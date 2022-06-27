@@ -1,2 +1,2 @@
-# GeminiTS
-Time-Series Database Core
+# openGemini
+Time-Series Database
