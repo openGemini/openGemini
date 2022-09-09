@@ -7,7 +7,7 @@ assignees: xiangyu5632
 
 ---
 
-**Describe the bug（bug 描述）** 
+**Describe the bug（Bug 描述）** 
 A clear and concise description of what the bug is. （用简洁、准确的语言描述Bug的情况）
 
 **To Reproduce（Bug 复现步骤）**
@@ -22,6 +22,9 @@ A clear and concise description of what you expected to happen. （描述清楚�
 
 **Screenshots（屏幕截图）**
 If applicable, add screenshots to help explain your problem.（如果可能，请尽量上传Bug的屏幕截图，对解释清楚Bug非常有帮助）
+
+**Logs（完整的错误日志）**
+If applicable, add complete error logs to help analyze and resolve problems faster（提供完整的错误日志可以帮助社区更快分析和解决问题）
 
 **Application (please complete the following information): （应用场景说明，比如操作系统、客户端、open Gemini版本等）**
  - OS: [e.g. iOS]
