@@ -1,0 +1,205 @@
+/*
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+package engine
+
+import "github.com/openGemini/openGemini/lib/record"
+
+{{range .}}
+func {{.name}}CountReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, int64, bool) {
+	count := int64(cv.ValidCount(start, end))
+	return start, count, count == 0
+}
+{{end}}
+
+func integerCountMerge(prevBuf, currBuf *integerColBuf) {
+	prevBuf.value += currBuf.value
+}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+func {{.name}}SumReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, {{.Type}}, bool) {
+	var sum {{.Type}}
+	var aggregated int
+	if cv.Length() + cv.NilCount == 0 {
+        return start, 0, aggregated == 0
+    }
+	start, end = cv.GetValIndexRange(start, end)
+	for _, v := range values[start:end] {
+		sum += v
+		aggregated++
+	}
+	return start, sum, aggregated == 0
+}
+
+func {{.name}}SumMerge(prevBuf, currBuf *{{.name}}ColBuf) {
+	prevBuf.value += currBuf.value
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+func {{.name}}MeanReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, float64, bool) {
+	var sum {{.Type}}
+	var aggregated int
+	for i := start; i < end; i++ {
+		if v, isNil := cv.{{.Name}}Value(i); !isNil {
+			aggregated++
+			sum += v
+		}
+	}
+	return start, float64(sum) / float64(aggregated), aggregated == 0
+}
+
+func {{.name}}MeanMerge(prevBuf, currBuf *floatColBuf) {
+	prevBuf.value = (prevBuf.value + currBuf.value) / 2
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+func {{.name}}MinReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, {{.Type}}, bool) {
+	minValue, minIndex := cv.Min{{.Name}}Value(values, start, end)
+	if minIndex == -1 {
+		return 0, {{.Nil}}, true
+	}
+	return minIndex, minValue, false
+}
+
+func {{.name}}MinMerge(prevBuf, currBuf *{{.name}}ColBuf) {
+	if currBuf.value < prevBuf.value {
+		prevBuf.index = currBuf.index
+		prevBuf.time = currBuf.time
+		prevBuf.value = currBuf.value
+	}
+}
+{{- end}}
+{{end}}
+
+func booleanMinReduce(cv *record.ColVal, values []bool, start, end int) (int, bool, bool) {
+	minValue, minIndex := cv.MinBooleanValue(values, start, end)
+	if minIndex == -1 {
+		return 0, false, true
+	}
+	return minIndex, minValue, false
+}
+
+func booleanMinMerge(prevBuf, currBuf *booleanColBuf) {
+	if currBuf.value != prevBuf.value && !currBuf.value {
+		prevBuf.index = currBuf.index
+		prevBuf.time = currBuf.time
+		prevBuf.value = currBuf.value
+	}
+}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+func {{.name}}MaxReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, {{.Type}}, bool) {
+	maxValue, maxIndex := cv.Max{{.Name}}Value(values, start, end)
+	if maxIndex == -1 {
+		return 0, 0, true
+	}
+	return maxIndex, maxValue, false
+}
+
+func {{.name}}MaxMerge(prevBuf, currBuf *{{.name}}ColBuf) {
+	if currBuf.value > prevBuf.value {
+		prevBuf.index = currBuf.index
+		prevBuf.time = currBuf.time
+		prevBuf.value = currBuf.value
+	}
+}
+{{- end}}
+{{end}}
+
+func booleanMaxReduce(cv *record.ColVal, values []bool, start, end int) (int, bool, bool) {
+	maxValue, maxIndex := cv.MaxBooleanValue(values, start, end)
+	if maxIndex == -1 {
+		return 0, false, true
+	}
+	return maxIndex, maxValue, false
+}
+
+func booleanMaxMerge(prevBuf, currBuf *booleanColBuf) {
+	if currBuf.value != prevBuf.value && currBuf.value {
+		prevBuf.index = currBuf.index
+		prevBuf.time = currBuf.time
+		prevBuf.value = currBuf.value
+	}
+}
+
+{{range .}}
+func {{.name}}FirstReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, {{.Type}}, bool) {
+	firstValue, firstIndex := cv.First{{.Name}}Value(values, start, end)
+	if firstIndex == -1 {
+		return 0, {{.Nil}}, true
+	}
+	return firstIndex, firstValue, false
+}
+
+func {{.name}}FirstMerge(prevBuf, currBuf *{{.name}}ColBuf) {
+}
+{{end}}
+
+{{range .}}
+// note: last is designed in ascending order.
+func {{.name}}LastReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, {{.Type}}, bool) {
+	lastValue, lastIndex := cv.Last{{.Name}}Value(values, start, end)
+	if lastIndex == -1 {
+		return 0, {{.Nil}}, true
+	}
+	return lastIndex, lastValue, false
+}
+
+func {{.name}}LastMerge(prevBuf, currBuf *{{.name}}ColBuf) {
+	prevBuf.assign(currBuf)
+}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+func {{.name}}CmpByValueBottom(a, b *{{.Name}}PointItem) bool {
+	if a.value != b.value {
+		return a.value > b.value
+	}
+	return a.time > b.time
+}
+func {{.name}}CmpByTimeBottom(a, b *{{.Name}}PointItem) bool {
+	if a.time != b.time {
+		return a.time < b.time
+	}
+	return a.value < b.value
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+func {{.name}}CmpByValueTop(a, b *{{.Name}}PointItem) bool {
+	if a.value != b.value {
+		return a.value < b.value
+	}
+	return a.time > b.time
+}
+func {{.name}}CmpByTimeTop(a, b *{{.Name}}PointItem) bool {
+	if a.time != b.time {
+		return a.time < b.time
+	}
+	return a.value > b.value
+}
+{{- end}}
+{{end}}

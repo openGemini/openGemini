@@ -1,0 +1,16 @@
+{
+    "Name":"Compact",
+    "Measurement":"compact",
+    "Items":[
+        "Active",
+        "Errors",
+        "MaxMemoryUsed",
+        "RecordPoolGetTotal",
+        "RecordPoolHitTotal"
+    ],
+    "SetItems":[
+        "Active"
+    ],
+    "EnablePush":"Y",
+    "PushItems":[]
+}

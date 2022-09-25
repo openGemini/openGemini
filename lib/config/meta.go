@@ -1,0 +1,273 @@
+/*
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package config
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/hashicorp/raft"
+	"github.com/influxdata/influxdb/pkg/tlsconfig"
+	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+)
+
+const (
+	DefaultLoggingEnabled       = true
+	DefaultRaftFileName         = "raft"
+	DefaultGossipFileName       = "gossip"
+	DefaultHTTPBindAddress      = ":8091"
+	DefaultRPCBindAddress       = ":8092"
+	DefaultRaftBindAddress      = ":8088"
+	DefaultCommitTimeout        = 50 * time.Millisecond
+	DefaultLeaderLeaseTimeout   = 500 * time.Millisecond
+	DefaultElectionTimeout      = 1000 * time.Millisecond
+	DefaultHeartbeatTimeout     = 1000 * time.Millisecond
+	DefaultLeaseDuration        = 60 * time.Second
+	DefaultConcurrentWriteLimit = 10
+	DefaultVersion              = 0
+	DefaultSplitRowThreshold    = 1000
+	DefaultImbalanceFactor      = 0.3
+	DefaultRaftStore            = "boltdb"
+	DefaultHostname             = "localhost"
+	DefaultSuspicionMult        = 4
+	DefaultProbInterval         = toml.Duration(time.Second)
+)
+
+// TSMeta represents the configuration format for the ts-meta binary.
+type TSMeta struct {
+	Common  Common  `toml:"common"`
+	Meta    *Meta   `toml:"meta"`
+	Logging Logger  `toml:"logging"`
+	Monitor Monitor `toml:"monitor"`
+	Gossip  *Gossip `toml:"gossip"`
+	Spdy    Spdy    `toml:"spdy"`
+
+	// TLS provides configuration options for all https endpoints.
+	TLS tlsconfig.Config `toml:"tls"`
+}
+
+// NewTSMeta returns an instance of TSMeta with reasonable defaults.
+func NewTSMeta() *TSMeta {
+	c := &TSMeta{}
+	c.Meta = NewMeta()
+	c.Logging = NewLogger(AppMeta)
+	c.Monitor = NewMonitor(AppMeta)
+	c.Gossip = NewGossip()
+	c.TLS = tlsconfig.NewConfig()
+
+	return c
+}
+
+// Validate returns an error if the config is invalid.
+func (c *TSMeta) Validate() error {
+	items := []Validator{
+		c.Common,
+		c.Meta,
+		c.Monitor,
+		c.TLS,
+		c.Logging,
+		c.Gossip,
+		c.Spdy,
+	}
+
+	for _, item := range items {
+		if err := item.Validate(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ApplyEnvOverrides apply the environment configuration on top of the config.
+func (c *TSMeta) ApplyEnvOverrides(func(string) string) error {
+	return nil
+}
+
+func (c *TSMeta) GetLogging() *Logger {
+	return &c.Logging
+}
+
+func (c *TSMeta) GetSpdy() *Spdy {
+	return &c.Spdy
+}
+
+func (c *TSMeta) GetCommon() *Common {
+	return &c.Common
+}
+
+// Meta represents the meta configuration.
+type Meta struct {
+	HTTPSEnabled        bool `toml:"https-enabled"`
+	PprofEnabled        bool `toml:"pprof-enabled"`
+	RetentionAutoCreate bool `toml:"retention-autocreate"`
+	ClusterTracing      bool `toml:"cluster-tracing"`
+	LoggingEnabled      bool `toml:"logging-enabled"`
+	BatchApplyCh        bool `toml:"batch-enabled"`
+
+	Dir                     string  `toml:"dir"`
+	HTTPBindAddress         string  `toml:"http-bind-address"`
+	RPCBindAddress          string  `toml:"rpc-bind-address"`
+	BindAddress             string  `toml:"bind-address"`
+	HTTPSCertificate        string  `toml:"https-certificate"`
+	HTTPSPrivateKey         string  `toml:"https-private-key"`
+	MaxConcurrentWriteLimit int     `toml:"-"`
+	Version                 int     `toml:"meta-version"`
+	Hostname                string  `toml:"hostname"`
+	SplitRowThreshold       uint64  `toml:"split-row-threshold"`
+	ImbalanceFactor         float64 `toml:"imbalance-factor"`
+	RaftStore               string  `toml:"raft-store"`
+	RemoteHostname          string
+
+	JoinPeers          []string
+	ElectionTimeout    toml.Duration `toml:"election-timeout"`
+	HeartbeatTimeout   toml.Duration `toml:"heartbeat-timeout"`
+	LeaderLeaseTimeout toml.Duration `toml:"leader-lease-timeout"`
+	CommitTimeout      toml.Duration `toml:"commit-timeout"`
+	LeaseDuration      toml.Duration `toml:"lease-duration"`
+	Logging            Logger        `toml:"logging"`
+}
+
+// NewMeta builds a new configuration with default values.
+func NewMeta() *Meta {
+	return &Meta{
+		HTTPBindAddress:         DefaultHTTPBindAddress,
+		RPCBindAddress:          DefaultRPCBindAddress,
+		BindAddress:             DefaultRaftBindAddress,
+		RetentionAutoCreate:     true,
+		ElectionTimeout:         toml.Duration(DefaultElectionTimeout),
+		HeartbeatTimeout:        toml.Duration(DefaultHeartbeatTimeout),
+		LeaderLeaseTimeout:      toml.Duration(DefaultLeaderLeaseTimeout),
+		CommitTimeout:           toml.Duration(DefaultCommitTimeout),
+		LeaseDuration:           toml.Duration(DefaultLeaseDuration),
+		LoggingEnabled:          DefaultLoggingEnabled,
+		JoinPeers:               []string{},
+		MaxConcurrentWriteLimit: DefaultConcurrentWriteLimit,
+		Version:                 DefaultVersion,
+		SplitRowThreshold:       DefaultSplitRowThreshold,
+		ImbalanceFactor:         DefaultImbalanceFactor,
+		BatchApplyCh:            true,
+		RaftStore:               DefaultRaftStore,
+		RemoteHostname:          DefaultHostname,
+		ClusterTracing:          true,
+	}
+}
+
+func (c *Meta) ApplyEnvOverrides(fn func(string) string) error {
+	return toml.ApplyEnvOverrides(fn, "OPEN_GEMINI_META", c)
+}
+
+func (c *Meta) Validate() error {
+	svItems := []stringValidatorItem{
+		{"meta dir", c.Dir},
+		{"meta http-bind-address", c.HTTPBindAddress},
+		{"meta rpc-bind-address", c.RPCBindAddress},
+		{"meta bind-address", c.BindAddress},
+	}
+
+	if err := (stringValidator{}).Validate(svItems); err != nil {
+		return err
+	}
+
+	if c.SplitRowThreshold == 0 {
+		return fmt.Errorf("meta split-row-threshold must be greater than 0. got: %d", c.SplitRowThreshold)
+	}
+
+	return nil
+}
+
+func (c *Meta) BuildRaft() *raft.Config {
+	conf := raft.DefaultConfig()
+	if c.ClusterTracing {
+		conf.LogOutput = c.Logging.Build(DefaultRaftFileName)
+	}
+	conf.HeartbeatTimeout = time.Duration(c.HeartbeatTimeout)
+	conf.ElectionTimeout = time.Duration(c.ElectionTimeout)
+	conf.LeaderLeaseTimeout = time.Duration(c.LeaderLeaseTimeout)
+	conf.CommitTimeout = time.Duration(c.CommitTimeout)
+	conf.ShutdownOnRemove = false
+	conf.BatchApplyCh = c.BatchApplyCh
+
+	return conf
+}
+
+type Gossip struct {
+	Enabled       bool          `toml:"enabled"`
+	LogEnabled    bool          `toml:"log-enabled"`
+	BindAddr      string        `toml:"bind-address"`
+	MetaBindPort  int           `toml:"meta-bind-port"`
+	StoreBindPort int           `toml:"store-bind-port"`
+	ProbInterval  toml.Duration `toml:"prob-interval"`
+	SuspicionMult int           `toml:"suspicion-mult"`
+	Members       []string      `toml:"members"`
+}
+
+func (c Gossip) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	portItems := []intValidatorItem{
+		{"gossip bind-port", int64(c.MetaBindPort), false},
+		{"gossip bind-port", int64(c.StoreBindPort), false},
+	}
+
+	iv := intValidator{minPort, maxPort}
+	if err := iv.Validate(portItems); err != nil {
+		return err
+	}
+
+	if c.BindAddr == "" {
+		return fmt.Errorf("gossip bind-address must be not empty")
+	}
+
+	return nil
+}
+
+func (c *Gossip) BuildSerf(lg Logger, app App, name string, event chan<- serf.Event) *serf.Config {
+	serfConf := serf.DefaultConfig()
+	serfConf.NodeName = name
+	serfConf.Tags = map[string]string{"role": string(app)}
+	serfConf.EventCh = event
+	if c.LogEnabled {
+		serfConf.LogOutput = lg.Build(DefaultGossipFileName)
+	}
+
+	member := serfConf.MemberlistConfig
+	member.BindPort = c.MetaBindPort
+	if app == AppStore {
+		member.BindPort = c.StoreBindPort
+	}
+
+	member.LogOutput = serfConf.LogOutput
+	member.BindAddr = c.BindAddr
+	member.ProbeInterval = time.Duration(c.ProbInterval)
+	member.SuspicionMult = c.SuspicionMult
+	member.Name = serfConf.NodeName
+
+	return serfConf
+}
+
+func NewGossip() *Gossip {
+	return &Gossip{
+		Enabled:       true,
+		LogEnabled:    true,
+		ProbInterval:  DefaultProbInterval,
+		SuspicionMult: DefaultSuspicionMult,
+	}
+}
