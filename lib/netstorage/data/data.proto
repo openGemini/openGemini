@@ -1,0 +1,89 @@
+syntax = "proto2";
+package internal;
+
+option go_package = ".;internal";
+
+message SeriesKeysRequest {
+    required string Db           = 1;
+    repeated uint32 PtIDs        = 2;
+    repeated string Measurements = 3;
+    optional string condition    = 4;
+}
+
+message SeriesKeysResponse {
+    repeated string Series = 1;
+    optional string Err    = 2;
+}
+
+message CreateDataBaseRequest {
+    required string Db = 1;
+    required uint32 pt = 2;
+    required string rp = 3;
+}
+
+message CreateDataBaseResponse {
+    optional string Err = 1;
+}
+
+message SysCtrlRequest {
+    required string Mod 	  = 1;
+    map<string,string> Param = 2;
+}
+
+message SysCtrlResponse {
+    required string Err 	  	= 1;
+    map<string,string> Result = 2;
+}
+
+message GetShardSplitPointsRequest {
+    required string DB = 1;
+    required uint32 PtID = 2;
+    required uint64 ShardID = 3;
+    repeated int64 Idxes = 4;
+}
+
+message GetShardSplitPointsResponse {
+    repeated string SplitPoints = 1;
+    optional string Err = 2;
+}
+
+message DeleteRequest {
+    required string DB  = 1;
+    optional string Rp  = 2;
+    optional string Mst = 3;
+    repeated uint64 ShardIDs = 4;
+    required int32  DeleteType = 5;
+    optional uint32 PtId = 6;
+}
+
+message DeleteResponse {
+    optional string Err = 1;
+}
+
+message ShowTagValuesRequest {
+    required string Db           = 1;
+    repeated uint32 PtIDs        = 2;
+    repeated MapTagKeys TagKeys  = 3;
+    optional string Condition    = 4;
+}
+
+message ShowTagValuesResponse {
+    optional string Err            = 1;
+    repeated TagValuesSlice Values = 2;
+}
+
+message MapTagKeys {
+    required string Measurement = 1;
+    repeated string Keys        = 2;
+}
+
+message TagValuesSlice {
+    required string Measurement = 1;
+    repeated string Keys        = 2;
+    repeated string Values      = 3;
+}
+
+message ExactCardinalityResponse {
+    map<string, uint64> Cardinality = 1;
+    optional string Err    = 2;
+}

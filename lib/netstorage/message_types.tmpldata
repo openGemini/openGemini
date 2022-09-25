@@ -1,0 +1,9 @@
+[
+	"SeriesKeys",
+	"SeriesExactCardinality",
+	"SeriesCardinality",
+	"ShowTagValues",
+	"ShowTagValuesCardinality",
+	"GetShardSplitPoints",
+	"Delete"
+]

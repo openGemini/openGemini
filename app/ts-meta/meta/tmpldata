@@ -1,0 +1,10 @@
+[
+	"Ping",
+	"Peers",
+	"CreateNode",
+	"Snapshot",
+	"Execute",
+	"Update",
+	"Report",
+	"GetShardInfo"
+]

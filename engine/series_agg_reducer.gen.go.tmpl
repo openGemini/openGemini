@@ -1,0 +1,1019 @@
+/*
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+package engine
+
+import (
+    "container/heap"
+    "sort"
+
+	"github.com/openGemini/openGemini/engine/hybridqp"
+    "github.com/openGemini/openGemini/lib/record"
+)
+
+{{range .}}
+func {{.name}}AuxHelpFunc(input, output *record.ColVal, index ...int) {
+	for _, idx := range index {
+	    {{- if ne .Name "String"}}
+    	if v, isNil := input.{{.Name}}Value(idx); !isNil {
+    	{{- else}}
+    	if v, isNil := input.StringValueUnsafe(idx); !isNil {
+    	{{- end}}
+			output.Append{{.Name}}(v)
+		} else {
+			output.Append{{.Name}}Null()
+		}
+	}
+}
+{{end}}
+
+{{range .}}
+type {{.name}}ColBuf struct {
+	index int
+	time  int64
+	value {{.Type}}
+	isNil bool
+}
+
+func new{{.Name}}ColBuf() *{{.name}}ColBuf {
+	return &{{.name}}ColBuf{isNil: true}
+}
+
+func (b *{{.name}}ColBuf) set(index int, time int64, value {{.Type}}) {
+	b.index = index
+	b.time = time
+	b.value = value
+	b.isNil = false
+}
+
+func (b *{{.name}}ColBuf) reset() {
+	b.isNil = true
+}
+
+func (b *{{.name}}ColBuf) assign(src *{{.name}}ColBuf) {
+	b.index = src.index
+	b.time = src.time
+	b.value = src.value
+}
+{{end}}
+
+{{with $types := .}}{{range $k := $types}}
+{{range $v := $types}}
+type {{$k.name}}Col{{$v.Name}}Reduce func(col *record.ColVal, values []{{$k.Type}}, bmStart, bmEnd int) (index int, value {{$v.Type}}, isNil bool)
+
+type {{$k.name}}Col{{$v.Name}}Merge func(prevColumn, currColumn *{{$v.name}}ColBuf)
+
+type {{$k.name}}Col{{$v.Name}}Reducer struct {
+	fn           {{$k.name}}Col{{$v.Name}}Reduce
+	fv           {{$k.name}}Col{{$v.Name}}Merge
+	prevBuf      *{{$v.name}}ColBuf
+	currBuf      *{{$v.name}}ColBuf
+	auxRecord    *record.Record
+	auxProcessor []*auxProcessor
+	{{if eq $k.Name "String"}}
+	strArr       []string
+	{{end}}
+}
+
+func new{{$k.Name}}Col{{$v.Name}}Reducer(fn {{$k.name}}Col{{$v.Name}}Reduce, fv {{$k.name}}Col{{$v.Name}}Merge, auxProcessor []*auxProcessor) *{{$k.name}}Col{{$v.Name}}Reducer {
+	r := &{{$k.name}}Col{{$v.Name}}Reducer{
+		fn:           fn,
+		fv:           fv,
+		prevBuf:      new{{$v.Name}}ColBuf(),
+		currBuf:      new{{$v.Name}}ColBuf(),
+		auxProcessor: auxProcessor,
+	}
+	return r
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	if len(r.auxProcessor) > 0 && r.auxRecord == nil {
+		r.auxRecord = record.NewRecordBuilder(p.OutputPoint.Record.Schema)
+	}
+	var end int
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+	{{- if ne $k.Name "String"}}
+	values := inRecord.ColVals[inOrdinal].{{$k.Name}}Values()
+	{{else}}
+	r.strArr = inRecord.ColVals[inOrdinal].StringValues(r.strArr[:0])
+	{{end}}
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+        {{if ne $k.Name "String"}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], values, int(start), end)
+        {{else}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], r.strArr, int(start), end)
+        {{end}}
+		if !isNil {
+			// A.the aggregation result is not empty.
+			if i == firstIndex && !r.prevBuf.isNil {
+				// 1.the aggregation result and prevBuf belong to the same time window.
+				r.currBuf.set(index+1, inRecord.Time(index), value)
+				r.fv(r.prevBuf, r.currBuf)
+				// 1.1 the prevBuf and the first group with the next record belong to the same time window.
+				if firstIndex == lastIndex && param.sameWindow {
+					if len(r.auxProcessor) > 0 && r.prevBuf.index > 0 {
+						r.auxRecord.Reuse()
+						r.appendAuxRecord(inRecord, r.auxRecord, r.prevBuf.index-1)
+					}
+					r.prevBuf.index = 0
+				} else {
+					// 1.2 the prevBuf belong to a complete time window.
+					outRecord.ColVals[outOrdinal].Append{{$v.Name}}(r.prevBuf.value)
+					if !param.multiCall {
+						outRecord.AppendTime(r.prevBuf.time)
+					}
+					if len(r.auxProcessor) > 0 {
+						if r.prevBuf.index == 0 {
+					        r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+						} else {
+							r.appendAuxRecord(inRecord, outRecord, r.prevBuf.index-1)
+						}
+						r.auxRecord.Reuse()
+					}
+					r.prevBuf.reset()
+				}
+				r.currBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				// 2.the aggregation result and the first group with the next record belong to the same time window.
+				r.prevBuf.set(0, inRecord.Time(index), value)
+				if len(r.auxProcessor) > 0 {
+					r.appendAuxRecord(inRecord, r.auxRecord, index)
+				}
+				break
+			}
+			// 3.the aggregation result belong to a complete time window.
+			outRecord.ColVals[outOrdinal].Append{{$v.Name}}(value)
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		} else {
+			// B. the aggregation result is empty.
+			if (i == firstIndex && !r.prevBuf.isNil) && (firstIndex < lastIndex || !param.sameWindow) {
+				outRecord.ColVals[outOrdinal].Append{{$v.Name}}(r.prevBuf.value)
+				if !param.multiCall {
+					outRecord.AppendTime(r.prevBuf.time)
+				}
+				if len(r.auxProcessor) > 0 {
+					r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+					r.auxRecord.Reuse()
+				}
+				r.prevBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				break
+			}
+			outRecord.ColVals[outOrdinal].Append{{$v.Name}}Null()
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		}
+	}
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendAuxRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].inOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendOutRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+{{end}}
+{{end}}{{end}}
+
+{{range .}}
+type {{.name}}TimeCol{{.Name}}Reduce func(col *record.ColVal, values []{{.Type}}, bmStart, bmEnd int) (index int, value {{.Type}}, isNil bool)
+
+type {{.name}}TimeCol{{.Name}}Merge func(prevColumn, currColumn *{{.name}}ColBuf)
+
+type {{.name}}TimeCol{{.Name}}Reducer struct {
+	fn           {{.name}}TimeCol{{.Name}}Reduce
+	fv           {{.name}}TimeCol{{.Name}}Merge
+	prevBuf      *{{.name}}ColBuf
+	currBuf      *{{.name}}ColBuf
+	auxRecord    *record.Record
+	auxProcessor []*auxProcessor
+	{{if eq .Name "String"}}
+	strArr       []string
+	{{end}}
+}
+
+func new{{.Name}}TimeCol{{.Name}}Reducer(fn {{.name}}TimeCol{{.Name}}Reduce, fv {{.name}}TimeCol{{.Name}}Merge, auxProcessor []*auxProcessor) *{{.name}}TimeCol{{.Name}}Reducer {
+	return &{{.name}}TimeCol{{.Name}}Reducer{
+		fn:           fn,
+		fv:           fv,
+		prevBuf:      new{{.Name}}ColBuf(),
+		currBuf:      new{{.Name}}ColBuf(),
+		auxProcessor: auxProcessor,
+	}
+}
+
+func (r *{{.name}}TimeCol{{.Name}}Reducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	if len(r.auxProcessor) > 0 && r.auxRecord == nil {
+		r.auxRecord = record.NewRecordBuilder(p.OutputPoint.Record.Schema)
+	}
+	var end int
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+    {{if ne .Name "String"}}
+    values := inRecord.ColVals[inOrdinal].{{.Name}}Values()
+    {{else}}
+    r.strArr = inRecord.ColVals[inOrdinal].StringValues(r.strArr[:0])
+    {{end}}
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+		{{if ne .Name "String"}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], values, int(start), end)
+		{{else}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], r.strArr, int(start), end)
+		{{end}}
+		if !isNil {
+			// A.the aggregation result is not empty.
+			if i == firstIndex && !r.prevBuf.isNil {
+				// 1.the aggregation result and prevBuf belong to the same time window.
+				r.currBuf.set(index+1, inRecord.Time(index), value)
+				r.fv(r.prevBuf, r.currBuf)
+				// 1.1 the prevBuf and the first group with the next record belong to the same time window.
+				if firstIndex == lastIndex && param.sameWindow {
+					if len(r.auxProcessor) > 0 && r.prevBuf.index > 0 {
+						r.auxRecord.Reuse()
+						r.appendAuxRecord(inRecord, r.auxRecord, r.prevBuf.index-1)
+					}
+					r.prevBuf.index = 0
+				} else {
+					// 1.2 the prevBuf belong to a complete time window.
+					outRecord.ColVals[outOrdinal].Append{{.Name}}(r.prevBuf.value)
+					if !param.multiCall {
+						outRecord.AppendTime(r.prevBuf.time)
+					} else {
+					    outRecord.RecMeta.Times[outOrdinal] = append(outRecord.RecMeta.Times[outOrdinal], r.prevBuf.time)
+					}
+					if len(r.auxProcessor) > 0 {
+						if r.prevBuf.index == 0 {
+							r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+						} else {
+							r.appendAuxRecord(inRecord, outRecord, r.prevBuf.index-1)
+						}
+						r.auxRecord.Reuse()
+					}
+					r.prevBuf.reset()
+				}
+				r.currBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				// 2.the aggregation result and the first group with the next record belong to the same time window.
+				r.prevBuf.set(0, inRecord.Time(index), value)
+				if len(r.auxProcessor) > 0 {
+					r.appendAuxRecord(inRecord, r.auxRecord, index)
+				}
+				break
+			}
+			// 3.the aggregation result belong to a complete time window.
+			outRecord.ColVals[outOrdinal].Append{{.Name}}(value)
+            if !param.multiCall {
+                outRecord.AppendTime(inRecord.Time(index))
+            } else {
+                outRecord.RecMeta.Times[outOrdinal] = append(outRecord.RecMeta.Times[outOrdinal], inRecord.Time(index))
+            }
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		} else {
+			// B. the aggregation result is empty.
+			if (i == firstIndex && !r.prevBuf.isNil) && (firstIndex < lastIndex || !param.sameWindow) {
+				outRecord.ColVals[outOrdinal].Append{{.Name}}(r.prevBuf.value)
+				if !param.multiCall {
+					outRecord.AppendTime(r.prevBuf.time)
+				} else {
+				    outRecord.RecMeta.Times[outOrdinal] = append(outRecord.RecMeta.Times[outOrdinal], r.prevBuf.time)
+				}
+				if len(r.auxProcessor) > 0 {
+					r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+					r.auxRecord.Reuse()
+				}
+				r.prevBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				break
+			}
+			outRecord.ColVals[outOrdinal].Append{{.Name}}Null()
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			} else {
+			    outRecord.RecMeta.Times[outOrdinal] = append(outRecord.RecMeta.Times[outOrdinal], 0)
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		}
+	}
+}
+
+func (r *{{.name}}TimeCol{{.Name}}Reducer) appendAuxRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].inOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+
+func (r *{{.name}}TimeCol{{.Name}}Reducer) appendOutRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")  (eq .Name "String")}}
+type {{.name}}DistinctItem struct {
+	m     map[{{.Type}}]struct{}
+	time  []int64
+	value []{{.Type}}
+}
+
+func new{{.Name}}DistinctItem() *{{.name}}DistinctItem {
+	return &{{.name}}DistinctItem{
+		m: make(map[{{.Type}}]struct{}),
+	}
+}
+
+func (f *{{.name}}DistinctItem) appendItem(time []int64, value []{{.Type}}) {
+	for i := 0; i < len(time); i++ {
+		if _, ok := f.m[value[i]]; !ok {
+			f.m[value[i]] = struct{}{}
+			f.time = append(f.time, time[i])
+			f.value = append(f.value, value[i])
+		}
+	}
+}
+
+func (f *{{.name}}DistinctItem) Nil() bool {
+	return len(f.time) == 0
+}
+
+func (f *{{.name}}DistinctItem) Reset() {
+	for k := range f.m {
+		delete(f.m, k)
+	}
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+}
+
+func (f *{{.name}}DistinctItem) Len() int {
+	return len(f.time)
+}
+
+func (f *{{.name}}DistinctItem) Less(i, j int) bool {
+	if f.time[i] != f.time[j] {
+		return f.time[i] < f.time[j]
+	}
+	return f.value[i] < f.value[j]
+}
+
+func (f *{{.name}}DistinctItem) Swap(i, j int) {
+	f.time[i], f.time[j] = f.time[j], f.time[i]
+	f.value[i], f.value[j] = f.value[j], f.value[i]
+}
+{{- end}}
+{{end}}
+
+type booleanDistinctItem struct {
+	m     map[bool]struct{}
+	time  []int64
+	value []bool
+}
+
+func newBooleanDistinctItem() *booleanDistinctItem {
+	return &booleanDistinctItem{
+		m: make(map[bool]struct{}),
+	}
+}
+
+func (f *booleanDistinctItem) appendItem(time []int64, value []bool) {
+	for i := 0; i < len(time); i++ {
+		if _, ok := f.m[value[i]]; !ok {
+			f.m[value[i]] = struct{}{}
+			f.time = append(f.time, time[i])
+			f.value = append(f.value, value[i])
+		}
+	}
+}
+
+func (f *booleanDistinctItem) Nil() bool {
+	return len(f.time) == 0
+}
+
+func (f *booleanDistinctItem) Reset() {
+	for k := range f.m {
+		delete(f.m, k)
+	}
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+}
+
+func (f *booleanDistinctItem) Len() int {
+	return len(f.time)
+}
+
+func (f *booleanDistinctItem) Less(i, j int) bool {
+	if f.time[i] != f.time[j] {
+		return f.time[i] < f.time[j]
+	}
+	return !f.value[i]
+}
+
+func (f *booleanDistinctItem) Swap(i, j int) {
+	f.time[i], f.time[j] = f.time[j], f.time[i]
+	f.value[i], f.value[j] = f.value[j], f.value[i]
+}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+type {{.name}}Col{{.Name}}DistinctReducer struct {
+	buf *{{.name}}DistinctItem
+}
+
+func new{{.Name}}Col{{.Name}}DistinctReducer() *{{.name}}Col{{.Name}}DistinctReducer {
+	return &{{.name}}Col{{.Name}}DistinctReducer{buf: new{{.Name}}DistinctItem()}
+}
+
+func (r *{{.name}}Col{{.Name}}DistinctReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	var end int
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+	time, value := inRecord.ColVals[inRecord.Len()-1].IntegerValues(), inRecord.ColVals[inOrdinal].{{.Name}}Values()
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+		if i == firstIndex && !r.buf.Nil() {
+			r.buf.appendItem(time[int(start):end], value[int(start):end])
+			if firstIndex != lastIndex || !param.sameWindow {
+				sort.Sort(r.buf)
+				if r.buf.Len() > 0 {
+					outRecord.AppendTime(r.buf.time...)
+					outRecord.ColVals[outOrdinal].Append{{.Name}}s(r.buf.value...)
+				}
+				r.buf.Reset()
+			}
+			continue
+		} else if i == lastIndex && param.sameWindow {
+			r.buf.appendItem(time[int(start):end], value[int(start):end])
+			break
+		}
+		r.buf.appendItem(time[int(start):end], value[int(start):end])
+		sort.Sort(r.buf)
+		if r.buf.Len() > 0 {
+			outRecord.AppendTime(r.buf.time...)
+			outRecord.ColVals[outOrdinal].Append{{.Name}}s(r.buf.value...)
+		}
+		r.buf.Reset()
+	}
+}
+{{- end}}
+{{end}}
+
+type stringColStringDistinctReducer struct {
+	buf   *stringDistinctItem
+	value []string
+}
+
+func newStringColStringDistinctReducer() *stringColStringDistinctReducer {
+	return &stringColStringDistinctReducer{buf: newStringDistinctItem()}
+}
+
+func (r *stringColStringDistinctReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	var end int
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+	if cap(r.value) < inRecord.ColVals[inOrdinal].Length() {
+		r.value = make([]string, 0, inRecord.ColVals[inOrdinal].Length())
+	} else {
+		r.value = r.value[:0]
+	}
+	time, value := inRecord.ColVals[inRecord.Len()-1].IntegerValues(), inRecord.ColVals[inOrdinal].StringValues(r.value)
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+		if i == firstIndex && !r.buf.Nil() {
+			r.buf.appendItem(time[int(start):end], value[int(start):end])
+			if firstIndex != lastIndex || !param.sameWindow {
+				sort.Sort(r.buf)
+				if r.buf.Len() > 0 {
+					outRecord.AppendTime(r.buf.time...)
+					outRecord.ColVals[outOrdinal].AppendStrings(r.buf.value...)
+				}
+				r.buf.Reset()
+			}
+			continue
+		} else if i == lastIndex && param.sameWindow {
+			r.buf.appendItem(time[int(start):end], value[int(start):end])
+			break
+		}
+		r.buf.appendItem(time[int(start):end], value[int(start):end])
+		sort.Sort(r.buf)
+		if r.buf.Len() > 0 {
+			outRecord.AppendTime(r.buf.time...)
+			outRecord.ColVals[outOrdinal].AppendStrings(r.buf.value...)
+		}
+		r.buf.Reset()
+	}
+}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+type {{.Name}}PointItem struct {
+	time  int64
+	value {{.Type}}
+	index int
+}
+
+func New{{.Name}}PointItem(time int64, value {{.Type}}) *{{.Name}}PointItem {
+	return &{{.Name}}PointItem{
+		time:  time,
+		value: value,
+	}
+}
+
+type {{.Name}}HeapItem struct {
+	sortByTime   bool
+	maxIndex     int
+	cmpByValue   func(a, b *{{.Name}}PointItem) bool
+	cmpByTime    func(a, b *{{.Name}}PointItem) bool
+	items        []{{.Name}}PointItem
+	auxRecord    *record.Record
+	auxProcessor []*auxProcessor
+}
+
+func New{{.Name}}HeapItem(n int, cmpByValue, cmpByTime func(a, b *{{.Name}}PointItem) bool) *{{.Name}}HeapItem {
+	return &{{.Name}}HeapItem{
+		items:      make([]{{.Name}}PointItem, 0, n),
+		cmpByValue: cmpByValue,
+		cmpByTime: cmpByTime,
+	}
+}
+
+func (f *{{.Name}}HeapItem) appendFast(input *record.Record, start, end, ordinal int) {
+	// fast path
+	for i := start; i < end; i++ {
+		p := New{{.Name}}PointItem(
+			input.Time(i),
+			input.Column(ordinal).{{.Name}}Values()[i])
+		if f.Len() == cap(f.items) {
+			if !f.cmpByValue(&f.items[0], p) {
+				continue
+			}
+			f.items[0] = *p
+			heap.Fix(f, 0)
+			continue
+		} else {
+			heap.Push(f, *p)
+		}
+	}
+}
+func (f *{{.Name}}HeapItem) appendSlow(input *record.Record, start, end, ordinal int) {
+	// slow path
+	for i := start; i < end; i++ {
+		val, isNil := input.Column(ordinal).{{.Name}}Value(i)
+		if isNil {
+			continue
+		}
+		p := New{{.Name}}PointItem(
+			input.Time(i),
+			val)
+		if f.Len() == cap(f.items) {
+			if !f.cmpByValue(&f.items[0], p) {
+				continue
+			}
+			f.items[0] = *p
+			heap.Fix(f, 0)
+			continue
+		} else {
+			heap.Push(f, *p)
+		}
+	}
+}
+func (f *{{.Name}}HeapItem) append(input *record.Record, start, end, ordinal int) {
+	if input.ColVals[ordinal].NilCount == 0 {
+		f.appendFast(input, start, end, ordinal)
+	} else {
+		f.appendSlow(input, start, end, ordinal)
+	}
+}
+
+func (f *{{.Name}}HeapItem) appendForAuxFast(input *record.Record, start, end, ordinal, maxIndex int) {
+	// fast path
+	for i := start; i < end; i++ {
+		p := New{{.Name}}PointItem(
+			input.Time(i),
+			input.Column(ordinal).{{.Name}}Values()[i])
+		p.index = maxIndex + i
+		if f.Len() == cap(f.items) {
+			if !f.cmpByValue(&f.items[0], p) {
+				continue
+			}
+			if (*p).index > f.maxIndex {
+				f.maxIndex = (*p).index
+			}
+			f.items[0] = *p
+			heap.Fix(f, 0)
+			continue
+		} else {
+			if (*p).index > f.maxIndex {
+				f.maxIndex = (*p).index
+			}
+			heap.Push(f, *p)
+		}
+	}
+}
+
+func (f *{{.Name}}HeapItem) appendForAuxSlow(input *record.Record, start, end, ordinal, maxIndex int) {
+	// slow path
+	for i := start; i < end; i++ {
+		val, isNil := input.Column(ordinal).{{.Name}}Value(i)
+		if isNil {
+			continue
+		}
+		p := New{{.Name}}PointItem(
+			input.Time(i),
+			val)
+		p.index = maxIndex + i
+		if f.Len() == cap(f.items) {
+			if !f.cmpByValue(&f.items[0], p) {
+				continue
+			}
+			if (*p).index > f.maxIndex {
+				f.maxIndex = (*p).index
+			}
+			f.items[0] = *p
+			heap.Fix(f, 0)
+			continue
+		} else {
+			if (*p).index > f.maxIndex {
+				f.maxIndex = (*p).index
+			}
+			heap.Push(f, *p)
+		}
+	}
+}
+
+func (f *{{.Name}}HeapItem) appendForAux(input *record.Record, start, end, ordinal int) []int {
+	// make each index unique
+	maxIndex := f.maxIndex + 1 - start
+	if input.ColVals[ordinal].NilCount == 0 {
+		f.appendForAuxFast(input, start, end, ordinal, maxIndex)
+	} else {
+		f.appendForAuxSlow(input, start, end, ordinal, maxIndex)
+	}
+	index := make([]int, 0)
+	for i := range f.items {
+		if idx := f.items[i].index - maxIndex; idx >= start {
+			index = append(index, idx)
+		}
+	}
+	return index
+}
+
+func (f *{{.Name}}HeapItem) Reset() {
+	f.items = f.items[:0]
+	f.sortByTime = false
+	f.maxIndex = 0
+}
+
+func (f *{{.Name}}HeapItem) Len() int {
+	return len(f.items)
+}
+func (f *{{.Name}}HeapItem) Less(i, j int) bool {
+	if !f.sortByTime {
+		return f.cmpByValue(&f.items[i], &f.items[j])
+	}
+	return f.cmpByTime(&f.items[i], &f.items[j])
+}
+func (f *{{.Name}}HeapItem) Swap(i, j int) {
+	f.items[i], f.items[j] = f.items[j], f.items[i]
+}
+func (f *{{.Name}}HeapItem) Push(x interface{}) {
+	f.items = append(f.items, x.({{.Name}}PointItem))
+}
+func (f *{{.Name}}HeapItem) Pop() interface{} {
+	p := f.items[len(f.items)-1]
+	f.items = f.items[:len(f.items)-1]
+	return p
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+type {{.name}}Col{{.Name}}HeapReducer struct {
+	n             int
+	inOrdinal     int
+	outOrdinal    int
+	prevMaxIndex  int
+	buf           *{{.Name}}HeapItem
+	auxRecord     *record.Record
+	auxProcessor  []*auxProcessor
+	windowIndex   []int
+	prevBufIndex  []int
+	currBufIndex  []int
+	interBufIndex []int
+}
+
+
+func New{{.Name}}Col{{.Name}}HeapReducer(inOrdinal, outOrdinal int, auxProcessors []*auxProcessor, {{.name}}HeapItem *{{.Name}}HeapItem) *{{.name}}Col{{.Name}}HeapReducer {
+	r := &{{.name}}Col{{.Name}}HeapReducer{
+		buf:          {{.name}}HeapItem,
+		auxProcessor: auxProcessors,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+	}
+	return r
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) appendPrevItem(inRecord, outRecord *record.Record) {
+	for j := range r.buf.items {
+		outRecord.AppendTime(r.buf.items[j].time)
+		outRecord.ColVals[r.outOrdinal].Append{{.Name}}s(r.buf.items[j].value)
+	}
+	if len(r.auxProcessor) > 0 {
+		for j := range r.buf.items {
+			r.windowIndex = append(r.windowIndex, j)
+		}
+		for j := range r.auxProcessor {
+			r.auxProcessor[j].auxHelperFunc(
+				&r.auxRecord.ColVals[r.auxProcessor[j].outOrdinal],
+				&outRecord.ColVals[r.auxProcessor[j].outOrdinal],
+				r.windowIndex...,
+			)
+		}
+		r.windowIndex = r.windowIndex[:0]
+		r.auxRecord.Reuse()
+	}
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) appendCurrItem(inRecord, outRecord *record.Record, start int) {
+	for j := range r.buf.items {
+		outRecord.AppendTime(r.buf.items[j].time)
+		outRecord.ColVals[r.outOrdinal].Append{{.Name}}s(r.buf.items[j].value)
+	}
+	if len(r.auxProcessor) > 0 {
+		for i := range r.buf.items {
+			r.currBufIndex = append(r.currBufIndex, r.buf.items[i].index+start-r.prevMaxIndex)
+		}
+		hybridqp.SortS1ByS2(r.windowIndex, r.currBufIndex)
+		for j := range r.auxProcessor {
+			r.auxProcessor[j].auxHelperFunc(
+				&inRecord.ColVals[r.auxProcessor[j].inOrdinal],
+				&outRecord.ColVals[r.auxProcessor[j].outOrdinal],
+				r.windowIndex...,
+			)
+		}
+		r.windowIndex = r.windowIndex[:0]
+		r.currBufIndex = r.currBufIndex[:0]
+	}
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) updateAuxColInRecord(inRecord *record.Record) {
+	if len(r.interBufIndex) == 0 {
+		r.auxRecord.Reuse()
+	}
+	// inserts elements pushed from the heap
+	r.currBufIndex = r.currBufIndex[:0]
+	for i := range r.buf.items {
+		r.currBufIndex = append(r.currBufIndex, r.buf.items[i].index-r.prevMaxIndex)
+	}
+	hybridqp.SortS1ByS2(r.windowIndex, r.currBufIndex)
+
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[j].inOrdinal],
+			&r.auxRecord.ColVals[r.auxProcessor[j].outOrdinal],
+			r.windowIndex...,
+		)
+	}
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) updateAuxColBothRecord(inRecord *record.Record) {
+	clone := r.auxRecord.Clone()
+	r.auxRecord.Reuse()
+	sort.Ints(r.interBufIndex)
+
+	r.currBufIndex = r.currBufIndex[:0]
+	for i := range r.prevBufIndex {
+		if hybridqp.BinarySearch(r.prevBufIndex[i], r.interBufIndex) {
+			r.currBufIndex = append(r.currBufIndex, i)
+		}
+	}
+
+	r.prevBufIndex = r.prevBufIndex[:0]
+	for i := range r.buf.items {
+		r.prevBufIndex = append(r.prevBufIndex, r.buf.items[i].index-r.prevMaxIndex)
+	}
+	hybridqp.SortS1ByS2(r.windowIndex, r.prevBufIndex)
+	cs, ws := 0, 0
+	for i := range r.buf.items {
+		if hybridqp.BinarySearch(r.buf.items[i].index, r.interBufIndex) {
+			// inserts elements still remained in the heap
+			for j := range r.auxProcessor {
+				r.auxProcessor[j].auxHelperFunc(
+					&clone.ColVals[r.auxProcessor[j].outOrdinal],
+					&r.auxRecord.ColVals[r.auxProcessor[j].outOrdinal],
+					r.currBufIndex[cs],
+				)
+			}
+			cs++
+		} else {
+			// inserts elements pushed from the heap
+			for j := range r.auxProcessor {
+				r.auxProcessor[j].auxHelperFunc(
+					&inRecord.ColVals[r.auxProcessor[j].inOrdinal],
+					&r.auxRecord.ColVals[r.auxProcessor[j].outOrdinal],
+					r.windowIndex[ws],
+				)
+			}
+			ws++
+		}
+	}
+	clone.Reuse()
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) reset() {
+	r.prevBufIndex = r.prevBufIndex[:0]
+	r.currBufIndex = r.currBufIndex[:0]
+	r.interBufIndex = r.interBufIndex[:0]
+	r.windowIndex = r.windowIndex[:0]
+	r.buf.sortByTime = false
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) updatePrevItem(
+	inRecord *record.Record, start, end int,
+) {
+	if len(r.auxProcessor) == 0 {
+		r.buf.append(inRecord, start, end, r.inOrdinal)
+	} else {
+		r.buf.sortByTime = true
+		sort.Sort(r.buf)
+		for i := range r.buf.items {
+			r.prevBufIndex = append(r.prevBufIndex, r.buf.items[i].index)
+		}
+		r.buf.sortByTime = false
+		sort.Sort(r.buf)
+		r.prevMaxIndex = r.buf.maxIndex + 1
+
+		r.windowIndex = r.buf.appendForAux(inRecord, start, end, r.inOrdinal)
+
+		for i := range r.buf.items {
+			r.currBufIndex = append(r.currBufIndex, r.buf.items[i].index)
+		}
+
+		r.interBufIndex = hybridqp.Intersect(r.prevBufIndex, r.currBufIndex)
+
+		r.buf.sortByTime = true
+		sort.Sort(r.buf)
+
+		if !hybridqp.CompareSlice(r.interBufIndex, r.prevBufIndex) {
+			r.updateAuxColBothRecord(inRecord)
+		} else {
+			r.updateAuxColInRecord(inRecord)
+		}
+	}
+	r.reset()
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) updateCurrItem(
+	inRecord *record.Record, start, end int,
+) {
+	if len(r.auxProcessor) == 0 {
+		r.buf.append(inRecord, start, end, r.inOrdinal)
+	} else {
+		r.buf.sortByTime = true
+		sort.Sort(r.buf)
+		r.prevMaxIndex = r.buf.maxIndex + 1
+		r.windowIndex = r.buf.appendForAux(inRecord, start, end, r.inOrdinal)
+		for j := range r.auxProcessor {
+			r.auxProcessor[j].auxHelperFunc(
+				&inRecord.ColVals[r.auxProcessor[j].inOrdinal],
+				&r.auxRecord.ColVals[r.auxProcessor[j].outOrdinal],
+				r.windowIndex...,
+			)
+		}
+		r.windowIndex = r.windowIndex[:0]
+		r.currBufIndex = r.currBufIndex[:0]
+		r.buf.sortByTime = false
+	}
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) processFirstWindow(
+	inRecord, outRecord *record.Record, sameWindow, multiWindow bool, start, end int,
+) {
+	r.updatePrevItem(inRecord, start, end)
+	if multiWindow || !sameWindow {
+		r.buf.sortByTime = true
+		sort.Sort(r.buf)
+		if r.buf.Len() > 0 {
+			r.appendPrevItem(r.auxRecord, outRecord)
+		}
+		r.buf.Reset()
+	}
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) processLastWindow(
+	intRecord *record.Record, start, end int,
+) {
+	r.updateCurrItem(intRecord, start, end)
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) processMiddleWindow(
+	intRecord, outRecord *record.Record, start, end int,
+) {
+	if len(r.auxProcessor) == 0 {
+		r.buf.append(intRecord, start, end, r.inOrdinal)
+	} else {
+		r.prevMaxIndex = r.buf.maxIndex + 1
+		r.windowIndex = r.buf.appendForAux(intRecord, start, end, r.inOrdinal)
+	}
+	r.buf.sortByTime = true
+	sort.Sort(r.buf)
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(intRecord, outRecord, start)
+	}
+	r.buf.Reset()
+}
+
+func (r *{{.name}}Col{{.Name}}HeapReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	if len(r.auxProcessor) > 0 && r.auxRecord == nil {
+		r.auxRecord = record.NewRecordBuilder(p.OutputPoint.Record.Schema)
+	}
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+	var end int
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+		if i == firstIndex && r.buf.Len() > 0 {
+			r.processFirstWindow(inRecord, outRecord, param.sameWindow,
+				firstIndex != lastIndex, int(start), end)
+		} else if i == lastIndex && param.sameWindow {
+			r.processLastWindow(inRecord, int(start), end)
+		} else {
+			r.processMiddleWindow(inRecord, outRecord, int(start), end)
+		}
+	}
+}
+{{- end}}
+{{end}}
