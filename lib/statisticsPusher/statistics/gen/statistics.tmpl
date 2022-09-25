@@ -1,0 +1,159 @@
+/*
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package statistics
+
+import (
+	{{- if eq .EnablePush "Y"}}
+	"sync"
+	{{- end}}
+	"sync/atomic"
+	{{- if eq .PushDuration "Y"}}
+	"time"
+	{{- end}}
+)
+
+type {{.Name}}Statistics struct {
+	{{- range .Items}}
+	item{{.}} int64
+	{{- end}}
+
+	{{if eq .EnablePush "Y"}}
+	mu sync.RWMutex
+	buf []byte
+	{{- end}}
+
+	tags map[string]string
+}
+
+var instance{{.Name}}Statistics = &{{.Name}}Statistics{}
+
+func New{{.Name}}Statistics() *{{.Name}}Statistics {
+	return instance{{.Name}}Statistics
+}
+
+func (s *{{$.Name}}Statistics) Init(tags map[string]string) {
+	s.tags = make(map[string]string)
+	for k, v := range tags {
+		s.tags[k] = v
+	}
+}
+
+func (s *{{$.Name}}Statistics) Collect(buffer []byte) ([]byte, error) {
+	data := map[string]interface{}{
+		{{- range .Items}}
+		"{{.}}" : s.item{{.}},
+		{{- end}}
+	}
+
+	buffer = AddPointToBuffer("{{.Measurement}}", s.tags, data, buffer)
+
+	{{- if eq .EnablePush "Y"}}
+	if len(s.buf) > 0 {
+		s.mu.Lock()
+		buffer = append(buffer, s.buf...)
+		s.buf = s.buf[:0]
+		s.mu.Unlock()
+	}
+	{{- end}}
+
+	return buffer, nil
+}
+
+{{range .Items}}
+func (s *{{$.Name}}Statistics) Add{{.}}(i int64) {
+	atomic.AddInt64(&s.item{{.}}, i)
+}
+{{end}}
+
+{{range .SetItems}}
+func (s *{{$.Name}}Statistics) Set{{.}}(i int64) {
+	s.item{{.}} = i
+}
+{{end}}
+
+{{if eq .EnablePush "Y"}}
+
+func (s *{{$.Name}}Statistics) Push(item *{{$.Name}}StatItem) {
+	if !item.Validate() {
+		return
+	}
+
+	data := item.Values()
+	tags := item.Tags()
+	AllocTagMap(tags, s.tags)
+
+	s.mu.Lock()
+	s.buf = AddPointToBuffer("{{$.Measurement}}", tags, data, s.buf)
+	s.mu.Unlock()
+}
+
+type {{$.Name}}StatItem struct {
+    validateHandle func(item *{{$.Name}}StatItem) bool
+
+	{{range .PushItems}}
+	{{.}} int64
+	{{- end}}
+
+	{{range .PushTags}}
+	{{.}} string
+	{{- end}}
+
+	{{if eq $.PushDuration "Y"}}
+	begin time.Time
+	duration int64
+	{{- end}}
+}
+
+{{if eq $.PushDuration "Y"}}
+func (s *{{$.Name}}StatItem) Duration() int64 {
+    if s.duration == 0 {
+		s.duration = time.Since(s.begin).Milliseconds()
+	}
+	return s.duration
+}
+{{end}}
+
+func (s *{{$.Name}}StatItem) Push() {
+	New{{$.Name}}Statistics().Push(s)
+}
+
+func (s *{{$.Name}}StatItem) Validate() bool {
+    if s.validateHandle == nil {
+        return true
+    }
+	return s.validateHandle(s)
+}
+
+func (s *{{$.Name}}StatItem) Values() map[string]interface{} {
+	return map[string]interface{}{
+		{{- range .PushItems}}
+		"{{.}}": s.{{.}},
+		{{- end}}
+		{{- if eq $.PushDuration "Y"}}
+		"Duration": s.Duration(),
+		{{- end}}
+	}
+}
+
+func (s *{{$.Name}}StatItem) Tags() map[string]string {
+	return map[string]string{
+		{{- range .PushTags}}
+		"{{.}}": s.{{.}},
+		{{- end}}
+	}
+}
+{{- end}}

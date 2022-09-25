@@ -1,0 +1,135 @@
+
+syntax = "proto3";
+package executor;
+
+option go_package = ".;executor";
+
+message ProcessorOptions {
+    string               Name = 23;
+    string               Expr = 1;
+    repeated VarRef      Aux = 2;
+    repeated Measurement Sources = 3;
+    Interval             Interval = 4;
+    repeated string      Dimensions = 5;
+    map<string, bool>    GroupBy = 19;
+    int32       Fill = 6;
+    double      FillValue = 7;
+    string      Condition = 8;
+    int64       StartTime = 9;
+    int64       EndTime = 10;
+    string      Location = 21;
+    bool        Ascending = 11;
+    int64       Limit = 12;
+    int64       Offset = 13;
+    int64       SLimit = 14;
+    int64       SOffset = 15;
+    bool        StripName = 22;
+    bool        Dedupe = 16;
+    int64       MaxSeriesN = 18;
+    bool        Ordered = 20;
+    int64       ChunkSize = 25;
+    int64       MaxParallel = 26;
+    string      Query = 27;
+    int64       HintType = 28;
+    int64       EnableBinaryTreeMerge = 29;
+    uint64      TraceId = 30;
+    bytes       SeriesKey = 31;
+}
+
+message Measurement {
+    string Database = 1;
+    string RetentionPolicy = 2;
+    string Name = 3;
+    string Regex = 4;
+    bool   IsTarget = 5;
+    string SystemIterator = 6;
+}
+
+message Interval {
+    int64 Duration = 1;
+    int64 Offset = 2;
+}
+
+message IteratorStats {
+    int64 SeriesN = 1;
+    int64 PointN = 2;
+}
+
+message VarRef {
+    string Val = 1;
+    int32  Type = 2;
+}
+
+message QueryParam {
+    string SeriesKey = 1;
+    string TagsAsKey = 2;
+    int32  QueryFields = 3;
+    float  QueryPct = 4;
+}
+
+message QuerySchema {
+    string          QueryFields = 2;
+    repeated string ColumnNames = 3;
+    ProcessorOptions Opt = 4;
+}
+
+message QueryTable {
+    Measurement M = 1;
+    RowDataType Rt = 2;
+}
+
+message Chunk {
+    string   Name = 1;
+    repeated ChunkTags   Tags = 2;
+    repeated int64       TagIndex = 3;
+    repeated int64       Time = 4;
+    repeated int64       IntervalIndex = 5;
+    repeated Column      Columns = 6;
+}
+
+message RowDataType {
+	repeated int64 Aux = 1;
+	string   Fields    = 2;
+	map<string, int64> indexByName = 3;
+}
+
+message ChunkTags {
+	bytes  Subset = 1;
+}
+
+message Column {
+    int64  DataType = 1;
+    repeated double FloatValues   = 2;
+    repeated int64  IntegerValues = 3;
+    bytes  StringBytes = 4;
+    repeated uint32 Offset = 8;
+    repeated bool   BooleanValues  = 5;
+    repeated int64 Times = 6;
+    bytes  NilsV2 = 7;
+}
+
+message ExprOptions {
+    string Expr = 1;
+	string Ref  = 2;
+}
+
+message QueryNode {
+    string          Name      = 1;
+    repeated bytes  Inputs    = 3;
+    RowDataType     Rt        = 5;
+    repeated ExprOptions Ops  = 6;
+    uint32   Exchange         = 7;
+    int64           limit     = 8;
+    int64           Offset    = 9;
+    int64           limitType = 10;
+}
+
+message RemoteQuery {
+    string Database = 1;
+    uint32 PtID     = 2;
+    repeated uint64 ShardIDs = 3;
+    bytes  Opt      = 4;
+    uint64 NodeID   = 5;
+    bool analyze    = 6;
+    bytes QueryNode = 7;
+}

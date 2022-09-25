@@ -1,0 +1,65 @@
+/*
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package executor
+
+import (
+	"reflect"
+
+	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
+	"github.com/openGemini/openGemini/engine/hybridqp"
+)
+
+func init() {
+	 {{- range .}}
+    logicPlanNewHandler[reflect.TypeOf(&{{.Name}}{}).String()] = func() hybridqp.QueryNode {
+        return &{{.Name}}{}
+    }
+    {{- end}}
+}
+
+{{range .}}
+func (p *{{.Name}}) SetInputs(inputs []hybridqp.QueryNode) {
+    if len(inputs) == 0 {
+        return
+    }
+    {{- if eq .Inputs "one"}}
+	p.input = inputs[0]
+	{{- else if eq .Inputs "N"}}
+	p.inputs = inputs
+	{{- end}}
+}
+
+func (p *{{.Name}}) MarshalBinary() ([]byte, error) {
+    {{- if eq .Inputs "one" }}
+    return (&QueryNodeCodec{}).Marshal(p, p.input)
+    {{- else if eq .Inputs "N" }}
+    return (&QueryNodeCodec{}).Marshal(p, p.inputs...)
+    {{- else if eq .Inputs "null" }}
+    return (&QueryNodeCodec{}).Marshal(p, nil)
+    {{- end }}
+}
+
+func (p *{{.Name}}) UnmarshalBinary(pb *internal.QueryNode) error {
+    {{- if eq .Inputs "one" }}
+    return (&QueryNodeCodec{}).Unmarshal(&p.LogicalPlanBase, p, pb, inputsNumberFlagOne)
+    {{- else if eq .Inputs "N" }}
+    return (&QueryNodeCodec{}).Unmarshal(&p.LogicalPlanBase, p, pb, inputsNumberFlagN)
+    {{- else if eq .Inputs "null" }}
+    return (&QueryNodeCodec{}).Unmarshal(&p.LogicalPlanBase, p, pb, inputsNumberFlagNull)
+    {{- end }}
+}
+{{end}}

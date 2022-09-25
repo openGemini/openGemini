@@ -1,0 +1,21 @@
+{
+    "Name":"Meta",
+    "Measurement":"meta",
+    "Items":[
+        "SnapshotTotal",
+        "SnapshotDataSize",
+        "SnapshotUnmarshalDuration",
+        "LeaderSwitchTotal",
+        "StoreApplyTotal"
+    ],
+    "SetItems":[],
+    "EnablePush":"Y",
+    "PushItems":[
+        "Status",
+        "LTime"
+    ],
+    "PushTags":[
+        "NodeID",
+        "Host"
+    ]
+}
