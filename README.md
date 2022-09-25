@@ -188,7 +188,7 @@ select * from sensor
 
 2. Scan the QR code below to follow the official account of openGemini
 
-![img](images\qrt.png)
+![img](images/qrt.png)
 
 3. Community Email: community.ts@opengemini.org
 
