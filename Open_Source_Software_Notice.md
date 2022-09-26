@@ -504,16 +504,3 @@ Please see above.
 
 Please see above.
 
-
-### Written Offer
-This product contains software whose rights holders license it on the terms of the GNU General Public License, version 2 (GPLv2) and/or other open source software licenses. We will provide you and any third party with the source code of the software licensed under an open source software license if you send us a written request by mail or email to the following addresses:
-
-foss@huawei.com
-
-detailing the name of the product and the firmware version for which you need the source code and indicating how we can contact you.
-
-Please note you need to make a payment before you obtain the complete Corresponding Source Code from us. For how much you will pay and how we will deliver the complete Corresponding Source Code to you, we will further discuss it by mail or email.
-
-This offer is valid to anyone in receipt of this information.
-
-**THIS OFFER IS VALID FOR THREE YEARS FROM THE MOMENT WE DISTRIBUTED THE PRODUCT OR FIRMWARE.**
