@@ -182,19 +182,9 @@ select * from sensor
 
 ## Contact Us
 
-1. Join our WeChat user group
+1. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
 
-   Send a friend request to xiangyu5632 with a message saying “openGemini”, and we will invite you to our user group
-
-2. Scan the QR code below to follow the official account of openGemini
-
-![img](images/qrt.png)
-
-3. Community Email: community.ts@opengemini.org
-
-4. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
-
-5. [Twitter]()
+2. [Twitter]()
 
 ## License
 
