@@ -23,8 +23,7 @@ import (
 )
 
 func TestWalReplayParallel(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	config := TestConfig{100, 101, time.Second, false}
 	if testing.Short() && config.short {
 		t.Skip("skipping test in short mode.")
@@ -110,8 +109,7 @@ func TestWalReplayParallel(t *testing.T) {
 }
 
 func TestWalReplaySerial(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	config := TestConfig{100, 101, time.Second, false}
 	if testing.Short() && config.short {
 		t.Skip("skipping test in short mode.")
