@@ -25,10 +25,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,12 +50,8 @@ func init() {
 	immutable.EnableMergeOutOfOrder = false
 	logger.InitLogger(config.NewLogger(config.AppStore))
 	immutable.Init()
-	cleanupTestDataPath("")
 }
 
-var dirSeg = time.Now().UnixNano()
-
-const testRootDir = "/tmp/data/"
 const defaultDb = "db0"
 const defaultRp = "rp0"
 const defaultShGroupId = uint64(1)
@@ -68,11 +62,6 @@ const defaultMeasurementName = "cpu"
 
 type checkSingleCursorFunction func(cur comm.KeyCursor, expectRecords *sync.Map, total *int, ascending bool, stop chan struct{}) error
 type checkAggSingleCursorFunction func(cur comm.KeyCursor, expectRecords *sync.Map, stop chan struct{}) error
-
-func TmpDir() string {
-	seq := atomic.AddInt64(&dirSeg, 1)
-	return filepath.Join(testRootDir, strconv.FormatInt(seq, 16))
-}
 
 func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interval time.Duration,
 	tm time.Time, fullField, inc bool, fixBool bool, tv ...int) ([]influx.Row, int64, int64) {
@@ -213,14 +202,6 @@ func createFieldAux(fieldsName []string) []influxql.VarRef {
 	}
 
 	return fieldAux
-}
-
-func cleanupTestDataPath(dir string) {
-	if len(dir) == 0 {
-		_ = os.RemoveAll(testRootDir)
-	} else {
-		_ = os.RemoveAll(dir)
-	}
 }
 
 func createShard(db, rp string, ptId uint32, pathName string) (*shard, error) {
@@ -950,8 +931,7 @@ func TestAggQueryOnlyInImmutable(t *testing.T) {
 
 // data: all data in immutable
 func TestQueryOnlyInImmutable(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 2, time.Second, false},
 		{200, 1001, time.Second, false},
@@ -1039,8 +1019,7 @@ func TestQueryOnlyInImmutable(t *testing.T) {
 
 // data: all data in immutable
 func TestQueryOnlyInImmutableWithLimit(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 1001, time.Second, false},
 	}
@@ -1128,8 +1107,7 @@ func TestQueryOnlyInImmutableWithLimit(t *testing.T) {
 }
 
 func TestQueryOnlyInImmutableWithLimitOptimize(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 1001, time.Second, false},
 	}
@@ -1215,8 +1193,7 @@ func TestQueryOnlyInImmutableWithLimitOptimize(t *testing.T) {
 }
 
 func TestQueryOnlyInImmutableWithLimitWithGroupBy(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 2, time.Second, false},
 		{200, 1001, time.Second, false},
@@ -1298,8 +1275,7 @@ func TestQueryOnlyInImmutableWithLimitWithGroupBy(t *testing.T) {
 
 // data: all data in immutable
 func TestQueryOnlyInImmutableGroupBy(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 2, time.Second, false},
 		{200, 1001, time.Second, false},
@@ -1378,8 +1354,7 @@ func TestQueryOnlyInImmutableGroupBy(t *testing.T) {
 //
 // data: all data in mutable
 func TestQueryOnlyInMutableTable(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{1001, 1, time.Second, false},
 		{200, 2, time.Second, false},
@@ -1473,8 +1448,7 @@ func TestQueryOnlyInMutableTable(t *testing.T) {
 // select tag/field: no tag, all field
 // condition: no tag filter, query different time range
 func TestQueryImmutableUnorderedNoOverlap(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 2, time.Second, false},
 		{200, 1001, time.Second, false},
@@ -1573,8 +1547,7 @@ func TestQueryImmutableUnorderedNoOverlap(t *testing.T) {
 // select tag/field: no tag, all field
 // condition: no tag filter, query different time range
 func TestQueryMutableUnorderedNoOverlap(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 2, time.Second, false},
 		{200, 1001, time.Second, false},
@@ -1670,8 +1643,7 @@ func TestQueryMutableUnorderedNoOverlap(t *testing.T) {
 // select tag/field: no tag, all field
 // condition: no tag filter, query different time range
 func TestQueryImmutableSequenceWrite(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{1001, 1, time.Second, false},
 		{20, 2, time.Second, false},
@@ -1762,8 +1734,7 @@ func TestQueryImmutableSequenceWrite(t *testing.T) {
 }
 
 func TestQueryOnlyInImmutableReload(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	config := TestConfig{100, 1001, time.Second, false}
 	if testing.Short() && config.short {
 		t.Skip("skipping test in short mode.")
@@ -2068,8 +2039,7 @@ func TestEngine_DropMeasurement(t *testing.T) {
 }
 
 func TestEngine_Statistics_Shard(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	configs := []TestConfig{
 		{200, 2, time.Second, false},
 	}
@@ -2115,8 +2085,7 @@ func TestEngine_Statistics_Shard(t *testing.T) {
 }
 
 func TestSnapshotLimitTsspFiles(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	msNames := []string{"cpu"}
 	// step1: clean env
 	_ = os.RemoveAll(testDir)
