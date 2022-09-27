@@ -43,13 +43,11 @@ import (
 
 func init() {
 	immutable.EnableMergeOutOfOrder = false
-	cleanupTestDataPath("")
 	logger.InitLogger(config.NewLogger(config.AppStore))
 }
 
 func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
@@ -1831,6 +1829,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				defer chunkReader.Release()
 
 				// this is the output for this stmt
 				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -1844,7 +1843,6 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 				chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
 				go func() {
 					chunkReader.Work(ctx)
-					chunkReader.Release()
 				}()
 				go agg.Work(ctx)
 
@@ -1872,8 +1870,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 }
 
 func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
@@ -3332,6 +3329,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				defer chunkReader.Release()
 
 				// this is the output for this stmt
 				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -3345,7 +3343,6 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 				chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
 				go func() {
 					chunkReader.Work(ctx)
-					chunkReader.Release()
 				}()
 				go agg.Work(ctx)
 
@@ -3381,8 +3378,7 @@ func Test_PreAggregation_OutOfOrderMissingData_SingleCall(t *testing.T) {
 }
 
 func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
@@ -4799,6 +4795,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				defer chunkReader.Release()
 
 				// this is the output for this stmt
 				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -4813,7 +4810,6 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 
 				go func() {
 					chunkReader.Work(ctx)
-					chunkReader.Release()
 				}()
 				go agg.Work(ctx)
 
@@ -4939,8 +4935,7 @@ func getMinMaxBoolWithMemtable(rows []influx.Row, outRows []influx.Row) (int64, 
 }
 
 func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
@@ -6364,6 +6359,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				defer chunkReader.Release()
 
 				// this is the output for this stmt
 				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -6377,7 +6373,6 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 				chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
 				go func() {
 					chunkReader.Work(ctx)
-					chunkReader.Release()
 				}()
 				go agg.Work(ctx)
 
@@ -6405,8 +6400,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 }
 
 func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
@@ -7797,6 +7791,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 				keyCursors = append(keyCursors, cur)
 			}
 			chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+			defer chunkReader.Release()
 
 			// this is the output for this stmt
 			outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -7810,7 +7805,6 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 			chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
 			go func() {
 				chunkReader.Work(ctx)
-				chunkReader.Release()
 			}()
 			go agg.Work(ctx)
 
@@ -8008,8 +8002,7 @@ var aggOps_MultiCalls = []hybridqp.ExprOptions{
 }
 
 func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
@@ -8179,6 +8172,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				defer chunkReader.Release()
 
 				// this is the output for this stmt
 				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -8192,7 +8186,6 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
 				go func() {
 					chunkReader.Work(ctx)
-					chunkReader.Release()
 				}()
 				go agg.Work(ctx)
 
@@ -8221,8 +8214,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 }
 
 func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
-	testDir := TmpDir()
-	defer cleanupTestDataPath(testDir)
+	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
 	msNames := []string{"cpu"}
 	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
@@ -8379,6 +8371,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				defer chunkReader.Release()
 
 				// this is the output for this stmt
 				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
@@ -8392,7 +8385,6 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
 				go func() {
 					chunkReader.Work(ctx)
-					chunkReader.Release()
 				}()
 				go agg.Work(ctx)
 
@@ -8427,18 +8419,6 @@ func MustParseSelectStatement(s string) *influxql.SelectStatement {
 		panic(err)
 	}
 	return stmt.(*influxql.SelectStatement)
-}
-
-type mockShardMapper struct {
-	MapShardsFn func(sources influxql.Sources, t influxql.TimeRange) query.ShardGroup
-}
-
-func (m *mockShardMapper) MapShards(sources influxql.Sources, t influxql.TimeRange, opt query.SelectOptions, condition influxql.Expr) (query.ShardGroup, error) {
-	shards := m.MapShardsFn(sources, t)
-	return shards, nil
-}
-func (m *mockShardMapper) Close() error {
-	return nil
 }
 
 type mockShardGroup struct {
@@ -8488,7 +8468,6 @@ func (sg *mockShardGroup) MapTypeBatch(measurement *influxql.Measurement, field 
 }
 
 func (*mockShardGroup) Close() error {
-	//cleanupTestDataPath("")
 	return nil
 }
 
