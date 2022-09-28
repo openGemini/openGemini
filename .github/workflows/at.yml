@@ -1,0 +1,24 @@
+name: Acceptance Testing
+
+on: [pull_request, push]
+
+env:
+  GO111MODULE: on
+  GONOSUMDB: "*"
+  GOSUMDB: off
+
+jobs:
+  AT:
+    name: AT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - name: build
+        run: |
+          make go_build
+          bash scripts/install_cluster.sh
+          ps -ef | grep ts- | grep -v grep
+      - name: run at
+        run: make at

@@ -61,7 +61,7 @@ killall -w dlv
 if [ ! -d "test_log" ]
 then
 	mkdir -p test_log
-else	
+else
 	#mv test_log test_log_tmp
 	rm -rf test_log
 	mkdir -p test_log
@@ -77,7 +77,7 @@ go mod download
 #
 echo "start run UT test "
 
-go test -count=1 $(go list ./... | grep -v tests | grep -v github.com/hashicorp) -v | tee ./test_log/test_ut.log
+go test -count=1 -short $(go list ./... | grep -v tests | grep -v github.com/hashicorp) -v | tee ./test_log/test_ut.log
 
 echo "end run ut test "
 find $PROJECT_DIR -type d | grep -vE "(\.cid|\.build_config|tests)" | xargs failpoint-ctl disable
@@ -107,7 +107,7 @@ do
     sed -i "s/cache-table-meta-block = false/cache-table-meta-block = true/g" config/openGemini-2.conf
     sed -i "s/cache-table-data-block = false/cache-table-data-block = true/g" config/openGemini-3.conf
     sed -i "s/cache-table-meta-block = false/cache-table-meta-block = true/g" config/openGemini-3.conf
-    sh scripts/install_cluster.sh
+    bash scripts/install_cluster.sh
 
     sleep 10
     echo "start run test: " $t
@@ -153,7 +153,7 @@ do
     sed -i "s/read-cache-limit = 0/read-cache-limit = 5368709120/g" ${store}
     done
 
-    sh scripts/install_cluster.sh
+    bash scripts/install_cluster.sh
 
     sleep 10
     echo "start run test: " $t

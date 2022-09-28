@@ -1,0 +1,47 @@
+name: Continuous Integration
+
+on: [pull_request, push]
+
+env:
+  GO111MODULE: on
+  GONOSUMDB: "*"
+  GOSUMDB: off
+
+jobs:
+  CommitLint:
+    name: CommitLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 5
+      - name: commitlint
+        uses: wagoid/commitlint-github-action@v5
+  Build:
+    name: Build
+    needs: CommitLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - run: |
+          python build.py --clean
+  CI:
+    name: CI
+    needs: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - name: Setup Go environment
+        uses: actions/setup-go@v3
+        with:
+          go-version: '>=1.16.8'
+      - name: gotest
+        run: |
+          go mod tidy
+          make gotest
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3

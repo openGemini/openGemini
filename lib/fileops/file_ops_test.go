@@ -30,7 +30,7 @@ import (
 func init() {}
 
 //_00001.wal
-func TestGlob(t *testing.T) {
+func _TestGlob(t *testing.T) {
 	files := []string{
 		"/tmp/test/a000000001-000000001.tsm",
 		"/tmp/test/a000000002-000000001.tsm",

@@ -3,19 +3,19 @@
 #	Shell script to install openGemini as a cluster at one node.
 #
 
-ps -ef | grep -v grep | grep -v init_cluster_influxdb.sh | grep ts-store | grep $USER > /dev/null
+ps -ef | grep -v grep | grep ts-store | grep $USER > /dev/null
 if [ $? == 0 ];then
 	killall -9 -w ts-store
 fi
 
-ps -ef | grep -v grep | grep -v init_cluster_influxdb.sh | grep ts-meta | grep $USER > /dev/null
+ps -ef | grep -v grep | grep ts-meta | grep $USER > /dev/null
 if [ $? == 0 ];then
-	killall -9 -w ts-meta
+  killall -9 -w ts-meta
 fi
 
-ps -ef | grep -v grep | grep -v init_cluster_influxdb.sh | grep ts-sql | grep $USER > /dev/null
+ps -ef | grep -v grep | grep ts-sql | grep $USER > /dev/null
 if [ $? == 0 ];then
-	killall -9 -w ts-sql
+  killall -9 -w ts-sql
 fi
 
 declare -a nodes[3]
