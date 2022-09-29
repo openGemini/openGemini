@@ -15,6 +15,5 @@
 
 **v1.0.0 (2022.12)**
 
-- [ ] Select into.
 - [ ] Time series data prediction.
 - [ ] Time series data anomaly detection.
