@@ -17,3 +17,6 @@
 
 - [ ] Time series data prediction.
 - [ ] Time series data anomaly detection.
+- [ ] Stream
+- [ ] Continue Query
+- [ ] down-sampling
