@@ -27,11 +27,11 @@ import (
 	"path"
 	"path/filepath"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
@@ -184,14 +184,7 @@ func (vfs) ReadFile(filename string, _ ...FSOption) ([]byte, error) {
 }
 
 func (vfs) CreateTime(name string) (*time.Time, error) {
-	fi, err := os.Stat(name)
-	if err != nil {
-		return nil, err
-	}
-
-	st := fi.Sys().(*syscall.Stat_t)
-	tm := time.Unix(st.Ctim.Sec, st.Ctim.Nsec)
-	return &tm, nil
+	return sysinfo.CreateTime(name)
 }
 
 func (vfs) Truncate(name string, size int64, _ ...FSOption) error {
