@@ -18,7 +18,6 @@ package immutable_test
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -49,7 +48,7 @@ var defaultSchemas = record.Schemas{
 
 var defaultInterval = time.Second.Nanoseconds()
 var timeBegin = time.Date(2022, 7, 22, 17, 39, 0, 0, time.UTC).UnixNano()
-var saveDir = "/tmp/test_merge/"
+var saveDir = ""
 var defaultTier uint64 = meta.Warm
 
 func init() {
@@ -63,8 +62,8 @@ type MergeTestHelper struct {
 	rvMap   RecordValuesMap
 }
 
-func removeDataDir() {
-	_ = os.RemoveAll(saveDir + "/mst")
+func setDataDir(t *testing.T) {
+	saveDir = t.TempDir()
 }
 
 func NewMergeTestHelper(conf *immutable.Config) *MergeTestHelper {
@@ -152,7 +151,7 @@ func (h *MergeTestHelper) save(seq uint64, order bool) error {
 func TestMergeHelper_Merge_mod1(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	mh := NewMergeTestHelper(immutable.NewConfig())
 	mh.genRecord(100, timeBegin-defaultInterval*10, 10, false)
 	if !assert.NoError(t, mh.save(1, true)) {
@@ -174,7 +173,7 @@ func TestMergeHelper_Merge_mod1(t *testing.T) {
 func TestMergeHelper_Merge_mod2(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 50
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -216,7 +215,7 @@ SeriesID=1 部分合入第一个文件，部分合入第二个文件，
 func TestMergeHelper_Merge_mod3(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 100
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -261,7 +260,7 @@ func TestMergeHelper_Merge_mod3(t *testing.T) {
 func TestMergeHelper_Merge_mod4(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 10
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -292,7 +291,7 @@ func TestMergeHelper_Merge_mod4(t *testing.T) {
 func TestMergeHelper_Merge_mod5(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 10
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -358,7 +357,7 @@ func TestMergeHelper_Merge_mod5(t *testing.T) {
 func TestMergeHelper_Merge_mod6(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 100
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -395,7 +394,7 @@ func TestMergeHelper_Merge_mod6(t *testing.T) {
 func TestMergeHelper_Merge_mod7(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 10
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -819,7 +818,7 @@ func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatV
 func TestMergeHelper_Merge_zeroSeriesID(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 10
 	mh := NewMergeTestHelper(immutable.NewConfig())
 
@@ -846,7 +845,7 @@ func TestMergeHelper_Merge_zeroSeriesID(t *testing.T) {
 func TestMergeHelper_Merge_diffSchema(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	limit := 10
 	conf := immutable.NewConfig()
 	mh := NewMergeTestHelper(conf)
@@ -934,7 +933,7 @@ func openFilesFromDir(dir string, store *immutable.MmsTables, order bool) error 
 func TestMergeHelper_Merge_SegmentLimit1(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 
 	conf := immutable.NewConfig()
 	conf.SetMaxRowsPerSegment(40)
@@ -969,7 +968,7 @@ func TestMergeHelper_Merge_SegmentLimit1(t *testing.T) {
 func TestMergeHelper_Merge_SegmentLimit2(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	conf := immutable.NewConfig()
 	conf.SetMaxRowsPerSegment(40)
 	conf.SetMaxSegmentLimit(3)
@@ -1024,7 +1023,7 @@ func TestMergeHelper_Merge_SegmentLimit2(t *testing.T) {
 func TestMergeHelper_Merge_SegmentLimit3(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 	rowPerSeg := 8
 	conf := immutable.NewConfig()
 	conf.SetMaxRowsPerSegment(rowPerSeg)
@@ -1069,7 +1068,7 @@ func TestMergeHelper_Merge_SegmentLimit3(t *testing.T) {
 func TestMergeHelper_Merge_First(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 
 	conf := immutable.NewConfig()
 	conf.SetMaxRowsPerSegment(40000)
@@ -1109,7 +1108,7 @@ func TestMergeHelper_Merge_First(t *testing.T) {
 func TestMerge_SplitFile(t *testing.T) {
 	cacheIns := readcache.GetReadCacheIns()
 	cacheIns.Purge()
-	removeDataDir()
+	setDataDir(t)
 
 	conf := immutable.NewConfig()
 	conf.SetFilesLimit(10)
