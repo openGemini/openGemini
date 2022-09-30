@@ -115,15 +115,15 @@ func compareRow(mst string, tags map[string]string, fields map[string]interface{
 	for i, item := range gotFields {
 		if item.StrValue != "" {
 			if item.StrValue != expFields[i].StrValue {
-				return fmt.Errorf("error fields value, index: %d, exp: %s; got: %s",
-					i, expFields[i].StrValue, item.StrValue)
+				return fmt.Errorf("error fields value(string), index: %d, key: %s, exp: %s; got: %s",
+					i, expFields[i].Key, expFields[i].StrValue, item.StrValue)
 			}
 			continue
 		}
 
 		if item.NumValue != expFields[i].NumValue {
-			return fmt.Errorf("error fields value, index: %d, exp: %v; got: %v",
-				i, expFields[i].NumValue, item.NumValue)
+			return fmt.Errorf("error fields value(number), index: %d,  key: %s, exp: %v; got: %v",
+				i, expFields[i].Key, expFields[i].NumValue, item.NumValue)
 		}
 	}
 	return nil

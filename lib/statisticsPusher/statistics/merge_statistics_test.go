@@ -75,6 +75,7 @@ func TestMergePush(t *testing.T) {
 	item.StatOutOfOrderFile(1100)
 	item.StatOutOfOrderFile(2200)
 
+	time.Sleep(time.Millisecond)
 	item.Push()
 	buf, err := stat.Collect(nil)
 	if !assert.NoError(t, err) {
