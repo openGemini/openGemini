@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
@@ -44,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/strings"
+	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -86,14 +86,16 @@ type Engine struct {
 const maxInt = int(^uint(0) >> 1)
 
 func sysTotalMemory() int {
-	var si syscall.Sysinfo_t
-	if err := syscall.Sysinfo(&si); err != nil {
-		panic("syscall failed")
+	sysTotalMem, err := sysinfo.TotalMemory()
+	if err != nil {
+		panic(err)
 	}
+
 	totalMem := maxInt
-	if uint64(maxInt)/uint64(si.Totalram) > uint64(si.Unit) {
-		totalMem = int(uint64(si.Totalram) * uint64(si.Unit))
+	if sysTotalMem < uint64(maxInt) {
+		totalMem = int(sysTotalMem)
 	}
+
 	mem := cgroup.GetMemoryLimit()
 	if mem <= 0 || int64(int(mem)) != mem || int(mem) > totalMem {
 		mem = cgroup.GetHierarchicalMemoryLimit()
