@@ -35,11 +35,11 @@ OpenGemini is an open-source time-series database that can be widely used in IoT
 
 ## Third-party supports
 
-![image-20220722152842190](images/image-20220722152842190.png)
+![image-20220927210909436](images/image-20220927210909436.png)
 
 currently openGemini only supports Linux OS, and supports InfluxDB ecosystem toolchains, such as:
 
-Drivers: [JavaScript](https://github.com/node-influx/node-influx)、[Java](https://github.com/influxdata/influxdb-java)、[C/C++](C/C++)、[Ruby](https://github.com/influxdata/influxdb-ruby)、[Go](https://github.com/influxdata/influxdb1-client)、[Python](https://github.com/influxdata/influxdb-python)、[PHP](https://github.com/influxdata/influxdb-php)
+Drivers: [JavaScript](https://github.com/node-influx/node-influx), [Java](https://github.com/influxdata/influxdb-java), [C/C++](C/C++), [Ruby](https://github.com/influxdata/influxdb-ruby), [Go](https://github.com/influxdata/influxdb1-client), [Python](https://github.com/influxdata/influxdb-python), [PHP](https://github.com/influxdata/influxdb-php)
 
 Client: Influx
 
@@ -55,7 +55,7 @@ For a more detailed introduction, please visit our official website [User Guide]
 
 This section mainly contains the following:
 
-- How to compile openGemini source codes
+- How to compile openGemini source code
 - How to run openGemini
 
 ### Compiling environment information
@@ -66,7 +66,7 @@ This section mainly contains the following:
 
 **How to set GO environment variables**
 
-Open /etc/profile configuration file and add the following configurations to the end of the file:
+Open ~/.profile configuration file and add the following configurations to the end of the file:
 
 ```
 export GOPATH=/path/to/dir
@@ -128,14 +128,14 @@ Refer to cluster deployments in [User Guide](http://opengemini.org/docs)
 
 Use the client to connect to openGemini
 
-```
-influx --host 127.0.0.1 port 8086
+```shell
+> influx -host 127.0.0.1 -port 8086
 ```
 
 After successful login, the following message will be displayed
 
 ```sh
-> influx --host 127.0.0.1 --port 8086
+> influx -host 127.0.0.1 -port 8086
 WARN: Connected to http://127.0.0.1:8086, but found no server version.
 Are you sure an InfluxDB server is listening at the given address?
 InfluxDB shell version: 1.8.3
@@ -149,31 +149,39 @@ InfluxDB shell version: 1.8.3
 Create a database
 
 ```
-create database sensordb
+> create database sensordb
+> use sensordb
 ```
 
-Create a table (automatic table creation is supported)
+The openGemini supports three ways for creating a measurement.
+
+- Implicit creation, automatic creation measurement when data is written. By default, partition is based on time.
+- explicit creation, without specifying the partition key, as the same as implicit creation.
 
 ```
-create measurement sensor
+> create measurement sensor
 ```
 
-Specifying partition keys during table creation is also supported. During data storage, the table will be primarily partitioned by time, and then secondarily partitioned according to the specified partition keys.
+- explicit creation, specifying partition keys during table creation, During data storage, the table will be primarily partitioned by time, and then secondarily partitioned according to the specified partition keys.
 
 ```shell
-create measurement sensor with shardkey farmID
+> create measurement sensor with shardkey farmID
 ```
 
 Write data
 
 ```
-insert sensor,farmID="001",deviceId="110" sensor_id="s20",value=50.98
+> insert sensor,farmID="001",device="110" sensorId="s20",value=50.98
 ```
 
 Query data
 
 ```
-select * from sensor
+> select * from sensor
+name: sensor
+time                device farmID sensorId value
+----                ------ ------ -------- -----
+1664285811060281356 "110"  "001"  s20      50.98
 ```
 
 ## Join & Contribute

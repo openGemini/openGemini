@@ -35,7 +35,7 @@ openGemini是一个开源的时序数据库，可广泛应用于物联网、车�
   
 ## 第三方支持
 
-![image-20220718170813377](images/image-20220718170813377.png)
+![image-20220927211159737](images/image-20220927211159737.png)
 
 openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工具链，比如：
 
@@ -68,7 +68,7 @@ openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工
 
 **GO环境变量设置**
 
-打开/etc/profile配置文件，在文件末尾添加如下配置：
+打开 ~/.profile配置文件，在文件末尾添加如下配置：
 
 ```
 export GOPATH=/path/to/dir
@@ -116,9 +116,10 @@ ts-meta  ts-server  ts-sql  ts-store
 
 ### 运行openGemini
 
-单机运行，数据目录默认为 /tmp/openGemini，部分操作系统需要提前创建好/tmp/openGemini目录。如果您想切换成其他目录，也可以在openGemini.singlenode.conf中进行修改。
+单机运行，数据目录默认为/opt/tsdb，部分操作系统需要提前创建好/opt/tsdb目录。如果您想切换成其他目录，也可以在singenode.conf中进行修改。
 
 ```
+> cd openGemini
 > mkdir -p /tmp/openGemini
 > sh scripts/install.sh
 ```
@@ -130,13 +131,13 @@ ts-meta  ts-server  ts-sql  ts-store
 使用influx客户端连接openGemini, [点击下载influx客户端](https://dl.influxdata.com/influxdb/releases/influxdb-1.8.10_linux_amd64.tar.gz)
 
 ```
-> influx --host 127.0.0.1 --port 8086
+> influx -host 127.0.0.1 -port 8086
 ```
 
 登陆成功后显示如下信息
 
 ```sh
-> influx --host 127.0.0.1 --port 8086
+> influx -host 127.0.0.1 -port 8086
 WARN: Connected to http://127.0.0.1:8086, but found no server version.
 Are you sure an InfluxDB server is listening at the given address?
 InfluxDB shell version: 1.8.3
@@ -151,6 +152,7 @@ InfluxDB shell version: 1.8.3
 
 ```
 > create database sensordb
+> use sensordb
 ```
 
 openGemini支持三种方式创建measurement数据表
@@ -159,7 +161,6 @@ openGemini支持三种方式创建measurement数据表
 - 显式创建，不指定分区键，效果与隐式创建一样
 
 ```
-> use sensordb
 > create measurement sensor
 ```
 
@@ -167,7 +168,6 @@ openGemini支持三种方式创建measurement数据表
 
 
 ```shell
-> use sensordb
 > create measurement sensor with shardkey farmID
 ```
 
@@ -189,7 +189,7 @@ time                device   farmID sensorID value
 
 ## 加入贡献
 
-[贡献指南](https://github.com/openGemini/openGemini/blob/main/CONTRIBUTION.md)
+[贡献指南]()
 
 ## 联系我们
 
