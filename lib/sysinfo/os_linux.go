@@ -25,5 +25,5 @@ func TotalMemory() (uint64, error) {
 	if err := syscall.Sysinfo(&si); err != nil {
 		return 0, err
 	}
-	return uint64(si.Totalram) * uint64(si.Unit)
+	return uint64(si.Totalram) * uint64(si.Unit), nil
 }
