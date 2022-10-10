@@ -192,7 +192,7 @@ time                device farmID sensorId value
 
 1. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
 
-2. [Twitter]()
+2. [Twitter](https://twitter.com/openGemini)
 
 ## License
 
