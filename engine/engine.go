@@ -1264,7 +1264,7 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 					// Measurement name not found
 					continue
 				}
-				results[name] = make([][]string, len(tagKeys[name]))
+
 				appendValuesToMap(results, name, values)
 			}
 		}
@@ -1289,8 +1289,11 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 }
 
 func appendValuesToMap(results map[string][][]string, name string, values [][]string) {
+	if _, ok := results[name]; !ok {
+		results[name] = make([][]string, len(values))
+	}
 	for i := 0; i < len(values); i++ {
-		results[name][i] = strings.UnionSlice(values[i])
+		results[name][i] = strings.UnionSlice(append(results[name][i], values[i]...))
 	}
 }
 

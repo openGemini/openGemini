@@ -511,6 +511,35 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 	assert(mcis[0].CardinalityInfos[0].Cardinality == 10, "series count should be 1")
 }
 
+func TestEngine_TagValues(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	if err = eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	dbInfo := eng.DBPartitions["db0"][0]
+	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx.DebugFlush()
+
+	tagsets, err := eng.TagValues("db0", []uint32{0}, map[string][][]byte{
+		msNames[0]: {[]byte("tagkey1")},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	require.Equal(t, 1, len(tagsets))
+	require.Equal(t, 10, len(tagsets[0].Values))
+}
+
 func Test_Engine_DropMeasurement(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
