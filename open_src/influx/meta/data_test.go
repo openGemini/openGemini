@@ -719,6 +719,59 @@ func TestData_MarkRetentionPolicyDelete(t *testing.T) {
 	assert(err == ErrRetentionPolicyIsBeingDelete, "rp should being delete")
 }
 
+func TestData_createIndexGroupIfNeeded(t *testing.T) {
+	data := initData()
+	duration := 24 * time.Hour
+	now := time.Now().Truncate(duration).UTC()
+	rpi := &RetentionPolicyInfo{
+		IndexGroupDuration: duration,
+		IndexGroups: IndexGroupInfos{
+			{
+				ID:        0,
+				StartTime: now,
+				EndTime:   now.Add(duration),
+				Indexes:   make([]IndexInfo, 2),
+			},
+			{
+				ID:        1,
+				StartTime: now.Add(duration),
+				EndTime:   now.Add(2 * duration),
+				Indexes:   make([]IndexInfo, 2),
+			},
+			{
+				ID:        2,
+				StartTime: now.Add(2 * duration),
+				EndTime:   now.Add(3 * duration),
+				Indexes:   make([]IndexInfo, 2),
+			},
+		},
+	}
+	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour))
+	require.Equal(t, 4, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[0], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour))
+	require.Equal(t, 4, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[1], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour))
+	require.Equal(t, 4, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[2], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour))
+	require.Equal(t, 4, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[3], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour))
+	require.Equal(t, 5, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[4], ig)
+
+	rpi.IndexGroups = nil
+	ig = data.createIndexGroupIfNeeded(rpi, now)
+	require.Equal(t, 1, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[0], ig)
+}
+
 func initDataWithDataNode() *Data {
 	data := &Data{PtNumPerNode: 1}
 	DataLogger = logger.New(os.Stderr)
