@@ -1789,7 +1789,7 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 				} else {
 					firstTime = metaMaxTime
 				}
-
+				init = true
 			}
 
 			row, err := loc.GetChunkMeta().TimeMeta().RowCount(schema.Field(schema.Len()-1), ctx.decs)
