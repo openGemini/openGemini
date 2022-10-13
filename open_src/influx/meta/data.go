@@ -1460,15 +1460,16 @@ func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time
 }
 
 func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time) *IndexGroupInfo {
-	if rpi.IndexGroups == nil {
+	if len(rpi.IndexGroups) == 0 {
 		return data.CreateIndexGroup(rpi, timestamp)
 	}
-	igIdx := sort.Search(len(rpi.IndexGroups), func(i int) bool {
-		if rpi.IndexGroups[i].Contains(timestamp) {
-			return true
+	var igIdx int
+	for igIdx = 0; igIdx < len(rpi.IndexGroups); igIdx++ {
+		if rpi.IndexGroups[igIdx].Contains(timestamp) {
+			break
 		}
-		return false
-	})
+	}
+
 	if igIdx < len(rpi.IndexGroups) && len(rpi.IndexGroups[igIdx].Indexes) >= int(data.ClusterPtNum) {
 		return &rpi.IndexGroups[igIdx]
 	}
