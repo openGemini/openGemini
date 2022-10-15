@@ -54,6 +54,7 @@ openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工
 ## 快速开始
 
 如需更详细的介绍，请访问官网[用户指南](http://www.openGemini.org/docs)
+
 相关编译和部署详细视频教程，[点击访问](https://www.bilibili.com/video/BV1Km4y1P7oB/?spm_id_from=333.999.0.0&vd_source=ea61c9c8b95b08ba907a4c9b78741732)
 
 本章节主要包含以下内容：
