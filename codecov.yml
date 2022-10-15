@@ -1,0 +1,7 @@
+ignore:
+  - "open_src"
+  - "tests"
+  - "yacc"
+  - "main.go"
+  - "app/ts-meta/meta/handler.go"
+  - "lib/netstorage/data"
