@@ -1,0 +1,250 @@
+
+state 0
+	$accept: .STATEMENTS $end 
+
+	INSERT  shift 4
+	USE  shift 5
+	.  error
+
+	STATEMENTS  goto 1
+	INSERT_STATEMENT  goto 2
+	USE_STATEMENT  goto 3
+
+state 1
+	$accept:  STATEMENTS.$end 
+
+	$end  accept
+	.  error
+
+
+state 2
+	STATEMENTS:  INSERT_STATEMENT.    (1)
+
+	.  reduce 1 (src line 58)
+
+
+state 3
+	STATEMENTS:  USE_STATEMENT.    (2)
+
+	.  reduce 2 (src line 63)
+
+
+state 4
+	INSERT_STATEMENT:  INSERT.INTO NAMESPACE LINE_PROTOCOL 
+	INSERT_STATEMENT:  INSERT.INTO LINE_PROTOCOL 
+
+	INTO  shift 6
+	.  error
+
+
+state 5
+	USE_STATEMENT:  USE.NAMESPACE 
+
+	IDENT  shift 8
+	.  error
+
+	NAMESPACE  goto 7
+
+state 6
+	INSERT_STATEMENT:  INSERT INTO.NAMESPACE LINE_PROTOCOL 
+	INSERT_STATEMENT:  INSERT INTO.LINE_PROTOCOL 
+
+	IDENT  shift 11
+	.  error
+
+	LINE_PROTOCOL  goto 10
+	TIME_SERIES  goto 12
+	MEASUREMENT  goto 13
+	NAMESPACE  goto 9
+
+state 7
+	USE_STATEMENT:  USE NAMESPACE.    (3)
+
+	.  reduce 3 (src line 68)
+
+
+state 8
+	NAMESPACE:  IDENT.    (6)
+	NAMESPACE:  IDENT.DOT NAMESPACE 
+
+	DOT  shift 14
+	.  reduce 6 (src line 109)
+
+
+state 9
+	INSERT_STATEMENT:  INSERT INTO NAMESPACE.LINE_PROTOCOL 
+
+	IDENT  shift 16
+	.  error
+
+	LINE_PROTOCOL  goto 15
+	TIME_SERIES  goto 12
+	MEASUREMENT  goto 13
+
+state 10
+	INSERT_STATEMENT:  INSERT INTO LINE_PROTOCOL.    (5)
+
+	.  reduce 5 (src line 101)
+
+
+state 11
+	NAMESPACE:  IDENT.    (6)
+	NAMESPACE:  IDENT.DOT NAMESPACE 
+	MEASUREMENT:  IDENT.    (16)
+
+	DOT  shift 14
+	IDENT  reduce 6 (src line 109)
+	.  reduce 16 (src line 160)
+
+
+state 12
+	LINE_PROTOCOL:  TIME_SERIES.DIGIT 
+	LINE_PROTOCOL:  TIME_SERIES.STRING 
+
+	DIGIT  shift 17
+	STRING  shift 18
+	.  error
+
+
+state 13
+	TIME_SERIES:  MEASUREMENT.COMMA KEY_VALUES KEY_VALUES 
+
+	COMMA  shift 19
+	.  error
+
+
+state 14
+	NAMESPACE:  IDENT DOT.NAMESPACE 
+
+	IDENT  shift 8
+	.  error
+
+	NAMESPACE  goto 20
+
+state 15
+	INSERT_STATEMENT:  INSERT INTO NAMESPACE LINE_PROTOCOL.    (4)
+
+	.  reduce 4 (src line 86)
+
+
+state 16
+	MEASUREMENT:  IDENT.    (16)
+
+	.  reduce 16 (src line 160)
+
+
+state 17
+	LINE_PROTOCOL:  TIME_SERIES DIGIT.    (8)
+
+	.  reduce 8 (src line 120)
+
+
+state 18
+	LINE_PROTOCOL:  TIME_SERIES STRING.    (9)
+
+	.  reduce 9 (src line 125)
+
+
+state 19
+	TIME_SERIES:  MEASUREMENT COMMA.KEY_VALUES KEY_VALUES 
+
+	IDENT  shift 23
+	.  error
+
+	KEY_VALUES  goto 21
+	KEY_VALUE  goto 22
+
+state 20
+	NAMESPACE:  IDENT DOT NAMESPACE.    (7)
+
+	.  reduce 7 (src line 114)
+
+
+state 21
+	TIME_SERIES:  MEASUREMENT COMMA KEY_VALUES.KEY_VALUES 
+
+	IDENT  shift 23
+	.  error
+
+	KEY_VALUES  goto 24
+	KEY_VALUE  goto 22
+
+state 22
+	KEY_VALUES:  KEY_VALUE.    (14)
+	KEY_VALUES:  KEY_VALUE.COMMA KEY_VALUES 
+
+	COMMA  shift 25
+	.  reduce 14 (src line 150)
+
+
+state 23
+	KEY_VALUE:  IDENT.EQ IDENT 
+	KEY_VALUE:  IDENT.EQ DIGIT 
+	KEY_VALUE:  IDENT.EQ STRING 
+
+	EQ  shift 26
+	.  error
+
+
+state 24
+	TIME_SERIES:  MEASUREMENT COMMA KEY_VALUES KEY_VALUES.    (10)
+
+	.  reduce 10 (src line 130)
+
+
+state 25
+	KEY_VALUES:  KEY_VALUE COMMA.KEY_VALUES 
+
+	IDENT  shift 23
+	.  error
+
+	KEY_VALUES  goto 27
+	KEY_VALUE  goto 22
+
+state 26
+	KEY_VALUE:  IDENT EQ.IDENT 
+	KEY_VALUE:  IDENT EQ.DIGIT 
+	KEY_VALUE:  IDENT EQ.STRING 
+
+	IDENT  shift 28
+	DIGIT  shift 29
+	STRING  shift 30
+	.  error
+
+
+state 27
+	KEY_VALUES:  KEY_VALUE COMMA KEY_VALUES.    (15)
+
+	.  reduce 15 (src line 155)
+
+
+state 28
+	KEY_VALUE:  IDENT EQ IDENT.    (11)
+
+	.  reduce 11 (src line 136)
+
+
+state 29
+	KEY_VALUE:  IDENT EQ DIGIT.    (12)
+
+	.  reduce 12 (src line 141)
+
+
+state 30
+	KEY_VALUE:  IDENT EQ STRING.    (13)
+
+	.  reduce 13 (src line 145)
+
+
+12 terminals, 10 nonterminals
+17 grammar rules, 31/16000 states
+0 shift/reduce, 0 reduce/reduce conflicts reported
+59 working sets used
+memory: parser 17/240000
+1 extra closures
+20 shift entries, 2 exceptions
+14 goto entries
+4 entries saved by goto default
+Optimizer space used: output 30/240000
+30 table entries, 0 zero
+maximum spread: 12, maximum offset: 25
