@@ -105,7 +105,7 @@ The compiled binary file is in the build directory
 
 ```
 > ls build
-ts-meta  ts-server  ts-sql  ts-store
+ts-cli  ts-meta  ts-server  ts-sql  ts-store
 ```
 
 ### Configuration
