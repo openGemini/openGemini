@@ -19,6 +19,7 @@ package fileops
 import (
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -27,27 +28,24 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func init() {}
-
 //_00001.wal
 func TestGlob(t *testing.T) {
+	tmpDir := t.TempDir()
 	files := []string{
-		"/tmp/test/a000000001-000000001.tsm",
-		"/tmp/test/a000000002-000000001.tsm",
-		"/tmp/test/a000000002-000000001.tsm.tmp",
-		"/tmp/test/a000000002-tsm000001.txt",
-		"/tmp/test/a000000002-000000tsm",
-		"/tmp/test/_00001.wal",
-		"/tmp/test/_00002.wal",
-		"/tmp/test/_00wal.wal.wal",
-		"/tmp/test/_00002.wal.init",
-		"/tmp/test/_00wal.txt",
+		"a000000001-000000001.tsm",
+		"a000000002-000000001.tsm",
+		"a000000002-000000001.tsm.tmp",
+		"a000000002-tsm000001.txt",
+		"a000000002-000000tsm",
+		"_00001.wal",
+		"_00002.wal",
+		"_00wal.wal.wal",
+		"_00002.wal.init",
+		"_00wal.txt",
 	}
 
-	_ = RemoveAll("/tmp/test")
-	_ = MkdirAll("/tmp/test", 0640)
-
 	for _, file := range files {
+		file = path.Join(tmpDir, file)
 		f, err := Create(file)
 		if err != nil {
 			t.Fatal(err)
@@ -59,37 +57,39 @@ func TestGlob(t *testing.T) {
 		_ = f.Close()
 	}
 
-	tsmfile := files[0:2]
-	sort.Strings(tsmfile)
-	tmpFiles, err := Glob("/tmp/test/*.tsm")
+	tsmfiles := files[0:2]
+	sort.Strings(tsmfiles)
+	tsmPattern := path.Join(tmpDir, "*.tsm")
+	tmpFiles, err := Glob(tsmPattern)
+	sort.Strings(tmpFiles)
 	if err != nil {
-		t.Fatalf("Glob(/tmp/test/*.tsm) failed: %q", err.Error())
+		t.Fatalf("Glob(%s) failed: %q", tsmPattern, err.Error())
 	}
-	if len(tmpFiles) != len(tsmfile) {
-		t.Fatalf("Glob(/tmp/test/*.tsm) failed")
+	if len(tmpFiles) != len(tsmfiles) {
+		t.Fatalf("Glob(%s) failed", tsmPattern)
 	}
 	for i := 0; i < len(tmpFiles); i++ {
-		if tsmfile[i] != tmpFiles[i] {
-			t.Fatalf("Glob(/tmp/test/*.tsm) failed: expected(%s) but(%s)", tsmfile[i], tmpFiles[i])
+		if path.Join(tmpDir, tsmfiles[i]) != tmpFiles[i] {
+			t.Fatalf("Glob(%s) failed: expected(%s) but(%s)", tsmPattern, tsmfiles[i], tmpFiles[i])
 		}
 	}
 
-	walfile := files[5:8]
-	sort.Strings(walfile)
-	tmpFiles, err = Glob("/tmp/test/_*.wal")
+	walfiles := files[5:8]
+	sort.Strings(walfiles)
+	walPattern := path.Join(tmpDir, "_*.wal")
+	walFiles, err := Glob(walPattern)
+	sort.Strings(walFiles)
 	if err != nil {
-		t.Fatalf("Glob(/tmp/test/*.tsm) failed: %q", err.Error())
+		t.Fatalf("Glob(%s) failed: %q", walPattern, err.Error())
 	}
-	if len(tmpFiles) != len(walfile) {
-		t.Fatalf("Glob(/tmp/test/*.tsm) failed")
+	if len(walFiles) != len(walfiles) {
+		t.Fatalf("Glob(%s) failed", walPattern)
 	}
-	for i := 0; i < len(tmpFiles); i++ {
-		if walfile[i] != tmpFiles[i] {
-			t.Fatalf("Glob(/tmp/test/*.tsm) failed: expected(%s) but(%s)", walfile[i], tmpFiles[i])
+	for i := 0; i < len(walFiles); i++ {
+		if path.Join(tmpDir, walfiles[i]) != walFiles[i] {
+			t.Fatalf("Glob(%s) failed: expected(%s) but(%s)", walPattern, walfiles[i], tmpFiles[i])
 		}
 	}
-
-	_ = RemoveAll("/tmp/test")
 }
 
 func TestFileInterface(t *testing.T) {
