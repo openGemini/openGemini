@@ -8,45 +8,30 @@
 Please create an issue first to describe the problem.
 
 There MUST be one line starting with "Issue Number:  " and 
-linking the relevant issues via the "close" or "ref".
-
+linking the relevant issues via the "close","fix",reslove or "ref".
 -->
 
-Issue Number: close #xxx
-
-## Problem Summary:
+Issue Number: close/fix/reslove/ref #xxx
 
 ### What is changed and how it works?
+Please describe how it works
 
-### Check List
+### How Has This Been Tested?
 
-Tests <!-- At least one of them must be included. -->
+Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce. Please also list any relevant details for your test configuration
 
-- [ ] Unit test
-- [ ] Integration test
-- [ ] Manual test (add detailed scripts or steps below)
+- [ ] Test A
+- [ ] Test B
+- [ ] Test cases to be added
 - [ ] No code
 
-## Documentation
+# Checklist:
 
-- [ ] Affects user behaviors
-- [ ] Contains syntax changes
-- [ ] Contains variable changes
-- [ ] Contains experimental features
-
-## Changelog category (leave one):
-
-- New Feature
-- Improvement
-- Bug Fix (user-visible misbehavior in official stable or prestable release)
-- Performance Improvement
-- Backward Incompatible Change
-- Build/Testing/Packaging Improvement
-- Documentation (changelog entry is not required)
-- Not for changelog (changelog entry is not required)
-
-### Changelog entry (a user-readable short description of the changes that goes to CHANGELOG.md):
-
-```release-note
-None
-```
+- [ ] My code follows the style guidelines of this project
+- [ ] I have performed a self-review of my own code
+- [ ] I have commented my code, particularly in hard-to-understand areas
+- [ ] I have made corresponding changes to the documentation
+- [ ] My changes generate no new warnings
+- [ ] I have added tests that prove my fix is effective or that my feature works
+- [ ] New and existing unit tests pass locally with my changes
+- [ ] Any dependent changes have been merged and published in downstream modules
