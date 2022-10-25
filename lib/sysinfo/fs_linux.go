@@ -29,6 +29,6 @@ func CreateTime(name string) (*time.Time, error) {
 	}
 
 	st := fi.Sys().(*syscall.Stat_t)
-	tm := time.Unix(st.Ctim.Sec, st.Ctim.Nsec)
+	tm := time.Unix(int64(st.Ctim.Sec), int64(st.Ctim.Nsec))
 	return &tm, nil
 }

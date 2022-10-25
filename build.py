@@ -31,7 +31,7 @@ targets = {
 }
 
 supported_builds = {
-    'linux': [ "amd64"]
+    'linux': [ "amd64","arm64"]
 }
 
 ################
@@ -334,8 +334,6 @@ def build(version=None,
         # Handle variations in architecture output
         if arch == "i386" or arch == "i686":
             arch = "386"
-        elif "arm" in arch:
-            arch = "arm"
         build_command += "GOOS={} GOARCH={} ".format(platform, arch)
 
         if "arm" in arch:
@@ -350,8 +348,10 @@ def build(version=None,
                 logging.error("Invalid ARM architecture specified: {}".format(arch))
                 logging.error("Please specify either 'armel', 'armhf', or 'arm64'.")
                 return False
-
-        build_command += "go build -mod=mod -o {} ".format(os.path.join(outdir, target))
+        if "arm" in arch:
+            build_command += "go build -o {} ".format(os.path.join(outdir, target))
+        else:
+            build_command += "go build -mod=mod -o {} ".format(os.path.join(outdir, target))
         if race:
             build_command += "-race "
         if len(tags) > 0:
@@ -369,6 +369,7 @@ def build(version=None,
             build_command += "-a -installsuffix cgo "
         build_command += path
         start_time = datetime.utcnow()
+        logging.info(build_command)
         run(build_command, shell=True)
         end_time = datetime.utcnow()
         logging.info("Time taken: {}s".format((end_time - start_time).total_seconds()))
