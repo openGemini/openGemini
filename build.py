@@ -28,6 +28,7 @@ targets = {
     'ts-store' : './app/ts-store',
     'ts-server' : './app/ts-server',
     'ts-monitor' : './app/ts-monitor',
+    'ts-cli' : './app/ts-cli',
 }
 
 supported_builds = {
