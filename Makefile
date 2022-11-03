@@ -51,19 +51,32 @@ licence-check:
   			cat $$file | grep -qs $(COPYRIGHT_HEADER) || { echo $$file "has no licence header" >> licence-check.log; }; \
 	 	done
 	@if [ -f licence-check.log ]; \
-  		then \
-			cat  licence-check.log; \
-			rm -f licence-check.log; \
-			exit 1; \
+  	then \
+		cat  licence-check.log; \
+		rm -f licence-check.log; \
+		exit 1; \
 	else \
-		  	echo "licence check ok"; \
-		  	exit 0; \
+		echo "licence check ok"; \
+		exit 0; \
 	fi
 
 
 style-check: install-goimports-reviser
 	@echo "run style check for import pkg order"
-	for file in $$(find . -name '*.go'); do if ! goimports-reviser -project-name fuck -set-exit-status $$file; then exit 1; fi; done
+	@for file in $$(find . -name '*.go'); do goimports-reviser -project-name none-pjn $$file; done
+	@GIT_STATUS=`git status | grep "Changes not staged for commit"`; \
+		if [ "$$GIT_STATUS" = "" ]; \
+		then \
+			echo "code already go formatted"; \
+		else \
+			echo "style check failed, please format your code using goimports-reviser"; \
+			echo "ref: github.com/incu6us/goimports-reviser"; \
+			echo "git diff files:"; \
+			git diff --stat | tee; \
+			echo "git diff details: "; \
+			git diff | tee; \
+			exit 1; \
+		fi
 
 install-failpoint:
 	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl
