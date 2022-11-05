@@ -58,10 +58,10 @@ func (relation *IndexRelation) IndexBuild(name []byte, indexMap map[string]int) 
 	return relation.indexAmRoutine.amBuild(relation)
 }
 
-func (relation *IndexRelation) IndexInsert(name []byte, point interface{}, version uint16) error {
+func (relation *IndexRelation) IndexInsert(name []byte, point interface{}) error {
 	index := relation.indexAmRoutine.index
 	primaryIndex := relation.iBuilder.GetPrimaryIndex()
-	_, err := relation.indexAmRoutine.amInsert(index, primaryIndex, name, point, version)
+	_, err := relation.indexAmRoutine.amInsert(index, primaryIndex, name, point)
 	return err
 }
 
@@ -90,4 +90,5 @@ type PrimaryIndex interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
 	GetDeletePrimaryKeys(name []byte, condition influxql.Expr, tr TimeRange) ([]uint64, error)
+	Path() string
 }

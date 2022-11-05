@@ -50,7 +50,7 @@ func (idx *TextIndex) Close() error {
 	return nil
 }
 
-func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *influx.Row, version uint16) (uint64, error) {
+func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *influx.Row) (uint64, error) {
 	//fmt.Println("TextIndex CreateIndexIfNotExists")
 	// TODO
 	return 0, nil
@@ -94,10 +94,10 @@ func TextOpen(index interface{}) error {
 	return textIndex.Open()
 }
 
-func TextInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row interface{}, version uint16) (uint64, error) {
+func TextInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row interface{}) (uint64, error) {
 	textIndex := index.(*TextIndex)
 	insertRow := row.(*influx.Row)
-	return textIndex.CreateIndexIfNotExists(primaryIndex, insertRow, version)
+	return textIndex.CreateIndexIfNotExists(primaryIndex, insertRow)
 }
 
 // upper function call should analyze result

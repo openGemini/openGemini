@@ -69,6 +69,38 @@ func NewIndexBuilder(opt *Options) *IndexBuilder {
 	return iBuilder
 }
 
+type indexRow struct {
+	Row *influx.Row
+	Wg  *sync.WaitGroup
+	Err error
+}
+
+type indexRows []indexRow
+
+func (rows *indexRows) reset() {
+	for _, row := range *rows {
+		row.Wg = nil
+		row.Row = nil
+		row.Err = nil
+	}
+}
+
+var indexRowsPool sync.Pool
+
+func getIndexRows() *indexRows {
+	rows := indexRowsPool.Get()
+	if rows == nil {
+		return &indexRows{}
+	}
+	return rows.(*indexRows)
+}
+
+func putIndexRows(rows *indexRows) {
+	rows.reset()
+	*rows = (*rows)[:0]
+	indexRowsPool.Put(rows)
+}
+
 func (iBuilder *IndexBuilder) Flush() {
 	idx := iBuilder.GetPrimaryIndex().(*MergeSetIndex)
 	idx.DebugFlush()
@@ -225,11 +257,13 @@ func (iBuilder *IndexBuilder) DropMeasurement(name []byte) error {
 
 func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 	primaryIndex := iBuilder.GetPrimaryIndex()
-	iBuilder.mu.Lock()
-	defer iBuilder.mu.Unlock()
+	var wg sync.WaitGroup
+	// 1st, create primary index.
+	iRows := getIndexRows()
 	for mmIdx := range mmRows.D {
 		rows, ok := mmRows.D[mmIdx].Value.(*[]influx.Row)
 		if !ok {
+			putIndexRows(iRows)
 			return errno.NewError(errno.CreateIndexFailPointRowType)
 		}
 		version, loaded := iBuilder.loadOrStore(stringinterner.InternSafe(mmRows.D[mmIdx].Key))
@@ -240,42 +274,46 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 		}
 
 		for rowIdx := range *rows {
-			row := (*rows)[rowIdx]
+			row := &(*rows)[rowIdx]
 			if row.SeriesId != 0 {
 				continue
 			}
 
-			// use primary index to create index
-			mergetIndex := primaryIndex.(*MergeSetIndex)
-			var err error
-			sid, err := mergetIndex.GetSeriesIdBySeriesKey(row.IndexKey, record.Str2bytes(row.Name))
-			if err != nil {
-				return err
-			}
-			if sid == 0 {
-				(*rows)[rowIdx].SeriesId, err = mergetIndex.CreateIndexIfNotExistsByRow(&row, version)
-				if err != nil {
-					return err
-				}
-				row.SeriesId = (*rows)[rowIdx].SeriesId
-			} else {
-				(*rows)[rowIdx].SeriesId = sid
-				row.SeriesId = sid
-			}
+			row.Version = version
 
-			for _, indexOpt := range row.IndexOptions {
-				relation := iBuilder.Relations[indexOpt.Oid]
-				if relation == nil {
-					opt := &Options{
-						indexType: GetIndexTypeById(indexOpt.Oid),
-					}
-					relation, _ = NewIndexRelation(opt, primaryIndex, iBuilder)
-					iBuilder.Relations[indexOpt.Oid] = relation
-				}
-				err := relation.IndexInsert([]byte(row.Name), &row, version)
-				if err != nil {
-					return err
-				}
+			if cap(*iRows) > len(*iRows) {
+				*iRows = (*iRows)[:len(*iRows)+1]
+			} else {
+				*iRows = append(*iRows, indexRow{})
+			}
+			iRow := (*iRows)[len(*iRows)-1]
+			iRow.Row = row
+			iRow.Wg = &wg
+
+			wg.Add(1)
+			idx := primaryIndex.(*MergeSetIndex)
+			idx.WriteRow(&iRow)
+		}
+	}
+	// Wait all rows in the batch finished.
+	wg.Wait()
+
+	// Check Err.
+	for _, row := range *iRows {
+		if row.Err != nil {
+			putIndexRows(iRows)
+			return row.Err
+		}
+	}
+	putIndexRows(iRows)
+
+	// 2nd, create secondary index.
+	for mmIdx := range mmRows.D {
+		rows, _ := mmRows.D[mmIdx].Value.(*[]influx.Row)
+		for rowIdx := range *rows {
+			row := &(*rows)[rowIdx]
+			if err := iBuilder.createSecondaryIndex(row, primaryIndex); err != nil {
+				return err
 			}
 		}
 	}
@@ -301,25 +339,38 @@ func (iBuilder *IndexBuilder) CreateIndexIfPrimaryKeyExists(mmRows *dictpool.Dic
 		}
 
 		for rowIdx := range *rows {
-			row := (*rows)[rowIdx]
-
-			for _, indexOpt := range row.IndexOptions {
-				relation := iBuilder.Relations[indexOpt.Oid]
-				if relation == nil {
-					opt := &Options{
-						indexType: GetIndexTypeById(indexOpt.Oid),
-					}
-					relation, _ = NewIndexRelation(opt, primaryIndex, iBuilder)
-					iBuilder.Relations[indexOpt.Oid] = relation
-				}
-				err := relation.IndexInsert([]byte(row.Name), &row, version)
-				if err != nil {
-					return err
-				}
+			row := &(*rows)[rowIdx]
+			if err := iBuilder.createSecondaryIndex(row, primaryIndex); err != nil {
+				return err
 			}
 		}
 	}
 
+	return nil
+}
+
+func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex PrimaryIndex) error {
+	for _, indexOpt := range row.IndexOptions {
+		relation := iBuilder.Relations[indexOpt.Oid]
+		if relation == nil {
+			opt := &Options{
+				indexType: GetIndexTypeById(indexOpt.Oid),
+				path:      primaryIndex.Path(),
+			}
+			var err error
+			relation, err = NewIndexRelation(opt, primaryIndex, iBuilder)
+			if err != nil {
+				return err
+			}
+			if err = relation.IndexOpen(); err != nil {
+				return err
+			}
+			iBuilder.Relations[indexOpt.Oid] = relation
+		}
+		if err := relation.IndexInsert([]byte(row.Name), row); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
