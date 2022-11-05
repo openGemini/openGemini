@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"path"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -35,8 +37,10 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
@@ -47,7 +51,6 @@ const (
 	nsPrefixKeyToTSID = iota
 	nsPrefixTSIDToKey
 	nsPrefixTagToTSIDs
-	//	nsPrefixCellIDToTSID
 	nsPrefixDeletedTSIDs
 )
 
@@ -57,8 +60,7 @@ const (
 	kvSeparatorChar  = 2
 
 	compositeTagKeyPrefix = '\xfe'
-	//maxTSIDsPerRow        = 64
-	MergeSetDirName = "mergeset"
+	MergeSetDirName       = "mergeset"
 )
 
 var tagFiltersKeyGen uint64
@@ -67,6 +69,16 @@ func invalidateTagCache() {
 	// This function must be fast, since it is called each
 	// time new timeseries is added.
 	atomic.AddUint64(&tagFiltersKeyGen, 1)
+}
+
+var (
+	queueSize     uint32
+	queueSizeMask uint32
+)
+
+func init() {
+	queueSize = util.CeilToPower2(uint32(runtime.NumCPU() << 1))
+	queueSizeMask = queueSize - 1
 }
 
 var kbPool bytesutil.ByteBufferPool
@@ -78,7 +90,8 @@ type MergeSetIndex struct {
 	logger *zap.Logger
 	path   string
 
-	cache *IndexCache
+	queues []chan *indexRow
+	cache  *IndexCache
 
 	// Deleted tsids
 	deletedTSIDs     atomic.Value
@@ -98,10 +111,10 @@ func NewMergeSetIndex(opts *Options) (*MergeSetIndex, error) {
 }
 
 func (idx *MergeSetIndex) Open() error {
-	path := idx.path + "/" + MergeSetDirName
-	tb, err := mergeset.OpenTable(path, invalidateTagCache, mergeIndexRows)
+	tablePath := path.Join(idx.path, MergeSetDirName)
+	tb, err := mergeset.OpenTable(tablePath, invalidateTagCache, mergeIndexRows)
 	if err != nil {
-		return fmt.Errorf("cannot open index:%s, err: %+v", path, err)
+		return fmt.Errorf("cannot open index:%s, err: %+v", tablePath, err)
 	}
 	idx.tb = tb
 	if logger.GetLogger() == nil {
@@ -117,7 +130,30 @@ func (idx *MergeSetIndex) Open() error {
 		return err
 	}
 
+	idx.queues = make([]chan *indexRow, queueSize)
+	for i := 0; i < len(idx.queues); i++ {
+		idx.queues[i] = make(chan *indexRow, 1024)
+	}
+
+	idx.run()
+
 	return nil
+}
+
+func (idx *MergeSetIndex) WriteRow(row *indexRow) {
+	partId := meta.HashID(row.Row.IndexKey) & uint64(queueSizeMask)
+	idx.queues[partId] <- row
+}
+
+func (idx *MergeSetIndex) run() {
+	for i := 0; i < len(idx.queues); i++ {
+		go func(index int) {
+			for row := range idx.queues[index] {
+				row.Row.SeriesId, row.Err = idx.CreateIndexIfNotExistsByRow(row.Row)
+				row.Wg.Done()
+			}
+		}(i)
+	}
 }
 
 func (idx *MergeSetIndex) SetIndexBuilder(builder *IndexBuilder) {
@@ -230,7 +266,7 @@ func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 	return nil
 }
 
-func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row, version uint16) (uint64, error) {
+func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row) (uint64, error) {
 	vkey := kbPool.Get()
 	defer kbPool.Put(vkey)
 	vname := kbPool.Get()
@@ -238,10 +274,10 @@ func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row, version u
 
 	var sid uint64
 	vname.B = append(vname.B[:0], []byte(row.Name)...)
-	vname.B = encoding.MarshalUint16(vname.B, version)
+	vname.B = encoding.MarshalUint16(vname.B, row.Version)
 	// retry get seriesId in Lock
 	vkey.B = append(vkey.B[:0], row.IndexKey...)
-	vkey.B = encoding.MarshalUint16(vkey.B, version)
+	vkey.B = encoding.MarshalUint16(vkey.B, row.Version)
 	sid, err := idx.createIndexesIfNotExists(vkey.B, vname.B, row.Tags, row.ShardKey)
 	return sid, err
 }
@@ -866,10 +902,13 @@ func MergeSetOpen(index interface{}) error {
 	return mergeindex.Open()
 }
 
-func MergeSetInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row interface{}, version uint16) (uint64, error) {
-	mergeindex := index.(*MergeSetIndex)
-	insertPoints := row.(*influx.Row)
-	return mergeindex.CreateIndexIfNotExistsByRow(insertPoints, version)
+func MergeSetInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row interface{}) (uint64, error) {
+	mergeIndex, ok := index.(*MergeSetIndex)
+	if !ok {
+		return 0, fmt.Errorf("index %v is not a MergeSetIndex", index)
+	}
+	insertPoint := row.(*influx.Row)
+	return mergeIndex.CreateIndexIfNotExistsByRow(insertPoint)
 }
 
 // upper function call should analyze result
