@@ -339,10 +339,10 @@ func (dbPT *DBPTInfo) OpenIndexes(rp string) error {
 			for idx := range allIndexDirs {
 				if containOtherIndexes(allIndexDirs[idx].Name()) {
 					idxType := tsi.GetIndexTypeByName(allIndexDirs[idx].Name())
-					indexPath := path.Join(ipath, allIndexDirs[idx].Name())
+					//indexPath := path.Join(ipath, allIndexDirs[idx].Name())
 					opts := new(tsi.Options).
 						Ident(indexIdent).
-						Path(indexPath).
+						Path(ipath).
 						IndexType(idxType).
 						EndTime(tr.EndTime)
 					indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)

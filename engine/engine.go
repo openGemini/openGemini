@@ -1264,7 +1264,6 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 					// Measurement name not found
 					continue
 				}
-
 				appendValuesToMap(results, name, values)
 			}
 		}
