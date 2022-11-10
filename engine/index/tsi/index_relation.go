@@ -32,22 +32,25 @@ type IndexRelation struct {
 
 func NewIndexRelation(opt *Options, primaryIndex PrimaryIndex, iBuilder *IndexBuilder) (*IndexRelation, error) {
 	relation := &IndexRelation{
-		oid:            GetIndexIdByType(opt.indexType),
-		indexAmRoutine: getIndexAmRoutine(opt, primaryIndex),
-		iBuilder:       iBuilder,
+		oid:      GetIndexIdByType(opt.indexType),
+		iBuilder: iBuilder,
 	}
 
-	return relation, nil
+	var err error
+	relation.indexAmRoutine, err = getIndexAmRoutine(opt, primaryIndex)
+	return relation, err
 }
 
-func getIndexAmRoutine(opt *Options, primaryIndex PrimaryIndex) *IndexAmRoutine {
+func getIndexAmRoutine(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	switch opt.indexType {
 	case MergeSet:
 		return MergeSetIndexHandler(opt, primaryIndex)
 	case Text:
 		return TextIndexHandler(opt, primaryIndex)
+	case Field:
+		return FieldIndexHandler(opt, primaryIndex)
 	}
-	return nil
+	return nil, nil
 }
 
 func (relation *IndexRelation) IndexOpen() error {
@@ -90,4 +93,7 @@ type PrimaryIndex interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
 	GetDeletePrimaryKeys(name []byte, condition influxql.Expr, tr TimeRange) ([]uint64, error)
+	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (GroupSeries, error)
+	Path() string
+	GetVersion(name []byte) (uint16, bool)
 }

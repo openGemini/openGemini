@@ -380,12 +380,12 @@ func (w *PointsWriter) WritePointRows(database, retentionPolicy string, rows []i
 			}
 
 			for _, relation := range indexRelations {
-				for _, indexList := range relation.IndexList {
+				for k, indexList := range relation.IndexList {
 					ok, index := selectArr(columns, indexList.IList)
 					if ok {
 						opt := influx.IndexOption{
 							IndexList: index,
-							Oid:       relation.Oid,
+							Oid:       relation.Oids[k],
 						}
 						r.IndexOptions = append(r.IndexOptions, opt)
 					}
