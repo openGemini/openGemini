@@ -107,7 +107,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	}
 
 	start := time.Now()
-	result, err := s.indexBuilder.Scan(span, record.Str2bytes(schema.Options().(*query.ProcessorOptions).Name), schema.Options().(*query.ProcessorOptions), tsi.MergeSet)
+	result, err := s.indexBuilder.Scan(span, record.Str2bytes(schema.Options().(*query.ProcessorOptions).Name), schema.Options().(*query.ProcessorOptions), tsi.Text)
 	tagSets := result.(tsi.GroupSeries)
 
 	qDuration, _ := ctx.Value(query.QueryDurationKey).(*statistics.StoreSlowQueryStatistics)
@@ -525,7 +525,6 @@ func hasMultipleColumnsWithFirst(schema *executor.QuerySchema) bool {
 	return false
 }
 
-//
 func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, error) {
 	if c.recordPool == nil {
 		c.recordPool = record.NewCircularRecordPool(c.ctx.aggPool, groupCursorRecordNum, c.GetSchema(), true)
@@ -922,6 +921,7 @@ func (s *shard) itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, s
 			topNList.Insert(itr)
 		}
 	}
+
 	canNotAggOnSeries := CanNotAggOnSeriesFunc(schema.Calls())
 	if topNList.head != nil {
 		nowNode := topNList.head

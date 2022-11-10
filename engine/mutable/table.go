@@ -161,7 +161,7 @@ func (s uint64Sids) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
 
-//nolint
+// nolint
 func (t *MemTable) AddMemSize(size int64) {
 	atomic.AddInt64(&t.memSize, size)
 	Statistics.MutableStat.AddMutableSize(t.path, size)
@@ -492,7 +492,7 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 		start = time.Now()
 		msInfo.mu.Lock()
 		for index := range rs {
-			sid := rs[index].SeriesId
+			sid := rs[index].PrimaryId
 			chunkBuff, exist := msInfo.sidMap[sid]
 			if !exist {
 				if cap(msInfo.chunkBufs) == len(msInfo.chunkBufs) {

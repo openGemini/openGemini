@@ -1369,7 +1369,7 @@ func (m *UserPrivilege) GetPrivilege() int32 {
 
 type IndexRelation struct {
 	Rid                  *uint32      `protobuf:"varint,1,req,name=Rid" json:"Rid,omitempty"`
-	Oid                  *uint32      `protobuf:"varint,2,req,name=Oid" json:"Oid,omitempty"`
+	Oid                  []uint32     `protobuf:"varint,2,req,name=Oid" json:"Oid,omitempty"`
 	IndexName            []string     `protobuf:"bytes,3,rep,name=IndexName" json:"IndexName,omitempty"`
 	IndexLists           []*IndexList `protobuf:"bytes,4,rep,name=IndexLists" json:"IndexLists,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
@@ -1408,11 +1408,11 @@ func (m *IndexRelation) GetRid() uint32 {
 	return 0
 }
 
-func (m *IndexRelation) GetOid() uint32 {
+func (m *IndexRelation) GetOid() []uint32 {
 	if m != nil && m.Oid != nil {
-		return *m.Oid
+		return m.Oid
 	}
-	return 0
+	return nil
 }
 
 func (m *IndexRelation) GetIndexName() []string {

@@ -767,6 +767,10 @@ func (rec *Record) mergeRecRow(newRec, oldRec *Record, newRowIdx, oldRowIdx int)
 }
 
 func (rec *Record) AppendRec(srcRec *Record, start, end int) {
+	rec.appendRecImpl(srcRec, start, end, true)
+}
+
+func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool) {
 	if start == end {
 		return
 	}
@@ -786,7 +790,7 @@ func (rec *Record) AppendRec(srcRec *Record, start, end int) {
 			continue
 		}
 
-		if iRec < recLen {
+		if pad {
 			for iRec < recLen {
 				rec.ColVals[iRec].PadColVal(rec.Schema[iRec].Type, end-start)
 				iRec++
@@ -795,7 +799,24 @@ func (rec *Record) AppendRec(srcRec *Record, start, end int) {
 		break
 	}
 	// append time col
-	rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[srcRecLen], srcRec.Schema[srcRecLen].Type, start, end)
+	rec.ColVals[recLen].AppendColVal(&srcRec.ColVals[srcRecLen], srcRec.Schema[srcRecLen].Type, start, end)
+	// append RecMeta
+	if srcRec.RecMeta != nil && len(srcRec.RecMeta.Times) > 0 {
+		if rec.RecMeta == nil {
+			rec.RecMeta = &RecMeta{
+				Times: make([][]int64, srcRecLen+1),
+			}
+		}
+		for i, t := range srcRec.RecMeta.Times {
+			if len(t) != 0 {
+				rec.RecMeta.Times[i] = append(rec.RecMeta.Times[i], t[start:end]...)
+			}
+		}
+	}
+}
+
+func (rec *Record) AppendRecForTagSet(srcRec *Record, start, end int) {
+	rec.appendRecImpl(srcRec, start, end, false)
 }
 
 func (rec *Record) AppendRecForSeries(srcRec *Record, start, end int, ridIdx map[int]struct{}) {
@@ -812,31 +833,6 @@ func (rec *Record) AppendRecForSeries(srcRec *Record, start, end int, ridIdx map
 		rec.ColVals[idx].AppendColVal(&srcRec.ColVals[i], srcRec.Schema[i].Type, start, end)
 		idx++
 	}
-}
-
-func (rec *Record) AppendRecForTagSet(srcRec *Record, start, end int) {
-	if start == end {
-		return
-	}
-
-	iRec, iSrcRec := 0, 0
-	recLen, srcRecLen := len(rec.Schema)-1, len(srcRec.Schema)-1
-	for {
-		if iRec < recLen && iSrcRec < srcRecLen {
-			// srcRec.Name < rec.Name is not exist
-			if srcRec.Schema[iSrcRec].Name > rec.Schema[iRec].Name {
-				rec.ColVals[iRec].PadColVal(rec.Schema[iRec].Type, end-start)
-			} else {
-				rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[iSrcRec], srcRec.Schema[iSrcRec].Type, start, end)
-				iSrcRec++
-			}
-			iRec++
-			continue
-		}
-		break
-	}
-	// append time col
-	rec.ColVals[recLen].AppendColVal(&srcRec.ColVals[srcRecLen], srcRec.Schema[srcRecLen].Type, start, end)
 }
 
 func (rec *Record) AppendRecForAggTagSet(srcRec *Record, start, end int) {

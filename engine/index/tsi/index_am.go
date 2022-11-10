@@ -17,6 +17,8 @@ limitations under the License.
 package tsi
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -27,12 +29,29 @@ type indexAm struct {
 	id      uint32
 	IdxType IndexType
 	IdxName string
-	idxFunc func(opt *Options, primaryIndex PrimaryIndex) *IndexAmRoutine
+	idxFunc func(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error)
 }
 
 var IndexAms = []indexAm{
 	{0, MergeSet, "mergeset", MergeSetIndexHandler},
 	{1, Text, "text", TextIndexHandler},
+	{2, Field, "field", FieldIndexHandler},
+}
+
+var (
+	IndexNameToID = map[string]uint32{
+		"mergeset": 0,
+		"text":     1,
+		"field":    2,
+	}
+)
+
+func GetIndexIdByName(name string) (uint32, error) {
+	id, ok := IndexNameToID[name]
+	if !ok {
+		return 0, fmt.Errorf("invalid index type %s", name)
+	}
+	return id, nil
 }
 
 func GetIndexTypeByName(name string) IndexType {
@@ -62,13 +81,13 @@ func GetIndexTypeById(id uint32) IndexType {
 	return MergeSet
 }
 
-func GetIndexAmRoutine(id uint32, opt *Options, primaryIndex PrimaryIndex) *IndexAmRoutine {
+func GetIndexAmRoutine(id uint32, opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	for _, am := range IndexAms {
 		if am.id == id {
 			return am.idxFunc(opt, primaryIndex)
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 type IndexAmRoutine struct {

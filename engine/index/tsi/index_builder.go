@@ -240,8 +240,12 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 		}
 
 		for rowIdx := range *rows {
-			row := (*rows)[rowIdx]
+			row := &(*rows)[rowIdx]
 			if row.SeriesId != 0 {
+				row.PrimaryId = row.SeriesId
+				if err := iBuilder.createSecondaryIndex(row, primaryIndex, version); err != nil {
+					return err
+				}
 				continue
 			}
 
@@ -253,7 +257,7 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 				return err
 			}
 			if sid == 0 {
-				(*rows)[rowIdx].SeriesId, err = mergetIndex.CreateIndexIfNotExistsByRow(&row, version)
+				row.SeriesId, err = mergetIndex.CreateIndexIfNotExistsByRow(row, version)
 				if err != nil {
 					return err
 				}
@@ -263,19 +267,10 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 				row.SeriesId = sid
 			}
 
-			for _, indexOpt := range row.IndexOptions {
-				relation := iBuilder.Relations[indexOpt.Oid]
-				if relation == nil {
-					opt := &Options{
-						indexType: GetIndexTypeById(indexOpt.Oid),
-					}
-					relation, _ = NewIndexRelation(opt, primaryIndex, iBuilder)
-					iBuilder.Relations[indexOpt.Oid] = relation
-				}
-				err := relation.IndexInsert([]byte(row.Name), &row, version)
-				if err != nil {
-					return err
-				}
+			// PrimaryId is the same as SeriesId by default.
+			row.PrimaryId = row.SeriesId
+			if err = iBuilder.createSecondaryIndex(row, primaryIndex, version); err != nil {
+				return err
 			}
 		}
 	}
@@ -301,21 +296,10 @@ func (iBuilder *IndexBuilder) CreateIndexIfPrimaryKeyExists(mmRows *dictpool.Dic
 		}
 
 		for rowIdx := range *rows {
-			row := (*rows)[rowIdx]
-
-			for _, indexOpt := range row.IndexOptions {
-				relation := iBuilder.Relations[indexOpt.Oid]
-				if relation == nil {
-					opt := &Options{
-						indexType: GetIndexTypeById(indexOpt.Oid),
-					}
-					relation, _ = NewIndexRelation(opt, primaryIndex, iBuilder)
-					iBuilder.Relations[indexOpt.Oid] = relation
-				}
-				err := relation.IndexInsert([]byte(row.Name), &row, version)
-				if err != nil {
-					return err
-				}
+			row := &(*rows)[rowIdx]
+			row.PrimaryId = row.SeriesId
+			if err := iBuilder.createSecondaryIndex(row, primaryIndex, version); err != nil {
+				return err
 			}
 		}
 	}
@@ -323,11 +307,40 @@ func (iBuilder *IndexBuilder) CreateIndexIfPrimaryKeyExists(mmRows *dictpool.Dic
 	return nil
 }
 
+func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex PrimaryIndex, version uint16) error {
+	for _, indexOpt := range row.IndexOptions {
+		relation := iBuilder.Relations[indexOpt.Oid]
+		if relation == nil {
+			opt := &Options{
+				indexType: GetIndexTypeById(indexOpt.Oid),
+				path:      primaryIndex.Path(),
+			}
+			var err error
+			relation, err = NewIndexRelation(opt, primaryIndex, iBuilder)
+			if err != nil {
+				return err
+			}
+			if err = relation.IndexOpen(); err != nil {
+				return err
+			}
+			iBuilder.Relations[indexOpt.Oid] = relation
+		}
+		err := relation.IndexInsert([]byte(row.Name), row, version)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, idxType IndexType) (interface{}, error) {
 	oid := GetIndexIdByType(idxType)
 	relation := iBuilder.Relations[oid]
 	if relation == nil {
-		return nil, fmt.Errorf("Index type do not exist!")
+		relation = iBuilder.Relations[uint32(MergeSet)]
+		if relation == nil {
+			return nil, fmt.Errorf("not exist index for %s", name)
+		}
 	}
 	return relation.IndexScan(span, name, opt)
 }
@@ -355,7 +368,9 @@ func (iBuilder *IndexBuilder) Close() error {
 		return err
 	}
 	for _, relation := range iBuilder.Relations {
-		_ = relation.IndexClose()
+		if err := relation.IndexClose(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
