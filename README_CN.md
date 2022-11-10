@@ -114,7 +114,7 @@ ts-meta  ts-server  ts-sql  ts-store
 
 ### 配置
 
-配置文件放置在conf目录下，有关配置项的详细信息，请参见[用户指南-->配置文件](http://opengemini.org/docs)
+配置文件放置在conf目录下，有关配置项的详细信息，请参见[openGmeini-Config-File-Descriptions](https://github.com/openGemini/community/blob/main/openGmeini-Config-File-Descriptions)
 
 ### 运行openGemini
 
@@ -126,7 +126,7 @@ ts-meta  ts-server  ts-sql  ts-store
 > sh scripts/install.sh
 ```
 
-集群部署见[用户指南](http://opengemini.org/docs)
+集群部署见[openGemini部署指南]([http://opengemini.org/docs](https://github.com/openGemini/community/blob/main/openGemini%E5%AE%89%E8%A3%85%E9%83%A8%E7%BD%B2%E6%8C%87%E5%8D%97md))
 
 #### 使用openGemini
 
