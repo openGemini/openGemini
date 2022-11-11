@@ -293,10 +293,7 @@ func (rb *ReportJob) tail(filename string, result chan []byte) error {
 	}
 
 	st := pusher.NewSnappyTail(timeout, rb.compress)
-	go func() {
-		<-rb.done
-		st.Close()
-	}()
+	defer st.Close()
 
 	err := st.Tail(filename, func(data []byte) {
 		defer func() {
