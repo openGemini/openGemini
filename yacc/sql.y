@@ -98,8 +98,9 @@ func deal_Fill (fill interface{})  (influxql.FillOption , interface{},bool) {
                 REPLICATION SERIES DROP CASE WHEN THEN ELSE END TRUE FALSE TAG FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
                 CONTINUOUS DIAGNOSTICS QUERIES QUERIE SHARDS STATS SUBSCRIPTIONS SUBSCRIPTION GROUPS INDEXTYPE INDEXLIST
                 QUERY PARTITION
+                FUZZY MATCH REGEX
 %token <bool>   DESC ASC
-%token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
+%token <str>    COMMA SEMICOLON LPAREN RPAREN
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
 %token <str>    IDENT
 %token <int64>  INTEGER
@@ -875,6 +876,18 @@ CONDITION_OPERATOR:
     |NEQREGEX
     {
         $$ = influxql.NEQREGEX
+    }
+	|REGEX
+    {
+        $$ = influxql.REGEX
+    }
+    |FUZZY
+    {
+        $$ = influxql.FUZZY
+    }
+    |MATCH
+    {
+        $$ = influxql.MATCH
     }
 
 REGULAR_EXPRESSION:

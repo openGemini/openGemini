@@ -1,4 +1,4 @@
-//nolint
+// nolint
 package tsi
 
 /*
@@ -72,6 +72,72 @@ func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {
 	}
 	// Nothing found
 	return 0, io.EOF
+}
+
+func (is *indexSearch) getPidByPkey(key []byte) (uint64, error) {
+	ts := &is.ts
+	kb := &is.kb
+	kb.B = append(kb.B[:0], nsPrefixFieldToPID)
+	kb.B = append(kb.B, key...)
+	kb.B = append(kb.B, kvSeparatorChar)
+	ts.Seek(kb.B)
+	for ts.NextItem() {
+		if !bytes.HasPrefix(ts.Item, kb.B) {
+			// Nothing found.
+			return 0, nil
+		}
+		v := ts.Item[len(kb.B):]
+		pid := encoding.UnmarshalUint64(v)
+
+		// Found valid dst.
+		return pid, nil
+	}
+
+	if err := ts.Error(); err != nil {
+		return 0, fmt.Errorf("error when searching pid by ip; searchPrefix %q: %w", kb.B, err)
+	}
+	// Nothing found
+	return 0, nil
+}
+
+func (is *indexSearch) getFieldKey() (map[string]string, error) {
+	fieldKeys := make(map[string]string, 16)
+	ts := &is.ts
+	kb := &is.kb
+	kb.B = append(kb.B[:0], nsPrefixMstToFieldKey)
+	ts.Seek(kb.B)
+	for ts.NextItem() {
+		if !bytes.HasPrefix(ts.Item, kb.B) {
+			// Nothing found.
+			return nil, io.EOF
+		}
+		tail := ts.Item[len(kb.B):]
+		if len(tail) < 3 {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		mstLen := encoding.UnmarshalUint16(tail)
+		tail = tail[2:]
+		if len(tail) < int(mstLen) {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		mstName := tail[:mstLen]
+		tail = tail[mstLen:]
+		if len(tail) < 3 {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		fieldKeyLen := encoding.UnmarshalUint16(tail)
+		tail = tail[2:]
+		if len(tail) != int(fieldKeyLen) {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		fieldKey := tail[:fieldKeyLen]
+		fieldKeys[string(mstName)] = string(fieldKey)
+	}
+	return fieldKeys, nil
 }
 
 func (is *indexSearch) containsMeasurement(name []byte) (bool, error) {
@@ -937,6 +1003,32 @@ func (is *indexSearch) getAllSeriesKeys() ([][]byte, error) {
 		return nil, fmt.Errorf("error when getSeriesCardinality for prefix %q: %w", prefix, err)
 	}
 	return keys, nil
+}
+
+func (is *indexSearch) getFieldsByTSID(tsid uint64) ([][]byte, error) {
+	ts := &is.ts
+	kb := &is.kb
+	kb.B = append(kb.B[:0], nsPrefixTSIDToField)
+	kb.B = encoding.MarshalUint64(kb.B, tsid)
+
+	ips := make([][]byte, 0, 16)
+
+	prefix := kb.B
+	ts.Seek(prefix)
+	for ts.NextItem() {
+		item := ts.Item
+		if !bytes.HasPrefix(item, prefix) {
+			break
+		}
+
+		tail := item[9:]
+		for len(tail) > 0 {
+			l := int(tail[0])
+			ips = append(ips, tail[1:1+l])
+			tail = tail[1+l:]
+		}
+	}
+	return ips, nil
 }
 
 func cloneBytes(b []byte) []byte {

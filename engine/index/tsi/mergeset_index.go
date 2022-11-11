@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -49,6 +50,9 @@ const (
 	nsPrefixTagToTSIDs
 	//	nsPrefixCellIDToTSID
 	nsPrefixDeletedTSIDs
+	nsPrefixTSIDToField
+	nsPrefixFieldToPID
+	nsPrefixMstToFieldKey
 )
 
 const (
@@ -365,19 +369,20 @@ func (idx *MergeSetIndex) SearchSeries(series [][]byte, name []byte, condition i
 	return series, nil
 }
 
-func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (GroupSeries, error) {
-	var indexSpan, search, tsid_iter, sortTs *tracing.Span
-	if span != nil {
-		indexSpan = span.StartSpan("index_stat").StartPP()
-		defer indexSpan.Finish()
-	}
+func (idx *MergeSetIndex) GetVersion(name []byte) (uint16, bool) {
+	return idx.indexBuilder.getVersion(record.Bytes2str(name))
+}
+
+func (idx *MergeSetIndex) SearchSeriesIterator(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (index.SeriesIDIterator, error) {
+	var search *tracing.Span
+
 	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
 	if !ok {
 		return nil, nil
 	}
 	// need add version for delete measurement safeguard
-	if indexSpan != nil {
-		search = indexSpan.StartSpan("tsid_search")
+	if span != nil {
+		search = span.StartSpan("tsid_search")
 		search.StartPP()
 	}
 
@@ -404,16 +409,29 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	if itr == nil {
 		return nil, nil
 	}
+	return itr, nil
+}
 
-	var dims []string
-	var totalSeriesKeyLen int64
-	if len(opt.Dimensions) > 0 {
-		dims = make([]string, len(opt.Dimensions))
-		copy(dims, opt.Dimensions)
-		sort.Strings(dims)
+func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (GroupSeries, error) {
+	var indexSpan, tsidIter, sortTs *tracing.Span
+	if span != nil {
+		indexSpan = span.StartSpan("index_stat").StartPP()
+		defer indexSpan.Finish()
 	}
 
-	kvReflection := NewTagKeyReflection(opt.Dimensions, dims)
+	itr, err := idx.SearchSeriesIterator(indexSpan, name, opt)
+	if err != nil {
+		return nil, err
+	}
+	if itr == nil {
+		return nil, nil
+	}
+
+	dims := make([]string, len(opt.Dimensions))
+	copy(dims, opt.Dimensions)
+	sort.Strings(dims)
+	dimPos := genDimensionPosition(opt.Dimensions)
+
 	tagSets := make(map[string]*TagSetInfo)
 	releaseSeriesInfo := func() {
 		for _, v := range tagSets {
@@ -422,14 +440,15 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	}
 
 	if indexSpan != nil {
-		tsid_iter = indexSpan.StartSpan("tsid_iter")
-		tsid_iter.StartPP()
+		tsidIter = indexSpan.StartSpan("tsid_iter")
+		tsidIter.StartPP()
 	}
 
 	deletedTSIDs := idx.getDeletedTSIDs()
 	var seriesN int
 	var indexKeyBuf []byte // reused
 	var groupTagKey []byte // reused
+	var totalSeriesKeyLen int64
 
 	for {
 		var tagsBuf influx.PointTags
@@ -459,8 +478,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 		}
 
 		if len(dims) > 0 {
-			kvReflection.Reset()
-			groupTagKey = MakeGroupTagsKey(dims, tagsBuf, groupTagKey, kvReflection)
+			groupTagKey = MakeGroupTagsKey(dims, tagsBuf, groupTagKey, dimPos)
 		}
 
 		tagSet, ok := tagSets[string(groupTagKey)]
@@ -481,10 +499,10 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 		seriesN++
 	}
 
-	if tsid_iter != nil {
-		tsid_iter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
+	if tsidIter != nil {
+		tsidIter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
 			len(tagSets), seriesN, totalSeriesKeyLen))
-		tsid_iter.Finish()
+		tsidIter.Finish()
 	}
 
 	if indexSpan != nil {
@@ -841,7 +859,7 @@ func (idx *MergeSetIndex) DebugFlush() {
 	idx.tb.DebugFlush()
 }
 
-func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) *IndexAmRoutine {
+func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	return &IndexAmRoutine{
 		amKeyType:    MergeSet,
 		amOpen:       MergeSetOpen,
@@ -852,7 +870,7 @@ func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) *IndexAmRouti
 		amClose:      MergeSetClose,
 		index:        primaryIndex,
 		primaryIndex: nil,
-	}
+	}, nil
 }
 
 // indexRelation contains MergeSetIndex
@@ -893,6 +911,14 @@ type tagKeyReflection struct {
 	buf   [][]byte
 }
 
+func genDimensionPosition(dims []string) map[string]int {
+	dimPos := make(map[string]int, len(dims))
+	for i, dim := range dims {
+		dimPos[dim] = i
+	}
+	return dimPos
+}
+
 func NewTagKeyReflection(src, curr []string) *tagKeyReflection {
 	if len(src) != len(curr) {
 		panic("src len doesn't equal to curr len")
@@ -912,37 +938,34 @@ func NewTagKeyReflection(src, curr []string) *tagKeyReflection {
 	return t
 }
 
-func (t *tagKeyReflection) Reset() {
-	for i := range t.buf {
-		t.buf[i] = t.buf[i][:0]
-	}
-}
-
-func MakeGroupTagsKey(dims []string, tags influx.PointTags, dst []byte, reflect *tagKeyReflection) []byte {
+func MakeGroupTagsKey(dims []string, tags influx.PointTags, dst []byte, dimPos map[string]int) []byte {
 	if len(dims) == 0 || len(tags) == 0 {
 		return nil
 	}
 
+	result := make([]string, len(dims))
 	i, j := 0, 0
 	for i < len(dims) && j < len(tags) {
 		if dims[i] < tags[j].Key {
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(dims[i])...)
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], []byte{'=', ','}...)
+			result[dimPos[dims[i]]] = dims[i] + "=,"
+			//reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(dims[i])...)
+			//reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], []byte{'=', ','}...)
 			i++
 		} else if dims[i] > tags[j].Key {
 			j++
 		} else {
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(dims[i])...)
+			result[dimPos[dims[i]]] = dims[i] + "=" + tags[j].Value + ","
+			/*reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(dims[i])...)
 			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], '=')
 			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(tags[j].Value)...)
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], ',')
+			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], ',')*/
 
 			i++
 			j++
 		}
 	}
-	for k := range reflect.order {
-		dst = append(dst, reflect.buf[k]...)
+	for k := range result {
+		dst = append(dst, bytesutil.ToUnsafeBytes(result[k])...)
 	}
 
 	// skip last ','
