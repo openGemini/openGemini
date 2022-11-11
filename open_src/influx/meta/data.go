@@ -374,9 +374,9 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string, 
 
 		if indexR != nil {
 			newIndexR := IndexRelation{
-				Rid:       indexR.GetRid(),
-				Oid:       indexR.GetOid(),
-				IndexName: indexR.GetIndexName(),
+				Rid:        indexR.GetRid(),
+				Oids:       indexR.GetOid(),
+				IndexNames: indexR.GetIndexName(),
 			}
 			indexLists := indexR.GetIndexLists()
 			newIndexR.IndexList = make([]*IndexList, len(indexLists))

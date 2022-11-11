@@ -9,6 +9,7 @@ require (
 	github.com/VictoriaMetrics/fastcache v1.7.0
 	github.com/armon/go-metrics v0.3.10
 	github.com/c-bata/go-prompt v0.2.2
+	github.com/clipperhouse/uax29 v1.12.4
 	github.com/cockroachdb/pebble v0.0.0-20211013210608-e95e73745ce8
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang-jwt/jwt v3.2.1+incompatible

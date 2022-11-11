@@ -96,40 +96,42 @@ const INDEXTYPE = 57426
 const INDEXLIST = 57427
 const QUERY = 57428
 const PARTITION = 57429
-const DESC = 57430
-const ASC = 57431
-const COMMA = 57432
-const SEMICOLON = 57433
-const LPAREN = 57434
-const RPAREN = 57435
-const REGEX = 57436
-const EQ = 57437
-const NEQ = 57438
-const LT = 57439
-const LTE = 57440
-const GT = 57441
-const GTE = 57442
-const DOT = 57443
-const DOUBLECOLON = 57444
-const NEQREGEX = 57445
-const EQREGEX = 57446
-const IDENT = 57447
-const INTEGER = 57448
-const DURATIONVAL = 57449
-const STRING = 57450
-const NUMBER = 57451
-const HINT = 57452
-const AND = 57453
-const OR = 57454
-const ADD = 57455
-const SUB = 57456
-const BITWISE_OR = 57457
-const BITWISE_XOR = 57458
-const MUL = 57459
-const DIV = 57460
-const MOD = 57461
-const BITWISE_AND = 57462
-const UMINUS = 57463
+const FUZZY = 57430
+const MATCH = 57431
+const REGEX = 57432
+const DESC = 57433
+const ASC = 57434
+const COMMA = 57435
+const SEMICOLON = 57436
+const LPAREN = 57437
+const RPAREN = 57438
+const EQ = 57439
+const NEQ = 57440
+const LT = 57441
+const LTE = 57442
+const GT = 57443
+const GTE = 57444
+const DOT = 57445
+const DOUBLECOLON = 57446
+const NEQREGEX = 57447
+const EQREGEX = 57448
+const IDENT = 57449
+const INTEGER = 57450
+const DURATIONVAL = 57451
+const STRING = 57452
+const NUMBER = 57453
+const HINT = 57454
+const AND = 57455
+const OR = 57456
+const ADD = 57457
+const SUB = 57458
+const BITWISE_OR = 57459
+const BITWISE_XOR = 57460
+const MUL = 57461
+const DIV = 57462
+const MOD = 57463
+const BITWISE_AND = 57464
+const UMINUS = 57465
 
 // Token is a lexical token of the InfluxQL language.
 type Token int
@@ -427,6 +429,8 @@ var tokens = [...]string{
 	REPLICANUM:    "REPLICANUM",
 	INDEXTYPE:     "INDEXTYPE",
 	INDEXLIST:     "INDEXLIST",
+	FUZZY:         "FUZZY",
+	MATCH:         "MATCH",
 }
 
 var keywords map[string]int
@@ -466,6 +470,9 @@ var operatorMap = map[Token]int{
 	SUB:      SUB,
 	MUL:      MUL,
 	DIV:      DIV,
+	MATCH:    MATCH,
+	REGEX:    REGEX,
+	FUZZY:    FUZZY,
 	MOD:      1, //fixme
 }
 

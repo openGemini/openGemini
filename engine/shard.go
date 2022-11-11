@@ -392,7 +392,7 @@ func (mw *mstWriteCtx) getRowsPool() []influx.Row {
 	return rp
 }
 
-//nolint
+// nolint
 func (mw *mstWriteCtx) putRowsPool(rp []influx.Row) {
 	for _, r := range rp {
 		r.Reset()
@@ -553,7 +553,7 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 			return err
 		}
 	} else {
-		if err = s.indexBuilder.CreateIndexIfPrimaryKeyExists(mmPoints, false); err != nil {
+		if err = s.indexBuilder.CreateIndexIfPrimaryKeyExists(mmPoints, true); err != nil {
 			return err
 		}
 	}

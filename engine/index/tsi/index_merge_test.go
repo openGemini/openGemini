@@ -284,7 +284,7 @@ func TestTagKeyReflection(t *testing.T) {
 
 func TestMakeGroupTagsKey(t *testing.T) {
 	sortResult := []string{}
-	r := NewTagKeyReflection([]string{"sex", "address"}, []string{"address", "sex"})
+	r := genDimensionPosition([]string{"sex", "address"})
 	tags := influx.PointTags{}
 	tags = append(tags, influx.Tag{Key: "address", Value: "shanghai"})
 	tags = append(tags, influx.Tag{Key: "age_region", Value: "teenager"})
@@ -294,7 +294,6 @@ func TestMakeGroupTagsKey(t *testing.T) {
 	assert.Equal(t, "sex=male,address=shanghai", string(res1))
 	sortResult = append(sortResult, string(res1))
 
-	r.Reset()
 	tags2 := influx.PointTags{}
 	tags2 = append(tags2, influx.Tag{Key: "address", Value: "shanghai"})
 	tags2 = append(tags2, influx.Tag{Key: "age_region", Value: "teenager"})
@@ -304,7 +303,6 @@ func TestMakeGroupTagsKey(t *testing.T) {
 	assert.Equal(t, "sex=female,address=shanghai", string(res2))
 	sortResult = append(sortResult, string(res2))
 
-	r.Reset()
 	tags3 := influx.PointTags{}
 	tags3 = append(tags3, influx.Tag{Key: "address", Value: "beijing"})
 	tags3 = append(tags3, influx.Tag{Key: "age_region", Value: "teenager"})

@@ -206,10 +206,10 @@ func (ski ShardKeyInfo) clone() ShardKeyInfo {
 }
 
 type IndexRelation struct {
-	Rid       uint32
-	Oid       uint32
-	IndexName []string
-	IndexList []*IndexList
+	Rid        uint32
+	Oids       []uint32
+	IndexNames []string
+	IndexList  []*IndexList
 }
 
 type IndexList struct {
@@ -218,8 +218,8 @@ type IndexList struct {
 
 func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 	pb := &proto2.IndexRelation{Rid: proto.Uint32(indexR.Rid),
-		Oid:       proto.Uint32(indexR.Oid),
-		IndexName: indexR.IndexName}
+		Oid:       indexR.Oids,
+		IndexName: indexR.IndexNames}
 
 	pb.IndexLists = make([]*proto2.IndexList, len(indexR.IndexList))
 	for i, IList := range indexR.IndexList {
@@ -233,8 +233,8 @@ func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 
 func (indexR *IndexRelation) unmarshal(pb *proto2.IndexRelation) {
 	indexR.Rid = pb.GetRid()
-	indexR.Oid = pb.GetOid()
-	indexR.IndexName = pb.GetIndexName()
+	indexR.Oids = pb.GetOid()
+	indexR.IndexNames = pb.GetIndexName()
 	indexLists := pb.GetIndexLists()
 	indexR.IndexList = make([]*IndexList, len(indexLists))
 	for i, iList := range indexLists {
