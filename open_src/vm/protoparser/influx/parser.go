@@ -108,6 +108,7 @@ func (rs Rows) Swap(i, j int) {
 // Row is a single influx row.
 type Row struct {
 	Name         string
+	Version      uint16
 	Tags         PointTags
 	Fields       Fields
 	ShardKey     []byte

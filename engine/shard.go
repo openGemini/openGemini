@@ -531,13 +531,15 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 			tm = rows[i].Timestamp
 		}
 
-		ri.SeriesId, err = mergetIndex.GetSeriesIdBySeriesKey(rows[i].IndexKey, record.Str2bytes(rows[i].Name))
-		if err != nil {
-			return err
-		}
+		if !writeIndexRequired {
+			ri.SeriesId, err = mergetIndex.GetSeriesIdBySeriesKey(rows[i].IndexKey, record.Str2bytes(rows[i].Name))
+			if err != nil {
+				return err
+			}
 
-		if ri.SeriesId == 0 {
-			writeIndexRequired = true
+			if ri.SeriesId == 0 {
+				writeIndexRequired = true
+			}
 		}
 
 		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len()))

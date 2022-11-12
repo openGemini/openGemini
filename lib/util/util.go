@@ -99,3 +99,16 @@ func (c *Corrector) TomlSize(v *toml.Size, def toml.Size) {
 		*v = def
 	}
 }
+
+func CeilToPower2(num uint32) uint32 {
+	if num > (1 << 31) {
+		return 1 << 31
+	}
+	num--
+	num |= num >> 1
+	num |= num >> 2
+	num |= num >> 4
+	num |= num >> 8
+	num |= num >> 16
+	return num + 1
+}
