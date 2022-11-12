@@ -114,6 +114,7 @@ type Row struct {
 	Timestamp    int64
 	IndexKey     []byte
 	SeriesId     uint64
+	PrimaryId    uint64
 	IndexOptions IndexOptions
 }
 
@@ -150,6 +151,7 @@ func (r *Row) Clone(rr *Row) {
 	r.Timestamp = rr.Timestamp
 	r.IndexKey = rr.IndexKey
 	r.SeriesId = rr.SeriesId
+	r.PrimaryId = rr.PrimaryId
 	r.IndexOptions = rr.IndexOptions
 }
 
