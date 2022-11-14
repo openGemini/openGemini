@@ -18,7 +18,6 @@ package tsi
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/clvIndex"
@@ -38,7 +37,7 @@ type TextIndex struct {
 func NewTextIndex(opts *Options) (*TextIndex, error) {
 	textIndex := &TextIndex{
 		FieldKeys: make(map[string][]string),
-		ClvIndex:  clvIndex.NewCLVIndex(clvIndex.VTOKEN),
+		ClvIndex:  clvIndex.NewCLVIndex(clvIndex.VGRAM),
 	}
 	str := make([]string, 1)
 	str[0] = "logs"
