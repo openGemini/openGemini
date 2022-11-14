@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/vGram/gramDic/gramClvl"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvl"
+	"time"
 )
 
 /*
@@ -41,36 +42,55 @@ const TTOKEN = 40
 const GRAMWLEN = 20
 const TOKENWLEN = 20
 
-const MAXDICBUFFER = 5000
+const MAXDICBUFFER = 1
 
 var DicIndex = 0
 var BuffDicStrings []utils.LogSeries
 
+const DIC_PERSISTENCE_INTERVAL time.Duration = time.Hour
+const DICOUTPATH = "../../lib/persistence/" //clvTable/logs/VGRAM/dic/
+
 type CLVDictionary struct {
-	DicType           CLVDicType
-	VgramClvcDicRoot  *gramClvc.TrieTree
-	VgramClvc         bool
-	VgramClvlDicRoot  *gramClvc.TrieTree
-	VgramClvl         bool
-	VtokenClvcDicRoot *tokenClvc.TrieTree
-	VtokenClvc        bool
-	VtokenClvlDicRoot *tokenClvc.TrieTree
-	VtokenClvl        bool
+	DicType       CLVDicType
+	VgramDicRoot  *gramClvc.TrieTree
+	VtokenDicRoot *tokenClvc.TrieTree
 }
 
 func NewCLVDictionary() *CLVDictionary {
 	return &CLVDictionary{
-		DicType:           CLVC,
-		VgramClvcDicRoot:  gramClvc.NewTrieTree(QMINGRAM, QMAXGRAM),
-		VgramClvc:         false,
-		VgramClvlDicRoot:  gramClvc.NewTrieTree(QMINGRAM, QMAXGRAM),
-		VgramClvl:         false,
-		VtokenClvcDicRoot: tokenClvc.NewTrieTree(QMINTOKEN, QMAXTOKEN),
-		VtokenClvc:        false,
-		VtokenClvlDicRoot: tokenClvc.NewTrieTree(QMINTOKEN, QMAXTOKEN),
-		VtokenClvl:        false,
+		DicType:       CLVC,
+		VgramDicRoot:  gramClvc.NewTrieTree(QMINGRAM, QMAXGRAM),
+		VtokenDicRoot: tokenClvc.NewTrieTree(QMINTOKEN, QMAXTOKEN),
 	}
 }
+
+/*func (clvDic *CLVDictionary) Flush(){
+	go clvDic.flushClvDicRoutine()
+}
+
+func (clvDic *CLVDictionary) flushClvDicRoutine() {
+	timer := time.NewTimer(DIC_PERSISTENCE_INTERVAL)
+	defer  timer.Stop()
+	for {
+		select {
+		case <- timer.C:
+			clvDic.serializeDic()
+		}
+	}
+}
+
+func (clvDic *CLVDictionary) serializeDic() {
+	if clvDic.DicType == CLVC{
+		outpath := DIC_OUTPATH + "/gram_0.txt"
+		dictrie := clvDic.VgramDicRoot
+		encode.SerializeGramDicToFile(dictrie,outpath)
+	}
+	if clvDic.DicType == CLVL{
+		outpath := DIC_OUTPATH + "/token_0.txt"
+		dictrie := clvDic.VtokenDicRoot
+		encode.SerializeTokenDicToFile(dictrie,outpath)
+	}
+}*/
 
 func (clvDic *CLVDictionary) CreateDictionaryIfNotExists(log string, tsid uint64, timeStamp int64, indexType CLVIndexType) {
 	if DicIndex < MAXDICBUFFER {
@@ -78,23 +98,11 @@ func (clvDic *CLVDictionary) CreateDictionaryIfNotExists(log string, tsid uint64
 		DicIndex += 1
 	}
 	if DicIndex == MAXDICBUFFER {
-		if indexType == VGRAM && (clvDic.VgramClvc == false && clvDic.VgramClvl == false) { //!(clvDic.VgramClvc == true && clvDic.VgramClvl == true)
-			clvDic.CreateCLVVGramDictionaryIfNotExists(BuffDicStrings) //clvDic.VgramClvcDicRoot, clvDic.VgramClvlDicRoot
-			if len(clvDic.VgramClvcDicRoot.Root().Children()) > 0 {
-				clvDic.VgramClvc = true
-			}
-			if len(clvDic.VgramClvlDicRoot.Root().Children()) > 0 {
-				clvDic.VgramClvl = true
-			}
+		if indexType == VGRAM {
+			clvDic.CreateCLVVGramDictionaryIfNotExists(BuffDicStrings)
 		}
-		if indexType == VTOKEN && (clvDic.VtokenClvc == false && clvDic.VtokenClvl == false) { //!(clvDic.VtokenClvc == true && clvDic.VtokenClvl == true)
+		if indexType == VTOKEN {
 			clvDic.CreateCLVVTokenDictionaryIfNotExists(BuffDicStrings)
-			if len(clvDic.VtokenClvcDicRoot.Root().Children()) > 0 {
-				clvDic.VtokenClvc = true
-			}
-			if len(clvDic.VtokenClvlDicRoot.Root().Children()) > 0 {
-				clvDic.VtokenClvl = true
-			}
 		}
 	}
 }
@@ -103,14 +111,14 @@ func (clvDic *CLVDictionary) CreateCLVVGramDictionaryIfNotExists(buffDicStrings 
 	if clvDic.DicType == CLVC {
 		clvcdic := gramClvc.NewCLVCDic(QMINGRAM, QMAXGRAM)
 		clvcdic.GenerateClvcDictionaryTree(buffDicStrings, QMINGRAM, QMAXGRAM, TGRAM)
-		clvDic.VgramClvcDicRoot = clvcdic.TrieTree
+		clvDic.VgramDicRoot = clvcdic.TrieTree
 	}
 	if clvDic.DicType == CLVL {
 		sampleStrOfWlen := utils.HasSample(buffDicStrings, GRAMWLEN)
 		bufflogs := utils.LogSeriesToMap(buffDicStrings)
 		clvldic := gramClvl.NewCLVLDic(QMINGRAM, QMAXGRAM)
 		clvldic.GenerateClvlDictionaryTree(bufflogs, QMINGRAM, sampleStrOfWlen)
-		clvDic.VgramClvlDicRoot = clvldic.TrieTree
+		clvDic.VgramDicRoot = clvldic.TrieTree
 	}
 }
 
@@ -118,13 +126,13 @@ func (clvDic *CLVDictionary) CreateCLVVTokenDictionaryIfNotExists(buffDicStrings
 	if clvDic.DicType == CLVC {
 		clvcdic := tokenClvc.NewCLVCDic(QMINTOKEN, QMAXTOKEN)
 		clvcdic.GenerateClvcDictionaryTree(buffDicStrings, QMINTOKEN, QMAXTOKEN, TTOKEN)
-		clvDic.VtokenClvcDicRoot = clvcdic.TrieTree
+		clvDic.VtokenDicRoot = clvcdic.TrieTree
 	}
 	if clvDic.DicType == CLVL {
 		sampleStrOfWlen := utils.HasSample(buffDicStrings, TOKENWLEN)
 		bufflogs := utils.LogSeriesToMap(buffDicStrings)
 		clvldic := tokenClvl.NewCLVLDic(QMINTOKEN, QMAXTOKEN)
 		clvldic.GenerateClvlDictionaryTree(bufflogs, QMINTOKEN, sampleStrOfWlen)
-		clvDic.VtokenClvlDicRoot = clvldic.TrieTree
+		clvDic.VtokenDicRoot = clvldic.TrieTree
 	}
 }

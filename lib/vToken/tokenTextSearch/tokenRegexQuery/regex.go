@@ -16,34 +16,42 @@ limitations under the License.
 package tokenRegexQuery
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie/cache"
+	"github.com/openGemini/openGemini/lib/mpTrie/decode"
+	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
+	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"regexp"
 
 	"github.com/openGemini/openGemini/lib/utils"
-	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenMatchQuery"
 )
 
-func RegexSearch(re string, indextree *tokenIndex.IndexTree) []utils.SeriesId {
+func RegexSearch(re string, root *tokenClvc.TrieTreeNode, indexRoot *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	regex, _ := regexp.Compile(re)
 	sidmap := make(map[utils.SeriesId]struct{})
 	result := make([]utils.SeriesId, 0)
-	childrenlist := indextree.Root().Children()
+	childrenlist := root.Children()
 	for i, _ := range childrenlist {
 		if regex.MatchString(childrenlist[i].Data()) {
 			// match
-			var invertIndex tokenIndex.Inverted_index
-			var indexNode *tokenIndex.IndexTreeNode
-			var invertIndex1 tokenIndex.Inverted_index
-			var invertIndex2 tokenIndex.Inverted_index
-			var invertIndex3 tokenIndex.Inverted_index
-			invertIndex1, indexNode = tokenMatchQuery.SearchInvertedListFromCurrentNode([]string{childrenlist[i].Data()}, indextree.Root(), 0, invertIndex1, indexNode)
-			invertIndex = tokenMatchQuery.DeepCopy(invertIndex1)
-			invertIndex2 = tokenMatchQuery.SearchInvertedListFromChildrensOfCurrentNode(indexNode, nil)
-			if indexNode != nil && len(indexNode.AddrOffset()) > 0 {
-				invertIndex3 = tokenMatchQuery.TurnAddr2InvertLists(indexNode.AddrOffset(), invertIndex3)
+			var invertIndex gramIndex.Inverted_index
+			var invertIndexOffset uint64
+			var addrOffset uint64
+			var indexNode *decode.SearchTreeNode
+			var invertIndex1 gramIndex.Inverted_index
+			var invertIndex2 gramIndex.Inverted_index
+			var invertIndex3 gramIndex.Inverted_index
+			invertIndexOffset, addrOffset, indexNode = tokenMatchQuery.SearchNodeAddrFromPersistentIndexTree([]string{childrenlist[i].Data()}, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
+			invertIndex1 = utils.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
+			invertIndex = utils.DeepCopy(invertIndex1)
+			invertIndex2 = utils.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+			addrOffsets := utils.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+			if indexNode != nil && len(addrOffsets) > 0 {
+				invertIndex3 = utils.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 			}
-			invertIndex = tokenMatchQuery.MergeMapsInvertLists(invertIndex2, invertIndex)
-			invertIndex = tokenMatchQuery.MergeMapsInvertLists(invertIndex3, invertIndex)
+			invertIndex = utils.MergeMapsInvertLists(invertIndex2, invertIndex)
+			invertIndex = utils.MergeMapsInvertLists(invertIndex3, invertIndex)
+
 			for k, _ := range invertIndex {
 				_, isfind := sidmap[k]
 				if !isfind {

@@ -18,7 +18,6 @@ package tsi
 
 import (
 	"fmt"
-	"sort"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/clvIndex"
@@ -38,16 +37,14 @@ type TextIndex struct {
 func NewTextIndex(opts *Options) (*TextIndex, error) {
 	textIndex := &TextIndex{
 		FieldKeys: make(map[string][]string),
-		ClvIndex:  clvIndex.NewCLVIndex(clvIndex.VTOKEN),
+		ClvIndex:  clvIndex.NewCLVIndex(clvIndex.VGRAM),
 	}
 	str := make([]string, 1)
 	str[0] = "logs"
 	textIndex.FieldKeys["clvTable"] = str
-
 	if err := textIndex.Open(); err != nil {
 		return nil, err
 	}
-
 	return textIndex, nil
 }
 
@@ -106,9 +103,6 @@ func Or(s1, s2 []utils.SeriesId) []utils.SeriesId {
 			s1 = append(s1, s2[i])
 		}
 	}
-	sort.Slice(s1, func(i, j int) bool {
-		return s1[i].Id < s2[i].Id
-	})
 	return s1
 }
 
@@ -178,16 +172,12 @@ func (idx *TextIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, name
 	end3 := time.Now().UnixMicro()
 	mergeSetIndex := primaryIndex.(*MergeSetIndex)
 	var indexKeyBuf []byte // reused todo
-	var err error
 
 	groupSeries := make(GroupSeries, 1)
 	for i := 0; i < 1; i++ {
 		tagSetInfo := NewTagSetInfo()
 		for id, timeArr := range mapClvSids {
-			indexKeyBuf, err = mergeSetIndex.searchSeriesKey(indexKeyBuf, id)
-			if err != nil {
-				panic(err)
-			}
+			indexKeyBuf, _ = mergeSetIndex.searchSeriesKey(indexKeyBuf, id)
 			var tagsBuf influx.PointTags
 			influx.IndexKeyToTags(indexKeyBuf, true, &tagsBuf)
 			seriesKey := getSeriesKeyBuf()
