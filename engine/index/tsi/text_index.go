@@ -106,9 +106,6 @@ func Or(s1, s2 []utils.SeriesId) []utils.SeriesId {
 			s1 = append(s1, s2[i])
 		}
 	}
-	sort.Slice(s1, func(i, j int) bool {
-		return s1[i].Id < s2[i].Id
-	})
 	return s1
 }
 
