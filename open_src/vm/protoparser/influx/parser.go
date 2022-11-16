@@ -1168,7 +1168,7 @@ func parseFieldNumValue(s string) (float64, int32, error) {
 	}
 
 	f := fastfloat.ParseBestEffort(s)
-	if math.IsNaN(f) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, Field_Type_Unknown, fmt.Errorf("invalid number")
 	}
 
