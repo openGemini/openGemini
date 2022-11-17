@@ -42,11 +42,9 @@ func NewTextIndex(opts *Options) (*TextIndex, error) {
 	str := make([]string, 1)
 	str[0] = "logs"
 	textIndex.FieldKeys["clvTable"] = str
-
 	if err := textIndex.Open(); err != nil {
 		return nil, err
 	}
-
 	return textIndex, nil
 }
 

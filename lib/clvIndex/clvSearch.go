@@ -82,10 +82,10 @@ func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryO
 func MatchSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramClvcDicRoot.Root(), index.VgramClvcIndexRoot.Root(), QMINGRAM)
+		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), index.VgramIndexRoot.Root(), QMINGRAM)
 	}
 	if dicType == CLVL {
-		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramClvlDicRoot.Root(), index.VgramClvlIndexRoot.Root(), QMINGRAM)
+		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), index.VgramIndexRoot.Root(), QMINGRAM)
 	}
 	return res
 }
@@ -93,10 +93,10 @@ func MatchSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVD
 func MatchSearchVTokenIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenClvcDicRoot.Root(), index.VtokenClvcIndexRoot.Root(), QMINTOKEN)
+		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), index.VtokenIndexRoot.Root(), QMINTOKEN)
 	}
 	if dicType == CLVL {
-		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenClvlDicRoot.Root(), index.VtokenClvlIndexRoot.Root(), QMINTOKEN)
+		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), index.VtokenIndexRoot.Root(), QMINTOKEN)
 	}
 	return res
 }
@@ -104,10 +104,10 @@ func MatchSearchVTokenIndex(dicType CLVDicType, queryStr string, dictionary *CLV
 func FuzzySearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = gramFuzzyQuery.FuzzyQueryGramQmaxTrie(index.LogTreeRoot.Root(), queryStr, dictionary.VgramClvcDicRoot.Root(), index.VgramClvcIndexRoot.Root(), QMINGRAM, LOGTREEMAX, ED)
+		res = gramFuzzyQuery.FuzzyQueryGramQmaxTrie(index.LogTreeRoot.Root(), queryStr, dictionary.VgramDicRoot.Root(), index.VgramIndexRoot.Root(), QMINGRAM, LOGTREEMAX, ED)
 	}
 	if dicType == CLVL {
-		res = gramFuzzyQuery.FuzzyQueryGramQmaxTrie(index.LogTreeRoot.Root(), queryStr, dictionary.VgramClvlDicRoot.Root(), index.VgramClvlIndexRoot.Root(), QMINGRAM, LOGTREEMAX, ED)
+		res = gramFuzzyQuery.FuzzyQueryGramQmaxTrie(index.LogTreeRoot.Root(), queryStr, dictionary.VgramDicRoot.Root(), index.VgramIndexRoot.Root(), QMINGRAM, LOGTREEMAX, ED)
 	}
 	return res
 }
@@ -115,10 +115,10 @@ func FuzzySearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVD
 func FuzzySearchVTokenIndex(dicType CLVDicType, queryStr string, index *CLVIndexNode) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = tokenFuzzyQuery.FuzzySearchComparedWithES(queryStr, index.VtokenClvcIndexRoot.Root(), ED)
+		res = tokenFuzzyQuery.FuzzySearchComparedWithES(queryStr, index.VtokenIndexRoot.Root(), ED)
 	}
 	if dicType == CLVL {
-		res = tokenFuzzyQuery.FuzzySearchComparedWithES(queryStr, index.VtokenClvlIndexRoot.Root(), ED)
+		res = tokenFuzzyQuery.FuzzySearchComparedWithES(queryStr, index.VtokenIndexRoot.Root(), ED)
 	}
 	return res
 }
@@ -126,10 +126,10 @@ func FuzzySearchVTokenIndex(dicType CLVDicType, queryStr string, index *CLVIndex
 func RegexSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = gramRegexQuery.RegexSearch(queryStr, dictionary.VgramClvcDicRoot, index.VgramClvcIndexRoot)
+		res = gramRegexQuery.RegexSearch(queryStr, dictionary.VgramDicRoot, index.VgramIndexRoot)
 	}
 	if dicType == CLVL {
-		res = gramRegexQuery.RegexSearch(queryStr, dictionary.VgramClvlDicRoot, index.VgramClvlIndexRoot)
+		res = gramRegexQuery.RegexSearch(queryStr, dictionary.VgramDicRoot, index.VgramIndexRoot)
 	}
 	return res
 }
@@ -137,10 +137,10 @@ func RegexSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVD
 func RegexSearchVTokenIndex(dicType CLVDicType, queryStr string, index *CLVIndexNode) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = tokenRegexQuery.RegexSearch(queryStr, index.VtokenClvcIndexRoot)
+		res = tokenRegexQuery.RegexSearch(queryStr, index.VtokenIndexRoot)
 	}
 	if dicType == CLVL {
-		res = tokenRegexQuery.RegexSearch(queryStr, index.VtokenClvlIndexRoot)
+		res = tokenRegexQuery.RegexSearch(queryStr, index.VtokenIndexRoot)
 	}
 	return res
 }

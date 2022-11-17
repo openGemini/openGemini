@@ -27,13 +27,13 @@ import (
 )
 
 type CLVIndex struct {
-	indexTreeMap map[MeasurementAndFieldKey]*DicAndIndex
+	indexTreeMap map[MeasurementAndFieldKey]*CLVIndexNode
 	indexType    CLVIndexType
 }
 
 func NewCLVIndex(indexType CLVIndexType) *CLVIndex {
 	return &CLVIndex{
-		indexTreeMap: make(map[MeasurementAndFieldKey]*DicAndIndex),
+		indexTreeMap: make(map[MeasurementAndFieldKey]*CLVIndexNode),
 		indexType:    indexType,
 	}
 }
@@ -74,30 +74,18 @@ func NewMeasurementAndFieldKey(measurementName string, fieldKey string) Measurem
 	}
 }
 
-type DicAndIndex struct {
-	dic   *CLVDictionary
-	index *CLVIndexNode
-}
-
-func NewDicAndIndex() *DicAndIndex {
-	return &DicAndIndex{
-		dic:   NewCLVDictionary(),
-		index: NewCLVIndexNode(),
-	}
-}
-
 func (clvIndex *CLVIndex) CreateCLVIndex(log string, tsid uint64, timeStamp int64, measurement string, fieldName string) {
 	measurementAndFieldKey := NewMeasurementAndFieldKey(measurement, fieldName)
 	if _, ok := clvIndex.indexTreeMap[measurementAndFieldKey]; !ok {
-		clvIndex.indexTreeMap[measurementAndFieldKey] = NewDicAndIndex() //Start with the configuration dictionary
+		var dic *CLVDictionary
+		//todo 赋值给dic  持久化
+		//dic =
+		clvIndex.indexTreeMap[measurementAndFieldKey] = NewCLVIndexNode(clvIndex.indexType, dic) //Start with the configuration dictionary
+		//clvIndex.indexTreeMap[measurementAndFieldKey].dic.CreateDictionaryIfNotExists(log, tsid, timeStamp, indexType)
 	} /*else { //Later, a learning dictionary was used to index the log of this table.
-		clvIndex.indexTreeMap[measurementAndFieldKey].dic.DicType = CLVL //todo
+		clvIndex.indexTreeMap[measurementAndFieldKey].dicType = CLVL //todo
 	}*/
-	indexType := clvIndex.indexType
-	clvIndex.indexTreeMap[measurementAndFieldKey].dic.CreateDictionaryIfNotExists(log, tsid, timeStamp, indexType)
-	dicType := clvIndex.indexTreeMap[measurementAndFieldKey].dic.DicType
-	dic := clvIndex.indexTreeMap[measurementAndFieldKey].dic
-	clvIndex.indexTreeMap[measurementAndFieldKey].index.CreateCLVIndexIfNotExists(log, tsid, timeStamp, indexType, dicType, *dic)
+	clvIndex.indexTreeMap[measurementAndFieldKey].CreateCLVIndexIfNotExists(log, tsid, timeStamp)
 }
 
 func (clvIndex *CLVIndex) CLVSearch(measurementName string, fieldKey string, queryType QuerySearch, queryStr string) []utils.SeriesId {
@@ -105,9 +93,9 @@ func (clvIndex *CLVIndex) CLVSearch(measurementName string, fieldKey string, que
 	option := NewQueryOption(measurementName, fieldKey, queryType, queryStr)
 	measurementAndFieldKey := NewMeasurementAndFieldKey(measurementName, fieldKey)
 	if _, ok := clvIndex.indexTreeMap[measurementAndFieldKey]; ok {
-		dic := clvIndex.indexTreeMap[measurementAndFieldKey].dic
 		indexType := clvIndex.indexType
-		index := clvIndex.indexTreeMap[measurementAndFieldKey].index
+		dic := clvIndex.indexTreeMap[measurementAndFieldKey].dic
+		index := clvIndex.indexTreeMap[measurementAndFieldKey]
 		res = CLVSearchIndex(indexType, dic.DicType, option, dic, index)
 	} else {
 		res = nil
