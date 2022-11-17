@@ -132,18 +132,18 @@ func (clvIndex *CLVIndexNode) CreateCLVIndexIfNotExists(log string, tsid uint64,
 
 func (clvIndexNode *CLVIndexNode) CreateCLVVGramIndexIfNotExists(buffLogStrings []utils.LogSeries) {
 	if clvIndexNode.dicType == CLVC {
-		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.GenerateIndexTree(buffLogStrings, QMINGRAM, QMAXGRAM, LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root())
+		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, QMAXGRAM, LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
 	}
 	if clvIndexNode.dicType == CLVL {
-		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.GenerateIndexTree(buffLogStrings, QMINGRAM, clvIndexNode.dic.VgramDicRoot.Qmax(), LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root())
+		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, clvIndexNode.dic.VgramDicRoot.Qmax(), LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
 	}
 }
 
 func (clvIndexNode *CLVIndexNode) CreateCLVVTokenIndexIfNotExists(buffLogStrings []utils.LogSeries) {
 	if clvIndexNode.dicType == CLVC {
-		clvIndexNode.VtokenIndexRoot, _ = tokenIndex.GenerateIndexTree(buffLogStrings, QMINTOKEN, QMAXTOKEN, clvIndexNode.dic.VtokenDicRoot.Root())
+		clvIndexNode.VtokenIndexRoot, _ = tokenIndex.AddIndex(buffLogStrings, QMINTOKEN, QMAXTOKEN, clvIndexNode.dic.VtokenDicRoot.Root(), clvIndexNode.VtokenIndexRoot)
 	}
 	if clvIndexNode.dicType == CLVL {
-		clvIndexNode.VtokenIndexRoot, _ = tokenIndex.GenerateIndexTree(buffLogStrings, QMINTOKEN, clvIndexNode.dic.VtokenDicRoot.Qmax(), clvIndexNode.dic.VtokenDicRoot.Root())
+		clvIndexNode.VtokenIndexRoot, _ = tokenIndex.AddIndex(buffLogStrings, QMINTOKEN, clvIndexNode.dic.VtokenDicRoot.Qmax(), clvIndexNode.dic.VtokenDicRoot.Root(), clvIndexNode.VtokenIndexRoot)
 	}
 }
