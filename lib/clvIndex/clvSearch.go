@@ -17,9 +17,11 @@ package clvIndex
 
 import (
 	"github.com/openGemini/openGemini/lib/utils"
+	"github.com/openGemini/openGemini/lib/vGram/gramDic/gramClvc"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramFuzzyQuery"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramMatchQuery"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramRegexQuery"
+	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenFuzzyQuery"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenMatchQuery"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenRegexQuery"
@@ -49,6 +51,10 @@ func NewQueryOption(measurement string, fieldKey string, search QuerySearch, que
 		queryString: queryString,
 	}
 }
+
+//查询存放所有的indexTree 
+type VGramIndexTreeSlice []*gramClvc.TrieTree
+type VTokenIndexTreeSlice []*tokenClvc.TrieTree
 
 func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryOption, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
 	var res []utils.SeriesId

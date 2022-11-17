@@ -83,7 +83,7 @@ func (clvIndex *CLVIndexNode) updateClvIndexRoutine() {
 	for {
 		select {
 		case <-timer.C: //update the index tree periodically
-			clvIndex.updateClvIndex() //VGRAM  todo
+			clvIndex.updateClvIndex()
 		case signal, ok := <-clvIndex.dataSignal:
 			if !ok {
 				return
@@ -91,7 +91,7 @@ func (clvIndex *CLVIndexNode) updateClvIndexRoutine() {
 			if signal == close {
 				return
 			}
-			clvIndex.updateClvIndex() //VGRAM  todo
+			clvIndex.updateClvIndex()
 		}
 	}
 }
@@ -133,6 +133,7 @@ func (clvIndex *CLVIndexNode) CreateCLVIndexIfNotExists(log string, tsid uint64,
 func (clvIndexNode *CLVIndexNode) CreateCLVVGramIndexIfNotExists(buffLogStrings []utils.LogSeries) {
 	if clvIndexNode.dicType == CLVC {
 		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, QMAXGRAM, LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
+		//把clvIndexNode的logTree和VgramIndexRoot摘出来进行持久化  时机 触发条件  然后继续向VgramIndexRoot（新申请空间）写入数据
 	}
 	if clvIndexNode.dicType == CLVL {
 		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, clvIndexNode.dic.VgramDicRoot.Qmax(), LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
