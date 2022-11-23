@@ -46,6 +46,8 @@ const MAXDICBUFFER = 1
 var DicIndex = 0
 var BuffDicStrings []utils.LogSeries
 
+const DICOUTPATH = "../../lib/persistence/data/measurement/dicout/"
+
 type CLVDictionary struct {
 	DicType       CLVDicType
 	VgramDicRoot  *gramClvc.TrieTree

@@ -16,33 +16,45 @@ limitations under the License.
 package tokenMatchQuery
 
 import (
-	"sort"
-
+	"github.com/openGemini/openGemini/lib/mpTrie/cache"
+	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/utils"
+	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramMatchQuery"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
+	"sort"
 )
 
-func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoot *tokenIndex.IndexTreeNode, qmin int) []utils.SeriesId {
+func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoots []*decode.SearchTreeNode, qmin int, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	var vgMap = make(map[uint16][]string)
 	searchtoken, _ := utils.DataProcess(searchStr)
 	tokenIndex.VGCons(root, qmin, searchtoken, vgMap)
-	//fmt.Println(vgMap)
+	var resArr = make([]utils.SeriesId, 0)
+	for i := 0; i < len(indexRoots); i++ {
+		resArr = append(resArr, MatchSearch2(vgMap, indexRoots[i], buffer, addrCache, invertedCache)...)
+	}
+	return resArr
+}
 
+func MatchSearch2(vgMap map[uint16][]string, indexRoot *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	var sortSumInvertList = make([]SortKey, 0)
 	for x := range vgMap {
 		token := vgMap[x]
 		if token != nil {
 			var invertIndex tokenIndex.Inverted_index
-			var indexNode *tokenIndex.IndexTreeNode
+			var invertIndexOffset uint64
+			var addrOffset uint64
+			var indexNode *decode.SearchTreeNode
 			var invertIndex1 tokenIndex.Inverted_index
 			var invertIndex2 tokenIndex.Inverted_index
 			var invertIndex3 tokenIndex.Inverted_index
-			invertIndex1, indexNode = SearchInvertedListFromCurrentNode(token, indexRoot, 0, invertIndex1, indexNode)
+			invertIndexOffset, addrOffset, indexNode = SearchNodeAddrFromPersistentIndexTree(token, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
+			invertIndex1 = gramMatchQuery.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
 			invertIndex = DeepCopy(invertIndex1)
-			invertIndex2 = SearchInvertedListFromChildrensOfCurrentNode(indexNode, nil)
-			if indexNode != nil && len(indexNode.AddrOffset()) > 0 {
-				invertIndex3 = TurnAddr2InvertLists(indexNode.AddrOffset(), invertIndex3)
+			invertIndex2 = gramMatchQuery.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+			addrOffsets := gramMatchQuery.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+			if indexNode != nil && len(addrOffsets) > 0 {
+				invertIndex3 = gramMatchQuery.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 			}
 			invertIndex = MergeMapsInvertLists(invertIndex2, invertIndex)
 			invertIndex = MergeMapsInvertLists(invertIndex3, invertIndex)
@@ -118,50 +130,19 @@ func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoot *toke
 	return resArr
 }
 
-func SearchInvertedListFromCurrentNode(tokenArr []string, indexRoot *tokenIndex.IndexTreeNode, i int, invertIndex1 tokenIndex.Inverted_index, indexNode *tokenIndex.IndexTreeNode) (tokenIndex.Inverted_index, *tokenIndex.IndexTreeNode) {
+func SearchNodeAddrFromPersistentIndexTree(tokenArr []string, indexRoot *decode.SearchTreeNode, i int, invertIndexOffset uint64, addrOffset uint64, indexNode *decode.SearchTreeNode) (uint64, uint64, *decode.SearchTreeNode) {
 	if indexRoot == nil {
-		return invertIndex1, indexNode
+		return invertIndexOffset, addrOffset, indexNode
 	}
 	if i < len(tokenArr)-1 && indexRoot.Children()[utils.StringToHashCode(tokenArr[i])] != nil {
-		invertIndex1, indexNode = SearchInvertedListFromCurrentNode(tokenArr, indexRoot.Children()[utils.StringToHashCode(tokenArr[i])], i+1, invertIndex1, indexNode)
+		invertIndexOffset, addrOffset, indexNode = SearchNodeAddrFromPersistentIndexTree(tokenArr, indexRoot.Children()[utils.StringToHashCode(tokenArr[i])], i+1, invertIndexOffset, addrOffset, indexNode)
 	}
-	if i == len(tokenArr)-1 && indexRoot.Children()[utils.StringToHashCode(tokenArr[i])] != nil { //找到那一层的倒排表
-		invertIndex1 = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])].InvertedIndex()
+	if i == len(tokenArr)-1 && indexRoot.Children()[utils.StringToHashCode(tokenArr[i])] != nil {
+		invertIndexOffset = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])].InvtdInfo().IvtdblkOffset()
+		addrOffset = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])].AddrInfo().AddrblkOffset()
 		indexNode = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])]
 	}
-	return invertIndex1, indexNode
-}
-
-func SearchInvertedListFromChildrensOfCurrentNode(indexNode *tokenIndex.IndexTreeNode, invertIndex2 tokenIndex.Inverted_index) tokenIndex.Inverted_index {
-	if indexNode != nil {
-		for _, child := range indexNode.Children() {
-			if len(child.InvertedIndex()) > 0 {
-				invertIndex2 = MergeMapsInvertLists(child.InvertedIndex(), invertIndex2)
-			}
-			if len(child.AddrOffset()) > 0 {
-				var invertIndex3 = TurnAddr2InvertLists(child.AddrOffset(), nil)
-				invertIndex2 = MergeMapsInvertLists(invertIndex3, invertIndex2)
-			}
-			invertIndex2 = SearchInvertedListFromChildrensOfCurrentNode(child, invertIndex2)
-		}
-	}
-	return invertIndex2
-}
-
-func TurnAddr2InvertLists(addrOffset map[*tokenIndex.IndexTreeNode]uint16, invertIndex3 tokenIndex.Inverted_index) tokenIndex.Inverted_index {
-	var res tokenIndex.Inverted_index
-	for addr, offset := range addrOffset {
-		invertIndex3 = make(map[utils.SeriesId][]uint16)
-		for key, value := range addr.InvertedIndex() {
-			list := make([]uint16, 0)
-			for i := 0; i < len(value); i++ {
-				list = append(list, value[i]+offset)
-			}
-			invertIndex3[key] = list
-		}
-		res = MergeMapsTwoInvertLists(invertIndex3, res)
-	}
-	return res
+	return invertIndexOffset, addrOffset, indexNode
 }
 
 func MergeMapsInvertLists(map1 map[utils.SeriesId][]uint16, map2 map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {

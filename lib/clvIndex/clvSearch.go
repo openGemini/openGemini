@@ -16,12 +16,11 @@ limitations under the License.
 package clvIndex
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/utils"
-	"github.com/openGemini/openGemini/lib/vGram/gramDic/gramClvc"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramFuzzyQuery"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramMatchQuery"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramRegexQuery"
-	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenFuzzyQuery"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenMatchQuery"
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenRegexQuery"
@@ -52,9 +51,9 @@ func NewQueryOption(measurement string, fieldKey string, search QuerySearch, que
 	}
 }
 
-//查询存放所有的indexTree 
-type VGramIndexTreeSlice []*gramClvc.TrieTree
-type VTokenIndexTreeSlice []*tokenClvc.TrieTree
+//查询存放所有的indexTree
+type VGramIndexTreeSlice []*decode.SearchTreeNode
+type VTokenIndexTreeSlice []*decode.SearchTreeNode
 
 func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryOption, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
 	var res []utils.SeriesId
@@ -86,23 +85,31 @@ func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryO
 }
 
 func MatchSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
+	buffer, size := decode.GetBytesFromFile(INDEXOUTPATH + "dic3_1.txt")
+	searchTree, addrCache, invtdCache := decode.UnserializeFromFile(buffer, size, 500000, 500000)
+	var indexRoots []*decode.SearchTreeNode
+	indexRoots[0] = searchTree.Root()
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
-		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), index.VgramIndexRoot.Root(), QMINGRAM)
+		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), indexRoots, QMINGRAM, buffer, addrCache, invtdCache)
 	}
 	if dicType == CLVL {
-		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), index.VgramIndexRoot.Root(), QMINGRAM)
+		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), indexRoots, QMINGRAM, buffer, addrCache, invtdCache)
 	}
 	return res
 }
 
 func MatchSearchVTokenIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, index *CLVIndexNode) []utils.SeriesId {
+	buffer, size := decode.GetBytesFromFile(INDEXOUTPATH + "dic3_1.txt")
+	searchTree, addrCache, invtdCache := decode.UnserializeFromFile(buffer, size, 500000, 500000)
+	var indexRoots []*decode.SearchTreeNode
+	indexRoots[0] = searchTree.Root()
 	var res = make([]utils.SeriesId, 0)
-	if dicType == CLVC {
-		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), index.VtokenIndexRoot.Root(), QMINTOKEN)
+	if dicType == CLVC { //indexRoots不同 clvc clvl
+		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), indexRoots, QMINGRAM, buffer, addrCache, invtdCache)
 	}
 	if dicType == CLVL {
-		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), index.VtokenIndexRoot.Root(), QMINTOKEN)
+		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), indexRoots, QMINGRAM, buffer, addrCache, invtdCache)
 	}
 	return res
 }

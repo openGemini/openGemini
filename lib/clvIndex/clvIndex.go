@@ -78,7 +78,7 @@ func (clvIndex *CLVIndex) CreateCLVIndex(log string, tsid uint64, timeStamp int6
 	measurementAndFieldKey := NewMeasurementAndFieldKey(measurement, fieldName)
 	if _, ok := clvIndex.indexTreeMap[measurementAndFieldKey]; !ok {
 		var dic *CLVDictionary
-		//todo 赋值给dic  持久化
+		//todo 赋值给dic
 		//dic =
 		clvIndex.indexTreeMap[measurementAndFieldKey] = NewCLVIndexNode(clvIndex.indexType, dic) //Start with the configuration dictionary
 		//clvIndex.indexTreeMap[measurementAndFieldKey].dic.CreateDictionaryIfNotExists(log, tsid, timeStamp, indexType)

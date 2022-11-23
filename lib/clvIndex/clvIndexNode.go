@@ -16,6 +16,7 @@ limitations under the License.
 package clvIndex
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie/encode"
 	"sync"
 	"time"
 
@@ -129,11 +130,17 @@ func (clvIndex *CLVIndexNode) CreateCLVIndexIfNotExists(log string, tsid uint64,
 }
 
 //addIndex
+const INDEXOUTPATH = "../../lib/persistence/data/measurement/indexout/"
 
 func (clvIndexNode *CLVIndexNode) CreateCLVVGramIndexIfNotExists(buffLogStrings []utils.LogSeries) {
 	if clvIndexNode.dicType == CLVC {
 		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, QMAXGRAM, LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
 		//把clvIndexNode的logTree和VgramIndexRoot摘出来进行持久化  时机 触发条件  然后继续向VgramIndexRoot（新申请空间）写入数据
+
+		//一直add所以不可在这持久化
+		indexout := INDEXOUTPATH + "dic3_1.txt"
+		encode.SerializeToFile(clvIndexNode.VgramIndexRoot, indexout)
+		clvIndexNode.VgramIndexRoot = gramIndex.NewIndexTree(QMINGRAM, QMAXGRAM)
 	}
 	if clvIndexNode.dicType == CLVL {
 		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, clvIndexNode.dic.VgramDicRoot.Qmax(), LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)

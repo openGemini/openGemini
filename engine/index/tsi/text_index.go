@@ -172,16 +172,12 @@ func (idx *TextIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, name
 	end3 := time.Now().UnixMicro()
 	mergeSetIndex := primaryIndex.(*MergeSetIndex)
 	var indexKeyBuf []byte // reused todo
-	var err error
 
 	groupSeries := make(GroupSeries, 1)
 	for i := 0; i < 1; i++ {
 		tagSetInfo := NewTagSetInfo()
 		for id, timeArr := range mapClvSids {
-			indexKeyBuf, err = mergeSetIndex.searchSeriesKey(indexKeyBuf, id)
-			if err != nil {
-				panic(err)
-			}
+			indexKeyBuf, _ = mergeSetIndex.searchSeriesKey(indexKeyBuf, id)
 			var tagsBuf influx.PointTags
 			influx.IndexKeyToTags(indexKeyBuf, true, &tagsBuf)
 			seriesKey := getSeriesKeyBuf()
