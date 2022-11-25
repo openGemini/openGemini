@@ -30,6 +30,8 @@ import (
 */
 const SHARDBUFFER = 500000
 const UPDATE_INTERVAL time.Duration = 30
+const INDEX_PERSISTENCE_INTERVAL time.Duration = time.Hour
+const INDEXOUTPATH = "../../lib/persistence/" //clvTable/logs/VGRAM/index/
 
 type semaphore int
 
@@ -39,13 +41,13 @@ const (
 )
 
 type CLVIndexNode struct {
-	dicType CLVDicType
-	dic     *CLVDictionary
-
-	indexType       CLVIndexType
-	VgramIndexRoot  *gramIndex.IndexTree
-	LogTreeRoot     *gramIndex.LogTree
-	VtokenIndexRoot *tokenIndex.IndexTree
+	measurementAndFieldKey MeasurementAndFieldKey
+	dicType                CLVDicType
+	dic                    *CLVDictionary
+	indexType              CLVIndexType
+	VgramIndexRoot         *gramIndex.IndexTree
+	LogTreeRoot            *gramIndex.LogTree
+	VtokenIndexRoot        *tokenIndex.IndexTree
 
 	dataSignal chan semaphore
 	dataLock   sync.Mutex
@@ -53,18 +55,20 @@ type CLVIndexNode struct {
 	dataBuf    []utils.LogSeries
 }
 
-func NewCLVIndexNode(indexType CLVIndexType, dic *CLVDictionary) *CLVIndexNode {
+func NewCLVIndexNode(indexType CLVIndexType, dic *CLVDictionary, measurementAndFieldKey MeasurementAndFieldKey) *CLVIndexNode {
 	clvIndex := &CLVIndexNode{
-		dicType:         CLVC,
-		dic:             dic,
-		indexType:       indexType,
-		VgramIndexRoot:  gramIndex.NewIndexTree(QMINGRAM, QMAXGRAM),
-		LogTreeRoot:     gramIndex.NewLogTree(QMAXGRAM),
-		VtokenIndexRoot: tokenIndex.NewIndexTree(QMINTOKEN, QMAXTOKEN),
-		dataSignal:      make(chan semaphore),
-		dataBuf:         make([]utils.LogSeries, 0, SHARDBUFFER),
+		measurementAndFieldKey: measurementAndFieldKey,
+		dicType:                CLVC,
+		dic:                    dic,
+		indexType:              indexType,
+		VgramIndexRoot:         gramIndex.NewIndexTree(QMINGRAM, QMAXGRAM),
+		LogTreeRoot:            gramIndex.NewLogTree(QMAXGRAM),
+		VtokenIndexRoot:        tokenIndex.NewIndexTree(QMINTOKEN, QMAXTOKEN),
+		dataSignal:             make(chan semaphore),
+		dataBuf:                make([]utils.LogSeries, 0, SHARDBUFFER),
 	}
 	clvIndex.Open()
+	clvIndex.Flush()
 	return clvIndex
 }
 
@@ -112,8 +116,7 @@ func (clvIndex *CLVIndexNode) updateClvIndex() {
 
 	if clvIndex.indexType == VGRAM {
 		clvIndex.CreateCLVVGramIndexIfNotExists(logbuf)
-	}
-	if clvIndex.indexType == VTOKEN {
+	} else if clvIndex.indexType == VTOKEN {
 		clvIndex.CreateCLVVTokenIndexIfNotExists(logbuf)
 	}
 	LogIndex = 0
@@ -129,18 +132,9 @@ func (clvIndex *CLVIndexNode) CreateCLVIndexIfNotExists(log string, tsid uint64,
 	}
 }
 
-//addIndex
-const INDEXOUTPATH = "../../lib/persistence/data/measurement/indexout/"
-
 func (clvIndexNode *CLVIndexNode) CreateCLVVGramIndexIfNotExists(buffLogStrings []utils.LogSeries) {
 	if clvIndexNode.dicType == CLVC {
 		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, QMAXGRAM, LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
-		//把clvIndexNode的logTree和VgramIndexRoot摘出来进行持久化  时机 触发条件  然后继续向VgramIndexRoot（新申请空间）写入数据
-
-		//一直add所以不可在这持久化
-		indexout := INDEXOUTPATH + "dic3_1.txt"
-		encode.SerializeToFile(clvIndexNode.VgramIndexRoot, indexout)
-		clvIndexNode.VgramIndexRoot = gramIndex.NewIndexTree(QMINGRAM, QMAXGRAM)
 	}
 	if clvIndexNode.dicType == CLVL {
 		clvIndexNode.VgramIndexRoot, _, clvIndexNode.LogTreeRoot = gramIndex.AddIndex(buffLogStrings, QMINGRAM, clvIndexNode.dic.VgramDicRoot.Qmax(), LOGTREEMAX, clvIndexNode.dic.VgramDicRoot.Root(), clvIndexNode.LogTreeRoot, clvIndexNode.VgramIndexRoot)
@@ -153,5 +147,38 @@ func (clvIndexNode *CLVIndexNode) CreateCLVVTokenIndexIfNotExists(buffLogStrings
 	}
 	if clvIndexNode.dicType == CLVL {
 		clvIndexNode.VtokenIndexRoot, _ = tokenIndex.AddIndex(buffLogStrings, QMINTOKEN, clvIndexNode.dic.VtokenDicRoot.Qmax(), clvIndexNode.dic.VtokenDicRoot.Root(), clvIndexNode.VtokenIndexRoot)
+	}
+}
+
+func (clvIndexNode *CLVIndexNode) Flush() {
+	go clvIndexNode.flushClvIndexRoutine()
+}
+
+func (clvIndexNode *CLVIndexNode) flushClvIndexRoutine() {
+	timer := time.NewTimer(INDEX_PERSISTENCE_INTERVAL)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			clvIndexNode.serializeIndex()
+		}
+	}
+}
+
+func (clvIndexNode *CLVIndexNode) serializeIndex() { //clvTable/logs/VGRAM/index/
+	if clvIndexNode.indexType == VGRAM {
+		outPath := INDEXOUTPATH + clvIndexNode.measurementAndFieldKey.measurementName + "/" + clvIndexNode.measurementAndFieldKey.fieldKey + "/" + "VGRAM/" + "index/" + "index0.txt"
+		indexTree := clvIndexNode.VgramIndexRoot
+		encode.SerializeGramIndexToFile(indexTree, outPath)
+		clvIndexNode.VgramIndexRoot = gramIndex.NewIndexTree(QMINGRAM, QMAXGRAM)
+		logTree := clvIndexNode.LogTreeRoot
+		encode.SerializeLogTreeToFile(logTree, INDEXOUTPATH+clvIndexNode.measurementAndFieldKey.measurementName+"/"+clvIndexNode.measurementAndFieldKey.fieldKey+"/"+"VGRAM/"+"logTree/"+"log0.txt")
+		clvIndexNode.LogTreeRoot = gramIndex.NewLogTree(QMAXGRAM)
+	}
+	if clvIndexNode.indexType == VTOKEN {
+		outPath := INDEXOUTPATH + clvIndexNode.measurementAndFieldKey.measurementName + "/" + clvIndexNode.measurementAndFieldKey.fieldKey + "/" + "VTOKEN/" + "index/" + "index0.txt"
+		indexTree := clvIndexNode.VtokenIndexRoot
+		encode.SerializeTokenIndexToFile(indexTree, outPath)
+		clvIndexNode.VtokenIndexRoot = tokenIndex.NewIndexTree(QMINGRAM, QMAXGRAM)
 	}
 }

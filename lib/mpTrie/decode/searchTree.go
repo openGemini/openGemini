@@ -3,6 +3,8 @@ package decode
 import (
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
+	"github.com/openGemini/openGemini/lib/utils"
+	"strings"
 )
 
 type SearchTree struct {
@@ -76,7 +78,6 @@ func (tree *SearchTree) PrintSearchTree(addrcache *cache.AddrCache, invtdcache *
 	tree.root.printsearchTreeNode(0, addrcache, invtdcache)
 }
 
-/*
 func (tree *SearchTree) InsertToken(addrcache *cache.AddrCache, invtdcache *cache.InvertedCache, buffer []byte, data string, obj *obj.SerializeObj) {
 	root := tree.root
 	tokens := strings.Split(data, " ")
@@ -95,7 +96,7 @@ func (tree *SearchTree) InsertToken(addrcache *cache.AddrCache, invtdcache *cach
 		addr := root.addrInfo
 		off := obj.AddrListEntry().Blockoffset()
 		addr.addrblkOffset = off
-		addrInfo := unserializeAddrListBlk(off, buffer)
+		addrInfo := UnserializeAddrListBlk(off, buffer)
 		addrcache.Put(off, addrInfo)
 		addr.addrblksize = obj.AddrListEntry().Size()
 	}
@@ -106,7 +107,7 @@ func (tree *SearchTree) InsertToken(addrcache *cache.AddrCache, invtdcache *cach
 		invt := root.invtdInfo
 		off := obj.InvertedListEntry().Blockoffset()
 		invt.ivtdblkOffset = off
-		invtdInfo := unserializeInvertedListBlk(off, buffer)
+		invtdInfo := UnserializeInvertedListBlk(off, buffer)
 		invtdcache.Put(off, invtdInfo)
 		invt.ivtdblksize = obj.InvertedListEntry().Size()
 	}
@@ -130,4 +131,3 @@ func (tree *SearchTree) SearchToken(data string) bool {
 	node := tree.SearchTokenPrefix(data)
 	return node.isleaf && node != nil
 }
-*/

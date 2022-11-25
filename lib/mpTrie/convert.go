@@ -8,6 +8,7 @@ import (
 
 //n interface{}->the all type of int
 //isSymbol is mean uint or int
+
 func BytesToInt(b []byte, isSymbol bool) (int, error) {
 	if isSymbol {
 		return bytesToIntS(b)

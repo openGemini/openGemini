@@ -23,6 +23,7 @@ limitations under the License.
 package clvIndex
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/utils"
 )
 
@@ -76,15 +77,17 @@ func NewMeasurementAndFieldKey(measurementName string, fieldKey string) Measurem
 
 func (clvIndex *CLVIndex) CreateCLVIndex(log string, tsid uint64, timeStamp int64, measurement string, fieldName string) {
 	measurementAndFieldKey := NewMeasurementAndFieldKey(measurement, fieldName)
-	if _, ok := clvIndex.indexTreeMap[measurementAndFieldKey]; !ok {
+	if _, ok := clvIndex.indexTreeMap[measurementAndFieldKey]; !ok { //Execute only once
 		var dic *CLVDictionary
-		//todo 赋值给dic
-		//dic =
-		clvIndex.indexTreeMap[measurementAndFieldKey] = NewCLVIndexNode(clvIndex.indexType, dic) //Start with the configuration dictionary
-		//clvIndex.indexTreeMap[measurementAndFieldKey].dic.CreateDictionaryIfNotExists(log, tsid, timeStamp, indexType)
-	} /*else { //Later, a learning dictionary was used to index the log of this table.
-		clvIndex.indexTreeMap[measurementAndFieldKey].dicType = CLVL //todo
-	}*/
+		if clvIndex.indexType == VGRAM {
+			dicPath := DICOUTPATH + measurement + "/" + fieldName + "/" + "VGRAM/" + "dic/" + "dic0.txt"
+			dic.VgramDicRoot = decode.UnserializeGramDicFromFile(dicPath)
+		} else if clvIndex.indexType == VTOKEN {
+			dicPath := DICOUTPATH + measurement + "/" + fieldName + "/" + "VTOKEN/" + "dic/" + "dic0.txt"
+			dic.VtokenDicRoot = decode.UnserializeTokenDicFromFile(dicPath)
+		}
+		clvIndex.indexTreeMap[measurementAndFieldKey] = NewCLVIndexNode(clvIndex.indexType, dic, measurementAndFieldKey)
+	}
 	clvIndex.indexTreeMap[measurementAndFieldKey].CreateCLVIndexIfNotExists(log, tsid, timeStamp)
 }
 
@@ -93,10 +96,10 @@ func (clvIndex *CLVIndex) CLVSearch(measurementName string, fieldKey string, que
 	option := NewQueryOption(measurementName, fieldKey, queryType, queryStr)
 	measurementAndFieldKey := NewMeasurementAndFieldKey(measurementName, fieldKey)
 	if _, ok := clvIndex.indexTreeMap[measurementAndFieldKey]; ok {
-		indexType := clvIndex.indexType
 		dic := clvIndex.indexTreeMap[measurementAndFieldKey].dic
-		index := clvIndex.indexTreeMap[measurementAndFieldKey]
-		res = CLVSearchIndex(indexType, dic.DicType, option, dic, index)
+		indexType := clvIndex.indexType
+		buffer, indexRoots, addrCache, invtdCache, logTree := SearchIndexTreeFromDisk(measurementName, fieldKey, clvIndex.indexType)
+		res = CLVSearchIndex(indexType, dic.DicType, option, dic, indexRoots, buffer, addrCache, invtdCache, logTree)
 	} else {
 		res = nil
 	}

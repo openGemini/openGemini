@@ -28,7 +28,6 @@ func UnserializeGramDicFromFile(filename string) *gramClvc.TrieTree {
 	return dictrie
 }
 
-
 func UnserializeTokenDicFromFile(filename string) *tokenClvc.TrieTree {
 	buffer, _ := GetBytesFromFile(filename)
 	bufstr := string(buffer)

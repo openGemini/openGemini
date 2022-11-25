@@ -5,12 +5,6 @@ import (
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 )
 
-/**
-* @ Author: Yaixihn
-* @ Dec:map+trie unserialized
-* @ Date: 2022/10/4 13:40
- */
-
 func UnserializeAddrListBlk(offset uint64, buffer []byte) *obj.AddrListBlock {
 	buffer = buffer[offset:]
 	sizebyte := buffer[:obj.DEFAULT_SIZE]

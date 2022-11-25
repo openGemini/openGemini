@@ -6,11 +6,6 @@ import (
 	"github.com/openGemini/openGemini/lib/utils"
 )
 
-/**
-* @ Author: Yaixihn
-* @ Dec:map+trie unserialized
-* @ Date: 2022/10/5 13:40
- */
 func UnserializeInvertedListBlk(offset uint64, buffer []byte) *obj.InvertedListBlock {
 	buf := buffer[offset:]
 	sizeByte := buf[:obj.DEFAULT_SIZE]

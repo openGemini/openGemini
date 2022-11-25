@@ -39,8 +39,8 @@ func NewAddrItem(addrdata uint64, indexEntryOffset uint16) *AddrItem {
 
 type AddrListBlock struct {
 	blk     []*AddrItem
-	mpblk   map[uint64]uint16 //offset 有什么用，能否找到倒排？内存中是一个节点地址，直接可获取倒排表，磁盘中存放是invetoffset还是 addroffset，能否找到倒排
-	blksize uint64            // UnserializeInvertedListBlk函数？
+	mpblk   map[uint64]uint16
+	blksize uint64
 }
 
 func InitAddrListBlock(mpblk map[uint64]uint16, blksize uint64) *AddrListBlock {

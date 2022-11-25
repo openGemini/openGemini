@@ -5,7 +5,6 @@ import (
 	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 	"github.com/openGemini/openGemini/lib/utils"
-	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"sort"
 )
 
@@ -64,7 +63,7 @@ func serializeInvertedItem(item *obj.InvertedItem) []byte {
 }
 
 //turn to file layout
-func encodeInvertedBlk(inverted gramIndex.Inverted_index) *obj.InvertedListBlock {
+func encodeInvertedBlk(inverted map[utils.SeriesId][]uint16) *obj.InvertedListBlock {
 	var total uint64 = 0
 	res := new(obj.InvertedListBlock)
 	blk := make([]*obj.InvertedItem, 0)
@@ -84,7 +83,7 @@ func getInvtdItemSize(pos []uint16) uint64 {
 	return uint64(sidstd + timestd + len(pos)*posstd)
 }
 
-func GetMaxAndMinTime(index gramIndex.Inverted_index) (min, max int64) {
+func GetMaxAndMinTime(index map[utils.SeriesId][]uint16) (min, max int64) {
 	sidArr := make([]utils.SeriesId, 0)
 	if len(index) <= 0 {
 		return -1, -1

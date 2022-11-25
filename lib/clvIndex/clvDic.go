@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/vGram/gramDic/gramClvl"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvl"
+	"time"
 )
 
 /*
@@ -46,7 +47,8 @@ const MAXDICBUFFER = 1
 var DicIndex = 0
 var BuffDicStrings []utils.LogSeries
 
-const DICOUTPATH = "../../lib/persistence/data/measurement/dicout/"
+const DIC_PERSISTENCE_INTERVAL time.Duration = time.Hour
+const DICOUTPATH = "../../lib/persistence/" //clvTable/logs/VGRAM/dic/
 
 type CLVDictionary struct {
 	DicType       CLVDicType
@@ -61,6 +63,34 @@ func NewCLVDictionary() *CLVDictionary {
 		VtokenDicRoot: tokenClvc.NewTrieTree(QMINTOKEN, QMAXTOKEN),
 	}
 }
+
+/*func (clvDic *CLVDictionary) Flush(){
+	go clvDic.flushClvDicRoutine()
+}
+
+func (clvDic *CLVDictionary) flushClvDicRoutine() {
+	timer := time.NewTimer(DIC_PERSISTENCE_INTERVAL)
+	defer  timer.Stop()
+	for {
+		select {
+		case <- timer.C:
+			clvDic.serializeDic()
+		}
+	}
+}
+
+func (clvDic *CLVDictionary) serializeDic() {
+	if clvDic.DicType == CLVC{
+		outpath := DIC_OUTPATH + "/gram_0.txt"
+		dictrie := clvDic.VgramDicRoot
+		encode.SerializeGramDicToFile(dictrie,outpath)
+	}
+	if clvDic.DicType == CLVL{
+		outpath := DIC_OUTPATH + "/token_0.txt"
+		dictrie := clvDic.VtokenDicRoot
+		encode.SerializeTokenDicToFile(dictrie,outpath)
+	}
+}*/
 
 func (clvDic *CLVDictionary) CreateDictionaryIfNotExists(log string, tsid uint64, timeStamp int64, indexType CLVIndexType) {
 	if DicIndex < MAXDICBUFFER {

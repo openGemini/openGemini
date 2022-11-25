@@ -2,13 +2,25 @@ package encode
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
+	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
+	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
 )
 
 //the center status of addrlistblock turn to file layout format
-func encodeAddrCntStatus(addoff map[*gramIndex.IndexTreeNode]uint16) []*obj.AddrCenterStatus {
+func encodeTokenAddrCntStatus(addoff map[*tokenIndex.IndexTreeNode]uint16) []*obj.AddrCenterStatus {
+	res := make([]*obj.AddrCenterStatus, 0)
+	for node, off := range addoff {
+		cur := *node
+		inverted := cur.InvertedIndex()
+		blk := encodeInvertedBlk(inverted)
+		tmp := obj.NewAddrCenterStatus(blk, off)
+		res = append(res, tmp)
+	}
+	return res
+}
+func encodeGramAddrCntStatus(addoff map[*gramIndex.IndexTreeNode]uint16) []*obj.AddrCenterStatus {
 	res := make([]*obj.AddrCenterStatus, 0)
 	for node, off := range addoff {
 		cur := *node

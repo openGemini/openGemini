@@ -1,11 +1,7 @@
 package obj
 
-/**
-* @ Author: Yaixihn
-* @ Dec:
-* @ Date: 2022/9/18 13:51
- */
 //serialize object information
+
 const DEFAULT_SIZE = 64 / 8
 
 type SerializeObj struct {
