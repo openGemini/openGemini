@@ -16,36 +16,54 @@ limitations under the License.
 package tokenMatchQuery
 
 import (
-	"sort"
-
+	"github.com/openGemini/openGemini/lib/mpTrie/cache"
+	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/utils"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
+	"sort"
 )
 
-func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoot *tokenIndex.IndexTreeNode, qmin int) []utils.SeriesId {
+func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoots *decode.SearchTreeNode, qmin int, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
+	/*var vgMap = make(map[uint16][]string)
+	searchtoken, _ := utils.DataProcess(searchStr)
+	tokenIndex.VGCons(root, qmin, searchtoken, vgMap)
+	var resArr = make([]utils.SeriesId, 0)
+	for i := 0; i < len(indexRoots); i++ {
+		resArr = append(resArr, MatchSearch2(vgMap, indexRoots[i], buffer, addrCache, invertedCache)...)
+	}
+	return resArr*/
+
 	var vgMap = make(map[uint16][]string)
 	searchtoken, _ := utils.DataProcess(searchStr)
 	tokenIndex.VGCons(root, qmin, searchtoken, vgMap)
-	//fmt.Println(vgMap)
+	var resArr = make([]utils.SeriesId, 0)
+	resArr = MatchSearch2(vgMap, indexRoots, buffer, addrCache, invertedCache)
+	return resArr
+}
 
+func MatchSearch2(vgMap map[uint16][]string, indexRoot *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	var sortSumInvertList = make([]SortKey, 0)
 	for x := range vgMap {
 		token := vgMap[x]
 		if token != nil {
 			var invertIndex tokenIndex.Inverted_index
-			var indexNode *tokenIndex.IndexTreeNode
+			var invertIndexOffset uint64
+			var addrOffset uint64
+			var indexNode *decode.SearchTreeNode
 			var invertIndex1 tokenIndex.Inverted_index
 			var invertIndex2 tokenIndex.Inverted_index
 			var invertIndex3 tokenIndex.Inverted_index
-			invertIndex1, indexNode = SearchInvertedListFromCurrentNode(token, indexRoot, 0, invertIndex1, indexNode)
-			invertIndex = DeepCopy(invertIndex1)
-			invertIndex2 = SearchInvertedListFromChildrensOfCurrentNode(indexNode, nil)
-			if indexNode != nil && len(indexNode.AddrOffset()) > 0 {
-				invertIndex3 = TurnAddr2InvertLists(indexNode.AddrOffset(), invertIndex3)
+			invertIndexOffset, addrOffset, indexNode = SearchNodeAddrFromPersistentIndexTree(token, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
+			invertIndex1 = utils.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
+			invertIndex = utils.DeepCopy(invertIndex1)
+			invertIndex2 = utils.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+			addrOffsets := utils.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+			if indexNode != nil && len(addrOffsets) > 0 {
+				invertIndex3 = utils.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 			}
-			invertIndex = MergeMapsInvertLists(invertIndex2, invertIndex)
-			invertIndex = MergeMapsInvertLists(invertIndex3, invertIndex)
+			invertIndex = utils.MergeMapsInvertLists(invertIndex2, invertIndex)
+			invertIndex = utils.MergeMapsInvertLists(invertIndex3, invertIndex)
 			sortSumInvertList = append(sortSumInvertList, NewSortKey(x, len(invertIndex), token, invertIndex))
 		}
 	}
@@ -118,122 +136,17 @@ func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoot *toke
 	return resArr
 }
 
-func SearchInvertedListFromCurrentNode(tokenArr []string, indexRoot *tokenIndex.IndexTreeNode, i int, invertIndex1 tokenIndex.Inverted_index, indexNode *tokenIndex.IndexTreeNode) (tokenIndex.Inverted_index, *tokenIndex.IndexTreeNode) {
+func SearchNodeAddrFromPersistentIndexTree(tokenArr []string, indexRoot *decode.SearchTreeNode, i int, invertIndexOffset uint64, addrOffset uint64, indexNode *decode.SearchTreeNode) (uint64, uint64, *decode.SearchTreeNode) {
 	if indexRoot == nil {
-		return invertIndex1, indexNode
+		return invertIndexOffset, addrOffset, indexNode
 	}
 	if i < len(tokenArr)-1 && indexRoot.Children()[utils.StringToHashCode(tokenArr[i])] != nil {
-		invertIndex1, indexNode = SearchInvertedListFromCurrentNode(tokenArr, indexRoot.Children()[utils.StringToHashCode(tokenArr[i])], i+1, invertIndex1, indexNode)
+		invertIndexOffset, addrOffset, indexNode = SearchNodeAddrFromPersistentIndexTree(tokenArr, indexRoot.Children()[utils.StringToHashCode(tokenArr[i])], i+1, invertIndexOffset, addrOffset, indexNode)
 	}
-	if i == len(tokenArr)-1 && indexRoot.Children()[utils.StringToHashCode(tokenArr[i])] != nil { //找到那一层的倒排表
-		invertIndex1 = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])].InvertedIndex()
+	if i == len(tokenArr)-1 && indexRoot.Children()[utils.StringToHashCode(tokenArr[i])] != nil {
+		invertIndexOffset = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])].InvtdInfo().IvtdblkOffset()
+		addrOffset = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])].AddrInfo().AddrblkOffset()
 		indexNode = indexRoot.Children()[utils.StringToHashCode(tokenArr[i])]
 	}
-	return invertIndex1, indexNode
-}
-
-func SearchInvertedListFromChildrensOfCurrentNode(indexNode *tokenIndex.IndexTreeNode, invertIndex2 tokenIndex.Inverted_index) tokenIndex.Inverted_index {
-	if indexNode != nil {
-		for _, child := range indexNode.Children() {
-			if len(child.InvertedIndex()) > 0 {
-				invertIndex2 = MergeMapsInvertLists(child.InvertedIndex(), invertIndex2)
-			}
-			if len(child.AddrOffset()) > 0 {
-				var invertIndex3 = TurnAddr2InvertLists(child.AddrOffset(), nil)
-				invertIndex2 = MergeMapsInvertLists(invertIndex3, invertIndex2)
-			}
-			invertIndex2 = SearchInvertedListFromChildrensOfCurrentNode(child, invertIndex2)
-		}
-	}
-	return invertIndex2
-}
-
-func TurnAddr2InvertLists(addrOffset map[*tokenIndex.IndexTreeNode]uint16, invertIndex3 tokenIndex.Inverted_index) tokenIndex.Inverted_index {
-	var res tokenIndex.Inverted_index
-	for addr, offset := range addrOffset {
-		invertIndex3 = make(map[utils.SeriesId][]uint16)
-		for key, value := range addr.InvertedIndex() {
-			list := make([]uint16, 0)
-			for i := 0; i < len(value); i++ {
-				list = append(list, value[i]+offset)
-			}
-			invertIndex3[key] = list
-		}
-		res = MergeMapsTwoInvertLists(invertIndex3, res)
-	}
-	return res
-}
-
-func MergeMapsInvertLists(map1 map[utils.SeriesId][]uint16, map2 map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {
-	if len(map2) > 0 {
-		for sid1, list1 := range map1 {
-			if list2, ok := map2[sid1]; !ok {
-				map2[sid1] = list1
-			} else {
-				list2 = append(list2, list1...)
-				list2 = UniqueArr(list2)
-				sort.Slice(list2, func(i, j int) bool { return list2[i] < list2[j] })
-				map2[sid1] = list2
-			}
-		}
-	} else {
-		map2 = DeepCopy(map1)
-	}
-	return map2
-}
-
-func UniqueArr(m []uint16) []uint16 {
-	d := make([]uint16, 0)
-	tempMap := make(map[uint16]bool, len(m))
-	for _, v := range m { // 以值作为键名
-		if tempMap[v] == false {
-			tempMap[v] = true
-			d = append(d, v)
-		}
-	}
-	return d
-}
-
-func DeepCopy(src map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {
-	dst := make(map[utils.SeriesId][]uint16)
-	for key, value := range src {
-		list := make([]uint16, 0)
-		for i := 0; i < len(value); i++ {
-			list = append(list, value[i])
-		}
-		dst[key] = list
-	}
-	return dst
-}
-
-func MergeMapsTwoInvertLists(map1 map[utils.SeriesId][]uint16, map2 map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {
-	if len(map1) == 0 {
-		return map2
-	} else if len(map2) == 0 {
-		return map1
-	} else if len(map1) < len(map2) {
-		for sid1, list1 := range map1 {
-			if list2, ok := map2[sid1]; !ok {
-				map2[sid1] = list1
-			} else {
-				list2 = append(list2, list1...)
-				list2 = UniqueArr(list2)
-				sort.Slice(list2, func(i, j int) bool { return list2[i] < list2[j] })
-				map2[sid1] = list2
-			}
-		}
-		return map2
-	} else {
-		for sid1, list1 := range map2 {
-			if list2, ok := map1[sid1]; !ok {
-				map1[sid1] = list1
-			} else {
-				list2 = append(list2, list1...)
-				list2 = UniqueArr(list2)
-				sort.Slice(list2, func(i, j int) bool { return list2[i] < list2[j] })
-				map1[sid1] = list2
-			}
-		}
-		return map1
-	}
+	return invertIndexOffset, addrOffset, indexNode
 }

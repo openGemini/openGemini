@@ -15,7 +15,7 @@ limitations under the License.
 */
 package vToken
 
-import (
+/*import (
 	"fmt"
 	"testing"
 	"time"
@@ -369,4 +369,4 @@ func CreateIndex(dicTrie tokenClvc.TrieTree, qmin int, qmax int) *tokenIndex.Ind
 	}
 	indexTrie, _ := tokenIndex.GenerateIndexTree(strIndex, qmin, qmax, dicTrie.Root())
 	return indexTrie
-}
+}*/
