@@ -16,15 +16,15 @@ limitations under the License.
 package tokenMatchQuery
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/utils"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
 	"sort"
 )
 
-func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoots *decode.SearchTreeNode, qmin int, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
+func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoots *mpTrie.SearchTreeNode, qmin int, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	/*var vgMap = make(map[uint16][]string)
 	searchtoken, _ := utils.DataProcess(searchStr)
 	tokenIndex.VGCons(root, qmin, searchtoken, vgMap)
@@ -42,7 +42,7 @@ func MatchSearch(searchStr string, root *tokenClvc.TrieTreeNode, indexRoots *dec
 	return resArr
 }
 
-func MatchSearch2(vgMap map[uint16][]string, indexRoot *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
+func MatchSearch2(vgMap map[uint16][]string, indexRoot *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	var sortSumInvertList = make([]SortKey, 0)
 	for x := range vgMap {
 		token := vgMap[x]
@@ -50,20 +50,20 @@ func MatchSearch2(vgMap map[uint16][]string, indexRoot *decode.SearchTreeNode, b
 			var invertIndex tokenIndex.Inverted_index
 			var invertIndexOffset uint64
 			var addrOffset uint64
-			var indexNode *decode.SearchTreeNode
+			var indexNode *mpTrie.SearchTreeNode
 			var invertIndex1 tokenIndex.Inverted_index
 			var invertIndex2 tokenIndex.Inverted_index
 			var invertIndex3 tokenIndex.Inverted_index
 			invertIndexOffset, addrOffset, indexNode = SearchNodeAddrFromPersistentIndexTree(token, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
-			invertIndex1 = utils.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
-			invertIndex = utils.DeepCopy(invertIndex1)
-			invertIndex2 = utils.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
-			addrOffsets := utils.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+			invertIndex1 = mpTrie.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
+			invertIndex = mpTrie.DeepCopy(invertIndex1)
+			invertIndex2 = mpTrie.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+			addrOffsets := mpTrie.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
 			if indexNode != nil && len(addrOffsets) > 0 {
-				invertIndex3 = utils.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
+				invertIndex3 = mpTrie.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 			}
-			invertIndex = utils.MergeMapsInvertLists(invertIndex2, invertIndex)
-			invertIndex = utils.MergeMapsInvertLists(invertIndex3, invertIndex)
+			invertIndex = mpTrie.MergeMapsInvertLists(invertIndex2, invertIndex)
+			invertIndex = mpTrie.MergeMapsInvertLists(invertIndex3, invertIndex)
 			sortSumInvertList = append(sortSumInvertList, NewSortKey(x, len(invertIndex), token, invertIndex))
 		}
 	}
@@ -136,7 +136,7 @@ func MatchSearch2(vgMap map[uint16][]string, indexRoot *decode.SearchTreeNode, b
 	return resArr
 }
 
-func SearchNodeAddrFromPersistentIndexTree(tokenArr []string, indexRoot *decode.SearchTreeNode, i int, invertIndexOffset uint64, addrOffset uint64, indexNode *decode.SearchTreeNode) (uint64, uint64, *decode.SearchTreeNode) {
+func SearchNodeAddrFromPersistentIndexTree(tokenArr []string, indexRoot *mpTrie.SearchTreeNode, i int, invertIndexOffset uint64, addrOffset uint64, indexNode *mpTrie.SearchTreeNode) (uint64, uint64, *mpTrie.SearchTreeNode) {
 	if indexRoot == nil {
 		return invertIndexOffset, addrOffset, indexNode
 	}

@@ -1,8 +1,7 @@
-package decode
+package mpTrie
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 	"os"
@@ -15,8 +14,8 @@ func UnserializeGramIndexFromFile(buffer []byte, filesize int64, addrCachesize, 
 	}
 	invtdTotalbyte := buffer[filesize-2*obj.DEFAULT_SIZE : filesize-obj.DEFAULT_SIZE]
 	addrTotalbyte := buffer[filesize-obj.DEFAULT_SIZE:]
-	invtdTotal, _ := mpTrie.BytesToInt(invtdTotalbyte, true)
-	addrTotal, _ := mpTrie.BytesToInt(addrTotalbyte, true)
+	invtdTotal, _ := BytesToInt(invtdTotalbyte, true)
+	addrTotal, _ := BytesToInt(addrTotalbyte, true)
 	clvdataStart := invtdTotal + addrTotal
 	clvdatabuf := buffer[clvdataStart : filesize-2*obj.DEFAULT_SIZE]
 
@@ -58,7 +57,7 @@ func unserializeObj(buffer, raw []byte, addrCachesize, invtdCachesize int) (*Sea
 	//offaddrObjmp := make(map[uint64]*obj.AddrListBlock)
 	for len(buffer) > 0 {
 		tmp := buffer[:stdlen]
-		objsize, _ := mpTrie.BytesToInt(tmp, false)
+		objsize, _ := BytesToInt(tmp, false)
 		objsize += stdlen
 		objbuff := buffer[stdlen:objsize]
 		data, obj := decodeSerializeObj(objbuff)
@@ -72,24 +71,24 @@ func unserializeObj(buffer, raw []byte, addrCachesize, invtdCachesize int) (*Sea
 
 func decodeSerializeObj(buffer []byte) (string, *obj.SerializeObj) {
 	stdlen := obj.DEFAULT_SIZE
-	objaddrlen, _ := mpTrie.BytesToInt(buffer[:stdlen], false)
+	objaddrlen, _ := BytesToInt(buffer[:stdlen], false)
 	buffer = buffer[stdlen:]
 	var addrListEntry = new(obj.AddrListEntry)
 	if objaddrlen != 0 {
-		size, _ := mpTrie.BytesToInt(buffer[:stdlen], false)
-		off, _ := mpTrie.BytesToInt(buffer[stdlen:2*stdlen], false)
+		size, _ := BytesToInt(buffer[:stdlen], false)
+		off, _ := BytesToInt(buffer[stdlen:2*stdlen], false)
 		addrListEntry.SetSize(uint64(size))
 		addrListEntry.SetBlockoffset(uint64(off))
 		buffer = buffer[2*stdlen:]
 	}
-	objinvtdlen, _ := mpTrie.BytesToInt(buffer[:stdlen], false)
+	objinvtdlen, _ := BytesToInt(buffer[:stdlen], false)
 	buffer = buffer[stdlen:]
 	var invtdListEntry = new(obj.InvertedListEntry)
 	if objinvtdlen != 0 {
-		size, _ := mpTrie.BytesToInt(buffer[:stdlen], false)
-		mintime, _ := mpTrie.BytesToInt(buffer[stdlen:2*stdlen], false)
-		maxtime, _ := mpTrie.BytesToInt(buffer[2*stdlen:3*stdlen], false)
-		off, _ := mpTrie.BytesToInt(buffer[3*stdlen:4*stdlen], false)
+		size, _ := BytesToInt(buffer[:stdlen], false)
+		mintime, _ := BytesToInt(buffer[stdlen:2*stdlen], false)
+		maxtime, _ := BytesToInt(buffer[2*stdlen:3*stdlen], false)
+		off, _ := BytesToInt(buffer[3*stdlen:4*stdlen], false)
 		invtdListEntry.SetSize(uint64(size))
 		invtdListEntry.SetMinTime(int64(mintime))
 		invtdListEntry.SetMaxTime(int64(maxtime))

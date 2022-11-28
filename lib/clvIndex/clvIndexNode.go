@@ -16,7 +16,7 @@ limitations under the License.
 package clvIndex
 
 import (
-	"github.com/openGemini/openGemini/lib/mpTrie/encode"
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"sync"
 	"time"
 
@@ -169,16 +169,16 @@ func (clvIndexNode *CLVIndexNode) serializeIndex() { //clvTable/logs/VGRAM/index
 	if clvIndexNode.indexType == VGRAM {
 		outPath := INDEXOUTPATH + clvIndexNode.measurementAndFieldKey.measurementName + "/" + clvIndexNode.measurementAndFieldKey.fieldKey + "/" + "VGRAM/" + "index/" + "index0.txt"
 		indexTree := clvIndexNode.VgramIndexRoot
-		encode.SerializeGramIndexToFile(indexTree, outPath)
+		mpTrie.SerializeGramIndexToFile(indexTree, outPath)
 		clvIndexNode.VgramIndexRoot = gramIndex.NewIndexTree(QMINGRAM, QMAXGRAM)
 		logTree := clvIndexNode.LogTreeRoot
-		encode.SerializeLogTreeToFile(logTree, INDEXOUTPATH+clvIndexNode.measurementAndFieldKey.measurementName+"/"+clvIndexNode.measurementAndFieldKey.fieldKey+"/"+"VGRAM/"+"logTree/"+"log0.txt")
+		mpTrie.SerializeLogTreeToFile(logTree, INDEXOUTPATH+clvIndexNode.measurementAndFieldKey.measurementName+"/"+clvIndexNode.measurementAndFieldKey.fieldKey+"/"+"VGRAM/"+"logTree/"+"log0.txt")
 		clvIndexNode.LogTreeRoot = gramIndex.NewLogTree(QMAXGRAM)
 	}
 	if clvIndexNode.indexType == VTOKEN {
 		outPath := INDEXOUTPATH + clvIndexNode.measurementAndFieldKey.measurementName + "/" + clvIndexNode.measurementAndFieldKey.fieldKey + "/" + "VTOKEN/" + "index/" + "index0.txt"
 		indexTree := clvIndexNode.VtokenIndexRoot
-		encode.SerializeTokenIndexToFile(indexTree, outPath)
+		mpTrie.SerializeTokenIndexToFile(indexTree, outPath)
 		clvIndexNode.VtokenIndexRoot = tokenIndex.NewIndexTree(QMINGRAM, QMAXGRAM)
 	}
 }

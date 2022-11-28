@@ -1,8 +1,7 @@
-package encode
+package mpTrie
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 	"github.com/openGemini/openGemini/lib/utils"
 	"sort"
@@ -12,7 +11,7 @@ import (
 func serializeInvertedListBlk(invtdblk *obj.InvertedListBlock) []byte {
 	res := make([]byte, 0)
 	// size  store
-	invtdblksize, err := mpTrie.IntToBytes(int(invtdblk.Blksize()), stdlen)
+	invtdblksize, err := IntToBytes(int(invtdblk.Blksize()), stdlen)
 	res = append(res, invtdblksize...)
 	if err != nil {
 		fmt.Println(err)
@@ -29,19 +28,19 @@ func serializeInvertedListBlk(invtdblk *obj.InvertedListBlock) []byte {
 func serializeInvertedItem(item *obj.InvertedItem) []byte {
 	res := make([]byte, 0)
 	// record the size in the start position
-	itemsize, err := mpTrie.IntToBytes(int(item.Size()), stdlen)
+	itemsize, err := IntToBytes(int(item.Size()), stdlen)
 	res = append(res, itemsize...)
 	if err != nil {
 		fmt.Println(err)
 		return nil
 	}
-	itemTsid, err := mpTrie.IntToBytes(int(item.Tsid()), stdlen)
+	itemTsid, err := IntToBytes(int(item.Tsid()), stdlen)
 	res = append(res, itemTsid...)
 	if err != nil {
 		fmt.Println(err)
 		return nil
 	}
-	itemTime, err := mpTrie.IntToBytes(int(item.Timestamp()), stdlen)
+	itemTime, err := IntToBytes(int(item.Timestamp()), stdlen)
 	res = append(res, itemTime...)
 	if err != nil {
 		fmt.Println(err)
@@ -50,7 +49,7 @@ func serializeInvertedItem(item *obj.InvertedItem) []byte {
 	pos := item.PosBlock()
 	tmp := make([]byte, 0)
 	for _, num := range pos {
-		n, err := mpTrie.IntToBytes(int(num), 2)
+		n, err := IntToBytes(int(num), 2)
 		tmp = append(tmp, n...)
 		if err != nil {
 			fmt.Println(err)

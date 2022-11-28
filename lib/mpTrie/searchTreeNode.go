@@ -1,8 +1,7 @@
-package decode
+package mpTrie
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 )
@@ -160,19 +159,19 @@ func (node *SearchTreeNode) GetInvertedListBlock(buffer []byte) *obj.InvertedLis
 	invtbuf := buffer[off : off+size]
 	blk := new(obj.InvertedListBlock)
 	invtblk := blk.Blk()
-	blksize, _ := mpTrie.BytesToInt(invtbuf[:obj.DEFAULT_SIZE], false)
+	blksize, _ := BytesToInt(invtbuf[:obj.DEFAULT_SIZE], false)
 	invtbuf = invtbuf[obj.DEFAULT_SIZE:]
 	invtbuf = invtbuf[:blksize]
 	for len(invtbuf) != 0 {
-		itemsize, _ := mpTrie.BytesToInt(invtbuf[:obj.DEFAULT_SIZE], false)
+		itemsize, _ := BytesToInt(invtbuf[:obj.DEFAULT_SIZE], false)
 		invtbuf = invtbuf[obj.DEFAULT_SIZE:]
 		itembuf := invtbuf[:itemsize]
-		tsid, _ := mpTrie.BytesToInt(itembuf[:obj.DEFAULT_SIZE], false)
-		timestamp, _ := mpTrie.BytesToInt(itembuf[obj.DEFAULT_SIZE:2*obj.DEFAULT_SIZE], false)
+		tsid, _ := BytesToInt(itembuf[:obj.DEFAULT_SIZE], false)
+		timestamp, _ := BytesToInt(itembuf[obj.DEFAULT_SIZE:2*obj.DEFAULT_SIZE], false)
 		itembuf = itembuf[2*obj.DEFAULT_SIZE:]
 		pos := make([]uint16, 0)
 		for len(itembuf) != 0 {
-			p, _ := mpTrie.BytesToInt(itembuf[:2], false)
+			p, _ := BytesToInt(itembuf[:2], false)
 			pos = append(pos, uint16(p))
 			itembuf = itembuf[2:]
 		}
@@ -188,18 +187,18 @@ func (node *SearchTreeNode) GetAddrListBlock(buffer []byte) *obj.AddrListBlock {
 	off := node.addrInfo.addrblkOffset
 	size := node.addrInfo.addrblksize
 	addrbuf := buffer[off : off+size]
-	blksize, _ := mpTrie.BytesToInt(addrbuf[:obj.DEFAULT_SIZE], false)
+	blksize, _ := BytesToInt(addrbuf[:obj.DEFAULT_SIZE], false)
 	addrbuf = addrbuf[obj.DEFAULT_SIZE:]
 	addrbuf = addrbuf[:blksize]
 	//decode addrlistblock
 	blk := new(obj.AddrListBlock)
 	addrblk := blk.Blk()
 	for len(addrbuf) != 0 {
-		itemsize, _ := mpTrie.BytesToInt(addrbuf[:obj.DEFAULT_SIZE], false)
+		itemsize, _ := BytesToInt(addrbuf[:obj.DEFAULT_SIZE], false)
 		addrbuf = addrbuf[obj.DEFAULT_SIZE:]
-		itemdata, _ := mpTrie.BytesToInt(addrbuf[:obj.DEFAULT_SIZE], false)
+		itemdata, _ := BytesToInt(addrbuf[:obj.DEFAULT_SIZE], false)
 		//decode invtdblk
-		itemoff, _ := mpTrie.BytesToInt(addrbuf[obj.DEFAULT_SIZE:], false)
+		itemoff, _ := BytesToInt(addrbuf[obj.DEFAULT_SIZE:], false)
 		addrbuf = addrbuf[itemsize:]
 		item := obj.NewAddrItem(uint64(itemdata), uint16(itemoff))
 		addrblk = append(addrblk, item)

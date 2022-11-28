@@ -1,7 +1,6 @@
-package decode
+package mpTrie
 
 import (
-	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 )
@@ -13,8 +12,8 @@ func UnserializeTokenIndexFromFile(buffer []byte, filesize int64, addrCachesize,
 	}
 	invtdTotalbyte := buffer[filesize-2*obj.DEFAULT_SIZE : filesize-obj.DEFAULT_SIZE]
 	addrTotalbyte := buffer[filesize-obj.DEFAULT_SIZE:]
-	invtdTotal, _ := mpTrie.BytesToInt(invtdTotalbyte, true)
-	addrTotal, _ := mpTrie.BytesToInt(addrTotalbyte, true)
+	invtdTotal, _ := BytesToInt(invtdTotalbyte, true)
+	addrTotal, _ := BytesToInt(addrTotalbyte, true)
 	clvdataStart := invtdTotal + addrTotal
 	clvdatabuf := buffer[clvdataStart : filesize-2*obj.DEFAULT_SIZE]
 
@@ -32,7 +31,7 @@ func unserializeTokenObj(buffer, raw []byte, addrCachesize, invtdCachesize int) 
 	invtdcache := cache.InitInvertedCache(invtdCachesize)
 	for len(buffer) > 0 {
 		tmp := buffer[:stdlen]
-		objsize, _ := mpTrie.BytesToInt(tmp, false)
+		objsize, _ := BytesToInt(tmp, false)
 		objsize += stdlen
 		objbuff := buffer[stdlen:objsize]
 		data, obj := decodeSerializeObj(objbuff)

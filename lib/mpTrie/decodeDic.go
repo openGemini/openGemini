@@ -1,7 +1,6 @@
-package decode
+package mpTrie
 
 import (
-	"github.com/openGemini/openGemini/lib/mpTrie/encode"
 	"github.com/openGemini/openGemini/lib/vGram/gramDic/gramClvc"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"strings"
@@ -10,7 +9,7 @@ import (
 func UnserializeGramDicFromFile(filename string) *gramClvc.TrieTree {
 	buffer, _ := GetBytesFromFile(filename)
 	bufstr := string(buffer)
-	grams := strings.Split(bufstr, encode.SPLITFLAG)
+	grams := strings.Split(bufstr, SPLITFLAG)
 	grams = grams[:len(grams)-1]
 	qmin, qmax := 0, 0
 	for _, gram := range grams {
@@ -31,7 +30,7 @@ func UnserializeGramDicFromFile(filename string) *gramClvc.TrieTree {
 func UnserializeTokenDicFromFile(filename string) *tokenClvc.TrieTree {
 	buffer, _ := GetBytesFromFile(filename)
 	bufstr := string(buffer)
-	res := strings.Split(bufstr, encode.SPLITFLAG)
+	res := strings.Split(bufstr, SPLITFLAG)
 	res = res[:len(res)-1]
 	qmin, qmax := 0, 0
 	for _, tokens := range res {

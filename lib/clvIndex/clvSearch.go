@@ -16,8 +16,8 @@ limitations under the License.
 package clvIndex
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/utils"
 	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"github.com/openGemini/openGemini/lib/vGram/gramTextSearch/gramFuzzyQuery"
@@ -54,32 +54,32 @@ func NewQueryOption(measurement string, fieldKey string, search QuerySearch, que
 }
 
 //查询存放所有的indexTree
-type VGramIndexTreeSlice *decode.SearchTreeNode
-type VTokenIndexTreeSlice *decode.SearchTreeNode
+type VGramIndexTreeSlice *mpTrie.SearchTreeNode
+type VTokenIndexTreeSlice *mpTrie.SearchTreeNode
 
-func SearchIndexTreeFromDisk(measurement string, fieldKey string, clvType CLVIndexType) ([]byte, *decode.SearchTreeNode, *cache.AddrCache, *cache.InvertedCache, *gramIndex.LogTree) {
+func SearchIndexTreeFromDisk(measurement string, fieldKey string, clvType CLVIndexType) ([]byte, *mpTrie.SearchTreeNode, *cache.AddrCache, *cache.InvertedCache, *gramIndex.LogTree) {
 	var buffer []byte
 	var size int64
-	var searchTree *decode.SearchTree
-	var indexRoots *decode.SearchTreeNode
+	var searchTree *mpTrie.SearchTree
+	var indexRoots *mpTrie.SearchTreeNode
 	var addrCache *cache.AddrCache
 	var invtdCache *cache.InvertedCache
 	var logTree *gramIndex.LogTree
 	if clvType == VGRAM {
-		buffer, size = decode.GetBytesFromFile(INDEXOUTPATH + measurement + "/" + fieldKey + "/" + "VGRAM/" + "index/" + "index0.txt")
-		searchTree, addrCache, invtdCache = decode.UnserializeGramIndexFromFile(buffer, size, 500000, 500000) //UnserializeGramIndexFromFile
+		buffer, size = mpTrie.GetBytesFromFile(INDEXOUTPATH + measurement + "/" + fieldKey + "/" + "VGRAM/" + "index/" + "index0.txt")
+		searchTree, addrCache, invtdCache = mpTrie.UnserializeGramIndexFromFile(buffer, size, 500000, 500000) //UnserializeGramIndexFromFile
 		indexRoots = searchTree.Root()
-		logTree = decode.UnserializeLogTreeFromFile(INDEXOUTPATH + measurement + "/" + fieldKey + "/" + "VGRAM/" + "logTree/" + "log0.txt")
+		logTree = mpTrie.UnserializeLogTreeFromFile(INDEXOUTPATH + measurement + "/" + fieldKey + "/" + "VGRAM/" + "logTree/" + "log0.txt")
 	} else if clvType == VTOKEN {
-		buffer, size = decode.GetBytesFromFile(INDEXOUTPATH + measurement + "/" + fieldKey + "/" + "VTOKEN/" + "index/" + "index0.txt")
-		searchTree, addrCache, invtdCache = decode.UnserializeTokenIndexFromFile(buffer, size, 500000, 500000) //UnserializeGramIndexFromFile
+		buffer, size = mpTrie.GetBytesFromFile(INDEXOUTPATH + measurement + "/" + fieldKey + "/" + "VTOKEN/" + "index/" + "index0.txt")
+		searchTree, addrCache, invtdCache = mpTrie.UnserializeTokenIndexFromFile(buffer, size, 500000, 500000) //UnserializeGramIndexFromFile
 		indexRoots = searchTree.Root()
 		logTree = gramIndex.NewLogTree(-1)
 	}
 	return buffer, indexRoots, addrCache, invtdCache, logTree
 }
 
-func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryOption, dictionary *CLVDictionary, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache, logTree *gramIndex.LogTree) []utils.SeriesId {
+func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryOption, dictionary *CLVDictionary, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache, logTree *gramIndex.LogTree) []utils.SeriesId {
 	var res []utils.SeriesId
 	if queryOption.querySearch == MATCHSEARCH {
 		if clvType == VGRAM {
@@ -108,7 +108,7 @@ func CLVSearchIndex(clvType CLVIndexType, dicType CLVDicType, queryOption QueryO
 	return res
 }
 
-func MatchSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
+func MatchSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
 		res = gramMatchQuery.MatchSearch(queryStr, dictionary.VgramDicRoot.Root(), indexRoots, QMINGRAM, buffer, addrCache, invtdCache)
@@ -119,7 +119,7 @@ func MatchSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVD
 	return res
 }
 
-func MatchSearchVTokenIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
+func MatchSearchVTokenIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
 		res = tokenMatchQuery.MatchSearch(queryStr, dictionary.VtokenDicRoot.Root(), indexRoots, QMINGRAM, buffer, addrCache, invtdCache)
@@ -130,7 +130,7 @@ func MatchSearchVTokenIndex(dicType CLVDicType, queryStr string, dictionary *CLV
 	return res
 }
 
-func FuzzySearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache, logTree *gramIndex.LogTree) []utils.SeriesId {
+func FuzzySearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache, logTree *gramIndex.LogTree) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC { //持久化在捞出来
 		res = gramFuzzyQuery.FuzzyQueryGramQmaxTrie(logTree.Root(), queryStr, dictionary.VgramDicRoot.Root(), indexRoots, QMINGRAM, LOGTREEMAX, ED, buffer, addrCache, invtdCache)
@@ -141,7 +141,7 @@ func FuzzySearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVD
 	return res
 }
 
-func FuzzySearchVTokenIndex(dicType CLVDicType, queryStr string, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
+func FuzzySearchVTokenIndex(dicType CLVDicType, queryStr string, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
 		res = tokenFuzzyQuery.FuzzySearchComparedWithES(queryStr, indexRoots, buffer, addrCache, invtdCache, ED)
@@ -152,7 +152,7 @@ func FuzzySearchVTokenIndex(dicType CLVDicType, queryStr string, indexRoots *dec
 	return res
 }
 
-func RegexSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
+func RegexSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVDictionary, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
 		res = gramRegexQuery.RegexSearch(queryStr, dictionary.VgramDicRoot, QMINGRAM, indexRoots, buffer, addrCache, invtdCache)
@@ -163,7 +163,7 @@ func RegexSearchVGramIndex(dicType CLVDicType, queryStr string, dictionary *CLVD
 	return res
 }
 
-func RegexSearchVTokenIndex(dicType CLVDicType, dictionary *CLVDictionary, queryStr string, indexRoots *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
+func RegexSearchVTokenIndex(dicType CLVDicType, dictionary *CLVDictionary, queryStr string, indexRoots *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invtdCache *cache.InvertedCache) []utils.SeriesId {
 	var res = make([]utils.SeriesId, 0)
 	if dicType == CLVC {
 		res = tokenRegexQuery.RegexSearch(queryStr, dictionary.VtokenDicRoot.Root(), indexRoots, buffer, addrCache, invtdCache)

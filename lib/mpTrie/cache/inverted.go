@@ -1,8 +1,6 @@
 package cache
 
-import (
-	"github.com/openGemini/openGemini/lib/mpTrie/obj"
-)
+import "github.com/openGemini/openGemini/lib/mpTrie/obj"
 
 //LRU
 type InvertedCache struct {

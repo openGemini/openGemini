@@ -17,9 +17,8 @@ package gramRegexQuery
 
 import (
 	"fmt"
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
-
 	"github.com/openGemini/openGemini/lib/utils"
 	"github.com/openGemini/openGemini/lib/vGram/gramDic/gramClvc"
 	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
@@ -240,7 +239,7 @@ func (g *Gnfa) AddEdge(label string, start *GnfaNode, end *GnfaNode) {
 
 }
 
-func (g *Gnfa) LoadInvertedIndex(index *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) {
+func (g *Gnfa) LoadInvertedIndex(index *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) {
 	for i := 0; i < len(g.edges); i++ {
 		edge := g.edges[i]
 		label := edge.label
@@ -355,24 +354,24 @@ func (g *Gnfa) Isfinal(node *GnfaNode) bool {
 	return false
 }
 
-func SearchString(indexRoot *decode.SearchTreeNode, label string, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) *gramIndex.Inverted_index {
+func SearchString(indexRoot *mpTrie.SearchTreeNode, label string, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) *gramIndex.Inverted_index {
 	var invertIndex gramIndex.Inverted_index
 	var invertIndexOffset uint64
 	var addrOffset uint64
-	var indexNode *decode.SearchTreeNode
+	var indexNode *mpTrie.SearchTreeNode
 	var invertIndex1 gramIndex.Inverted_index
 	var invertIndex2 gramIndex.Inverted_index
 	var invertIndex3 gramIndex.Inverted_index
 	invertIndexOffset, addrOffset, indexNode = gramMatchQuery.SearchNodeAddrFromPersistentIndexTree(label, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
-	invertIndex1 = utils.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
-	invertIndex = utils.DeepCopy(invertIndex1)
-	invertIndex2 = utils.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
-	addrOffsets := utils.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+	invertIndex1 = mpTrie.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
+	invertIndex = mpTrie.DeepCopy(invertIndex1)
+	invertIndex2 = mpTrie.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+	addrOffsets := mpTrie.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
 	if indexNode != nil && len(addrOffsets) > 0 {
-		invertIndex3 = utils.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
+		invertIndex3 = mpTrie.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 	}
-	invertIndex = utils.MergeMapsInvertLists(invertIndex2, invertIndex)
-	invertIndex = utils.MergeMapsInvertLists(invertIndex3, invertIndex)
+	invertIndex = mpTrie.MergeMapsInvertLists(invertIndex2, invertIndex)
+	invertIndex = mpTrie.MergeMapsInvertLists(invertIndex3, invertIndex)
 
 	return &invertIndex
 }
