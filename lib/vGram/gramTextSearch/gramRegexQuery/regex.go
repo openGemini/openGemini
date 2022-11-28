@@ -16,8 +16,8 @@ limitations under the License.
 package gramRegexQuery
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"strings"
 	"time"
 
@@ -108,7 +108,7 @@ func RegexStandardization(re string) string {
 	return re
 }
 
-func RegexSearch(re string, trietree *gramClvc.TrieTree, qmin int, index *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
+func RegexSearch(re string, trietree *gramClvc.TrieTree, qmin int, index *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	//fmt.Println(re + " : ")
 	//start := time.Now().UnixMicro()
 	split := strings.Contains(re, ".")
@@ -140,7 +140,7 @@ func RegexSearch(re string, trietree *gramClvc.TrieTree, qmin int, index *decode
 	return result
 }
 
-func MatchRegex(re string, trietree *gramClvc.TrieTree, index *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []*SeriesIdWithPosition {
+func MatchRegex(re string, trietree *gramClvc.TrieTree, index *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []*SeriesIdWithPosition {
 	//gramnum := 0
 	//ctime := int64(0)
 	//mtime := int64(0)
@@ -182,7 +182,7 @@ func MatchRegex(re string, trietree *gramClvc.TrieTree, index *decode.SearchTree
 	return sidlist
 }
 
-func MatchRegexPlusList(regexpluslist []*RegexPlus, trietree *gramClvc.TrieTree, indextree *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
+func MatchRegexPlusList(regexpluslist []*RegexPlus, trietree *gramClvc.TrieTree, indextree *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
 	gramnum := 0
 	//ctime := int64(0)
 	mtime := int64(0)
@@ -303,7 +303,7 @@ func CanMergeWithOp(lastend uint16, nextstart uint16, op uint8) bool {
 	}
 }
 
-func (re *Regex) LoadInvertedIndex(index *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) {
+func (re *Regex) LoadInvertedIndex(index *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) {
 	re.gnfa.LoadInvertedIndex(index, buffer, addrCache, invertedCache)
 }
 

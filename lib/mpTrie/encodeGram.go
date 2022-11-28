@@ -1,18 +1,18 @@
-package encode
+package mpTrie
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
-	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
+	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"os"
 	"sort"
-	"strings"
 )
 
-func SerializeTokenIndexToFile(tree *tokenIndex.IndexTree, filename string) {
+var stdlen byte = obj.DEFAULT_SIZE
+
+func SerializeGramIndexToFile(tree *gramIndex.IndexTree, filename string) {
 	fb := make([]byte, 0)
-	res, mp_invertedblk, res_addrctr := getIndexTokenData(tree)
+	res, mp_invertedblk, res_addrctr := getGramIndexData(tree)
 	var addrTotal uint64
 	//1. serialize invertedlistblock
 	ivtdIdxData := make([]string, 0)
@@ -80,8 +80,8 @@ func SerializeTokenIndexToFile(tree *tokenIndex.IndexTree, filename string) {
 	}
 
 	//file tailer
-	invtdTotalbyte, _ := mpTrie.IntToBytes(int(start_invtblk), stdlen)
-	addrTotalbyte, _ := mpTrie.IntToBytes(int(addrTotal), stdlen)
+	invtdTotalbyte, _ := IntToBytes(int(start_invtblk), stdlen)
+	addrTotalbyte, _ := IntToBytes(int(addrTotal), stdlen)
 	fb = append(fb, invtdTotalbyte...)
 	fb = append(fb, addrTotalbyte...)
 
@@ -101,23 +101,22 @@ func SerializeTokenIndexToFile(tree *tokenIndex.IndexTree, filename string) {
 }
 
 //get more than qmin index grams,and write the file
-func getIndexTokenData(tree *tokenIndex.IndexTree) (map[string]*obj.SerializeObj, map[string]*obj.InvertedListBlock, map[string][]*obj.AddrCenterStatus) {
+func getGramIndexData(tree *gramIndex.IndexTree) (map[string]*obj.SerializeObj, map[string]*obj.InvertedListBlock, map[string][]*obj.AddrCenterStatus) {
 	res := make(map[string]*obj.SerializeObj)
 	res_invetedblk := make(map[string]*obj.InvertedListBlock)
 	res_addrCntStatus := make(map[string][]*obj.AddrCenterStatus)
-	var dfs func(node *tokenIndex.IndexTreeNode, path []string)
-	dfs = func(node *tokenIndex.IndexTreeNode, path []string) {
+	var dfs func(node *gramIndex.IndexTreeNode, path []string)
+	dfs = func(node *gramIndex.IndexTreeNode, path []string) {
 		if node.Isleaf() == true {
 			temp := ""
 			for _, s := range path {
-				temp += s + " "
+				temp += s
 			}
-			temp = strings.TrimSpace(temp)
 			//process addr
 			addrmp := node.AddrOffset()
 			arrlen := uint64(len(addrmp))
 			if arrlen != 0 {
-				res_addrCntStatus[temp] = encodeTokenAddrCntStatus(addrmp) //addrlistblock
+				res_addrCntStatus[temp] = encodeGramAddrCntStatus(addrmp) //addrlistblock
 			}
 
 			//process inverted
@@ -147,4 +146,71 @@ func getIndexTokenData(tree *tokenIndex.IndexTree) (map[string]*obj.SerializeObj
 	path := make([]string, 0)
 	dfs(root, path)
 	return res, res_invetedblk, res_addrCntStatus
+}
+
+func serializeObj(obj *obj.SerializeObj) []byte {
+	res := make([]byte, 0)
+	size, err := IntToBytes(int(obj.Size()), stdlen)
+	res = append(res, size...)
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+	addrlen, err := IntToBytes(int(obj.AddrListlen()), stdlen)
+	res = append(res, addrlen...)
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+	if obj.AddrListlen() == 0 {
+		//
+	} else {
+		//maybe don`t have record size
+		entrysize, err := IntToBytes(int(obj.AddrListEntry().Size()), stdlen)
+		res = append(res, entrysize...)
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+		entryoff, err := IntToBytes(int(obj.AddrListEntry().Blockoffset()), stdlen)
+		res = append(res, entryoff...)
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+
+	}
+	invtdlen, err := IntToBytes(int(obj.InvertedListlen()), stdlen)
+	res = append(res, invtdlen...)
+	if obj.InvertedListlen() == 0 {
+		//
+	} else {
+
+		entrysize, err := IntToBytes(int(obj.InvertedListEntry().Size()), stdlen)
+		res = append(res, entrysize...)
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+		entryMinTime, err := IntToBytes(int(obj.InvertedListEntry().MinTime()), stdlen)
+		res = append(res, entryMinTime...)
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+		entryMaxTime, err := IntToBytes(int(obj.InvertedListEntry().MaxTime()), stdlen)
+		res = append(res, entryMaxTime...)
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+		entryoff, err := IntToBytes(int(obj.InvertedListEntry().Blockoffset()), stdlen)
+		res = append(res, entryoff...)
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+	}
+	res = append(res, []byte(obj.Data())...)
+	return res
 }

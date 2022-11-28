@@ -1,8 +1,7 @@
-package encode
+package mpTrie
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/obj"
 	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"github.com/openGemini/openGemini/lib/vToken/tokenIndex"
@@ -61,7 +60,7 @@ func addrCenterStatusToBLK(startoff uint64, idxData []string, res_addrctr map[st
 //serialize addrlistblock
 func serializeAddrListBlock(addrblk *obj.AddrListBlock) []byte {
 	res := make([]byte, 0)
-	addrblksize, err := mpTrie.IntToBytes(int(addrblk.Blksize()), stdlen)
+	addrblksize, err := IntToBytes(int(addrblk.Blksize()), stdlen)
 	res = append(res, addrblksize...)
 	if err != nil {
 		fmt.Println(err)
@@ -77,19 +76,19 @@ func serializeAddrListBlock(addrblk *obj.AddrListBlock) []byte {
 
 func serializeAddrItem(item *obj.AddrItem) []byte {
 	res := make([]byte, 0)
-	itemsize, err := mpTrie.IntToBytes(int(item.Size()), stdlen)
+	itemsize, err := IntToBytes(int(item.Size()), stdlen)
 	res = append(res, itemsize...)
 	if err != nil {
 		fmt.Println(err)
 		return nil
 	}
-	itemdata, err := mpTrie.IntToBytes(int(item.Addrdata()), stdlen)
+	itemdata, err := IntToBytes(int(item.Addrdata()), stdlen)
 	res = append(res, itemdata...)
 	if err != nil {
 		fmt.Println(err)
 		return nil
 	}
-	itemoff, err := mpTrie.IntToBytes(int(item.IndexEntryOffset()), 2)
+	itemoff, err := IntToBytes(int(item.IndexEntryOffset()), 2)
 	res = append(res, itemoff...)
 	if err != nil {
 		fmt.Println(err)

@@ -16,8 +16,8 @@ limitations under the License.
 package tokenFuzzyQuery
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"sort"
 
 	"github.com/openGemini/openGemini/lib/utils"
@@ -110,27 +110,27 @@ func UnionMapTokenThree(x map[utils.SeriesId][]uint16, y map[utils.SeriesId][]ui
 		return x
 	}
 }
-func ReadInvertedIndex(token string, indexRoot *decode.SearchTreeNode,buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
+func ReadInvertedIndex(token string, indexRoot *mpTrie.SearchTreeNode,buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
 	var invertIndex tokenIndex.Inverted_index
 	var invertIndexOffset uint64
 	var addrOffset uint64
-	var indexNode *decode.SearchTreeNode
+	var indexNode *mpTrie.SearchTreeNode
 	var invertIndex1 tokenIndex.Inverted_index
 	var invertIndex2 tokenIndex.Inverted_index
 	var invertIndex3 tokenIndex.Inverted_index
 	tokenArr := []string{token}
 	invertIndexOffset, addrOffset, indexNode =  tokenMatchQuery.SearchNodeAddrFromPersistentIndexTree(tokenArr, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
-	invertIndex1 = utils.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
-	invertIndex = utils.DeepCopy(invertIndex1)
-	invertIndex2 = utils.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
-	addrOffsets := utils.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+	invertIndex1 = mpTrie.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
+	invertIndex = mpTrie.DeepCopy(invertIndex1)
+	invertIndex2 = mpTrie.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+	addrOffsets := mpTrie.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
 	if indexNode != nil && len(addrOffsets) > 0 {
-		invertIndex3 = utils.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
+		invertIndex3 = mpTrie.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 	}
 	invertIndex = UnionMapTokenThree(invertIndex, invertIndex2, invertIndex3)
 	return invertIndex
 }
-func FuzzySearchComparedWithES(searchSingleToken string, indexRoot *decode.SearchTreeNode,buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache, distance int) []utils.SeriesId {
+func FuzzySearchComparedWithES(searchSingleToken string, indexRoot *mpTrie.SearchTreeNode,buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache, distance int) []utils.SeriesId {
 	sum := 0
 	sumPass := 0
 	mapRes := make(map[utils.SeriesId][]uint16)

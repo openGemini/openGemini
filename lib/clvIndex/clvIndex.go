@@ -23,7 +23,7 @@ limitations under the License.
 package clvIndex
 
 import (
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/utils"
 )
 
@@ -81,10 +81,10 @@ func (clvIndex *CLVIndex) CreateCLVIndex(log string, tsid uint64, timeStamp int6
 		var dic *CLVDictionary
 		if clvIndex.indexType == VGRAM {
 			dicPath := DICOUTPATH + measurement + "/" + fieldName + "/" + "VGRAM/" + "dic/" + "dic0.txt"
-			dic.VgramDicRoot = decode.UnserializeGramDicFromFile(dicPath)
+			dic.VgramDicRoot = mpTrie.UnserializeGramDicFromFile(dicPath)
 		} else if clvIndex.indexType == VTOKEN {
 			dicPath := DICOUTPATH + measurement + "/" + fieldName + "/" + "VTOKEN/" + "dic/" + "dic0.txt"
-			dic.VtokenDicRoot = decode.UnserializeTokenDicFromFile(dicPath)
+			dic.VtokenDicRoot = mpTrie.UnserializeTokenDicFromFile(dicPath)
 		}
 		clvIndex.indexTreeMap[measurementAndFieldKey] = NewCLVIndexNode(clvIndex.indexType, dic, measurementAndFieldKey)
 	}

@@ -1,14 +1,11 @@
-package decode
+package mpTrie
 
-import (
-	"github.com/openGemini/openGemini/lib/mpTrie"
-	"github.com/openGemini/openGemini/lib/mpTrie/obj"
-)
+import "github.com/openGemini/openGemini/lib/mpTrie/obj"
 
 func UnserializeAddrListBlk(offset uint64, buffer []byte) *obj.AddrListBlock {
 	buffer = buffer[offset:]
 	sizebyte := buffer[:obj.DEFAULT_SIZE]
-	blksize, _ := mpTrie.BytesToInt(sizebyte, false)
+	blksize, _ := BytesToInt(sizebyte, false)
 	buffer = buffer[obj.DEFAULT_SIZE:]
 	buffer = buffer[:blksize]
 	//items := unserializeAddrItemList(buffer)
@@ -22,7 +19,7 @@ func unserializeAddrItemList(buffer []byte) []*obj.AddrItem {
 	for len(buffer) != 0 {
 		//size
 		sizebyte := buffer[:obj.DEFAULT_SIZE]
-		itemsize, _ := mpTrie.BytesToInt(sizebyte, false)
+		itemsize, _ := BytesToInt(sizebyte, false)
 		buffer = buffer[obj.DEFAULT_SIZE:]
 		item := unserializeAddrItem(buffer)
 		list = append(list, item)
@@ -34,11 +31,11 @@ func unserializeAddrItemList(buffer []byte) []*obj.AddrItem {
 func unserializeAddrItem(buffer []byte) *obj.AddrItem {
 	//data
 	databyte := buffer[:obj.DEFAULT_SIZE]
-	data, _ := mpTrie.BytesToInt(databyte, false)
+	data, _ := BytesToInt(databyte, false)
 	buffer = buffer[obj.DEFAULT_SIZE:]
 	//offset
 	offbyte := buffer[:2]
-	off, _ := mpTrie.BytesToInt(offbyte, false)
+	off, _ := BytesToInt(offbyte, false)
 	buffer = buffer[2:]
 	item := obj.NewAddrItem(uint64(data), uint16(off))
 	return item
@@ -49,7 +46,7 @@ func UnserializeAddrMap(buffer []byte) map[uint64]uint16 {
 	for len(buffer) != 0 {
 		//size
 		sizebyte := buffer[:obj.DEFAULT_SIZE]
-		itemsize, _ := mpTrie.BytesToInt(sizebyte, false)
+		itemsize, _ := BytesToInt(sizebyte, false)
 		buffer = buffer[obj.DEFAULT_SIZE:]
 		data, offset := getUnserializeAddrData(buffer)
 		res[data] = offset
@@ -61,11 +58,11 @@ func UnserializeAddrMap(buffer []byte) map[uint64]uint16 {
 func getUnserializeAddrData(buffer []byte) (uint64, uint16) {
 	//data
 	databyte := buffer[:obj.DEFAULT_SIZE]
-	data, _ := mpTrie.BytesToInt(databyte, false)
+	data, _ := BytesToInt(databyte, false)
 	buffer = buffer[obj.DEFAULT_SIZE:]
 	//offset
 	offbyte := buffer[:2]
-	off, _ := mpTrie.BytesToInt(offbyte, false)
+	off, _ := BytesToInt(offbyte, false)
 	buffer = buffer[2:]
 	return uint64(data), uint16(off)
 }

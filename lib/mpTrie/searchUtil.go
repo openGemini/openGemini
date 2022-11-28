@@ -1,15 +1,15 @@
-package utils
+package mpTrie
 
 import (
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
+	"github.com/openGemini/openGemini/lib/utils"
 	"sort"
 )
 
-func SearchInvertedIndexFromCacheOrDisk(invertIndexOffset uint64, buffer []byte, invertedCache *cache.InvertedCache) map[SeriesId][]uint16 {
+func SearchInvertedIndexFromCacheOrDisk(invertIndexOffset uint64, buffer []byte, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
 	invertedIndex := invertedCache.Get(invertIndexOffset).Mpblk()
 	if len(invertedIndex) == 0 {
-		invertedIndex = decode.UnserializeInvertedListBlk(invertIndexOffset, buffer).Mpblk()
+		invertedIndex = UnserializeInvertedListBlk(invertIndexOffset, buffer).Mpblk()
 	}
 	return invertedIndex
 }
@@ -17,12 +17,12 @@ func SearchInvertedIndexFromCacheOrDisk(invertIndexOffset uint64, buffer []byte,
 func SearchAddrOffsetsFromCacheOrDisk(addrOffset uint64, buffer []byte, addrCache *cache.AddrCache) map[uint64]uint16 {
 	addrOffsets := addrCache.Get(addrOffset).Mpblk()
 	if len(addrOffsets) == 0 {
-		addrOffsets = decode.UnserializeAddrListBlk(addrOffset, buffer).Mpblk()
+		addrOffsets = UnserializeAddrListBlk(addrOffset, buffer).Mpblk()
 	}
 	return addrOffsets
 }
 
-func SearchInvertedListFromChildrensOfCurrentNode(indexNode *decode.SearchTreeNode, invertIndex2 map[SeriesId][]uint16, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) map[SeriesId][]uint16 {
+func SearchInvertedListFromChildrensOfCurrentNode(indexNode *SearchTreeNode, invertIndex2 map[utils.SeriesId][]uint16, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
 	if indexNode != nil {
 		for _, child := range indexNode.Children() {
 			childInvertIndexOffset := child.InvtdInfo().IvtdblkOffset()
@@ -43,10 +43,10 @@ func SearchInvertedListFromChildrensOfCurrentNode(indexNode *decode.SearchTreeNo
 	return invertIndex2
 }
 
-func TurnAddr2InvertLists(addrOffsets map[uint64]uint16, buffer []byte, invertedCache *cache.InvertedCache) map[SeriesId][]uint16 {
-	var res map[SeriesId][]uint16
+func TurnAddr2InvertLists(addrOffsets map[uint64]uint16, buffer []byte, invertedCache *cache.InvertedCache) map[utils.SeriesId][]uint16 {
+	var res map[utils.SeriesId][]uint16
 	for addr, offset := range addrOffsets {
-		invertIndex3 := make(map[SeriesId][]uint16)
+		invertIndex3 := make(map[utils.SeriesId][]uint16)
 		addrInvertedIndex := SearchInvertedIndexFromCacheOrDisk(addr, buffer, invertedCache)
 		for key, value := range addrInvertedIndex {
 			list := make([]uint16, 0)
@@ -60,7 +60,7 @@ func TurnAddr2InvertLists(addrOffsets map[uint64]uint16, buffer []byte, inverted
 	return res
 }
 
-func MergeMapsInvertLists(map1 map[SeriesId][]uint16, map2 map[SeriesId][]uint16) map[SeriesId][]uint16 {
+func MergeMapsInvertLists(map1 map[utils.SeriesId][]uint16, map2 map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {
 	if len(map2) > 0 {
 		for sid1, list1 := range map1 {
 			if list2, ok := map2[sid1]; !ok {
@@ -90,8 +90,8 @@ func UniqueArr(m []uint16) []uint16 {
 	return d
 }
 
-func DeepCopy(src map[SeriesId][]uint16) map[SeriesId][]uint16 {
-	dst := make(map[SeriesId][]uint16)
+func DeepCopy(src map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {
+	dst := make(map[utils.SeriesId][]uint16)
 	for key, value := range src {
 		list := make([]uint16, 0)
 		for i := 0; i < len(value); i++ {
@@ -102,7 +102,7 @@ func DeepCopy(src map[SeriesId][]uint16) map[SeriesId][]uint16 {
 	return dst
 }
 
-func MergeMapsTwoInvertLists(map1 map[SeriesId][]uint16, map2 map[SeriesId][]uint16) map[SeriesId][]uint16 {
+func MergeMapsTwoInvertLists(map1 map[utils.SeriesId][]uint16, map2 map[utils.SeriesId][]uint16) map[utils.SeriesId][]uint16 {
 	if len(map1) == 0 {
 		return map2
 	} else if len(map2) == 0 {

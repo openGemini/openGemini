@@ -1,7 +1,6 @@
-package decode
+package mpTrie
 
 import (
-	"github.com/openGemini/openGemini/lib/mpTrie/encode"
 	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"strings"
 )
@@ -9,7 +8,7 @@ import (
 func UnserializeLogTreeFromFile(filename string) *gramIndex.LogTree {
 	buffer, _ := GetBytesFromFile(filename)
 	bufstr := string(buffer)
-	grams := strings.Split(bufstr, encode.SPLITFLAG)
+	grams := strings.Split(bufstr, SPLITFLAG)
 	grams = grams[:len(grams)-1]
 	qmax := 0
 	for _, gram := range grams {

@@ -16,8 +16,8 @@ limitations under the License.
 package tokenRegexQuery
 
 import (
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"github.com/openGemini/openGemini/lib/vGram/gramIndex"
 	"github.com/openGemini/openGemini/lib/vToken/tokenDic/tokenClvc"
 	"regexp"
@@ -26,7 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/vToken/tokenTextSearch/tokenMatchQuery"
 )
 
-func RegexSearch(re string, root *tokenClvc.TrieTreeNode, indexRoot *decode.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
+func RegexSearch(re string, root *tokenClvc.TrieTreeNode, indexRoot *mpTrie.SearchTreeNode, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	regex, _ := regexp.Compile(re)
 	sidmap := make(map[utils.SeriesId]struct{})
 	result := make([]utils.SeriesId, 0)
@@ -37,20 +37,20 @@ func RegexSearch(re string, root *tokenClvc.TrieTreeNode, indexRoot *decode.Sear
 			var invertIndex gramIndex.Inverted_index
 			var invertIndexOffset uint64
 			var addrOffset uint64
-			var indexNode *decode.SearchTreeNode
+			var indexNode *mpTrie.SearchTreeNode
 			var invertIndex1 gramIndex.Inverted_index
 			var invertIndex2 gramIndex.Inverted_index
 			var invertIndex3 gramIndex.Inverted_index
 			invertIndexOffset, addrOffset, indexNode = tokenMatchQuery.SearchNodeAddrFromPersistentIndexTree([]string{childrenlist[i].Data()}, indexRoot, 0, invertIndexOffset, addrOffset, indexNode)
-			invertIndex1 = utils.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
-			invertIndex = utils.DeepCopy(invertIndex1)
-			invertIndex2 = utils.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
-			addrOffsets := utils.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
+			invertIndex1 = mpTrie.SearchInvertedIndexFromCacheOrDisk(invertIndexOffset, buffer, invertedCache)
+			invertIndex = mpTrie.DeepCopy(invertIndex1)
+			invertIndex2 = mpTrie.SearchInvertedListFromChildrensOfCurrentNode(indexNode, invertIndex2, buffer, addrCache, invertedCache)
+			addrOffsets := mpTrie.SearchAddrOffsetsFromCacheOrDisk(addrOffset, buffer, addrCache)
 			if indexNode != nil && len(addrOffsets) > 0 {
-				invertIndex3 = utils.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
+				invertIndex3 = mpTrie.TurnAddr2InvertLists(addrOffsets, buffer, invertedCache)
 			}
-			invertIndex = utils.MergeMapsInvertLists(invertIndex2, invertIndex)
-			invertIndex = utils.MergeMapsInvertLists(invertIndex3, invertIndex)
+			invertIndex = mpTrie.MergeMapsInvertLists(invertIndex2, invertIndex)
+			invertIndex = mpTrie.MergeMapsInvertLists(invertIndex3, invertIndex)
 
 			for k, _ := range invertIndex {
 				_, isfind := sidmap[k]

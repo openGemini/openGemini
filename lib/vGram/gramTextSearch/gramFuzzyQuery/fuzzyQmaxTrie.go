@@ -17,8 +17,8 @@ package gramFuzzyQuery
 
 import (
 	"fmt"
+	"github.com/openGemini/openGemini/lib/mpTrie"
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
-	"github.com/openGemini/openGemini/lib/mpTrie/decode"
 	"sort"
 	"strings"
 
@@ -180,7 +180,7 @@ func ArraySortAndRemoveDuplicate(array []utils.SeriesId) []utils.SeriesId {
 	return array
 }
 func FuzzyQueryGramQmaxTrie(rootFuzzyTrie *gramIndex.LogTreeNode, searchStr string, dicRootNode *gramClvc.TrieTreeNode,
-	indexRoots *decode.SearchTreeNode, qmin int, qmax int, distance int, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
+	indexRoots *mpTrie.SearchTreeNode, qmin int, qmax int, distance int, buffer []byte, addrCache *cache.AddrCache, invertedCache *cache.InvertedCache) []utils.SeriesId {
 	resArrFuzzy := make([]utils.SeriesId, 0)
 	if len(searchStr) > qmax+distance {
 		fmt.Println("error:查询语句长度大于qmax+distance,无法匹配结果")

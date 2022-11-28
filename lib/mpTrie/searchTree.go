@@ -1,4 +1,4 @@
-package decode
+package mpTrie
 
 import (
 	"github.com/openGemini/openGemini/lib/mpTrie/cache"
