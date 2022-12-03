@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 function checkStore(){
     count=`ps -ef |grep $1 |grep -v "grep" |wc -l`

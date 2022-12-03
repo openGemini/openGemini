@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 ps -ef | grep -v grep | grep -v init_monitor_influxdb.sh | grep ts-monitor | grep $USER > /dev/null
 if [ $? == 0 ];then

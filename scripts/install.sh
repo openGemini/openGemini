@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 ps -ef | grep -v grep | grep ts-server | grep $USER > /dev/null
 if [ $? == 0 ];then
