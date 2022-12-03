@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 #	Shell script to install openGemini as a cluster at one node.
 #

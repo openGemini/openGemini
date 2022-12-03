@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 function backup_log() {
     if [ $# -ge 2 ]
