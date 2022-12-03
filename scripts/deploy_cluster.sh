@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 #	Shell script to deploy openGemini cluster in different nodes.
 # To run this script, you must finish password-free login.

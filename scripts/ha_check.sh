@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/usr/bin/env bash
 
 meta_conf="/opt/tsdb/tsmeta/config/meta.conf"
 sql_conf="/opt/tsdb/tssql/config/sql.conf"
