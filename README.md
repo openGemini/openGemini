@@ -9,7 +9,7 @@
 
 ## About openGemini
 
-OpenGemini is an open-source time-series database that can be widely used in IoT, Internet of Vehicles(IoV), O&M monitoring, and industrial Internet scenarios. It has excellent read/write performance and efficient data analysis capabilities. It uses an SQL-like query language, does not rely on third-party software, and is easy to install, deploy, and maintain. We encourage contribution and collaboration to the community.
+openGemini is an open-source,cloud-native time-series database(TSDB) that can be widely used in IoT, Internet of Vehicles(IoV), O&M monitoring, and industrial Internet scenarios.It developed by HUAWEI CLOUD and it has excellent read/write performance and efficient data analysis capabilities. It uses an SQL-like query language, does not rely on third-party software, and is easy to install, deploy, and maintain. We encourage contribution and collaboration to the community.
 
 ## Why openGemini
 
@@ -21,7 +21,7 @@ OpenGemini is an open-source time-series database that can be widely used in IoT
   - Supports real-time abnormality detection and prediction of time-series data
 - Ecosystem compatibility
   - Compatible with InfluxDB line protocol and Influxql
-  - Seamless integration with existing InfluxDB toolchain
+  - Compatible with existing InfluxDB toolchain
   - Supports promethus remote read/write API
 - Efficient management  of massive time series data
   - Supports 100-million-scale time series management
@@ -62,7 +62,7 @@ This section mainly contains the following:
 
 [GO](https://golang.org/dl/) version v1.16+
 
-[Python](https://www.python.org/downloads/) version v2.7+
+[Python](https://www.python.org/downloads/) version v3.7+
 
 **How to set GO environment variables**
 
@@ -105,7 +105,7 @@ The compiled binary file is in the build directory
 
 ```
 > ls build
-ts-cli  ts-meta  ts-server  ts-sql  ts-store
+ts-cli ts-meta ts-monitor ts-server  ts-sql  ts-store
 ```
 
 ### Configuration
@@ -129,22 +129,17 @@ Refer to cluster deployments in [User Guide](http://opengemini.org/docs)
 Use the client to connect to openGemini
 
 ```shell
-> influx -host 127.0.0.1 -port 8086
+> ts-cli -host 127.0.0.1 -port 8086
 ```
 
 After successful login, the following message will be displayed
 
 ```sh
-> influx -host 127.0.0.1 -port 8086
-WARN: Connected to http://127.0.0.1:8086, but found no server version.
-Are you sure an InfluxDB server is listening at the given address?
-InfluxDB shell version: 1.8.3
+> ts-cli -host 127.0.0.1 -port 8086
+openGemini CLI 0.1.0 (rev-revision)
+Please use 'quit', 'exit' or 'Ctrl-D' to exit this program
 > 
 ```
-
-#### Demo
-
-![dongtu](images/demo.gif)
 
 Create a database
 
@@ -171,7 +166,7 @@ The openGemini supports three ways for creating a measurement.
 Write data
 
 ```
-> insert sensor,farmID="001",device="110" sensorId="s20",value=50.98
+insert sensor,farmID=f1,deviceID=d0 sensorID=s20,value=50.98
 ```
 
 Query data
@@ -179,9 +174,13 @@ Query data
 ```
 > select * from sensor
 name: sensor
-time                device farmID sensorId value
-----                ------ ------ -------- -----
-1664285811060281356 "110"  "001"  s20      50.98
++---------------------+----------+--------+----------+-------+
+| time                | deviceID | farmID | sensorID | value |
++---------------------+----------+--------+----------+-------+
+| 1657959880895515464 | d0       | f1     | s20      | 50.98 |
++---------------------+----------+--------+----------+-------+
+5 columns,1 rows in set
+Elapsed: 7.723332ms  
 ```
 
 ## Join & Contribute
