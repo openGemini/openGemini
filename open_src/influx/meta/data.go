@@ -2116,8 +2116,9 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 	updateStatus := serf.MemberStatus(status)
 	dn.Status = updateStatus
 	dn.LTime = lTime
-	if updateStatus == serf.StatusAlive {
-		dn.GossipAddr = gossipAddr
+	if dn.GossipAddr == "" {
+		_, port, _ := net.SplitHostPort(gossipAddr)
+		dn.GossipAddr = net.JoinHostPort(dn.Host, port)
 	}
 
 	if data.TakeOverEnabled || updateStatus == serf.StatusFailed {

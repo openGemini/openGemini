@@ -34,6 +34,7 @@ message ProcessorOptions {
     int64       EnableBinaryTreeMerge = 29;
     uint64      TraceId = 30;
     bytes       SeriesKey = 31;
+    bool        GroupByAllDims = 32;
 }
 
 message Measurement {

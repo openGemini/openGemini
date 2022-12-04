@@ -124,8 +124,8 @@ func (s *Server) Open() error {
 
 	startTime := time.Now()
 	storageNodeInfo := metaclient.StorageNodeInfo{
-		InsertAddr: s.ingestAddr,
-		SelectAddr: s.selectAddr,
+		InsertAddr: s.config.Data.InsertAddr(),
+		SelectAddr: s.config.Data.SelectAddr(),
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")

@@ -7,6 +7,7 @@ require (
 	github.com/RoaringBitmap/roaring v0.9.1
 	github.com/VictoriaMetrics/VictoriaMetrics v1.67.0
 	github.com/VictoriaMetrics/fastcache v1.7.0
+	github.com/apache/arrow/go/arrow v0.0.0-20200923215132-ac86123a3f01
 	github.com/armon/go-metrics v0.3.10
 	github.com/c-bata/go-prompt v0.2.2
 	github.com/cockroachdb/pebble v0.0.0-20211013210608-e95e73745ce8

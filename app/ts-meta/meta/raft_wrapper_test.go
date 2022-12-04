@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/stretchr/testify/assert"
 )
@@ -35,4 +36,17 @@ func TestRaftWrapperApply(t *testing.T) {
 	r.raft = follows[0]
 	err = r.apply([]byte("not leader"))
 	assert.True(t, errno.Equal(err, errno.MetaIsNotLeader), "apply should fail with error not leader")
+}
+
+func TestBootFirst(t *testing.T) {
+	c := &config.Meta{
+		RPCBindAddress: "127.0.0.1:8400",
+		JoinPeers:      nil,
+		Domain:         "localhost",
+	}
+
+	assert.False(t, bootFirst(c))
+
+	c.JoinPeers = []string{c.Domain + ":8400"}
+	assert.True(t, bootFirst(c))
 }

@@ -841,6 +841,11 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 
 	defer func() {
 		if e := recover(); e != nil {
+			internalErr, ok := e.(*errno.Error)
+			if ok && errno.Equal(internalErr, errno.DtypeNotSupport) {
+				panic(internalErr)
+			}
+
 			log := logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "pipeline executor"))
 			stackInfo := fmt.Errorf("runtime panic: %v\n %s", e, string(debug.Stack())).Error()
 			log.Error(stackInfo, zap.Uint64("trace_id", opt.Traceid))

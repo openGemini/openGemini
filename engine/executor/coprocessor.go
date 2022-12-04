@@ -23,6 +23,7 @@ type IteratorParams struct {
 	start        int
 	end          int
 	chunkLen     int
+	err          error
 	Table        ReflectionTable
 	winIdx       [][2]int
 }
@@ -94,4 +95,39 @@ func (p *CoProcessorImpl) WorkOnChunk(in Chunk, out Chunk, params *IteratorParam
 	for _, r := range p.Routines {
 		r.WorkOnChunk(in, out, params)
 	}
+}
+
+type WideRoutineImpl struct {
+	iterator Iterator
+	endPoint *IteratorEndpoint
+}
+
+func NewWideRoutineImpl(iterator Iterator) *WideRoutineImpl {
+	return &WideRoutineImpl{
+		iterator: iterator,
+		endPoint: &IteratorEndpoint{
+			InputPoint:  EndPointPair{},
+			OutputPoint: EndPointPair{},
+		},
+	}
+}
+
+func (r *WideRoutineImpl) WorkOnChunk(in Chunk, out Chunk, params *IteratorParams) {
+	r.endPoint.InputPoint.Chunk = in
+	r.endPoint.OutputPoint.Chunk = out
+	r.iterator.Next(r.endPoint, params)
+}
+
+type WideCoProcessorImpl struct {
+	Routine *WideRoutineImpl
+}
+
+func NewWideCoProcessorImpl(routine *WideRoutineImpl) *WideCoProcessorImpl {
+	return &WideCoProcessorImpl{
+		Routine: routine,
+	}
+}
+
+func (p *WideCoProcessorImpl) WorkOnChunk(in Chunk, out Chunk, params *IteratorParams) {
+	p.Routine.WorkOnChunk(in, out, params)
 }
