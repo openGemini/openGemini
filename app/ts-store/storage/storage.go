@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/hierarchical"
 	"github.com/openGemini/openGemini/services/retention"
 	"go.uber.org/zap"
@@ -110,6 +111,14 @@ func (s *Storage) appendHierarchicalService(c retention2.Config) {
 	s.Services = append(s.Services, srv)
 }
 
+func (s *Storage) appendAnalysisService(c config.Castor) {
+	if !c.Enabled {
+		return
+	}
+	srv := castor.NewService(c)
+	s.Services = append(s.Services, srv)
+}
+
 func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, conf *config.TSStore) (*Storage, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
@@ -174,6 +183,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	// Append services.
 	s.appendRetentionPolicyService(conf.Retention)
 	s.appendHierarchicalService(conf.HierarchicalStore)
+	s.appendAnalysisService(conf.Analysis)
 
 	for _, service := range s.Services {
 		if err := service.Open(); err != nil {

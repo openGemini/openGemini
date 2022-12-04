@@ -1315,6 +1315,9 @@ type SelectStatement struct {
 	Dedupe bool
 
 	Schema Schema
+
+	// GroupByAllDims is true when group by single series
+	GroupByAllDims bool
 }
 
 // TimeAscending returns true if the time field is sorted in chronological order.
@@ -1578,6 +1581,12 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool) (*SelectSta
 
 	if !hasFieldWildcard && !hasDimensionWildcard {
 		return other, nil
+	}
+
+	if len(other.Dimensions) == 1 {
+		if _, ok := other.Dimensions[0].Expr.(*Wildcard); ok {
+			other.GroupByAllDims = true
+		}
 	}
 
 	fieldSet, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)

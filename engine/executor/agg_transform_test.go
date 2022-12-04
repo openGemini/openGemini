@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/services/castor"
 )
 
 func buildInRowDataTypeIntegral() hybridqp.RowDataType {
@@ -4392,6 +4393,91 @@ func buildBenchChunks(chunkCount, chunkSize, tagPerChunk, intervalPerChunk int) 
 		chunkList = append(chunkList, chunk)
 	}
 	return chunkList
+}
+
+func buildInRowDataTypeCastor() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "f", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstRowDataTypeCastor() hybridqp.RowDataType {
+	return buildInRowDataTypeCastor()
+}
+
+func buildInChunkCastor() executor.Chunk {
+	rowDataType := buildInRowDataTypeCastor()
+	b := executor.NewChunkBuilder(rowDataType)
+
+	c := b.NewChunk("castor")
+	c.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
+	c.AppendIntervalIndex([]int{0}...)
+	c.AppendTime([]int64{0, 1, 2, 3, 4, 5}...)
+
+	c.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	c.Column(0).AppendManyNotNil(6)
+
+	return c
+}
+
+func buildDstChunkCastor() executor.Chunk {
+	rowDataType := buildDstRowDataTypeCastor()
+	b := executor.NewChunkBuilder(rowDataType)
+
+	c := b.NewChunk("castor")
+	c.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
+	c.AppendIntervalIndex(0)
+	c.AppendTime(0)
+
+	c.Column(0).AppendFloatValues(0)
+	c.Column(0).AppendManyNotNil(1)
+
+	return c
+}
+
+func TestStreamAggregateTransformCastor(t *testing.T) {
+	inChunk := buildInChunkCastor()
+	dstChunk := buildDstChunkCastor()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{
+				Name: "castor",
+				Args: []influxql.Expr{
+					hybridqp.MustParseExpr("f"),
+					&influxql.StringLiteral{Val: "DIFFERENTIATEAD"},
+					&influxql.StringLiteral{Val: "detect_base"},
+					&influxql.StringLiteral{Val: "detect"},
+				},
+			},
+			Ref: influxql.VarRef{Val: `f`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"t"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  inChunk.Len(),
+	}
+
+	srv, _, err := castor.MockCastorService(6661)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	if err := castor.MockPyWorker(srv.Config.PyWorkerAddr[0]); err != nil {
+		t.Fatal(err)
+	}
+	wait := 8 * time.Second // wait for service to build connection
+	time.Sleep(wait)
+
+	testStreamAggregateTransformBase(
+		t,
+		[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
+		buildInRowDataTypeCastor(), buildDstRowDataTypeCastor(),
+		exprOpt, opt,
+	)
 }
 
 func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_1000_1_10000(t *testing.T) {

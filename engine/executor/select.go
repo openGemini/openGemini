@@ -168,6 +168,7 @@ func buildHeuristicPlanner() hybridqp.Planner {
 	pb.AddRuleCatagory(RULE_PUSHDOWN_LIMIT)
 	pb.AddRuleCatagory(RULE_PUSHDOWN_AGG)
 	pb.AddRuleCatagory(RULE_SPREAD_AGG)
+	pb.AddRuleCatagory(RULE_HEIMADLL_PUSHDOWN)
 	planner := NewHeuPlannerImpl(pb.Build())
 
 	// subquery
@@ -181,6 +182,9 @@ func buildHeuristicPlanner() hybridqp.Planner {
 	planner.AddRule(NewAggPushdownToExchangeRule(""))
 	planner.AddRule(NewAggPushdownToReaderRule(""))
 	planner.AddRule(NewAggPushdownToSeriesRule(""))
+
+	planner.AddRule(NewCastorAggCutRule(""))
+
 	planner.AddRule(NewAggSpreadToSortAppendRule(""))
 	planner.AddRule(NewAggSpreadToExchangeRule(""))
 	planner.AddRule(NewAggSpreadToReaderRule(""))

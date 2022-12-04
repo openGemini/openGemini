@@ -39,4 +39,5 @@ type Options interface {
 	GetMaxParallel() int
 	Window(t int64) (start, end int64)
 	GetGroupBy() map[string]struct{}
+	IsGroupByAllDims() bool
 }

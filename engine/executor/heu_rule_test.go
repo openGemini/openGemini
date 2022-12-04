@@ -897,3 +897,179 @@ func TestSlideWindowPushDownToExchange(t *testing.T) {
 		t.Errorf("slide window push down failed")
 	}
 }
+
+func getPlanner() *executor.HeuPlannerImpl {
+	pb := executor.NewHeuProgramBuilder()
+	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
+	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCatagory(executor.RULE_HEIMADLL_PUSHDOWN)
+
+	planner := executor.NewHeuPlannerImpl(pb.Build())
+	planner.AddRule(executor.NewAggPushDownToSubQueryRule(""))
+	planner.AddRule(executor.NewAggToProjectInSubQueryRule(""))
+	planner.AddRule(executor.NewReaderUpdateInSubQueryRule(""))
+
+	planner.AddRule(executor.NewLimitPushdownToExchangeRule(""))
+	planner.AddRule(executor.NewLimitPushdownToReaderRule(""))
+	planner.AddRule(executor.NewLimitPushdownToSeriesRule(""))
+	planner.AddRule(executor.NewAggPushdownToExchangeRule(""))
+	planner.AddRule(executor.NewAggPushdownToReaderRule(""))
+	planner.AddRule(executor.NewAggPushdownToSeriesRule(""))
+
+	planner.AddRule(executor.NewCastorAggCutRule(""))
+
+	planner.AddRule(executor.NewAggSpreadToSortAppendRule(""))
+	planner.AddRule(executor.NewAggSpreadToExchangeRule(""))
+	planner.AddRule(executor.NewAggSpreadToReaderRule(""))
+	planner.AddRule(executor.NewSlideWindowSpreadRule(""))
+	return planner
+}
+
+func TestCastorPushDownGroupByAllSeries(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "castor",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"castor"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = true
+
+	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+
+	var plan hybridqp.QueryNode
+	plan = buildPlan(t, schema)
+
+	planner := getPlanner()
+	planner.SetRoot(plan)
+
+	best := planner.FindBestExp()
+
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	verifier := NewAggPushDownVerifier()
+	hybridqp.WalkQueryNodeInPreOrder(verifier, best)
+	if executor.GetEnableFileCursor() && verifier.AggCount() != 1 {
+		t.Errorf("only 1 agg in plan tree, but %d", verifier.AggCount())
+	}
+}
+
+func TestCastorPushDownGroupByNotAllSeries(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "castor",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"castor"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = false
+
+	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+
+	var plan hybridqp.QueryNode
+	plan = buildPlan(t, schema)
+
+	planner := getPlanner()
+	planner.SetRoot(plan)
+
+	best := planner.FindBestExp()
+
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	verifier := NewAggPushDownVerifier()
+	hybridqp.WalkQueryNodeInPreOrder(verifier, best)
+	if executor.GetEnableFileCursor() && verifier.AggCount() != 2 || (!executor.GetEnableFileCursor() && verifier.AggCount() != 1) {
+		t.Errorf("only four agg in plan tree, but %d", verifier.AggCount())
+	}
+}
+
+func buildPlan(t *testing.T, schema *executor.QuerySchema) hybridqp.QueryNode {
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateShardPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.Aggregate()
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+	return plan
+}
+
+func TestCastorRuleEquale(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "castor",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"castor"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = false
+
+	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+
+	var plan hybridqp.QueryNode
+	plan = buildPlan(t, schema)
+
+	planner := getPlanner()
+	planner.SetRoot(plan)
+
+	best := planner.FindBestExp()
+
+	if best == nil {
+		t.Error("no best plan found")
+	}
+	hRule := executor.NewCastorAggCutRule("")
+	hRul2 := executor.NewCastorAggCutRule("")
+	if !hRule.Equals(hRul2) {
+		t.Error("hemidall rule not equal")
+	}
+	limitRule := executor.NewLimitPushdownToSeriesRule("")
+	if hRule.Equals(limitRule) {
+		t.Error("hemidall rule not equal")
+	}
+}

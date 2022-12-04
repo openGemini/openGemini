@@ -78,6 +78,36 @@ func (c *OpFactory) FindAggregateOp(name string) (AggregateOp, bool) {
 	return nil, false
 }
 
+func (c *OpFactory) GetAggregateOpNames() []string {
+	var aggRes []string
+	for name, op := range c.pmap {
+		if _, ok := op.(AggregateOp); ok {
+			aggRes = append(aggRes, name)
+		}
+	}
+	return aggRes
+}
+
+func (c *OpFactory) FindUDAFOp(name string) (UDAFOp, bool) {
+	if op, ok := c.FindOp(name); ok {
+		if aop, ok := op.(UDAFOp); ok {
+			return aop, true
+		}
+		return nil, false
+	}
+	return nil, false
+}
+
+func (c *OpFactory) GetUDAFOpNames() []string {
+	var udafRes []string
+	for name, op := range c.pmap {
+		if _, ok := op.(UDAFOp); ok {
+			udafRes = append(udafRes, name)
+		}
+	}
+	return udafRes
+}
+
 func CompileOp(expr *influxql.Call) error {
 	if op, ok := GetOpFactory().FindOp(expr.Name); ok {
 		return op.Compile(expr)
@@ -137,6 +167,13 @@ func IsProjectOp(call *influxql.Call) bool {
 
 func IsAggregateOp(call *influxql.Call) bool {
 	if _, ok := GetOpFactory().FindAggregateOp(call.Name); ok {
+		return true
+	}
+	return false
+}
+
+func IsUDAFOp(call *influxql.Call) bool {
+	if _, ok := GetOpFactory().FindUDAFOp(call.Name); ok {
 		return true
 	}
 	return false

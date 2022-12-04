@@ -469,9 +469,13 @@ func (s *Store) Open(raftln net.Listener) error {
 }
 
 func (s *Store) joinMetaServer(c *mclient.Client) error {
+	addr := s.config.CombineDomain(s.httpAddr)
+	rpcAddr := s.config.CombineDomain(s.rpcAddr)
+	raftAddr := s.config.CombineDomain(s.raftAddr)
+
 	if len(s.config.JoinPeers) == 1 {
 		for {
-			err := s.setMetaNode(s.httpAddr, s.rpcAddr, s.raftAddr)
+			err := s.setMetaNode(addr, rpcAddr, raftAddr)
 			if err == nil {
 				break
 			}
@@ -480,7 +484,7 @@ func (s *Store) joinMetaServer(c *mclient.Client) error {
 		return nil
 	}
 
-	n, err := c.JoinMetaServer(s.httpAddr, s.rpcAddr, s.raftAddr)
+	n, err := c.JoinMetaServer(addr, rpcAddr, raftAddr)
 	if err != nil {
 		return err
 	}
@@ -498,10 +502,12 @@ func (s *Store) makeClient() *mclient.Client {
 
 func (s *Store) connectFull(c *mclient.Client) []string {
 	var peers []string
+	raftAddr := s.config.CombineDomain(s.raftAddr)
+
 	for {
 		peers = c.Peers()
-		if !mclient.Peers(peers).Contains(s.raftAddr) {
-			peers = append(peers, s.raftAddr)
+		if !mclient.Peers(peers).Contains(raftAddr) {
+			peers = append(peers, raftAddr)
 		}
 
 		if len(peers) >= len(s.config.JoinPeers) {
@@ -542,11 +548,11 @@ func (s *Store) peers() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.raft == nil {
-		return []string{s.raftAddr}
+		return []string{s.config.CombineDomain(s.raftAddr)}
 	}
 	peers, _ := s.raft.peers()
 	if len(peers) == 0 {
-		return []string{s.raftAddr}
+		return []string{s.config.CombineDomain(s.raftAddr)}
 	}
 	return peers
 }

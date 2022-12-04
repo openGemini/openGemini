@@ -159,6 +159,7 @@ func NewSuppressLogger() *SuppressLogger {
 		forceIndulge:    5,
 		notifyHandler:   (*SuppressLogger).defaultNotify,
 		loggingObserver: nil,
+		closed:          make(chan struct{}),
 	}
 
 	go logger.run()

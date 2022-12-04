@@ -184,3 +184,20 @@ func TestGossip_BuildSerf(t *testing.T) {
 	assert.Equal(t, name, serfConf.NodeName)
 	assert.Equal(t, conf.SuspicionMult, serfConf.MemberlistConfig.SuspicionMult)
 }
+
+func TestCombineDomain(t *testing.T) {
+	meta := &config.Meta{
+		Domain: "localhost",
+	}
+	assert.Equal(t, meta.Domain+":8400", meta.CombineDomain("127.0.0.1:8400"))
+
+	store := config.Store{
+		Domain:          "localhost",
+		IngesterAddress: "127.0.0.1",
+		SelectAddress:   "127.0.0.1:8888",
+	}
+	assert.Equal(t, "127.0.0.1", store.InsertAddr())
+	assert.Equal(t, store.Domain+":8888", store.SelectAddr())
+
+	assert.Equal(t, "127.0.0.1", config.CombineDomain("", "127.0.0.1"))
+}

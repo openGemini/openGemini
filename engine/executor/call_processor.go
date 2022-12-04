@@ -19,6 +19,7 @@ package executor
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
@@ -28,86 +29,6 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
-
-func countRoutineFactory(args ...interface{}) (interface{}, error) {
-	inRowDataType := args[0].(hybridqp.RowDataType)
-	outRowDataType := args[1].(hybridqp.RowDataType)
-	opt := args[2].(hybridqp.ExprOptions)
-	isSingleCall := args[3].(bool)
-
-	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
-	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
-	if inOrdinal < 0 || outOrdinal < 0 {
-		panic("input and output schemas are not aligned for count iterator")
-	}
-	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
-	switch dataType {
-	case influxql.Integer:
-		return NewRoutineImpl(
-			NewIntegerColIntegerIterator(IntegerCountReduce, IntegerCountMerge, isSingleCall, inOrdinal, outOrdinal,
-				nil, nil),
-			inOrdinal, outOrdinal), nil
-	case influxql.Float:
-		return NewRoutineImpl(
-			NewFloatColIntegerIterator(FloatCountReduce, IntegerCountMerge, isSingleCall, inOrdinal, outOrdinal,
-				nil, nil),
-			inOrdinal, outOrdinal), nil
-	case influxql.String:
-		return NewRoutineImpl(
-			NewStringColIntegerIterator(StringCountReduce, IntegerCountMerge, isSingleCall, inOrdinal, outOrdinal,
-				nil, nil),
-			inOrdinal, outOrdinal), nil
-	case influxql.Boolean:
-		return NewRoutineImpl(
-			NewBooleanColIntegerIterator(BooleanCountReduce, IntegerCountMerge, isSingleCall, inOrdinal, outOrdinal,
-				nil, nil),
-			inOrdinal, outOrdinal), nil
-	default:
-		return nil, errno.NewError(errno.UnsupportedDataType, "count/mean", dataType.String())
-	}
-}
-
-func sumRoutineFactory(args ...interface{}) (interface{}, error) {
-	inRowDataType := args[0].(hybridqp.RowDataType)
-	outRowDataType := args[1].(hybridqp.RowDataType)
-	opt := args[2].(hybridqp.ExprOptions)
-	isSingleCall := args[3].(bool)
-
-	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
-	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
-	if inOrdinal < 0 || outOrdinal < 0 {
-		panic("input and output schemas are not aligned for sum iterator")
-	}
-	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
-	switch dataType {
-	case influxql.Integer:
-		return NewRoutineImpl(
-			NewIntegerColIntegerIterator(IntegerSumReduce, IntegerSumMerge, isSingleCall, inOrdinal, outOrdinal,
-				nil, nil),
-			inOrdinal, outOrdinal), nil
-	case influxql.Float:
-		return NewRoutineImpl(
-			NewFloatColFloatIterator(FloatSumReduce, FloatSumMerge, isSingleCall, inOrdinal, outOrdinal,
-				nil, nil), inOrdinal, outOrdinal), nil
-	default:
-		return nil, errno.NewError(errno.UnsupportedDataType, "sum/mean", dataType.String())
-	}
-}
-
-func createRoutineFromUDF(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
-	if op, ok := op.GetOpFactory().FindAggregateOp(opt.Expr.(*influxql.Call).Name); ok {
-		routine, err := op.Factory().Create(inRowDataType, outRowDataType, opt, isSingleCall, auxProcessor)
-		return routine.(Routine), err
-	}
-	return nil, fmt.Errorf("aggregate operator %s found in UDF before, but disappeared", opt.Expr.(*influxql.Call).Name)
-}
-
-type processorResults struct {
-	isSingleCall, isTransformationCall bool
-	isIntegralCall, isTimeUniqueCall   bool
-	offset                             int //Time offset in transform operators, for difference(), derivative(), elapsed(), moving_average(), cumulative_sum()
-	coProcessor                        CoProcessor
-}
 
 func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions) (*processorResults, error) {
 	var err error
@@ -119,6 +40,16 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 		switch expr := exprOpt[i].Expr.(type) {
 		case *influxql.Call:
 			if op.IsAggregateOp(expr) {
+				name := exprOpt[i].Expr.(*influxql.Call).Name
+				if strings.Contains(name, "castor") {
+					processor, err := NewWideProcessorImpl(inRowDataType, outRowDataType, exprOpt)
+					proRes.coProcessor = processor.(*WideCoProcessorImpl)
+					if err != nil {
+						return nil, errors.New("unsupported aggregation operator of call processor")
+					}
+					proRes.isUDAFCall = true
+					return proRes, nil
+				}
 				routine, err = createRoutineFromUDF(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, nil)
 				if err != nil {
 					return proRes, err
@@ -170,6 +101,7 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 					isSingleCall, isNonNegative)
 				coProcessor.AppendRoutine(routine)
 				proRes.isTimeUniqueCall = true
+				proRes.isTransformationCall = true
 				proRes.offset = 1
 			case "derivative", "non_negative_derivative":
 				isNonNegative := name == "non_negative_derivative"
@@ -178,6 +110,7 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 					isSingleCall, isNonNegative, opt.Ascending, interval)
 				coProcessor.AppendRoutine(routine)
 				proRes.isTimeUniqueCall = true
+				proRes.isTransformationCall = true
 				proRes.offset = 1
 			case "elapsed":
 				routine, err = NewElapsedRoutineImpl(inRowDataType, outRowDataType, exprOpt[i],
@@ -230,6 +163,63 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 	proRes.isSingleCall = isSingleCall
 	proRes.coProcessor = coProcessor
 	return proRes, nil
+}
+
+func castorRoutineFactory(_ ...interface{}) (interface{}, error) {
+	return nil, nil
+}
+
+func NewWideProcessorImpl(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpts []hybridqp.ExprOptions) (CoProcessor, error) {
+	for _, exprOpt := range exprOpts {
+		inOrdinal := inRowDataType.FieldIndex(exprOpt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+		outOrdinal := outRowDataType.FieldIndex(exprOpt.Ref.Val)
+		if inOrdinal < 0 || outOrdinal < 0 || inOrdinal != outOrdinal {
+			panic("input and output schemas are not aligned for iterator")
+		}
+	}
+	var wideRoutine *WideRoutineImpl
+	expr, ok := exprOpts[0].Expr.(*influxql.Call)
+	if !ok {
+		return nil, errors.New("the first expr should be a call")
+	}
+	switch expr.Name {
+	case "castor":
+		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce, expr.Args[1:]))
+	}
+	wideProcessor := NewWideCoProcessorImpl(wideRoutine)
+	return wideProcessor, nil
+}
+
+func countRoutineFactory(args ...interface{}) (interface{}, error) {
+	inRowDataType := args[0].(hybridqp.RowDataType)
+	outRowDataType := args[1].(hybridqp.RowDataType)
+	opt := args[2].(hybridqp.ExprOptions)
+	isSingleCall := args[3].(bool)
+	return NewCountRoutineImpl(inRowDataType, outRowDataType, opt, isSingleCall)
+}
+
+func sumRoutineFactory(args ...interface{}) (interface{}, error) {
+	inRowDataType := args[0].(hybridqp.RowDataType)
+	outRowDataType := args[1].(hybridqp.RowDataType)
+	opt := args[2].(hybridqp.ExprOptions)
+	isSingleCall := args[3].(bool)
+	return NewSumRoutineImpl(inRowDataType, outRowDataType, opt, isSingleCall)
+}
+
+func createRoutineFromUDF(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
+	if ops, ok := op.GetOpFactory().FindAggregateOp(opt.Expr.(*influxql.Call).Name); ok {
+		routine, err := ops.Factory().Create(inRowDataType, outRowDataType, opt, isSingleCall, auxProcessor)
+		return routine.(Routine), err
+	}
+	return nil, fmt.Errorf("aggregate operator %s found in UDF before, but disappeared", opt.Expr.(*influxql.Call).Name)
+}
+
+type processorResults struct {
+	isSingleCall, isTransformationCall, isUDAFCall    bool
+	isIntegralCall, isTimeUniqueCall, isCompositeCall bool
+	//Time offset in transform operators, for difference(), derivative(), elapsed(), moving_average(), cumulative_sum()
+	offset, clusterNum int
+	coProcessor        CoProcessor
 }
 
 func statCallAndAux(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions) ([]*AuxProcessor, bool) {

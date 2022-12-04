@@ -142,3 +142,44 @@ func TestLogicalPlanFilterBlank(t *testing.T) {
 		t.Error("call options of agg must be aux call")
 	}
 }
+
+func createQuerySchemaWithCalls() *executor.QuerySchema {
+	opt := query.ProcessorOptions{}
+	fields := createFields()
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.Call{
+			Name: "mean",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "id",
+					Type: influxql.Integer,
+				},
+			},
+		},
+	})
+	names := createColumnNames()
+	names = append(names, "mean")
+	schema := executor.NewQuerySchema(fields, names, &opt)
+	m := createMeasurement()
+	schema.AddTable(m, schema.MakeRefs())
+
+	return schema
+}
+
+func TestNewLogicalSplitGroup(t *testing.T) {
+	schema := createQuerySchemaWithCalls()
+	node := executor.NewLogicalSeries(schema)
+	sg := executor.NewLogicalSplitGroup(node, schema)
+	sg2 := executor.NewLogicalSplitGroup(node, schema)
+	_ = sg.Digest()
+	_ = sg.Schema()
+	_ = sg.RowDataType()
+	_ = sg.Dummy()
+	_ = sg.RowExprOptions()
+	sg.ReplaceChild(0, sg2)
+	sg.DeriveOperations()
+	aggClone := sg.Clone()
+	if aggClone.Type() != sg.Type() {
+		t.Error("wrong result")
+	}
+}

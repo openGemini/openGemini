@@ -1580,6 +1580,59 @@ func TestSubQueryHelper(t *testing.T) {
 	executor.Release()
 }
 
+func TestSplitGroupHelper(t *testing.T) {
+	chunk1 := BuildTimeOrderChunk1()
+
+	source1 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk1})
+	trans := executor.NewSplitTransformTransform(buildRowDataType1(), buildRowDataType1(), []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.VarRef{Val: "val0", Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.VarRef{Val: "val1", Type: influxql.String},
+		},
+		{
+			Expr: &influxql.VarRef{Val: "val2", Type: influxql.Float},
+		},
+	}, query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Ascending: true,
+		ChunkSize: 100,
+		Limit:     2,
+		Offset:    1,
+	})
+
+	sink := NewSinkFromFunction(buildRowDataType1(), func(chunk executor.Chunk) error {
+		return nil
+	})
+
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+
+	var processors executor.Processors
+
+	processors = append(processors, source1)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+
+	dag := executor.NewDAG(processors)
+
+	if dag.CyclicGraph() == true {
+		t.Error("dag has circle")
+	}
+
+	trans.Explain()
+	trans.Release()
+	if len(trans.GetOutputs()) != len(trans.GetInputs()) || trans.GetInputNumber(trans.GetInputs()[0]) != trans.GetInputNumber(trans.GetInputs()[0]) {
+		t.Error("unexpected ports len")
+	}
+	executor := executor.NewPipelineExecutor(processors)
+	executor.Execute(context.Background())
+	executor.Release()
+}
+
 // SourceFromSingleRecord used to generate records we need
 type SourceFromSingleChunk struct {
 	executor.BaseProcessor

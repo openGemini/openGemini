@@ -120,6 +120,7 @@ type Meta struct {
 	LoggingEnabled      bool `toml:"logging-enabled"`
 	BatchApplyCh        bool `toml:"batch-enabled"`
 
+	Domain                  string  `toml:"domain"`
 	Dir                     string  `toml:"dir"`
 	HTTPBindAddress         string  `toml:"http-bind-address"`
 	RPCBindAddress          string  `toml:"rpc-bind-address"`
@@ -204,6 +205,10 @@ func (c *Meta) BuildRaft() *raft.Config {
 	conf.BatchApplyCh = c.BatchApplyCh
 
 	return conf
+}
+
+func (c *Meta) CombineDomain(addr string) string {
+	return CombineDomain(c.Domain, addr)
 }
 
 type Gossip struct {
