@@ -1,0 +1,112 @@
+# parameters for data validate
+Data_Validate:
+
+  # the maximum of rate of the missing value. default: 0.5
+  miss_max_rate: 0.9
+
+# parameters for data preprocess
+Data_Preprocess:
+
+  # the resample interval, in minutes. default: 1 minutes
+  interval:
+
+  # extreme value removal
+  # the low quantile. default: 0.001.
+  p1: 0
+  # the high quantile. default: 0.999
+  p2: 1
+
+  # smooth process
+  # the smooth window. default: 1
+  window: 1
+  # the agg function. default: "median"
+  agg: median
+
+# parameters for anomaly suppression
+# Configurable in detecting
+Anomaly_Suppress:
+  common:
+
+      cache_length: 50
+
+      LowerBoundSuppressor:
+        upper_bound: 0
+        upper_bound_dict:
+          data1: 0.5
+          data2: 0.5
+
+      VariationRatioSuppressor:
+        threshold: 0.05
+        history_length: 50
+
+      TransientAnomalySuppressor:
+        window: 5
+        anomalies: 3
+
+      ContinuousAnomalySuppressor:
+        gap: "90s"
+
+  IncrementalAD:
+    VariationRatioSuppressor:
+      threshold: 0.05
+      history_length: 50
+
+    TransientAnomalySuppressor:
+      window: 5
+      anomalies: 2
+
+    ContinuousAnomalySuppressor:
+      gap: "15T"
+
+  ThresholdAD:
+    TransientAnomalySuppressor:
+      window: 5
+      anomalies: 2
+
+    ContinuousAnomalySuppressor:
+      gap: "1350s"
+
+  ValueChangeAD:
+
+
+DIFFERENTIATEAD:
+  algo: DIFFERENTIATEAD
+  window: 9
+
+  DYNAMIC_THRESHOLD:
+    CHOICE: 'SigewmThresholder'
+    SigewmThresholder:
+      window: 100
+      sigma: 2.5
+
+ThresholdAD:
+  upper_bound: 0.7
+  lower_bound: 0
+  window: 0
+  upper_bound_dict:
+    data1: 0.5
+    data2: 0.5
+  lower_bound_dict:
+    data1: 0.2
+    data2: 0.2
+
+IncrementalAD:
+  window_size: 20
+  window_number: 4
+  upper_bound: 1
+  lower_bound: 0
+  upper_bound_dict:
+    data1: 1
+    data2: 1
+  lower_bound_dict:
+    data1: 0
+    data2: 0
+
+Severity_Level:
+  algo:
+    ThresholdAD: 1
+    Incremental: 0
+    DIFFERENTIATEAD: 0.85
+    ValueChangeAD: 1
+  his_anomaly:
+    gap: "2D"
