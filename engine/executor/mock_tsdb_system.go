@@ -957,6 +957,7 @@ func (s *TSDBSystem) ExecSQL(sql string, validator func([]Chunk)) error {
 		pb.AddRuleCatagory(RULE_PUSHDOWN_LIMIT)
 		pb.AddRuleCatagory(RULE_PUSHDOWN_AGG)
 		pb.AddRuleCatagory(RULE_SPREAD_AGG)
+		pb.AddRuleCatagory(RULE_HEIMADLL_PUSHDOWN)
 		planner := NewHeuPlannerImpl(pb.Build())
 
 		planner.AddRule(NewLimitPushdownToExchangeRule(""))
@@ -965,6 +966,9 @@ func (s *TSDBSystem) ExecSQL(sql string, validator func([]Chunk)) error {
 		planner.AddRule(NewAggPushdownToExchangeRule(""))
 		planner.AddRule(NewAggPushdownToReaderRule(""))
 		planner.AddRule(NewAggPushdownToSeriesRule(""))
+
+		planner.AddRule(NewCastorAggCutRule(""))
+
 		planner.AddRule(NewAggSpreadToSortAppendRule(""))
 		planner.AddRule(NewAggSpreadToExchangeRule(""))
 		planner.AddRule(NewAggSpreadToReaderRule(""))

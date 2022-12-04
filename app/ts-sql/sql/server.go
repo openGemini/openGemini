@@ -43,6 +43,7 @@ import (
 	coordinator2 "github.com/openGemini/openGemini/open_src/influx/coordinator"
 	"github.com/openGemini/openGemini/open_src/influx/httpd"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/services/castor"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -70,6 +71,8 @@ type Server struct {
 	metaUseTLS bool
 
 	config *config.TSSql
+
+	castorService *castor.Service
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -165,6 +168,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	executor.SetPipelineExecutorResourceManagerParas(int64(c.Common.MemoryLimitSize), time.Duration(c.Common.MemoryWaitTime))
 
 	machine.InitMachineID(c.HTTP.BindAddress)
+
+	s.castorService = castor.NewService(c.Analysis)
 	return s, nil
 }
 
@@ -199,6 +204,9 @@ func (s *Server) Open() error {
 
 	s.httpService.Handler.PointsWriter = s.PointsWriter
 
+	if err := s.castorService.Open(); err != nil {
+		return err
+	}
 	return nil
 }
 

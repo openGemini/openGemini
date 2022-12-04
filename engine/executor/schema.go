@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
@@ -33,6 +34,18 @@ var NotAggOnSeries = map[string]bool{
 	"rate": true, "irate": true, "absent": true, "stddev": true, "mode": true, "median": true,
 	"elapsed": true, "moving_average": true, "cumulative_sum": true, "integral": true, "sample": true,
 	"sliding_window": true,
+}
+
+func init() {
+	addUDAFNotAggOnSeries()
+}
+
+func addUDAFNotAggOnSeries() {
+	// UDAF can not sink into the series
+	udafRes := op.GetOpFactory().GetUDAFOpNames()
+	for _, udafName := range udafRes {
+		NotAggOnSeries[udafName] = true
+	}
 }
 
 var DefaultTypeMapper = influxql.MultiTypeMapper(
@@ -550,6 +563,15 @@ func (qs *QuerySchema) CountDistinct() *influxql.Call {
 	return qs.countDistinct
 }
 
+func (qs *QuerySchema) HasCastorCall() bool {
+	for _, v := range qs.calls {
+		if v.Name == "castor" {
+			return true
+		}
+	}
+	return false
+}
+
 func (qs *QuerySchema) isMathFunction(call *influxql.Call) bool {
 	switch call.Name {
 	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round":
@@ -678,6 +700,9 @@ func (qs *QuerySchema) mapSymbol(key string, expr influxql.Expr) {
 		symbolName := fmt.Sprintf("val%d", qs.i)
 		typ, err := qs.deriveType(expr)
 		if err != nil {
+			if errno.Equal(err, errno.DtypeNotSupport) {
+				panic(err)
+			}
 			panic(fmt.Errorf("QuerySchema mapSymbol get derive type failed, %v", err.Error()))
 		}
 
@@ -795,6 +820,12 @@ func (qs *QuerySchema) CanAggPushDown() bool {
 }
 
 func (qs *QuerySchema) ContainSeriesIgnoreCall() bool {
+	for _, call := range qs.calls {
+		// UDAF can not sink into the series
+		if op.IsUDAFOp(call) {
+			return true
+		}
+	}
 	return false
 }
 

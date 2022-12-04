@@ -202,3 +202,40 @@ const (
 const (
 	WatchFileTimeout = 7001
 )
+
+// castor service
+const (
+	DtypeNotSupport          = 8001
+	DtypeNotMatch            = 8002
+	NumOfFieldNotEqual       = 8003
+	TimestampNotFound        = 8004
+	TypeAssertFail           = 8005
+	FailToProcessData        = 8006
+	FailToFillUpConnPool     = 8007
+	ClientQueueClosed        = 8008
+	NoAvailableClient        = 8009
+	ConnectionBroken         = 8010
+	ResponseTimeout          = 8011
+	FailToConnectToPyworker  = 8012
+	UnknownDataMessage       = 8013
+	UnknownDataMessageType   = 8014
+	MessageNotFound          = 8015
+	InvalidAddr              = 8016
+	InvalidPort              = 8017
+	AlgoConfNotFound         = 8018
+	AlgoNotFound             = 8019
+	AlgoTypeNotFound         = 8020
+	InvalidResultWaitTimeout = 8021
+	InvalidPoolSize          = 8022
+	ServiceNotEnable         = 8023
+	ServiceNotAlive          = 8024
+	ResponseIncomplete       = 8025
+	OnlySupportSingleField   = 8026
+	InvalidArgsNum           = 8027
+	DataTooMuch              = 8028
+	FieldTypeNotEqual        = 8029
+	FieldInfoNotFound        = 8030
+	FieldNotFound            = 8031
+	MultiFieldIndex          = 8032
+	EmptyData                = 8033
+)

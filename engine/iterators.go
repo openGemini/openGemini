@@ -922,6 +922,7 @@ func (s *shard) itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, s
 			topNList.Insert(itr)
 		}
 	}
+
 	canNotAggOnSeries := CanNotAggOnSeriesFunc(schema.Calls())
 	if topNList.head != nil {
 		nowNode := topNList.head

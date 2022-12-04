@@ -2838,6 +2838,7 @@ type LogicalPlanBuilder interface {
 	TagSubset() LogicalPlanBuilder
 	Project() LogicalPlanBuilder
 	HttpSender() LogicalPlanBuilder
+	SplitGroup() LogicalPlanBuilder
 	Exchange(eType ExchangeType, eTraits []hybridqp.Trait) LogicalPlanBuilder
 	CreateSeriesPlan() (hybridqp.QueryNode, error)
 	CreateMeasurementPlan(hybridqp.QueryNode) (hybridqp.QueryNode, error)
@@ -3120,6 +3121,13 @@ func (b *LogicalPlanBuilderImpl) TagSubset() LogicalPlanBuilder {
 func (b *LogicalPlanBuilderImpl) Project() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalProject(last, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
+func (b *LogicalPlanBuilderImpl) SplitGroup() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalSplitGroup(last, b.schema)
 	b.stack.Push(plan)
 	return b
 }
@@ -3437,5 +3445,118 @@ func (p *LogicalIndexScan) Schema() hybridqp.Catalog {
 }
 
 func (p *LogicalIndexScan) Dummy() bool {
+	return false
+}
+
+type LogicalSplitGroup struct {
+	input hybridqp.QueryNode
+	LogicalPlanBase
+}
+
+func NewLogicalSplitGroup(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalSplitGroup {
+	SplitGroup := &LogicalSplitGroup{
+		input: input,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+
+	SplitGroup.init()
+
+	return SplitGroup
+}
+
+func (p *LogicalSplitGroup) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalSplitGroup) init() {
+	schema := p.schema
+
+	tableExprs := make([]influxql.Expr, 0, len(schema.Refs()))
+	derivedRefs := make([]influxql.VarRef, 0, len(schema.Refs()))
+
+	for _, ref := range schema.Refs() {
+		tableExprs = append(tableExprs, ref)
+		derivedRefs = append(derivedRefs, schema.DerivedRef(ref))
+	}
+
+	refs := make([]influxql.VarRef, 0, len(tableExprs))
+	p.ops = make([]hybridqp.ExprOptions, 0, len(tableExprs))
+
+	for i, expr := range tableExprs {
+		clone := influxql.CloneExpr(expr)
+		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: clone, Ref: derivedRefs[i]})
+		refs = append(refs, derivedRefs[i])
+	}
+
+	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
+}
+
+func (p *LogicalSplitGroup) Clone() hybridqp.QueryNode {
+	clone := &LogicalSplitGroup{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalSplitGroup) Children() []hybridqp.QueryNode {
+	if p.input == nil {
+		return nil
+	}
+	return []hybridqp.QueryNode{p.input}
+}
+
+func (p *LogicalSplitGroup) ReplaceChildren(children []hybridqp.QueryNode) {
+	if len(children) > 1 {
+		panic("only one child in logical reader")
+	}
+	p.input = children[0]
+}
+
+func (p *LogicalSplitGroup) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal > 0 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
+	p.input = child
+}
+
+func (p *LogicalSplitGroup) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalSplitGroup) String() string {
+	return GetTypeName(p)
+}
+
+func (p *LogicalSplitGroup) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalSplitGroup) Digest() string {
+	if p.input != nil {
+		return fmt.Sprintf("%s[%d]", GetTypeName(p), p.input.ID())
+	} else {
+		return fmt.Sprintf("%s[]", GetTypeName(p))
+	}
+}
+
+func (p *LogicalSplitGroup) RowDataType() hybridqp.RowDataType {
+	return p.rt
+}
+
+func (p *LogicalSplitGroup) RowExprOptions() []hybridqp.ExprOptions {
+	return p.ops
+}
+
+func (p *LogicalSplitGroup) Schema() hybridqp.Catalog {
+	return p.schema
+}
+
+func (p *LogicalSplitGroup) Dummy() bool {
 	return false
 }

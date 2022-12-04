@@ -19,7 +19,10 @@ package op
 import (
 	"fmt"
 
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/services/castor"
 )
 
 type SumOp struct {
@@ -102,4 +105,111 @@ func (op *CountOp) Compile(call *influxql.Call) error {
 		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", op.name, op.arity, nargs)
 	}
 	return nil
+}
+
+var heidmallAlgoTypeSet = []string{
+	string(config.Fit),
+	string(config.Detect),
+	string(config.Predict),
+	string(config.FitDetect),
+}
+
+type castorArgIdx int
+
+const (
+	field castorArgIdx = iota
+	Algo
+	Conf
+	AlgoType
+)
+
+type CastorOp struct {
+	BaseOp
+	factory RoutineFactory
+}
+
+func NewCastorOp(factory RoutineFactory) *CastorOp {
+	op := &CastorOp{
+		factory: factory,
+	}
+	op.init(op, "castor", CASTOR_OP, 4)
+	return op
+}
+
+func (op *CastorOp) Clone() Op {
+	clone := &CastorOp{}
+	clone.init(clone, op.name, op.id, op.arity)
+	return clone
+}
+
+func (op *CastorOp) Factory() RoutineFactory {
+	return op.factory
+}
+
+func (op *CastorOp) CanPushDownSeries() bool {
+	return false
+}
+
+func (op *CastorOp) Type(args ...influxql.DataType) (influxql.DataType, error) {
+	// for now, only return anomaly level, type float
+	fType := args[field]
+	if !(fType == influxql.Float || fType == influxql.Integer) {
+		return influxql.Unknown, errno.NewError(errno.DtypeNotSupport)
+	}
+	return influxql.Float, nil
+}
+
+func (op *CastorOp) Compile(call *influxql.Call) error {
+	// select castor(field, 'algo', 'conf', 'type') from measurement
+	srv := castor.GetService()
+	if srv == nil {
+		return errno.NewError(errno.ServiceNotEnable)
+	}
+	if !srv.IsAlive() {
+		return errno.NewError(errno.ServiceNotAlive)
+	}
+
+	nargs := len(call.Args)
+	if nargs != op.arity {
+		return errno.NewError(errno.InvalidArgsNum, op.name, op.arity, nargs)
+	}
+	args := call.Args
+
+	c := srv.Config
+
+	aType, ok := args[AlgoType].(*influxql.StringLiteral)
+	if !ok {
+		return errno.NewError(errno.TypeAssertFail)
+	}
+	if !checkAlgoType(aType.Val) {
+		return errno.NewError(errno.AlgoTypeNotFound)
+	}
+
+	algo, ok := args[Algo].(*influxql.StringLiteral)
+	if !ok {
+		return errno.NewError(errno.TypeAssertFail)
+	}
+	conf, ok := args[Conf].(*influxql.StringLiteral)
+	if !ok {
+		return errno.NewError(errno.TypeAssertFail)
+	}
+	if err := c.CheckAlgoAndConfExistence(algo.Val, conf.Val, aType.Val); err != nil {
+		return err
+	}
+	aType.Val = convertToInternalTagVal(aType.Val)
+
+	return nil
+}
+
+func checkAlgoType(algo string) bool {
+	for _, item := range heidmallAlgoTypeSet {
+		if item == algo {
+			return true
+		}
+	}
+	return false
+}
+
+func convertToInternalTagVal(s string) string {
+	return fmt.Sprintf("_%s", s)
 }

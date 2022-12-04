@@ -21,4 +21,5 @@ import "github.com/openGemini/openGemini/engine/op"
 func init() {
 	_ = op.GetOpFactory().AddOp(op.NewSumOp(op.FuncRoutineFactory(sumRoutineFactory)))
 	_ = op.GetOpFactory().AddOp(op.NewCountOp(op.FuncRoutineFactory(countRoutineFactory)))
+	_ = op.GetOpFactory().AddOp(op.NewCastorOp(op.FuncRoutineFactory(castorRoutineFactory)))
 }

@@ -72,7 +72,7 @@ func newRaftWrapper(s *Store, ln net.Listener, peers []string) (*raftWrapper, er
 		if err != nil {
 			return nil, err
 		}
-	} else if s.config.RPCBindAddress == s.config.JoinPeers[0] { // bootstrap with all peers will make choose leader for longer time
+	} else if bootFirst(s.config) { // bootstrap with all peers will make choose leader for longer time
 		logger.GetLogger().Info("bootstrap from first peer!!!")
 		err = raft.BootstrapCluster(raftConf, rw.logStore, rw.stableStore, rw.snapStore, trans, configuration)
 		if err != nil {
@@ -88,9 +88,17 @@ func newRaftWrapper(s *Store, ln net.Listener, peers []string) (*raftWrapper, er
 	return rw, nil
 }
 
+func bootFirst(c *config.Meta) bool {
+	if len(c.JoinPeers) == 0 {
+		return false
+	}
+
+	return c.CombineDomain(c.RPCBindAddress) == c.JoinPeers[0]
+}
+
 func (r *raftWrapper) raftConfig(c *config.Meta) *raft.Config {
 	conf := c.BuildRaft()
-	conf.LocalID = raft.ServerID(r.ln.Addr().String())
+	conf.LocalID = raft.ServerID(c.CombineDomain(r.ln.Addr().String()))
 	conf.NotifyCh = r.notifyCh
 	return conf
 }

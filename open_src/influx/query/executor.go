@@ -21,6 +21,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	query2 "github.com/influxdata/influxdb/query"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
@@ -406,9 +407,18 @@ func init() {
 func (e *Executor) recover(query *influxql.Query, results chan *query2.Result) {
 	if err := recover(); err != nil {
 		e.Logger.Error(fmt.Sprintf("%s [error:%s] %s", query.String(), err, debug.Stack()))
-		results <- &query2.Result{
-			StatementID: -1,
-			Err:         fmt.Errorf("%s [error:%s]", query.String(), err),
+
+		internalErr, ok := err.(*errno.Error)
+		if ok && errno.Equal(internalErr, errno.DtypeNotSupport) {
+			results <- &query2.Result{
+				StatementID: -1,
+				Err:         fmt.Errorf("%s", err),
+			}
+		} else {
+			results <- &query2.Result{
+				StatementID: -1,
+				Err:         fmt.Errorf("%s [error:%s]", query.String(), err),
+			}
 		}
 
 		if willCrash {
