@@ -9,7 +9,7 @@
 
 ## 关于openGemini
 
-openGemini是一个开源的时序数据库，可广泛应用于物联网、车联网、运维监控、工业互联网等业务场景，具备卓越的读写性能和高效的数据分析能力，采用类SQL查询语言，无第三方软件依赖、安装简单、部署灵活、运维便捷，鼓励社区贡献、合作。
+openGemini是华为云开源的一款云原生分布式时序数据库，可广泛应用于物联网、车联网、运维监控、工业互联网等业务场景，具备卓越的读写性能和高效的数据分析能力，采用类SQL查询语言，无第三方软件依赖、安装简单、部署灵活、运维便捷，鼓励社区贡献、合作。
 
 ## 特性
 
@@ -55,7 +55,10 @@ openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工
 
 如需更详细的介绍，请访问官网[用户指南](http://www.openGemini.org/docs)
 
-相关编译和部署详细视频教程，[点击访问](https://www.bilibili.com/video/BV1Km4y1P7oB/?spm_id_from=333.999.0.0&vd_source=ea61c9c8b95b08ba907a4c9b78741732)
+安装部署、扩节点等相关详细介绍见[openGemini安装部署指南](https://github.com/openGemini/community)
+
+openGemini内部提供了时序异常检测的分析框架、分析算子heimdall和UDF接口，见官网[用户指南](http://www.openGemini.org/docs)。
+openGemini提供了基于AI的时序数据异常检测库，详细可见[openGemini-castor](https://github.com/openGemini/openGemini-castor)
 
 本章节主要包含以下内容：
 
