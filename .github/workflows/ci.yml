@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - '.github/**'
       - 'config/**'
+      - 'docker/**'
       - 'docs/**'
       - 'images/**'
       - 'scripts/**'
