@@ -28,7 +28,7 @@ function start() {
 
     # start Pyworker
     echo "Starting Pyworker..."
-    nohup python3 -u -m ts-udf.server.handler --config $PYWORKER_CONFIG_FILE --ip $PYWORKER_IP --port $PYWORKER_PORT --pidfile $PID_FILE > $LOG_FILE 2>&1 &
+    nohup python3 -u -m worker.server.handler --config $PYWORKER_CONFIG_FILE --ip $PYWORKER_IP --port $PYWORKER_PORT --pidfile $PID_FILE > $LOG_FILE 2>&1 &
     # sleep to verify Pyworker is up
     sleep 10
     if [ -f $PID_FILE ]; then
