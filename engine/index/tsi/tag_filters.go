@@ -214,6 +214,7 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 	if tf.isRegexp {
 		prefix, expr = getRegexpPrefix(tf.value)
 		if len(expr) == 0 {
+			tf.value = append(tf.value[:0], prefix...)
 			// select /Ubuntu/ should return match value which contain Ubuntu
 			tf.reSuffixMatch = func(b []byte) bool {
 				return bytes.Contains(b, tf.value)
