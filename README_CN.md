@@ -57,7 +57,7 @@ openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工
 
 安装部署、扩节点等相关详细介绍见[openGemini安装部署指南](https://github.com/openGemini/community)
 
-openGemini内部提供了时序异常检测的分析框架、分析算子heimdall和UDF接口，见官网[用户指南](http://www.openGemini.org/docs)。
+openGemini内部提供了时序异常检测的分析框架、分析算子heimdall和UDF接口，见官网[用户指南 -> SQL Syntax -> Data Analysis](http://www.openGemini.org/docs)。
 openGemini提供了基于AI的时序数据异常检测库，详细可见[openGemini-castor](https://github.com/openGemini/openGemini-castor)
 
 本章节主要包含以下内容：
