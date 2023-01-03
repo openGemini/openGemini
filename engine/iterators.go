@@ -159,22 +159,18 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 
 func (s *shard) cloneMeasurementReaders(mm string) *immutable.MmsReaders {
 	var readers immutable.MmsReaders
-	s.mu.RLock()
 	orders := s.immTables.GetFilesRef(mm, true)
 	unOrder := s.immTables.GetFilesRef(mm, false)
 	readers.Orders = append(readers.Orders, orders...)
 	readers.OutOfOrders = append(readers.OutOfOrders, unOrder...)
-	s.mu.RUnlock()
 
 	return &readers
 }
 
 func (s *shard) cloneMeasurementReadersByTime(mm string, ascending bool, tr record.TimeRange) *immutable.MmsReaders {
 	var readers immutable.MmsReaders
-	s.mu.RLock()
 	orders := s.immTables.GetFilesRefByAscending(mm, true, ascending, tr)
 	unOrder := s.immTables.GetFilesRef(mm, false)
-	s.mu.RUnlock()
 	readers.Orders = append(readers.Orders, orders...)
 	readers.OutOfOrders = append(readers.OutOfOrders, unOrder...)
 
