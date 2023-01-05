@@ -10,13 +10,17 @@
 
 **v0.2.0 (2022.10)**
 
-- [ ] Supports KubeEdge.
-- [ ] Real-time analysis framework.
+- [x] Supports KubeEdge.
+- [x] Real-time analysis framework.
 
 **v1.0.0 (2022.12)**
 
 - [ ] Time series data prediction.
 - [ ] Time series data anomaly detection.
 - [ ] Stream
-- [ ] Continue Query
 - [ ] down-sampling
+
+**v1.1.0 （2022.06）**
+
+- [ ] Reliability capability
+- [ ] Continue Query
