@@ -251,7 +251,7 @@ func (s *Storage) ReportLoad() {
 				case rCtx := <-s.loadCtx.LoadCh:
 					loads = append(loads, rCtx.DBPTStat)
 					rCtxes = append(rCtxes, rCtx)
-					s.log.Info("get load from dbPT", zap.Any("load", rCtx.DBPTStat))
+					s.log.Info("get load from dbPT", zap.String("load", rCtx.String()))
 				default:
 					break
 				}
