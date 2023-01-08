@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -272,6 +273,13 @@ func (nc *NodeCollector) collectBasic(ctx context.Context) error {
 }
 
 func (nc *NodeCollector) collectIndexUsed() error {
+	files, err := filepath.Glob(fmt.Sprintf("%s/data/*/*/*/index", nc.conf.DiskPath))
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
+	}
 	duCmd := fmt.Sprintf(DuIndex, path.Clean(nc.conf.DiskPath))
 	// #nosec
 	res, err := exec.Command("/bin/sh", "-c", duCmd).Output()

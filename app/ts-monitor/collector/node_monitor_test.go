@@ -17,7 +17,10 @@ limitations under the License.
 package collector
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -29,13 +32,18 @@ import (
 )
 
 func TestNodeCollector(t *testing.T) {
+	diskDir := t.TempDir()
 	log := logger.NewLogger(errno.ModuleUnknown)
 	conf := config.MonitorMain{
 		Host:        "127.0.0.1",
-		DiskPath:    "/opt/tsdb",
-		AuxDiskPath: "/opt/tsdb",
+		DiskPath:    diskDir,
+		AuxDiskPath: diskDir,
 		Process:     "ts-store,ts-sql,ts-meta",
 	}
+	dname := fmt.Sprintf("%s/data/a/b/c/index", diskDir)
+	_ = os.MkdirAll(dname, 0750)
+	fname := filepath.Join(dname, "file1")
+	_ = os.WriteFile(fname, make([]byte, 10240000), 0600)
 	nc := NewNodeCollector(log, &conf)
 	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", time.Hour, false, false, log, "errLogHistory")
 	nc.Reporter = rj
@@ -54,6 +62,7 @@ func TestNodeCollector(t *testing.T) {
 	nc.Reporter.Client = &mocks.MockClient{DoFunc: doFn}
 	nc.Start()
 	time.Sleep(1 * time.Second)
+	assert.Equal(t, int64(9), nc.nodeMetric.IndexUsed)
 	nc.Close()
 	time.Sleep(1 * time.Second)
 }
