@@ -113,7 +113,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		return nil, err
 	}
 	if result == nil {
-    	s.log.Info("get index result empty")
+		s.log.Info("get index result empty")
 		return nil, nil
 	}
 	tagSets := result.(tsi.GroupSeries)
