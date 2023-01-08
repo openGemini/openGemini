@@ -22,6 +22,7 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_reserveColumnValue(t *testing.T) {
@@ -106,5 +107,40 @@ func Test_AppendString(t *testing.T) {
 		if vi != rArr[i] {
 			t.Fatalf("exp:%v, get:%v", rArr[i], vi)
 		}
+	}
+}
+
+func TestDecodeColumnData(t *testing.T) {
+	timeCol := &record.ColVal{}
+	timeCol.AppendIntegers(1, 2, 3)
+
+	for _, typ := range []int{influx.Field_Type_Float, influx.Field_Type_Int, influx.Field_Type_Boolean} {
+		col := &record.ColVal{}
+		col.Bitmap = []byte{0, 0}
+		col.BitMapOffset = 7
+		ref := record.Field{Name: "foo", Type: typ}
+		ctx := &ReadContext{
+			coderCtx:  &CoderContext{},
+			Ascending: false,
+		}
+		builder := ColumnBuilder{}
+		builder.colMeta = &ColumnMeta{name: "foo", ty: uint8(typ), entries: make([]Segment, 1)}
+		builder.coder = &CoderContext{}
+
+		switch typ {
+		case influx.Field_Type_Int:
+			col.AppendIntegers(1, 2, 3)
+			require.NoError(t, builder.encIntegerColumn([]record.ColVal{*timeCol}, []record.ColVal{*col}, 0))
+		case influx.Field_Type_Float:
+			col.AppendFloats(1, 2, 3)
+			require.NoError(t, builder.encFloatColumn([]record.ColVal{*timeCol}, []record.ColVal{*col}, 0))
+		case influx.Field_Type_Boolean:
+			col.AppendBooleans(true, false, true)
+			require.NoError(t, builder.encBooleanColumn([]record.ColVal{*timeCol}, []record.ColVal{*col}, 0))
+		}
+
+		other := &record.ColVal{}
+		require.NoError(t, decodeColumnData(&ref, builder.data, other, ctx, true))
+		require.Equal(t, []byte{7}, other.Bitmap)
 	}
 }
