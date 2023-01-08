@@ -108,16 +108,20 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 
 	start := time.Now()
 	result, err := s.indexBuilder.Scan(span, record.Str2bytes(schema.Options().(*query.ProcessorOptions).Name), schema.Options().(*query.ProcessorOptions), tsi.MergeSet)
+	if err != nil {
+		s.log.Error("get index result fail", zap.Error(err))
+		return nil, err
+	}
+	if result == nil {
+    	s.log.Info("get index result empty")
+		return nil, nil
+	}
 	tagSets := result.(tsi.GroupSeries)
 
 	qDuration, _ := ctx.Value(query.QueryDurationKey).(*statistics.StoreSlowQueryStatistics)
 	if qDuration != nil {
 		end := time.Now()
 		qDuration.AddDuration("LocalTagSetDuration", end.Sub(start).Nanoseconds())
-	}
-
-	if err != nil {
-		return nil, err
 	}
 
 	if len(tagSets) == 0 {
