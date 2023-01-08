@@ -504,7 +504,7 @@ func appendIntegerColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 
 		if !ctx.Ascending {
 			_ = reverseIntergerValues(values)
-			col.Bitmap = record.ReverseBitMap(col.Bitmap, bitmapOffset, rows)
+			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
 		col.Len += rows
@@ -530,7 +530,7 @@ func appendFloatColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, ni
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
 			_ = reverseFloatValues(values)
-			col.Bitmap = record.ReverseBitMap(col.Bitmap, bitmapOffset, rows)
+			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
 		col.Len += rows
@@ -555,7 +555,7 @@ func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
 			values = reverseBooleanValues(values)
-			col.Bitmap = record.ReverseBitMap(col.Bitmap, bitmapOffset, len(values)+int(nilCount))
+			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), len(values)+int(nilCount))
 		}
 
 		col.Len += rows

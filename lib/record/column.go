@@ -324,7 +324,7 @@ func (cv *ColVal) reserveVal(size int) {
 
 func (cv *ColVal) reserveBitMap() {
 	bLen := len(cv.Bitmap)
-	if cv.Len/8 < bLen {
+	if (cv.Len+cv.BitMapOffset)/8 < bLen {
 		return
 	}
 	bCap := cap(cv.Bitmap)
@@ -336,11 +336,13 @@ func (cv *ColVal) reserveBitMap() {
 }
 
 func (cv *ColVal) setBitMap(index int) {
+	index += cv.BitMapOffset
 	cv.reserveBitMap()
 	cv.Bitmap[index>>3] |= BitMask[index&0x07]
 }
 
 func (cv *ColVal) resetBitMap(index int) {
+	index += cv.BitMapOffset
 	cv.reserveBitMap()
 	cv.Bitmap[index>>3] &= FlippedBitMask[index&0x07]
 }
