@@ -333,3 +333,25 @@ func TestClient_CreateDatabaseWithRetentionPolicy2(t *testing.T) {
 	_, err := c.CreateDatabaseWithRetentionPolicy("test", spec, ski)
 	require.EqualError(t, err, "shard key conflict")
 }
+
+func TestDBPTCtx_String(t *testing.T) {
+	ctx := &DBPTCtx{}
+	ctx.DBPTStat = &proto2.DBPtStatus{
+		DB:   proto.String("db0"),
+		PtID: proto.Uint32(100),
+		RpStats: []*proto2.RpShardStatus{{
+			RpName: proto.String("default"),
+			ShardStats: &proto2.ShardStatus{
+				ShardID:     proto.Uint64(101),
+				ShardSize:   proto.Uint64(102),
+				SeriesCount: proto.Int32(103),
+				MaxTime:     proto.Int64(104),
+			},
+		}, nil},
+	}
+
+	exp := `DB:"db0" PtID:100 RpStats:<RpName:"default" ShardStats:<ShardID:101 ShardSize:102 SeriesCount:103 MaxTime:104 > > RpStats:<nil> `
+	require.Equal(t, exp, ctx.String())
+	ctx.DBPTStat = nil
+	require.Equal(t, "", ctx.String())
+}
