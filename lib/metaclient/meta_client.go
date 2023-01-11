@@ -218,14 +218,6 @@ func (r *DBPTCtx) putRpStat(rss *[]*proto2.RpShardStatus) {
 	r.RpStatusPool.Put(*rss)
 }
 
-func (r *DBPTCtx) String() string {
-	if r.DBPTStat == nil {
-		return ""
-	}
-
-	return r.DBPTStat.String()
-}
-
 // Client is used to execute commands on and read data from
 // a meta service cluster.
 type Client struct {
@@ -661,6 +653,10 @@ func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst 
 	}
 	if err != meta2.ErrMeasurementNotFound {
 		return nil, err
+	}
+
+	if !meta2.ValidMeasurementName(mst) {
+		return nil, errno.NewError(errno.InvalidMeasurement, mst)
 	}
 
 	cmd := &proto2.CreateMeasurementCommand{
