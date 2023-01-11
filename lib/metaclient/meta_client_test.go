@@ -334,24 +334,32 @@ func TestClient_CreateDatabaseWithRetentionPolicy2(t *testing.T) {
 	require.EqualError(t, err, "shard key conflict")
 }
 
-func TestDBPTCtx_String(t *testing.T) {
-	ctx := &DBPTCtx{}
-	ctx.DBPTStat = &proto2.DBPtStatus{
-		DB:   proto.String("db0"),
-		PtID: proto.Uint32(100),
-		RpStats: []*proto2.RpShardStatus{{
-			RpName: proto.String("default"),
-			ShardStats: &proto2.ShardStatus{
-				ShardID:     proto.Uint64(101),
-				ShardSize:   proto.Uint64(102),
-				SeriesCount: proto.Int32(103),
-				MaxTime:     proto.Int64(104),
-			},
-		}, nil},
+func TestCreateMeasurement(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	var err error
+	invalidMst := []string{"", "/111", ".", "..", "bbb\\aaa", string([]byte{'m', 's', 't', 0, '_', '0', '0'})}
+
+	for _, mst := range invalidMst {
+		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil)
+		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
 	}
 
-	exp := `DB:"db0" PtID:100 RpStats:<RpName:"default" ShardStats:<ShardID:101 ShardSize:102 SeriesCount:103 MaxTime:104 > > RpStats:<nil> `
-	require.Equal(t, exp, ctx.String())
-	ctx.DBPTStat = nil
-	require.Equal(t, "", ctx.String())
+	validMst := []string{"--", "__", ".-_", "mst....", "...", ".mst", "mst中文", "mst#11"}
+	for _, mst := range validMst {
+		require.True(t, meta2.ValidMeasurementName(mst))
+	}
 }
