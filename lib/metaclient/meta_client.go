@@ -218,6 +218,14 @@ func (r *DBPTCtx) putRpStat(rss *[]*proto2.RpShardStatus) {
 	r.RpStatusPool.Put(*rss)
 }
 
+func (r *DBPTCtx) String() string {
+	if r.DBPTStat == nil {
+		return ""
+	}
+
+	return r.DBPTStat.String()
+}
+
 // Client is used to execute commands on and read data from
 // a meta service cluster.
 type Client struct {
