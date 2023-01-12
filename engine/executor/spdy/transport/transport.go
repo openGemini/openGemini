@@ -130,13 +130,13 @@ func (s *Transport) Send(data Codec) error {
 }
 
 func (s *Transport) Wait() error {
-	defer s.release()
-
 	err := s.responser.Apply()
 	if err != nil {
+		spdy.HandleError(s.responser.Session().Close())
 		return err
 	}
 
+	s.release()
 	return nil
 }
 
