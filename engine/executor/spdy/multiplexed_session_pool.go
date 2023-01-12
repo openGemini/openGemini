@@ -166,11 +166,14 @@ func (c *MultiplexedSessionPool) create() (*MultiplexedSession, error) {
 
 func (c *MultiplexedSessionPool) Close() {
 	c.closeGuard.Lock()
-	if c.closed {
-		return
-	}
+	closed := c.closed
 	c.closed = true
 	c.closeGuard.Unlock()
+
+	if closed {
+		return
+	}
+
 	c.wg.Done()
 	HandleError(c.conn.Close())
 	close(c.queue)
