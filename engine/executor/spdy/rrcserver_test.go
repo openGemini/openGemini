@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -435,6 +436,17 @@ func SequenceRequest(t *testing.T, ip string) error {
 	spool.Close()
 	server.Stop()
 	return nil
+}
+
+func TestCloseAgain(t *testing.T) {
+	server, spool, err := StartServer("127.0.0.8:18081")
+	require.NoError(t, err)
+
+	spool.Close()
+	spool.Close()
+
+	require.False(t, spool.Available())
+	server.Stop()
 }
 
 func TestSequenceRequest(t *testing.T) {
