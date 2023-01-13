@@ -355,3 +355,33 @@ func TestDBPTCtx_String(t *testing.T) {
 	ctx.DBPTStat = nil
 	require.Equal(t, "", ctx.String())
 }
+
+func TestCreateMeasurement(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	var err error
+	invalidMst := []string{"", "/111", ".", "..", "bbb\\aaa", string([]byte{'m', 's', 't', 0, '_', '0', '0'})}
+
+	for _, mst := range invalidMst {
+		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil)
+		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
+	}
+
+	validMst := []string{"--", "__", ".-_", "mst....", "...", ".mst", "mst中文", "mst#11"}
+	for _, mst := range validMst {
+		require.True(t, meta2.ValidMeasurementName(mst))
+	}
+}

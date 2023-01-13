@@ -663,6 +663,10 @@ func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst 
 		return nil, err
 	}
 
+	if !meta2.ValidMeasurementName(mst) {
+		return nil, errno.NewError(errno.InvalidMeasurement, mst)
+	}
+
 	cmd := &proto2.CreateMeasurementCommand{
 		DBName: proto.String(database),
 		RpName: proto.String(retentionPolicy),

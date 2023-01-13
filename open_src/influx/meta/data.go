@@ -2308,17 +2308,24 @@ func UnmarshalTime(v int64) time.Time {
 
 // ValidName checks to see if the given name can would be valid for DB/RP name
 func ValidName(name string) bool {
+	return validName(name, `,:;./\`)
+}
+
+func ValidMeasurementName(name string) bool {
+	if name == "." || name == ".." {
+		return false
+	}
+	return validName(name, `,:;/\`)
+}
+
+func validName(name string, charactersNotSupport string) bool {
 	for _, r := range name {
 		if !unicode.IsPrint(r) {
 			return false
 		}
 	}
 
-	charactersNotSupport := []byte{',', ':', ';', '.'}
-
-	return name != "" &&
-		!strings.ContainsAny(name, `/\`) &&
-		!strings.ContainsAny(name, string(charactersNotSupport))
+	return name != "" && !strings.ContainsAny(name, charactersNotSupport)
 }
 
 func ValidShardKey(shardKeys []string) error {
