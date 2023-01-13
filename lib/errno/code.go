@@ -40,8 +40,9 @@ const (
 	// ThirdPartyError errors returned by third-party packages
 	ThirdPartyError = 9008
 
-	ShortWrite = 9009
-	ShortRead  = 9010
+	ShortWrite         = 9009
+	ShortRead          = 9010
+	InvalidMeasurement = 9011
 )
 
 // network module error codes

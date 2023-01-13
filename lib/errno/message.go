@@ -57,6 +57,7 @@ var messageMap = map[Errno]*Message{
 	ShortBufferSize:    newWarnMessage("invalid buffer size, expected greater than %d; actual %d", ModuleUnknown),
 	ShortWrite:         newWarnMessage("short write. succeeded in writing %d bytes, but expected %d bytes", ModuleUnknown),
 	ShortRead:          newWarnMessage("short read. succeeded in reading %d bytes, but expected %d bytes", ModuleUnknown),
+	InvalidMeasurement: newWarnMessage("invalid measurement name: %s", ModuleUnknown),
 
 	// write error codes
 	WriteNoShardGroup:               newWarnMessage("nil shard group", ModuleWrite),
