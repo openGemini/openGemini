@@ -22,13 +22,14 @@ function checkApp() {
 	app=$1
 
 	ok=`echo $OPEN_GEMINI_LAUNCH|grep "$app"`
-	if [ !-n "$ok" ]; then
+	if [ ! -n "$ok" ]; then
 		return
 	fi
 
 	n=`ps axu|grep "ts-$app"|grep -v grep|wc -l`
 	if [[ $n -eq 0 ]]; then
-		exit ""
+		echo "Process ts-$app has exited"
+		exit 1
 	fi
 }
 
@@ -40,9 +41,9 @@ startApp server
 while true; do
 
 	sleep 1s
-	startApp meta
-	startApp sql
-	startApp store
-	startApp server
+	checkApp meta
+	checkApp sql
+	checkApp store
+	checkApp server
 
 done
