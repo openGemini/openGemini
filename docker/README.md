@@ -1,5 +1,7 @@
 该文档指导Docker环境部署openGemini，若有任何问题，请及时给社区提issue反馈
 
+**开始前，建议点击查看下** [Q&A](https://github.com/openGemini/openGemini/issues/59)
+
 ## 说明
 
 openGemini 在配置文件中指定了 meta 节点的信息，用于节点发现。虚拟机部署时，我们直接使用 meta 节点的IP，但是在docker中，节点的IP可能在重启后变化，将导致节点不可用。因此，在docker环境中需要使用域名代替节点IP（虚拟机环境同样可以使用域名）
