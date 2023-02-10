@@ -115,6 +115,7 @@ spec:
           value: "ts-meta,ts-sql,ts-store"
         # 【必填】配置域名，一般由[servername].[namespace].svc.cluster.local几部分组成
         - name: OPEN_GEMINI_DOMAIN
+          # 【特别注意，此处出错的人很多】
           value: "svc-opengemini-001.opengemini.svc.cluster.local"
         # 【必填】配置文件挂载点，value是配置文件的完整路径（含配置文件名），与mountPath配置的目录需要保持一致
         - name: OPEN_GEMINI_CONFIG
