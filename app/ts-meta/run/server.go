@@ -53,6 +53,8 @@ type Server struct {
 
 	statisticsPusher *statisticsPusher.StatisticsPusher
 	serfInstance     *serf.Serf
+
+	reportEnable bool
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -87,6 +89,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.MetaService = meta.NewService(metaConf, &c.TLS)
 	s.MetaService.Version = s.cmd.Version
 	s.MetaService.Node = s.Node
+
+	s.reportEnable = c.Common.ReportEnable
 
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
@@ -144,7 +148,14 @@ func (s *Server) Open() error {
 		}
 	}
 
-	return s.initSerf(s.MetaService.GetClusterManager())
+	if err = s.initSerf(s.MetaService.GetClusterManager()); err != nil {
+		return err
+	}
+
+	if s.reportEnable {
+		go s.MetaService.StartReportServer()
+	}
+	return nil
 }
 
 func (s *Server) initSerf(cm *meta.ClusterManager) (err error) {

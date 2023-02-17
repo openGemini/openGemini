@@ -79,9 +79,10 @@ func fromToml(c Config, input string) error {
 
 // Common represents the CommonConfiguration format for the influxd binary.
 type Common struct {
-	MetaJoin  []string `toml:"meta-join"`
-	ClusterID string   `toml:"cluster-id"`
-	CPUNum    int      `toml:"cpu-num"`
+	MetaJoin     []string `toml:"meta-join"`
+	ClusterID    string   `toml:"cluster-id"`
+	CPUNum       int      `toml:"cpu-num"`
+	ReportEnable bool     `toml:"report-enable"`
 
 	MemorySize      itoml.Size     `toml:"memory-size"`
 	MemoryLimitSize itoml.Size     `toml:"executor-memory-size-limit"`
@@ -90,7 +91,9 @@ type Common struct {
 
 // NewCommon builds a new CommonConfiguration with default values.
 func NewCommon() *Common {
-	return &Common{}
+	return &Common{
+		ReportEnable: true,
+	}
 }
 
 // ApplyEnvOverrides apply the environment CommonConfiguration on top of the CommonConfig.
