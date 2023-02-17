@@ -286,13 +286,13 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 			} else {
 				*iRows = append(*iRows, indexRow{})
 			}
-			iRow := (*iRows)[len(*iRows)-1]
+			iRow := &(*iRows)[len(*iRows)-1]
 			iRow.Row = row
 			iRow.Wg = &wg
 
 			wg.Add(1)
 			idx := primaryIndex.(*MergeSetIndex)
-			idx.WriteRow(&iRow)
+			idx.WriteRow(iRow)
 		}
 	}
 	// Wait all rows in the batch finished.
