@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	TsVersion   string
+	TsVersion   = "v0.2.0"
 	TsCommit    string
 	TsBranch    string
 	TsBuildTime string

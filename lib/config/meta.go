@@ -50,7 +50,7 @@ const (
 
 // TSMeta represents the configuration format for the ts-meta binary.
 type TSMeta struct {
-	Common  Common  `toml:"common"`
+	Common  *Common `toml:"common"`
 	Meta    *Meta   `toml:"meta"`
 	Logging Logger  `toml:"logging"`
 	Monitor Monitor `toml:"monitor"`
@@ -64,6 +64,7 @@ type TSMeta struct {
 // NewTSMeta returns an instance of TSMeta with reasonable defaults.
 func NewTSMeta() *TSMeta {
 	c := &TSMeta{}
+	c.Common = NewCommon()
 	c.Meta = NewMeta()
 	c.Logging = NewLogger(AppMeta)
 	c.Monitor = NewMonitor(AppMeta)
@@ -108,7 +109,7 @@ func (c *TSMeta) GetSpdy() *Spdy {
 }
 
 func (c *TSMeta) GetCommon() *Common {
-	return &c.Common
+	return c.Common
 }
 
 // Meta represents the meta configuration.
