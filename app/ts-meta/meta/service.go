@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
@@ -28,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/usage_client"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
 )
@@ -47,6 +49,7 @@ var globalService *Service
 
 type Service struct {
 	RaftListener net.Listener
+	closing      chan struct{}
 
 	Version        string
 	config         *config.Meta
@@ -66,12 +69,26 @@ type Service struct {
 // NewService returns a new instance of Service.
 func NewService(c *config.Meta, tls *tlsconfig.Config) *Service {
 	globalService = &Service{
+		closing:  make(chan struct{}),
 		config:   c,
 		tls:      tls,
 		raftAddr: c.BindAddress,
 		Logger:   logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
 	}
 	return globalService
+}
+
+// StartReportServer starts report server.
+func (s *Service) StartReportServer() {
+	ticker := time.NewTimer(1 * time.Hour)
+	defer ticker.Stop()
+
+	select {
+	case <-s.closing:
+		return
+	case <-ticker.C:
+		s.runReportServer()
+	}
 }
 
 // Open starts the meta service
@@ -144,12 +161,34 @@ func (s *Service) Close() error {
 	if s.metaServer != nil {
 		s.metaServer.Stop()
 	}
+	close(s.closing)
 
 	if s.httpServer != nil && err == nil {
 		err = s.httpServer.close()
 	}
 
 	return err
+}
+
+// runReportServer reports usage statistics about the system.
+func (s *Service) runReportServer() {
+	s.store.cacheMu.RLock()
+	clusterID := s.store.cacheData.ClusterID
+	s.store.cacheMu.RUnlock()
+
+	usage := map[string]string{
+		"product":    "openGemini",
+		"os":         runtime.GOOS,
+		"arch":       runtime.GOARCH,
+		"version":    s.Version,
+		"cluster_id": fmt.Sprintf("%v", clusterID),
+		"uptime":     time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	cli := usage_client.NewClient()
+	cli.WithLogger(s.Logger.GetZapLogger())
+	s.Logger.Info("sending usage statistics to openGemini")
+	go cli.Send(usage)
 }
 
 type httpServer struct {
