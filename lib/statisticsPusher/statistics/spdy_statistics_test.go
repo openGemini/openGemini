@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func newSpdyStatistics() *SpdyStatistics {
@@ -100,4 +102,26 @@ func TestBenchmarkSpdyStatistics(t *testing.T) {
 
 	use := time.Since(begin)
 	fmt.Println(use.Nanoseconds()/int64(total), "op/ns")
+}
+
+func TestOpsSpdyStatistics(t *testing.T) {
+	ts := NewTimestamp()
+	ts.Init(time.Second)
+	ss := newSpdyStatistics()
+	defer ss.Close()
+
+	ss.Add(NewSpdyJob(Sql2Meta).SetAddr("127.0.0.1:8092").SetItem(ConnTotal))
+	ss.Add(NewSpdyJob(Meta2Meta).SetAddr("127.0.0.1:8091").SetItem(ClosedConnTotal))
+
+	job := NewSpdyJob(Sql2Store).SetAddr("127.0.0.1:8401").SetItem(ConnTotal)
+	job2 := job.Clone()
+	job2.SetItem(FailedConnTotal)
+	job2.SetValue(20)
+	ss.Add(job2)
+
+	time.Sleep(time.Second)
+
+	stats := CollectOpsSpdyStatistics()
+	assert.Equal(t, 1, len(stats))
+	assert.Equal(t, "spdy", stats[0].Name)
 }

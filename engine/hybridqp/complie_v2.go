@@ -42,15 +42,8 @@ func VerifyHintStmt(stmt *influxql.SelectStatement, opt Options) error {
 		opt.SetHintType(FilterNullColumn)
 		return nil
 	}
-
 	if IsExactStatisticQuery(stmt) {
-		for _, field := range stmt.Fields {
-			if _, ok := field.Expr.(*influxql.Call); ok {
-				opt.SetHintType(ExactStatisticQuery)
-				break
-			}
-		}
-		return nil
+		opt.SetHintType(ExactStatisticQuery)
 	}
 	return nil
 }

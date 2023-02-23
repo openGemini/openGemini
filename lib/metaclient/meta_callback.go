@@ -19,9 +19,11 @@ package metaclient
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
 
@@ -202,6 +204,114 @@ func (c *GetShardInfoCallback) Handle(data interface{}) error {
 	msg, ok := metaMsg.Data().(*message.GetShardInfoResponse)
 	if !ok {
 		return errors.New("data is not a GetShardInfoResponse")
+	}
+	if msg.ErrCode != 0 {
+		return errno.NewError(msg.ErrCode, msg.Err)
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type GetDownSampleInfoCallback struct {
+	BaseCallback
+	Data []byte
+}
+
+func (c *GetDownSampleInfoCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetDownSampleInfoResponse)
+	if !ok {
+		return errors.New("data is not a GetDownSampleInfoResponse")
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type GetRpMstInfoCallback struct {
+	BaseCallback
+	Data []byte
+}
+
+func (c *GetRpMstInfoCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetRpMstInfosResponse)
+	if !ok {
+		return errors.New("data is not a GetRpMstInfosResponse")
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type GetUserInfoCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *GetUserInfoCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetUserInfoResponse)
+	if !ok {
+		return errors.New("data is not a GetUserInfoResponse")
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type GetStreamInfoCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *GetStreamInfoCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetStreamInfoResponse)
+	if !ok {
+		return errors.New(fmt.Sprintf("data is not a GetStreamInfoResponse, type %T", metaMsg.Data()))
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type GetMeasurementInfoCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *GetMeasurementInfoCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetMeasurementInfoResponse)
+	if !ok {
+		return errors.New(fmt.Sprintf("data is not a GetMeasurementInfoResponse, type %T", metaMsg.Data()))
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)

@@ -24,6 +24,8 @@ package statistics
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type CompactStatistics struct {
@@ -70,6 +72,24 @@ func (s *CompactStatistics) Collect(buffer []byte) ([]byte, error) {
 	}
 
 	return buffer, nil
+}
+
+func (s *CompactStatistics) CollectOps() []opsStat.OpsStatistic {
+	data := map[string]interface{}{
+		"Active":             s.itemActive,
+		"Errors":             s.itemErrors,
+		"MaxMemoryUsed":      s.itemMaxMemoryUsed,
+		"RecordPoolGetTotal": s.itemRecordPoolGetTotal,
+		"RecordPoolHitTotal": s.itemRecordPoolHitTotal,
+	}
+
+	return []opsStat.OpsStatistic{
+		{
+			Name:   "compact",
+			Tags:   s.tags,
+			Values: data,
+		},
+	}
 }
 
 func (s *CompactStatistics) AddActive(i int64) {

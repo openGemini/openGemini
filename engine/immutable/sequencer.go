@@ -20,9 +20,12 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
+	"go.uber.org/zap"
 )
 
 type idInfo struct {
@@ -32,7 +35,7 @@ type idInfo struct {
 
 type MmsIdTime struct {
 	mu     sync.RWMutex
-	idTime map[uint64]idInfo
+	idTime map[uint64]*idInfo
 }
 
 func (m *MmsIdTime) get(id uint64) (int64, int64) {
@@ -47,70 +50,125 @@ func (m *MmsIdTime) get(id uint64) (int64, int64) {
 }
 
 func (m *MmsIdTime) addRowCounts(id uint64, rowCounts int64) {
-	var info idInfo
-	m.mu.Lock()
-	mapInfo, ok := m.idTime[id]
+	m.mu.RLock()
+	info, ok := m.idTime[id]
+	m.mu.RUnlock()
+
 	if !ok {
-		info.rows = rowCounts
-		info.lastFlushTime = math.MinInt64
-	} else {
-		info.rows = mapInfo.rows + rowCounts
-		info.lastFlushTime = mapInfo.lastFlushTime
+		m.mu.Lock()
+		info = m.createIdInfo(id)
+		m.mu.Unlock()
 	}
-	m.idTime[id] = info
-	m.mu.Unlock()
+
+	atomic.AddInt64(&info.rows, rowCounts)
 }
 
 func (m *MmsIdTime) batchUpdate(p *IdTimePairs) {
-	var info idInfo
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for i := range p.Ids {
-		mapInfo, ok := m.idTime[p.Ids[i]]
-		if !ok {
-			info.rows = 0
-			info.lastFlushTime = p.Tms[i]
-		} else {
-			info.rows = mapInfo.rows
-			info.lastFlushTime = p.Tms[i]
-		}
-		m.idTime[p.Ids[i]] = info
+		info := m.createIdInfo(p.Ids[i])
+		info.lastFlushTime = p.Tms[i]
 	}
-	m.mu.Unlock()
 }
 
 func (m *MmsIdTime) batchUpdateCheckTime(p *IdTimePairs) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	for i := range p.Ids {
-		mapInfo, ok := m.idTime[p.Ids[i]]
-		if !ok {
-			mapInfo = idInfo{lastFlushTime: math.MinInt64, rows: 0}
-		}
+		info := m.createIdInfo(p.Ids[i])
 
-		mapInfo.rows += p.Rows[i]
-		if len(p.Tms) > i && p.Tms[i] > mapInfo.lastFlushTime {
-			mapInfo.lastFlushTime = p.Tms[i]
+		info.rows += p.Rows[i]
+		if len(p.Tms) > i && p.Tms[i] > info.lastFlushTime {
+			info.lastFlushTime = p.Tms[i]
 		}
-
-		m.idTime[p.Ids[i]] = mapInfo
 	}
-	m.mu.Unlock()
+}
+
+func (m *MmsIdTime) createIdInfo(id uint64) *idInfo {
+	info, ok := m.idTime[id]
+	if !ok {
+		info = &idInfo{lastFlushTime: math.MinInt64, rows: 0}
+		m.idTime[id] = info
+	}
+	return info
 }
 
 func NewMmsIdTime() *MmsIdTime {
 	return &MmsIdTime{
-		idTime: make(map[uint64]idInfo, 32),
+		idTime: make(map[uint64]*idInfo, 32),
 	}
 }
 
 type Sequencer struct {
 	mu        sync.RWMutex
-	mmsIdTime map[string]*MmsIdTime
+	mmsIdTime map[string]*MmsIdTime // {"cpu_0001": *MmsIdTime}
+	seqMu     sync.RWMutex          // only one goroutine can reload sequencer and others wait
+	isLoading bool                  // is loading for mmsIdTime, set isLoading false when loading mmsIdTime finish
+	isFree    bool                  // if free successfully, set isFree true else false
+	ref       int32                 // used for mark use of sequencer, if sequencer is in used, can not free
 }
 
 func NewSequencer() *Sequencer {
 	return &Sequencer{
 		mmsIdTime: make(map[string]*MmsIdTime, 16),
 	}
+}
+
+func (s *Sequencer) free() bool {
+	if s.isFree {
+		return false
+	}
+	s.seqMu.Lock()
+	defer s.seqMu.Unlock()
+	if atomic.LoadInt32(&s.ref) != 0 {
+		return false
+	}
+	s.mmsIdTime = make(map[string]*MmsIdTime, 16) // keep this map to avoid lose memtable id time in flush
+	s.isFree = true
+	return true
+}
+
+// pass nil MmsTables if do not need reload id time
+func (s *Sequencer) addRef(m *MmsTables) error {
+	s.seqMu.RLock()
+	if s.isFree && m != nil {
+		s.seqMu.RUnlock()
+		err := s.reloadIdTime(m)
+		if err != nil {
+			return err
+		}
+		s.seqMu.RLock()
+	}
+	atomic.AddInt32(&s.ref, 1)
+	s.seqMu.RUnlock()
+	return nil
+}
+
+func (s *Sequencer) reloadIdTime(m *MmsTables) error {
+	s.seqMu.Lock()
+	defer s.seqMu.Unlock()
+	if !s.isFree {
+		return nil
+	}
+	count, err := m.loadIdTimesInLock()
+	if m.addFunc != nil && !m.isAdded {
+		// add row count to shard
+		m.addFunc(count)
+		m.isAdded = true
+	}
+	s.isFree = false
+	if err != nil {
+		s.mmsIdTime = make(map[string]*MmsIdTime, len(s.mmsIdTime))
+		s.isFree = true
+	}
+	return err
+}
+
+func (s *Sequencer) unRef() {
+	atomic.AddInt32(&s.ref, -1)
 }
 
 func (s *Sequencer) getMmsIdTime(name string) *MmsIdTime {
@@ -135,8 +193,18 @@ func (s *Sequencer) BatchUpdate(p *IdTimePairs) {
 }
 
 func (s *Sequencer) BatchUpdateCheckTime(p *IdTimePairs) {
+	defer PutIDTimePairs(p)
+	start := time.Now()
 	mmsIdTime := s.getMmsIdTime(p.Name)
 	mmsIdTime.batchUpdateCheckTime(p)
+	s.isLoading = false
+	log.Info("batch update check time success", zap.String("time used", time.Since(start).String()), zap.Int("series ids", len(p.Ids)))
+}
+
+func (s *Sequencer) IsLoading() bool {
+	s.seqMu.RLock()
+	defer s.seqMu.RUnlock()
+	return s.isLoading
 }
 
 func (s *Sequencer) Get(mn string, id uint64) (lastFlushTime, rowCnt int64) {
@@ -270,7 +338,7 @@ func (p *IdTimePairs) Marshal(isOrder bool, dst []byte, ctx *CoderContext) []byt
 func (p *IdTimePairs) Unmarshal(isOrder bool, src []byte) ([]byte, error) {
 	var err error
 	if len(src) < 8 {
-		err = fmt.Errorf("too smaller data for id time, %d", len(src))
+		err = fmt.Errorf("too small data for id time, %d", len(src))
 		log.Error(err.Error())
 		return nil, err
 	}

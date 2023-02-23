@@ -45,6 +45,9 @@ type EngineOptions struct {
 	// MaxWriteHangTime is the maximum time to hang for data write to store if node mem of mem is not enough
 	MaxWriteHangTime time.Duration
 
+	// Enable read from mem data, include mutable and snapshot table, default value is true
+	MemDataReadEnabled bool
+
 	FullCompactColdDuration  time.Duration
 	MaxConcurrentCompactions int
 	MaxFullCompactions       int
@@ -58,13 +61,17 @@ type EngineOptions struct {
 	WalEnabled        bool
 	WalSyncInterval   time.Duration
 	WalReplayParallel bool
+	WalReplayAsync    bool
 
 	// Immutable config
-	ReadCacheLimit   int
+	ReadCacheLimit   uint64
 	CacheDataBlock   bool
 	CacheMetaBlock   bool
 	EnableMmapRead   bool
 	CompactionMethod int // 0:auto, 1:stream, 2: non-stream
+	OpenShardLimit   int
+
+	DownSampleWriteDrop bool
 }
 
 func NewEngineOptions() EngineOptions {

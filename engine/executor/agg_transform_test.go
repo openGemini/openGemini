@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/stretchr/testify/assert"
 )
 
 func buildInRowDataTypeIntegral() hybridqp.RowDataType {
@@ -143,7 +143,7 @@ func TestStreamAggregateTransformIntegral(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeIntegral(), buildDstRowDataTypeIntegral(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -285,7 +285,7 @@ func TestStreamAggregateTransformElapsed(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeElapsed(), buildDstRowDataTypeElapsed(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -428,7 +428,7 @@ func TestStreamAggregateTransformMode(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeMode(), buildDstRowDataTypeMode(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -534,7 +534,7 @@ func TestStreamAggregateTransformMedian(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSourceRowDataType(), buildDstRowDataTypeMedian(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -1379,7 +1379,6 @@ func buildSourceRowDataTypeStddev() hybridqp.RowDataType {
 		influxql.VarRef{Val: "value1", Type: influxql.Integer},
 		influxql.VarRef{Val: "value2", Type: influxql.Float},
 	)
-
 	return rowDataType
 }
 
@@ -1435,6 +1434,13 @@ func buildStdddevInChunk() []executor.Chunk {
 	return inChunks
 }
 
+func buildPercentileApproxInChunk() []executor.Chunk {
+	sourceChunk1, sourceChunk2 := buildSourceChunkStddev1(), buildSourceChunkStddev2()
+	inChunks := make([]executor.Chunk, 0, 2)
+	inChunks = append(inChunks, sourceChunk1, sourceChunk2)
+
+	return inChunks
+}
 func buildDstRowDataTypeRate() hybridqp.RowDataType {
 	schema := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "rate(\"age\")", Type: influxql.Float},
@@ -2143,7 +2149,7 @@ func TestStreamAggregateTransform_Multi_Count_Integer_Min_Float(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataType()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataType())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2214,7 +2220,7 @@ func TestStreamAggregateTransformPercentile(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataTypePercentile()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypePercentile())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2279,7 +2285,35 @@ func TestStreamAggregateTransformPercentileConsecutiveMultiNullWindow(t *testing
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypePercentile(),
-		exprOpt, opt,
+		exprOpt, opt, false,
+	)
+}
+
+func TestStreamAggregateTransformPercentileSubQuery(t *testing.T) {
+	inChunks := buildComInChunkConsecutiveMultiNullWindow()
+	dstChunks := buildDstChunkPercentileConsecutiveMultiNullWindow()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "percentile", Args: []influxql.Expr{hybridqp.MustParseExpr("age"), hybridqp.MustParseExpr("100")}},
+			Ref:  influxql.VarRef{Val: `percentile("age",100)`, Type: influxql.Float},
+		},
+		{
+			Expr: &influxql.Call{Name: "percentile", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), hybridqp.MustParseExpr("100")}},
+			Ref:  influxql.VarRef{Val: `percentile("height",100)`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		ChunkSize:  6,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildComRowDataType(), buildDstRowDataTypePercentile(),
+		exprOpt, opt, true,
 	)
 }
 
@@ -2314,7 +2348,7 @@ func TestStreamAggregateTransformTop(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTop(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTop()}, []hybridqp.RowDataType{buildTargetRowDataTypeTop()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeTop())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2386,7 +2420,7 @@ func TestStreamAggregateTransformTopInteger(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTop(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTop()}, []hybridqp.RowDataType{buildTargetRowDataTypeTopInteger()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeTopInteger())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2459,7 +2493,7 @@ func TestStreamAggregateTransformBottomInteger(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeBottom()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeBottomInteger()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeBottomInteger())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2532,7 +2566,7 @@ func TestStreamAggregateTransformBottom(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeBottom()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeBottom()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeBottom())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2600,7 +2634,7 @@ func TestStreamAggregateTransformDistinct(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeDistinct()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeDistinct()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeDistinct())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2672,7 +2706,7 @@ func TestStreamAggregateTransform_Multi_Min_Integer_Max_Float(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeMinMax()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeMinMax())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2744,7 +2778,7 @@ func TestStreamAggregateTransformAux(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeAux()},
-		exprOpt, opt)
+		exprOpt, opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeAux())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2790,6 +2824,7 @@ func testStreamAggregateTransformBase(
 	inChunks []executor.Chunk, dstChunks []executor.Chunk,
 	inRowDataType, outRowDataType hybridqp.RowDataType,
 	exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions,
+	isSubQuery bool,
 ) {
 	// generate each executor node node to build a dag.
 	source := NewSourceFromMultiChunk(inRowDataType, inChunks)
@@ -2797,7 +2832,7 @@ func testStreamAggregateTransformBase(
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt)
+		opt, isSubQuery)
 	sink := NewNilSink(outRowDataType)
 	err := executor.Connect(source.Output, trans.Inputs[0])
 	if err != nil {
@@ -2862,7 +2897,7 @@ func TestStreamAggregateTransformRate(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeRate(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -2891,7 +2926,7 @@ func TestStreamAggregateTransformIrate(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeIrate(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -2920,7 +2955,7 @@ func TestStreamAggregateTransformRateInnerChunkSizeTo1(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeRate(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -2949,7 +2984,7 @@ func TestStreamAggregateTransformIrateInnerChunkSizeTo1(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeIrate(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -2978,7 +3013,7 @@ func TestStreamAggregateTransformAbsent(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeAbsent(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3010,7 +3045,7 @@ func TestStreamAggregateTransformStddev(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSourceRowDataTypeStddev(), buildDSTRowDataTypeStddev(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3038,7 +3073,7 @@ func TestStreamAggregateTransformDifference(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDifference(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3066,7 +3101,7 @@ func TestStreamAggregateTransformFrontDifference(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeFrontDifference(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3094,7 +3129,7 @@ func TestStreamAggregateTransformAbsoluteDifference(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeAbsoluteDifference(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3122,7 +3157,7 @@ func TestStreamAggregateTransformDifferenceNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDifference(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3217,7 +3252,7 @@ func TestStreamAggregateTransformDifferenceForDuplicatedTime(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeFrontDifference(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3331,7 +3366,7 @@ func TestStreamAggregateTransformSample(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample(), buildDstRowDataTypeSample(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3445,7 +3480,7 @@ func TestStreamAggregateTransformSample_Float(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample_Float(), buildDstRowDataTypeSample_Float(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3558,7 +3593,7 @@ func TestStreamAggregateTransformSample_String(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample_String(), buildDstRowDataTypeSample_String(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3671,7 +3706,7 @@ func TestStreamAggregateTransformSample_Bool(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample_Bool(), buildDstRowDataTypeSample_Bool(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3699,7 +3734,7 @@ func TestStreamAggregateTransformDerivative(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3793,7 +3828,7 @@ func TestStreamAggregateTransformDerivativeOne(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3821,7 +3856,7 @@ func TestStreamAggregateTransformDerivativeNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 func buildSrcChunkDerivativeForDuplicatedTime() []executor.Chunk {
@@ -3916,7 +3951,7 @@ func TestStreamAggregateTransformDerivativeForDuplicatedTime(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3944,7 +3979,7 @@ func TestStreamAggregateTransformCumulativeSum(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeCumulativeSum(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -3972,7 +4007,7 @@ func TestStreamAggregateTransformCumulativeSumNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeCumulativeSum(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4004,7 +4039,7 @@ func TestStreamAggregateTransformMovingAverage(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeMovingAverage(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4036,7 +4071,7 @@ func TestStreamAggregateTransformMovingAverageNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeMovingAverage(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4114,7 +4149,7 @@ func TestStreamAggregateTransformMovingAverageNullWindowChunkSizeOne(t *testing.
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeMovingAverage(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4251,7 +4286,7 @@ func TestStreamAggregateTransformNullForCount(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcNullRowDataType(), buildDstNullRowDataTypeFourCount(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4333,7 +4368,7 @@ func TestStreamAggregateTransformPreAggLastFloat(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcLastRowDataType(), buildDstLastRowDataTypeRate(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4476,7 +4511,7 @@ func TestStreamAggregateTransformCastor(t *testing.T) {
 		t,
 		[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
 		buildInRowDataTypeCastor(), buildDstRowDataTypeCastor(),
-		exprOpt, opt,
+		exprOpt, opt, false,
 	)
 }
 
@@ -4505,7 +4540,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 		[]hybridqp.RowDataType{buildBenchRowDataType()},
 		[]hybridqp.RowDataType{buildBenchTargetRowDataType()},
 		exprOpt,
-		opt)
+		opt, false)
 	sink := NewNilSink(buildBenchTargetRowDataType())
 	err := executor.Connect(source.Output, trans1.Inputs[0])
 	if err != nil {
@@ -4554,7 +4589,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 		[]hybridqp.RowDataType{buildBenchRowDataType()},
 		[]hybridqp.RowDataType{buildBenchTargetRowDataType()},
 		exprOpt,
-		opt)
+		opt, false)
 	sink := NewNilSink(buildBenchTargetRowDataType())
 	err := executor.Connect(source.Output, trans1.Inputs[0])
 	if err != nil {
@@ -4590,7 +4625,7 @@ func benchmarkStreamAggregateTransform(b *testing.B, chunkCount, ChunkSize, tagP
 			[]hybridqp.RowDataType{srcRowDataType},
 			[]hybridqp.RowDataType{dstRowDataType},
 			exprOpt,
-			opt)
+			opt, false)
 		sink := NewNilSink(dstRowDataType)
 		err := executor.Connect(source.Output, trans1.Inputs[0])
 		if err != nil {
@@ -4974,4 +5009,651 @@ func BenchmarkAggregateTransform_Last_Float_Chunk_MultiTS(b *testing.B) {
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
 		opt, exprOpt, srcRowDataType, dstRowDataType)
+}
+
+func buildSrcRowDataTypeOGSketchInsert() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func buildSrcChunkOGSketchInsert() []executor.Chunk {
+	rowDataType := buildSrcRowDataTypeOGSketchInsert()
+	b := executor.NewChunkBuilder(rowDataType)
+	srcCks := make([]executor.Chunk, 0, 2)
+
+	srcCk1 := b.NewChunk("mst")
+
+	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
+		[]int{0, 3})
+	srcCk1.AppendIntervalIndex([]int{0, 3}...)
+	srcCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	srcCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	srcCk1.Column(0).AppendManyNotNil(5)
+	srcCk1.Column(1).AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
+	srcCk1.Column(1).AppendManyNotNil(5)
+
+	srcCk2 := b.NewChunk("mst")
+	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
+		[]int{0, 2})
+	srcCk2.AppendIntervalIndex([]int{0, 2}...)
+	srcCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	srcCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	srcCk2.Column(0).AppendManyNotNil(5)
+	srcCk2.Column(1).AppendFloatValues([]float64{6, 7, 8, 9, 10}...)
+	srcCk2.Column(1).AppendManyNotNil(5)
+
+	srcCks = append(srcCks, srcCk1, srcCk2)
+	return srcCks
+}
+
+func buildDstRowDataTypeOGSketchInsert() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ogsketch_insert(\"value1\")", Type: influxql.FloatTuple},
+		influxql.VarRef{Val: "ogsketch_insert(\"value2\")", Type: influxql.FloatTuple},
+	)
+	return schema
+}
+
+func buildDstChunkOGSketchInsert() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeOGSketchInsert()
+	b := executor.NewChunkBuilder(rowDataType)
+	dstCks := make([]executor.Chunk, 0, 1)
+
+	dstCk1 := b.NewChunk("mst")
+	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 5, 10})
+	dstCk1.AppendIntervalIndex([]int{0, 5, 10}...)
+	dstCk1.AppendTime(1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 8, 8, 8, 8, 8)
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	dstCk1.Column(0).AppendNilsV2(true, true, true, false, false, true, true, true, true, false, true, true, true, false, false)
+
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
+	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	dstCk1.Column(1).AppendNilsV2(true, true, true, false, false, true, true, true, true, false, true, true, true, false, false)
+
+	dstCks = append(dstCks, dstCk1)
+	return dstCks
+}
+
+func TestStreamAggregateTransformOGSketchInsert(t *testing.T) {
+	inChunks := buildSrcChunkOGSketchInsert()
+	dstChunks := buildDstChunkOGSketchInsert()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "ogsketch_insert", Args: []influxql.Expr{
+				hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("50"), hybridqp.MustParseExpr("5")}},
+			Ref: influxql.VarRef{Val: `ogsketch_insert("value1")`, Type: influxql.FloatTuple},
+		},
+		{
+			Expr: &influxql.Call{Name: "ogsketch_insert", Args: []influxql.Expr{
+				hybridqp.MustParseExpr("value2"), hybridqp.MustParseExpr("50"), hybridqp.MustParseExpr("5")}},
+			Ref: influxql.VarRef{Val: `ogsketch_insert("value2")`, Type: influxql.FloatTuple},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"name"},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  15,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSrcRowDataTypeOGSketchInsert(), buildDstRowDataTypeOGSketchInsert(),
+		exprOpt, opt, false,
+	)
+}
+
+func buildSrcRowDataTypeOGSketchMerge() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.FloatTuple},
+	)
+
+	return rowDataType
+}
+
+func buildSrcChunkOGSketchMerge() []executor.Chunk {
+	rowDataType := buildSrcRowDataTypeOGSketchMerge()
+	b := executor.NewChunkBuilder(rowDataType)
+	srcCks := make([]executor.Chunk, 0, 2)
+
+	srcCk1 := b.NewChunk("mst")
+	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
+		[]int{0, 3})
+	srcCk1.AppendIntervalIndex([]int{0, 3}...)
+	srcCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	srcCk1.Column(0).AppendManyNotNil(5)
+
+	srcCk2 := b.NewChunk("mst")
+	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
+		[]int{0, 2})
+	srcCk2.AppendIntervalIndex([]int{0, 2}...)
+	srcCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	srcCk2.Column(0).AppendManyNotNil(5)
+
+	srcCks = append(srcCks, srcCk1, srcCk2)
+	return srcCks
+}
+
+func buildDstRowDataTypeOGSketchMerge() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ogsketch_merge(\"value1\")", Type: influxql.FloatTuple},
+	)
+	return schema
+}
+
+func buildDstChunkOGSketchMerge() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeOGSketchMerge()
+	b := executor.NewChunkBuilder(rowDataType)
+	dstCks := make([]executor.Chunk, 0, 1)
+
+	dstCk1 := b.NewChunk("mst")
+	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 3, 7})
+	dstCk1.AppendIntervalIndex([]int{0, 3, 7}...)
+	dstCk1.AppendTime([]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}...)
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
+	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	dstCk1.Column(0).AppendManyNotNil(10)
+
+	dstCks = append(dstCks, dstCk1)
+	return dstCks
+}
+
+func TestStreamAggregateTransformOGSketchMerge(t *testing.T) {
+	inChunks := buildSrcChunkOGSketchMerge()
+	dstChunks := buildDstChunkOGSketchMerge()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "ogsketch_merge", Args: []influxql.Expr{
+				hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("50"), hybridqp.MustParseExpr("5")}},
+			Ref: influxql.VarRef{Val: `ogsketch_merge("value1")`, Type: influxql.FloatTuple},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"name"},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  15,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSrcRowDataTypeOGSketchMerge(), buildDstRowDataTypeOGSketchMerge(),
+		exprOpt, opt, false,
+	)
+}
+
+func buildSrcRowDataTypeOGSketchPercentile() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.FloatTuple},
+	)
+	return rowDataType
+}
+
+func buildSrcChunkOGSketchPercentile() []executor.Chunk {
+	rowDataType := buildSrcRowDataTypeOGSketchPercentile()
+	b := executor.NewChunkBuilder(rowDataType)
+	srcCks := make([]executor.Chunk, 0, 2)
+
+	srcCk1 := b.NewChunk("mst")
+	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
+		[]int{0, 3})
+	srcCk1.AppendIntervalIndex([]int{0, 3}...)
+	srcCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
+	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	srcCk1.Column(0).AppendManyNotNil(5)
+
+	srcCk2 := b.NewChunk("mst")
+	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
+		[]int{0, 2})
+	srcCk2.AppendIntervalIndex([]int{0, 2}...)
+	srcCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
+	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	srcCk2.Column(0).AppendManyNotNil(5)
+
+	srcCks = append(srcCks, srcCk1, srcCk2)
+	return srcCks
+}
+
+func buildDstChunkOGSketchPercentile() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeOGSketchPercentile()
+	b := executor.NewChunkBuilder(rowDataType)
+	dstCks := make([]executor.Chunk, 0, 1)
+
+	dstCk1 := b.NewChunk("mst")
+	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	dstCk1.AppendIntervalIndex([]int{0, 1, 2}...)
+	dstCk1.AppendTime([]int64{0, 0, 0}...)
+
+	dstCk1.Column(0).AppendFloatValues([]float64{2, 5.5, 9}...)
+	dstCk1.Column(0).AppendManyNotNil(3)
+
+	dstCks = append(dstCks, dstCk1)
+	return dstCks
+}
+
+func buildDstRowDataTypeOGSketchPercentile() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ogsketch_percentile(\"value1\", 50)", Type: influxql.Float},
+	)
+	return schema
+}
+
+func TestStreamAggregateTransformOGSketchPercentile(t *testing.T) {
+	inChunks := buildSrcChunkOGSketchPercentile()
+	dstChunks := buildDstChunkOGSketchPercentile()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "ogsketch_percentile", Args: []influxql.Expr{
+				hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("50")}},
+			Ref: influxql.VarRef{Val: `ogsketch_percentile("value1", 50)`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ogsketch_percentile("value1", 50)`)},
+		Dimensions: []string{"name"},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  5,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSrcRowDataTypeOGSketchPercentile(), buildDstRowDataTypeOGSketchPercentile(),
+		exprOpt, opt,
+		false)
+}
+
+func buildDSTRowDataTypePercentileApprox() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "percentile_approx(\"value1\",50)", Type: influxql.Integer},
+		influxql.VarRef{Val: "percentile_approx(\"value2\",50)", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstChunkPercentileApprox() []executor.Chunk {
+	rowDataType := buildDSTRowDataTypePercentileApprox()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
+	chunk.AppendTime([]int64{1, 11, 14}...)
+
+	chunk.Column(0).AppendIntegerValues([]int64{2, 6, 10}...)
+	chunk.Column(0).AppendManyNotNil(3)
+
+	chunk.Column(1).AppendFloatValues([]float64{3.85, 8.11, 9.9}...)
+	chunk.Column(1).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformPercentileApprox(t *testing.T) {
+	inChunks := buildPercentileApproxInChunk()
+	dstChunks := buildDstChunkPercentileApprox()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "percentile_approx", Args: []influxql.Expr{hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("50")}},
+			Ref:  influxql.VarRef{Val: `percentile_approx("value1",50)`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "percentile_approx", Args: []influxql.Expr{hybridqp.MustParseExpr("value2"), hybridqp.MustParseExpr("50")}},
+			Ref:  influxql.VarRef{Val: `percentile_approx("value2",50)`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`percentile_approx("value1",50)`), hybridqp.MustParseExpr(`percentile_approx("value2",50)`)},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 7 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSourceRowDataTypeStddev(), buildDSTRowDataTypePercentileApprox(),
+		exprOpt, opt, false,
+	)
+}
+
+func buildDSTRowDataTypePercentileApproxSubQuery() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "percentile_approx(\"value1\",50.0)", Type: influxql.Integer},
+		influxql.VarRef{Val: "percentile_approx(\"value2\",50.0)", Type: influxql.Float},
+	)
+	return schema
+}
+
+func TestStreamAggregateTransformPercentileApproxSubQuery(t *testing.T) {
+	inChunks := buildPercentileApproxInChunk()
+	dstChunks := buildDstChunkPercentileApprox()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "percentile_approx", Args: []influxql.Expr{hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("50.0")}},
+			Ref:  influxql.VarRef{Val: `percentile_approx("value1",50.0)`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "percentile_approx", Args: []influxql.Expr{hybridqp.MustParseExpr("value2"), hybridqp.MustParseExpr("50.0")}},
+			Ref:  influxql.VarRef{Val: `percentile_approx("value2",50.0)`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`percentile_approx("value1",50.0)`), hybridqp.MustParseExpr(`percentile_approx("value2",50.0)`)},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 7 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSourceRowDataTypeStddev(), buildDSTRowDataTypePercentileApproxSubQuery(),
+		exprOpt, opt, true,
+	)
+}
+
+func TestStreamAggregateTransformPercentileCornerCase(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "percentile", Args: []influxql.Expr{hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("101")}},
+			Ref:  influxql.VarRef{Val: `percentile("value1",101)`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "percentile", Args: []influxql.Expr{hybridqp.MustParseExpr("value2"), hybridqp.MustParseExpr("-1")}},
+			Ref:  influxql.VarRef{Val: `percentile("value2",-1)`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`percentile("value1",101)`), hybridqp.MustParseExpr(`percentile("value2",-1)`)},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 7 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+	inRowDataType := buildSourceRowDataTypeStddev()
+	outRowDataType := buildDSTRowDataTypePercentileApproxSubQuery()
+	_, err := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{inRowDataType},
+		[]hybridqp.RowDataType{outRowDataType},
+		exprOpt,
+		opt, false)
+	assert.EqualError(t, err, fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
+}
+
+func TestStreamAggregateTransformPercentileApproxCornerCase(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "percentile_approx", Args: []influxql.Expr{hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr("101")}},
+			Ref:  influxql.VarRef{Val: `percentile_approx("value1",101)`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "percentile_approx", Args: []influxql.Expr{hybridqp.MustParseExpr("value2"), hybridqp.MustParseExpr("-1")}},
+			Ref:  influxql.VarRef{Val: `percentile_approx("value2",-1)`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`percentile_approx("value1",101)`), hybridqp.MustParseExpr(`percentile_approx("value2",-1)`)},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 7 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+	inRowDataType := buildSourceRowDataTypeStddev()
+	outRowDataType := buildDSTRowDataTypePercentileApproxSubQuery()
+	_, err := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{inRowDataType},
+		[]hybridqp.RowDataType{outRowDataType},
+		exprOpt,
+		opt, false)
+	assert.EqualError(t, err, fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
+}
+
+func buildSrcRowDataTypeSingle() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Float},
+	)
+	return rowDataType
+}
+
+func buildSrcChunkSingle() []executor.Chunk {
+	rowDataType := buildSrcRowDataTypeSingle()
+	b := executor.NewChunkBuilder(rowDataType)
+	srcCks := make([]executor.Chunk, 0, 3)
+
+	srcCk1 := b.NewChunk("mst")
+	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	srcCk1.AppendIntervalIndex([]int{0}...)
+	srcCk1.AppendTime([]int64{1000000000}...)
+	srcCk1.Column(0).AppendFloatValues(1)
+	srcCk1.Column(0).AppendManyNotNil(1)
+
+	srcCk2 := b.NewChunk("mst")
+	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	srcCk2.AppendIntervalIndex([]int{0}...)
+	srcCk2.AppendTime([]int64{2000000000}...)
+	srcCk2.Column(0).AppendFloatValues(2)
+	srcCk2.Column(0).AppendManyNotNil(1)
+
+	srcCk3 := b.NewChunk("mst")
+	srcCk3.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	srcCk3.AppendIntervalIndex([]int{0, 2}...)
+	srcCk3.AppendTime([]int64{3000000000, 4000000000, 5000000000, 6000000000, 7000000000, 8000000000}...)
+	srcCk3.Column(0).AppendFloatValues(3, 4, 5, 6, 7, 8)
+	srcCk3.Column(0).AppendManyNotNil(6)
+
+	srcCks = append(srcCks, srcCk1, srcCk2, srcCk3)
+	return srcCks
+}
+
+func buildDstRowDataTypeIntegralSingle() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "integral(\"value1\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstChunkIntegralSingle() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeIntegralSingle()
+	b := executor.NewChunkBuilder(rowDataType)
+	dstCks := make([]executor.Chunk, 0, 1)
+
+	dstCk1 := b.NewChunk("mst")
+	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	dstCk1.AppendIntervalIndex([]int{0, 1}...)
+	dstCk1.AppendTime([]int64{0, 5000000000}...)
+	dstCk1.Column(0).AppendFloatValues(12, 19.5)
+	dstCk1.Column(0).AppendManyNotNil(2)
+
+	dstCks = append(dstCks, dstCk1)
+	return dstCks
+}
+
+func TestAggTransformIntegralSingle(t *testing.T) {
+	inChunks := buildSrcChunkSingle()
+	dstChunks := buildDstChunkIntegralSingle()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "integral", Args: []influxql.Expr{
+				hybridqp.MustParseExpr("value1")}},
+			Ref: influxql.VarRef{Val: `integral("value1")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`integral("value1")`)},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 5000000000 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  1,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSrcRowDataTypeSingle(), buildDstRowDataTypeIntegralSingle(),
+		exprOpt, opt,
+		false)
+}
+
+func buildSrcRowDataTypeSingleInt() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+	)
+	return rowDataType
+}
+
+func buildSrcChunkSingleInt() []executor.Chunk {
+	rowDataType := buildSrcRowDataTypeSingleInt()
+	b := executor.NewChunkBuilder(rowDataType)
+	srcCks := make([]executor.Chunk, 0, 3)
+
+	srcCk1 := b.NewChunk("mst")
+	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	srcCk1.AppendIntervalIndex([]int{0}...)
+	srcCk1.AppendTime([]int64{1000000000}...)
+	srcCk1.Column(0).AppendIntegerValues(1)
+	srcCk1.Column(0).AppendManyNotNil(1)
+
+	srcCk2 := b.NewChunk("mst")
+	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	srcCk2.AppendIntervalIndex([]int{0}...)
+	srcCk2.AppendTime([]int64{2000000000}...)
+	srcCk2.Column(0).AppendIntegerValues(2)
+	srcCk2.Column(0).AppendManyNotNil(1)
+
+	srcCk3 := b.NewChunk("mst")
+	srcCk3.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=a")}, []int{0})
+	srcCk3.AppendIntervalIndex([]int{0, 2}...)
+	srcCk3.AppendTime([]int64{3000000000, 4000000000, 5000000000, 6000000000, 7000000000, 8000000000}...)
+	srcCk3.Column(0).AppendIntegerValues(3, 4, 5, 6, 7, 8)
+	srcCk3.Column(0).AppendManyNotNil(6)
+
+	srcCks = append(srcCks, srcCk1, srcCk2, srcCk3)
+	return srcCks
+}
+
+func TestAggTransformIntegralSingleInt(t *testing.T) {
+	inChunks := buildSrcChunkSingleInt()
+	dstChunks := buildDstChunkIntegralSingle()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "integral", Args: []influxql.Expr{
+				hybridqp.MustParseExpr("value1")}},
+			Ref: influxql.VarRef{Val: `integral("value1")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`integral("value1")`)},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 5000000000 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  1,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildSrcRowDataTypeSingleInt(), buildDstRowDataTypeIntegralSingle(),
+		exprOpt, opt,
+		false)
 }

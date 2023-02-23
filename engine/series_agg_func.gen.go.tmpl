@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package engine
 
 import "github.com/openGemini/openGemini/lib/record"
@@ -46,26 +47,6 @@ func {{.name}}SumReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (
 
 func {{.name}}SumMerge(prevBuf, currBuf *{{.name}}ColBuf) {
 	prevBuf.value += currBuf.value
-}
-{{- end}}
-{{end}}
-
-{{range .}}
-{{- if or (eq .Name "Float") (eq .Name "Integer")}}
-func {{.name}}MeanReduce(cv *record.ColVal, values []{{.Type}}, start, end int) (int, float64, bool) {
-	var sum {{.Type}}
-	var aggregated int
-	for i := start; i < end; i++ {
-		if v, isNil := cv.{{.Name}}Value(i); !isNil {
-			aggregated++
-			sum += v
-		}
-	}
-	return start, float64(sum) / float64(aggregated), aggregated == 0
-}
-
-func {{.name}}MeanMerge(prevBuf, currBuf *floatColBuf) {
-	prevBuf.value = (prevBuf.value + currBuf.value) / 2
 }
 {{- end}}
 {{end}}

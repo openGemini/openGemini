@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -34,7 +35,7 @@ const (
 
 type IMetaExecutor interface {
 	SetTimeOut(timeout time.Duration)
-	EachDBNodes(database string, fn func(nodeID uint64, pts []uint32)) error
+	EachDBNodes(database string, fn func(nodeID uint64, pts []uint32, hasErr *bool) error) error
 	Close() error
 }
 
@@ -65,13 +66,8 @@ func (m *MetaExecutor) Close() error {
 	return nil
 }
 
-func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32)) error {
+func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32, hasError *bool) error) error {
 	_, err := m.MetaClient.Database(database)
-	if err != nil {
-		return err
-	}
-
-	dbPtInfo, err := m.MetaClient.DBPtView(database)
 	if err != nil {
 		return err
 	}
@@ -85,23 +81,54 @@ func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts [
 		return nil
 	}
 
-	// Start a goroutine to execute the statement on each of the remote nodes.
+	start := time.Now()
+	var dbPtInfo []meta2.PtInfo
 	var wg sync.WaitGroup
-	wg.Add(len(nodes))
-	for _, node := range nodes {
-		dbPts := meta2.GetNodeDBPts(dbPtInfo, node.ID)
-		if len(dbPts) == 0 {
-			m.Logger.Warn("pt not exist on node: ", zap.String("db", database), zap.Error(err))
-			wg.Done()
-			continue
-		}
 
-		go func(nodeID uint64, pts []uint32) {
-			fn(nodeID, pts)
-			wg.Done()
-		}(node.ID, dbPts)
+retryExecute:
+	for {
+		if time.Since(start).Seconds() >= 30*time.Second.Seconds() {
+			break retryExecute
+		}
+		dbPtInfo, err = m.MetaClient.DBPtView(database)
+		if err != nil {
+			break retryExecute
+		}
+		nodePtMap := make(map[uint64][]uint32, len(nodes))
+		for i := range dbPtInfo {
+			nodePtMap[dbPtInfo[i].Owner.NodeID] = append(nodePtMap[dbPtInfo[i].Owner.NodeID], dbPtInfo[i].PtId)
+		}
+		hasErr := false
+		wg.Add(len(nodePtMap))
+		for nodeId := range nodePtMap {
+			go func(nodeID uint64, pts []uint32) {
+				errR := fn(nodeID, pts, &hasErr)
+				// in none ha case create pt in write process so ignore it.
+				// ignore node is not available
+				if !config.GetHaEnable() && IgnoreErrForNotHA(errR) {
+					errR = nil
+				}
+				if errR != nil {
+					err = errR
+				}
+				wg.Done()
+			}(nodeId, nodePtMap[nodeId])
+		}
+		wg.Wait()
+		if err == nil || !IsRetryErrorForPtView(err) {
+			break retryExecute
+		}
+		time.Sleep(100 * time.Millisecond)
+		m.Logger.Warn("retry execute command", zap.Error(err))
 	}
 
-	wg.Wait()
-	return nil
+	return err
+}
+
+// IgnoreErrForNotHA returns true if we should ignore the error in not ha case.
+// Prevents query errors, but query data may be lost.
+func IgnoreErrForNotHA(err error) bool {
+	return errno.Equal(err, errno.PtNotFound) ||
+		errno.Equal(err, errno.NoConnectionAvailable) ||
+		errno.Equal(err, errno.NoNodeAvailable)
 }

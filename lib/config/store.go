@@ -17,6 +17,7 @@ limitations under the License.
 package config
 
 import (
+	"crypto/tls"
 	"fmt"
 	"math"
 	"runtime"
@@ -28,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/memory"
 	httpdConf "github.com/openGemini/openGemini/open_src/influx/httpd/config"
+	"github.com/openGemini/openGemini/services/stream"
 )
 
 const (
@@ -35,7 +37,7 @@ const (
 	EngineType2                         = "tssp2"
 	DefaultEngine                       = "tssp1"
 	DefaultImmutableMaxMemoryPercent    = 10
-	DefaultCompactFullWriteColdDuration = time.Duration(1 * time.Hour)
+	DefaultCompactFullWriteColdDuration = 1 * time.Hour
 
 	KB = 1024
 	MB = 1024 * 1024
@@ -45,13 +47,20 @@ const (
 	// that can run at one time.  A value of 0 results in 50% of runtime.GOMAXPROCS(0) used at runtime.
 	DefaultMaxConcurrentCompactions = 0
 
-	DefaultWriteColdDuration = time.Duration(5 * time.Second)
+	DefaultWriteColdDuration = 5 * time.Second
 	Is32BitPtr               = (^uintptr(0) >> 32) == 0
 
 	DefaultSnapshotThroughput      = 48 * MB
 	DefaultSnapshotThroughputBurst = 64 * MB
 	DefaultMaxWriteHangTime        = 15 * time.Second
 	DefaultWALSyncInterval         = 100 * time.Millisecond
+	DefaultReadCachePercent        = 3
+	MinFlavorMemory                = 8 * GB
+	MaxFlavorMemory                = 512 * GB
+
+	IndexFileDirectory = "index"
+	DataDirectory      = "data"
+	WalDirectory       = "wal"
 )
 
 // TSStore represents the configuration format for the influxd binary.
@@ -66,11 +75,14 @@ type TSStore struct {
 
 	HTTPD             httpdConf.Config `toml:"http"`
 	Retention         retention.Config `toml:"retention"`
+	DownSample        retention.Config `toml:"downsample"`
 	HierarchicalStore retention.Config `toml:"hierarchical-storage"`
+	Stream            stream.Config    `toml:"stream"`
 
 	// TLS provides configuration options for all https endpoints.
 	TLS      tlsconfig.Config `toml:"tls"`
 	Analysis Castor           `toml:"castor"`
+	Sherlock *SherlockConfig  `toml:"sherlock"`
 }
 
 // NewTSStore returns an instance of Config with reasonable defaults.
@@ -86,10 +98,13 @@ func NewTSStore() *TSStore {
 	c.Logging = NewLogger(AppStore)
 
 	c.Retention = retention.NewConfig()
+	c.DownSample = retention.NewConfig()
 	c.HierarchicalStore = retention.NewConfig()
 	c.Gossip = NewGossip()
 
 	c.Analysis = NewCastor()
+	c.Stream = stream.NewConfig()
+	c.Sherlock = NewSherlockConfig()
 	return c
 }
 
@@ -104,11 +119,13 @@ func (c *TSStore) Validate() error {
 		c.Data,
 		c.Monitor,
 		c.Retention,
+		c.DownSample,
 		c.HierarchicalStore,
 		c.TLS,
 		c.Logging,
 		c.Spdy,
 		c.Analysis,
+		c.Sherlock,
 	}
 
 	for _, item := range items {
@@ -139,15 +156,16 @@ func (c *TSStore) GetCommon() *Common {
 
 // Store is the configuration for the engine.
 type Store struct {
-	IngesterAddress string `toml:"store-ingest-addr"`
-	SelectAddress   string `toml:"store-select-addr"`
-	DataDir         string `toml:"store-data-dir"`
-	Domain          string `toml:"domain"`
-	WALDir          string `toml:"store-wal-dir"`
-	MetaDir         string `toml:"store-meta-dir"`
-	Engine          string `toml:"engine-type"`
-	Index           string `toml:"index-version"`
-
+	IngesterAddress string      `toml:"store-ingest-addr"`
+	SelectAddress   string      `toml:"store-select-addr"`
+	Domain          string      `toml:"domain"`
+	TLS             *tls.Config `toml:"-"`
+	DataDir         string      `toml:"store-data-dir"`
+	WALDir          string      `toml:"store-wal-dir"`
+	MetaDir         string      `toml:"store-meta-dir"`
+	Engine          string      `toml:"engine-type"`
+	Index           string      `toml:"index-version"`
+	OpsMonitor      *OpsMonitor `toml:"ops-monitor"`
 	// The max inmem percent of immutable
 	ImmTableMaxMemoryPercentage int `toml:"imm-table-max-memory-percentage"`
 
@@ -166,22 +184,31 @@ type Store struct {
 	ShardMutableSizeLimit toml.Size     `toml:"shard-mutable-size-limit"`
 	NodeMutableSizeLimit  toml.Size     `toml:"node-mutable-size-limit"`
 	MaxWriteHangTime      toml.Duration `toml:"max-write-hang-time"`
-	WalSyncInterval       toml.Duration `toml:"wal-sync-interval"`
+	MemDataReadEnabled    bool          `toml:"mem-data-read-enabled"`
 
-	WalEnabled        bool `toml:"wal-enabled"`
-	WalReplayParallel bool `toml:"wal-replay-parallel"`
-	CacheDataBlock    bool `toml:"cache-table-data-block"`
-	CacheMetaBlock    bool `toml:"cache-table-meta-block"`
-	EnableMmapRead    bool `toml:"enable-mmap-read"`
-	Readonly          bool `toml:"readonly"`
-	CompactRecovery   bool `toml:"compact-recovery"`
+	WalSyncInterval   toml.Duration `toml:"wal-sync-interval"`
+	WalEnabled        bool          `toml:"wal-enabled"`
+	WalReplayParallel bool          `toml:"wal-replay-parallel"`
+	WalReplayAsync    bool          `toml:"wal-replay-async"`
+	CacheDataBlock    bool          `toml:"cache-table-data-block"`
+	CacheMetaBlock    bool          `toml:"cache-table-meta-block"`
+	EnableMmapRead    bool          `toml:"enable-mmap-read"`
+	Readonly          bool          `toml:"readonly"`
+	CompactRecovery   bool          `toml:"compact-recovery"`
+	QuerySeriesLimit  int           `toml:"query-series-limit"`
 
-	ReadCacheLimit       int `toml:"read-cache-limit"`
-	WriteConcurrentLimit int `toml:"write-concurrent-limit"`
+	ReadCacheLimit       toml.Size `toml:"read-cache-limit"`
+	WriteConcurrentLimit int       `toml:"write-concurrent-limit"`
+	OpenShardLimit       int       `toml:"open-shard-limit"`
+
+	DownSampleWriteDrop bool `toml:"downsample-write-drop"`
 }
 
 // NewStore returns the default configuration for tsdb.
 func NewStore() Store {
+	size, _ := memory.SysMem()
+	memorySize := toml.Size(size * KB)
+	readCacheLimit := getCacheLimitSize(uint64(memorySize))
 	return Store{
 		Engine:                       DefaultEngine,
 		ImmTableMaxMemoryPercentage:  DefaultImmutableMaxMemoryPercent,
@@ -192,16 +219,22 @@ func NewStore() Store {
 		SnapshotThroughputBurst:      toml.Size(DefaultSnapshotThroughputBurst),
 		WriteColdDuration:            toml.Duration(DefaultWriteColdDuration),
 		MaxWriteHangTime:             toml.Duration(DefaultMaxWriteHangTime),
+		MemDataReadEnabled:           true,
 		CacheDataBlock:               false,
 		CacheMetaBlock:               false,
 		EnableMmapRead:               !Is32BitPtr,
-		ReadCacheLimit:               0,
+		ReadCacheLimit:               toml.Size(readCacheLimit),
 		WriteConcurrentLimit:         0,
 		WalSyncInterval:              toml.Duration(DefaultWALSyncInterval),
 		WalEnabled:                   true,
 		WalReplayParallel:            false,
+		WalReplayAsync:               false,
 		CompactRecovery:              true,
+		QuerySeriesLimit:             0,
 		CompactionMethod:             0,
+		OpsMonitor:                   NewOpsMonitorConfig(),
+		OpenShardLimit:               0,
+		DownSampleWriteDrop:          true,
 	}
 }
 
@@ -213,7 +246,13 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 		size, _ := memory.SysMem()
 		memorySize = toml.Size(size * KB)
 	}
+	if c.OpenShardLimit <= 0 {
+		c.OpenShardLimit = cpuNum
+	}
 
+	if c.ReadCacheLimit != 0 {
+		c.ReadCacheLimit = toml.Size(getCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
+	}
 	defaultShardMutableSizeLimit := toml.Size(uint64Limit(8*MB, 1*GB, uint64(memorySize/256)))
 	defaultNodeMutableSizeLimit := toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/16)))
 	defaultCompactThroughput := toml.Size(uint64Limit(32*MB, 256*MB, uint64(cpuNum*12*MB)))
@@ -289,4 +328,21 @@ func uint64Limit(min, max uint64, v uint64) uint64 {
 		return max
 	}
 	return v
+}
+
+type OpsMonitor struct {
+	HttpAddress      string `toml:"store-http-addr"`
+	AuthEnabled      bool   `toml:"auth-enabled"`
+	HttpsEnabled     bool   `toml:"store-https-enabled"`
+	HttpsCertificate string `toml:"store-https-certificate"`
+}
+
+func NewOpsMonitorConfig() *OpsMonitor {
+	return &OpsMonitor{
+		HttpAddress: "",
+	}
+}
+
+func getCacheLimitSize(size uint64) uint64 {
+	return size * DefaultReadCachePercent / 100
 }

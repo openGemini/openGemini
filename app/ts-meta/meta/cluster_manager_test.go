@@ -14,123 +14,114 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package meta_test
+package meta
 
 import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/app/ts-meta/meta"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
 )
 
+var testIp = "127.0.0.3"
+
 func TestClusterManagerHandleJoinEvent(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cm := ms.GetStore().GetClusterManager()
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
-	eventCh := cm.GetEventCh()
+	eventCh := mms.service.clusterManager.GetEventCh()
 	eventCh <- e
 	time.Sleep(1 * time.Second)
-	cm.WaitEventDone()
-	dn := ms.GetStore().GetData().DataNode(2)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(2)
 	assert.Equal(t, serf.StatusAlive, dn.Status)
 	assert.Equal(t, uint64(1), dn.LTime)
 }
 
 func TestClusterManagerHandleFailedEvent(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cm := ms.GetStore().GetClusterManager()
 	e := *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)
-	eventCh := cm.GetEventCh()
+	eventCh := mms.service.clusterManager.GetEventCh()
 	eventCh <- e
 	time.Sleep(1 * time.Second)
-	cm.WaitEventDone()
-	dn := ms.GetStore().GetData().DataNode(2)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(2)
 	assert.Equal(t, serf.StatusFailed, dn.Status)
 	assert.Equal(t, uint64(1), dn.LTime)
 }
 
 func TestClusterManagerDoNotHandleOldEvent(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cm := ms.GetStore().GetClusterManager()
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 3, serf.StatusAlive)
-	eventCh := cm.GetEventCh()
+	eventCh := mms.service.clusterManager.GetEventCh()
 	eventCh <- e
 	time.Sleep(1 * time.Second)
-	cm.WaitEventDone()
-	dn := ms.GetStore().GetData().DataNode(2)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(2)
 	assert.Equal(t, serf.StatusAlive, dn.Status)
 	assert.Equal(t, uint64(3), dn.LTime)
 
 	e = *generateMemberEvent(serf.EventMemberFailed, "2", 2, serf.StatusFailed)
 	eventCh <- e
 	time.Sleep(1 * time.Second)
-	cm.WaitEventDone()
-	dn = ms.GetStore().GetData().DataNode(2)
+	mms.service.clusterManager.WaitEventDone()
+	dn = mms.service.store.data.DataNode(2)
 	assert.Equal(t, serf.StatusAlive, dn.Status)
 	assert.Equal(t, uint64(3), dn.LTime)
 }
 
 func TestEventCanBeHandledAfterLeaderChange(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cm := ms.GetStore().GetClusterManager()
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 3, serf.StatusAlive)
-	eventCh := cm.GetEventCh()
+	eventCh := mms.service.clusterManager.GetEventCh()
 	eventCh <- e
-	cm.Stop()
-	cm.Start()
+	mms.service.clusterManager.Stop()
+	mms.service.clusterManager.Start()
 	time.Sleep(time.Second)
-	cm.WaitEventDone()
-	dn := ms.GetStore().GetData().DataNode(2)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(2)
 	assert.Equal(t, serf.StatusAlive, dn.Status)
 	assert.Equal(t, uint64(3), dn.LTime)
 }
@@ -149,52 +140,51 @@ func generateMemberEvent(t serf.EventType, name string, ltime uint64, status ser
 
 func TestClusterManagerReSendEvent(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cm := ms.GetStore().GetClusterManager()
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 3, serf.StatusAlive)
-	eventCh := cm.GetEventCh()
+	eventCh := mms.service.clusterManager.GetEventCh()
 	eventCh <- e
 	time.Sleep(time.Second)
-	cm.WaitEventDone()
-	cm.Stop()
+	mms.service.clusterManager.WaitEventDone()
+	mms.service.clusterManager.Stop()
 	e = *generateMemberEvent(serf.EventMemberFailed, "2", 4, serf.StatusFailed)
 	eventCh <- e
 	time.Sleep(time.Second)
-	cm.WaitEventDone()
-	cm.Start()
+	mms.service.clusterManager.WaitEventDone()
+	mms.service.clusterManager.Start()
 	time.Sleep(time.Second)
-	cm.WaitEventDone()
-	dn := ms.GetStore().GetData().DataNode(2)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(2)
 	assert.Equal(t, serf.StatusFailed, dn.Status)
 	assert.Equal(t, uint64(4), dn.LTime)
 }
 
 func TestClusterManagerResendLastEventWhenLeaderChange(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	followerCm := meta.NewClusterManager(ms.GetStore())
+	followerCm := NewClusterManager(mms.service.store)
 	followerCh := followerCm.GetEventCh()
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 3, serf.StatusAlive)
 	followerCh <- e
@@ -203,4 +193,148 @@ func TestClusterManagerResendLastEventWhenLeaderChange(t *testing.T) {
 	time.Sleep(time.Second)
 	assert.Equal(t, 0, len(followerCh), "follower eventCh will be clear by checkEvents")
 	followerCm.Close()
+}
+
+func TestClusterManager_PassiveTakeOver(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "db0"
+	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
+	globalService.clusterManager.eventCh <- e
+	e = *generateMemberEvent(serf.EventMemberJoin, "3", 2, serf.StatusAlive)
+	globalService.clusterManager.eventCh <- e
+	time.Sleep(time.Second)
+	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+		t.Fatal(err)
+	}
+	config.SetHaEnable(true)
+	globalService.store.data.TakeOverEnabled = true
+	globalService.store.NetStore = NewMockNetStorage()
+	e = *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)
+	globalService.clusterManager.eventCh <- e
+	time.Sleep(time.Second)
+	assert.Equal(t, serf.StatusFailed, globalService.store.data.DataNode(2).Status)
+	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(3).Status)
+	globalService.msm.eventsWg.Wait()
+	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
+	assert.Equal(t, uint64(3), globalService.store.data.PtView[db][0].Owner.NodeID)
+	assert.Equal(t, 0, len(globalService.store.data.MigrateEvents))
+}
+
+func TestClusterManager_ActiveTakeover(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+	db := "db0"
+	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
+	globalService.clusterManager.eventCh <- e
+	time.Sleep(time.Second)
+	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+		t.Fatal(err)
+	}
+	config.SetHaEnable(true)
+	globalService.store.data.TakeOverEnabled = true
+	globalService.store.NetStore = NewMockNetStorage()
+	e = *generateMemberEvent(serf.EventMemberJoin, "2", 2, serf.StatusAlive)
+
+	globalService.clusterManager.eventCh <- e
+	timer := time.NewTimer(30 * time.Second)
+	// wait db pt got to process
+waitEventProcess:
+	for {
+		if 1 == len(globalService.store.data.MigrateEvents) {
+			break
+		}
+		select {
+		case <-timer.C:
+			timer.Stop()
+			break waitEventProcess
+		default:
+
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(time.Second)
+	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(2).Status)
+	globalService.msm.eventsWg.Wait()
+	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
+	assert.Equal(t, uint64(2), globalService.store.data.PtView[db][0].Owner.NodeID)
+	assert.Equal(t, 0, len(globalService.store.data.MigrateEvents))
+}
+
+func TestClusterManager_LeaderChanged(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+	db := "db0"
+	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
+	globalService.clusterManager.eventCh <- e
+	time.Sleep(time.Second)
+	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
+	config.SetHaEnable(true)
+	globalService.store.data.TakeOverEnabled = true
+	globalService.store.NetStore = NewMockNetStorage()
+	e = *generateMemberEvent(serf.EventMemberJoin, "2", 2, serf.StatusAlive)
+	globalService.clusterManager.eventCh <- e
+	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(2).Status)
+	//pt := db + "$0"
+	timer := time.NewTimer(30 * time.Second)
+	// wait db pt got to process
+waitEventProcess:
+	for {
+		if 1 == len(globalService.store.data.MigrateEvents) {
+			break
+		}
+		select {
+		case <-timer.C:
+			timer.Stop()
+			break waitEventProcess
+		default:
+
+		}
+		time.Sleep(time.Millisecond)
+	}
+	assert.Equal(t, meta.Offline, globalService.store.data.PtView[db][0].Status)
+	globalService.store.notifyCh <- false
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, MSMState(Stopping), globalService.msm.state)
+	globalService.msm.eventsWg.Wait()
+	globalService.msm.wg.Wait()
+	globalService.store.notifyCh <- true
+	globalService.msm.waitRecovery()
+	globalService.msm.eventsWg.Wait()
+	assert.Equal(t, MSMState(Running), globalService.msm.state)
+	assert.Equal(t, 0, len(globalService.store.data.MigrateEvents))
+	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
+	assert.Equal(t, uint64(2), globalService.store.data.PtView[db][0].Owner.NodeID)
 }

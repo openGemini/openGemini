@@ -3,8 +3,8 @@
     "Measurement":"merge",
     "Items":[
         "CurrentOutOfOrderFile",
-        "RecordPoolGetTotal",
-        "RecordPoolHitTotal",
+        "SkipTotal",
+        "MergeSelfTotal",
         "Errors",
         "Active"
     ],
@@ -19,7 +19,9 @@
     	"OrderFileCount",
     	"OrderFileSize",
     	"MergedFileCount",
-    	"MergedFileSize"
+    	"MergedFileSize",
+    	"OrderSeriesCount",
+    	"IntersectSeriesCount"
     ],
     "PushTags":[
         "Measurement",

@@ -17,7 +17,11 @@ limitations under the License.
 package app
 
 import (
+	"time"
+
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"go.uber.org/zap"
 )
 
 type Server interface {
@@ -36,6 +40,22 @@ func CreateSerfInstance(conf *serf.Config, clock uint64, members []string, preNo
 		return nil, err
 	}
 
-	_, err = serfInstance.Join(members, false)
+	timer := time.NewTimer(10 * time.Minute)
+	defer timer.Stop()
+	for {
+		_, err = serfInstance.Join(members, false)
+		if err == nil {
+			break
+		}
+		select {
+		case <-timer.C:
+			return serfInstance, err
+		default:
+			logger.GetLogger().Info("fail to join meta servers", zap.Error(err))
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	return serfInstance, err
 }

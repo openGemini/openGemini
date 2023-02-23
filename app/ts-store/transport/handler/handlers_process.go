@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
 )
@@ -119,19 +120,16 @@ func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
 func processDDL(cond *string, processor func(expr influxql.Expr) error) *string {
 	var err error
 	var expr influxql.Expr
+
 	if cond != nil {
 		expr, err = parseTagKeyCondition(*cond)
 		if err != nil {
-			return proto.String(err.Error())
+			return netstorage.MarshalError(err)
 		}
 	}
 
 	err = processor(expr)
-	if err != nil {
-		return proto.String(err.Error())
-	}
-
-	return nil
+	return netstorage.MarshalError(err)
 }
 
 func createDir(dataPath, db string, pt uint32, rp string) error {

@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -42,9 +43,7 @@ func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, opt query.Proces
 		opt:         opt,
 		query:       rq,
 		abortSignal: make(chan struct{}),
-		rpcLogger: logger.NewLogger(errno.ModuleQueryEngine).With(
-			zap.String("query", "rpc executor"),
-			zap.Uint64("trace_id", opt.Traceid)),
+		rpcLogger:   logger.NewLogger(errno.ModuleQueryEngine),
 	}
 	trans.InitOnce()
 	return trans
@@ -131,6 +130,8 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 	}()
 
 	client := NewRPCClient(ctx, t.query)
+	defer client.FinishAnalyze()
+
 	go func() {
 		<-t.abortSignal
 		if t.aborted {
@@ -141,6 +142,13 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 	client.StartAnalyze(t.BaseSpan())
 	client.AddHandler(ChunkResponseMessage, t.chunkResponse)
 
+	// 1. case HA
+	// Do not retry request
+	if config.GetHaEnable() {
+		return client.Run()
+	}
+
+	// 2. case not HA
 	var i = 0
 	for ; i < maxRetry; i++ {
 		err = client.Run()
@@ -148,13 +156,14 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 			break
 		}
 
-		t.rpcLogger.Error("RPC request failed.", zap.Error(err))
+		t.rpcLogger.Error("RPC request failed.", zap.Error(err),
+			zap.String("query", "rpc executor"),
+			zap.Uint64("trace_id", t.opt.Traceid))
 		time.Sleep(retryInterval * (1 << i))
 	}
 	if t.span != nil {
 		t.span.AppendNameValue("retry", i)
 	}
-	client.FinishAnalyze()
 
 	if errno.Equal(err, errno.RemoteError) {
 		return err
@@ -236,13 +245,11 @@ func (t *RPCSenderTransform) Close() {
 func (t *RPCSenderTransform) Work(ctx context.Context) error {
 	span := t.StartSpan("send_chunk", false)
 	t.w.StartAnalyze(t.BaseSpan())
-	t.w.Session().EnableDataACK()
 
 	statistics.ExecutorStat.SinkWidth.Push(int64(t.Input.RowDataType.NumColumn()))
 
 	count := 0
 	defer func() {
-		t.w.Session().DisableDataACK()
 		if span != nil {
 			t.w.FinishAnalyze()
 			span.AppendNameValue("count", count)

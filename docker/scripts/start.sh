@@ -28,7 +28,7 @@ function checkApp() {
 
 	n=`ps axu|grep "ts-$app"|grep -v grep|wc -l`
 	if [[ $n -eq 0 ]]; then
-		echo "Process ts-$app has exited"
+	  echo "Process ts-$app has exited"
 		exit 1
 	fi
 }

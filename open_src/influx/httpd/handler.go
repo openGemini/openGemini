@@ -33,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
@@ -43,7 +44,6 @@ import (
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/yacc"
 	"github.com/pingcap/failpoint"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/model"
@@ -142,7 +142,7 @@ type Handler struct {
 	}
 
 	PointsWriter interface {
-		WritePointRows(database, retentionPolicy string, points []influx.Row) error
+		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
 	}
 
 	Config           *config.Config
@@ -151,10 +151,11 @@ type Handler struct {
 	accessLog        *os.File
 	accessLogFilters config.StatusFilters
 
-	requestTracker *httpd.RequestTracker
-	writeThrottler *Throttler
-	queryThrottler *Throttler
-	slowQueries    chan *hybridqp.SelectDuration
+	requestTracker   *httpd.RequestTracker
+	writeThrottler   *Throttler
+	queryThrottler   *Throttler
+	slowQueries      chan *hybridqp.SelectDuration
+	StatisticsPusher *statisticsPusher.StatisticsPusher
 }
 
 // NewHandler returns a new instance of handler with routes.
@@ -358,6 +359,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleProfiles(w, r)
 	} else if strings.HasPrefix(r.URL.Path, "/debug/requests") {
 		h.serveDebugRequests(w, r)
+	} else if strings.HasPrefix(r.URL.Path, "/debug/vars") {
+		h.serveExpvar(w, r)
 	} else {
 		h.mux.ServeHTTP(w, r)
 	}
@@ -510,7 +513,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		p.SetParams(params)
 	}
 
-	YyParser := yacc.NewYyParser(p.GetScanner())
+	YyParser := influxql.NewYyParser(p.GetScanner())
 	YyParser.ParseTokens()
 
 	/*	// Parse query from query string.
@@ -918,19 +921,21 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		uw := influx.GetUnmarshalWork()
 		uw.Callback = func(db string, rows []influx.Row, err error) {
 			if err != nil {
-				ctx.CallbackErr = err
+				ctx.ErrLock.Lock()
+				ctx.UnmarshalErr = err
+				ctx.ErrLock.Unlock()
 				ctx.Wg.Done()
 				return
 			}
 			if atomic.LoadInt32(&syscontrol.LogRowsRuleSwitch) == 1 {
 				h.logRowsIfNecessary(rows, uw.ReqBuf)
 			}
-			if err = h.PointsWriter.WritePointRows(db, r.URL.Query().Get("rp"), rows); err != nil {
-				ctx.CallbackErrLock.Lock()
+			if err = h.PointsWriter.RetryWritePointRows(db, r.URL.Query().Get("rp"), rows); err != nil {
+				ctx.ErrLock.Lock()
 				if ctx.CallbackErr == nil {
 					ctx.CallbackErr = err
 				}
-				ctx.CallbackErrLock.Unlock()
+				ctx.ErrLock.Unlock()
 			} else {
 				atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, int64(len(rows)))
 			}
@@ -950,6 +955,13 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 	ctx.Wg.Wait()
 	if err := ctx.Error(); err != nil {
 		h.Logger.Error("write error:read body ", zap.Error(err), zap.String("db", database))
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		return
+	}
+	if err := ctx.UnmarshalErr; err != nil {
+		atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsInsert))
+		h.Logger.Error("write client error, unmarshal points failed", zap.Error(err), zap.String("db", database))
 		h.httpError(w, err.Error(), http.StatusBadRequest)
 		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 		return
@@ -1200,7 +1212,7 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 	}
 
 	// Write points.
-	if err := h.PointsWriter.WritePointRows(database, r.URL.Query().Get("rp"), rows); influxdb.IsClientError(err) {
+	if err := h.PointsWriter.RetryWritePointRows(database, r.URL.Query().Get("rp"), rows); influxdb.IsClientError(err) {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	} else if influxdb.IsAuthorizationError(err) {
@@ -1242,7 +1254,7 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 	db := r.FormValue("db")
 
 	queries, err := ReadRequestToInfluxQuery(&req)
-	YyParser := &yacc.YyParser{
+	YyParser := &influxql.YyParser{
 		Query: influxql.Query{},
 	}
 	YyParser.Scanner = influxql.NewScanner(strings.NewReader(queries))
@@ -1361,65 +1373,68 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 
 	var unsupportedCursor string
 
+	var tags models.Tags
+
+	sameTag := false
+
 	for r := range results {
 		for i := range r.Series {
-			r := r.Series[i]
-			tags := TagsConverterRemoveInfluxSystemTag(r.Tags)
+			s := r.Series[i]
 			var series *prompb.TimeSeries
-			// We have some data for this series.
-			series = &prompb.TimeSeries{
-				Labels: prometheus.ModelTagsToLabelPairs(tags),
-			}
-			if len(r.Columns) != 2 {
-				h.httpError(w, "wrong column length", http.StatusBadRequest)
-				return
-			} else if r.Columns[0] != "time" && r.Columns[1] != "time" {
-				h.httpError(w, "no time column in row", http.StatusBadRequest)
-				return
-			}
-			var timeStamps []int64
-			var values []float64
-			for j := range r.Values {
-				for i, ts := range r.Columns {
-					if ts == "time" {
-						if t, ok := r.Values[j][i].(time.Time); !ok {
-							h.httpError(w, "wrong time datatype, should be time.Time", http.StatusBadRequest)
-							return
-						} else {
-							timeStamps = append(timeStamps, t.UnixNano())
-						}
-					} else {
-						if value, ok := r.Values[j][i].(float64); !ok {
-							h.httpError(w, "wrong value datatype, should be float64", http.StatusBadRequest)
-							return
-						} else {
-							values = append(values, value)
-						}
-					}
+			if sameTag {
+				series = resp.Results[0].Timeseries[len(resp.Results[0].Timeseries)-1]
+			} else {
+				tags = TagsConverterRemoveInfluxSystemTag(s.Tags)
+				// We have some data for this series.
+				series = &prompb.TimeSeries{
+					Labels:  prometheus.ModelTagsToLabelPairs(tags),
+					Samples: make([]prompb.Sample, 0, len(r.Series)),
 				}
 			}
-			for i := range timeStamps {
-				series.Samples = append(series.Samples, prompb.Sample{
-					Timestamp: timeStamps[i] / int64(time.Millisecond),
-					Value:     values[i],
-				})
+			start := len(series.Samples)
+			series.Samples = append(series.Samples, make([]prompb.Sample, len(s.Values))...)
+
+			for j := range s.Values {
+				sample := &series.Samples[start+j]
+				if t, ok := s.Values[j][0].(time.Time); !ok {
+					h.httpError(w, "wrong time datatype, should be time.Time", http.StatusBadRequest)
+					return
+				} else {
+					sample.Timestamp = t.UnixNano() / int64(time.Millisecond)
+				}
+				if value, ok := s.Values[j][len(s.Values[j])-1].(float64); !ok {
+					h.httpError(w, "wrong value datatype, should be float64", http.StatusBadRequest)
+					return
+				} else {
+					sample.Value = value
+				}
+
 			}
 			// There was data for the series.
-			resp.Results[0].Timeseries = append(resp.Results[0].Timeseries, series)
+			if !sameTag {
+				resp.Results[0].Timeseries = append(resp.Results[0].Timeseries, series)
+			}
+
 			if len(unsupportedCursor) > 0 {
 				h.Logger.Info("Prometheus can't read data",
 					zap.String("cursor_type", unsupportedCursor),
 					zap.Stringer("series", tags),
 				)
 			}
+			sameTag = s.Partial
 		}
 	}
-
+	h.Logger.Info("serve prometheus read", zap.String("SQL:", q.String()), zap.Duration("prometheus query duration:", time.Since(startTime)))
 	respond(resp)
 }
 
 func (h *Handler) serveFluxQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	h.httpError(w, "not implementation", http.StatusBadRequest)
+}
+
+// serveExpvar serves internal metrics in /debug/vars format over HTTP.
+func (h *Handler) serveExpvar(w http.ResponseWriter, r *http.Request) {
+	app.SetStatsResponse(h.StatisticsPusher, w, r)
 }
 
 // serveDebugRequests will track requests for a period of time.
@@ -1530,7 +1545,7 @@ func parseToken(token string) (user, pass string, ok bool) {
 // As basic auth: http://username:password@127.0.0.1
 // As Bearer token in Authorization header: Bearer <JWT_TOKEN_BLOB>
 // As Token in Authorization header: Token <username:password>
-func parseCredentials(r *http.Request) (*credentials, error) {
+func ParseCredentials(r *http.Request) (*credentials, error) {
 	q := r.URL.Query()
 
 	// Check for username and password in URL params.
@@ -1593,7 +1608,7 @@ func authenticate(inner func(http.ResponseWriter, *http.Request, meta2.User), h 
 
 		// TODO corylanou: never allow this in the future without users
 		if requireAuthentication && h.MetaClient.AdminUserExists() {
-			creds, err := parseCredentials(r)
+			creds, err := ParseCredentials(r)
 			if err != nil {
 				atomic.AddInt64(&statistics.HandlerStat.AuthenticationFailures, 1)
 				h.httpError(w, err.Error(), http.StatusUnauthorized)
@@ -2030,7 +2045,6 @@ func ReadRequestToInfluxQuery(req *prompb.ReadRequest) (string, error) {
 }
 
 func TagsConverterRemoveInfluxSystemTag(tags map[string]string) models.Tags {
-
 	var t models.Tags
 	for k, v := range tags {
 		if k == measurementTagKey || v == fieldTagKey {
@@ -2042,6 +2056,7 @@ func TagsConverterRemoveInfluxSystemTag(tags map[string]string) models.Tags {
 		}
 		t = append(t, tt)
 	}
+	sort.Sort(t)
 	return t
 }
 

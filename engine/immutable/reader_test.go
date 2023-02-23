@@ -110,6 +110,218 @@ func Test_AppendString(t *testing.T) {
 	}
 }
 
+type MocTsspFile struct {
+	path string
+}
+
+func (m MocTsspFile) Path() string {
+	return m.path
+}
+
+func (m MocTsspFile) Name() string {
+	return ""
+}
+
+func (m MocTsspFile) FileName() TSSPFileName {
+	return TSSPFileName{}
+}
+
+func (m MocTsspFile) LevelAndSequence() (uint16, uint64) {
+	return 0, 0
+}
+
+func (m MocTsspFile) FileNameMerge() uint16 {
+	return 0
+}
+
+func (m MocTsspFile) FileNameExtend() uint16 {
+	return 0
+}
+
+func (m MocTsspFile) IsOrder() bool {
+	return false
+}
+
+func (m MocTsspFile) Ref() {
+	return
+}
+
+func (m MocTsspFile) Unref() {
+	return
+}
+
+func (m MocTsspFile) RefFileReader() {
+	return
+}
+
+func (m MocTsspFile) UnrefFileReader() {
+	return
+}
+
+func (m MocTsspFile) LoadComponents() error {
+	return nil
+}
+
+func (m MocTsspFile) FreeFileHandle() error {
+	return nil
+}
+
+func (m MocTsspFile) Stop() {
+	return
+}
+
+func (m MocTsspFile) Inuse() bool {
+	return false
+}
+
+func (m MocTsspFile) MetaIndexAt(idx int) (*MetaIndex, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) MetaIndex(id uint64, tr record.TimeRange) (int, *MetaIndex, error) {
+	return 0, nil, nil
+}
+
+func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) Read(id uint64, tr record.TimeRange, dst *record.Record) (*record.Record, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) ChunkAt(index int) (*ChunkMeta, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) ReadData(offset int64, size uint32, dst *[]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) ReadChunkMetaData(metaIdx int, me *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) CreateTime() int64 {
+	return 0
+}
+
+func (m MocTsspFile) FileStat() *Trailer {
+	return nil
+}
+
+func (m MocTsspFile) FileSize() int64 {
+	return 0
+}
+
+func (m MocTsspFile) InMemSize() int64 {
+	return 0
+}
+
+func (m MocTsspFile) Contains(id uint64) (bool, error) {
+	return false, nil
+}
+
+func (m MocTsspFile) ContainsByTime(tr record.TimeRange) (bool, error) {
+	return false, nil
+}
+
+func (m MocTsspFile) ContainsValue(id uint64, tr record.TimeRange) (bool, error) {
+	return false, nil
+}
+
+func (m MocTsspFile) MinMaxTime() (int64, int64, error) {
+	return 0, 0, nil
+}
+
+func (m MocTsspFile) Delete(ids []int64) error {
+	return nil
+}
+
+func (m MocTsspFile) DeleteRange(ids []int64, min, max int64) error {
+	return nil
+}
+
+func (m MocTsspFile) HasTombstones() bool {
+	return false
+}
+
+func (m MocTsspFile) TombstoneFiles() []TombstoneFile {
+	return nil
+}
+
+func (m MocTsspFile) Open() error {
+	return nil
+}
+
+func (m MocTsspFile) Close() error {
+	return nil
+}
+
+func (m MocTsspFile) LoadIntoMemory() error {
+	return nil
+}
+
+func (m MocTsspFile) LoadIndex() error {
+	return nil
+}
+
+func (m MocTsspFile) LoadIdTimes(p *IdTimePairs) error {
+	return nil
+}
+
+func (m MocTsspFile) Rename(newName string) error {
+	return nil
+}
+
+func (m MocTsspFile) Remove() error {
+	return nil
+}
+
+func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
+	return 0
+}
+
+func (m MocTsspFile) Version() uint64 {
+	return 0
+}
+
+func (m MocTsspFile) AverageChunkRows() int {
+	return 0
+}
+
+func (m MocTsspFile) MaxChunkRows() int {
+	return 0
+}
+
+func (m MocTsspFile) MetaIndexItemNum() int64 {
+	return 0
+}
+
+func (m MocTsspFile) AddToEvictList(level uint16) {
+	return
+}
+
+func (m MocTsspFile) RemoveFromEvictList(level uint16) {
+	return
+}
+
+func TestGetTsspFiles(t *testing.T) {
+	m := &MmsTables{
+		Order: map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
+			path: "/tmp/openGemini",
+		}}}},
+	}
+	f, _ := m.GetTSSPFiles("table1", true)
+	if f.files[0].Path() != "/tmp/openGemini" {
+		t.Fatal()
+	}
+}
+
 func TestDecodeColumnData(t *testing.T) {
 	timeCol := &record.ColVal{}
 	timeCol.AppendIntegers(1, 2, 3)

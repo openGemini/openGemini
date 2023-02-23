@@ -45,7 +45,7 @@ func newReactor(cfg config.Spdy, session *MultiplexedSession, factories []EventH
 		dispatcher:    make([]EventHandler, Unknown),
 		closeSignal:   make(chan struct{}),
 		err:           nil,
-		reactorLogger: logger.NewLogger(errno.ModuleNetwork).With(zap.String("SPDY", "Reactor")),
+		reactorLogger: logger.NewLogger(errno.ModuleNetwork),
 	}
 	for _, factory := range factories {
 		reactor.dispatcher[factory.EventHandlerType()] = factory.CreateEventHandler(session)
@@ -54,7 +54,7 @@ func newReactor(cfg config.Spdy, session *MultiplexedSession, factories []EventH
 }
 
 func (r *Reactor) closeWithErr(err error) {
-	r.reactorLogger.Error("closeWithErr", zap.Error(err))
+	r.reactorLogger.Error("closeWithErr", zap.Error(err), zap.String("SPDY", "Reactor"))
 	r.err = err
 	r.Close()
 }
@@ -87,7 +87,7 @@ func (r *Reactor) HandleEvents() {
 			if errno.Equal(err, errno.SessionSelectTimeout) {
 				continue
 			}
-			r.reactorLogger.Error("failed to select from connection", zap.Error(err))
+			r.reactorLogger.Error("failed to select from connection", zap.Error(err), zap.String("SPDY", "Reactor"))
 			r.closeWithErr(err)
 			return
 		}
@@ -99,19 +99,22 @@ func (r *Reactor) HandleEvents() {
 		header := ProtocolHeader(data)
 
 		if header.Version() != ProtocolVersion {
-			r.reactorLogger.Error(ErrorInvalidProtocolVersion.Error(), zap.Error(ErrorInvalidProtocolVersion))
+			r.reactorLogger.Error(ErrorInvalidProtocolVersion.Error(), zap.Error(ErrorInvalidProtocolVersion),
+				zap.String("SPDY", "Reactor"))
 			r.closeWithErr(ErrorInvalidProtocolVersion)
 			return
 		}
 
 		if header.Type() >= Unknown || header.Type() < Prototype {
-			r.reactorLogger.Error(ErrorInvalidProtocolType.Error(), zap.Error(ErrorInvalidProtocolType))
+			r.reactorLogger.Error(ErrorInvalidProtocolType.Error(), zap.Error(ErrorInvalidProtocolType),
+				zap.String("SPDY", "Reactor"))
 			r.closeWithErr(ErrorInvalidProtocolType)
 			return
 		}
 
 		if header.Flags()&ReqFlag != ReqFlag {
-			r.reactorLogger.Error(ErrorUnexpectedRequest.Error(), zap.Error(ErrorUnexpectedRequest))
+			r.reactorLogger.Error(ErrorUnexpectedRequest.Error(), zap.Error(ErrorUnexpectedRequest),
+				zap.String("SPDY", "Reactor"))
 			r.closeWithErr(ErrorUnexpectedRequest)
 			return
 		}
@@ -131,7 +134,7 @@ func (r *Reactor) HandleEvents() {
 			responser := requester.WarpResponser()
 			err := handler.Handle(requester, responser)
 			if err != nil {
-				r.reactorLogger.Error("failed to handler response", zap.Error(err))
+				r.reactorLogger.Error("failed to handler response", zap.Error(err), zap.String("SPDY", "Reactor"))
 			}
 		}
 	}

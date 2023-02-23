@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package engine
 
 import (
@@ -71,6 +72,8 @@ func (b *{{.name}}ColBuf) assign(src *{{.name}}ColBuf) {
 
 {{with $types := .}}{{range $k := $types}}
 {{range $v := $types}}
+{{if eq $v.Name "Float"}}
+{{if eq $k.Name "Float"}}
 type {{$k.name}}Col{{$v.Name}}Reduce func(col *record.ColVal, values []{{$k.Type}}, bmStart, bmEnd int) (index int, value {{$v.Type}}, isNil bool)
 
 type {{$k.name}}Col{{$v.Name}}Merge func(prevColumn, currColumn *{{$v.name}}ColBuf)
@@ -213,6 +216,297 @@ func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendOutRecord(inRecord, outRecord *
 			index)
 	}
 }
+{{end}}
+{{else if eq $v.Name "Integer"}}
+type {{$k.name}}Col{{$v.Name}}Reduce func(col *record.ColVal, values []{{$k.Type}}, bmStart, bmEnd int) (index int, value {{$v.Type}}, isNil bool)
+
+type {{$k.name}}Col{{$v.Name}}Merge func(prevColumn, currColumn *{{$v.name}}ColBuf)
+
+type {{$k.name}}Col{{$v.Name}}Reducer struct {
+	fn           {{$k.name}}Col{{$v.Name}}Reduce
+	fv           {{$k.name}}Col{{$v.Name}}Merge
+	prevBuf      *{{$v.name}}ColBuf
+	currBuf      *{{$v.name}}ColBuf
+	auxRecord    *record.Record
+	auxProcessor []*auxProcessor
+	{{if eq $k.Name "String"}}
+	strArr       []string
+	{{end}}
+}
+
+func new{{$k.Name}}Col{{$v.Name}}Reducer(fn {{$k.name}}Col{{$v.Name}}Reduce, fv {{$k.name}}Col{{$v.Name}}Merge, auxProcessor []*auxProcessor) *{{$k.name}}Col{{$v.Name}}Reducer {
+	r := &{{$k.name}}Col{{$v.Name}}Reducer{
+		fn:           fn,
+		fv:           fv,
+		prevBuf:      new{{$v.Name}}ColBuf(),
+		currBuf:      new{{$v.Name}}ColBuf(),
+		auxProcessor: auxProcessor,
+	}
+	return r
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	if len(r.auxProcessor) > 0 && r.auxRecord == nil {
+		r.auxRecord = record.NewRecordBuilder(p.OutputPoint.Record.Schema)
+	}
+	var end int
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+	{{- if ne $k.Name "String"}}
+	values := inRecord.ColVals[inOrdinal].{{$k.Name}}Values()
+	{{else}}
+	r.strArr = inRecord.ColVals[inOrdinal].StringValues(r.strArr[:0])
+	{{end}}
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+        {{if ne $k.Name "String"}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], values, int(start), end)
+        {{else}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], r.strArr, int(start), end)
+        {{end}}
+		if !isNil {
+			// A.the aggregation result is not empty.
+			if i == firstIndex && !r.prevBuf.isNil {
+				// 1.the aggregation result and prevBuf belong to the same time window.
+				r.currBuf.set(index+1, inRecord.Time(index), value)
+				r.fv(r.prevBuf, r.currBuf)
+				// 1.1 the prevBuf and the first group with the next record belong to the same time window.
+				if firstIndex == lastIndex && param.sameWindow {
+					if len(r.auxProcessor) > 0 && r.prevBuf.index > 0 {
+						r.auxRecord.Reuse()
+						r.appendAuxRecord(inRecord, r.auxRecord, r.prevBuf.index-1)
+					}
+					r.prevBuf.index = 0
+				} else {
+					// 1.2 the prevBuf belong to a complete time window.
+					outRecord.ColVals[outOrdinal].Append{{$v.Name}}(r.prevBuf.value)
+					if !param.multiCall {
+						outRecord.AppendTime(r.prevBuf.time)
+					}
+					if len(r.auxProcessor) > 0 {
+						if r.prevBuf.index == 0 {
+					        r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+						} else {
+							r.appendAuxRecord(inRecord, outRecord, r.prevBuf.index-1)
+						}
+						r.auxRecord.Reuse()
+					}
+					r.prevBuf.reset()
+				}
+				r.currBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				// 2.the aggregation result and the first group with the next record belong to the same time window.
+				r.prevBuf.set(0, inRecord.Time(index), value)
+				if len(r.auxProcessor) > 0 {
+					r.appendAuxRecord(inRecord, r.auxRecord, index)
+				}
+				break
+			}
+			// 3.the aggregation result belong to a complete time window.
+			outRecord.ColVals[outOrdinal].Append{{$v.Name}}(value)
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		} else {
+			// B. the aggregation result is empty.
+			if (i == firstIndex && !r.prevBuf.isNil) && (firstIndex < lastIndex || !param.sameWindow) {
+				outRecord.ColVals[outOrdinal].Append{{$v.Name}}(r.prevBuf.value)
+				if !param.multiCall {
+					outRecord.AppendTime(r.prevBuf.time)
+				}
+				if len(r.auxProcessor) > 0 {
+					r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+					r.auxRecord.Reuse()
+				}
+				r.prevBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				break
+			}
+			outRecord.ColVals[outOrdinal].Append{{$v.Name}}Null()
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		}
+	}
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendAuxRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].inOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendOutRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+{{else if eq $v.Name "String"}}
+{{else if eq $v.Name "Boolean"}}
+{{if eq $k.Name "Boolean"}}
+type {{$k.name}}Col{{$v.Name}}Reduce func(col *record.ColVal, values []{{$k.Type}}, bmStart, bmEnd int) (index int, value {{$v.Type}}, isNil bool)
+
+type {{$k.name}}Col{{$v.Name}}Merge func(prevColumn, currColumn *{{$v.name}}ColBuf)
+
+type {{$k.name}}Col{{$v.Name}}Reducer struct {
+	fn           {{$k.name}}Col{{$v.Name}}Reduce
+	fv           {{$k.name}}Col{{$v.Name}}Merge
+	prevBuf      *{{$v.name}}ColBuf
+	currBuf      *{{$v.name}}ColBuf
+	auxRecord    *record.Record
+	auxProcessor []*auxProcessor
+	{{if eq $k.Name "String"}}
+	strArr       []string
+	{{end}}
+}
+
+func new{{$k.Name}}Col{{$v.Name}}Reducer(fn {{$k.name}}Col{{$v.Name}}Reduce, fv {{$k.name}}Col{{$v.Name}}Merge, auxProcessor []*auxProcessor) *{{$k.name}}Col{{$v.Name}}Reducer {
+	r := &{{$k.name}}Col{{$v.Name}}Reducer{
+		fn:           fn,
+		fv:           fv,
+		prevBuf:      new{{$v.Name}}ColBuf(),
+		currBuf:      new{{$v.Name}}ColBuf(),
+		auxProcessor: auxProcessor,
+	}
+	return r
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
+	if len(r.auxProcessor) > 0 && r.auxRecord == nil {
+		r.auxRecord = record.NewRecordBuilder(p.OutputPoint.Record.Schema)
+	}
+	var end int
+	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
+	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
+	firstIndex, lastIndex := 0, len(param.intervalIndex)-1
+	{{- if ne $k.Name "String"}}
+	values := inRecord.ColVals[inOrdinal].{{$k.Name}}Values()
+	{{else}}
+	r.strArr = inRecord.ColVals[inOrdinal].StringValues(r.strArr[:0])
+	{{end}}
+	for i, start := range param.intervalIndex {
+		if i < lastIndex {
+			end = int(param.intervalIndex[i+1])
+		} else {
+			end = inRecord.RowNums()
+		}
+        {{if ne $k.Name "String"}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], values, int(start), end)
+        {{else}}
+		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], r.strArr, int(start), end)
+        {{end}}
+		if !isNil {
+			// A.the aggregation result is not empty.
+			if i == firstIndex && !r.prevBuf.isNil {
+				// 1.the aggregation result and prevBuf belong to the same time window.
+				r.currBuf.set(index+1, inRecord.Time(index), value)
+				r.fv(r.prevBuf, r.currBuf)
+				// 1.1 the prevBuf and the first group with the next record belong to the same time window.
+				if firstIndex == lastIndex && param.sameWindow {
+					if len(r.auxProcessor) > 0 && r.prevBuf.index > 0 {
+						r.auxRecord.Reuse()
+						r.appendAuxRecord(inRecord, r.auxRecord, r.prevBuf.index-1)
+					}
+					r.prevBuf.index = 0
+				} else {
+					// 1.2 the prevBuf belong to a complete time window.
+					outRecord.ColVals[outOrdinal].Append{{$v.Name}}(r.prevBuf.value)
+					if !param.multiCall {
+						outRecord.AppendTime(r.prevBuf.time)
+					}
+					if len(r.auxProcessor) > 0 {
+						if r.prevBuf.index == 0 {
+					        r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+						} else {
+							r.appendAuxRecord(inRecord, outRecord, r.prevBuf.index-1)
+						}
+						r.auxRecord.Reuse()
+					}
+					r.prevBuf.reset()
+				}
+				r.currBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				// 2.the aggregation result and the first group with the next record belong to the same time window.
+				r.prevBuf.set(0, inRecord.Time(index), value)
+				if len(r.auxProcessor) > 0 {
+					r.appendAuxRecord(inRecord, r.auxRecord, index)
+				}
+				break
+			}
+			// 3.the aggregation result belong to a complete time window.
+			outRecord.ColVals[outOrdinal].Append{{$v.Name}}(value)
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		} else {
+			// B. the aggregation result is empty.
+			if (i == firstIndex && !r.prevBuf.isNil) && (firstIndex < lastIndex || !param.sameWindow) {
+				outRecord.ColVals[outOrdinal].Append{{$v.Name}}(r.prevBuf.value)
+				if !param.multiCall {
+					outRecord.AppendTime(r.prevBuf.time)
+				}
+				if len(r.auxProcessor) > 0 {
+					r.appendOutRecord(r.auxRecord, outRecord, r.prevBuf.index)
+					r.auxRecord.Reuse()
+				}
+				r.prevBuf.reset()
+				continue
+			} else if i == lastIndex && param.sameWindow {
+				break
+			}
+			outRecord.ColVals[outOrdinal].Append{{$v.Name}}Null()
+			if !param.multiCall {
+				outRecord.AppendTime(inRecord.Time(index))
+			}
+			if len(r.auxProcessor) > 0 {
+				r.appendAuxRecord(inRecord, outRecord, index)
+			}
+		}
+	}
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendAuxRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].inOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+
+func (r *{{$k.name}}Col{{$v.Name}}Reducer) appendOutRecord(inRecord, outRecord *record.Record, index int) {
+	for i := range r.auxProcessor {
+		r.auxProcessor[i].auxHelperFunc(
+			&inRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			&outRecord.ColVals[r.auxProcessor[i].outOrdinal],
+			index)
+	}
+}
+{{end}}
+{{end}}
 {{end}}
 {{end}}{{end}}
 

@@ -18,13 +18,13 @@ package castor
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow/go/arrow/array"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/services"
+	"go.uber.org/zap"
 )
 
 var service *Service
@@ -32,17 +32,16 @@ var service *Service
 type Service struct {
 	services.Base
 
-	Config config.Castor
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	Config  config.Castor
+	closeMu sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 
-	clientPool chan *castorCli
-	clientCnt  map[string]*int32
-
+	clientPool      []*pool
+	lastPoolIdx     int
+	dataChanMu      sync.Mutex
 	dataChan        chan *data
-	dataRetryChan   chan *data
 	dataFailureChan chan *data
 	resultChan      chan array.Record
 	responseChanMap sync.Map
@@ -66,18 +65,23 @@ func NewService(c config.Castor) *Service {
 		Config:          c,
 		ctx:             ctx,
 		cancel:          cancel,
-		clientPool:      make(chan *castorCli, c.ConnPoolSize*len(c.PyWorkerAddr)),
+		clientPool:      make([]*pool, len(c.PyWorkerAddr)),
 		dataChan:        make(chan *data, chanBufferSize),
-		dataRetryChan:   make(chan *data, chanBufferSize),
 		dataFailureChan: make(chan *data, chanBufferSize),
 		resultChan:      make(chan array.Record, chanBufferSize),
 		responseChanMap: sync.Map{},
 	}
-	s.clientCnt = make(map[string]*int32, len(c.PyWorkerAddr))
-	for _, addr := range c.PyWorkerAddr {
-		s.clientCnt[addr] = new(int32)
-	}
 	s.Init("castor", 0, s.handle)
+
+	for i, addr := range c.PyWorkerAddr {
+		s.clientPool[i] = newClientPool(
+			addr, c.ConnPoolSize, s.Logger, getCliTimeout/time.Duration(len(c.PyWorkerAddr)),
+			&dataChanSet{
+				dataChan:   s.dataChan,
+				resultChan: s.resultChan,
+			},
+		)
+	}
 	return s
 }
 
@@ -128,6 +132,7 @@ func (s *Service) recordFailure() {
 				return
 			}
 			s.Logger.Error(errno.NewError(errno.FailToProcessData, data.size()).Error())
+			s.dispatchErr(data)
 			data.release()
 		case <-s.ctx.Done():
 			return
@@ -136,20 +141,9 @@ func (s *Service) recordFailure() {
 }
 
 func (s *Service) fillUpConnPool() {
-	for addr, cnt := range s.clientCnt {
-		for i := int(atomic.LoadInt32(cnt)); i < s.Config.ConnPoolSize; i++ {
-			time.Sleep(time.Second)
-			cli, err := newClient(addr, s.Logger, &chanSet{
-				dataRetryChan:   s.dataRetryChan,
-				dataFailureChan: s.dataFailureChan,
-				resultChan:      s.resultChan,
-				clientPool:      s.clientPool,
-			}, cnt)
-			if err != nil {
-				s.Logger.Warn(errno.NewError(errno.FailToFillUpConnPool, err).Error())
-				continue
-			}
-			s.clientPool <- cli
+	for _, p := range s.clientPool {
+		if err := p.fillUp(); err != nil {
+			s.Logger.Error(errno.NewError(errno.FailToFillUpConnPool).Error(), zap.Error(err))
 		}
 	}
 }
@@ -162,61 +156,48 @@ func (s *Service) sendData() {
 			if !ok {
 				return
 			}
-			cli, err := s.getClient()
-			if err != nil {
-				if errno.Equal(err, errno.ClientQueueClosed) {
-					s.Logger.Error(errno.NewError(errno.FailToProcessData, data.size()).Error())
-					return
-				}
-				s.Logger.Warn(err.Error())
-				s.dataRetryChan <- data
-				continue
-			}
-			cli.writeChan <- data
-		case data, ok := <-s.dataRetryChan:
-			if !ok {
-				return
-			}
-			cli, err := s.getClient()
-			if err != nil {
-				if errno.Equal(err, errno.ClientQueueClosed) {
-					s.Logger.Error(errno.NewError(errno.FailToProcessData, data.size()).Error())
-					return
-				}
+			if data.retryCnt >= maxSendRetry {
+				data.err = errno.NewError(errno.ExceedRetryChance)
 				s.dataFailureChan <- data
 				continue
 			}
-			cli.writeChan <- data
+			cli, err := s.getClient()
+			if err != nil {
+				s.handleRetry(data)
+			} else if err := cli.send(data); err != nil {
+				s.handleRetry(data)
+			}
 		case <-s.ctx.Done():
 			return
 		}
 	}
 }
 
+func (s *Service) handleRetry(data *data) {
+	s.dataChanMu.Lock()
+	defer s.dataChanMu.Unlock()
+	if len(s.dataChan) == cap(s.dataChan) {
+		data.err = errno.NewError(errno.TaskQueueFull)
+		s.dataFailureChan <- data
+		return
+	}
+	data.retryCnt += 1
+	s.dataChan <- data
+}
+
 func (s *Service) getClient() (*castorCli, *errno.Error) {
-	timer := time.NewTimer(getCliTimeout)
-	defer timer.Stop()
-	var cli *castorCli
-	var ok bool
-GETCLI:
+	start := time.Now()
 	for {
-		select {
-		case <-timer.C:
-			break GETCLI
-		case cli, ok = <-s.clientPool:
-			if !ok {
-				return nil, errno.NewError(errno.ClientQueueClosed)
-			}
-			break GETCLI
+		s.lastPoolIdx = (s.lastPoolIdx + 1) % len(s.clientPool)
+		p := s.clientPool[s.lastPoolIdx]
+		cli := p.get()
+		if cli != nil {
+			return cli, nil
+		}
+		if time.Since(start) >= getCliTimeout {
+			return nil, errno.NewError(errno.NoAvailableClient)
 		}
 	}
-	if cli == nil {
-		return nil, errno.NewError(errno.NoAvailableClient)
-	}
-	if !cli.alive {
-		return nil, errno.NewError(errno.ConnectionBroken)
-	}
-	return cli, nil
 }
 
 func (s *Service) handleResult() {
@@ -237,19 +218,27 @@ func (s *Service) handleResult() {
 	}
 }
 
-func (s *Service) dispatchResult(rec array.Record) *errno.Error {
+func (s *Service) getRespChan(rec array.Record) (*respChan, *errno.Error) {
 	id, err := GetMetaValueFromRecord(rec, string(TaskID))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	nodeResultChan, exist := s.responseChanMap.Load(id)
 	if !exist {
-		return errno.NewError(errno.ResponseTimeout)
+		return nil, errno.NewError(errno.ResponseTimeout)
 	}
 	ch, ok := nodeResultChan.(*respChan)
 	if !ok {
-		return errno.NewError(errno.TypeAssertFail)
+		return nil, errno.NewError(errno.TypeAssertFail)
+	}
+	return ch, nil
+}
+
+func (s *Service) dispatchResult(rec array.Record) *errno.Error {
+	ch, err := s.getRespChan(rec)
+	if err != nil {
+		return err
 	}
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
@@ -260,8 +249,35 @@ func (s *Service) dispatchResult(rec array.Record) *errno.Error {
 	return nil
 }
 
+func (s *Service) dispatchErr(data *data) {
+	ch, err2 := s.getRespChan(data.record)
+	if err2 != nil {
+		s.Logger.Error(err2.Error())
+		return
+	}
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if !ch.alive {
+		s.Logger.Error(errno.NewError(errno.ResponseTimeout).Error())
+		return
+	}
+	if data.err != nil {
+		ch.ErrCh <- data.err
+		return
+	}
+	ch.ErrCh <- errno.NewError(errno.UnknownErr)
+}
+
 // HandleData will send data to computation node through internal client
 func (s *Service) HandleData(record array.Record) {
+	s.dataChanMu.Lock()
+	defer s.dataChanMu.Unlock()
+	data := newData(record)
+	if len(s.dataChan) == cap(s.dataChan) {
+		data.err = errno.NewError(errno.TaskQueueFull)
+		s.dataFailureChan <- data
+		return
+	}
 	s.dataChan <- newData(record)
 }
 
@@ -272,8 +288,8 @@ func (s *Service) ResultChan() chan<- array.Record {
 
 // Close release internal client and close channel, service will mark as not alive, any castor query will not be processed
 func (s *Service) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
 	if !s.alive {
 		return nil
 	}
@@ -282,22 +298,15 @@ func (s *Service) Close() error {
 	s.cancel()
 	s.wg.Wait()
 
-	// close all client
-	for len(s.clientPool) > 0 {
-		cli := <-s.clientPool
-		cli.close()
+	for _, p := range s.clientPool {
+		p.close()
 	}
-	close(s.clientPool)
 
 	// clear out remaining data
 	for len(s.dataChan) > 0 {
 		s.dataFailureChan <- <-s.dataChan
 	}
 	close(s.dataChan)
-	for len(s.dataRetryChan) > 0 {
-		s.dataFailureChan <- <-s.dataRetryChan
-	}
-	close(s.dataRetryChan)
 	for len(s.resultChan) > 0 {
 		s.dataFailureChan <- newData(<-s.resultChan)
 	}

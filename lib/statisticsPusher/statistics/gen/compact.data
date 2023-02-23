@@ -11,6 +11,7 @@
     "SetItems":[
         "Active"
     ],
-    "EnablePush":"Y",
+    "EnablePush":"N",
+    "PushDuration":"N",
     "PushItems":[]
 }

@@ -17,15 +17,20 @@ limitations under the License.
 package app
 
 import (
+	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -165,11 +170,10 @@ type BuildInfo struct {
 
 // Options represents the command line options that can be parsed.
 type Options struct {
-	SpdyConfigPath string
-	ConfigPath     string
-	PIDFile        string
-	Join           string
-	Hostname       string
+	ConfigPath string
+	PIDFile    string
+	Join       string
+	Hostname   string
 }
 
 func (opt *Options) GetConfigPath() string {
@@ -178,10 +182,6 @@ func (opt *Options) GetConfigPath() string {
 	}
 
 	return ""
-}
-
-func (opt *Options) GetSpdyConfigPath() string {
-	return opt.SpdyConfigPath
 }
 
 func ParseFlags(usage func(), args ...string) (Options, error) {
@@ -257,4 +257,50 @@ func HideQueryPassword(url string) string {
 		return buf.String()
 	}
 	return url
+}
+
+func SetStatsResponse(pusher *statisticsPusher.StatisticsPusher, w http.ResponseWriter, r *http.Request) {
+	if pusher == nil {
+		return
+	}
+
+	stats, err := pusher.CollectOpsStatistics()
+	if err != nil {
+		util.HttpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	fmt.Fprintln(w, "{")
+
+	first := true
+	uniqueKeys := make(map[string]int)
+	for _, s := range stats {
+		val, err := json.Marshal(s)
+		if err != nil {
+			continue
+		}
+
+		// Very hackily create a unique key.
+		buf := bytes.NewBufferString(s.Name)
+		key := buf.String()
+		v := uniqueKeys[key]
+		uniqueKeys[key] = v + 1
+		if v > 0 {
+			fmt.Fprintf(buf, ":%d", v)
+			key = buf.String()
+		}
+
+		if !first {
+			fmt.Fprintln(w, ",")
+		}
+		first = false
+		fmt.Fprintf(w, "%q: ", key)
+		_, err = w.Write(bytes.TrimSpace(val))
+		if err != nil {
+			util.HttpError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	fmt.Fprintln(w, "\n}")
 }

@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 const (
@@ -34,7 +35,10 @@ type ErrnoStat struct {
 	tags   map[string]string
 	fields map[string]interface{}
 	data   map[string]int64
+	stats  []opsStat.OpsStatistic
 	mu     sync.Mutex
+
+	statMu sync.RWMutex
 }
 
 func NewErrnoStat() *ErrnoStat {
@@ -71,13 +75,21 @@ func (s *ErrnoStat) Collect(buf []byte) ([]byte, error) {
 		return buf, nil
 	}
 
+	s.statMu.Lock()
 	for code, n := range data {
 		s.tags["errno"] = code
 		s.tags["module"] = code[1:3]
 		s.fields["value"] = n
 		buf = AddPointToBuffer(errnoStatisticsName, s.tags, s.fields, buf)
-	}
 
+		stat := opsStat.OpsStatistic{
+			Name:   errnoStatisticsName,
+			Tags:   s.tags,
+			Values: s.fields,
+		}
+		s.stats = append(s.stats, stat)
+	}
+	s.statMu.Unlock()
 	return buf, nil
 }
 
@@ -92,4 +104,21 @@ func (s *ErrnoStat) getData() map[string]int64 {
 	data := s.data
 	s.data = make(map[string]int64)
 	return data
+}
+
+func (s *ErrnoStat) CollectOps() []opsStat.OpsStatistic {
+	if !s.init {
+		return nil
+	}
+
+	s.statMu.Lock()
+	defer s.statMu.Unlock()
+	if len(s.stats) == 0 {
+		return nil
+	}
+
+	retStats := make([]opsStat.OpsStatistic, len(s.stats))
+	copy(retStats, s.stats)
+	s.stats = s.stats[:0]
+	return retStats
 }

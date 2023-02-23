@@ -202,6 +202,15 @@ func (c *ColumnImpl) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendBoolSlice(buf, c.booleanValues)
 	buf = codec.AppendInt64Slice(buf, c.times)
 
+	buf = codec.AppendUint32(buf, uint32(len(c.floatTuples)))
+	for _, item := range c.floatTuples {
+		buf = codec.AppendUint32(buf, uint32(item.Size()))
+		buf, err = item.Marshal(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	func() {
 		if c.nilsV2 == nil {
 			buf = codec.AppendUint32(buf, 0)
@@ -231,6 +240,22 @@ func (c *ColumnImpl) Unmarshal(buf []byte) error {
 	c.booleanValues = dec.BoolSlice()
 	c.times = dec.Int64Slice()
 
+	floatTuplesLen := int(dec.Uint32())
+	if floatTuplesLen > 0 {
+		c.floatTuples = make([]floatTuple, floatTuplesLen)
+		for i := 0; i < floatTuplesLen; i++ {
+			subBuf := dec.BytesNoCopy()
+			if len(subBuf) == 0 {
+				continue
+			}
+
+			c.floatTuples[i] = floatTuple{}
+			if err := c.floatTuples[i].Unmarshal(subBuf); err != nil {
+				return err
+			}
+		}
+	}
+
 	func() {
 		subBuf := dec.BytesNoCopy()
 		if len(subBuf) == 0 {
@@ -256,6 +281,12 @@ func (c *ColumnImpl) Size() int {
 	size += codec.SizeOfBoolSlice(c.booleanValues)
 	size += codec.SizeOfInt64Slice(c.times)
 
+	size += codec.MaxSliceSize
+	for _, item := range c.floatTuples {
+		size += codec.SizeOfUint32()
+		size += item.Size()
+	}
+
 	size += codec.SizeOfUint32()
 	if c.nilsV2 != nil {
 		size += c.nilsV2.Size()
@@ -266,4 +297,33 @@ func (c *ColumnImpl) Size() int {
 
 func (c *ColumnImpl) Instance() transport.Codec {
 	return &ColumnImpl{}
+}
+
+func (o *floatTuple) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendFloat64Slice(buf, o.values)
+
+	return buf, err
+}
+
+func (o *floatTuple) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.values = dec.Float64Slice()
+
+	return err
+}
+
+func (o *floatTuple) Size() int {
+	size := 0
+	size += codec.SizeOfFloat64Slice(o.values)
+
+	return size
+}
+
+func (o *floatTuple) Instance() transport.Codec {
+	return &floatTuple{}
 }

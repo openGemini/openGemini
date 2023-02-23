@@ -19,7 +19,6 @@ package gen_test
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -29,6 +28,7 @@ import (
 )
 
 func TestGen(t *testing.T) {
+	tmpDir := t.TempDir()
 	obj := &CodecObject{
 		mo: &MapObject{
 			mi: map[string]IObject{"obj": &SubString{s: "tttt"}},
@@ -39,13 +39,11 @@ func TestGen(t *testing.T) {
 	g := gen.NewCodecGen("gen_test")
 	g.Gen(obj)
 
-	_, f, _, _ := runtime.Caller(0)
-	path := filepath.Dir(f) + "/codec.gen_test.go"
+	path := filepath.Join(tmpDir, "codec.gen_test.go")
 	g.SaveTo(path)
 
 	_, err := os.Stat(path)
 	assert.NoError(t, err)
-	assert.NoError(t, os.Remove(path))
 }
 
 type IObject interface {

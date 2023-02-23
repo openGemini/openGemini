@@ -61,6 +61,7 @@ func (m *TopNList) Insert(node interface{}) {
 			nowNode = nowNode.Next()
 		}
 		m.len += 1
+		return
 	}
 	if m.compareFunc(node, m.l.Front().Value) {
 		return

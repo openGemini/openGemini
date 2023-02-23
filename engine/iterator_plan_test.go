@@ -1812,7 +1812,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 				ctx := context.Background()
 				// parse stmt and opt
 				stmt := MustParseSelectStatement(tt.q)
-				stmt, _ = stmt.RewriteFields(shardGroup, true)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -1836,7 +1836,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -3312,7 +3312,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 				ctx := context.Background()
 				// parse stmt and opt
 				stmt := MustParseSelectStatement(tt.q)
-				stmt, _ = stmt.RewriteFields(shardGroup, true)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -3336,7 +3336,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -3412,7 +3412,10 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 		time.Sleep(time.Second * 1)
 		sh.ForceFlush()
 	} else {
-		idx := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+		idx, ok := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+		if !ok {
+			t.Fatal("not a MergeSetIndex")
+		}
 		idx.DebugFlush()
 	}
 	var minFalseTOut int64
@@ -4778,7 +4781,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 				ctx := context.Background()
 				// parse stmt and opt
 				stmt := MustParseSelectStatement(tt.q)
-				stmt, _ = stmt.RewriteFields(shardGroup, true)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -4802,7 +4805,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -4965,7 +4968,10 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 	if err := sh.WriteRows(ptsOut, nil); err != nil {
 		t.Fatal(err)
 	}
-	idx := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx, ok := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+	if !ok {
+		t.Fatal("not a MergeSetIndex type")
+	}
 	idx.DebugFlush()
 
 	var minFalseTOut, maxTrueTime int64
@@ -6342,7 +6348,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 				ctx := context.Background()
 				// parse stmt and opt
 				stmt := MustParseSelectStatement(tt.q)
-				stmt, _ = stmt.RewriteFields(shardGroup, true)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -6366,7 +6372,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -7774,7 +7780,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 			ctx := context.Background()
 			// parse stmt and opt
 			stmt := MustParseSelectStatement(tt.q)
-			stmt, _ = stmt.RewriteFields(shardGroup, true)
+			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -7798,7 +7804,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 
 			agg, _ := executor.NewStreamAggregateTransform(
 				[]hybridqp.RowDataType{tt.outputRowDataType},
-				[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+				[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 			agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 			agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8155,7 +8161,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				ctx := context.Background()
 				// parse stmt and opt
 				stmt := MustParseSelectStatement(tt.q)
-				stmt, _ = stmt.RewriteFields(shardGroup, true)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -8179,7 +8185,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8354,7 +8360,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				ctx := context.Background()
 				// parse stmt and opt
 				stmt := MustParseSelectStatement(tt.q)
-				stmt, _ = stmt.RewriteFields(shardGroup, true)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
@@ -8378,7 +8384,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8460,9 +8466,9 @@ func (sg *mockShardGroup) MapType(m *influxql.Measurement, field string) influxq
 	return influxql.Unknown
 }
 
-func (sg *mockShardGroup) MapTypeBatch(measurement *influxql.Measurement, field map[string]influxql.DataType, schema *influxql.Schema) error {
+func (sg *mockShardGroup) MapTypeBatch(measurement *influxql.Measurement, field map[string]*influxql.FieldNameSpace, schema *influxql.Schema) error {
 	for k := range field {
-		field[k] = sg.Fields[k]
+		field[k].DataType = sg.Fields[k]
 	}
 	return nil
 }

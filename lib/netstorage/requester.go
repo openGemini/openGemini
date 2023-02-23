@@ -22,10 +22,8 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
-	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"go.uber.org/zap"
 )
 
 const (
@@ -82,7 +80,7 @@ func (r *Requester) ddl() (interface{}, error) {
 	data := NewDDLMessage(r.msgTyp, r.data)
 	cb := &DDLCallback{}
 
-	if err := r.retryRequest(spdy.DDLRequest, data, cb); err != nil {
+	if err := r.request(spdy.DDLRequest, data, cb); err != nil {
 		return nil, err
 	}
 
@@ -92,36 +90,11 @@ func (r *Requester) ddl() (interface{}, error) {
 func (r *Requester) sysCtrl(req *SysCtrlRequest) (interface{}, error) {
 	cb := &SysCtrlCallback{}
 
-	if err := r.retryRequest(spdy.SysCtrlRequest, req, cb); err != nil {
+	if err := r.request(spdy.SysCtrlRequest, req, cb); err != nil {
 		return nil, err
 	}
 
 	return cb.GetResponse(), nil
-}
-
-var writeTimePool = spdy.NewTimePool()
-
-func (r *Requester) retryRequest(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
-	var err error
-	tm := writeTimePool.GetTimer(r.timeout)
-	for {
-		err = r.request(queryTyp, data, cb)
-		if err == nil {
-			break
-		}
-
-		logger.GetLogger().With(zap.String("netstorage", "Requester")).
-			Error(err.Error(), zap.Uint8("queryTyp", queryTyp))
-		select {
-		case <-tm.C:
-			writeTimePool.PutTimer(tm)
-			return err
-		default:
-			time.Sleep(retryInterval)
-		}
-	}
-	writeTimePool.PutTimer(tm)
-	return err
 }
 
 func (r *Requester) request(queryTyp uint8, data transport.Codec, cb transport.Callback) error {

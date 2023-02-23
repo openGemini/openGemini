@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"unsafe"
 
+	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -224,6 +225,10 @@ func (cv *ColVal) ValidCount(start, end int) int {
 	if cv.Length()+cv.NilCount == 0 || cv.Len == cv.NilCount {
 		return validCount
 	}
+	if cv.NilCount == 0 {
+		return end - start
+	}
+
 	end += cv.BitMapOffset
 	start += cv.BitMapOffset
 	for i := start; i < end; i++ {
@@ -544,6 +549,29 @@ func (cv *ColVal) GetValIndexRange(bmStart, bmEnd int) (valStart, valEnd int) {
 		return bmStart, bmEnd
 	}
 	return valueIndexRange(cv.Bitmap, cv.BitMapOffset, bmStart, bmEnd)
+}
+
+func (cv *ColVal) SplitByIndex(dst []ColVal, index int, refType int) []ColVal {
+	if index <= 0 {
+		panic(fmt.Sprintf("index is %v, must greater than 0", index))
+	}
+	if index > cv.Len {
+		panic(fmt.Sprintf("index is %v, must less than rowNum %v", index, cv.Len))
+	}
+
+	dst = resize(dst, 2)
+	start := 0
+	offset, validCount := dst[0].sliceValAndOffset(cv, start, index, refType, 0)
+	dst[0].sliceBitMap(cv, start, index)
+	dst[0].Len = index - start
+	dst[0].NilCount = dst[0].Len - validCount
+
+	_, validCount = dst[1].sliceValAndOffset(cv, index, cv.Len, refType, offset)
+	dst[1].sliceBitMap(cv, index, cv.Len)
+	dst[1].Len = cv.Len - index
+	dst[1].NilCount = dst[1].Len - validCount
+
+	return dst
 }
 
 func (cv *ColVal) MaxIntegerValue(values []int64, start, end int) (int64, int) {
@@ -1475,4 +1503,225 @@ func (cv *ColVal) MinBooleanValues(values []bool, start, end int) (bool, []int) 
 		vIdx++
 	}
 	return min, row
+}
+
+func (cv *ColVal) AppendFloatNullReserve() {
+	index := len(cv.Val)
+	cv.reserveVal(Float64SizeBytes)
+	*(*float64)(unsafe.Pointer(&cv.Val[index])) = 0
+	cv.resetBitMap(cv.Len)
+	cv.Len++
+	cv.NilCount++
+}
+
+func (cv *ColVal) AppendIntegerNullReserve() {
+	index := len(cv.Val)
+	cv.reserveVal(Float64SizeBytes)
+	*(*int64)(unsafe.Pointer(&cv.Val[index])) = 0
+	cv.resetBitMap(cv.Len)
+	cv.Len++
+	cv.NilCount++
+}
+
+func (cv *ColVal) AppendBooleanNullReserve() {
+	index := len(cv.Val)
+	cv.reserveVal(BooleanSizeBytes)
+	*(*bool)(unsafe.Pointer(&cv.Val[index])) = false
+	cv.resetBitMap(cv.Len)
+	cv.Len++
+	cv.NilCount++
+}
+
+func (cv *ColVal) UpdateFloatValue(v float64, isNil bool, row int) {
+	if isNil {
+		cv.UpdateFloatIntoNull(row)
+		return
+	}
+	if cv.IsNil(row) {
+		cv.NilCount--
+	}
+	cv.FloatValues()[row] = v
+	cv.Bitmap[row>>3] |= BitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateIntegerValue(v int64, isNil bool, row int) {
+	if isNil {
+		cv.UpdateFloatIntoNull(row)
+		return
+	}
+	if cv.IsNil(row) {
+		cv.NilCount--
+	}
+	cv.IntegerValues()[row] = v
+	cv.Bitmap[row>>3] |= BitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateBooleanValue(v bool, isNil bool, row int) {
+	if isNil {
+		cv.UpdateBooleanIntoNull(row)
+		return
+	}
+	if cv.IsNil(row) {
+		cv.NilCount--
+	}
+	cv.BooleanValues()[row] = v
+	cv.Bitmap[row>>3] |= BitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateStringValue(v string, isNil bool, row int) {
+	if isNil {
+		cv.UpdateStringIntoNull(row)
+		return
+	}
+	if cv.IsNil(row) {
+		cv.NilCount--
+	}
+	values := make([]byte, len(cv.Val))
+	copy(values, cv.Val)
+	oValue, _ := cv.StringValueUnsafe(row)
+	cv.Val = cv.Val[:0]
+	dif := len(oValue) - len(v)
+	if dif < 0 {
+		cv.Val = append(cv.Val, make([]byte, 0, -dif)...)
+	}
+	cv.Val = append(cv.Val, values[:cv.Offset[row]]...)
+	cv.Val = append(cv.Val, v...)
+	if row < cv.Len-1 {
+		cv.Val = append(cv.Val, values[cv.Offset[row+1]:]...)
+	}
+	for i := row + 1; i < cv.Len; i++ {
+		cv.Offset[i] -= uint32(dif)
+	}
+	cv.Bitmap[row>>3] |= BitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateFloatIntoNull(row int) {
+	if !cv.IsNil(row) {
+		cv.FloatValues()[row] = 0
+		cv.NilCount++
+	}
+	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateIntegerIntoNull(row int) {
+	if !cv.IsNil(row) {
+		cv.IntegerValues()[row] = 0
+		cv.NilCount++
+	}
+	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateBooleanIntoNull(row int) {
+	if !cv.IsNil(row) {
+		cv.BooleanValues()[row] = false
+		cv.NilCount++
+	}
+	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
+}
+
+func (cv *ColVal) UpdateStringIntoNull(row int) {
+	var stringLen int
+	if v, isNil := cv.StringValueUnsafe(row); !isNil {
+		cv.NilCount++
+		stringLen = len(v)
+	}
+	values := make([]byte, len(cv.Val))
+	copy(values, cv.Val)
+	cv.Val = cv.Val[:0]
+	cv.Val = append(cv.Val, values[:cv.Offset[row]]...)
+	if row < cv.Len-1 {
+		cv.Val = append(cv.Val, values[cv.Offset[row+1]:]...)
+	}
+	for i := row + 1; i < cv.Len; i++ {
+		cv.Offset[i] -= uint32(stringLen)
+	}
+	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
+}
+
+func (cv *ColVal) FloatValueWithNullReserve(index int) (float64, bool) {
+	return cv.FloatValues()[index], cv.IsNil(index)
+}
+
+func (cv *ColVal) IntegerValueWithNullReserve(index int) (int64, bool) {
+	return cv.IntegerValues()[index], cv.IsNil(index)
+}
+
+func (cv *ColVal) BooleanValueWithNullReserve(index int) (bool, bool) {
+	return cv.BooleanValues()[index], cv.IsNil(index)
+}
+
+func (cv *ColVal) appendStringCol(src *ColVal, start, limit int) {
+	allNil := src.NilCount == src.Len
+
+	offset := uint32(len(cv.Val))
+	for i := 0; i < limit; i++ {
+		if i != 0 && !allNil {
+			offset += src.Offset[start+i] - src.Offset[start+i-1]
+		}
+		cv.Offset = append(cv.Offset, offset)
+	}
+
+	if allNil {
+		return
+	}
+
+	vs, ve := src.Offset[start], uint32(len(src.Val))
+	if start+limit < src.Len {
+		ve = src.Offset[start+limit]
+	}
+
+	if len(src.Val) > 0 {
+		cv.Val = append(cv.Val, src.Val[vs:ve]...)
+	}
+}
+
+func (cv *ColVal) appendBytes(src *ColVal, typ int, start, end int) {
+	if len(src.Val) == 0 || start == end {
+		return
+	}
+
+	size, ok := typeSize[typ]
+	if !ok {
+		panic("error type")
+	}
+
+	cv.Val = append(cv.Val, src.Val[start*size:end*size]...)
+}
+
+func (cv *ColVal) AppendAll(src *ColVal) {
+	cv.Val = append(cv.Val, src.Val...)
+	cv.Offset = append(cv.Offset, src.Offset...)
+	bitmap, bitMapOffset := subBitmapBytes(src.Bitmap, src.BitMapOffset, src.Len)
+	cv.Bitmap = append(cv.Bitmap, bitmap...)
+	cv.BitMapOffset = bitMapOffset
+	cv.Len = src.Len
+	cv.NilCount = src.NilCount
+}
+
+func (cv *ColVal) AppendTimes(times []int64) {
+	if len(times) == 0 {
+		return
+	}
+
+	cv.Val = append(cv.Val, Int64Slice2byte(times)...)
+	cv.Len += len(times)
+
+	cv.FillBitmap(255)
+}
+
+func (cv *ColVal) FillBitmap(val uint8) {
+	bitmapSize := cv.Len/8 + 1
+	if cv.Len%8 == 0 {
+		bitmapSize--
+	}
+
+	preSize := len(cv.Bitmap)
+	if preSize == bitmapSize {
+		return
+	}
+
+	cv.Bitmap = bufferpool.Resize(cv.Bitmap, bitmapSize)
+	for i := preSize; i < bitmapSize; i++ {
+		cv.Bitmap[i] = val
+	}
 }

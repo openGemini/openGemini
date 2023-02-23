@@ -101,16 +101,18 @@ func (o *{{.StructName}}) Unmarshal(buf []byte) error {
 	{{- else if eq .Typ "slice_object"}}
 
 	{{.FieldName}}Len := int(dec.Uint32())
-	o.{{.FieldName}} = make([]{{.SubStruct}}, {{.FieldName}}Len)
-	for i := 0; i < {{.FieldName}}Len; i++ {
-		subBuf := dec.BytesNoCopy()
-		if len(subBuf) == 0 {
-			continue
-		}
-
-		o.{{.FieldName}}[i] = {{.NewSubStruct}}{}
-		if err := o.{{.FieldName}}[i].Unmarshal(subBuf); err != nil {
-			return err
+    if {{.FieldName}}Len > 0 {
+		o.{{.FieldName}} = make([]{{.SubStruct}}, {{.FieldName}}Len)
+		for i := 0; i < {{.FieldName}}Len; i++ {
+			subBuf := dec.BytesNoCopy()
+			if len(subBuf) == 0 {
+				continue
+			}
+	
+			o.{{.FieldName}}[i] = {{.NewSubStruct}}{}
+			if err := o.{{.FieldName}}[i].Unmarshal(subBuf); err != nil {
+				return err
+			}
 		}
 	}
 	{{- else if eq .Typ "map_string_object"}}

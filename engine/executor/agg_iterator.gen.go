@@ -21,6 +21,7 @@ limitations under the License.
 package executor
 
 import (
+	"bytes"
 	"container/heap"
 	"sort"
 
@@ -460,178 +461,6 @@ func (r *FloatColIntegerIterator) processMiddleWindow(
 }
 
 func (r *FloatColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
-	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
-		var addIntervalLen int
-		if p.sameInterval {
-			addIntervalLen = inChunk.IntervalLen() - 1
-		} else {
-			addIntervalLen = inChunk.IntervalLen()
-		}
-		if addIntervalLen > 0 {
-			outChunk.Column(r.outOrdinal).AppendManyNil(addIntervalLen)
-		}
-		return
-	}
-
-	var end int
-	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	for i, start := range inChunk.IntervalIndex() {
-		if i < lastIndex {
-			end = inChunk.IntervalIndex()[i+1]
-		} else {
-			end = inChunk.NumberOfRows()
-		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
-		if isNil && ((i > firstIndex && i < lastIndex) ||
-			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
-			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
-			(firstIndex != lastIndex && i == lastIndex && !p.sameInterval)) {
-			outChunk.Column(r.outOrdinal).AppendNil()
-			continue
-		}
-		if i == firstIndex && !r.prevPoint.isNil {
-			r.processFirstWindow(inChunk, outChunk, isNil, p.sameInterval,
-				firstIndex == lastIndex, index, value)
-		} else if i == lastIndex && p.sameInterval {
-			r.processLastWindow(inChunk, index, isNil, value)
-		} else if !isNil {
-			r.processMiddleWindow(inChunk, outChunk, index, value)
-		}
-	}
-}
-
-type IntegerColFloatReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
-
-type IntegerColFloatMerge func(prevPoint, currPoint *FloatPoint)
-
-type IntegerColFloatIterator struct {
-	isSingleCall bool
-	inOrdinal    int
-	outOrdinal   int
-	prevPoint    *FloatPoint
-	currPoint    *FloatPoint
-	fn           IntegerColFloatReduce
-	fv           IntegerColFloatMerge
-	auxChunk     Chunk
-	auxProcessor []*AuxProcessor
-}
-
-func NewIntegerColFloatIterator(fn IntegerColFloatReduce, fv IntegerColFloatMerge,
-	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
-) *IntegerColFloatIterator {
-	r := &IntegerColFloatIterator{
-		fn:           fn,
-		fv:           fv,
-		isSingleCall: isSingleCall,
-		inOrdinal:    inOrdinal,
-		outOrdinal:   outOrdinal,
-		prevPoint:    newFloatPoint(),
-		currPoint:    newFloatPoint(),
-	}
-	if isSingleCall && len(auxProcessor) > 0 {
-		r.auxProcessor = auxProcessor
-		r.auxChunk = NewChunkBuilder(rowDataType).NewChunk("")
-	}
-	return r
-}
-
-func (r *IntegerColFloatIterator) appendInAuxCol(
-	inChunk, outChunk Chunk, index int,
-) {
-	for j := range r.auxProcessor {
-		r.auxProcessor[j].auxHelperFunc(
-			inChunk.Column(r.auxProcessor[j].inOrdinal),
-			outChunk.Column(r.auxProcessor[j].outOrdinal),
-			index,
-		)
-	}
-}
-
-func (r *IntegerColFloatIterator) appendOutAuxCol(
-	inChunk, outChunk Chunk, index int,
-) {
-	for j := range r.auxProcessor {
-		r.auxProcessor[j].auxHelperFunc(
-			inChunk.Column(r.auxProcessor[j].outOrdinal),
-			outChunk.Column(r.auxProcessor[j].outOrdinal),
-			index,
-		)
-	}
-}
-
-func (r *IntegerColFloatIterator) mergePrevItem(
-	inChunk, outChunk Chunk,
-) {
-	if r.isSingleCall {
-		outChunk.AppendTime(r.prevPoint.time)
-		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
-	}
-	outChunk.Column(r.outOrdinal).AppendNilsV2(true)
-	outChunk.Column(r.outOrdinal).AppendFloatValues(r.prevPoint.value)
-	if r.auxProcessor != nil {
-		if r.prevPoint.index == 0 {
-			r.appendOutAuxCol(r.auxChunk, outChunk, r.prevPoint.index)
-		} else {
-			r.appendInAuxCol(inChunk, outChunk, r.prevPoint.index-1)
-		}
-		r.auxChunk.Reset()
-	}
-}
-
-func (r *IntegerColFloatIterator) processFirstWindow(
-	inChunk, outChunk Chunk, isNil, sameInterval, onlyOneInterval bool, index int, value float64,
-) {
-	// To distinguish values between inChunk and auxChunk, r.currPoint.index incremented by 1.
-	if !isNil {
-		r.currPoint.Set(index+1, inChunk.TimeByIndex(index), value)
-		r.fv(r.prevPoint, r.currPoint)
-	}
-	if onlyOneInterval && sameInterval {
-		if r.auxProcessor != nil && r.prevPoint.index > 0 {
-			r.auxChunk.Reset()
-			r.auxChunk.AppendTime(inChunk.TimeByIndex(r.prevPoint.index - 1))
-			r.appendInAuxCol(inChunk, r.auxChunk, r.prevPoint.index-1)
-		}
-		r.prevPoint.index = 0
-	} else {
-		if !r.prevPoint.isNil {
-			r.mergePrevItem(inChunk, outChunk)
-		}
-		r.prevPoint.Reset()
-	}
-	r.currPoint.Reset()
-}
-
-func (r *IntegerColFloatIterator) processLastWindow(
-	inChunk Chunk, index int, isNil bool, value float64,
-) {
-	if isNil {
-		r.prevPoint.Reset()
-	} else {
-		r.prevPoint.Set(0, inChunk.TimeByIndex(index), value)
-	}
-	if r.auxProcessor != nil {
-		r.auxChunk.AppendTime(inChunk.TimeByIndex(index))
-		r.appendInAuxCol(inChunk, r.auxChunk, index)
-	}
-}
-
-func (r *IntegerColFloatIterator) processMiddleWindow(
-	inChunk, outChunk Chunk, index int, value float64,
-) {
-	if r.isSingleCall {
-		outChunk.AppendTime(inChunk.TimeByIndex(index))
-		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
-	}
-	outChunk.Column(r.outOrdinal).AppendNilsV2(true)
-	outChunk.Column(r.outOrdinal).AppendFloatValues(value)
-	if r.auxProcessor != nil {
-		r.appendInAuxCol(inChunk, outChunk, index)
-	}
-}
-
-func (r *IntegerColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
@@ -5616,7 +5445,7 @@ func NewFloatColFloatIntegralIterator(
 }
 
 func (r *FloatColFloatIntegralIterator) processFirstWindow(
-	inChunk, outChunk Chunk, haveMultiInterval, sameInterval, sameTag, newTag bool, start, end, i int,
+	inChunk Chunk, haveMultiInterval, sameInterval, sameTag bool, start, end int,
 ) {
 	if haveMultiInterval {
 		r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false, sameTag)
@@ -5626,21 +5455,14 @@ func (r *FloatColFloatIntegralIterator) processFirstWindow(
 	if !sameTag && (end-start) == 1 && r.buf.prev.time == r.buf.window.start {
 		r.nilCount++
 	}
-	if r.isSingleCall && !(r.buf.pointNum == 1 && r.buf.prev.time == r.buf.window.start) && !(r.buf.pointNum == 0) {
-		outChunk.AppendIntervalIndex(len(outChunk.IntervalIndex()))
-		if newTag {
-			outChunk.AppendTagsAndIndex(inChunk.Tags()[i], len(outChunk.IntervalIndex())-1)
-		}
-	}
-
 }
 
 func (r *FloatColFloatIntegralIterator) processLastWindow(
-	inChunk, outChunk Chunk, start, end, i int,
+	inChunk, outChunk Chunk, start, end, tagIdx int,
 ) {
 	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, true, true)
 	if r.buf.Len() > 0 {
-		r.appendPrevItem(outChunk)
+		r.appendPrevItem(inChunk, outChunk, tagIdx)
 		r.buf.Reset()
 		if !r.isSingleCall {
 			outChunk.Column(r.outOrdinal).AppendManyNil(r.nilCount)
@@ -5650,20 +5472,14 @@ func (r *FloatColFloatIntegralIterator) processLastWindow(
 }
 
 func (r *FloatColFloatIntegralIterator) processMiddleWindow(
-	inChunk, outChunk Chunk, start, end, i int, sameTag, newTag bool,
+	inChunk, outChunk Chunk, start, end, tagIdx int, sameTag bool,
 ) {
 	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false, sameTag)
 	if !sameTag && (end-start) == 1 && r.buf.prev.time == r.buf.window.start {
 		r.nilCount++
 	}
-	if r.isSingleCall && !(r.buf.pointNum == 1 && r.buf.prev.time == r.buf.window.start) && !(r.buf.pointNum == 0) {
-		outChunk.AppendIntervalIndex(len(outChunk.IntervalIndex()))
-		if newTag {
-			outChunk.AppendTagsAndIndex(inChunk.Tags()[i], len(outChunk.IntervalIndex())-1)
-		}
-	}
 	if r.buf.Len() > 0 {
-		r.appendPrevItem(outChunk)
+		r.appendPrevItem(inChunk, outChunk, tagIdx)
 		r.buf.Reset()
 		if !r.isSingleCall {
 			outChunk.Column(r.outOrdinal).AppendManyNil(r.nilCount)
@@ -5673,13 +5489,18 @@ func (r *FloatColFloatIntegralIterator) processMiddleWindow(
 }
 
 func (r *FloatColFloatIntegralIterator) appendPrevItem(
-	outChunk Chunk,
+	inChunk, outChunk Chunk, tagIdx int,
 ) {
 	if r.isSingleCall {
 		for j := range r.buf.time {
 			outChunk.AppendTime(r.buf.time[j])
 			outChunk.Column(r.outOrdinal).AppendFloatValues(r.buf.value[j])
 			outChunk.Column(r.outOrdinal).AppendNilsV2(true)
+		}
+		outChunk.AppendIntervalIndex(outChunk.Len() - r.buf.Len())
+		if !(outChunk.TagLen() > 0 && bytes.Equal(inChunk.Tags()[tagIdx].Subset(r.buf.opt.Dimensions),
+			outChunk.Tags()[outChunk.TagLen()-1].Subset(r.buf.opt.Dimensions))) {
+			outChunk.AppendTagsAndIndex(inChunk.Tags()[tagIdx], outChunk.IntervalIndex()[outChunk.IntervalLen()-1])
 		}
 		return
 	}
@@ -5691,7 +5512,7 @@ func (r *FloatColFloatIntegralIterator) appendPrevItem(
 }
 
 func (r *FloatColFloatIntegralIterator) appendLastItem(
-	outChunk Chunk,
+	inChunk, outChunk Chunk, tagIdx int,
 ) {
 	if r.isSingleCall {
 		if r.buf.opt.Interval.IsZero() {
@@ -5701,6 +5522,11 @@ func (r *FloatColFloatIntegralIterator) appendLastItem(
 		}
 		outChunk.Column(r.outOrdinal).AppendFloatValues(r.buf.sum)
 		outChunk.Column(r.outOrdinal).AppendNilsV2(true)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+		if !(outChunk.TagLen() > 0 && bytes.Equal(inChunk.Tags()[tagIdx].Subset(r.buf.opt.Dimensions),
+			outChunk.Tags()[outChunk.TagLen()-1].Subset(r.buf.opt.Dimensions))) {
+			outChunk.AppendTagsAndIndex(inChunk.Tags()[tagIdx], outChunk.IntervalIndex()[outChunk.IntervalLen()-1])
+		}
 		return
 	}
 
@@ -5754,11 +5580,11 @@ func (r *FloatColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 				}
 			}
 			if intervali == firstIndex && r.buf.sameInterval {
-				r.processFirstWindow(inChunk, outChunk, firstIndex != lastIndex, p.sameInterval, sametag, !r.buf.sameTag, start, end, i)
+				r.processFirstWindow(inChunk, firstIndex != lastIndex, p.sameInterval, sametag, start, end)
 			} else if intervali == lastIndex && p.sameInterval {
-				r.processLastWindow(inChunk, outChunk, start, end, intervali)
+				r.processLastWindow(inChunk, outChunk, start, end, i)
 			} else {
-				r.processMiddleWindow(inChunk, outChunk, start, end, i, sametag, !r.buf.sameTag)
+				r.processMiddleWindow(inChunk, outChunk, start, end, i, sametag)
 			}
 			intervali++
 			if intervali >= len(inChunk.IntervalIndex()) {
@@ -5768,7 +5594,7 @@ func (r *FloatColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	}
 	if p.lastChunk {
 		if !(r.buf.pointNum == 1 && r.buf.prev.time == r.buf.window.start) && !(r.buf.pointNum == 0) {
-			r.appendLastItem(outChunk)
+			r.appendLastItem(inChunk, outChunk, inChunk.TagLen()-1)
 		}
 		if !r.isSingleCall {
 			outChunk.Column(r.outOrdinal).AppendManyNil(r.nilCount)
@@ -5800,7 +5626,7 @@ func NewIntegerColFloatIntegralIterator(
 }
 
 func (r *IntegerColFloatIntegralIterator) processFirstWindow(
-	inChunk, outChunk Chunk, haveMultiInterval, sameInterval, sameTag, newTag bool, start, end, i int,
+	inChunk Chunk, haveMultiInterval, sameInterval, sameTag bool, start, end int,
 ) {
 	if haveMultiInterval {
 		r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false, sameTag)
@@ -5810,21 +5636,14 @@ func (r *IntegerColFloatIntegralIterator) processFirstWindow(
 	if !sameTag && (end-start) == 1 && r.buf.prev.time == r.buf.window.start {
 		r.nilCount++
 	}
-	if r.isSingleCall && !(r.buf.pointNum == 1 && r.buf.prev.time == r.buf.window.start) && !(r.buf.pointNum == 0) {
-		outChunk.AppendIntervalIndex(len(outChunk.IntervalIndex()))
-		if newTag {
-			outChunk.AppendTagsAndIndex(inChunk.Tags()[i], len(outChunk.IntervalIndex())-1)
-		}
-	}
-
 }
 
 func (r *IntegerColFloatIntegralIterator) processLastWindow(
-	inChunk, outChunk Chunk, start, end, i int,
+	inChunk, outChunk Chunk, start, end, tagIdx int,
 ) {
 	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, true, true)
 	if r.buf.Len() > 0 {
-		r.appendPrevItem(outChunk)
+		r.appendPrevItem(inChunk, outChunk, tagIdx)
 		r.buf.Reset()
 		if !r.isSingleCall {
 			outChunk.Column(r.outOrdinal).AppendManyNil(r.nilCount)
@@ -5834,20 +5653,14 @@ func (r *IntegerColFloatIntegralIterator) processLastWindow(
 }
 
 func (r *IntegerColFloatIntegralIterator) processMiddleWindow(
-	inChunk, outChunk Chunk, start, end, i int, sameTag, newTag bool,
+	inChunk, outChunk Chunk, start, end, tagIdx int, sameTag bool,
 ) {
 	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false, sameTag)
 	if !sameTag && (end-start) == 1 && r.buf.prev.time == r.buf.window.start {
 		r.nilCount++
 	}
-	if r.isSingleCall && !(r.buf.pointNum == 1 && r.buf.prev.time == r.buf.window.start) && !(r.buf.pointNum == 0) {
-		outChunk.AppendIntervalIndex(len(outChunk.IntervalIndex()))
-		if newTag {
-			outChunk.AppendTagsAndIndex(inChunk.Tags()[i], len(outChunk.IntervalIndex())-1)
-		}
-	}
 	if r.buf.Len() > 0 {
-		r.appendPrevItem(outChunk)
+		r.appendPrevItem(inChunk, outChunk, tagIdx)
 		r.buf.Reset()
 		if !r.isSingleCall {
 			outChunk.Column(r.outOrdinal).AppendManyNil(r.nilCount)
@@ -5857,13 +5670,18 @@ func (r *IntegerColFloatIntegralIterator) processMiddleWindow(
 }
 
 func (r *IntegerColFloatIntegralIterator) appendPrevItem(
-	outChunk Chunk,
+	inChunk, outChunk Chunk, tagIdx int,
 ) {
 	if r.isSingleCall {
 		for j := range r.buf.time {
 			outChunk.AppendTime(r.buf.time[j])
 			outChunk.Column(r.outOrdinal).AppendFloatValues(r.buf.value[j])
 			outChunk.Column(r.outOrdinal).AppendNilsV2(true)
+		}
+		outChunk.AppendIntervalIndex(outChunk.Len() - r.buf.Len())
+		if !(outChunk.TagLen() > 0 && bytes.Equal(inChunk.Tags()[tagIdx].Subset(r.buf.opt.Dimensions),
+			outChunk.Tags()[outChunk.TagLen()-1].Subset(r.buf.opt.Dimensions))) {
+			outChunk.AppendTagsAndIndex(inChunk.Tags()[tagIdx], outChunk.IntervalIndex()[outChunk.IntervalLen()-1])
 		}
 		return
 	}
@@ -5875,7 +5693,7 @@ func (r *IntegerColFloatIntegralIterator) appendPrevItem(
 }
 
 func (r *IntegerColFloatIntegralIterator) appendLastItem(
-	outChunk Chunk,
+	inChunk, outChunk Chunk, tagIdx int,
 ) {
 	if r.isSingleCall {
 		if r.buf.opt.Interval.IsZero() {
@@ -5885,6 +5703,11 @@ func (r *IntegerColFloatIntegralIterator) appendLastItem(
 		}
 		outChunk.Column(r.outOrdinal).AppendFloatValues(r.buf.sum)
 		outChunk.Column(r.outOrdinal).AppendNilsV2(true)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+		if !(outChunk.TagLen() > 0 && bytes.Equal(inChunk.Tags()[tagIdx].Subset(r.buf.opt.Dimensions),
+			outChunk.Tags()[outChunk.TagLen()-1].Subset(r.buf.opt.Dimensions))) {
+			outChunk.AppendTagsAndIndex(inChunk.Tags()[tagIdx], outChunk.IntervalIndex()[outChunk.IntervalLen()-1])
+		}
 		return
 	}
 
@@ -5938,11 +5761,11 @@ func (r *IntegerColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *Iterator
 				}
 			}
 			if intervali == firstIndex && r.buf.sameInterval {
-				r.processFirstWindow(inChunk, outChunk, firstIndex != lastIndex, p.sameInterval, sametag, !r.buf.sameTag, start, end, i)
+				r.processFirstWindow(inChunk, firstIndex != lastIndex, p.sameInterval, sametag, start, end)
 			} else if intervali == lastIndex && p.sameInterval {
-				r.processLastWindow(inChunk, outChunk, start, end, intervali)
+				r.processLastWindow(inChunk, outChunk, start, end, i)
 			} else {
-				r.processMiddleWindow(inChunk, outChunk, start, end, i, sametag, !r.buf.sameTag)
+				r.processMiddleWindow(inChunk, outChunk, start, end, i, sametag)
 			}
 			intervali++
 			if intervali >= len(inChunk.IntervalIndex()) {
@@ -5952,7 +5775,7 @@ func (r *IntegerColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *Iterator
 	}
 	if p.lastChunk {
 		if !(r.buf.pointNum == 1 && r.buf.prev.time == r.buf.window.start) && !(r.buf.pointNum == 0) {
-			r.appendLastItem(outChunk)
+			r.appendLastItem(inChunk, outChunk, inChunk.TagLen()-1)
 		}
 		if !r.isSingleCall {
 			outChunk.Column(r.outOrdinal).AppendManyNil(r.nilCount)
@@ -8894,110 +8717,6 @@ type IntegerPointMerge func(prevPoint, currPoint *IntegerPoint)
 
 type IntegerWindowMerge func(prevWindow, currWindow *IntegerSlidingWindow, fpm IntegerPointMerge)
 
-type FloatColIntegerWindowReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type FloatSlidingWindowIntegerIterator struct {
-	slidingNum int
-	inOrdinal  int
-	outOrdinal int
-	prevWindow *IntegerSlidingWindow
-	currWindow *IntegerSlidingWindow
-	fwr        FloatColIntegerWindowReduce
-	fpm        IntegerPointMerge
-	fwm        IntegerWindowMerge
-}
-
-func NewFloatSlidingWindowIntegerIterator(
-	fwr FloatColIntegerWindowReduce,
-	fpm IntegerPointMerge,
-	fwm IntegerWindowMerge,
-	inOrdinal, outOrdinal int, slidingNum int,
-) *FloatSlidingWindowIntegerIterator {
-	r := &FloatSlidingWindowIntegerIterator{
-		fwr:        fwr,
-		fpm:        fpm,
-		fwm:        fwm,
-		slidingNum: slidingNum,
-		inOrdinal:  inOrdinal,
-		outOrdinal: outOrdinal,
-		prevWindow: NewIntegerSlidingWindow(slidingNum),
-		currWindow: NewIntegerSlidingWindow(slidingNum),
-	}
-	return r
-}
-
-func (r *FloatSlidingWindowIntegerIterator) mergePrevWindow(
-	outChunk Chunk,
-) {
-	for i := 0; i < r.slidingNum; i++ {
-		if r.prevWindow.points[i].isNil {
-			outChunk.Column(r.outOrdinal).AppendNilsV2(false)
-		} else {
-			outChunk.Column(r.outOrdinal).AppendNilsV2(true)
-			outChunk.Column(r.outOrdinal).AppendIntegerValues(r.prevWindow.points[i].value)
-		}
-	}
-}
-
-func (r *FloatSlidingWindowIntegerIterator) processFirstWindow(
-	outChunk Chunk, value int64, isNil, sameTag, onlyOneWindow bool, n int,
-) {
-	r.currWindow.SetPoint(value, isNil, n)
-	if n < r.slidingNum-1 {
-		return
-	}
-	r.fwm(r.prevWindow, r.currWindow, r.fpm)
-	if !onlyOneWindow || !sameTag {
-		r.mergePrevWindow(outChunk)
-		r.prevWindow.Reset()
-	}
-	r.currWindow.Reset()
-}
-
-func (r *FloatSlidingWindowIntegerIterator) processLastWindow(
-	value int64, isNil bool, index int,
-) {
-	r.prevWindow.SetPoint(value, isNil, index)
-}
-
-func (r *FloatSlidingWindowIntegerIterator) processMiddleWindow(
-	outChunk Chunk, value int64, isNil bool,
-) {
-	if isNil {
-		outChunk.Column(r.outOrdinal).AppendNilsV2(false)
-	} else {
-		outChunk.Column(r.outOrdinal).AppendNilsV2(true)
-		outChunk.Column(r.outOrdinal).AppendIntegerValues(value)
-	}
-}
-
-func (r *FloatSlidingWindowIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
-	var (
-		start, end int
-		value      int64
-		isNil      bool
-	)
-	firstIndex, lastIndex := 0, len(p.winIdx)/r.slidingNum-1
-	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	for i := range p.winIdx {
-		m, n := i/r.slidingNum, i%r.slidingNum
-		start, end = p.winIdx[i][0], p.winIdx[i][1]
-		if start == -1 || end == -1 || start >= end {
-			value, isNil = 0, true
-		} else {
-			_, value, isNil = r.fwr(inChunk, r.inOrdinal, start, end)
-		}
-		if m == firstIndex && !r.prevWindow.IsNil() {
-			r.processFirstWindow(outChunk, value, isNil,
-				p.sameTag, firstIndex == lastIndex, n)
-		} else if m == lastIndex && p.sameTag {
-			r.processLastWindow(value, isNil, n)
-		} else {
-			r.processMiddleWindow(outChunk, value, isNil)
-		}
-	}
-}
-
 type IntegerColIntegerWindowReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
 type IntegerSlidingWindowIntegerIterator struct {
@@ -9076,110 +8795,6 @@ func (r *IntegerSlidingWindowIntegerIterator) processMiddleWindow(
 }
 
 func (r *IntegerSlidingWindowIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
-	var (
-		start, end int
-		value      int64
-		isNil      bool
-	)
-	firstIndex, lastIndex := 0, len(p.winIdx)/r.slidingNum-1
-	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	for i := range p.winIdx {
-		m, n := i/r.slidingNum, i%r.slidingNum
-		start, end = p.winIdx[i][0], p.winIdx[i][1]
-		if start == -1 || end == -1 || start >= end {
-			value, isNil = 0, true
-		} else {
-			_, value, isNil = r.fwr(inChunk, r.inOrdinal, start, end)
-		}
-		if m == firstIndex && !r.prevWindow.IsNil() {
-			r.processFirstWindow(outChunk, value, isNil,
-				p.sameTag, firstIndex == lastIndex, n)
-		} else if m == lastIndex && p.sameTag {
-			r.processLastWindow(value, isNil, n)
-		} else {
-			r.processMiddleWindow(outChunk, value, isNil)
-		}
-	}
-}
-
-type StringColIntegerWindowReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type StringSlidingWindowIntegerIterator struct {
-	slidingNum int
-	inOrdinal  int
-	outOrdinal int
-	prevWindow *IntegerSlidingWindow
-	currWindow *IntegerSlidingWindow
-	fwr        StringColIntegerWindowReduce
-	fpm        IntegerPointMerge
-	fwm        IntegerWindowMerge
-}
-
-func NewStringSlidingWindowIntegerIterator(
-	fwr StringColIntegerWindowReduce,
-	fpm IntegerPointMerge,
-	fwm IntegerWindowMerge,
-	inOrdinal, outOrdinal int, slidingNum int,
-) *StringSlidingWindowIntegerIterator {
-	r := &StringSlidingWindowIntegerIterator{
-		fwr:        fwr,
-		fpm:        fpm,
-		fwm:        fwm,
-		slidingNum: slidingNum,
-		inOrdinal:  inOrdinal,
-		outOrdinal: outOrdinal,
-		prevWindow: NewIntegerSlidingWindow(slidingNum),
-		currWindow: NewIntegerSlidingWindow(slidingNum),
-	}
-	return r
-}
-
-func (r *StringSlidingWindowIntegerIterator) mergePrevWindow(
-	outChunk Chunk,
-) {
-	for i := 0; i < r.slidingNum; i++ {
-		if r.prevWindow.points[i].isNil {
-			outChunk.Column(r.outOrdinal).AppendNilsV2(false)
-		} else {
-			outChunk.Column(r.outOrdinal).AppendNilsV2(true)
-			outChunk.Column(r.outOrdinal).AppendIntegerValues(r.prevWindow.points[i].value)
-		}
-	}
-}
-
-func (r *StringSlidingWindowIntegerIterator) processFirstWindow(
-	outChunk Chunk, value int64, isNil, sameTag, onlyOneWindow bool, n int,
-) {
-	r.currWindow.SetPoint(value, isNil, n)
-	if n < r.slidingNum-1 {
-		return
-	}
-	r.fwm(r.prevWindow, r.currWindow, r.fpm)
-	if !onlyOneWindow || !sameTag {
-		r.mergePrevWindow(outChunk)
-		r.prevWindow.Reset()
-	}
-	r.currWindow.Reset()
-}
-
-func (r *StringSlidingWindowIntegerIterator) processLastWindow(
-	value int64, isNil bool, index int,
-) {
-	r.prevWindow.SetPoint(value, isNil, index)
-}
-
-func (r *StringSlidingWindowIntegerIterator) processMiddleWindow(
-	outChunk Chunk, value int64, isNil bool,
-) {
-	if isNil {
-		outChunk.Column(r.outOrdinal).AppendNilsV2(false)
-	} else {
-		outChunk.Column(r.outOrdinal).AppendNilsV2(true)
-		outChunk.Column(r.outOrdinal).AppendIntegerValues(value)
-	}
-}
-
-func (r *StringSlidingWindowIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	var (
 		start, end int
 		value      int64
@@ -9306,6 +8921,431 @@ func (r *BooleanSlidingWindowIntegerIterator) Next(ie *IteratorEndpoint, p *Iter
 			r.processLastWindow(value, isNil, n)
 		} else {
 			r.processMiddleWindow(outChunk, value, isNil)
+		}
+	}
+}
+
+type OGSketchItem interface {
+	UpdateCluster(inChunk Chunk, start, end int)
+	WriteResult(outChunk Chunk, time int64)
+	IsNil() bool
+	Reset()
+}
+
+type FloatOGSketchInsertItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+	clusters     ClusterSet
+}
+
+func NewFloatOGSketchInsertIem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *FloatOGSketchInsertItem {
+	return &FloatOGSketchInsertItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *FloatOGSketchInsertItem) UpdateCluster(inChunk Chunk, start, end int) {
+	o.sketch.InsertPoints(inChunk.Column(o.inOrdinal).FloatValues()[start:end]...)
+}
+
+func (o *FloatOGSketchInsertItem) WriteResult(outChunk Chunk, time int64) {
+	o.clusters = o.sketch.Clusters()
+	clusterNum := len(o.clusters)
+	if o.isSingleCall {
+		for i := 0; i < clusterNum; i++ {
+			outChunk.AppendTime(time)
+		}
+		outChunk.AppendIntervalIndex(outChunk.Len() - clusterNum)
+	}
+
+	for i := 0; i < clusterNum; i++ {
+		outChunk.Column(o.outOrdinal).AppendFloatTuples(floatTuple{values: []float64{o.clusters[i].Mean, o.clusters[i].Weight}})
+	}
+	outChunk.Column(o.outOrdinal).AppendManyNotNil(clusterNum)
+
+	if !o.isSingleCall && o.clusterNum > clusterNum {
+		outChunk.Column(o.outOrdinal).AppendManyNil(o.clusterNum - clusterNum)
+	}
+}
+
+func (o *FloatOGSketchInsertItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *FloatOGSketchInsertItem) Reset() {
+	o.sketch.Reset()
+}
+
+type FloatOGSketchPercentileItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+}
+
+func NewFloatOGSketchPercentileItem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *FloatOGSketchPercentileItem {
+	return &FloatOGSketchPercentileItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *FloatOGSketchPercentileItem) UpdateCluster(inChunk Chunk, start, end int) {
+	tuples := inChunk.Column(o.inOrdinal).FloatTuples()[start:end]
+	o.sketch.InsertClusters(tuples...)
+
+}
+
+func (o *FloatOGSketchPercentileItem) WriteResult(outChunk Chunk, time int64) {
+	value := o.sketch.Percentile(o.percentile)
+	if o.isSingleCall {
+		outChunk.AppendTime(time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outChunk.Column(o.outOrdinal).AppendFloatValues(value)
+	outChunk.Column(o.outOrdinal).AppendNilsV2(true)
+}
+
+func (o *FloatOGSketchPercentileItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *FloatOGSketchPercentileItem) Reset() {
+	o.sketch.Reset()
+}
+
+type FloatPercentileApproxItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+}
+
+func NewFloatPercentileApproxItem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *FloatPercentileApproxItem {
+	return &FloatPercentileApproxItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *FloatPercentileApproxItem) UpdateCluster(inChunk Chunk, start, end int) {
+	o.sketch.InsertPoints(inChunk.Column(o.inOrdinal).FloatValues()[start:end]...)
+}
+
+func (o *FloatPercentileApproxItem) WriteResult(outChunk Chunk, time int64) {
+	value := o.sketch.Percentile(o.percentile)
+	if o.isSingleCall {
+		outChunk.AppendTime(time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outChunk.Column(o.outOrdinal).AppendFloatValues(value)
+	outChunk.Column(o.outOrdinal).AppendNilsV2(true)
+}
+
+func (o *FloatPercentileApproxItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *FloatPercentileApproxItem) Reset() {
+	o.sketch.Reset()
+}
+
+type IntegerOGSketchInsertItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+	clusters     ClusterSet
+}
+
+func NewIntegerOGSketchInsertIem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *IntegerOGSketchInsertItem {
+	return &IntegerOGSketchInsertItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *IntegerOGSketchInsertItem) UpdateCluster(inChunk Chunk, start, end int) {
+	values := inChunk.Column(o.inOrdinal).IntegerValues()[start:end]
+	for i := range values {
+		o.sketch.InsertPoints(float64(values[i]))
+	}
+}
+
+func (o *IntegerOGSketchInsertItem) WriteResult(outChunk Chunk, time int64) {
+	o.clusters = o.sketch.Clusters()
+	clusterNum := len(o.clusters)
+	if o.isSingleCall {
+		for i := 0; i < clusterNum; i++ {
+			outChunk.AppendTime(time)
+		}
+		outChunk.AppendIntervalIndex(outChunk.Len() - clusterNum)
+	}
+
+	for i := 0; i < clusterNum; i++ {
+		outChunk.Column(o.outOrdinal).AppendFloatTuples(floatTuple{values: []float64{o.clusters[i].Mean, o.clusters[i].Weight}})
+	}
+	outChunk.Column(o.outOrdinal).AppendManyNotNil(clusterNum)
+
+	if !o.isSingleCall && o.clusterNum > clusterNum {
+		outChunk.Column(o.outOrdinal).AppendManyNil(o.clusterNum - clusterNum)
+	}
+}
+
+func (o *IntegerOGSketchInsertItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *IntegerOGSketchInsertItem) Reset() {
+	o.sketch.Reset()
+}
+
+type IntegerOGSketchPercentileItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+}
+
+func NewIntegerOGSketchPercentileItem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *IntegerOGSketchPercentileItem {
+	return &IntegerOGSketchPercentileItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *IntegerOGSketchPercentileItem) UpdateCluster(inChunk Chunk, start, end int) {
+	tuples := inChunk.Column(o.inOrdinal).FloatTuples()[start:end]
+	o.sketch.InsertClusters(tuples...)
+
+}
+
+func (o *IntegerOGSketchPercentileItem) WriteResult(outChunk Chunk, time int64) {
+	value := o.sketch.Percentile(o.percentile)
+	if o.isSingleCall {
+		outChunk.AppendTime(time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outChunk.Column(o.outOrdinal).AppendIntegerValues(int64(value))
+	outChunk.Column(o.outOrdinal).AppendNilsV2(true)
+}
+
+func (o *IntegerOGSketchPercentileItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *IntegerOGSketchPercentileItem) Reset() {
+	o.sketch.Reset()
+}
+
+type IntegerPercentileApproxItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+}
+
+func NewIntegerPercentileApproxItem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *IntegerPercentileApproxItem {
+	return &IntegerPercentileApproxItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *IntegerPercentileApproxItem) UpdateCluster(inChunk Chunk, start, end int) {
+	values := inChunk.Column(o.inOrdinal).IntegerValues()[start:end]
+	for i := range values {
+		o.sketch.InsertPoints(float64(values[i]))
+	}
+}
+
+func (o *IntegerPercentileApproxItem) WriteResult(outChunk Chunk, time int64) {
+	value := o.sketch.Percentile(o.percentile)
+	if o.isSingleCall {
+		outChunk.AppendTime(time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outChunk.Column(o.outOrdinal).AppendIntegerValues(int64(value))
+	outChunk.Column(o.outOrdinal).AppendNilsV2(true)
+}
+
+func (o *IntegerPercentileApproxItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *IntegerPercentileApproxItem) Reset() {
+	o.sketch.Reset()
+}
+
+type OGSketchMergeItem struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	percentile   float64
+	sketch       OGSketch
+	clusters     ClusterSet
+}
+
+func NewOGSketchMergeItem(isSingleCall bool, inOrdinal, outOrdinal, clusterNum int, percentile float64) *OGSketchMergeItem {
+	return &OGSketchMergeItem{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		percentile:   percentile,
+		sketch:       NewOGSketchImpl(float64(clusterNum)),
+	}
+}
+
+func (o *OGSketchMergeItem) UpdateCluster(inChunk Chunk, start, end int) {
+	tuples := inChunk.Column(o.inOrdinal).FloatTuples()[start:end]
+	o.sketch.InsertClusters(tuples...)
+}
+
+func (o *OGSketchMergeItem) WriteResult(outChunk Chunk, time int64) {
+	o.clusters = o.sketch.Clusters()
+	clusterNum := len(o.clusters)
+	if o.isSingleCall {
+		for i := 0; i < clusterNum; i++ {
+			outChunk.AppendTime(time)
+		}
+		outChunk.AppendIntervalIndex(outChunk.Len() - clusterNum)
+	}
+
+	for i := 0; i < clusterNum; i++ {
+		outChunk.Column(o.outOrdinal).AppendFloatTuples(floatTuple{values: []float64{o.clusters[i].Mean, o.clusters[i].Weight}})
+	}
+	outChunk.Column(o.outOrdinal).AppendManyNotNil(clusterNum)
+
+	if !o.isSingleCall && o.clusterNum > clusterNum {
+		outChunk.Column(o.outOrdinal).AppendManyNil(o.clusterNum - clusterNum)
+	}
+}
+
+func (o *OGSketchMergeItem) IsNil() bool {
+	return o.sketch.Len() == 0
+}
+
+func (o *OGSketchMergeItem) Reset() {
+	o.sketch.Reset()
+}
+
+type OGSketchIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	clusterNum   int
+	opt          *query.ProcessorOptions
+	sketch       OGSketchItem
+}
+
+func NewOGSketchIterator(
+	isSingleCall bool, inOrdinal, outOrdinal int, clusterNum int, opt *query.ProcessorOptions, sketch OGSketchItem,
+) *OGSketchIterator {
+	r := &OGSketchIterator{
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		clusterNum:   clusterNum,
+		opt:          opt,
+		sketch:       sketch,
+	}
+	return r
+}
+
+func (r *OGSketchIterator) processFirstWindow(
+	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int, time int64,
+) {
+	r.sketch.UpdateCluster(inChunk, start, end)
+	if haveMultiInterval || !sameInterval {
+		r.sketch.WriteResult(outChunk, time)
+		r.sketch.Reset()
+	}
+}
+
+func (r *OGSketchIterator) processLastWindow(
+	inChunk Chunk, start, end int,
+) {
+	r.sketch.UpdateCluster(inChunk, start, end)
+}
+
+func (r *OGSketchIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, start, end int, time int64,
+) {
+	r.sketch.UpdateCluster(inChunk, start, end)
+	r.sketch.WriteResult(outChunk, time)
+	r.sketch.Reset()
+}
+
+func (r *OGSketchIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	var end int
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	for i, start := range inChunk.IntervalIndex() {
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		var time int64
+		if r.opt.Interval.IsZero() {
+			time = hybridqp.MaxInt64(r.opt.StartTime, 0)
+		} else {
+			time, _ = r.opt.Window(inChunk.TimeByIndex(start))
+		}
+		start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+		if !r.isSingleCall {
+			if start == end && r.sketch.IsNil() && (i < lastIndex || (i == lastIndex && !p.sameInterval)) {
+				outChunk.Column(r.outOrdinal).AppendManyNil(r.clusterNum)
+				continue
+			}
+		}
+		if i == firstIndex && !r.sketch.IsNil() {
+			r.processFirstWindow(inChunk, outChunk, p.sameInterval, firstIndex != lastIndex, start, end, time)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, start, end)
+		} else {
+			r.processMiddleWindow(inChunk, outChunk, start, end, time)
 		}
 	}
 }

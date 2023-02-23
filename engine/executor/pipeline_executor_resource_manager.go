@@ -53,6 +53,10 @@ func NewPipelineExecutorManager() *PipelineExecutorManager {
 	return p
 }
 
+func (p *PipelineExecutorManager) GetMemBucket() bucket.ResourceBucket {
+	return p.memBucket
+}
+
 func (p *PipelineExecutorManager) ManageMemResource(exec *PipelineExecutor) error {
 	exec.WaitTimeStats.Begin()
 	defer exec.WaitTimeStats.End()

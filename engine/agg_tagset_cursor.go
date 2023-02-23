@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package engine
 
 import (
@@ -36,26 +37,27 @@ const (
 	tagSetCursorRecordNumEqualsUno = 1
 )
 
+var (
+	IntervalRecordPool = record.NewRecordPool(record.IntervalRecordPool)
+)
+
 type fileLoopCursorFunctions struct {
 	readDataFunction func() (*record.Record, *comm.FileInfo, error)
 }
 
 type fileLoopCursor struct {
-	start       int
-	step        int
-	index       int
-	minTime     int64
-	maxTime     int64
-	fileMinTime int64
-	currSid     uint64
+	start   int
+	step    int
+	index   int
+	minTime int64
+	maxTime int64
+	currSid uint64
 
-	isCutSchema     bool
-	newCursor       bool
-	onlyFirstOrLast bool
-	breakFlag       bool
-	initFirst       bool
-	memTableInit    bool
-	preAgg          bool
+	isCutSchema  bool
+	newCursor    bool
+	initFirst    bool
+	memTableInit bool
+	preAgg       bool
 
 	ridIdx        map[int]struct{}
 	mergeRecIters map[uint64]*SeriesIter
@@ -70,8 +72,8 @@ type fileLoopCursor struct {
 	shardP                  *shard
 	currAggCursor           *fileCursor
 	FilesInfoPool           *filesInfoPool
-	FileCursorPool          *record.CircularRecordPool
 	fileLoopCursorFunctions *fileLoopCursorFunctions
+	recPool                 *record.CircularRecordPool
 }
 
 type filesInfoPool struct {
@@ -101,7 +103,6 @@ func NewSeriesInfoPool(num int64) *filesInfoPool {
 
 func NewFileLoopCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, start, step int, s *shard) *fileLoopCursor {
-	ctx.decs.InitPreAggBuilder()
 	tagSet.Ref()
 	sc := &fileLoopCursor{
 		ctx:           ctx,
@@ -126,21 +127,6 @@ func (s *fileLoopCursor) SetOps(ops []*comm.CallOption) {
 
 func (s *fileLoopCursor) SetSchema(schema record.Schemas) {
 	s.recordSchema = schema
-}
-
-func (s *fileLoopCursor) setOnlyFirstOrLastFlag() {
-	if len(s.ctx.decs.GetOps()) == 0 {
-		return
-	}
-	ops := s.ctx.decs.GetOps()
-
-	s.onlyFirstOrLast = true
-	for _, call := range ops {
-		if call.Call.Name != "last" && call.Call.Name != "first" {
-			s.onlyFirstOrLast = false
-			return
-		}
-	}
 }
 
 func (s *fileLoopCursor) SinkPlan(plan hybridqp.QueryNode) {
@@ -242,71 +228,35 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 }
 
 func (s *fileLoopCursor) initData() error {
-	s.minTime = unAssignedValue
-	s.maxTime = unAssignedValue
+	s.minTime = math.MaxInt64
+	s.maxTime = math.MinInt64
 	if err := s.initMergeIters(); err != nil {
 		return err
-	}
-	s.setOnlyFirstOrLastFlag()
-	if s.onlyFirstOrLast && ((s.schema.Options().IsAscending() && s.ctx.decs.GetOps()[0].Call.Name == "last") ||
-		(!s.schema.Options().IsAscending() && s.ctx.decs.GetOps()[0].Call.Name == "first")) {
-		s.index = len(s.ctx.readers.Orders) - 1
 	}
 	return nil
 }
 
-func (s *fileLoopCursor) UpdateFileTime(min, max int64) {
-	if s.ctx.querySchema.Options().IsAscending() {
-		s.UpdateFileTimeAsc(min, max)
-		return
-	}
-	s.UpdateFileTimeDesc(min, max)
-}
-
-func (s *fileLoopCursor) UpdateFileTimeDesc(min, max int64) {
-	if s.index == len(s.ctx.readers.Orders)-1 && s.minTime > min || s.minTime < 0 {
-		s.fileInfo.MinTime = min
-	} else {
-		s.fileInfo.MinTime = s.fileMinTime
-	}
-	if s.index == 0 && s.maxTime > max {
-		s.fileInfo.MaxTime = s.maxTime
-	} else {
-		s.fileInfo.MaxTime = max
-	}
-}
-
-func (s *fileLoopCursor) UpdateFileTimeAsc(min, max int64) {
-	if s.index == 0 && s.minTime > min || s.minTime < 0 {
-		s.fileInfo.MinTime = min
-	} else {
-		s.fileInfo.MinTime = s.fileMinTime
-	}
-	if s.index == len(s.ctx.readers.Orders)-1 && s.maxTime > max {
-		s.fileInfo.MaxTime = s.maxTime
-	} else {
-		s.fileInfo.MaxTime = max
-	}
-}
-
 func (s *fileLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
 	if !s.initFirst {
-		var pool *record.CircularRecordPool
-		if len(s.ctx.decs.GetOps()) > 0 {
-			pool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, s.ctx.schema, true)
+		var schema record.Schemas
+		if s.recordSchema != nil {
+			schema = s.recordSchema
 		} else {
-			pool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, s.ctx.schema, false)
+			schema = s.ctx.schema
+		}
+		if len(s.ctx.decs.GetOps()) > 0 {
+			s.recPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, schema, true)
+		} else {
+			s.recPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, schema, false)
 		}
 		if len(s.ctx.readers.Orders) == 0 {
 			s.fileLoopCursorFunctions.readDataFunction = s.ReadAggDataOnlyInMemTable
 		} else {
 			s.fileLoopCursorFunctions.readDataFunction = s.ReadAggDataNormal
 		}
-		s.FileCursorPool = pool
 		if err := s.initData(); err != nil {
 			return nil, nil, err
 		}
-		s.fileMinTime = s.minTime
 		s.initFirst = true
 	}
 	return s.fileLoopCursorFunctions.readDataFunction()
@@ -320,9 +270,6 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 		} else {
 			s.currAggCursor.reset()
 		}
-	}
-	if s.breakFlag {
-		return nil, nil, nil
 	}
 
 	var e error
@@ -338,11 +285,6 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 			}
 
 			s.newCursor = false
-			min, max, err := file.MinMaxTime()
-			if err != nil {
-				return nil, nil, err
-			}
-			s.UpdateFileTime(min, max)
 		}
 		re, err := s.currAggCursor.next()
 		if err != nil {
@@ -351,24 +293,17 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 		if re == nil {
 			s.newCursor = true
 			s.index++
-			s.fileMinTime = s.fileInfo.MaxTime
-			if s.onlyFirstOrLast {
-				s.breakFlag = true
-			}
 			continue
 		}
-		if s.recordSchema == nil {
-			s.recordSchema = re.record.Schema
-		}
-
+		rec := s.recPool.Get()
 		if s.isCutSchema {
-			midRec := record.NewRecord(s.recordSchema, false)
-			midRec.AppendRecForSeries(re.record, 0, re.record.RowNums(), s.ridIdx)
-			re.record = midRec
+			rec.AppendRecForSeries(re.record, 0, re.record.RowNums(), s.ridIdx)
+		} else {
+			rec.CopyImpl(re.record, false, false)
 		}
 
 		info := s.UpdateRecordInfo(re)
-		return re.record, info, nil
+		return rec, info, nil
 	}
 
 	return nil, s.fileInfo, nil
@@ -384,7 +319,7 @@ func (s *fileLoopCursor) getFile() immutable.TSSPFile {
 func (s *fileLoopCursor) initCurrAggCursor(file immutable.TSSPFile) error {
 	var e error
 	if s.index == 0 || s.currAggCursor == nil {
-		s.currAggCursor, e = newFileCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step, file, s.mergeRecIters, s.FileCursorPool)
+		s.currAggCursor, e = newFileCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step, file, s.mergeRecIters)
 		if e != nil {
 			return e
 		}
@@ -399,17 +334,8 @@ func (s *fileLoopCursor) initCurrAggCursor(file immutable.TSSPFile) error {
 func (s *fileLoopCursor) UpdateRecordInfo(re *DataBlockInfo) *comm.FileInfo {
 	info := s.FilesInfoPool.Get()
 	info.SeriesInfo = re.sInfo
-	if s.ctx.tr.Min >= s.fileInfo.MinTime {
-		info.MinTime = s.ctx.tr.Min
-	} else {
-		info.MinTime = s.fileInfo.MinTime
-	}
-	if s.ctx.tr.Max <= s.fileInfo.MaxTime {
-		info.MaxTime = s.ctx.tr.Max
-	} else {
-		info.MaxTime = s.fileInfo.MaxTime
-	}
-	re.record.Schema = s.recordSchema
+	info.MinTime = s.minTime
+	info.MaxTime = s.maxTime
 	return info
 }
 
@@ -417,9 +343,9 @@ func (s *fileLoopCursor) Name() string {
 	return "fileLoopCursor"
 }
 func (s *fileLoopCursor) Close() error {
-	if s.FileCursorPool != nil {
-		s.FileCursorPool.Put()
-		s.FileCursorPool = nil
+	if s.recPool != nil {
+		s.recPool.Put()
+		s.recPool = nil
 	}
 	s.tagSetInfo.Unref()
 	return nil
@@ -449,6 +375,7 @@ func (s *fileLoopCursor) initMemitrs() {
 */
 func (s *fileLoopCursor) initMergeIters() error {
 	s.initMemitrs()
+	defer s.updateQueryTime()
 	if len(s.ctx.readers.OutOfOrders) < 1 {
 		return nil
 	}
@@ -461,7 +388,7 @@ func (s *fileLoopCursor) initMergeIters() error {
 	}
 	for i := range s.ctx.readers.OutOfOrders {
 		if !isInit {
-			curCursor, err = newFileCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step, s.ctx.readers.OutOfOrders[i], nil, s.FileCursorPool)
+			curCursor, err = newFileCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step, s.ctx.readers.OutOfOrders[i], nil)
 			if err != nil {
 				return err
 			}
@@ -481,6 +408,15 @@ func (s *fileLoopCursor) initMergeIters() error {
 		s.span.Count(unorderDuration, int64(duration))
 	}
 	return nil
+}
+
+func (s *fileLoopCursor) updateQueryTime() {
+	if s.minTime > s.ctx.queryTr.Min {
+		s.minTime = s.ctx.queryTr.Min
+	}
+	if s.maxTime < s.ctx.queryTr.Max {
+		s.maxTime = s.ctx.queryTr.Max
+	}
 }
 
 func (s *fileLoopCursor) initOutOfOrderItersByFile(curCursor *fileCursor, i int) error {
@@ -545,24 +481,20 @@ func (s *fileLoopCursor) initOutOfOrderItersByRecord(data *DataBlockInfo, limitR
 		mergeRecord.Schema = nil
 		mergeRecord.MergeRecordLimitRowsDescend(data.record, s.mergeRecIters[midSid].iter.record, 0, 0, limitRows)
 	}
+	if mergeRecord.RowNums() != 0 {
+		s.minTime = GetMinTime(s.minTime, mergeRecord, s.schema.Options().IsAscending())
+		s.maxTime = GetMaxTime(s.maxTime, mergeRecord, s.schema.Options().IsAscending())
+	}
 	s.mergeRecIters[midSid].iter.init(mergeRecord)
-}
-
-type clusterHelper struct {
-	record     *record.Record
-	recordPool *record.CircularRecordPool
-	recordInfo *comm.FileInfo
 }
 
 type baseAggCursorInfo struct {
 	ascending     bool
-	recordIndex   int
 	minTime       int64
 	maxTime       int64
 	intervalTime  int64
 	recordBuf     *record.Record
 	fileInfo      *comm.FileInfo
-	aggItrs       []*clusterHelper
 	cacheRecord   *record.Record
 	cacheFileInfo *comm.FileInfo
 }
@@ -584,22 +516,26 @@ func (b *baseCursorInfo) timeWindow(t int64) (int64, int64) {
 	return b.schema.Options().Window(t)
 }
 
-func (b *baseCursorInfo) field(i int) *record.Field {
-	return b.recordSchema.Field(i)
-}
-
 type AggTagSetCursor struct {
 	baseCursorInfo    *baseCursorInfo
 	baseAggCursorInfo *baseAggCursorInfo
 
-	firstOrLast    bool
-	availableIndex int
-	auxColIndex    []int // the aux tag index at the recordSchema
-	aggOps         []*comm.CallOption
-	aggFunction    *clusterCursorFunctions
+	firstOrLast         bool
+	auxTag              bool
+	intervalRecPosition int
+	auxColIndex         []int // the aux tag index at the recordSchema
+	aggOps              []*comm.CallOption
+	intervalRecordPool  *record.CircularRecordPool
+	intervalRecord      *record.Record
+	intervalStartTime   int64
+	record              *record.Record
+	recordPool          *record.CircularRecordPool
+	functions           [][2]func(intervalRec, rec *record.Record, recColumn, chunkColumn, recRow, chunkRow int)
+	nextFunction        func() (*record.Record, comm.SeriesInfoIntf, error)
+	funcIndex           []int
 }
 
-func NewAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, itr comm.KeyCursor) *AggTagSetCursor {
+func NewAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, itr comm.KeyCursor, singleSeries bool) *AggTagSetCursor {
 	c := &AggTagSetCursor{
 		firstOrLast: hasMultipleColumnsWithFirst(schema),
 	}
@@ -611,11 +547,12 @@ func NewAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, i
 		keyCursor: itr,
 		ctx:       ctx,
 	}
+	if singleSeries {
+		c.nextFunction = c.NextWithSingleSeries
+	} else {
+		c.nextFunction = c.NextWithMultipleSeries
+	}
 	return c
-}
-
-func (s *AggTagSetCursor) aggItr(i int) *clusterHelper {
-	return s.baseAggCursorInfo.aggItrs[i]
 }
 
 func (s *AggTagSetCursor) SetOps(ops []*comm.CallOption) {
@@ -626,7 +563,229 @@ func (s *AggTagSetCursor) NextAggData() (*record.Record, *comm.FileInfo, error) 
 	return nil, nil, nil
 }
 
+func (s *AggTagSetCursor) aggFunctionsInit() {
+	s.functions = make([][2]func(intervalRec, rec *record.Record, recColumn, chunkColumn, recRow, chunkRow int), len(s.GetSchema())-1)
+	s.funcIndex = make([]int, len(s.GetSchema())-1)
+	if len(s.aggOps) == 1 {
+		s.buildAggFunc()
+		return
+	}
+	s.buildAggFuncs()
+}
+
+func (s *AggTagSetCursor) buildAggFuncs() {
+	for i := range s.aggOps {
+		switch s.aggOps[i].Call.Name {
+		case "min":
+			s.buildMinFuncs(i)
+		case "max":
+			s.buildMaxFuncs(i)
+		case "first":
+			s.buildFirstFuncs(i)
+		case "last":
+			s.buildLastFuncs(i)
+		case "sum":
+			s.buildSumFuncs(i)
+		case "count":
+			s.buildCountFuncs(i)
+		default:
+			panic("unsupported agg function")
+		}
+	}
+}
+
+func (s *AggTagSetCursor) buildAggFunc() {
+	switch s.aggOps[0].Call.Name {
+	case "min":
+		s.buildMinFunc()
+	case "max":
+		s.buildMaxFunc()
+	case "first":
+		s.buildFirstFunc()
+	case "last":
+		s.buildLastFunc()
+	case "sum":
+		s.buildSumFunc()
+	case "count":
+		s.buildCountFunc()
+	default:
+		panic("unsupported agg function")
+
+	}
+}
+
+func (s *AggTagSetCursor) buildMinFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerMin
+		s.functions[column][1] = record.UpdateIntegerMinFast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatMin
+		s.functions[column][1] = record.UpdateFloatMinFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanMin
+		s.functions[column][1] = record.UpdateBooleanMinFast
+	}
+}
+
+func (s *AggTagSetCursor) buildMinFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerColumnMin
+		s.functions[column][1] = record.UpdateIntegerColumnMinFast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatColumnMin
+		s.functions[column][1] = record.UpdateFloatColumnMinFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanColumnMin
+		s.functions[column][1] = record.UpdateBooleanColumnMinFast
+	}
+}
+
+func (s *AggTagSetCursor) buildMaxFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerMax
+		s.functions[column][1] = record.UpdateIntegerMaxFast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatMax
+		s.functions[column][1] = record.UpdateFloatMaxFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanMax
+		s.functions[column][1] = record.UpdateBooleanMaxFast
+	}
+}
+
+func (s *AggTagSetCursor) buildMaxFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerColumnMax
+		s.functions[column][1] = record.UpdateIntegerColumnMaxFast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatColumnMax
+		s.functions[column][1] = record.UpdateFloatColumnMaxFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanColumnMax
+		s.functions[column][1] = record.UpdateBooleanColumnMaxFast
+	}
+}
+
+func (s *AggTagSetCursor) buildFirstFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerFirst
+		s.functions[column][1] = record.UpdateIntegerFirstFast
+	case influx.Field_Type_String:
+		s.functions[column][0] = record.UpdateStringFirst
+		s.functions[column][1] = record.UpdateStringFirst
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatFirst
+		s.functions[column][1] = record.UpdateFloatFirstFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanFirst
+		s.functions[column][1] = record.UpdateBooleanFirstFast
+	}
+}
+
+func (s *AggTagSetCursor) buildFirstFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerColumnFirst
+		s.functions[column][1] = record.UpdateIntegerColumnFirstFast
+	case influx.Field_Type_String:
+		s.functions[column][0] = record.UpdateStringColumnFirst
+		s.functions[column][1] = record.UpdateStringColumnFirst
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatColumnFirst
+		s.functions[column][1] = record.UpdateFloatColumnFirstFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanColumnFirst
+		s.functions[column][1] = record.UpdateBooleanColumnFirstFast
+	}
+}
+
+func (s *AggTagSetCursor) buildLastFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerLast
+		s.functions[column][1] = record.UpdateIntegerLastFast
+	case influx.Field_Type_String:
+		s.functions[column][0] = record.UpdateStringLast
+		s.functions[column][1] = record.UpdateStringLast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatLast
+		s.functions[column][1] = record.UpdateFloatLastFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanLast
+		s.functions[column][1] = record.UpdateBooleanLastFast
+	}
+}
+
+func (s *AggTagSetCursor) buildLastFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerColumnLast
+		s.functions[column][1] = record.UpdateIntegerColumnLastFast
+	case influx.Field_Type_String:
+		s.functions[column][0] = record.UpdateStringColumnLast
+		s.functions[column][1] = record.UpdateStringColumnLast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatColumnLast
+		s.functions[column][1] = record.UpdateFloatColumnLastFast
+	case influx.Field_Type_Boolean:
+		s.functions[column][0] = record.UpdateBooleanColumnLast
+		s.functions[column][1] = record.UpdateBooleanColumnLastFast
+	}
+}
+
+func (s *AggTagSetCursor) buildSumFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerSum
+		s.functions[column][1] = record.UpdateIntegerSumFast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatSum
+		s.functions[column][1] = record.UpdateFloatSumFast
+	}
+}
+
+func (s *AggTagSetCursor) buildSumFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	switch s.GetSchema()[column].Type {
+	case influx.Field_Type_Int:
+		s.functions[column][0] = record.UpdateIntegerSum
+		s.functions[column][1] = record.UpdateIntegerSumFast
+	case influx.Field_Type_Float:
+		s.functions[column][0] = record.UpdateFloatSum
+		s.functions[column][1] = record.UpdateFloatSumFast
+	}
+}
+
+func (s *AggTagSetCursor) buildCountFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	s.functions[column][0] = record.UpdateCount
+	s.functions[column][1] = record.UpdateCountFast
+}
+
+func (s *AggTagSetCursor) buildCountFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	s.functions[column][0] = record.UpdateCount
+	s.functions[column][1] = record.UpdateCountFast
+}
+
 func (s *AggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
+	defer func() {
+		s.aggFunctionsInit()
+	}()
 	if p, ok := plan.Children()[0].(*executor.LogicalAggregate); ok {
 		var callOps []*comm.CallOption
 		for _, op := range p.RowExprOptions() {
@@ -639,17 +798,13 @@ func (s *AggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
 		}
 		s.aggOps = callOps
 		s.baseCursorInfo.keyCursor.SinkPlan(plan.Children()[0].Children()[0])
-	} else {
-		s.baseCursorInfo.keyCursor.SinkPlan(plan.Children()[0])
 	}
-	defer func() {
-		s.initOpsFunctions()
-	}()
 	fieldSchema := s.GetSchema()
 	if len(s.baseCursorInfo.ctx.auxTags) == 0 {
 		s.SetSchema(fieldSchema)
 		return
 	}
+	s.auxTag = true
 	schema := make(record.Schemas, len(fieldSchema))
 	copy(schema[:len(fieldSchema)], fieldSchema)
 	schema = schema[:len(schema)-1]
@@ -664,30 +819,78 @@ func (s *AggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
 	s.SetSchema(schema)
 }
 
+func (s *AggTagSetCursor) assignRecord() {
+	if s.auxTag {
+		s.record.AppendRecForTagSet(s.baseAggCursorInfo.recordBuf, 0, s.baseAggCursorInfo.recordBuf.RowNums())
+		s.TagAuxHandler(s.record, 0, s.record.RowNums())
+		return
+	}
+	s.record = s.baseAggCursorInfo.recordBuf
+}
+
+func (s *AggTagSetCursor) SetParaForTest(schema record.Schemas) {
+	s.baseCursorInfo.ctx = &idKeyCursorContext{
+		aggPool: record.NewRecordPool(record.UnknownPool),
+	}
+	s.baseCursorInfo.recordSchema = schema
+	s.auxTag = true
+}
+
+func (s *AggTagSetCursor) NextWithSingleSeries() (*record.Record, comm.SeriesInfoIntf, error) {
+	re, info, err := s.baseCursorInfo.keyCursor.NextAggData()
+	if err != nil {
+		return nil, nil, err
+	}
+	if re == nil {
+		return nil, nil, nil
+	}
+	if !s.auxTag {
+		return re, info.SeriesInfo, nil
+	}
+	if s.auxTag && !s.baseCursorInfo.initPool {
+		s.baseCursorInfo.initPool = true
+		s.recordPool = record.NewCircularRecordPool(s.baseCursorInfo.ctx.aggPool, 2, s.GetSchema(), s.firstOrLast)
+		s.record = s.recordPool.Get()
+	}
+	s.baseAggCursorInfo.recordBuf = re
+	s.baseAggCursorInfo.fileInfo = info
+	s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
+	s.record.AppendRecForTagSet(s.baseAggCursorInfo.recordBuf, 0, s.baseAggCursorInfo.recordBuf.RowNums())
+	s.TagAuxHandler(s.record, 0, s.record.RowNums())
+	r := s.record
+	s.record = s.recordPool.Get()
+	return r, s.baseAggCursorInfo.fileInfo.SeriesInfo, nil
+}
+
 func (s *AggTagSetCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	return s.nextFunction()
+}
+
+func (s *AggTagSetCursor) NextWithMultipleSeries() (*record.Record, comm.SeriesInfoIntf, error) {
 	if !s.baseCursorInfo.initPool {
 		s.baseCursorInfo.initPool = true
-		s.baseCursorInfo.recordPool = record.NewCircularRecordPool(s.baseCursorInfo.ctx.aggPool, tagSetCursorRecordNumEqualsUno, s.GetSchema(), s.firstOrLast)
+		s.baseCursorInfo.recordPool = record.NewCircularRecordPool(s.baseCursorInfo.ctx.aggPool, tagSetCursorRecordNum, s.GetSchema(), s.firstOrLast)
 		if !s.baseAggCursorInfo.ascending {
 			s.baseAggCursorInfo.minTime = math.MaxInt64
+		}
+		s.intervalRecordPool = record.NewCircularRecordPool(IntervalRecordPool, tagSetCursorRecordNumEqualsUno, s.GetSchema(), s.firstOrLast)
+		s.intervalRecord = s.intervalRecordPool.Get()
+		s.baseCursorInfo.RecordResult = s.baseCursorInfo.recordPool.Get()
+		if s.auxTag {
+			s.recordPool = record.NewCircularRecordPool(s.baseCursorInfo.ctx.aggPool, tagSetCursorRecordNumEqualsUno, s.GetSchema(), s.firstOrLast)
+			s.record = s.recordPool.Get()
 		}
 	}
 	var err error
 	for {
 		if !s.baseCursorInfo.init {
-			if s.baseAggCursorInfo.cacheRecord == nil {
-				s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
-				if s.baseAggCursorInfo.recordBuf == nil {
-					break
-				}
-			} else {
-				s.baseAggCursorInfo.recordBuf = s.baseAggCursorInfo.cacheRecord
-				s.baseAggCursorInfo.fileInfo = s.baseAggCursorInfo.cacheFileInfo
-				s.baseAggCursorInfo.cacheRecord = nil
-				s.baseAggCursorInfo.cacheFileInfo = nil
+			s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
+			if s.baseAggCursorInfo.recordBuf == nil {
+				break
 			}
 
 			s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
+			s.assignRecord()
 			if err != nil {
 				return nil, nil, err
 			}
@@ -697,312 +900,23 @@ func (s *AggTagSetCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 			}
 			s.baseCursorInfo.init = true
 		}
-		for s.baseAggCursorInfo.recordIndex < s.availableIndex {
-			var index int
-			if s.baseAggCursorInfo.ascending {
-				index = s.baseAggCursorInfo.recordIndex
-			} else {
-				index = len(s.baseAggCursorInfo.aggItrs) - 1 - s.baseAggCursorInfo.recordIndex
+		for s.intervalRecPosition < s.intervalRecord.RowNums() {
+			num := s.intervalRecord.RowNums() - s.intervalRecPosition
+			maxNum := s.baseCursorInfo.schema.Options().ChunkSizeNum()
+			if num > maxNum {
+				num = maxNum
 			}
-
-			s.baseAggCursorInfo.recordIndex++
-			r := s.aggItr(index).record
-			s.aggItr(index).record = s.aggItr(index).recordPool.Get()
+			s.intervalRecord.TransIntervalRec2Rec(s.baseCursorInfo.RecordResult, s.intervalRecPosition, s.intervalRecPosition+num)
+			s.intervalRecPosition += num
+			r := s.baseCursorInfo.RecordResult
+			s.baseCursorInfo.RecordResult = s.baseCursorInfo.recordPool.Get()
 			if r.RowNums() != 0 {
 				return r, s.baseCursorInfo.currSeriesInfo, nil
 			}
 		}
-		s.updateAggItrs()
-		s.baseAggCursorInfo.recordIndex = 0
 		s.baseCursorInfo.init = false
 	}
 	return nil, nil, nil
-}
-
-type clusterCursorFunction struct {
-	function func(dscRe, re *record.Record, index int)
-	index    int
-}
-
-type clusterCursorFunctions struct {
-	functions []*clusterCursorFunction
-}
-
-func (s *AggTagSetCursor) initOpsFunctions() {
-	opsNum := len(s.aggOps)
-	s.aggFunction = &clusterCursorFunctions{
-		functions: make([]*clusterCursorFunction, 0, opsNum),
-	}
-	if opsNum == 1 {
-		index := s.baseCursorInfo.recordSchema.FieldIndex(s.aggOps[0].Ref.Val)
-		switch s.aggOps[0].Call.Name {
-		case "min":
-			s.assignMinFunc(index)
-		case "max":
-			s.assignMaxFunc(index)
-		case "first":
-			s.assignFirstFunc(index)
-		case "last":
-			s.assignLastFunc(index)
-		case "sum":
-			s.assignSumFunc(index)
-		case "count":
-			s.assignCountFunc(index)
-		default:
-			s.assignDefaultFunc(index)
-		}
-		return
-	}
-	for i := range s.aggOps {
-		index := s.baseCursorInfo.recordSchema.FieldIndex(s.aggOps[i].Ref.Val)
-		switch s.aggOps[i].Call.Name {
-		case "min":
-			s.assignColumnMinFunc(index)
-		case "max":
-			s.assignColumnMaxFunc(index)
-		case "first":
-			s.assignColumnFirstFunc(index)
-		case "last":
-			s.assignColumnLastFunc(index)
-		case "sum":
-			s.assignColumnSumFunc(index)
-		case "count":
-			s.assignColumnCountFunc(index)
-		default:
-			s.assignDefaultFunc(index)
-		}
-	}
-}
-
-func (s *AggTagSetCursor) assignMinFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordFloatMin,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordIntegerMin,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordBooleanMin,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignColumnMinFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnFloatMin,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnIntegerMin,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnBooleanMin,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignMaxFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordFloatMax,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordIntegerMax,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordBooleanMax,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignColumnMaxFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnFloatMax,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnIntegerMax,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnBooleanMax,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignFirstFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordFloatFirst,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordIntegerFirst,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordBooleanFirst,
-			index:    index,
-		})
-	case influx.Field_Type_String:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordStringFirst,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignColumnFirstFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnFloatFirst,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnIntegerFirst,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnBooleanFirst,
-			index:    index,
-		})
-	case influx.Field_Type_String:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnStringFirst,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignLastFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordFloatLast,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordIntegerLast,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordBooleanLast,
-			index:    index,
-		})
-	case influx.Field_Type_String:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordStringLast,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignColumnLastFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnFloatLast,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnIntegerLast,
-			index:    index,
-		})
-	case influx.Field_Type_Boolean:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnBooleanLast,
-			index:    index,
-		})
-	case influx.Field_Type_String:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnStringLast,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignSumFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordFloatSum,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordIntegerSum,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignColumnSumFunc(index int) {
-	switch s.baseCursorInfo.field(index).Type {
-	case influx.Field_Type_Float:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnFloatSum,
-			index:    index,
-		})
-	case influx.Field_Type_Int:
-		s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-			function: record.GetRecordColumnIntegerSum,
-			index:    index,
-		})
-	}
-}
-
-func (s *AggTagSetCursor) assignDefaultFunc(index int) {
-	s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-		function: record.GetRecordDefault,
-		index:    index,
-	})
-}
-
-func (s *AggTagSetCursor) assignCountFunc(index int) {
-	s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-		function: record.GetRecordCount,
-		index:    index,
-	})
-}
-
-func (s *AggTagSetCursor) assignColumnCountFunc(index int) {
-	s.aggFunction.functions = append(s.aggFunction.functions, &clusterCursorFunction{
-		function: record.GetRecordColumnCount,
-		index:    index,
-	})
 }
 
 func (s *AggTagSetCursor) TimeWindowsInit() {
@@ -1013,105 +927,82 @@ func (s *AggTagSetCursor) TimeWindowsInit() {
 		s.baseAggCursorInfo.minTime = minTime
 	}
 	_, s.baseAggCursorInfo.maxTime = s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MaxTime + 1)
-	windowLen := int(hybridqp.Abs((s.baseAggCursorInfo.maxTime - s.baseAggCursorInfo.minTime) / s.baseAggCursorInfo.intervalTime))
-	aggLen := len(s.baseAggCursorInfo.aggItrs)
-	if cap(s.baseAggCursorInfo.aggItrs) == 0 {
-		s.baseAggCursorInfo.aggItrs = make([]*clusterHelper, 0, windowLen)
+	opt := s.baseCursorInfo.schema.Options()
+	if s.baseAggCursorInfo.ascending {
+		s.intervalStartTime = s.baseAggCursorInfo.minTime
+	} else {
+		//window function return time range which is left closed and right open, so when use max time, we must minus one.
+		s.intervalStartTime = s.baseAggCursorInfo.maxTime - 1
 	}
-	var tmp []*clusterHelper
-	if windowLen > aggLen {
-		tmp = make([]*clusterHelper, 0, windowLen-aggLen)
-		for i := 0; i < windowLen-aggLen; i++ {
-			c := &clusterHelper{
-				recordPool: record.NewCircularRecordPool(s.baseCursorInfo.ctx.aggPool, tagSetCursorRecordNum, s.GetSchema(), s.firstOrLast),
-			}
-			c.record = c.recordPool.Get()
-			tmp = append(tmp, c)
+	s.intervalRecord.BuildEmptyIntervalRec(s.baseAggCursorInfo.minTime, s.baseAggCursorInfo.maxTime, int64(opt.GetInterval()), s.firstOrLast, opt.HasInterval(), opt.IsAscending())
+}
+
+func (s *AggTagSetCursor) GetIndex(t int64) int64 {
+	var index int64
+	if s.baseCursorInfo.schema.Options().HasInterval() {
+		index = hybridqp.Abs(t-s.intervalStartTime) / s.baseAggCursorInfo.intervalTime
+	} else {
+		index = 0
+	}
+	return index
+}
+
+func (s *AggTagSetCursor) resetFuncIndex() {
+	for i := range s.funcIndex {
+		s.funcIndex[i] = 0
+	}
+}
+
+func (s *AggTagSetCursor) updateFuncIndex() {
+	rec := s.record
+	for i := 0; i < rec.Len()-1; i++ {
+		// if there's no empty value in col, use fast compute function
+		if rec.ColVals[i].NilCount == 0 {
+			s.funcIndex[i] = 1
+		} else {
+			s.funcIndex[i] = 0
 		}
 	}
-	if s.baseAggCursorInfo.ascending {
-		s.baseAggCursorInfo.aggItrs = append(s.baseAggCursorInfo.aggItrs, tmp...)
-	} else {
-		s.baseAggCursorInfo.aggItrs = append(tmp, s.baseAggCursorInfo.aggItrs...)
+}
+
+func (s *AggTagSetCursor) getRecord() {
+	if s.auxTag {
+		s.record = s.recordPool.Get()
+		startPoint := s.record.RowNums()
+		s.record.AppendRecForTagSet(s.baseAggCursorInfo.recordBuf, 0, s.baseAggCursorInfo.recordBuf.RowNums())
+		s.TagAuxHandler(s.record, startPoint, startPoint+s.record.RowNums())
+		return
 	}
+	s.record = s.baseAggCursorInfo.recordBuf
 }
 
 func (s *AggTagSetCursor) RecordInit() error {
 	var err error
-	defer func() {
-		for i := range s.baseAggCursorInfo.aggItrs {
-			if s.baseAggCursorInfo.aggItrs[i].record.RowNums() > 1 {
-				s.aggRec(i)
-			}
-		}
-	}()
 	for s.baseAggCursorInfo.recordBuf != nil {
-		times := s.baseAggCursorInfo.recordBuf.Times()
+		s.resetFuncIndex()
+		s.updateFuncIndex()
+		times := s.getTimes()
 		for i, t := range times {
-			start, _ := s.baseCursorInfo.timeWindow(t)
-			index := hybridqp.Abs(start-s.baseAggCursorInfo.minTime) / s.baseAggCursorInfo.intervalTime
-			s.UpdateRec2Window(int(index), i)
+			index := s.GetIndex(t)
+			s.UpdateRec(i, int(index))
 		}
 		s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
 		if s.baseAggCursorInfo.recordBuf == nil {
 			break
 		}
+
 		s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
 		if err != nil {
 			return err
 		}
-		start, _ := s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MinTime)
-		_, end := s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MaxTime + 1)
-		if start != s.baseAggCursorInfo.minTime || end != s.baseAggCursorInfo.maxTime {
-			s.updateAggItrsIndex(start, end)
-			s.baseAggCursorInfo.cacheRecord = s.baseAggCursorInfo.recordBuf
-			s.baseAggCursorInfo.cacheFileInfo = s.baseAggCursorInfo.fileInfo
-			return nil
-		}
+
+		s.getRecord()
 	}
-	s.availableIndex = len(s.baseAggCursorInfo.aggItrs)
 	return nil
 }
 
-func (s *AggTagSetCursor) updateAggItrsIndex(start, end int64) {
-	if s.baseAggCursorInfo.ascending {
-		s.availableIndex = int((start - s.baseAggCursorInfo.minTime) / s.baseAggCursorInfo.intervalTime)
-		return
-	}
-	s.availableIndex = int((s.baseAggCursorInfo.maxTime - end) / s.baseAggCursorInfo.intervalTime)
-}
-
-func (s *AggTagSetCursor) updateAggItrs() {
-	if s.baseAggCursorInfo.ascending {
-		tmp := s.baseAggCursorInfo.aggItrs[:s.availableIndex]
-		s.baseAggCursorInfo.aggItrs = s.baseAggCursorInfo.aggItrs[s.availableIndex:]
-		s.baseAggCursorInfo.aggItrs = append(s.baseAggCursorInfo.aggItrs, tmp...)
-		return
-	}
-	itrCut := len(s.baseAggCursorInfo.aggItrs) - s.availableIndex
-	s.baseAggCursorInfo.aggItrs = s.baseAggCursorInfo.aggItrs[:itrCut]
-}
-
-func (s *AggTagSetCursor) UpdateRec2Window(index int, i int) {
-	re := s.aggItr(index).record
-	re.AppendRecForAggTagSet(s.baseAggCursorInfo.recordBuf, i, i+1)
-	if len(s.baseCursorInfo.ctx.auxTags) > 0 {
-		s.TagAuxHandler(s.aggItr(index).record, i, i+1)
-	}
-	if re.RowNums() >= s.baseCursorInfo.schema.Options().ChunkSizeNum() {
-		s.aggRec(index)
-	}
-}
-
-func (s *AggTagSetCursor) aggRec(itrIndex int) {
-	re := s.baseAggCursorInfo.aggItrs[itrIndex].record
-	s.baseAggCursorInfo.aggItrs[itrIndex].record = s.baseAggCursorInfo.aggItrs[itrIndex].recordPool.Get()
-	for _, f := range s.aggFunction.functions {
-		f.function(s.baseAggCursorInfo.aggItrs[itrIndex].record, re, f.index)
-	}
-	if len(s.aggOps) > 1 {
-		s.baseAggCursorInfo.aggItrs[itrIndex].record.ColVals[s.baseAggCursorInfo.aggItrs[itrIndex].record.ColNums()-1].AppendInteger(re.Time(0))
-	}
+func (s *AggTagSetCursor) getTimes() []int64 {
+	return s.record.Times()
 }
 
 func (s *AggTagSetCursor) TagAuxHandler(re *record.Record, start, end int) {
@@ -1124,6 +1015,17 @@ func (s *AggTagSetCursor) TagAuxHandler(re *record.Record, start, end int) {
 				re.ColVals[s.auxColIndex[i]].AppendStringNull()
 			}
 		}
+	}
+}
+
+func (s *AggTagSetCursor) UpdateRec(recRow, chunkRow int) {
+	var re = s.record
+	for i := range s.functions {
+		if s.functions[i][s.funcIndex[i]] == nil {
+			continue
+		}
+		recCol := re.Schema.FieldIndex(s.intervalRecord.Schema[i].Name)
+		s.functions[i][s.funcIndex[i]](s.intervalRecord, re, recCol, i, recRow, chunkRow)
 	}
 }
 
@@ -1140,6 +1042,15 @@ func (s *AggTagSetCursor) Name() string {
 }
 
 func (s *AggTagSetCursor) Close() error {
+	if s.recordPool != nil {
+		s.recordPool.Put()
+	}
+	if s.baseCursorInfo.recordPool != nil {
+		s.baseCursorInfo.recordPool.Put()
+	}
+	if s.intervalRecordPool != nil {
+		s.intervalRecordPool.Put()
+	}
 	return s.baseCursorInfo.keyCursor.Close()
 }
 
@@ -1161,6 +1072,7 @@ func (s *AggTagSetCursor) EndSpan() {
 type PreAggTagSetCursor struct {
 	baseCursorInfo    *baseCursorInfo
 	baseAggCursorInfo *baseAggCursorInfo
+	ops               []*comm.CallOption
 }
 
 func NewPreAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, itr comm.KeyCursor) *PreAggTagSetCursor {
@@ -1205,108 +1117,41 @@ func (s *PreAggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
 	s.SetSchema(schema)
 }
 
-func (s *PreAggTagSetCursor) aggItr(i int) *clusterHelper {
-	return s.baseAggCursorInfo.aggItrs[i]
-}
-
 func (s *PreAggTagSetCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	var err error
-	for {
-		if !s.baseCursorInfo.init {
-			s.baseAggCursorInfo.aggItrs = s.baseAggCursorInfo.aggItrs[:0]
-			if s.baseAggCursorInfo.cacheRecord == nil {
-				s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
-				if s.baseAggCursorInfo.recordBuf == nil {
-					break
-				}
-			} else {
-				s.baseAggCursorInfo.recordBuf = s.baseAggCursorInfo.cacheRecord
-				s.baseAggCursorInfo.fileInfo = s.baseAggCursorInfo.cacheFileInfo
-				s.baseAggCursorInfo.cacheRecord = nil
-				s.baseAggCursorInfo.cacheFileInfo = nil
-			}
-			if s.baseAggCursorInfo.recordBuf == nil {
-				break
-			}
-			s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
-			if err != nil {
-				return nil, nil, err
-			}
-			s.TimeWindowsInit()
-			if e := s.RecordInitPreAgg(); e != nil {
-				return nil, nil, e
-			}
-			s.baseCursorInfo.init = true
-		}
-		for s.baseAggCursorInfo.recordIndex < len(s.baseAggCursorInfo.aggItrs) {
-			var index int
-			if s.baseAggCursorInfo.ascending {
-				index = s.baseAggCursorInfo.recordIndex
-			} else {
-				index = len(s.baseAggCursorInfo.aggItrs) - 1 - s.baseAggCursorInfo.recordIndex
-			}
-
-			s.baseAggCursorInfo.recordIndex++
-			r := s.aggItr(index).record
-			s.aggItr(index).record = s.aggItr(index).recordPool.Get()
-			if r.RowNums() != 0 {
-				return r, s.aggItr(index).recordInfo.SeriesInfo, nil
-			}
-		}
-		s.baseCursorInfo.init = false
+	s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
+	s.ops = s.baseCursorInfo.ctx.decs.GetOps()
+	if s.baseAggCursorInfo.recordBuf == nil {
+		return nil, nil, nil
 	}
+	s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
+	if err != nil {
+		return nil, nil, err
+	}
+	s.baseCursorInfo.RecordResult = s.baseAggCursorInfo.recordBuf.Copy()
+	if e := s.RecordInitPreAgg(); e != nil {
+		return nil, nil, e
+	}
+
+	r := s.baseCursorInfo.RecordResult
+	if r.RowNums() != 0 {
+		return r, s.baseCursorInfo.currSeriesInfo, nil
+	}
+	s.baseCursorInfo.init = false
 	return nil, nil, nil
-}
-
-func (s *PreAggTagSetCursor) TimeWindowsInit() {
-	s.baseAggCursorInfo.minTime, s.baseAggCursorInfo.intervalTime = s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MinTime)
-	s.baseAggCursorInfo.intervalTime -= s.baseAggCursorInfo.minTime
-	_, s.baseAggCursorInfo.maxTime = s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MaxTime)
-	windowLen := int(hybridqp.Abs((s.baseAggCursorInfo.maxTime - s.baseAggCursorInfo.minTime) / s.baseAggCursorInfo.intervalTime))
-	if cap(s.baseAggCursorInfo.aggItrs) == 0 {
-		s.baseAggCursorInfo.aggItrs = make([]*clusterHelper, 0, windowLen)
-	}
-	for i := 0; i < windowLen; i++ {
-		c := &clusterHelper{
-			recordPool: record.NewCircularRecordPool(s.baseCursorInfo.ctx.aggPool, tagSetCursorRecordNum, s.GetSchema(), true),
-		}
-		c.record = c.recordPool.Get()
-		s.baseAggCursorInfo.aggItrs = append(s.baseAggCursorInfo.aggItrs, c)
-	}
 }
 
 func (s *PreAggTagSetCursor) RecordInitPreAgg() error {
 	var err error
-	for s.baseAggCursorInfo.recordBuf != nil {
-		times := s.baseAggCursorInfo.recordBuf.Times()
-		for _, t := range times {
-			start, _ := s.baseCursorInfo.timeWindow(t)
-			index := int(hybridqp.Abs(start-s.baseAggCursorInfo.minTime) / s.baseAggCursorInfo.intervalTime)
-			if s.aggItr(index).record != nil && s.aggItr(index).record.RecMeta != nil && len(s.aggItr(index).record.RecMeta.ColMeta) != 0 {
-				addr := &s.aggItr(index).record.ColVals[0]
-				immutable.AggregateData(s.aggItr(index).record, s.baseAggCursorInfo.recordBuf, s.baseCursorInfo.ctx.decs.GetOps())
-				if addr != &s.aggItr(index).record.ColVals[0] {
-					s.aggItr(index).recordInfo = s.baseAggCursorInfo.fileInfo
-				}
-			} else {
-				s.aggItr(index).record = s.baseAggCursorInfo.recordBuf.Copy()
-				s.aggItr(index).recordInfo = s.baseAggCursorInfo.fileInfo
-			}
-		}
+	for {
 		s.baseAggCursorInfo.recordBuf, s.baseAggCursorInfo.fileInfo, err = s.baseCursorInfo.keyCursor.NextAggData()
 		if s.baseAggCursorInfo.recordBuf == nil {
-			return nil
+			break
 		}
+		immutable.AggregateData(s.baseCursorInfo.RecordResult, s.baseAggCursorInfo.recordBuf, s.ops)
 		s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
 		if err != nil {
 			return err
-		}
-		start, _ := s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MinTime)
-		_, end := s.baseCursorInfo.timeWindow(s.baseAggCursorInfo.fileInfo.MaxTime + 1)
-		if start != s.baseAggCursorInfo.minTime || end != s.baseAggCursorInfo.maxTime {
-			s.baseAggCursorInfo.cacheRecord = s.baseAggCursorInfo.recordBuf
-			s.baseAggCursorInfo.cacheFileInfo = s.baseAggCursorInfo.fileInfo
-			return nil
 		}
 	}
 	return nil

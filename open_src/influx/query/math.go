@@ -17,7 +17,7 @@ import (
 
 func isMathFunction(call *influxql.Call) bool {
 	switch call.Name {
-	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round":
+	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max":
 		return true
 	}
 	return false
@@ -29,7 +29,7 @@ func (MathTypeMapper) MapType(measurement *influxql.Measurement, field string) i
 	return influxql.Unknown
 }
 
-func (MathTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]influxql.DataType, schema *influxql.Schema) error {
+func (MathTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]*influxql.FieldNameSpace, schema *influxql.Schema) error {
 	return nil
 }
 
@@ -79,7 +79,7 @@ func (MathTypeMapper) CallType(name string, args []influxql.DataType) (influxql.
 		default:
 			return influxql.Unknown, fmt.Errorf("invalid argument type for the second argument in %s(): %s", name, arg1)
 		}
-	case "abs", "floor", "ceil", "round":
+	case "abs", "floor", "ceil", "round", "row_max":
 		var arg0 influxql.DataType
 		if len(args) > 0 {
 			arg0 = args[0]

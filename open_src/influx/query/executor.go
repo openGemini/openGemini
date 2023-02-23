@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -223,6 +224,11 @@ type Executor struct {
 	// Used for tracking running queries.
 	TaskManager *TaskManager
 
+	// writer is used for INTO statement
+	PointsWriter interface {
+		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
+	}
+
 	// Logger to use for all logging.
 	// Defaults to discarding all log output.
 	Logger *zap.Logger
@@ -269,6 +275,8 @@ func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, clo
 	}
 	defer detach()
 
+	// init point writer of context which may be used to write data with into statement
+	ctx.PointsWriter = e.PointsWriter
 	// Setup the execution context that will be used when executing statements.
 	ctx.Results = results
 

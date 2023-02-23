@@ -12,24 +12,28 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 // RetentionPolicyInfo represents metadata about a retention policy.
 type RetentionPolicyInfo struct {
-	Name               string
-	ReplicaN           int
-	Duration           time.Duration
-	ShardGroupDuration time.Duration
-	HotDuration        time.Duration
-	WarmDuration       time.Duration
-	IndexGroupDuration time.Duration
-	IndexGroups        []IndexGroupInfo
-	Measurements       map[string]*MeasurementInfo
-	ShardGroups        []ShardGroupInfo
-	Subscriptions      []SubscriptionInfo
-	MarkDeleted        bool
+	Name                 string
+	ReplicaN             int
+	Duration             time.Duration
+	ShardGroupDuration   time.Duration
+	HotDuration          time.Duration
+	WarmDuration         time.Duration
+	IndexGroupDuration   time.Duration
+	IndexGroups          []IndexGroupInfo
+	Measurements         map[string]*MeasurementInfo // {"cpu_0001": *MeasurementInfo}
+	MstVersions          map[string]uint32           // { "cpu": 1}
+	ShardGroups          []ShardGroupInfo
+	Subscriptions        []SubscriptionInfo
+	DownSamplePolicyInfo *DownSamplePolicyInfo
+	MarkDeleted          bool
 }
 
 // NewRetentionPolicyInfo returns a new instance of RetentionPolicyInfo
@@ -189,6 +193,10 @@ func (rpi *RetentionPolicyInfo) TimeRangeInfo(shardID uint64) *ShardTimeRangeInf
 		timeRangeInfo := ShardTimeRangeInfo{}
 		timeRangeInfo.TimeRange = TimeRangeInfo{StartTime: rpi.ShardGroups[i].StartTime, EndTime: rpi.ShardGroups[i].EndTime}
 		shard := rpi.ShardGroups[i].Shard(shardID)
+		if shard == nil {
+			continue
+		}
+
 		timeRangeInfo.OwnerIndex = IndexDescriptor{IndexID: shard.IndexID}
 		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange = rpi.getIndexGroupTimeRange(shard.IndexID)
 		timeRangeInfo.ShardDuration = &ShardDurationInfo{DurationInfo: DurationDescriptor{Duration: rpi.Duration,
@@ -213,9 +221,9 @@ func (rpi *RetentionPolicyInfo) getIndexGroupTimeRange(indexID uint64) (indexGro
 
 func (rpi *RetentionPolicyInfo) TierDuration(tier uint64) time.Duration {
 	switch tier {
-	case Hot:
+	case util.Hot:
 		return rpi.HotDuration
-	case Warm:
+	case util.Warm:
 		return rpi.WarmDuration
 	}
 	return 0
@@ -265,6 +273,12 @@ func (rpi *RetentionPolicyInfo) walkShardGroups(fn func(sg *ShardGroupInfo)) {
 	}
 }
 
+func (rpi *RetentionPolicyInfo) walkIndexGroups(fn func(ig *IndexGroupInfo)) {
+	for i := range rpi.IndexGroups {
+		fn(&rpi.IndexGroups[i])
+	}
+}
+
 func (rpi *RetentionPolicyInfo) walkSubscriptions(fn func(subscription *SubscriptionInfo)) {
 	for i := range rpi.Subscriptions {
 		fn(&rpi.Subscriptions[i])
@@ -293,6 +307,13 @@ func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 		}
 	}
 
+	if rpi.MstVersions != nil {
+		pb.MstVersions = make(map[string]uint32, len(rpi.MstVersions))
+		for n, v := range rpi.MstVersions {
+			pb.MstVersions[n] = v
+		}
+	}
+
 	pb.ShardGroups = make([]*proto2.ShardGroupInfo, len(rpi.ShardGroups))
 	for i, sgi := range rpi.ShardGroups {
 		pb.ShardGroups[i] = sgi.marshal()
@@ -308,6 +329,10 @@ func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 		for i, sub := range rpi.Subscriptions {
 			pb.Subscriptions[i] = sub.marshal()
 		}
+	}
+
+	if rpi.DownSamplePolicyInfo != nil {
+		pb.DownSamplePolicyInfo = rpi.DownSamplePolicyInfo.Marshal()
 	}
 
 	return pb
@@ -333,6 +358,10 @@ func (rpi *RetentionPolicyInfo) unmarshal(pb *proto2.RetentionPolicyInfo) {
 		}
 	}
 
+	if len(pb.GetMstVersions()) > 0 {
+		rpi.MstVersions = pb.GetMstVersions()
+	}
+
 	if len(pb.GetShardGroups()) > 0 {
 		rpi.ShardGroups = make([]ShardGroupInfo, len(pb.GetShardGroups()))
 		for i, x := range pb.GetShardGroups() {
@@ -352,6 +381,11 @@ func (rpi *RetentionPolicyInfo) unmarshal(pb *proto2.RetentionPolicyInfo) {
 		for i, x := range pb.GetSubscriptions() {
 			rpi.Subscriptions[i].unmarshal(x)
 		}
+	}
+
+	if pb.GetDownSamplePolicyInfo() != nil {
+		rpi.DownSamplePolicyInfo = &DownSamplePolicyInfo{}
+		rpi.DownSamplePolicyInfo.Unmarshal(pb.GetDownSamplePolicyInfo())
 	}
 }
 
@@ -400,6 +434,10 @@ func (rpi *RetentionPolicyInfo) UnmarshalBinary(data []byte) error {
 
 func (rpi *RetentionPolicyInfo) MatchMeasurements(ms influxql.Measurements, ret map[string]*MeasurementInfo) {
 	rpi.EachMeasurements(func(mi *MeasurementInfo) {
+		if mi.MarkDeleted {
+			return
+		}
+
 		key := rpi.Name + "." + mi.Name
 		if len(ms) == 0 {
 			ret[key] = mi
@@ -411,11 +449,12 @@ func (rpi *RetentionPolicyInfo) MatchMeasurements(ms influxql.Measurements, ret 
 				continue
 			}
 
-			if m.Regex != nil && m.Regex.Val.MatchString(mi.Name) {
+			originName := mi.OriginName()
+			if m.Regex != nil && m.Regex.Val.MatchString(originName) {
 				ret[key] = mi
 			}
 
-			if m.Name == mi.Name {
+			if m.Name == originName {
 				ret[key] = mi
 			}
 		}
@@ -424,6 +463,9 @@ func (rpi *RetentionPolicyInfo) MatchMeasurements(ms influxql.Measurements, ret 
 
 func (rpi *RetentionPolicyInfo) EachMeasurements(fn func(m *MeasurementInfo)) {
 	for _, msti := range rpi.Measurements {
+		if msti.MarkDeleted {
+			continue
+		}
 		fn(msti)
 	}
 }
@@ -464,13 +506,15 @@ func (rpi *RetentionPolicyInfo) GetMeasurement(name string) (*MeasurementInfo, e
 }
 
 func (rpi *RetentionPolicyInfo) Measurement(name string) *MeasurementInfo {
-	return rpi.Measurements[name]
+	version := rpi.MstVersions[name]
+	nameWithVer := influx.GetNameWithVersion(name, version)
+	return rpi.Measurements[nameWithVer]
 }
 
 func (rpi *RetentionPolicyInfo) validMeasurementShardType(shardType, mstName string) error {
 	var msti *MeasurementInfo
 	for _, mst := range rpi.Measurements {
-		if mst.Name == mstName {
+		if influx.GetOriginMstName(mst.Name) == mstName {
 			continue
 		}
 		msti = mst
@@ -497,6 +541,10 @@ func (rpi *RetentionPolicyInfo) maxShardGroupID() uint64 {
 		}
 	}
 	return maxId
+}
+
+func (rpi *RetentionPolicyInfo) HasDownSamplePolicy() bool {
+	return rpi.DownSamplePolicyInfo != nil && (rpi.DownSamplePolicyInfo.Calls != nil || rpi.DownSamplePolicyInfo.DownSamplePolicies != nil)
 }
 
 // RetentionPolicySpec represents the specification for a new retention policy.

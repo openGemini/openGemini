@@ -51,7 +51,7 @@ func (e *FuncExecutor) Execute() error {
 	return nil
 }
 
-func mockMetaData() (meta.Data, error) {
+func MockMetaData() (meta.Data, error) {
 	exec := &FuncExecutor{}
 
 	data := meta.Data{PtNumPerNode: 1, ClusterPtNum: 1}
@@ -118,7 +118,7 @@ func mockMetaData() (meta.Data, error) {
 }
 
 func TestQueryTagKeys(t *testing.T) {
-	data, err := mockMetaData()
+	data, err := MockMetaData()
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
@@ -143,10 +143,10 @@ func TestQueryTagKeys(t *testing.T) {
 		RHS: &influxql.StringLiteral{Val: "year"},
 	})
 
-	if _, ok := ret["cpu"]; !ok {
+	if _, ok := ret["cpu_0000"]; !ok {
 		t.Fatalf("tag keys query failed. exp: contain cpu")
 	}
-	if _, ok := ret["cpu"]["year"]; !ok {
+	if _, ok := ret["cpu_0000"]["year"]; !ok {
 		t.Fatalf("tag keys query failed. exp: contain year")
 	}
 
@@ -160,10 +160,10 @@ func TestQueryTagKeys(t *testing.T) {
 		RHS: &influxql.RegexLiteral{Val: reg},
 	})
 
-	if _, ok := ret["cpu"]["host_node"]; !ok {
+	if _, ok := ret["cpu_0000"]["host_node"]; !ok {
 		t.Fatalf("tag keys query failed. exp: contain host_node")
 	}
-	if _, ok := ret["cpu"]["server_node"]; !ok {
+	if _, ok := ret["cpu_0000"]["server_node"]; !ok {
 		t.Fatalf("tag keys query failed. exp: contain server_node")
 	}
 }

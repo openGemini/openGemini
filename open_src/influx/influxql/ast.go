@@ -58,6 +58,8 @@ const (
 	AnyField DataType = 8
 	// Unsigned means the data type is an unsigned integer.
 	Unsigned DataType = 9
+	// FloatTuple means the data type is a float tuple.
+	FloatTuple DataType = 10
 )
 
 const (
@@ -124,6 +126,8 @@ func DataTypeFromString(s string) DataType {
 	switch s {
 	case "float":
 		return Float
+	case "floatTuple":
+		return FloatTuple
 	case "integer":
 		return Integer
 	case "unsigned":
@@ -145,6 +149,11 @@ func DataTypeFromString(s string) DataType {
 	}
 }
 
+type FieldNameSpace struct {
+	DataType DataType
+	RealName string
+}
+
 // LessThan returns true if the other DataType has greater precedence than the
 // current data type. Unknown has the lowest precedence.
 //
@@ -163,13 +172,14 @@ func (d DataType) LessThan(other DataType) bool {
 }
 
 var (
-	zeroFloat64  interface{} = float64(0)
-	zeroInt64    interface{} = int64(0)
-	zeroUint64   interface{} = uint64(0)
-	zeroString   interface{} = ""
-	zeroBoolean  interface{} = false
-	zeroTime     interface{} = time.Time{}
-	zeroDuration interface{} = time.Duration(0)
+	zeroFloat64    interface{} = float64(0)
+	zeroInt64      interface{} = int64(0)
+	zeroUint64     interface{} = uint64(0)
+	zeroString     interface{} = ""
+	zeroBoolean    interface{} = false
+	zeroTime       interface{} = time.Time{}
+	zeroDuration   interface{} = time.Duration(0)
+	zeroFloatTuple interface{} = []float64{}
 )
 
 // Zero returns the zero value for the DataType.
@@ -179,6 +189,8 @@ func (d DataType) Zero() interface{} {
 	switch d {
 	case Float:
 		return zeroFloat64
+	case FloatTuple:
+		return zeroFloatTuple
 	case Integer:
 		return zeroInt64
 	case Unsigned:
@@ -200,6 +212,8 @@ func (d DataType) String() string {
 	switch d {
 	case Float:
 		return "float"
+	case FloatTuple:
+		return "floatTuple"
 	case Integer:
 		return "integer"
 	case Unsigned:
@@ -320,6 +334,7 @@ func (SortFields) node()                   {}
 func (Sources) node()                      {}
 func (*StringLiteral) node()               {}
 func (*SubQuery) node()                    {}
+func (*Join) node()                        {}
 func (*Target) node()                      {}
 func (*TimeLiteral) node()                 {}
 func (*VarRef) node()                      {}
@@ -444,6 +459,7 @@ type Expr interface {
 	// expr is unexported to ensure implementations of Expr
 	// can only originate in this package.
 	expr()
+	RewriteNameSpace(alias, mst string)
 }
 
 func (*BinaryExpr) expr()      {}
@@ -490,10 +506,12 @@ type Source interface {
 	// source is unexported to ensure implementations of Source
 	// can only originate in this package.
 	source()
+	GetName() string
 }
 
 func (*Measurement) source() {}
 func (*SubQuery) source()    {}
+func (*Join) source()        {}
 
 // Sources represents a list of sources.
 type Sources []Source
@@ -567,6 +585,15 @@ func (a Sources) RequiredPrivileges() (ExecutionPrivileges, error) {
 			})
 		case *SubQuery:
 			privs, err := source.Statement.RequiredPrivileges()
+			if err != nil {
+				return nil, err
+			}
+			ep = append(ep, privs...)
+		case *Join:
+			var sources Sources
+			sources = append(sources, source.LSrc)
+			sources = append(sources, source.RSrc)
+			privs, err := sources.RequiredPrivileges()
 			if err != nil {
 				return nil, err
 			}
@@ -1314,10 +1341,12 @@ type SelectStatement struct {
 	// Removes duplicate rows from raw queries.
 	Dedupe bool
 
-	Schema Schema
-
 	// GroupByAllDims is true when group by single series
 	GroupByAllDims bool
+
+	Schema Schema
+
+	JoinSource []*Join
 }
 
 // TimeAscending returns true if the time field is sorted in chronological order.
@@ -1368,6 +1397,10 @@ func (s *SelectStatement) Clone() *SelectStatement {
 	return &clone
 }
 
+func CloneSource(source Source) Source {
+	return cloneSource(source)
+}
+
 func cloneSources(sources Sources) Sources {
 	clone := make(Sources, 0, len(sources))
 	for _, s := range sources {
@@ -1385,7 +1418,13 @@ func cloneSource(s Source) Source {
 	case *Measurement:
 		return s.Clone()
 	case *SubQuery:
-		return &SubQuery{Statement: s.Statement.Clone()}
+		return &SubQuery{Statement: s.Statement.Clone(), Alias: s.Alias}
+	case *Join:
+		c := &Join{}
+		c.LSrc = cloneSource(s.LSrc)
+		c.RSrc = cloneSource(s.RSrc)
+		c.Condition = CloneExpr(s.Condition)
+		return c
 	default:
 		panic("unreachable")
 	}
@@ -1398,11 +1437,77 @@ type FieldMapper interface {
 	TypeMapper
 }
 
+func RewriteMstNameSpace(fields Fields, source Source, hasJoin bool, alias string) error {
+	s, ok := source.(*Measurement)
+	if !ok {
+		return errors.New("expect measurement type")
+	}
+	for i := range fields {
+		fields[i].Expr.RewriteNameSpace(s.Alias, s.Name)
+		if f, ok := fields[i].Expr.(*VarRef); ok && len(fields[i].Alias) == 0 {
+			if len(f.Alias) > 0 {
+				fields[i].Alias = f.Alias
+			} else if hasJoin && alias != "" {
+				fields[i].Alias = alias + "." + f.Val
+			}
+		}
+	}
+	return nil
+}
+
+func RewriteSubQueryNameSpace(source Source, hasJoin bool) error {
+	s, ok := source.(*SubQuery)
+	if !ok {
+		return errors.New("expect measurement type")
+	}
+	for i := range s.Statement.Sources {
+		switch src := s.Statement.Sources[i].(type) {
+		case *Measurement:
+			if e := RewriteMstNameSpace(s.Statement.Fields, src, hasJoin, s.GetName()); e != nil {
+				return e
+			}
+		case *SubQuery:
+			if e := RewriteSubQueryNameSpace(src, hasJoin); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn bool, fields Fields) (Source, error) {
+	switch src := src.(type) {
+	case *SubQuery:
+		if e := RewriteSubQueryNameSpace(src, true); e != nil {
+			return nil, e
+		}
+		stmt, err := src.Statement.RewriteFields(m, batchEn, true)
+		src.Statement = stmt
+		if e := RewriteSubQueryNameSpace(src, true); e != nil {
+			return nil, e
+		}
+		if err == nil {
+			src.Statement = stmt
+			return src, nil
+		}
+		if err != ErrDeclareEmptyCollection {
+			return nil, err
+		}
+		return nil, nil
+	case *Measurement:
+		if e := RewriteMstNameSpace(fields, src, true, src.GetName()); e != nil {
+			return nil, e
+		}
+		return nil, nil
+	}
+	return nil, nil
+}
+
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
 // fields are replaced with the supplied fields, and any wildcard GROUP BY fields are replaced
 // with the supplied dimensions. Any fields with no type specifier are rewritten with the
 // appropriate type.
-func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool) (*SelectStatement, error) {
+func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin bool) (*SelectStatement, error) {
 	// Clone the statement so we aren't rewriting the original.
 	other := s.Clone()
 
@@ -1411,7 +1516,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool) (*SelectSta
 	for _, src := range other.Sources {
 		switch src := src.(type) {
 		case *SubQuery:
-			stmt, err := src.Statement.RewriteFields(m, batchEn)
+			stmt, err := src.Statement.RewriteFields(m, batchEn, hasJoin)
 			if err == nil {
 				src.Statement = stmt
 				sources = append(sources, src)
@@ -1421,7 +1526,21 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool) (*SelectSta
 			if err != ErrDeclareEmptyCollection {
 				return nil, err
 			}
+		case *Join:
+			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields)
+			if lErr != nil {
+				return nil, lErr
+			}
+			sources = append(sources, lSources)
+			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields)
+			if rErr != nil {
+				return nil, rErr
+			}
+			sources = append(sources, rSources)
 		default:
+			if e := RewriteMstNameSpace(other.Fields, src, hasJoin, src.GetName()); e != nil {
+				return nil, e
+			}
 			sources = append(sources, src)
 		}
 	}
@@ -1536,7 +1655,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool) (*SelectSta
 	isEmptyCollByField := func(varRefmap map[string]Expr) bool {
 		for _, expr := range varRefmap {
 			if varRef, ok := expr.(*VarRef); ok {
-				if varRef.Type != Unknown {
+				if varRef.Type != Unknown && varRef.Type != AnyField {
 					return false
 				}
 			}
@@ -1551,7 +1670,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool) (*SelectSta
 
 		for _, expr := range varRefmap {
 			if varRef, ok := expr.(*VarRef); ok {
-				if varRef.Type != Unknown {
+				if varRef.Type != Unknown && varRef.Type != AnyField {
 					return false
 				}
 			}
@@ -1999,7 +2118,7 @@ func RewriteTopBottomStatement(node Node) Node {
 			nst.Fields = append(nst.Fields, s.Fields[i+1:]...)
 
 			s.Sources = s.Sources[:0]
-			s.Sources = append(s.Sources, &SubQuery{nst})
+			s.Sources = append(s.Sources, &SubQuery{Statement: nst})
 
 			// rewrite the top/bottom fields
 			var newArgs []Expr
@@ -2053,6 +2172,38 @@ func (fn rewriterOpsNestFunc) RewriteOpsNest(n Node) Node { return fn(n) }
 // RewriteTopBottom converts a query with a tag in the top or bottom to a subquery
 func (s *SelectStatement) RewriteTopBottom() {
 	RewriteOpsNestFunc(s, RewriteTopBottomStatement)
+}
+
+// RewritePercentileOGSketchStatement converts a query with percentile_ogsketch that has a subquery to the percentile_approx
+func RewritePercentileOGSketchStatement(node Node) Node {
+	s, ok := node.(*SelectStatement)
+	if !ok {
+		return s
+	}
+	var haveSubQuery bool
+	for i := range s.Sources {
+		if s.Sources[i] == nil {
+			continue
+		}
+		if _, ok := s.Sources[i].(*SubQuery); ok {
+			haveSubQuery = true
+			break
+		}
+	}
+	if !haveSubQuery {
+		return s
+	}
+	for i := 0; i < len(s.Fields); i++ {
+		if call, ok := s.Fields[i].Expr.(*Call); ok && call.Name == "percentile_ogsketch" {
+			call.Name = "percentile_approx"
+		}
+	}
+	return s
+}
+
+// RewritePercentileOGSketch converts a query with percentile_ogsketch that has a subquery to the percentile_approx
+func (s *SelectStatement) RewritePercentileOGSketch() {
+	RewriteOpsNestFunc(s, RewritePercentileOGSketchStatement)
 }
 
 // RewriteDistinct rewrites the expression to be a call for map/reduce to work correctly.
@@ -3864,7 +4015,7 @@ func (a Measurements) String() string {
 type Measurement struct {
 	Database        string
 	RetentionPolicy string
-	Name            string
+	Name            string // name with version
 	Regex           *RegexLiteral
 	IsTarget        bool
 
@@ -3872,6 +4023,7 @@ type Measurement struct {
 	// specified system iterator.
 	SystemIterator    string
 	IsSystemStatement bool
+	Alias             string
 }
 
 // Clone returns a deep clone of the Measurement.
@@ -3888,6 +4040,7 @@ func (m *Measurement) Clone() *Measurement {
 		IsTarget:          m.IsTarget,
 		SystemIterator:    m.SystemIterator,
 		IsSystemStatement: m.IsSystemStatement,
+		Alias:             m.Alias,
 	}
 }
 
@@ -3918,9 +4071,17 @@ func (m *Measurement) String() string {
 	return buf.String()
 }
 
+func (m *Measurement) GetName() string {
+	if len(m.Alias) != 0 {
+		return m.Alias
+	}
+	return m.Name
+}
+
 // SubQuery is a source with a SelectStatement as the backing store.
 type SubQuery struct {
 	Statement *SelectStatement
+	Alias     string
 }
 
 // String returns a string representation of the subquery.
@@ -3928,10 +4089,38 @@ func (s *SubQuery) String() string {
 	return fmt.Sprintf("(%s)", s.Statement.String())
 }
 
+func (s *SubQuery) GetName() string {
+	return s.Alias
+}
+
+type Join struct {
+	LSrc      Source
+	RSrc      Source
+	Condition Expr
+}
+
+func (j *Join) String() string {
+	return fmt.Sprintf("%s full join %s on %s", "1", "2", j.Condition.String())
+}
+
+func (j *Join) GetName() string {
+	return ""
+}
+
 // VarRef represents a reference to a variable.
 type VarRef struct {
-	Val  string
-	Type DataType
+	Val   string
+	Type  DataType
+	Alias string
+}
+
+func (r *VarRef) RewriteNameSpace(alias, mst string) {
+	if len(r.Alias) == 0 && strings.HasPrefix(r.Val, alias+".") {
+		al := make([]byte, len(r.Val))
+		copy(al, r.Val)
+		r.Val = mst + "." + r.Val[len(alias)+1:]
+		r.Alias = string(al)
+	}
 }
 
 // String returns a string representation of the variable reference.
@@ -3942,6 +4131,32 @@ func (r *VarRef) String() string {
 		buf.WriteString(r.Type.String())
 	}
 	return buf.String()
+}
+
+// VarRefs represents a slice of VarRef types.
+type VarRefPointers []*VarRef
+
+// Len implements sort.Interface.
+func (a VarRefPointers) Len() int { return len(a) }
+
+// Less implements sort.Interface.
+func (a VarRefPointers) Less(i, j int) bool {
+	if a[i].Val != a[j].Val {
+		return a[i].Val < a[j].Val
+	}
+	return a[i].Type < a[j].Type
+}
+
+// Swap implements sort.Interface.
+func (a VarRefPointers) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+// Strings returns a slice of the variable names.
+func (a VarRefPointers) Strings() []string {
+	s := make([]string, len(a))
+	for i, ref := range a {
+		s[i] = ref.Val
+	}
+	return s
 }
 
 // VarRefs represents a slice of VarRef types.
@@ -3976,6 +4191,12 @@ type Call struct {
 	Args []Expr
 }
 
+func (c *Call) RewriteNameSpace(alias, mst string) {
+	for i := range c.Args {
+		c.Args[i].RewriteNameSpace(alias, mst)
+	}
+}
+
 // String returns a string representation of the call.
 func (c *Call) String() string {
 	// Join arguments.
@@ -3988,11 +4209,34 @@ func (c *Call) String() string {
 	return fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
 }
 
+// WriteString returns a string representation of the call.
+func (c *Call) WriteString(b *bytes.Buffer) {
+	// format fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
+	b.WriteString(c.Name)
+	b.WriteString("(")
+
+	firstCall := true
+	for _, arg := range c.Args {
+		if firstCall {
+			b.WriteString(arg.String())
+			firstCall = false
+			continue
+		}
+		b.WriteString(",")
+		b.WriteString(arg.String())
+	}
+	b.WriteString(")")
+	// Write function name and args.
+	return
+}
+
 // Distinct represents a DISTINCT expression.
 type Distinct struct {
 	// Identifier following DISTINCT
 	Val string
 }
+
+func (d *Distinct) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the expression.
 func (d *Distinct) String() string {
@@ -4014,6 +4258,8 @@ type NumberLiteral struct {
 	Val float64
 }
 
+func (l *NumberLiteral) RewriteNameSpace(alias, mst string) {}
+
 // String returns a string representation of the literal.
 func (l *NumberLiteral) String() string { return strconv.FormatFloat(l.Val, 'f', 9, 64) }
 
@@ -4021,6 +4267,8 @@ func (l *NumberLiteral) String() string { return strconv.FormatFloat(l.Val, 'f',
 type IntegerLiteral struct {
 	Val int64
 }
+
+func (l *IntegerLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
 func (l *IntegerLiteral) String() string { return fmt.Sprintf("%d", l.Val) }
@@ -4031,6 +4279,8 @@ type UnsignedLiteral struct {
 	Val uint64
 }
 
+func (l *UnsignedLiteral) RewriteNameSpace(alias, mst string) {}
+
 // String returns a string representation of the literal.
 func (l *UnsignedLiteral) String() string { return strconv.FormatUint(l.Val, 10) }
 
@@ -4038,6 +4288,8 @@ func (l *UnsignedLiteral) String() string { return strconv.FormatUint(l.Val, 10)
 type BooleanLiteral struct {
 	Val bool
 }
+
+func (l *BooleanLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
 func (l *BooleanLiteral) String() string {
@@ -4068,6 +4320,8 @@ type ListLiteral struct {
 	Vals []string
 }
 
+func (s *ListLiteral) RewriteNameSpace(alias, mst string) {}
+
 // String returns a string representation of the literal.
 func (s *ListLiteral) String() string {
 	var buf bytes.Buffer
@@ -4086,6 +4340,8 @@ func (s *ListLiteral) String() string {
 type StringLiteral struct {
 	Val string
 }
+
+func (l *StringLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
 func (l *StringLiteral) String() string { return QuoteString(l.Val) }
@@ -4126,6 +4382,8 @@ type TimeLiteral struct {
 	Val time.Time
 }
 
+func (l *TimeLiteral) RewriteNameSpace(alias, mst string) {}
+
 // String returns a string representation of the literal.
 func (l *TimeLiteral) String() string {
 	return `'` + l.Val.UTC().Format(time.RFC3339Nano) + `'`
@@ -4136,12 +4394,16 @@ type DurationLiteral struct {
 	Val time.Duration
 }
 
+func (l *DurationLiteral) RewriteNameSpace(alias, mst string) {}
+
 // String returns a string representation of the literal.
 func (l *DurationLiteral) String() string { return FormatDuration(l.Val) }
 
 // NilLiteral represents a nil literal.
 // This is not available to the query language itself. It's only used internally.
 type NilLiteral struct{}
+
+func (l *NilLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
 func (l *NilLiteral) String() string { return `nil` }
@@ -4152,6 +4414,8 @@ func (l *NilLiteral) String() string { return `nil` }
 type BoundParameter struct {
 	Name string
 }
+
+func (bp *BoundParameter) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the bound parameter.
 func (bp *BoundParameter) String() string {
@@ -4168,6 +4432,11 @@ type BinaryExpr struct {
 // String returns a string representation of the binary expression.
 func (e *BinaryExpr) String() string {
 	return fmt.Sprintf("%s %s %s", e.LHS.String(), e.Op.String(), e.RHS.String())
+}
+
+func (e *BinaryExpr) RewriteNameSpace(alias, mst string) {
+	e.LHS.RewriteNameSpace(alias, mst)
+	e.RHS.RewriteNameSpace(alias, mst)
 }
 
 // BinaryExprName returns the name of a binary expression by concatenating
@@ -4198,6 +4467,10 @@ type ParenExpr struct {
 	Expr Expr
 }
 
+func (e *ParenExpr) RewriteNameSpace(alias, mst string) {
+	e.Expr.RewriteNameSpace(alias, mst)
+}
+
 // String returns a string representation of the parenthesized expression.
 func (e *ParenExpr) String() string { return fmt.Sprintf("(%s)", e.Expr.String()) }
 
@@ -4205,6 +4478,8 @@ func (e *ParenExpr) String() string { return fmt.Sprintf("(%s)", e.Expr.String()
 type RegexLiteral struct {
 	Val *regexp.Regexp
 }
+
+func (r *RegexLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
 func (r *RegexLiteral) String() string {
@@ -4232,6 +4507,8 @@ func CloneRegexLiteral(r *RegexLiteral) *RegexLiteral {
 type Wildcard struct {
 	Type Token
 }
+
+func (e *Wildcard) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the wildcard.
 func (e *Wildcard) String() string {
@@ -4285,6 +4562,10 @@ func CloneExpr(expr Expr) Expr {
 		return &Wildcard{Type: expr.Type}
 	}
 	panic("unreachable")
+}
+
+func CloneVarRef(expr *VarRef) *VarRef {
+	return &VarRef{Val: expr.Val, Type: expr.Type}
 }
 
 // HasTimeExpr returns true if the expression has a time term.
@@ -4423,6 +4704,11 @@ func Walk(v Visitor, node Node) {
 		for _, s := range n {
 			Walk(v, s)
 		}
+
+	case *Join:
+		Walk(v, n.LSrc)
+		Walk(v, n.RSrc)
+		Walk(v, n.Condition)
 
 	case *SubQuery:
 		Walk(v, n.Statement)
@@ -5016,7 +5302,7 @@ func EvalBool(expr Expr, m map[string]interface{}) bool {
 // TypeMapper maps a data type to the measurement and field.
 type TypeMapper interface {
 	MapType(measurement *Measurement, field string) DataType
-	MapTypeBatch(measurement *Measurement, field map[string]DataType, schema *Schema) error
+	MapTypeBatch(measurement *Measurement, field map[string]*FieldNameSpace, schema *Schema) error
 }
 
 // CallTypeMapper maps a data type to the function call.
@@ -5028,8 +5314,10 @@ type CallTypeMapper interface {
 
 type nilTypeMapper struct{}
 
-func (nilTypeMapper) MapType(*Measurement, string) DataType                         { return Unknown }
-func (nilTypeMapper) MapTypeBatch(*Measurement, map[string]DataType, *Schema) error { return nil }
+func (nilTypeMapper) MapType(*Measurement, string) DataType { return Unknown }
+func (nilTypeMapper) MapTypeBatch(*Measurement, map[string]*FieldNameSpace, *Schema) error {
+	return nil
+}
 
 type multiTypeMapper []TypeMapper
 
@@ -5049,10 +5337,10 @@ func (a multiTypeMapper) MapType(measurement *Measurement, field string) DataTyp
 	return Unknown
 }
 
-func (a multiTypeMapper) MapTypeBatch(m *Measurement, fields map[string]DataType, schema *Schema) error {
+func (a multiTypeMapper) MapTypeBatch(m *Measurement, fields map[string]*FieldNameSpace, schema *Schema) error {
 	for field, v := range fields {
-		if typ := a.MapType(m, field); v.LessThan(typ) {
-			fields[field] = typ
+		if typ := a.MapType(m, field); v.DataType.LessThan(typ) {
+			fields[field].DataType = typ
 		}
 	}
 	return nil
@@ -5116,8 +5404,16 @@ func cloneVarTypeMap(src map[string]DataType) (other map[string]DataType) {
 	return
 }
 
+func cloneVarNameSpace(src map[string]*FieldNameSpace) (other map[string]*FieldNameSpace) {
+	other = make(map[string]*FieldNameSpace, len(src))
+	for k, _ := range src {
+		other[k] = &FieldNameSpace{DataType: Unknown}
+	}
+	return
+}
+
 func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, batchEn bool) (err error) {
-	fields := make(map[string]DataType, len(exprs))
+	fields := make(map[string]*FieldNameSpace, len(exprs))
 	for _, expr := range exprs {
 		ref, _ := expr.(*VarRef)
 		if ref == nil {
@@ -5126,7 +5422,7 @@ func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, ba
 		ty, err := v.EvalType(expr, batchEn)
 		if err != nil {
 			if err == ErrNeedBatchMap {
-				fields[ref.Val] = Unknown
+				fields[ref.Val] = &FieldNameSpace{DataType: Unknown}
 				continue
 			}
 			return err
@@ -5140,13 +5436,13 @@ func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, ba
 	}
 
 	errs := make(chan error, len(v.Sources)+1)
-	batchMapType := func(mm *Measurement, ft map[string]DataType, wg *sync.WaitGroup) {
+	batchMapType := func(mm *Measurement, ft map[string]*FieldNameSpace, wg *sync.WaitGroup) {
 		er := v.TypeMapper.MapTypeBatch(mm, ft, schema)
 		errs <- er
 		wg.Done()
 	}
 
-	fTypes := make([]map[string]DataType, 0, len(v.Sources))
+	fTypes := make([]map[string]*FieldNameSpace, 0, len(v.Sources))
 	var wg sync.WaitGroup
 	for i, src := range v.Sources {
 		switch src := src.(type) {
@@ -5156,7 +5452,7 @@ func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, ba
 				fTypes = append(fTypes, fields)
 				go batchMapType(src, fields, &wg)
 			} else {
-				fts := cloneVarTypeMap(fields)
+				fts := cloneVarNameSpace(fields)
 				fTypes = append(fTypes, fts)
 				go batchMapType(src, fts, &wg)
 			}
@@ -5172,7 +5468,7 @@ func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, ba
 					if t, err := valuer.EvalType(e, false); err != nil {
 						return err
 					} else {
-						fields[k] = t
+						fields[k].DataType = t
 					}
 				}
 			}
@@ -5203,8 +5499,12 @@ func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, ba
 			expr, _ := exprs[k]
 			if expr != nil {
 				ref, _ := expr.(*VarRef)
-				if ref != nil && ref.Type.LessThan(v) {
-					ref.Type = v
+				if ref != nil && ref.Type.LessThan(v.DataType) {
+					ref.Type = v.DataType
+					if len(v.RealName) != 0 {
+						ref.Alias = ref.Val
+						ref.Val = v.RealName
+					}
 				}
 			}
 		}
@@ -6500,6 +6800,8 @@ type CaseWhenExpr struct {
 	Args       []Expr
 }
 
+func (p *CaseWhenExpr) RewriteNameSpace(alias, mst string) {}
+
 func (p *CaseWhenExpr) node() {}
 func (p *CaseWhenExpr) expr() {}
 func (p *CaseWhenExpr) String() string {
@@ -6509,4 +6811,227 @@ func (p *CaseWhenExpr) String() string {
 	}
 	s += "Else Condition:" + p.Assigners[len(p.Conditions)].String()
 	return fmt.Sprintf(s)
+}
+
+type CreateDownSampleStatement struct {
+	DbName         string
+	RpName         string
+	Duration       time.Duration
+	SampleInterval []time.Duration
+	TimeInterval   []time.Duration
+	WaterMark      []time.Duration
+	Ops            Fields
+}
+
+func (d *CreateDownSampleStatement) stmt() {}
+
+func (d *CreateDownSampleStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (d *CreateDownSampleStatement) node() {}
+
+func Times2String(times []time.Duration) string {
+	var s []byte
+	for i, t := range times {
+		s = append(s, t.String()...)
+		if i < len(times)-1 {
+			s = append(s, ","...)
+		}
+	}
+	return string(s)
+}
+
+func (d *CreateDownSampleStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("CREATE DOWNSAMPLE")
+
+	if d.DbName != "" {
+		_, _ = buf.WriteString(" ON ")
+		_, _ = buf.WriteString(QuoteIdent(d.DbName))
+	}
+
+	if d.RpName != "" {
+		if d.DbName == "" {
+			_, _ = buf.WriteString(" ON ")
+		}
+		_, _ = buf.WriteString(QuoteIdent(d.RpName))
+	}
+
+	if len(d.Ops) != 0 {
+		_, _ = buf.WriteString("(")
+		for i, op := range d.Ops {
+			c := op.Expr.(*Call)
+			_, _ = buf.WriteString(QuoteIdent(fmt.Sprintf("%s", c.String())))
+			if i != len(d.Ops)-1 {
+				_, _ = buf.WriteString(",")
+			}
+		}
+	}
+
+	if d.Duration != 0 {
+		_, _ = buf.WriteString("WITH TTL")
+		_, _ = buf.WriteString(QuoteIdent(d.Duration.String()))
+	}
+
+	if len(d.SampleInterval) != 0 {
+		_, _ = buf.WriteString("SAMPLEINTERVAL")
+		s := Times2String(d.SampleInterval)
+		_, _ = buf.WriteString(QuoteIdent(s))
+	}
+
+	if len(d.TimeInterval) != 0 {
+		_, _ = buf.WriteString("TIMEINTERVAL")
+		s := Times2String(d.TimeInterval)
+		_, _ = buf.WriteString(QuoteIdent(s))
+	}
+
+	if len(d.WaterMark) != 0 {
+		_, _ = buf.WriteString("WATERMARK")
+		s := Times2String(d.WaterMark)
+		_, _ = buf.WriteString(QuoteIdent(s))
+	}
+
+	return buf.String()
+}
+
+type DropDownSampleStatement struct {
+	DbName  string
+	RpName  string
+	DropAll bool
+}
+
+func (d *DropDownSampleStatement) stmt() {}
+
+func (d *DropDownSampleStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (d *DropDownSampleStatement) node() {}
+
+func (d *DropDownSampleStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("DROP DOWNSAMPLE")
+
+	if d.DbName != "" {
+		_, _ = buf.WriteString(" ON ")
+		_, _ = buf.WriteString(QuoteIdent(d.DbName))
+	}
+
+	if d.RpName != "" {
+		if d.DbName == "" {
+			_, _ = buf.WriteString(" ON ")
+		}
+		_, _ = buf.WriteString(QuoteIdent(d.RpName))
+	}
+	return buf.String()
+}
+
+type ShowDownSampleStatement struct {
+	DbName string
+}
+
+func (d *ShowDownSampleStatement) stmt() {}
+
+func (d *ShowDownSampleStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (d *ShowDownSampleStatement) node() {}
+
+func (d *ShowDownSampleStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("Show DownSampling")
+
+	if d.DbName != "" {
+		_, _ = buf.WriteString(" ON ")
+		_, _ = buf.WriteString(QuoteIdent(d.DbName))
+	}
+
+	return buf.String()
+}
+
+type CreateStreamStatement struct {
+	Name   string
+	Target *Target
+	Query  Statement
+	Delay  time.Duration
+}
+
+func (c *CreateStreamStatement) stmt() {}
+
+func (c *CreateStreamStatement) node() {}
+
+func (c *CreateStreamStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (c *CreateStreamStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("CREATE STREAM")
+	_, _ = buf.WriteString(QuoteIdent(c.Name))
+	_, _ = buf.WriteString("INTO")
+	_, _ = buf.WriteString(QuoteIdent(c.Target.String()))
+	_, _ = buf.WriteString(QuoteIdent(c.Query.String()))
+	_, _ = buf.WriteString("OFFSET")
+	_, _ = buf.WriteString(QuoteIdent(c.Delay.String()))
+
+	return buf.String()
+}
+
+func (c *CreateStreamStatement) Check(stmt *SelectStatement, supportTable map[string]bool) error {
+	for i := range stmt.Fields {
+		if c, ok := stmt.Fields[i].Expr.(*Call); ok && !supportTable[c.Name] {
+			return errors.New("unsupported call function in stream")
+		}
+	}
+	if stmt.groupByInterval == 0 {
+		return errors.New("should have group by interval time")
+	}
+	if stmt.groupByInterval*10 < c.Delay {
+		return errors.New("delay time must be smaller than 10 times of group by interval time")
+	}
+	return nil
+}
+
+type ShowStreamsStatement struct {
+	Database string
+}
+
+func (s *ShowStreamsStatement) stmt() {}
+
+func (s *ShowStreamsStatement) node() {}
+
+func (s *ShowStreamsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *ShowStreamsStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("SHOW STREAMS")
+	if len(s.Database) > 0 {
+		_, _ = buf.WriteString(QuoteIdent(s.Database))
+	}
+
+	return buf.String()
+}
+
+type DropStreamsStatement struct {
+	Name string
+}
+
+func (s *DropStreamsStatement) stmt() {}
+
+func (s *DropStreamsStatement) node() {}
+
+func (s *DropStreamsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *DropStreamsStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("DROP STREAMS ")
+	_, _ = buf.WriteString(QuoteIdent(s.Name))
+
+	return buf.String()
 }

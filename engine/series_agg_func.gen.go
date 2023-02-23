@@ -83,38 +83,6 @@ func integerSumMerge(prevBuf, currBuf *integerColBuf) {
 	prevBuf.value += currBuf.value
 }
 
-func floatMeanReduce(cv *record.ColVal, values []float64, start, end int) (int, float64, bool) {
-	var sum float64
-	var aggregated int
-	for i := start; i < end; i++ {
-		if v, isNil := cv.FloatValue(i); !isNil {
-			aggregated++
-			sum += v
-		}
-	}
-	return start, float64(sum) / float64(aggregated), aggregated == 0
-}
-
-func floatMeanMerge(prevBuf, currBuf *floatColBuf) {
-	prevBuf.value = (prevBuf.value + currBuf.value) / 2
-}
-
-func integerMeanReduce(cv *record.ColVal, values []int64, start, end int) (int, float64, bool) {
-	var sum int64
-	var aggregated int
-	for i := start; i < end; i++ {
-		if v, isNil := cv.IntegerValue(i); !isNil {
-			aggregated++
-			sum += v
-		}
-	}
-	return start, float64(sum) / float64(aggregated), aggregated == 0
-}
-
-func integerMeanMerge(prevBuf, currBuf *floatColBuf) {
-	prevBuf.value = (prevBuf.value + currBuf.value) / 2
-}
-
 func floatMinReduce(cv *record.ColVal, values []float64, start, end int) (int, float64, bool) {
 	minValue, minIndex := cv.MinFloatValue(values, start, end)
 	if minIndex == -1 {

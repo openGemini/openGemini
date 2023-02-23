@@ -18,6 +18,8 @@ package statistics
 
 import (
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type IOStatistics struct {
@@ -89,6 +91,12 @@ func InitIOStatistics(tags map[string]string) {
 }
 
 func CollectIOStatistics(buffer []byte) ([]byte, error) {
+	IOMap := genIOValueMap()
+	buffer = AddPointToBuffer(IOStatisticsName, IOTagMap, IOMap, buffer)
+	return buffer, nil
+}
+
+func genIOValueMap() map[string]interface{} {
 	IOMap := map[string]interface{}{
 		statIOWriteTotalCount:  atomic.LoadInt64(&IOStat.IOWriteTotalCount),
 		statIOWriteActiveCount: atomic.LoadInt64(&IOStat.IOWriteActiveCount),
@@ -115,11 +123,19 @@ func CollectIOStatistics(buffer []byte) ([]byte, error) {
 		statIOSnapshotBytes:    atomic.LoadInt64(&IOStat.IOSnapshotBytes),
 	}
 
-	buffer = AddPointToBuffer(IOStatisticsName, IOTagMap, IOMap, buffer)
-	return buffer, nil
+	return IOMap
 }
 
 func (s *IOStatistics) AddIOSnapshotBytes(i int64) {
 	atomic.AddInt64(&s.IOSnapshotCount, 1)
 	atomic.AddInt64(&s.IOSnapshotBytes, i)
+}
+
+func CollectOpsIOStatistics() []opsStat.OpsStatistic {
+	return []opsStat.OpsStatistic{{
+		Name:   IOStatisticsName,
+		Tags:   IOTagMap,
+		Values: genIOValueMap(),
+	},
+	}
 }

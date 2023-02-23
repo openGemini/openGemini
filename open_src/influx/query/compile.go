@@ -79,6 +79,10 @@ type compiledStatement struct {
 	// used in the statement.
 	TopBottomFunction string
 
+	// PercentileOGSketchFunction is set to percentile ogsketch when one of those functions are
+	// used in the statement.
+	PercentileOGSketchFunction string
+
 	// HasAuxiliaryFields is true when the function requires auxiliary fields.
 	HasAuxiliaryFields bool
 
@@ -136,6 +140,9 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 
 	// Rewrite any regex conditions that could make use of the index.
 	c.stmt.RewriteRegexConditions()
+
+	// Convert PERCENTILE_OGSKETCH into the PERCENTILE_APPROX
+	c.stmt.RewritePercentileOGSketch()
 	return c, nil
 }
 
@@ -200,6 +207,19 @@ func (c *compiledStatement) compile(stmt *influxql.SelectStatement) error {
 			source.Statement.OmitTime = true
 			if err := c.subquery(source.Statement); err != nil {
 				return err
+			}
+		case *influxql.Join:
+			if lsrc, ok := source.LSrc.(*influxql.SubQuery); ok {
+				lsrc.Statement.OmitTime = true
+				if err := c.subquery(lsrc.Statement); err != nil {
+					return err
+				}
+			}
+			if rsrc, ok := source.RSrc.(*influxql.SubQuery); ok {
+				rsrc.Statement.OmitTime = true
+				if err := c.subquery(rsrc.Statement); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -292,6 +312,8 @@ func (c *compiledField) compileExpr(expr influxql.Expr) error {
 		switch expr.Name {
 		case "percentile":
 			return c.compilePercentile(expr.Args)
+		case "percentile_ogsketch", "percentile_approx":
+			return c.compilePercentileOGSketch(expr.Args, expr.Name)
 		case "histogram":
 			return c.compileHistogram(expr.Args)
 		case "sample":
@@ -500,6 +522,31 @@ func (c *compiledField) compilePercentile(args []influxql.Expr) error {
 		return fmt.Errorf("expected float argument in percentile()")
 	}
 	return c.compileSymbol("percentile", args[0])
+}
+
+func (c *compiledField) compilePercentileOGSketch(args []influxql.Expr, name string) error {
+	if min, max, got := 2, 3, len(args); got > max || got < min {
+		return fmt.Errorf("invalid number of arguments for %s, expected at least %d but no more than %d, got %d", name, min, max, got)
+	}
+
+	switch args[1].(type) {
+	case *influxql.IntegerLiteral:
+	case *influxql.NumberLiteral:
+	default:
+		return fmt.Errorf("expected integer or float argument as second arg in %s", name)
+	}
+	if len(args) == 3 {
+		switch args[2].(type) {
+		case *influxql.IntegerLiteral:
+		default:
+			return fmt.Errorf("expected integer argument as third arg in %s", name)
+		}
+	}
+	c.global.OnlySelectors = false
+	if name == "percentile_ogsketch" {
+		c.global.PercentileOGSketchFunction = name
+	}
+	return c.compileSymbol(name, args[0])
 }
 
 func (c *compiledField) compileHistogram(args []influxql.Expr) error {
@@ -1075,6 +1122,8 @@ func (c *compiledField) compileCall(expr *influxql.Call) error {
 	switch expr.Name {
 	case "percentile":
 		return c.compilePercentile(expr.Args)
+	case "percentile_ogsketch", "percentile_approx":
+		return c.compilePercentileOGSketch(expr.Args, expr.Name)
 	case "histogram":
 		return c.compileHistogram(expr.Args)
 	case "sample":
@@ -1117,7 +1166,7 @@ func (c *compiledField) compileMathFunction(expr *influxql.Call) error {
 	// How many arguments are we expecting?
 	nargs := 1
 	switch expr.Name {
-	case "atan2", "pow", "log":
+	case "atan2", "pow", "log", "row_max":
 		nargs = 2
 	}
 
@@ -1233,6 +1282,14 @@ func (c *compiledStatement) validateFields() error {
 	if c.HasDistinct && (len(c.FunctionCalls) != 1 || c.HasAuxiliaryFields) {
 		return errors.New("aggregate function distinct() cannot be combined with other functions or fields")
 	}
+	// Ensure there are not different calls if percentile_ogsketch is present.
+	if len(c.FunctionCalls) > 1 && c.PercentileOGSketchFunction != "" {
+		for _, call := range c.FunctionCalls {
+			if call.Name != "percentile_ogsketch" {
+				return fmt.Errorf("selector function %s() cannot be combined with other functions", c.PercentileOGSketchFunction)
+			}
+		}
+	}
 	// Validate we are using a selector or raw query if auxiliary fields are required.
 	if c.HasAuxiliaryFields {
 		if !c.OnlySelectors {
@@ -1332,6 +1389,23 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 	return subquery.compile(stmt)
 }
 
+func (c *compiledStatement) RewriteJoinSource() {
+	sources := make([]*influxql.Join, 0, 8)
+	c.RewriteJoinSourceDFS(&sources, c.stmt.Sources)
+	c.stmt.JoinSource = sources
+}
+
+func (c *compiledStatement) RewriteJoinSourceDFS(joinSources *[]*influxql.Join, sources influxql.Sources) {
+	for i := range sources {
+		switch s := sources[i].(type) {
+		case *influxql.SubQuery:
+			c.RewriteJoinSourceDFS(joinSources, s.Statement.Sources)
+		case *influxql.Join:
+			*joinSources = append(*joinSources, influxql.CloneSource(s).(*influxql.Join))
+		}
+	}
+}
+
 func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions) (PreparedStatement, error) {
 	// If this is a query with a grouping, there is a bucket limit, and the minimum time has not been specified,
 	// we need to limit the possible time range that can be used when mapping shards but not when actually executing
@@ -1405,7 +1479,8 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	// TODO: batchEn := atomic.LoadInt32(&batchMapTypeEn) == 1
 	batchEn := true
 	mapper := FieldMapper{FieldMapper: shards}
-	stmt, err := c.stmt.RewriteFields(mapper, batchEn)
+	c.RewriteJoinSource()
+	stmt, err := c.stmt.RewriteFields(mapper, batchEn, false)
 	if err != nil {
 		shards.Close()
 		return nil, err

@@ -18,13 +18,21 @@ package handler
 
 import (
 	"context"
+	"testing"
 
+	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	qry "github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/require"
 )
 
 type MockStoreEngine struct {
@@ -45,6 +53,10 @@ func (s *MockStoreEngine) CreateLogicPlan(context.Context, string, uint32, uint6
 
 func (s *MockStoreEngine) RefEngineDbPt(string, uint32) error {
 	return nil
+}
+
+func (s *MockStoreEngine) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
+	return 0
 }
 
 func (s *MockStoreEngine) UnrefEngineDbPt(string, uint32) {
@@ -80,6 +92,26 @@ func (s *MockStoreEngine) TagValuesCardinality(db string, ptIDs []uint32, tagKey
 }
 
 func (s *MockStoreEngine) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) error {
+	return nil
+}
+
+func (s *MockStoreEngine) PreOffload(*meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) RollbackPreOffload(*meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) PreAssign(uint64, *meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) Offload(*meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) Assign(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
@@ -172,3 +204,93 @@ func hookLogicPlan() {
 		t.Error(err)
 	}
 }*/
+
+type EmptyResponser struct {
+	transport.Responser
+	session *spdy.MultiplexedSession
+}
+
+func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
+	return r.session
+}
+
+func (r *EmptyResponser) Response(response interface{}, full bool) error {
+
+	return nil
+}
+
+func (r *EmptyResponser) Callback(data interface{}) error {
+
+	return nil
+}
+
+func (r *EmptyResponser) Encode(dst []byte, data interface{}) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *EmptyResponser) Decode(data []byte) (interface{}, error) {
+	return nil, nil
+}
+
+func (r *EmptyResponser) Sequence() uint64 {
+	return 200
+}
+
+func TestSelectProcessor(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+
+	msg := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Node: []byte{10}})
+	msg.SetClientID(100)
+
+	p := NewSelectProcessor(nil)
+	require.NoError(t, p.Handle(resp, msg))
+}
+
+var storageDataPath = "/tmp/data/"
+var metaPath = "/tmp/meta"
+
+func mockStorage() *storage.Storage {
+	node := metaclient.NewNode(metaPath)
+	storeConfig := config.NewStore()
+	monitorConfig := config.Monitor{
+		Pushers: "http",
+	}
+	config.SetHaEnable(true)
+	config := &config.TSStore{
+		Data:    storeConfig,
+		Monitor: monitorConfig,
+		Common:  config.NewCommon(),
+	}
+
+	storage, err := storage.OpenStorage(storageDataPath, node, nil, config)
+	if err != nil {
+		return nil
+	}
+	return storage
+}
+
+func TestNewShardTraits(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+	msg := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Database: "db0", PtID: 0, Node: []byte{10}, ShardIDs: []uint64{1, 2, 3}})
+	req, _ := msg.Data().(*executor.RemoteQuery)
+	store := mockStorage()
+	p := NewSelectProcessor(store)
+	s := NewSelect(p.store, resp, req)
+	config.SetHaEnable(false)
+	_, _, err := s.NewShardTraits(s.req, s.w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.SetHaEnable(true)
+	_, _, err = s.NewShardTraits(s.req, s.w)
+	if err == nil {
+		t.Fatal(err)
+	}
+	s.store.GetEngine().CreateDBPT("db0", 0)
+	_, _, err = s.NewShardTraits(s.req, s.w)
+	if err != nil {
+		t.Fatal(err)
+	}
+}

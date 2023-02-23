@@ -17,6 +17,7 @@ limitations under the License.
 package sysinfo
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 	"time"
@@ -28,7 +29,10 @@ func CreateTime(name string) (*time.Time, error) {
 		return nil, err
 	}
 
-	st := fi.Sys().(*syscall.Stat_t)
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("not syscall.Stat_t type")
+	}
 	tm := time.Unix(int64(st.Ctim.Sec), int64(st.Ctim.Nsec))
 	return &tm, nil
 }

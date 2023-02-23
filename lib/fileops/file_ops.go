@@ -38,6 +38,15 @@ const (
 	opsTypeSync
 )
 
+const (
+	FADV_NORMAL     = 0x0
+	FADV_RANDOM     = 0x1
+	FADV_SEQUENTIAL = 0x2
+	FADV_WILLNEED   = 0x3
+	FADV_DONTNEED   = 0x4
+	FADV_NOREUSE    = 0x5
+)
+
 type File interface {
 	io.Closer
 	io.Reader
@@ -78,6 +87,8 @@ type VFS interface {
 	// If the file does not exist, it is created with mode 0666
 	// the optional opt is: (FileLockOption,FilePriorityOption)
 	Create(name string, opt ...FSOption) (File, error)
+
+	CreateV1(name string, opt ...FSOption) (File, error)
 
 	// Remove removes the named file or (empty) directory.
 	// the optional opt is: FileLockOption
@@ -141,6 +152,10 @@ func OpenFile(name string, flag int, perm os.FileMode, opt ...FSOption) (File, e
 // the optional opt is: (FileLockOption,FilePriorityOption)
 func Create(name string, opt ...FSOption) (File, error) {
 	return targetFS.Create(name, opt...)
+}
+
+func CreateV1(name string, opt ...FSOption) (File, error) {
+	return targetFS.CreateV1(name, opt...)
 }
 
 // Remove removes the named file or (empty) directory.

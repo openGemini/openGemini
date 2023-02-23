@@ -24,11 +24,11 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/tlsconfig"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/usage_client"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
@@ -58,24 +58,78 @@ type Service struct {
 	store          *Store
 	clusterManager *ClusterManager
 	msm            *MigrateStateMachine
+	balanceManager *BalanceManager
 
 	httpServer *httpServer
 	metaServer *MetaServer
 	Node       *metaclient.Node
 
-	tls *tlsconfig.Config
+	tlsConfig        *tls.Config
+	statisticsPusher *statisticsPusher.StatisticsPusher
+	handler          *httpHandler
 }
 
 // NewService returns a new instance of Service.
-func NewService(c *config.Meta, tls *tlsconfig.Config) *Service {
+func NewService(c *config.Meta, tlsConfig *tls.Config) *Service {
 	globalService = &Service{
-		closing:  make(chan struct{}),
-		config:   c,
-		tls:      tls,
-		raftAddr: c.BindAddress,
-		Logger:   logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
+		closing:   make(chan struct{}),
+		config:    c,
+		tlsConfig: tlsConfig,
+		raftAddr:  c.BindAddress,
+		Logger:    logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
+	}
+	if globalService.tlsConfig == nil {
+		globalService.tlsConfig = new(tls.Config)
 	}
 	return globalService
+}
+
+// init the store. The addresses passed in are remotely accessible.
+func (s *Service) initStore(ar *AddrRewriter) {
+	s.store = NewStore(s.config,
+		ar.RewriteHost(s.config.HTTPBindAddress),
+		ar.RewriteHost(s.config.RPCBindAddress),
+		s.raftAddr)
+
+	s.store.Logger = s.Logger
+	meta.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	s.store.Node = s.Node
+}
+
+func (s *Service) startMetaServer() error {
+	s.metaServer = NewMetaServer(s.config.RPCBindAddress, s.store, s.config)
+	if err := s.metaServer.Start(); err != nil {
+		return fmt.Errorf("metaRPCServer start failed: addr=%s, err=%s", s.config.RPCBindAddress, err)
+	}
+
+	if len(s.config.JoinPeers) > 1 || s.balanceManager != nil {
+		s.clusterManager = NewClusterManager(s.store)
+		s.balanceManager = NewBalanceManager()
+		s.msm = NewMigrateStateMachine()
+	}
+	s.store.cm = s.clusterManager
+	return nil
+}
+
+func (s *Service) openStore() error {
+	if err := s.store.Open(s.RaftListener); err != nil {
+		return err
+	}
+	s.handler.client = s.store.client
+	s.handler.client.UpdateUserInfo()
+	return nil
+}
+
+// Start the HTTP server in a separate goroutine.
+func (s *Service) startMetaHTTPServer() {
+	go func() {
+		err := s.openHttpServer()
+		if err != nil {
+			s.Logger.Error("failed to start the HTTP server",
+				zap.String("addr", s.config.HTTPBindAddress),
+				zap.Error(err))
+		}
+	}()
 }
 
 // StartReportServer starts report server.
@@ -99,6 +153,19 @@ func (s *Service) Open() error {
 		panic("no raft listener set")
 	}
 
+	// wait for the listeners to start
+	timeout := time.Now().Add(raftListenerStartupTimeout)
+	for {
+		if s.RaftListener.Addr() != nil {
+			break
+		}
+
+		if time.Now().After(timeout) {
+			return fmt.Errorf("unable to open meta service without raft listener running")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	var err error
 	ar := NewAddrRewriter()
 	ar.SetHostname(s.config.RemoteHostname)
@@ -107,37 +174,15 @@ func (s *Service) Open() error {
 		return err
 	}
 
-	// Open the store. The addresses passed in are remotely accessible.
-	s.store = NewStore(s.config,
-		ar.RewriteHost(s.config.HTTPBindAddress),
-		ar.RewriteHost(s.config.RPCBindAddress),
-		s.raftAddr)
-
-	s.store.Logger = s.Logger
-	meta.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
-	s.store.Node = s.Node
-
-	// Start the HTTP server in a separate goroutine.
-	go func() {
-		err := s.openHttpServer()
-		if err != nil {
-			s.Logger.Error("failed to start the HTTP server",
-				zap.String("addr", s.config.HTTPBindAddress),
-				zap.Error(err))
-		}
-	}()
-
-	s.metaServer = NewMetaServer(s.config.RPCBindAddress, s.store, s.config)
-	if err := s.metaServer.Start(); err != nil {
-		return fmt.Errorf("metaRPCServer start failed: addr=%s, err=%s", s.config.RPCBindAddress, err)
+	s.initStore(ar)
+	s.startMetaHTTPServer()
+	err = s.startMetaServer()
+	if err != nil {
+		return err
 	}
 
-	if len(s.config.JoinPeers) > 1 {
-		s.clusterManager = NewClusterManager(s.store)
-		s.store.cm = s.clusterManager
-	}
-
-	if err := s.store.Open(s.RaftListener); err != nil {
+	err = s.openStore()
+	if err != nil {
 		return err
 	}
 
@@ -150,12 +195,23 @@ func (s *Service) GetClusterManager() *ClusterManager {
 
 // openHttpServer Used only for debugging.
 func (s *Service) openHttpServer() error {
-	s.httpServer = newHttpServer(s.config, s.tls)
+	s.httpServer = newHttpServer(s.config, s.tlsConfig)
 	handler := newHttpHandler(s.config, s.store)
+	handler.statisticsPusher = s.statisticsPusher
+	s.handler = handler
 	return s.httpServer.open(handler)
 }
 
 func (s *Service) Close() error {
+	if s.clusterManager != nil {
+		s.clusterManager.Close()
+	}
+	if s.balanceManager != nil {
+		s.balanceManager.Stop()
+	}
+	if s.msm != nil {
+		s.msm.Stop()
+	}
 	err := s.store.close()
 
 	if s.metaServer != nil {
@@ -168,6 +224,10 @@ func (s *Service) Close() error {
 	}
 
 	return err
+}
+
+func (s *Service) SetStatisticsPusher(pusher *statisticsPusher.StatisticsPusher) {
+	s.statisticsPusher = pusher
 }
 
 // runReportServer reports usage statistics about the system.
@@ -195,10 +255,10 @@ type httpServer struct {
 	conf   *config.Meta
 	logger *logger.Logger
 	ln     net.Listener
-	tls    *tlsconfig.Config
+	tls    *tls.Config
 }
 
-func newHttpServer(conf *config.Meta, tls *tlsconfig.Config) *httpServer {
+func newHttpServer(conf *config.Meta, tls *tls.Config) *httpServer {
 	return &httpServer{
 		conf:   conf,
 		tls:    tls,
@@ -227,10 +287,7 @@ func (s *httpServer) httpsListener() (net.Listener, error) {
 		return nil, err
 	}
 
-	cfg, err := s.tls.Parse()
-	if err != nil {
-		return nil, err
-	}
+	cfg := s.tls.Clone()
 	cfg.Certificates = []tls.Certificate{cert}
 
 	ln, err := tls.Listen("tcp", s.conf.HTTPBindAddress, cfg)

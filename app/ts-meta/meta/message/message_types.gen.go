@@ -50,6 +50,21 @@ const (
 
 	GetShardInfoRequestMessage
 	GetShardInfoResponseMessage
+
+	GetDownSampleInfoRequestMessage
+	GetDownSampleInfoResponseMessage
+
+	GetRpMstInfosRequestMessage
+	GetRpMstInfosResponseMessage
+
+	GetUserInfoRequestMessage
+	GetUserInfoResponseMessage
+
+	GetStreamInfoRequestMessage
+	GetStreamInfoResponseMessage
+
+	GetMeasurementInfoRequestMessage
+	GetMeasurementInfoResponseMessage
 )
 
 func NewMessage(typ uint8) transport.Codec {
@@ -86,6 +101,26 @@ func NewMessage(typ uint8) transport.Codec {
 		return &GetShardInfoRequest{}
 	case GetShardInfoResponseMessage:
 		return &GetShardInfoResponse{}
+	case GetDownSampleInfoRequestMessage:
+		return &GetDownSampleInfoRequest{}
+	case GetDownSampleInfoResponseMessage:
+		return &GetDownSampleInfoResponse{}
+	case GetRpMstInfosRequestMessage:
+		return &GetRpMstInfosRequest{}
+	case GetRpMstInfosResponseMessage:
+		return &GetRpMstInfosResponse{}
+	case GetUserInfoRequestMessage:
+		return &GetUserInfoRequest{}
+	case GetUserInfoResponseMessage:
+		return &GetUserInfoResponse{}
+	case GetStreamInfoRequestMessage:
+		return &GetStreamInfoRequest{}
+	case GetStreamInfoResponseMessage:
+		return &GetStreamInfoResponse{}
+	case GetMeasurementInfoRequestMessage:
+		return &GetMeasurementInfoRequest{}
+	case GetMeasurementInfoResponseMessage:
+		return &GetMeasurementInfoResponse{}
 	default:
 		return nil
 	}
@@ -109,6 +144,16 @@ func GetResponseMessageType(typ uint8) uint8 {
 		return ReportResponseMessage
 	case GetShardInfoRequestMessage:
 		return GetShardInfoResponseMessage
+	case GetDownSampleInfoRequestMessage:
+		return GetDownSampleInfoResponseMessage
+	case GetRpMstInfosRequestMessage:
+		return GetRpMstInfosResponseMessage
+	case GetUserInfoRequestMessage:
+		return GetUserInfoResponseMessage
+	case GetStreamInfoRequestMessage:
+		return GetStreamInfoResponseMessage
+	case GetMeasurementInfoRequestMessage:
+		return GetMeasurementInfoResponseMessage
 	default:
 		return UnknownMessage
 	}

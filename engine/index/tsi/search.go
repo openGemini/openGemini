@@ -1,4 +1,4 @@
-//nolint
+// nolint
 package tsi
 
 /*
@@ -32,13 +32,11 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 )
 
@@ -72,6 +70,72 @@ func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {
 	}
 	// Nothing found
 	return 0, io.EOF
+}
+
+func (is *indexSearch) getPidByPkey(key []byte) (uint64, error) {
+	ts := &is.ts
+	kb := &is.kb
+	kb.B = append(kb.B[:0], nsPrefixFieldToPID)
+	kb.B = append(kb.B, key...)
+	kb.B = append(kb.B, kvSeparatorChar)
+	ts.Seek(kb.B)
+	for ts.NextItem() {
+		if !bytes.HasPrefix(ts.Item, kb.B) {
+			// Nothing found.
+			return 0, nil
+		}
+		v := ts.Item[len(kb.B):]
+		pid := encoding.UnmarshalUint64(v)
+
+		// Found valid dst.
+		return pid, nil
+	}
+
+	if err := ts.Error(); err != nil {
+		return 0, fmt.Errorf("error when searching pid by key; searchPrefix %q: %w", kb.B, err)
+	}
+	// Nothing found
+	return 0, nil
+}
+
+func (is *indexSearch) getFieldKey() (map[string]string, error) {
+	fieldKeys := make(map[string]string, 16)
+	ts := &is.ts
+	kb := &is.kb
+	kb.B = append(kb.B[:0], nsPrefixMstToFieldKey)
+	ts.Seek(kb.B)
+	for ts.NextItem() {
+		if !bytes.HasPrefix(ts.Item, kb.B) {
+			// Nothing found.
+			return nil, io.EOF
+		}
+		tail := ts.Item[len(kb.B):]
+		if len(tail) < 3 {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		mstLen := encoding.UnmarshalUint16(tail)
+		tail = tail[2:]
+		if len(tail) < int(mstLen) {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		mstName := tail[:mstLen]
+		tail = tail[mstLen:]
+		if len(tail) < 3 {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		fieldKeyLen := encoding.UnmarshalUint16(tail)
+		tail = tail[2:]
+		if len(tail) != int(fieldKeyLen) {
+			return nil, fmt.Errorf("invalid item for mst->fieldKey: %q", ts.Item)
+		}
+
+		fieldKey := tail[:fieldKeyLen]
+		fieldKeys[string(mstName)] = string(fieldKey)
+	}
+	return fieldKeys, nil
 }
 
 func (is *indexSearch) containsMeasurement(name []byte) (bool, error) {
@@ -363,6 +427,10 @@ func (is indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExp
 		if err != nil {
 			return nil, err
 		}
+		matchAll := value.Val.MatchString("")
+		if matchAll {
+			tf.SetRegexMatchAll(true)
+		}
 	case *influxql.VarRef:
 		err := tf.Init(name, []byte(key.Val), []byte(value.Val), n.Op == influxql.NEQ, false)
 		if err != nil {
@@ -432,6 +500,10 @@ func (is indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr
 		err = tf.Init(name, []byte(key.Val), []byte(value.Val), n.Op != influxql.EQ, false)
 	case *influxql.RegexLiteral:
 		err = tf.Init(name, []byte(key.Val), []byte(value.Val.String()), n.Op != influxql.EQREGEX, true)
+		matchAll := value.Val.MatchString("")
+		if matchAll {
+			tf.SetRegexMatchAll(true)
+		}
 	case *influxql.VarRef:
 		return is.seriesByBinaryExprVarRef(name, []byte(key.Val), []byte(value.Val), n.Op == influxql.EQ)
 	default:
@@ -478,12 +550,82 @@ func (is *indexSearch) seriesByBinaryExprVarRef(name, key, val []byte, equal boo
 }
 
 func (is *indexSearch) searchTSIDsByTagFilterAndDateRange(tf *tagFilter, tr TimeRange) (*uint64set.Set, error) {
-	return is.getTSIDsByTagFilter(tf)
+	if tf.isRegexp {
+		return is.getTSIDsByTagFilterWithRegex(tf)
+	}
+	return is.getTSIDsByTagFilterNoRegex(tf)
 }
 
-func (is *indexSearch) getTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, error) {
+func (is *indexSearch) getTSIDsByTagFilterNoRegex(tf *tagFilter) (*uint64set.Set, error) {
 	if !tf.isNegative {
-		return is.searchTSIDsByTagFilter(tf)
+		if len(tf.value) != 0 {
+			return is.searchTSIDsByTagFilter(tf)
+		}
+
+		tsids, err := is.getTSIDsByMeasurementName(tf.name)
+		if err != nil {
+			return nil, err
+		}
+
+		m, err := is.searchTSIDsByTagFilter(tf)
+		if err != nil {
+			return nil, err
+		}
+
+		tsids.Subtract(m)
+		return tsids, nil
+	}
+
+	if len(tf.value) != 0 {
+		tsids, err := is.getTSIDsByMeasurementName(tf.name)
+		if err != nil {
+			return nil, err
+		}
+
+		tf.isNegative = false
+		m, err := is.searchTSIDsByTagFilter(tf)
+		if err != nil {
+			return nil, err
+		}
+
+		tsids, err = is.subTSIDSWithTagArray(tsids, m)
+		if err != nil {
+			return nil, err
+		}
+		return tsids, nil
+	}
+	tf.isNegative = false
+	tsids, err := is.searchTSIDsByTagFilter(tf)
+	if err != nil {
+		return nil, err
+	}
+	return tsids, nil
+}
+
+func (is *indexSearch) getTSIDsByTagFilterWithRegex(tf *tagFilter) (*uint64set.Set, error) {
+	if !tf.isNegative {
+		if tf.isAllMatch {
+			tsids, err := is.getTSIDsByMeasurementName(tf.name)
+			if err != nil {
+				return nil, err
+			}
+			return tsids, nil
+		}
+
+		m, err := is.searchTSIDsByTagFilter(tf)
+		if err != nil {
+			return nil, err
+		}
+
+		return m, nil
+
+	}
+
+	// eg, select * from mst where tagkey1 !~ /.*/
+	// eg, show series from mst where tagkey1 !~ /.*/
+	// eg, show tag values with key="tagkey1" where tagkey2 !~ /.*/
+	if tf.isAllMatch {
+		return nil, nil
 	}
 
 	tsids, err := is.getTSIDsByMeasurementName(tf.name)
@@ -497,7 +639,10 @@ func (is *indexSearch) getTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, error
 		return nil, err
 	}
 
-	tsids.Subtract(m)
+	tsids, err = is.subTSIDSWithTagArray(tsids, m)
+	if err != nil {
+		return nil, err
+	}
 	return tsids, nil
 }
 
@@ -554,6 +699,7 @@ func (is *indexSearch) measurementSeriesByExprIterator(name []byte, expr influxq
 		return nil, err
 	} else if !ok {
 		// Fast path - the index doesn't contain measurement for the given name.
+		logger.Infof("measurement not found")
 		return nil, nil
 	}
 
@@ -627,6 +773,18 @@ func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set
 			return err
 		}
 		mp.ParseTSIDs()
+		if tf.isEmptyValue && !tf.isRegexp {
+			// Fast path: tag value is empty
+			// no regex
+			for _, tsid := range mp.TSIDs {
+				if filter != nil && !filter.Has(tsid) {
+					continue
+				}
+				f(tsid)
+			}
+			continue
+		}
+
 		if prevMatch && string(suffix) == string(prevMatchingSuffix) {
 			// Fast path: the same tag value found.
 			// There is no need in checking it again with potentially
@@ -644,6 +802,7 @@ func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set
 			// since the current row has no matching tsids.
 			continue
 		}
+
 		// Slow path: need tf.matchSuffix call.
 		ok, err := tf.matchSuffix(suffix)
 		if err != nil {
@@ -895,48 +1054,30 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 	return tagValueMap, nil
 }
 
-func (is *indexSearch) getAllSeriesKeys() ([][]byte, error) {
+func (is *indexSearch) getFieldsByTSID(tsid uint64) ([][]byte, error) {
 	ts := &is.ts
 	kb := &is.kb
+	kb.B = append(kb.B[:0], nsPrefixTSIDToField)
+	kb.B = encoding.MarshalUint64(kb.B, tsid)
 
-	keys := make([][]byte, 0, 1024)
-	deletedTSIDs := is.idx.getDeletedTSIDs()
+	ips := make([][]byte, 0, 16)
 
-	kb.B = mergeindex.MarshalCommonPrefix(kb.B[:0], nsPrefixTSIDToKey)
 	prefix := kb.B
-	ts.Seek(kb.B)
+	ts.Seek(prefix)
 	for ts.NextItem() {
 		item := ts.Item
 		if !bytes.HasPrefix(item, prefix) {
 			break
 		}
-		tail := item[1:]
-		tsid := encoding.UnmarshalUint64(tail)
-		if deletedTSIDs.Has(tsid) {
-			// tsid has been deleted, ignore it
-			continue
-		}
 
-		key := tail[8:]
-		// extract measurement
-		mn, _, err := influx.MeasurementName(key)
-		if err != nil {
-			return nil, err
+		tail := item[9:]
+		for len(tail) > 0 {
+			l := int(tail[0])
+			ips = append(ips, tail[1:1+l])
+			tail = tail[1+l:]
 		}
-		keyVersion := encoding.UnmarshalUint16(key[len(key)-2:])
-		if version, ok := is.idx.indexBuilder.getVersion(record.Bytes2str(mn)); ok {
-			if keyVersion != version {
-				// key's version is not recent, regard it as deleted
-				continue
-			}
-		}
-
-		keys = append(keys, cloneBytes(key))
 	}
-	if err := ts.Error(); err != nil {
-		return nil, fmt.Errorf("error when getSeriesCardinality for prefix %q: %w", prefix, err)
-	}
-	return keys, nil
+	return ips, nil
 }
 
 func cloneBytes(b []byte) []byte {

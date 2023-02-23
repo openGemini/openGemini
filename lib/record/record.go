@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -32,6 +33,34 @@ const (
 	RecMaxLenForRuse    = 512
 	RecMaxRowNumForRuse = 2024
 )
+
+var intervalRecAppendFunctions map[int]func(rec, iRec *Record, index, row int)
+var intervalRecUpdateFunctions map[int]func(rec, iRec *Record, index, row, recRow int)
+var recTransAppendFunctions map[int]func(rec, iRec *Record, index, row int)
+
+func init() {
+	intervalRecAppendFunctions = make(map[int]func(rec, iRec *Record, index, row int))
+	recTransAppendFunctions = make(map[int]func(rec, iRec *Record, index, row int))
+	intervalRecUpdateFunctions = make(map[int]func(rec, iRec *Record, index, row, recRow int))
+
+	intervalRecAppendFunctions[influx.Field_Type_String] = stringAppendFunction
+	intervalRecAppendFunctions[influx.Field_Type_Tag] = stringAppendFunction
+	intervalRecAppendFunctions[influx.Field_Type_Int] = integerAppendFunction
+	intervalRecAppendFunctions[influx.Field_Type_Float] = floatAppendFunction
+	intervalRecAppendFunctions[influx.Field_Type_Boolean] = booleanAppendFunction
+
+	intervalRecUpdateFunctions[influx.Field_Type_String] = stringUpdateFunction
+	intervalRecUpdateFunctions[influx.Field_Type_Tag] = stringUpdateFunction
+	intervalRecUpdateFunctions[influx.Field_Type_Int] = integerUpdateFunction
+	intervalRecUpdateFunctions[influx.Field_Type_Float] = floatUpdateFunction
+	intervalRecUpdateFunctions[influx.Field_Type_Boolean] = booleanUpdateFunction
+
+	recTransAppendFunctions[influx.Field_Type_String] = recStringAppendFunction
+	recTransAppendFunctions[influx.Field_Type_Tag] = recStringAppendFunction
+	recTransAppendFunctions[influx.Field_Type_Int] = recIntegerAppendFunction
+	recTransAppendFunctions[influx.Field_Type_Float] = recFloatAppendFunction
+	recTransAppendFunctions[influx.Field_Type_Boolean] = recBooleanAppendFunction
+}
 
 type Record struct {
 	*RecMeta
@@ -92,6 +121,28 @@ func (r *RecMeta) Copy() *RecMeta {
 	}
 
 	return copyMeta
+}
+
+func (r *RecMeta) ResetDeep() {
+	for i := range r.ColMeta {
+		r.ColMeta[i].Init()
+	}
+	r.tags = r.tags[:0]
+	r.IntervalIndex = r.IntervalIndex[:0]
+	r.tagIndex = r.tagIndex[:0]
+	r.ColMeta = r.ColMeta[:0]
+	r.Times = r.Times[:0]
+}
+func (r *RecMeta) ResetForReuse() {
+	for i := range r.ColMeta {
+		r.ColMeta[i].Init()
+	}
+	r.tags = r.tags[:0]
+	r.tagIndex = r.tagIndex[:0]
+	r.IntervalIndex = r.IntervalIndex[:0]
+	for i := range r.Times {
+		r.Times[i] = r.Times[i][:0]
+	}
 }
 
 func cloneBytes(v []byte) *[]byte {
@@ -237,6 +288,10 @@ func (aux *SortAux) Swap(i, j int) {
 	aux.RowIds[i], aux.RowIds[j] = aux.RowIds[j], aux.RowIds[i]
 }
 
+func (aux *SortAux) Init(times []int64) {
+	aux.init(times)
+}
+
 func (aux *SortAux) init(times []int64) {
 	size := len(times)
 	if cap(aux.Times) < size {
@@ -358,71 +413,7 @@ func (rec *Record) ColumnAppendNull(colIdx int) {
 	}
 }
 
-func (rec *Record) SortAndDedupe(sortAux *SortAux) {
-	times := rec.Times()
-	sortAux.init(times)
-	sort.Stable(sortAux)
-	sortRec := sortAux.SortRec
-
-	timeLen := len(times)
-	for index := 0; index < timeLen-1; {
-		start := index
-		// time is ascending
-		for index < timeLen-1 && sortAux.Times[index] != sortAux.Times[index+1] {
-			index++
-		}
-		if start != index {
-			if index < timeLen-1 {
-				index--
-			}
-			for i := start; i <= index; {
-				startRow := i
-				endRow := i
-				for endRow < index && sortAux.RowIds[endRow]+1 == sortAux.RowIds[endRow+1] {
-					endRow++
-				}
-				if endRow != startRow {
-					sortRec.AppendRec(rec, int(sortAux.RowIds[startRow]), int(sortAux.RowIds[endRow])+1)
-					i = endRow + 1
-				} else {
-					sortRec.AppendRec(rec, int(sortAux.RowIds[startRow]), int(sortAux.RowIds[startRow])+1)
-					i++
-				}
-			}
-			index++
-		}
-
-		// equal times
-		start = index
-		for index < timeLen-1 && sortAux.Times[index] == sortAux.Times[index+1] {
-			index++
-		}
-		if start != index {
-			for colIdx := range rec.ColVals {
-				isHaveData := false
-				for idx := index; idx >= start; idx-- {
-					rowId := int(sortAux.RowIds[idx])
-					if !rec.ColVals[colIdx].IsNil(rowId) {
-						sortRec.ColVals[colIdx].AppendColVal(&rec.ColVals[colIdx], rec.Schema[colIdx].Type, rowId, rowId+1)
-						isHaveData = true
-						break
-					}
-				}
-				if !isHaveData {
-					sortRec.ColumnAppendNull(colIdx)
-				}
-			}
-			index++
-
-			// left only one element, need append it
-			if index == timeLen-1 {
-				sortRec.AppendRec(rec, int(sortAux.RowIds[index]), int(sortAux.RowIds[index])+1)
-			}
-		}
-	}
-}
-
-func (rec *Record) CopyWithCondition(tr TimeRange, schema Schemas) *Record {
+func (rec *Record) CopyWithCondition(ascending bool, tr TimeRange, schema Schemas) *Record {
 	times := rec.Times()
 	startIndex := GetTimeRangeStartIndex(times, 0, tr.Min)
 	endIndex := GetTimeRangeEndIndex(times, 0, tr.Max)
@@ -432,19 +423,42 @@ func (rec *Record) CopyWithCondition(tr TimeRange, schema Schemas) *Record {
 		copyRec.SetSchema(schema)
 		copyRec.ReserveColVal(len(schema))
 		isExist := false
+		if ascending {
+			for i := 0; i < len(schema)-1; i++ {
+				colIndex := rec.FieldIndexs(schema[i].Name)
+				if colIndex >= 0 {
+					isExist = true
+					copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, startIndex, endIndex+1)
+				} else {
+					copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
+				}
+			}
+			if isExist {
+				// append time column
+				timeIndex := rec.ColNums() - 1
+				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, startIndex, endIndex+1)
+				return &copyRec
+			}
+			return nil
+		}
+
 		for i := 0; i < len(schema)-1; i++ {
 			colIndex := rec.FieldIndexs(schema[i].Name)
-			if colIndex >= 0 {
-				isExist = true
-				copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, startIndex, endIndex+1)
-			} else {
+			if colIndex < 0 {
 				copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
+				continue
+			}
+			isExist = true
+			for pos := endIndex; pos >= startIndex; pos-- {
+				copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, pos, pos+1)
 			}
 		}
 		if isExist {
 			// append time column
 			timeIndex := rec.ColNums() - 1
-			copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, startIndex, endIndex+1)
+			for pos := endIndex; pos >= startIndex; pos-- {
+				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, pos, pos+1)
+			}
 			return &copyRec
 		}
 		return nil
@@ -453,35 +467,44 @@ func (rec *Record) CopyWithCondition(tr TimeRange, schema Schemas) *Record {
 }
 
 func (rec *Record) Copy() *Record {
-	times := rec.Times()
+	copyRec := &Record{}
+	copyRec.CopyImpl(rec, true, true)
+	return copyRec
+}
+
+func (rec *Record) CopyImpl(srcRec *Record, setSchema, reserveColVal bool) {
+	times := srcRec.Times()
 	startIndex := 0
 	endIndex := len(times) - 1
 	if startIndex <= endIndex {
-		copyRec := Record{}
-		if rec.RecMeta != nil {
-			copyRec.RecMeta = rec.RecMeta.Copy()
+		if srcRec.RecMeta != nil {
+			rec.RecMeta = srcRec.RecMeta.Copy()
 		}
-		copyRec.SetSchema(rec.Schema)
-		copyRec.ReserveColVal(len(rec.Schema))
+		if setSchema {
+			rec.SetSchema(srcRec.Schema)
+		}
+		if reserveColVal {
+			rec.ReserveColVal(len(srcRec.Schema))
+		}
 		isExist := false
-		for i := 0; i < len(rec.Schema)-1; i++ {
-			colIndex := rec.FieldIndexs(rec.Schema[i].Name)
+		for i := 0; i < len(srcRec.Schema)-1; i++ {
+			colIndex := srcRec.FieldIndexs(srcRec.Schema[i].Name)
 			if colIndex >= 0 {
 				isExist = true
-				copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, startIndex, endIndex+1)
+				rec.ColVals[i].AppendColVal(&srcRec.ColVals[colIndex], srcRec.Schema[colIndex].Type, startIndex, endIndex+1)
 			} else {
-				copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
+				rec.ColVals[i].PadColVal(rec.Schema[i].Type, endIndex-startIndex+1)
 			}
 		}
 		if isExist {
 			// append time column
-			timeIndex := rec.ColNums() - 1
-			copyRec.ColVals[len(rec.Schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, startIndex, endIndex+1)
-			return &copyRec
+			timeIndex := srcRec.ColNums() - 1
+			rec.ColVals[len(srcRec.Schema)-1].AppendColVal(&srcRec.ColVals[timeIndex], srcRec.Schema[timeIndex].Type, startIndex, endIndex+1)
+			return
 		}
-		return nil
+		return
 	}
-	return nil
+	return
 }
 
 func (rec *Record) Clone() *Record {
@@ -517,41 +540,6 @@ func (rec *Record) CopyColVals() []ColVal {
 		}
 		return nil
 	}
-	return nil
-}
-
-func (rec *Record) CopyWithConditionDescend(tr TimeRange, schema Schemas) *Record {
-	times := rec.Times()
-	startIndex := GetTimeRangeStartIndex(times, 0, tr.Min)
-	endIndex := GetTimeRangeEndIndex(times, 0, tr.Max)
-
-	if startIndex <= endIndex {
-		copyRec := Record{}
-		copyRec.SetSchema(schema)
-		copyRec.ReserveColVal(len(schema))
-		isExist := false
-		for i := 0; i < len(schema)-1; i++ {
-			colIndex := rec.FieldIndexs(schema[i].Name)
-			if colIndex < 0 {
-				copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
-				continue
-			}
-			isExist = true
-			for pos := endIndex; pos >= startIndex; pos-- {
-				copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, pos, pos+1)
-			}
-		}
-		if isExist {
-			// append time column
-			timeIndex := rec.ColNums() - 1
-			for pos := endIndex; pos >= startIndex; pos-- {
-				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, pos, pos+1)
-			}
-			return &copyRec
-		}
-		return nil
-	}
-
 	return nil
 }
 
@@ -767,6 +755,10 @@ func (rec *Record) mergeRecRow(newRec, oldRec *Record, newRowIdx, oldRowIdx int)
 }
 
 func (rec *Record) AppendRec(srcRec *Record, start, end int) {
+	rec.appendRecImpl(srcRec, start, end, true)
+}
+
+func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool) {
 	if start == end {
 		return
 	}
@@ -786,77 +778,11 @@ func (rec *Record) AppendRec(srcRec *Record, start, end int) {
 			continue
 		}
 
-		if iRec < recLen {
+		if pad {
 			for iRec < recLen {
 				rec.ColVals[iRec].PadColVal(rec.Schema[iRec].Type, end-start)
 				iRec++
 			}
-		}
-		break
-	}
-	// append time col
-	rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[srcRecLen], srcRec.Schema[srcRecLen].Type, start, end)
-}
-
-func (rec *Record) AppendRecForSeries(srcRec *Record, start, end int, ridIdx map[int]struct{}) {
-	// note: there is not RecMeta to deal with.
-	if start == end {
-		return
-	}
-
-	var idx int
-	for i := range srcRec.Schema {
-		if _, ok := ridIdx[i]; ok {
-			continue
-		}
-		rec.ColVals[idx].AppendColVal(&srcRec.ColVals[i], srcRec.Schema[i].Type, start, end)
-		idx++
-	}
-}
-
-func (rec *Record) AppendRecForTagSet(srcRec *Record, start, end int) {
-	if start == end {
-		return
-	}
-
-	iRec, iSrcRec := 0, 0
-	recLen, srcRecLen := len(rec.Schema)-1, len(srcRec.Schema)-1
-	for {
-		if iRec < recLen && iSrcRec < srcRecLen {
-			// srcRec.Name < rec.Name is not exist
-			if srcRec.Schema[iSrcRec].Name > rec.Schema[iRec].Name {
-				rec.ColVals[iRec].PadColVal(rec.Schema[iRec].Type, end-start)
-			} else {
-				rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[iSrcRec], srcRec.Schema[iSrcRec].Type, start, end)
-				iSrcRec++
-			}
-			iRec++
-			continue
-		}
-		break
-	}
-	// append time col
-	rec.ColVals[recLen].AppendColVal(&srcRec.ColVals[srcRecLen], srcRec.Schema[srcRecLen].Type, start, end)
-}
-
-func (rec *Record) AppendRecForAggTagSet(srcRec *Record, start, end int) {
-	if start == end {
-		return
-	}
-
-	iRec, iSrcRec := 0, 0
-	recLen, srcRecLen := len(rec.Schema)-1, len(srcRec.Schema)-1
-	for {
-		if iRec < recLen && iSrcRec < srcRecLen {
-			// srcRec.Name < rec.Name is not exist
-			if srcRec.Schema[iSrcRec].Name > rec.Schema[iRec].Name {
-				rec.ColVals[iRec].PadColVal(rec.Schema[iRec].Type, end-start)
-			} else {
-				rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[iSrcRec], srcRec.Schema[iSrcRec].Type, start, end)
-				iSrcRec++
-			}
-			iRec++
-			continue
 		}
 		break
 	}
@@ -878,9 +804,30 @@ func (rec *Record) AppendRecForAggTagSet(srcRec *Record, start, end int) {
 	}
 }
 
-func (rec *Record) appendRecs(newRec, oldRec *Record, newStart, newEnd, oldStart, oldEnd int, newTimeVals, oldTimeVals []int64, limitRows int) (int, int, int) {
-	for {
-		if newStart < newEnd && oldStart < oldEnd {
+func (rec *Record) AppendRecForTagSet(srcRec *Record, start, end int) {
+	rec.appendRecImpl(srcRec, start, end, false)
+}
+
+func (rec *Record) AppendRecForSeries(srcRec *Record, start, end int, ridIdx map[int]struct{}) {
+	// note: there is not RecMeta to deal with.
+	if start == end {
+		return
+	}
+
+	var idx int
+	for i := range srcRec.Schema {
+		if _, ok := ridIdx[i]; ok {
+			continue
+		}
+		rec.ColVals[idx].AppendColVal(&srcRec.ColVals[i], srcRec.Schema[i].Type, start, end)
+		idx++
+	}
+}
+
+func (rec *Record) appendRecs(ascending bool, newRec, oldRec *Record, newStart, newEnd, oldStart, oldEnd int,
+	newTimeVals, oldTimeVals []int64, limitRows int) (int, int, int) {
+	if ascending {
+		for newStart < newEnd && oldStart < oldEnd {
 			if oldTimeVals[oldStart] < newTimeVals[newStart] {
 				rec.AppendRec(oldRec, oldStart, oldStart+1)
 				oldStart++
@@ -896,39 +843,15 @@ func (rec *Record) appendRecs(newRec, oldRec *Record, newStart, newEnd, oldStart
 			if limitRows == 0 {
 				return 0, newStart, oldStart
 			}
-			continue
 		}
-
-		if newStart < newEnd {
-			curNewRows := newEnd - newStart
-			if curNewRows >= limitRows {
-				rec.AppendRec(newRec, newStart, newStart+limitRows)
-				return 0, newStart + limitRows, oldStart
-			}
-			rec.AppendRec(newRec, newStart, newEnd)
-			limitRows -= curNewRows
-		} else if oldStart < oldEnd {
-			curOldRows := oldEnd - oldStart
-			if curOldRows >= limitRows {
-				rec.AppendRec(oldRec, oldStart, oldStart+limitRows)
-				return 0, newStart, oldStart + limitRows
-			}
-			rec.AppendRec(oldRec, oldStart, oldEnd)
-			limitRows -= curOldRows
-		}
-		return limitRows, newEnd, oldEnd
-	}
-}
-
-func (rec *Record) appendRecsDescend(newRec, oldRec *Record, newStart, newEnd, oldStart, oldEnd int, newTimeVals, oldTimeVals []int64, limitRows int) (int, int, int) {
-	for {
-		if newStart < newEnd && oldStart < oldEnd {
-			if oldTimeVals[oldStart] > newTimeVals[newStart] {
-				rec.AppendRec(oldRec, oldStart, oldStart+1)
-				oldStart++
-			} else if newTimeVals[newStart] > oldTimeVals[oldStart] {
+	} else {
+		for newStart < newEnd && oldStart < oldEnd {
+			if oldTimeVals[oldStart] < newTimeVals[newStart] {
 				rec.AppendRec(newRec, newStart, newStart+1)
 				newStart++
+			} else if newTimeVals[newStart] < oldTimeVals[oldStart] {
+				rec.AppendRec(oldRec, oldStart, oldStart+1)
+				oldStart++
 			} else {
 				rec.mergeRecRow(newRec, oldRec, newStart, oldStart)
 				newStart++
@@ -938,28 +861,27 @@ func (rec *Record) appendRecsDescend(newRec, oldRec *Record, newStart, newEnd, o
 			if limitRows == 0 {
 				return 0, newStart, oldStart
 			}
-			continue
 		}
-
-		if newStart < newEnd {
-			curNewRows := newEnd - newStart
-			if curNewRows >= limitRows {
-				rec.AppendRec(newRec, newStart, newStart+limitRows)
-				return 0, newStart + limitRows, oldStart
-			}
-			rec.AppendRec(newRec, newStart, newEnd)
-			limitRows -= curNewRows
-		} else if oldStart < oldEnd {
-			curOldRows := oldEnd - oldStart
-			if curOldRows >= limitRows {
-				rec.AppendRec(oldRec, oldStart, oldStart+limitRows)
-				return 0, newStart, oldStart + limitRows
-			}
-			rec.AppendRec(oldRec, oldStart, oldEnd)
-			limitRows -= curOldRows
-		}
-		return limitRows, newEnd, oldEnd
 	}
+
+	if newStart < newEnd {
+		curNewRows := newEnd - newStart
+		if curNewRows >= limitRows {
+			rec.AppendRec(newRec, newStart, newStart+limitRows)
+			return 0, newStart + limitRows, oldStart
+		}
+		rec.AppendRec(newRec, newStart, newEnd)
+		limitRows -= curNewRows
+	} else if oldStart < oldEnd {
+		curOldRows := oldEnd - oldStart
+		if curOldRows >= limitRows {
+			rec.AppendRec(oldRec, oldStart, oldStart+limitRows)
+			return 0, newStart, oldStart + limitRows
+		}
+		rec.AppendRec(oldRec, oldStart, oldEnd)
+		limitRows -= curOldRows
+	}
+	return limitRows, newEnd, oldEnd
 }
 
 func (rec *Record) mergeRecordOverlapImpl(newRec, oldRec *Record, newOpStart, newOpEnd, oldOpStart, oldOpEnd int, newTimeVals, oldTimeVals []int64,
@@ -990,11 +912,8 @@ func (rec *Record) mergeRecordOverlapImpl(newRec, oldRec *Record, newOpStart, ne
 	}
 
 	var newEnd, oldEnd int
-	if ascending {
-		limitRows, newEnd, oldEnd = rec.appendRecs(newRec, oldRec, newOpStart, newOpEnd, oldOpStart, oldOpEnd, newTimeVals, oldTimeVals, limitRows)
-	} else {
-		limitRows, newEnd, oldEnd = rec.appendRecsDescend(newRec, oldRec, newOpStart, newOpEnd, oldOpStart, oldOpEnd, newTimeVals, oldTimeVals, limitRows)
-	}
+	limitRows, newEnd, oldEnd = rec.appendRecs(ascending, newRec, oldRec, newOpStart, newOpEnd, oldOpStart, oldOpEnd,
+		newTimeVals, oldTimeVals, limitRows)
 	if limitRows == 0 {
 		return newEnd, oldEnd
 	}
@@ -1213,7 +1132,7 @@ func (rec *Record) SliceFromRecord(srcRec *Record, start, end int) {
 	}
 
 	if srcRec.RecMeta != nil {
-		srcRec.CopyColMetaTo(rec, start, end)
+		srcRec.CopyColMetaTo(rec)
 		for i := range srcRec.RecMeta.Times {
 			if len(rec.RecMeta.Times) != 0 && len(srcRec.RecMeta.Times[i]) != 0 {
 				rec.RecMeta.Times[i] = rec.RecMeta.Times[i][:0]
@@ -1223,7 +1142,7 @@ func (rec *Record) SliceFromRecord(srcRec *Record, start, end int) {
 	}
 }
 
-func (rec *Record) CopyColMetaTo(dst *Record, timeStart, timeEnd int) {
+func (rec *Record) CopyColMetaTo(dst *Record) {
 	if len(rec.RecMeta.Times) != 0 && len(dst.RecMeta.Times) == 0 {
 		dst.RecMeta.Times = rec.RecMeta.Times
 	}
@@ -1462,46 +1381,6 @@ func (rec *Record) Merge(newRec *Record) {
 	col.AppendColVal(newCol, rec.Schema[oldColumnN-1].Type, 0, newRecRows)
 }
 
-func CheckRecord(rec *Record) {
-	colN := len(rec.Schema)
-	if rec.Schema[colN-1].Name != TimeField {
-		panic(fmt.Sprintf("schema:%v", rec.Schema))
-	}
-
-	if rec.ColVals[colN-1].NilCount != 0 {
-		panic(rec.String())
-	}
-
-	for i := 1; i < colN; i++ {
-		if rec.Schema[i].Name == rec.Schema[i-1].Name {
-			panic(fmt.Sprintf("same schema; idx: %d, name: %v", i, rec.Schema[i].Name))
-		}
-	}
-
-	for i := 0; i < colN-1; i++ {
-		f := &rec.Schema[i]
-		col1, col2 := &rec.ColVals[i], &rec.ColVals[i+1]
-
-		if col1.Len != col2.Len {
-			panic(rec.String())
-		}
-
-		// check string data length
-		if f.Type == influx.Field_Type_String {
-			continue
-		}
-
-		// check data length
-		expLen := typeSize[f.Type] * (col1.Len - col1.NilCount)
-		if expLen != len(col1.Val) {
-			fmt.Println(rec.String())
-			err := fmt.Sprintf("the length of rec.ColVals[%d].val is incorrect. exp: %d, got: %d",
-				i, expLen, len(col1.Val))
-			panic(err)
-		}
-	}
-}
-
 func (rec *Record) IsNilRow(row int) bool {
 	// exclude time column
 	colNum := rec.ColNums() - 1
@@ -1589,6 +1468,112 @@ func (rec *Record) GetTagIndexAndKey() ([]*[]byte, []int) {
 	return rec.tags, rec.tagIndex
 }
 
+func (rec *Record) IntervalFirstTime() int64 {
+	return rec.ColVals[len(rec.ColVals)-1].IntegerValues()[0]
+}
+
+func (rec *Record) IntervalLastTime() int64 {
+	return rec.ColVals[len(rec.ColVals)-1].IntegerValues()[rec.RowNums()-1]
+}
+
+func (rec *Record) AppendIntervalEmptyRows(start, step, num int64, initRecMeta bool) {
+	for i := int64(0); i < num; i++ {
+		rec.AppendIntervalEmptyRow(start+step*i, initRecMeta)
+	}
+}
+
+func (rec *Record) AppendIntervalEmptyRow(rowTime int64, initRecMeta bool) {
+	for i := 0; i < rec.Len()-1; i++ {
+		switch rec.Schema[i].Type {
+		case influx.Field_Type_Float:
+			rec.ColVals[i].AppendFloatNullReserve()
+		case influx.Field_Type_String, influx.Field_Type_Tag:
+			rec.ColVals[i].AppendStringNull()
+		case influx.Field_Type_Int:
+			rec.ColVals[i].AppendIntegerNullReserve()
+		case influx.Field_Type_Boolean:
+			rec.ColVals[i].AppendBooleanNullReserve()
+		default:
+			panic("unsupported data type")
+		}
+	}
+	rec.ColVals[len(rec.ColVals)-1].AppendInteger(rowTime)
+	if initRecMeta {
+		for i := 0; i < len(rec.RecMeta.Times)-1; i++ {
+			rec.RecMeta.Times[i] = append(rec.RecMeta.Times[i], 0)
+		}
+	}
+}
+
+func (rec *Record) AppendRecRow2IntervalRec(re *Record, row int) {
+	for i := 0; i < len(re.Schema)-1; i++ {
+		intervalRecAppendFunctions[re.Schema[i].Type](re, rec, i, row)
+	}
+	time, _ := re.ColVals[len(re.Schema)-1].IntegerValue(row)
+	rec.ColVals[len(rec.Schema)-1].AppendInteger(time)
+	appendRecMeta2iRec(re, rec, len(re.Schema)-1, row)
+}
+
+func (rec *Record) BuildEmptyIntervalRec(min, max, interval int64, initRecMeta, hasInterval, ascending bool) {
+	if !hasInterval {
+		rec.AppendIntervalEmptyRows(0, interval, 1, initRecMeta)
+		return
+	}
+	num := (max - min) / interval
+	if ascending {
+		rec.AppendIntervalEmptyRows(min, interval, num, initRecMeta)
+	} else {
+		rec.AppendIntervalEmptyRows(max-interval, -interval, num, initRecMeta)
+	}
+}
+
+func (rec *Record) TransIntervalRec2Rec(re *Record, start, end int) {
+	for i := start; i < end; i++ {
+		if rec.IsIntervalRecRowNull(i) {
+			continue
+		}
+		for j := range rec.Schema {
+			recTransAppendFunctions[rec.Schema[j].Type](re, rec, j, i)
+		}
+	}
+}
+
+func (rec *Record) IsIntervalRecRowNull(row int) bool {
+	for i := 0; i < rec.Len()-1; i++ {
+		if !rec.ColVals[i].IsNil(row) {
+			return false
+		}
+	}
+	return true
+}
+
+func (rec *Record) UpdateIntervalRecRow(re *Record, recRow, row int) {
+	for i := range re.Schema {
+		intervalRecUpdateFunctions[re.Schema[i].Type](re, rec, i, row, recRow)
+	}
+}
+
+func (rec *Record) ResizeBySchema(schema Schemas, initColMeta bool) {
+	capCol := cap(rec.ColVals)
+	if capCol < len(schema) {
+		padLen := len(schema) - capCol
+		rec.ColVals = append(rec.ColVals, make([]ColVal, padLen)...)
+		for i := cap(rec.ColVals) - padLen; i < rec.Len(); i++ {
+			rec.ColVals[i] = ColVal{}
+		}
+		if initColMeta {
+			rec.RecMeta.Times = append(rec.RecMeta.Times, make([][]int64, padLen)...)
+			for i := cap(rec.ColVals) - padLen; i < rec.Len(); i++ {
+				rec.RecMeta.Times[i] = make([]int64, 0, len(rec.RecMeta.Times[0]))
+			}
+		}
+	}
+	rec.ColVals = rec.ColVals[:len(schema)]
+	if initColMeta {
+		rec.RecMeta.Times = rec.RecMeta.Times[:len(schema)]
+	}
+}
+
 func ReverseBitMap(bitmap []byte, bitmapOffset uint32, count int) []byte {
 	if len(bitmap) == 0 {
 		return bitmap
@@ -1617,11 +1602,29 @@ func ReverseBitMap(bitmap []byte, bitmapOffset uint32, count int) []byte {
 }
 
 type RecordPool struct {
+	name  RecordType
 	cache chan *Record
 	pool  sync.Pool
+	inUse func(i int64)
+	get   func(i int64)
+	reUse func(i int64)
+	abort func(i int64)
 }
 
-func NewRecordPool() *RecordPool {
+type RecordType uint8
+
+const (
+	IntervalRecordPool RecordType = iota
+	FileCursorPool
+	AggPool
+	TsmMergePool
+	TsspSequencePool
+	SequenceAggPool
+	SeriesPool
+	UnknownPool
+)
+
+func NewRecordPool(recordType RecordType) *RecordPool {
 	n := cpu.GetCpuNum() * 2
 	if n < 4 {
 		n = 4
@@ -1630,14 +1633,64 @@ func NewRecordPool() *RecordPool {
 		n = 256
 	}
 
+	inUse := func(i int64) {}
+	get := func(i int64) {}
+	reuse := func(i int64) {}
+	abort := func(i int64) {}
+	switch recordType {
+	case IntervalRecordPool:
+		inUse = statistics.NewRecordStatistics().AddIntervalRecordPoolInUse
+		get = statistics.NewRecordStatistics().AddIntervalRecordPoolGet
+		reuse = statistics.NewRecordStatistics().AddIntervalRecordPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddIntervalRecordPoolAbort
+	case FileCursorPool:
+		inUse = statistics.NewRecordStatistics().AddFileCursorPoolInUse
+		get = statistics.NewRecordStatistics().AddFileCursorPoolGet
+		reuse = statistics.NewRecordStatistics().AddFileCursorPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddFileCursorPoolAbort
+	case AggPool:
+		inUse = statistics.NewRecordStatistics().AddAggPoolInUse
+		get = statistics.NewRecordStatistics().AddAggPoolGet
+		reuse = statistics.NewRecordStatistics().AddAggPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddAggPoolAbort
+	case TsmMergePool:
+		inUse = statistics.NewRecordStatistics().AddTsmMergePoolInUse
+		get = statistics.NewRecordStatistics().AddTsmMergePoolGet
+		reuse = statistics.NewRecordStatistics().AddTsmMergePoolGetReUse
+		abort = statistics.NewRecordStatistics().AddTsmMergePoolAbort
+	case TsspSequencePool:
+		inUse = statistics.NewRecordStatistics().AddTsspSequencePoolInUse
+		get = statistics.NewRecordStatistics().AddTsspSequencePoolGet
+		reuse = statistics.NewRecordStatistics().AddTsspSequencePoolGetReUse
+		abort = statistics.NewRecordStatistics().AddTsspSequencePoolAbort
+	case SequenceAggPool:
+		inUse = statistics.NewRecordStatistics().AddSequenceAggPoolInUse
+		get = statistics.NewRecordStatistics().AddSequenceAggPoolGet
+		reuse = statistics.NewRecordStatistics().AddSequenceAggPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddSequenceAggPoolAbort
+	case SeriesPool:
+		inUse = statistics.NewRecordStatistics().AddSeriesPoolInUse
+		get = statistics.NewRecordStatistics().AddSeriesPoolGet
+		reuse = statistics.NewRecordStatistics().AddSeriesPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddSeriesPoolAbort
+	}
+
 	return &RecordPool{
 		cache: make(chan *Record, n),
+		name:  recordType,
+		inUse: inUse,
+		get:   get,
+		reUse: reuse,
+		abort: abort,
 	}
 }
 
 func (p *RecordPool) Get() *Record {
+	p.inUse(1)
+	p.get(1)
 	select {
 	case rec := <-p.cache:
+		p.reUse(1)
 		return rec
 	default:
 		v := p.pool.Get()
@@ -1646,6 +1699,7 @@ func (p *RecordPool) Get() *Record {
 			if !ok {
 				return &Record{}
 			}
+			p.reUse(1)
 			return rec
 		}
 		rec := &Record{}
@@ -1654,7 +1708,9 @@ func (p *RecordPool) Get() *Record {
 }
 
 func (p *RecordPool) Put(rec *Record) {
+	p.inUse(-1)
 	if recLen := rec.Len(); (recLen > 0 && rec.RowNums() > RecMaxRowNumForRuse) || cap(rec.Schema) > RecMaxLenForRuse {
+		p.abort(1)
 		return
 	}
 	rec.ResetDeep()
@@ -1674,6 +1730,7 @@ type CircularRecordPool struct {
 }
 
 func NewCircularRecordPool(recordPool *RecordPool, recordNum int, schema Schemas, initColMeta bool) *CircularRecordPool {
+	statistics.NewRecordStatistics().AddCircularRecordPool(1)
 	rp := &CircularRecordPool{
 		index:       0,
 		recordNum:   recordNum,
@@ -1738,6 +1795,7 @@ func (p *CircularRecordPool) GetBySchema(s Schemas) *Record {
 }
 
 func (p *CircularRecordPool) Put() {
+	statistics.NewRecordStatistics().AddCircularRecordPool(-1)
 	for i := 0; i < p.recordNum; i++ {
 		p.pool.Put(p.records[i])
 	}
@@ -1784,4 +1842,125 @@ func (rec *Record) Split(dst []Record, maxRows int) []Record {
 	}
 
 	return dst
+}
+
+func stringAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := rec.ColVals[index].StringValueUnsafe(row)
+	if isNil {
+		iRec.ColVals[index].AppendStringNull()
+	} else {
+		iRec.ColVals[index].AppendString(v)
+	}
+	appendRecMeta2iRec(rec, iRec, index, row)
+}
+
+func integerAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := rec.ColVals[index].IntegerValue(row)
+	if isNil {
+		iRec.ColVals[index].AppendIntegerNullReserve()
+	} else {
+		iRec.ColVals[index].AppendInteger(v)
+	}
+	appendRecMeta2iRec(rec, iRec, index, row)
+}
+func floatAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := rec.ColVals[index].FloatValue(row)
+	if isNil {
+		iRec.ColVals[index].AppendFloatNullReserve()
+	} else {
+		iRec.ColVals[index].AppendFloat(v)
+	}
+	appendRecMeta2iRec(rec, iRec, index, row)
+}
+func booleanAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := rec.ColVals[index].BooleanValue(row)
+	if isNil {
+		iRec.ColVals[index].AppendBooleanNullReserve()
+	} else {
+		iRec.ColVals[index].AppendBoolean(v)
+	}
+	appendRecMeta2iRec(rec, iRec, index, row)
+}
+
+func stringUpdateFunction(rec, iRec *Record, index, row, recRow int) {
+	v, isNil := rec.ColVals[index].StringValueUnsafe(recRow)
+	iRec.ColVals[index].UpdateStringValue(v, isNil, row)
+	updateRecMeta(rec, iRec, index, row, recRow)
+}
+
+func integerUpdateFunction(rec, iRec *Record, index, row, recRow int) {
+	v, isNil := rec.ColVals[index].IntegerValue(recRow)
+	iRec.ColVals[index].UpdateIntegerValue(v, isNil, row)
+	updateRecMeta(rec, iRec, index, row, recRow)
+}
+
+func floatUpdateFunction(rec, iRec *Record, index, row, recRow int) {
+	v, isNil := rec.ColVals[index].FloatValue(recRow)
+	iRec.ColVals[index].UpdateFloatValue(v, isNil, row)
+	updateRecMeta(rec, iRec, index, row, recRow)
+}
+
+func booleanUpdateFunction(rec, iRec *Record, index, row, recRow int) {
+	v, isNil := rec.ColVals[index].BooleanValue(recRow)
+	iRec.ColVals[index].UpdateBooleanValue(v, isNil, row)
+	updateRecMeta(rec, iRec, index, row, recRow)
+}
+
+func recStringAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := iRec.ColVals[index].StringValueUnsafe(row)
+	if isNil {
+		rec.ColVals[index].AppendStringNull()
+	} else {
+		rec.ColVals[index].AppendString(v)
+	}
+	appendRecMeta2Rec(rec, iRec, index, row)
+}
+
+func recIntegerAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := iRec.ColVals[index].IntegerValueWithNullReserve(row)
+	if isNil {
+		rec.ColVals[index].AppendIntegerNull()
+	} else {
+		rec.ColVals[index].AppendInteger(v)
+	}
+	appendRecMeta2Rec(rec, iRec, index, row)
+}
+
+func recFloatAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := iRec.ColVals[index].FloatValueWithNullReserve(row)
+	if isNil {
+		rec.ColVals[index].AppendFloatNull()
+	} else {
+		rec.ColVals[index].AppendFloat(v)
+	}
+	appendRecMeta2Rec(rec, iRec, index, row)
+}
+
+func recBooleanAppendFunction(rec, iRec *Record, index, row int) {
+	v, isNil := iRec.ColVals[index].BooleanValueWithNullReserve(row)
+	if isNil {
+		rec.ColVals[index].AppendBooleanNull()
+	} else {
+		rec.ColVals[index].AppendBoolean(v)
+	}
+	appendRecMeta2Rec(rec, iRec, index, row)
+}
+
+func appendRecMeta2iRec(rec, iRec *Record, index, row int) {
+	if rec.RecMeta != nil && len(rec.RecMeta.Times) != 0 && len(rec.RecMeta.Times[index]) != 0 {
+		iRec.RecMeta.Times[index] = append(iRec.RecMeta.Times[index], rec.RecMeta.Times[index][row])
+	}
+}
+
+func updateRecMeta(rec, iRec *Record, index, row, recRow int) {
+	if rec.RecMeta != nil && len(rec.RecMeta.Times) != 0 && index < len(rec.RecMeta.Times)-1 &&
+		len(rec.RecMeta.Times[index]) != 0 {
+		iRec.RecMeta.Times[index][row] = rec.RecMeta.Times[index][recRow]
+	}
+}
+
+func appendRecMeta2Rec(rec, iRec *Record, index, row int) {
+	if rec.RecMeta != nil && len(iRec.RecMeta.Times) != 0 && len(iRec.RecMeta.Times[index]) != 0 {
+		rec.RecMeta.Times[index] = append(rec.RecMeta.Times[index], iRec.RecMeta.Times[index][row])
+	}
 }

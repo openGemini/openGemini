@@ -27,11 +27,11 @@ import (
 
 const (
 	// DefaultWriteTimeout is the default timeout for a complete write to succeed.
-	DefaultWriteTimeout = 10 * time.Second
+	DefaultWriteTimeout = 120 * time.Second
 	DefaultQueryTimeout = 0
 
 	// DefaultShardWriterTimeout is the default timeout set on shard writers.
-	DefaultShardWriterTimeout = 10 * time.Second
+	DefaultShardWriterTimeout = 30 * time.Second
 
 	// DefaultShardMapperTimeout is the default timeout set on shard mappers.
 	DefaultShardMapperTimeout = 10 * time.Second
@@ -65,6 +65,7 @@ type TSSql struct {
 	// TLS provides configuration options for all https endpoints.
 	TLS      tlsconfig.Config `toml:"tls"`
 	Analysis Castor           `toml:"castor"`
+	Sherlock *SherlockConfig  `toml:"sherlock"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -76,6 +77,7 @@ func NewTSSql() *TSSql {
 	c.Logging = NewLogger(AppSql)
 	c.HTTP = httpdConfig.NewConfig()
 	c.Analysis = NewCastor()
+	c.Sherlock = NewSherlockConfig()
 	return c
 }
 
@@ -90,6 +92,7 @@ func (c *TSSql) Validate() error {
 		c.HTTP,
 		c.Spdy,
 		c.Analysis,
+		c.Sherlock,
 	}
 
 	for _, item := range items {
@@ -127,12 +130,13 @@ type Coordinator struct {
 	ShardWriterTimeout   toml.Duration `toml:"shard-writer-timeout"`
 	ShardMapperTimeout   toml.Duration `toml:"shard-mapper-timeout"`
 	// Maximum number of memory bytes to use from the query
-	MaxQueryMem              toml.Size     `toml:"max-query-mem"`
-	MetaExecutorWriteTimeout toml.Duration `toml:"meta-executor-write-timeout"`
-	QueryLimitIntervalTime   int           `toml:"query-limit-interval-time"`
-	QueryLimitLevel          int           `toml:"query-limit-level"`
-	RetentionPolicyLimit     int           `toml:"rp-limit"`
-	ShardTier                string        `toml:"shard-tier"`
+	MaxQueryMem              toml.Size       `toml:"max-query-mem"`
+	MetaExecutorWriteTimeout toml.Duration   `toml:"meta-executor-write-timeout"`
+	QueryLimitIntervalTime   int             `toml:"query-limit-interval-time"`
+	QueryLimitLevel          int             `toml:"query-limit-level"`
+	RetentionPolicyLimit     int             `toml:"rp-limit"`
+	ShardTier                string          `toml:"shard-tier"`
+	TimeRangeLimit           []toml.Duration `toml:"time-range-limit"`
 
 	QueryLimitFlag          bool `toml:"query-limit-flag"`
 	QueryTimeCompareEnabled bool `toml:"query-time-compare-enabled"`

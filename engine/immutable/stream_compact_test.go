@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -28,8 +29,9 @@ import (
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -42,8 +44,8 @@ func TestFileWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	fw := newFileWriter(fd, false, true)
+	lockPath := ""
+	fw := newFileWriter(fd, false, true, &lockPath)
 	if fn != fw.Name() {
 		t.Fatalf("invalid writer name")
 	}
@@ -86,10 +88,10 @@ func TestFileIterator(t *testing.T) {
 	conf := NewConfig()
 	conf.maxRowsPerSegment = 100
 	conf.maxSegmentLimit = 65535
-	tier := uint64(meta.Hot)
+	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*9 + 1
-
-	store := NewTableStore(testCompDir, &tier, true, conf)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -116,8 +118,8 @@ func TestFileIterator(t *testing.T) {
 
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
-		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-		msb := AllocMsBuilder(store.path, "mst", conf, 10, fileName, store.Tier(), nil, 2)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
 		write(ids, data, msb)
 
 		for j, id := range ids {
@@ -226,10 +228,10 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	conf.maxRowsPerSegment = 40
 	conf.maxSegmentLimit = 16
 	conf.fileSizeLimit = defaultFileSizeLimit
-	tier := uint64(meta.Hot)
+	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*2 + 1
-
-	store := NewTableStore(testCompDir, &tier, true, conf)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -247,6 +249,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	check := func(name string, seq string, ids []uint64, orig []*record.Record) {
 		f := store.File(name, seq, true)
 		defer f.Unref()
+		defer f.UnrefFileReader()
 		contains, err := f.Contains(idMinMax.min)
 		if err != nil || !contains {
 			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -328,8 +331,8 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	var dataIds []uint64
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
-		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-		msb := AllocMsBuilder(store.path, "mst", conf, 10, fileName, store.Tier(), nil, 2)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
 		write(ids, data, msb)
 
 		for j, id := range ids {
@@ -514,7 +517,7 @@ func TestColumnBuilder_EncodeColumn(t *testing.T) {
 		_ = cb.initEncoder(ref)
 		cols[0] = col
 		cb.data = cb.data[:0]
-		if err := cb.encodeColumn(cols[:], 0, ref); err != nil {
+		if err := cb.encodeColumn(cols[:], nil, 0, ref); err != nil {
 			t.Fatal(err)
 		}
 
@@ -542,6 +545,7 @@ func readOrderChunks(mst string, store *MmsTables, chunks map[uint64]*record.Rec
 	for _, f := range files.files {
 		fi.oldFids = append(fi.oldFids, f.Path())
 		f.Ref()
+		f.RefFileReader()
 		fi.oldFiles = append(fi.oldFiles, f)
 		fItr := NewFileIterator(f, CLog)
 		fi.compIts = append(fi.compIts, fItr)
@@ -588,9 +592,9 @@ func TestFileSizeExceedLimit(t *testing.T) {
 	conf.SetFilesLimit(int64(size))
 	conf.maxRowsPerSegment = 1000
 	conf.maxSegmentLimit = 65535
-	tier := uint64(meta.Hot)
-
-	store := NewTableStore(testCompDir, &tier, true, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
 
 	rows := size/2 + 10
@@ -601,8 +605,8 @@ func TestFileSizeExceedLimit(t *testing.T) {
 	oldData := make(map[uint64]*record.Record, filesN)
 	oldIds := make([]uint64, 0, filesN)
 	for i := 0; i < filesN; i++ {
-		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-		msb := AllocMsBuilder(store.path, "mst", conf, 1, fileName, store.Tier(), nil, size)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, size)
 		rec := genIntColumn(&startTime, rows, 2)
 		if err := msb.WriteData(id, rec); err != nil {
 			t.Fatal(err)
@@ -689,9 +693,9 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 
 	conf := NewConfig()
 	conf.SetFilesLimit(1)
-	tier := uint64(meta.Warm)
-
-	store := NewTableStore(testCompDir, &tier, true, conf)
+	tier := uint64(util.Warm)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
 
 	rows := 30000
@@ -701,8 +705,8 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 	oldData := make(map[uint64]*record.Record, filesN)
 	oldIds := make([]uint64, 0, filesN)
 	for i := 0; i < filesN; i++ {
-		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-		msb := AllocMsBuilder(store.path, "mst", conf, 1, fileName, store.Tier(), nil, 1024)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 1024)
 		rec := genIntColumn(&startTime, rows, 2)
 		if err := msb.WriteData(id, rec); err != nil {
 			t.Fatal(err)
@@ -754,4 +758,53 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 		read := readRec[sid]
 		compareRecFun(old, read)
 	}
+}
+
+func TestSplitColumn_panic(t *testing.T) {
+	itr := &StreamIterators{
+		col:  &record.ColVal{},
+		Conf: NewConfig(),
+	}
+	itr.Conf.SetMaxRowsPerSegment(16)
+	for i := 0; i < 40; i++ {
+		itr.col.AppendFloat(1)
+	}
+
+	var err string
+	var split = func() {
+		defer func() {
+			if e := recover(); e != nil {
+				err = fmt.Sprintf("%v", e)
+			}
+		}()
+
+		itr.splitColumn(record.Field{Name: "foo", Type: influx.Field_Type_Float}, false)
+	}
+	split()
+	require.Equal(t, "len(c.colSegs) != 2, got: 3", err)
+}
+
+func TestStreamWriteFile_WriteData_panic(t *testing.T) {
+	sw := &StreamWriteFile{}
+	sw.Conf = NewConfig()
+	sw.Conf.SetMaxRowsPerSegment(16)
+
+	ref := record.Field{Name: "foo", Type: influx.Field_Type_Float}
+	col := record.ColVal{}
+	for i := 0; i < 20; i++ {
+		col.AppendFloat(1)
+	}
+
+	var err string
+	var write = func() {
+		defer func() {
+			if e := recover(); e != nil {
+				err = fmt.Sprintf("%v", e)
+			}
+		}()
+
+		_ = sw.WriteData(100, ref, col, nil)
+	}
+	write()
+	require.Equal(t, "col.Len=20 is greater than MaxRowsPerSegment=16", err)
 }

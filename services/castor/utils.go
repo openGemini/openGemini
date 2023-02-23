@@ -60,6 +60,7 @@ func NewRespChan(size int) (*respChan, *errno.Error) {
 	}
 	return &respChan{
 		C:     make(chan array.Record, size),
+		ErrCh: make(chan *errno.Error, size),
 		alive: true,
 	}, nil
 }
@@ -67,6 +68,7 @@ func NewRespChan(size int) (*respChan, *errno.Error) {
 type respChan struct {
 	mu    sync.Mutex
 	C     chan array.Record
+	ErrCh chan *errno.Error
 	alive bool
 }
 
@@ -83,6 +85,7 @@ func (r *respChan) Close() {
 		resp.Release()
 	}
 	close(r.C)
+	close(r.ErrCh)
 }
 
 func newData(record array.Record) *data {
@@ -92,6 +95,7 @@ func newData(record array.Record) *data {
 type data struct {
 	record   array.Record
 	retryCnt int
+	err      *errno.Error
 }
 
 func (d *data) release() {
@@ -102,9 +106,7 @@ func (d *data) size() int {
 	return int(d.record.NumRows())
 }
 
-type chanSet struct {
-	dataRetryChan   chan *data
-	dataFailureChan chan *data
-	resultChan      chan array.Record
-	clientPool      chan *castorCli
+type dataChanSet struct {
+	dataChan   chan *data
+	resultChan chan array.Record
 }

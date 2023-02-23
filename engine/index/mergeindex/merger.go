@@ -17,16 +17,18 @@ limitations under the License.
 package mergeindex
 
 import (
+	"bytes"
 	"log"
 	"sync/atomic"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 )
 
 const MaxTSIDsPerRow = 64
 
-func MergeItems(data []byte, items []mergeset.Item, nsPrefix byte, rowsMerger ItemMerger) ([]byte, []mergeset.Item) {
+func MergeItems(data []byte, items []mergeset.Item,
+	nsPrefix byte, rowsMerger ItemMerger) ([]byte, []mergeset.Item) {
 	// Perform quick checks whether items contain rows starting from NsPrefix
 	// based on the fact that items are sorted.
 	if len(items) <= 2 {
@@ -49,6 +51,7 @@ func MergeItems(data []byte, items []mergeset.Item, nsPrefix byte, rowsMerger It
 	mpPrev := rowsMerger.GetPreMergeParser()
 	dstData := data[:0]
 	dstItems := items[:0]
+	var prevItem []byte
 	for i, it := range items {
 		item := it.Bytes(data)
 		if len(item) == 0 || item[0] != nsPrefix || i == 0 || i == len(items)-1 {
@@ -61,8 +64,15 @@ func MergeItems(data []byte, items []mergeset.Item, nsPrefix byte, rowsMerger It
 				Start: uint32(len(dstData) - len(item)),
 				End:   uint32(len(dstData)),
 			})
+			prevItem = item
 			continue
 		}
+
+		if bytes.Equal(prevItem, item) {
+			continue
+		}
+		prevItem = item
+
 		if err := mp.Init(item, nsPrefix); err != nil {
 			log.Panicf("FATAL: cannot parse row starting with NsPrefix %d during merge: %s", nsPrefix, err)
 		}

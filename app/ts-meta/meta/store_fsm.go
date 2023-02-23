@@ -25,6 +25,8 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"go.uber.org/zap"
@@ -49,7 +51,9 @@ func (fsm *storeFSM) ApplyBatch(logs []*raft.Log) []interface{} {
 		if err := proto.Unmarshal(logs[i].Data, &cmd); err != nil {
 			panic(fmt.Errorf("cannot marshal command: %s err %+v", string(logs[i].Data), err))
 		}
-		fsm.Logger.Info(fmt.Sprintf("BatchApply log term %d index %d type %d", logs[i].Term, logs[i].Index, int32(cmd.GetType())))
+		if cmd.GetType() != proto2.Command_VerifyDataNodeCommand {
+			fsm.Logger.Info(fmt.Sprintf("BatchApply log term %d index %d type %d", logs[i].Term, logs[i].Index, int32(cmd.GetType())))
+		}
 		ret[i] = fsm.executeCmd(cmd)
 		if ret[i] == nil {
 			dataChanged = true
@@ -172,6 +176,28 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 		return fsm.applyUpdatePtInfoCommand(&cmd)
 	case proto2.Command_RemoveEventCommand:
 		return fsm.applyRemoveEvent(&cmd)
+	case proto2.Command_CreateDownSamplePolicyCommand:
+		return fsm.applyCreateDownSampleCommand(&cmd)
+	case proto2.Command_DropDownSamplePolicyCommand:
+		return fsm.applyDropDownSampleCommand(&cmd)
+	case proto2.Command_CreateDbPtViewCommand:
+		return fsm.applyCreateDbPtViewCommand(&cmd)
+	case proto2.Command_UpdateShardDownSampleInfoCommand:
+		return fsm.applyUpdateShardDownSampleInfoCommand(&cmd)
+	case proto2.Command_MarkTakeoverCommand:
+		return fsm.applyMarkTakeoverCommand(&cmd)
+	case proto2.Command_MarkBalancerCommand:
+		return fsm.applyMarkBalancerCommand(&cmd)
+	case proto2.Command_CreateStreamCommand:
+		return fsm.applyCreateStream(&cmd)
+	case proto2.Command_DropStreamCommand:
+		return fsm.applyDropStream(&cmd)
+	case proto2.Command_VerifyDataNodeCommand:
+		return fsm.applyVerifyDataNodeCommand(&cmd)
+	case proto2.Command_ExpandGroupsCommand:
+		return fsm.applyExpandGroupsCommand(&cmd)
+	case proto2.Command_UpdatePtVersionCommand:
+		return fsm.applyUpdatePtVersionCommand(&cmd)
 	default:
 		panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
 	}
@@ -192,31 +218,55 @@ func (fsm *storeFSM) applyReShardingCommand(cmd *proto2.Command) interface{} {
 
 func (fsm *storeFSM) applyUpdateSchemaCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSchemaCommand_Command)
-	v := ext.(*proto2.UpdateSchemaCommand)
+	v, ok := ext.(*proto2.UpdateSchemaCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateSchemaCommand", ext))
+	}
 	return fsm.data.UpdateSchema(v.GetDatabase(), v.GetRpName(), v.GetMeasurement(), v.GetFieldToCreate())
 }
 
 func (fsm *storeFSM) applyAlterShardKeyCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_AlterShardKeyCmd_Command)
-	v := ext.(*proto2.AlterShardKeyCmd)
+	v, ok := ext.(*proto2.AlterShardKeyCmd)
+	if !ok {
+		panic(fmt.Errorf("%s is not a AlterShardKeyCmd", ext))
+	}
 	return fsm.data.AlterShardKey(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki())
 }
 
 func (fsm *storeFSM) applyMarkMeasurementDeleteCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command)
-	v := ext.(*proto2.MarkMeasurementDeleteCommand)
+	v, ok := ext.(*proto2.MarkMeasurementDeleteCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a MarkMeasurementDeleteCommand", ext))
+	}
 	return fsm.data.MarkMeasurementDelete(v.GetDatabase(), v.GetPolicy(), v.GetMeasurement())
 }
 
 func (fsm *storeFSM) applyDropMeasurementCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_DropMeasurementCommand_Command)
-	v := ext.(*proto2.DropMeasurementCommand)
+	v, ok := ext.(*proto2.DropMeasurementCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a DropMeasurementCommand", ext))
+	}
 	return fsm.data.DropMeasurement(v.GetDatabase(), v.GetPolicy(), v.GetMeasurement())
+}
+
+func (fsm *storeFSM) applyCreateDbPtViewCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command)
+	v, ok := ext.(*proto2.CreateDbPtViewCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
+	}
+	return fsm.data.CreateDBPtView(v.GetDbName())
 }
 
 func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
-	v := ext.(*proto2.CreateDatabaseCommand)
+	v, ok := ext.(*proto2.CreateDatabaseCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateDatabaseCommand", ext))
+	}
 
 	s := (*Store)(fsm)
 	var rp *meta2.RetentionPolicyInfo
@@ -250,14 +300,19 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 
 func (fsm *storeFSM) applyMarkDatabaseDeleteCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_MarkDatabaseDeleteCommand_Command)
-	v := ext.(*proto2.MarkDatabaseDeleteCommand)
+	v, ok := ext.(*proto2.MarkDatabaseDeleteCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a MarkDatabaseDeleteCommand", ext))
+	}
 	return fsm.data.MarkDatabaseDelete(v.GetName())
 }
 
 func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_DropDatabaseCommand_Command)
-	v := ext.(*proto2.DropDatabaseCommand)
-
+	v, ok := ext.(*proto2.DropDatabaseCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a DropDatabaseCommand", ext))
+	}
 	dbi := fsm.data.Database(v.GetName())
 	if dbi == nil {
 		return nil
@@ -269,13 +324,19 @@ func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
 
 func (fsm *storeFSM) applyCreateMeasurementCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateMeasurementCommand_Command)
-	v := ext.(*proto2.CreateMeasurementCommand)
+	v, ok := ext.(*proto2.CreateMeasurementCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateMeasurementCommand", ext))
+	}
 	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR())
 }
 
 func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateRetentionPolicyCommand_Command)
-	v := ext.(*proto2.CreateRetentionPolicyCommand)
+	v, ok := ext.(*proto2.CreateRetentionPolicyCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateRetentionPolicyCommand", ext))
+	}
 	pb := v.GetRetentionPolicy()
 
 	rpi := &meta2.RetentionPolicyInfo{
@@ -348,7 +409,7 @@ func (fsm *storeFSM) applyDeleteIndexGroupCommand(cmd *proto2.Command) interface
 func (fsm *storeFSM) applyPruneGroupsCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_PruneGroupsCommand_Command)
 	v := ext.(*proto2.PruneGroupsCommand)
-	return fsm.data.PruneGroups(v.GetShardGroup())
+	return fsm.data.PruneGroups(v.GetShardGroup(), v.GetID())
 }
 
 func (fsm *storeFSM) applyCreateSubscriptionCommand(cmd *proto2.Command) interface{} {
@@ -453,9 +514,12 @@ func (fsm *storeFSM) applyCreateDataNodeCommand(cmd *proto2.Command) interface{}
 
 	dataNode := fsm.data.DataNodeByHttpHost(v.GetHTTPAddr())
 	if dataNode != nil {
+		if len(fsm.data.MetaNodes) == 1 {
+			dataNode.LTime += 1
+		}
 		return nil
 	}
-
+	fsm.data.ExpandShardsEnable = fsm.config.ExpandShardsEnable
 	err, _ := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr())
 	return err
 }
@@ -495,8 +559,7 @@ func (fsm *storeFSM) applyUpdateNodeStatusCommand(cmd *proto2.Command) interface
 func (fsm *storeFSM) applyCreateEventCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateEventCommand_Command)
 	v := ext.(*proto2.CreateEventCommand)
-	fsm.data.CreateMigrateEvent(v.GetEventInfo())
-	return nil
+	return fsm.data.CreateMigrateEvent(v.GetEventInfo())
 }
 
 func (fsm *storeFSM) applyUpdateEventCommand(cmd *proto2.Command) interface{} {
@@ -517,6 +580,40 @@ func (fsm *storeFSM) applyRemoveEvent(cmd *proto2.Command) interface{} {
 	return fsm.data.RemoveEventInfo(v.GetEventId())
 }
 
+func (fsm *storeFSM) applyCreateStream(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateStreamCommand_Command)
+	v := ext.(*proto2.CreateStreamCommand)
+	pb := v.GetStreamInfo()
+
+	rpi := &meta2.StreamInfo{}
+	rpi.Unmarshal(pb)
+
+	return fsm.data.CreateStream(rpi)
+}
+
+func (fsm *storeFSM) applyDropStream(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_DropStreamCommand_Command)
+	v := ext.(*proto2.DropStreamCommand)
+	name := v.GetName()
+
+	return fsm.data.DropStream(name)
+}
+
+func (fsm *storeFSM) applyExpandGroupsCommand(cmd *proto2.Command) interface{} {
+	fsm.data.ExpandGroups()
+	return nil
+}
+
+func (fsm *storeFSM) applyUpdatePtVersionCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdatePtVersionCommand_Command)
+	v, ok := ext.(*proto2.UpdatePtVersionCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdatePtVersionCommand", ext))
+	}
+	fsm.data.UpdatePtVersion(v.GetDb(), v.GetPt())
+	return nil
+}
+
 func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	b, err := ioutil.ReadAll(r)
 	if err != nil {
@@ -529,8 +626,77 @@ func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	}
 
 	fsm.data = data
-	fsm.cacheData = data.Clone()
-	fsm.cacheDataBytes = b
+
+	return nil
+}
+
+func (fsm *storeFSM) applyCreateDownSampleCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command)
+	v := ext.(*proto2.CreateDownSamplePolicyCommand)
+	pb := v.GetDownSamplePolicyInfo()
+
+	rpi := &meta2.DownSamplePolicyInfo{}
+	rpi.Unmarshal(pb)
+	if rpi.IsNil() {
+		rpi = nil
+	}
+
+	return fsm.data.CreateDownSamplePolicy(v.GetDatabase(), v.GetName(), rpi)
+}
+
+func (fsm *storeFSM) applyDropDownSampleCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command)
+	v := ext.(*proto2.DropDownSamplePolicyCommand)
+
+	fsm.data.DropDownSamplePolicy(v.GetDatabase(), v.GetRpName(), v.GetDropAll())
+	return nil
+}
+
+func (fsm *storeFSM) applyUpdateShardDownSampleInfoCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command)
+	v := ext.(*proto2.UpdateShardDownSampleInfoCommand)
+
+	ident := &meta2.ShardIdentifier{}
+	ident.Unmarshal(v.GetIdent())
+	return fsm.data.UpdateShardDownSampleInfo(ident)
+}
+
+func (fsm *storeFSM) applyMarkTakeoverCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_MarkTakeoverCommand_Command)
+	v := ext.(*proto2.MarkTakeoverCommand)
+
+	fsm.data.MarkTakeover(v.GetEnable())
+	return nil
+}
+
+func (fsm *storeFSM) applyMarkBalancerCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_MarkBalancerCommand_Command)
+	v := ext.(*proto2.MarkBalancerCommand)
+
+	fsm.data.MarkBalancer(v.GetEnable())
+	return nil
+}
+
+func (fsm *storeFSM) applyVerifyDataNodeCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_VerifyDataNodeCommand_Command)
+	v, ok := ext.(*proto2.VerifyDataNodeCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a VerifyDataNodeCommand", ext))
+	}
+	nodeID := v.GetNodeID()
+	nodeIndex, err := fsm.data.GetNodeIndex(nodeID)
+	if err != nil {
+		return err
+	}
+
+	dataNode := fsm.data.DataNodes[nodeIndex]
+	// The data node has not joined into the cluster
+	if dataNode.AliveConnID != dataNode.ConnID {
+		return nil
+	}
+	if dataNode.Status == serf.StatusFailed {
+		return errno.NewError(errno.DataNoAlive, nodeID)
+	}
 
 	return nil
 }

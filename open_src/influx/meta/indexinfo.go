@@ -43,6 +43,15 @@ type IndexGroupInfo struct {
 	DeletedAt time.Time
 }
 
+func (igi *IndexGroupInfo) canDelete() bool {
+	for i := range igi.Indexes {
+		if !igi.Indexes[i].MarkDelete {
+			return false
+		}
+	}
+	return true
+}
+
 func (igi *IndexGroupInfo) Contains(t time.Time) bool {
 	return !t.Before(igi.StartTime) && t.Before(igi.EndTime)
 }
@@ -125,8 +134,9 @@ func (igs IndexGroupInfos) Less(i, j int) bool {
 }
 
 type IndexInfo struct {
-	ID     uint64
-	Owners []uint32 // pt group for replications.
+	ID         uint64
+	Owners     []uint32 // pt group for replications.
+	MarkDelete bool
 }
 
 func (ii IndexInfo) clone() IndexInfo {
@@ -143,7 +153,8 @@ func (ii IndexInfo) clone() IndexInfo {
 // marshal serializes to a protobuf representation.
 func (ii IndexInfo) marshal() *proto2.IndexInfo {
 	pb := &proto2.IndexInfo{
-		ID: proto.Uint64(ii.ID),
+		ID:         proto.Uint64(ii.ID),
+		MarkDelete: proto.Bool(ii.MarkDelete),
 	}
 	pb.OwnerIDs = make([]uint32, len(ii.Owners))
 	for i := range ii.Owners {
@@ -166,6 +177,7 @@ func (ii *IndexInfo) UnmarshalBinary(buf []byte) error {
 // unmarshal deserializes from a protobuf representation.
 func (ii *IndexInfo) unmarshal(pb *proto2.IndexInfo) {
 	ii.ID = pb.GetID()
+	ii.MarkDelete = pb.GetMarkDelete()
 
 	ii.Owners = make([]uint32, len(pb.GetOwnerIDs()))
 	for i, x := range pb.GetOwnerIDs() {

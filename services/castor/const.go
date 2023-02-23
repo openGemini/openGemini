@@ -34,7 +34,6 @@ const (
 	PostProcessType internalTagKey = "type"
 	ResultSeries    internalTagKey = "series"
 	OutputInfo      internalTagKey = "_outputInfo"
-	TriggerType     internalTagKey = "triggerType"
 )
 
 var internalKeySet = map[string]struct{}{
@@ -52,7 +51,6 @@ var internalKeySet = map[string]struct{}{
 	string(PostProcessType): {},
 	string(ResultSeries):    {},
 	string(OutputInfo):      {},
-	string(TriggerType):     {},
 }
 
 type resultFieldKey string // validate result from castor
@@ -80,9 +78,9 @@ const (
 )
 
 const (
-	maxRespBufSize    = 1000
-	chanBufferSize    = 100
-	getCliTimeout     = 2 * time.Second
-	connCheckInterval = 5 * time.Second
-	maxSendRetry      = 1
+	maxRespBufSize    int           = 1000
+	chanBufferSize    int           = 100
+	getCliTimeout     time.Duration = 2 * time.Second
+	connCheckInterval time.Duration = 5 * time.Second
+	maxSendRetry      int           = 1
 )

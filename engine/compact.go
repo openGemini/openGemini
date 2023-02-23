@@ -78,10 +78,45 @@ func (c *Compactor) RegisterShard(sh *shard) {
 }
 
 func (c *Compactor) UnregisterShard(shardId uint64) {
+	c.mu.RLock()
+	if _, ok := c.sources[shardId]; !ok {
+		c.mu.RUnlock()
+		return
+	}
+	c.mu.RUnlock()
+
 	c.wg.Done()
 	c.mu.Lock()
 	delete(c.sources, shardId)
 	c.mu.Unlock()
+}
+
+func (c *Compactor) free() {
+	c.compactShards = c.compactShards[:0]
+	c.mu.RLock()
+	for _, v := range c.sources {
+		c.compactShards = append(c.compactShards, v)
+	}
+	c.mu.RUnlock()
+
+	for _, sh := range c.compactShards {
+		id := sh.GetID()
+		select {
+		case <-sh.closed.Signal():
+			log.Info("closed", zap.Uint64("shardId", id))
+			return
+		default:
+			nowTime := fasttime.UnixTimestamp()
+			lastWrite := sh.LastWriteTime()
+			d := nowTime - lastWrite
+			if d >= atomic.LoadUint64(&fullCompColdDuration) {
+				sh.ForceFlush() // make sure memtable finish flush
+				if sh.immTables.FreeSequencer() {
+					log.Info("finish free shard", zap.Uint64("id", sh.ident.ShardID))
+				}
+			}
+		}
+	}
 }
 
 func (c *Compactor) merger() {
@@ -101,7 +136,6 @@ func (c *Compactor) merger() {
 		if !sh.immTables.MergeEnabled() {
 			continue
 		}
-
 		id := sh.GetID()
 		select {
 		case <-sh.closed.Signal():
@@ -109,7 +143,7 @@ func (c *Compactor) merger() {
 			return
 		default:
 			log.Info("begin merge out of order files", zap.Uint64("shardId", id))
-			_ = sh.immTables.MergeOutOfOrder(id)
+			_ = sh.immTables.MergeOutOfOrder(id, false)
 		}
 	}
 }
@@ -123,32 +157,7 @@ func (c *Compactor) compact() {
 	c.mu.RUnlock()
 
 	for _, sh := range c.compactShards {
-		id := sh.GetID()
-		select {
-		case <-sh.closed.Signal():
-			log.Info("closed", zap.Uint64("shardId", id))
-			return
-		default:
-			if !sh.immTables.CompactionEnabled() {
-				return
-			}
-			nowTime := fasttime.UnixTimestamp()
-			lastWrite := sh.LastWriteTime()
-			d := nowTime - lastWrite
-			if d >= atomic.LoadUint64(&fullCompColdDuration) {
-				if err := sh.immTables.FullCompact(id); err != nil {
-					log.Error("full compact error", zap.Uint64("shid", id), zap.Error(err))
-				}
-				continue
-			}
-
-			for _, level := range immutable.LevelCompactRule {
-				if err := sh.immTables.LevelCompact(level, id); err != nil {
-					log.Error("level compact error", zap.Uint64("shid", id), zap.Error(err))
-					continue
-				}
-			}
-		}
+		sh.Compact()
 	}
 }
 
@@ -158,6 +167,7 @@ func (c *Compactor) run() {
 	for range tm.C {
 		c.merger()
 		c.compact()
+		c.free()
 	}
 }
 

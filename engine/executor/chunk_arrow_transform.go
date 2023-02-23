@@ -23,7 +23,6 @@ import (
 	"github.com/apache/arrow/go/arrow/array"
 	"github.com/apache/arrow/go/arrow/memory"
 	"github.com/influxdata/influxdb/uuid"
-	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -37,8 +36,8 @@ type fieldInfo struct {
 	idx   int
 }
 
-// return every series' field info in form of 2 level map. Level 1 key is series key, level 2 key is field name.
-func getFieldInfo(chunks []Chunk) (map[string]map[string]*fieldInfo, *errno.Error) {
+// GetFieldInfo return every series' field info in form of 2 level map. Level 1 key is series key, level 2 key is field name.
+func GetFieldInfo(chunks []Chunk) (map[string]map[string]*fieldInfo, *errno.Error) {
 	ret := make(map[string]map[string]*fieldInfo)
 	for _, c := range chunks {
 		tagIdx := c.TagIndex()
@@ -70,9 +69,9 @@ func getFieldInfo(chunks []Chunk) (map[string]map[string]*fieldInfo, *errno.Erro
 	return ret, nil
 }
 
-// must release record after use
-func chunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([]array.Record, *errno.Error) {
-	seriesFieldInfo, err := getFieldInfo(chunks)
+// ChunkToArrowRecords must release record after use
+func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([]array.Record, *errno.Error) {
+	seriesFieldInfo, err := GetFieldInfo(chunks)
 	if err != nil {
 		return nil, err
 	}
@@ -389,28 +388,7 @@ func appendArrowInt64(b *array.RecordBuilder, col Column, fieldIndex, seriesStar
 	}
 }
 
-func buildChunkSchema(schema *arrow.Schema) (*hybridqp.RowDataTypeImpl, *errno.Error) {
-	varRefs := make([]influxql.VarRef, len(schema.Fields())-1) // minus 1 for timestamp
-	idx := 0
-	for _, f := range schema.Fields() {
-		if f.Name == string(castor.DataTime) {
-			continue
-		}
-		switch f.Type {
-		case arrow.PrimitiveTypes.Float64:
-			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.Float}
-		case arrow.PrimitiveTypes.Int64:
-			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.Integer}
-		default:
-			return nil, errno.NewError(errno.DtypeNotSupport)
-		}
-		idx++
-	}
-	row := hybridqp.NewRowDataTypeImpl(varRefs...)
-	return row, nil
-}
-
-func copyArrowRecordToChunk(r array.Record, c Chunk, fields map[string]struct{}) *errno.Error {
+func CopyArrowRecordToChunk(r array.Record, c Chunk, fields map[string]struct{}) *errno.Error {
 	// check errInfo, if exist, just return it
 	metaData := r.Schema().Metadata()
 	errInfoIdx := metaData.FindKey(string(castor.ErrInfo))

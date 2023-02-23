@@ -107,6 +107,7 @@ type PreparedStatement interface {
 
 	ChangeCreator(hybridqp.ExecutorBuilderCreator)
 	ChangeOptimizer(hybridqp.ExecutorBuilderOptimizer)
+	Statement() *influxql.SelectStatement
 
 	// Explain outputs the explain plan for this statement.
 	Explain() (string, error)
@@ -275,12 +276,6 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.StripName = stmt.StripName
 
 	opt.Fill, opt.FillValue = stmt.Fill, stmt.FillValue
-	if opt.Fill == influxql.NullFill && stmt.Target != nil {
-		// Set the fill option to none if a target has been given.
-		// Null values will get ignored when being written to the target
-		// so fill(null) wouldn't write any null values to begin with.
-		opt.Fill = influxql.NoFill
-	}
 	opt.Limit, opt.Offset = stmt.Limit, stmt.Offset
 	opt.SLimit, opt.SOffset = stmt.SLimit, stmt.SOffset
 	opt.MaxSeriesN = sopt.MaxSeriesN
@@ -387,10 +382,6 @@ func (opt *ProcessorOptions) Clone() *ProcessorOptions {
 	return &popt
 }
 
-func (opt ProcessorOptions) CloseRowChan() {
-	close(opt.RowsChan)
-}
-
 // MergeSorted returns true if the options require a sorted merge.
 func (opt ProcessorOptions) MergeSorted() bool {
 	return opt.Ordered
@@ -409,9 +400,17 @@ func (opt ProcessorOptions) SeekTime() int64 {
 // For ascending iterators this is the end time, for descending iterators it's the start time.
 func (opt ProcessorOptions) StopTime() int64 {
 	if opt.Ascending {
-		return opt.EndTime
+		if !opt.HasInterval() {
+			return opt.EndTime
+		}
+		_, stopTime := opt.Window(opt.EndTime)
+		return stopTime
 	}
-	return opt.StartTime
+	if !opt.HasInterval() {
+		return opt.StartTime
+	}
+	stopTime, _ := opt.Window(opt.StartTime)
+	return stopTime
 }
 
 func (opt ProcessorOptions) GetMaxParallel() int {
@@ -592,6 +591,10 @@ func (opt *ProcessorOptions) GetHintType() hybridqp.HintType {
 	return opt.HintType
 }
 
+func (opt *ProcessorOptions) IsGroupByAllDims() bool {
+	return opt.GroupByAllDims
+}
+
 func (opt *ProcessorOptions) GetLimit() int {
 	return opt.Limit
 }
@@ -604,10 +607,6 @@ func (opt *ProcessorOptions) GetGroupBy() map[string]struct{} {
 	return opt.GroupBy
 }
 
-func (opt *ProcessorOptions) IsGroupByAllDims() bool {
-	return opt.GroupByAllDims
-}
-
 func (opt *ProcessorOptions) HasInterval() bool {
 	return !opt.Interval.IsZero()
 }
@@ -618,6 +617,18 @@ func (opt *ProcessorOptions) ISChunked() bool {
 
 func (opt *ProcessorOptions) SetHintType(h hybridqp.HintType) {
 	opt.HintType = h
+}
+
+func (opt *ProcessorOptions) GetInterval() time.Duration {
+	return opt.Interval.Duration
+}
+
+func (opt *ProcessorOptions) GetSourcesNames() []string {
+	names := make([]string, len(opt.Sources))
+	for i := range names {
+		names[i] = opt.Sources[i].GetName()
+	}
+	return names
 }
 
 func ContainDim(des []string, src string) bool {

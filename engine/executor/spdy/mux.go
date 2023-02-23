@@ -53,6 +53,8 @@ const (
 	SysCtrlRequest
 	MetaRequest
 	WritePointsRequest
+	PtRequest
+	WriteStreamPointsRequest
 	Unknown
 )
 

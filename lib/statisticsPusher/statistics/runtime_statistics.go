@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -46,10 +47,16 @@ func InitRuntimeStatistics(tags map[string]string, interval int) {
 }
 
 func CollectRuntimeStatistics(buffer []byte) ([]byte, error) {
-	user_usage, _ := GetCpuUsage()
+	valueMap := genRuntimeValueMap()
 
+	buffer = AddPointToBuffer(RuntimeStatisticsName, RuntimeTagMap, valueMap, buffer)
+	return buffer, nil
+}
+
+func genRuntimeValueMap() map[string]interface{} {
 	var rt runtime.MemStats
 	runtime.ReadMemStats(&rt)
+	user_usage, _ := GetCpuUsage()
 	valueMap := map[string]interface{}{
 		"Sys":          int64(rt.Sys),
 		"Alloc":        int64(rt.Alloc),
@@ -69,8 +76,17 @@ func CollectRuntimeStatistics(buffer []byte) ([]byte, error) {
 		"CpuUsage":     user_usage,
 	}
 
-	buffer = AddPointToBuffer(RuntimeStatisticsName, RuntimeTagMap, valueMap, buffer)
-	return buffer, nil
+	return valueMap
+}
+
+func CollectOpsRuntimeStatistics() []opsStat.OpsStatistic {
+	valueMap := genRuntimeValueMap()
+	return []opsStat.OpsStatistic{{
+		Name:   RuntimeStatisticsName,
+		Tags:   RuntimeTagMap,
+		Values: valueMap,
+	},
+	}
 }
 
 func CreateRuntimeWithShardKey(buffer []byte) ([]byte, error) {

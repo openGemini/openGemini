@@ -26,6 +26,7 @@ import threading
 import traceback
 import socket
 import os
+import stat
 import pyarrow as pa
 import logging
 from .metadata import MetaData
@@ -73,7 +74,7 @@ class Flusher:
                     self._buffer.append(data)
                 if self._check_flush():
                     self._flush_batch()
-            except:
+            except Exception:
                 if self._queue.empty():
                     if len(self._buffer) > 0:
                         self._flush_batch()
@@ -240,6 +241,7 @@ def worker(
 ):
     signal.signal(signal.SIGHUP, signal.SIG_DFL)
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     signal.signal(signal.SIGINT, signal.default_int_handler)
     worker_bucket_size = bucket_size // num_workers
     meta_data = MetaData(worker_bucket_size, data_lifetime)
@@ -247,7 +249,13 @@ def worker(
     h = handler(data_dir, model_config_dir, version, meta_data)
     hook = collections.deque()
     for data, _ in iter(data_in.get, "stop"):
-        results = h.batch_data(data, cache, hook)
+        results = None
+        try:
+            results = h.batch_data(data, cache, hook)
+        except Exception as e:
+            traceback.print_exc()
+            error = "pyworker processes data got exception: %s" % e
+            logger.error(error)
         if results is not None:
             data_out.put(results)
     while True:
@@ -279,7 +287,7 @@ def worker_daemon(
             task_queue._rlock.release()
         except ValueError:
             logger.debug("read lock of input queue has already released")
-        if alive.value == False:
+        if alive.value is False:
             return
         else:
             p = Process(
@@ -306,13 +314,18 @@ def start_split(results, qs):
     while True:
         records = results.get()
         for rec in records:
-            index = int(rec.schema.metadata[b"_connID"].decode())
-            q = qs.get(index)
-            if q is not None:
-                q.put(rec)
-            else:
-                logger.error("missing rec queue, id %d", index)
-                continue
+            try:
+                index = int(rec.schema.metadata[b"_connID"].decode())
+                q = qs.get(index)
+                if q is not None:
+                    q.put(rec)
+                else:
+                    logger.error("missing rec queue, id %d", index)
+                    continue
+            except Exception as e:
+                traceback.print_exc()
+                error = "split result got exception: %s" % e
+                logger.error(error)
 
 
 class accepter(object):
@@ -336,6 +349,12 @@ class accepter(object):
         a.wait()
         logger.info("Agent finished connection %d", count)
 
+
+def write_pid(file: str, pid: str):
+    flags = os.O_WRONLY | os.O_CREAT
+    modes = stat.S_IWUSR | stat.S_IRUSR
+    with os.fdopen(os.open(file, flags, modes), 'w', encoding="utf-8") as fout:
+        fout.write(pid)
 
 class Server(object):
     def __init__(self, handler, params):
@@ -361,8 +380,7 @@ class Server(object):
         self.qs = dict()
 
         # pid
-        with open(params["pidfile"], "w", encoding="utf-8") as f:
-            f.write(str(os.getpid()))
+        write_pid(params["pidfile"], str(os.getpid()))
 
         # sharing variable for workers to determine whether server is alive
         self.alive = Value("b", True)

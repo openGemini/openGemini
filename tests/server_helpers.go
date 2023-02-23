@@ -170,7 +170,6 @@ func (s *RemoteServer) CheckDropDatabases(dbs []string) error {
 		for _, db := range dbs {
 			if s.ContainDatabase(db) {
 				ret = false
-				fmt.Println("check drop databases")
 			}
 		}
 
@@ -179,8 +178,8 @@ func (s *RemoteServer) CheckDropDatabases(dbs []string) error {
 		}
 
 		if retryCount == 1200 {
-			fmt.Println("retryCount 1200")
-			return fmt.Errorf("drop database timeout")
+			fmt.Println("drop database failed in 2m")
+			return fmt.Errorf("drop database timeout 2m")
 		}
 
 		time.Sleep(100 * time.Millisecond)
@@ -779,6 +778,7 @@ type Tests map[string]Test
 type Test struct {
 	initialized bool
 	writes      Writes
+	writesArray []Writes
 	params      url.Values
 	db          string
 	rp          string
@@ -788,8 +788,9 @@ type Test struct {
 
 func NewTest(db, rp string) Test {
 	return Test{
-		db: db,
-		rp: rp,
+		db:          db,
+		rp:          rp,
+		writesArray: []Writes{},
 	}
 }
 
@@ -848,6 +849,28 @@ func (t *Test) init(s Server) error {
 		return err
 	}
 
+	t.initialized = true
+
+	return nil
+}
+
+func (t *Test) initMultipleFiles(s Server) error {
+	if len(t.writesArray) == 0 || t.initialized {
+		return nil
+	}
+	if t.db == "" {
+		t.db = "db0"
+	}
+	if t.rp == "" {
+		t.rp = "rp0"
+	}
+	for i := range t.writesArray {
+		t.writes = t.writesArray[i]
+		if err := writeTestData(s, t); err != nil {
+			return err
+		}
+		http.Post(s.URL()+"/debug/ctrl?mod=flush", "", nil)
+	}
 	t.initialized = true
 
 	return nil

@@ -17,7 +17,12 @@ limitations under the License.
 package readcache
 
 import (
+	"bytes"
+	"fmt"
+	"math/rand"
+	path1 "path"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -397,6 +402,132 @@ func TestReadCacheAddCopy001(t *testing.T) {
 	}
 }
 
+func TestEntryNotFound(t *testing.T) {
+	// given
+	cacheIns := GetReadCacheIns()
+	defer cacheIns.Purge()
+
+	// when
+	_, ok := cacheIns.Get("nonExistingKey")
+
+	// then
+	assertEqual(t, false, ok)
+}
+
+// TestGetValueWhenEvict test basic add and get function
+func TestGetValueWhenEvict(t *testing.T) {
+	totalLimitSize = 10
+	blocksMax = 1
+	defer func() {
+		totalLimitSize = 2 * 1024 * 1024 * 1024
+		blocksMax = 256
+	}()
+	cacheIns := GetReadCacheIns()
+	defer cacheIns.Purge()
+	key := cacheIns.CreatCacheKey(path, int64(offset))
+	cacheIns.AddPage(key, data, size)
+	value, _ := cacheIns.Get(key)
+
+	data1 := []byte{11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+	cacheIns.AddPage(key, data1, size)
+	cacheIns.AddPage(key, data1, size)
+	cacheIns.AddPage(key, data1, size)
+
+	resultData := value.(*CachePage).Value
+	if !reflect.DeepEqual(resultData, data) || !reflect.DeepEqual(len(resultData), (len(data))) {
+		t.Fatal("except get page value equal to the add value, but can't",
+			key, resultData, len(resultData), data)
+	}
+}
+
+// TestCacheDelRandomly does simultaneous deletes, puts and gets, to check for corruption errors.
+func TestCacheDelRandomly(t *testing.T) {
+	cacheIns := GetReadCacheIns()
+	defer cacheIns.Purge()
+	var wg sync.WaitGroup
+	var ntest = 1000
+	wg.Add(3)
+	go func() {
+		for i := 0; i < ntest; i++ {
+			r := uint8(rand.Int())
+			key := fmt.Sprintf("thekey%d", r)
+			testPath := cacheIns.CreatCacheKey(key, int64(offset))
+
+			cacheIns.Remove(testPath)
+		}
+		wg.Done()
+	}()
+	valueLen := 1024
+	go func() {
+		val := make([]byte, valueLen)
+		for i := 0; i < ntest; i++ {
+			r := byte(rand.Int())
+			key := fmt.Sprintf("thekey%d", r)
+			testPath := cacheIns.CreatCacheKey(key, int64(offset))
+
+			for j := 0; j < len(val); j++ {
+				val[j] = r
+			}
+			cacheIns.AddPage(testPath, val, int64(len(val)))
+		}
+		wg.Done()
+	}()
+	go func() {
+		val := make([]byte, valueLen)
+		for i := 0; i < ntest; i++ {
+			r := byte(rand.Int())
+			key := fmt.Sprintf("thekey%d", r)
+			testPath := cacheIns.CreatCacheKey(key, int64(offset))
+
+			for j := 0; j < len(val); j++ {
+				val[j] = r
+			}
+			if value, ok := cacheIns.Get(testPath); ok {
+				if !bytes.Equal(value.(*CachePage).Value, val) {
+					t.Errorf("got %s ->\n %x\n expected:\n %x\n ", key, value.(*CachePage).Value, val)
+				}
+			}
+		}
+		wg.Done()
+	}()
+	wg.Wait()
+}
+
+func TestEntryUpdate(t *testing.T) {
+	// given
+	cacheIns := GetReadCacheIns()
+	defer cacheIns.Purge()
+
+	// when
+	var value1 = []byte("value")
+	var value2 = []byte("value2")
+	var value3 = []byte("value3")
+	key := cacheIns.CreatCacheKey(path, int64(offset))
+	key2 := cacheIns.CreatCacheKey(path, int64(offset+1))
+	cacheIns.AddPage(key, value1, int64(len(value1)))
+	cacheIns.AddPage(key, value2, int64(len(value2)))
+	cacheIns.AddPage(key2, value3, int64(len(value3)))
+	cachedValue, _ := cacheIns.Get(key)
+
+	// then
+	assertEqual(t, []byte("value2"), cachedValue.(*CachePage).Value)
+}
+
+func TestNilValueCaching(t *testing.T) {
+	// given
+	cacheIns := GetReadCacheIns()
+	defer cacheIns.Purge()
+
+	// when
+	var value = []byte{}
+	key := cacheIns.CreatCacheKey(path, int64(offset))
+	cacheIns.AddPage(key, value, int64(len(value)))
+	cachedValue, _ := cacheIns.Get(key)
+
+	// then
+	assertEqual(t, []byte{}, cachedValue.(*CachePage).Value)
+}
+
 func checkGetResult(t *testing.T, cacheIns *ReadCacheInstance, key string, exceptData []byte) *CachePage {
 	var page *CachePage
 	if value, isGet := cacheIns.Get(key); isGet {
@@ -421,4 +552,35 @@ func checkGetResultOrNil(t *testing.T, cacheIns *ReadCacheInstance, key string, 
 		}
 	}
 	return page
+}
+
+func assertEqual(t *testing.T, expected, actual interface{}, msgAndArgs ...interface{}) {
+	if !objectsAreEqual(expected, actual) {
+		_, file, line, _ := runtime.Caller(1)
+		file = path1.Base(file)
+		t.Errorf(fmt.Sprintf("\n%s:%d: Not equal: \n"+
+			"expected: %T(%#v)\n"+
+			"actual  : %T(%#v)\n",
+			file, line, expected, expected, actual, actual), msgAndArgs...)
+	}
+}
+
+func objectsAreEqual(expected, actual interface{}) bool {
+	if expected == nil || actual == nil {
+		return expected == actual
+	}
+
+	exp, ok := expected.([]byte)
+	if !ok {
+		return reflect.DeepEqual(expected, actual)
+	}
+
+	act, ok := actual.([]byte)
+	if !ok {
+		return false
+	}
+	if exp == nil || act == nil {
+		return exp == nil && act == nil
+	}
+	return bytes.Equal(exp, act)
 }

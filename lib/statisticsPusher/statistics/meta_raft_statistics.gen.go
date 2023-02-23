@@ -24,6 +24,8 @@ package statistics
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type MetaRaftStatistics struct {
@@ -62,6 +64,18 @@ func (s *MetaRaftStatistics) Collect(buffer []byte) ([]byte, error) {
 	}
 
 	return buffer, nil
+}
+
+func (s *MetaRaftStatistics) CollectOps() []opsStat.OpsStatistic {
+	data := map[string]interface{}{
+		"foo": s.itemfoo,
+	}
+	return []opsStat.OpsStatistic{{
+		Name:   "metaRaft",
+		Tags:   s.tags,
+		Values: data,
+	},
+	}
 }
 
 func (s *MetaRaftStatistics) Addfoo(i int64) {

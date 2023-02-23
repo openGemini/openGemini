@@ -22,9 +22,9 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 const (
@@ -32,7 +32,9 @@ const (
 )
 
 var (
-	RecordIteratorPool = &sync.Pool{}
+	defaultChunkMetaSize uint64 = 4096
+	RecordIteratorPool          = &sync.Pool{}
+	ChunkMetaBufferPool         = bufferpool.NewByteBufferPool(defaultChunkMetaSize)
 )
 
 func getRecordIterator() *recordIter {
@@ -54,7 +56,9 @@ type fileCursor struct {
 	isPreAgg    bool
 	start       int
 	step        int
+	buf         []byte
 	minT, maxT  int64
+	schema      record.Schemas
 	file        immutable.TSSPFile
 	tagSet      *tsi.TagSetInfo
 	loc         *immutable.Location
@@ -83,7 +87,7 @@ const (
 )
 
 var (
-	FileCursorPool = record.NewRecordPool()
+	FileCursorPool = record.NewRecordPool(record.FileCursorPool)
 )
 
 /*
@@ -92,7 +96,7 @@ var (
 */
 
 func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
-	tagSet *tsi.TagSetInfo, start, step int, file immutable.TSSPFile, memRecIters map[uint64]*SeriesIter, pool *record.CircularRecordPool) (*fileCursor, error) {
+	tagSet *tsi.TagSetInfo, start, step int, file immutable.TSSPFile, memRecIters map[uint64]*SeriesIter) (*fileCursor, error) {
 	if len(tagSet.IDs) == 0 {
 		return nil, nil
 	}
@@ -113,15 +117,21 @@ func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor
 		maxT:        maxT,
 		querySchema: schema,
 		tagSet:      tagSet,
+		schema:      ctx.schema.Copy(),
 		ascending:   schema.Options().IsAscending(),
 		memRecIters: memRecIters,
-		recordPool:  pool,
 		isPreAgg:    ctx.decs.MatchPreAgg(),
 	}
+	c.buf = ChunkMetaBufferPool.Get()
 	c.seriesIter = &SeriesIter{iter: &recordIter{}}
 	c.seriesIter.iter.reset()
 	c.memIter = &recordIter{}
 	c.memIter.reset()
+	if len(ctx.decs.GetOps()) > 0 {
+		c.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, true)
+	} else {
+		c.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, false)
+	}
 	return c, nil
 }
 
@@ -138,10 +148,12 @@ func (f *fileCursor) next() (*DataBlockInfo, error) {
 	} else {
 		data, err = f.readData()
 	}
+
 	if f.span != nil {
 		duration = time.Since(tm)
 		f.span.Count(fileCursorDurationSpan, int64(duration))
 	}
+
 	return data, err
 }
 
@@ -150,53 +162,56 @@ func (f *fileCursor) SetLastFile() {
 }
 
 func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
-	i := f.start
-	f.start += f.step
-	if i >= len(f.tagSet.IDs) {
-		return nil, nil
-	}
-	sid := f.tagSet.IDs[i]
-	ptTags := &(f.tagSet.TagsVec[i])
-	sInfo := &seriesInfo{tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
-	f.loc.ResetMeta()
-	contains, err := f.loc.Contains(sid, f.ctx.tr)
-	if err != nil {
-		return nil, err
-	}
-	// if sid not in files, return memdata
-	if !contains {
-		data := f.readInMemData(sid, sInfo)
-		if data != nil {
-			return data, err
+	for {
+		i := f.start
+		f.start += f.step
+		if i >= len(f.tagSet.IDs) {
+			return nil, nil
 		}
-		return f.readPreAggData()
-	}
-
-	filter := f.tagSet.Filters[i]
-	filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)
-	orderRec := f.recordPool.GetBySchema(f.ctx.schema)
-	rec, err := f.loc.ReadData(filterOpts, orderRec)
-	if err != nil {
-		return nil, err
-	}
-	if rec == nil {
-		data := f.readInMemData(sid, sInfo)
-		if data != nil {
-			return data, err
+		sid := f.tagSet.IDs[i]
+		ptTags := &(f.tagSet.TagsVec[i])
+		sInfo := &seriesInfo{tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
+		f.loc.ResetMeta()
+		contains, err := f.loc.Contains(sid, f.ctx.tr, &f.buf)
+		if err != nil {
+			return nil, err
 		}
-		return f.readPreAggData()
-	}
+		// if sid not in files, return memdata
+		if !contains {
+			data := f.readInMemData(sid, sInfo)
+			if data != nil {
+				return data, err
+			}
+			continue
+		}
 
-	if v, ok := f.memRecIters[sid]; ok && v.iter.record != nil {
-		immutable.AggregateData(f.memRecIters[sid].iter.record, rec, f.ctx.decs.GetOps())
-		immutable.ResetAggregateData(f.memRecIters[sid].iter.record, f.ctx.decs.GetOps())
-		orderRec = f.memRecIters[sid].iter.record.Copy()
-		putRecordIterator(f.memRecIters[sid].iter)
-		delete(f.memRecIters, sid)
-	} else {
-		orderRec = rec
+		filter := f.tagSet.Filters[i]
+		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)
+		orderRec := f.recordPool.Get()
+		rec, err := f.loc.ReadData(filterOpts, orderRec)
+		if err != nil {
+			return nil, err
+		}
+		if rec == nil {
+			f.recordPool.PutRecordInCircularPool()
+			data := f.readInMemData(sid, sInfo)
+			if data != nil {
+				return data, err
+			}
+			continue
+		}
+
+		if v, ok := f.memRecIters[sid]; ok && v.iter.record != nil {
+			immutable.AggregateData(f.memRecIters[sid].iter.record, rec, f.ctx.decs.GetOps())
+			immutable.ResetAggregateData(f.memRecIters[sid].iter.record, f.ctx.decs.GetOps())
+			orderRec = f.memRecIters[sid].iter.record.Copy()
+			putRecordIterator(f.memRecIters[sid].iter)
+			delete(f.memRecIters, sid)
+		} else {
+			orderRec = rec
+		}
+		return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: sid}, nil
 	}
-	return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: sid}, nil
 }
 
 func (f *fileCursor) readInMemData(sid uint64, sInfo *seriesInfo) *DataBlockInfo {
@@ -210,76 +225,79 @@ func (f *fileCursor) readInMemData(sid uint64, sInfo *seriesInfo) *DataBlockInfo
 }
 
 func (f *fileCursor) readData() (*DataBlockInfo, error) {
-	i := f.start
-	if i >= len(f.tagSet.IDs) {
-		return nil, nil
-	}
-	sid := f.tagSet.IDs[i]
-	ptTags := &(f.tagSet.TagsVec[i])
-	sInfo := &seriesInfo{tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
-	if f.seriesIter.iter.hasRemainData() {
-		orderRec := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
-		orderRec = orderRec.KickNilRow()
-		return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: sid}, nil
-	}
-	m := f.loc.GetChunkMeta()
-	if m == nil || m.GetSid() != sid {
-		f.loc.ResetMeta()
-		contains, err := f.loc.Contains(sid, f.ctx.tr)
+	for {
+		i := f.start
+		if i >= len(f.tagSet.IDs) {
+			return nil, nil
+		}
+		sid := f.tagSet.IDs[i]
+		ptTags := &(f.tagSet.TagsVec[i])
+		sInfo := &seriesInfo{tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
+		if f.seriesIter.iter.hasRemainData() {
+			orderRec := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
+			orderRec = orderRec.KickNilRow()
+			return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: sid}, nil
+		}
+		m := f.loc.GetChunkMeta()
+		if m == nil || m.GetSid() != sid {
+			f.loc.ResetMeta()
+			contains, err := f.loc.Contains(sid, f.ctx.tr, &f.buf)
+			if err != nil {
+				return nil, err
+			}
+			if !contains {
+				if f.isLastFile {
+					if v, ok := f.memRecIters[sid]; ok && v.iter.hasRemainData() && v.iter.record != nil {
+						r := f.GetMemData(sid, sInfo)
+						if r != nil && r.record != nil && r.record.RowNums() != 0 {
+							return r, nil
+						}
+					}
+				}
+				f.start += f.step
+				continue
+			}
+		}
+
+		if _, ok := f.memRecIters[sid]; ok && f.memRecIters[sid].iter.hasRemainData() {
+			f.memIter.init(f.getSeriesNotInFile(sid))
+		}
+		filter := f.tagSet.Filters[i]
+		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)
+		orderRec := f.recordPool.Get()
+		rec, err := f.loc.ReadData(filterOpts, orderRec)
 		if err != nil {
 			return nil, err
 		}
-		if !contains {
-			if v, ok := f.memRecIters[sid]; ok && v.iter.hasRemainData() && v.iter.record != nil {
-				return f.GetMemData(sid, i, sInfo)
+		if rec == nil {
+			if f.memIter.hasRemainData() {
+				orderRec = mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
+				orderRec = orderRec.KickNilRow()
+				return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: f.tagSet.IDs[i]}, nil
 			}
+			f.memIter.reset()
+			f.seriesIter.iter.reset()
 			f.start += f.step
-			return f.readData()
+			f.recordPool.PutRecordInCircularPool()
+			continue
 		}
+		f.seriesIter.iter.init(rec)
+		r := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
+		r = r.KickNilRow()
+		if r.RowNums() == 0 {
+			f.recordPool.PutRecordInCircularPool()
+			continue
+		}
+		return &DataBlockInfo{sInfo: sInfo, record: r, sid: sid}, nil
 	}
-	return f.GetRecord(sInfo, i, ptTags, sid)
 }
 
-func (f *fileCursor) GetRecord(sInfo *seriesInfo, i int, ptTags *influx.PointTags, sid uint64) (*DataBlockInfo, error) {
-	if _, ok := f.memRecIters[sid]; ok && f.memRecIters[sid].iter.hasRemainData() {
-		f.memIter.init(f.getSeriesNotInFile(sid))
-	}
-	filter := f.tagSet.Filters[i]
-	filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)
-	orderRec := f.recordPool.GetBySchema(f.ctx.schema)
-	rec, err := f.loc.ReadData(filterOpts, orderRec)
-	if err != nil {
-		return nil, err
-	}
-	if rec == nil {
-		return f.GetRecordWhenFileRecordIsNil(orderRec, sInfo, i)
-	}
-	f.seriesIter.iter.init(rec)
-	r := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
-	r = r.KickNilRow()
-	return &DataBlockInfo{sInfo: sInfo, record: r, sid: sid}, nil
-}
-
-func (f *fileCursor) GetRecordWhenFileRecordIsNil(orderRec *record.Record, sInfo *seriesInfo, i int) (*DataBlockInfo, error) {
-	if f.memIter.hasRemainData() {
-		orderRec.ResetForReuse()
-		orderRec = mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
-		orderRec = orderRec.KickNilRow()
-		return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: f.tagSet.IDs[i]}, nil
-	}
-	f.memIter.reset()
-	f.seriesIter.iter.reset()
-	f.start += f.step
-	f.recordPool.PutRecordInCircularPool()
-	return f.readData()
-}
-
-func (f *fileCursor) GetMemData(sid uint64, i int, sInfo *seriesInfo) (*DataBlockInfo, error) {
+func (f *fileCursor) GetMemData(sid uint64, sInfo *seriesInfo) *DataBlockInfo {
 	endIndex := f.getMemEndIndex(sid)
 	f.start += f.step
 	r := f.memRecIters[sid].iter.cutRecord(endIndex - f.memRecIters[sid].iter.pos)
 	r = r.KickNilRow()
-	return &DataBlockInfo{sInfo: sInfo, record: r, sid: sid}, nil
+	return &DataBlockInfo{sInfo: sInfo, record: r, sid: sid}
 }
 
 func (f *fileCursor) getSeriesNotInFile(sid uint64) *record.Record {
@@ -299,10 +317,11 @@ func (f *fileCursor) getMemEndIndex(sid uint64) int {
 	}
 	var endIndex int
 	t := f.memRecIters[sid].iter.record.Times()
+	minT, maxT := f.loc.GetChunkMeta().MinMaxTime()
 	if f.ascending {
-		endIndex = record.GetTimeRangeEndIndex(t, f.memRecIters[sid].iter.pos, f.maxT) + 1
+		endIndex = record.GetTimeRangeEndIndex(t, f.memRecIters[sid].iter.pos, maxT) + 1
 	} else {
-		endIndex = record.GetTimeRangeEndIndexDescend(t, f.memRecIters[sid].iter.pos, f.minT) + 1
+		endIndex = record.GetTimeRangeEndIndexDescend(t, f.memRecIters[sid].iter.pos, minT) + 1
 	}
 	return endIndex
 }
@@ -323,6 +342,11 @@ func (f *fileCursor) reInit(ctx *idKeyCursorContext, span *tracing.Span, schema 
 	f.tagSet = tagSet
 	f.file = file
 	f.ctx = ctx
+	if len(ctx.decs.GetOps()) > 0 {
+		f.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, true)
+	} else {
+		f.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, false)
+	}
 	f.loc = immutable.NewLocation(file, f.ctx.decs)
 	var err error
 	f.minT, f.maxT, err = file.MinMaxTime()
@@ -338,6 +362,10 @@ func (f *fileCursor) reInit(ctx *idKeyCursorContext, span *tracing.Span, schema 
 }
 
 func (f *fileCursor) Close() error {
+	if f.recordPool != nil {
+		f.recordPool.Put()
+	}
+	ChunkMetaBufferPool.Put(f.buf)
 	f.reset()
 	return nil
 }

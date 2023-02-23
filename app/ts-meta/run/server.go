@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/services/sherlock"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -55,6 +56,8 @@ type Server struct {
 	serfInstance     *serf.Serf
 
 	reportEnable bool
+
+	sherlockService *sherlock.Service
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -65,6 +68,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	}
 	c.Meta.JoinPeers = c.Common.MetaJoin
 
+	c.Meta.DataDir = c.Data.DataDir
+	c.Meta.WalDir = c.Data.WALDir
 	lockFile := fileops.FileLockOption("")
 	if err := fileops.MkdirAll(c.Meta.Dir, 0750, lockFile); err != nil {
 		return nil, fmt.Errorf("mkdir all: %s", err)
@@ -86,7 +91,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	// initialize log
 	metaConf := c.Meta
 	metaConf.Logging = c.Logging
-	s.MetaService = meta.NewService(metaConf, &c.TLS)
+	s.MetaService = meta.NewService(metaConf, c.TLS)
 	s.MetaService.Version = s.cmd.Version
 	s.MetaService.Node = s.Node
 
@@ -95,6 +100,10 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
 	s.initStatisticsPusher()
+
+	s.sherlockService = sherlock.NewService(c.Sherlock)
+	s.sherlockService.WithLogger(s.Logger)
+
 	return s, nil
 }
 
@@ -142,6 +151,7 @@ func (s *Server) Open() error {
 
 	if s.MetaService != nil {
 		s.MetaService.RaftListener = mux.Listen(meta.MuxHeader)
+		s.MetaService.SetStatisticsPusher(s.statisticsPusher)
 		// Open meta service.
 		if err := s.MetaService.Open(); err != nil {
 			return fmt.Errorf("open meta service: %s", err)
@@ -154,6 +164,10 @@ func (s *Server) Open() error {
 
 	if s.reportEnable {
 		go s.MetaService.StartReportServer()
+	}
+
+	if s.sherlockService != nil {
+		s.sherlockService.Open()
 	}
 	return nil
 }
@@ -184,6 +198,9 @@ func (s *Server) Close() error {
 	if s.MetaService != nil {
 		err = s.MetaService.Close()
 	}
+	if s.sherlockService != nil {
+		s.sherlockService.Stop()
+	}
 	return err
 }
 
@@ -194,6 +211,8 @@ type Service interface {
 }
 
 func (s *Server) initStatisticsPusher() {
+	stat.MetaTaskInstance = stat.NewMetaTaskDuration(s.config.Monitor.StoreEnabled)
+	stat.MetadataInstance = stat.NewMetadataStatistics(s.config.Monitor.StoreEnabled)
 	if !s.config.Monitor.StoreEnabled {
 		return
 	}
@@ -217,6 +236,14 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.Register(
 		stat.NewMetaStatistics().Collect,
 		stat.NewErrnoStat().Collect,
-		stat.NewMetaRaftStatistics().Collect)
+		stat.NewMetaRaftStatistics().Collect,
+		stat.MetaTaskInstance.Collect,
+		stat.MetadataInstance.Collect,
+	)
+
+	s.statisticsPusher.RegisterOps(
+		stat.NewMetaStatistics().CollectOps,
+		stat.NewErrnoStat().CollectOps,
+		stat.NewMetaRaftStatistics().CollectOps)
 	s.statisticsPusher.Start()
 }

@@ -24,6 +24,8 @@ import (
 	"unsafe"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 )
 
@@ -84,6 +86,11 @@ func (p *ChunkPort) Equal(to Port) bool {
 
 func (p *ChunkPort) Connect(to Port) {
 	p.State = make(chan Chunk, PORT_CHAN_SIZE)
+	to.(*ChunkPort).State = p.State
+}
+
+func (p *ChunkPort) ConnectNoneCache(to Port) {
+	p.State = make(chan Chunk, 0)
 	to.(*ChunkPort).State = p.State
 }
 
@@ -240,3 +247,195 @@ func (ps Processors) Close() {
 		p.Close()
 	}
 }
+
+type SeriesRecord struct {
+	sid  uint64
+	seq  uint64
+	err  error
+	rec  *record.Record
+	file immutable.TSSPFile
+}
+
+func NewSeriesRecord(rec *record.Record, sid uint64, file immutable.TSSPFile, seq uint64, err error) *SeriesRecord {
+	return &SeriesRecord{sid, seq, err, rec, file}
+}
+
+func (r *SeriesRecord) GetRec() *record.Record {
+	return r.rec
+}
+
+func (r *SeriesRecord) GetSid() uint64 {
+	return r.sid
+}
+
+func (r *SeriesRecord) GetErr() error {
+	return r.err
+}
+
+func (r *SeriesRecord) GetTsspFile() immutable.TSSPFile {
+	return r.file
+}
+
+func (r *SeriesRecord) GetSeq() uint64 {
+	return r.seq
+}
+
+type SeriesRecordPort struct {
+	RowDataType hybridqp.RowDataType
+	State       chan *SeriesRecord
+	OrigiState  chan *SeriesRecord
+	Redirected  bool
+	once        *sync.Once
+}
+
+func NewSeriesRecordPort(rowDataType hybridqp.RowDataType) *SeriesRecordPort {
+	return &SeriesRecordPort{
+		RowDataType: rowDataType,
+		State:       nil,
+		OrigiState:  nil,
+		Redirected:  false,
+		once:        new(sync.Once),
+	}
+}
+
+func (p *SeriesRecordPort) Equal(to Port) bool {
+	return p.RowDataType.Equal(to.(*SeriesRecordPort).RowDataType)
+}
+
+func (p *SeriesRecordPort) Connect(to Port) {
+	p.State = make(chan *SeriesRecord, PORT_CHAN_SIZE)
+	to.(*SeriesRecordPort).State = p.State
+}
+
+func (p *SeriesRecordPort) ConnectWithoutCache(to Port) {
+	p.State = make(chan *SeriesRecord)
+	to.(*SeriesRecordPort).State = p.State
+}
+
+func (p *SeriesRecordPort) Redirect(to Port) {
+	if to.(*SeriesRecordPort).State == nil {
+		panic("redirect port to nil")
+	}
+
+	if !p.Redirected {
+		p.Redirected = true
+		p.OrigiState = p.State
+	}
+
+	p.State = to.(*SeriesRecordPort).State
+}
+
+func (p *SeriesRecordPort) ConnectionId() uintptr {
+	id := *(*uintptr)(unsafe.Pointer(&p.State))
+
+	if id == 0 {
+		panic("Obtain connection id from unconnected arrow port")
+	}
+
+	return id
+}
+
+func (p *SeriesRecordPort) Close() {
+	p.once.Do(func() {
+		if p.Redirected {
+			p.State = p.OrigiState
+		}
+		if p.State != nil {
+			close(p.State)
+		}
+	})
+}
+
+func (p *SeriesRecordPort) Release() {}
+
+type DownSampleState struct {
+	taskID   int
+	err      error
+	newFiles []immutable.TSSPFile
+}
+
+func NewDownSampleState(taskID int, err error, newFiles []immutable.TSSPFile) *DownSampleState {
+	return &DownSampleState{taskID, err, newFiles}
+}
+
+func (p *DownSampleState) GetTaskID() int {
+	return p.taskID
+}
+
+func (p *DownSampleState) GetErr() error {
+	return p.err
+}
+
+func (p *DownSampleState) GetNewFiles() []immutable.TSSPFile {
+	return p.newFiles
+}
+
+type DownSampleStatePort struct {
+	RowDataType hybridqp.RowDataType
+	State       chan *DownSampleState
+	OrigiState  chan *DownSampleState
+	Redirected  bool
+	once        *sync.Once
+}
+
+func NewDownSampleStatePort(rowDataType hybridqp.RowDataType) *DownSampleStatePort {
+	return &DownSampleStatePort{
+		RowDataType: rowDataType,
+		State:       nil,
+		OrigiState:  nil,
+		Redirected:  false,
+		once:        new(sync.Once),
+	}
+}
+
+func (p *DownSampleStatePort) Equal(to Port) bool {
+	return p.RowDataType.Equal(to.(*DownSampleStatePort).RowDataType)
+}
+
+func (p *DownSampleStatePort) Connect(to Port) {
+	p.State = make(chan *DownSampleState, PORT_CHAN_SIZE)
+	to.(*DownSampleStatePort).State = p.State
+}
+
+func (p *DownSampleStatePort) ConnectStateReserve(to Port) {
+	if p.State == nil {
+		p.State = make(chan *DownSampleState, 0)
+	}
+	to.(*DownSampleStatePort).State = p.State
+}
+
+func (p *DownSampleStatePort) Redirect(to Port) {
+	if to.(*DownSampleStatePort).State == nil {
+		panic("redirect port to nil")
+	}
+
+	if !p.Redirected {
+		p.Redirected = true
+		p.OrigiState = p.State
+	}
+
+	p.State = to.(*DownSampleStatePort).State
+}
+
+func (p *DownSampleStatePort) ConnectionId() uintptr {
+	id := *(*uintptr)(unsafe.Pointer(&p.State))
+
+	if id == 0 {
+		panic("Obtain connection id from unconnected arrow port")
+	}
+
+	return id
+}
+
+func (p *DownSampleStatePort) Close() {
+	p.once.Do(func() {
+		if p.Redirected {
+			p.State = p.OrigiState
+		}
+		if p.State != nil {
+			close(p.State)
+		}
+	})
+}
+
+func (p *DownSampleStatePort) Release() {}

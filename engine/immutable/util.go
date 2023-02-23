@@ -16,7 +16,7 @@ limitations under the License.
 
 package immutable
 
-func sumFilesSize(files []TSSPFile) int64 {
+func SumFilesSize(files []TSSPFile) int64 {
 	var size int64 = 0
 	for _, f := range files {
 		size += f.FileSize()

@@ -1,7 +1,9 @@
 syntax = "proto2";
-package internal;
+package netstorage.data;
 
-option go_package = ".;internal";
+import "PyxisDB/open_src/influx/meta/proto/meta.proto";
+
+option go_package = ".;netstorage.data";
 
 message SeriesKeysRequest {
     required string Db           = 1;
@@ -86,4 +88,14 @@ message TagValuesSlice {
 message ExactCardinalityResponse {
     map<string, uint64> Cardinality = 1;
     optional string Err    = 2;
+}
+
+message PtRequest {
+    required proto.DbPt Pt = 1;
+    required int32 MigrateType = 2;
+    required uint64 OpId = 3;
+}
+
+message PtResponse {
+    optional string Err = 1;
 }

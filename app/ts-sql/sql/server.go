@@ -44,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/httpd"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/openGemini/openGemini/services/sherlock"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -52,12 +53,12 @@ import (
 // It is built using a Config and it manages the startup and shutdown of all
 // services in the proper order.
 type Server struct {
-	cmd        *cobra.Command
-	Listener   net.Listener
-	Node       *meta.Node
-	MetaClient *meta.Client
-	TSDBStore  netstorage.Storage
-	Logger     *Logger.Logger
+	cmd              *cobra.Command
+	Listener         net.Listener
+	initMetaClientFn func() error
+	MetaClient       *meta.Client
+	TSDBStore        netstorage.Storage
+	Logger           *Logger.Logger
 
 	statisticsPusher *statisticsPusher.StatisticsPusher
 	QueryExecutor    *query.Executor
@@ -73,6 +74,8 @@ type Server struct {
 	config *config.TSSql
 
 	castorService *castor.Service
+
+	sherlockService *sherlock.Service
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -111,18 +114,9 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 		metaUseTLS:    false,
 		config:        c,
 	}
+	s.initMetaClientFn = s.initializeMetaClient
 
-	listenIp := strings.Split(c.HTTP.BindAddress, ":")[0]
-	go func() {
-		if !c.HTTP.PprofEnabled {
-			return
-		}
-		addr := fmt.Sprintf("%s:6061", listenIp)
-		err := http.ListenAndServe(addr, nil)
-		if err != nil {
-			logger.Error("failed to start http server", zap.String("addr", addr))
-		}
-	}()
+	go openServer(c, logger)
 
 	err = s.MetaClient.SetTier(c.Coordinator.ShardTier)
 	if err != nil {
@@ -133,6 +127,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 
 	s.PointsWriter = coordinator.NewPointsWriter(time.Duration(c.Coordinator.ShardWriterTimeout))
 	s.PointsWriter.TSDBStore = s.TSDBStore
+	go s.PointsWriter.ApplyTimeRangeLimit(c.Coordinator.TimeRangeLimit)
 
 	syscontrol.SysCtrl.MetaClient = s.MetaClient
 	syscontrol.SysCtrl.NetStore = store
@@ -164,13 +159,33 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
 
 	s.initStatisticsPusher()
+	s.httpService.Handler.StatisticsPusher = s.statisticsPusher
 	syscontrol.SetQueryParallel(int64(c.HTTP.ChunkReaderParallel))
 	executor.SetPipelineExecutorResourceManagerParas(int64(c.Common.MemoryLimitSize), time.Duration(c.Common.MemoryWaitTime))
+	executor.IgnoreEmptyTag = c.Common.IgnoreEmptyTag
 
 	machine.InitMachineID(c.HTTP.BindAddress)
 
 	s.castorService = castor.NewService(c.Analysis)
+	s.sherlockService = sherlock.NewService(c.Sherlock)
+	s.sherlockService.WithLogger(s.Logger)
 	return s, nil
+}
+
+func openServer(c *config.TSSql, logger *Logger.Logger) {
+	if !c.HTTP.PprofEnabled {
+		return
+	}
+	strs := strings.Split(c.HTTP.BindAddress, ":")
+	if len(strs) != 2 {
+		return
+	}
+	listenIp := strs[0]
+	addr := fmt.Sprintf("%s:6061", listenIp)
+	err := http.ListenAndServe(addr, nil)
+	if err != nil {
+		logger.Error("failed to start http server", zap.String("addr", addr))
+	}
 }
 
 func (s *Server) Open() error {
@@ -191,7 +206,7 @@ func (s *Server) Open() error {
 		executor.SetEnableForceBroadcastQuery(int64(1))
 	}
 
-	if err := s.initializeMetaClient(); err != nil {
+	if err := s.initMetaClientFn(); err != nil {
 		return err
 	}
 
@@ -202,10 +217,14 @@ func (s *Server) Open() error {
 		return err
 	}
 
+	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
 
 	if err := s.castorService.Open(); err != nil {
 		return err
+	}
+	if s.sherlockService != nil {
+		s.sherlockService.Open()
 	}
 	return nil
 }
@@ -232,6 +251,13 @@ func (s *Server) Close() error {
 		util.MustClose(s.MetaClient)
 	}
 
+	if s.PointsWriter != nil {
+		s.PointsWriter.Close()
+	}
+
+	if s.sherlockService != nil {
+		s.sherlockService.Stop()
+	}
 	return nil
 }
 
@@ -295,9 +321,16 @@ func (s *Server) initStatisticsPusher() {
 		stat.CollectSpdyStatistics,
 		stat.CollectSqlSlowQueryStatistics,
 		stat.CollectRuntimeStatistics,
-		stat.NewMetaStatistics().Collect,
 		stat.CollectExecutorStatistics,
 		stat.NewErrnoStat().Collect,
 	)
+
+	s.statisticsPusher.RegisterOps(stat.CollectOpsHandlerStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsSpdyStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsSqlSlowQueryStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectExecutorStatisticsOps)
+	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
+
 	s.statisticsPusher.Start()
 }

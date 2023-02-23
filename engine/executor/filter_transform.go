@@ -108,12 +108,14 @@ func (trans *FilterTransform) Work(ctx context.Context) error {
 	}()
 
 	runnable := func() {
-		defer wg.Done()
+		defer func() {
+			close(trans.currChunk)
+			wg.Done()
+		}()
 		for {
 			select {
 			case chunk, ok := <-trans.Input.State:
 				if !ok {
-					close(trans.currChunk)
 					return
 				}
 

@@ -21,24 +21,73 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	internal "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const dataPath = "/tmp/test_data"
 
-func TestBaseHandler_SetMessage(t *testing.T) {
-	h := &CreateDataBase{}
+type handlerItem struct {
+	typ uint8
+	msg codec.BinaryCodec
+}
 
-	req := netstorage.CreateDataBaseRequest{}
-	if err := h.SetMessage(&req); err != nil {
-		t.Fatalf("SetMessage failed: %+v", err)
+type mockCodec struct {
+}
+
+func (r *mockCodec) MarshalBinary() ([]byte, error) {
+	return []byte{1}, nil
+}
+
+func (r *mockCodec) UnmarshalBinary(buf []byte) error {
+	return nil
+}
+
+func TestBaseHandler_SetMessage(t *testing.T) {
+	var items = []handlerItem{
+		{
+			typ: netstorage.SeriesKeysRequestMessage,
+			msg: &netstorage.SeriesKeysRequest{},
+		},
+		{
+			typ: netstorage.SeriesExactCardinalityRequestMessage,
+			msg: &netstorage.SeriesExactCardinalityRequest{},
+		},
+		{
+			typ: netstorage.SeriesCardinalityRequestMessage,
+			msg: &netstorage.SeriesCardinalityRequest{},
+		},
+		{
+			typ: netstorage.ShowTagValuesRequestMessage,
+			msg: &netstorage.ShowTagValuesRequest{},
+		},
+		{
+			typ: netstorage.ShowTagValuesCardinalityRequestMessage,
+			msg: &netstorage.ShowTagValuesCardinalityRequest{},
+		},
+		{
+			typ: netstorage.GetShardSplitPointsRequestMessage,
+			msg: &netstorage.GetShardSplitPointsRequest{},
+		},
+		{
+			typ: netstorage.DeleteRequestMessage,
+			msg: &netstorage.DeleteRequest{},
+		},
+		{
+			typ: netstorage.CreateDataBaseRequestMessage,
+			msg: &netstorage.CreateDataBaseRequest{},
+		},
 	}
 
-	err := h.SetMessage(&netstorage.SeriesKeysRequest{})
-	assert.NotNil(t, err)
+	for _, item := range items {
+		h := newHandler(item.typ)
+		require.NoError(t, h.SetMessage(item.msg))
+		require.NotNil(t, h.SetMessage(&mockCodec{}))
+	}
 }
 
 func TestCreateDataBase_Process(t *testing.T) {

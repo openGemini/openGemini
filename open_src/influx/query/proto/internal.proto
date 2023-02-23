@@ -115,7 +115,7 @@ message ExprOptions {
 }
 
 message QueryNode {
-    string          Name      = 1;
+    LogicPlanType   Name      = 1;
     repeated bytes  Inputs    = 3;
     RowDataType     Rt        = 5;
     repeated ExprOptions Ops  = 6;
@@ -123,6 +123,7 @@ message QueryNode {
     int64           limit     = 8;
     int64           Offset    = 9;
     int64           limitType = 10;
+    AggType  AggType = 11;
 }
 
 message RemoteQuery {
@@ -133,4 +134,48 @@ message RemoteQuery {
     uint64 NodeID   = 5;
     bool analyze    = 6;
     bytes QueryNode = 7;
+}
+
+enum AggType
+{
+    TagSet = 0;
+	CountDistinct = 1;
+	Normal = 2;
+}
+
+enum LogicPlanType
+{
+    LogicalExchange = 0;
+	LogicalLimit = 1;
+	LogicalIndexScan = 2;
+	LogicalAggregate = 3;
+	LogicalMerge = 4;
+	LogicalSortMerge = 5;
+	LogicalFilter = 6;
+	LogicalDedupe = 7;
+	LogicalInterval = 8;
+	LogicalSeries = 9;
+	LogicalReader = 10;
+	LogicalTagSubset = 11;
+	LogicalFill = 12;
+	LogicalAlign = 13;
+	LogicalMst = 14;
+	LogicalProject = 15;
+	LogicalSlidingWindow = 16;
+
+	LogicalFilterBlank = 17;
+	LogicalHttpSender = 18;
+	LogicalFullJoin = 19;
+	LogicalWriteIntoStorage = 20;
+	LogicalSequenceAggregate = 21;
+	LogicalSplitGroup = 22;
+	LogicalHoltWinters = 23;
+	LogicalSubQuery = 24;
+	LogicalGroupBy = 25;
+	LogicalOrderBy = 26;
+	LogicalHttpSenderHint = 27;
+	LogicalTarget = 28;
+	LogicalDummyShard = 29;
+	LogicalTSSPScan = 30;
+	LogicalSortAppend = 31;
 }
