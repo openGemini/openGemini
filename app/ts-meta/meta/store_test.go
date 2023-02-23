@@ -29,10 +29,13 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -176,6 +179,7 @@ type MockStore interface {
 	DeleteDatabase(node *meta2.DataNode, database string, ptId uint32) error
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, ptId uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
+	MigratePt(uint64, transport.Codec, transport.Callback) error
 }
 
 type MockNetStorage struct {
@@ -210,6 +214,10 @@ func (s *MockNetStorage) DeleteRetentionPolicy(node *meta2.DataNode, db string, 
 }
 
 func (s *MockNetStorage) DeleteMeasurement(node *meta2.DataNode, db, rp, name string, shardIds []uint64) error {
+	return nil
+}
+
+func (s *MockNetStorage) MigratePt(uint64, transport.Codec, transport.Callback) error {
 	return nil
 }
 
@@ -364,26 +372,26 @@ func MockReportLoad(ms *meta.MetaService, db string, ptId uint32) {
 
 func TestConcurrentApply(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
+
 	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 	PrintMemUsage()
-	BatchApplyCmd(ms, 100, 60)
+	BatchApplyCmd(mms, 100, 60)
 	PrintMemUsage()
 }
-func BatchApplyCmd(ms *meta.MetaService, goroutineNum int, dbNumPerRoutine int) {
+
+func BatchApplyCmd(mms *meta.MockMetaService, goroutineNum int, dbNumPerRoutine int) {
 	errChan := make(chan error)
 	dbPrefix := "foo"
 	rp := "autogen"
@@ -395,15 +403,15 @@ func BatchApplyCmd(ms *meta.MetaService, goroutineNum int, dbNumPerRoutine int) 
 			var err error
 			for j := 0; j < dbNumPerRoutine; j++ {
 				dbName := commonDbName + "-" + fmt.Sprint(j)
-				err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(dbName))
+				err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(dbName))
 				if err != nil {
 					errChan <- err
 				}
-				err = ms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(dbName, rp, mst, nil, "hash"))
+				err = mms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(dbName, rp, mst, nil, "hash"))
 				if err != nil {
 					errChan <- err
 				}
-				err = ms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(dbName, rp, time.Now()))
+				err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(dbName, rp, time.Now()))
 				if err != nil {
 					errChan <- err
 				}
@@ -435,7 +443,7 @@ func bToMb(b uint64) float32 {
 	return float32(b) / 1024. / 1024.
 }
 
-func shardInfoMsgHandler(cmd *proto2.Command, ms *meta.MetaService) error {
+func shardInfoMsgHandler(cmd *proto2.Command, mms *meta.MockMetaService) error {
 	b, err := proto.Marshal(cmd)
 	if err != nil {
 		return err
@@ -446,7 +454,7 @@ func shardInfoMsgHandler(cmd *proto2.Command, ms *meta.MetaService) error {
 	if err != nil {
 		return err
 	}
-	h.InitHandler(ms.GetStore(), ms.GetConfig(), nil)
+	h.InitHandler(mms.GetStore(), mms.GetConfig(), nil)
 	if err != nil {
 		return err
 	}
@@ -463,189 +471,348 @@ func shardInfoMsgHandler(cmd *proto2.Command, ms *meta.MetaService) error {
 
 func TestGetShardInfo_Process(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
-
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
+
 	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
 	db := "db0"
 	rp := "autogen"
 	mst := "mst0"
-	err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
+	err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = ms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(db, rp, mst, nil, "hash"))
+	err = mms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(db, rp, mst, nil, "hash"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = ms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now()))
+	err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now()))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	cmd = meta.GenerateGetShardRangeInfoCmd(db, rp, 2)
-	err = shardInfoMsgHandler(cmd, ms)
+	err = shardInfoMsgHandler(cmd, mms)
 	assert.True(t, err.Error() == errno.NewError(errno.ShardMetaNotFound, 2).Error(),
 		"actual err ", err.Error(), ";expect err ", errno.NewError(errno.ShardMetaNotFound, 2).Error())
 
-	cmd = meta.GenerateShardDurationCmd(12, []uint32{0})
-	err = shardInfoMsgHandler(cmd, ms)
+	cmd = meta.GenerateShardDurationCmd(12, []uint32{0}, mms.GetService().Node.ID)
+	err = shardInfoMsgHandler(cmd, mms)
 	assert.True(t, err.Error() == errno.NewError(errno.DataIsOlder).Error(),
-		"actual err ", err.Error(), ";expect err ", errno.NewError(errno.DataIsOlder, ms.GetStore().GetData().Index, 12).Error())
-}
+		"actual err ", err.Error(), ";expect err ", errno.NewError(errno.DataIsOlder, mms.GetStore().GetData().Index, 12).Error())
 
-func TestStoreRestartWithOtherIp(t *testing.T) {
-	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
-
+	cmd = meta.GenerateShardDurationCmd(0, []uint32{0}, mms.GetStore().GetData().PtView["db0"][0].Owner.NodeID)
+	err = shardInfoMsgHandler(cmd, mms)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
-		t.Fatal(err)
-	}
-
-	dataNodes := ms.GetStore().GetData().DataNodes
-	ms.Close()
-	ms, err = meta.InitStore(dir, "127.0.0.2")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assert.True(t, len(ms.GetStore().GetData().DataNodes) == len(dataNodes), "data should be same when restart with other ip")
-	assert.True(t, ms.GetStore().GetData().DataNodes[0] == dataNodes[0],
-		"dataNode should equal to previous, current %+v prev %+v", ms.GetStore().GetData().DataNodes[0], dataNodes[0])
 }
 
 func TestStoreDeleteDatabase(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
-
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
+
 	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd = meta.GenerateCreateDatabaseCmd("test")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	db := "test"
+	cmd = meta.GenerateCreateDatabaseCmd(db)
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd = meta.GenerateMarkDatabaseDelete("test")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd = meta.GenerateMarkDatabaseDelete(db)
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
-	ms.GetStore().NetStore = NewMockNetStorage()
+	netStore := meta.NewMockNetStorage()
+	mms.GetStore().NetStore = netStore
 
-	dbi := ms.GetStore().GetData().Database("test")
+	dbi := mms.GetStore().GetData().Database(db)
 	assert.Equal(t, dbi.MarkDeleted, true)
 
 	for {
-		dbi = ms.GetStore().GetData().Database("test")
+		dbi = mms.GetStore().GetData().Database(db)
 		if dbi == nil {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db)); err != nil {
+		t.Fatal(err)
+	}
+	netStore.DeleteDatabaseFn = func(node *meta2.DataNode, database string, ptId uint32) error {
+		return errno.NewError(errno.NoConnectionAvailable)
+	}
+	if err = mms.GetStore().ApplyCmd(meta.GenerateMarkDatabaseDelete(db)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	dbi = mms.GetStore().GetData().Database(db)
+	assert.Equal(t, true, dbi != nil)
 }
 
 func TestStoreDeleteRetentionPolicy(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
-
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
+
 	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
-	cmd = meta.GenerateCreateDatabaseCmd("test")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	dbName := "test"
+	rpName := "autogen"
+	cmd = meta.GenerateCreateDatabaseCmd(dbName)
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
-	rp, err := ms.GetStore().GetData().RetentionPolicy("test", "autogen")
+	rp, err := mms.GetStore().GetData().RetentionPolicy(dbName, rpName)
 	assert.Equal(t, true, rp != nil)
-	ms.GetStore().NetStore = NewMockNetStorage()
+	netStore := meta.NewMockNetStorage()
+	mms.GetStore().NetStore = netStore
 
-	cmd = meta.GenerateMarkRpDelete("test", "autogen")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	cmd = meta.GenerateMarkRpDelete(dbName, rpName)
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
 
-	rp = ms.GetStore().GetData().Database("test").RetentionPolicy("autogen")
+	rp = mms.GetStore().GetData().Database(dbName).RetentionPolicy(rpName)
 	assert.Equal(t, true, rp.MarkDeleted)
 	for {
-		rp = ms.GetStore().GetData().Database("test").RetentionPolicy("autogen")
+		rp = mms.GetStore().GetData().Database(dbName).RetentionPolicy(rpName)
 		if rp == nil {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	netStore.DeleteRetentionPolicyFn = func(node *meta2.DataNode, db string, rp string, ptId uint32) error {
+		return errno.NewError(errno.NoConnectionAvailable)
+	}
+	dbName = "test1"
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(dbName)); err != nil {
+		t.Fatal(err)
+	}
+	if err = mms.GetStore().ApplyCmd(meta.GenerateMarkRpDelete(dbName, rpName)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	rp = mms.GetStore().GetData().Database(dbName).RetentionPolicy(rpName)
+	assert.Equal(t, true, rp != nil)
 }
 
 func TestStoreDeleteMeasurement(t *testing.T) {
 	dir := t.TempDir()
-	ms, err := meta.InitStore(dir, "127.0.0.1")
-	defer func() {
-		ms.Close()
-	}()
-
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer mms.Close()
+
 	db := "db0"
 	rp := "autogen"
 	mst := "mst0"
 	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
-	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	if err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db)); err != nil {
-		t.Fatal(err)
-	}
-	if err = ms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(db, rp, mst, nil, "hash")); err != nil {
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db)); err != nil {
 		t.Fatal(err)
 	}
 
-	ms.GetStore().NetStore = NewMockNetStorage()
-	if err = ms.GetStore().ApplyCmd(meta.GenerateMarkMeasurementDeleteCmd(db, rp, mst)); err != nil {
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(db, rp, mst, nil, "hash")); err != nil {
 		t.Fatal(err)
 	}
 
-	msti := ms.GetStore().GetData().Database(db).RetentionPolicy(rp).Measurement(mst)
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	netStore := meta.NewMockNetStorage()
+	mms.GetStore().NetStore = netStore
+	if err = mms.GetStore().ApplyCmd(meta.GenerateMarkMeasurementDeleteCmd(db, rp, mst)); err != nil {
+		t.Fatal(err)
+	}
+
+	msti := mms.GetStore().GetData().Database(db).RetentionPolicy(rp).Measurement(mst)
 	assert.Equal(t, true, msti.MarkDeleted)
 
 	for {
-		msti = ms.GetStore().GetData().Database(db).RetentionPolicy(rp).Measurement(mst)
+		msti = mms.GetStore().GetData().Database(db).RetentionPolicy(rp).Measurement(mst)
 		if msti == nil {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+
+	netStore.DeleteMeasurementFn = func(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error {
+		return errno.NewError(errno.NoConnectionAvailable)
+	}
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(db, rp, mst, nil, "hash")); err != nil {
+		t.Fatal(err)
+	}
+	if err = mms.GetStore().ApplyCmd(meta.GenerateMarkMeasurementDeleteCmd(db, rp, mst)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	msti = mms.GetStore().GetData().Database(db).RetentionPolicy(rp).Measurement(mst)
+	assert.Equal(t, true, msti != nil)
+}
+
+func TestDownSampleCommands(t *testing.T) {
+	dir := t.TempDir()
+	ms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ms.Close()
+	}()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err := ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "db0"
+	rp := "autogen"
+
+	duration := 720 * time.Hour
+	sampleIntervals := []time.Duration{24 * time.Hour, 168 * time.Hour}
+	timeIntervals := []time.Duration{time.Minute, 15 * time.Minute}
+	calls := []*meta2.DownSampleOperators{
+		{
+			AggOps:   []string{"min,first"},
+			DataType: int64(influxql.Float),
+		},
+		{
+			AggOps:   []string{"sum", "count"},
+			DataType: int64(influxql.Integer),
+		},
+	}
+	err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ms.GetStore().ApplyCmd(meta.GenerateCreateDownSampleCmd(db, rp, duration, sampleIntervals, timeIntervals, calls)); err != nil {
+		t.Fatal(err)
+	}
+	if err = ms.GetStore().ApplyCmd(meta.GenerateDropDownSampleCmd(db, rp, false)); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = ms.GetStore().GetDownSampleInfo()
+	_, _ = ms.GetStore().GetRpMstInfos(db, rp, []int64{1})
+	ident := &meta2.ShardIdentifier{
+		ShardID: 1,
+		OwnerDb: "db0",
+		Policy:  "autogen",
+	}
+	if err := ms.GetStore().ApplyCmd(meta.GenerateUpdateShardDownSampleInfoCmd(ident)); err != nil {
+		t.Fatal(err)
+	}
+
+	rpInfos := &meta2.RetentionPolicyInfo{
+		Measurements: map[string]*meta2.MeasurementInfo{"mst_0000": {
+			Name:   "mst_0000",
+			Schema: map[string]int32{"age": influx.Field_Type_Int},
+		}},
+		MstVersions: map[string]uint32{
+			"mst": 0,
+		},
+	}
+	dataTypes := []int64{influx.Field_Type_Int}
+	_, _ = meta.TransMeasurementInfos2Bytes(dataTypes, rpInfos)
+}
+
+func TestStreamCommands(t *testing.T) {
+	dir := t.TempDir()
+	ms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ms.Close()
+	}()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err := ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "db0"
+	rp := "autogen"
+	srcMst := "mst0"
+	desMst := "mst1"
+	name := "test"
+	dims := []string{"tag1"}
+	err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := []*meta2.StreamCall{
+		{
+			Call:  "first",
+			Field: "age",
+			Alias: "first_age",
+		},
+		{
+			Call:  "first",
+			Field: "score",
+			Alias: "first_score",
+		},
+		{
+			Call:  "first",
+			Field: "name",
+			Alias: "first_name",
+		},
+		{
+			Call:  "first",
+			Field: "alive",
+			Alias: "first_alive",
+		},
+	}
+	if err = ms.GetStore().ApplyCmd(meta.GenerateCreateStreamCmd(db, rp, srcMst, desMst, name, calls, dims, 0, time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err = ms.GetStore().ApplyCmd(meta.GenerateDropStreamCmd(name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStoreExpandGroups(t *testing.T) {
+	dir := t.TempDir()
+	ms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ms.Close()
+	}()
+
+	if err = ms.GetStore().ExpandGroups(); err != nil {
+		t.Fatal(err)
 	}
 }

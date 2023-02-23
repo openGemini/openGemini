@@ -17,14 +17,9 @@ limitations under the License.
 package netstorage
 
 import (
-	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
-)
-
-var (
-	ErrPartitionNotFound = errors.New("partition not found")
 )
 
 // PartialWriteError indicates a write request could only write a portion of the

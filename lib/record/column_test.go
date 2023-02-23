@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 )
 
 func checkMaxValue(rec *record.Record, iv int64, iIdx int, fv float64, fIdx int, bv bool, bIdx int) bool {
@@ -304,4 +305,21 @@ func TestAggValues(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestAppendTimes(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendTimes([]int64{1, 2, 3})
+	col.AppendTimes([]int64{4, 5})
+	col.AppendTimes([]int64{})
+	col.AppendTimes([]int64{6, 7, 8})
+	col.AppendTimes([]int64{9})
+
+	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, col.IntegerValues())
+	require.Equal(t, []byte{255, 255}, col.Bitmap)
+
+	col = &record.ColVal{}
+	col.AppendBooleanNulls(10)
+	col.FillBitmap(0)
+	require.Equal(t, []byte{0, 0}, col.Bitmap)
 }

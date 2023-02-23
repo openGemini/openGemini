@@ -17,29 +17,48 @@ limitations under the License.
 package transport
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/app/ts-store/stream"
+	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/pool"
+	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestServer(t *testing.T) {
-	s, err := NewServer("127.0.0.2:18100", "127.0.0.2:18101", nil)
-	if !assert.NoError(t, err) {
+	s := NewServer("127.0.0.2:18100", "127.0.0.2:18101")
+	if !assert.NoError(t, s.Open()) {
+		return
+	}
+	defer s.MustClose()
+
+	s2 := NewServer("127.0.0.2:18100", "127.0.0.21:18101")
+	err := s2.Open()
+	if !assert.NotEmpty(t, err) || !assert.Regexp(t, regexp.MustCompile("^cannot create a server"), err.Error()) {
 		return
 	}
 
-	go s.SelectWorker()
-	go s.InsertWorker()
+	s3 := NewServer("127.0.0.21:18100", "127.0.0.2:18101")
+	err = s3.Open()
+	if !assert.NotEmpty(t, err) || !assert.Regexp(t, regexp.MustCompile("^cannot create a server"), err.Error()) {
+		return
+	}
 
+	s.Run(nil, nil)
 	time.Sleep(time.Second)
-	s.MustClose()
 }
 
 func mockRows() []influx.Row {
@@ -156,8 +175,171 @@ func TestWritePointsWork_decodePoints(t *testing.T) {
 			var err error
 			ww := getWritePointsWork()
 			ww.reqBuf = tt.reqBuf
-			_, _, _, _, _, err = ww.decodePoints()
+			_, _, _, _, _, _, err = ww.decodePoints()
 			require.Equal(t, err.Error(), tt.expectMsg)
 		})
+	}
+}
+
+var storageDataPath = "/tmp/data/"
+var metaPath = "/tmp/meta"
+
+func mockStorage() *storage.Storage {
+	node := metaclient.NewNode(metaPath)
+	storeConfig := config.NewStore()
+	config.SetHaEnable(true)
+	monitorConfig := config.Monitor{
+		Pushers: "http",
+	}
+	conf := &config.TSStore{
+		Data:    storeConfig,
+		Monitor: monitorConfig,
+		Common:  config.NewCommon(),
+	}
+
+	store, err := storage.OpenStorage(storageDataPath, node, nil, conf)
+	if err != nil {
+		return nil
+	}
+	return store
+}
+
+type MockStream struct{}
+
+func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, block *pool.DataBlock) {
+	panic("implement me")
+}
+
+func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []stream.FieldCall, fieldsDims map[string]int32) error {
+	panic("implement me")
+}
+
+func (m MockStream) Drain() {
+	panic("implement me")
+}
+
+func (m MockStream) DeleteTask(id uint64) {
+	panic("implement me")
+}
+
+func (m MockStream) Run() {
+	panic("implement me")
+}
+
+func (m MockStream) Close() {
+	panic("implement me")
+}
+
+func mockStream() stream.Engine {
+	return &MockStream{}
+}
+
+type MockNewResponser struct {
+}
+
+func (m MockNewResponser) Encode(bytes []byte, i interface{}) ([]byte, error) {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Decode(bytes []byte) (interface{}, error) {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Response(i interface{}, b bool) error {
+	return nil
+}
+
+func (m MockNewResponser) Callback(i interface{}) error {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Apply() error {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Type() uint8 {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Session() *spdy.MultiplexedSession {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Sequence() uint64 {
+	panic("implement me")
+}
+
+func (m MockNewResponser) StartAnalyze(span *tracing.Span) {
+	panic("implement me")
+}
+
+func (m MockNewResponser) FinishAnalyze() {
+	panic("implement me")
+}
+
+func TestInsertProcessor(t *testing.T) {
+	store := mockStorage()
+	defer store.MustClose()
+	stream := mockStream()
+	processor := NewInsertProcessor(store, stream)
+	w := &MockNewResponser{}
+	req1 := netstorage.NewWritePointsRequest([]byte{1, 2, 3, 4, 5, 6, 7})
+	if err := processor.Handle(w, req1); err != nil {
+		t.Fatal("WritePointsRequest failed")
+	}
+
+	req2 := netstorage.NewWriteStreamPointsRequest([]byte{1, 2, 3, 4, 5, 6, 7},
+		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	if err := processor.Handle(w, req2); err != nil {
+		t.Fatal("WritePointsRequest failed")
+	}
+}
+
+func mockMarshaledStreamPoint() []byte {
+	pBuf := make([]byte, 0)
+	pBuf = append(pBuf[:0], netstorage.PackageTypeFast)
+	// db
+	db := "db0"
+	pBuf = append(pBuf, uint8(len(db)))
+	pBuf = append(pBuf, db...)
+	// rp
+	rp := "rp0"
+	pBuf = append(pBuf, uint8(len(rp)))
+	pBuf = append(pBuf, rp...)
+	// ptid
+	pt := uint32(0)
+	pBuf = numenc.MarshalUint32(pBuf, pt)
+	// shard
+	shard := uint64(0)
+	pBuf = numenc.MarshalUint64(pBuf, shard)
+	// streamShardIdList
+	streamShardIdList := []uint64{0, 1}
+	pBuf = numenc.MarshalUint32(pBuf, uint32(len(streamShardIdList)))
+	pBuf = numenc.MarshalVarUint64s(pBuf, streamShardIdList)
+	// rows
+	rows := mockRows()
+	pBuf, err := influx.FastMarshalMultiRows(pBuf, rows)
+	if err != nil {
+		panic(err)
+	}
+	return pBuf
+}
+
+func TestDecodePoints(t *testing.T) {
+	ww := getWritePointsWork()
+	ww.reqBuf = mockMarshaledStreamPoint()
+	ww.streamVars = []*netstorage.StreamVar{{false, []uint64{0}}, {true, []uint64{1}}}
+	_, _, _, _, _, _, err := ww.decodePoints()
+	if err != nil {
+		t.Fatal("DecodePoints failed")
+	}
+
+	ww.streamVars = []*netstorage.StreamVar{{false, []uint64{0}}}
+	_, _, _, _, _, _, err = ww.decodePoints()
+	if err == nil {
+		t.Fatal("DecodePoints failed")
+	}
+	if !strings.Contains(err.Error(), "unmarshal rows failed, the num of the rows is not equal to the stream vars") {
+		t.Fatal("DecodePoints failed")
 	}
 }

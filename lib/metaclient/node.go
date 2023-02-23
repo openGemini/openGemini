@@ -47,8 +47,12 @@ func NewNode(path string) *Node {
 func (n *Node) LoadLogicalClock() error {
 	clockPath := filepath.Join(n.path, ClockFileName)
 	var file *os.File
-	file, err := os.OpenFile(path.Clean(clockPath), os.O_RDONLY|os.O_CREATE, 0600)
+	// for compatibility: if clock is already exist read it else do not create it and use ltime as logicalclock
+	file, err := os.OpenFile(path.Clean(clockPath), os.O_RDONLY, 0600)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return err
 	}
 

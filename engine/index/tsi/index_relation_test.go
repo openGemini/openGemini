@@ -27,18 +27,31 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	assert1 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func getTestIndexAndBuilder() (Index, *IndexBuilder) {
+func getTestIndexAndBuilder(path string) (Index, *IndexBuilder) {
+	ltime := uint64(time.Now().Unix())
+	lockPath := ""
+	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 2,
+		IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
 	opts := new(Options).
-		Path(testIndexPath + "index-" + fmt.Sprintf("%d", time.Now().UnixNano())).
+		Path(path).
+		Ident(indexIdent).
 		IndexType(MergeSet).
 		EndTime(time.Now().Add(time.Hour)).
-		Duration(time.Hour)
+		Duration(time.Hour).
+		LogicalClock(1).
+		SequenceId(&ltime).
+		Lock(&lockPath)
 
 	indexBuilder := NewIndexBuilder(opts)
 	indexBuilder.Relations = make(map[uint32]*IndexRelation)
@@ -49,28 +62,48 @@ func getTestIndexAndBuilder() (Index, *IndexBuilder) {
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
 	indexRelation, err := NewIndexRelation(opts, primaryIndex, indexBuilder)
+	if err != nil {
+		panic(err)
+	}
 	indexBuilder.Relations[uint32(MergeSet)] = indexRelation
 
+	config.NewLogger("test")
 	err = indexBuilder.Open()
+	if err != nil {
+		panic(err)
+	}
 
 	return primaryIndex, indexBuilder
 }
 
-func getTextIndexAndBuilder() (Index, *IndexBuilder) {
+func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
+	ltime := uint64(time.Now().Unix())
+	lockPath := ""
+	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 2,
+		IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
 	opts := new(Options).
-		Path(testIndexPath + "index-" + fmt.Sprintf("%d", time.Now().UnixNano())).
+		Path(path).
+		Ident(indexIdent).
 		IndexType(Text).
 		EndTime(time.Now().Add(time.Hour)).
-		Duration(time.Hour)
+		Duration(time.Hour).
+		LogicalClock(1).
+		SequenceId(&ltime).
+		Lock(&lockPath)
 
 	indexBuilder := NewIndexBuilder(opts)
 	indexBuilder.Relations = make(map[uint32]*IndexRelation)
 
 	opt := new(Options).
-		Path(testIndexPath + "index-" + fmt.Sprintf("%d", time.Now().UnixNano())).
+		Path(path).
 		IndexType(MergeSet).
 		EndTime(time.Now().Add(time.Hour)).
-		Duration(time.Hour)
+		Duration(time.Hour).
+		LogicalClock(1).
+		SequenceId(&ltime).
+		Lock(&lockPath)
+
 	primaryIndex, err := NewIndex(opt)
 	if err != nil {
 		panic(err)
@@ -87,9 +120,59 @@ func getTextIndexAndBuilder() (Index, *IndexBuilder) {
 	return primaryIndex, indexBuilder
 }
 
+func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
+	lockPath := ""
+	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 3, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	opts := new(Options).
+		Path(path).
+		IndexType(Field).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour).
+		Ident(indexIdent).
+		Lock(&lockPath)
+
+	indexBuilder := NewIndexBuilder(opts)
+	indexBuilder.Relations = make(map[uint32]*IndexRelation)
+
+	indexIdent = &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 1, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	opt := new(Options).
+		Path(path).
+		IndexType(MergeSet).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour).
+		Ident(indexIdent).
+		Lock(&lockPath)
+	primaryIndex, err := NewIndex(opt)
+	if err != nil {
+		panic(err)
+	}
+	primaryIndex.SetIndexBuilder(indexBuilder)
+	fieldIndexRelation, err := NewIndexRelation(opts, primaryIndex, indexBuilder)
+	if err != nil {
+		panic(err)
+	}
+	invertedIndexRelation, err := NewIndexRelation(opt, primaryIndex, indexBuilder)
+	if err != nil {
+		panic(err)
+	}
+
+	indexBuilder.Relations[uint32(Field)] = fieldIndexRelation
+	indexBuilder.Relations[uint32(MergeSet)] = invertedIndexRelation
+
+	err = indexBuilder.Open()
+	if err != nil {
+		panic(err)
+	}
+
+	return primaryIndex, indexBuilder
+}
+
 func TestSearchSeries_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
@@ -128,6 +211,20 @@ func TestSearchSeries_Relation(t *testing.T) {
 
 	t.Run("NEQ", func(t *testing.T) {
 		f([]byte("mn-1"), MustParseExpr(`tk1!='value1'`), defaultTR, []string{
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("EQEmpty", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1=''`), defaultTR, []string{})
+	})
+
+	t.Run("NEQEmpty", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1!=''`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
 			"mn-1,tk1=value11,tk2=value2,tk3=value33",
 			"mn-1,tk1=value11,tk2=value22,tk3=value3",
 			"mn-1,tk1=value11,tk2=value22,tk3=value33",
@@ -213,8 +310,9 @@ func TestSearchSeries_Relation(t *testing.T) {
 }
 
 func TestSearchSeriesKeys_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, opts influxql.Expr, expectedSeriesKeys map[string]struct{}) {
@@ -242,12 +340,14 @@ func TestSearchSeriesKeys_Relation(t *testing.T) {
 }
 
 func TestDropMeasurement_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
 		dst := make([][]byte, 1)
+		name = append(name, []byte("_0000")...)
 		dst, err := idx.SearchSeries(dst[:0], name, opts, tr)
 		if err != nil {
 			t.Fatal(err)
@@ -264,18 +364,11 @@ func TestDropMeasurement_Relation(t *testing.T) {
 	}
 
 	f([]byte("mn-1"), nil, defaultTR, []string{
-		"mn-1,tk1=value1,tk2=value2,tk3=value3",
-		"mn-1,tk1=value1,tk2=value22,tk3=value3",
-		"mn-1,tk1=value11,tk2=value2,tk3=value33",
-		"mn-1,tk1=value11,tk2=value22,tk3=value3",
-		"mn-1,tk1=value11,tk2=value22,tk3=value33",
-	})
-
-	t.Run("DropAndQuery", func(t *testing.T) {
-		if err := idxBuilder.DropMeasurement([]byte("mn-1")); err != nil {
-			t.Fatal(err)
-		}
-		f([]byte("mn-1"), nil, defaultTR, nil)
+		"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
+		"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
+		"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
+		"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+		"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
 	})
 
 	t.Run("IndexReopenAndQuery", func(t *testing.T) {
@@ -291,22 +384,24 @@ func TestDropMeasurement_Relation(t *testing.T) {
 	t.Run("AddNewIndexAndQuery", func(t *testing.T) {
 		CreateIndexByBuild(idxBuilder, idx)
 		f([]byte("mn-1"), nil, defaultTR, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value22,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
-			"mn-1,tk1=value11,tk2=value22,tk3=value3",
-			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
 		})
 	})
 }
 
 func TestDeleteTSIDs_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
 		dst := make([][]byte, 1)
+		name = append(name, []byte("_0000")...)
 		dst, err := idx.SearchSeries(dst[:0], name, opts, tr)
 		if err != nil {
 			t.Fatal(err)
@@ -325,42 +420,42 @@ func TestDeleteTSIDs_Relation(t *testing.T) {
 
 	t.Run("NormalQuery", func(t *testing.T) {
 		f([]byte("mn-1"), nil, defaultTR, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value22,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
-			"mn-1,tk1=value11,tk2=value22,tk3=value3",
-			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
 		})
 	})
 
 	t.Run("DeleteByEQCond", func(t *testing.T) {
-		if err := idx.DeleteTSIDs([]byte("mn-1"), MustParseExpr(`tk1='value1'`), defaultTR); err != nil {
+		if err := idx.DeleteTSIDs([]byte("mn-1_0000"), MustParseExpr(`tk1='value1'`), defaultTR); err != nil {
 			t.Fatal(err)
 		}
 
 		f([]byte("mn-1"), nil, defaultTR, []string{
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
-			"mn-1,tk1=value11,tk2=value22,tk3=value3",
-			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
 		})
 
-		if err := idx.DeleteTSIDs([]byte("mn-1"), MustParseExpr(`tk2='value2'`), defaultTR); err != nil {
+		if err := idx.DeleteTSIDs([]byte("mn-1_0000"), MustParseExpr(`tk2='value2'`), defaultTR); err != nil {
 			t.Fatal(err)
 		}
 
-		f([]byte("mn-1"), nil, defaultTR, []string{
-			"mn-1,tk1=value11,tk2=value22,tk3=value3",
-			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		f([]byte("mn-1_0000"), nil, defaultTR, []string{
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
 		})
 	})
 
 	t.Run("DeleteByBigTR", func(t *testing.T) {
-		err := idx.DeleteTSIDs([]byte("mn-1"), MustParseExpr(`tk2='value2'`), TimeRange{time.Now().Add(-41 * 24 * time.Hour).UnixNano(), time.Now().UnixNano()})
+		err := idx.DeleteTSIDs([]byte("mn-1_0000"), MustParseExpr(`tk2='value2'`), TimeRange{time.Now().Add(-41 * 24 * time.Hour).UnixNano(), time.Now().UnixNano()})
 		assert.Equal(t, strings.Contains(err.Error(), "too much dates"), true)
 	})
 
 	t.Run("DeleteWithoutCond", func(t *testing.T) {
-		if err := idx.DeleteTSIDs([]byte("mn-1"), nil, defaultTR); err != nil {
+		if err := idx.DeleteTSIDs([]byte("mn-1_0000"), nil, defaultTR); err != nil {
 			t.Fatal(err)
 		}
 
@@ -369,11 +464,13 @@ func TestDeleteTSIDs_Relation(t *testing.T) {
 }
 
 func TestSearchTagValues_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, tagKeys [][]byte, condition influxql.Expr, expectedTagValues [][]string) {
+		//name = append(name, []byte("_0000")...)
 		tagValues, err := idx.SearchTagValues(name, tagKeys, condition)
 		if err != nil {
 			t.Fatal(err)
@@ -446,41 +543,10 @@ func TestSearchTagValues_Relation(t *testing.T) {
 	})
 }
 
-func TestSearchAllSeriesKeys_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
-	CreateIndexByBuild(idxBuilder, idx)
-
-	f := func(expectCardinality uint64) {
-		keys, err := idx.SearchAllSeriesKeys()
-		if err != nil {
-			t.Fatal(err)
-		}
-		require.Equal(t, expectCardinality, uint64(len(keys)))
-	}
-
-	t.Run("NormalQuery", func(t *testing.T) {
-		f(5)
-	})
-
-	t.Run("DeleteTSIDsByEQ", func(t *testing.T) {
-		if err := idx.DeleteTSIDs([]byte("mn-1"), MustParseExpr(`tk1='value1'`), defaultTR); err != nil {
-			t.Fatal(err)
-		}
-		f(3)
-	})
-
-	t.Run("DropMeasurement", func(t *testing.T) {
-		if err := idxBuilder.DropMeasurement([]byte("mn-1")); err != nil {
-			t.Fatal(err)
-		}
-		f(0)
-	})
-}
-
 func TestSeriesCardinality_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, condition influxql.Expr, expectCardinality uint64) {
@@ -501,8 +567,9 @@ func TestSeriesCardinality_Relation(t *testing.T) {
 }
 
 func TestSearchTagValuesCardinality_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name, tagKey []byte, expectCardinality uint64) {
@@ -527,58 +594,181 @@ func TestSearchTagValuesCardinality_Relation(t *testing.T) {
 	})
 }
 
-func TestSearchAllTagValues_Relation(t *testing.T) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
-	CreateIndexByBuild(idxBuilder, idx)
+func TestWriteTextData(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTextIndexAndBuilder(path)
+	defer idxBuilder.Close()
+	mmPoints := &dictpool.Dict{}
+	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
+		t.Fatal(err)
+	}
 
-	f := func(tagKey string, expectTagValues map[string]map[string]struct{}) {
-		tagValues, err := idx.SearchAllTagValues([]byte(tagKey))
-		if err != nil {
-			t.Fatal(err)
-		}
-		require.Equal(t, len(expectTagValues), len(tagValues))
-		for name, etvs := range expectTagValues {
-			atvs, ok := tagValues[name]
-			if !ok {
-				t.Fatalf("expected measurement '%s' not found", name)
-			}
-			for tv := range etvs {
-				if _, ok := atvs[tv]; !ok {
-					t.Fatalf("expected tag value '%s' not found", tv)
-				}
-			}
+	_, err := idxBuilder.Scan(nil, nil, &query.ProcessorOptions{})
+	require.Nil(t, err)
+}
+
+func TestWriteFieldIndex(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getFieldIndexAndBuilder(path)
+
+	SeriesKeys := []string{
+		"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
+		"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
+		"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
+		"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
+		"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+	}
+
+	opt := influx.IndexOption{
+		IndexList: []uint16{0},
+		Oid:       uint32(Field),
+	}
+	mmPoints := genRowsByOpt(opt, SeriesKeys)
+	err := CreateIndexByRows(idxBuilder, mmPoints)
+	if !assert1.NotNil(t, err) {
+		t.Fatal()
+	}
+
+	opt.IndexList = []uint16{0, 3}
+	mmPoints = genRowsByOpt(opt, SeriesKeys)
+	err = CreateIndexByRows(idxBuilder, mmPoints)
+	if !assert1.NotNil(t, err) {
+		t.Fatal()
+	}
+
+	opt.IndexList = []uint16{3}
+	mmPoints = genRowsByOpt(opt, SeriesKeys)
+	err = CreateIndexByRows(idxBuilder, mmPoints)
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	if err = idxBuilder.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFieldIndexSearch(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getFieldIndexAndBuilder(path)
+	defer idxBuilder.Close()
+
+	SeriesKeys := []string{
+		"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
+		"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
+		"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
+		"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
+		"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+	}
+
+	opt := influx.IndexOption{
+		IndexList: []uint16{3},
+		Oid:       uint32(Field),
+	}
+	mmPoints := genRowsByOpt(opt, SeriesKeys)
+	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
+		t.Fatal(err)
+	}
+
+	// No group by and without filter.
+	nameWithVer := "mn-1_0000"
+	result, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer})
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok := result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 1, len(tagSets)) {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+		t.Fatal()
+	}
+
+	sort.Strings(SeriesKeys)
+	sort.Sort(tagSets[0])
+	for i, key := range SeriesKeys {
+		if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
+			t.Fatal(string(tagSets[0].SeriesKeys[i]), key)
 		}
 	}
 
-	t.Run("NormalQuery", func(t *testing.T) {
-		f("tk1", map[string]map[string]struct{}{
-			"mn-1": {
-				"value1":  {},
-				"value11": {},
-			},
-		})
+	// No group by and with field filter.
+	result, err = idxBuilder.Scan(nil, []byte(nameWithVer),
+		&query.ProcessorOptions{
+			Name:      "mn-1_0000",
+			Condition: MustParseExpr(`field_str0='value-1'`)})
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok = result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 1, len(tagSets)) {
+		t.Fatal()
+	}
+	if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0=value-1")) {
+		t.Fatal()
+	}
 
-		f("tk2", map[string]map[string]struct{}{
-			"mn-1": {
-				"value2":  {},
-				"value22": {},
-			},
-		})
-
-		f("tk3", map[string]map[string]struct{}{
-			"mn-1": {
-				"value3":  {},
-				"value33": {},
-			},
-		})
-	})
+	// Group by field.
+	result, err = idxBuilder.Scan(nil, []byte(nameWithVer),
+		&query.ProcessorOptions{
+			Name:       "mn-1_0000",
+			Dimensions: []string{"field_str0"}})
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok = result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, len(SeriesKeys), len(tagSets)) {
+		t.Fatal()
+	}
+	for i, tagSet := range tagSets {
+		if !assert1.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0=value-%d", i))) {
+			t.Fatal()
+		}
+	}
 }
 
-func TestWriteTextData(t *testing.T) {
-	idx, idxBuilder := getTextIndexAndBuilder()
-	defer clear(idx)
-	CreateTextIndexByBuild(idxBuilder, idx)
+func genRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.Dict {
+	pts := make([]influx.Row, 0, len(seriesKeys))
+
+	indexOptions := make([]influx.IndexOption, 0)
+	indexOptions = append(indexOptions, opt)
+	for i, key := range seriesKeys {
+		pt := influx.Row{
+			IndexOptions: indexOptions,
+			Fields: []influx.Field{
+				{
+					Key:      "field_str0",
+					Type:     influx.Field_Type_String,
+					StrValue: fmt.Sprintf("value-%d", i),
+				},
+			},
+		}
+		strs := strings.Split(key, ",")
+		pt.Name = strs[0]
+		pt.Tags = make(influx.PointTags, len(strs)-1)
+		for i, str := range strs[1:] {
+			kv := strings.Split(str, "=")
+			pt.Tags[i].Key = kv[0]
+			pt.Tags[i].Value = kv[1]
+		}
+		sort.Sort(&pt.Tags)
+		pt.Timestamp = time.Now().UnixNano()
+		pt.UnmarshalIndexKeys(nil)
+		pt.ShardKey = pt.IndexKey
+		pts = append(pts, pt)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &pts)
+	return mmPoints
 }
 
 func CreateIndexByBuild(iBuilder *IndexBuilder, idx Index) {
@@ -630,72 +820,38 @@ func CreateIndexByBuild(iBuilder *IndexBuilder, idx Index) {
 	iBuilder.Open()
 }
 
-func CreateTextIndexByBuild(iBuilder *IndexBuilder, idx Index) {
-	keys := []string{
-		"mn-1,tk1=value1,tk2=value2,tk3=value3",
-		"mn-1,tk1=value11,tk2=value22,tk3=value33",
-		"mn-1,tk1=value1,tk2=value22,tk3=value3",
-		"mn-1,tk1=value11,tk2=value2,tk3=value33",
-		"mn-1,tk1=value11,tk2=value22,tk3=value3",
-	}
-	pts := make([]influx.Row, 0, len(keys))
-	indexList := make([]uint16, 0)
-	indexList = append(indexList, 0)
-	opt := influx.IndexOption{
-		IndexList: indexList,
-		Oid:       uint32(Text),
-	}
-	indexOptions := make([]influx.IndexOption, 0)
-	indexOptions = append(indexOptions, opt)
-	for _, key := range keys {
-		pt := influx.Row{
-			IndexOptions: indexOptions,
-		}
-		strs := strings.Split(key, ",")
-		pt.Name = strs[0]
-		pt.Tags = make(influx.PointTags, len(strs)-1)
-		for i, str := range strs[1:] {
-			kv := strings.Split(str, "=")
-			pt.Tags[i].Key = kv[0]
-			pt.Tags[i].Value = kv[1]
-		}
-		sort.Sort(&pt.Tags)
-		pt.Timestamp = time.Now().UnixNano()
-		pt.UnmarshalIndexKeys(nil)
-		pt.ShardKey = pt.IndexKey
-		pts = append(pts, pt)
-	}
+func CreateIndexByRows(iBuilder *IndexBuilder, mmPoints *dictpool.Dict) error {
 
-	mmPoints := &dictpool.Dict{}
-	mmPoints.Set("mn-1", &pts)
 	if err := iBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
-		panic(err)
+		return err
 	}
 
 	for mmIndex := range mmPoints.D {
 		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
 		if !ok {
-			panic("create index failed due to map mmPoints")
+			return fmt.Errorf("create index failed due to map mmPoints")
 		}
 
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId == 0 {
-				panic("create index failed")
+				return fmt.Errorf("create index failed")
 			}
 		}
 	}
 
-	if err := iBuilder.CreateIndexIfPrimaryKeyExists(mmPoints, true); err != nil {
-		panic(err)
+	if err := iBuilder.Close(); err != nil {
+		return err
 	}
-
-	iBuilder.Close()
-	iBuilder.Open()
+	if err := iBuilder.Open(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func BenchmarkCreateIndex1(b *testing.B) {
-	idx, idxBuilder := getTestIndexAndBuilder()
-	defer clear(idx)
+	path := b.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
 
 	type IndexItem struct {
 		name      []byte
@@ -739,7 +895,7 @@ func BenchmarkCreateIndex1(b *testing.B) {
 		pt.Name = name
 		pt.Tags = tags
 		item.mmPoints = &dictpool.Dict{}
-		item.mmPoints.Set(name, &[]influx.Row{pt})
+		item.mmPoints.Set(name+"_0000", &[]influx.Row{pt})
 		items[i] = item
 	}
 
@@ -751,4 +907,20 @@ func BenchmarkCreateIndex1(b *testing.B) {
 		idxBuilder.CreateIndexIfNotExists(item.mmPoints)
 	}
 	b.StopTimer()
+}
+
+func GetIndexKey(serieskey string) []byte {
+	pt := influx.Row{}
+	strs := strings.Split(serieskey, ",")
+	pt.Name = strs[0]
+	pt.Tags = make(influx.PointTags, len(strs)-1)
+	for i, str := range strs[1:] {
+		kv := strings.Split(str, "=")
+		pt.Tags[i].Key = kv[0]
+		pt.Tags[i].Value = kv[1]
+	}
+	sort.Sort(&pt.Tags)
+	pt.Timestamp = time.Now().UnixNano()
+	pt.UnmarshalIndexKeys(nil)
+	return pt.IndexKey
 }

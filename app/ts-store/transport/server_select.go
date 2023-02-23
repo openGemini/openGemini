@@ -17,8 +17,6 @@ limitations under the License.
 package transport
 
 import (
-	"fmt"
-
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/handler"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -28,50 +26,44 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 )
 
-func (s *Server) SelectWorker() {
-	if err := s.selectServer.Start(); err != nil {
-		err = fmt.Errorf("cannot create a server with selectAddr=%s: %s", s.selectServer.addr, err)
-		panic(err)
-	}
-}
-
 type SelectServer struct {
-	addr    string
-	storage *storage.Storage
-	server  *spdy.RRCServer
+	addr   string
+	server *spdy.RRCServer
 }
 
-func NewSelectServer(addr string, storage *storage.Storage) *SelectServer {
+func NewSelectServer(addr string) *SelectServer {
 	return &SelectServer{
-		addr:    addr,
-		storage: storage,
+		addr: addr,
 	}
 }
 
-func (s *SelectServer) Start() error {
+func (s *SelectServer) Open() error {
 	s.server = spdy.NewRRCServer(spdy.DefaultConfiguration(), "tcp", s.addr)
-	s.register()
+	return s.server.Open()
+}
 
-	if err := s.server.Start(); err != nil {
-		return err
-	}
-	return nil
+func (s *SelectServer) Run(store *storage.Storage) {
+	s.register(store)
+	s.server.Run()
 }
 
 func (s *SelectServer) Close() {
 	s.server.Stop()
 }
 
-func (s *SelectServer) register() {
+func (s *SelectServer) register(store *storage.Storage) {
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SelectRequest,
-		handler.NewSelectProcessor(s.storage), rpc.NewMessageWithHandler(executor.NewRPCMessage)))
+		handler.NewSelectProcessor(store), rpc.NewMessageWithHandler(executor.NewRPCMessage)))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.AbortRequest,
 		handler.NewAbortProcessor(), &executor.Abort{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.DDLRequest,
-		handler.NewDDLProcessor(s.storage), &netstorage.DDLMessage{}))
+		handler.NewDDLProcessor(store), &netstorage.DDLMessage{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SysCtrlRequest,
-		handler.NewSysProcessor(s.storage), &netstorage.SysCtrlRequest{}))
+		handler.NewSysProcessor(store), &netstorage.SysCtrlRequest{}))
+
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.PtRequest,
+		handler.NewPtProcessor(store), &netstorage.PtRequest{}))
 }

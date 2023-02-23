@@ -144,6 +144,73 @@ func init() {
 		},
 	}
 
+	tests["measurement_commands"] = Test{
+		queries: []*Query{
+			&Query{
+				name:    "create database should succeed",
+				command: `CREATE DATABASE db0`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "create measurement cpu",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `CREATE MEASUREMENT cpu`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "retry create measurement cpu",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `CREATE MEASUREMENT cpu`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "create measurement cpu with shardkey",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `CREATE MEASUREMENT cpu WITH SHARDKEY hostname`,
+				exp:     `{"results":[{"statement_id":0,"error":"measurement already exists"}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "show measurements",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `SHOW MEASUREMENTS`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"]]}]}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "create measurement cpu2 with shardkey",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `CREATE MEASUREMENT cpu2 WITH SHARDKEY hostname`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "show measurements",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `SHOW MEASUREMENTS`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"],["cpu2"]]}]}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "drop measurement cpu2",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `DROP MEASUREMENT cpu2`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "show measurements",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `SHOW MEASUREMENTS`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"]]}]}]}`,
+				once:    true,
+			},
+		},
+	}
+
 	tests["drop_and_recreate_database"] = Test{
 		db: "db0",
 		rp: "rp0",

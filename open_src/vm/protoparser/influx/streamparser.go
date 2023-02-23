@@ -107,9 +107,10 @@ type streamContext struct {
 	tailBuf []byte
 	err     error
 
-	Wg              sync.WaitGroup
-	CallbackErrLock sync.Mutex
-	CallbackErr     error
+	Wg           sync.WaitGroup
+	ErrLock      sync.Mutex
+	UnmarshalErr error // unmarshal points failed, 400 error code
+	CallbackErr  error
 }
 
 func (ctx *streamContext) Error() error {
@@ -125,6 +126,7 @@ func (ctx *streamContext) reset() {
 	ctx.tailBuf = ctx.tailBuf[:0]
 	ctx.err = nil
 	ctx.CallbackErr = nil
+	ctx.UnmarshalErr = nil
 }
 
 func GetStreamContext(r io.Reader) *streamContext {
@@ -219,21 +221,6 @@ func (uw *unmarshalWork) Unmarshal() {
 	putUnmarshalWork(uw)
 }
 
-func GetUnmarshalWork() *unmarshalWork {
-	v := unmarshalWorkPool.Get()
-	if v == nil {
-		return &unmarshalWork{}
-	}
-	return v.(*unmarshalWork)
-}
-
-func putUnmarshalWork(uw *unmarshalWork) {
-	uw.reset()
-	unmarshalWorkPool.Put(uw)
-}
-
-var unmarshalWorkPool sync.Pool
-
 // ScheduleUnmarshalWork schedules uw to run in the worker pool.
 //
 // It is expected that StartUnmarshalWorkers is already called.
@@ -254,6 +241,7 @@ func StartUnmarshalWorkers() {
 	}
 	gomaxprocs := cgroup.AvailableCPUs()
 	unmarshalWorkCh = make(chan UnmarshalWork, 2*gomaxprocs)
+	unmarshalWorkPool = make(chan *unmarshalWork, 16*gomaxprocs)
 	unmarshalWorkersWG.Add(gomaxprocs)
 	for i := 0; i < gomaxprocs; i++ {
 		go func() {

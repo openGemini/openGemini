@@ -25,12 +25,26 @@ import (
 	"testing"
 	"time"
 
+	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/record"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
+
+const (
+	noStream = iota
+	sameShard
+	sameNode
+	sameMst
+	diffDis
+)
+
+var streamDistribution = noStream
+var enableFieldIndex = true
 
 type MockMetaClient struct {
 	DatabaseFn          func(database string) (*meta2.DatabaseInfo, error)
@@ -75,10 +89,110 @@ func (mmc *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroup
 	return mmc.GetAliveShardsFn(database, sgi)
 }
 
+func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
+	sis := mmc.GetStreamInfos()
+	if len(sis) == 0 {
+		return false
+	}
+	i := 0
+	*dstSis = (*dstSis)[:cap(*dstSis)]
+	for _, si := range sis {
+		if si.SrcMst.Database == db && si.SrcMst.RetentionPolicy == rp {
+			if len(*dstSis) < i+1 {
+				*dstSis = append(*dstSis, si)
+			} else {
+				(*dstSis)[i] = si
+			}
+			i++
+		}
+	}
+	*dstSis = (*dstSis)[:i]
+	return len(*dstSis) > 0
+}
+
+func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
+	infos := map[string]*meta2.StreamInfo{}
+	info := &meta2.StreamInfo{}
+	info.ID = 1
+	src := meta2.StreamMeasurementInfo{
+		Name:            "mst0",
+		Database:        "db0",
+		RetentionPolicy: "rp0",
+	}
+
+	var des meta2.StreamMeasurementInfo
+	switch streamDistribution {
+	case sameNode:
+		des = meta2.StreamMeasurementInfo{
+			Name:            "mst2",
+			Database:        "db0",
+			RetentionPolicy: "rp1",
+		}
+	case noStream:
+		return map[string]*meta2.StreamInfo{}
+	default:
+		des = meta2.StreamMeasurementInfo{
+			Name:            "mst2",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		}
+	}
+
+	info.DesMst = &des
+	info.SrcMst = &src
+	var groupKeys []string
+	groupKeys = append(groupKeys, "tk1")
+	info.Dims = groupKeys
+	info.Name = "t"
+	info.Interval = time.Duration(5)
+	info.Calls = []*meta2.StreamCall{
+		{
+			"sum",
+			"fk1",
+			"sum_fk1",
+		},
+		{
+			"sum",
+			"fk2",
+			"sum_fk2",
+		},
+		{
+			"count",
+			"fk2",
+			"count_fk2",
+		},
+		{
+			"min",
+			"fk2",
+			"min_fk2",
+		},
+		{
+			"max",
+			"fk2",
+			"max_fk2",
+		},
+	}
+	infos[info.Name] = info
+	return infos
+}
+
 func NewMockMetaClient() *MockMetaClient {
 	mc := &MockMetaClient{}
 	rpInfo := NewRetentionPolicy("rp0", time.Hour)
-	dbInfo := &meta2.DatabaseInfo{Name: "db0", RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{"rp0": rpInfo}}
+	rp1Info := NewRetentionPolicy("rp1", time.Hour)
+	var dbInfo *meta2.DatabaseInfo
+
+	switch streamDistribution {
+	case sameShard:
+		dbInfo = &meta2.DatabaseInfo{Name: "db0", RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{"rp0": rpInfo},
+			ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tk1", "tk2"}}}
+	case sameNode:
+		dbInfo = &meta2.DatabaseInfo{Name: "db0", RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{"rp0": rpInfo, "rp1": rp1Info},
+			ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tk1", "tk2"}}}
+	default:
+		dbInfo = &meta2.DatabaseInfo{Name: "db0", RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{"rp0": rpInfo}}
+	}
+
 	mc.DatabaseFn = func(database string) (*meta2.DatabaseInfo, error) {
 		return dbInfo, nil
 	}
@@ -95,12 +209,11 @@ func NewMockMetaClient() *MockMetaClient {
 		panic("could not find sg")
 	}
 
-	msti := NewMeasurement("mst0")
 	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error) {
-		return msti, nil
+		return NewMeasurement(mst), nil
 	}
 	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-		return msti, nil
+		return NewMeasurement(mstName), nil
 	}
 	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
 		return nil
@@ -150,10 +263,26 @@ func NewRetentionPolicy(name string, duration time.Duration) *meta2.RetentionPol
 }
 
 func NewMeasurement(mst string) *meta2.MeasurementInfo {
-	msti := &meta2.MeasurementInfo{Name: mst, ShardKeys: []meta2.ShardKeyInfo{meta2.ShardKeyInfo{Type: "hash"}}}
+	var msti = meta2.NewMeasurementInfo(mst)
+	switch streamDistribution {
+	case sameMst:
+		msti.ShardKeys = []meta2.ShardKeyInfo{{ShardKey: []string{"tk1"}, Type: "hash"}}
+	default:
+		msti.ShardKeys = []meta2.ShardKeyInfo{{Type: "hash"}}
+	}
+
 	msti.Schema = map[string]int32{
+		"fk1": influx.Field_Type_Float,
+		"fk2": influx.Field_Type_Int,
 		"tk1": influx.Field_Type_Tag,
 		"tk2": influx.Field_Type_Tag,
+	}
+	if enableFieldIndex {
+		ilist := []string{"tk3", "tk1"}
+		msti.IndexRelation = meta2.IndexRelation{
+			IndexList: []*meta2.IndexList{{ilist}},
+			Oids:      []uint32{0},
+		}
 	}
 	return msti
 }
@@ -162,7 +291,7 @@ type MockNetStore struct {
 	WriteRowsFn func(nodeID uint64, database, rp string, pt uint32, shard uint64, rows *[]influx.Row, timeout time.Duration) error
 }
 
-func (mns *MockNetStore) WriteRows(nodeID uint64, database, rp string, pt uint32, shard uint64, rows *[]influx.Row, timeout time.Duration) error {
+func (mns *MockNetStore) WriteRows(nodeID uint64, database, rp string, pt uint32, shard uint64, _ []uint64, rows *[]influx.Row, timeout time.Duration) error {
 	return mns.WriteRowsFn(nodeID, database, rp, pt, shard, rows, timeout)
 }
 
@@ -178,22 +307,18 @@ func TestPointsWriter_WritePointRows(t *testing.T) {
 	pw := NewPointsWriter(time.Second)
 	pw.MetaClient = NewMockMetaClient()
 	pw.TSDBStore = NewMockNetStore()
-	err := pw.WritePointRows("db0", "rp0", generateRows())
+	rows := make([]influx.Row, 10)
+	err := pw.RetryWritePointRows("db0", "rp0", generateRows(10, rows))
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
-	mi := &meta2.MeasurementInfo{
-		Name:      "mst",
-		ShardKeys: nil,
-		Schema: map[string]int32{
-			"value1": influx.Field_Type_Float,
-			"value2": influx.Field_Type_String,
-		},
-		IndexRelations: nil,
-		MarkDeleted:    false,
+	mi := meta2.NewMeasurementInfo("mst_0000")
+	mi.Schema = map[string]int32{
+		"value1": influx.Field_Type_Float,
+		"value2": influx.Field_Type_String,
 	}
 
 	fs := make([]*proto2.FieldSchema, 0, 8)
@@ -213,6 +338,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 	pw := NewPointsWriter(time.Second)
 	pw.MetaClient = mc
 	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
 
 	var errors = []string{
 		"",
@@ -227,7 +353,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 		}
 
 		for i, r := range rows {
-			_, _, err := pw.updateSchemaIfNeeded("db0", "rp0", &r, mi, fs)
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.Name, fs)
 
 			if errors[i] == "" {
 				assert.NoError(t, err)
@@ -257,29 +383,78 @@ func unmarshal(buf []byte, callback func(db string, rows []influx.Row, err error
 	w.Unmarshal()
 }
 
-func generateRows() []influx.Row {
-	keys := []string{
+func buildTagKeys() []string {
+	//mock dii tagNum
+	tagNum := 50
+	tagKeys := make([]string, tagNum)
+	for i := 0; i < tagNum; i++ {
+		tagKeys[i] = fmt.Sprintf("tagNum%v", i)
+	}
+	return tagKeys
+}
+
+func buildRow() influx.Row {
+	pt := influx.Row{}
+	//mock dii tagNum
+	tagNum := 50
+	pt.Tags = make(influx.PointTags, tagNum)
+	for i := 0; i < tagNum; i++ {
+		kv := fmt.Sprintf("tagNum%v", i)
+		pt.Tags[i].Key = kv
+		pt.Tags[i].Value = kv
+	}
+	sort.Sort(&pt.Tags)
+	return pt
+}
+
+func generateRows(num int, rows []influx.Row) []influx.Row {
+	tmpKeys := []string{
 		"mst0,tk1=value1,tk2=value2,tk3=value3",
 		"mst0,tk1=value11,tk2=value22,tk3=value33",
+		"mst0,tk1=value12,tk2=value23",
+		"mst0,tk1=value12,tk2=value23",
+		"mst0,tk1=value12,tk2=value23",
 	}
-	pts := make([]influx.Row, 0, len(keys))
-	for _, key := range keys {
-		pt := influx.Row{}
+	keys := make([]string, num)
+	for i := 0; i < num; i++ {
+		keys[i] = tmpKeys[i%len(tmpKeys)]
+	}
+	rows = rows[:cap(rows)]
+	for j, key := range keys {
+		if cap(rows) <= j {
+			rows = append(rows, influx.Row{})
+		}
+		pt := &rows[j]
 		strs := strings.Split(key, ",")
 		pt.Name = strs[0]
-		pt.Tags = make(influx.PointTags, len(strs)-1)
+		pt.Tags = pt.Tags[:cap(pt.Tags)]
 		for i, str := range strs[1:] {
+			if cap(pt.Tags) <= i {
+				pt.Tags = append(pt.Tags, influx.Tag{})
+			}
 			kv := strings.Split(str, "=")
 			pt.Tags[i].Key = kv[0]
 			pt.Tags[i].Value = kv[1]
 		}
+		pt.Tags = pt.Tags[:len(strs[1:])]
 		sort.Sort(&pt.Tags)
 		pt.Timestamp = time.Now().UnixNano()
 		pt.UnmarshalIndexKeys(nil)
 		pt.ShardKey = pt.IndexKey
-		pts = append(pts, pt)
+		pt.Fields = pt.Fields[:cap(pt.Fields)]
+		if cap(pt.Fields) < 1 {
+			pt.Fields = append(pt.Fields, influx.Field{}, influx.Field{})
+		}
+		pt.Fields[0].NumValue = 1
+		pt.Fields[0].StrValue = ""
+		pt.Fields[0].Type = influx.Field_Type_Float
+		pt.Fields[0].Key = "fk1"
+		pt.Fields[1].NumValue = 1
+		pt.Fields[1].StrValue = ""
+		pt.Fields[1].Type = influx.Field_Type_Int
+		pt.Fields[1].Key = "fk2"
 	}
-	return pts
+	return rows[:num]
 }
 
 func TestCheckFields(t *testing.T) {
@@ -300,4 +475,303 @@ func TestCheckFields(t *testing.T) {
 	fields[0].Key = "foo2"
 	err = checkFields(fields)
 	assert.NoError(t, err)
+}
+
+func TestStreamSymbolMarshalUnmarshal(t *testing.T) {
+	var binary []byte
+	var err error
+	wRows := make([]influx.Row, 10)
+	sRows := generateRows(10, wRows)
+	sRows[0].StreamOnly = true
+	var streamIDs []uint64
+	streamIDs = append(streamIDs, 3)
+	sRows[0].StreamId = streamIDs
+	b, err := influx.FastMarshalMultiRows(binary, sRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var rows []influx.Row
+	var tagPools []influx.Tag
+	var fieldPools []influx.Field
+	var indexKeyPools []byte
+	var indexOptionPools []influx.IndexOption
+
+	rows, _, _, _, _, err = influx.FastUnmarshalMultiRows(b, rows, tagPools, fieldPools, indexOptionPools, indexKeyPools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].StreamOnly != false {
+		t.Error(fmt.Sprintf("expect %v ,got %v", sRows[0].StreamOnly, rows[0].StreamOnly))
+	}
+	if len(rows[0].StreamId) != 0 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", rows[0].StreamId[0], streamIDs[0]))
+	}
+}
+
+func TestPointsWriter_xx(t *testing.T) {
+	xx := &[]influx.Row{}
+	*xx = append(*xx, influx.Row{})
+	*xx = append(*xx, influx.Row{})
+	*xx = append(*xx, influx.Row{})
+	*xx = (*xx)[:cap(*xx)]
+	t.Log(*xx)
+}
+
+func TestSelectIndexList(t *testing.T) {
+	size := 1
+	columnToIndex := map[string]int{}
+	indexList := make([]string, size)
+	for i := 0; i < size; i++ {
+		key := fmt.Sprintf("name%v", i)
+		columnToIndex[key] = i
+		indexList[i] = key
+	}
+	index, ok := selectIndexList(columnToIndex, indexList)
+	if !assert2.Equal(t, index, []uint16{0}) {
+		t.Fatal("SelectIndexList failed")
+	}
+	if !assert2.Equal(t, ok, true) {
+		t.Fatal("SelectIndexList failed")
+	}
+}
+
+func TestPointsWriter_WritePointRows_SameShardForStream(t *testing.T) {
+	streamDistribution = sameShard
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	err := pw.writePointRows("db0", "rp0", generateRows(10, rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPointsWriter_WritePointRows_NoStream_NoFieldIndex(t *testing.T) {
+	streamDistribution = noStream
+	enableFieldIndex = false
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	err := pw.writePointRows("db0", "rp0", generateRows(10, rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPointsWriter_WritePointRows_SameNodeForStream(t *testing.T) {
+	streamDistribution = sameNode
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	err := pw.writePointRows("db0", "rp0", generateRows(10, rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPointsWriter_WritePointRows_SameMstForStream(t *testing.T) {
+	streamDistribution = sameMst
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	err := pw.writePointRows("db0", "rp0", generateRows(10, rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPointsWriter_WritePointRows_CalculateOnSqlForStream(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	err := pw.writePointRows("db0", "rp0", generateRows(10, rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPointsWriter_TimeRangeLimit(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+
+	pw.ApplyTimeRangeLimit(nil)
+	pw.ApplyTimeRangeLimit([]toml.Duration{0, 0})
+	go pw.ApplyTimeRangeLimit([]toml.Duration{toml.Duration(time.Hour * 24), toml.Duration(time.Hour * 24)})
+
+	time.Sleep(time.Second / 10)
+	rows = generateRows(10, rows)
+	rows[0].Timestamp = time.Now().Add(-time.Hour * 30).UnixNano()
+
+	err := pw.writePointRows("db0", "rp0", rows)
+	pw.Close()
+
+	exp := "partial write: " + errno.NewError(errno.WritePointOutOfRP).Error() + " dropped=1"
+	assert.EqualError(t, err, exp)
+}
+
+func TestColumnToIndexUpdate(t *testing.T) {
+	var k1Ptr, k2Ptr *string
+	b1 := []byte{'a', 'b', 'c'}
+	b2 := []byte{'a', 'b', 'c'}
+	m := make(map[string]int)
+	m[record.Bytes2str(b1)] = 0
+	for k1 := range m {
+		k1Ptr = &k1
+	}
+	m[record.Bytes2str(b2)] = 1
+	for k2 := range m {
+		k2Ptr = &k2
+	}
+	if k1Ptr == k2Ptr {
+		t.Fatal("columnToIndex failed")
+	}
+}
+
+func Benchmark_UnmarshalShardKey(t *testing.B) {
+	t.N = 10
+	row := buildRow()
+	t.ReportAllocs()
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		t.StartTimer()
+		for j := 0; j < 1000000; j++ {
+			err := row.UnmarshalShardKeyByTag([]string{})
+			if err != nil {
+				t.Fatal("UnmarshalShardKeyByTag fail")
+			}
+		}
+		t.StopTimer()
+	}
+}
+
+func Benchmark_UnmarshalShardKeyByTagOp(t *testing.B) {
+	t.N = 10
+	row := buildRow()
+
+	t.ReportAllocs()
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		t.StartTimer()
+		for j := 0; j < 1000000; j++ {
+			err := row.UnmarshalShardKeyByTagOp([]string{})
+			if err != nil {
+				t.Fatal("UnmarshalShardKeyByTagOp fail")
+			}
+		}
+		t.StopTimer()
+	}
+}
+
+func Benchmark_UnmarshalShardKey_WithDims(t *testing.B) {
+	t.N = 10
+	tagKeys := buildTagKeys()
+	row := buildRow()
+	t.ReportAllocs()
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		t.StartTimer()
+		for j := 0; j < 1000000; j++ {
+			err := row.UnmarshalShardKeyByTag(tagKeys)
+			if err != nil {
+				t.Fatal("UnmarshalShardKey_WithDims fail")
+			}
+		}
+		t.StopTimer()
+	}
+}
+
+func Benchmark_UnmarshalShardKeyByTagOp_WithDims(t *testing.B) {
+	t.N = 10
+	tagKeys := buildTagKeys()
+	row := buildRow()
+	t.ReportAllocs()
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		t.StartTimer()
+		for j := 0; j < 1000000; j++ {
+			err := row.UnmarshalShardKeyByTagOp(tagKeys)
+			if err != nil {
+				t.Fatal("UnmarshalShardKeyByTagOp_WithDims fail")
+			}
+		}
+		t.StopTimer()
+	}
+}
+
+func Benchmark_selectIndexList(t *testing.B) {
+	t.N = 10
+	columnToIndex := map[string]int{}
+	size := 1
+	indexList := make([]string, size)
+	for i := 0; i < size; i++ {
+		key := fmt.Sprintf("name%v", i)
+		columnToIndex[key] = i
+		indexList[i] = key
+	}
+	t.ReportAllocs()
+	t.ResetTimer()
+	for i := 0; i < t.N; i++ {
+		t.StartTimer()
+		for j := 0; j < 10000000; j++ {
+			selectIndexList(columnToIndex, indexList)
+		}
+		t.Log("cost")
+		t.StopTimer()
+	}
+}
+
+func Benchmark_WritePointRows(t *testing.B) {
+	t.N = 10
+	now := time.Now()
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	t.ReportAllocs()
+	t.ResetTimer()
+	tt := time.Now()
+	t.Log("init cost", tt.Sub(now))
+	now = tt
+	rows := make([]influx.Row, 100000)
+	for i := 0; i < t.N; i++ {
+		generateRows(100000, rows)
+		t.StartTimer()
+		err := pw.writePointRows("db0", "rp0", rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tt = time.Now()
+		t.Log("write cost", tt.Sub(now))
+		now = tt
+		t.StopTimer()
+	}
+}
+
+func TestPointsWriter_InvalidMst(t *testing.T) {
+	streamDistribution = noStream
+	pw := NewPointsWriter(time.Second * 10)
+	mc := NewMockMetaClient()
+	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+		return nil, errno.NewError(errno.InvalidMeasurement, "a/a")
+	}
+
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+
+	rows = generateRows(5, rows)
+	err := pw.writePointRows("db0", "rp0", rows)
+	pw.Close()
+
+	exp := "partial write: " + errno.NewError(errno.InvalidMeasurement, "a/a").Error() + " dropped=5"
+	assert.EqualError(t, err, exp)
 }

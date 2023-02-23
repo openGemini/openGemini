@@ -19,15 +19,17 @@ package engine
 import (
 	"testing"
 
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
-func TestEngine_processReq_failpoint(t *testing.T) {
-	log = zap.NewNop()
+func TestEngine_processReq_error_point(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	e := Engine{
-		log: zap.NewNop(),
+		log: log,
 	}
 	req := &netstorage.SysCtrlRequest{}
 	req.SetMod(Failpoint)
@@ -40,9 +42,9 @@ func TestEngine_processReq_failpoint(t *testing.T) {
 }
 
 func TestEngine_processReq_readonly(t *testing.T) {
-	log = zap.NewNop()
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	e := Engine{
-		log: zap.NewNop(),
+		log: log,
 	}
 	req := &netstorage.SysCtrlRequest{}
 	req.SetMod(Readonly)
@@ -51,4 +53,122 @@ func TestEngine_processReq_readonly(t *testing.T) {
 		"allnodes": "y",
 	})
 	require.NoError(t, e.processReq(req))
+}
+
+func TestEngine_processReq_snapshot(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(snapshot)
+	req.SetParam(map[string]string{
+		"duration": "5s",
+	})
+	require.NoError(t, e.processReq(req))
+
+	// invalid duration param
+	req.SetParam(map[string]string{
+		"duration": "5x",
+	})
+	require.Error(t, e.processReq(req))
+}
+
+func TestEngine_processReq_compaction(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(compactionEn)
+	req.SetParam(map[string]string{
+		"switchon":  "true",
+		"allshards": "true",
+	})
+	require.NoError(t, e.processReq(req))
+
+	req.SetParam(map[string]string{
+		"switchon": "true",
+		"shid":     "1",
+	})
+	require.NoError(t, e.processReq(req))
+
+	// without param "switchon"
+	req.SetParam(map[string]string{
+		"shid": "1",
+	})
+	require.Error(t, e.processReq(req))
+
+	// invalid param "allshards"
+	req.SetParam(map[string]string{
+		"switchon":  "true",
+		"allshards": "y",
+	})
+	require.Error(t, e.processReq(req))
+}
+
+func TestEngine_processReq_merge(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(compmerge)
+	req.SetParam(map[string]string{
+		"switchon":  "true",
+		"allshards": "true",
+	})
+	require.NoError(t, e.processReq(req))
+
+	req.SetParam(map[string]string{
+		"switchon": "true",
+		"shid":     "1",
+	})
+	require.NoError(t, e.processReq(req))
+
+	// without param "switchon"
+	req.SetParam(map[string]string{
+		"shid": "1",
+	})
+	require.Error(t, e.processReq(req))
+
+	// invalid param "allshards"
+	req.SetParam(map[string]string{
+		"switchon":  "true",
+		"allshards": "y",
+	})
+	require.Error(t, e.processReq(req))
+}
+
+func TestEngine_downSample_order(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(downSampleInOrder)
+	req.SetParam(map[string]string{
+		"order": "true",
+	})
+	require.NoError(t, e.processReq(req))
+	req.SetParam(map[string]string{
+		"order": "false",
+	})
+	require.NoError(t, e.processReq(req))
+}
+
+func TestEngine_processReq_debugMode(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(verifyNode)
+	req.SetParam(map[string]string{
+		"switchon": "true",
+	})
+	require.NoError(t, e.processReq(req))
+
+	req.SetParam(map[string]string{})
+	require.Error(t, e.processReq(req))
 }

@@ -38,15 +38,17 @@ type Spdy struct {
 	TCPDialTimeout       toml.Duration `toml:"tcp-dial-timeout"`
 	DataAckTimeout       toml.Duration `toml:"data-ack-timeout"`
 
-	TLSEnable             bool   `toml:"tls-enable"`
-	TLSClientAuth         bool   `toml:"tls-client-auth"`
-	TLSInsecureSkipVerify bool   `toml:"tls-insecure-skip-verify"`
-	TLSCertificate        string `toml:"tls-certificate"`
-	TLSPrivateKey         string `toml:"tls-private-key"`
-	TLSClientCertificate  string `toml:"tls-client-certificate"`
-	TLSClientPrivateKey   string `toml:"tls-client-private-key"`
-	TLSCARoot             string `toml:"tls-ca-root"`
-	TLSServerName         string `toml:"tls-server-name"`
+	CompressEnable        bool `toml:"compress-enable"`
+	TLSEnable             bool `toml:"tls-enable"`
+	TLSClientAuth         bool `toml:"tls-client-auth"`
+	TLSInsecureSkipVerify bool `toml:"tls-insecure-skip-verify"`
+
+	TLSCertificate       string `toml:"tls-certificate"`
+	TLSPrivateKey        string `toml:"tls-private-key"`
+	TLSClientCertificate string `toml:"tls-client-certificate"`
+	TLSClientPrivateKey  string `toml:"tls-client-private-key"`
+	TLSCARoot            string `toml:"tls-ca-root"`
+	TLSServerName        string `toml:"tls-server-name"`
 }
 
 const (
@@ -61,10 +63,13 @@ const (
 
 	DefaultRecvWindowSize          = 8
 	DefaultConcurrentAcceptSession = 4096
-	DefaultOpenSessionTimeout      = 300 * Second
+	DefaultOpenSessionTimeout      = 10 * Second
 	DefaultSessionSelectTimeout    = 300 * Second
 	DefaultTCPDialTimeout          = Second
 	DefaultConnPoolSize            = 4
+
+	TCPWriteTimeout = 120 * time.Second
+	TCPReadTimeout  = 300 * time.Second
 )
 
 func NewSpdy() Spdy {

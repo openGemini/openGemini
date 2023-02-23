@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,15 +31,19 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	mclient "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/rand"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	mproto "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -64,6 +69,16 @@ const (
 const (
 	raftListenerStartupTimeout = time.Second
 )
+
+const (
+	DeleteDatabase = iota
+	DeleteRp
+	DeleteMeasurement
+)
+
+const categoryDatanode = "datanode"
+const categoryMetadata = "metanode"
+const categoryParam = "param"
 
 type ShardStat struct {
 	id          uint64
@@ -323,6 +338,19 @@ func (rpi *rpInfo) String() string {
 		rpi.maxShardID, rpi.reSharding, rpi.shardStat)
 }
 
+type RaftInterface interface {
+	State() raft.RaftState
+	Peers() ([]string, error)
+	Close() error
+	IsLeader() bool
+	IsCandidate() bool
+	Leader() string
+	Apply(b []byte) error
+	AddServer(addr string) error
+	ShowDebugInfo(witch string) ([]byte, error)
+	UserSnapshot() error
+}
+
 type Store struct {
 	mu      sync.RWMutex
 	closing chan struct{}
@@ -334,7 +362,7 @@ type Store struct {
 	path        string
 	opened      bool
 	Logger      *logger.Logger
-	raft        *raftWrapper
+	raft        RaftInterface
 	notifyCh    chan bool
 	wg          sync.WaitGroup
 	deleteWg    sync.WaitGroup
@@ -351,10 +379,12 @@ type Store struct {
 		DeleteDatabase(node *meta.DataNode, database string, pt uint32) error
 		DeleteRetentionPolicy(node *meta.DataNode, db string, rp string, pt uint32) error
 		DeleteMeasurement(node *meta.DataNode, db string, rp string, name string, shardIds []uint64) error
+		MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
 	}
 
 	statMu       sync.RWMutex
 	dbStatistics map[string]*dbInfo
+	client       *mclient.Client
 
 	cacheMu          sync.RWMutex
 	cacheData        *meta.Data
@@ -366,8 +396,10 @@ type Store struct {
 func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 	s := Store{
 		data: &meta.Data{
-			Index:        1,
-			PtNumPerNode: meta.DefaultPtNumPerNode,
+			Index:           1,
+			PtNumPerNode:    c.PtNumPerNode,
+			TakeOverEnabled: true,
+			BalancerEnabled: true,
 		},
 		cacheData:        &meta.Data{},
 		closing:          make(chan struct{}),
@@ -389,7 +421,7 @@ func (s *Store) checkLeaderChanged() {
 	defer s.wg.Done()
 	pushTimer := time.NewTimer(pushInterval)
 	defer pushTimer.Stop()
-	lastState := s.raft.raft.State()
+	lastState := s.raft.State()
 	stat.NewMetaStatCollector().Push(&stat.MetaRaftStatItem{Status: int64(lastState),
 		NodeID: strconv.FormatUint(s.Node.ID, 10)})
 	for {
@@ -398,27 +430,31 @@ func (s *Store) checkLeaderChanged() {
 			stat.NewMetaStatistics().AddLeaderSwitchTotal(1)
 			if v {
 				s.stepDown = make(chan struct{})
-				if s.cm != nil {
-					s.cm.Start()
+				if globalService.clusterManager != nil {
+					globalService.msm.Start()
+					globalService.balanceManager.Start()
+					globalService.clusterManager.Start()
 				}
 
 				s.deleteWg.Add(3)
-				go s.checkDatabaseDelete()
-				go s.checkRpDelete()
-				go s.checkMeasurementDelete()
+				go s.checkDelete(DeleteDatabase)
+				go s.checkDelete(DeleteRp)
+				go s.checkDelete(DeleteMeasurement)
 				continue
 			}
 
 			stat.NewMetaStatCollector().Clear(stat.TypeMetaStatItem)
 			close(s.stepDown)
-			if s.cm != nil {
-				s.cm.Stop()
+			if globalService.clusterManager != nil {
+				globalService.clusterManager.Stop()
+				globalService.balanceManager.Stop()
+				globalService.msm.Stop()
 			}
 			s.deleteWg.Wait()
 		case <-s.closing:
 			return
 		case <-pushTimer.C:
-			currentState := s.raft.raft.State()
+			currentState := s.raft.State()
 			if currentState != lastState {
 				stat.NewMetaStatCollector().Push(&stat.MetaRaftStatItem{Status: int64(currentState),
 					NodeID: strconv.FormatUint(s.Node.ID, 10)})
@@ -443,6 +479,7 @@ func (s *Store) Open(raftln net.Listener) error {
 		s.config.SplitRowThreshold), zap.Float64("imbalance factor", s.config.ImbalanceFactor))
 
 	c := s.makeClient()
+	s.client = c
 	peers := s.connectFull(c)
 	if err := s.setOpen(); err != nil {
 		return err
@@ -550,8 +587,8 @@ func (s *Store) peers() []string {
 	if s.raft == nil {
 		return []string{s.config.CombineDomain(s.raftAddr)}
 	}
-	peers, _ := s.raft.peers()
-	if len(peers) == 0 {
+	peers, err := s.raft.Peers()
+	if err != nil || len(peers) == 0 {
 		return []string{s.config.CombineDomain(s.raftAddr)}
 	}
 	return peers
@@ -582,6 +619,24 @@ func (s *Store) updateCacheData() {
 	s.cacheMu.Unlock()
 	close(s.cacheDataChanged)
 	s.cacheDataChanged = make(chan struct{})
+	// save metadata statistics
+	s.saveMetadataStatistics()
+}
+
+func (s *Store) saveMetadataStatistics() {
+	if stat.MetadataInstance.HaveMetadata() {
+		// reduce the reporting frequency to almost 10s.
+		return
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	for _, datanode := range s.cacheData.DataNodes {
+		stat.MetadataInstance.SaveMetadataNodes(categoryDatanode, datanode.Host, datanode.ID, int64(datanode.Status))
+	}
+	for _, metanode := range s.cacheData.MetaNodes {
+		stat.MetadataInstance.SaveMetadataNodes(categoryMetadata, metanode.Host, metanode.ID, int64(metanode.Status))
+	}
+	stat.MetadataInstance.SaveMetadataParam(categoryParam, s.cacheData.TakeOverEnabled, s.cacheData.BalancerEnabled, int64(s.cacheData.PtNumPerNode))
 }
 
 func (s *Store) serveSnapshot() {
@@ -603,58 +658,14 @@ func (s *Store) serveSnapshot() {
 		}
 	}
 }
-func (s *Store) checkMeasurementDelete() {
-	defer s.deleteWg.Done()
-	var index uint64 = 0
-	errChan := make(chan error)
-	n := 0
-
-	for {
-		select {
-		case <-s.closing:
-			return
-		case <-s.stepDown:
-			return
-		default:
-			s.cacheMu.RLock()
-			if index < s.cacheData.Index {
-				index = s.cacheData.Index
-			}
-			s.cacheMu.RUnlock()
-		}
-
-		n = 0
-		s.cacheMu.RLock()
-		s.cacheData.WalkDatabases(func(db *meta.DatabaseInfo) {
-			db.WalkRetentionPolicy(func(rp *meta.RetentionPolicyInfo) {
-				for mstIdx := range rp.Measurements {
-					if rp.Measurements[mstIdx].MarkDeleted {
-						n++
-						go func(db string, rp *meta.RetentionPolicyInfo, mst string) {
-							errChan <- s.deleteMeasurement(db, rp, mst)
-						}(db.Name, rp.Clone(), rp.Measurements[mstIdx].Name)
-					}
-				}
-			})
-		})
-		s.cacheMu.RUnlock()
-		for i := 0; i < n; i++ {
-			err := <-errChan
-			if err != nil {
-				s.Logger.Warn("delete measurement failed", zap.Error(err))
-			}
-		}
-
-		time.Sleep(checkInterval)
-	}
-}
 
 func (s *Store) deleteMeasurement(db string, rp *meta.RetentionPolicyInfo, mst string) error {
 	s.cacheMu.RLock()
 	nodeShardsMap := make(map[uint64][]uint64)
 	for sgIdx := range rp.ShardGroups {
 		for shIdx := range rp.ShardGroups[sgIdx].Shards {
-			if rp.ShardGroups[sgIdx].Shards[shIdx].ContainPrefix(mst) {
+			originName := influx.GetOriginMstName(mst)
+			if rp.ShardGroups[sgIdx].Shards[shIdx].ContainPrefix(originName) {
 				ptId := rp.ShardGroups[sgIdx].Shards[shIdx].Owners[0]
 				nodeId := s.cacheData.PtView[db][ptId].Owner.NodeID
 				nodeShardsMap[nodeId] = append(nodeShardsMap[nodeId], rp.ShardGroups[sgIdx].Shards[shIdx].ID)
@@ -672,63 +683,35 @@ func (s *Store) deleteMeasurement(db string, rp *meta.RetentionPolicyInfo, mst s
 		}(node, db, shardIds)
 	}
 	s.cacheMu.RUnlock()
+
+	var err error
 	for i := 0; i < n; i++ {
-		err := <-errChan
-		if err != nil {
-			return err
+		errC := <-errChan
+		if errC != nil {
+			err = errC
 		}
 	}
 	close(errChan)
+	if err != nil {
+		return err
+	}
 
 	return s.deleteMeasurementMetaData(db, rp.Name, mst)
 }
 
-func (s *Store) checkRpDelete() {
-	defer s.deleteWg.Done()
-	var index uint64 = 0
-	errChan := make(chan error)
-	n := 0
-
-	for {
-		select {
-		case <-s.closing:
-			return
-		case <-s.stepDown:
-			return
-		default:
-			s.cacheMu.RLock()
-			if index < s.cacheData.Index {
-				index = s.cacheData.Index
-			}
-			s.cacheMu.RUnlock()
-		}
-
-		n = 0
-		s.cacheMu.RLock()
-		for dbName := range s.cacheData.Databases {
-			if s.cacheData.Databases[dbName].MarkDeleted {
-				continue
-			}
-			for rpName := range s.cacheData.Databases[dbName].RetentionPolicies {
-				if s.cacheData.Databases[dbName].RetentionPolicies[rpName].MarkDeleted {
-					n++
-					go func(db string, rp string) {
-						errChan <- s.deleteRetentionPolicy(db, rp)
-					}(dbName, rpName)
-				}
-			}
-		}
-		s.cacheMu.RUnlock()
-
-		for i := 0; i < n; i++ {
-			err := <-errChan
-			if err != nil {
-				s.Logger.Warn("drop retentionPolicy failed", zap.Error(err))
-			}
-		}
-
-		time.Sleep(checkInterval)
+// deletePtDir deletes data/db/pt dir and wal/db/pt dir
+func (s *Store) deletePtDir(db string, pt uint32) error {
+	ptId := strconv.Itoa(int(pt))
+	dataPtPath := path.Join(s.config.DataDir, config.DataDirectory, db, ptId)
+	lock := fileops.FileLockOption("")
+	if err := fileops.RemoveAll(dataPtPath, lock); err != nil {
+		return err
 	}
+	walPtPath := path.Join(s.config.WalDir, config.WalDirectory, db, ptId)
+	if err := fileops.RemoveAll(walPtPath, lock); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) deleteRetentionPolicy(db string, rp string) error {
@@ -748,18 +731,23 @@ func (s *Store) deleteRetentionPolicy(db string, rp string) error {
 		}(node, db, rp, ptInfos[i].PtId)
 	}
 	s.cacheMu.RUnlock()
+
+	var err error
 	for i := 0; i < n; i++ {
-		err := <-errChan
-		if err != nil {
-			return err
+		errC := <-errChan
+		if errC != nil {
+			err = errC
 		}
 	}
 	close(errChan)
+	if err != nil {
+		return err
+	}
 
 	return s.deleteRpMetadata(db, rp)
 }
 
-func (s *Store) checkDatabaseDelete() {
+func (s *Store) checkDelete(deleteType int) {
 	defer s.deleteWg.Done()
 	var index uint64 = 0
 	errChan := make(chan error)
@@ -780,19 +768,48 @@ func (s *Store) checkDatabaseDelete() {
 
 		n = 0
 		s.cacheMu.RLock()
-		for dbName := range s.cacheData.Databases {
-			if s.cacheData.Databases[dbName].MarkDeleted {
-				n++
-				go func(dbName string) {
-					errChan <- s.deleteDatabase(dbName)
-				}(dbName)
+		if deleteType == DeleteDatabase {
+			for dbName := range s.cacheData.Databases {
+				if s.cacheData.Databases[dbName].MarkDeleted {
+					n++
+					go func(dbName string) {
+						errChan <- s.deleteDatabase(dbName)
+					}(dbName)
+				}
 			}
+		} else if deleteType == DeleteRp {
+			for dbName := range s.cacheData.Databases {
+				if s.cacheData.Databases[dbName].MarkDeleted {
+					continue
+				}
+				for rpName := range s.cacheData.Databases[dbName].RetentionPolicies {
+					if s.cacheData.Databases[dbName].RetentionPolicies[rpName].MarkDeleted {
+						n++
+						go func(db string, rp string) {
+							errChan <- s.deleteRetentionPolicy(db, rp)
+						}(dbName, rpName)
+					}
+				}
+			}
+		} else if deleteType == DeleteMeasurement {
+			s.cacheData.WalkDatabases(func(db *meta.DatabaseInfo) {
+				db.WalkRetentionPolicy(func(rp *meta.RetentionPolicyInfo) {
+					for mstIdx := range rp.Measurements {
+						if rp.Measurements[mstIdx].MarkDeleted {
+							n++
+							go func(db string, rp *meta.RetentionPolicyInfo, mst string) {
+								errChan <- s.deleteMeasurement(db, rp, mst)
+							}(db.Name, rp.Clone(), rp.Measurements[mstIdx].Name)
+						}
+					}
+				})
+			})
 		}
 		s.cacheMu.RUnlock()
 		for i := 0; i < n; i++ {
 			err := <-errChan
 			if err != nil {
-				s.Logger.Warn("drop database failed", zap.Error(err))
+				s.Logger.Warn("drop failed", zap.Error(err), zap.Int("delete type", deleteType))
 			}
 		}
 
@@ -811,6 +828,15 @@ func (s *Store) deleteDatabase(dbName string) error {
 		if node == nil {
 			continue
 		}
+
+		// HA enable and the node is not alive status, remove pt dir directly
+		if config.GetHaEnable() && node.Status != serf.StatusAlive {
+			if err := s.deletePtDir(dbName, ptInfos[i].PtId); err != nil {
+				return err
+			}
+			continue
+		}
+
 		n++
 		go func(node *meta.DataNode, dbName string, ptId uint32) {
 			errChan <- s.NetStore.DeleteDatabase(node, dbName, ptId)
@@ -818,13 +844,17 @@ func (s *Store) deleteDatabase(dbName string) error {
 	}
 	s.cacheMu.RUnlock()
 
+	var err error
 	for i := 0; i < n; i++ {
-		err := <-errChan
-		if err != nil {
-			return err
+		errC := <-errChan
+		if errC != nil {
+			err = errC
 		}
 	}
 	close(errChan)
+	if err != nil {
+		return err
+	}
 
 	return s.deleteDatabaseMetadata(dbName)
 }
@@ -903,13 +933,40 @@ func (s *Store) close() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.raft.close()
+	if s.raft == nil {
+		return nil
+	}
+	return s.raft.Close()
 }
 
-func (s *Store) getSnapshot() []byte {
+func (s *Store) getSnapshot(role mclient.Role) []byte {
+	switch role {
+	case mclient.SQL:
+		return s.getSnapshotBySql()
+	case mclient.STORE:
+		return s.getSnapshotByStore()
+	case mclient.META:
+		return s.getSnapshotBySql()
+	default:
+		panic("not exist role")
+	}
+	return nil
+}
+
+func (s *Store) getSnapshotBySql() []byte {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	return s.cacheDataBytes
+}
+
+func (s *Store) getSnapshotByStore() []byte {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	b, err := s.cacheData.MarshalBinaryToStore()
+	if err != nil {
+		s.Logger.Error("marshal binary to store error", zap.Error(err))
+	}
+	return b
 }
 
 // afterIndex returns a channel that will be closed to signal
@@ -946,14 +1003,20 @@ func (s *Store) waitForLeader() error {
 func (s *Store) IsLeader() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.raft.isLeader()
+	if s.raft == nil {
+		return false
+	}
+	return s.raft.IsLeader()
 }
 
 // isCandidate returns true if the Store is currently the Candidate.
 func (s *Store) isCandidate() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.raft.isCandidate()
+	if s.raft == nil {
+		return false
+	}
+	return s.raft.IsCandidate()
 }
 
 // leader returns what the Store thinks is the current leader. An empty
@@ -961,8 +1024,10 @@ func (s *Store) isCandidate() bool {
 func (s *Store) leader() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	return s.raft.leader()
+	if s.raft == nil {
+		return ""
+	}
+	return s.raft.Leader()
 }
 
 // otherMetaServersHTTP will return the HTTP bind addresses of the other
@@ -996,11 +1061,17 @@ func (s *Store) cacheIndex() uint64 {
 // apply applies a command to raft.
 func (s *Store) apply(b []byte) error {
 	stat.NewMetaStatistics().AddStoreApplyTotal(1)
-	return s.raft.apply(b)
+	if s.raft == nil {
+		return errno.NewError(errno.RaftIsNotOpen)
+	}
+	return s.raft.Apply(b)
 }
 
 func (s *Store) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
-	if err := s.raft.addServer(n.TCPHost); err != nil {
+	if s.raft == nil {
+		return nil, ErrRaftNotOpen
+	}
+	if err := s.raft.AddServer(n.TCPHost); err != nil {
 		return nil, err
 	}
 
@@ -1057,7 +1128,10 @@ func (s *Store) setMetaNode(addr, rpcAddr, raftAddr string) error {
 
 func (s *Store) showDebugInfo(witch string) ([]byte, error) {
 	if strings.Contains(witch, "raft") {
-		return s.raft.showDebugInfo(witch)
+		if s.raft == nil {
+			return nil, ErrRaftNotOpen
+		}
+		return s.raft.ShowDebugInfo(witch)
 	}
 
 	if strings.Contains(witch, "meta") {
@@ -1222,21 +1296,19 @@ func (s *Store) createDataNode(writeHost, queryHost string) ([]byte, error) {
 	}
 
 	nodeStartInfo := meta.NodeStartInfo{}
-	s.cacheMu.RLock()
-	dn := s.cacheData.DataNodeByHttpHost(writeHost)
-	if dn == nil {
-		s.cacheMu.RUnlock()
-		s.updateCacheData()
-		s.cacheMu.RLock()
-		dn = s.cacheData.DataNodeByHttpHost(writeHost)
-	}
+	s.mu.RLock()
+	dn := s.data.DataNodeByHttpHost(writeHost)
+	logger.GetLogger().Info("create data node", zap.Uint64("id", dn.ID), zap.Uint64("lTime", dn.LTime))
+	dbPtIds := s.getDbPtsByNodeId(dn.ID)
 	nodeStartInfo.NodeId = dn.ID
-	nodeStartInfo.LTime = uint64(dn.LTime)
-	nodeStartInfo.PtIds = s.cacheData.GetPtsByNodeId(nodeStartInfo.NodeId)
-	nodeStartInfo.ShardDurationInfos = s.cacheData.GetDurationInfos(nodeStartInfo.PtIds)
-	s.cacheMu.RUnlock()
-	stat.NewMetaStatCollector().Push(&stat.MetaStatItem{Status: int64(dn.Status),
-		LTime: int64(dn.LTime), NodeID: strconv.FormatUint(dn.ID, 10), Host: dn.Host})
+	nodeStartInfo.LTime = dn.LTime
+	nodeStartInfo.ShardDurationInfos = s.data.GetDurationInfos(dbPtIds)
+	status := dn.Status
+	s.mu.RUnlock()
+	// register the store node to SPDY, support send message from meta to store.
+	transport.NewNodeManager().Add(dn.ID, dn.TCPHost)
+	stat.NewMetaStatCollector().Push(&stat.MetaStatItem{Status: int64(status),
+		LTime: int64(nodeStartInfo.LTime), NodeID: strconv.FormatUint(dn.ID, 10), Host: dn.Host})
 	return nodeStartInfo.MarshalBinary()
 }
 
@@ -1260,6 +1332,42 @@ func (s *Store) getShardAuxInfo(body []byte) ([]byte, error) {
 		err = fmt.Errorf("non suportted getAuxShardInfo cmd")
 	}
 	return b, err
+}
+
+func (s *Store) GetUserInfo() ([]byte, error) {
+	b, err := s.cacheData.MarshalBinaryUser()
+	return b, err
+}
+
+func (s *Store) getStreamInfo() ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	streams := &mproto.StreamInfos{
+		Infos: make([]*mproto.StreamInfo, len(s.cacheData.Streams)),
+	}
+	j := 0
+	for si := range s.cacheData.Streams {
+		streams.Infos[j] = s.cacheData.Streams[si].Marshal()
+		j++
+	}
+
+	return proto.Marshal(streams)
+}
+
+func (s *Store) getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	mst, err := s.cacheData.Measurement(dbName, rpName, mstName)
+	if err != nil {
+		return nil, err
+	}
+	return mst.MarshalBinary()
 }
 
 func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
@@ -1286,14 +1394,55 @@ func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
 func (s *Store) getDurationInfo(cmd *mproto.Command) ([]byte, error) {
 	ext, _ := proto.GetExtension(cmd, mproto.E_ShardDurationCommand_Command)
 	v := ext.(*mproto.ShardDurationCommand)
+	s.mu.RLock()
+	dbPtIds := s.getDbPtsByNodeId(v.GetNodeId())
+	s.mu.RUnlock()
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	if s.cacheData.Index < v.GetIndex() {
 		return nil, errno.NewError(errno.DataIsOlder)
 	}
-
-	durationRes := s.cacheData.DurationInfos(v.GetPts())
+	durationRes := s.cacheData.DurationInfos(dbPtIds)
 	return durationRes.MarshalBinary()
+}
+
+func (s *Store) GetDownSampleInfo() ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	d := &meta.DownSamplePoliciesInfoWithDbRp{
+		Infos: make([]*meta.DownSamplePolicyInfoWithDbRp, 0),
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	for database, dbInfo := range s.cacheData.Databases {
+		for rpName, rpinfo := range dbInfo.RetentionPolicies {
+			if rpinfo.DownSamplePolicyInfo == nil || rpinfo.DownSamplePolicyInfo.IsNil() {
+				continue
+			}
+			d.Infos = append(d.Infos, &meta.DownSamplePolicyInfoWithDbRp{
+				DbName: database,
+				RpName: rpName,
+				Info:   rpinfo.DownSamplePolicyInfo,
+			})
+		}
+	}
+	return d.MarshalBinary()
+}
+func (s *Store) GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	if s.cacheData.Database(db) == nil {
+		return nil, errno.NewError(errno.DatabaseNotFound, db)
+	}
+	rpInfos := s.cacheData.Database(db).RetentionPolicies[rp]
+	if rpInfos == nil {
+		return nil, errno.NewError(errno.RpNotFound, rp)
+	}
+	return TransMeasurementInfos2Bytes(dataTypes, rpInfos)
 }
 
 func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error {
@@ -1373,7 +1522,6 @@ func (s *Store) updatePtInfo(db string, ptInfo *meta.PtInfo, ownerNode uint64, s
 	if ownerNode > 0 {
 		val.OwnerNode = proto.Uint64(ownerNode)
 	}
-
 	t := mproto.Command_UpdatePtInfoCommand
 	cmd := &mproto.Command{Type: &t}
 	if err := proto.SetExtension(cmd, mproto.E_UpdatePtInfoCommand_Command, val); err != nil {
@@ -1398,4 +1546,122 @@ func (s *Store) getEventOpId(e MigrateEvent) uint64 {
 	}
 	s.mu.RUnlock()
 	return opId
+}
+
+func (s *Store) getEvents() []*meta.MigrateEventInfo {
+	s.mu.RLock()
+	events := make([]*meta.MigrateEventInfo, 0, len(s.data.MigrateEvents))
+	for _, e := range s.data.MigrateEvents {
+		events = append(events, e.Clone())
+	}
+	s.mu.RUnlock()
+	return events
+}
+
+func (s *Store) getFailedDbPts(ownerNode uint64, status meta.PtStatus) []*meta.DbPtInfo {
+	s.mu.RLock()
+	ptInfos := s.data.GetFailedPtInfos(ownerNode, status)
+	s.mu.RUnlock()
+	return ptInfos
+}
+
+func (s *Store) getDbPtNumPerAliveNode() *map[uint64]uint32 {
+	nodePtNumMap := make(map[uint64]uint32)
+	aliveNodes := make(map[uint64]struct{})
+	s.mu.RLock()
+	for _, dataNode := range s.data.DataNodes {
+		if dataNode.Status == serf.StatusAlive {
+			aliveNodes[dataNode.ID] = struct{}{}
+		}
+	}
+	for db, _ := range s.data.PtView {
+		for _, ptInfo := range s.data.PtView[db] {
+			if _, ok := aliveNodes[ptInfo.Owner.NodeID]; ok {
+				nodePtNumMap[ptInfo.Owner.NodeID]++
+			}
+		}
+	}
+	s.mu.RUnlock()
+	return &nodePtNumMap
+}
+
+func (s *Store) shouldTakeOver() bool {
+	return s.data.TakeOverEnabled
+}
+
+func (s *Store) getDbPtsByDbname(db string) ([]*meta.DbPtInfo, error) {
+	s.mu.RLock()
+	ptInfos, err := s.data.GetPtInfosByDbname(db)
+	s.mu.RUnlock()
+	return ptInfos, err
+}
+
+func TransMeasurementInfos2Bytes(dataTypes []int64, rpInfos *meta.RetentionPolicyInfo) ([]byte, error) {
+	d := &meta.RpMeasurementsFieldsInfo{
+		MeasurementInfos: make([]*meta.MeasurementFieldsInfo, 0),
+	}
+	msts := rpInfos.Measurements
+	for mst, mstInfo := range msts {
+		info := &meta.MeasurementFieldsInfo{
+			MstName: mst,
+		}
+		info.TypeFields = mstInfo.FindMstInfos(dataTypes)
+		d.MeasurementInfos = append(d.MeasurementInfos, info)
+	}
+	return d.MarshalBinary()
+}
+
+func (s *Store) ExpandGroups() error {
+	val := &mproto.ExpandGroupsCommand{}
+	t := mproto.Command_ExpandGroupsCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_ExpandGroupsCommand_Command, val); err != nil {
+		return err
+	}
+
+	return s.ApplyCmd(cmd)
+}
+
+func (s *Store) updatePtVersion(db string, ptId uint32) error {
+	val := &mproto.UpdatePtVersionCommand{
+		Db: proto.String(db),
+		Pt: proto.Uint32(ptId),
+	}
+	t := mproto.Command_UpdatePtVersionCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_UpdatePtVersionCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return s.ApplyCmd(cmd)
+}
+
+func (s *Store) getPtVersion(db string, ptId uint32) uint64 {
+	s.mu.RLock()
+	ver := s.data.PtView[db][ptId].Ver
+	s.mu.RUnlock()
+	return ver
+}
+
+func (s *Store) getPtStatus(db string, ptId uint32) meta.PtStatus {
+	s.mu.RLock()
+	status := s.data.PtView[db][ptId].Status
+	s.mu.RUnlock()
+	return status
+}
+
+// locked by the caller
+func (s *Store) getDbPtsByNodeId(nodeId uint64) map[string][]uint32 {
+	dbPtIds := make(map[string][]uint32)
+	for db, ptInfos := range s.data.PtView {
+		for i := range ptInfos {
+			if ptInfos[i].Owner.NodeID != nodeId {
+				continue
+			}
+			if _, ok := dbPtIds[db]; !ok {
+				dbPtIds[db] = make([]uint32, 0, len(ptInfos))
+			}
+			dbPtIds[db] = append(dbPtIds[db], ptInfos[i].PtId)
+		}
+	}
+	return dbPtIds
 }

@@ -18,6 +18,7 @@ package strings
 
 import (
 	"strings"
+	"unsafe"
 
 	strings2 "github.com/openGemini/openGemini/open_src/github.com/savsgio/gotils/strings"
 )
@@ -59,4 +60,27 @@ func EqualInterface(i interface{}, s string) bool {
 		return false
 	}
 	return ss == s
+}
+
+// TODO: replace it when the go version upgrades 1.18
+func Clone(s string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	b := make([]byte, len(s))
+	copy(b, s)
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// SortIsEqual compares if two sorted strings are the equal
+func SortIsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

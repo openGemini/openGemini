@@ -20,7 +20,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/errno"
 	internal2 "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
@@ -135,10 +138,7 @@ func (r *SeriesKeysResponse) UnmarshalBinary(buf []byte) error {
 }
 
 func (r *SeriesKeysResponse) Error() error {
-	if r.Err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s", *r.Err)
+	return NormalizeError(r.Err)
 }
 
 type SeriesCardinalityRequest struct {
@@ -178,10 +178,7 @@ func (r *ExactCardinalityResponse) UnmarshalBinary(buf []byte) error {
 }
 
 func (r *ExactCardinalityResponse) Error() error {
-	if r.Err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s", *r.Err)
+	return NormalizeError(r.Err)
 }
 
 type ShowTagValuesRequest struct {
@@ -239,10 +236,34 @@ func (r *ShowTagValuesResponse) UnmarshalBinary(buf []byte) error {
 }
 
 func (r *ShowTagValuesResponse) Error() error {
-	if r.Err == nil {
+	return NormalizeError(r.Err)
+}
+
+func NormalizeError(errStr *string) error {
+	if errStr == nil {
 		return nil
 	}
-	return fmt.Errorf("%s", *r.Err)
+	errBytes := bytesutil.ToUnsafeBytes(*errStr)
+	errCode := encoding.UnmarshalUint16(errBytes[:2])
+	if errCode != 0 {
+		return errno.NewError(errno.Errno(errCode), bytesutil.ToUnsafeString(errBytes[2:]))
+	}
+	return fmt.Errorf("%s", bytesutil.ToUnsafeString(errBytes[2:]))
+}
+
+func MarshalError(e error) *string {
+	if e == nil {
+		return nil
+	}
+	var dst []byte
+	switch stdErr := e.(type) {
+	case *errno.Error:
+		dst = encoding.MarshalUint16(dst, uint16(stdErr.Errno()))
+		return proto.String(bytesutil.ToUnsafeString(dst) + e.Error())
+	default:
+		dst = encoding.MarshalUint16(dst, 0)
+		return proto.String(bytesutil.ToUnsafeString(dst) + e.Error())
+	}
 }
 
 func (r *ShowTagValuesResponse) GetTagValuesSlice() TablesTagSets {
@@ -330,10 +351,7 @@ func (r *GetShardSplitPointsResponse) UnmarshalBinary(buf []byte) error {
 }
 
 func (r *GetShardSplitPointsResponse) Error() error {
-	if r.Err == nil {
-		return nil
-	}
-	return fmt.Errorf("%s", *r.Err)
+	return NormalizeError(r.Err)
 }
 
 type CreateDataBaseRequest struct {

@@ -115,10 +115,11 @@ func Test_HttpSenderTransform(t *testing.T) {
 	processors = append(processors, httpSender)
 	executors := executor.NewPipelineExecutor(processors)
 
-	ec := make(chan error)
+	ec := make(chan error, 1)
 	go func() {
 		ec <- executors.Execute(context.Background())
 		close(ec)
+		close(opt.RowsChan)
 	}()
 	var closed bool
 	for {
@@ -191,6 +192,7 @@ func BenchmarkHttpSenderTransform(b *testing.B) {
 		go func() {
 			ec <- executors.Execute(context.Background())
 			close(ec)
+			close(opt.RowsChan)
 		}()
 		var closed bool
 		for {

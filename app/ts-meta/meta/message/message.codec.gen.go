@@ -1,12 +1,9 @@
 /*
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
  http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,6 +16,7 @@ package message
 import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 func (o *CreateNodeRequest) Marshal(buf []byte) ([]byte, error) {
@@ -149,11 +147,129 @@ func (o *ExecuteResponse) Instance() transport.Codec {
 	return &ExecuteResponse{}
 }
 
-func (o *GetShardInfoRequest) Marshal(buf []byte) ([]byte, error) {
+func (o *GetDownSampleInfoRequest) Marshal(buf []byte) ([]byte, error) {
 	var err error
-	buf = codec.AppendBytes(buf, o.Body)
 
 	return buf, err
+}
+
+func (o *GetDownSampleInfoRequest) Unmarshal(buf []byte) error {
+	return nil
+}
+
+func (o *GetDownSampleInfoRequest) Size() int {
+	size := 0
+
+	return size
+}
+
+func (o *GetDownSampleInfoRequest) Instance() transport.Codec {
+	return &GetDownSampleInfoRequest{}
+}
+
+func (o *GetDownSampleInfoResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *GetDownSampleInfoResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *GetDownSampleInfoResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *GetDownSampleInfoResponse) Instance() transport.Codec {
+	return &GetDownSampleInfoResponse{}
+}
+
+func (o *GetRpMstInfosRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, o.DbName)
+	buf = codec.AppendString(buf, o.RpName)
+	buf = codec.AppendInt64Slice(buf, o.DataTypes)
+
+	return buf, err
+}
+
+func (o *GetRpMstInfosRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.DbName = dec.String()
+	o.RpName = dec.String()
+	o.DataTypes = dec.Int64Slice()
+
+	return err
+}
+
+func (o *GetRpMstInfosRequest) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.DbName)
+	size += codec.SizeOfString(o.RpName)
+	size += codec.SizeOfInt64Slice(o.DataTypes)
+
+	return size
+}
+
+func (o *GetRpMstInfosRequest) Instance() transport.Codec {
+	return &GetRpMstInfosRequest{}
+}
+
+func (o *GetRpMstInfosResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *GetRpMstInfosResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *GetRpMstInfosResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *GetRpMstInfosResponse) Instance() transport.Codec {
+	return &GetRpMstInfosResponse{}
+}
+
+func (o *GetShardInfoRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBytes(buf, o.Body)
+
+	return buf, nil
 }
 
 func (o *GetShardInfoRequest) Unmarshal(buf []byte) error {
@@ -181,6 +297,7 @@ func (o *GetShardInfoRequest) Instance() transport.Codec {
 func (o *GetShardInfoResponse) Marshal(buf []byte) ([]byte, error) {
 	var err error
 	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendUint16(buf, uint16(o.ErrCode))
 	buf = codec.AppendString(buf, o.Err)
 
 	return buf, err
@@ -193,6 +310,7 @@ func (o *GetShardInfoResponse) Unmarshal(buf []byte) error {
 	var err error
 	dec := codec.NewBinaryDecoder(buf)
 	o.Data = dec.Bytes()
+	o.ErrCode = errno.Errno(dec.Uint16())
 	o.Err = dec.String()
 
 	return err
@@ -201,6 +319,7 @@ func (o *GetShardInfoResponse) Unmarshal(buf []byte) error {
 func (o *GetShardInfoResponse) Size() int {
 	size := 0
 	size += codec.SizeOfByteSlice(o.Data)
+	size += 2
 	size += codec.SizeOfString(o.Err)
 
 	return size
@@ -372,6 +491,7 @@ func (o *ReportResponse) Instance() transport.Codec {
 
 func (o *SnapshotRequest) Marshal(buf []byte) ([]byte, error) {
 	var err error
+	buf = codec.AppendInt(buf, o.Role)
 	buf = codec.AppendUint64(buf, o.Index)
 
 	return buf, err
@@ -383,6 +503,7 @@ func (o *SnapshotRequest) Unmarshal(buf []byte) error {
 	}
 	var err error
 	dec := codec.NewBinaryDecoder(buf)
+	o.Role = dec.Int()
 	o.Index = dec.Uint64()
 
 	return err
@@ -390,6 +511,7 @@ func (o *SnapshotRequest) Unmarshal(buf []byte) error {
 
 func (o *SnapshotRequest) Size() int {
 	size := 0
+	size += codec.SizeOfInt()
 	size += codec.SizeOfUint64()
 
 	return size
@@ -554,4 +676,193 @@ func (o *UserSnapshotResponse) Size() int {
 
 func (o *UserSnapshotResponse) Instance() transport.Codec {
 	return &UserSnapshotResponse{}
+}
+
+func (o *GetUserInfoRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendUint64(buf, o.Index)
+
+	return buf, err
+}
+
+func (o *GetUserInfoRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Index = dec.Uint64()
+
+	return err
+}
+
+func (o *GetUserInfoRequest) Size() int {
+	size := 0
+	size += codec.SizeOfUint64()
+
+	return size
+}
+
+func (o *GetUserInfoRequest) Instance() transport.Codec {
+	return &GetUserInfoRequest{}
+}
+
+func (o *GetUserInfoResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *GetUserInfoResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *GetUserInfoResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *GetUserInfoResponse) Instance() transport.Codec {
+	return &GetUserInfoResponse{}
+}
+
+func (o *GetMeasurementInfoRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, o.DbName)
+	buf = codec.AppendString(buf, o.RpName)
+	buf = codec.AppendString(buf, o.MstName)
+
+	return buf, err
+}
+
+func (o *GetMeasurementInfoRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.DbName = dec.String()
+	o.RpName = dec.String()
+	o.MstName = dec.String()
+
+	return err
+}
+
+func (o *GetMeasurementInfoRequest) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.DbName)
+	size += codec.SizeOfString(o.RpName)
+	size += codec.SizeOfString(o.MstName)
+
+	return size
+}
+
+func (o *GetMeasurementInfoRequest) Instance() transport.Codec {
+	return &GetMeasurementInfoRequest{}
+}
+
+func (o *GetMeasurementInfoResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *GetMeasurementInfoResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *GetMeasurementInfoResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *GetMeasurementInfoResponse) Instance() transport.Codec {
+	return &GetMeasurementInfoResponse{}
+}
+
+func (o *GetStreamInfoRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, o.Body)
+
+	return buf, err
+}
+
+func (o *GetStreamInfoRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Body = dec.Bytes()
+
+	return err
+}
+
+func (o *GetStreamInfoRequest) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Body)
+
+	return size
+}
+
+func (o *GetStreamInfoRequest) Instance() transport.Codec {
+	return &GetStreamInfoRequest{}
+}
+
+func (o *GetStreamInfoResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *GetStreamInfoResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *GetStreamInfoResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *GetStreamInfoResponse) Instance() transport.Codec {
+	return &GetStreamInfoResponse{}
 }

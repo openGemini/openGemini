@@ -28,6 +28,10 @@ type IteratorParams struct {
 	winIdx       [][2]int
 }
 
+func (i *IteratorParams) GetErr() error {
+	return i.err
+}
+
 type EndPointPair struct {
 	Chunk   Chunk
 	Ordinal int

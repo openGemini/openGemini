@@ -32,7 +32,9 @@ import (
 )
 
 const (
-	maxBlockSize = 64 * 1024 * 1024 // 64M
+	maxBlockSize  = 64 * 1024 * 1024 // 64M
+	retryInternal = 200 * time.Millisecond
+	maxRetry      = 10
 )
 
 var pool = bufferpool.NewByteBufferPool(0)
@@ -188,7 +190,7 @@ func (r *SnappyReader) readBlock() ([]byte, error) {
 	}
 
 	block := GetBuffer(int(size))
-	if err := r.read(block); err != nil {
+	if err := r.retryRead(block); err != nil {
 		if err == io.EOF {
 			return nil, r.SeekStart(r.location)
 		}
@@ -210,6 +212,52 @@ func (r *SnappyReader) read(b []byte) error {
 	}
 
 	return nil
+}
+
+func (r *SnappyReader) retryRead(b []byte) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = errno.NewError(errno.RecoverPanic, e).SetModule(errno.ModuleStat)
+		}
+	}()
+
+	retryCount := 0
+	var wait = func() bool {
+		if retryCount >= maxRetry {
+			return false
+		}
+		retryCount++
+		time.Sleep(retryInternal)
+		return true
+	}
+
+	tmp := b
+	readN := 0
+
+	for {
+		n, err := r.f.Read(tmp)
+		if err == io.EOF {
+			if !wait() {
+				return errno.NewError(errno.ShortRead, n, len(b))
+			}
+			continue
+		}
+
+		if err != nil {
+			return err
+		}
+
+		readN += n
+		if readN != len(b) {
+			tmp = tmp[n:]
+			if !wait() {
+				return errno.NewError(errno.ShortRead, readN, len(b))
+			}
+			continue
+		}
+
+		return nil
+	}
 }
 
 func (r *SnappyReader) SeekStart(location int64) error {

@@ -16,6 +16,10 @@ limitations under the License.
 
 package statistics
 
+import (
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
+)
+
 type Statistics interface {
 	BuildAccumulator()
 	AssignName()
@@ -166,6 +170,16 @@ func CollectExecutorStatistics(buffer []byte) ([]byte, error) {
 	valueMap := ExecutorStat.Report()
 	buffer = AddPointToBuffer(ExecutorStat.name, ExecutorStat.tags, valueMap, buffer)
 	return buffer, nil
+}
+
+func CollectExecutorStatisticsOps() []opsStat.OpsStatistic {
+	valueMap := ExecutorStat.Report()
+	return []opsStat.OpsStatistic{{
+		Name:   ExecutorStat.name,
+		Tags:   ExecutorStat.tags,
+		Values: valueMap,
+	},
+	}
 }
 
 func CreateExecutorWithShardKey(buffer []byte) ([]byte, error) {

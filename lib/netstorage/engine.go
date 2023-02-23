@@ -25,8 +25,10 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"go.uber.org/zap"
 )
 
 type NewEngineFun func(dataPath, walPath string, options EngineOptions, ctx *metaclient.LoadCtx) (Engine, error)
@@ -58,7 +60,7 @@ func GetNewEngineFunction(entType string) NewEngineFun {
 }
 
 type Engine interface {
-	Open(ptIds []uint32, durationInfos map[uint64]*meta.ShardDurationInfo) error
+	Open(durationInfos map[uint64]*meta.ShardDurationInfo, client metaclient.MetaClient) error
 	Close() error
 	ForceFlush()
 	SetReadOnly(readonly bool)
@@ -67,13 +69,14 @@ type Engine interface {
 	DeleteIndex(db string, pt uint32, shardID uint64) error
 	ExpiredShards() []*meta.ShardIdentifier
 	ExpiredIndexes() []*meta.IndexIdentifier
-
 	FetchShardsNeedChangeStore() ([]*meta.ShardIdentifier, []*meta.ShardIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
 
 	CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo) error
 	WriteRows(db, rp string, ptId uint32, shardID uint64, points []influx.Row, binaryRows []byte) error
 	CreateDBPT(db string, pt uint32)
+
+	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 
 	GetShardSplitPoints(db string, ptId uint32, shardID uint64, idxes []int64) ([]string, error)
 
@@ -98,6 +101,25 @@ type Engine interface {
 
 	UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
 
+	PreOffload(db string, ptId uint32) error
+	RollbackPreOffload(db string, ptId uint32) error
+	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta2.ShardDurationInfo, client metaclient.MetaClient) error
+	Offload(db string, ptId uint32) error
+	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, client metaclient.MetaClient) error
+
 	SysCtrl(req *SysCtrlRequest) error
 	Statistics(buffer []byte) ([]byte, error)
+
+	UpdateStoreDownSamplePolicies(info *meta.DownSamplePolicyInfo, ident string)
+	ResetDownSampleFlag()
+	RemoveDeadDownSamplePolicy()
+	GetShardDownSamplePolicyInfos(meta interface {
+		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
+	}) ([]*meta.ShardDownSamplePolicyInfo, error)
+	GetDownSamplePolicy(key string) *meta.StoreDownSamplePolicy
+	StartDownSampleTask(info *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {
+		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
+	}) error
+	UpdateDownSampleInfo(policies *meta2.DownSamplePoliciesInfoWithDbRp)
+	UpdateShardDownSampleInfo(infos *meta2.ShardDownSampleUpdateInfos)
 }

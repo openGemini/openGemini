@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -61,7 +62,7 @@ func (s *shard) CreateLogicalPlan(ctx context.Context, sources influxql.Sources,
 	defer tracing.Finish(spanCursor)
 
 	if atomic.LoadInt32(&s.cacheClosed) > 0 {
-		return nil, ErrShardClosed
+		return nil, errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
 	}
 	schema.Options().(*query.ProcessorOptions).Sources = sources
 	srcCursors := make([][]comm.KeyCursor, 0, len(sources))
@@ -669,7 +670,7 @@ func (r *ChunkReader) readChunk() (executor.Chunk, error) {
 
 		name := r.cursor[r.cursorPos].Name()
 		ck := r.ResultChunkPool.GetChunk()
-		ck.SetName(name)
+		ck.SetName(influx.GetOriginMstName(name))
 		ck.(*executor.ChunkImpl).Record = rec
 		tracing.SpanElapsed(r.transSpan, func() {
 			err = r.transToChunk(rec, ck)
@@ -717,7 +718,7 @@ func (r *ChunkReader) readChunkByPreAgg() (executor.Chunk, error) {
 		if err != nil {
 			return nil, err
 		}
-		ck.SetName(name)
+		ck.SetName(influx.GetOriginMstName(name))
 		rec = nil
 		if ck.Len() >= r.schema.Options().(*query.ProcessorOptions).ChunkSize {
 			executor.IntervalIndexGen(ck, *r.schema.Options().(*query.ProcessorOptions))
@@ -866,13 +867,12 @@ func (r *ChunkReader) Create(plan executor.LogicalPlan, opt query.ProcessorOptio
 func AppendColumnTimes(bitmap []bool, column executor.Column, columnTimes []int64, recCol *record.ColVal) {
 	if recCol.NilCount == 0 {
 		column.AppendColumnTimes(columnTimes...)
-		return
-	}
-	if len(columnTimes) > 0 && recCol.NilCount != recCol.Length() {
+	} else if len(columnTimes) > 0 && recCol.NilCount != recCol.Length() {
 		for j := range columnTimes {
 			if bitmap[j] {
 				column.AppendColumnTimes(columnTimes[j])
 			}
 		}
 	}
+
 }

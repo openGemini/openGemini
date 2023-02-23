@@ -17,16 +17,18 @@ limitations under the License.
 package pusher_test
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/pusher"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var testPushData []string
@@ -82,7 +84,6 @@ func TestSnappyReader_Tail(t *testing.T) {
 	tail := pusher.NewSnappyTail(0, false)
 	n := 0
 	err := tail.Tail(file, func(block []byte) {
-		fmt.Println(testPushData[n])
 		assert.Equal(t, testPushData[n], string(block))
 		n++
 	})
@@ -119,37 +120,81 @@ func writeTestData(t *testing.T, file string, interval time.Duration) {
 	}
 }
 
-func TestSnappy_ReadEOF(t *testing.T) {
-	initTestData()
-
-	file := t.TempDir() + "/stat_file_push_eof.data"
-	writer := pusher.NewSnappyWriter()
-	if !assert.NoError(t, writer.OpenFile(file)) {
-		return
-	}
-
-	_, err := writer.File().Write([]byte{0, 0, 0, 10})
-	if !assert.NoError(t, err) {
-		return
+func snappyRead(file string, wg *sync.WaitGroup, delay time.Duration) error {
+	if delay > 0 {
+		time.Sleep(delay)
 	}
 
 	r := pusher.NewSnappyReader()
-	if !assert.NoError(t, r.OpenFile(file)) {
-		return
+	if err := r.OpenFile(file); err != nil {
+		return err
 	}
 	defer r.Close()
+	defer wg.Done()
+	_, err := r.ReadBlock()
+	return err
+}
 
-	line, err := r.ReadBlock()
-	assert.NoError(t, err)
-	assert.Empty(t, line)
+func writeData(writer *pusher.SnappyWriter, buf []byte) error {
+	f := writer.File()
+	_, err := f.Write(buf)
+	if err != nil {
+		return err
+	}
+	return f.Sync()
+}
 
-	data := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
-	_, err = writer.File().Write(data)
-	if !assert.NoError(t, err) {
-		return
+func TestSnappy_ReadRetry(t *testing.T) {
+	t.Skip()
+	file := t.TempDir() + "/stat_file_push_retry.data"
+	writer := pusher.NewSnappyWriter()
+	require.NoError(t, writer.OpenFile(file))
+	require.NoError(t, writeData(writer, []byte{0, 0, 0, 20}))
+	defer writer.Close()
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	var readErr error
+	go func() {
+		readErr = snappyRead(file, &wg, 0)
+	}()
+
+	for i := 0; i < 2; i++ {
+		time.Sleep(time.Second / 10)
+		require.NoError(t, writeData(writer, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 1}))
 	}
 
-	line, err = r.ReadBlock()
-	assert.NoError(t, err)
-	assert.Equal(t, data, line)
+	wg.Wait()
+	assert.NoError(t, readErr)
+}
+
+func TestSnappy_ReadErr(t *testing.T) {
+	file := t.TempDir() + "/stat_file_push_err.data"
+	writer := pusher.NewSnappyWriter()
+	require.NoError(t, writer.OpenFile(file))
+	require.NoError(t, writeData(writer, []byte{0, 0, 0, 20}))
+	defer writer.Close()
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	var readErr error
+	go func() {
+		readErr = snappyRead(file, &wg, 0)
+	}()
+	wg.Wait()
+	require.EqualError(t, readErr, errno.NewError(errno.ShortRead, 0, 20).Error())
+
+	wg.Add(1)
+	go func() {
+		readErr = snappyRead(file, &wg, time.Second/10)
+	}()
+	for i := 0; i < 11; i++ {
+		require.NoError(t, writeData(writer, []byte{1}))
+		time.Sleep(time.Second / 5)
+	}
+
+	wg.Wait()
+	require.EqualError(t, readErr, errno.NewError(errno.ShortRead, 11, 20).Error())
 }

@@ -1761,7 +1761,7 @@ func ParseChunkTags(s string) *executor.ChunkTags {
 	var ss []string
 	for _, kv := range strings.Split(s, ",") {
 		a := strings.Split(kv, "=")
-		m = append(m, influx.Tag{a[0], a[1]})
+		m = append(m, influx.Tag{a[0], a[1], false})
 		ss = append(ss, a[0])
 	}
 	return executor.NewChunkTags(m, ss)

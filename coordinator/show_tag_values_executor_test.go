@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -158,6 +159,10 @@ type mockMC struct {
 	metaclient.MetaClient
 }
 
+func (m *mockMC) NewDownSamplePolicy(string, string, *meta2.DownSamplePolicyInfo) error {
+	return nil
+}
+
 func (m *mockMC) QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error) {
 	if database == "db_nil" {
 		return nil, nil
@@ -220,16 +225,26 @@ type mockME struct {
 	MetaExecutor
 }
 
-func (m *mockME) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32)) error {
+func (m *mockME) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32, hasErr *bool) error) error {
 	n := 4
 	wg := sync.WaitGroup{}
 	wg.Add(n)
+	hasErr := false
+	var mu sync.RWMutex
+	errs := make([]error, n)
 	for i := 0; i < n; i++ {
 		go func(nodeID int) {
-			fn(uint64(nodeID), nil)
+			mu.Lock()
+			errs[nodeID] = fn(uint64(nodeID), nil, &hasErr)
+			mu.Unlock()
 			wg.Done()
 		}(i)
 	}
 	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }

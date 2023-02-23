@@ -27,7 +27,7 @@ import (
 
 var readCacheInstance *ReadCacheInstance
 var mu sync.Mutex
-var totalLimitSize int64 = 2 * 1024 * 1024 * 1024
+var totalLimitSize uint64 = 2 * 1024 * 1024 * 1024
 var tempFactor = 0.01
 
 type ReadCacheInstance struct {
@@ -37,8 +37,8 @@ type ReadCacheInstance struct {
 	closed         chan int
 }
 
-func SetCacheLimitSize(size int) {
-	totalLimitSize = int64(size)
+func SetCacheLimitSize(size uint64) {
+	totalLimitSize = size
 }
 
 // GetReadCacheIns Get a single instance of readCache, if you want to change totalLimitSize, please use Resize method.
@@ -47,7 +47,7 @@ func GetReadCacheIns() *ReadCacheInstance {
 		mu.Lock()
 		defer mu.Unlock()
 		if readCacheInstance == nil {
-			readCacheInstance = newCacheInstance(totalLimitSize, tempFactor)
+			readCacheInstance = newCacheInstance(int64(totalLimitSize), tempFactor)
 		}
 	}
 	return readCacheInstance

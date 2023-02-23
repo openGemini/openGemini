@@ -19,10 +19,9 @@ package executor
 import (
 	"bytes"
 	"context"
-	"sort"
-	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/binarysearch"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -76,7 +75,7 @@ func NewSlidingWindowTransform(
 		nextChunkCh:   make(chan struct{}),
 		reduceChunkCh: make(chan struct{}),
 		iteratorParam: &IteratorParams{},
-		aggLogger:     logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "SlidingWindowTransform"), zap.Uint64("trace_id", opt.Traceid)),
+		aggLogger:     logger.NewLogger(errno.ModuleQueryEngine),
 		chunkPool:     NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
 	}
 
@@ -138,59 +137,35 @@ func (trans *SlidingWindowTransform) Work(ctx context.Context) error {
 		trans.Close()
 	}()
 
-	errs := NewErrs(len(trans.Inputs) + 2)
-	errSignals := NewErrorSignals(len(trans.Inputs) + 2)
-
-	closeErrs := func() {
-		errs.Close()
-		errSignals.Close()
-	}
-
-	var wg sync.WaitGroup
+	errs := errno.NewErrsPool().Get()
+	errs.Init(len(trans.Inputs)+1, trans.Close)
+	defer func() {
+		errno.NewErrsPool().Put(errs)
+	}()
 
 	runnable := func(in int) {
 		defer func() {
 			tracing.Finish(trans.span)
 			if e := recover(); e != nil {
 				err := errno.NewError(errno.RecoverPanic, e)
-				trans.aggLogger.Error(err.Error())
+				trans.aggLogger.Error(err.Error(),
+					zap.String("query", "SlidingWindowTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
 				errs.Dispatch(err)
-				errSignals.Dispatch()
+			} else {
+				errs.Dispatch(nil)
 			}
-			defer wg.Done()
 		}()
 
 		trans.running(ctx, in)
 	}
 
 	for i := range trans.Inputs {
-		wg.Add(1)
 		go runnable(i)
 	}
 
-	wg.Add(1)
-	go trans.reduce(ctx, &wg, errs, errSignals)
+	go trans.reduce(ctx, errs)
 
-	monitoring := func() {
-		errSignals.Wait(trans.Close)
-	}
-	go monitoring()
-
-	wg.Wait()
-	closeErrs()
-
-	var err error
-	for e := range errs.ch {
-		if err == nil {
-			err = e
-		}
-	}
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return errs.Err()
 }
 
 func (trans *SlidingWindowTransform) running(ctx context.Context, in int) {
@@ -237,14 +212,14 @@ func (trans *SlidingWindowTransform) calculateWindowIndex(c Chunk) {
 			te = c.TagIndex()[i+1]
 		}
 		for j, w := range trans.slideWindow {
-			start = UpperBoundInt64(times[ts:te], w)
+			start = binarysearch.UpperBoundInt64Ascending(times[ts:te], w)
 			if start == -1 {
 				trans.winIdx[i*trans.slidingNum+j][0] = start
 				continue
 			} else {
 				trans.winIdx[i*trans.slidingNum+j][0] = ts + start
 			}
-			end = LowerBoundInt64(times[ts:te], w+windowDuration)
+			end = binarysearch.LowerBoundInt64Ascending(times[ts:te], w+windowDuration)
 			if end == -1 {
 				trans.winIdx[i*trans.slidingNum+j][1] = end
 			} else {
@@ -295,16 +270,17 @@ func (trans *SlidingWindowTransform) unreadChunk(c Chunk) {
 }
 
 func (trans *SlidingWindowTransform) reduce(
-	_ context.Context, wg *sync.WaitGroup, errs *Errs, errSignals *ErrorSignals,
+	_ context.Context, errs *errno.Errs,
 ) {
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.aggLogger.Error(err.Error())
+			trans.aggLogger.Error(err.Error(),
+				zap.String("query", "SlidingWindowTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
 			errs.Dispatch(err)
-			errSignals.Dispatch()
+		} else {
+			errs.Dispatch(nil)
 		}
-		defer wg.Done()
 	}()
 
 	reduceStart := func() {
@@ -473,22 +449,4 @@ func (trans *SlidingWindowTransform) GetInputNumber(port Port) int {
 		}
 	}
 	return INVALID_NUMBER
-}
-
-// UpperBoundInt64 looks for the first element in the ordered data that is greater than or equal to the target value.
-// return the index of that element if it exists, otherwise return -1.
-func UpperBoundInt64(a []int64, x int64) int {
-	if len(a) == 0 || a[len(a)-1] < x {
-		return -1
-	}
-	return sort.Search(len(a), func(i int) bool { return a[i] >= x })
-}
-
-// LowerBoundInt64 looks for the first element in the ordered data that is smaller than the target value.
-// return the index of that element if it exists, otherwise return -1.
-func LowerBoundInt64(a []int64, x int64) int {
-	if len(a) == 0 || a[0] >= x {
-		return -1
-	}
-	return sort.Search(len(a), func(i int) bool { return a[i] >= x }) - 1
 }

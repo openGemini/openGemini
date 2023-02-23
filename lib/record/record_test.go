@@ -801,8 +801,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase2Descend(t *testing.T) {
 }
 
 // merge with all time of oldRec is equal to the time of newRec
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase3(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -842,8 +843,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase3(t *testing.T) {
 }
 
 // merge with all time of oldRec is equal to the time of newRec
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase3Descend(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -883,8 +885,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase3Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time     [32, 33, 34, 45, 46, 47, 48]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase4(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -923,8 +926,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase4(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time     [47, 46, 45, 34, 33, 32, 31]
-//   new.time [48, 47, 46, 45, 34, 33, 32]
+//
+//	old.time     [47, 46, 45, 34, 33, 32, 31]
+//	new.time [48, 47, 46, 45, 34, 33, 32]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase4Descend(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -963,8 +967,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase4Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time     [32, 33, 34, 45, 46, 47, 48, 49]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48, 49]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase5(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1003,8 +1008,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase5(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time         [47, 46, 45, 34, 33, 32, 31]
-//   new.time [49, 48, 47, 46, 45, 34, 33, 32]
+//
+//	old.time         [47, 46, 45, 34, 33, 32, 31]
+//	new.time [49, 48, 47, 46, 45, 34, 33, 32]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase5Descend(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1043,8 +1049,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase5Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time     [32, 33, 34, 45, 46,    48, 49, 50]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46,    48, 49, 50]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase6(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1083,8 +1090,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase6(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time              [47, 46, 45, 34, 33, 32, 31]
-//   new.time [50, 49, 48,      46, 45, 34, 33, 32]
+//
+//	old.time              [47, 46, 45, 34, 33, 32, 31]
+//	new.time [50, 49, 48,      46, 45, 34, 33, 32]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase6Descend(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1123,8 +1131,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase6Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [30,    32, 33, 34, 45, 46, 47]
-//   new.time     [31,    33, 34, 45, 46,    48, 49, 50]
+//
+//	old.time [30,    32, 33, 34, 45, 46, 47]
+//	new.time     [31,    33, 34, 45, 46,    48, 49, 50]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase7(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1163,8 +1172,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase7(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time             [47, 46, 45, 34, 33, 32,   30]
-//   new.time [50, 49, 48,     46, 45, 34, 33,    31]
+//
+//	old.time             [47, 46, 45, 34, 33, 32,   30]
+//	new.time [50, 49, 48,     46, 45, 34, 33,    31]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase7Descend(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1203,8 +1213,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase7Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [30,    32, 33, 34, 45, 46, 47]
-//   new.time     [31,    33, 34, 45, 46]
+//
+//	old.time [30,    32, 33, 34, 45, 46, 47]
+//	new.time     [31,    33, 34, 45, 46]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase8(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1243,8 +1254,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase8(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [47, 46, 45, 34, 33, 32,   30]
-//   new.time     [46, 45, 34, 33,    31]
+//
+//	old.time [47, 46, 45, 34, 33, 32,   30]
+//	new.time     [46, 45, 34, 33,    31]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase8Descend(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1283,8 +1295,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase8Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [30,    32, 33, 34, 45, 46,   48]
-//   new.time     [31,    33, 34, 45,    47]
+//
+//	old.time [30,    32, 33, 34, 45, 46,   48]
+//	new.time     [31,    33, 34, 45,    47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase9(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1323,8 +1336,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase9(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time     [31,    33, 34, 45,    47]
-//   new.time [30,    32, 33, 34, 45, 46,   48]
+//
+//	old.time     [31,    33, 34, 45,    47]
+//	new.time [30,    32, 33, 34, 45, 46,   48]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase10(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1363,8 +1377,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase10(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time 	  [31,    33, 34, 45, 46,    48, 49, 50]
-//   new.time [30,    32, 33, 34, 45, 46, 47]
+//
+//	old.time 	  [31,    33, 34, 45, 46,    48, 49, 50]
+//	new.time [30,    32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase11(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1403,8 +1418,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase11(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time 	 [31,    33, 34, 45, 46,    48, 49, 50]
-//   new.time [30,    32, 33, 34, 45, 46, 47]
+//
+//	old.time 	 [31,    33, 34, 45, 46,    48, 49, 50]
+//	new.time [30,    32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase12(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1443,8 +1459,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase12(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time     [32, 33, 34, 45, 46,    48, 49, 50]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time     [32, 33, 34, 45, 46,    48, 49, 50]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase13(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1483,8 +1500,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase13(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time     [32, 33, 34, 45, 46, 47, 48, 49]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time     [32, 33, 34, 45, 46, 47, 48, 49]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase14(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1523,8 +1541,9 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase14(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time     [32, 33, 34, 45, 46, 47, 48]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time     [32, 33, 34, 45, 46, 47, 48]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase15(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1732,8 +1751,9 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2Descend(t *testing.T) {
 }
 
 // merge with all time of oldRec is equal to the time of newRec
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3(t *testing.T) {
 	oldSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1785,8 +1805,9 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3(t *testing.T) {
 }
 
 // merge with all time of oldRec is equal to the time of newRec
-//   old.time [47, 46, 45, 34, 33, 32, 31]
-//   new.time [47, 46, 45, 34, 33, 32, 31]
+//
+//	old.time [47, 46, 45, 34, 33, 32, 31]
+//	new.time [47, 46, 45, 34, 33, 32, 31]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3Descend(t *testing.T) {
 	oldSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1838,8 +1859,9 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3Descend(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time     [32, 33, 34, 45, 46, 47, 48]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase4(t *testing.T) {
 	oldSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1890,8 +1912,9 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase4(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time     [32, 33, 34, 45, 46, 47, 48, 49]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48, 49]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase5(t *testing.T) {
 	oldSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -1939,8 +1962,9 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase5(t *testing.T) {
 }
 
 // merge with time of oldRec and newRec like below
-//   old.time         [47, 46, 45, 34, 33, 32, 31]
-//   new.time [49, 48, 47, 46, 45, 34, 33, 32]
+//
+//	old.time         [47, 46, 45, 34, 33, 32, 31]
+//	new.time [49, 48, 47, 46, 45, 34, 33, 32]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase5Descend(t *testing.T) {
 	oldSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -2325,8 +2349,9 @@ func TestMergeRecordLimitRowsCase5(t *testing.T) {
 
 // limitRows = 3, newRows = 7, oldRows = 7, mergedRows = 7
 // merge with all time of oldRec is equal to the time of newRec
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordLimitRowsCase6(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -2393,8 +2418,9 @@ func TestMergeRecordLimitRowsCase6(t *testing.T) {
 
 // limitRows = 1000, newRows = 7, oldRows = 7, mergedRows = 7
 // merge with all time of oldRec is equal to the time of newRec
-//   old.time [31, 32, 33, 34, 45, 46, 47]
-//   new.time [31, 32, 33, 34, 45, 46, 47]
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordLimitRowsCase7(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -2740,11 +2766,11 @@ func TestSortRecord1(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sortAux := &record.SortAux{}
-	sortAux.InitRecord(rec.Schemas())
-	rec.SortAndDedupe(sortAux)
+	sh := &record.SortHelper{}
+	aux := newAux(rec.Times(), rec.Schema)
+	sh.Sort(rec, aux)
 
-	if !testRecsEqual(sortAux.SortRec, expRec) {
+	if !testRecsEqual(aux.SortRec, expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2772,11 +2798,11 @@ func TestSortRecord2(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sortAux := &record.SortAux{}
-	sortAux.InitRecord(rec.Schemas())
-	rec.SortAndDedupe(sortAux)
+	sh := &record.SortHelper{}
+	aux := newAux(rec.Times(), rec.Schema)
+	sh.Sort(rec, aux)
 
-	if !testRecsEqual(sortAux.SortRec, expRec) {
+	if !testRecsEqual(aux.SortRec, expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2797,11 +2823,11 @@ func TestSortRecord3(t *testing.T) {
 		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
 	sort.Sort(rec)
 
-	sortAux := &record.SortAux{}
-	sortAux.InitRecord(rec.Schemas())
-	rec.SortAndDedupe(sortAux)
+	sh := &record.SortHelper{}
+	aux := newAux(rec.Times(), rec.Schema)
+	sh.Sort(rec, aux)
 
-	if !testRecsEqual(sortAux.SortRec, rec) {
+	if !testRecsEqual(aux.SortRec, rec) {
 		t.Fatal("error result")
 	}
 }
@@ -2829,11 +2855,11 @@ func TestSortRecord4(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sortAux := &record.SortAux{}
-	sortAux.InitRecord(rec.Schemas())
-	rec.SortAndDedupe(sortAux)
+	sh := &record.SortHelper{}
+	aux := newAux(rec.Times(), rec.Schema)
+	sh.Sort(rec, aux)
 
-	if !testRecsEqual(sortAux.SortRec, expRec) {
+	if !testRecsEqual(aux.SortRec, expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2861,11 +2887,11 @@ func TestSortRecord5(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sortAux := &record.SortAux{}
-	sortAux.InitRecord(rec.Schemas())
-	rec.SortAndDedupe(sortAux)
+	sh := &record.SortHelper{}
+	aux := newAux(rec.Times(), rec.Schema)
+	sh.Sort(rec, aux)
 
-	if !testRecsEqual(sortAux.SortRec, expRec) {
+	if !testRecsEqual(aux.SortRec, expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2893,11 +2919,11 @@ func TestSortRecord6(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sortAux := &record.SortAux{}
-	sortAux.InitRecord(rec.Schemas())
-	rec.SortAndDedupe(sortAux)
+	sh := &record.SortHelper{}
+	aux := newAux(rec.Times(), rec.Schema)
+	sh.Sort(rec, aux)
 
-	if !testRecsEqual(sortAux.SortRec, expRec) {
+	if !testRecsEqual(aux.SortRec, expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2985,7 +3011,7 @@ func TestRecordPoolGetBySchema(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	pool := record.NewCircularRecordPool(record.NewRecordPool(), 3, schema, false)
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 3, schema, false)
 	re := pool.GetBySchema(changeSchema)
 	assert.Equal(t, re.Schema, changeSchema, "invalid schema")
 }
@@ -2999,7 +3025,7 @@ func TestRecordPoolPutIn(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
 
-	pool := record.NewCircularRecordPool(record.NewRecordPool(), 4, schema, false)
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
 	pool.Get()
 	pool.Get()
 	pool.PutRecordInCircularPool()
@@ -3043,37 +3069,53 @@ func TestSliceFromRecordWithRecMetaTimes(t *testing.T) {
 	assert.Equal(t, r.RecMeta.Times[3], []int64{1})
 }
 
-func TestGetFirstLastImp(t *testing.T) {
-	schema := record.Schemas{
+func TestRecordResizeBySchema(t *testing.T) {
+	schema1 := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	schema2 := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 1, schema1, true)
+	rec1 := pool.Get()
+	assert.Equal(t, rec1.Len(), 2)
+	rec2 := pool.GetBySchema(schema2)
+	rec2.ResizeBySchema(schema2, true)
+	assert.Equal(t, rec2.Len(), 3)
+}
+
+func TestRecUpdateFunc(t *testing.T) {
+	schema1 := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
 		record.Field{Type: influx.Field_Type_Float, Name: "float"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	rec := genRowRec(schema,
-		[]int{0, 1, 1}, []int64{0, 1, 2},
-		[]int{0, 1, 1}, []float64{0, 2.2, 5.3},
-		[]int{0, 1, 1}, []string{"", "hi", "world"},
-		[]int{0, 1, 1}, []bool{false, true, true},
-		[]int64{1, 1, 1})
-	rec.RecMeta = &record.RecMeta{}
-	rec.RecMeta.Times = make([][]int64, len(schema)-1)
-	rec.RecMeta.Times[0] = []int64{0, 1, 1}
-	rec.RecMeta.Times[1] = []int64{0, 1, 1}
-	rec.RecMeta.Times[2] = []int64{0, 1, 1}
-	rec.RecMeta.Times[3] = []int64{0, 1, 1}
-	r1 := record.NewRecord(schema, true)
-	r1.RecMeta = &record.RecMeta{}
-	r1.RecMeta.Times = make([][]int64, len(schema)-1)
-	record.GetRecordIntegerFirst(r1, rec, 0)
-	record.GetRecordFloatFirst(r1, rec, 1)
-	record.GetRecordBooleanFirst(r1, rec, 3)
-	r2 := record.NewRecord(schema, true)
-	r2.RecMeta = &record.RecMeta{}
-	r2.RecMeta.Times = make([][]int64, len(schema)-1)
-	record.GetRecordIntegerLast(r2, rec, 0)
-	record.GetRecordFloatFirst(r2, rec, 1)
-	record.GetRecordBooleanLast(r2, rec, 3)
-	assert.Equal(t, r1.RecMeta.Times, r2.RecMeta.Times)
+	iRec := record.NewRecord(schema1, true)
+	iRec.AppendIntervalEmptyRow(1, true)
+	rec := record.NewRecord(schema1, true)
+	rec.AppendIntervalEmptyRow(1, true)
+	record.UpdateIntegerFirst(iRec, rec, 0, 0, 0, 0)
+	record.UpdateIntegerLast(iRec, rec, 0, 0, 0, 0)
+	record.UpdateFloatFirst(iRec, rec, 1, 1, 0, 0)
+	record.UpdateFloatLast(iRec, rec, 1, 1, 0, 0)
+	record.UpdateBooleanFirst(iRec, rec, 2, 2, 0, 0)
+	record.UpdateBooleanLast(iRec, rec, 2, 2, 0, 0)
+	record.UpdateStringFirst(iRec, rec, 3, 3, 0, 0)
+	record.UpdateStringLast(iRec, rec, 3, 3, 0, 0)
+}
+
+func BenchmarkRecord_Get(b *testing.B) {
+	p := record.NewRecordPool(record.UnknownPool)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 100; j++ {
+			p.Get()
+		}
+	}
 }

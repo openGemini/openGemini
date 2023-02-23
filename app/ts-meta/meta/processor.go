@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
 
@@ -37,13 +38,18 @@ type MetaStoreInterface interface {
 	peers() []string
 	createDataNode(httpAddr, tcpAddr string) ([]byte, error)
 	afterIndex(index uint64) <-chan struct{}
-	getSnapshot() []byte
+	getSnapshot(role metaclient.Role) []byte
 	isCandidate() bool
 	Join(n *meta.NodeInfo) (*meta.NodeInfo, error)
 	apply(b []byte) error
 	index() uint64
 	UpdateLoad(b []byte) error
 	getShardAuxInfo(body []byte) ([]byte, error)
+	GetDownSampleInfo() ([]byte, error)
+	GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, error)
+	GetUserInfo() ([]byte, error)
+	getStreamInfo() ([]byte, error)
+	getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error)
 }
 
 type RPCHandler interface {

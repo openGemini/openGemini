@@ -25,7 +25,7 @@ import (
 	"github.com/openGemini/openGemini/services/castor"
 )
 
-func Test_Castor_service_not_open(t *testing.T) {
+func Test_Castor_Service_NotOpen(t *testing.T) {
 	call := &influxql.Call{Name: "castor"}
 	heimOp := op.NewCastorOp(nil)
 	if err := heimOp.Compile(call); err == nil || !errno.Equal(err, errno.ServiceNotEnable) {
@@ -33,7 +33,7 @@ func Test_Castor_service_not_open(t *testing.T) {
 	}
 }
 
-func Test_Castor_service_args_num_not_correct(t *testing.T) {
+func Test_Castor_Service_ArgsNumNotCorrect(t *testing.T) {
 	srv, _, err := castor.MockCastorService(6666)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func Test_Castor_service_args_num_not_correct(t *testing.T) {
 	}
 }
 
-func Test_Castor_service_args_type_not_correct(t *testing.T) {
+func Test_Castor_Service_ArgsTypeNotCorrect(t *testing.T) {
 	srv, _, err := castor.MockCastorService(6666)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func Test_Castor_service_args_type_not_correct(t *testing.T) {
 	}
 }
 
-func Test_Castor_service_algo_type_not_correct(t *testing.T) {
+func Test_Castor_Service_AlgoTypeNotCorrect(t *testing.T) {
 	srv, _, err := castor.MockCastorService(6666)
 	if err != nil {
 		t.Fatal(err)

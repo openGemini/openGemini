@@ -88,11 +88,15 @@ func NewPreparedStatement(stmt *influxql.SelectStatement, opt hybridqp.Options,
 		opt:       opt,
 		qc:        shards,
 		creator:   defaultQueryExecutorBuilderCreator,
-		optimizer: buildHeuristicPlanner,
+		optimizer: BuildHeuristicPlanner,
 		columns:   columns,
 		maxPointN: MaxPointN,
 		now:       now,
 	}
+}
+
+func (p *preparedStatement) Statement() *influxql.SelectStatement {
+	return p.stmt
 }
 
 func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, error) {
@@ -108,9 +112,11 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 	}
 	opt.EnableBinaryTreeMerge = GetEnableBinaryTreeMerge()
 
-	schema := NewQuerySchemaWithSources(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt)
+	rewriteVarfName(p.stmt.Fields)
 
-	plan, err := buildSender(ctx, p.stmt, p.qc, schema)
+	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource)
+
+	plan, err := buildExtendedPlan(ctx, p.stmt, p.qc, schema)
 
 	if err != nil {
 		return nil, err
@@ -146,6 +152,14 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 	return executorBuilder.Build(best)
 }
 
+func rewriteVarfName(fields influxql.Fields) {
+	for i := range fields {
+		if f, ok := fields[i].Expr.(*influxql.VarRef); ok && len(fields[i].Alias) == 0 {
+			fields[i].Alias = f.Alias
+		}
+	}
+}
+
 func (p *preparedStatement) ChangeCreator(creator hybridqp.ExecutorBuilderCreator) {
 	p.creator = creator
 }
@@ -162,38 +176,41 @@ func (p *preparedStatement) Close() error {
 	return p.qc.Close()
 }
 
-func buildHeuristicPlanner() hybridqp.Planner {
-	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(RULE_SUBQUERY)
-	pb.AddRuleCatagory(RULE_PUSHDOWN_LIMIT)
-	pb.AddRuleCatagory(RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(RULE_SPREAD_AGG)
-	pb.AddRuleCatagory(RULE_HEIMADLL_PUSHDOWN)
-	planner := NewHeuPlannerImpl(pb.Build())
-
-	// subquery
-	planner.AddRule(NewAggPushDownToSubQueryRule(""))
-	planner.AddRule(NewAggToProjectInSubQueryRule(""))
-	planner.AddRule(NewReaderUpdateInSubQueryRule(""))
-
-	planner.AddRule(NewLimitPushdownToExchangeRule(""))
-	planner.AddRule(NewLimitPushdownToReaderRule(""))
-	planner.AddRule(NewLimitPushdownToSeriesRule(""))
-	planner.AddRule(NewAggPushdownToExchangeRule(""))
-	planner.AddRule(NewAggPushdownToReaderRule(""))
-	planner.AddRule(NewAggPushdownToSeriesRule(""))
-
-	planner.AddRule(NewCastorAggCutRule(""))
-
-	planner.AddRule(NewAggSpreadToSortAppendRule(""))
-	planner.AddRule(NewAggSpreadToExchangeRule(""))
-	planner.AddRule(NewAggSpreadToReaderRule(""))
-	planner.AddRule(NewSlideWindowSpreadRule(""))
-	return planner
-}
-
 func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
+	for i := range stmt.Sources {
+		source, e := copystructure.Copy(stmt.Sources[i])
+		if e != nil {
+			return nil, e
+		}
+		optSource := influxql.Sources{source.(influxql.Source)}
+		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
+		childOpt.UpdateSources(optSource)
+		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource)
+		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
+		if err != nil {
+			return nil, err
+		}
+		if child != nil {
+			joinNodes = append(joinNodes, child)
+		}
+		schema.sources = append(schema.sources, source.(influxql.Source))
+	}
+
+	if len(joinNodes) == 0 {
+		return nil, nil
+	}
+	return NewLogicalSortAppend(joinNodes, schema), nil
+}
+
+func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
+	joinCases := schema.GetJoinCases()
+	if len(joinCases) != 1 {
+		return nil, fmt.Errorf("only surrport two subquery join")
+	}
+	var joinConditon influxql.Expr
+	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
+
 	for i := range stmt.Sources {
 		source, e := copystructure.Copy(stmt.Sources[i])
 		if e != nil {
@@ -216,7 +233,7 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 	if len(joinNodes) == 0 {
 		return nil, nil
 	}
-	return NewLogicalSortAppend(joinNodes, schema), nil
+	return NewLogicalFullJoin(joinNodes[0], joinNodes[1], joinConditon, schema), nil
 }
 
 func hasDistinctSelectorCall(s *QuerySchema) (bool, bool) {
@@ -245,6 +262,7 @@ func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasS
 func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *QuerySchema) {
 	hasDistinct, hasSelector := hasDistinctSelectorCall(s)
 	hasSlidingWindow := schema.HasSlidingWindowCall()
+	hasHoltWinters := schema.HasHoltWintersCall()
 
 	if len(schema.Calls()) > 0 {
 		buildAggNode(builder, schema, hasSlidingWindow)
@@ -264,7 +282,12 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 		builder.FilterBlank()
 	}
 
-	if !hasSelector && !hasSlidingWindow && s.opt.HasInterval() && s.opt.(*query.ProcessorOptions).Fill != influxql.NoFill {
+	if hasHoltWinters {
+		builder.HoltWinters()
+	}
+
+	// not support fill: selector, slidingWindow, holtWinters
+	if !hasSelector && !hasSlidingWindow && !hasHoltWinters && s.opt.HasInterval() && s.opt.(*query.ProcessorOptions).Fill != influxql.NoFill {
 		builder.Fill()
 	}
 
@@ -289,7 +312,9 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	if !ok {
 		return nil, errors.New("buildQueryPlan schema type isn't *QuerySchema")
 	}
-	if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
+	if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
+		sp, err = buildFullJoinQueryPlan(ctx, qc, stmt, s)
+	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
 		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
 	} else {
 		sp, err = buildSources(ctx, qc, stmt.Sources, s)
@@ -307,7 +332,7 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	return builder.Build()
 }
 
-func buildSender(ctx context.Context, stmt *influxql.SelectStatement, qc query.LogicalPlanCreator, schema *QuerySchema) (hybridqp.QueryNode, error) {
+func buildExtendedPlan(ctx context.Context, stmt *influxql.SelectStatement, qc query.LogicalPlanCreator, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	builder := NewLogicalPlanBuilderImpl(schema)
 	queryPlan, err := buildQueryPlan(ctx, stmt, qc, schema)
 	if err != nil {
@@ -317,6 +342,10 @@ func buildSender(ctx context.Context, stmt *influxql.SelectStatement, qc query.L
 		return nil, nil
 	}
 	builder.Push(queryPlan)
+
+	if stmt.Target != nil {
+		builder.Target(stmt.Target.Measurement)
+	}
 
 	if schema.Options().(*query.ProcessorOptions).HintType == hybridqp.FilterNullColumn {
 		builder.HttpSenderHint()

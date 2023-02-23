@@ -28,6 +28,7 @@ const (
 
 	// DefaultEnqueuedWriteTimeout is the maximum time a write request can wait to be processed.
 	DefaultEnqueuedWriteTimeout = 30 * time.Second
+	DefaultEnqueuedQueryTimeout = 5 * time.Minute
 	// DefaultMaxRowNum is the maximum row number of a query result.
 	DefaultMaxRowNum = 1000000
 
@@ -95,6 +96,7 @@ func NewConfig() Config {
 		BindSocket:              DefaultBindSocket,
 		MaxBodySize:             DefaultMaxBodySize,
 		EnqueuedWriteTimeout:    toml.Duration(DefaultEnqueuedWriteTimeout),
+		EnqueuedQueryTimeout:    toml.Duration(DefaultEnqueuedQueryTimeout),
 		SlowQueryTime:           toml.Duration(time.Second * 10),
 		ParallelQueryInBatch:    false,
 		QueryMemoryLimitEnabled: true,

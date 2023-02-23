@@ -35,7 +35,7 @@ const (
 
 // ZigZagEncode ZigZag encoding maps signed integers to unsigned integers from: https://developers.google.com/protocol-buffers/docs/encoding
 func ZigZagEncode(v int64) uint64 {
-	return uint64(uint64(v<<1) ^ uint64((int64(v) >> 63)))
+	return uint64(v<<1) ^ uint64(v>>63)
 }
 
 func ZigZagDecode(v uint64) int64 {
@@ -131,7 +131,7 @@ func (enc *Integer) encodingSimple8b(out []byte) ([]byte, error) {
 	out = append(out, byte(enc.encodingType)<<4)
 	out = numberenc.MarshalUint32Append(out, uint32(len(encData)+1))        // enc count
 	out = numberenc.MarshalUint32Append(out, uint32(len(enc.zigZagDeltas))) // src count
-	b := record.Uint64Slice2byte(enc.zigZagDeltas[:len(encData)+1])
+	b := record.Uint64Slice2ByteBigEndian(enc.zigZagDeltas[:len(encData)+1])
 	out = append(out, b...)
 	return out, nil
 }
@@ -169,9 +169,13 @@ func (enc *Integer) encodingZSTD(in, out []byte) ([]byte, error) {
 }
 
 func (enc *Integer) uncompressedData(in []byte, out []byte) ([]byte, error) {
+	// encode type&len
 	out = append(out, byte(intUncompressed<<4))
 	out = numberenc.MarshalUint32Append(out, uint32(len(in)))
-	out = append(out, in...)
+
+	// encode int64 value slice
+	dataSlice := record.Bytes2Int64Slice(in)
+	out = append(out, record.Int64Slice2ByteBigEndian(dataSlice)...)
 	return out, nil
 }
 
@@ -270,7 +274,7 @@ func (enc *Integer) decodingSimple8b() ([]byte, error) {
 		return nil, fmt.Errorf("integer: too small data for decode %v < %v", len(in), l)
 	}
 
-	src := record.Bytes2Uint64Slice(in[:l])
+	src := record.Bytes2Uint64SliceBigEndian(in[:l])
 
 	srcLen := srcCount*8 + enc.outPos
 	if cap(out) < srcLen {
@@ -324,8 +328,10 @@ func (enc *Integer) decodingUncompressed() ([]byte, error) {
 		return nil, fmt.Errorf("integer: invalid uncompressed data len, %v < %v", len(in), inLen)
 	}
 
+	// decode byte to int64 slice
+	intArr := record.Bytes2Int64SliceBigEndian(in)
 	out := enc.out
-	out = append(out, in...)
+	out = append(out, record.Int64Slice2byte(intArr)...)
 	return out, nil
 }
 

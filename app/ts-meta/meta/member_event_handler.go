@@ -17,12 +17,14 @@ limitations under the License.
 package meta
 
 import (
-	"net"
+	"fmt"
 	"strconv"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
 )
 
@@ -34,26 +36,48 @@ type baseHandler struct {
 	cm *ClusterManager
 }
 
-func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent) error {
+func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint64) error {
 	// do not take over meta
 	if m.Tags["role"] == "meta" || uint64(e.EventTime) == 0 {
 		return nil
 	}
 
 	bh.cm.addEventMap(m.Name, e)
-	logger.NewLogger(errno.ModuleHA).Error("handle event", zap.String("eventType", e.String()), zap.String("addr", m.Addr.String()),
-		zap.String("name", m.Name), zap.Int("status", int(m.Status)))
+	logger.GetLogger().Info("handle event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
+		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)))
 	if bh.cm.isStopped() {
 		return nil
 	}
-	// change store status to alive
-	id, err := strconv.Atoi(m.Name)
-	if err != nil {
-		panic(err)
+
+	err := bh.cm.store.updateNodeStatus(id, int32(m.Status), uint64(e.EventTime), fmt.Sprintf("%d", m.Port))
+	if errno.Equal(err, errno.OlderEvent) || errno.Equal(err, errno.DataNodeSplitBrain) {
+		return nil
 	}
-	addr := net.TCPAddr{IP: m.Addr, Port: int(m.Port)}
-	err = bh.cm.store.updateNodeStatus(uint64(id), int32(m.Status), uint64(e.EventTime), addr.String())
-	return err
+	if err != nil {
+		return err
+	}
+	if e.Type == serf.EventMemberFailed {
+		bh.cm.removeClusterMember(id)
+	}
+	if e.Type == serf.EventMemberJoin {
+		bh.cm.addClusterMember(id)
+	}
+
+	if !config.GetHaEnable() || !globalService.store.shouldTakeOver() {
+		return nil
+	}
+	// get pts and add to failed dbPts
+	dbPtInfos := globalService.store.getFailedDbPts(id, meta.Offline)
+	nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
+	for i := range dbPtInfos {
+		err = bh.cm.processFailedDbPt(dbPtInfos[i], nodePtNumMap)
+		if err != nil {
+			logger.NewLogger(errno.ModuleHA).Error("fail to take over db pt",
+				zap.String("db", dbPtInfos[i].Db), zap.Uint32("pt", dbPtInfos[i].Pti.PtId))
+		}
+	}
+	// if process event failed migrate state machine will retry event when retry needed
+	return nil
 }
 
 type joinHandler struct {
@@ -62,7 +86,14 @@ type joinHandler struct {
 
 func (jh *joinHandler) handle(e *memberEvent) error {
 	for i := range e.event.Members {
-		err := jh.handleEvent(&e.event.Members[i], &e.event)
+		id, err := strconv.ParseUint(e.event.Members[i].Name, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+		if e.event.Members[i].Tags["role"] == "meta" {
+			continue
+		}
+		err = jh.handleEvent(&e.event.Members[i], &e.event, id)
 		if err != nil {
 			return err
 		}
@@ -76,7 +107,11 @@ type failedHandler struct {
 
 func (fh *failedHandler) handle(e *memberEvent) error {
 	for i := range e.event.Members {
-		err := fh.handleEvent(&e.event.Members[i], &e.event)
+		id, err := strconv.ParseUint(e.event.Members[i].Name, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+		err = fh.handleEvent(&e.event.Members[i], &e.event, id)
 		if err != nil {
 			logger.GetLogger().Error("handle event failed", zap.Error(err))
 			return err

@@ -38,6 +38,10 @@ func init() {
 	pipelineExecutorResourceManager = NewPipelineExecutorManager()
 }
 
+func GetPipelineExecutorResourceManager() *PipelineExecutorManager {
+	return pipelineExecutorResourceManager
+}
+
 type UnRefDbPt struct {
 	Db string
 	Pt uint32
@@ -71,7 +75,7 @@ func NewPipelineExecutor(processors Processors) *PipelineExecutor {
 		cancelFunc:    nil,
 		aborted:       false,
 		crashed:       false,
-		peLogger:      logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "PipelineExecutor")),
+		peLogger:      logger.NewLogger(errno.ModuleQueryEngine),
 		RunTimeStats:  statistics.NewStatisticTimer(statistics.ExecutorStat.ExecRunTime),
 		WaitTimeStats: statistics.NewStatisticTimer(statistics.ExecutorStat.ExecWaitTime),
 	}
@@ -88,7 +92,7 @@ func NewPipelineExecutorFromDag(dag *TransformDag, root *TransformVertex) *Pipel
 		cancelFunc:    nil,
 		aborted:       false,
 		crashed:       false,
-		peLogger:      logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "PipelineExecutor")),
+		peLogger:      logger.NewLogger(errno.ModuleQueryEngine),
 		RunTimeStats:  statistics.NewStatisticTimer(statistics.ExecutorStat.ExecRunTime),
 		WaitTimeStats: statistics.NewStatisticTimer(statistics.ExecutorStat.ExecWaitTime),
 	}
@@ -157,6 +161,14 @@ func (exec *PipelineExecutor) Crashed() bool {
 	return exec.crashed
 }
 
+func (exec *PipelineExecutor) GetProcessors() Processors {
+	return exec.processors
+}
+
+func (exec *PipelineExecutor) SetProcessors(pro Processors) {
+	exec.processors = pro
+}
+
 func (exec *PipelineExecutor) cancel() {
 	if exec.cancelFunc != nil {
 		exec.cancelFunc()
@@ -167,7 +179,7 @@ func (exec *PipelineExecutor) Release() {
 	for _, p := range exec.processors {
 		if err := p.Release(); err != nil {
 			exec.peLogger.Error("failed to release", zap.Error(err), zap.String("processors", p.Name()),
-				zap.Bool("aborted", exec.aborted), zap.Bool("crashed", exec.crashed))
+				zap.Bool("aborted", exec.aborted), zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
 		}
 	}
 }
@@ -232,7 +244,7 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 					exec.peLogger.Error("runtime panic", zap.String("PipelineExecutor Execute raise stack:", string(debug.Stack())),
 						zap.Error(errno.NewError(errno.RecoverPanic, e)),
 						zap.Bool("aborted", exec.aborted),
-						zap.Bool("crashed", exec.crashed))
+						zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
 				}
 
 				if err != nil {
@@ -242,7 +254,8 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 					exec.peLogger.Error(msg,
 						zap.Error(err),
 						zap.Bool("aborted", exec.aborted),
-						zap.Bool("crashed", exec.crashed))
+						zap.Bool("crashed", exec.crashed),
+						zap.String("query", "PipelineExecutor"))
 				}
 
 				processor.FinishSpan()
@@ -278,10 +291,25 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 
 	if err != nil {
 		// TODO: return an internel error like errors.New("internal error occurs in executor")
+		if errno.Equal(err, errno.NoFieldSelected) {
+			return nil
+		}
 		return err
 	}
 
 	return nil
+}
+
+func (exec *PipelineExecutor) SetRoot(r *TransformVertex) {
+	exec.root = r
+}
+
+func (exec *PipelineExecutor) GetRoot() *TransformVertex {
+	return exec.root
+}
+
+func (exec *PipelineExecutor) SetDag(d *TransformDag) {
+	exec.dag = d
 }
 
 type TransformVertex struct {
@@ -294,6 +322,10 @@ func NewTransformVertex(node hybridqp.QueryNode, transform Processor) *Transform
 		node:      node,
 		transform: transform,
 	}
+}
+
+func (t *TransformVertex) GetTransform() Processor {
+	return t.transform
 }
 
 type TransformVertexVisitor interface {
@@ -344,6 +376,11 @@ func NewTransformDag() *TransformDag {
 func (dag *TransformDag) Contains(vertex *TransformVertex) bool {
 	_, ok := dag.mapVertexToInfo[vertex]
 	return ok
+}
+
+// SetVertexToInfo de
+func (dag *TransformDag) SetVertexToInfo(vertex *TransformVertex, info *TransformVertexInfo) {
+	dag.mapVertexToInfo[vertex] = info
 }
 
 func (dag *TransformDag) AddVertex(vertex *TransformVertex) bool {
@@ -564,6 +601,10 @@ func (builder *ExecutorBuilder) Build(node hybridqp.QueryNode) (hybridqp.Executo
 	return NewPipelineExecutorFromDag(builder.dag, builder.root), err
 }
 
+func (builder *ExecutorBuilder) SetInfo(info *IndexScanExtraInfo) {
+	builder.info = info
+}
+
 func (builder *ExecutorBuilder) buildAnalyze() {
 	if builder.span == nil {
 		return
@@ -595,7 +636,7 @@ func (builder *ExecutorBuilder) createMergeTransform(exchange *LogicalExchange, 
 
 func (builder *ExecutorBuilder) createIndexScanTransform(indexScan *LogicalIndexScan) Processor {
 	info := builder.info.Clone()
-	p := NewIndexScanTransform(indexScan.RowDataType(), indexScan.RowExprOptions(), indexScan.Schema(), indexScan.input, info)
+	p := NewIndexScanTransform(indexScan.RowDataType(), indexScan.RowExprOptions(), indexScan.Schema(), indexScan.inputs[0], info)
 	p.InitOnce()
 	return p
 }
@@ -707,6 +748,16 @@ func (builder *ExecutorBuilder) addShardExchange(exchange *LogicalExchange) (*Tr
 	for _, shard := range builder.traits.shards {
 		exchange.AddTrait(shard)
 	}
+
+	if builder.enableBinaryTreeMerge == 1 {
+		return builder.addBinaryTreeExchange(exchange, len(exchange.eTraits)), nil
+	} else {
+		return builder.addDefaultExchange(exchange)
+	}
+}
+
+func (builder *ExecutorBuilder) addSingleShardExchange(exchange *LogicalExchange) (*TransformVertex, error) {
+	exchange.AddTrait(builder.traits.PeekShard())
 
 	if builder.enableBinaryTreeMerge == 1 {
 		return builder.addBinaryTreeExchange(exchange, len(exchange.eTraits)), nil
@@ -835,6 +886,8 @@ func (builder *ExecutorBuilder) addExchangeToDag(exchange *LogicalExchange) (*Tr
 		return builder.addNodeExchange(exchange)
 	case SHARD_EXCHANGE:
 		return builder.addShardExchange(exchange)
+	case SINGLE_SHARD_EXCHANGE:
+		return builder.addSingleShardExchange(exchange)
 	case READER_EXCHANGE:
 		return builder.addReaderExchange(exchange)
 	case SERIES_EXCHANGE:

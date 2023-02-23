@@ -37,8 +37,13 @@ message Data {
 	required uint64 MaxIndexGroupID      = 17;
 	required uint64 MaxIndexID           = 18;
 	optional uint64 MaxEventOpId         = 19;
-    optional bool   TakeOverEnabled      = 20;
-    repeated MigrateEventInfo MigrateEvents = 21;
+	optional bool   TakeOverEnabled      = 20;
+	repeated MigrateEventInfo MigrateEvents = 21;
+	optional bool BalancerEnabled = 22;
+	optional uint64 MaxDownSampleID = 23;
+	repeated StreamInfo Streams  = 24;
+	optional uint64 MaxStreamID = 25;
+	optional uint64 MaxConnId = 26;
 }
 
 message PtOwner {
@@ -49,6 +54,7 @@ message PtInfo {
 	required PtOwner Owner = 1;
 	required uint32 Status = 2;
 	required uint32 PtId = 3;
+	optional uint64 Ver = 4;
 }
 
 message DBPtInfo {
@@ -66,7 +72,9 @@ message NodeInfo {
 }
 
 message DataNode {
-	required NodeInfo Ni    = 1;
+	required NodeInfo Ni = 1;
+	optional uint64 ConnID = 2;
+	optional uint64 AliveConnID = 3;
 }
 
 message DatabaseInfo {
@@ -89,7 +97,7 @@ message MeasurementInfo {
     repeated ShardKeyInfo ShardKeys = 2;
     map<string, int32> Schema = 3;
     optional bool MarkDeleted = 4;
-    repeated IndexRelation indexRelations = 5;
+		optional IndexRelation indexRelation = 5;
 }
 
 message RetentionPolicyInfo {
@@ -98,6 +106,7 @@ message RetentionPolicyInfo {
 	required int64 ShardGroupDuration = 3;
 	required uint32 ReplicaN = 4;
 	repeated MeasurementInfo Measurements = 5;
+	map<string, uint32> MstVersions = 14;
 	repeated ShardGroupInfo ShardGroups = 6;
 	repeated SubscriptionInfo Subscriptions = 7;
 	optional bool MarkDeleted = 8;
@@ -105,6 +114,7 @@ message RetentionPolicyInfo {
 	required int64 WarmDuration = 10;
 	required int64 IndexGroupDuration = 11;
 	repeated IndexGroupInfo IndexGroups = 12;
+	optional DownSamplePolicyInfo DownSamplePolicyInfo = 13;
 }
 
 message ShardGroupInfo {
@@ -123,6 +133,10 @@ message ShardInfo {
 	required string Max = 4;
 	required uint64 Tier = 5;
 	required uint64 IndexID = 6;
+	required int64  DownSampleLevel = 7;
+	optional uint64 DownSampleID  = 8;
+	optional bool   ReadOnly     = 9;
+	optional bool   MarkDelete   = 10;
 }
 
 message ShardKeyInfo {
@@ -156,7 +170,7 @@ message UserPrivilege {
 
 message IndexRelation {
     required uint32 Rid = 1;
-    required uint32 Oid = 2;
+		repeated uint32 Oid = 2;
     repeated string IndexName = 3;
     repeated IndexList IndexLists = 4;
 }
@@ -164,6 +178,47 @@ message IndexRelation {
 message IndexList {
     repeated string IList = 1;
 }
+
+message RpMeasurementsFieldsInfo {
+    repeated MeasurementFieldsInfo MeasurementInfos = 1;
+}
+message MeasurementFieldsInfo {
+    required string MstName                   = 1;
+    repeated MeasurementTypeFields TypeFields = 2;
+}
+message MeasurementTypeFields {
+    repeated string Fields  = 1;
+    required int64 Type = 2;
+}
+
+
+message StreamInfo {
+    required string Name = 1;
+    required uint64 ID = 2;
+    required StreamMeasurementInfo SrcMst = 3;
+    required StreamMeasurementInfo DesMst = 4;
+    required int64 Interval = 5;
+    required int64 Delay = 6;
+    repeated string Dims = 7;
+    repeated StreamCall Calls = 8;
+}
+
+message StreamInfos {
+    repeated StreamInfo Infos = 1;
+}
+
+message StreamMeasurementInfo {
+    required string Name = 1;
+    required string Database = 2;
+    required string RetentionPolicy = 3;
+}
+
+message StreamCall {
+    required string Call = 1;
+    required string Field = 2;
+    required string Alias = 3;
+}
+
 //========================================================================
 //
 // COMMANDS
@@ -214,9 +269,23 @@ message Command {
 		UpdateShardInfoTierCommand                 = 63;
 		UpdateNodeStatusCommand                    = 64;
 		CreateEventCommand                         = 65;
-        UpdateEventCommand                         = 66;
-        UpdatePtInfoCommand                        = 67;
-        RemoveEventCommand                         = 68;
+		UpdateEventCommand                         = 66;
+		UpdatePtInfoCommand                        = 67;
+		RemoveEventCommand                         = 68;
+		CreateDownSamplePolicyCommand              = 69;
+		DropDownSamplePolicyCommand                = 70;
+		GetDownSamplePolicyCommand                 = 71;
+		CreateDbPtViewCommand                      = 72;
+		GetMeasurementInfoWithinSameRpCommand      = 73;
+		UpdateShardDownSampleInfoCommand           = 74;
+		MarkTakeoverCommand                        = 75;
+		MarkBalancerCommand                        = 76;
+		CreateStreamCommand                        = 77;
+		DropStreamCommand                          = 78;
+		GetMeasurementInfoStoreCommand             = 79;
+		VerifyDataNodeCommand                      = 80;
+		ExpandGroupsCommand                        = 81;
+		UpdatePtVersionCommand                     = 82;
 	}
 
 	required Type type = 1;
@@ -517,6 +586,7 @@ message FieldSchema {
 message IndexInfo {
 	required uint64 ID = 1;
 	repeated uint32 OwnerIDs = 2;
+	optional bool   MarkDelete = 3;
 }
 
 message IndexGroupInfo {
@@ -552,12 +622,50 @@ message ReportShardsLoadCommand {
     repeated DBPtStatus DBPTStat = 1;
 }
 
+message DownSamplePolicyInfo{
+    repeated DownSampleOperators Calls = 1;
+    repeated DownSamplePolicy DownSamplePolicies = 2;
+    required int64 Duration = 3;
+    optional uint64 TaskID  = 4;
+}
+
+message DownSamplePolicy{
+    required int64 SampleInterval = 1;
+    required int64 TimeInterval = 2;
+    required int64 WaterMark = 3;
+}
+
+message DownSampleOperators{
+    repeated string AggOps  = 1;
+    required int64 DataType = 2;
+}
+
+message DownSamplePolicyInfoWithDbRp {
+    required DownSamplePolicyInfo Info = 1;
+    required string DbName = 2;
+    required string RpName = 3;
+}
+
+message DownSamplePoliciesInfoWithDbRp {
+    repeated DownSamplePolicyInfoWithDbRp Infos = 1;
+}
+
+message ShardDownSampleUpdateInfos {
+    repeated ShardDownSampleUpdateInfo Infos = 1;
+}
+
+message ShardDownSampleUpdateInfo {
+    required ShardIdentifier Ident = 1;
+    required int64 DownSampleLvl   = 2;
+}
+
 message PruneGroupsCommand {
     extend Command {
         optional PruneGroupsCommand command = 157;
     }
 
     required bool ShardGroup = 1;
+    optional uint64 ID = 2;
 }
 
 message MarkMeasurementDeleteCommand {
@@ -601,6 +709,7 @@ message ShardDurationCommand {
     }
     required uint64 Index = 1;
     repeated uint32 Pts = 2;
+    optional uint64 nodeId = 3;
 }
 
 message DurationDescriptor {
@@ -616,6 +725,9 @@ message ShardIdentifier {
     required uint32 OwnerPt = 4;
     required string Policy = 5;
     required string ShardType = 6;
+    optional int64  DownSampleLevel = 7;
+    optional uint64 DownSampleID  = 8;
+    optional bool   ReadOnly      = 9;
 }
 
 message TimeRangeInfo {
@@ -705,6 +817,7 @@ message MigrateEventInfo {
     optional int32 preState = 6;
     optional uint64 src = 7;
     optional uint64 dest = 8;
+    optional bool checkConflict = 9;
 }
 
 message CreateEventCommand {
@@ -736,4 +849,109 @@ message RemoveEventCommand {
         optional RemoveEventCommand command = 168;
     }
     required string eventId = 1;
+}
+
+message CreateDownSamplePolicyCommand {
+    extend Command {
+        optional CreateDownSamplePolicyCommand command = 169;
+    }
+    required DownSamplePolicyInfo DownSamplePolicyInfo = 1;
+    required string Database = 2;
+    required string name = 3;
+}
+
+message DropDownSamplePolicyCommand {
+    extend Command {
+        optional DropDownSamplePolicyCommand command = 170;
+    }
+    required string Database = 1;
+    required string rpName   = 2;
+    optional bool dropAll    = 3;
+}
+
+message GetDownSamplePolicyCommand {
+    extend Command {
+        optional GetDownSamplePolicyCommand command = 171;
+    }
+}
+
+message CreateDbPtViewCommand {
+    extend Command {
+        optional CreateDbPtViewCommand command = 172;
+    }
+    required string DbName = 1;
+}
+
+message GetMeasurementInfoWithinSameRpCommand {
+    extend Command {
+        optional GetMeasurementInfoWithinSameRpCommand command = 173;
+    }
+    required string DbName   = 1;
+    required string RpName   = 2;
+    repeated int64 DataTypes = 3;
+}
+
+message UpdateShardDownSampleInfoCommand {
+    extend Command {
+        optional UpdateShardDownSampleInfoCommand command = 174;
+    }
+    required ShardIdentifier Ident = 1;
+}
+
+message MarkTakeoverCommand {
+	extend Command {
+		optional MarkTakeoverCommand command = 175;
+	}
+	required bool enable = 1;
+}
+
+message MarkBalancerCommand {
+	extend Command {
+		optional MarkBalancerCommand command = 176;
+	}
+	required bool enable = 1;
+}
+
+message CreateStreamCommand {
+    extend Command {
+        optional CreateStreamCommand command = 177;
+    }
+    required StreamInfo StreamInfo = 1;
+}
+
+message DropStreamCommand {
+    extend Command {
+        optional DropStreamCommand command = 178;
+    }
+    required string Name = 1;
+}
+
+message GetMeasurementInfoStoreCommand {
+    extend Command {
+        optional GetMeasurementInfoStoreCommand command = 179;
+    }
+    required string DbName   = 1;
+    required string RpName   = 2;
+    required string MstName  = 3;
+}
+
+message VerifyDataNodeCommand {
+	extend Command {
+		optional VerifyDataNodeCommand command = 180;
+	}
+	required uint64 NodeID = 1;
+}
+
+message ExpandGroupsCommand {
+    extend Command {
+        optional ExpandGroupsCommand command = 181;
+    }
+}
+
+message UpdatePtVersionCommand {
+	extend Command {
+		optional UpdatePtVersionCommand command = 182;
+	}
+	required string Db = 1;
+	required uint32 Pt = 2;
 }

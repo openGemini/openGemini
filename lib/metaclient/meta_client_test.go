@@ -19,13 +19,21 @@ import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func init() {
+	RetryGetUserInfoTimeout = 1 * time.Second
+	RetryExecTimeout = 1 * time.Second
+	RetryReportTimeout = 1 * time.Second
+}
 
 type RPCServer struct {
 	metaData *meta2.Data
@@ -86,7 +94,7 @@ func TestSnapshot(t *testing.T) {
 	time.Sleep(time.Second)
 
 	mc := Client{logger: logger.NewLogger(errno.ModuleUnknown)}
-	data, err := mc.getSnapshot(nodeId, 0)
+	data, err := mc.getSnapshot(SQL, nodeId, 0)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -196,7 +204,6 @@ func TestClient_ReportCtx(t *testing.T) {
 func TestClient_BasicFunctions(t *testing.T) {
 	client := &Client{
 		nodeID: 1,
-		ptIds:  []uint32{1, 2, 3},
 		cacheData: &meta2.Data{
 			PtNumPerNode: 1,
 			ClusterID:    1,
@@ -207,6 +214,8 @@ func TestClient_BasicFunctions(t *testing.T) {
 						Host:    "127.0.0.1:8090",
 						TCPHost: "127.0.0.1:8091",
 					},
+					0,
+					0,
 				},
 			},
 			MetaNodes: []meta2.NodeInfo{
@@ -220,8 +229,6 @@ func TestClient_BasicFunctions(t *testing.T) {
 	}
 
 	require.Equal(t, uint64(1), client.NodeID())
-	require.Equal(t, []uint32{1, 2, 3}, client.PtIds())
-
 	require.NoError(t, client.SetTier("hot"))
 	require.NoError(t, client.SetTier("warm"))
 	require.NoError(t, client.SetTier("cold"))
@@ -240,11 +247,6 @@ func TestClient_BasicFunctions(t *testing.T) {
 	dataNodes, _ := client.DataNodes()
 	require.Equal(t, dataNodes[0].ID, uint64(1))
 	require.Equal(t, dataNodes[0].Host, "127.0.0.1:8090")
-
-	// AddPt
-	client.AddPt(3)
-	client.AddPt(4)
-	require.Equal(t, []uint32{1, 2, 3, 4}, client.PtIds())
 
 	// DataNodeByHTTPHost
 	dataNode, _ = client.DataNodeByHTTPHost("127.0.0.1:8090")
@@ -334,26 +336,483 @@ func TestClient_CreateDatabaseWithRetentionPolicy2(t *testing.T) {
 	require.EqualError(t, err, "shard key conflict")
 }
 
-func TestDBPTCtx_String(t *testing.T) {
-	ctx := &DBPTCtx{}
-	ctx.DBPTStat = &proto2.DBPtStatus{
-		DB:   proto.String("db0"),
-		PtID: proto.Uint32(100),
-		RpStats: []*proto2.RpShardStatus{{
-			RpName: proto.String("default"),
-			ShardStats: &proto2.ShardStatus{
-				ShardID:     proto.Uint64(101),
-				ShardSize:   proto.Uint64(102),
-				SeriesCount: proto.Int32(103),
-				MaxTime:     proto.Int64(104),
+func TestClient_Stream(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+					},
+				}},
+				"db1": {
+					Name:     "db1",
+					ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp1": {
+							Name:         "rp1",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"mst1": {Name: "mst1"}},
+						},
+					},
+				},
 			},
-		}, nil},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	info := &meta2.StreamInfo{
+		Name: "test",
+		ID:   0,
+		SrcMst: &meta2.StreamMeasurementInfo{
+			Name:            "mst0",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		},
+		DesMst: &meta2.StreamMeasurementInfo{
+			Name:            "mst1",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		},
+		Dims: []string{"tag1"},
+		Calls: []*meta2.StreamCall{
+			{
+				Call:  "first",
+				Field: "age",
+				Alias: "first_age",
+			},
+			{
+				Call:  "first",
+				Field: "score",
+				Alias: "first_score",
+			},
+			{
+				Call:  "first",
+				Field: "name",
+				Alias: "first_name",
+			},
+			{
+				Call:  "first",
+				Field: "alive",
+				Alias: "first_alive",
+			},
+		},
+		Delay: time.Second,
+	}
+	err := c.CreateStreamPolicy(info)
+	require.EqualError(t, err, "execute command timeout")
+	err = c.DropStream("test")
+
+	c.cacheData.Streams = map[string]*meta2.StreamInfo{"test": info}
+	_, _ = c.ShowStreams("db0", false)
+	_, _ = c.ShowStreams("", true)
+
+	stmt := &influxql.SelectStatement{
+		Fields: influxql.Fields{
+			&influxql.Field{
+				Expr: &influxql.Call{
+					Name: "first",
+					Args: []influxql.Expr{&influxql.VarRef{Val: "age", Type: influxql.Integer}},
+				},
+			},
+			&influxql.Field{
+				Expr: &influxql.Call{
+					Name: "first",
+					Args: []influxql.Expr{&influxql.VarRef{Val: "name", Type: influxql.String}},
+				},
+			},
+			&influxql.Field{
+				Expr: &influxql.Call{
+					Name: "first",
+					Args: []influxql.Expr{&influxql.VarRef{Val: "score", Type: influxql.Float}},
+				},
+			},
+			&influxql.Field{
+				Expr: &influxql.Call{
+					Name: "first",
+					Args: []influxql.Expr{&influxql.VarRef{Val: "alive", Type: influxql.Boolean}},
+				},
+			},
+		},
+		Dimensions: influxql.Dimensions{
+			{
+				&influxql.VarRef{Val: "tag1", Type: influxql.Tag},
+			},
+		},
+	}
+	stmt1 := &influxql.SelectStatement{
+		Fields: influxql.Fields{
+			{
+				Expr: &influxql.VarRef{Val: "tag1", Type: influxql.Tag},
+			},
+		},
+	}
+	stmt2 := &influxql.SelectStatement{
+		Fields: influxql.Fields{
+			{
+				Expr: &influxql.Call{
+					Name: "first",
+					Args: []influxql.Expr{&influxql.VarRef{Val: "tag1", Type: influxql.TAG}},
+				},
+			},
+		},
+	}
+	c.UpdateStreamMstSchema("db0", "rp0", "mst1", stmt)
+	if c.UpdateStreamMstSchema("db0", "rp0", "mst1", stmt1).Error() != "unexpected call function" {
+		t.Fatal()
+	}
+	if c.UpdateStreamMstSchema("db0", "rp0", "mst1", stmt2).Error() != "unexpected call type" {
+		t.Fatal()
 	}
 
-	exp := `DB:"db0" PtID:100 RpStats:<RpName:"default" ShardStats:<ShardID:101 ShardSize:102 SeriesCount:103 MaxTime:104 > > RpStats:<nil> `
-	require.Equal(t, exp, ctx.String())
-	ctx.DBPTStat = nil
-	require.Equal(t, "", ctx.String())
+	infos := c.GetStreamInfos()
+	if len(infos) != 1 {
+		t.Fatal("not find stream infos")
+	}
+
+	infos = c.GetStreamInfosStore()
+	if len(infos) != 0 {
+		t.Fatal("query from store should not return value in ut")
+	}
+}
+
+func TestClient_MeasurementInfo(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	_, err := c.GetMeasurementInfoStore("test", "rp0", "test")
+	if err == nil {
+		t.Fatal("query from store should not return value in ut")
+	}
+}
+
+func TestClient_Stream_GetStreamInfos(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	info := &meta2.StreamInfo{
+		Name: "test",
+		ID:   0,
+		SrcMst: &meta2.StreamMeasurementInfo{
+			Name:            "mst0",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		},
+		DesMst: &meta2.StreamMeasurementInfo{
+			Name:            "mst1",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		},
+		Dims: []string{"tag1", "tag2"},
+		Calls: []*meta2.StreamCall{
+			{
+				Call:  "first",
+				Field: "age",
+				Alias: "first_age",
+			},
+		},
+		Delay: time.Second,
+	}
+	c.cacheData.Streams = map[string]*meta2.StreamInfo{"test": info}
+	sis := c.GetStreamInfos()
+	if _, ok := sis["test"]; !ok {
+		t.Fatal("GetStreamInfos failed")
+	}
+}
+
+func TestClient_Stream_GetDstStreamInfos(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	info := &meta2.StreamInfo{
+		Name: "test",
+		ID:   0,
+		SrcMst: &meta2.StreamMeasurementInfo{
+			Name:            "mst0",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		},
+		DesMst: &meta2.StreamMeasurementInfo{
+			Name:            "mst1",
+			Database:        "db0",
+			RetentionPolicy: "rp0",
+		},
+		Dims: []string{"tag1"},
+		Calls: []*meta2.StreamCall{
+			{
+				Call:  "first",
+				Field: "age",
+				Alias: "first_age",
+			},
+		},
+		Delay: time.Second,
+	}
+	c.cacheData.Streams = map[string]*meta2.StreamInfo{"test": info}
+	dstSis := &[]*meta2.StreamInfo{}
+	db := "db0"
+	rp := "rp0"
+	exist := c.GetDstStreamInfos(db, rp, dstSis)
+	if !exist {
+		t.Fatal("GetStreamInfos failed")
+	}
+
+	c.cacheData.Streams = map[string]*meta2.StreamInfo{}
+	exist = c.GetDstStreamInfos(db, rp, dstSis)
+	if exist {
+		t.Fatal("GetStreamInfos failed")
+	}
+}
+
+func TestClient_CreateDownSamplePolicy(t *testing.T) {
+	info := &meta2.DownSamplePolicyInfo{
+		Calls: []*meta2.DownSampleOperators{
+			{
+				AggOps:   []string{"min", "max"},
+				DataType: int64(influxql.Integer),
+			},
+		},
+		DownSamplePolicies: []*meta2.DownSamplePolicy{
+			{
+				SampleInterval: time.Hour,
+				TimeInterval:   25 * time.Second,
+				WaterMark:      time.Hour,
+			},
+		},
+		Duration: 240 * time.Hour,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	err := c.NewDownSamplePolicy("test", "rp0", info)
+	require.EqualError(t, err, "execute command timeout")
+	err = c.DropDownSamplePolicy("test", "rp0", true)
+	require.EqualError(t, err, "execute command timeout")
+
+	c.cacheData.Databases["test"].RetentionPolicies["rp0"].DownSamplePolicyInfo = info
+	row, _ := c.ShowDownSamplePolicies("test")
+	names := []string{"rpName", "field_operator", "duration", "sampleInterval", "timeInterval", "waterMark"}
+	values := []interface{}{"rp0", "integer{min,max}", "240h0m0s", "1h0m0s", "25s", "1h0m0s"}
+	for i := range row[0].Columns {
+		if row[0].Columns[i] != names[i] {
+			t.Fatalf("wrong column names")
+		}
+		if row[0].Values[0][i] != values[i] {
+			t.Fatalf("wrong column values")
+		}
+	}
+}
+
+func TestGetDownSampleInfo(t *testing.T) {
+	info := &meta2.DownSamplePolicyInfo{
+		Calls: []*meta2.DownSampleOperators{
+			{
+				AggOps:   []string{"min", "max"},
+				DataType: int64(influxql.Integer),
+			},
+		},
+		DownSamplePolicies: []*meta2.DownSamplePolicy{
+			{
+				SampleInterval: time.Hour,
+				TimeInterval:   25 * time.Second,
+				WaterMark:      time.Hour,
+			},
+		},
+		Duration: 240 * time.Hour,
+	}
+	address := "127.0.0.1:8491"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8491"},
+		logger:      logger.NewLogger(errno.ModuleUnknown),
+	}
+
+	mc.cacheData.Databases["test"].RetentionPolicies["rp0"].DownSamplePolicyInfo = info
+	var data []byte
+	_ = data
+	data, err = mc.getDownSampleInfo(nodeId)
+	_, err = mc.GetMstInfoWithInRp("test", "rp0", []int64{int64(influxql.Integer)})
+	_, err = mc.GetDownSamplePolicies()
+	ident := &meta2.ShardIdentifier{
+		ShardID: 1,
+		OwnerDb: "db0",
+		Policy:  "rp0",
+	}
+	err = mc.UpdateShardDownSampleInfo(ident)
+	rmfi := meta2.RpMeasurementsFieldsInfo{
+		MeasurementInfos: []*meta2.MeasurementFieldsInfo{
+			{
+				MstName: "mst",
+				TypeFields: []*meta2.MeasurementTypeFields{
+					{Type: 1, Fields: []string{"field1"}},
+				},
+			},
+		},
+	}
+	b1, e1 := rmfi.MarshalBinary()
+	if e1 != nil {
+		t.Fatal(e1)
+	}
+	_, err1 := mc.unmarshalMstInfoWithInRp(b1)
+	if err1 != nil {
+		t.Fatal(err1)
+	}
+	dspi := &meta2.DownSamplePoliciesInfoWithDbRp{
+		Infos: []*meta2.DownSamplePolicyInfoWithDbRp{
+			{Info: info, DbName: "test", RpName: "rp0"},
+		},
+	}
+	b2, e2 := dspi.MarshalBinary()
+	if e2 != nil {
+		t.Fatal(e2)
+	}
+	_, err2 := mc.unmarshalDownSamplePolicies(b2)
+	if err2 != nil {
+		t.Fatal(err2)
+	}
+}
+
+func TestUserInfo(t *testing.T) {
+	address := "127.0.0.10:8492"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	RetryGetUserInfoTimeout = 1 * time.Second
+	mc := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+			Index: 0,
+		},
+		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	mc.UpdateUserInfo()
+	time.Sleep(2 * time.Second)
+}
+
+func TestVerifyDataNodeStatus(t *testing.T) {
+	config.SetHaEnable(true)
+	defer config.SetHaEnable(false)
+
+	address := "127.0.0.10:8492"
+	nodeId := 0
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+	mc := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		nodeID:      1,
+		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+		closing:     make(chan struct{}),
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	go mc.verifyDataNodeStatus()
+	time.Sleep(2 * time.Second)
 }
 
 func TestCreateMeasurement(t *testing.T) {
@@ -384,4 +843,26 @@ func TestCreateMeasurement(t *testing.T) {
 	for _, mst := range validMst {
 		require.True(t, meta2.ValidMeasurementName(mst))
 	}
+}
+
+func TestDBPTCtx_String(t *testing.T) {
+	ctx := &DBPTCtx{}
+	ctx.DBPTStat = &proto2.DBPtStatus{
+		DB:   proto.String("db0"),
+		PtID: proto.Uint32(100),
+		RpStats: []*proto2.RpShardStatus{{
+			RpName: proto.String("default"),
+			ShardStats: &proto2.ShardStatus{
+				ShardID:     proto.Uint64(101),
+				ShardSize:   proto.Uint64(102),
+				SeriesCount: proto.Int32(103),
+				MaxTime:     proto.Int64(104),
+			},
+		}, nil},
+	}
+
+	exp := `DB:"db0" PtID:100 RpStats:<RpName:"default" ShardStats:<ShardID:101 ShardSize:102 SeriesCount:103 MaxTime:104 > > RpStats:<nil> `
+	require.Equal(t, exp, ctx.String())
+	ctx.DBPTStat = nil
+	require.Equal(t, "", ctx.String())
 }

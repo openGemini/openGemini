@@ -24,6 +24,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -36,7 +37,8 @@ import (
 )
 
 var (
-	debugEn = true
+	debugEn        = true
+	migrateTimeout = 5 * time.Second
 )
 
 const (
@@ -47,7 +49,7 @@ type Storage interface {
 	Open() error
 	Close() error
 
-	WriteRows(nodeID uint64, database string, rp string, pt uint32, shard uint64, rows *[]influx.Row, timeout time.Duration) error
+	WriteRows(nodeID uint64, database string, rp string, pt uint32, shard uint64, streamShardIdList []uint64, rows *[]influx.Row, timeout time.Duration) error
 	DropShard(nodeID uint64, database, rpName string, dbPts []uint32, shardID uint64) error
 
 	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (TablesTagSets, error)
@@ -64,6 +66,7 @@ type Storage interface {
 	DeleteDatabase(node *meta2.DataNode, database string, pt uint32) error
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, pt uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp string, name string, shardIds []uint64) error
+	MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
 }
 
 type NetStorage struct {
@@ -154,12 +157,10 @@ func (s *NetStorage) DeleteDatabase(node *meta2.DataNode, database string, pt ui
 	return s.HandleDeleteReq(node, deleteReq)
 }
 
-func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt uint32, shard uint64, rows *[]influx.Row, timeout time.Duration) error {
+func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt uint32, shard uint64, streamShardIdList []uint64, rows *[]influx.Row, timeout time.Duration) error {
 	if len(*rows) == 0 {
 		return nil
 	}
-	s.log.Debug("NetStorage begin to write rows", zap.Uint64("nodeID", nodeID), zap.String("database", database),
-		zap.String("rp", rpName), zap.Uint64("shard", shard), zap.Int("rowsLen", len(*rows)))
 	var err error
 
 	// Determine the location of this shard and whether it still exists
@@ -188,6 +189,10 @@ func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt
 	pBuf = numenc.MarshalUint32(pBuf, pt)
 	pBuf = numenc.MarshalUint64(pBuf, shard)
 
+	// streamShardIdList
+	pBuf = numenc.MarshalUint32(pBuf, uint32(len(streamShardIdList)))
+	pBuf = numenc.MarshalVarUint64s(pBuf, streamShardIdList)
+
 	pBuf, err = influx.FastMarshalMultiRows(pBuf, *rows)
 	if err != nil {
 		return err
@@ -201,12 +206,27 @@ func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt
 		return err
 	}
 
+	if len(streamShardIdList) > 0 {
+		streamVars := make([]*StreamVar, len(*rows))
+		for i := range *rows {
+			streamVars[i] = &StreamVar{}
+			streamVars[i].Only = (*rows)[i].StreamOnly
+			streamVars[i].Id = (*rows)[i].StreamId
+		}
+		cb := &WriteStreamPointsCallback{}
+		err = r.request(spdy.WriteStreamPointsRequest, NewWriteStreamPointsRequest(pBuf, streamVars), cb)
+		if err != nil {
+			return err
+		}
+		return nil
+
+	}
 	cb := &WritePointsCallback{}
-	err = r.retryRequest(spdy.WritePointsRequest, NewWritePointsRequest(pBuf), cb)
+	err = r.request(spdy.WritePointsRequest, NewWritePointsRequest(pBuf), cb)
 	if err != nil {
 		return err
 	}
-	return cb.Error()
+	return nil
 }
 
 func (s *NetStorage) ddlRequestWithNodeId(nodeID uint64, typ uint8, data codec.BinaryCodec) (interface{}, error) {
@@ -292,7 +312,11 @@ func (s *NetStorage) SeriesCardinality(nodeID uint64, db string, dbPts []uint32,
 		return nil, executor.NewInvalidTypeError("*netstorage.SeriesCardinalityResponse", v)
 	}
 
-	return resp.CardinalityInfos, resp.Error()
+	if resp.Err != nil {
+		errStr := resp.Err.Error()
+		return resp.CardinalityInfos, NormalizeError(&errStr)
+	}
+	return resp.CardinalityInfos, nil
 }
 
 func (s *NetStorage) SeriesExactCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) (map[string]uint64, error) {
@@ -366,4 +390,23 @@ func (s *NetStorage) SendSysCtrlOnNode(nodeID uint64, req SysCtrlRequest) (map[s
 	}
 
 	return ret, nil
+}
+
+func (s *NetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error {
+	trans, err := transport.NewTransport(nodeID, spdy.PtRequest, cb)
+	if err != nil {
+		return err
+	}
+	trans.SetTimeout(migrateTimeout)
+	if err := trans.Send(data); err != nil {
+		return err
+	}
+	mcb := cb.(*MigratePtCallback)
+	go func() {
+		err := trans.Wait()
+		if err != nil {
+			mcb.fn(err)
+		}
+	}()
+	return nil
 }

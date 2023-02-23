@@ -188,10 +188,6 @@ func (w *HttpChunkSender) sendRows(rows models.Rows, partial bool) {
 	}
 }
 
-func (w *HttpChunkSender) Close() {
-	close(w.opt.RowsChan)
-}
-
 type RowChunk struct {
 	Name string
 	Tags []ChunkTags
@@ -353,7 +349,6 @@ func NewHttpSenderTransform(inRowDataType hybridqp.RowDataType, schema *QuerySch
 		schema: schema,
 	}
 
-	trans.InitOnce()
 	return trans
 }
 
@@ -366,9 +361,7 @@ func (trans *HttpSenderTransform) Explain() []ValuePair {
 }
 
 func (trans *HttpSenderTransform) Close() {
-	trans.Once(func() {
-		trans.Writer.Close()
-	})
+
 }
 
 func (trans *HttpSenderTransform) Work(ctx context.Context) error {
@@ -455,7 +448,6 @@ func NewHttpSenderHintTransform(inRowDataType hybridqp.RowDataType, schema *Quer
 		schema: schema,
 	}
 
-	trans.InitOnce()
 	return trans
 }
 
@@ -468,9 +460,7 @@ func (trans *HttpSenderHintTransform) Explain() []ValuePair {
 }
 
 func (trans *HttpSenderHintTransform) Close() {
-	trans.Once(func() {
-		trans.schema.Options().CloseRowChan()
-	})
+
 }
 
 func (trans *HttpSenderHintTransform) Work(ctx context.Context) error {

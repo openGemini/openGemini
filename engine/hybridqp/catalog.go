@@ -48,6 +48,8 @@ type RowDataType interface {
 	SlimFields(ridIdx []int) RowDataType
 	CopyTo(dst *RowDataTypeImpl)
 
+	IndexByName() map[string]int
+	UpdateByDownSampleFields(map[string]string)
 	Marshal() *internal.RowDataType
 	Unmarshal(*internal.RowDataType) error
 }
@@ -74,6 +76,18 @@ func NewRowDataTypeImpl(refs ...influxql.VarRef) *RowDataTypeImpl {
 	}
 
 	return rowDataType
+}
+
+func (s *RowDataTypeImpl) UpdateByDownSampleFields(m map[string]string) {
+	tempMap := make(map[string]int)
+	for k, v := range s.Fields() {
+		currVal := v.Expr.(*influxql.VarRef).Val
+		originVal := s.Fields()[k].Expr.(*influxql.VarRef).Val
+		s.Fields()[k].Expr.(*influxql.VarRef).Val = m[currVal]
+		s.NumColumn()
+		tempMap[m[currVal]] = s.indexByName[originVal]
+	}
+	s.indexByName = tempMap
 }
 
 func (s *RowDataTypeImpl) DeepEqual(to *RowDataTypeImpl) bool {
@@ -118,6 +132,14 @@ func (s *RowDataTypeImpl) Field(i int) *influxql.Field {
 	return s.fields[i]
 }
 
+func (s *RowDataTypeImpl) SetIndexByName(m map[string]int) {
+	s.indexByName = m
+}
+
+func (s *RowDataTypeImpl) IndexByName() map[string]int {
+	return s.indexByName
+}
+
 func (s *RowDataTypeImpl) FieldIndex(name string) int {
 	if index, ok := s.indexByName[name]; ok {
 		return index
@@ -151,12 +173,16 @@ func (s *RowDataTypeImpl) CopyTo(dst *RowDataTypeImpl) {
 	}
 	for i, field := range s.Fields() {
 		dst.fields[i] = &influxql.Field{
-			Expr:  field.Expr,
+			Expr:  influxql.CloneExpr(field.Expr),
 			Alias: field.Alias,
 		}
 	}
-
-	dst.indexByName = nil
+	if dst.indexByName == nil {
+		dst.indexByName = make(map[string]int, len(s.indexByName))
+	}
+	for k, v := range s.indexByName {
+		dst.indexByName[k] = v
+	}
 }
 
 func (s *RowDataTypeImpl) Marshal() *internal.RowDataType {
@@ -196,7 +222,6 @@ func (s *RowDataTypeImpl) Unmarshal(rt *internal.RowDataType) error {
 type Catalog interface {
 	GetColumnNames() []string
 	GetQueryFields() influxql.Fields
-	GetOptions() Options
 
 	CloneField(f *influxql.Field) *influxql.Field
 	HasCall() bool
@@ -208,6 +233,8 @@ type Catalog interface {
 	HasBlankRowCall() bool
 	HasInterval() bool
 	HasFieldCondition() bool
+	HasAuxTag() bool
+	HasPercentileOGSketch() bool
 	Options() Options
 	Symbols() map[string]influxql.VarRef
 	Mapping() map[influxql.Expr]influxql.VarRef
@@ -219,6 +246,8 @@ type Catalog interface {
 	SetOpt(opt Options)
 	Calls() map[string]*influxql.Call
 	SlidingWindow() map[string]*influxql.Call
+	HoltWinters() []*influxql.Field
+	CompositeCall() map[string]*OGSketchCompositeOperator
 	Binarys() map[string]*influxql.BinaryExpr
 	Fields() influxql.Fields
 	FieldsMap() map[string]*influxql.Field
@@ -239,10 +268,16 @@ type Catalog interface {
 	IsTimeZero() bool
 	HasStreamCall() bool
 	HasSlidingWindowCall() bool
+	HasHoltWintersCall() bool
 	IsMultiMeasurements() bool
 	HasGroupBy() bool
 	Sources() influxql.Sources
 	HasSubQuery() bool
+	HasOptimizeAgg() bool
+	GetSourcesNames() []string
+	GetFieldType(i int) (int64, error)
+	GetJoinCaseCount() int
+	GetJoinCases() []*influxql.Join
 }
 
 type CatalogCreator interface {
@@ -290,4 +325,27 @@ type StoreEngine interface {
 	ReportLoad()
 	CreateLogicPlanV2(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
 	UnrefEngineDbPt(db string, ptId uint32)
+	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
+}
+
+type OGSketchCompositeOperator struct {
+	insertOp   *influxql.Call
+	mergeOp    *influxql.Call
+	queryPerOp *influxql.Call
+}
+
+func NewOGSketchCompositeOperator(i, m, qp *influxql.Call) *OGSketchCompositeOperator {
+	return &OGSketchCompositeOperator{insertOp: i, mergeOp: m, queryPerOp: qp}
+}
+
+func (o *OGSketchCompositeOperator) GetInsertOp() *influxql.Call {
+	return o.insertOp
+}
+
+func (o *OGSketchCompositeOperator) GetMergeOp() *influxql.Call {
+	return o.mergeOp
+}
+
+func (o *OGSketchCompositeOperator) GetQueryPerOp() *influxql.Call {
+	return o.queryPerOp
 }

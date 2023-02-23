@@ -21,10 +21,8 @@ import (
 	"math"
 	"reflect"
 	"sort"
-	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/comm"
-	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -38,21 +36,15 @@ func init() {
 	InitDecFunctions()
 }
 
-var (
-	crc32CheckEn = int32(0)
-)
-
-func CheckCrc32En() bool {
-	return atomic.LoadInt32(&crc32CheckEn) > 0
-}
-
 type TableReader interface {
 	Open() error
 	Close() error
-	ReadData(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error)
+	ReadData(cm *ChunkMeta, segment int, dst *record.Record, ctx *ReadContext) (*record.Record, error)
+	Ref()
+	Unref()
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr record.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta) (*ChunkMeta, error)
+	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error)
 	ChunkMetaAt(index int) (*ChunkMeta, error)
 
 	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
@@ -75,8 +67,9 @@ type TableReader interface {
 	InMemSize() int64
 	Version() uint64
 	FreeMemory() int64
+	FreeFileHandle() error
 	LoadIntoMemory() error
-	LoadIndex() error
+	LoadComponents() error
 	AverageChunkRows() int
 	MaxChunkRows() int
 }
@@ -186,21 +179,9 @@ func readLastRowIndex(timeCol, callCol *record.ColVal, tr record.TimeRange) int 
 	return rowIndex
 }
 
-func readMinRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, decs *ReadContext, meta *record.ColMeta, copied bool) (int, bool, error) {
+func readMinRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, meta *record.ColMeta,
+	rowIdxStart, rowIdxStop int) (int, bool, error) {
 	rowIndex := timeCol.Len
-
-	// find the min value in the time range
-	var rowIdxStart, rowIdxStop int
-	rowIdxStart, rowIdxStop = findRowIdxRange(timeCol, decs.tr)
-	if rowIdxStart == timeCol.Length() {
-		return rowIndex, false, nil
-	}
-
-	err := decodeColumnData(callRef, decs.origData, callCol, decs, copied)
-	if err != nil {
-		return rowIndex, false, err
-	}
-
 	isSet := false
 	seen := false
 	switch callRef.Type {
@@ -251,6 +232,26 @@ func readMinRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, dec
 	return rowIndex, isSet, nil
 }
 
+func readMinMaxRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, ctx *ReadContext, meta *record.ColMeta,
+	copied, isMin bool) (int, bool, error) {
+
+	rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, ctx.tr)
+	if rowIdxStart == timeCol.Length() {
+		return timeCol.Len, false, nil
+	}
+
+	err := decodeColumnData(callRef, ctx.origData, callCol, ctx, copied)
+	if err != nil {
+		return timeCol.Len, false, err
+	}
+
+	if isMin {
+		return readMinRowIndex(callRef, callCol, timeCol, meta, rowIdxStart, rowIdxStop)
+	}
+
+	return readMaxRowIndex(callRef, callCol, timeCol, meta, rowIdxStart, rowIdxStop)
+}
+
 func loopMinRowindex(rowIdxStart, rowIdxStop int, callCol *record.ColVal) (interface{}, int, bool) {
 	var min interface{}
 	var rowIndex int
@@ -274,19 +275,9 @@ func loopMinRowindex(rowIdxStart, rowIdxStop int, callCol *record.ColVal) (inter
 	return min, rowIndex, seen
 }
 
-func readMaxRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, decs *ReadContext, meta *record.ColMeta,
-	copied bool) (int, bool, error) {
-	rowIndex := timeCol.Length()
-	var rowIdxStart, rowIdxStop int
-	rowIdxStart, rowIdxStop = findRowIdxRange(timeCol, decs.tr)
-	if rowIdxStart == timeCol.Length() {
-		return rowIndex, false, nil
-	}
-
-	err := decodeColumnData(callRef, decs.origData, callCol, decs, copied)
-	if err != nil {
-		return rowIndex, false, err
-	}
+func readMaxRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, meta *record.ColMeta,
+	rowIdxStart, rowIdxStop int) (int, bool, error) {
+	rowIndex := timeCol.Len
 	isSet := false
 	seen := false
 	switch callRef.Type {
@@ -503,7 +494,7 @@ func appendIntegerColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 
 		if !ctx.Ascending {
-			_ = reverseIntergerValues(values)
+			_ = reverseIntegerValues(values)
 			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
@@ -555,7 +546,7 @@ func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
 			values = reverseBooleanValues(values)
-			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), len(values)+int(nilCount))
+			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
 		col.Len += rows
@@ -614,16 +605,16 @@ func InitDecFunctions() {
 	decFuncs[influx.Field_Type_String] = appendStringColumn
 }
 
-func appendColumnData(dataType int, nilBitmap []byte, bitmapOffset uint32, encData []byte, nilCount uint32, col *record.ColVal, decs *ReadContext) error {
+func appendColumnData(dataType int, nilBitmap []byte, bitmapOffset uint32, encData []byte, nilCount uint32, col *record.ColVal, ctx *ReadContext) error {
 	decFun, ok := decFuncs[dataType]
 	if !ok {
 		panic(fmt.Sprintf("invalid column type %v", dataType))
 	}
 
-	return decFun(nilBitmap, bitmapOffset, encData, nilCount, col, decs)
+	return decFun(nilBitmap, bitmapOffset, encData, nilCount, col, ctx)
 }
 
-func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, decs *ReadContext, copied bool) error {
+func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, ctx *ReadContext, copied bool) error {
 	if tmData[0] != BlockInteger {
 		err := fmt.Errorf("column data type not time, %v", tmData[0])
 		log.Error(err.Error())
@@ -650,19 +641,19 @@ func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, decs *ReadConte
 	nilCount := numberenc.UnmarshalUint32(tmData)
 	tmData = tmData[4:]
 
-	if decs.coderCtx.timeCoder == nil {
-		decs.coderCtx.timeCoder = GetTimeCoder()
+	if ctx.coderCtx.timeCoder == nil {
+		ctx.coderCtx.timeCoder = GetTimeCoder()
 	}
 
 	timeCol.Init()
-	values, err := DecodeTimestampBlock(tmData, &timeCol.Val, decs.coderCtx)
+	values, err := DecodeTimestampBlock(tmData, &timeCol.Val, ctx.coderCtx)
 	if err != nil {
 		return err
 	}
 
 	timeCol.AppendBitmap(nilBitmap, int(bitmapOffset), len(values), 0, len(values))
-	if !decs.Ascending {
-		values = reverseIntergerValues(values)
+	if !ctx.Ascending {
+		values = reverseIntegerValues(values)
 		timeCol.Val = record.Int64Slice2byte(values)
 		timeCol.Bitmap = record.ReverseBitMap(timeCol.Bitmap, bitmapOffset, len(values))
 	}
@@ -672,7 +663,7 @@ func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, decs *ReadConte
 	return nil
 }
 
-func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, decs *ReadContext, copied bool) error {
+func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, ctx *ReadContext, copied bool) error {
 	pos := 0
 	dataType := int(data[0])
 	pos += 1
@@ -709,75 +700,7 @@ func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, decs *
 		encData = data[pos:]
 	}
 
-	return appendColumnData(dataType, nilBitmap, bitmapOffset, encData, nilCount, col, decs)
-}
-
-type Location struct {
-	decs   *ReadContext
-	r      TSSPFile
-	meta   *ChunkMeta
-	segPos int
-}
-
-func NewLocation(r TSSPFile, decs *ReadContext) *Location {
-	return &Location{r: r, decs: decs}
-}
-
-func NewLocationCursor(n int) *LocationCursor {
-	return &LocationCursor{
-		pos: 0,
-		lcs: make([]*Location, 0, n),
-	}
-}
-
-type LocationCursor struct {
-	pos int
-	lcs []*Location
-}
-
-func (l *LocationCursor) AddLocation(loc *Location) {
-	l.lcs = append(l.lcs, loc)
-}
-
-func (l LocationCursor) Len() int {
-	return len(l.lcs)
-}
-
-func (l LocationCursor) Swap(i, j int) {
-	l.lcs[i], l.lcs[j] = l.lcs[j], l.lcs[i]
-}
-
-func (l LocationCursor) Less(i, j int) bool {
-	if l.lcs[i].r.IsOrder() {
-		ti, _ := l.lcs[i].meta.MinMaxTime()
-		tj, _ := l.lcs[j].meta.MinMaxTime()
-		return ti < tj
-	}
-	_, seqI := l.lcs[i].r.LevelAndSequence()
-	_, seqJ := l.lcs[j].r.LevelAndSequence()
-	return seqI < seqJ
-}
-
-func (l LocationCursor) Reverse() {
-	left, right := 0, len(l.lcs)-1
-	for left < right {
-		// we can't reverse segment meta because it's just a references, should not change it
-		l.lcs[left], l.lcs[right] = l.lcs[right], l.lcs[left]
-		left++
-		right--
-	}
-}
-
-func (l *LocationCursor) AddRef() {
-	for i := range l.lcs {
-		l.lcs[i].r.Ref()
-	}
-}
-
-func (l *LocationCursor) Unref() {
-	for i := range l.lcs {
-		l.lcs[i].r.Unref()
-	}
+	return appendColumnData(dataType, nilBitmap, bitmapOffset, encData, nilCount, col, ctx)
 }
 
 type FilterOptions struct {
@@ -796,292 +719,6 @@ func NewFilterOpts(cond influxql.Expr, filterMap map[string]interface{}, fieldsI
 		fieldsIdx:  fieldsIdx,
 		filterTags: idTags,
 		pointTags:  tags,
-	}
-}
-
-func (l *LocationCursor) ReadMeta(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	var err error
-	var rec *record.Record
-	var readCxt = l.lcs[0].decs
-
-	if readCxt.onlyFirstOrLast && l.lcs[0].decs.Ascending && l.lcs[0].decs.ops[0].Call.Name == "last" {
-		// tmp code for ascending locations. Delete when support descending locations.
-		for {
-			pos := len(l.lcs) - l.pos - 1
-			if pos < 0 {
-				return nil, nil
-			}
-			loc := l.lcs[pos]
-
-			for loc.Next() {
-				var tmpRec *record.Record
-				tmpRec, err = loc.readMeta(filterOpts, dst)
-				if err != nil {
-					return nil, err
-				}
-				if tmpRec != nil {
-					rec = tmpRec
-				}
-			}
-			l.pos++
-
-			if rec != nil {
-				if readCxt.onlyFirstOrLast {
-					l.pos = len(l.lcs)
-				}
-				return rec, nil
-			}
-		}
-	}
-
-	for {
-		if l.pos >= len(l.lcs) {
-			return nil, nil
-		}
-		loc := l.lcs[l.pos]
-		if !loc.Next() {
-			l.pos++
-			continue
-		}
-		rec, err = loc.readMeta(filterOpts, dst)
-		if err != nil {
-			return nil, err
-		}
-		l.pos++
-
-		if readCxt.onlyFirstOrLast {
-			l.pos = len(l.lcs)
-		}
-		return rec, nil
-	}
-}
-
-func (l *LocationCursor) ReadOutOfOrderMeta(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	var err error
-	var rec *record.Record
-
-	for {
-		var midRec *record.Record
-		if l.pos >= len(l.lcs) {
-			break
-		}
-		loc := l.lcs[l.pos]
-		if !loc.Next() {
-			l.pos++
-			continue
-		}
-		midRec, err = loc.readMeta(filterOpts, dst)
-		if err != nil {
-			return nil, err
-		}
-		if midRec == nil {
-			break
-		}
-		l.pos++
-		if rec == nil {
-			rec = midRec.Copy()
-			continue
-		}
-		AggregateData(rec, midRec, loc.decs.ops)
-	}
-	return rec, nil
-}
-
-func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	if len(l.lcs) == 0 {
-		return nil, nil
-	}
-
-	var err error
-	var rec *record.Record
-	var readCxt = l.lcs[0].decs
-
-	if len(readCxt.ops) > 0 {
-		return l.ReadMeta(filterOpts, dst)
-	}
-
-	for {
-		if l.pos >= len(l.lcs) {
-			return nil, nil
-		}
-		loc := l.lcs[l.pos]
-		if !loc.Next() {
-			l.pos++
-			continue
-		}
-		rec, err = loc.readData(filterOpts, dst)
-		if err != nil {
-			return nil, err
-		}
-
-		if rec != nil {
-			return rec, nil
-		}
-		dst.Reuse()
-		l.pos++
-	}
-}
-
-func (l *Location) readChunkMeta(id uint64, tr record.TimeRange) error {
-	idx, m, err := l.r.MetaIndex(id, tr)
-	if err != nil {
-		return err
-	}
-
-	if m == nil {
-		return nil
-	}
-
-	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta)
-	if err != nil {
-		return err
-	}
-
-	if meta == nil {
-		return nil
-	}
-
-	if !tr.Overlaps(meta.MinMaxTime()) {
-		return nil
-	}
-
-	l.meta = meta
-	if !l.decs.Ascending {
-		l.segPos = int(meta.segCount) - 1
-	}
-
-	return nil
-}
-
-func (l *Location) GetChunkMeta() *ChunkMeta {
-	return l.meta
-}
-
-func (l *Location) Next() bool {
-	if l.decs.Ascending {
-		return l.segPos < int(l.meta.segCount)
-	}
-	return l.segPos >= 0
-}
-
-func (l *Location) ReadDone() {
-	if l.decs.Ascending {
-		l.segPos = -1
-	} else {
-		l.segPos = int(l.meta.segCount)
-	}
-}
-
-func (l *Location) Contains(sid uint64, tr record.TimeRange) (bool, error) {
-	// use bloom filter and file time range to filter generally
-	contains, err := l.r.ContainsValue(sid, tr)
-	if err != nil {
-		return false, err
-	}
-	if !contains {
-		return false, nil
-	}
-
-	// read file meta to judge whether file has data, chunk meta will also init
-	err = l.readChunkMeta(sid, tr)
-	if err != nil {
-		return false, err
-	}
-
-	if l.meta == nil {
-		return false, nil
-	}
-
-	if l.decs.Ascending {
-		return l.segPos < int(l.meta.segCount), nil
-	}
-
-	return l.segPos >= 0, nil
-}
-
-func (l *Location) isPreAggRead() bool {
-	return len(l.decs.ops) > 0
-}
-
-func (l *Location) nextSegment() {
-	if l.decs.Ascending {
-		if l.isPreAggRead() {
-			l.segPos = int(l.meta.segCount)
-		} else {
-			l.segPos++
-		}
-	} else {
-		if l.isPreAggRead() {
-			l.segPos = -1
-		} else {
-			l.segPos--
-		}
-	}
-}
-
-func (l *Location) next() bool {
-	if l.meta == nil {
-		return false
-	}
-	if l.decs.Ascending {
-		return l.segPos < int(l.meta.segCount)
-	} else {
-		return l.segPos >= 0
-	}
-}
-
-func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	return l.readData(filterOpts, dst)
-}
-
-func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	var rec *record.Record
-	var err error
-	for rec == nil && l.next() {
-		if !l.decs.tr.Overlaps(l.meta.MinMaxTime()) {
-			l.nextSegment()
-			continue
-		}
-
-		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.decs)
-		if err != nil {
-			return nil, err
-		}
-		l.nextSegment()
-
-		if l.isPreAggRead() {
-			return rec, nil
-		}
-
-		if rec != nil {
-			if l.decs.Ascending {
-				rec = FilterByTime(rec, l.decs.tr)
-			} else {
-				rec = FilterByTimeDescend(rec, l.decs.tr)
-			}
-		}
-		// filter by field
-		if rec != nil {
-			rec = FilterByField(rec, filterOpts.filtersMap, filterOpts.cond, filterOpts.fieldsIdx,
-				filterOpts.filterTags, filterOpts.pointTags)
-		}
-	}
-
-	return rec, nil
-}
-
-func (l *Location) readMeta(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	if l.decs.preAggBuilders == nil {
-		l.decs.preAggBuilders = newPreAggBuilders()
-	}
-
-	return l.readData(filterOpts, dst)
-}
-
-func (l *Location) ResetMeta() {
-	l.segPos = 0
-	if l.GetChunkMeta() != nil {
-		l.GetChunkMeta().Reset()
 	}
 }
 
@@ -1217,7 +854,7 @@ func initIgnoreTypeFun() {
 	}
 }
 
-func reverseIntergerValues(values []int64) []int64 {
+func reverseIntegerValues(values []int64) []int64 {
 	for i, j := 0, len(values)-1; i < j; {
 		values[i], values[j] = values[j], values[i]
 		i++
@@ -1270,90 +907,6 @@ func reverseStringValues(val []byte, offs []uint32, col *record.ColVal, bmCol *r
 	}
 }
 
-type ReadContext struct {
-	coderCtx       *CoderContext
-	preAggBuilders *PreAggBuilders
-	decBuf         []byte
-	offset         []uint32
-	col            record.ColVal
-
-	ops             []*comm.CallOption
-	tr              record.TimeRange
-	Ascending       bool
-	onlyFirstOrLast bool
-	origData        []byte
-
-	readBuf []byte
-}
-
-func NewReadContext(ascending bool) *ReadContext {
-	var readBuf []byte
-	if !mmapEn {
-		readBuf = bufferpool.Get()
-	}
-	b := bufferpool.Get()
-	return &ReadContext{
-		coderCtx:       NewCoderContext(),
-		preAggBuilders: newPreAggBuilders(),
-		decBuf:         b[:0],
-		Ascending:      ascending,
-		tr:             record.MinMaxTimeRange,
-		readBuf:        readBuf,
-	}
-}
-
-func (d *ReadContext) GetOps() []*comm.CallOption {
-	return d.ops
-}
-
-func (d *ReadContext) SetOps(c []*comm.CallOption) {
-	d.ops = c
-}
-
-func (d *ReadContext) MatchPreAgg() bool {
-	return len(d.ops) > 0
-}
-
-func (d *ReadContext) Set(ascending bool, tr record.TimeRange, onlyFirstOrLast bool, ops []*comm.CallOption) {
-	d.Ascending = ascending
-	d.tr = tr
-	d.onlyFirstOrLast = onlyFirstOrLast
-	d.ops = ops
-}
-
-func (d *ReadContext) Reset() {}
-
-func (d *ReadContext) Release() {
-	if d.coderCtx != nil {
-		d.coderCtx.Release()
-		d.coderCtx = nil
-	}
-
-	if d.decBuf != nil {
-		d.decBuf = d.decBuf[:0]
-		bufferpool.Put(d.decBuf)
-		d.decBuf = nil
-	}
-
-	if d.preAggBuilders != nil {
-		d.preAggBuilders.Release()
-		d.preAggBuilders = nil
-	}
-
-	if d.readBuf != nil {
-		bufferpool.Put(d.readBuf)
-		d.readBuf = nil
-	}
-}
-
-func (d *ReadContext) SetTr(tr record.TimeRange) {
-	d.tr = tr
-}
-
-func (d *ReadContext) InitPreAggBuilder() {
-	d.preAggBuilders = newPreAggBuilders()
-}
-
 type ColumnReader interface {
 	ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error)
 	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
@@ -1361,7 +914,7 @@ type ColumnReader interface {
 
 var timeRef = &record.Field{Name: record.TimeField, Type: influx.Field_Type_Int}
 
-func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, decs *ReadContext, cr ColumnReader, copied bool) error {
+func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool) error {
 	for i := range dst.Schema[:len(dst.Schema)-1] {
 		var buf []byte
 
@@ -1392,7 +945,7 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, d
 			log.Error("read data segment fail", zap.Error(err))
 			return err
 		}
-		err = decodeColumnData(field, data, col, decs, copied)
+		err = decodeColumnData(field, data, col, ctx, copied)
 		if err != nil {
 			log.Error("decode column data fail", zap.Error(err))
 			return err
@@ -1406,7 +959,7 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, d
 	return nil
 }
 
-func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *ReadContext, cr ColumnReader, copied bool, first bool) error {
+func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, first bool) error {
 	idx := cm.columnIndex(ref)
 	if idx < 0 {
 		log.Warn("column not find", zap.String("column", ref.String()))
@@ -1450,7 +1003,7 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs 
 		tmSeg := tmMeta.entries[segIndex]
 		minMaxSeg := &cm.timeRange[segIndex]
 		minT, maxT := minMaxSeg.minTime(), minMaxSeg.maxTime()
-		if !decs.tr.Overlaps(minT, maxT) {
+		if !ctx.tr.Overlaps(minT, maxT) {
 			nextSeg()
 			continue
 		}
@@ -1461,7 +1014,7 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs 
 			log.Error("read data segment fail", zap.Error(err))
 			return err
 		}
-		err = decodeColumnData(ref, colData, col, decs, copied)
+		err = decodeColumnData(ref, colData, col, ctx, copied)
 		if err != nil {
 			log.Error("decode column data fail", zap.Error(err))
 			return err
@@ -1474,7 +1027,7 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs 
 			log.Error("read time segment fail", zap.Error(err))
 			return err
 		}
-		err = appendTimeColumnData(tmData, timeCol, decs, copied)
+		err = appendTimeColumnData(tmData, timeCol, ctx, copied)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 			return err
@@ -1482,9 +1035,9 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs 
 
 		var rowIndex int
 		if first {
-			rowIndex = readFirstRowIndex(timeCol, col, decs.tr)
+			rowIndex = readFirstRowIndex(timeCol, col, ctx.tr)
 		} else {
-			rowIndex = readLastRowIndex(timeCol, col, decs.tr)
+			rowIndex = readLastRowIndex(timeCol, col, ctx.tr)
 		}
 
 		if rowIndex >= timeCol.Length() {
@@ -1503,8 +1056,8 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs 
 		setColumnDefaultValue(ref, col)
 		reserveColumnValue(timeRef, timeCol, rowIndex)
 
-		if dst.Schema.Len() > 2 && len(decs.ops) == 1 {
-			err = readAuxData(cm, segIndex, rowIndex, dst, decs, cr, copied)
+		if dst.Schema.Len() > 2 && len(ctx.ops) == 1 {
+			err = readAuxData(cm, segIndex, rowIndex, dst, ctx, cr, copied)
 			if err != nil {
 				log.Error("read aux data column fail", zap.Error(err))
 				return err
@@ -1516,7 +1069,7 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs 
 	return nil
 }
 
-func readTimeColumn(seg Segment, timeCol *record.ColVal, decs *ReadContext, cr ColumnReader, copied bool) error {
+func readTimeColumn(seg Segment, timeCol *record.ColVal, ctx *ReadContext, cr ColumnReader, copied bool) error {
 	var buf []byte
 	offset, size := seg.offsetSize()
 	tmData, err := cr.ReadDataBlock(offset, size, &buf)
@@ -1525,7 +1078,7 @@ func readTimeColumn(seg Segment, timeCol *record.ColVal, decs *ReadContext, cr C
 		return err
 	}
 
-	err = appendTimeColumnData(tmData, timeCol, decs, copied)
+	err = appendTimeColumnData(tmData, timeCol, ctx, copied)
 	if err != nil {
 		log.Error("decode time data fail", zap.Error(err))
 		return err
@@ -1534,7 +1087,7 @@ func readTimeColumn(seg Segment, timeCol *record.ColVal, decs *ReadContext, cr C
 	return nil
 }
 
-func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx int, decs *ReadContext, cr ColumnReader, copied bool, isMin bool) (rowIndex, segIndex int, err error) {
+func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx int, ctx *ReadContext, cr ColumnReader, copied bool, isMin bool) (rowIndex, segIndex int, err error) {
 	segIndex = -1
 	rowIndex = -1
 	colMeta := cm.colMeta[colIndex]
@@ -1550,10 +1103,10 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 		colSeg := colMeta.entries[i]
 		minMaxSeg := &cm.timeRange[i]
 		minT, maxT := minMaxSeg.minTime(), minMaxSeg.maxTime()
-		if !decs.tr.Overlaps(minT, maxT) {
+		if !ctx.tr.Overlaps(minT, maxT) {
 			continue
 		}
-		err = readTimeColumn(tmSeg, timeCol, decs, cr, copied)
+		err = readTimeColumn(tmSeg, timeCol, ctx, cr, copied)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 		}
@@ -1565,22 +1118,12 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 			err = er
 			return
 		}
-		decs.origData = data
+		ctx.origData = data
 
-		var ri int
-		var ok bool
-		if isMin {
-			ri, ok, err = readMinRowIndex(ref, col, timeCol, decs, meta, copied)
-			if err != nil {
-				log.Error("read max column data fail", zap.Error(err))
-				return
-			}
-		} else {
-			ri, ok, err = readMaxRowIndex(ref, col, timeCol, decs, meta, copied)
-			if err != nil {
-				log.Error("read max column data fail", zap.Error(err))
-				return
-			}
+		ri, ok, er := readMinMaxRowIndex(ref, col, timeCol, ctx, meta, copied, isMin)
+		if err != nil {
+			log.Error("read min max column data fail", zap.Error(err), zap.Bool("isMin", isMin))
+			return
 		}
 
 		if ok {
@@ -1592,7 +1135,7 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 	return
 }
 
-func findRowIndex(cm *ChunkMeta, decs *ReadContext, cr ColumnReader, timeCol *record.ColVal, tm int64, copied bool) (rowIndex, segIndex int, err error) {
+func findRowIndex(cm *ChunkMeta, ctx *ReadContext, cr ColumnReader, timeCol *record.ColVal, tm int64, copied bool) (rowIndex, segIndex int, err error) {
 	rowIndex = -1
 	segIndex = -1
 	timeMeta := cm.timeMeta()
@@ -1603,7 +1146,7 @@ func findRowIndex(cm *ChunkMeta, decs *ReadContext, cr ColumnReader, timeCol *re
 			continue
 		}
 
-		err = readTimeColumn(seg, timeCol, decs, cr, copied)
+		err = readTimeColumn(seg, timeCol, ctx, cr, copied)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 			return
@@ -1621,7 +1164,7 @@ func findRowIndex(cm *ChunkMeta, decs *ReadContext, cr ColumnReader, timeCol *re
 	return
 }
 
-func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *ReadContext, cr ColumnReader, copied bool, isMin bool) error {
+func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, isMin bool) error {
 	colIdx := cm.columnIndex(ref)
 	if colIdx < 0 {
 		log.Warn("column not find", zap.String("column", ref.String()))
@@ -1636,14 +1179,14 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Read
 	col := dst.Column(dstIdx)
 	timeCol := dst.TimeColumn()
 	meta := &dst.ColMeta[dstIdx]
-	readAux := dst.Schema.Len() > 2 && len(decs.ops) == 1
+	readAux := dst.Schema.Len() > 2 && len(ctx.ops) == 1
 
 	var err error
 	var rowIndex = -1
 	var segIndex = -1
 	var tm int64
-	if cm.allRowsInRange(decs.tr) {
-		cb := decs.preAggBuilders.aggBuilder(ref)
+	if cm.allRowsInRange(ctx.tr) {
+		cb := ctx.preAggBuilders.aggBuilder(ref)
 		_, err = cb.unmarshal(colMeta.preAgg)
 		if err != nil {
 			log.Error("unmarshal pre-agg data fail", zap.Error(err))
@@ -1658,10 +1201,10 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Read
 			_, tm = meta.Max()
 		}
 		if readAux {
-			rowIndex, segIndex, err = findRowIndex(cm, decs, cr, timeCol, tm, copied)
+			rowIndex, segIndex, err = findRowIndex(cm, ctx, cr, timeCol, tm, copied)
 		}
 	} else {
-		rowIndex, segIndex, err = readMinMaxFromData(cm, colIdx, dst, dstIdx, decs, cr, copied, isMin)
+		rowIndex, segIndex, err = readMinMaxFromData(cm, colIdx, dst, dstIdx, ctx, cr, copied, isMin)
 		if isMin {
 			_, tm = dst.ColMeta[dstIdx].Min()
 		} else {
@@ -1675,7 +1218,7 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Read
 	}
 
 	if readAux && rowIndex >= 0 {
-		err = readAuxData(cm, segIndex, rowIndex, dst, decs, cr, copied)
+		err = readAuxData(cm, segIndex, rowIndex, dst, ctx, cr, copied)
 		if err != nil {
 			log.Error("read aux data fail", zap.Error(err))
 			return err
@@ -1691,7 +1234,7 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Read
 	return nil
 }
 
-func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callIndex int, decs *ReadContext, cr ColumnReader, copied bool, isSum bool) error {
+func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callIndex int, ctx *ReadContext, cr ColumnReader, copied bool, isSum bool) error {
 	colMeta := cm.colMeta[colIndex]
 	timeCol := dst.TimeColumn()
 	ref := &dst.Schema[callIndex]
@@ -1699,16 +1242,16 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 	meta := &dst.ColMeta[callIndex]
 	tmMeta := cm.timeMeta()
 	trSegs := cm.timeRange
-	cb := decs.preAggBuilders.aggBuilder(ref)
+	cb := ctx.preAggBuilders.aggBuilder(ref)
 	cb.reset()
 	for i := range tmMeta.entries {
 		var buf []byte
 		tmSeg := tmMeta.entries[i]
 		colSeg := colMeta.entries[i]
-		if !decs.tr.Overlaps(trSegs[i].minTime(), trSegs[i].maxTime()) {
+		if !ctx.tr.Overlaps(trSegs[i].minTime(), trSegs[i].maxTime()) {
 			continue
 		}
-		err := readTimeColumn(tmSeg, timeCol, decs, cr, copied)
+		err := readTimeColumn(tmSeg, timeCol, ctx, cr, copied)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 		}
@@ -1719,14 +1262,14 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 			log.Error("read time segment fail", zap.Error(err))
 			return err
 		}
-		decs.origData = data
-		err = decodeColumnData(ref, data, col, decs, copied)
+		ctx.origData = data
+		err = decodeColumnData(ref, data, col, ctx, copied)
 		if err != nil {
 			log.Error("decode column data fail", zap.Error(err))
 			return err
 		}
 
-		rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, decs.tr)
+		rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, ctx.tr)
 		if isSum {
 			sumRangeValues(ref, col, rowIdxStart, rowIdxStop, meta)
 		} else {
@@ -1749,7 +1292,7 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 	return nil
 }
 
-func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *ReadContext, cr ColumnReader, copied bool, isSum bool) error {
+func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, isSum bool) error {
 	colIdx := cm.columnIndex(ref)
 	if colIdx < 0 {
 		log.Warn("column not find", zap.String("column", ref.String()))
@@ -1765,8 +1308,8 @@ func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Re
 	timeCol := dst.TimeColumn()
 	meta := &dst.ColMeta[dstIdx]
 
-	if cm.allRowsInRange(decs.tr) {
-		cb := decs.preAggBuilders.aggBuilder(ref)
+	if cm.allRowsInRange(ctx.tr) {
+		cb := ctx.preAggBuilders.aggBuilder(ref)
 		_, err := cb.unmarshal(colMeta.preAgg)
 		if err != nil {
 			log.Error("unmarshal pre-agg data fail", zap.Error(err))
@@ -1782,9 +1325,9 @@ func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Re
 	} else {
 		var err error
 		if !isSum && ref.Name == record.TimeField {
-			err = readTimeCount(cm, ref, dst, decs, cr)
+			err = readTimeCount(cm, ref, dst, ctx, cr)
 		} else {
-			err = readSumCountFromData(cm, colIdx, dst, dstIdx, decs, cr, copied, isSum)
+			err = readSumCountFromData(cm, colIdx, dst, dstIdx, ctx, cr, copied, isSum)
 		}
 		if err != nil {
 			log.Error("read data fail", zap.Error(err))
@@ -1798,7 +1341,7 @@ func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *Re
 	return nil
 }
 
-func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *ReadContext, cr ColumnReader) error {
+func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader) error {
 	tmMeta := cm.timeMeta()
 	dstIdx := dst.Schema.FieldIndex(ref.Name)
 	if dstIdx < 0 {
@@ -1811,15 +1354,15 @@ func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, decs *R
 	countN := 0
 	for i := range tmMeta.entries {
 		seg := tmMeta.entries[i]
-		if !decs.tr.Overlaps(trSegs[i].minTime(), trSegs[i].maxTime()) {
+		if !ctx.tr.Overlaps(trSegs[i].minTime(), trSegs[i].maxTime()) {
 			continue
 		}
-		err := readTimeColumn(seg, col, decs, cr, false)
+		err := readTimeColumn(seg, col, ctx, cr, false)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
-		start, end := findRowIdxRange(col, decs.tr)
+		start, end := findRowIdxRange(col, ctx.tr)
 		countN += end - start
 	}
 
@@ -2123,19 +1666,14 @@ func compareMin(newRecV, baseRecV interface{}) bool {
 			return true
 		}
 
-		if newRecV.(int64) < base {
-			return true
-		}
-		return false
+		return newRecV.(int64) < base
 	case float64:
 		base, ok := baseRecV.(float64)
 		if !ok {
 			return true
 		}
 
-		if newRecV.(float64) < base {
-			return true
-		}
+		return newRecV.(float64) < base
 	case string:
 		base, ok := baseRecV.(string)
 		if !ok {
@@ -2158,7 +1696,6 @@ func compareMin(newRecV, baseRecV interface{}) bool {
 	default:
 		return true
 	}
-	return true
 }
 
 func lastMeta(newRec, baseRec *record.Record, idx int) {
@@ -2196,48 +1733,4 @@ func IsInterfaceNil(value interface{}) bool {
 	}
 
 	return false
-}
-
-type MemoryReader interface {
-	AppendDataBlock(srcData []byte)
-	ReadChunkMetaBlock(metaIdx int, sid uint64, count uint32) []byte
-	ReadDataBlock(offset int64, size uint32, dstPtr *[]byte) ([]byte, error)
-	CopyBlocks(src MemoryReader)
-	LoadIntoMemory(dr DiskFileReader, tr *Trailer, metaIndexItems []MetaIndex) error
-	FreeMemory() int64
-	DataInMemory() bool
-	MetaInMemory() bool
-	ReserveMetaBlock(n int)
-	ReserveDataBlock(n int)
-	DataBlocks() [][]byte
-	MetaBlocks() [][]byte
-	SetMetaBlocks(blocks [][]byte)
-	Size() int64
-	Reset()
-}
-
-type memReader struct{}
-
-func (memReader) AppendDataBlock([]byte)                                     {}
-func (memReader) ReadChunkMetaBlock(int, uint64, uint32) []byte              { return nil }
-func (memReader) ReadDataBlock(int64, uint32, *[]byte) ([]byte, error)       { return nil, nil }
-func (memReader) CopyBlocks(MemoryReader)                                    {}
-func (memReader) LoadIntoMemory(DiskFileReader, *Trailer, []MetaIndex) error { return nil }
-func (memReader) FreeMemory() int64                                          { return 0 }
-func (memReader) DataInMemory() bool                                         { return false }
-func (memReader) MetaInMemory() bool                                         { return false }
-func (memReader) ReserveMetaBlock(int)                                       {}
-func (memReader) ReserveDataBlock(int)                                       {}
-func (memReader) Size() int64                                                { return 0 }
-func (memReader) Reset()                                                     {}
-func (memReader) DataBlocks() [][]byte                                       { return nil }
-func (memReader) MetaBlocks() [][]byte                                       { return nil }
-func (memReader) SetMetaBlocks([][]byte)                                     {}
-
-var (
-	emptyMemReader = &memReader{}
-)
-
-func NewMemReader() MemoryReader {
-	return &memReader{}
 }

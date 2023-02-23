@@ -132,6 +132,7 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 	if common := conf.GetCommon(); common != nil {
 		common.Corrector()
 		cpu.SetCpuNum(common.CPUNum)
+		config.SetHaEnable(common.HaEnable)
 	}
 
 	cmd.Config = conf

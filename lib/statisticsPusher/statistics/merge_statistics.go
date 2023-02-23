@@ -21,18 +21,18 @@ import (
 	"time"
 )
 
-func (s *MergeStatItem) StatOutOfOrderFile(size int64) {
-	s.OutOfOrderFileCount++
+func (s *MergeStatItem) StatOutOfOrderFile(size int64, num int) {
+	s.OutOfOrderFileCount += int64(num)
 	s.OutOfOrderFileSize += size
 }
 
-func (s *MergeStatItem) StatOrderFile(size int64) {
-	s.OrderFileCount++
+func (s *MergeStatItem) StatOrderFile(size int64, num int) {
+	s.OrderFileCount += int64(num)
 	s.OrderFileSize += size
 }
 
-func (s *MergeStatItem) StatMergedFile(size int64) {
-	s.MergedFileCount++
+func (s *MergeStatItem) StatMergedFile(size int64, num int) {
+	s.MergedFileCount += int64(num)
 	s.MergedFileSize += size
 }
 

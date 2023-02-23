@@ -31,6 +31,10 @@ func (f *Field) equal(other *Field) bool {
 	return f.Name == other.Name && f.Type == other.Type
 }
 
+func (f *Field) IsString() bool {
+	return f.Type == influx.Field_Type_String
+}
+
 func (f *Field) String() string {
 	var sb strings.Builder
 	sb.WriteString(f.Name)

@@ -16,7 +16,11 @@ limitations under the License.
 
 package hybridqp
 
-import "github.com/openGemini/openGemini/open_src/influx/influxql"
+import (
+	"time"
+
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
+)
 
 type HintType int64
 
@@ -29,7 +33,6 @@ type Options interface {
 	GetHintType() HintType
 	ISChunked() bool
 	SetHintType(HintType)
-	CloseRowChan()
 	OptionsName() string
 	IsAscending() bool
 	SetAscending(bool)
@@ -39,5 +42,8 @@ type Options interface {
 	GetMaxParallel() int
 	Window(t int64) (start, end int64)
 	GetGroupBy() map[string]struct{}
+	GetInterval() time.Duration
 	IsGroupByAllDims() bool
+	GetSourcesNames() []string
+	GetDimensions() []string
 }

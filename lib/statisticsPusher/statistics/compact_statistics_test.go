@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -92,4 +93,30 @@ func TestPushCompaction(t *testing.T) {
 	compareRowIndex = 1
 	assert.NoError(t, compareBuffer("compact", tags, fields, buf))
 	compareRowIndex = 0
+}
+
+func TestOpsCompaction(t *testing.T) {
+	s := &statistics.CompactStatistics{}
+	tags := map[string]string{"hostname": "127.0.0.1:8866"}
+	s.Init(tags)
+	statistics.NewTimestamp().Init(time.Second)
+	s.SetActive(int64(1))
+
+	stats := s.CollectOps()
+
+	data := map[string]interface{}{
+		"Active":             int64(1),
+		"Errors":             int64(0),
+		"MaxMemoryUsed":      int64(0),
+		"RecordPoolGetTotal": int64(0),
+		"RecordPoolHitTotal": int64(0),
+	}
+	expectResult := []opsStat.OpsStatistic{{
+		Name:   "compact",
+		Tags:   tags,
+		Values: data,
+	},
+	}
+
+	assert.Equal(t, stats, expectResult)
 }

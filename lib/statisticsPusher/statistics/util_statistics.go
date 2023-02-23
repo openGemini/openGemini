@@ -27,7 +27,7 @@ const (
 	maxTimeDiff = 30 * time.Second
 )
 
-func AddPointToBuffer(statisticsName string, tagMap map[string]string, fieldMap map[string]interface{}, buffer []byte) []byte {
+func addTagFieldToBuffer(statisticsName string, tagMap map[string]string, fieldMap map[string]interface{}, buffer []byte) []byte {
 	/* append measurement name*/
 	buffer = append(buffer, statisticsName...)
 	buffer = append(buffer, ',')
@@ -55,15 +55,34 @@ func AddPointToBuffer(statisticsName string, tagMap map[string]string, fieldMap 
 			buffer = append(buffer, fmt.Sprintf("%v", item)...)
 		case string:
 			buffer = append(buffer, formatString(item, true)...)
+		case bool:
+			buffer = append(buffer, fmt.Sprintf("%t", item)...)
+		default:
+			panic(fmt.Sprintf("don't support type %T!\n", v))
 		}
 		if index != len(fieldMap)-1 {
 			buffer = append(buffer, ',')
 		}
 		index++
 	}
+	return buffer
+}
+
+func AddPointToBuffer(statisticsName string, tagMap map[string]string, fieldMap map[string]interface{}, buffer []byte) []byte {
+	/* append measurement name*/
+	buffer = addTagFieldToBuffer(statisticsName, tagMap, fieldMap, buffer)
 
 	buffer = append(buffer, ' ')
 	buffer = append(buffer, NewTimestamp().Bytes()...)
+	buffer = append(buffer, '\n')
+	return buffer
+}
+
+func AddTimeToBuffer(statisticsName string, tagMap map[string]string, fieldMap map[string]interface{}, t time.Time, buffer []byte) []byte {
+	buffer = addTagFieldToBuffer(statisticsName, tagMap, fieldMap, buffer)
+
+	buffer = append(buffer, ' ')
+	buffer = append(buffer, []byte(strconv.FormatInt(t.UnixNano(), 10))...)
 	buffer = append(buffer, '\n')
 	return buffer
 }

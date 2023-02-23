@@ -7,11 +7,11 @@ You may obtain a copy of the License at
 
  http://www.apache.org/licenses/LICENSE-2.0
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package castor
@@ -42,19 +42,21 @@ func Test_WriteRead(t *testing.T) {
 	l.SetZapLogger(observedLogger)
 
 	respChan := make(chan array.Record)
+	idleCliChan := make(chan *castorCli, 1)
+
 	cnt := new(int32)
-	cli, err := newClient(addr, l, &chanSet{
-		dataRetryChan:   make(chan *data, 1),
-		dataFailureChan: make(chan *data, 1),
-		resultChan:      respChan,
-		clientPool:      make(chan *castorCli, 1),
-	}, cnt)
+	cli, err := newClient(addr, l, &dataChanSet{
+		dataChan:   make(chan *data, 1),
+		resultChan: respChan,
+	}, idleCliChan, cnt)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	rec := BuildNumericRecord()
-	cli.writeChan <- newData(rec)
+	if err := cli.send(newData(rec)); err != nil {
+		t.Fatal(err)
+	}
 
 	time.Sleep(time.Second)
 	timer := time.After(time.Second)
@@ -109,78 +111,87 @@ func (m *mockReadWriteCloser) Close() error {
 func Test_Write_Fail(t *testing.T) {
 	rwc := &mockReadWriteCloser{}
 	ctx, cancel := context.WithCancel(context.Background())
+	idleCliChan := make(chan *castorCli, 1)
+	srvDataChanSet := &dataChanSet{
+		dataChan:   make(chan *data, 1),
+		resultChan: make(chan array.Record, 1),
+	}
 	cli := castorCli{
 		dataSocketIn:  rwc,
 		dataSocketOut: rwc,
+		alive:         true,
+		logger:        logger.NewLogger(errno.ModuleCastor),
 		cnt:           new(int32),
-		chanSet: &chanSet{
-			dataRetryChan:   make(chan *data, 1),
-			dataFailureChan: make(chan *data, 1),
-			resultChan:      make(chan array.Record, 1),
-			clientPool:      make(chan *castorCli, 1),
-		},
-		writeChan: make(chan *data, 1),
-		cancel:    cancel,
-		ctx:       ctx,
+		dataChanSet:   srvDataChanSet,
+		writeChan:     make(chan *data, 1),
+		cancel:        cancel,
+		ctx:           ctx,
+		idleCliChan:   idleCliChan,
 	}
 	go cli.write()
 
 	dat := newData(BuildNumericRecord())
-	cli.writeChan <- dat
+	if err := cli.send(dat); err != nil {
+		t.Fatal(err)
+	}
 
 	wait := time.Second
 	timer := time.After(wait)
-	isDataInRetryChan := false
+	isDataRetry := false
 GETRETRY:
 	for {
 		select {
 		case <-timer:
 			break GETRETRY
-		case _, ok := <-cli.chanSet.dataRetryChan:
+		case _, ok := <-srvDataChanSet.dataChan:
 			if !ok {
-				t.Fatal("retry channel closed")
+				t.Fatal("data channel closed")
 			}
-			isDataInRetryChan = true
+			isDataRetry = true
 			break GETRETRY
 		}
 	}
-	if !isDataInRetryChan {
-		t.Fatal("data not put in retry channel")
+	if !isDataRetry {
+		t.Fatal("data not put in data channel")
 	}
 
-	cli = castorCli{
+	ctx, cancel = context.WithCancel(context.Background())
+	cli2 := castorCli{
 		dataSocketIn:  rwc,
 		dataSocketOut: rwc,
+		alive:         true,
+		logger:        logger.NewLogger(errno.ModuleCastor),
 		cnt:           new(int32),
-		chanSet: &chanSet{
-			dataRetryChan:   make(chan *data, 1),
-			dataFailureChan: make(chan *data, 1),
-			resultChan:      make(chan array.Record, 1),
-			clientPool:      make(chan *castorCli, 1),
-		},
-		writeChan: make(chan *data, 1),
-		cancel:    cancel,
-		ctx:       ctx,
+		dataChanSet:   srvDataChanSet,
+		writeChan:     make(chan *data, 1),
+		cancel:        cancel,
+		ctx:           ctx,
+		idleCliChan:   idleCliChan,
 	}
-	go cli.write()
+	go cli2.write()
 
-	cli.writeChan <- dat
+	if err := cli2.send(dat); err != nil {
+		t.Fatal(err)
+	}
 	timer = time.After(wait)
-	isDataInFailureChan := false
+	isDataRetryAgain := false
 GETFailure:
 	for {
 		select {
 		case <-timer:
 			break GETFailure
-		case _, ok := <-cli.chanSet.dataFailureChan:
+		case _, ok := <-srvDataChanSet.dataChan:
 			if !ok {
-				t.Fatal("failure channel closed")
+				t.Fatal("data channel closed")
 			}
-			isDataInFailureChan = true
+			isDataRetryAgain = true
 			break GETFailure
 		}
 	}
-	if !isDataInFailureChan {
-		t.Fatal("data not put in failure channel")
+	if !isDataRetryAgain {
+		t.Fatal("data not put in data channel")
+	}
+	if dat.retryCnt != 2 {
+		t.Fatal("data retry times not as expected")
 	}
 }

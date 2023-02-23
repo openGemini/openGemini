@@ -16,11 +16,20 @@ limitations under the License.
 
 package gen
 
-//go:generate tmpl -data=@merge.data -o=../merge_statistics.gen.go statistics.tmpl
-//go:generate tmpl -data=@merge.data -o=../merge_statistics.gen_test.go statistics_test.tmpl
+//go:generate tmpl -data="@merge.data" -o="../merge_statistics.gen.go" statistics.tmpl
 
 //go:generate tmpl -data=@compact.data -o=../compact_statistics.gen.go statistics.tmpl
 //go:generate tmpl -data=@compact.data -o=../compact_statistics.gen_test.go statistics_test.tmpl
 
 //go:generate tmpl -data=@meta.data -o=../meta_statistics.gen.go statistics.tmpl
 //go:generate tmpl -data=@meta.data -o=../meta_statistics.gen_test.go statistics_test.tmpl
+
+//go:generate tmpl -data=@stream.data -o=../stream_statistics.gen.go statistics.tmpl
+//go:generate tmpl -data=@stream.data -o=../stream_statistics.gen_test.go statistics_test.tmpl
+
+//go:generate tmpl -data=@window.data -o=../window_statistics.gen.go statistics.tmpl
+//go:generate tmpl -data=@window.data -o=../window_statistics.gen_test.go statistics_test.tmpl
+//go:generate tmpl -data=@downsample.data -o=../downSample_statistics.gen.go statistics.tmpl
+
+//go:generate tmpl -data=@record.data -o=../record_statistics.gen.go statistics.tmpl
+//go:generate tmpl -data=@record.data -o=../record_statistics.gen_test.go statistics_test.tmpl

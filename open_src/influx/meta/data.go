@@ -41,9 +41,12 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -59,14 +62,15 @@ const (
 
 	// MinRetentionPolicyDuration represents the minimum duration for a policy.
 	MinRetentionPolicyDuration = time.Hour
-
-	DefaultPtNumPerNode = 1
 )
 
 const (
-	HASH  = "hash"
-	RANGE = "range"
+	HASH          = "hash"
+	RANGE         = "range"
+	seperatorChar = "$"
 )
+
+var dropStreamFirstError = errors.New("stream task exists, drop it first")
 
 func assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
@@ -87,13 +91,16 @@ type Data struct {
 	PtView    map[string]DBPtInfos // PtView's key is dbname, value is PtInfo's slice.
 
 	Databases     map[string]*DatabaseInfo
+	Streams       map[string]*StreamInfo
 	Users         []UserInfo
 	MigrateEvents map[string]*MigrateEventInfo
 
 	// adminUserExists provides a constant time mechanism for determining
 	// if there is at least one admin GetUser.
-	AdminUserExists bool
-	TakeOverEnabled bool // set by syscontrol command
+	AdminUserExists    bool
+	TakeOverEnabled    bool // set by syscontrol command
+	BalancerEnabled    bool
+	ExpandShardsEnable bool // set by config (not persistence)
 
 	MaxNodeID       uint64
 	MaxShardGroupID uint64
@@ -101,6 +108,9 @@ type Data struct {
 	MaxIndexGroupID uint64
 	MaxIndexID      uint64
 	MaxEventOpId    uint64
+	MaxDownSampleID uint64
+	MaxStreamID     uint64
+	MaxConnID       uint64
 }
 
 var DataLogger *zap.Logger
@@ -119,72 +129,82 @@ func (data *Data) WalkDatabases(fn func(db *DatabaseInfo)) {
 	}
 }
 
-func (data *Data) GetDurationInfos(ptIds []uint32) map[uint64]*ShardDurationInfo {
-	r := make(map[uint64]*ShardDurationInfo, len(ptIds))
-
-	for i := range ptIds {
-		data.WalkDatabases(func(db *DatabaseInfo) {
-			if db.MarkDeleted {
+func (data *Data) GetDurationInfos(dbPtIds map[string][]uint32) map[uint64]*ShardDurationInfo {
+	r := make(map[uint64]*ShardDurationInfo)
+	data.WalkDatabases(func(db *DatabaseInfo) {
+		if db.MarkDeleted {
+			return
+		}
+		if _, ok := dbPtIds[db.Name]; !ok {
+			return
+		}
+		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+			if rp.MarkDeleted {
 				return
 			}
-			db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-				if rp.MarkDeleted {
-					return
-				}
-				rp.walkShardGroups(func(sg *ShardGroupInfo) {
-					if sg.Deleted() {
-						return
-					}
-					sg.walkShards(func(sh *ShardInfo) {
-						if sh.Owners[0] == ptIds[i] {
+			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+				sg.walkShards(func(sh *ShardInfo) {
+					for i := range dbPtIds[db.Name] {
+						if sh.Owners[0] == dbPtIds[db.Name][i] {
 							durationInfo := &ShardDurationInfo{}
 							durationInfo.Ident = ShardIdentifier{}
 							durationInfo.Ident.ShardID = sh.ID
 							durationInfo.Ident.ShardGroupID = sg.ID
 							durationInfo.Ident.OwnerDb = db.Name
-							durationInfo.Ident.OwnerPt = ptIds[i]
+							durationInfo.Ident.OwnerPt = dbPtIds[db.Name][i]
 							durationInfo.Ident.Policy = rp.Name
 							durationInfo.Ident.ShardType = rp.shardingType()
+							durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
+							durationInfo.Ident.DownSampleID = sh.DownSampleID
+							durationInfo.Ident.ReadOnly = sh.ReadOnly
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
 							durationInfo.DurationInfo.Tier = sh.Tier
 							durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
 							r[sh.ID] = durationInfo
+							return
 						}
-					})
+					}
 				})
 			})
 		})
-	}
+	})
 	return r
 }
 
-func (data *Data) DurationInfos(ptIds []uint32) *ShardDurationResponse {
+func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationResponse {
 	r := &ShardDurationResponse{DataIndex: data.Index}
-	for i := range ptIds {
-		data.WalkDatabases(func(db *DatabaseInfo) {
-			db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-				rp.walkShardGroups(func(sg *ShardGroupInfo) {
-					sg.walkShards(func(sh *ShardInfo) {
-						if sh.Owners[0] == ptIds[i] {
+	data.WalkDatabases(func(db *DatabaseInfo) {
+		if _, ok := dbPtIds[db.Name]; !ok {
+			return
+		}
+		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+				sg.walkShards(func(sh *ShardInfo) {
+					for i := range dbPtIds[db.Name] {
+						if sh.Owners[0] == dbPtIds[db.Name][i] {
 							durationInfo := ShardDurationInfo{}
 							durationInfo.Ident = ShardIdentifier{}
 							durationInfo.Ident.ShardID = sh.ID
 							durationInfo.Ident.ShardGroupID = sg.ID
 							durationInfo.Ident.OwnerDb = db.Name
-							durationInfo.Ident.OwnerPt = ptIds[i]
+							durationInfo.Ident.OwnerPt = dbPtIds[db.Name][i]
 							durationInfo.Ident.Policy = rp.Name
+							durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
+							durationInfo.Ident.DownSampleID = sh.DownSampleID
+							durationInfo.Ident.ReadOnly = sh.ReadOnly
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
 							durationInfo.DurationInfo.Tier = sh.Tier
 							durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
 							r.Durations = append(r.Durations, durationInfo)
+							return
 						}
-					})
+					}
 				})
 			})
 		})
-	}
+	})
 	return r
 }
 
@@ -224,7 +244,7 @@ func (data *Data) Measurement(database, retentionPolicy, mst string) (*Measureme
 	}
 
 	if msti.MarkDeleted {
-		return nil, ErrMeasurementIsBeingDelete
+		return nil, ErrMeasurementNotFound
 	}
 	return msti, nil
 }
@@ -344,6 +364,46 @@ func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime 
 	return nil
 }
 
+// createVersionMeasurement create new measurement
+func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo,
+	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32) {
+	sgLen := len(rp.ShardGroups)
+	if sgLen == 0 {
+		ski.ShardGroup = data.MaxShardGroupID + 1
+	} else {
+		ski.ShardGroup = 0
+	}
+	nameWithVer := influx.GetNameWithVersion(mst, version)
+
+	msti := &MeasurementInfo{Name: nameWithVer, originName: mst}
+	if shardKey != nil {
+		msti.ShardKeys = []ShardKeyInfo{*ski}
+	}
+
+	if indexR != nil {
+		newIndexR := IndexRelation{
+			Rid:        indexR.GetRid(),
+			Oids:       indexR.GetOid(),
+			IndexNames: indexR.GetIndexName(),
+		}
+		indexLists := indexR.GetIndexLists()
+		newIndexR.IndexList = make([]*IndexList, len(indexLists))
+		for i, iList := range indexLists {
+			newIndexR.IndexList[i] = &IndexList{
+				IList: iList.GetIList(),
+			}
+		}
+		msti.IndexRelation = newIndexR
+	}
+
+	if rp.Measurements == nil {
+		rp.Measurements = make(map[string]*MeasurementInfo)
+	}
+
+	rp.MstVersions[mst] = version
+	rp.Measurements[nameWithVer] = msti
+}
+
 func (data *Data) CreateMeasurement(database string, rpName string, mst string, shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation) error {
 	rp, err := data.RetentionPolicy(database, rpName)
 	if err != nil {
@@ -359,45 +419,19 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string, 
 	}
 
 	msti := rp.Measurement(mst)
-	if msti == nil {
-		sgLen := len(rp.ShardGroups)
-		if sgLen == 0 {
-			ski.ShardGroup = data.MaxShardGroupID + 1
-		} else {
-			ski.ShardGroup = 0
+	if msti == nil || msti.MarkDeleted {
+		version, ok := rp.MstVersions[mst]
+		if ok {
+			version = (version + 1) & 0xffff
 		}
-
-		msti = &MeasurementInfo{Name: mst}
-		if shardKey != nil {
-			msti.ShardKeys = []ShardKeyInfo{*ski}
+		if len(rp.MstVersions) == 0 {
+			rp.MstVersions = make(map[string]uint32)
 		}
-
-		if indexR != nil {
-			newIndexR := IndexRelation{
-				Rid:       indexR.GetRid(),
-				Oid:       indexR.GetOid(),
-				IndexName: indexR.GetIndexName(),
-			}
-			indexLists := indexR.GetIndexLists()
-			newIndexR.IndexList = make([]*IndexList, len(indexLists))
-			for i, iList := range indexLists {
-				newIndexR.IndexList[i] = &IndexList{
-					IList: iList.GetIList(),
-				}
-			}
-			msti.IndexRelations = append(msti.IndexRelations, newIndexR)
-		}
-
-		if rp.Measurements == nil {
-			rp.Measurements = make(map[string]*MeasurementInfo)
-		}
-		rp.Measurements[mst] = msti
+		rp.MstVersions[mst] = version
+		data.createVersionMeasurement(rp, shardKey, indexR, ski, mst, version)
 		return nil
 	}
 
-	if msti.MarkDeleted {
-		return fmt.Errorf("measurement %s is being deleted", mst)
-	}
 	n := len(msti.ShardKeys)
 	if n > 0 && ski.EqualsToAnother(&msti.ShardKeys[n-1]) {
 		return nil
@@ -420,6 +454,10 @@ func (data *Data) AlterShardKey(database string, rpName string, mst string, shar
 	ski := &ShardKeyInfo{}
 	if shardKey != nil {
 		ski.unmarshal(shardKey)
+	}
+
+	if ski.Type != shardKeyInfo.Type {
+		return ErrShardingTypeNotEqual(rpName, ski.Type, shardKeyInfo.Type)
 	}
 
 	if ski.EqualsToAnother(shardKeyInfo) {
@@ -499,9 +537,9 @@ func (data *Data) DataNode(id uint64) *DataNode {
 }
 
 func (data *Data) DataNodeByHttpHost(httpAddr string) *DataNode {
-	for _, n := range data.DataNodes {
-		if n.Host == httpAddr {
-			return &n
+	for i := range data.DataNodes {
+		if data.DataNodes[i].Host == httpAddr {
+			return &data.DataNodes[i]
 		}
 	}
 	return nil
@@ -541,6 +579,15 @@ func (data *Data) ClusterChangeState(nodeID uint64, newState serf.MemberStatus) 
 
 // CreateDataNode adds a node to the metadata.
 func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
+	data.MaxConnID++
+	// Ensure a node with the same host doesn't already exist.
+	for i := range data.DataNodes {
+		if data.DataNodes[i].TCPHost == tcpHost {
+			data.DataNodes[i].ConnID = data.MaxConnID
+			return nil, data.DataNodes[i].ID
+		}
+	}
+
 	// If an existing meta node exists with the same TCPHost address,
 	// then these nodes are actually the same so re-use the existing ID
 	var existingID uint64
@@ -561,10 +608,12 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 		NodeInfo: NodeInfo{
 			ID:      existingID,
 			Host:    host,
-			TCPHost: tcpHost}}
+			TCPHost: tcpHost},
+		ConnID: data.MaxConnID}
 	if len(data.MetaNodes) == 1 {
 		dn.Status = serf.StatusAlive
 		dn.LTime = 1
+		dn.AliveConnID = dn.ConnID
 	}
 	// Append new node.
 	data.DataNodes = append(data.DataNodes, dn)
@@ -573,6 +622,9 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 	data.initDataNodePtView()
 	for db := range data.PtView {
 		data.expendDBPtView(db, data.ClusterPtNum)
+	}
+	if data.ExpandShardsEnable {
+		data.ExpandGroups()
 	}
 	return nil, existingID
 }
@@ -592,7 +644,9 @@ func (data *Data) updatePtStatus(db string, ptId uint32, nodeId uint64, status P
 	pi.Owner.NodeID = nodeId
 	pi.Status = status
 	pi.PtId = ptId
-
+	if pi.Ver == 0 {
+		pi.Ver = 1
+	}
 	data.PtView[db] = dbPtView
 }
 
@@ -769,6 +823,17 @@ func (data *Data) CloneDatabases() map[string]*DatabaseInfo {
 	return dbs
 }
 
+func (data *Data) CloneStreams() map[string]*StreamInfo {
+	if data.Streams == nil {
+		return nil
+	}
+	strs := make(map[string]*StreamInfo, len(data.Streams))
+	for name := range data.Streams {
+		strs[name] = data.Streams[name].clone()
+	}
+	return strs
+}
+
 // CloneDataNodes returns a copy of the NodeInfo.
 func (data *Data) CloneDataNodes() []DataNode {
 	if data == nil || data.DataNodes == nil {
@@ -808,6 +873,32 @@ func (data *Data) createDBPtView(name string) error {
 		data.updatePtStatus(name, uint32(ptId), data.DataNodes[pos].ID, Online)
 	}
 
+	return nil
+}
+
+func (data *Data) CreateDBPtView(name string) error {
+	if data.PtView == nil {
+		data.PtView = make(map[string]DBPtInfos)
+	}
+
+	// pt view is already exist
+	if data.PtView[name] != nil {
+		return nil
+	}
+	var aliveDataNodeIds []uint64
+	for i := range data.DataNodes {
+		if data.DataNodes[i].Status == serf.StatusAlive {
+			aliveDataNodeIds = append(aliveDataNodeIds, data.DataNodes[i].ID)
+		}
+	}
+
+	if len(aliveDataNodeIds) == 0 {
+		return errno.NewError(errno.DataNoAlive)
+	}
+	for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
+		pos := ptId % len(aliveDataNodeIds)
+		data.updatePtStatus(name, uint32(ptId), aliveDataNodeIds[pos], Offline)
+	}
 	return nil
 }
 
@@ -890,14 +981,32 @@ func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardK
 }
 
 func (data *Data) SetDatabase(dbi *DatabaseInfo) error {
-	err := data.createDBPtView(dbi.Name)
+	var err error
+	if !config.GetHaEnable() {
+		err = data.createDBPtView(dbi.Name)
+	}
+
 	if err != nil {
 		return err
 	}
+
 	if data.Databases == nil {
 		data.Databases = make(map[string]*DatabaseInfo)
 	}
 	data.Databases[dbi.Name] = dbi
+	return nil
+}
+
+func (data *Data) SetStream(info *StreamInfo) error {
+	if data.Streams == nil {
+		data.Streams = make(map[string]*StreamInfo)
+	}
+	if v := data.Streams[info.Name]; v != nil && !v.Equal(info) {
+		return errno.NewError(errno.StreamHasExist)
+	}
+	info.ID = data.MaxStreamID
+	data.MaxStreamID++
+	data.Streams[info.Name] = info
 	return nil
 }
 
@@ -916,8 +1025,14 @@ func (data *Data) MarkDatabaseDelete(name string) error {
 	if dbi == nil {
 		return errno.NewError(errno.DatabaseNotFound, name)
 	}
+	if e := data.CheckStreamExistInDatabase(name); e != nil {
+		return e
+	}
 	if dbi.MarkDeleted {
 		return errno.NewError(errno.DatabaseIsBeingDelete, name)
+	}
+	if err := data.checkMigrateConflict(name); err != nil {
+		return err
 	}
 	dbi.MarkDeleted = true
 	return nil
@@ -1025,6 +1140,12 @@ func (data *Data) MarkRetentionPolicyDelete(database, name string) error {
 	if err != nil {
 		return err
 	}
+	if e := data.CheckStreamExistInRetention(database, name); e != nil {
+		return e
+	}
+	if err = data.checkMigrateConflict(database); err != nil {
+		return err
+	}
 	rp.MarkDeleted = true
 
 	return nil
@@ -1035,12 +1156,17 @@ func (data *Data) MarkMeasurementDelete(database, policy, measurement string) er
 	if err != nil {
 		return err
 	}
-
+	if e := data.CheckStreamExistInMst(database, policy, measurement); e != nil {
+		return e
+	}
+	if err = data.checkMigrateConflict(database); err != nil {
+		return err
+	}
 	mst.MarkDeleted = true
 	return nil
 }
 
-func (data *Data) DropMeasurement(database, policy, measurement string) error {
+func (data *Data) DropMeasurement(database, policy, nameWithVer string) error {
 	rpi, err := data.RetentionPolicy(database, policy)
 	if err != nil {
 		return err
@@ -1052,7 +1178,12 @@ func (data *Data) DropMeasurement(database, policy, measurement string) error {
 	if rpi.Measurements == nil {
 		return nil
 	}
-	delete(rpi.Measurements, measurement)
+	for k, m := range rpi.Measurements {
+		if k == nameWithVer && m.MarkDeleted {
+			delete(rpi.Measurements, nameWithVer)
+			break
+		}
+	}
 	return nil
 }
 
@@ -1074,7 +1205,7 @@ func (data *Data) SetDefaultRetentionPolicy(database, name string) error {
 func (data *Data) ShowShards() models.Rows {
 	var rows models.Rows
 	data.WalkDatabases(func(db *DatabaseInfo) {
-		row := &models.Row{Columns: []string{"id", "database", "retention_policy", "shard_group", "start_time", "end_time", "expiry_time", "owners", "tier"}, Name: db.Name}
+		row := &models.Row{Columns: []string{"id", "database", "retention_policy", "shard_group", "start_time", "end_time", "expiry_time", "owners", "tier", "downSample_level"}, Name: db.Name}
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
 			rp.walkShardGroups(func(sg *ShardGroupInfo) {
 				if sg.Deleted() {
@@ -1091,6 +1222,7 @@ func (data *Data) ShowShards() models.Rows {
 						sg.EndTime.Add(rp.Duration).UTC().Format(time.RFC3339),
 						joinUint64(data.GetDbPtOwners(db.Name, sh.Owners)),
 						TierToString(sh.Tier),
+						sh.DownSampleLevel,
 					})
 				})
 			})
@@ -1196,6 +1328,9 @@ func (data *Data) UpdateRetentionPolicy(database, name string, rpu *RetentionPol
 		return err
 	}
 
+	if rpi.HasDownSamplePolicy() && (rpu.Duration != nil && rpi.Duration != *rpu.Duration) {
+		return errno.NewError(errno.DownSamplePolicyExists)
+	}
 	// Ensure new policy doesn't match an existing policy.
 	err = di.checkUpdateRetentionPolicyName(name, rpu.Name)
 	if err != nil {
@@ -1322,13 +1457,13 @@ func (data *Data) GetTierOfShardGroup(database, policy string, timestamp time.Ti
 	now := time.Now()
 	if rpi.HotDuration > 0 {
 		if endTime.Add(rpi.HotDuration).Before(now) {
-			tier = Warm
+			tier = util.Warm
 		}
 	}
 
 	if rpi.WarmDuration > 0 {
 		if endTime.Add(rpi.WarmDuration).Before(now) {
-			tier = Cold
+			tier = util.Cold
 		}
 	}
 	return nil, tier, nil
@@ -1463,13 +1598,13 @@ func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp t
 	if len(rpi.IndexGroups) == 0 {
 		return data.CreateIndexGroup(rpi, timestamp)
 	}
+
 	var igIdx int
 	for igIdx = 0; igIdx < len(rpi.IndexGroups); igIdx++ {
 		if rpi.IndexGroups[igIdx].Contains(timestamp) {
 			break
 		}
 	}
-
 	if igIdx < len(rpi.IndexGroups) && len(rpi.IndexGroups[igIdx].Indexes) >= int(data.ClusterPtNum) {
 		return &rpi.IndexGroups[igIdx]
 	}
@@ -1497,6 +1632,46 @@ func (data *Data) expendDBPtView(database string, ptNum uint32) {
 	}
 }
 
+func (data *Data) ExpandGroups() {
+	data.WalkDatabases(func(db *DatabaseInfo) {
+		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+			if rp.shardingType() == RANGE {
+				return
+			}
+
+			rp.walkIndexGroups(func(ig *IndexGroupInfo) {
+				for i := len(ig.Indexes); i < int(data.ClusterPtNum); i++ {
+					data.MaxIndexID++
+					ig.Indexes = append(ig.Indexes, IndexInfo{
+						ID:     data.MaxIndexID,
+						Owners: []uint32{uint32(i)},
+					})
+				}
+			})
+
+			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+				for i := len(sg.Shards); i < int(data.ClusterPtNum); i++ {
+					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime)
+					data.MaxShardID++
+					sg.Shards = append(sg.Shards, ShardInfo{ID: data.MaxShardID, Owners: []uint32{uint32(i)}, IndexID: igi.Indexes[i].ID, Tier: sg.Shards[i-1].Tier})
+				}
+			})
+		})
+	})
+}
+
+func (data *Data) UpdatePtVersion(db string, ptId uint32) error {
+	dbPtView, ok := data.PtView[db]
+	if !ok {
+		return errno.NewError(errno.DatabaseNotFound)
+	}
+	if ptId >= uint32(len(dbPtView)) || ptId != data.PtView[db][ptId].PtId {
+		return errno.NewError(errno.PtNotFound)
+	}
+	data.PtView[db][ptId].Ver += 1
+	return nil
+}
+
 func (data *Data) DeleteIndexGroup(database, policy string, id uint64) error {
 	rpi, err := data.RetentionPolicy(database, policy)
 	if err != nil {
@@ -1506,7 +1681,7 @@ func (data *Data) DeleteIndexGroup(database, policy string, id uint64) error {
 	for i := range rpi.IndexGroups {
 		if rpi.IndexGroups[i].ID == id {
 			rpi.IndexGroups[i].DeletedAt = time.Now().UTC()
-			return nil
+			break
 		}
 	}
 	return nil
@@ -1519,32 +1694,37 @@ func (data *Data) DeleteShardGroup(database, policy string, id uint64) error {
 	if err != nil {
 		return err
 	}
-
 	// Find shard group by ID and set its deletion timestamp.
 	for i := range rpi.ShardGroups {
 		if rpi.ShardGroups[i].ID == id {
 			rpi.ShardGroups[i].DeletedAt = time.Now().UTC()
-			return nil
+			break
 		}
 	}
 
 	return nil
 }
 
-func (data *Data) PruneGroups(shardGroup bool) error {
+func (data *Data) PruneGroups(shardGroup bool, id uint64) error {
 	if shardGroup {
-		return data.pruneShardGroups()
+		return data.pruneShardGroups(id)
 	} else {
-		return data.pruneIndexGroups()
+		return data.pruneIndexGroups(id)
 	}
 }
 
 // remove all expired indexgroups.
-func (data *Data) pruneIndexGroups() error {
+func (data *Data) pruneIndexGroups(id uint64) error {
 	data.WalkDatabases(func(db *DatabaseInfo) {
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
 			for idx := 0; idx < len(rp.IndexGroups); {
-				if !rp.IndexGroups[idx].DeletedAt.IsZero() {
+				if id >= rp.IndexGroups[idx].Indexes[0].ID && id <= rp.IndexGroups[idx].Indexes[len(rp.IndexGroups[idx].Indexes)-1].ID {
+					pos := sort.Search(len(rp.IndexGroups[idx].Indexes), func(i int) bool {
+						return rp.IndexGroups[idx].Indexes[i].ID >= id
+					})
+					rp.IndexGroups[idx].Indexes[pos].MarkDelete = true
+				}
+				if rp.IndexGroups[idx].canDelete() {
 					rp.IndexGroups = append(rp.IndexGroups[:idx],
 						rp.IndexGroups[idx+1:]...)
 				} else {
@@ -1558,13 +1738,19 @@ func (data *Data) pruneIndexGroups() error {
 }
 
 // remove all expired shardgroups.
-func (data *Data) pruneShardGroups() error {
+func (data *Data) pruneShardGroups(id uint64) error {
 	data.WalkDatabases(func(db *DatabaseInfo) {
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
 			for idx := 0; idx < len(rp.ShardGroups); {
-				if !rp.ShardGroups[idx].DeletedAt.IsZero() {
-					rp.ShardGroups = append(rp.ShardGroups[:idx],
-						rp.ShardGroups[idx+1:]...)
+				if id >= rp.ShardGroups[idx].Shards[0].ID && id <= rp.ShardGroups[idx].Shards[len(rp.ShardGroups[idx].Shards)-1].ID {
+					pos := sort.Search(len(rp.ShardGroups[idx].Shards), func(i int) bool {
+						return rp.ShardGroups[idx].Shards[i].ID >= id
+					})
+					rp.ShardGroups[idx].Shards[pos].MarkDelete = true
+				}
+
+				if !rp.ShardGroups[idx].DeletedAt.IsZero() && rp.ShardGroups[idx].canDelete() {
+					rp.ShardGroups = append(rp.ShardGroups[:idx], rp.ShardGroups[idx+1:]...)
 				} else {
 					idx++
 				}
@@ -1802,6 +1988,7 @@ func (data *Data) Clone() *Data {
 	other.MetaNodes = data.CloneMetaNodes()
 
 	other.Databases = data.CloneDatabases()
+	other.Streams = data.CloneStreams()
 	other.Users = data.CloneUsers()
 	other.PtView = data.CloneDBPtView()
 	other.MigrateEvents = data.CloneMigrateEvents()
@@ -1827,6 +2014,11 @@ func (data *Data) Marshal() *proto2.Data {
 		PtNumPerNode:    proto.Uint32(data.PtNumPerNode),
 		MaxEventOpId:    proto.Uint64(data.MaxEventOpId),
 		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
+		BalancerEnabled: proto.Bool(data.BalancerEnabled),
+
+		MaxDownSampleID: proto.Uint64(data.MaxDownSampleID),
+		MaxStreamID:     proto.Uint64(data.MaxStreamID),
+		MaxConnId:       proto.Uint64(data.MaxConnID),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -1855,6 +2047,13 @@ func (data *Data) Marshal() *proto2.Data {
 	for dbName := range data.Databases {
 		pb.Databases[i] = data.Databases[dbName].marshal()
 		i++
+	}
+
+	pb.Streams = make([]*proto2.StreamInfo, len(data.Streams))
+	j := 0
+	for si := range data.Streams {
+		pb.Streams[j] = data.Streams[si].Marshal()
+		j++
 	}
 
 	pb.Users = make([]*proto2.UserInfo, len(data.Users))
@@ -1887,6 +2086,11 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	data.MaxEventOpId = pb.GetMaxEventOpId()
 	data.TakeOverEnabled = pb.GetTakeOverEnabled()
+	data.BalancerEnabled = pb.GetBalancerEnabled()
+	data.MaxDownSampleID = pb.GetMaxDownSampleID()
+	data.MaxStreamID = pb.GetMaxStreamID()
+	data.MaxConnID = pb.GetMaxConnId()
+
 	for i, x := range pb.GetDataNodes() {
 		data.DataNodes[i].unmarshal(x)
 	}
@@ -1910,6 +2114,15 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 		dbi := &DatabaseInfo{}
 		dbi.unmarshal(x)
 		data.Databases[dbi.Name] = dbi
+	}
+
+	if streams := pb.GetStreams(); len(streams) > 0 {
+		data.Streams = make(map[string]*StreamInfo, len(streams))
+		for _, s := range streams {
+			si := &StreamInfo{}
+			si.Unmarshal(s)
+			data.Streams[si.Name] = si
+		}
 	}
 
 	data.Users = make([]UserInfo, len(pb.GetUsers()))
@@ -1941,6 +2154,46 @@ func (data *Data) UnmarshalBinary(buf []byte) error {
 	}
 	data.Unmarshal(&pb)
 	return nil
+}
+
+// MarshalToStore serializes data to a protobuf representation. Just for ts-store use
+func (data *Data) MarshalToStore() *proto2.Data {
+	pb := &proto2.Data{
+		Term:         proto.Uint64(data.Term),
+		Index:        proto.Uint64(data.Index),
+		ClusterID:    proto.Uint64(data.ClusterID),
+		ClusterPtNum: proto.Uint32(data.ClusterPtNum),
+
+		MaxShardGroupID: proto.Uint64(data.MaxShardGroupID),
+		MaxShardID:      proto.Uint64(data.MaxShardID),
+		MaxIndexGroupID: proto.Uint64(data.MaxIndexGroupID),
+		MaxIndexID:      proto.Uint64(data.MaxIndexID),
+
+		// Need this for reverse compatibility
+		MaxNodeID: proto.Uint64(data.MaxNodeID),
+
+		PtNumPerNode:    proto.Uint32(data.PtNumPerNode),
+		MaxEventOpId:    proto.Uint64(data.MaxEventOpId),
+		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
+	}
+
+	pb.Databases = make([]*proto2.DatabaseInfo, len(data.Databases))
+	i := 0
+	for dbName := range data.Databases {
+		pb.Databases[i] = data.Databases[dbName].marshal()
+		i++
+	}
+
+	pb.Users = make([]*proto2.UserInfo, len(data.Users))
+	for i := range data.Users {
+		pb.Users[i] = data.Users[i].marshal()
+	}
+	return pb
+}
+
+// MarshalBinaryToStore encodes the metadata to a binary format. Just for ts-store use
+func (data *Data) MarshalBinaryToStore() ([]byte, error) {
+	return proto.Marshal(data.MarshalToStore())
 }
 
 // TruncateShardGroups truncates any shard group that could contain timestamps beyond t.
@@ -2073,19 +2326,6 @@ func (data *Data) importOneDB(other Data, backupDBName, restoreDBName, backupRPN
 	return restoreDBName, nil
 }
 
-func (data *Data) GetPtsByNodeId(nid uint64) []uint32 {
-	var ptIds []uint32
-	for db := range data.PtView {
-		for i := range data.PtView[db] {
-			if data.PtView[db][i].Owner.NodeID == nid {
-				ptIds = append(ptIds, data.PtView[db][i].PtId)
-			}
-		}
-		break
-	}
-	return ptIds
-}
-
 func (data *Data) UpdateShardInfoTier(shardID uint64, shardTier uint64, dbName, rpName string) error {
 	rpi, err := data.RetentionPolicy(dbName, rpName)
 	if err != nil {
@@ -2110,18 +2350,26 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 	}
 
 	if lTime < dn.LTime {
-		return nil
+		DataLogger.Error("event is older", zap.Uint64("id", id), zap.Int32("status", status), zap.Uint64("ltime", lTime), zap.Uint64("dnLtime", dn.LTime))
+		return errno.NewError(errno.OlderEvent)
 	}
 
 	updateStatus := serf.MemberStatus(status)
+	// node cannot join into cluster after split-brain
+	if config.GetHaEnable() && updateStatus == serf.StatusAlive && lTime == dn.LTime {
+		return errno.NewError(errno.DataNodeSplitBrain)
+	}
 	dn.Status = updateStatus
 	dn.LTime = lTime
+	if updateStatus == serf.StatusAlive {
+		dn.AliveConnID = dn.ConnID
+	}
 	if dn.GossipAddr == "" {
-		_, port, _ := net.SplitHostPort(gossipAddr)
-		dn.GossipAddr = net.JoinHostPort(dn.Host, port)
+		host, _, _ := net.SplitHostPort(dn.Host)
+		dn.GossipAddr = fmt.Sprintf("%s:%s", host, gossipAddr)
 	}
 
-	if data.TakeOverEnabled || updateStatus == serf.StatusFailed {
+	if config.GetHaEnable() || updateStatus == serf.StatusFailed {
 		data.updatePtViewStatus(id, Offline)
 		return nil
 	}
@@ -2136,6 +2384,7 @@ func (data *Data) updatePtViewStatus(nid uint64, status PtStatus) {
 		for i := range data.PtView[db] {
 			if data.PtView[db][i].Owner.NodeID == nid {
 				data.PtView[db][i].Status = status
+				data.PtView[db][i].Ver += 1
 			}
 		}
 	}
@@ -2148,7 +2397,7 @@ type DbPtInfo struct {
 }
 
 func (pt *DbPtInfo) String() string {
-	return fmt.Sprintf("%s$%d", pt.Db, pt.Pti.PtId)
+	return fmt.Sprintf("%s%s%d", pt.Db, seperatorChar, pt.Pti.PtId)
 }
 
 func (pt *DbPtInfo) Marshal() *proto2.DbPt {
@@ -2167,8 +2416,10 @@ func (pt *DbPtInfo) Marshal() *proto2.DbPt {
 }
 
 func (pt *DbPtInfo) Unmarshal(pb *proto2.DbPt) {
-	pt.Pti = &PtInfo{}
-	pt.Pti.unmarshal(pb.GetPt())
+	if pb.GetPt() != nil {
+		pt.Pti = &PtInfo{}
+		pt.Pti.unmarshal(pb.GetPt())
+	}
 	pt.Db = pb.GetDb()
 	if len(pb.Shards) > 0 {
 		pt.Shards = make(map[uint64]*ShardDurationInfo)
@@ -2201,6 +2452,9 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 				durationInfo.Ident.OwnerPt = pt
 				durationInfo.Ident.Policy = rp.Name
 				durationInfo.Ident.ShardType = rp.shardingType()
+				durationInfo.Ident.DownSampleID = sh.DownSampleID
+				durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
+				durationInfo.Ident.ReadOnly = sh.ReadOnly
 				durationInfo.DurationInfo = DurationDescriptor{}
 				durationInfo.DurationInfo.Duration = rp.Duration
 				durationInfo.DurationInfo.Tier = sh.Tier
@@ -2213,8 +2467,7 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 }
 
 func (data *Data) GetFailedPtInfos(id uint64, status PtStatus) []*DbPtInfo {
-	resPtInfos := make([]*DbPtInfo, data.ClusterPtNum)
-	idx := 0
+	resPtInfos := make([]*DbPtInfo, 0, data.ClusterPtNum)
 	for db := range data.PtView {
 		// do not get pt which db mark deleted
 		if data.Databases[db] == nil || data.Database(db).MarkDeleted {
@@ -2224,32 +2477,59 @@ func (data *Data) GetFailedPtInfos(id uint64, status PtStatus) []*DbPtInfo {
 			if data.PtView[db][i].Owner.NodeID == id && data.PtView[db][i].Status == status {
 				shards := data.GetShardDurationsByDbPt(db, data.PtView[db][i].PtId)
 				pt := data.PtView[db][i]
-				resPtInfos[idx] = &DbPtInfo{Db: db, Pti: &pt, Shards: shards}
-				idx++
+				resPtInfos = append(resPtInfos, &DbPtInfo{Db: db, Pti: &pt, Shards: shards})
 			}
 		}
 	}
-	return resPtInfos[:idx]
+	return resPtInfos
 }
 
-func (data *Data) CreateMigrateEvent(e *proto2.MigrateEventInfo) {
+func (data *Data) GetPtInfosByDbname(name string) ([]*DbPtInfo, error) {
+	resPtInfos := make([]*DbPtInfo, len(data.PtView[name]))
+	if data.Database(name) != nil && data.Database(name).MarkDeleted {
+		return nil, errno.NewError(errno.DatabaseIsBeingDelete)
+	}
+	idx := 0
+	for i := range data.PtView[name] {
+		if data.PtView[name][i].Status == Offline {
+			pt := data.PtView[name][i]
+			resPtInfos[idx] = &DbPtInfo{Db: name, Pti: &pt}
+			idx++
+		}
+	}
+	return resPtInfos[:idx], nil
+}
+
+func (data *Data) CreateMigrateEvent(e *proto2.MigrateEventInfo) error {
 	if data.MigrateEvents == nil {
 		data.MigrateEvents = make(map[string]*MigrateEventInfo)
 	}
 	if data.MigrateEvents[e.GetEventId()] != nil {
-		return
+		if data.MigrateEvents[e.GetEventId()].src != e.GetSrc() ||
+			data.MigrateEvents[e.GetEventId()].dest != e.GetDest() ||
+			data.MigrateEvents[e.GetEventId()].currState != int(e.GetCurrState()) ||
+			data.MigrateEvents[e.GetEventId()].preState != int(e.GetPreState()) {
+			return errno.NewError(errno.PtEventIsAlreadyExist)
+		}
+		return nil
+	}
+	if err := data.checkDDLConflict(e); err != nil {
+		return err
 	}
 	mei := &MigrateEventInfo{}
 	mei.unmarshal(e)
 	data.MaxEventOpId++
 	mei.opId = data.MaxEventOpId
 	data.MigrateEvents[mei.eventId] = mei
+	return nil
 }
 
 func (data *Data) UpdateMigrateEvent(e *proto2.MigrateEventInfo) error {
-	if data.MigrateEvents == nil || data.MigrateEvents[e.GetEventId()] == nil {
+	if data.MigrateEvents == nil || data.MigrateEvents[e.GetEventId()] == nil ||
+		data.MigrateEvents[e.GetEventId()].opId != e.GetOpId() {
 		return errno.NewError(errno.EventNotFound, e.GetEventId())
 	}
+
 	eventInfo := data.MigrateEvents[e.GetEventId()]
 	eventInfo.currState = int(e.GetCurrState())
 	eventInfo.preState = int(e.GetPreState())
@@ -2289,6 +2569,206 @@ func (data *Data) CloneMigrateEvents() map[string]*MigrateEventInfo {
 	return events
 }
 
+func (data *Data) CreateDownSamplePolicy(database, rpName string, info *DownSamplePolicyInfo) error {
+	d := data.Database(database)
+	id := data.MaxDownSampleID
+	data.MaxDownSampleID++
+	info.TaskID = id
+	d.RetentionPolicies[rpName].DownSamplePolicyInfo = info
+	d.RetentionPolicies[rpName].Duration = info.Duration
+	return nil
+}
+
+func (data *Data) DropDownSamplePolicy(database, rpName string, dropAll bool) {
+	if !dropAll {
+		d := data.Database(database)
+		d.RetentionPolicies[rpName].DownSamplePolicyInfo.DownSamplePolicies = nil
+		d.RetentionPolicies[rpName].DownSamplePolicyInfo.Calls = nil
+		return
+	}
+	for _, rpi := range data.Database(database).RetentionPolicies {
+		rpi.DownSamplePolicyInfo = nil
+	}
+}
+
+func (data *Data) ShowDownSamplePolicies(database string) (models.Rows, error) {
+	dbi, err := data.GetDatabase(database)
+	if err != nil {
+		return nil, err
+	}
+
+	row := &models.Row{Columns: []string{"rpName", "field_operator", "duration", "sampleInterval", "timeInterval"}}
+	dbi.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+		info := rp.DownSamplePolicyInfo
+		if info == nil || info.IsNil() {
+			return
+		}
+		row.Values = append(row.Values, []interface{}{rp.Name, info.Calls2String(), info.Duration.String(), info.SampleInterval2String(),
+			info.TimeInterval2String()})
+	})
+
+	sort.Slice(row.Values, func(i, j int) bool {
+		return row.Values[i][0].(string) < row.Values[j][0].(string)
+	})
+	return []*models.Row{row}, nil
+}
+
+// Marshal serializes data to a protobuf representation.
+func (data *Data) MarshalUsers() *proto2.Data {
+	pb := &proto2.Data{
+		Term:         proto.Uint64(data.Term),
+		Index:        proto.Uint64(data.Index),
+		ClusterID:    proto.Uint64(data.ClusterID),
+		ClusterPtNum: proto.Uint32(data.ClusterPtNum),
+
+		MaxShardGroupID: proto.Uint64(data.MaxShardGroupID),
+		MaxShardID:      proto.Uint64(data.MaxShardID),
+		MaxIndexGroupID: proto.Uint64(data.MaxIndexGroupID),
+		MaxIndexID:      proto.Uint64(data.MaxIndexID),
+
+		// Need this for reverse compatibility
+		MaxNodeID: proto.Uint64(data.MaxNodeID),
+
+		PtNumPerNode:    proto.Uint32(data.PtNumPerNode),
+		MaxEventOpId:    proto.Uint64(data.MaxEventOpId),
+		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
+	}
+	pb.Users = make([]*proto2.UserInfo, len(data.Users))
+	for i := range data.Users {
+		pb.Users[i] = data.Users[i].marshal()
+	}
+	return pb
+}
+
+// MarshalBinary encodes the metadata to a binary format.
+func (data *Data) MarshalBinaryUser() ([]byte, error) {
+	return proto.Marshal(data.MarshalUsers())
+}
+
+func (data *Data) UpdateShardDownSampleInfo(ident *ShardIdentifier) error {
+	database := data.Databases[ident.OwnerDb]
+	if database == nil {
+		return nil
+	}
+	rp := database.RetentionPolicies[ident.Policy]
+	if rp == nil {
+		return nil
+	}
+	shardGroups := rp.ShardGroups
+	for i := range shardGroups {
+		if inShardGroup(&shardGroups[i], ident.ShardID) {
+			shardGroups[i].Shard(ident.ShardID).DownSampleLevel = int64(ident.DownSampleLevel)
+			shardGroups[i].Shard(ident.ShardID).DownSampleID = ident.DownSampleID
+		}
+	}
+	return nil
+}
+
+func (data *Data) MarkTakeover(enable bool) {
+	data.TakeOverEnabled = enable
+}
+
+func (data *Data) MarkBalancer(enable bool) {
+	data.BalancerEnabled = enable
+}
+
+func (data *Data) CreateStream(info *StreamInfo) error {
+	if info == nil {
+		return nil
+	}
+	return data.SetStream(info)
+}
+
+func (data *Data) ShowStreams(database string, showAll bool) (models.Rows, error) {
+	_, err := data.GetDatabase(database)
+	if err != nil && !showAll {
+		return nil, err
+	}
+	row := &models.Row{Columns: []string{"database", "retention", "measurement", "Name", "source measurement", "dimensions", "calls", "interval", "delay"}}
+	for _, v := range data.Streams {
+		if showAll || v.DesMst.Database == database {
+			row.Values = append(row.Values, []interface{}{v.DesMst.Database, v.DesMst.RetentionPolicy, v.DesMst.Name, v.Name, v.SrcMst.Name + "." + v.SrcMst.RetentionPolicy + "." + v.SrcMst.Name,
+				v.Dimensions(), v.CallsName(), v.Interval.String(), v.Delay.String()})
+		}
+	}
+
+	sort.Slice(row.Values, func(i, j int) bool {
+		return row.Values[i][0].(string) < row.Values[j][0].(string)
+	})
+	return []*models.Row{row}, nil
+}
+
+func (data *Data) DropStream(name string) error {
+	if _, ok := data.Streams[name]; !ok {
+		return errno.NewError(errno.StreamNotFound)
+	}
+	delete(data.Streams, name)
+	return nil
+}
+
+func (data *Data) CheckStreamExistInDatabase(database string) error {
+	for _, v := range data.Streams {
+		if v.SrcMst.Database == database || v.DesMst.Database == database {
+			return dropStreamFirstError
+		}
+	}
+	return nil
+}
+
+func (data *Data) CheckStreamExistInRetention(database, rp string) error {
+	for _, v := range data.Streams {
+		if (v.SrcMst.Database == database && v.SrcMst.RetentionPolicy == rp) || (v.DesMst.Database == database && v.DesMst.RetentionPolicy == rp) {
+			return dropStreamFirstError
+		}
+	}
+	return nil
+}
+
+func (data *Data) CheckStreamExistInMst(database, rp, mst string) error {
+	for _, v := range data.Streams {
+		if (v.SrcMst.Database == database && v.SrcMst.Name == mst && v.SrcMst.RetentionPolicy == rp) ||
+			(v.DesMst.Database == database && v.DesMst.Name == mst && v.DesMst.RetentionPolicy == rp) {
+			return dropStreamFirstError
+		}
+	}
+	return nil
+}
+
+func (data *Data) checkMigrateConflict(database string) error {
+	for i := 0; i < len(data.PtView[database]); i++ {
+		eventId := fmt.Sprintf("%s%s%d", database, seperatorChar, i)
+		if data.MigrateEvents[eventId] != nil {
+			return errno.NewError(errno.ConflictWithEvent)
+		}
+	}
+	return nil
+}
+
+func (data *Data) checkDDLConflict(e *proto2.MigrateEventInfo) error {
+	if !e.GetCheckConflict() {
+		return nil
+	}
+	dbi := data.Databases[e.Pti.GetDb()]
+	if dbi == nil {
+		return errno.NewError(errno.DatabaseNotFound)
+	}
+	if dbi.MarkDeleted {
+		return errno.NewError(errno.DatabaseIsBeingDelete)
+	}
+	for rpName := range dbi.RetentionPolicies {
+		rpi := dbi.RetentionPolicies[rpName]
+		if rpi.MarkDeleted {
+			return errno.NewError(errno.RpIsBeingDelete)
+		}
+		for mstIdx := range rpi.Measurements {
+			if rpi.Measurements[mstIdx].MarkDeleted {
+				return errno.NewError(errno.MstIsBeingDelete)
+			}
+		}
+	}
+	return nil
+}
+
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.
 func MarshalTime(t time.Time) int64 {
 	if t.IsZero() {
@@ -2315,6 +2795,7 @@ func ValidMeasurementName(name string) bool {
 	if name == "." || name == ".." {
 		return false
 	}
+
 	return validName(name, `,:;/\`)
 }
 
@@ -2369,4 +2850,8 @@ func LoadDurationOrDefault(duration *time.Duration, existDuration *time.Duration
 		return existDuration
 	}
 	return duration
+}
+
+func inShardGroup(group *ShardGroupInfo, shardID uint64) bool {
+	return shardID >= group.Shards[0].ID && shardID <= group.Shards[len(group.Shards)-1].ID
 }

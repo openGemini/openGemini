@@ -181,33 +181,6 @@ func {{.Name}}SumMerge(prevPoint, currPoint *{{.Name}}Point) {
 {{end}}
 
 {{range .}}
-{{- if or (eq .Name "Float") (eq .Name "Integer")}}
-func {{.Name}}MeanReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-    vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-    if vs == ve {
-		return start, 0, true
-	}
-
-    var sum {{.Type}}
-    var aggregated int
-	for i := vs; i < ve; i++ {
-        sum += c.Column(ordinal).{{.Name}}Value(i)
-        aggregated++
-    }
-	return start, float64(sum) / float64(aggregated), false
-}
-{{- end}}
-{{end}}
-
-func FloatMeanMerge(prevPoint, currPoint *FloatPoint) {
-	if prevPoint.isNil {
-		prevPoint.Assign(currPoint)
-		return
-	}
-	prevPoint.value = (prevPoint.value + currPoint.value) / 2
-}
-
-{{range .}}
 {{- if and (ne .Name "String") (ne .Name "Boolean")}}
 func {{.Name}}MinReduce(c Chunk, ordinal, start, end int) (int, {{.Type}}, bool) {
 	if c.Column(ordinal).NilCount() == 0 {

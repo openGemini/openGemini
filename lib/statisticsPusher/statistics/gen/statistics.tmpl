@@ -24,6 +24,8 @@ import (
 	{{- if eq .PushDuration "Y"}}
 	"time"
 	{{- end}}
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type {{.Name}}Statistics struct {
@@ -71,6 +73,22 @@ func (s *{{$.Name}}Statistics) Collect(buffer []byte) ([]byte, error) {
 	{{- end}}
 
 	return buffer, nil
+}
+
+func (s *{{$.Name}}Statistics) CollectOps() []opsStat.OpsStatistic {
+	data := map[string]interface{}{
+    	{{- range .Items}}
+    	"{{.}}" : s.item{{.}},
+    	{{- end}}
+    }
+
+	return []opsStat.OpsStatistic{
+	    {
+		Name:   "{{.Measurement}}",
+		Tags:   s.tags,
+		Values: data,
+	},
+	}
 }
 
 {{range .Items}}

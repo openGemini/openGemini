@@ -17,18 +17,12 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-)
-
-const (
-	TierBegin = 0
-	Hot       = 1
-	Warm      = 2
-	Cold      = 3
-	TierEnd   = 4
 )
 
 // ShardGroupInfo represents metadata about a shard group. The DeletedAt field is important
@@ -44,18 +38,30 @@ type ShardGroupInfo struct {
 	TruncatedAt time.Time
 }
 
+func (sgi *ShardGroupInfo) canDelete() bool {
+	for i := range sgi.Shards {
+		if !sgi.Shards[i].MarkDelete {
+			return false
+		}
+	}
+	return true
+}
+
 func (sgi *ShardGroupInfo) walkShards(fn func(sh *ShardInfo)) {
 	for i := range sgi.Shards {
 		fn(&sgi.Shards[i])
 	}
 }
 
-func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.PointTags, aliveShardIdxes []int, mstName string) ([]ShardInfo, []byte) {
+func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.PointTags, aliveShardIdxes []int, mstName string, ski *ShardKeyInfo) ([]ShardInfo, []byte) {
 	shards := make([]ShardInfo, 0, len(sgi.Shards))
 	sort.Sort(tagsGroup)
 	r := influx.Row{Name: mstName, Tags: *tagsGroup}
 	r.UnmarshalIndexKeys(nil)
 	r.UnmarshalShardKeyByTag(nil)
+	if len(ski.ShardKey) > 0 {
+		r.ShardKey = r.ShardKey[len(mstName)+1:]
+	}
 	shard := sgi.ShardFor(HashID(r.ShardKey), aliveShardIdxes)
 	shards = append(shards, *shard)
 	// Force the query to be broadcast
@@ -65,7 +71,7 @@ func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.Po
 	return shards, r.IndexKey
 }
 
-func (sgi ShardGroupInfo) TargetShardsHintQuery(mstName string, mst *MeasurementInfo, condition influxql.Expr, opt *query.SelectOptions, aliveShardIdxes []int) ([]ShardInfo, []byte) {
+func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, opt *query.SelectOptions, aliveShardIdxes []int) ([]ShardInfo, []byte) {
 	tagsGroup := getConditionTags(condition, mst.Schema)
 	if len(tagsGroup) != 1 {
 		return sgi.Shards, nil
@@ -93,11 +99,11 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mstName string, mst *Measurement
 	}
 
 	// it's used for specific or full series of the hint query
-	return sgi.getShardsAndSeriesKeyForHintQuery(tagsGroup[0], aliveShardIdxes, mstName)
+	return sgi.getShardsAndSeriesKeyForHintQuery(tagsGroup[0], aliveShardIdxes, mst.Name, ski)
 
 }
 
-func (sgi ShardGroupInfo) TargetShards(mstName string, mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, aliveShardIdxes []int) []ShardInfo {
+func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, aliveShardIdxes []int) []ShardInfo {
 	shards := make([]ShardInfo, 0, len(sgi.Shards))
 	if ski == nil || ski.ShardKey == nil || (ski.Type == HASH && condition == nil) {
 		if len(aliveShardIdxes) == len(sgi.Shards) {
@@ -119,7 +125,7 @@ func (sgi ShardGroupInfo) TargetShards(mstName string, mst *MeasurementInfo, ski
 		return sgi.Shards
 	}
 	var shardKeyAndValue []byte
-	shardKeyAndValue = append(shardKeyAndValue, mstName...)
+	shardKeyAndValue = append(shardKeyAndValue, mst.Name...)
 	for tagGroupIdx := range tagsGroup {
 		sort.Sort(tagsGroup[tagGroupIdx])
 		i, j := 0, 0
@@ -151,7 +157,7 @@ func (sgi ShardGroupInfo) TargetShards(mstName string, mst *MeasurementInfo, ski
 			return sgi.Shards
 		}
 
-		shard := sgi.ShardFor(HashID(shardKeyAndValue), aliveShardIdxes)
+		shard := sgi.ShardFor(HashID(shardKeyAndValue[len(mst.Name)+1:]), aliveShardIdxes)
 		if shard == nil {
 			continue
 		}
@@ -340,6 +346,9 @@ func (sgi *ShardGroupInfo) DestShard(shardKey string) *ShardInfo {
 
 // ShardFor returns the ShardInfo for a Point hash.
 func (sgi *ShardGroupInfo) ShardFor(hash uint64, aliveShardIdxes []int) *ShardInfo {
+	if config.GetHaEnable() {
+		return &sgi.Shards[hash%uint64(len(sgi.Shards))]
+	}
 	if len(aliveShardIdxes) == 0 {
 		return nil
 	}
@@ -397,12 +406,16 @@ func (sgi *ShardGroupInfo) unmarshal(pb *proto2.ShardGroupInfo) {
 
 // ShardInfo represents metadata about a shard.
 type ShardInfo struct {
-	ID      uint64
-	Owners  []uint32 // pt group for replications.
-	Min     string
-	Max     string
-	Tier    uint64
-	IndexID uint64
+	ID              uint64
+	Owners          []uint32 // pt group for replications.
+	Min             string
+	Max             string
+	Tier            uint64
+	IndexID         uint64
+	DownSampleID    uint64
+	DownSampleLevel int64
+	ReadOnly        bool
+	MarkDelete      bool
 }
 
 func (si ShardInfo) Contain(shardKey string) bool {
@@ -440,11 +453,15 @@ func (si ShardInfo) clone() ShardInfo {
 // marshal serializes to a protobuf representation.
 func (si ShardInfo) marshal() *proto2.ShardInfo {
 	pb := &proto2.ShardInfo{
-		ID:      proto.Uint64(si.ID),
-		Min:     proto.String(si.Min),
-		Max:     proto.String(si.Max),
-		Tier:    proto.Uint64(uint64(si.Tier)),
-		IndexID: proto.Uint64(si.IndexID),
+		ID:              proto.Uint64(si.ID),
+		Min:             proto.String(si.Min),
+		Max:             proto.String(si.Max),
+		Tier:            proto.Uint64(si.Tier),
+		IndexID:         proto.Uint64(si.IndexID),
+		DownSampleLevel: proto.Int64(si.DownSampleLevel),
+		DownSampleID:    proto.Uint64(si.DownSampleID),
+		ReadOnly:        proto.Bool(si.ReadOnly),
+		MarkDelete:      proto.Bool(si.MarkDelete),
 	}
 	pb.OwnerIDs = make([]uint32, len(si.Owners))
 	for i := range si.Owners {
@@ -471,6 +488,10 @@ func (si *ShardInfo) unmarshal(pb *proto2.ShardInfo) {
 	si.Max = pb.GetMax()
 	si.Tier = pb.GetTier()
 	si.IndexID = pb.GetIndexID()
+	si.DownSampleLevel = pb.GetDownSampleLevel()
+	si.DownSampleID = pb.GetDownSampleID()
+	si.ReadOnly = pb.GetReadOnly()
+	si.MarkDelete = pb.GetMarkDelete()
 
 	si.Owners = make([]uint32, len(pb.GetOwnerIDs()))
 	for i, x := range pb.GetOwnerIDs() {
@@ -509,11 +530,11 @@ func HashID(key []byte) uint64 {
 
 func TierToString(tier uint64) string {
 	switch tier {
-	case Hot:
+	case util.Hot:
 		return "hot"
-	case Warm:
+	case util.Warm:
 		return "warm"
-	case Cold:
+	case util.Cold:
 		return "cold"
 	}
 	return "unknown"
@@ -522,12 +543,12 @@ func TierToString(tier uint64) string {
 func StringToTier(tier string) uint64 {
 	switch tier {
 	case "HOT":
-		return Hot
+		return util.Hot
 	case "WARM":
-		return Warm
+		return util.Warm
 	case "COLD":
-		return Cold
+		return util.Cold
 	default:
-		return TierBegin
+		return util.TierBegin
 	}
 }

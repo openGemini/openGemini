@@ -157,8 +157,9 @@ type Monitor struct {
 	StorePath     string        `toml:"store-path"`
 	Compress      bool          `toml:"compress"`
 	HttpsEnabled  bool          `toml:"https-enabled"`
-	HttpAuth      []string      `toml:"http-auth"`
 	HttpEndPoint  string        `toml:"http-endpoint"`
+	Username      string        `toml:"username"`
+	Password      string        `toml:"password"`
 }
 
 func NewMonitor(app App) Monitor {

@@ -16,15 +16,10 @@ limitations under the License.
 
 package immutable
 
-/*
-The float compression modified from: https://github.com/dgryski/go-tsz
-*/
-
 import (
-	"fmt"
 	"math"
-	"math/bits"
 
+	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/github.com/dgryski/go-bitstream"
@@ -41,65 +36,13 @@ type Float struct {
 	trailing     uint8
 
 	buf *BytesBuffer
-	bw  *bitstream.BitWriter
 	br  *bitstream.BitReader
+
+	float *compress.Float
 }
 
-func (enc *Float) Reset(dst []byte) {
-	enc.buf.Reset(dst)
-	enc.leading = ^uint8(0)
-	enc.trailing = 0
-	enc.encodingType = floatCompressedGorilla
-	enc.bw.Reset(enc.buf)
-}
-
-func (enc *Float) gorillaEncoding(values []float64) error {
-	writeValue := func(preV, v float64) {
-		vDelta := math.Float64bits(v) ^ math.Float64bits(preV)
-
-		if vDelta == 0 {
-			_ = enc.bw.WriteBit(bitstream.Zero)
-		} else {
-			_ = enc.bw.WriteBit(bitstream.One)
-
-			leading := uint8(bits.LeadingZeros64(vDelta))
-			trailing := uint8(bits.TrailingZeros64(vDelta))
-			// clamp number of leading zeros to avoid overflow when encoding
-			if leading >= 32 {
-				leading = 31
-			}
-
-			// TODO(dgryski): check if it's 'cheaper' to reset the leading/trailing bits instead
-			if enc.leading != ^uint8(0) && leading >= enc.leading && trailing >= enc.trailing {
-				_ = enc.bw.WriteBit(bitstream.Zero)
-				_ = enc.bw.WriteBits(vDelta>>enc.trailing, 64-int(enc.leading)-int(enc.trailing))
-			} else {
-				enc.leading, enc.trailing = leading, trailing
-
-				_ = enc.bw.WriteBit(bitstream.Zero)
-				_ = enc.bw.WriteBits(uint64(leading), 5)
-				// Note that if leading == trailing == 0, then sigbits == 64.  But that value doesn't actually fit into the 6 bits we have.
-				// Luckily, we never need to encode 0 significant bits, since that would put us in the other case (vdelta == 0).
-				// So instead we write out a 0 and adjust it back to 64 on unpacking.
-				sigbits := 64 - leading - trailing
-				_ = enc.bw.WriteBits(uint64(sigbits), 6)
-				_ = enc.bw.WriteBits(vDelta>>trailing, int(sigbits))
-			}
-		}
-	}
-
-	v0 := values[0]
-	_ = enc.bw.WriteBits(math.Float64bits(v0), 64)
-
-	for i := 1; i < len(values); i++ {
-		v := values[i]
-		writeValue(v0, v)
-		v0 = v
-	}
-
-	writeValue(v0, math.NaN())
-
-	return enc.bw.Flush(bitstream.Zero)
+func NewFloat() *Float {
+	return &Float{float: compress.NewFloat()}
 }
 
 func (enc *Float) SetEncodingType(ty int) {
@@ -111,24 +54,41 @@ func (enc *Float) Encoding(in []byte, out []byte) ([]byte, error) {
 		return out, nil
 	}
 
-	enc.buf.Reset(out)
-	if enc.bw == nil {
-		enc.bw = bitstream.NewWriter(enc.buf)
-	} else {
-		enc.bw.Reset(enc.buf)
-	}
-
-	values := record.Bytes2Float64Slice(in)
-	var count [4]byte
-	numberenc.MarshalUint32Copy(count[:], uint32(len(values)))
-	_ = enc.buf.WriteByte(byte(floatCompressedGorilla << 4))
-	_, _ = enc.buf.Write(count[:])
-
-	if err := enc.gorillaEncoding(values); err != nil {
+	pos := len(out)
+	buf, err := enc.float.AdaptiveEncoding(in, out[pos:])
+	if err != nil {
 		return nil, err
 	}
 
-	return enc.buf.Bytes(), nil
+	if pos == 0 {
+		return buf, nil
+	}
+
+	out = append(out, buf...)
+	return out, err
+}
+
+func (enc *Float) Decoding(in []byte, out []byte) ([]byte, error) {
+	enc.encodingType = int(in[0] >> 4)
+	if enc.encodingType == floatCompressedGorilla {
+		// compatible with old data files
+		// will be deleted in later versions
+		enc.buf = NewBytesBuffer(nil)
+		return enc.decoding(in[1:], out)
+	}
+
+	pos := len(out)
+	buf, err := enc.float.AdaptiveDecoding(in, out[pos:])
+	if err != nil {
+		return nil, err
+	}
+
+	if pos == 0 {
+		return buf, nil
+	}
+
+	out = append(out, buf...)
+	return out, err
 }
 
 func (enc *Float) gorillaDecoding(out []float64) error {
@@ -192,12 +152,9 @@ func (enc *Float) gorillaDecoding(out []float64) error {
 	return nil
 }
 
-func (enc *Float) Decoding(in []byte, out []byte) ([]byte, error) {
-	enc.encodingType, in = int(in[0]>>4), in[1:]
-	if enc.encodingType != floatCompressedGorilla {
-		return nil, fmt.Errorf("invalid input float encoded data, type = %v", enc.encodingType)
-	}
-
+// Deprecated: this function has function and performance problems.
+// It is reserved for compatibility and will be deleted in the next version.
+func (enc *Float) decoding(in []byte, out []byte) ([]byte, error) {
 	count := int(numberenc.UnmarshalUint32(in))
 	enc.buf.Reset(in[4:])
 	if enc.br == nil {

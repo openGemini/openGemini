@@ -24,7 +24,7 @@ import (
 type SessionRole string
 
 const (
-	defaultBlockTimeout = 10 * time.Second
+	defaultBlockTimeout = 60 * time.Second
 
 	RoleClient SessionRole = "client"
 	RoleServer SessionRole = "server"

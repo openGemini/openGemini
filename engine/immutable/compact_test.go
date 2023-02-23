@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,13 +34,10 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 )
-
-func init() {
-	Init()
-}
 
 func init() {
 	Init()
@@ -106,7 +104,7 @@ func genTestData(id uint64, idCount int, rows int, startValue *float64, starTime
 	return ids, data
 }
 
-func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
+func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadCacheIns()
@@ -122,10 +120,11 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 
 	conf := NewConfig()
 	conf.maxRowsPerSegment = 100
-	tier := uint64(meta.Hot)
+	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*4 + 1
+	lockPath := ""
 
-	store := NewTableStore(testCompDir, &tier, true, conf)
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -144,6 +143,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	check := func(name string, fn string, orig *record.Record) {
 		f := store.File(name, fn, true)
 		defer f.Unref()
+		defer UnrefFilesReader(f)
 		contains, err := f.Contains(idMinMax.min)
 		if err != nil || !contains {
 			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -154,7 +154,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,8 +216,177 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	recs := make([]*record.Record, 0, filesN)
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
-		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-		msb := AllocMsBuilder(store.path, "mst", conf, 1, fileName, store.Tier(), nil, 2)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		write(ids, data, msb, oldRec)
+		for _, v := range data {
+			recs = append(recs, v)
+		}
+		store.AddTable(msb, true, false)
+	}
+
+	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+
+	files := store.Order
+	if len(files) != 1 {
+		t.Fatalf("exp 4 file, but:%v", len(files))
+	}
+	fids, ok := files["mst"]
+	if !ok || fids.Len() != filesN {
+		t.Fatalf("mst not find")
+	}
+	for _, f := range fids.files {
+		err := f.FreeFileHandle()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for i, f := range fids.files {
+		check("mst", f.Path(), recs[i])
+		fr := f.(*tsspFile).reader.(*TSSPFileReader)
+		if fr.ref != 0 {
+			t.Fatal("ref error")
+		}
+	}
+
+	if err := store.LevelCompact(0, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	store.wg.Wait()
+
+	files = store.Order
+	if len(files) != 1 {
+		t.Fatalf("exp 1 file after compact, but:%v", len(files))
+	}
+
+	fids, ok = files["mst"]
+	if !ok {
+		t.Fatalf("mst not find")
+	}
+
+	if fids.Len() != 1 {
+		t.Fatalf("exp 1 file after compact, but:%v", fids)
+	}
+
+	check("mst", fids.files[0].Path(), oldRec)
+}
+
+func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	cacheIns := readcache.GetReadCacheIns()
+	cacheIns.Purge()
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	var idMinMax, tmMinMax MinMax
+	var startValue = 1.1
+
+	conf := NewConfig()
+	conf.maxRowsPerSegment = 100
+	tier := uint64(util.Hot)
+	recRows := conf.maxRowsPerSegment*4 + 1
+	lockPath := ""
+
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+
+	store.CompactionEnable()
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			merge.Merge(rec)
+		}
+	}
+
+	check := func(name string, fn string, orig *record.Record) {
+		f := store.File(name, fn, true)
+		defer f.Unref()
+		defer f.UnrefFileReader()
+		contains, err := f.Contains(idMinMax.min)
+		if err != nil || !contains {
+			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
+		}
+
+		midx, _ := f.MetaIndexAt(0)
+		if midx == nil {
+			t.Fatalf("meta index not find")
+		}
+
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decs := NewReadContext(true)
+		readRec := record.NewRecordBuilder(schema)
+		readRec.ReserveColumnRows(recRows * 4)
+		rec := record.NewRecordBuilder(schema)
+		rec.ReserveColumnRows(conf.maxRowsPerSegment)
+		for i := range cm.timeMeta().entries {
+			rec, err = f.ReadAt(cm, i, rec, decs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readRec.Merge(rec)
+		}
+
+		oldV0 := orig.Column(0).FloatValues()
+		oldV1 := orig.Column(1).IntegerValues()
+		oldV2 := orig.Column(2).BooleanValues()
+		oldV3 := orig.Column(3).StringValues(nil)
+		oldTimes := orig.Times()
+		v0 := readRec.Column(0).FloatValues()
+		v1 := readRec.Column(1).IntegerValues()
+		v2 := readRec.Column(2).BooleanValues()
+		v3 := readRec.Column(3).StringValues(nil)
+		times := readRec.Times()
+
+		if !reflect.DeepEqual(oldTimes, times) {
+			t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
+		}
+
+		if !reflect.DeepEqual(oldV0, v0) {
+			t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
+		}
+
+		if !reflect.DeepEqual(oldV1, v1) {
+			t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
+		}
+
+		if !reflect.DeepEqual(oldV2, v2) {
+			t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
+		}
+
+		if !reflect.DeepEqual(oldV3, v3) {
+			t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
+		}
+	}
+
+	tm := testTimeStart
+
+	tmMinMax.min = uint64(tm.UnixNano())
+	idMinMax.min = 1
+
+	filesN := LeveLMinGroupFiles[0]
+	oldRec := record.NewRecordBuilder(schema)
+	oldRec.ReserveColumnRows(recRows * filesN)
+
+	recs := make([]*record.Record, 0, filesN)
+	for i := 0; i < filesN; i++ {
+		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -263,9 +432,168 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	check("mst", fids.files[0].Path(), oldRec)
 }
 
+func TestMmsTables_FullCompact(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	cacheIns := readcache.GetReadCacheIns()
+	cacheIns.Purge()
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	var idMinMax, tmMinMax MinMax
+	var startValue = 1.1
+
+	conf := NewConfig()
+	conf.maxRowsPerSegment = 100
+	tier := uint64(util.Hot)
+	recRows := conf.maxRowsPerSegment*4 + 1
+	lockPath := ""
+
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+
+	store.CompactionEnable()
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			merge.Merge(rec)
+		}
+	}
+
+	check := func(name string, fn string, orig *record.Record) {
+		f := store.File(name, fn, true)
+		defer f.Unref()
+		contains, err := f.Contains(idMinMax.min)
+		if err != nil || !contains {
+			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
+		}
+
+		midx, _ := f.MetaIndexAt(0)
+		if midx == nil {
+			t.Fatalf("meta index not find")
+		}
+
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decs := NewReadContext(true)
+		readRec := record.NewRecordBuilder(schema)
+		readRec.ReserveColumnRows(recRows * 4)
+		rec := record.NewRecordBuilder(schema)
+		rec.ReserveColumnRows(conf.maxRowsPerSegment)
+		for i := range cm.timeMeta().entries {
+			rec, err = f.ReadAt(cm, i, rec, decs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readRec.Merge(rec)
+		}
+
+		oldV0 := orig.Column(0).FloatValues()
+		oldV1 := orig.Column(1).IntegerValues()
+		oldV2 := orig.Column(2).BooleanValues()
+		oldV3 := orig.Column(3).StringValues(nil)
+		oldTimes := orig.Times()
+		v0 := readRec.Column(0).FloatValues()
+		v1 := readRec.Column(1).IntegerValues()
+		v2 := readRec.Column(2).BooleanValues()
+		v3 := readRec.Column(3).StringValues(nil)
+		times := readRec.Times()
+
+		if !reflect.DeepEqual(oldTimes, times) {
+			t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
+		}
+
+		if !reflect.DeepEqual(oldV0, v0) {
+			t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
+		}
+
+		if !reflect.DeepEqual(oldV1, v1) {
+			t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
+		}
+
+		if !reflect.DeepEqual(oldV2, v2) {
+			t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
+		}
+
+		if !reflect.DeepEqual(oldV3, v3) {
+			t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
+		}
+	}
+
+	tm := testTimeStart
+
+	tmMinMax.min = uint64(tm.UnixNano())
+	idMinMax.min = 1
+
+	filesN := LeveLMinGroupFiles[0]
+	oldRec := record.NewRecordBuilder(schema)
+	oldRec.ReserveColumnRows(recRows * filesN)
+
+	recs := make([]*record.Record, 0, filesN)
+	for i := 0; i < filesN; i++ {
+		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		write(ids, data, msb, oldRec)
+		for _, v := range data {
+			recs = append(recs, v)
+		}
+		store.AddTable(msb, true, false)
+	}
+
+	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+
+	files := store.Order
+	if len(files) != 1 {
+		t.Fatalf("exp 4 file, but:%v", len(files))
+	}
+	fids, ok := files["mst"]
+	if !ok || fids.Len() != filesN {
+		t.Fatalf("mst not find")
+	}
+
+	for i, f := range fids.files {
+		check("mst", f.Path(), recs[i])
+	}
+
+	if err := store.FullCompact(1); err != nil {
+		t.Fatal(err)
+	}
+
+	store.wg.Wait()
+
+	files = store.Order
+	if len(files) != 1 {
+		t.Fatalf("exp 1 file after compact, but:%v", len(files))
+	}
+
+	fids, ok = files["mst"]
+	if !ok {
+		t.Fatalf("mst not find")
+	}
+
+	if fids.Len() != 1 {
+		t.Fatalf("exp 1 file after compact, but:%v", fids)
+	}
+
+	check("mst", fids.files[0].Path(), oldRec)
+}
+
 func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 	mergeFlags := []int32{NonStreamingCompact, StreamingCompact, AutoCompact}
 	testCompDir := t.TempDir()
+	lockPath := ""
 	for _, flag := range mergeFlags {
 		_ = fileops.RemoveAll(testCompDir)
 		cacheIns := readcache.GetReadCacheIns()
@@ -283,10 +611,10 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		conf := NewConfig()
 		conf.maxRowsPerSegment = 100
 		conf.maxSegmentLimit = 65535
-		tier := uint64(meta.Hot)
+		tier := uint64(util.Hot)
 		recRows := conf.maxRowsPerSegment*9 + 1
 
-		store := NewTableStore(testCompDir, &tier, true, conf)
+		store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 		defer store.Close()
 
 		store.CompactionEnable()
@@ -304,6 +632,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		check := func(name string, fn string, ids []uint64, orig []*record.Record) {
 			f := store.File(name, fn, true)
 			defer f.Unref()
+			defer f.UnrefFileReader()
 			contains, err := f.Contains(idMinMax.min)
 			if err != nil || !contains {
 				t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -385,8 +714,8 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		var dataIds []uint64
 		for i := 0; i < filesN; i++ {
 			ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
-			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-			msb := AllocMsBuilder(store.path, "mst", conf, 10, fileName, store.Tier(), nil, 2)
+			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+			msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
 			write(ids, data, msb)
 
 			for j, id := range ids {
@@ -450,6 +779,7 @@ func mustCloseTsspFiles(fiels []TSSPFile) {
 func mustCreateTsspFiles(path string, fileNames []string) []TSSPFile {
 	_ = fileops.MkdirAll(path, 0750)
 	files := make([]TSSPFile, 0, len(fileNames))
+	lockPath := ""
 	for i := range fileNames {
 		name := filepath.Join(path, fileNames[i])
 		pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
@@ -458,14 +788,15 @@ func mustCreateTsspFiles(path string, fileNames []string) []TSSPFile {
 			mustCloseTsspFiles(files)
 			panic(err)
 		}
-		dr := NewDiskFileReader(fd)
-		fileName := NewTSSPFileName(1, 0, 0, 0, true)
+		dr := NewDiskFileReader(fd, &lockPath)
+		fileName := NewTSSPFileName(1, 0, 0, 0, true, &lockPath)
 		f := &tsspFile{
 			name: fileName,
 			reader: &TSSPFileReader{
 				r:          dr,
 				inMemBlock: NewMemReader(),
 			},
+			lock: &lockPath,
 		}
 		files = append(files, f)
 	}
@@ -517,8 +848,8 @@ func TestCompactLog_Validate(t *testing.T) {
 		mustCloseTsspFiles(oldFiles)
 		mustCloseTsspFiles(newFiles)
 	}()
-
-	store := &MmsTables{}
+	lockPath := ""
+	store := &MmsTables{lock: &lockPath}
 	logFile, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
 	if err != nil {
 		t.Fatal(err)
@@ -572,13 +903,13 @@ func TestCompactLog_AllNewFileExist1(t *testing.T) {
 		mustCloseTsspFiles(newFiles)
 	}()
 
-	store := &MmsTables{}
+	lockPath := ""
+	store := &MmsTables{lock: &lockPath}
 	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err = recoverFile(testCompDir); err != nil {
+	if err = recoverFile(testCompDir, &lockPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -621,7 +952,8 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 		mustCloseTsspFiles(newFiles)
 	}()
 
-	store := &MmsTables{}
+	lockPath := ""
+	store := &MmsTables{lock: &lockPath}
 	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
 	if err != nil {
 		t.Fatal(err)
@@ -633,8 +965,7 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 	//remove 1 old file
 	fName = filepath.Join(dir, info.OldFile[1])
 	_ = fileops.Remove(fName)
-
-	if err = recoverFile(testCompDir); err != nil {
+	if err = recoverFile(testCompDir, &lockPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -678,7 +1009,8 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 		mustCloseTsspFiles(newFiles)
 	}()
 
-	store := &MmsTables{}
+	lockPath := ""
+	store := &MmsTables{lock: &lockPath}
 	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
 	if err != nil {
 		t.Fatal(err)
@@ -690,8 +1022,7 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
-
-	if err = recoverFile(testCompDir); err != nil {
+	if err = recoverFile(testCompDir, &lockPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -736,7 +1067,8 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 		mustCloseTsspFiles(newFiles)
 	}()
 
-	store := &MmsTables{}
+	lockPath := ""
+	store := &MmsTables{lock: &lockPath}
 	_, err := store.writeCompactedFileInfo(info.Name, oldFiles, newFiles, testCompDir, info.IsOrder)
 	if err != nil {
 		t.Fatal(err)
@@ -748,8 +1080,7 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
-
-	if err = recoverFile(testCompDir); err != nil {
+	if err = recoverFile(testCompDir, &lockPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -773,11 +1104,12 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 	confs := []TestConfig{
 		{24, 7, defaultFileSizeLimit, 24, NonStreamingCompact},
 		{24, 7, defaultFileSizeLimit, 24, StreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit, 1000 * 10, NonStreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit, 1000 * 10, StreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit, 1000 * 10, AutoCompact},
+		{1000, math.MaxUint16, minFileSizeLimit, 1500 * 10, NonStreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit, 1500 * 10, StreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit, 1500 * 10, AutoCompact},
 	}
 	testCompDir := t.TempDir()
+	lockPath := ""
 	for _, cf := range confs {
 		_ = fileops.RemoveAll(testCompDir)
 		cacheIns := readcache.GetReadCacheIns()
@@ -797,8 +1129,8 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 		conf.maxRowsPerSegment = cf.rowPerSegment
 		conf.maxSegmentLimit = cf.segmentPerFile
 		conf.fileSizeLimit = cf.fileSizeLimit
-		tier := uint64(meta.Hot)
-		store := NewTableStore(testCompDir, &tier, true, conf)
+		tier := uint64(util.Hot)
+		store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 
 		store.CompactionEnable()
 
@@ -839,8 +1171,8 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 				ids, data = genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 			}
 
-			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true)
-			msb := AllocMsBuilder(store.path, "mst", conf, 1, fileName, store.Tier(), nil, 2)
+			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+			msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
 			write(ids, data, msb, oldRec)
 			for _, v := range data {
 				recs = append(recs, v)
@@ -918,7 +1250,8 @@ func TestDiskWriter(t *testing.T) {
 	}
 
 	var buf [128 * 1024]byte
-	dr := NewDiskWriter(fd, 1024)
+	lockPath := ""
+	dr := NewDiskWriter(fd, 1024, &lockPath)
 	if _, err := dr.Write(buf[:32]); err != nil {
 		t.Fatal(err)
 	}
@@ -1038,9 +1371,9 @@ func TestCompactRecovery(t *testing.T) {
 
 	conf := NewConfig()
 	conf.maxRowsPerSegment = 100
-	tier := uint64(meta.Hot)
-
-	store := NewTableStore(testCompDir, &tier, false, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, false, conf)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -1069,18 +1402,27 @@ func TestMergeRecovery(t *testing.T) {
 
 	conf := NewConfig()
 	conf.maxRowsPerSegment = 100
-	tier := uint64(meta.Hot)
-
-	store := NewTableStore(testCompDir, &tier, false, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, false, conf)
 	defer store.Close()
 
 	store.CompactionEnable()
 
-	outFiles := &OutOfOrderMergeContext{
-		Seqs:  []uint64{1, 2, 3, 4},
-		Names: []string{"1", "2", "3", "4"},
-	}
-	defer MergeRecovery(testCompDir, "test_name", outFiles)
+	ctx := NewMergeContext("mst")
+	ctx.order.seq = append(ctx.order.seq, 1)
+	defer MergeRecovery(testCompDir, "test_name", ctx)
 
 	panic("merge panic")
+}
+
+func TestDisableCompAndMerge(t *testing.T) {
+	mst := &MmsTables{inCompLock: sync.RWMutex{}}
+	mst.EnableCompAndMerge()
+	mst.EnableCompAndMerge()
+	require.True(t, mst.CompactionEnabled())
+
+	mst.DisableCompAndMerge()
+	mst.DisableCompAndMerge()
+	require.False(t, mst.CompactionEnabled())
 }

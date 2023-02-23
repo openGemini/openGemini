@@ -47,9 +47,9 @@ func (s *Scanner) Scan() (tok Token, pos Pos, lit string) {
 		if tok != WS {
 			s.preToken = tok
 		}
-		if tok >= FROM && tok <= MEASUREMENT {
+		if tok >= FROM && tok <= ON {
 			s.checkDOT = true
-		} else if tok > MEASUREMENT && tok <= ASC {
+		} else if tok > ON && tok <= ASC {
 			s.checkDOT = false
 		}
 	}()
@@ -240,13 +240,19 @@ func (s *Scanner) skipUntilEndComment() (comment string, err error) {
 
 func (s *Scanner) skipUntilEndRegex() (comment string, err error) {
 	var buf bytes.Buffer
+	skip := true
 	for {
 		ch1, _ := s.r.read()
 		// We might be at the end.
-		if ch1 == '/' {
+		if ch1 == '/' && skip {
 			return buf.String(), nil
 		} else if ch1 == eof {
 			return buf.String(), io.EOF
+		}
+		if ch1 != '\\' {
+			skip = true
+		} else {
+			skip = false
 		}
 		buf.WriteRune(ch1)
 		if ch1 == eof {

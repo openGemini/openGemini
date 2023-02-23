@@ -55,7 +55,7 @@ func verifyProcessors(processors executor.Processors) bool {
 
 func TestDagBuilder(t *testing.T) {
 	executor.RegistryTransformCreator(&executor.LogicalHttpSender{}, &executor.HttpSenderTransformCreator{})
-	executor.RegistryTransformCreator(&executor.LogicalReader{}, &executor.MocReaderTransformCreator{})
+	executor.RegistryTransformCreator(&executor.LogicalReader{}, &MocReaderTransformCreator{})
 	schema := createQuerySchema()
 	schema.Options().(*query.ProcessorOptions).Sources = influxql.Sources{createMeasurement()}
 	logicMst := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))
@@ -85,4 +85,34 @@ func TestDagBuilder(t *testing.T) {
 	if !verifyProcessors(dag.Processors()) {
 		t.Errorf("processors from dag builder aren't correct")
 	}
+}
+
+func TestFulljoinDagBuilder(t *testing.T) {
+	executor.RegistryTransformCreator(&executor.LogicalReader{}, &MocReaderTransformCreator{})
+	joinCase := buildJoinCase()
+	var joinCases []*influxql.Join
+	joinCases = append(joinCases, joinCase)
+	schema := buildFullJoinSchema()
+	schema = executor.NewQuerySchemaWithJoinCase(schema.Fields(), schema.Sources(), schema.GetColumnNames(), schema.Options(), joinCases)
+	schema.Options().(*query.ProcessorOptions).Sources = influxql.Sources{createMeasurement()}
+	logicMst1 := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))
+	logicMst2 := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))
+	reader1 := executor.NewLogicalReader(logicMst1, schema)
+	reader2 := executor.NewLogicalReader(logicMst2, schema)
+	leftSubquery := executor.NewLogicalSubQuery(reader1, schema)
+	rightSubquery := executor.NewLogicalSubQuery(reader2, schema)
+	fullJoin := executor.NewLogicalFullJoin(leftSubquery, rightSubquery, nil, schema)
+	sender := executor.NewLogicalHttpSender(fullJoin, schema)
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	sender.Explain(planWriter)
+	fmt.Println(planWriter.String())
+	builder := executor.NewDAGBuilder(*schema.Options().(*query.ProcessorOptions))
+	dag, err := builder.Build(sender)
+	if err != nil {
+		t.Errorf("error found %v", err)
+	}
+	vertexWriter := dag.Explain(func(dag *executor.DAG, sb *strings.Builder) executor.VertexWriter {
+		return executor.NewVertexWriterImpl(dag, sb)
+	})
+	fmt.Println(vertexWriter.String())
 }

@@ -66,7 +66,8 @@ func (writeRec *WriteRec) init(schema []record.Field) {
 func (writeRec *WriteRec) sortAndDedupe(sortAux *record.SortAux) {
 	if writeRec.rec.RowNums() > 1 {
 		sortAux.InitRecord(writeRec.rec.Schemas())
-		writeRec.rec.SortAndDedupe(sortAux)
+		hlp := &record.SortHelper{}
+		hlp.Sort(writeRec.rec, sortAux)
 		writeRec.rec, sortAux.SortRec = sortAux.SortRec, writeRec.rec
 	}
 }
@@ -84,10 +85,40 @@ func (chunk *WriteChunk) Init(sid uint64, schema []record.Field) {
 
 type MsInfo struct {
 	mu        sync.RWMutex
+	Name      string // measurement name with version
 	Schema    record.Schemas
 	sidMap    map[uint64]*WriteChunk
 	chunkBufs []WriteChunk
 	TimeAsd   bool
+}
+
+func (msi *MsInfo) Init(row *influx.Row) {
+	msi.Name = row.Name
+	genMsSchema(&msi.Schema, row.Fields)
+	msi.TimeAsd = true
+	msi.sidMap = make(map[uint64]*WriteChunk, 1024)
+}
+
+func (msi *MsInfo) allocChunk() *WriteChunk {
+	if cap(msi.chunkBufs) == len(msi.chunkBufs) {
+		msi.chunkBufs = make([]WriteChunk, 0, 1024)
+	}
+	msi.chunkBufs = msi.chunkBufs[:len(msi.chunkBufs)+1]
+
+	return &msi.chunkBufs[len(msi.chunkBufs)-1]
+}
+
+func (msi *MsInfo) CreateChunk(sid uint64) (*WriteChunk, bool) {
+	msi.mu.Lock()
+	chunk, ok := msi.sidMap[sid]
+	if !ok {
+		// init chunk buffer
+		chunk = msi.allocChunk()
+		chunk.Init(sid, msi.Schema)
+		msi.sidMap[sid] = chunk
+	}
+	msi.mu.Unlock()
+	return chunk, ok
 }
 
 type MemTable struct {
@@ -97,12 +128,62 @@ type MemTable struct {
 	path string
 	idx  *ski.ShardKeyIndex
 
-	msInfoMap     map[string]*MsInfo // measurements schemas
-	msInfos       []MsInfo
+	msInfoMap     map[string]*MsInfo // measurements schemas, {"cpu_0001": *MsInfo}
 	concurLimiter limiter.Fixed
 
 	log     *zap.Logger
 	memSize int64
+}
+
+type MemTables struct {
+	readEnable  bool
+	activeTbl   *MemTable
+	snapshotTbl *MemTable
+}
+
+func (m *MemTables) Init(activeTbl, snapshotTbl *MemTable, readEnable bool) {
+	m.activeTbl = activeTbl
+	m.snapshotTbl = snapshotTbl
+	m.readEnable = readEnable
+}
+
+func (m *MemTables) Ref() {
+	refMemTable(m.activeTbl)
+	refMemTable(m.snapshotTbl)
+}
+
+func (m *MemTables) UnRef() {
+	unrefMemTable(m.activeTbl)
+	unrefMemTable(m.snapshotTbl)
+}
+
+func (m *MemTables) Values(msName string, id uint64, tr record.TimeRange, schema record.Schemas, ascending bool) *record.Record {
+	if !m.readEnable {
+		return nil
+	}
+
+	var getValues = func(mt *MemTable) *record.Record {
+		if mt == nil {
+			return nil
+		}
+		return mt.values(msName, id, tr, schema, ascending)
+	}
+
+	snapshotRec := getValues(m.snapshotTbl)
+	activeRec := getValues(m.activeTbl)
+	if activeRec == nil {
+		return snapshotRec
+	} else if snapshotRec == nil {
+		return activeRec
+	}
+
+	var mergeRecord record.Record
+	if ascending {
+		mergeRecord.MergeRecord(activeRec, snapshotRec)
+	} else {
+		mergeRecord.MergeRecordDescend(activeRec, snapshotRec)
+	}
+	return &mergeRecord
 }
 
 var memTablePool sync.Pool
@@ -151,6 +232,18 @@ func (t *MemTable) PutMemTable() {
 	}
 }
 
+func refMemTable(mt *MemTable) {
+	if mt != nil {
+		mt.Ref()
+	}
+}
+
+func unrefMemTable(mt *MemTable) {
+	if mt != nil {
+		mt.UnRef()
+	}
+}
+
 type uint64Sids []uint64
 
 func (s uint64Sids) Len() int { return len(s) }
@@ -161,7 +254,7 @@ func (s uint64Sids) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
 
-//nolint
+// nolint
 func (t *MemTable) AddMemSize(size int64) {
 	atomic.AddInt64(&t.memSize, size)
 	Statistics.MutableStat.AddMutableSize(t.path, size)
@@ -189,8 +282,12 @@ func (t *MemTable) ApplyConcurrency(f func(msName string, sids []uint64)) {
 }
 
 func (t *MemTable) GetSids(msName string, sids []uint64) []uint64 {
-	sidMap := t.msInfoMap[msName].sidMap
-	for k := range sidMap {
+	info, ok := t.msInfoMap[msName]
+	if !ok || info == nil {
+		return nil
+	}
+
+	for k := range info.sidMap {
 		sids = append(sids, k)
 	}
 	return sids
@@ -263,8 +360,8 @@ func (t *MemTable) SortAndDedup(msName string, sids []uint64) {
 	}
 }
 
-func (t *MemTable) FlushChunks(dataPath, msName string, tbStore immutable.TablesStore, sids []uint64,
-	f func(dataPath, msName string, totalChunks int, tbStore immutable.TablesStore, chunk *WriteChunk,
+func (t *MemTable) FlushChunks(dataPath, msName string, lock *string, tbStore immutable.TablesStore, sids []uint64,
+	f func(dataPath, msName string, lock *string, totalChunks int, tbStore immutable.TablesStore, chunk *WriteChunk,
 		orderMs, unOrderMs *immutable.MsBuilder, finish bool) (*immutable.MsBuilder, *immutable.MsBuilder)) {
 
 	sidMap := t.msInfoMap[msName].sidMap
@@ -272,9 +369,9 @@ func (t *MemTable) FlushChunks(dataPath, msName string, tbStore immutable.Tables
 	sidLen := len(sids)
 	for i := range sids {
 		if i < sidLen-1 {
-			orderMs, unOrderMs = f(dataPath, msName, sidLen, tbStore, sidMap[sids[i]], orderMs, unOrderMs, false)
+			orderMs, unOrderMs = f(dataPath, msName, lock, sidLen, tbStore, sidMap[sids[i]], orderMs, unOrderMs, false)
 		} else {
-			orderMs, unOrderMs = f(dataPath, msName, sidLen, tbStore, sidMap[sids[i]], orderMs, unOrderMs, true)
+			orderMs, unOrderMs = f(dataPath, msName, lock, sidLen, tbStore, sidMap[sids[i]], orderMs, unOrderMs, true)
 		}
 	}
 }
@@ -451,14 +548,37 @@ func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, f
 	if time <= writeRec.lastAppendTime {
 		writeRec.timeAsd = false
 		msInfo.TimeAsd = false
+	} else {
+		writeRec.lastAppendTime = time
 	}
-	writeRec.lastAppendTime = time
 
 	return t.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
-func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName string, sid uint64) int64,
+func (t *MemTable) createMsInfo(name string, row *influx.Row) *MsInfo {
+	t.mu.RLock()
+	msInfo, ok := t.msInfoMap[name]
+	t.mu.RUnlock()
+
+	if ok {
+		return msInfo
+	}
+
+	t.mu.Lock()
+	msInfo, ok = t.msInfoMap[name]
+	if !ok {
+		msInfo = &MsInfo{}
+		msInfo.Init(row)
+		t.msInfoMap[name] = msInfo
+	}
+	t.mu.Unlock()
+
+	return msInfo
+}
+
+func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName string, sid uint64) (int64, error),
 	addRowCountsBySid func(msName string, sid uint64, rowCounts int64)) error {
+	var err error
 	for _, mapp := range rowsD.D {
 		rows, ok := mapp.Value.(*[]influx.Row)
 		if !ok {
@@ -466,66 +586,45 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 		}
 		rs := *rows
 		msName := stringinterner.InternSafe(mapp.Key)
+
 		start := time.Now()
-		t.mu.RLock()
-		msInfo, ok := t.msInfoMap[msName]
-		t.mu.RUnlock()
-		if !ok {
-			t.mu.Lock()
-			msInfo, ok = t.msInfoMap[msName]
-			if !ok {
-				if cap(t.msInfos) == len(t.msInfos) {
-					capNew := (len(t.msInfos) + 1) * 2
-					t.msInfos = make([]MsInfo, 0, capNew)
-				}
-				t.msInfos = t.msInfos[:len(t.msInfos)+1]
-				msInfo = &t.msInfos[len(t.msInfos)-1]
-				msInfo.TimeAsd = true
-				msInfo.sidMap = make(map[uint64]*WriteChunk)
-				msInfo.chunkBufs = msInfo.chunkBufs[:0]
-				genMsSchema(&msInfo.Schema, rs[0].Fields)
-				t.msInfoMap[msName] = msInfo
-			}
-			t.mu.Unlock()
-		}
+		msInfo := t.createMsInfo(msName, &rs[0])
 		atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
+
 		start = time.Now()
-		msInfo.mu.Lock()
+		var (
+			exist        = false
+			sid   uint64 = 0
+			chunk *WriteChunk
+		)
 		for index := range rs {
-			sid := rs[index].SeriesId
-			chunkBuff, exist := msInfo.sidMap[sid]
-			if !exist {
-				if cap(msInfo.chunkBufs) == len(msInfo.chunkBufs) {
-					capNew := (len(msInfo.chunkBufs) + 1) * 2
-					msInfo.chunkBufs = make([]WriteChunk, 0, capNew)
-				}
-				msInfo.chunkBufs = msInfo.chunkBufs[:len(msInfo.chunkBufs)+1]
-				msInfo.sidMap[sid] = &msInfo.chunkBufs[len(msInfo.chunkBufs)-1]
-				chunkBuff = &msInfo.chunkBufs[len(msInfo.chunkBufs)-1]
+			sid = rs[index].PrimaryId
+			chunk, exist = msInfo.CreateChunk(sid)
 
-				// init chunk buffer
-				chunkBuff.Init(sid, msInfo.Schema)
-				chunkBuff.LastFlushTime = getLastFlushTime(msName, sid)
-
-				if t.idx != nil && chunkBuff.LastFlushTime == math.MinInt64 {
-					startTime := time.Now()
-					err := t.idx.CreateIndex(record.Str2bytes(msName), rs[index].ShardKey, sid)
-					if err != nil {
-						return err
-					}
-					atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
+			if chunk.LastFlushTime == math.MinInt64 {
+				chunk.LastFlushTime, err = getLastFlushTime(msName, sid)
+				if err != nil {
+					return err
 				}
 			}
-			err, _ := t.appendFields(msInfo, chunkBuff, rs[index].Timestamp, rs[index].Fields)
+
+			if !exist && t.idx != nil && (chunk.LastFlushTime == math.MinInt64 || chunk.LastFlushTime == math.MaxInt64) {
+				startTime := time.Now()
+				err = t.idx.CreateIndex(record.Str2bytes(msName), rs[index].ShardKey, sid)
+				if err != nil {
+					return err
+				}
+				atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
+			}
+
+			err, _ = t.appendFields(msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
 			if err != nil {
-				msInfo.mu.Unlock()
 				return err
 			}
-			startTime := time.Now()
+
 			addRowCountsBySid(msName, sid, 1)
-			atomic.AddInt64(&Statistics.PerfStat.WriteAddSidRowCountNs, time.Since(startTime).Nanoseconds())
 		}
-		msInfo.mu.Unlock()
+
 		atomic.AddInt64(&Statistics.PerfStat.WriteMstInfoNs, time.Since(start).Nanoseconds())
 	}
 
@@ -533,14 +632,9 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 }
 
 func (t *MemTable) Reset() {
-	t.msInfos = make([]MsInfo, 0, 1)
 	t.memSize = 0
 	t.msInfoMap = make(map[string]*MsInfo)
 	t.idx = nil
-}
-
-func (t *MemTable) Close() error {
-	return nil
 }
 
 func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr record.TimeRange, schema record.Schemas, ascending bool) *record.Record {
@@ -583,13 +677,10 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr record.TimeRang
 	}
 	chunk.Mu.Unlock()
 
-	if ascending {
-		return rec.CopyWithCondition(tr, schema)
-	}
-	return rec.CopyWithConditionDescend(tr, schema)
+	return rec.CopyWithCondition(ascending, tr, schema)
 }
 
-func (t *MemTable) Values(msName string, id uint64, tr record.TimeRange, schema record.Schemas, ascending bool) *record.Record {
+func (t *MemTable) values(msName string, id uint64, tr record.TimeRange, schema record.Schemas, ascending bool) *record.Record {
 	// column of sid need sort and dedupe
 	rec := t.getSortedRecSafe(msName, id, tr, schema, ascending)
 	if rec != nil {

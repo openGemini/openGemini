@@ -75,6 +75,12 @@ func (s *mockServer) run() {
 				panic(err.Error())
 			}
 		}
+		for {
+			if session.fsm.state > 0 {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		s.sessions[session.ID()] = session
 		HandleError(session.Send([]byte(echo)))
 	}

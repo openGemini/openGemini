@@ -91,11 +91,9 @@ func (r *LimitPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	switch exchange.ExchangeType() {
-	case NODE_EXCHANGE, SERIES_EXCHANGE:
+	exchangeType := exchange.ExchangeType()
+	if exchangeType == NODE_EXCHANGE || exchangeType == SERIES_EXCHANGE {
 		return
-	default:
-		break
 	}
 
 	if vertex, ok := call.planner.Vertex(exchange); ok {
@@ -232,7 +230,7 @@ func (r *LimitPushdownToSeriesRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	if enableFileCursor && series.Schema().HasInSeriesAgg() {
+	if enableFileCursor && series.Schema().HasOptimizeAgg() {
 		return
 	}
 
@@ -554,6 +552,7 @@ func (r *AggSpreadToExchangeRule) OnMatch(call *OptRuleCall) {
 	if !agg.Schema().CanCallsPushdown() {
 		return
 	}
+
 	if agg.schema.HasCastorCall() {
 		return
 	}
@@ -713,10 +712,6 @@ func (r *AggSpreadToReaderRule) OnMatch(call *OptRuleCall) {
 	}
 
 	if agg.Schema().MatchPreAgg() {
-		return
-	}
-
-	if agg.Schema().ContainSeriesIgnoreCall() {
 		return
 	}
 

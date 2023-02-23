@@ -1,13 +1,5 @@
 package tests
 
-/*
-Copyright (c) 2018 InfluxData
-This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/tests/server_test.go
-
-2022.01.23 modified some query response like "hot duration","warm duration" etc.
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-*/
-
 import (
 	"flag"
 	"fmt"
@@ -16,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"reflect"
 	_ "regexp"
 	"strconv"
 	"strings"
@@ -43,57 +36,35 @@ type TestType struct {
 var testType TestType
 
 func killInfluxDB3(t *testing.T) error {
-	command := `ps -ef |grep -w influxdb1-3.conf | grep -v grep | cut -c 9-15 | xargs kill -9`
+	command := `ps -ef |grep -w config/openGemini-3.conf | grep ts-store | grep -v grep | cut -c 9-15 | xargs kill -9`
 	cmd := exec.Command("/bin/bash", "-c", command)
 
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("kill influxdb3 error :%s failed with error:%s", command, err.Error())
-		t.Error(fmt.Sprintf("InitTestEnv kill influxdb3 error command: %s - err: %s", command, err.Error()))
+		fmt.Printf("kill ts-store 3 error :%s failed with error:%s\n", command, err.Error())
+		t.Error(fmt.Sprintf("InitTestEnv kill ts-store 3 error command: %s - err: %s\n", command, err.Error()))
 		return err
 	} else {
-		fmt.Printf("kill influxdb3 suc:%s finished with output:\n%s", command, string(output))
+		fmt.Printf("kill ts-store 3 suc:%s finished with output:\n%s\n", command, string(output))
 		return nil
 	}
 }
 
-func startInfluxDB3(t *testing.T) error {
-	logDir := os.Getenv("LOGDIR")
-	confDir := os.Getenv("CONFDIR")
+func startInfluxDB3(t *testing.T) {
+	_ = os.MkdirAll("/tmp/openGemini/logs/3", 600)
+	confFile := "config/openGemini-3.conf "
+	logFile := "/tmp/openGemini/logs/3/store_extra3.log"
 
-	_, err := os.Stat(logDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			os.MkdirAll(logDir, 600)
-		} else {
-			return err
-		}
-	}
-
-	_, err = os.Stat(confDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			os.MkdirAll(confDir, 600)
-		} else {
-			return err
-		}
-	}
-
-	confFile := confDir + "/influxdb1-3.conf "
-	logFile := logDir + "/influxd_extra3.log"
-
-	command := "nohup influxd -config " + confFile + ">" + logFile + " 2>&1 &"
+	command := "cd ..; nohup build/ts-store -config " + confFile + ">" + logFile + " 2>&1 &"
 	cmd := exec.Command("/bin/bash", "-c", command)
 
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("start influxdb3 error:%s failed with error:%s", command, err.Error())
-		t.Error(fmt.Sprintf("start influxdb3 error command: %s - err: %s", command, err.Error()))
-		return err
+		fmt.Printf("start ts-store 3 error:%s failed with error:%s\n", command, err.Error())
+		t.Fatal(fmt.Sprintf("start ts-store 3 error command: %s - err: %s\n", command, err.Error()))
 	} else {
-		fmt.Printf("start influxdb3 suc:%s finished with output:\n%s", command, string(output))
-		time.Sleep(20 * time.Second)
-		return nil
+		time.Sleep(2 * time.Second)
+		fmt.Printf("start influxdb3 suc:%s finished with output:\n%s\n", command, string(output))
 	}
 }
 
@@ -109,7 +80,7 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 		if err := killInfluxDB3(t); err != nil {
 			return err
 		}
-		return startInfluxDB3(t)
+		startInfluxDB3(t)
 	} else if testType.MovePT {
 		b := "http://127.0.0.1:8091" + bodyType
 		fmt.Printf(" movePT %s \n", b)
@@ -127,15 +98,24 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 			return err
 		}
 		time.Sleep(45 * time.Second)
-		return startInfluxDB3(t)
+		startInfluxDB3(t)
 	}
 
 	return nil
 }
 
+func InitHaTestEnv(t *testing.T) {
+	if testType.HA {
+		if err := killInfluxDB3(t); err != nil {
+			fmt.Printf("kill ts-store 3 error: %s\n", err.Error())
+			t.Fatal(err.Error())
+		}
+	}
+}
+
 func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		return startInfluxDB3(t)
+		startInfluxDB3(t)
 	} else if testType.ReStart {
 		return nil
 	} else if testType.MovePT {
@@ -158,13 +138,25 @@ func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 }
 
+func ReleaseHaTestEnv(t *testing.T) {
+	if testType.HA {
+		startInfluxDB3(t)
+	}
+}
+
 func TestMain(m *testing.M) {
 	flag.BoolVar(&verboseServerLogs, "vv", false, "Turn on very verbose server logging.")
 	flag.BoolVar(&cleanupData, "clean", true, "Clean up test data on disk.")
 	flag.Int64Var(&seed, "seed", 0, "Set specific seed controlling randomness.")
 	flag.Parse()
 
-	fmt.Printf("Running in nomal.\n")
+	testType.HA = false
+
+	for _, arg := range flag.Args() {
+		if arg == "HA" {
+			testType.HA = true
+		}
+	}
 
 	var r int
 
@@ -242,6 +234,28 @@ func TestServer_DatabaseCommands(t *testing.T) {
 	}
 }
 
+// Ensure the measurement commands work.
+func TestServer_MeasurementCommands(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := tests.load(t, "measurement_commands")
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Query_DropAndRecreateDatabase(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -252,6 +266,8 @@ func TestServer_Query_DropAndRecreateDatabase(t *testing.T) {
 	if err := s.CreateDatabaseAndRetentionPolicy(test.database(), NewRetentionPolicySpec(test.retentionPolicy(), 1, 0), true); err != nil {
 		t.Fatal(err)
 	}
+
+	InitHaTestEnv(t)
 
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
@@ -276,6 +292,7 @@ func TestServer_Query_DropAndRecreateDatabase(t *testing.T) {
 			}
 		})
 	}
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_DropDatabaseIsolated(t *testing.T) {
@@ -3574,6 +3591,17 @@ func TestServer_Query_For_BugList(t *testing.T) {
 			command: `SELECT TOP(field1, 2),* FROM db0.rp0.cpu LIMIT 2`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","field1","tag1","tag2"],"values":[["2019-08-26T02:28:58Z",3,3,null,"3"],["2019-08-26T02:28:59Z",4,4,null,"4"]]}]}]}`,
 		},
+		// BUG2022120901869
+		&Query{
+			name:    "SELECT multi-agg(field1) FROM db0.rp0.cpu LIMIT 1",
+			command: `select MOVING_AVERAGE(field2,2) as f8, NON_NEGATIVE_DERIVATIVE(field2) as f1, NON_NEGATIVE_DIFFERENCE(field2) as f2, CUMULATIVE_SUM(field2) as f3, CUMULATIVE_SUM(field2) as f4, DERIVATIVE(field2) as f5, DIFFERENCE(field2) as f6, ELAPSED(field2) as f7, MOVING_AVERAGE(field1,2) as ax, INTEGRAL(field2) as f9 from db0.rp0.cpu limit 1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","f8","f1","f2","f3","f4","f5","f6","f7","ax","f9"],"values":[["2019-08-26T02:28:57Z",null,null,null,null,null,null,null,null,1.5,null]]}]}]}`,
+		},
+		&Query{
+			name:    "SELECT multi-agg(*) FROM db0.rp0.cpu LIMIT 1",
+			command: `select ax, ay from ( select ax , f3 from (select  NON_NEGATIVE_DERIVATIVE(field2) as f1, NON_NEGATIVE_DIFFERENCE(field2) as f2, CUMULATIVE_SUM(field2) as f3, CUMULATIVE_SUM(field2) as f4, DERIVATIVE(field2) as f5, DIFFERENCE(field2) as f6, ELAPSED(field2) as f7, MOVING_AVERAGE(field1,2) as ax, MOVING_AVERAGE(field2,2) as f8, INTEGRAL(field2) as f9 from db0.rp0.cpu limit 1))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","ax","ay"],"values":[["2019-08-26T02:28:57Z",1.5,null]]}]}]}`,
+		},
 	}...)
 
 	for i, query := range test.queries {
@@ -3626,6 +3654,66 @@ func TestServer_Query_Blank_Row(t *testing.T) {
 			name:    "non_negative_derivative(*) from mst",
 			command: `select non_negative_derivative(*) from db0.rp0.mst`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","non_negative_derivative_f1","non_negative_derivative_f2"],"values":[["2020-01-19T06:32:46.558082073Z",5,null],["2020-01-19T06:32:47.558882073Z",null,2.4990003998400643]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_Fill_Bug_List(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,tag1=1 count=0 0`),
+		fmt.Sprintf(`mst,tag1=2 count=4 4000000000`),
+		fmt.Sprintf(`mst,tag1=3 count=2 2000000000`),
+		fmt.Sprintf(`mst,tag1=4 count=0 0`),
+		fmt.Sprintf(`mst,tag1=4 count=1 1000000000`),
+		fmt.Sprintf(`mst,tag1=5 count=3 3000000000`),
+		fmt.Sprintf(`mst,tag1=5 count=4 4000000000`),
+		fmt.Sprintf(`mst,tag1=6 count=0 0`),
+		fmt.Sprintf(`mst,tag1=6 count=4 4000000000`),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "select sum(count) from db0.rp0.mst group by time(1s),tag1",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select sum(count) from db0.rp0.mst where time >= 0 and time < 5000000000 group by time(1s),tag1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"tag1":"1"},"columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:04Z",null]]},{"name":"mst","tags":{"tag1":"2"},"columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:04Z",4]]},{"name":"mst","tags":{"tag1":"3"},"columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:02Z",2],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:04Z",null]]},{"name":"mst","tags":{"tag1":"4"},"columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T00:00:01Z",1],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:04Z",null]]},{"name":"mst","tags":{"tag1":"5"},"columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:03Z",3],["1970-01-01T00:00:04Z",4]]},{"name":"mst","tags":{"tag1":"6"},"columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:04Z",4]]}]}]}`,
+		},
+		&Query{
+			name:    "select sum(count) from db0.rp0.mst group by time(1s),tag1 order by time desc",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select sum(count) from db0.rp0.mst where time >= 0 and time < 5000000000 group by time(1s),tag1 order by time desc`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"tag1":"6"},"columns":["time","sum"],"values":[["1970-01-01T00:00:04Z",4],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:00Z",0]]},{"name":"mst","tags":{"tag1":"5"},"columns":["time","sum"],"values":[["1970-01-01T00:00:04Z",4],["1970-01-01T00:00:03Z",3],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:00Z",null]]},{"name":"mst","tags":{"tag1":"4"},"columns":["time","sum"],"values":[["1970-01-01T00:00:04Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:01Z",1],["1970-01-01T00:00:00Z",0]]},{"name":"mst","tags":{"tag1":"3"},"columns":["time","sum"],"values":[["1970-01-01T00:00:04Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:02Z",2],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:00Z",null]]},{"name":"mst","tags":{"tag1":"2"},"columns":["time","sum"],"values":[["1970-01-01T00:00:04Z",4],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:00Z",null]]},{"name":"mst","tags":{"tag1":"1"},"columns":["time","sum"],"values":[["1970-01-01T00:00:04Z",null],["1970-01-01T00:00:03Z",null],["1970-01-01T00:00:02Z",null],["1970-01-01T00:00:01Z",null],["1970-01-01T00:00:00Z",0]]}]}]}`,
 		},
 	}...)
 
@@ -6148,6 +6236,71 @@ func TestServer_Query_NilColumn(t *testing.T) {
 	}
 }
 
+func TestServer_Query_MultipleFiles_NoCrossTime(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,country=China,name=ada age=15 1625558240121000000`),
+		fmt.Sprintf(`mst,country=China,name=billy age=27 1625558240122000000`),
+	}
+	test := NewTest("db0", "rp0")
+	test.writesArray = append(test.writesArray, Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	})
+
+	writes2 := []string{
+		fmt.Sprintf(`mst,country=China,name=demon age=57 1625558242123000000`),
+		fmt.Sprintf(`mst,country=China,name=king age=22 1625558242124000000`),
+	}
+	test.writesArray = append(test.writesArray, Writes{
+		&Write{data: strings.Join(writes2, "\n")},
+	})
+
+	writes3 := []string{
+		fmt.Sprintf(`mst,country=Egypt,name=chris age=31 1625558244121000000`),
+		fmt.Sprintf(`mst,country=Egypt,name=daisy age=40 1625558244122000000`),
+		fmt.Sprintf(`mst,country=France,name=paul age=45 1625558245123000000`),
+		fmt.Sprintf(`mst,country=Germany,name=frank age=36 1625558245124000000`),
+		fmt.Sprintf(`mst,country=Japan,name=jack age=21 1625558245125000000`),
+	}
+	test.writesArray = append(test.writesArray, Writes{
+		&Write{data: strings.Join(writes3, "\n")},
+	})
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "select mean(*) from measurements group by time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT mean(*) FROM mst where time >= 1625558240121000000 and time <= 1625558245125000000 group by time(1s)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","mean_age"],"values":[["2021-07-06T07:57:20Z",21],["2021-07-06T07:57:21Z",null],["2021-07-06T07:57:22Z",39.5],["2021-07-06T07:57:23Z",null],["2021-07-06T07:57:24Z",35.5],["2021-07-06T07:57:25Z",34]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.initMultipleFiles(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Query_OutOfOrder_Overlap_Column(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -8290,6 +8443,8 @@ func TestServer_Query_ShowMeasurementExactCardinality(t *testing.T) {
 		},
 	}...)
 
+	InitHaTestEnv(t)
+
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
 			if i == 0 {
@@ -8307,6 +8462,81 @@ func TestServer_Query_ShowMeasurementExactCardinality(t *testing.T) {
 			}
 		})
 	}
+
+	ReleaseHaTestEnv(t)
+}
+
+func TestServer_Query_ShowSeries(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`cpu,host=server01 value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server01,region=uswest value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server01,region=useast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server02 value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server02,region=uswest value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server02,region=useast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    `create measurement cpu`,
+			command: "CREATE MEASUREMENT cpu",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		&Query{
+			name:    `drop measurement cpu`,
+			command: "DROP MEASUREMENT cpu",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		&Query{
+			name:    `show series exact cardinality`,
+			command: "SHOW SERIES EXACT CARDINALITY",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["count"],"values":[[6]]}]}]}`,
+		},
+		&Query{
+			name:    `show series cardinality`,
+			command: "SHOW SERIES CARDINALITY",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",6]]}]}]}`,
+		},
+	}...)
+
+	InitHaTestEnv(t)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 2 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_ShowTagKeys(t *testing.T) {
@@ -8406,6 +8636,8 @@ func TestServer_Query_ShowTagKeys(t *testing.T) {
 		},
 	}...)
 
+	InitHaTestEnv(t)
+
 	var initialized bool
 	for _, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
@@ -8425,6 +8657,8 @@ func TestServer_Query_ShowTagKeys(t *testing.T) {
 			}
 		})
 	}
+
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_ShowTagValues(t *testing.T) {
@@ -8630,6 +8864,8 @@ func TestServer_Query_ShowTagValues(t *testing.T) {
 		},
 	}...)
 
+	InitHaTestEnv(t)
+
 	var once sync.Once
 	for _, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
@@ -8648,6 +8884,8 @@ func TestServer_Query_ShowTagValues(t *testing.T) {
 			}
 		})
 	}
+
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_ShowTagKeyCardinality(t *testing.T) {
@@ -8835,6 +9073,8 @@ func TestServer_Query_ShowTagKeyCardinality(t *testing.T) {
 		},
 	}...)
 
+	InitHaTestEnv(t)
+
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
 			if i == 0 {
@@ -8852,6 +9092,8 @@ func TestServer_Query_ShowTagKeyCardinality(t *testing.T) {
 			}
 		})
 	}
+
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_ShowFieldKeys(t *testing.T) {
@@ -8899,6 +9141,8 @@ func TestServer_Query_ShowFieldKeys(t *testing.T) {
 		},
 	}...)
 
+	InitHaTestEnv(t)
+
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
 			if i == 0 {
@@ -8916,6 +9160,8 @@ func TestServer_Query_ShowFieldKeys(t *testing.T) {
 			}
 		})
 	}
+
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_ShowFieldKeyCardinality(t *testing.T) {
@@ -8981,6 +9227,8 @@ func TestServer_Query_ShowFieldKeyCardinality(t *testing.T) {
 		},
 	}...)
 
+	InitHaTestEnv(t)
+
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
 			if i == 0 {
@@ -8998,6 +9246,8 @@ func TestServer_Query_ShowFieldKeyCardinality(t *testing.T) {
 			}
 		})
 	}
+
+	ReleaseHaTestEnv(t)
 }
 
 func TestServer_Query_TagOrder(t *testing.T) {
@@ -10187,6 +10437,94 @@ func TestServer_HintQuery_ManyNullColumns(t *testing.T) {
 	}
 }
 
+func TestServer_HintLimit(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: fmt.Sprintf("mst,tk1=tv9 f1=9i 1610380800000000000\n" +
+			"mst,tk1=tv2 f1=2i    1610380800000000000\n" +
+			"mst,tk1=tv3 f1=3i 1610380800000000000\n" +
+			"mst,tk1=tv4 f1=4i  1610380800000000000\n" +
+			"mst,tk1=tv5 f1=5i 1610380800000000000\n" +
+			"mst,tk1=tv6 f1=6i 1610380800000000000\n" +
+			"mst,tk1=tv7 f1=7i 1610380800000000000\n" +
+			"mst,tk1=tv8 f1=8i 1610380800000000000\n" +
+			"mst,tk1=tv1 f1=1i 1610380800000000000\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "exact limit * query",
+			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
+			command: `select /*+ Exact_Statistic_Query */ * from mst limit 1`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","tk1"],"values":[["2021-01-11T16:00:00Z",1,"tv1"]]}]}]}`),
+		},
+		&Query{
+			name:    "exact limit field query",
+			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
+			command: `select /*+ Exact_Statistic_Query */ f1 from mst limit 1`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1"],"values":[["2021-01-11T16:00:00Z",1]]}]}]}`),
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+func TestServer_FullJoin(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: fmt.Sprintf("mst,tk1=tv1 f1=1i 1610380800000000000\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "full join on one tag",
+			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
+			command: `select m1.f1, m2.f1 from (select f1 from mst) as m1 full join (select f1 from mst) as m2 on (m1.tk1 = m2.tk1) group by tk1`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"m1,m2","tags":{"tk1":"tv1"},"columns":["time","m1.f1","m2.f1"],"values":[["2021-01-11T16:00:00Z",1,1]]}]}]}`),
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
 func TestServer_DuplicateField(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -10231,4 +10569,244 @@ func RegisteredIndexes() []string {
 	a := make([]string, 0, 1)
 	a = append(a, "tsi")
 	return a
+}
+
+func Test_killInfluxDB3(t *testing.T) {
+	type args struct {
+		t *testing.T
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := killInfluxDB3(tt.args.t); (err != nil) != tt.wantErr {
+				t.Errorf("killInfluxDB3() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func Test_startInfluxDB3(t *testing.T) {
+	type args struct {
+		t *testing.T
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			startInfluxDB3(tt.args.t)
+		})
+	}
+}
+
+func TestInitTestEnv(t *testing.T) {
+	type args struct {
+		t        *testing.T
+		bodyType string
+		body     io.Reader
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := InitTestEnv(tt.args.t, tt.args.bodyType, tt.args.body); (err != nil) != tt.wantErr {
+				t.Errorf("InitTestEnv() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestInitHaTestEnv(t *testing.T) {
+	type args struct {
+		t *testing.T
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			InitHaTestEnv(tt.args.t)
+		})
+	}
+}
+
+func TestReleasTestEnv(t *testing.T) {
+	type args struct {
+		t        *testing.T
+		bodyType string
+		body     io.Reader
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ReleasTestEnv(tt.args.t, tt.args.bodyType, tt.args.body); (err != nil) != tt.wantErr {
+				t.Errorf("ReleasTestEnv() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestReleaseHaTestEnv(t *testing.T) {
+	type args struct {
+		t *testing.T
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ReleaseHaTestEnv(tt.args.t)
+		})
+	}
+}
+
+func Test_generateBool(t *testing.T) {
+	type args struct {
+		i int
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := generateBool(tt.args.i); got != tt.want {
+				t.Errorf("generateBool() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_generateFloat(t *testing.T) {
+	type args struct {
+		i int
+	}
+	tests := []struct {
+		name string
+		args args
+		want float64
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := generateFloat(tt.args.i); got != tt.want {
+				t.Errorf("generateFloat() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_generateString(t *testing.T) {
+	type args struct {
+		i int
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := generateString(tt.args.i); got != tt.want {
+				t.Errorf("generateString() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegisteredIndexes(t *testing.T) {
+	tests := []struct {
+		name string
+		want []string
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RegisteredIndexes(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("RegisteredIndexes() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestServer_HoltWinters(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: fmt.Sprintf("cpu,host=server1 value=10 1597042800000000000\n" +
+			"cpu,host=server2 value=22 1597043400000000000\n" +
+			"cpu,host=server3 value=37 1597044000000000000\n" +
+			"cpu,host=server4 value=15 1597044600000000000\n" +
+			"cpu,host=server5 value=48 1597045200000000000\n" +
+			"cpu,host=server6 value=27 1597045800000000000\n" +
+			"cpu,host=server7 value=80 1597046400000000000\n" +
+			"cpu,host=server8 value=69 1597047000000000000\n" +
+			"cpu,host=server9 value=39 1597047600000000000\n" +
+			"cpu,host=server10 value=57 1597048200000000000\n" +
+			"cpu,host=server11 value=25 1597048800000000000\n" +
+			"cpu,host=server12 value=98 1597049400000000000\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "holt_winters query",
+			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
+			command: `SELECT HOLT_WINTERS(FIRST(value),6,4) FROM cpu WHERE  time >= '2020-08-10T07:00:00Z' AND time <= '2020-08-10T08:50:00Z' GROUP BY time(20m)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","holt_winters"],"values":[["2020-08-10T09:00:00Z",47.997143423738216],["2020-08-10T09:20:00Z",80.01574957657594],["2020-08-10T09:40:00Z",39.0206910442188],["2020-08-10T10:00:00Z",30.99629387435043],["2020-08-10T10:20:00Z",47.99669178533439],["2020-08-10T10:40:00Z",80.01631956468897]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
 }

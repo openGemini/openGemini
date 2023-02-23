@@ -94,6 +94,8 @@ const (
 	BucketLacks                  = 1113
 	CreatePipelineExecutorFail   = 1114
 	LogicalPlainBuildFailInShard = 1115
+	SchemaNotAligned             = 1116
+	NoFieldSelected              = 1117
 )
 
 // store engine error codes
@@ -125,6 +127,12 @@ const (
 	WalRecordHeaderCorrupted           = 2125
 	WalRecordUnmarshalFailed           = 2126
 	CompactPanicFail                   = 2127
+	ErrShardClosed                     = 2128
+	DBPTClosed                         = 2129
+	ShardNotFound                      = 2130
+	IndexNotFound                      = 2131
+	FailedToDecodeFloatArray           = 2132
+	InvalidFloatBuffer                 = 2133
 )
 
 // merge out of order
@@ -137,31 +145,57 @@ const (
 
 // query engine error codes
 const (
-	UnsupportedExprType       = 3001
-	UnsupportedToFillPrevious = 3002
+	UnsupportedExprType            = 3001
+	UnsupportedToFillPrevious      = 3002
+	UnsupportedConditionInFullJoin = 3003
+	UnsupportedHoltWinterInit      = 3004
 )
 
 // meta
 const (
-	FieldTypeConflict        = 4001
-	DatabaseNotFound         = 4002
-	DataNodeNotFound         = 4003
-	DataNoAlive              = 4004
-	PtNotFound               = 4005
-	ShardMetaNotFound        = 4006
-	DataIsOlder              = 4007
-	DatabaseIsBeingDelete    = 4008
-	MetaIsNotLeader          = 4009
-	RaftIsNotOpen            = 4010
-	ShardKeyConflict         = 4011
-	ErrMeasurementNotFound   = 4012
-	NeedChangeStore          = 4013
-	StateMachineIsNotRunning = 4014
-	ConflictWithEvent        = 4015
-	EventIsInterrupted       = 4016
-	EventNotFound            = 4017
-	PtChanged                = 4018
-	OpIdIsInvalid            = 4019
+	FieldTypeConflict                  = 4001
+	DatabaseNotFound                   = 4002
+	DataNodeNotFound                   = 4003
+	DataNoAlive                        = 4004
+	PtNotFound                         = 4005
+	ShardMetaNotFound                  = 4006
+	DataIsOlder                        = 4007
+	DatabaseIsBeingDelete              = 4008
+	MetaIsNotLeader                    = 4009
+	RaftIsNotOpen                      = 4010
+	ShardKeyConflict                   = 4011
+	ErrMeasurementNotFound             = 4012
+	NeedChangeStore                    = 4013
+	StateMachineIsNotRunning           = 4014
+	ConflictWithEvent                  = 4015
+	EventIsInterrupted                 = 4016
+	EventNotFound                      = 4017
+	PtChanged                          = 4018
+	OpIdIsInvalid                      = 4019
+	ClusterManagerIsNotRunning         = 4020
+	ErrMigrationRequestDB              = 4021
+	ErrMigrationRequestPt              = 4022
+	InvalidName                        = 4023
+	DownSamplePolicyExists             = 4024
+	DownSamplePolicyNotFound           = 4025
+	DownSampleIntervalCheck            = 4026
+	DownSampleIntervalLenCheck         = 4027
+	DownSampleParaError                = 4028
+	DownSampleUnExpectedDataType       = 4029
+	DownSampleAtLeastOneOpsForDataType = 4030
+	DownSampleUnsupportedAggOp         = 4031
+	RpNotFound                         = 4032
+	PtEventIsAlreadyExist              = 4033
+	PtIsAlreadyMigrating               = 4034
+	InvalidMigrationType               = 4035
+	StreamHasExist                     = 4036
+	StreamNotFound                     = 4037
+	UpdateShardIdentFail               = 4038
+	DataNodeSplitBrain                 = 4039
+	OlderEvent                         = 4040
+	RpIsBeingDelete                    = 4041
+	ShardIsBeingDelete                 = 4042
+	MstIsBeingDelete                   = 4043
 )
 
 // meta-client process
@@ -193,11 +227,17 @@ const (
 	WritePointOutOfRP          = 5013
 	WritePointShardKeyTooLarge = 5014
 	EngineClosed               = 5015
+	WriteMissTagValue          = 5016
+	WriteMultiArray            = 5017
+	WriteErrorArray            = 5018
 )
 
 // index
 const (
 	ConvertToBinaryExprFailed = 6001
+	ErrQuerySeriesUpperBound  = 6002
+	ErrTooSmallKeyCount       = 6003
+	ErrTooSmallIndexKey       = 6004
 )
 
 const (
@@ -239,4 +279,7 @@ const (
 	FieldNotFound            = 8031
 	MultiFieldIndex          = 8032
 	EmptyData                = 8033
+	TaskQueueFull            = 8034
+	ExceedRetryChance        = 8035
+	UnknownErr               = 8036
 )

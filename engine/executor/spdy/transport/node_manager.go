@@ -84,6 +84,13 @@ func (m *NodeManager) Add(nodeID uint64, address string) {
 	m.nodes[nodeID].setStatisticsJob(m.job)
 }
 
+func (m *NodeManager) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.nodes = make(map[uint64]*Node)
+}
+
 func (m *NodeManager) Get(nodeID uint64) *Node {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

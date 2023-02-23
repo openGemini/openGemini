@@ -1,0 +1,23 @@
+{
+    "Name":"DownSample",
+    "Measurement":"downSample",
+    "Items":[
+        "Errors",
+        "Active"
+    ],
+    "SetItems":[
+    ],
+    "EnablePush":"Y",
+    "PushDuration":"Y",
+    "PushItems":[
+        "Level",
+    	"OriginalFileCount",
+    	"OriginalFileSize",
+    	"DownSampleFileCount",
+    	"DownSampleFileSize"
+    ],
+    "PushTags":[
+        "ShardID"
+        "TaskID"
+    ]
+}

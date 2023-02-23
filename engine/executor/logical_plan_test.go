@@ -17,6 +17,7 @@ limitations under the License.
 package executor_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -28,6 +29,29 @@ import (
 func createQuerySchema() *executor.QuerySchema {
 	opt := query.ProcessorOptions{}
 	schema := executor.NewQuerySchema(createFields(), createColumnNames(), &opt)
+	m := createMeasurement()
+	schema.AddTable(m, schema.MakeRefs())
+
+	return schema
+}
+
+func createQuerySchemaWithCalls() *executor.QuerySchema {
+	opt := query.ProcessorOptions{}
+	fields := createFields()
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.Call{
+			Name: "mean",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "id",
+					Type: influxql.Integer,
+				},
+			},
+		},
+	})
+	names := createColumnNames()
+	names = append(names, "mean")
+	schema := executor.NewQuerySchema(fields, names, &opt)
 	m := createMeasurement()
 	schema.AddTable(m, schema.MakeRefs())
 
@@ -143,27 +167,43 @@ func TestLogicalPlanFilterBlank(t *testing.T) {
 	}
 }
 
-func createQuerySchemaWithCalls() *executor.QuerySchema {
-	opt := query.ProcessorOptions{}
-	fields := createFields()
-	fields = append(fields, &influxql.Field{
-		Expr: &influxql.Call{
-			Name: "mean",
-			Args: []influxql.Expr{
-				&influxql.VarRef{
-					Val:  "id",
-					Type: influxql.Integer,
-				},
-			},
-		},
-	})
-	names := createColumnNames()
-	names = append(names, "mean")
-	schema := executor.NewQuerySchema(fields, names, &opt)
-	m := createMeasurement()
-	schema.AddTable(m, schema.MakeRefs())
+func TestNewLogicalSTSSPScan(t *testing.T) {
+	schema := createQuerySchema()
 
-	return schema
+	reader := executor.NewLogicalTSSPScan(schema)
+	_ = reader.Digest()
+	_ = reader.Schema()
+	_ = reader.RowDataType()
+	_ = reader.Dummy()
+	reader.DeriveOperations()
+	if len(reader.RowExprOptions()) != len(schema.GetColumnNames()) {
+		t.Errorf("call options of reader must be 0, but %v", len(reader.RowExprOptions()))
+	}
+
+	if !IsAuxExprOptions(reader.RowExprOptions()) {
+		t.Error("call options of reader must be aux call")
+	}
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	reader.Explain(planWriter)
+	child := reader.Children()
+	if child != nil {
+		t.Error("children of reader must be nil")
+	}
+}
+
+func TestNewLogicalSequenceAggregate(t *testing.T) {
+	schema := createQuerySchemaWithCalls()
+	node := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalSequenceAggregate(node, schema)
+	_ = agg.Digest()
+	_ = agg.Schema()
+	_ = agg.RowDataType()
+	_ = agg.Dummy()
+	agg.DeriveOperations()
+	aggClone := agg.Clone()
+	if aggClone.Type() != agg.Type() {
+		t.Error("wrong result")
+	}
 }
 
 func TestNewLogicalSplitGroup(t *testing.T) {
@@ -180,6 +220,18 @@ func TestNewLogicalSplitGroup(t *testing.T) {
 	sg.DeriveOperations()
 	aggClone := sg.Clone()
 	if aggClone.Type() != sg.Type() {
+		t.Error("wrong result")
+	}
+}
+
+func TestNewLogicalFullJoin(t *testing.T) {
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	leftSubquery := executor.NewLogicalSubQuery(node, schema)
+	rightSubquery := executor.NewLogicalSubQuery(node, schema)
+	fullJoin := executor.NewLogicalFullJoin(leftSubquery, rightSubquery, nil, schema)
+	fullJoinClone := fullJoin.Clone()
+	if fullJoinClone.Type() != fullJoin.Type() {
 		t.Error("wrong result")
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -75,65 +76,62 @@ func (v *LogicPlanVisit) Visit(plan hybridqp.QueryNode, span *tracing.Span) exec
 	return nil
 }
 
-func compareRowDataType(a, b hybridqp.RowDataType) error {
-	var fn = func() error {
-		if err := compareFields(a.Fields(), b.Fields(), "RowDataType"); err != nil {
-			return err
+func BenchmarkMarshalBinary(t *testing.B) {
+	for i := 0; i < t.N; i++ {
+		dag := buildDag()
+		node, err := executor.MarshalQueryNode(dag)
+		if !assert.NoError(t, err) {
+			return
 		}
 
-		if !reflect.DeepEqual(a.Aux(), b.Aux()) {
-			return fmt.Errorf("failed to marshal RowDataType.aux: exp: %+v, got: %+v", a.Aux(), b.Aux())
+		other, err := executor.UnmarshalQueryNode(node)
+		if !assert.NoError(t, err) {
+			return
 		}
 
-		return nil
+		assert.NoError(t, ComparePlan(dag, other))
 	}
-
-	return compareNil(a, b, "RowDataType", fn)
 }
 
-func comparePlan(a, b hybridqp.QueryNode) error {
-	if a.String() != b.String() {
-		return fmt.Errorf("failed to marshal LogicalPlan. exp: %s , got: %s", a.String(), b.String())
-	}
+func buildDag() hybridqp.QueryNode {
+	schema := createQuerySchema()
 
-	/*
-		err := compareSchema(a.Schema(), b.Schema())
-		if err != nil {
-			return err
-		}
-	*/
+	logicSeries1 := executor.NewLogicalSeries(schema)
+	logicSeries2 := executor.NewLogicalSeries(schema)
 
-	if err := compareRowDataType(a.RowDataType(), b.RowDataType()); err != nil {
-		return err
-	}
+	indexScan1 := executor.NewLogicalIndexScan(logicSeries1, schema)
+	indexScan2 := executor.NewLogicalIndexScan(logicSeries2, schema)
 
-	if exa, ok := a.(*executor.LogicalExchange); ok {
-		exb := b.(*executor.LogicalExchange)
+	reader1 := executor.NewLogicalReader(indexScan1, schema)
+	reader2 := executor.NewLogicalReader(indexScan2, schema)
 
-		if exa.ExchangeType() != exb.ExchangeType() {
-			return fmt.Errorf("failed to marshal LogicalPlan.eType. exp: %d, got: %d", exa.ExchangeType(), exb.ExchangeType())
-		}
+	tagSubset1 := executor.NewLogicalTagSubset(reader1, schema)
+	tagSubset2 := executor.NewLogicalTagSubset(reader2, schema)
 
-		if exa.ExchangeRole() != exb.ExchangeRole() {
-			return fmt.Errorf("failed to marshal LogicalPlan.eRole. exp: %d, got: %d", exa.ExchangeRole(), exb.ExchangeRole())
-		}
-	}
+	agg1 := executor.NewLogicalAggregate(tagSubset1, schema)
+	agg2 := executor.NewLogicalAggregate(tagSubset2, schema)
 
-	ac := a.Children()
-	bc := b.Children()
+	merge := executor.NewLogicalMerge([]hybridqp.QueryNode{agg1, agg2}, schema)
 
-	if len(ac) != len(bc) {
-		return fmt.Errorf("failed to marshal LogicalPlan.children: exp len: %d , got len: %d", len(ac), len(bc))
-	}
+	sortMerge := executor.NewLogicalSortMerge([]hybridqp.QueryNode{merge}, schema)
 
-	for i, p := range ac {
-		err := comparePlan(p, bc[i])
-		if err != nil {
-			return err
-		}
-	}
+	limit := executor.NewLogicalLimit(sortMerge, schema, executor.LimitTransformParameters{})
 
-	return nil
+	dedupe := executor.NewLogicalDedupe(limit, schema)
+
+	interval := executor.NewLogicalInterval(dedupe, schema)
+
+	fill := executor.NewLogicalFill(interval, schema)
+
+	align := executor.NewLogicalAlign(fill, schema)
+
+	project := executor.NewLogicalProject(align, schema)
+
+	filter := executor.NewLogicalFilter(project, schema)
+
+	exg := executor.NewLogicalExchange(filter, executor.NODE_EXCHANGE, []hybridqp.Trait{1, 2, 3}, schema)
+
+	return exg
 }
 
 func TestLogicalPlanCodec(t *testing.T) {
@@ -177,12 +175,12 @@ func TestLogicalPlanCodec(t *testing.T) {
 	//fmt.Println("----------Visit Begin------------")
 	//(&LogicPlanVisit{}).Visit(exg, nil)
 
-	buf, err := exg.MarshalBinary()
+	buf, err := executor.MarshalQueryNode(exg)
 	if err != nil {
 		t.Fatalf("failed to marshal logical plan: %v", err)
 	}
 
-	newPlan, err := (&executor.QueryNodeCodec{}).UnmarshalBinary(buf)
+	newPlan, err := executor.UnmarshalQueryNode(buf)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -190,7 +188,7 @@ func TestLogicalPlanCodec(t *testing.T) {
 	//fmt.Println("----------Visit Begin------------")
 	//(&LogicPlanVisit{}).Visit(newPlan, nil)
 
-	if err := comparePlan(exg, newPlan); err != nil {
+	if err := ComparePlan(exg, newPlan); err != nil {
 		t.Fatalf("%v", err)
 	}
 }
@@ -224,7 +222,7 @@ func TestQueryNodeCodec(t *testing.T) {
 		return
 	}
 
-	assert.NoError(t, comparePlan(exg, other))
+	assert.NoError(t, ComparePlan(exg, other))
 }
 
 func TestUnmarshalQueryNode(t *testing.T) {
@@ -237,4 +235,102 @@ func TestUnmarshalQueryNode(t *testing.T) {
 	binary.BigEndian.PutUint64(buf[:record.Uint64SizeBytes], size)
 	_, err = executor.UnmarshalQueryNode(buf)
 	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, size, len(buf)-record.Uint64SizeBytes).Error())
+}
+
+func CompareRowDataType(a, b hybridqp.RowDataType) error {
+	var fn = func() error {
+		af := a.Fields()
+		sort.Sort(af)
+		bf := b.Fields()
+		sort.Sort(bf)
+		if err := CompareFields(af, bf, "RowDataType"); err != nil {
+			return err
+		}
+
+		if !reflect.DeepEqual(a.Aux(), b.Aux()) {
+			return fmt.Errorf("failed to marshal RowDataType.aux: exp: %+v, got: %+v", a.Aux(), b.Aux())
+		}
+
+		return nil
+	}
+
+	return CompareNil(a, b, "RowDataType", fn)
+}
+
+func ComparePlan(a, b hybridqp.QueryNode) error {
+	if a.String() != b.String() {
+		return fmt.Errorf("failed to marshal LogicalPlan. exp: %s , got: %s", a.String(), b.String())
+	}
+
+	/*
+		err := compareSchema(a.Schema(), b.Schema())
+		if err != nil {
+			return err
+		}
+	*/
+
+	if err := CompareRowDataType(a.RowDataType(), b.RowDataType()); err != nil {
+		return err
+	}
+
+	if exa, ok := a.(*executor.LogicalExchange); ok {
+		exb, _ := b.(*executor.LogicalExchange)
+
+		if exa.ExchangeType() != exb.ExchangeType() {
+			return fmt.Errorf("failed to marshal LogicalPlan.eType. exp: %d, got: %d", exa.ExchangeType(), exb.ExchangeType())
+		}
+
+		if exa.ExchangeRole() != exb.ExchangeRole() {
+			return fmt.Errorf("failed to marshal LogicalPlan.eRole. exp: %d, got: %d", exa.ExchangeRole(), exb.ExchangeRole())
+		}
+	}
+
+	ac := a.Children()
+	bc := b.Children()
+
+	if len(ac) != len(bc) {
+		return fmt.Errorf("failed to marshal LogicalPlan.children: exp len: %d , got len: %d", len(ac), len(bc))
+	}
+
+	for i, p := range ac {
+		err := ComparePlan(p, bc[i])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func CompareNil(a, b interface{}, object string, fn func() error) error {
+	if a == nil || b == nil {
+		return nil
+	}
+	aIsNil := reflect.ValueOf(a).IsNil()
+	bIsNil := reflect.ValueOf(b).IsNil()
+
+	if aIsNil && !bIsNil {
+		return fmt.Errorf("failed to marshal %s. exp: nil, got: %+v ", object, b)
+	}
+
+	if !aIsNil && bIsNil {
+		return fmt.Errorf("failed to marshal %s. exp: %+v, got: nil ", a, object)
+	}
+
+	if !aIsNil && !bIsNil {
+		return fn()
+	}
+
+	return nil
+}
+
+func CompareFields(fa, fb influxql.Fields, object string) error {
+	fn := func() error {
+		if fa.String() != fb.String() {
+			return fmt.Errorf("failed to marshal %s.fields. exp: %s, got: %s ", object, fa, fb)
+		}
+		return nil
+	}
+
+	return CompareNil(fa, fb, fmt.Sprintf("%s.fields", object), fn)
 }

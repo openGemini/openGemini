@@ -102,6 +102,17 @@ func TestMonitor(t *testing.T) {
 func TestTSMeta(t *testing.T) {
 	conf := config.NewTSMeta()
 
+	// Data conf
+	conf.Data.IngesterAddress = "127.0.0.1:8800"
+	conf.Data.SelectAddress = "127.0.0.1:8801"
+	conf.Data.DataDir = "/opt/gemini"
+	conf.Data.MetaDir = "/opt/gemini/meta"
+	conf.Spdy.ConnPoolSize = 10
+	conf.Common.CPUNum = 10
+	conf.Data.WALDir = "/opt/gemini/wal"
+	conf.Data.MaxConcurrentCompactions = -1
+	conf.Data.MaxConcurrentCompactions = 10
+
 	conf.Gossip.Enabled = false
 	assert.NoError(t, conf.Gossip.Validate())
 	conf.Gossip.Enabled = true
@@ -167,6 +178,11 @@ func TestTSStore(t *testing.T) {
 	assert.EqualError(t, conf.Data.ValidateEngine(eng), "unrecognized engine invalid")
 	conf.Data.Engine = config.EngineType1
 	assert.NoError(t, conf.Data.ValidateEngine(eng))
+
+	maxSize := 600 * config.GB
+	conf.Data.Corrector(0, 600*config.GB)
+	assert.NotEqual(t, maxSize*3/100, conf.Data.ReadCacheLimit)
+
 }
 
 func TestGossip_BuildSerf(t *testing.T) {

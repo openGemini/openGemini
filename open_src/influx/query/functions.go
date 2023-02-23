@@ -41,7 +41,7 @@ func (CallTypeMapper) MapType(measurement *influxql.Measurement, field string) i
 	return influxql.Unknown
 }
 
-func (CallTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]influxql.DataType, schema *influxql.Schema) error {
+func (CallTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]*influxql.FieldNameSpace, schema *influxql.Schema) error {
 	return nil
 }
 
@@ -70,7 +70,7 @@ func (FunctionTypeMapper) MapType(measurement *influxql.Measurement, field strin
 	return influxql.Unknown
 }
 
-func (FunctionTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]influxql.DataType, schema *influxql.Schema) error {
+func (FunctionTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]*influxql.FieldNameSpace, schema *influxql.Schema) error {
 	return nil
 }
 
@@ -99,9 +99,13 @@ func (m FunctionTypeMapper) CallType(name string, args []influxql.DataType) (inf
 		return influxql.Float, nil
 	case "elapsed", "absent":
 		return influxql.Integer, nil
-	case "percentile", "histogram", "distinct", "top", "bottom",
+	case "percentile", "percentile_ogsketch", "percentile_approx", "histogram", "distinct", "top", "bottom",
 		"difference", "non_negative_difference", "mode", "spread", "sample", "cumulative_sum":
 		return args[0], nil
+	case "ogsketch_percentile":
+		return influxql.Float, nil
+	case "ogsketch_insert", "ogsketch_merge":
+		return influxql.FloatTuple, nil
 	case "sin", "cos", "tan", "atan", "exp", "log", "ln", "log2", "log10", "sqrt", "acos", "asin", "atan2", "pow":
 		return influxql.Float, nil
 	case "abs", "round", "ceil", "floor":
@@ -124,7 +128,7 @@ func (m StringFunctionTypeMapper) MapType(_ *influxql.Measurement, _ string) inf
 	return influxql.Unknown
 }
 
-func (m StringFunctionTypeMapper) MapTypeBatch(_ *influxql.Measurement, _ map[string]influxql.DataType, _ *influxql.Schema) error {
+func (m StringFunctionTypeMapper) MapTypeBatch(_ *influxql.Measurement, _ map[string]*influxql.FieldNameSpace, _ *influxql.Schema) error {
 	return nil
 }
 

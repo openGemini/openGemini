@@ -41,8 +41,8 @@ func TestFsReader_Read(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	dr := NewDiskFileReader(fd)
+	lockPath := ""
+	dr := NewDiskFileReader(fd, &lockPath)
 	defer dr.Close()
 
 	rb, err := dr.ReadAt(0, 0, nil)
@@ -110,13 +110,49 @@ func TestFsReader_Rename(t *testing.T) {
 			return nil
 		},
 	}
-	dr := NewDiskFileReader(fd)
+	lockPath := ""
+	dr := NewDiskFileReader(fd, &lockPath)
 	defer dr.Close()
 
 	err := dr.Rename("/tmp/name.new")
 	if err == nil || !strings.Contains(err.Error(), "table store rename file failed") {
 		t.Fatalf("test rename error fail")
 	}
+}
+
+func TestFsReader_Rename_With_FileHandle_Optimize(t *testing.T) {
+	fn := "/tmp/test_diskreader.data"
+	_ = fileops.Remove(fn)
+	defer fileops.Remove(fn)
+	var buf [4096]byte
+
+	fd, err := fileops.OpenFile(fn, os.O_CREATE|os.O_RDWR, 0640)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = fd.Write(buf[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := ""
+	dr := NewDiskFileReader(fd, &lockPath)
+
+	err = dr.Rename("/tmp/test_diskreadernew.data")
+	if err != nil || dr.fd == nil {
+		t.Fatalf("test rename error fail")
+	}
+
+	err = dr.FreeFileHandle()
+	if err != nil {
+		t.Fatalf("FreeFileHandle error fail")
+	}
+
+	err = dr.Rename("/tmp/test_diskreadern.data")
+	if err != nil {
+		t.Fatalf("test rename error fail")
+	}
+
 }
 
 type mockFile struct {

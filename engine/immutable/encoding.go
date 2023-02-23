@@ -139,7 +139,7 @@ func GetFloatCoder() *Float {
 	if v != nil {
 		return v.(*Float)
 	}
-	return &Float{buf: NewBytesBuffer(nil)}
+	return NewFloat()
 }
 
 func GetBoolCoder() *Boolean {
@@ -303,7 +303,7 @@ func packString(in []byte, offset []uint32, ctx *CoderContext) []byte {
 	ctx.buf = numberenc.MarshalUint32Append(ctx.buf[:0], uint32(len(in)))
 	ctx.buf = append(ctx.buf, in...)
 
-	offBytes := record.Uint32Slice2byte(offset)
+	offBytes := record.Uint32Slice2ByteBigEndian(offset)
 	ctx.buf = numberenc.MarshalUint32Append(ctx.buf, uint32(len(offBytes)))
 	ctx.buf = append(ctx.buf, offBytes...)
 	return ctx.buf
@@ -322,7 +322,7 @@ func unpackString(src []byte) ([]byte, []uint32, error) {
 	src = src[byteLen:]
 	offLen := int(numberenc.UnmarshalUint32(src))
 	src = src[4:]
-	off := record.Bytes2Uint32Slice(src[:offLen])
+	off := record.Bytes2Uint32SliceBigEndian(src[:offLen])
 	if len(src) < offLen {
 		return nil, nil, fmt.Errorf("too small data for string offset, %v < %v", len(src), offLen)
 	}

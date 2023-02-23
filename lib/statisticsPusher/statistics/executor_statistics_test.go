@@ -18,8 +18,10 @@ package statistics_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestExecutorStatistics(t *testing.T) {
@@ -31,4 +33,16 @@ func TestExecutorStatistics(t *testing.T) {
 	if err != nil {
 		t.Errorf("%v, %v", buf, err)
 	}
+}
+
+func TestOpsExecutorStatistics(t *testing.T) {
+	tags := map[string]string{"hostname": "127.0.0.1:8090"}
+	statistics.NewTimestamp().Init(time.Second)
+	statistics.InitExecutorStatistics(tags)
+
+	statistics.CreateExecutorWithShardKey(nil)
+
+	stats := statistics.CollectExecutorStatisticsOps()
+	assert.Equal(t, len(stats), 1)
+	assert.Equal(t, stats[0].Tags, tags)
 }

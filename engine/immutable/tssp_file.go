@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
@@ -51,6 +52,7 @@ var (
 )
 
 type TSSPFileReader struct {
+	ref            int64
 	r              DiskFileReader
 	opened         chan struct{}
 	metaIndexItems []MetaIndex
@@ -61,12 +63,14 @@ type TSSPFileReader struct {
 	fileSize       int64
 	avgChunkRows   int
 	maxChunkRows   int
+	mu             sync.RWMutex
+
 	// in memory data and meta block
 	inMemBlock MemoryReader
 	inited     int32
 }
 
-func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *TableData, ver uint64, tmp bool) (*TSSPFileReader, error) {
+func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *TableData, ver uint64, tmp bool, lockPath *string) (*TSSPFileReader, error) {
 	if size <= minTableSize() {
 		log.Error("zero file size", zap.Int64("size", size))
 		panic("zero file size")
@@ -74,7 +78,7 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 
 	var bloomFilter *bloom.Filter
 	var err error
-	// copy bloom filter content for reader, buf does not shared
+	// copy bloom filter content for reader, buf does not share
 	bloomBuf := make([]byte, len(tb.bloomFilter))
 	copy(bloomBuf, tb.bloomFilter)
 
@@ -90,7 +94,7 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 			return nil, err
 		}
 
-		lock := fileops.FileLockOption("")
+		lock := fileops.FileLockOption(*lockPath)
 		pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 		name := tmpName[:len(tmpName)-len(tmpTsspFileSuffix)]
 		if err = fileops.RenameFile(tmpName, name, lock); err != nil {
@@ -98,6 +102,7 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 			log.Error("stat file fail", zap.String("name", tmpName), zap.Error(err))
 			return nil, err
 		}
+		lock = ""
 		fd, err = fileops.Open(name, lock, pri)
 		if err != nil {
 			log.Error("open file fail", zap.String("name", tmpName), zap.Error(err))
@@ -119,13 +124,14 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 	}
 
 	r := getTSSPFileReader()
-	r.r = NewDiskFileReader(fd)
+	r.r = NewDiskFileReader(fd, lockPath)
 	r.opened = make(chan struct{})
 	r.trailer = Trailer{}
 	r.trailerOffset = size - int64(len(tb.trailerData))
 	r.fileSize = size
 	r.version = ver
 	r.inited = 0
+	r.ref = 0
 
 	r.bloom = bloomFilter
 	trailer.copyTo(&r.trailer)
@@ -139,7 +145,7 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 	return r, nil
 }
 
-func NewTSSPFileReader(name string) (*TSSPFileReader, error) {
+func NewTSSPFileReader(name string, lockPath *string) (*TSSPFileReader, error) {
 	var header [fileHeaderSize]byte
 	var footer [8]byte
 	fi, err := fileops.Stat(name)
@@ -148,18 +154,19 @@ func NewTSSPFileReader(name string) (*TSSPFileReader, error) {
 		err = errOpenFail(name, err)
 		return nil, err
 	}
+	lock := fileops.FileLockOption(*lockPath)
 
 	if fi.Size() < minTableSize() {
 		err = fmt.Errorf("invalid file(%v) size:%v", name, fi.Size())
 		log.Error(err.Error())
 		err = errOpenFail(err)
-		_ = fileops.Remove(name)
+		_ = fileops.Remove(name, lock)
 		return nil, err
 	}
 
 	size := fi.Size()
-	lock := fileops.FileLockOption("")
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
+	lock = ""
 	fd, err := fileops.Open(name, lock, pri)
 	if err != nil {
 		err = errCreateFail(name, err)
@@ -167,7 +174,7 @@ func NewTSSPFileReader(name string) (*TSSPFileReader, error) {
 		return nil, err
 	}
 
-	dr := NewDiskFileReader(fd)
+	dr := NewDiskFileReader(fd, lockPath)
 
 	hd := header[:]
 	hb, err := dr.ReadAt(0, uint32(len(header[:])), &hd)
@@ -228,6 +235,7 @@ func NewTSSPFileReader(name string) (*TSSPFileReader, error) {
 	r.r = dr
 	r.opened = make(chan struct{})
 	r.inited = 0
+	r.ref = 0
 
 	return r, nil
 }
@@ -264,6 +272,19 @@ func (r *TSSPFileReader) validate(offset, size int64) error {
 			offset, size)
 	}
 
+	return nil
+}
+
+func (r *TSSPFileReader) FreeFileHandle() error {
+	if !r.r.IsOpen() {
+		return nil
+	}
+	defer util.TimeCost("close file")()
+	atomic.CompareAndSwapInt32(&r.inited, 1, 0)
+	if err := r.r.FreeFileHandle(); err != nil {
+		return err
+	}
+	r.opened = make(chan struct{})
 	return nil
 }
 
@@ -364,7 +385,6 @@ func (r *TSSPFileReader) readSegmentRecord(cm *ChunkMeta, segment int, dst *reco
 		if idx < 0 {
 			continue
 		}
-
 		fieldMatched = true
 
 		if ref.Name == record.TimeField {
@@ -459,7 +479,7 @@ func (r *TSSPFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, siz
 	if readCacheEn {
 		rb, err = r.GetTSSPFileBytes(offset, size, dst)
 	} else {
-		rb, err = r.r.ReadAt(offset, size, dst)
+		rb, err = r.Read(offset, size, dst)
 	}
 	if err != nil {
 		log.Error("read file failed", zap.String("file", r.r.Name()), zap.Error(err))
@@ -474,11 +494,7 @@ func (r *TSSPFileReader) ReadDataBlock(offset int64, size uint32, dst *[]byte) (
 		return r.inMemBlock.ReadDataBlock(offset, size, dst)
 	}
 
-	if readCacheEn {
-		rb, err = r.GetTSSPFileBytes(offset, size, dst)
-	} else {
-		rb, err = r.r.ReadAt(offset, size, dst)
-	}
+	rb, err = r.Read(offset, size, dst)
 
 	if err != nil {
 		log.Error("read file failed", zap.String("file", r.FileName()), zap.Error(err))
@@ -502,7 +518,7 @@ func (r *TSSPFileReader) GetTSSPFileBytes(offset int64, size uint32, buf *[]byte
 		}
 	}
 
-	b, err = r.r.ReadAt(offset, size, buf)
+	b, err = r.Read(offset, size, buf)
 	if err != nil {
 		log.Error("read TSSPFile failed", zap.Error(err))
 		return nil, err
@@ -512,7 +528,23 @@ func (r *TSSPFileReader) GetTSSPFileBytes(offset int64, size uint32, buf *[]byte
 }
 
 func (r *TSSPFileReader) Read(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return r.r.ReadAt(offset, size, dst)
+	if err := r.lazyInit(); err != nil {
+		errInfo := errno.NewError(errno.LoadFilesFailed)
+		log.Error("Read", zap.Error(errInfo))
+		return nil, err
+	}
+
+	b, err := r.r.ReadAt(offset, size, dst)
+	if err == nil && len(b) != int(size) {
+		err = fmt.Errorf("short read, exp size: %d , got: %d", size, len(b))
+	}
+
+	if err != nil {
+		log.Error("read file failed", zap.String("file", r.FileName()), zap.Error(err))
+		return nil, err
+	}
+
+	return b, nil
 }
 
 func chunkMetaDataAndOffsets(src []byte, itemCount uint32) ([]byte, []uint32, error) {
@@ -524,7 +556,7 @@ func chunkMetaDataAndOffsets(src []byte, itemCount uint32) ([]byte, []uint32, er
 
 	off := record.Uint32SizeBytes * int(itemCount)
 	n := len(src) - off
-	offs := record.Bytes2Uint32Slice(src[n:])
+	offs := record.Bytes2Uint32SliceBigEndian(src[n:])
 
 	return src[:n], offs, nil
 }
@@ -665,16 +697,26 @@ func searchChunkMeta(data []byte, offsets []uint32, sid uint64, dst *ChunkMeta) 
 	return nil, nil
 }
 
-func (r *TSSPFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta) (*ChunkMeta, error) {
+func (r *TSSPFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error) {
 	needCopy := !r.r.IsMmapRead()
-	var buf []byte
 	if needCopy {
-		buf = bufferpool.Get()
-		buf = bufferpool.Resize(buf, int(size))
-		defer bufferpool.Put(buf)
+		if buffer == nil {
+			buf := bufferpool.Get()
+			buf = bufferpool.Resize(buf, int(size))
+			buffer = &buf
+			defer bufferpool.Put(buf)
+		} else {
+			n := int(size)
+			bufferSize := cap(*buffer)
+			nn := n - bufferSize
+			if nn > 0 {
+				*buffer = append((*buffer)[:bufferSize], make([]byte, nn)...)
+			}
+			*buffer = (*buffer)[:n]
+		}
 	}
 
-	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, &buf)
+	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, buffer)
 	if err != nil {
 		log.Error("read chunk mata data fail", zap.Error(err))
 	}
@@ -775,7 +817,14 @@ func (r *TSSPFileReader) Version() uint64 {
 	return r.version
 }
 
+func (r *TSSPFileReader) loadDiskFileReader() error {
+	return r.r.ReOpen()
+}
+
 func (r *TSSPFileReader) loadBloomFilter() error {
+	if r.bloom != nil {
+		return nil
+	}
 	tr := &r.trailer
 	// load bloom filter
 	bloomBuf := make([]byte, tr.bloomSize)
@@ -797,6 +846,9 @@ func (r *TSSPFileReader) loadBloomFilter() error {
 }
 
 func (r *TSSPFileReader) loadMetaIndex() error {
+	if len(r.metaIndexItems) != 0 {
+		return nil
+	}
 	tr := &r.trailer
 	metaIndexOff, metaIndexSize := r.trailer.metaIndexOffsetSize()
 
@@ -835,13 +887,22 @@ func (r *TSSPFileReader) loadMetaIndex() error {
 	return err
 }
 
-func (r *TSSPFileReader) LoadIndex() error {
+func (r *TSSPFileReader) LoadComponents() error {
 	if r.initialized() {
 		return nil
 	}
 
 	if !atomic.CompareAndSwapInt32(&r.inited, 0, 1) {
 		return nil
+	}
+
+	defer close(r.opened)
+	if !r.r.IsOpen() {
+		if err := r.loadDiskFileReader(); err != nil {
+			err = errLoadFail(r.FileName(), err)
+			log.Error("load diskFileReader fail", zap.Error(err))
+			return err
+		}
 	}
 
 	if err := r.loadBloomFilter(); err != nil {
@@ -856,8 +917,6 @@ func (r *TSSPFileReader) LoadIndex() error {
 		return err
 	}
 
-	close(r.opened)
-
 	return nil
 }
 
@@ -870,6 +929,12 @@ func (r *TSSPFileReader) loadIdTimes(isOrder bool, p *IdTimePairs) error {
 		buf = bufferpool.Get()
 		buf = bufferpool.Resize(buf, int(size))
 		defer bufferpool.Put(buf)
+	}
+
+	if err = r.lazyInit(); err != nil {
+		errInfo := errno.NewError(errno.LoadFilesFailed)
+		log.Error("loadIdTimes", zap.Error(errInfo))
+		return err
 	}
 
 	buf, err = r.r.ReadAt(off, uint32(size), &buf)
@@ -919,7 +984,7 @@ func (r *TSSPFileReader) FreeMemory() int64 {
 
 func (r *TSSPFileReader) LoadIntoMemory() error {
 	if !r.initialized() {
-		if err := r.LoadIndex(); err != nil {
+		if err := r.LoadComponents(); err != nil {
 			log.Error("load index fail", zap.String("file", r.r.Name()), zap.Error(err))
 			return err
 		}
@@ -979,14 +1044,41 @@ var (
 )
 
 func (r *TSSPFileReader) lazyInit() error {
+	failpoint.Inject("lazyInit-error", func() {
+		failpoint.Return(fmt.Errorf("lazyInit error"))
+	})
+
 	select {
 	case <-r.opened:
 		return nil
 	default:
-		if err := r.LoadIndex(); err != nil {
+		if err := r.LoadComponents(); err != nil {
 			return err
 		}
 		<-r.opened
 		return nil
+	}
+}
+
+func (r *TSSPFileReader) Ref() {
+	r.mu.RLock()
+	atomic.AddInt64(&r.ref, 1)
+	r.mu.RUnlock()
+
+}
+
+func (r *TSSPFileReader) Unref() {
+	if atomic.AddInt64(&r.ref, -1) == 0 {
+		r.mu.Lock()
+		if r.ref == 0 {
+			if err := r.FreeFileHandle(); err != nil {
+				r.mu.Unlock()
+				panic("freeFile failed")
+			}
+		}
+		r.mu.Unlock()
+	}
+	if r.ref < 0 {
+		panic("file closed: " + r.FileName())
 	}
 }

@@ -18,97 +18,19 @@ package executor
 
 import (
 	"bytes"
-	"container/heap"
-	"context"
 	"sort"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"go.uber.org/zap"
 )
-
-type SortAppendTransform struct {
-	BaseProcessor
-	ReflectionTables
-
-	Inputs  ChunkPorts
-	Outputs ChunkPorts
-
-	schema *QuerySchema
-
-	BreakPoint  *SortedBreakPoint
-	currItem    *Item
-	HeapItems   *AppendHeapItems
-	NewChunk    Chunk
-	CoProcessor CoProcessor
-	mstName     string
-
-	WaitMerge chan Semaphore
-	chunkPool *CircularChunkPool
-	NextChunk []chan Semaphore
-
-	lock sync.Mutex
-	wg   sync.WaitGroup
-
-	count      int32
-	heapLength int32
-
-	span           *tracing.Span
-	ppForHeap      *tracing.Span
-	ppForCalculate *tracing.Span
-
-	param      *IteratorParams
-	sortLogger *logger.Logger
-}
 
 type ReflectionTable []int
 
 type ReflectionTables []ReflectionTable
 
-func NewSortAppendTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hybridqp.RowDataType, schema *QuerySchema, children []hybridqp.QueryNode) *SortAppendTransform {
-	opt := *schema.Options().(*query.ProcessorOptions)
-	trans := &SortAppendTransform{
-		Inputs:  make(ChunkPorts, 0, len(inRowDataType)),
-		Outputs: make(ChunkPorts, 0, len(outRowDataType)),
-		schema:  schema,
-		HeapItems: &AppendHeapItems{
-			Items: make([]*Item, 0, len(inRowDataType)),
-			opt:   opt,
-		},
-		CoProcessor: AppendColumnsIteratorHelper(outRowDataType[0]),
-		chunkPool:   NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
-		WaitMerge:   make(chan Semaphore),
-		param:       &IteratorParams{},
-		BreakPoint:  &SortedBreakPoint{},
-		sortLogger:  logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "SortAppendTransform"), zap.Uint64("trace_id", opt.Traceid)),
-	}
-
-	trans.NewChunk = trans.chunkPool.GetChunk()
-
-	for _, schema := range inRowDataType {
-		input := NewChunkPort(schema)
-		trans.Inputs = append(trans.Inputs, input)
-		trans.NextChunk = append(trans.NextChunk, make(chan Semaphore))
-	}
-	for _, schema := range outRowDataType {
-		output := NewChunkPort(schema)
-		trans.Outputs = append(trans.Outputs, output)
-	}
-
-	trans.count, trans.heapLength = 0, int32(len(inRowDataType))
-
-	trans.initReflectionTable(children, schema, outRowDataType[0])
-	return trans
-}
-
-func initMstName(item *AppendHeapItems) string {
+func InitMstName(item *AppendHeapItems) string {
 	var stringSlice []string
 	for i := range item.Items {
 		stringSlice = append(stringSlice, item.Items[i].ChunkBuf.Name())
@@ -129,6 +51,10 @@ func initMstName(item *AppendHeapItems) string {
 	return s
 }
 
+func NewSortAppendTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, schema *QuerySchema, children []hybridqp.QueryNode) *MergeTransform {
+	return NewBaseMergeTransform(inRowDataTypes, outRowDataTypes, schema, children, &SortAppendTransf{})
+}
+
 type SortAppendTransformCreator struct {
 }
 
@@ -139,236 +65,57 @@ func (c *SortAppendTransformCreator) Create(plan LogicalPlan, _ query.ProcessorO
 		inRowDataTypes = append(inRowDataTypes, inPlan.RowDataType())
 	}
 
-	p := NewSortAppendTransform(inRowDataTypes, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema().(*QuerySchema), plan.Children())
+	p := NewBaseMergeTransform(inRowDataTypes, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema().(*QuerySchema),
+		plan.Children(), &SortAppendTransf{})
 	p.InitOnce()
 	return p, nil
 }
 
 var _ = RegistryTransformCreator(&LogicalSortAppend{}, &SortAppendTransformCreator{})
 
-func (trans *SortAppendTransform) Name() string {
+type SortAppendTransf struct {
+}
+
+func (t *SortAppendTransf) Name() string {
 	return "SortAppendTransform"
 }
 
-func (trans *SortAppendTransform) Explain() []ValuePair {
-	return nil
+func (t *SortAppendTransf) CostName() string {
+	return "[SortAppendTransform] TotalWorkCost"
 }
 
-func (trans *SortAppendTransform) Close() {
-	trans.Once(func() {
-		close(trans.WaitMerge)
-		for _, next := range trans.NextChunk {
-			close(next)
-		}
-	})
-	trans.Outputs.Close()
+func (t *SortAppendTransf) GetType() MergeTransformType {
+	return SortAppendTrans
 }
 
-func (trans *SortAppendTransform) AppendToHeap(in int, c Chunk) {
-	trans.lock.Lock()
-	tracing.SpanElapsed(trans.ppForHeap, func() {
-		heap.Push(trans.HeapItems, NewItem(in, c))
-	})
-	trans.lock.Unlock()
+func (t *SortAppendTransf) InitHeapItems(inRowDataLen int, _ hybridqp.RowDataType, schema *QuerySchema) BaseHeapItems {
+	opt := *schema.Options().(*query.ProcessorOptions)
+	items := &AppendHeapItems{
+		Items: make([]*Item, 0, inRowDataLen),
+		opt:   opt,
+	}
+	return items
 }
 
-func (trans *SortAppendTransform) initSpan() {
-	trans.span = trans.StartSpan("[SortAppend] TotalWorkCost", false)
-	if trans.span != nil {
-		trans.span.AppendNameValue("inputs", len(trans.Inputs))
-		trans.ppForHeap = trans.span.StartSpan("heap_sorted_cost")
-		trans.ppForCalculate = trans.span.StartSpan("calculate_cost")
-	}
+func (t *SortAppendTransf) InitColumnsIteratorHelper(rt hybridqp.RowDataType) CoProcessor {
+	return AppendColumnsIteratorHelper(rt)
 }
 
-func (trans *SortAppendTransform) Work(ctx context.Context) error {
-	trans.initSpan()
-	defer func() {
-		tracing.Finish(trans.span, trans.ppForHeap, trans.ppForCalculate)
-		trans.Close()
-	}()
-
-	// there are len(trans.Inputs) + merge goroutines which are watched
-	errs := NewErrs(len(trans.Inputs) + 2)
-	errSignals := NewErrorSignals(len(trans.Inputs) + 2)
-
-	closeErrs := func() {
-		errs.Close()
-		errSignals.Close()
-	}
-
-	runnable := func(in int) {
-		defer func() {
-			if e := recover(); e != nil {
-				err := errno.NewError(errno.RecoverPanic, e)
-				trans.sortLogger.Error(err.Error())
-				errs.Dispatch(err)
-				errSignals.Dispatch()
-			}
-			defer trans.wg.Done()
-		}()
-
-		for {
-			select {
-			case c, ok := <-trans.Inputs[in].State:
-				begin := time.Now()
-				if !ok {
-					if atomic.AddInt32(&trans.count, 1) == trans.heapLength {
-						trans.WaitMerge <- signal
-					}
-					return
-				}
-
-				trans.AppendToHeap(in, c)
-				if atomic.AddInt32(&trans.count, 1) == trans.heapLength {
-					trans.WaitMerge <- signal
-				}
-				<-trans.NextChunk[in]
-				tracing.AddPP(trans.span, begin)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}
-
-	for i := range trans.Inputs {
-		trans.wg.Add(1)
-		go runnable(i)
-	}
-
-	trans.wg.Add(1)
-	go trans.Merge(ctx, errs, errSignals)
-
-	monitoring := func() {
-		errSignals.Wait(trans.Close)
-	}
-	go monitoring()
-
-	trans.wg.Wait()
-	closeErrs()
-
-	var err error
-	for e := range errs.ch {
-		if err == nil {
-			err = e
-		}
-	}
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+func (t *SortAppendTransf) isItemEmpty(currItem *Item) bool {
+	return currItem.IsSortedEmpty()
 }
 
-func (trans *SortAppendTransform) GetOutputs() Ports {
-	ports := make(Ports, 0, len(trans.Outputs))
+func (t *SortAppendTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int) {
+	chunk := trans.currItem.ChunkBuf
+	var start, end int = i - 1, i
 
-	for _, output := range trans.Outputs {
-		ports = append(ports, output)
-	}
-	return ports
+	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
+	trans.param.Table = trans.ReflectionTables[trans.currItem.Input]
+	trans.NewChunk.AppendTime(chunk.Time()[start:end]...)
+	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
 }
 
-func (trans *SortAppendTransform) GetInputs() Ports {
-	ports := make(Ports, 0, len(trans.Inputs))
-
-	for _, input := range trans.Inputs {
-		ports = append(ports, input)
-	}
-	return ports
-}
-
-func (trans *SortAppendTransform) GetOutputNumber(port Port) int {
-	for i, output := range trans.Outputs {
-		if output == port {
-			return i
-		}
-	}
-	return INVALID_NUMBER
-}
-
-func (trans *SortAppendTransform) GetInputNumber(port Port) int {
-	for i, input := range trans.Inputs {
-		if input == port {
-			return i
-		}
-	}
-	return INVALID_NUMBER
-}
-
-// Merge used to merge chunks to a sorted chunks.
-func (trans *SortAppendTransform) Merge(ctx context.Context, errs *Errs, errSignals *ErrorSignals) {
-	defer func() {
-		if e := recover(); e != nil {
-			err := errno.NewError(errno.RecoverPanic, e)
-			trans.sortLogger.Error(err.Error())
-			errs.Dispatch(err)
-			errSignals.Dispatch()
-		}
-		defer trans.wg.Done()
-	}()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case _, ok := <-trans.WaitMerge:
-			if !ok {
-				return
-			}
-			if trans.mstName == "" {
-				trans.mstName = initMstName(trans.HeapItems)
-			}
-			if len(trans.HeapItems.Items) == 0 {
-				if trans.NewChunk.Len() > 0 {
-					trans.SendChunk()
-				}
-				return
-			}
-			tracing.SpanElapsed(trans.ppForHeap, func() {
-				trans.currItem, ok = heap.Pop(trans.HeapItems).(*Item)
-				if !ok {
-					panic("Merge trans.HeapItems isn't *Item type")
-				}
-			})
-			if len(trans.HeapItems.Items) == 0 {
-				trans.UpdateWithSingleChunk()
-			} else {
-				trans.GetSortedBreakPoint()
-				trans.updateWithBreakPoint()
-			}
-
-			if trans.currItem.IsSortedEmpty() {
-				atomic.AddInt32(&trans.count, -1)
-				trans.NextChunk[trans.currItem.Input] <- signal
-			} else {
-				tracing.SpanElapsed(trans.ppForHeap, func() {
-					heap.Push(trans.HeapItems, trans.currItem)
-				})
-				go func() {
-					defer func() {
-						_ = recover()
-					}()
-					trans.WaitMerge <- signal
-				}()
-			}
-
-			if trans.NewChunk.Len() >= trans.HeapItems.opt.ChunkSize {
-				trans.SendChunk()
-			}
-		}
-	}
-}
-
-func (trans *SortAppendTransform) GetSortedBreakPoint() {
-	trans.BreakPoint.Tag = trans.HeapItems.Items[0].ChunkBuf.Tags()[trans.HeapItems.Items[0].TagIndex]
-	trans.BreakPoint.Time = trans.HeapItems.Items[0].ChunkBuf.Time()[trans.HeapItems.Items[0].Index]
-	trans.BreakPoint.chunk = trans.HeapItems.Items[0].ChunkBuf
-	trans.BreakPoint.ValuePosition = trans.HeapItems.Items[0].Index
-}
-
-func (trans *SortAppendTransform) UpdateWithSingleChunk() {
+func (t *SortAppendTransf) updateWithSingleChunk(trans *MergeTransform) {
 	tracing.StartPP(trans.ppForCalculate)
 	defer func() {
 		tracing.EndPP(trans.ppForCalculate)
@@ -377,7 +124,7 @@ func (trans *SortAppendTransform) UpdateWithSingleChunk() {
 	curr := trans.currItem
 	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
 		trans.AddTagAndIndexes(curr.ChunkBuf.Tags()[curr.TagIndex], i+1)
-		trans.AppendMergeTimeAndColumns(i + 1)
+		t.appendMergeTimeAndColumns(trans, i+1)
 		if curr.TagSwitch(i) {
 			curr.TagIndex += 1
 		}
@@ -388,7 +135,7 @@ func (trans *SortAppendTransform) UpdateWithSingleChunk() {
 	}
 }
 
-func (trans *SortAppendTransform) updateWithBreakPoint() {
+func (t *SortAppendTransf) updateWithBreakPoint(trans *MergeTransform) {
 	tracing.StartPP(trans.ppForCalculate)
 	defer func() {
 		tracing.EndPP(trans.ppForCalculate)
@@ -397,11 +144,11 @@ func (trans *SortAppendTransform) updateWithBreakPoint() {
 	curr := trans.currItem
 	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
 		tag := curr.ChunkBuf.Tags()[curr.TagIndex]
-		if !CompareSortedAppendBreakPoint(*curr, curr.Index, tag, trans.BreakPoint, trans.HeapItems.opt) {
+		if !CompareSortedAppendBreakPoint(*curr, curr.Index, tag, trans.BreakPoint.(*SortedBreakPoint), *trans.HeapItems.GetOption()) {
 			return
 		}
 		trans.AddTagAndIndexes(tag, i+1)
-		trans.AppendMergeTimeAndColumns(i + 1)
+		t.appendMergeTimeAndColumns(trans, i+1)
 		if curr.TagSwitch(i) {
 			curr.TagIndex += 1
 		}
@@ -410,86 +157,6 @@ func (trans *SortAppendTransform) updateWithBreakPoint() {
 		}
 		curr.Index += 1
 	}
-}
-
-func (trans *SortAppendTransform) SendChunk() {
-	trans.Outputs[0].State <- trans.NewChunk
-	trans.NewChunk = trans.chunkPool.GetChunk()
-}
-
-func (trans *SortAppendTransform) AddTagAndIndexes(tag ChunkTags, i int) {
-	c, chunk := trans.NewChunk, trans.currItem.ChunkBuf
-	opt := trans.HeapItems.opt
-	if c.Name() == "" {
-		c.SetName(trans.mstName)
-	}
-	if len(c.Tags()) == 0 {
-		c.AddTagAndIndex(tag, 0)
-		c.AddIntervalIndex(0)
-		return
-	} else if !bytes.Equal(tag.Subset(opt.Dimensions), c.Tags()[len(c.Tags())-1].Subset(opt.Dimensions)) {
-		c.AddTagAndIndex(tag, c.Len())
-		c.AddIntervalIndex(c.Len())
-		return
-	} else if !opt.Interval.IsZero() {
-		if trans.AddIntervalIndex(chunk, i, opt) {
-			c.AddIntervalIndex(c.Len())
-		}
-		return
-	}
-}
-
-func (trans *SortAppendTransform) AddIntervalIndex(chunk Chunk, i int, opt query.ProcessorOptions) bool {
-	TimeStart, TimeEnd := opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
-	if TimeStart <= chunk.Time()[i-1] && TimeEnd > chunk.Time()[i-1] {
-		return false
-	}
-	return true
-}
-
-func (trans *SortAppendTransform) AppendMergeTimeAndColumns(i int) {
-	chunk := trans.currItem.ChunkBuf
-	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), i-1, i
-	trans.param.Table = trans.ReflectionTables[trans.currItem.Input]
-	trans.NewChunk.AppendTime(chunk.Time()[i-1 : i]...)
-	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
-}
-
-func (trans *SortAppendTransform) initReflectionTable(children []hybridqp.QueryNode, schema *QuerySchema, rt hybridqp.RowDataType) {
-	var Reflection ReflectionTables
-	getRefsOrder := func(filedMap map[string]influxql.VarRef, rt hybridqp.RowDataType) []string {
-		s := make([]string, 0, len(filedMap))
-		symbolMap := make(map[string]string)
-		for key := range filedMap {
-			symbolMap[filedMap[key].Val] = key
-		}
-		for _, f := range rt.Fields() {
-			if v, ok := f.Expr.(*influxql.VarRef); ok {
-				s = append(s, symbolMap[v.Val])
-			}
-		}
-		return s
-	}
-
-	getReflectionOrder := func(dst, source []string) []int {
-		table := ReflectionTable{}
-		for _, target := range dst {
-			for i, s := range source {
-				if target == s {
-					table = append(table, i)
-					break
-				}
-			}
-		}
-		return table
-	}
-
-	outTable := getRefsOrder(schema.symbols, rt)
-	for _, child := range children {
-		inputTable := getRefsOrder(child.Schema().Symbols(), child.RowDataType())
-		Reflection = append(Reflection, getReflectionOrder(outTable, inputTable))
-	}
-	trans.ReflectionTables = Reflection
 }
 
 func CompareSortedAppendBreakPoint(item Item, in int, tag ChunkTags, b *SortedBreakPoint, opt query.ProcessorOptions) bool {
@@ -580,8 +247,11 @@ func (h *AppendHeapItems) Pop() interface{} {
 	return item
 }
 
-// GetSortedBreakPoint used to get the break point of the records
-func (h *AppendHeapItems) GetSortedBreakPoint() *SortedBreakPoint {
+func (h *AppendHeapItems) GetOption() *query.ProcessorOptions {
+	return &h.opt
+}
+
+func (h *AppendHeapItems) GetBreakPoint() BaseBreakPoint {
 	tmp := h.Items[0]
 	return &SortedBreakPoint{
 		Tag:           tmp.ChunkBuf.Tags()[tmp.TagIndex],
@@ -680,7 +350,7 @@ func NewStringAppendIterator() *StringAppendIterator {
 	return &StringAppendIterator{}
 }
 
-//nolint
+// nolint
 func (f *StringAppendIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
 	var start, end uint32
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)

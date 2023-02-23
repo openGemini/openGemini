@@ -22,7 +22,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"reflect"
 	"sync"
 	"unsafe"
 
@@ -202,15 +201,9 @@ func (m *IntegerPreAgg) size() int {
 }
 
 func (m *IntegerPreAgg) marshal(dst []byte) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&m.values))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * record.Int64SizeBytes
-	s.Cap = h.Cap * record.Int64SizeBytes
-
-	dst = append(dst, res...)
+	for _, val := range m.values {
+		dst = numberenc.MarshalInt64Append(dst, val)
+	}
 	return dst
 }
 
@@ -219,15 +212,12 @@ func (m *IntegerPreAgg) unmarshal(src []byte) ([]byte, error) {
 		return nil, fmt.Errorf("too small data %v for ColumnMetaInteger", len(src))
 	}
 
-	var dstArr []int64
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&src))
-	dst := (*reflect.SliceHeader)(unsafe.Pointer(&dstArr))
-	dst.Data = h.Data
-	dst.Cap = h.Cap / record.Int64SizeBytes
-	dst.Len = h.Len / record.Int64SizeBytes
-	copy(m.values, dstArr)
+	for i := range m.values {
+		m.values[i] = numberenc.UnmarshalInt64(src[:8])
+		src = src[8:]
+	}
 
-	return src[m.size():], nil
+	return src, nil
 }
 
 func (m *IntegerPreAgg) reset() {
@@ -757,6 +747,15 @@ type ColumnMeta struct {
 	entries []Segment
 }
 
+func (m *ColumnMeta) Clone() ColumnMeta {
+	return ColumnMeta{
+		name:    m.name,
+		ty:      m.ty,
+		preAgg:  append([]byte{}, m.preAgg...),
+		entries: append([]Segment{}, m.entries...),
+	}
+}
+
 func (m *ColumnMeta) reset() {
 	if m == nil {
 		return
@@ -812,19 +811,6 @@ func (m *ColumnMeta) marshal(dst []byte) []byte {
 	}
 
 	return dst
-}
-
-func (m *ChunkMeta) Reset() {
-	m.sid = 0
-	m.offset = 0
-	m.size = 0
-	m.segCount = 0
-	m.columnCount = 0
-
-	for i := range m.colMeta {
-		m.colMeta[i].reset()
-	}
-	m.colMeta = m.colMeta[:0]
 }
 
 func (m *ColumnMeta) unmarshal(src []byte, segs int) ([]byte, error) {
@@ -890,12 +876,16 @@ type ChunkMeta struct {
 	offset      int64
 	size        uint32
 	columnCount uint32
-	segCount    uint16
+	segCount    uint32
 	timeRange   []SegmentRange
 	colMeta     []ColumnMeta
 }
 
 func (m *ChunkMeta) segmentCount() int {
+	return int(m.segCount)
+}
+
+func (m *ChunkMeta) SegmentCount() int {
 	return int(m.segCount)
 }
 
@@ -942,6 +932,28 @@ func (m *ChunkMeta) resize(columns int, segs int) {
 	m.timeRange = m.timeRange[:segs]
 }
 
+func (m *ChunkMeta) GetColMeta() []ColumnMeta {
+	return m.colMeta
+}
+
+func (m *ChunkMeta) Clone() *ChunkMeta {
+	newMeta := &ChunkMeta{
+		sid:         m.sid,
+		offset:      m.offset,
+		size:        m.size,
+		columnCount: m.columnCount,
+		segCount:    m.segCount,
+		timeRange:   append([]SegmentRange{}, m.timeRange...),
+		colMeta:     make([]ColumnMeta, 0, len(m.colMeta)),
+	}
+
+	for i := 0; i < len(m.colMeta); i++ {
+		newMeta.colMeta = append(newMeta.colMeta, m.colMeta[i].Clone())
+	}
+
+	return newMeta
+}
+
 func (m *ChunkMeta) reset() {
 	m.sid = 0
 	m.offset = 0
@@ -969,7 +981,7 @@ func (m *ChunkMeta) marshal(dst []byte) []byte {
 	dst = numberenc.MarshalInt64Append(dst, m.offset)
 	dst = numberenc.MarshalUint32Append(dst, m.size)
 	dst = numberenc.MarshalUint32Append(dst, m.columnCount)
-	dst = numberenc.MarshalUint16Append(dst, m.segCount)
+	dst = numberenc.MarshalUint32Append(dst, m.segCount)
 	for i := range m.timeRange {
 		tr := &m.timeRange[i]
 		dst = tr.marshal(dst)
@@ -979,6 +991,28 @@ func (m *ChunkMeta) marshal(dst []byte) []byte {
 	}
 
 	return dst
+}
+
+func (m *ChunkMeta) validation() {
+	if m.sid == 0 {
+		panic("series is is 0")
+	}
+
+	if int(m.segCount) != len(m.timeRange) {
+		panic("length of m.timeRange is not equal to m.segCount")
+	}
+
+	if int(m.columnCount) != len(m.colMeta) {
+		panic("length of m.colMeta is not equal to m.columnCount")
+	}
+
+	for i := 0; i < len(m.colMeta); i++ {
+		item := &m.colMeta[i]
+
+		if len(item.entries) != int(m.segCount) {
+			panic(fmt.Sprintf("length of m.colMeta[%d].entries is not equal to m.segCount", i))
+		}
+	}
 }
 
 func (m *ChunkMeta) unmarshal(src []byte) ([]byte, error) {
@@ -993,7 +1027,7 @@ func (m *ChunkMeta) unmarshal(src []byte) ([]byte, error) {
 	m.offset, src = numberenc.UnmarshalInt64(src), src[8:]
 	m.size, src = numberenc.UnmarshalUint32(src), src[4:]
 	m.columnCount, src = numberenc.UnmarshalUint32(src), src[4:]
-	m.segCount, src = numberenc.UnmarshalUint16(src), src[2:]
+	m.segCount, src = numberenc.UnmarshalUint32(src), src[4:]
 
 	m.resize(int(m.columnCount), int(m.segCount))
 	for i := range m.timeRange {
@@ -1046,6 +1080,18 @@ func (m *ChunkMeta) growTimeRangeEntry() {
 	} else {
 		m.timeRange = append(m.timeRange, SegmentRange{})
 	}
+}
+
+func (m *ChunkMeta) Len() int {
+	return len(m.colMeta)
+}
+
+func (m *ChunkMeta) Less(i, j int) bool {
+	return m.colMeta[i].name < m.colMeta[j].name
+}
+
+func (m *ChunkMeta) Swap(i, j int) {
+	m.colMeta[i], m.colMeta[j] = m.colMeta[j], m.colMeta[i]
 }
 
 // MetaIndex If you change the order of the elements in the structure,
@@ -1135,17 +1181,17 @@ func newWriteLimiter(fd fileops.File, limitCompact bool) NameReadWriterCloser {
 	return lw
 }
 
-func newFileWriter(fd fileops.File, cacheMeta bool, limitCompact bool) FileWriter {
+func newFileWriter(fd fileops.File, cacheMeta bool, limitCompact bool, lockPath *string) FileWriter {
 	name := fd.Name()
 	idxName := name[:len(name)-len(tmpTsspFileSuffix)] + ".index.init"
 
 	lw := newWriteLimiter(fd, limitCompact)
 	w := &fileWriter{
 		fd: fd,
-		dw: NewDiskWriter(lw, defaultBufferSize),
+		dw: NewDiskWriter(lw, defaultBufferSize, lockPath),
 	}
 
-	w.cmw = NewIndexWriter(idxName, cacheMeta, limitCompact)
+	w.cmw = NewIndexWriter(idxName, cacheMeta, limitCompact, lockPath)
 
 	return w
 }
@@ -1250,12 +1296,13 @@ type writer interface {
 }
 
 type diskWriter struct {
-	lw NameReadWriterCloser
-	w  *bufio.Writer
-	n  int
+	lw   NameReadWriterCloser
+	w    *bufio.Writer
+	n    int
+	lock *string
 }
 
-func NewDiskWriter(lw NameReadWriterCloser, bufferSize int) *diskWriter {
+func NewDiskWriter(lw NameReadWriterCloser, bufferSize int, lockPath *string) *diskWriter {
 	if bufferSize == 0 {
 		bufferSize = defaultBufferSize
 	} else if bufferSize < minBufferSize {
@@ -1276,6 +1323,7 @@ func NewDiskWriter(lw NameReadWriterCloser, bufferSize int) *diskWriter {
 
 	dw.Reset(lw)
 	dw.n = 0
+	dw.lock = lockPath
 
 	return dw
 }
@@ -1341,7 +1389,7 @@ func (w *diskWriter) CopyTo(to io.Writer) (int, error) {
 		if err = fd.Close(); err != nil {
 			log.Error("close file fail", zap.String("file", fn), zap.Error(err))
 		}
-		if err = fileops.Remove(fn, fileops.FileLockOption("")); err != nil {
+		if err = fileops.Remove(fn, fileops.FileLockOption(*w.lock)); err != nil {
 			log.Error("remove file fail", zap.String("file", fn), zap.Error(err))
 		}
 	}(name)
@@ -1385,7 +1433,7 @@ func getMetaBlockBuffer(size int) []byte {
 	return buf[:0]
 }
 
-//nolint
+// nolint
 func freeMetaBlockBuffer(b []byte) {
 	metaBlkPool.Put(b[:0])
 }
@@ -1427,6 +1475,7 @@ func indexWriterBufferSize(sizeBytes int64) int {
 
 type indexWriter struct {
 	name string
+	lock *string
 	buf  []byte
 	n    int
 	wn   int
@@ -1439,10 +1488,11 @@ type indexWriter struct {
 	metas        [][]byte
 }
 
-func NewIndexWriter(indexName string, cacheMeta bool, limitCompact bool) *indexWriter {
+func NewIndexWriter(indexName string, cacheMeta bool, limitCompact bool, lockPath *string) *indexWriter {
 	v := indexWriterPool.Get()
 	w := v.(*indexWriter)
 	w.limitCompact = limitCompact
+	w.lock = lockPath
 	w.reset(indexName, cacheMeta)
 	if w.cacheMeta {
 		w.buf = getMetaBlockBuffer(w.blockSize)
@@ -1500,7 +1550,8 @@ func (w *indexWriter) writeBuffer(p []byte) (int, error) {
 	var err error
 	for len(p) > w.available() && err == nil {
 		if w.lw == nil {
-			fd, err := fileops.OpenFile(w.name, os.O_CREATE|os.O_RDWR, 0640)
+			lock := fileops.FileLockOption(*w.lock)
+			fd, err := fileops.OpenFile(w.name, os.O_CREATE|os.O_RDWR, 0640, lock)
 			if err != nil {
 				log.Error("create file fail", zap.String("file", w.name), zap.Error(err))
 				return 0, err
@@ -1551,7 +1602,8 @@ func (w *indexWriter) Write(p []byte) (nn int, err error) {
 func (w *indexWriter) Close() error {
 	if w.lw != nil {
 		_ = w.lw.Close()
-		_ = fileops.Remove(w.name)
+		lock := fileops.FileLockOption(*w.lock)
+		_ = fileops.Remove(w.name, lock)
 		w.lw = nil
 	}
 

@@ -27,14 +27,14 @@ import (
 
 func TestRaftWrapperApply(t *testing.T) {
 	var r *raftWrapper
-	err := r.apply([]byte("raft is not open"))
+	err := r.Apply([]byte("raft is not open"))
 	assert.True(t, errno.Equal(err, errno.RaftIsNotOpen), "apply should fail with error raft is not open")
 	r = &raftWrapper{}
 	c := raft.MakeCluster(3, t, nil)
 	follows := c.Followers()
 	assert.Equal(t, 2, len(follows))
 	r.raft = follows[0]
-	err = r.apply([]byte("not leader"))
+	err = r.Apply([]byte("not leader"))
 	assert.True(t, errno.Equal(err, errno.MetaIsNotLeader), "apply should fail with error not leader")
 }
 

@@ -26,7 +26,8 @@ import (
 var testPath = "/tmp/ski/index_test"
 
 func getTestIndex() *ShardKeyIndex {
-	index, err := NewShardKeyIndex(testPath)
+	lockPath := ""
+	index, err := NewShardKeyIndex(testPath, &lockPath)
 	if err != nil {
 		panic(err)
 	}

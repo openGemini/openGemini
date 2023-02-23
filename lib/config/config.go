@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package config
 
 import (
@@ -50,6 +51,16 @@ const (
 	AppMonitor App = "monitor"
 )
 
+var haEnable bool
+
+func SetHaEnable(en bool) {
+	haEnable = en
+}
+
+func GetHaEnable() bool {
+	return haEnable
+}
+
 func Parse(conf Config, path string) error {
 	if path == "" {
 		return nil
@@ -79,10 +90,12 @@ func fromToml(c Config, input string) error {
 
 // Common represents the CommonConfiguration format for the influxd binary.
 type Common struct {
-	MetaJoin     []string `toml:"meta-join"`
-	ClusterID    string   `toml:"cluster-id"`
-	CPUNum       int      `toml:"cpu-num"`
-	ReportEnable bool     `toml:"report-enable"`
+	MetaJoin       []string `toml:"meta-join"`
+	HaEnable       bool     `toml:"ha-enable"`
+	ClusterID      string   `toml:"cluster-id"`
+	CPUNum         int      `toml:"cpu-num"`
+	IgnoreEmptyTag bool     `toml:"ignore-empty-tag"`
+	ReportEnable   bool     `toml:"report-enable"`
 
 	MemorySize      itoml.Size     `toml:"memory-size"`
 	MemoryLimitSize itoml.Size     `toml:"executor-memory-size-limit"`
@@ -133,3 +146,5 @@ func (c *Common) Corrector() {
 		c.MemoryLimitSize = c.MemorySize / 2
 	}
 }
+
+var EnableTagArray = false

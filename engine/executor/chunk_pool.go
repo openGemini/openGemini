@@ -50,3 +50,41 @@ func (cp *CircularChunkPool) Release() {
 		cp.chunks[i].Release()
 	}
 }
+
+// BlockChunkPool fixed-capacity memory pool that blocks when the pool is empty or full.
+type BlockChunkPool struct {
+	pool chan Chunk
+}
+
+func NewBlockChunkPool(chunkNum int, chunkBuilder *ChunkBuilder) *BlockChunkPool {
+	cp := &BlockChunkPool{
+		pool: make(chan Chunk, chunkNum),
+	}
+	for i := 0; i < chunkNum; i++ {
+		cp.pool <- chunkBuilder.NewChunk("")
+	}
+	return cp
+}
+
+func (cp *BlockChunkPool) Get() Chunk {
+	for {
+		select {
+		case c := <-cp.pool:
+			return c
+		}
+	}
+}
+
+func (cp *BlockChunkPool) Put(c Chunk) {
+	c.Reset()
+	for {
+		select {
+		case cp.pool <- c:
+			return
+		}
+	}
+}
+
+func (cp *BlockChunkPool) Release() {
+	close(cp.pool)
+}

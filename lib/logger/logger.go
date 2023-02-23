@@ -397,14 +397,22 @@ type Logger struct {
 	module errno.Module
 }
 
+var loggerPool sync.Map
+
 func NewLogger(module errno.Module) *Logger {
-	logger := &Logger{
+	l, ok := loggerPool.Load(module)
+	if ok {
+		log, _ := l.(*Logger)
+		return log
+	}
+	// ignore concurrent situation, repeat store same module logger
+	log := &Logger{
 		logger: GetSuppressLogger(),
 		node:   errno.GetNode(),
 		module: module,
 	}
-
-	return logger
+	loggerPool.Store(module, log)
+	return log
 }
 
 func (l *Logger) With(fields ...zap.Field) *Logger {

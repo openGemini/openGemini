@@ -24,6 +24,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"go.uber.org/zap"
 )
 
@@ -94,7 +95,6 @@ func Test_Close_NoRemainingDataUnreleased(t *testing.T) {
 
 	srv.dataChan <- newData(BuildNumericRecord())
 	srv.dataFailureChan <- newData(BuildNumericRecord())
-	srv.dataRetryChan <- newData(BuildNumericRecord())
 	srv.resultChan <- BuildNumericRecord()
 	srv.dataFailureChan <- newData(BuildNumericRecord())
 
@@ -102,14 +102,13 @@ func Test_Close_NoRemainingDataUnreleased(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(srv.dataChan) > 0 || len(srv.dataFailureChan) > 0 ||
-		len(srv.dataRetryChan) > 0 || len(srv.dataFailureChan) > 0 {
+	if len(srv.dataChan) > 0 || len(srv.dataFailureChan) > 0 || len(srv.dataFailureChan) > 0 {
 		t.Fatal("data not release")
 	}
 }
 
 // test if connection pool will automatic fillup
-func test_MonitorConn(t *testing.T) {
+func Test_MonitorConn(t *testing.T) {
 	wait := 8 * time.Second
 	conf := newConf()
 
@@ -125,13 +124,16 @@ func test_MonitorConn(t *testing.T) {
 	defer srv.Close()
 	// wait for connection build
 	time.Sleep(wait)
-	if atomic.LoadInt32(srv.clientCnt[addr]) != 1 {
+	if atomic.LoadInt32(srv.clientPool[0].cliCnt) != 1 {
 		t.Fatal("connection not build")
 	}
 
-	cli := <-srv.clientPool
+	cli := srv.clientPool[0].get()
+	if cli == nil {
+		t.Fatal("no avaliable client")
+	}
 	cli.close()
-	if atomic.LoadInt32(srv.clientCnt[addr]) != 0 {
+	if atomic.LoadInt32(srv.clientPool[0].cliCnt) != 0 {
 		t.Fatal("connection not release")
 	}
 
@@ -139,7 +141,7 @@ func test_MonitorConn(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(wait)
-	if atomic.LoadInt32(srv.clientCnt[addr]) != 1 {
+	if atomic.LoadInt32(srv.clientPool[0].cliCnt) != 1 {
 		t.Fatal("connection should rebuild")
 	}
 }
@@ -162,7 +164,7 @@ func Test_HandleData(t *testing.T) {
 
 	// wait for connection build
 	time.Sleep(wait)
-	if atomic.LoadInt32(srv.clientCnt[addr]) != 1 {
+	if atomic.LoadInt32(srv.clientPool[0].cliCnt) != 1 {
 		t.Fatal("connection not build")
 	}
 
@@ -243,5 +245,26 @@ func Test_OpenWithNotEnable(t *testing.T) {
 
 	if tmp := GetService(); tmp != nil {
 		t.Fatal("service open when disable")
+	}
+}
+
+func Test_dispatchErr(t *testing.T) {
+	conf := newConf()
+	s := NewService(conf.C)
+
+	taskID := ""
+	ch := &respChan{
+		ErrCh: make(chan *errno.Error, 1),
+		alive: true,
+	}
+	s.responseChanMap.Store(taskID, ch)
+
+	rec := BuildNumericRecord()
+	dat := newData(rec)
+	dat.err = errno.NewError(errno.UnknownErr, errno.ModuleCastor)
+	s.dispatchErr(dat)
+
+	if len(ch.ErrCh) != 1 {
+		t.Fatal("error not dispatch to corresponsive channel")
 	}
 }

@@ -17,8 +17,10 @@ limitations under the License.
 package meta
 
 import (
+	"math"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -44,27 +46,34 @@ type ClusterManager struct {
 	wg           sync.WaitGroup
 	mu           sync.RWMutex
 	eventMap     map[string]*serf.MemberEvent // only read when leader changed
-	stop         chan struct{}                // used for meta leader step down and do not process any event
 	eventWg      sync.WaitGroup
-	memberIds    map[uint64]struct{} // alive members
+	memberIds    map[uint64]struct{} // alive ts-store members
+	stop         int32               // used for meta leader step down and do not process any event
+	takeover     chan bool
 }
 
-func NewClusterManager(store storeInterface) *ClusterManager {
+func CreateClusterManager() *ClusterManager {
 	c := &ClusterManager{
-		store:    store,
-		reOpen:   make(chan struct{}),
-		closing:  make(chan struct{}),
-		eventCh:  make(chan serf.Event, 1024),
-		eventMap: make(map[string]*serf.MemberEvent),
-		stop:     make(chan struct{})}
+		reOpen:    make(chan struct{}),
+		closing:   make(chan struct{}),
+		eventCh:   make(chan serf.Event, 1024),
+		eventMap:  make(map[string]*serf.MemberEvent),
+		memberIds: make(map[uint64]struct{}),
+		takeover:  make(chan bool)}
 
 	c.handlerMap = map[serf.EventType]memberEventHandler{
 		serf.EventMemberJoin:   &joinHandler{baseHandler{c}},
 		serf.EventMemberFailed: &failedHandler{baseHandler{c}},
 		serf.EventMemberLeave:  &leaveHandler{baseHandler{c}}}
-	c.Stop()
+	atomic.StoreInt32(&c.stop, 1)
 	c.wg.Add(1)
 	go c.checkEvents()
+	return c
+}
+
+func NewClusterManager(store storeInterface) *ClusterManager {
+	c := CreateClusterManager()
+	c.store = store
 	return c
 }
 
@@ -89,27 +98,32 @@ func (cm *ClusterManager) GetEventCh() chan serf.Event {
 }
 
 func (cm *ClusterManager) Start() {
+	if !globalService.store.shouldTakeOver() {
+		return
+	}
 	close(cm.reOpen)
 	cm.wg.Wait()
 	cm.eventWg.Wait()
 	cm.retryEventCh = make(chan serf.Event, 1024)
 	cm.reOpen = make(chan struct{})
+	globalService.msm.waitRecovery() // wait exist pt event execute first
+	atomic.CompareAndSwapInt32(&cm.stop, 1, 0)
 	cm.resendPreviousEvent()
 	cm.wg.Add(1)
 	go cm.checkEvents()
-	cm.stop = make(chan struct{})
 }
 
 func (cm *ClusterManager) Stop() {
-	if cm.isStopped() {
-		return
-	}
-	close(cm.stop)
+	atomic.CompareAndSwapInt32(&cm.stop, 0, 1)
 }
 
 func (cm *ClusterManager) isStopped() bool {
+	return atomic.LoadInt32(&cm.stop) == 1
+}
+
+func (cm *ClusterManager) isClosed() bool {
 	select {
-	case <-cm.stop:
+	case <-cm.closing:
 		return true
 	default:
 		return false
@@ -118,13 +132,27 @@ func (cm *ClusterManager) isStopped() bool {
 
 // resend previous event when transfer to leader to avoid some event do not handled when leader change
 func (cm *ClusterManager) resendPreviousEvent() {
-	dataNodes := cm.store.dataNodes()
+	dataNodes := globalService.store.dataNodes()
 	cm.mu.RLock()
 	for i := range dataNodes {
+		if dataNodes[i].Status == serf.StatusAlive {
+			cm.memberIds[dataNodes[i].ID] = struct{}{}
+		}
 		e := cm.eventMap[strconv.FormatUint(dataNodes[i].ID, 10)]
 		if e == nil || uint64(e.EventTime) < dataNodes[i].LTime {
 			continue
 		}
+
+		// if event has processed, do not process event repeatedly
+		if uint64(e.EventTime) == dataNodes[i].LTime {
+			if e.Type == serf.EventMemberJoin && dataNodes[i].Status == serf.StatusAlive {
+				continue
+			}
+			if e.Type == serf.EventMemberFailed && dataNodes[i].Status == serf.StatusFailed {
+				continue
+			}
+		}
+
 		logger.NewLogger(errno.ModuleHA).Error("resend event", zap.String("event", e.String()), zap.Any("members", e.Members))
 		cm.eventWg.Add(1)
 		go cm.processEvent(*e)
@@ -152,6 +180,8 @@ func (cm *ClusterManager) checkEvents() {
 	for {
 		select {
 		case <-cm.reOpen:
+			// During the meta leader changing, events may not be performed.
+			// You need to re-execute all events to prevent event loss.
 			// clear all events, and add to eventMap when leader changed
 			for i := 0; i < len(cm.eventCh); i++ {
 				e := <-cm.eventCh
@@ -159,7 +189,7 @@ func (cm *ClusterManager) checkEvents() {
 				go cm.processEvent(e)
 			}
 			return
-		case <-cm.closing:
+		case <-cm.closing: // meta node is closing
 			return
 		case event := <-cm.eventCh:
 			cm.eventWg.Add(1)
@@ -171,6 +201,11 @@ func (cm *ClusterManager) checkEvents() {
 			if !sendFailedEvent {
 				sendFailedEvent = true
 				cm.checkFailedNode()
+			}
+		case takeoverEnable := <-cm.takeover:
+			if takeoverEnable {
+				cm.eventWg.Wait()
+				cm.resendPreviousEvent()
 			}
 		}
 	}
@@ -190,8 +225,8 @@ func (cm *ClusterManager) checkFailedNode() {
 				EventTime: serf.LamportTime(dataNodes[i].LTime),
 				Members: []serf.Member{serf.Member{Name: strconv.FormatUint(dataNodes[i].ID, 10), Tags: map[string]string{"role": "store"},
 					Status: serf.StatusFailed}}}
-			logger.NewLogger(errno.ModuleHA).Error("check failed node ", zap.String("event", e.String()),
-				zap.Any("host", e.Members))
+			logger.GetLogger().Error("check failed node", zap.String("event", e.String()),
+				zap.Uint64("lTime", uint64(e.EventTime)), zap.Any("host", e.Members))
 			cm.eventWg.Add(1)
 			go cm.processEvent(*e)
 		}
@@ -228,4 +263,83 @@ func (cm *ClusterManager) isNodeAlive(id uint64) bool {
 	_, ok := cm.memberIds[id]
 	cm.mu.RUnlock()
 	return ok
+}
+
+// addClusterMember adds ts-store node id to memberIds
+func (cm *ClusterManager) addClusterMember(id uint64) {
+	cm.mu.Lock()
+	cm.memberIds[id] = struct{}{}
+	cm.mu.Unlock()
+}
+
+func (cm *ClusterManager) removeClusterMember(id uint64) {
+	cm.mu.Lock()
+	delete(cm.memberIds, id)
+	cm.mu.Unlock()
+}
+
+func (cm *ClusterManager) getTakeOverNode(oid uint64, nodePtNumMap *map[uint64]uint32) (uint64, error) {
+	cm.mu.RLock()
+	_, ok := cm.memberIds[oid]
+	cm.mu.RUnlock()
+	if ok {
+		return oid, nil // if db pt owner node is alive assign to the owner id
+	}
+	for {
+		if cm.isStopped() || cm.isClosed() {
+			break
+		}
+		nodeId, err := cm.chooseNodeByPtNum(nodePtNumMap)
+		if err == nil {
+			return nodeId, nil
+		}
+		cm.mu.RLock()
+		for id := range cm.memberIds {
+			cm.mu.RUnlock()
+			return id, nil
+		}
+		cm.mu.RUnlock()
+		time.Sleep(100 * time.Millisecond)
+		logger.GetSuppressLogger().Warn("can not get take over node id, because no store alive")
+	}
+	return 0, errno.NewError(errno.ClusterManagerIsNotRunning)
+}
+
+func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) (uint64, error) {
+	if len(*nodePtNumMap) == 0 {
+		return 0, errno.NewError(errno.NoNodeAvailable)
+	}
+	var nodeId uint64
+	minPtNum := uint32(math.MaxUint32)
+	for id, ptNum := range *nodePtNumMap {
+		if ptNum < minPtNum {
+			minPtNum = ptNum
+			nodeId = id
+		}
+	}
+	cm.mu.RLock()
+	_, ok := cm.memberIds[nodeId]
+	cm.mu.RUnlock()
+	if ok {
+		(*nodePtNumMap)[nodeId]++
+		return nodeId, nil
+	}
+	return 0, errno.NewError(errno.NoNodeAvailable)
+}
+
+func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32) error {
+	status := globalService.store.getPtStatus(dbPt.Db, dbPt.Pti.PtId)
+	if status == meta.Online {
+		logger.GetLogger().Info("no need to assign online pt", zap.String("db", dbPt.Db), zap.Uint32("pt", dbPt.Pti.PtId))
+		return nil
+	}
+	targetId, err := cm.getTakeOverNode(dbPt.Pti.Owner.NodeID, nodePtNumMap)
+	if err != nil {
+		return err
+	}
+	return globalService.balanceManager.assignDbPt(dbPt, targetId, false)
+}
+
+func (cm *ClusterManager) enableTakeover(enable bool) {
+	cm.takeover <- enable
 }

@@ -66,6 +66,8 @@ func (ni *NodeInfo) unmarshal(pb *proto2.NodeInfo) {
 
 type DataNode struct {
 	NodeInfo
+	ConnID      uint64
+	AliveConnID uint64
 }
 
 func (n *DataNode) MarshalBinary() ([]byte, error) {
@@ -84,10 +86,14 @@ func (n *DataNode) UnmarshalBinary(buf []byte) error {
 func (n *DataNode) marshal() *proto2.DataNode {
 	pb := &proto2.DataNode{}
 	pb.Ni = n.NodeInfo.marshal()
+	pb.ConnID = proto.Uint64(n.ConnID)
+	pb.AliveConnID = proto.Uint64(n.AliveConnID)
 	return pb
 }
 func (n *DataNode) unmarshal(pb *proto2.DataNode) {
 	n.NodeInfo.unmarshal(pb.GetNi())
+	n.ConnID = pb.GetConnID()
+	n.AliveConnID = pb.GetAliveConnID()
 }
 
 // NodeInfos is a slice of NodeInfo used for sorting

@@ -16,6 +16,7 @@ limitations under the License.
 package engine
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -35,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/pingcap/failpoint"
+	"go.uber.org/zap"
 )
 
 const (
@@ -58,7 +60,9 @@ var (
 type WAL struct {
 	log            *logger.Logger
 	mu             sync.RWMutex
+	wg             sync.WaitGroup // wait for replay wal finish
 	logPath        string
+	lock           *string
 	partitionNum   int
 	writeReq       uint64
 	logWriter      []LogWriter
@@ -66,7 +70,7 @@ type WAL struct {
 	replayParallel bool
 }
 
-func NewWAL(path string, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int) *WAL {
+func NewWAL(path string, lockPath *string, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int, writeWal bool) *WAL {
 	wal := &WAL{
 		logPath:        path,
 		partitionNum:   partitionNum,
@@ -74,23 +78,60 @@ func NewWAL(path string, walSyncInterval time.Duration, walEnabled, replayParall
 		walEnabled:     walEnabled,
 		replayParallel: replayParallel,
 		log:            logger.NewLogger(errno.ModuleWal),
+		lock:           lockPath,
 	}
 
-	lock := fileops.FileLockOption("")
+	lock := fileops.FileLockOption(*lockPath)
 	for i := 0; i < partitionNum; i++ {
 		wal.logWriter[i] = LogWriter{
 			closed:       make(chan struct{}),
 			logPath:      filepath.Join(path, strconv.Itoa(i)),
 			SyncInterval: walSyncInterval,
+			lock:         lockPath,
 		}
-
 		err := fileops.MkdirAll(wal.logWriter[i].logPath, 0750, lock)
 		if err != nil {
 			panic(err)
 		}
+		wal.setLastSeqAndFiles(&wal.logWriter[i])
+		if writeWal {
+			wal.logWriter[i].fileNames = wal.logWriter[i].fileNames[:0]
+		}
 	}
 
 	return wal
+}
+
+func (l *WAL) setLastSeqAndFiles(logWriter *LogWriter) {
+	logPath := logWriter.logPath
+	// read logPath
+	dirs, err := fileops.ReadDir(logPath)
+	if err != nil {
+		panic(err)
+	}
+	// sort file ordered by fileSeq. sort from new to old
+	sort.Slice(dirs, func(i, j int) bool {
+		iLen := len(dirs[i].Name())
+		jLen := len(dirs[j].Name())
+		if iLen == jLen {
+			return dirs[i].Name() > dirs[j].Name()
+		}
+		return iLen > jLen
+	})
+	if len(dirs) == 0 {
+		return
+	}
+	maxSeq, err := strconv.Atoi(dirs[0].Name()[:len(dirs[0].Name())-len(WALFileSuffixes)-1])
+	if err != nil {
+		l.log.Error("parse wal file failed", zap.String("path", logPath), zap.Error(err))
+		return
+	}
+	logWriter.fileSeq = maxSeq
+	// traverse files from old to new
+	for n := len(dirs) - 1; n >= 0; n-- {
+		walFile := filepath.Join(logPath, dirs[n].Name())
+		logWriter.fileNames = append(logWriter.fileNames, walFile)
+	}
 }
 
 func (l *WAL) writeBinary(binaryData []byte) error {
@@ -117,7 +158,7 @@ func (l *WAL) writeBinary(binaryData []byte) error {
 	err := l.logWriter[(atomic.AddUint64(&l.writeReq, 1)-1)%uint64(l.partitionNum)].Write(compBuf)
 	l.mu.RUnlock()
 	if err != nil {
-		return fmt.Errorf("writing WAL entry failed: %v", err)
+		panic(fmt.Errorf("writing WAL entry failed: %v", err))
 	}
 	return nil
 }
@@ -172,10 +213,11 @@ func (l *WAL) Remove(files []string) error {
 	if !l.walEnabled {
 		return nil
 	}
-	lock := fileops.FileLockOption("")
+	lock := fileops.FileLockOption(*l.lock)
 	for _, fn := range files {
 		err := fileops.Remove(fn, lock)
 		if err != nil {
+			l.log.Error("failed to remove wal file", zap.String("file", fn))
 			return err
 		}
 	}
@@ -230,7 +272,7 @@ func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, record
 	return offset, recordCompBuff, io.EOF
 }
 
-func (l *WAL) replayWalFile(walFileName string, callBack func(binary []byte) error) error {
+func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack func(binary []byte) error) error {
 	failpoint.Inject("mock-replay-wal-error", func(val failpoint.Value) {
 		msg := val.(string)
 		if strings.Contains(walFileName, msg) {
@@ -259,13 +301,19 @@ func (l *WAL) replayWalFile(walFileName string, callBack func(binary []byte) err
 		if len(recordCompBuff) <= WalCompMaxBufSize {
 			walCompBufPool.Put(recordCompBuff)
 		}
+		util.MustClose(fd)
 	}()
 
 	offset := int64(0)
 	for {
+		select {
+		case <-ctx.Done():
+			l.log.Info("cancel replay wal", zap.String("filename", walFileName))
+			return nil
+		default:
+		}
 		offset, recordCompBuff, err = l.replayPhysicRecord(fd, offset, fileSize, recordCompBuff, callBack)
 		if err != nil {
-			util.MustClose(fd)
 			if err == io.EOF {
 				return nil
 			}
@@ -274,37 +322,23 @@ func (l *WAL) replayWalFile(walFileName string, callBack func(binary []byte) err
 	}
 }
 
-func (l *WAL) replayOnePartition(logPath string, callBack func(binary []byte) error) ([]string, error) {
-	// read wal files
-	dirs, err := fileops.ReadDir(logPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// sort file ordered by fileSeq
-	sort.Slice(dirs, func(i, j int) bool {
-		iLen := len(dirs[i].Name())
-		jLen := len(dirs[j].Name())
-		if iLen == jLen {
-			return dirs[i].Name() < dirs[j].Name()
+func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(binary []byte) error) error {
+	for _, fileName := range l.logWriter[idx].fileNames {
+		select {
+		case <-ctx.Done():
+			l.log.Info("cancel replay wal", zap.String("filename", fileName))
+			return nil
+		default:
 		}
-		return iLen < jLen
-	})
-
-	walFileNames := make([]string, 0, len(dirs))
-	for i := range dirs {
-		fileName := filepath.Join(logPath, dirs[i].Name())
-		err = l.replayWalFile(fileName, callBack)
+		err := l.replayWalFile(ctx, fileName, callBack)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		walFileNames = append(walFileNames, fileName)
 	}
-	return walFileNames, nil
-
+	return nil
 }
 
-func consumeRecordSerial(mu *sync.Mutex, ptChs []chan []byte, errs *[]error, finish chan struct{}, callBack func(binary []byte) error) {
+func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error, finish chan<- struct{}, callBack func(binary []byte) error) {
 	// consume wal data according to partition order from channel
 	ptFinish := make([]bool, len(ptChs))
 	ptFinishNum := 0
@@ -313,8 +347,14 @@ func consumeRecordSerial(mu *sync.Mutex, ptChs []chan []byte, errs *[]error, fin
 			if ptFinish[i] {
 				continue
 			}
-			binary := <-ptChs[i]
-			if binary == nil {
+			var binary []byte
+			select {
+			case <-ctx.Done():
+				finish <- struct{}{}
+				return
+			case binary = <-ptChs[i]:
+			}
+			if len(binary) == 0 {
 				ptFinishNum++
 				ptFinish[i] = true
 				if ptFinishNum == len(ptChs) {
@@ -333,22 +373,26 @@ func consumeRecordSerial(mu *sync.Mutex, ptChs []chan []byte, errs *[]error, fin
 	}
 }
 
-func consumeRecordParallel(mu *sync.Mutex, ptChs []chan []byte, errs *[]error, finish chan struct{}, callBack func(binary []byte) error) {
+func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error, finish chan<- struct{}, callBack func(binary []byte) error) {
 	var wg sync.WaitGroup
 	wg.Add(len(ptChs))
 	for i := 0; i < len(ptChs); i++ {
 		go func(idx int) {
+			defer wg.Done()
 			for {
-				binary := <-ptChs[idx]
-				if binary == nil {
-					wg.Done()
+				select {
+				case <-ctx.Done():
 					return
-				}
-				err := callBack(binary)
-				if err != nil {
-					mu.Lock()
-					*errs = append(*errs, err)
-					mu.Unlock()
+				case binary := <-ptChs[idx]:
+					if len(binary) == 0 {
+						return
+					}
+					err := callBack(binary)
+					if err != nil {
+						mu.Lock()
+						*errs = append(*errs, err)
+						mu.Unlock()
+					}
 				}
 			}
 		}(i)
@@ -357,60 +401,71 @@ func consumeRecordParallel(mu *sync.Mutex, ptChs []chan []byte, errs *[]error, f
 	finish <- struct{}{}
 }
 
-func (l *WAL) productRecordParallel(mu *sync.Mutex, ptChs []chan []byte, errs *[]error, dirs []os.FileInfo) []string {
+// sendWal2ptChs sends the wal binary to the idx ptChs
+func (l *WAL) sendWal2ptChs(ctx context.Context, ptChs []chan []byte, idx int, binary []byte) {
+	select {
+	case <-ctx.Done():
+		l.log.Info("cancel replay wal", zap.Int("log writer", idx))
+	case ptChs[idx] <- binary:
+	}
+}
+
+func (l *WAL) productRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error) []string {
 	var wg sync.WaitGroup
 	var walFileNames []string
-	wg.Add(len(dirs))
-	for i := range dirs {
-		go func(logPath string, idx int) {
-			fileName, err := l.replayOnePartition(logPath, func(binary []byte) error {
-				ptChs[idx] <- binary
+	wg.Add(len(l.logWriter))
+	for i := range l.logWriter {
+		go func(idx int) {
+			err := l.replayOnePartition(ctx, idx, func(binary []byte) error {
+				l.sendWal2ptChs(ctx, ptChs, idx, binary)
 				return nil
 			})
-			ptChs[idx] <- nil
+			l.sendWal2ptChs(ctx, ptChs, idx, nil)
 			mu.Lock()
 			if err != nil {
 				*errs = append(*errs, err)
 			}
-			walFileNames = append(walFileNames, fileName...)
+			walFileNames = append(walFileNames, l.logWriter[idx].fileNames...)
 			mu.Unlock()
 			wg.Done()
-		}(filepath.Join(l.logPath, dirs[i].Name()), i)
+		}(i)
 	}
 	wg.Wait()
 	return walFileNames
 }
 
-func (l *WAL) Replay(callBack func(binary []byte) error) ([]string, error) {
+func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte) error) ([]string, error) {
 	if !l.walEnabled {
 		return nil, nil
 	}
-
-	// read wal partition dirs
-	dirs, err := fileops.ReadDir(l.logPath)
-	if err != nil {
-		return nil, err
-	}
+	l.wg.Add(2) // productRecord and consumeRecord
 
 	// replay wal files
 	var mu = sync.Mutex{}
 	var errs []error
 	var ptChs []chan []byte
 	consumeFinish := make(chan struct{})
-	for i := 0; i < len(dirs); i++ {
+	for i := 0; i < len(l.logWriter); i++ {
 		ptChs = append(ptChs, make(chan []byte, 4))
 	}
 
 	if l.replayParallel {
 		// multi partition wal files replayed parallel, the update of the same time at a certain series is not guaranteed
-		go consumeRecordParallel(&mu, ptChs, &errs, consumeFinish, callBack)
+		go func() {
+			defer l.wg.Done()
+			consumeRecordParallel(ctx, &mu, ptChs, &errs, consumeFinish, callBack)
+		}()
 	} else {
 		// multi partition wal files replayed serial, the update of the same time at a certain series is guaranteed
-		go consumeRecordSerial(&mu, ptChs, &errs, consumeFinish, callBack)
+		go func() {
+			defer l.wg.Done()
+			consumeRecordSerial(ctx, &mu, ptChs, &errs, consumeFinish, callBack)
+		}()
 	}
 
 	// production wal data to channel
-	walFileNames := l.productRecordParallel(&mu, ptChs, &errs, dirs)
+	walFileNames := l.productRecordParallel(ctx, &mu, ptChs, &errs)
+	l.wg.Done()
 	<-consumeFinish
 	close(consumeFinish)
 	for i := range ptChs {
@@ -451,165 +506,5 @@ func (l *WAL) Close() error {
 	for _, err := range errs {
 		return err
 	}
-	return nil
-}
-
-func (w *LogWriter) trySwitchFile(logPath string) error {
-	if w.currentFd == nil || w.currentFileSize > DefaultFileSize {
-		w.fileSeq++
-		// close current file
-		err := w.closeCurrentFile()
-		if err != nil {
-			return err
-		}
-
-		// new file
-		fileName := filepath.Join(logPath, fmt.Sprintf("%d.%s", w.fileSeq, WALFileSuffixes))
-		lock := fileops.FileLockOption("")
-		pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_ULTRA_HIGH)
-		fd, err := fileops.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
-		if err != nil {
-			return err
-		}
-
-		w.fileNames = append(w.fileNames, fileName)
-		w.currentFd = fd
-		w.currentFileSize = 0
-	}
-
-	return nil
-}
-
-type LogWriter struct {
-	writeMu         sync.Mutex
-	syncMu          sync.Mutex
-	logPath         string
-	syncTaskCount   int32
-	SyncInterval    time.Duration
-	closed          chan struct{}
-	fileSeq         int
-	fileNames       []string
-	currentFd       fileops.File
-	currentFileSize int
-}
-
-func (w *LogWriter) closeCurrentFile() error {
-	if w.currentFd == nil || w.currentFileSize == 0 {
-		return nil
-	}
-	if err := w.currentFd.Sync(); err != nil {
-		return err
-	}
-	if err := w.currentFd.Close(); err != nil {
-		return err
-	}
-	w.currentFileSize = 0
-	w.currentFd = nil
-	return nil
-}
-
-func (w *LogWriter) Switch() ([]string, error) {
-	w.syncMu.Lock()
-	err := w.closeCurrentFile()
-	w.syncMu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-
-	fileNames := make([]string, 0, len(w.fileNames))
-	fileNames = append(fileNames, w.fileNames...)
-
-	// reset
-	w.fileNames = w.fileNames[:0]
-
-	return fileNames, nil
-}
-
-func (w *LogWriter) sync() error {
-	var err error
-	if w.SyncInterval == 0 {
-		w.syncMu.Lock()
-		if w.currentFd != nil {
-			err = w.currentFd.Sync()
-		}
-		w.syncMu.Unlock()
-		return err
-	}
-
-	t := time.NewTicker(w.SyncInterval)
-	defer t.Stop()
-
-	for {
-		select {
-		case <-w.closed:
-			atomic.StoreInt32(&w.syncTaskCount, 0)
-			return nil
-		case <-t.C:
-			w.syncMu.Lock()
-			if w.currentFd != nil {
-				err = w.currentFd.Sync()
-			}
-			atomic.StoreInt32(&w.syncTaskCount, 0)
-			w.syncMu.Unlock()
-
-			return err
-		}
-	}
-}
-
-func (w *LogWriter) trySync() error {
-	if w.SyncInterval == 0 {
-		return w.sync()
-	}
-
-	if !atomic.CompareAndSwapInt32(&w.syncTaskCount, 0, 1) {
-		return nil
-	}
-
-	go func() {
-		_ = w.sync()
-	}()
-	return nil
-}
-
-func (w *LogWriter) Write(compBuf []byte) error {
-	select {
-	case <-w.closed:
-		return fmt.Errorf("WAL log writer closed")
-	default:
-		w.writeMu.Lock()
-		defer w.writeMu.Unlock()
-
-		w.syncMu.Lock()
-		err := w.trySwitchFile(w.logPath)
-		if err != nil {
-			w.syncMu.Unlock()
-			return err
-		}
-		w.syncMu.Unlock()
-
-		if _, err = w.currentFd.Write(compBuf); err != nil {
-			return err
-		}
-
-		if err = w.trySync(); err != nil {
-			return err
-		}
-
-		w.currentFileSize += len(compBuf)
-		return nil
-	}
-}
-
-func (w *LogWriter) close() error {
-	close(w.closed)
-
-	w.syncMu.Lock()
-	err := w.closeCurrentFile()
-	w.syncMu.Unlock()
-	if err != nil {
-		return err
-	}
-	w.fileNames = w.fileNames[:0]
 	return nil
 }

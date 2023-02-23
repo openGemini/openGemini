@@ -17,16 +17,15 @@ limitations under the License.
 package tsi
 
 import (
+	"encoding/binary"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/kvstorage"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/stringinterner"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -36,35 +35,32 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	// Avoid stepping to slow path in marshalTagValue
-	minVersion    = uint16(0x33)
-	versionPrefix = "v_"
-)
-
 // IndexBuilder is a collection of all indexes
 type IndexBuilder struct {
+	opId uint64 // assign task id
+
 	path      string                    // eg, data/db/pt/rp/index/indexid
 	Relations map[uint32]*IndexRelation // <oid, indexRelation>
 	ident     *meta.IndexIdentifier
 	endTime   time.Time
 	duration  time.Duration
-	kvStorage kvstorage.KVStorage
-	// Measurement version
-	mVersion    map[string]uint16
-	versionLock sync.RWMutex
 
-	mu sync.RWMutex
+	mu           sync.RWMutex
+	logicalClock uint64
+	sequenceID   *uint64
+	lock         *string
 }
 
 func NewIndexBuilder(opt *Options) *IndexBuilder {
 	iBuilder := &IndexBuilder{
-		path:      opt.path,
-		ident:     opt.ident,
-		duration:  opt.duration,
-		endTime:   opt.endTime,
-		kvStorage: opt.kvStorage,
-		mVersion:  make(map[string]uint16),
+		opId:         opt.opId,
+		path:         opt.path,
+		ident:        opt.ident,
+		duration:     opt.duration,
+		endTime:      opt.endTime,
+		logicalClock: opt.logicalClock,
+		sequenceID:   opt.sequenceID,
+		lock:         opt.lock,
 	}
 	return iBuilder
 }
@@ -101,28 +97,34 @@ func putIndexRows(rows *indexRows) {
 	indexRowsPool.Put(rows)
 }
 
+func (iBuilder *IndexBuilder) GenerateUUID() uint64 {
+	b := kbPool.Get()
+	// first three bytes is big endian of logicClock
+	b.B = append(b.B, byte(iBuilder.logicalClock>>16))
+	b.B = append(b.B, byte(iBuilder.logicalClock>>8))
+	b.B = append(b.B, byte(iBuilder.logicalClock))
+
+	// last five bytes is big endian of sequenceID
+	id := atomic.AddUint64(iBuilder.sequenceID, 1)
+	b.B = append(b.B, byte(id>>32))
+	b.B = append(b.B, byte(id>>24))
+	b.B = append(b.B, byte(id>>16))
+	b.B = append(b.B, byte(id>>8))
+	b.B = append(b.B, byte(id))
+
+	pid := binary.BigEndian.Uint64(b.B)
+	kbPool.Put(b)
+
+	return pid
+}
+
 func (iBuilder *IndexBuilder) Flush() {
 	idx := iBuilder.GetPrimaryIndex().(*MergeSetIndex)
 	idx.DebugFlush()
 }
 
 func (iBuilder *IndexBuilder) Open() error {
-	if iBuilder.kvStorage == nil || iBuilder.kvStorage.Closed() {
-		path := iBuilder.path + "/" + KVDirName
-		kv, err := kvstorage.NewStorage(&kvstorage.Config{
-			KVType: kvstorage.PEBBLEDB,
-			Path:   path,
-			Pebble: &kvstorage.PebbleOptions{},
-		})
-		if err != nil {
-			return err
-		}
-		iBuilder.kvStorage = kv
-	}
-
-	if err := iBuilder.loadMeasurementVersion(); err != nil {
-		return err
-	}
+	start := time.Now()
 
 	// Open all indexes
 	for _, relation := range iBuilder.Relations {
@@ -131,6 +133,8 @@ func (iBuilder *IndexBuilder) Open() error {
 			return err
 		}
 	}
+	statistics.IndexTaskInit(iBuilder.GetIndexID(), iBuilder.opId, iBuilder.ident.OwnerDb, iBuilder.ident.OwnerPt, iBuilder.RPName())
+	statistics.IndexStepDuration(iBuilder.GetIndexID(), iBuilder.opId, "OpenIndexDone", time.Since(start).Nanoseconds(), true)
 	return nil
 }
 
@@ -176,85 +180,6 @@ func (iBuilder *IndexBuilder) GetEndTime() time.Time {
 	return iBuilder.endTime
 }
 
-func (iBuilder *IndexBuilder) saveVersion(name []byte, version uint16) error {
-	key := make([]byte, 0, len(versionPrefix)+len(name))
-	key = append(key, versionPrefix...)
-	key = append(key, name...)
-	if err := iBuilder.kvStorage.Set(key, encoding.MarshalUint16(nil, version)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (iBuilder *IndexBuilder) loadMeasurementVersion() error {
-	iBuilder.kvStorage.GetByPrefixWithFunc([]byte(versionPrefix), func(k, v []byte) bool {
-		value := encoding.UnmarshalUint16(v)
-		iBuilder.storeVersion(string(k[len(versionPrefix):]), value)
-		return false
-	})
-
-	return nil
-}
-
-func (iBuilder *IndexBuilder) loadOrStore(name string) (uint16, bool) {
-	iBuilder.versionLock.RLock()
-	version, ok := iBuilder.mVersion[name]
-	if ok {
-		iBuilder.versionLock.RUnlock()
-		return version, true
-	}
-	iBuilder.versionLock.RUnlock()
-
-	iBuilder.versionLock.Lock()
-	defer iBuilder.versionLock.Unlock()
-	version, ok = iBuilder.mVersion[name]
-	if ok {
-		return version, true
-	}
-	iBuilder.mVersion[name] = minVersion
-	return minVersion, false
-}
-
-func (iBuilder *IndexBuilder) getVersion(name string) (uint16, bool) {
-	iBuilder.versionLock.RLock()
-	defer iBuilder.versionLock.RUnlock()
-	version, ok := iBuilder.mVersion[name]
-	return version, ok
-}
-
-func (iBuilder *IndexBuilder) storeVersion(name string, version uint16) {
-	iBuilder.versionLock.Lock()
-	defer iBuilder.versionLock.Unlock()
-	iBuilder.mVersion[name] = version
-}
-
-func (iBuilder *IndexBuilder) walkVersions(fn func(key string, value uint16) error) error {
-	iBuilder.versionLock.RLock()
-	defer iBuilder.versionLock.RUnlock()
-	var err error
-	for k := range iBuilder.mVersion {
-		err = fn(k, iBuilder.mVersion[k])
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (iBuilder *IndexBuilder) DropMeasurement(name []byte) error {
-	curVersion, ok := iBuilder.getVersion(record.Bytes2str(name))
-	if !ok {
-		// Measurement not found, ignore it
-		return nil
-	}
-	newVersion := curVersion + 1
-	iBuilder.storeVersion(stringinterner.InternSafe(record.Bytes2str(name)), newVersion)
-	if err := iBuilder.saveVersion(name, newVersion); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 	primaryIndex := iBuilder.GetPrimaryIndex()
 	var wg sync.WaitGroup
@@ -266,21 +191,12 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 			putIndexRows(iRows)
 			return errno.NewError(errno.CreateIndexFailPointRowType)
 		}
-		version, loaded := iBuilder.loadOrStore(stringinterner.InternSafe(mmRows.D[mmIdx].Key))
-		if !loaded {
-			if err := iBuilder.saveVersion([]byte(mmRows.D[mmIdx].Key), version); err != nil {
-				return err
-			}
-		}
 
 		for rowIdx := range *rows {
 			row := &(*rows)[rowIdx]
 			if row.SeriesId != 0 {
 				continue
 			}
-
-			row.Version = version
-
 			if cap(*iRows) > len(*iRows) {
 				*iRows = (*iRows)[:len(*iRows)+1]
 			} else {
@@ -321,34 +237,6 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 	return nil
 }
 
-func (iBuilder *IndexBuilder) CreateIndexIfPrimaryKeyExists(mmRows *dictpool.Dict, openIndexOption bool) error {
-	if !openIndexOption {
-		return nil
-	}
-	primaryIndex := iBuilder.GetPrimaryIndex()
-	for mmIdx := range mmRows.D {
-		rows, ok := mmRows.D[mmIdx].Value.(*[]influx.Row)
-		if !ok {
-			return errno.NewError(errno.CreateIndexFailPointRowType)
-		}
-		version, loaded := iBuilder.loadOrStore(stringinterner.InternSafe(mmRows.D[mmIdx].Key))
-		if !loaded {
-			if err := iBuilder.saveVersion([]byte(mmRows.D[mmIdx].Key), version); err != nil {
-				return err
-			}
-		}
-
-		for rowIdx := range *rows {
-			row := &(*rows)[rowIdx]
-			if err := iBuilder.createSecondaryIndex(row, primaryIndex); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex PrimaryIndex) error {
 	for _, indexOpt := range row.IndexOptions {
 		relation := iBuilder.Relations[indexOpt.Oid]
@@ -356,6 +244,7 @@ func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex
 			opt := &Options{
 				indexType: GetIndexTypeById(indexOpt.Oid),
 				path:      primaryIndex.Path(),
+				lock:      iBuilder.lock,
 			}
 			var err error
 			relation, err = NewIndexRelation(opt, primaryIndex, iBuilder)
@@ -374,13 +263,28 @@ func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex
 	return nil
 }
 
-func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, idxType IndexType) (interface{}, error) {
-	oid := GetIndexIdByType(idxType)
-	relation := iBuilder.Relations[oid]
+func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (interface{}, error) {
+	// 1st, use primary index to scan.
+	relation := iBuilder.Relations[uint32(MergeSet)]
 	if relation == nil {
-		return nil, fmt.Errorf("Index type do not exist!")
+		return nil, fmt.Errorf("not exist index for %s", name)
 	}
-	return relation.IndexScan(span, name, opt)
+	groups, err := relation.IndexScan(span, name, opt, nil)
+	if err != nil {
+		return nil, err
+	}
+	// 2nd, use secondary index to scan.
+	for oid, relation := range iBuilder.Relations {
+		if oid == uint32(MergeSet) {
+			continue
+		}
+		groups, err = relation.IndexScan(span, name, opt, groups)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return groups, nil
 }
 
 func (iBuilder *IndexBuilder) Delete(name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -402,11 +306,10 @@ func (iBuilder *IndexBuilder) Delete(name []byte, condition influxql.Expr, tr Ti
 }
 
 func (iBuilder *IndexBuilder) Close() error {
-	if err := iBuilder.kvStorage.Close(); err != nil {
-		return err
-	}
 	for _, relation := range iBuilder.Relations {
-		_ = relation.IndexClose()
+		if err := relation.IndexClose(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

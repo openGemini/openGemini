@@ -73,15 +73,15 @@ func TestTagSetCursorInRecord_Ascending(t *testing.T) {
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello5", "", "", "world5", "", "test5"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{81, 82, 83, 84, 85, 96, 97})
-	t1 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t1 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "A",
 		Value: "A",
 	}}, nil)
-	t2 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t2 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "B",
 		Value: "B",
 	}}, nil)
-	t3 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t3 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "C",
 		Value: "C",
 	}}, nil)
@@ -169,15 +169,15 @@ func TestTagSetCursorInRecord_Descending(t *testing.T) {
 		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test5", "", "world5", "", "", "hello5", ""},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{97, 96, 85, 84, 83, 82, 81})
-	t1 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t1 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "A",
 		Value: "A",
 	}}, nil)
-	t2 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t2 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "B",
 		Value: "B",
 	}}, nil)
-	t3 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t3 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "C",
 		Value: "C",
 	}}, nil)
@@ -252,7 +252,7 @@ func TestLimitCursorInRecord_SingleRow(t *testing.T) {
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello3", "", "", "world3", "", "test3"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{11, 12, 13, 14, 15, 16, 17})
-	t1 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t1 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "A",
 		Value: "A",
 	}}, nil)
@@ -322,7 +322,7 @@ func TestLimitCursorInRecord_MultipleRows(t *testing.T) {
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{81, 82, 83, 84, 95, 96, 97})
 	rec3.IntervalIndex = []int{0, 4, 5}
-	t1 := influx.MakeIndexKey("mst", []influx.Tag{influx.Tag{
+	t1 := influx.MakeIndexKey("mst_0000", []influx.Tag{influx.Tag{
 		Key:   "A",
 		Value: "A",
 	}}, nil)
@@ -381,6 +381,10 @@ func (s *sInfo) GetSeriesKey() []byte {
 
 func (s *sInfo) GetSeriesTags() *influx.PointTags {
 	return &s.tags
+}
+
+func (s *sInfo) GetSid() uint64 {
+	return 0
 }
 
 type cursor struct {
@@ -605,7 +609,8 @@ func createFieldsWithMultipleRows() influxql.Fields {
 var _ comm.KeyCursor = (*readerKeyCursor)(nil)
 
 type readerKeyCursor struct {
-	buf []*record.Record
+	buf  []*record.Record
+	info *comm.FileInfo
 }
 
 func (c *readerKeyCursor) SinkPlan(plan hybridqp.QueryNode) {
@@ -614,6 +619,10 @@ func (c *readerKeyCursor) SinkPlan(plan hybridqp.QueryNode) {
 
 func newReaderKeyCursor(records []*record.Record) *readerKeyCursor {
 	return &readerKeyCursor{buf: records}
+}
+
+func newReaderKeyCursorForAggTagSet(records []*record.Record, info *comm.FileInfo) *readerKeyCursor {
+	return &readerKeyCursor{buf: records, info: info}
 }
 
 func (c *readerKeyCursor) SetOps(ops []*comm.CallOption) {
@@ -650,6 +659,11 @@ func (c *readerKeyCursor) EndSpan() {
 }
 
 func (c *readerKeyCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
+	if len(c.buf) > 0 {
+		record := c.buf[0]
+		c.buf = c.buf[1:]
+		return record, c.info, nil
+	}
 	return nil, nil, nil
 }
 
@@ -680,7 +694,7 @@ func buildSrcRecords(schema record.Schemas) []*record.Record {
 	return srcRecords
 }
 
-var AggPool = record.NewRecordPool()
+var AggPool = record.NewRecordPool(record.AggPool)
 
 func testAggregateCursor(
 	t *testing.T,
@@ -2894,4 +2908,159 @@ func BenchmarkAggregateCursor_Last_Float_Record_SingleTS(b *testing.B) {
 	}
 	querySchema := executor.NewQuerySchema(nil, nil, opt)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
+}
+
+func TestIntervalRecordBuildAsc(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	baseTime := int64(time.Second)
+
+	intervalRecord := record.NewRecord(schema, false)
+
+	intervalRecord.BuildEmptyIntervalRec(0, baseTime, baseTime, false, true, true)
+	if intervalRecord.IntervalFirstTime() != 0 {
+		t.Errorf("unexpected first time, expected: %d,actuall: %d", 0, intervalRecord.IntervalFirstTime())
+	}
+	if intervalRecord.IntervalLastTime() != 0 {
+		t.Errorf("unexpected last time, expected: %d,actuall: %d", 11*baseTime, intervalRecord.IntervalLastTime())
+	}
+}
+
+func TestIntervalRecordBuildDesc(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	baseTime := int64(time.Second)
+	intervalRecord := record.NewRecord(schema, false)
+	intervalRecord.BuildEmptyIntervalRec(11*baseTime, 12*baseTime, baseTime, false, true, false)
+	times := intervalRecord.Times()
+	if len(times) != 1 {
+		t.Errorf("wrong interval rowNums")
+	}
+	for i := 1; i < len(times); i++ {
+		if times[i]-times[i-1] != -int64(time.Second) {
+			t.Errorf("unexpected time dff, expected: %d,actuall: %d", int64(time.Second), times[i]-times[i-1])
+		}
+	}
+	if intervalRecord.IntervalFirstTime() != 11*baseTime {
+		t.Errorf("unexpected first time, expected: %d,actuall: %d", 11*baseTime, intervalRecord.IntervalFirstTime())
+	}
+	if intervalRecord.IntervalLastTime() != 11*baseTime {
+		t.Errorf("unexpected last time, expected: %d,actuall: %d", baseTime, intervalRecord.IntervalLastTime())
+	}
+}
+
+func TestTransIntervalRecord2Rec(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	baseTime := int64(time.Second)
+	rec := genRowRec(schema,
+		[]int{1, 1, 1}, []int64{0, 1, 2},
+		[]int{0, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{0, 1, 1}, []string{"", "hi", "world"},
+		[]int{0, 1, 1}, []bool{false, true, true},
+		[]int64{baseTime, baseTime * 3, baseTime * 5})
+	intervalRecord := record.NewRecord(schema, false)
+	intervalRecord.BuildEmptyIntervalRec(0, baseTime*6, baseTime, false, true, true)
+	for i := 0; i < rec.RowNums(); i++ {
+		index := rec.Time(i) / baseTime
+		intervalRecord.UpdateIntervalRecRow(rec, i, int(index))
+	}
+	rec2 := record.NewRecord(schema, false)
+	intervalRecord.TransIntervalRec2Rec(rec2, 0, 6)
+	rec3 := genRowRec(schema,
+		[]int{1, 0, 0}, []int64{1, 0, 0},
+		[]int{1, 0, 0}, []float64{1.1, 0, 0},
+		[]int{1, 0, 0}, []string{"hello", "", ""},
+		[]int{1, 0, 0}, []bool{true, false, false},
+		[]int64{baseTime, baseTime * 3, baseTime * 5})
+	for i := 0; i < rec3.RowNums(); i++ {
+		index := rec3.Time(i) / baseTime
+		intervalRecord.UpdateIntervalRecRow(rec3, i, int(index))
+	}
+	rec4 := record.NewRecord(schema, false)
+	intervalRecord.TransIntervalRec2Rec(rec4, 0, 6)
+	if rec4.ColVals[0].IntegerValues()[0] != 1 || rec4.ColVals[1].FloatValues()[0] != 1.1 ||
+		!rec4.ColVals[2].BooleanValues()[0] || rec4.Time(0) != baseTime {
+		t.Errorf("wrong transfer rec")
+	}
+}
+
+type MocSeriesInfo struct {
+	seriesKeys string
+	seriesTags *influx.PointTags
+}
+
+func (m *MocSeriesInfo) GetSeriesKey() []byte {
+	b := make([]byte, len(m.seriesKeys))
+	copy(b, m.seriesKeys)
+	return b
+}
+func (m *MocSeriesInfo) GetSeriesTags() *influx.PointTags {
+	return m.seriesTags
+}
+
+func (m *MocSeriesInfo) GetSid() uint64 {
+	return 0
+}
+
+func TestAggTagSetCursorNext_SingleSeries(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	baseTime := int64(time.Second)
+	opt := query.ProcessorOptions{
+		Ascending: true,
+	}
+	querySchema := executor.NewQuerySchema(nil, nil, &opt)
+	rec := genRowRec(schema,
+		[]int{1, 1, 1}, []int64{0, 1, 2},
+		[]int{0, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{0, 1, 1}, []string{"", "hi", "world"},
+		[]int{0, 1, 1}, []bool{false, true, true},
+		[]int64{baseTime, baseTime * 3, baseTime * 5})
+	info := &comm.FileInfo{}
+	srcCursor := newReaderKeyCursorForAggTagSet([]*record.Record{rec}, info)
+	tagSetCursor := engine.NewAggTagSetCursor(querySchema, nil, srcCursor, true)
+	desRec, _, _ := tagSetCursor.Next()
+	if !reflect.DeepEqual(desRec, rec) {
+		t.Fatal("unexpected record")
+	}
+	info1 := &comm.FileInfo{
+		SeriesInfo: &MocSeriesInfo{
+			seriesKeys: "tag1",
+			seriesTags: &influx.PointTags{
+				influx.Tag{
+					Key:   "tag1",
+					Value: "value1",
+				},
+			},
+		},
+	}
+	srcCursor1 := newReaderKeyCursorForAggTagSet([]*record.Record{rec}, info1)
+	tagSetCursor1 := engine.NewAggTagSetCursor(querySchema, nil, srcCursor1, true)
+	tagSetCursor1.SetParaForTest(schema)
+	_, info2, _ := tagSetCursor1.Next()
+	if !reflect.DeepEqual(info2, info1.SeriesInfo) {
+		t.Fatal("unexpected info")
+	}
 }

@@ -17,120 +17,40 @@ limitations under the License.
 package stringinterner
 
 import (
-	"strings"
 	"sync"
-	"unsafe"
+
+	"github.com/openGemini/openGemini/lib/strings"
 )
 
-func Bytes2str(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
-}
-
-var si SingleStringInterner
+// split to two struct to store, key and value. avoid map too big to search
+var (
+	//store key, field key, tag key, measurement name, db name, rp name
+	key = SingleStringInterner{m: sync.Map{}}
+	//store value, tag values
+	value = SingleStringInterner{m: sync.Map{}}
+)
 
 // Single StringInterner For Inmutable Scenario
 type SingleStringInterner struct {
-	m     map[string]string
-	mutex sync.RWMutex
+	m sync.Map // its type is equivalent to map[sting]string
 }
 
-// Warning thread unsafe
-func InternUnsafe(s string) string {
-	if si.m == nil {
-		si.m = make(map[string]string)
-	}
-
-	if interned, ok := si.m[s]; ok {
-		return interned
-	}
-
-	var sb strings.Builder
-	sb.WriteString(s)
-	si.m[sb.String()] = sb.String()
-	return sb.String()
-}
-
+// InternSafe store key
 func InternSafe(s string) string {
-	si.mutex.RLock()
-	interned, ok := si.m[s]
-	if ok {
-		si.mutex.RUnlock()
-		return interned
-	}
-	si.mutex.RUnlock()
-	si.mutex.Lock()
-	defer si.mutex.Unlock()
-
-	if si.m == nil {
-		si.m = make(map[string]string)
-	}
-
-	if interned, ok := si.m[s]; ok {
-		return interned
-	}
-
-	var sb strings.Builder
-	sb.WriteString(s)
-	si.m[sb.String()] = sb.String()
-	return sb.String()
+	return loadValue(s, &key)
 }
 
-func InternSafeBytes(b []byte) string {
-	si.mutex.Lock()
-	defer si.mutex.Unlock()
-
-	s := Bytes2str(b)
-
-	if si.m == nil {
-		si.m = make(map[string]string)
-	}
-
-	if interned, ok := si.m[s]; ok {
-		return interned
-	}
-
-	var sb strings.Builder
-	sb.WriteString(s)
-	si.m[sb.String()] = sb.String()
-	return sb.String()
+// InternTagValue store value
+func InternTagValue(s string) string {
+	return loadValue(s, &value)
 }
 
-// Pooled StringInterner For Mutable Scenario
-type PooledStringInterner struct {
-	pool sync.Pool
-}
-
-func (psi *PooledStringInterner) String(s string) string {
-	m := psi.pool.Get().(map[string]string)
-	if m == nil {
-		m = make(map[string]string)
-	} else {
-		c, ok := m[s]
-		if ok {
-			psi.pool.Put(m)
-			return c
-		}
+func loadValue(s string, si *SingleStringInterner) string {
+	v, ok := si.m.Load(s)
+	if !ok {
+		k := strings.Clone(s)
+		si.m.Store(k, k)
+		return k
 	}
-
-	m[s] = s
-	psi.pool.Put(m)
-	return s
-}
-
-func (psi *PooledStringInterner) Bytes(b []byte) string {
-	s := string(b)
-	m := psi.pool.Get().(map[string]string)
-	if m == nil {
-		m = make(map[string]string)
-	} else {
-		c, ok := m[s]
-		if ok {
-			psi.pool.Put(m)
-			return c
-		}
-	}
-
-	m[s] = s
-	psi.pool.Put(m)
-	return s
+	return v.(string)
 }

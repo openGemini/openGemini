@@ -31,7 +31,8 @@ const (
 )
 
 type Span struct {
-	span *tracing.Span
+	span  *tracing.Span
+	trace *Trace
 
 	mu       sync.Mutex
 	pp       bool
@@ -70,7 +71,7 @@ func (s *Span) AddIntFields(key []string, val []int) {
 func (s *Span) StartSpan(name string, opt ...tracing.StartSpanOption) *Span {
 	span := s.span.StartSpan(name, opt...)
 
-	return &Span{span: span}
+	return &Span{span: span, trace: s.trace}
 }
 
 func (s *Span) Context() tracing.SpanContext {
@@ -129,7 +130,9 @@ func (s *Span) Finish() {
 		}
 	}
 
+	s.trace.mu.Lock()
 	s.span.Finish()
+	s.trace.mu.Unlock()
 }
 
 func (s *Span) CreateCounter(name string, unit string) *SpanCounter {

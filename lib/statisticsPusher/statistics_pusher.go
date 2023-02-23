@@ -27,10 +27,12 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/pusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"go.uber.org/zap"
 )
 
 type collectFunc func([]byte) ([]byte, error)
+type opsCollectFunc func() []opsStat.OpsStatistic
 
 // StatisticsPusher implements StatisticsPusher interface
 type StatisticsPusher struct {
@@ -38,9 +40,12 @@ type StatisticsPusher struct {
 	pushInterval time.Duration
 	stopping     chan struct{}
 	collects     map[uintptr]collectFunc
+	opsCollects  map[uintptr]opsCollectFunc
 	logger       *logger.Logger
 
-	wg sync.WaitGroup
+	startOnce sync.Once
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 var bufferPool = bufferpool.NewByteBufferPool(0)
@@ -77,6 +82,7 @@ func newStatisticsPusher(conf *config.Monitor, logger *logger.Logger) *Statistic
 		pushers:      pushers,
 		stopping:     make(chan struct{}),
 		collects:     make(map[uintptr]collectFunc),
+		opsCollects:  make(map[uintptr]opsCollectFunc),
 		logger:       logger,
 		pushInterval: time.Duration(conf.StoreInterval),
 	}
@@ -95,7 +101,8 @@ func newHttpPusher(mc *config.Monitor, logger *logger.Logger) pusher.Pusher {
 		RepN:     config.MonitorRetentionPolicyReplicaN,
 		Gzipped:  false,
 		Https:    mc.HttpsEnabled,
-		Auth:     mc.HttpAuth,
+		Username: mc.Username,
+		Password: mc.Password,
 	}
 
 	return pusher.NewHttp(&conf, logger)
@@ -150,8 +157,19 @@ func (sp *StatisticsPusher) Register(collects ...collectFunc) {
 	}
 }
 
+func (sp *StatisticsPusher) RegisterOps(collects ...opsCollectFunc) {
+	for _, fn := range collects {
+		ptr := reflect.ValueOf(fn).Pointer()
+		sp.opsCollects[ptr] = fn
+	}
+}
+
 // Start starts push statistics data in interval time
 func (sp *StatisticsPusher) Start() {
+	sp.startOnce.Do(sp.start)
+}
+
+func (sp *StatisticsPusher) start() {
 	sp.wg.Add(1)
 
 	go func() {
@@ -193,12 +211,54 @@ func (sp *StatisticsPusher) lastPush() {
 }
 
 func (sp *StatisticsPusher) Stop() {
-	statistics.NewMetaStatCollector().Stop()
-	close(sp.stopping)
-	sp.wg.Wait()
-	sp.lastPush()
+	sp.stopOnce.Do(func() {
+		statistics.NewMetaStatCollector().Stop()
+		close(sp.stopping)
+		sp.wg.Wait()
+		sp.lastPush()
 
-	for _, p := range sp.pushers {
-		p.Stop()
-	}
+		for _, p := range sp.pushers {
+			p.Stop()
+		}
+	})
 }
+
+func (sp *StatisticsPusher) CollectOpsStatistics() (Statistics, error) {
+	var statistics Statistics
+	if len(sp.pushers) == 0 {
+		return nil, nil
+	}
+
+	var err error
+	for _, collect := range sp.opsCollects {
+		// collect statistics data
+		stats := collect()
+		for _, stat := range stats {
+			statistics = append(statistics, &Statistic{stat})
+		}
+		if err != nil {
+			sp.logger.Error("collect statistics data error", zap.Error(err))
+			return nil, err
+		}
+	}
+
+	return statistics, nil
+}
+
+type Statistic struct {
+	opsStat.OpsStatistic
+}
+
+// Statistics is a slice of sortable statistics.
+type Statistics []*Statistic
+
+// Len implements sort.Interface.
+func (a Statistics) Len() int { return len(a) }
+
+// Less implements sort.Interface.
+func (a Statistics) Less(i, j int) bool {
+	return a[i].Name < a[j].Name
+}
+
+// Swap implements sort.Interface.
+func (a Statistics) Swap(i, j int) { a[i], a[j] = a[j], a[i] }

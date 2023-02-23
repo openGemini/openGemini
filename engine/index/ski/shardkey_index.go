@@ -27,13 +27,13 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
 	"github.com/VictoriaMetrics/fastcache"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"go.uber.org/zap"
 )
 
@@ -48,12 +48,13 @@ type ShardKeyIndex struct {
 	tb       *mergeset.Table
 	logger   *zap.Logger
 	path     string
+	lock     *string
 	cache    *workingsetcache.Cache
 	sidCount uint64
 }
 
-func NewShardKeyIndex(dataPath string) (*ShardKeyIndex, error) {
-	index := &ShardKeyIndex{path: dataPath}
+func NewShardKeyIndex(dataPath string, lockPath *string) (*ShardKeyIndex, error) {
+	index := &ShardKeyIndex{path: dataPath, lock: lockPath}
 	err := index.Open()
 	if err != nil {
 		return nil, err
@@ -78,7 +79,7 @@ func (idx *ShardKeyIndex) Open() error {
 	if err := fileops.MkdirAll(shardKeyPath, 0750); err != nil {
 		panic(err)
 	}
-	tb, err := mergeset.OpenTable(shardKeyPath, nil, mergeIndexRows)
+	tb, err := mergeset.OpenTable(shardKeyPath, nil, mergeIndexRows, idx.lock)
 	if err != nil {
 		return fmt.Errorf("cannot open index:%s, err: %+v", idx.path, err)
 	}
@@ -95,6 +96,10 @@ func (idx *ShardKeyIndex) Open() error {
 var kbPool bytesutil.ByteBufferPool
 
 var idxItemsPool mergeindex.IndexItemsPool
+
+func (idx *ShardKeyIndex) ForceFlush() {
+	idx.tb.DebugFlush()
+}
 
 func (idx *ShardKeyIndex) CreateIndex(name []byte, shardKey []byte, sid uint64) error {
 	ii := idxItemsPool.Get()
@@ -247,7 +252,7 @@ func (idx *ShardKeyIndex) validSplitKey(sidCount, pos int64, shardKey []byte) (b
 	return false, sidCount, nil
 }
 
-func (idx *ShardKeyIndex) GetSplitPointsByRowCount(poses []int64, f func(name string, sid uint64) int64) ([]string, error) {
+func (idx *ShardKeyIndex) GetSplitPointsByRowCount(poses []int64, f func(name string, sid uint64) (int64, error)) ([]string, error) {
 	is := idx.getIndexSearch()
 	defer idx.putIndexSearch(is)
 
@@ -286,7 +291,7 @@ func (idx *ShardKeyIndex) GetSplitPointsByRowCount(poses []int64, f func(name st
 	return splitPoints, nil
 }
 
-func (idx *ShardKeyIndex) isSplitKey(rowCount, pos int64, shardKey []byte, f func(name string, sid uint64) int64) (bool, int64, error) {
+func (idx *ShardKeyIndex) isSplitKey(rowCount, pos int64, shardKey []byte, f func(name string, sid uint64) (int64, error)) (bool, int64, error) {
 	is := idx.getIndexSearch()
 	defer idx.putIndexSearch(is)
 	ts := &is.ts
@@ -300,6 +305,7 @@ func (idx *ShardKeyIndex) isSplitKey(rowCount, pos int64, shardKey []byte, f fun
 
 	var err error
 	var preSid uint64
+	var count int64
 	res := false
 	for ts.NextItem() {
 		if !bytes.HasPrefix(ts.Item, kb.B) {
@@ -315,8 +321,12 @@ func (idx *ShardKeyIndex) isSplitKey(rowCount, pos int64, shardKey []byte, f fun
 			if tsid == preSid {
 				continue
 			}
-			// todo get tsid rowCount
-			rowCount += f(record.Bytes2str(mp.Name), tsid)
+
+			count, err = f(record.Bytes2str(mp.Name), tsid)
+			if err != nil {
+				return false, rowCount, err
+			}
+			rowCount += count
 			if rowCount >= pos {
 				res = true
 			}

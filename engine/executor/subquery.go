@@ -56,7 +56,7 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		}
 	}
 
-	pushDownDimension := getInnerDimensions(opt.Dimensions, subOpt.Dimensions)
+	pushDownDimension := GetInnerDimensions(opt.Dimensions, subOpt.Dimensions)
 	subOpt.Dimensions = pushDownDimension
 	for d := range opt.GroupBy {
 		subOpt.GroupBy[d] = struct{}{}
@@ -95,12 +95,12 @@ func (b *SubQueryBuilder) Build(ctx context.Context, opt query.ProcessorOptions)
 	if err != nil {
 		return nil, err
 	}
-	schema := NewQuerySchemaWithSources(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt)
+	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource)
 
 	return buildQueryPlan(ctx, b.stmt, b.qc, schema)
 }
 
-func getInnerDimensions(outer, inner []string) []string {
+func GetInnerDimensions(outer, inner []string) []string {
 	dimensionPushDownMap := make(map[string]struct{})
 	pushDownDimension := make([]string, 0, len(outer)+len(inner))
 	pushDownDimension = append(pushDownDimension, outer...)

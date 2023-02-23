@@ -67,12 +67,7 @@ func newRaftWrapper(s *Store, ln net.Listener, peers []string) (*raftWrapper, er
 	}
 
 	hasExistState, _ := raft.HasExistingState(rw.logStore, rw.stableStore, rw.snapStore)
-	if hasExistState {
-		err = raft.RecoverCluster(raftConf, (*storeFSM)(s), rw.logStore, rw.stableStore, rw.snapStore, trans, configuration)
-		if err != nil {
-			return nil, err
-		}
-	} else if bootFirst(s.config) { // bootstrap with all peers will make choose leader for longer time
+	if !hasExistState && bootFirst(s.config) { // bootstrap with all peers will make choose leader for longer time
 		logger.GetLogger().Info("bootstrap from first peer!!!")
 		err = raft.BootstrapCluster(raftConf, rw.logStore, rw.stableStore, rw.snapStore, trans, configuration)
 		if err != nil {
@@ -123,7 +118,7 @@ func (r *raftWrapper) raftStore(c *config.Meta) error {
 	return nil
 }
 
-func (r *raftWrapper) peers() ([]string, error) {
+func (r *raftWrapper) Peers() ([]string, error) {
 	future := r.raft.GetConfiguration()
 	if err := future.Error(); err != nil {
 		return nil, err
@@ -135,15 +130,15 @@ func (r *raftWrapper) peers() ([]string, error) {
 	return peerNodes, nil
 }
 
-func (r *raftWrapper) isLeader() bool {
+func (r *raftWrapper) IsLeader() bool {
 	return r != nil && r.raft.State() == raft.Leader
 }
 
-func (r *raftWrapper) isCandidate() bool {
+func (r *raftWrapper) IsCandidate() bool {
 	return r != nil && r.raft.State() == raft.Candidate
 }
 
-func (r *raftWrapper) leader() string {
+func (r *raftWrapper) Leader() string {
 	if r == nil || r.raft == nil {
 		return ""
 	}
@@ -155,7 +150,11 @@ func (r *raftWrapper) UserSnapshot() error {
 	return future.Error()
 }
 
-func (r *raftWrapper) close() error {
+func (r *raftWrapper) State() raft.RaftState {
+	return r.raft.State()
+}
+
+func (r *raftWrapper) Close() error {
 	if r == nil {
 		return nil
 	}
@@ -178,7 +177,7 @@ func (r *raftWrapper) close() error {
 	return nil
 }
 
-func (r *raftWrapper) apply(b []byte) error {
+func (r *raftWrapper) Apply(b []byte) error {
 	if r == nil || r.raft == nil {
 		return errno.NewError(errno.RaftIsNotOpen)
 	}
@@ -200,7 +199,7 @@ func (r *raftWrapper) apply(b []byte) error {
 	panic(fmt.Sprintf("unexpected response: %#v", resp))
 }
 
-func (r *raftWrapper) addServer(addr string) error {
+func (r *raftWrapper) AddServer(addr string) error {
 	if r == nil || r.raft == nil {
 		return ErrRaftNotOpen
 	}
@@ -208,7 +207,7 @@ func (r *raftWrapper) addServer(addr string) error {
 	return future.Error()
 }
 
-func (r *raftWrapper) showDebugInfo(witch string) ([]byte, error) {
+func (r *raftWrapper) ShowDebugInfo(witch string) ([]byte, error) {
 	if r == nil || r.raft == nil {
 		return nil, ErrRaftNotOpen
 	}

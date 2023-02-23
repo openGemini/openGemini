@@ -19,6 +19,8 @@ package statistics
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 var (
@@ -70,6 +72,14 @@ func CollectEngineStatStatistics(buffer []byte) ([]byte, error) {
 		return nil, nil
 	}
 
+	data := genEngineValueMap()
+	atomic.StoreInt64(&EngineStat.Updated, 0)
+
+	buffer = AddPointToBuffer("engine", engineMap, data, buffer)
+	return buffer, nil
+}
+
+func genEngineValueMap() map[string]interface{} {
 	data := map[string]interface{}{
 		"OpenErrors":     atomic.LoadInt64(&EngineStat.OpenErrors),
 		"OpenDurations":  atomic.LoadInt64(&EngineStat.OpenDurations),
@@ -96,10 +106,19 @@ func CollectEngineStatStatistics(buffer []byte) ([]byte, error) {
 		"DropRPCount":     atomic.LoadInt64(&EngineStat.DropRPCount),
 		"DropRPDurations": atomic.LoadInt64(&EngineStat.DropRPDurations),
 	}
-	atomic.StoreInt64(&EngineStat.Updated, 0)
 
-	buffer = AddPointToBuffer("engine", engineMap, data, buffer)
-	return buffer, nil
+	return data
+}
+
+func CollectOpsEngineStatStatistics() []opsStat.OpsStatistic {
+	data := genEngineValueMap()
+
+	return []opsStat.OpsStatistic{{
+		Name:   "engine",
+		Tags:   engineMap,
+		Values: data,
+	},
+	}
 }
 
 type ImmuStats struct {

@@ -212,30 +212,23 @@ var (
 )
 
 type OptRuleCall struct {
-	id       uint64
-	results  []hybridqp.QueryNode
-	planner  HeuPlanner
-	operand  OptRuleOperand
-	rule     OptRule
-	nodes    []hybridqp.QueryNode
-	children map[hybridqp.QueryNode][]hybridqp.QueryNode
-	parent   []hybridqp.QueryNode
+	id      uint64
+	results []hybridqp.QueryNode
+	planner HeuPlanner
+	rule    OptRule
+	nodes   []hybridqp.QueryNode
 }
 
 func NewOptRuleCall(planner HeuPlanner,
 	operand OptRuleOperand,
 	nodes []hybridqp.QueryNode,
-	children map[hybridqp.QueryNode][]hybridqp.QueryNode,
-	parent []hybridqp.QueryNode) *OptRuleCall {
+) *OptRuleCall {
 	return &OptRuleCall{
-		id:       atomic.AddUint64(&nextOptRuleCallId, 1),
-		results:  nil,
-		planner:  planner,
-		operand:  operand,
-		rule:     operand.Rule(),
-		nodes:    nodes,
-		children: children,
-		parent:   parent,
+		id:      atomic.AddUint64(&nextOptRuleCallId, 1),
+		results: nil,
+		planner: planner,
+		rule:    operand.Rule(),
+		nodes:   nodes,
 	}
 }
 

@@ -58,7 +58,17 @@ class PyWorkers:
             task_queue = Queue(ctx=get_context(), maxsize=os.cpu_count())
             p = Process(
                 target=worker,
-                args=(300000, 3600, num_workers, handler, None, None, "1.0.0", task_queue, self.results),
+                args=(
+                    300000,
+                    3600,
+                    num_workers,
+                    handler,
+                    None,
+                    None,
+                    "1.0.0",
+                    task_queue,
+                    self.results,
+                ),
             )
             self.tasks.append(task_queue)
             self.workers.append(p)

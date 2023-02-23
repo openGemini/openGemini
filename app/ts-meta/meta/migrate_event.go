@@ -29,26 +29,33 @@ type MigrateEvent interface {
 	getUserCommand() bool
 	getPtInfo() *meta.DbPtInfo
 	getEventType() EventType
-	getTarget() uint64                      // get which node this event execute
-	handleCmdResult(err error) ScheduleType // transit state due to store cmd response and return schedule type(normal or retry)
+	getTarget() uint64 // get which node this event execute
 	isInRecovery() bool
 	setRecovery(inRecover bool)
 	removeEventFromStore()
 	getEventId() string
 	getEventRes() *EventResultInfo
 	isReassignNeeded() bool
-	setInterrupt(interrupt bool)
 	getNextAction() (NextAction, error)
 	storeTransitionState() error
 	rollbackLastTransition()
+	getStartTime() time.Time
+	setStartTime(time.Time)
 	getCurrState() int
+	getCurrStateString() string
 	getPreState() int
+	getPreStateString() string
 	setSrc(src uint64)
 	setDest(dst uint64)
 	getSrc() uint64
 	getDst() uint64
 	getOpId() uint64
+	setOpId(opId uint64)
 	marshalEvent() *mproto.MigrateEventInfo
+	String() string
+	stateTransition(err error)
+	increaseRetryCnt()
+	exhaustRetries() bool
 }
 
 type EventResultInfo struct {
@@ -62,10 +69,22 @@ const maxRetryNum = 100
 type EventType int
 
 const (
-	Assign EventType = iota
-	Offload
-	Move
+	AssignType EventType = iota
+	OffloadType
+	MoveType
 )
+
+func (t EventType) String() string {
+	switch t {
+	case AssignType:
+		return "assign_event"
+	case OffloadType:
+		return "offload_event"
+	case MoveType:
+		return "move_event"
+	}
+	return "unknown event type"
+}
 
 type NextAction int
 
@@ -90,7 +109,6 @@ type BaseEvent struct {
 	needIsolate bool
 	needPersist bool
 	inRecover   bool
-	interrupt   bool
 	processed   bool // if this event is not processed, do not remove events in store in delete event
 	retryNum    int
 
@@ -120,6 +138,7 @@ func (e *BaseEvent) increaseRetryCnt() {
 	e.retryNum++
 }
 
+//nolint
 func (e *BaseEvent) setIsolate(isolate bool) {
 	e.needIsolate = isolate
 }
@@ -144,10 +163,6 @@ func (e *BaseEvent) setRecovery(inRecover bool) {
 	e.inRecover = inRecover
 }
 
-func (e *BaseEvent) setInterrupt(interrupt bool) {
-	e.interrupt = interrupt
-}
-
 func (e *BaseEvent) getEventId() string {
 	return e.eventId
 }
@@ -156,12 +171,20 @@ func (e *BaseEvent) getOpId() uint64 {
 	return e.operateId
 }
 
+func (e *BaseEvent) setOpId(opId uint64) {
+	e.operateId = opId
+}
+
 func (e *BaseEvent) removeEventFromStore() {
-	if !e.processed {
+	if !e.processed && !e.inRecover { // if event is in recover, need remove event from store
 		return
 	}
 	// remove from store
 	for {
+		if !globalService.msm.canExecuteEvent(false) {
+			break
+		}
+
 		err := globalService.store.removeEvent(e.eventId)
 		if err == nil || errno.Equal(err, errno.MetaIsNotLeader) {
 			break
@@ -188,4 +211,19 @@ func (e *BaseEvent) getSrc() uint64 {
 
 func (e *BaseEvent) getDst() uint64 {
 	return e.dst
+}
+
+func (e *BaseEvent) updatePtInfo() error {
+	status := meta.Online
+	if e.needIsolate {
+		status = meta.Disabled
+	}
+
+	err := globalService.store.updatePtInfo(e.pt.Db, e.pt.Pti, e.pt.Pti.Owner.NodeID, status)
+	if err != nil {
+		return err
+	}
+
+	e.pt.Pti.Status = status
+	return nil
 }

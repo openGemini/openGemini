@@ -42,15 +42,17 @@ type TSSPFileName struct {
 	extent uint16
 	merge  uint16
 	order  bool
+	lock   *string
 }
 
-func NewTSSPFileName(seq uint64, level, merge, extent uint16, order bool) TSSPFileName {
+func NewTSSPFileName(seq uint64, level, merge, extent uint16, order bool, lockPath *string) TSSPFileName {
 	return TSSPFileName{
 		seq:    seq,
 		level:  level,
 		merge:  merge % maxMerge,
 		extent: extent,
 		order:  order,
+		lock:   lockPath,
 	}
 }
 
@@ -82,7 +84,7 @@ func (n *TSSPFileName) path(dir string) string {
 	if !n.order {
 		dir = path.Join(dir, unorderedDir)
 
-		lock := fileops.FileLockOption("")
+		lock := fileops.FileLockOption(*n.lock)
 		if err := fileops.MkdirAll(dir, 0750, lock); err != nil {
 			log.Error("create dir failed", zap.String("dir", dir), zap.Error(err))
 			panic(err)

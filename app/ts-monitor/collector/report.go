@@ -70,7 +70,6 @@ type JobType int
 const (
 	ErrLogHistoryType JobType = iota
 	ErrLogCurrentType
-	ErrLogHistoryGoonType // continue to report error log
 )
 
 const (
@@ -200,8 +199,6 @@ func (rb *ReportJob) StartErrLogJob(filename, errLogPath string, jobType JobType
 		return rb.reportHistoryErrLog(filename)
 	case ErrLogCurrentType:
 		return rb.reportCurrentErrLog(filename, errLogPath)
-	case ErrLogHistoryGoonType:
-		return rb.goonReportHistoryErrLog(filename)
 	}
 	return nil
 }
@@ -453,77 +450,6 @@ func (rb *ReportJob) reportCurrentErrLog(filename, errLogPath string) error {
 			return nil
 		}
 	}
-}
-
-// reverse read the filename
-func (rb *ReportJob) goonReportHistoryErrLog(filename string) error {
-	file, err := os.Open(path.Clean(filename))
-	if err != nil {
-		return err
-	}
-	defer util.MustClose(file)
-	archive, err := gzip.NewReader(file)
-	if err != nil {
-		return err
-	}
-	defer util.MustClose(archive)
-	reader := bufio.NewReader(archive)
-
-	filePrefix := filepath.Base(strings.Split(filename, "-")[0])
-	defer func(filePrefix string) {
-		rb.errLogLock.Lock()
-		delete(rb.errLogStat, filePrefix)
-		rb.errLogLock.Unlock()
-	}(filePrefix)
-
-	rb.errLogLock.RLock()
-	locTime := []byte(rb.errLogStat[filePrefix])
-	rb.errLogLock.RUnlock()
-
-	// reduce the log reporting.
-	// A maximum of one point can be reported for each error code in each batch.
-	errnoMap := make(map[int]string)
-
-	var line []byte
-	var seen bool
-	for {
-		line, _, err = reader.ReadLine()
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		if ignoreLine(line, errnoMap) {
-			continue
-		}
-		errno, data := rb.parseErrLine(line, "", false, func(line []byte) bool {
-			if !seen && bytes.Contains(line, locTime) {
-				seen = true
-				return true
-			} else if !seen {
-				return true
-			}
-			return false
-		})
-		if data == "" {
-			continue
-		}
-		errnoMap[errno] = data
-	}
-	var buf bytes.Buffer
-	for _, data := range errnoMap {
-		buf.WriteString(data)
-		buf.WriteByte('\n')
-	}
-
-	if len(errnoMap) > 0 {
-		if err = rb.retryEver(rb.writeUrl, nil, buf.String(), 0); err != nil {
-			return err
-		}
-		buf.Reset()
-	}
-	return nil
 }
 
 func (rb *ReportJob) parseErrLine(line []byte, filePrefix string, isCurrent bool, ignoreTimeFunc func(line []byte) bool) (int, string) {

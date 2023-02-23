@@ -19,9 +19,18 @@ package util
 import (
 	"io"
 	"reflect"
+	"time"
 
 	"github.com/influxdata/influxdb/toml"
 	"go.uber.org/zap"
+)
+
+const (
+	TierBegin = 0
+	Hot       = 1
+	Warm      = 2
+	Cold      = 3
+	TierEnd   = 4
 )
 
 var logger *zap.Logger
@@ -100,6 +109,14 @@ func (c *Corrector) TomlSize(v *toml.Size, def toml.Size) {
 	}
 }
 
+func TimeCost(option string) func() {
+	start := time.Now()
+	return func() {
+		tc := time.Since(start)
+		logger.Debug(option, zap.Duration("time cost", tc))
+	}
+}
+
 func CeilToPower2(num uint32) uint32 {
 	if num > (1 << 31) {
 		return 1 << 31
@@ -111,4 +128,14 @@ func CeilToPower2(num uint32) uint32 {
 	num |= num >> 8
 	num |= num >> 16
 	return num + 1
+}
+
+func IntLimit(min, max int, v int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
 }

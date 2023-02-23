@@ -12,125 +12,6 @@ import (
 	"strings"
 )
 
-const FROM = 57346
-const MEASUREMENT = 57347
-const ON = 57348
-const SELECT = 57349
-const WHERE = 57350
-const AS = 57351
-const GROUP = 57352
-const BY = 57353
-const ORDER = 57354
-const LIMIT = 57355
-const OFFSET = 57356
-const SLIMIT = 57357
-const SOFFSET = 57358
-const SHOW = 57359
-const CREATE = 57360
-const FULL = 57361
-const PRIVILEGES = 57362
-const OUTER = 57363
-const JOIN = 57364
-const TO = 57365
-const IN = 57366
-const NOT = 57367
-const EXISTS = 57368
-const REVOKE = 57369
-const FILL = 57370
-const DELETE = 57371
-const WITH = 57372
-const ALL = 57373
-const PASSWORD = 57374
-const NAME = 57375
-const REPLICANUM = 57376
-const ALTER = 57377
-const USER = 57378
-const USERS = 57379
-const DATABASES = 57380
-const DATABASE = 57381
-const MEASUREMENTS = 57382
-const RETENTION = 57383
-const POLICIES = 57384
-const POLICY = 57385
-const DURATION = 57386
-const DEFAULT = 57387
-const SHARD = 57388
-const INDEX = 57389
-const GRANT = 57390
-const HOT = 57391
-const WARM = 57392
-const TYPE = 57393
-const SET = 57394
-const FOR = 57395
-const GRANTS = 57396
-const REPLICATION = 57397
-const SERIES = 57398
-const DROP = 57399
-const CASE = 57400
-const WHEN = 57401
-const THEN = 57402
-const ELSE = 57403
-const END = 57404
-const TRUE = 57405
-const FALSE = 57406
-const TAG = 57407
-const FIELD = 57408
-const KEYS = 57409
-const VALUES = 57410
-const KEY = 57411
-const EXPLAIN = 57412
-const ANALYZE = 57413
-const EXACT = 57414
-const CARDINALITY = 57415
-const SHARDKEY = 57416
-const CONTINUOUS = 57417
-const DIAGNOSTICS = 57418
-const QUERIES = 57419
-const QUERIE = 57420
-const SHARDS = 57421
-const STATS = 57422
-const SUBSCRIPTIONS = 57423
-const SUBSCRIPTION = 57424
-const GROUPS = 57425
-const INDEXTYPE = 57426
-const INDEXLIST = 57427
-const QUERY = 57428
-const PARTITION = 57429
-const DESC = 57430
-const ASC = 57431
-const COMMA = 57432
-const SEMICOLON = 57433
-const LPAREN = 57434
-const RPAREN = 57435
-const REGEX = 57436
-const EQ = 57437
-const NEQ = 57438
-const LT = 57439
-const LTE = 57440
-const GT = 57441
-const GTE = 57442
-const DOT = 57443
-const DOUBLECOLON = 57444
-const NEQREGEX = 57445
-const EQREGEX = 57446
-const IDENT = 57447
-const INTEGER = 57448
-const DURATIONVAL = 57449
-const STRING = 57450
-const NUMBER = 57451
-const HINT = 57452
-const AND = 57453
-const OR = 57454
-const ADD = 57455
-const SUB = 57456
-const BITWISE_OR = 57457
-const BITWISE_XOR = 57458
-const MUL = 57459
-const DIV = 57460
-const MOD = 57461
-const BITWISE_AND = 57462
-const UMINUS = 57463
-
 // Token is a lexical token of the InfluxQL language.
 type Token int
 
@@ -198,7 +79,7 @@ const (
 	ANY
 	//AS
 	//ASC
-	BEGIN //CREATE CONTINUOUS QUERY ON "telegraf" BEGIN
+	//BEGIN //CREATE CONTINUOUS QUERY ON "telegraf" BEGIN
 	//BY
 	//CARDINALITY
 	//CREATE
@@ -215,7 +96,7 @@ const (
 	//DROP
 	//DURATION
 	//END
-	EVERY
+	//EVERY
 	//EXACT
 	//EXPLAIN
 	//FIELD
@@ -228,7 +109,7 @@ const (
 	//IN
 	INF
 	INSERT
-	INTO
+	//INTO
 	//KEY
 	//KEYS
 	KILL
@@ -247,7 +128,7 @@ const (
 	//QUERY
 	READ //privilege        = "ALL" [ "PRIVILEGES" ] | "READ" | "WRITE" .
 	//REPLICATION
-	RESAMPLE
+	//RESAMPLE
 	//RETENTION
 	//REVOKE
 	//SELECT
@@ -327,106 +208,113 @@ var tokens = [...]string{
 	SEMICOLON:   ";",
 	DOT:         ".",
 
-	ALL:           "ALL",
-	ALTER:         "ALTER",
-	ANALYZE:       "ANALYZE",
-	ANY:           "ANY",
-	AS:            "AS",
-	ASC:           "ASC",
-	BEGIN:         "BEGIN",
-	BY:            "BY",
-	CARDINALITY:   "CARDINALITY",
-	CREATE:        "CREATE",
-	CONTINUOUS:    "CONTINUOUS",
-	DATABASE:      "DATABASE",
-	DATABASES:     "DATABASES",
-	DEFAULT:       "DEFAULT",
-	DELETE:        "DELETE",
-	DESC:          "DESC",
-	DESTINATIONS:  "DESTINATIONS",
-	DIAGNOSTICS:   "DIAGNOSTICS",
-	DISTINCT:      "DISTINCT",
-	DROP:          "DROP",
-	DURATION:      "DURATION",
-	CASE:          "CASE",
-	WHEN:          "WHEN",
-	THEN:          "THEN",
-	ELSE:          "ELSE",
-	END:           "END",
-	EVERY:         "EVERY",
-	EXACT:         "EXACT",
-	EXPLAIN:       "EXPLAIN",
-	FIELD:         "FIELD",
-	FOR:           "FOR",
-	FROM:          "FROM",
-	GRANT:         "GRANT",
-	GRANTS:        "GRANTS",
-	GROUP:         "GROUP",
-	GROUPS:        "GROUPS",
-	IN:            "IN",
-	NOT:           "NOT",
-	EXISTS:        "EXISTS",
-	INF:           "INF",
-	INSERT:        "INSERT",
-	INTO:          "INTO",
-	KEY:           "KEY",
-	KEYS:          "KEYS",
-	KILL:          "KILL",
-	LIMIT:         "LIMIT",
-	MEASUREMENT:   "MEASUREMENT",
-	MEASUREMENTS:  "MEASUREMENTS",
-	NAME:          "NAME",
-	OFFSET:        "OFFSET",
-	ON:            "ON",
-	ORDER:         "ORDER",
-	PASSWORD:      "PASSWORD",
-	POLICY:        "POLICY",
-	POLICIES:      "POLICIES",
-	PRIVILEGES:    "PRIVILEGES",
-	QUERIES:       "QUERIES",
-	QUERY:         "QUERY",
-	READ:          "READ",
-	REPLICATION:   "REPLICATION",
-	RESAMPLE:      "RESAMPLE",
-	RETENTION:     "RETENTION",
-	REVOKE:        "REVOKE",
-	SELECT:        "SELECT",
-	SERIES:        "SERIES",
-	SET:           "SET",
-	SHOW:          "SHOW",
-	SHARD:         "SHARD",
-	SHARDKEY:      "SHARDKEY",
-	SHARDS:        "SHARDS",
-	SLIMIT:        "SLIMIT",
-	SOFFSET:       "SOFFSET",
-	STATS:         "STATS",
-	SUBSCRIPTION:  "SUBSCRIPTION",
-	SUBSCRIPTIONS: "SUBSCRIPTIONS",
-	TYPE:          "TYPE",
-	TAG:           "TAG",
-	TO:            "TO",
-	USER:          "USER",
-	USERS:         "USERS",
-	VALUES:        "VALUES",
-	WHERE:         "WHERE",
-	WITH:          "WITH",
-	WRITE:         "WRITE",
-	PARTITION:     "PARTITION",
-	PREPARE:       "PREPARE",
-	SNAPSHOT:      "SNAPSHOT",
-	GET:           "GET",
-	RUNTIMEINFO:   "RUNTIMEINFO",
-	HINT:          "HINT",
-	HOT:           "HOT",
-	WARM:          "WARM",
-	INDEX:         "INDEX",
-	FULL:          "FULL",
-	OUTER:         "OUTER",
-	JOIN:          "JOIN",
-	FILL:          "FILL",
-	REPLICANUM:    "REPLICANUM",
-	INDEXTYPE:     "INDEXTYPE",
-	INDEXLIST:     "INDEXLIST",
+	ALL:            "ALL",
+	ALTER:          "ALTER",
+	ANALYZE:        "ANALYZE",
+	ANY:            "ANY",
+	AS:             "AS",
+	ASC:            "ASC",
+	BEGIN:          "BEGIN",
+	BY:             "BY",
+	CARDINALITY:    "CARDINALITY",
+	CREATE:         "CREATE",
+	CONTINUOUS:     "CONTINUOUS",
+	DATABASE:       "DATABASE",
+	DATABASES:      "DATABASES",
+	DEFAULT:        "DEFAULT",
+	DELETE:         "DELETE",
+	DESC:           "DESC",
+	DESTINATIONS:   "DESTINATIONS",
+	DIAGNOSTICS:    "DIAGNOSTICS",
+	DISTINCT:       "DISTINCT",
+	DROP:           "DROP",
+	DURATION:       "DURATION",
+	CASE:           "CASE",
+	WHEN:           "WHEN",
+	THEN:           "THEN",
+	ELSE:           "ELSE",
+	END:            "END",
+	EVERY:          "EVERY",
+	EXACT:          "EXACT",
+	EXPLAIN:        "EXPLAIN",
+	FIELD:          "FIELD",
+	FOR:            "FOR",
+	FROM:           "FROM",
+	GRANT:          "GRANT",
+	GRANTS:         "GRANTS",
+	GROUP:          "GROUP",
+	GROUPS:         "GROUPS",
+	IN:             "IN",
+	NOT:            "NOT",
+	EXISTS:         "EXISTS",
+	INF:            "INF",
+	INSERT:         "INSERT",
+	INTO:           "INTO",
+	KEY:            "KEY",
+	KEYS:           "KEYS",
+	KILL:           "KILL",
+	LIMIT:          "LIMIT",
+	MEASUREMENT:    "MEASUREMENT",
+	MEASUREMENTS:   "MEASUREMENTS",
+	NAME:           "NAME",
+	OFFSET:         "OFFSET",
+	ON:             "ON",
+	ORDER:          "ORDER",
+	PASSWORD:       "PASSWORD",
+	POLICY:         "POLICY",
+	POLICIES:       "POLICIES",
+	PRIVILEGES:     "PRIVILEGES",
+	QUERIES:        "QUERIES",
+	QUERY:          "QUERY",
+	READ:           "READ",
+	REPLICATION:    "REPLICATION",
+	RESAMPLE:       "RESAMPLE",
+	RETENTION:      "RETENTION",
+	REVOKE:         "REVOKE",
+	SELECT:         "SELECT",
+	SERIES:         "SERIES",
+	SET:            "SET",
+	SHOW:           "SHOW",
+	SHARD:          "SHARD",
+	SHARDKEY:       "SHARDKEY",
+	SHARDS:         "SHARDS",
+	SLIMIT:         "SLIMIT",
+	SOFFSET:        "SOFFSET",
+	STATS:          "STATS",
+	SUBSCRIPTION:   "SUBSCRIPTION",
+	SUBSCRIPTIONS:  "SUBSCRIPTIONS",
+	TYPE:           "TYPE",
+	TAG:            "TAG",
+	TO:             "TO",
+	USER:           "USER",
+	USERS:          "USERS",
+	VALUES:         "VALUES",
+	WHERE:          "WHERE",
+	WITH:           "WITH",
+	WRITE:          "WRITE",
+	PARTITION:      "PARTITION",
+	PREPARE:        "PREPARE",
+	SNAPSHOT:       "SNAPSHOT",
+	GET:            "GET",
+	RUNTIMEINFO:    "RUNTIMEINFO",
+	HINT:           "HINT",
+	HOT:            "HOT",
+	WARM:           "WARM",
+	INDEX:          "INDEX",
+	FULL:           "FULL",
+	OUTER:          "OUTER",
+	JOIN:           "JOIN",
+	FILL:           "FILL",
+	REPLICANUM:     "REPLICANUM",
+	INDEXTYPE:      "INDEXTYPE",
+	INDEXLIST:      "INDEXLIST",
+	DOWNSAMPLE:     "DOWNSAMPLE",
+	DOWNSAMPLES:    "DOWNSAMPLES",
+	SAMPLEINTERVAL: "SAMPLEINTERVAL",
+	TIMEINTERVAL:   "TIMEINTERVAL",
+	STREAM:         "STREAM",
+	STREAMS:        "STREAMS",
+	DELAY:          "DELAY",
 }
 
 var keywords map[string]int

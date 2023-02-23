@@ -19,6 +19,7 @@ package errno
 import (
 	"fmt"
 	"runtime/debug"
+	"sync"
 	"time"
 )
 
@@ -61,6 +62,7 @@ const (
 	ModuleShard         = 17
 	ModuleDownSample    = 18
 	ModuleCastor        = 19
+	ModuleStream        = 20
 )
 
 const (
@@ -120,6 +122,10 @@ func (s *Error) SetToWarn() *Error {
 func (s *Error) SetToFatal() *Error {
 	s.level = LevelFatal
 	return s
+}
+
+func (s *Error) SetMessage(message string) {
+	s.msg = message
 }
 
 func NewError(errno Errno, args ...interface{}) *Error {
@@ -203,4 +209,83 @@ func needStack(err *Error) bool {
 	}
 
 	return false
+}
+
+type Errs struct {
+	err      error
+	lock     sync.Mutex
+	wg       sync.WaitGroup
+	callback func()
+}
+
+// NewErrs func
+// 1.store only 1 error
+// 2.call callback at most once
+// 3.wait
+// 4.can reuse
+// call order, NewErrs -> Init -> Dispatch -> Wait -> Err -> Clean
+func NewErrs() *Errs {
+	// only store 1 error
+	return &Errs{}
+}
+
+// Dispatch no lock, use len 1 error chan for lock
+func (s *Errs) Dispatch(err error) {
+	s.wg.Add(-1)
+	if err == nil {
+		return
+	}
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.err == nil {
+		s.err = err
+		if s.callback != nil {
+			s.callback()
+		}
+	}
+}
+
+func (s *Errs) Err() error {
+	s.wg.Wait()
+	return s.err
+}
+
+func (s *Errs) Init(count int, callback func()) {
+	s.wg.Add(count)
+	s.callback = callback
+}
+
+func (s *Errs) Clean() {
+	s.err = nil
+	s.callback = nil
+}
+
+type ErrsPool struct {
+	pool *sync.Pool
+}
+
+var errsPool *ErrsPool
+
+func init() {
+	errsPool = &ErrsPool{
+		pool: new(sync.Pool),
+	}
+}
+
+func NewErrsPool() *ErrsPool {
+	return errsPool
+}
+
+func (u *ErrsPool) Get() *Errs {
+	v, ok := u.pool.Get().(*Errs)
+	if !ok || v == nil {
+		return NewErrs()
+	}
+
+	return v
+}
+
+func (u *ErrsPool) Put(v *Errs) {
+	v.Clean()
+	u.pool.Put(v)
 }

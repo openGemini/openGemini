@@ -17,7 +17,6 @@ limitations under the License.
 package executor_test
 
 import (
-	"fmt"
 	"reflect"
 	"regexp"
 	"testing"
@@ -138,43 +137,10 @@ func TestProcessorCodec(t *testing.T) {
 
 }
 
-func compareNil(a, b interface{}, object string, fn func() error) error {
-	if a == nil || b == nil {
-		return nil
-	}
-	aIsNil := reflect.ValueOf(a).IsNil()
-	bIsNil := reflect.ValueOf(b).IsNil()
-
-	if aIsNil && !bIsNil {
-		return fmt.Errorf("failed to marshal %s. exp: nil, got: %+v ", object, b)
-	}
-
-	if !aIsNil && bIsNil {
-		return fmt.Errorf("failed to marshal %s. exp: %+v, got: nil ", a, object)
-	}
-
-	if !aIsNil && !bIsNil {
-		return fn()
-	}
-
-	return nil
-}
-
-func compareFields(fa, fb influxql.Fields, object string) error {
-	fn := func() error {
-		if fa.String() != fb.String() {
-			return fmt.Errorf("failed to marshal %s.fields. exp: %s, got: %s ", object, fa, fb)
-		}
-		return nil
-	}
-
-	return compareNil(fa, fb, fmt.Sprintf("%s.fields", object), fn)
-}
-
 func compareSchema(s1, s2 *executor.QuerySchema) error {
 	fn := func() error {
-		return compareFields(s1.Fields(), s2.Fields(), "QuerySchema")
+		return CompareFields(s1.Fields(), s2.Fields(), "QuerySchema")
 	}
 
-	return compareNil(s1, s2, "QuerySchema", fn)
+	return CompareNil(s1, s2, "QuerySchema", fn)
 }

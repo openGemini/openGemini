@@ -23,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 type MetaMessage struct {
@@ -112,6 +113,7 @@ type UserSnapshotResponse struct {
 }
 
 type SnapshotRequest struct {
+	Role  int
 	Index uint64
 }
 
@@ -156,6 +158,54 @@ type GetShardInfoRequest struct {
 }
 
 type GetShardInfoResponse struct {
+	Data    []byte
+	ErrCode errno.Errno
+	Err     string
+}
+
+type GetDownSampleInfoRequest struct{}
+
+type GetDownSampleInfoResponse struct {
+	Data []byte
+	Err  string
+}
+
+type GetRpMstInfosRequest struct {
+	DbName    string
+	RpName    string
+	DataTypes []int64
+}
+
+type GetRpMstInfosResponse struct {
+	Data []byte
+	Err  string
+}
+
+type GetUserInfoRequest struct {
+	Index uint64
+}
+
+type GetUserInfoResponse struct {
+	Data []byte
+	Err  string
+}
+
+type GetStreamInfoRequest struct {
+	Body []byte
+}
+
+type GetStreamInfoResponse struct {
+	Data []byte
+	Err  string
+}
+
+type GetMeasurementInfoRequest struct {
+	DbName  string
+	RpName  string
+	MstName string
+}
+
+type GetMeasurementInfoResponse struct {
 	Data []byte
 	Err  string
 }

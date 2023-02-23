@@ -17,18 +17,18 @@ limitations under the License.
 package engine
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
+	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -42,8 +42,8 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/sysinfo"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -51,14 +51,12 @@ import (
 	"go.uber.org/zap"
 )
 
-const IndexFileDirectory = "index"
-const DataDirectory = "data"
-const WalDirectory = "wal"
-
-var log *zap.Logger
+var log *logger.Logger
+var openShardsLimit limiter.Fixed
+var replayWalLimit limiter.Fixed
 
 func init() {
-	log = logger.GetLogger()
+	log = logger.NewLogger(errno.ModuleStorageEngine)
 	netstorage.RegisterNewEngineFun(config.EngineType1, NewEngine)
 }
 
@@ -72,7 +70,7 @@ type Engine struct {
 	engOpt       netstorage.EngineOptions
 	DBPartitions map[string]map[uint32]*DBPTInfo
 
-	log *zap.Logger
+	log *logger.Logger
 
 	loadCtx     *meta.LoadCtx
 	dropMu      sync.RWMutex
@@ -80,7 +78,12 @@ type Engine struct {
 	droppingRP  map[string]string
 	droppingMst map[string]string
 
+	DownSamplePolicies map[string]*meta2.StoreDownSamplePolicy
+
 	statCount int64
+
+	mgtLock       sync.RWMutex // lock for migration
+	migratingDbPT map[string]map[uint32]struct{}
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -107,19 +110,23 @@ func sysTotalMemory() int {
 }
 
 func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *meta.LoadCtx) (netstorage.Engine, error) {
-	log = logger.GetLogger()
 	eng := &Engine{
-		closed:       interruptsignal.NewInterruptSignal(),
-		dataPath:     dataPath,
-		walPath:      walPath,
-		engOpt:       options,
-		DBPartitions: make(map[string]map[uint32]*DBPTInfo, 64),
-		loadCtx:      ctx,
-		log:          logger.GetLogger(),
-		droppingDB:   make(map[string]string),
-		droppingRP:   make(map[string]string),
-		droppingMst:  make(map[string]string),
+		closed:        interruptsignal.NewInterruptSignal(),
+		dataPath:      dataPath,
+		walPath:       walPath,
+		engOpt:        options,
+		DBPartitions:  make(map[string]map[uint32]*DBPTInfo, 64),
+		loadCtx:       ctx,
+		log:           logger.NewLogger(errno.ModuleStorageEngine),
+		droppingDB:    make(map[string]string),
+		droppingRP:    make(map[string]string),
+		droppingMst:   make(map[string]string),
+		migratingDbPT: make(map[string]map[uint32]struct{}),
 	}
+
+	eng.DownSamplePolicies = make(map[string]*meta2.StoreDownSamplePolicy)
+	openShardsLimit = limiter.NewFixed(options.OpenShardLimit)
+	replayWalLimit = limiter.NewFixed(options.OpenShardLimit)
 
 	SetFullCompColdDuration(options.FullCompactColdDuration)
 	immutable.SetMaxCompactor(options.MaxConcurrentCompactions)
@@ -141,7 +148,7 @@ func (e *Engine) GetLockFile() string {
 	return ""
 }
 
-func (e *Engine) Open(ptIds []uint32, durationInfos map[uint64]*meta2.ShardDurationInfo) error {
+func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, m meta.MetaClient) error {
 	e.log.Info("start open engine...")
 	start := time.Now()
 	defer func(tm time.Time) {
@@ -158,7 +165,7 @@ func (e *Engine) Open(ptIds []uint32, durationInfos map[uint64]*meta2.ShardDurat
 		return err
 	}
 
-	err := e.loadShards(ptIds, durationInfos)
+	err := e.loadShards(durationInfos, immutable.LOAD, m)
 	if err != nil {
 		atomic.AddInt64(&stat.EngineStat.OpenErrors, 1)
 		return err
@@ -167,8 +174,9 @@ func (e *Engine) Open(ptIds []uint32, durationInfos map[uint64]*meta2.ShardDurat
 	return nil
 }
 
-func (e *Engine) loadShards(ptIds []uint32, durationInfos map[uint64]*meta2.ShardDurationInfo) error {
-	dataPath := path.Join(e.dataPath, DataDirectory)
+func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, loadStat int, client meta.MetaClient) error {
+	e.log.Info("start loadShards...", zap.Int("loadStat", loadStat))
+	dataPath := path.Join(e.dataPath, config.DataDirectory)
 	_, err := fileops.Stat(dataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -188,7 +196,11 @@ func (e *Engine) loadShards(ptIds []uint32, durationInfos map[uint64]*meta2.Shar
 		dbRpLock[dbRpPath] = ""
 		n++
 		go func(db string, pt uint32, rp string) {
-			err := e.loadDbRp(db, pt, rp, durationInfos)
+			e.createDBPTIfNotExist(db, pt)
+			e.mu.RLock()
+			dbPTInfo := e.DBPartitions[db][pt]
+			e.mu.RUnlock()
+			err := dbPTInfo.loadShards(0, rp, durationInfos, loadStat, client)
 			if err != nil {
 				e.log.Error("fail to load db rp", zap.String("db", db), zap.Uint32("pt", pt),
 					zap.String("rp", rp), zap.Error(err))
@@ -209,7 +221,6 @@ func (e *Engine) loadShards(ptIds []uint32, durationInfos map[uint64]*meta2.Shar
 
 func (e *Engine) Close() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	e.closed.Close()
 
@@ -241,7 +252,11 @@ func (e *Engine) Close() error {
 	}
 
 	wg.Wait()
+	e.mu.Unlock()
 
+	for db := range e.DBPartitions {
+		e.dropDBPt(db)
+	}
 	return nil
 }
 
@@ -316,12 +331,14 @@ func (e *Engine) ExpiredShards() []*meta2.ShardIdentifier {
 
 	var res []*meta2.ShardIdentifier
 	for db := range e.DBPartitions {
-		for pt := range e.DBPartitions[db] {
-			for sid := range e.DBPartitions[db][pt].shards {
-				if e.DBPartitions[db][pt].shards[sid].Expired() {
-					res = append(res, e.DBPartitions[db][pt].shards[sid].Ident())
+		for _, pti := range e.DBPartitions[db] {
+			pti.mu.RLock()
+			for sid := range pti.shards {
+				if pti.shards[sid].Expired() {
+					res = append(res, pti.shards[sid].Ident())
 				}
 			}
+			pti.mu.RUnlock()
 		}
 	}
 	return res
@@ -333,12 +350,14 @@ func (e *Engine) ExpiredIndexes() []*meta2.IndexIdentifier {
 
 	var res []*meta2.IndexIdentifier
 	for db := range e.DBPartitions {
-		for pt := range e.DBPartitions[db] {
-			for idxId := range e.DBPartitions[db][pt].indexBuilder {
-				if e.DBPartitions[db][pt].indexBuilder[idxId].Expired() {
-					res = append(res, e.DBPartitions[db][pt].indexBuilder[idxId].Ident())
+		for _, pti := range e.DBPartitions[db] {
+			pti.mu.RLock()
+			for idxId := range e.DBPartitions[db][pti.id].indexBuilder {
+				if e.DBPartitions[db][pti.id].indexBuilder[idxId].Expired() {
+					res = append(res, e.DBPartitions[db][pti.id].indexBuilder[idxId].Ident())
 				}
 			}
+			pti.mu.RUnlock()
 		}
 	}
 	return res
@@ -369,10 +388,14 @@ func (e *Engine) DeleteShard(db string, ptId uint32, shardID uint64) error {
 	defer e.unrefDBPT(db, ptId)
 
 	dbPtInfo.mu.Lock()
+	if !dbPtInfo.bgrEnabled {
+		dbPtInfo.mu.Unlock()
+		return errno.NewError(errno.PtIsAlreadyMigrating)
+	}
 	sh, ok := dbPtInfo.shards[shardID]
 	if !ok {
 		dbPtInfo.mu.Unlock()
-		return ErrShardNotFound
+		return errno.NewError(errno.ShardNotFound, shardID)
 	}
 
 	if _, ok := dbPtInfo.pendingShardDeletes[shardID]; ok {
@@ -396,7 +419,7 @@ func (e *Engine) DeleteShard(db string, ptId uint32, shardID uint64) error {
 		return err
 	}
 
-	lock := fileops.FileLockOption("")
+	lock := fileops.FileLockOption(*dbPtInfo.lockPath)
 	// remove shard's wal&data on-disk, index data will not delete right now
 	if err := fileops.RemoveAll(sh.DataPath(), lock); err != nil {
 		atomic.AddInt64(&stat.EngineStat.DelShardErr, 1)
@@ -437,7 +460,7 @@ func (e *Engine) DeleteIndex(db string, ptId uint32, indexID uint64) error {
 	iBuild, ok := dbPtInfo.indexBuilder[indexID]
 	if !ok {
 		dbPtInfo.mu.Unlock()
-		return ErrIndexNotFound
+		return errno.NewError(errno.IndexNotFound, db, ptId, indexID)
 	}
 
 	if _, ok := dbPtInfo.pendingIndexDeletes[indexID]; ok {
@@ -460,7 +483,7 @@ func (e *Engine) DeleteIndex(db string, ptId uint32, indexID uint64) error {
 		return err
 	}
 
-	lock := fileops.FileLockOption("")
+	lock := fileops.FileLockOption(*dbPtInfo.lockPath)
 	if err := fileops.RemoveAll(iBuild.Path(), lock); err != nil {
 		atomic.AddInt64(&stat.EngineStat.DelIndexErr, 1)
 		return err
@@ -482,7 +505,7 @@ func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*met
 				if !expired {
 					continue
 				}
-				if tier == meta2.Hot {
+				if tier == util.Hot {
 					shardsToWarm = append(shardsToWarm, shard.Ident())
 				} else {
 					shardsToCold = append(shardsToCold, shard.Ident())
@@ -509,7 +532,7 @@ func (e *Engine) ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) e
 	sh, ok := dbPtInfo.shards[shardID]
 	if !ok {
 		dbPtInfo.mu.Unlock()
-		return ErrShardNotFound
+		return errno.NewError(errno.ShardNotFound, shardID)
 	}
 
 	if _, ok := dbPtInfo.pendingShardTiering[shardID]; ok {
@@ -544,15 +567,12 @@ func (e *Engine) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []in
 	defer e.unrefDBPT(db, ptId)
 
 	dbPTInfo := e.DBPartitions[db][ptId]
-	dbPTInfo.mu.RLock()
-	sh, ok := dbPTInfo.shards[shardID]
-	if !ok {
-		dbPTInfo.mu.RUnlock()
-		e.mu.RUnlock()
-		return ErrShardNotFound
-	}
-	dbPTInfo.mu.RUnlock()
 	e.mu.RUnlock()
+
+	sh := dbPTInfo.Shard(shardID)
+	if sh == nil {
+		return errno.NewError(errno.ShardNotFound, shardID)
+	}
 
 	return sh.WriteRows(rows, binaryRows)
 }
@@ -581,13 +601,13 @@ func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRan
 	defer dbPTInfo.mu.Unlock()
 	_, ok := dbPTInfo.shards[shardID]
 	if !ok {
-		sh, err := dbPTInfo.NewShard(rp, shardID, timeRangeInfo)
+		sh, err := dbPTInfo.NewShard(rp, shardID, timeRangeInfo, nil)
 		if err != nil {
 			return err
 		}
 		dbPTInfo.shards[shardID] = sh
-		existShardID, ok := dbPTInfo.newestRpShard[rp]
-		if !ok || existShardID < shardID {
+		newestShardID, ok := dbPTInfo.newestRpShard[rp]
+		if !ok || newestShardID < shardID {
 			dbPTInfo.newestRpShard[rp] = shardID
 		}
 	}
@@ -598,14 +618,14 @@ func (e *Engine) GetShardSplitPoints(db string, ptId uint32, shardID uint64, idx
 	e.mu.RLock()
 	if !e.isDBPtExist(db, ptId) {
 		e.mu.RUnlock()
-		return nil, ErrPTNotFound
+		return nil, errno.NewError(errno.PtNotFound)
 	}
 	dbPtInfo := e.DBPartitions[db][ptId]
 	e.mu.RUnlock()
 
 	shard := dbPtInfo.Shard(shardID)
 	if shard == nil {
-		return nil, ErrShardNotFound
+		return nil, errno.NewError(errno.ShardNotFound, shardID)
 	}
 
 	return shard.GetSplitPoints(idxes)
@@ -645,9 +665,11 @@ func (e *Engine) dropDBPTInfo(database string, ptID uint32) {
 func (e *Engine) CreateDBPT(db string, pt uint32) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	ptPath := path.Join(e.dataPath, DataDirectory, db, strconv.Itoa(int(pt)))
-	walPath := path.Join(e.walPath, WalDirectory, db, strconv.Itoa(int(pt)))
+	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(pt)))
+	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(pt)))
+	lockPath := path.Join(ptPath, "LOCK")
 	dbPTInfo := NewDBPTInfo(db, pt, ptPath, walPath, e.loadCtx)
+	dbPTInfo.lockPath = &lockPath
 	e.addDBPTInfo(dbPTInfo)
 	dbPTInfo.SetOption(e.engOpt)
 	dbPTInfo.enableReportShardLoad()
@@ -661,36 +683,6 @@ func (e *Engine) createDBPTIfNotExist(db string, pt uint32) {
 	}
 	e.mu.RUnlock()
 	e.CreateDBPT(db, pt)
-}
-
-func (e *Engine) loadDbRp(db string, pt uint32, rp string, durationInfos map[uint64]*meta2.ShardDurationInfo) error {
-	rpPath := path.Join(e.dataPath, DataDirectory, db, strconv.Itoa(int(pt)), rp)
-	_, err := fileops.Stat(rpPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		log.Warn("fail to get rpPath stat", zap.String("rpPath", rpPath), zap.Error(err))
-		return err
-	}
-	e.createDBPTIfNotExist(db, pt)
-	e.mu.RLock()
-	dbPTInfo := e.DBPartitions[db][pt]
-	e.mu.RUnlock()
-
-	err = dbPTInfo.OpenIndexes(rp)
-	if err != nil {
-		e.log.Error("open index failed", zap.String("db", db), zap.Uint32("pt", pt), zap.String("rp", rp), zap.Error(err))
-		return err
-	}
-
-	err = dbPTInfo.OpenShards(rp, durationInfos)
-	if err != nil {
-		e.log.Error("open shards failed", zap.String("db", db), zap.Uint32("pt", pt), zap.String("rp", rp), zap.Error(err))
-		return err
-	}
-
-	return nil
 }
 
 func (e *Engine) startDrop(name string, droppingMap map[string]string) error {
@@ -715,89 +707,42 @@ func (e *Engine) endDrop(name string, droppingMap map[string]string) {
 	e.dropMu.Unlock()
 }
 
-func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
-	traceId := tsi.GenerateUUID()
-	begin := time.Now()
-	e.log.Info("drop database begin", zap.String("db", db), zap.Uint64("trace_id", traceId))
-	defer func() {
-		e.log.Info("drop database finish",
-			zap.Error(err),
-			zap.String("time use", time.Since(begin).String()),
-			zap.String("db", db), zap.Uint64("trace_id", traceId))
-	}()
-
-	if err := e.startDrop(db, e.droppingDB); err != nil {
-		return err
-	}
-	defer e.endDrop(db, e.droppingDB)
-
-	atomic.AddInt64(&stat.EngineStat.DropDatabaseCount, 1)
-	defer func(tm time.Time) {
-		d := time.Since(tm)
-		atomic.AddInt64(&stat.EngineStat.DropDatabaseDurations, d.Nanoseconds())
-		stat.UpdateEngineStatS()
-	}(begin)
-
+func (e *Engine) getPartition(db string, ptID uint32, isRef bool) (*DBPTInfo, error) {
 	e.mu.RLock()
-	dbInfo, ok := e.DBPartitions[db]
-
-	if !ok {
-		e.mu.RUnlock()
-		dataPath := path.Join(e.dataPath, DataDirectory, db, strconv.Itoa(int(ptId)))
-		walPath := path.Join(e.walPath, WalDirectory, db, strconv.Itoa(int(ptId)))
-		return deleteDataAndWalPath(dataPath, walPath)
+	defer e.mu.RUnlock()
+	dbPT, dbExist := e.DBPartitions[db]
+	if !dbExist {
+		return nil, errno.NewError(errno.DatabaseNotFound, db)
 	}
-
-	for ptId, dbPTInfo := range dbInfo {
-		done := make(chan bool, 1)
-		if ok := dbPTInfo.markOffload(done); !ok {
-			select {
-			case <-done:
-			case <-time.After(15 * time.Second):
-				log.Warn("offload dbPt timeout", zap.String("db", db), zap.Uint32("pt id", ptId))
-				e.unMarkOffloadInLock(db)
-				e.mu.RUnlock()
-				atomic.AddInt64(&stat.EngineStat.DropDatabaseErrs, 1)
-				return meta2.ErrConflictWithIo
-			}
-		}
-		close(dbPTInfo.unload)
-		dbPTInfo.wg.Wait()
+	pt, ptExist := dbPT[ptID]
+	if !ptExist {
+		return nil, errno.NewError(errno.PtNotFound)
 	}
-
-	err = e.deleteShardsAndIndexes(db)
-	if err != nil {
-		e.unMarkOffloadInLock(db)
-		e.mu.RUnlock()
-		atomic.AddInt64(&stat.EngineStat.DropDatabaseErrs, 1)
-		return err
+	if !isRef {
+		return pt, nil
 	}
-	for ptId := range dbInfo {
-		if err = deleteDataAndWalPath(dbInfo[ptId].path, dbInfo[ptId].walPath); err != nil {
-			e.unMarkOffloadInLock(db)
-			e.mu.RUnlock()
-			atomic.AddInt64(&stat.EngineStat.DropDatabaseErrs, 1)
-			return err
-		}
+	if suc := pt.ref(); suc {
+		return pt, nil
 	}
-	e.mu.RUnlock()
-	e.dropDBPt(db)
-	return nil
+	return nil, errno.NewError(errno.DBPTClosed)
 }
 
-func deleteDataAndWalPath(dataPath, walPath string) error {
-	if err := deleteDir(dataPath); err != nil && !os.IsNotExist(err) {
+func deleteDataAndWalPath(dataPath, walPath string, lockPath *string) error {
+	logger.GetLogger().Info("deleteDataAndWalPath",
+		zap.String("data", dataPath), zap.String("wal", walPath))
+
+	if err := deleteDir(dataPath, lockPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
-	if err := deleteDir(walPath); err != nil && !os.IsNotExist(err) {
+	if err := deleteDir(walPath, lockPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
 }
 
-func deleteDir(path string) error {
-	lock := fileops.FileLockOption("")
+func deleteDir(path string, lockPath *string) error {
+	lock := fileops.FileLockOption(*lockPath)
 	if err := fileops.RemoveAll(path, lock); err != nil {
 		return err
 	}
@@ -805,32 +750,21 @@ func deleteDir(path string) error {
 	return nil
 }
 
-func (e *Engine) unMarkOffloadInLock(db string) {
-	for _, dbPTInfo := range e.DBPartitions[db] {
-		if dbPTInfo.offloading {
-			dbPTInfo.unMarkOffload()
+func (e *Engine) deleteShardsAndIndexes(dbPTInfo *DBPTInfo) error {
+	dbPTInfo.mu.Lock()
+	defer dbPTInfo.mu.Unlock()
+
+	for id, shard := range dbPTInfo.shards {
+		if err := shard.Close(); err != nil {
+			return err
 		}
+		delete(dbPTInfo.shards, id)
 	}
-}
-
-func (e *Engine) deleteShardsAndIndexes(db string) error {
-	for _, dbPTInfo := range e.DBPartitions[db] {
-		dbPTInfo.mu.Lock()
-		for id, shard := range dbPTInfo.shards {
-			if err := shard.Close(); err != nil {
-				dbPTInfo.mu.Unlock()
-				return err
-			}
-			delete(dbPTInfo.shards, id)
+	for id, iBuild := range dbPTInfo.indexBuilder {
+		if err := iBuild.Close(); err != nil {
+			return err
 		}
-
-		for id, iBuild := range dbPTInfo.indexBuilder {
-			if err := iBuild.Close(); err != nil {
-				return err
-			}
-			delete(dbPTInfo.indexBuilder, id)
-		}
-		dbPTInfo.mu.Unlock()
+		delete(dbPTInfo.indexBuilder, id)
 	}
 	return nil
 }
@@ -843,101 +777,30 @@ func (e *Engine) dropDBPt(db string) {
 	}
 }
 
-func (e *Engine) DropRetentionPolicy(db string, rp string, ptId uint32) error {
-	rpName := db + "." + rp
-	if err := e.startDrop(rpName, e.droppingRP); err != nil {
-		return err
-	}
-	defer e.endDrop(rpName, e.droppingRP)
-
-	atomic.AddInt64(&stat.EngineStat.DropRPCount, 1)
-	start := time.Now()
-	e.log.Info("start drop retention policy...", zap.String("db", db), zap.String("rp", rp))
-	defer func(st time.Time) {
-		d := time.Since(st)
-		atomic.AddInt64(&stat.EngineStat.DropRPDurations, d.Nanoseconds())
-		stat.UpdateEngineStatS()
-		e.log.Info("drop retention policy done",
-			zap.String("db", db), zap.String("rp", rp), zap.Duration("duration", d))
-	}(start)
-
-	e.mu.RLock()
-	ptInfo := e.DBPartitions[db]
-	if ptInfo == nil {
-		e.mu.RUnlock()
-		dataPath := path.Join(e.dataPath, DataDirectory, db, strconv.Itoa(int(ptId)), rp)
-		walPath := path.Join(e.walPath, WalDirectory, db, strconv.Itoa(int(ptId)), rp)
-		if err := deleteDataAndWalPath(dataPath, walPath); err != nil {
-			atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
-			return err
-		}
-		return nil
-	}
-
-	ptIds, err := e.refDBPTsNoLock(ptInfo, db)
-	if err != nil {
-		atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
-		e.mu.RUnlock()
-		return err
-	}
-	e.mu.RUnlock()
-	defer e.unrefDBPTs(db, ptIds)
-
-	if err := e.walkShards(db, func(dbPTInfo *DBPTInfo, shardID uint64, sh Shard) error {
-		if sh.RPName() != rp {
-			return nil
-		}
-
-		iBuild := sh.GetIndexBuild()
-		indexID := iBuild.GetIndexID()
-		_, ok := dbPTInfo.indexBuilder[indexID]
-		if ok {
-			if err := iBuild.Close(); err != nil {
-				return err
-			}
-		}
-
-		if err := sh.Close(); err != nil {
-			return err
-		}
-
-		dbPTInfo.mu.Lock()
-		delete(dbPTInfo.indexBuilder, indexID)
-		delete(dbPTInfo.shards, shardID)
-		delete(dbPTInfo.newestRpShard, rp)
-		dbPTInfo.mu.Unlock()
-		return nil
-	}); err != nil {
-		atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
-		return err
-	}
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	for pt := range e.DBPartitions[db] {
-		if err = deleteDataAndWalPath(filepath.Join(e.DBPartitions[db][pt].path, rp), filepath.Join(e.DBPartitions[db][pt].walPath, rp)); err != nil {
-			atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
-			return err
-		}
-	}
-	return nil
-}
-
-func (e *Engine) walkShards(db string, fn func(dbPTInfo *DBPTInfo, shardID uint64, sh Shard) error) error {
+func (e *Engine) deleteIndexes(db string, pt uint32, rp string, fn func(dbPTInfo *DBPTInfo, shardID uint64, sh Shard) error) error {
 	resC := make(chan error)
+	indexes := make(map[uint64]struct{})
+
+	dbPTInfo := e.getDBPTInfo(db, pt)
 	var n int
-	for _, dbPTInfo := range e.DBPartitions[db] {
-		for shardId := range dbPTInfo.shards {
-			n++
-			go func(info *DBPTInfo, id uint64, sh Shard) {
-				err := fn(info, id, sh)
-				if err != nil {
-					resC <- fmt.Errorf("shard %d: %s", id, err)
-					return
-				}
-				resC <- err
-			}(dbPTInfo, shardId, dbPTInfo.shards[shardId])
+	for shardId := range dbPTInfo.shards {
+		if dbPTInfo.shards[shardId].RPName() != rp {
+			continue
 		}
+		indexID := dbPTInfo.shards[shardId].GetIndexBuild().GetIndexID()
+		if _, ok := dbPTInfo.indexBuilder[indexID]; ok {
+			indexes[indexID] = struct{}{}
+		}
+		n++
+
+		go func(info *DBPTInfo, id uint64, sh Shard) {
+			err := fn(info, id, sh)
+			if err != nil {
+				resC <- fmt.Errorf("shard %d: %s", id, err)
+				return
+			}
+			resC <- err
+		}(dbPTInfo, shardId, dbPTInfo.shards[shardId])
 	}
 
 	var err error
@@ -948,115 +811,58 @@ func (e *Engine) walkShards(db string, fn func(dbPTInfo *DBPTInfo, shardID uint6
 		}
 	}
 	close(resC)
+
+	if err != nil {
+		return err
+	}
+
+	for index := range indexes {
+		if e := e.deleteOneIndex(dbPTInfo, index); e != nil {
+			err = e
+		}
+	}
 	return err
 }
 
-func (e *Engine) DropMeasurement(db string, rp string, name string, shardIds []uint64) error {
-	e.log.Info("start delete measurement...", zap.String("db", db), zap.String("name", name))
-	start := time.Now()
-	atomic.AddInt64(&stat.EngineStat.DropMstCount, 1)
-	defer func(tm time.Time) {
-		d := time.Since(tm)
-		atomic.AddInt64(&stat.EngineStat.DropMstDurations, d.Nanoseconds())
-		stat.UpdateEngineStatS()
-		e.log.Info("delete measurement done", zap.String("db", db), zap.String("name", name),
-			zap.Duration("time used", d))
-	}(start)
-
-	mstName := db + "." + rp + "." + name
-	if err := e.startDrop(mstName, e.droppingMst); err != nil {
-		return err
-	}
-	defer e.endDrop(mstName, e.droppingMst)
-
-	e.mu.RLock()
-	pts, ok := e.DBPartitions[db]
-	if !ok || len(pts) == 0 {
-		e.mu.RUnlock()
+func (e *Engine) deleteOneIndex(dbPTInfo *DBPTInfo, indexId uint64) error {
+	dbPTInfo.mu.Lock()
+	iBuilder, ok := dbPTInfo.indexBuilder[indexId]
+	if !ok {
+		dbPTInfo.mu.Unlock()
 		return nil
 	}
+	dbPTInfo.pendingIndexDeletes[indexId] = struct{}{}
+	dbPTInfo.mu.Unlock()
 
-	ptIds, err := e.refDBPTsNoLock(pts, db)
-	if err != nil {
-		atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
-		e.mu.RUnlock()
-		return err
+	err := iBuilder.Close()
+	dbPTInfo.mu.Lock()
+	defer dbPTInfo.mu.Unlock()
+	if err == nil {
+		delete(dbPTInfo.indexBuilder, indexId)
 	}
-	e.mu.RUnlock()
-	defer e.unrefDBPTs(db, ptIds)
-
-	for ptID, pt := range pts {
-		pt.mu.RLock()
-		// Drop measurement from index.
-		for id, iBuild := range pt.indexBuilder {
-			if err := iBuild.DropMeasurement([]byte(name)); err != nil {
-				pt.mu.RUnlock()
-				e.log.Error("drop measurement fail", zap.Uint32("ptid", ptID),
-					zap.Uint64("indexId", id), zap.Error(err))
-				atomic.AddInt64(&stat.EngineStat.DropMstErrs, 1)
-				return err
-			}
-		}
-
-		// drop measurement from shard
-		for _, id := range shardIds {
-			sh, ok := pt.shards[id]
-			if !ok {
-				continue
-			}
-			if err := sh.DropMeasurement(context.TODO(), name); err != nil {
-				e.log.Error("drop measurement fail", zap.Uint32("ptid", ptID),
-					zap.Uint64("shard", id), zap.Error(err))
-				pt.mu.RUnlock()
-				atomic.AddInt64(&stat.EngineStat.DropMstErrs, 1)
-				return err
-			}
-		}
-		pt.mu.RUnlock()
-	}
-
-	return nil
-}
-
-func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) ([]meta2.MeasurementCardinalityInfo, error) {
-	e.mu.RLock()
-	if err := e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
-		e.mu.RUnlock()
-		return nil, err
-	}
-	defer e.unrefDBPTs(db, ptIDs)
-	pts, ok := e.DBPartitions[db]
-	e.mu.RUnlock()
-	if !ok {
-		return nil, nil
-	}
-
-	var measurementCardinalityInfos []meta2.MeasurementCardinalityInfo
-	var err error
-	for i := range ptIDs {
-		pt, ok := pts[ptIDs[i]]
-		if !ok {
-			continue
-		}
-		pt.mu.RLock()
-		if condition != nil {
-			measurementCardinalityInfos, err = pt.seriesCardinalityWithCondition(measurements, condition, measurementCardinalityInfos)
-		} else {
-			measurementCardinalityInfos, err = pt.seriesCardinality(measurements, measurementCardinalityInfos)
-		}
-
-		if err != nil {
-			pt.mu.RUnlock()
-			return nil, err
-		}
-		pt.mu.RUnlock()
-	}
-	return measurementCardinalityInfos, nil
+	delete(dbPTInfo.pendingIndexDeletes, indexId)
+	return err
 }
 
 func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) (map[string]uint64, error) {
+	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition)
+	if err != nil {
+		return nil, err
+	}
+
+	// Count all measurement series cardinality
+	result := make(map[string]uint64, len(measurements))
+	for _, nameBytesWithVer := range measurements {
+		name := influx.GetOriginMstName(record.Bytes2str(nameBytesWithVer))
+		result[name] = uint64(len(keysMap[name]))
+	}
+	return result, nil
+}
+
+func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) (map[string]map[string]struct{}, error) {
 	e.mu.RLock()
-	if err := e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
+	var err error
+	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
 		e.mu.RUnlock()
 		return nil, err
 	}
@@ -1068,8 +874,9 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 	}
 
 	keysMap := make(map[string]map[string]struct{}, 64)
-	for _, name := range measurements {
-		keysMap[string(name)] = make(map[string]struct{}, 64)
+	for _, nameWithVer := range measurements {
+		name := influx.GetOriginMstName(record.Bytes2str(nameWithVer))
+		keysMap[name] = make(map[string]struct{}, 64)
 	}
 	series := make([][]byte, 1)
 	seriesLen := 0
@@ -1081,7 +888,6 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 			}
 		}
 	}()
-	var err error
 	for _, ptID := range ptIDs {
 		pt, ok := pts[ptID]
 		if !ok {
@@ -1089,14 +895,15 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 		}
 		pt.mu.RLock()
 		for _, iBuild := range pt.indexBuilder {
-			for _, name := range measurements {
+			for _, nameWithVer := range measurements {
+				mstName := influx.GetOriginMstName(record.Bytes2str(nameWithVer))
 				stime := time.Now()
 				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
-				series, err = idx.SearchSeriesKeys(series[:0], name, condition)
+				series, err = idx.SearchSeriesKeys(series[:0], nameWithVer, condition)
 				if len(series) > seriesLen {
 					seriesLen = len(series)
 				}
-				log.Info("search series keys", zap.String("name", string(name)),
+				log.Info("search series keys", zap.ByteString("nameWithVer", nameWithVer),
 					zap.Duration("cost", time.Since(stime)))
 				if err != nil {
 					pt.mu.RUnlock()
@@ -1104,201 +911,16 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 				}
 				stime = time.Now()
 				for _, key := range series {
-					keysMap[string(name)][string(key)] = struct{}{}
+					key = bytes.Replace(key, nameWithVer, []byte(mstName), 1)
+					keysMap[mstName][string(key)] = struct{}{}
 				}
-				log.Info("remove dupicate key", zap.String("name", string(name)),
+				log.Info("remove dupicate key", zap.String("nameWithVer", string(nameWithVer)),
 					zap.Duration("cost", time.Since(stime)))
 			}
 		}
 		pt.mu.RUnlock()
 	}
-
-	// Count all measurement series cardinality
-	result := make(map[string]uint64, len(measurements))
-	for _, name := range measurements {
-		result[string(name)] = uint64(len(keysMap[string(name)]))
-	}
-	return result, nil
-}
-
-func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) ([]string, error) {
-	e.mu.RLock()
-	if err := e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
-		e.mu.RUnlock()
-		return nil, err
-	}
-	defer e.unrefDBPTs(db, ptIDs)
-	pts, ok := e.DBPartitions[db]
-	e.mu.RUnlock()
-	if !ok {
-		return nil, nil
-	}
-
-	keyMap := make(map[string]struct{})
-	series := make([][]byte, 1)
-	seriesLen := 0
-	defer func() {
-		series = series[:seriesLen]
-		for i := range series {
-			if len(series[i]) > 0 {
-				influx.PutBytesBuffer(series[i])
-			}
-		}
-	}()
-	var err error
-	for _, ptID := range ptIDs {
-		pt, ok := pts[ptID]
-		if !ok {
-			continue
-		}
-		pt.mu.RLock()
-		for _, iBuild := range pt.indexBuilder {
-			for _, name := range measurements {
-				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
-				series, err = idx.SearchSeriesKeys(series[:0], name, condition)
-				if len(series) > seriesLen {
-					seriesLen = len(series)
-				}
-				if err != nil {
-					pt.mu.RUnlock()
-					return nil, err
-				}
-				for _, key := range series {
-					keyMap[string(key)] = struct{}{}
-				}
-			}
-		}
-		pt.mu.RUnlock()
-	}
-
-	result := make([]string, 0, len(keyMap))
-	for key := range keyMap {
-		result = append(result, key)
-	}
-	sort.Strings(result)
-
-	return result, nil
-}
-
-func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (map[string]uint64, error) {
-	e.mu.RLock()
-	if err := e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
-		e.mu.RUnlock()
-		return nil, err
-	}
-	defer e.unrefDBPTs(db, ptIDs)
-	pts, ok := e.DBPartitions[db]
-	e.mu.RUnlock()
-	if !ok {
-		return nil, nil
-	}
-	tvMap := make(map[string]map[string]struct{}, len(tagKeys))
-	for name := range tagKeys {
-		tvMap[name] = make(map[string]struct{}, 64)
-	}
-	for _, ptID := range ptIDs {
-		pt, ok := pts[ptID]
-		if !ok {
-			continue
-		}
-		pt.mu.RLock()
-		for _, iBuild := range pt.indexBuilder {
-			for name, tks := range tagKeys {
-				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
-				values, err := idx.SearchTagValues([]byte(name), tks, condition)
-				if err != nil {
-					pt.mu.RUnlock()
-					return nil, err
-				}
-				if values == nil {
-					// Measurement name not found
-					continue
-				}
-				for _, vs := range values {
-					for _, v := range vs {
-						tvMap[name][v] = struct{}{}
-					}
-				}
-			}
-		}
-		pt.mu.RUnlock()
-	}
-
-	result := make(map[string]uint64, len(tagKeys))
-	for name := range tagKeys {
-		result[name] = uint64(len(tvMap[name]))
-	}
-	return result, nil
-}
-
-func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (netstorage.TablesTagSets, error) {
-	e.mu.RLock()
-	if err := e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
-		e.mu.RUnlock()
-		return nil, err
-	}
-	defer e.unrefDBPTs(db, ptIDs)
-	pts, ok := e.DBPartitions[db]
-	e.mu.RUnlock()
-	if !ok {
-		return nil, nil
-	}
-
-	tagValuess := make(netstorage.TablesTagSets, 0)
-	results := make(map[string][][]string, len(tagKeys))
-	for _, ptID := range ptIDs {
-		pt, ok := pts[ptID]
-		if !ok {
-			continue
-		}
-		pt.mu.RLock()
-		for _, iBuild := range pt.indexBuilder {
-			for name, tks := range tagKeys {
-				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
-				values, err := idx.SearchTagValues([]byte(name), tks, condition)
-				if err != nil {
-					pt.mu.RUnlock()
-					return nil, err
-				}
-				if values == nil {
-					// Measurement name not found
-					continue
-				}
-
-				appendValuesToMap(results, name, values)
-			}
-		}
-		pt.mu.RUnlock()
-	}
-
-	// transform to tagvaluess
-	for name, tvs := range results {
-		tv := netstorage.TableTagSets{
-			Name:   name,
-			Values: make(netstorage.TagSets, 0, len(tvs[0])),
-		}
-		for i, tk := range tagKeys[name] {
-			for _, v := range tvs[i] {
-				tv.Values = append(tv.Values, netstorage.TagSet{Key: record.Bytes2str(tk), Value: v})
-			}
-		}
-		tagValuess = append(tagValuess, tv)
-	}
-
-	return tagValuess, nil
-}
-
-func appendValuesToMap(results map[string][][]string, name string, values [][]string) {
-	if _, ok := results[name]; !ok {
-		results[name] = make([][]string, len(values))
-	}
-	for i := 0; i < len(values); i++ {
-		results[name][i] = strings.UnionSlice(append(results[name][i], values[i]...))
-	}
-}
-
-func (e *Engine) DropSeries(database string, sources []influxql.Source, ptId []uint32, condition influxql.Expr) (int, error) {
-	panic("implement me")
+	return keysMap, nil
 }
 
 func (e *Engine) DbPTRef(db string, ptId uint32) error {
@@ -1315,19 +937,28 @@ func (e *Engine) DbPTUnref(db string, ptId uint32) {
 	e.mu.RUnlock()
 }
 
+func (e *Engine) GetShard(db string, ptId uint32, shardID uint64) Shard {
+	pt := e.getDBPTInfo(db, ptId)
+	if pt == nil {
+		return nil
+	}
+
+	return pt.Shard(shardID)
+}
+
+func (e *Engine) getDBPTInfo(db string, ptId uint32) *DBPTInfo {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	return e.DBPartitions[db][ptId]
+}
+
 func (e *Engine) CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64,
 	sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
-	e.mu.RLock()
-	dbPTInfo := e.DBPartitions[db][ptId]
-	dbPTInfo.mu.RLock()
-	sh, ok := dbPTInfo.shards[shardID]
-	if !ok {
-		dbPTInfo.mu.RUnlock()
-		e.mu.RUnlock()
+	sh := e.GetShard(db, ptId, shardID)
+	if sh == nil {
 		return nil, nil
 	}
-	dbPTInfo.mu.RUnlock()
-	e.mu.RUnlock()
 
 	// FIXME:context cancel func
 	return sh.CreateLogicalPlan(ctx, sources, schema)
@@ -1337,11 +968,15 @@ func (e *Engine) LogicalPlanCost(db string, ptId uint32, sources influxql.Source
 	panic("implement me")
 }
 
-func (e *Engine) checkAndAddRefPTSNoLock(database string, ptIDs []uint32) error {
+func (e *Engine) checkAndAddRefPTSNoLock(database string, ptIDs []uint32) ([]uint32, error) {
 	delRefPtId := make([]uint32, 0, len(ptIDs))
 	var err error
 	for _, ptId := range ptIDs {
-		if err = e.checkAndAddRefPTNoLock(database, ptId); err != nil {
+		if err1 := e.checkAndAddRefPTNoLock(database, ptId); err1 != nil {
+			if !config.GetHaEnable() && errno.Equal(err1, errno.PtNotFound) {
+				continue
+			}
+			err = err1
 			break
 		} else {
 			delRefPtId = append(delRefPtId, ptId)
@@ -1351,7 +986,7 @@ func (e *Engine) checkAndAddRefPTSNoLock(database string, ptIDs []uint32) error 
 	if err != nil {
 		e.unrefDBPTSNoLock(database, delRefPtId)
 	}
-	return err
+	return delRefPtId, err
 }
 
 func (e *Engine) checkAndAddRefPTNoLock(database string, ptID uint32) error {
@@ -1360,13 +995,13 @@ func (e *Engine) checkAndAddRefPTNoLock(database string, ptID uint32) error {
 			if suc := e.DBPartitions[database][ptID].ref(); suc {
 				return nil
 			} else {
-				return meta2.ErrDBPTClose
+				return errno.NewError(errno.DBPTClosed)
 			}
 		} else {
-			return ErrPTNotFound
+			return errno.NewError(errno.PtNotFound)
 		}
 	} else {
-		return ErrPTNotFound
+		return errno.NewError(errno.PtNotFound)
 	}
 }
 
@@ -1393,8 +1028,8 @@ func (e *Engine) refDBPTsNoLock(ptInfo map[uint32]*DBPTInfo, db string) ([]uint3
 		ptIds[i] = id
 		i++
 	}
-
-	if err := e.checkAndAddRefPTSNoLock(db, ptIds); err != nil {
+	var err error
+	if ptIds, err = e.checkAndAddRefPTSNoLock(db, ptIds); err != nil {
 		return nil, err
 	}
 

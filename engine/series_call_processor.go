@@ -52,8 +52,6 @@ func newProcessor(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOpt
 				coProcessor.AppendRoutine(newCountRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))
 			case "sum":
 				coProcessor.AppendRoutine(newSumRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))
-			case "mean":
-				coProcessor.AppendRoutine(newMeanRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))
 			case "first":
 				coProcessor.AppendRoutine(newFirstRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))
 				initColMata = true
@@ -139,31 +137,6 @@ func newSumRoutineImpl(inSchema, outSchema record.Schemas, opt hybridqp.ExprOpti
 		)
 	default:
 		panic(fmt.Sprintf("unsupported sum iterator type: %d", dataType))
-	}
-}
-
-func newMeanRoutineImpl(inSchema, outSchema record.Schemas, opt hybridqp.ExprOptions, auxProcessors []*auxProcessor) Routine {
-	inOrdinal := inSchema.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
-	outOrdinal := outSchema.FieldIndex(opt.Ref.Val)
-	if inOrdinal < 0 || outOrdinal < 0 {
-		panic("input and output schemas are not aligned for mean iterator")
-	}
-	dataType := inSchema.Field(inOrdinal).Type
-	switch dataType {
-	case influx.Field_Type_Int:
-		return NewRoutineImpl(
-			newIntegerColFloatReducer(integerMeanReduce, integerMeanMerge, auxProcessors),
-			inOrdinal,
-			outOrdinal,
-		)
-	case influx.Field_Type_Float:
-		return NewRoutineImpl(
-			newFloatColFloatReducer(floatMeanReduce, floatMeanMerge, auxProcessors),
-			inOrdinal,
-			outOrdinal,
-		)
-	default:
-		panic(fmt.Sprintf("unsupported mean iterator type: %d", dataType))
 	}
 }
 

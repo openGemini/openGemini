@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,16 +31,16 @@ func TestMerge(t *testing.T) {
 	tags := map[string]string{"hostname": "127.0.0.1:8866", "mst": "merge"}
 	stat.Init(tags)
 	stat.AddCurrentOutOfOrderFile(2)
-	stat.AddRecordPoolGetTotal(2)
-	stat.AddRecordPoolHitTotal(2)
 	stat.AddErrors(2)
+	stat.AddMergeSelfTotal(1)
+	stat.AddSkipTotal(1)
 	stat.SetCurrentOutOfOrderFile(3)
 	stat.AddActive(10)
 
 	fields := map[string]interface{}{
 		"CurrentOutOfOrderFile": int64(3),
-		"RecordPoolGetTotal":    int64(2),
-		"RecordPoolHitTotal":    int64(2),
+		"MergeSelfTotal":        int64(1),
+		"SkipTotal":             int64(1),
 		"Errors":                int64(2),
 		"Active":                int64(10),
 	}
@@ -68,12 +69,12 @@ func TestMergePush(t *testing.T) {
 	stat.Init(tags)
 
 	item := statistics.NewMergeStatItem(mst, shID)
-	item.StatMergedFile(1024)
-	item.StatMergedFile(1025)
-	item.StatOrderFile(88)
-	item.StatOrderFile(11)
-	item.StatOutOfOrderFile(1100)
-	item.StatOutOfOrderFile(2200)
+	item.StatMergedFile(1024, 1)
+	item.StatMergedFile(1025, 2)
+	item.StatOrderFile(88, 1)
+	item.StatOrderFile(11, 2)
+	item.StatOutOfOrderFile(1100, 1)
+	item.StatOutOfOrderFile(2200, 2)
 
 	time.Sleep(time.Millisecond)
 	item.Push()
@@ -83,16 +84,43 @@ func TestMergePush(t *testing.T) {
 	}
 
 	fields := map[string]interface{}{
-		"OutOfOrderFileCount": int64(2),
-		"OutOfOrderFileSize":  int64(3300),
-		"OrderFileCount":      int64(2),
-		"OrderFileSize":       int64(99),
-		"Duration":            item.Duration(),
-		"MergedFileCount":     int64(2),
-		"MergedFileSize":      int64(2049),
+		"OutOfOrderFileCount":  int64(3),
+		"OutOfOrderFileSize":   int64(3300),
+		"OrderFileCount":       int64(3),
+		"OrderFileSize":        int64(99),
+		"Duration":             item.Duration(),
+		"MergedFileCount":      int64(3),
+		"MergedFileSize":       int64(2049),
+		"OrderSeriesCount":     int64(0),
+		"IntersectSeriesCount": int64(0),
 	}
 
 	compareRowIndex = 1
 	assert.NoError(t, compareBuffer("merge", tags, fields, buf))
 	compareRowIndex = 0
+}
+
+func TestOpsMerge(t *testing.T) {
+	stat := &statistics.MergeStatistics{}
+	tags := map[string]string{"hostname": "127.0.0.1:8866", "mst": "merge"}
+	stat.Init(tags)
+	statistics.NewTimestamp().Init(time.Second)
+	stat.SetCurrentOutOfOrderFile(int64(2))
+	stats := stat.CollectOps()
+
+	data := map[string]interface{}{
+		"CurrentOutOfOrderFile": int64(2),
+		"MergeSelfTotal":        int64(0),
+		"SkipTotal":             int64(0),
+		"Errors":                int64(0),
+		"Active":                int64(0),
+	}
+	expectResult := []opsStat.OpsStatistic{{
+		Name:   "merge",
+		Tags:   tags,
+		Values: data,
+	},
+	}
+
+	assert.Equal(t, stats, expectResult)
 }

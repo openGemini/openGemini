@@ -1,5 +1,6 @@
 # IDE
 .vscode/
+.idea/
 
 # Build
 build/
@@ -19,9 +20,10 @@ build/
 
 # Dependency directories (remove the comment below to include it)
 vendor/
-build/
-output/
-.vscode/
-.idea/
-go.sum
+
+# The tmp config files for install
 config/openGemini-*
+config/monitor-*
+
+output/
+go.sum

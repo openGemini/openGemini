@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -25,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 )
 
 func cleanDir(dir string) {
@@ -96,7 +98,7 @@ func getChunkMeta() *ChunkMeta {
 	cm.offset = 16
 	cm.size = uint32(offset - 16)
 	cm.columnCount = uint32(len(cm.colMeta))
-	cm.segCount = uint16(len(cm.timeRange))
+	cm.segCount = uint32(len(cm.timeRange))
 	return &cm
 }
 
@@ -105,7 +107,8 @@ func TestIndexWriterWithoutCacheMeta(t *testing.T) {
 	defer cleanDir(testDir)
 	_ = fileops.MkdirAll(testDir, 0750)
 	fn := filepath.Join(testDir, "index.data")
-	wr := NewIndexWriter(fn, false, false)
+	lockPath := ""
+	wr := NewIndexWriter(fn, false, false, &lockPath)
 	cm := getChunkMeta()
 
 	meta := cm.marshal(nil)
@@ -175,7 +178,8 @@ func TestIndexWriterWithCacheMeta(t *testing.T) {
 	defer cleanDir(testDir)
 	_ = fileops.MkdirAll(testDir, 0750)
 	fn := filepath.Join(testDir, "index.data")
-	wr := NewIndexWriter(fn, true, true)
+	lockPath := ""
+	wr := NewIndexWriter(fn, true, true, &lockPath)
 	cm := getChunkMeta()
 
 	meta := cm.marshal(nil)
@@ -221,4 +225,39 @@ func TestIndexWriterWithCacheMeta(t *testing.T) {
 	if err = wr.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestChunkMeta_validation(t *testing.T) {
+	var validation = func(cm *ChunkMeta) (err string) {
+		defer func() {
+			if e := recover(); e != nil {
+				err = fmt.Sprintf("%v", e)
+			}
+		}()
+
+		cm.validation()
+		return
+	}
+
+	cm := &ChunkMeta{}
+	require.Equal(t, "series is is 0", validation(cm))
+
+	cm.sid = 100
+	cm.segCount = 1
+	require.Equal(t, "length of m.timeRange is not equal to m.segCount", validation(cm))
+
+	cm.timeRange = append(cm.timeRange, SegmentRange{})
+	cm.columnCount = 1
+	require.Equal(t, "length of m.colMeta is not equal to m.columnCount", validation(cm))
+
+	cm.colMeta = append(cm.colMeta, ColumnMeta{
+		name:    "foo",
+		ty:      1,
+		preAgg:  nil,
+		entries: nil,
+	})
+	require.Equal(t, "length of m.colMeta[0].entries is not equal to m.segCount", validation(cm))
+
+	cm.colMeta[0].entries = []Segment{{0, 10}}
+	require.Equal(t, "", validation(cm))
 }

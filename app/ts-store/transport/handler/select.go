@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -125,17 +126,23 @@ func (s *Select) Process() error {
 	return s.process(s.w, node, s.req)
 }
 
-func (s *Select) NewShardTraits(req *executor.RemoteQuery, w spdy.Responser) (*executor.StoreExchangeTraits, *[]executor.UnRefDbPt) {
+func (s *Select) NewShardTraits(req *executor.RemoteQuery, w spdy.Responser) (*executor.StoreExchangeTraits, *[]executor.UnRefDbPt, error) {
 	unrefs := make([]executor.UnRefDbPt, 0, len(req.ShardIDs))
 	m := make(map[uint64][][]interface{})
 	for _, sid := range req.ShardIDs {
 		if err := s.store.RefEngineDbPt(req.Database, req.PtID); err != nil {
-			continue
+			if !config.GetHaEnable() {
+				continue
+			}
+			for i := 0; i < len(unrefs); i++ {
+				s.store.UnrefEngineDbPt(req.Database, req.PtID)
+			}
+			return nil, nil, err
 		}
 		unrefs = append(unrefs, executor.UnRefDbPt{Db: req.Database, Pt: req.PtID})
 		m[sid] = nil
 	}
-	return executor.NewStoreExchangeTraits(w, m), &unrefs
+	return executor.NewStoreExchangeTraits(w, m), &unrefs, nil
 }
 
 func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executor.RemoteQuery) (err error) {
@@ -164,7 +171,10 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 		}
 	}()
 
-	traits, unrefs := s.NewShardTraits(req, w)
+	traits, unrefs, err := s.NewShardTraits(req, w)
+	if err != nil {
+		return err
+	}
 	if !traits.HasShard() {
 		return nil
 	}

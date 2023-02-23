@@ -255,3 +255,24 @@ func TestHasMathAndString(t *testing.T) {
 	assert.Equal(t, schema.HasMath(), true)
 	assert.Equal(t, schema.HasString(), true)
 }
+
+func TestHasAuxTags(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt)
+	schema.Refs()
+	assert.Equal(t, schema.HasMath(), true)
+	assert.Equal(t, schema.HasString(), true)
+}
+
+func TestGetFieldType(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(influxql.Fields{&influxql.Field{
+		Expr: &influxql.Call{
+			Name: "sum",
+			Args: []influxql.Expr{&influxql.VarRef{Val: "age", Type: influxql.Integer}},
+		},
+	}}, []string{"sum_age"}, &opt)
+	if i, err := schema.GetFieldType(0); i != int64(influxql.Integer) || err != nil {
+		t.Fatal()
+	}
+}

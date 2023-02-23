@@ -18,6 +18,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 // tagFilter represents a filter used for filtering tags.
@@ -51,6 +52,12 @@ type tagFilter struct {
 	// Contains reverse suffix for Graphite wildcard.
 	// I.e. for `{__name__=~"foo\\.[^.]*\\.bar\\.baz"}` the value will be `zab.rab.`
 	graphiteReverseSuffix []byte
+
+	// eg, host =~ /.*/
+	isAllMatch bool
+
+	// eg, host ='' or host != ''
+	isEmptyValue bool
 }
 
 type TagFilters struct {
@@ -195,6 +202,9 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 	tf.isNegative = isNegative
 	tf.isRegexp = isRegexp
 	tf.matchCost = 0
+	if len(value) == 0 {
+		tf.isEmptyValue = true
+	}
 
 	tf.prefix = tf.prefix[:0]
 
@@ -243,6 +253,10 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 		tf.graphiteReverseSuffix = reverseBytes(tf.graphiteReverseSuffix[:0], []byte(rcv.literalSuffix))
 	}
 	return nil
+}
+
+func (tf *tagFilter) SetRegexMatchAll(match bool) {
+	tf.isAllMatch = match
 }
 
 func reverseBytes(dst, src []byte) []byte {
@@ -793,4 +807,28 @@ func simplifyRegexpExt(sre *syntax.Regexp, hasPrefix, hasSuffix bool) *syntax.Re
 
 var emptyRegexp = &syntax.Regexp{
 	Op: syntax.OpEmptyMatch,
+}
+
+// eg, tagsBuf
+// {Key: "tk1", Value: "value1", V2: 0},
+// {Key: "tk2", Value: "value2", V2: 0},
+// {Key: "tk3", Value: "value3", V2: 0},
+// matchKey: tk1, matchValue: val.*1
+func (tf *tagFilter) Contains(tagsBuf *influx.PointTags, matchKey, matchValue string, isNegative, isRegexp bool) bool {
+	var match bool
+	for _, tag := range *tagsBuf {
+		if tag.Key == matchKey {
+			if isRegexp {
+				match = matchWithRegex(matchValue, tag.Value)
+			} else {
+				match = matchWithNoRegex(matchValue, tag.Value)
+			}
+			if isNegative {
+				return !match
+			}
+			return match
+		}
+	}
+
+	return true
 }

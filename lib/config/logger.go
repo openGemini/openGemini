@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package config
 
 import (
@@ -34,17 +35,24 @@ const (
 	DefaultLevel = zap.InfoLevel
 
 	// DefaultMaxSize is the max size of a log file
-	DefaultMaxSize = 10 * 1024 * 1024 // 10MB
+	DefaultMaxSize = 64 * 1024 * 1024 // 64MB
 
 	// DefaultMaxNum is the max number of log files
-	DefaultMaxNum = 30
+	DefaultMaxNum = 16
 
 	// DefaultMaxAge is the max duration a log file can keep
 	DefaultMaxAge = 7 // 7days
 
 	// DefaultCompressEnabled is whether the log files are compressed
-	DefaultCompressEnabled = false
+	DefaultCompressEnabled = true
 )
+
+// global readonly logger
+var globalLogger *Logger
+
+func GetStoreLogger() *Logger {
+	return globalLogger
+}
 
 type Logger struct {
 	app             App
@@ -59,7 +67,7 @@ type Logger struct {
 
 // NewLogger returns a new instance of Config with defaults.
 func NewLogger(app App) Logger {
-	return Logger{
+	logger := Logger{
 		app:             app,
 		Format:          "auto",
 		Level:           DefaultLevel,
@@ -69,6 +77,8 @@ func NewLogger(app App) Logger {
 		CompressEnabled: DefaultCompressEnabled,
 		Path:            DefaultPath,
 	}
+	globalLogger = &logger
+	return logger
 }
 
 // Validate validates that the configuration is acceptable.

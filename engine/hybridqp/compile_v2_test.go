@@ -23,7 +23,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	qry "github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/yacc"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,7 +30,7 @@ func TestIsFullSeriesQuery(t *testing.T) {
 	sql := `select /*+ full_series */ value from cpu where (host = 'server05' AND region = 'uswest')`
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
-	yaccParser := yacc.NewYyParser(parser.GetScanner())
+	yaccParser := influxql.NewYyParser(parser.GetScanner())
 	yaccParser.ParseTokens()
 	query, err := yaccParser.GetQuery()
 	if err != nil {
@@ -55,7 +54,7 @@ func TestIsSpecificSeriesQuery(t *testing.T) {
 	sql := `select /*+ specific_series */ value from cpu where (host = 'server01')`
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
-	yaccParser := yacc.NewYyParser(parser.GetScanner())
+	yaccParser := influxql.NewYyParser(parser.GetScanner())
 	yaccParser.ParseTokens()
 	query, err := yaccParser.GetQuery()
 	if err != nil {
@@ -74,4 +73,29 @@ func TestIsSpecificSeriesQuery(t *testing.T) {
 	}
 	assert.Equal(t, true, hybridqp.IsSpecificSeriesQuery(selectStmt))
 
+}
+
+func TestVerifyHintStmt(t *testing.T) {
+	sql := `select /*+ Exact_Statistic_Query */ value from cpu limit 1`
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner())
+	yaccParser.ParseTokens()
+	query, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal("parse error", err.Error())
+	}
+
+	stmt := query.Statements[0]
+
+	stmt, err = qry.RewriteStatement(stmt)
+	if err != nil {
+		t.Fatal("rewrite error", err.Error())
+	}
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		t.Fatal("stmt is not influxql.SelectStatement")
+	}
+	opt := qry.ProcessorOptions{}
+	assert.Equal(t, nil, hybridqp.VerifyHintStmt(selectStmt, &opt))
 }

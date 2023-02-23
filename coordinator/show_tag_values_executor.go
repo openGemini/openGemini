@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -192,17 +193,25 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 	var tagValuesSlice TagValuesSlice
 
 	lock := new(sync.Mutex)
-	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) {
-		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition)
-		if err != nil {
-			e.logger.Error("failed to query tag values", zap.Error(err))
-			return
+	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
+		if *hasErr {
+			return nil
 		}
+		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition)
 		lock.Lock()
 		defer lock.Unlock()
+		if err != nil && config.GetHaEnable() {
+			*hasErr = true
+			tagValuesSlice = tagValuesSlice[:0]
+		}
+		if *hasErr {
+			return err
+		}
 		tagValuesSlice = append(tagValuesSlice, s...)
+		return err
 	})
 	if err != nil {
+		e.logger.Error("failed to show tag values", zap.Error(err))
 		return nil, err
 	}
 

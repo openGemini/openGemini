@@ -18,6 +18,8 @@ package statistics
 
 import (
 	"sync"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type SpdyStatistics struct {
@@ -210,4 +212,33 @@ func (s *SpdyStatistics) processJob(job *SpdyJob) {
 	}
 
 	s.data[job.addr][k] += job.value
+}
+
+func CollectOpsSpdyStatistics() []opsStat.OpsStatistic {
+	spdyStat.mu.Lock()
+	defer spdyStat.mu.Unlock()
+
+	valueMap := make(map[string]interface{}, 0)
+	for addr, values := range spdyStat.data {
+		spdyTagMap["remote_addr"] = addr
+
+		for k, v := range values {
+			spdyTagMap["link"] = links[int(k>>8)]
+			i := SpdyItem(k & 0xff)
+
+			if v == 0 || i >= ItemEnd {
+				continue
+			}
+
+			vk := items[i]
+			valueMap[vk] = v
+		}
+	}
+
+	return []opsStat.OpsStatistic{{
+		Name:   "spdy",
+		Tags:   spdyTagMap,
+		Values: valueMap,
+	},
+	}
 }

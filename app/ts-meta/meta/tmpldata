@@ -6,5 +6,10 @@
 	"Execute",
 	"Update",
 	"Report",
-	"GetShardInfo"
+	"GetShardInfo",
+	"GetDownSampleInfo",
+	"GetRpMstInfos",
+	"GetUserInfo",
+	"GetStreamInfo",
+	"GetMeasurementInfo",
 ]

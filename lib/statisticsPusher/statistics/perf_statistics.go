@@ -18,6 +18,8 @@ package statistics
 
 import (
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 // Statistics keeps statistics related to the Performance
@@ -91,6 +93,11 @@ func InitPerfStatistics(tags map[string]string) {
 }
 
 func CollectPerfStatistics(buffer []byte) ([]byte, error) {
+	buffer = AddPointToBuffer(PerfStatisticsName, PerfTagMap, genPerfValueMap(), buffer)
+	return buffer, nil
+}
+
+func genPerfValueMap() map[string]interface{} {
 	perfValueMap := map[string]interface{}{
 		statWriteActiveRequests:      atomic.LoadInt64(&PerfStat.WriteActiveRequests),
 		statWriteUnmarshalNs:         atomic.LoadInt64(&PerfStat.WriteUnmarshalNs),
@@ -118,8 +125,14 @@ func CollectPerfStatistics(buffer []byte) ([]byte, error) {
 		statWriteShardKeyIdxNs:       atomic.LoadInt64(&PerfStat.WriteShardKeyIdxNs),
 		statWriteAddSidRowCountNs:    atomic.LoadInt64(&PerfStat.WriteAddSidRowCountNs),
 	}
+	return perfValueMap
+}
 
-	buffer = AddPointToBuffer(PerfStatisticsName, PerfTagMap, perfValueMap, buffer)
-
-	return buffer, nil
+func CollectOpsPerfStatistics() []opsStat.OpsStatistic {
+	return []opsStat.OpsStatistic{{
+		Name:   PerfStatisticsName,
+		Tags:   PerfTagMap,
+		Values: genPerfValueMap(),
+	},
+	}
 }

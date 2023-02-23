@@ -33,9 +33,11 @@ import (
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -123,8 +125,9 @@ func TestTableStoreOpen(t *testing.T) {
 	}()
 	_ = fileops.RemoveAll(testDir)
 	conf := NewConfig()
-	tier := uint64(meta.Hot)
-	store := NewTableStore(testDir, &tier, false, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
 
 	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
 		for _, id := range ids {
@@ -141,8 +144,8 @@ func TestTableStoreOpen(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	for _, mst := range msts {
 		ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true)
-		msb := AllocMsBuilder(testDir, mst, conf, 10, fileName, 0, store.Sequencer(), 2)
+		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(testDir, mst, &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
 		write(ids, data, msb)
 		fileSeq++
 		store.AddTable(msb, true, false)
@@ -152,8 +155,8 @@ func TestTableStoreOpen(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		ids, data := genMemTableData(sid, 10, 100, &idMinMax, &tmMinMax)
 		isOrder := !(i == 2)
-		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, isOrder)
-		msb := AllocMsBuilder(testDir, "mst", conf, 10, fileName, 0, store.Sequencer(), 2)
+		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, isOrder, &lockPath)
+		msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
 		write(ids, data, msb)
 		sid += 5
 		store.AddTable(msb, isOrder, false)
@@ -163,10 +166,278 @@ func TestTableStoreOpen(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	tier1 := uint64(meta.Hot)
-	store = NewTableStore(testDir, &tier1, false, conf)
-	if _, _, err := store.Open(); err != nil {
+	tier1 := uint64(util.Hot)
+	store = NewTableStore(testDir, &lockPath, &tier1, false, conf)
+	if _, err := store.Open(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMemoryRead(t *testing.T) {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewConfig()
+	conf.cacheDataBlock = true
+	conf.cacheMetaData = true
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	fileSeq++
+	store.AddTable(msb, true, false)
+
+	fs := store.tableFiles("mst", true)
+	if fs == nil {
+		t.Fatal("get mst files fail")
+	}
+
+	f := store.File("mst", fs.Files()[0].Path(), true)
+	if f == nil {
+		t.Fatal("get file fail")
+	}
+	midx, _ := f.MetaIndexAt(0)
+	if midx == nil {
+		t.Fatalf("meta index not find")
+	}
+	decs := NewReadContext(true)
+	cms, err := f.ReadChunkMetaData(0, midx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := record.NewRecordBuilder(schema)
+	fr := f.(*tsspFile).reader.(*TSSPFileReader)
+	fr.Unref()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			fr.Ref()
+			_, err = f.ReadAt(&cms[0], 0, rec, decs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fr.Unref()
+			defer wg.Done()
+		}()
+	}
+	wg.Wait()
+	if fr.ref != 0 {
+		t.Fatal("ref error")
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLazyInitError(t *testing.T) {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	fileSeq++
+	store.AddTable(msb, true, false)
+
+	fp := struct {
+		failPath string
+		inTerms  string
+		expect   func(err error) error
+	}{
+		failPath: "github.com/openGemini/openGemini/engine/immutable/lazyInit-error",
+		inTerms:  fmt.Sprintf(`return("%s")`, "lazyInit error"),
+		expect: func(err error) error {
+			if err != nil && err.Error() == fmt.Sprintf("%s", "lazyInit error") {
+				return nil
+			}
+			return fmt.Errorf("unexpected error:%s", err)
+		},
+	}
+
+	fs := store.tableFiles("mst", true)
+	if fs == nil {
+		t.Fatal("get mst files fail")
+	}
+
+	f := store.File("mst", fs.Files()[0].Path(), true)
+	if f == nil {
+		t.Fatal("get file fail")
+	}
+
+	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	midx, err := f.MetaIndexAt(0)
+	if err = fp.expect(err); err != nil {
+		t.Fatal(err)
+	}
+	require.NoError(t, failpoint.Disable(fp.failPath))
+
+	midx, err = f.MetaIndexAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decs := NewReadContext(true)
+	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	cms, err := f.ReadChunkMetaData(0, midx, nil)
+	if err = fp.expect(err); err != nil {
+		t.Fatal(err)
+	}
+	require.NoError(t, failpoint.Disable(fp.failPath))
+	cms, _ = f.ReadChunkMetaData(0, midx, nil)
+	rec := record.NewRecordBuilder(schema)
+	fr := f.(*tsspFile).reader.(*TSSPFileReader)
+	fr.Unref()
+
+	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	fr.Ref()
+	_, err = f.ReadAt(&cms[0], 0, rec, decs)
+	if err = fp.expect(err); err != nil {
+		t.Fatal(err)
+	}
+	fr.Unref()
+	if fr.ref != 0 {
+		t.Fatal("ref error")
+	}
+	require.NoError(t, failpoint.Disable(fp.failPath))
+
+	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+	fr.Ref()
+	_, err = f.ReadData(0, 1, nil)
+	if err = fp.expect(err); err != nil {
+		t.Fatal(err)
+	}
+	fr.Unref()
+	require.NoError(t, failpoint.Disable(fp.failPath))
+	if fr.ref != 0 {
+		t.Fatal("ref error")
+	}
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMemoryReadReload(t *testing.T) {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewConfig()
+	conf.cacheDataBlock = true
+	conf.cacheMetaData = true
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	fileSeq++
+	store.AddTable(msb, true, false)
+
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tier1 := uint64(util.Hot)
+	store = NewTableStore(testDir, &lockPath, &tier1, false, conf)
+	if _, err := store.Open(); err != nil {
+		t.Fatal(err)
+	}
+	fs := store.tableFiles("mst", true)
+	if fs == nil {
+		t.Fatal("get mst files fail")
+	}
+
+	f := store.File("mst", fs.Files()[0].Path(), true)
+	if f == nil {
+		t.Fatal("get file fail")
+	}
+	midx, _ := f.MetaIndexAt(0)
+	if midx == nil {
+		t.Fatalf("meta index not find")
+	}
+	decs := NewReadContext(true)
+	cms, err := f.ReadChunkMetaData(0, midx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := record.NewRecordBuilder(schema)
+	fr := f.(*tsspFile).reader.(*TSSPFileReader)
+	fr.Unref()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			fr.Ref()
+			_, err = f.ReadAt(&cms[0], 0, rec, decs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fr.Unref()
+			defer wg.Done()
+		}()
+	}
+	wg.Wait()
+	if fr.ref != 0 {
+		t.Fatal("ref error")
 	}
 }
 
@@ -265,7 +536,8 @@ func TestParseFileName(t *testing.T) {
 }
 
 func TestTsspReader(t *testing.T) {
-	fName := NewTSSPFileName(1, 0, 0, 0, false)
+	lockPath := ""
+	fName := NewTSSPFileName(1, 0, 0, 0, false, &lockPath)
 	msb := &MsBuilder{
 		Conf:     NewConfig(),
 		trailer:  &Trailer{},
@@ -288,13 +560,13 @@ func TestTsspReader(t *testing.T) {
 	msb.fileSize = 4096
 	msb.bloomFilter = make([]byte, 8)
 
-	_, err := CreateTSSPFileReader(msb.fileSize, msb.fd, msb.trailer, &msb.TableData, msb.FileVersion(), false)
+	_, err := CreateTSSPFileReader(msb.fileSize, msb.fd, msb.trailer, &msb.TableData, msb.FileVersion(), false, &lockPath)
 	if err == nil || !strings.Contains(err.Error(), "table store create file failed") {
 		t.Fatal("create tssp file should be fail")
 	}
 
 	fd.CloseFn = func() error { return nil }
-	_, err = CreateTSSPFileReader(msb.fileSize, msb.fd, msb.trailer, &msb.TableData, msb.FileVersion(), false)
+	_, err = CreateTSSPFileReader(msb.fileSize, msb.fd, msb.trailer, &msb.TableData, msb.FileVersion(), false, &lockPath)
 	if err == nil || !strings.Contains(err.Error(), "table store create file failed") {
 		t.Fatal("create tssp file should be fail")
 	}
@@ -346,11 +618,11 @@ func TestFullCompacted(t *testing.T) {
 	}
 
 	fs := &TSSPFiles{}
-
+	lockPath := ""
 	for _, tsc := range cases {
 		fs.files = fs.files[:0]
 		for _, ni := range tsc.files {
-			fs.files = append(fs.files, &tsspFile{name: NewTSSPFileName(ni.seq, ni.level, 0, ni.extent, true)})
+			fs.files = append(fs.files, &tsspFile{name: NewTSSPFileName(ni.seq, ni.level, 0, ni.extent, true, &lockPath)})
 		}
 
 		got := fs.fullCompacted()
@@ -361,6 +633,117 @@ func TestFullCompacted(t *testing.T) {
 
 }
 
+func TestFileHandlesRef(t *testing.T) {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+	var msb *MsBuilder
+	var err error
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err = msb.WriteData(id, rec)
+			if err != nil {
+				return
+			}
+		}
+	}
+	fileSeq := uint64(1)
+	mst := "mst"
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb = AllocMsBuilder(testDir, mst, &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := msb.NewTSSPFile(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddTSSPFiles(msb.Name(), true, f)
+
+	err = f.FreeFileHandle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr := f.(*tsspFile).reader.(*TSSPFileReader)
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			fr.Ref()
+			_, err = f.ReadData(0, 1, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fr.Unref()
+			defer wg.Done()
+		}()
+	}
+	wg.Wait()
+	if fr.ref != 0 {
+		t.Fatal("ref error")
+	}
+
+}
+
+func TestCloseFileAndUnref(t *testing.T) {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+	var msb *MsBuilder
+	var err error
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err = msb.WriteData(id, rec)
+			if err != nil {
+				return
+			}
+		}
+	}
+	fileSeq := uint64(1)
+	mst := "mst"
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb = AllocMsBuilder(testDir, mst, &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := msb.NewTSSPFile(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.AddTSSPFiles(msb.Name(), true, f)
+
+	f.RefFileReader()
+	go func() {
+		err := f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+	go f.UnrefFileReader()
+}
+
 func TestDropMeasurement(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -369,8 +752,9 @@ func TestDropMeasurement(t *testing.T) {
 	}()
 	_ = fileops.RemoveAll(testDir)
 	conf := NewConfig()
-	tier := uint64(meta.Hot)
-	store := NewTableStore(testDir, &tier, false, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
 
 	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
 		for _, id := range ids {
@@ -387,8 +771,8 @@ func TestDropMeasurement(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	for _, mst := range msts {
 		ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true)
-		msb := AllocMsBuilder(testDir, mst, conf, 10, fileName, 0, store.Sequencer(), 2)
+		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(testDir, mst, &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
 		write(ids, data, msb)
 		fileSeq++
 		store.AddTable(msb, true, false)
@@ -398,8 +782,8 @@ func TestDropMeasurement(t *testing.T) {
 	sid := uint64(10)
 	for i := 0; i < files; i++ {
 		ids, data := genMemTableData(sid, 10, 100, &idMinMax, &tmMinMax)
-		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true)
-		msb := AllocMsBuilder(testDir, "mst", conf, 10, fileName, 0, store.Sequencer(), 2)
+		fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+		msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
 		write(ids, data, msb)
 		sid += 5
 		store.AddTable(msb, true, false)
@@ -449,8 +833,9 @@ func TestClosedTsspFile(t *testing.T) {
 	}()
 	_ = fileops.RemoveAll(testDir)
 	conf := NewConfig()
-	tier := uint64(meta.Hot)
-	store := NewTableStore(testDir, &tier, false, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
 
 	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
 		for _, id := range ids {
@@ -465,8 +850,8 @@ func TestClosedTsspFile(t *testing.T) {
 	fileSeq := uint64(1)
 	var idMinMax, tmMinMax MinMax
 	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true)
-	msb := AllocMsBuilder(testDir, "mst", conf, 10, fileName, 0, store.Sequencer(), 2)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
 	write(ids, data, msb)
 	fileSeq++
 	store.AddTable(msb, true, false)
@@ -494,7 +879,7 @@ func TestClosedTsspFile(t *testing.T) {
 	}
 
 	var cm ChunkMeta
-	_, err = f.ChunkMeta(ids[0], 0, 0, 0, 0, &cm)
+	_, err = f.ChunkMeta(ids[0], 0, 0, 0, 0, &cm, nil)
 	if err != errFileClosed {
 		t.Fatal("stop fail fail")
 	}
@@ -535,11 +920,80 @@ func TestClosedTsspFile(t *testing.T) {
 	}
 }
 
+func newMmsTables(t *testing.T) *MmsTables {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+	}()
+	conf := NewConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(t.TempDir(), &lockPath, &tier, false, conf)
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	fileSeq++
+	store.AddTable(msb, true, false)
+	return store
+}
+
+func TestLoadIdTimes(t *testing.T) {
+	store := newMmsTables(t)
+	seq := store.Sequencer()
+	require.False(t, seq.isFree)
+
+	count, err := store.loadIdTimesInLock()
+	require.NoError(t, err, "load id times fail")
+	require.Equal(t, 1000, int(count))
+
+	idTimes, ok := seq.mmsIdTime["mst"]
+	require.True(t, ok)
+	require.Equal(t, 10, len(idTimes.idTime))
+
+	for seq.IsLoading() {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Println("seq is loading")
+	}
+	lastFlush, rows := idTimes.get(1)
+	require.Equal(t, int64(100), rows)
+	require.True(t, lastFlush > 0)
+}
+
+func TestClosedLoadIdTimes(t *testing.T) {
+	store := newMmsTables(t)
+	fs := store.tableFiles("mst", true)
+	require.NotEmpty(t, fs, "get mst files fail")
+
+	close(store.closed)
+
+	count, err := store.loadIdTimesInLock()
+	require.NoError(t, err, "load id times fail")
+	require.Equal(t, 0, int(count))
+
+	fr := fs.files[0].(*tsspFile).reader.(*TSSPFileReader)
+	require.True(t, fr.ref >= 0, "ref error")
+}
+
 func TestReadTimeColumn(t *testing.T) {
 	dir := t.TempDir()
 	conf := NewConfig()
-	tier := uint64(meta.Hot)
-	store := NewTableStore(dir, &tier, false, conf)
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(dir, &lockPath, &tier, false, conf)
 	defer store.Close()
 
 	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
@@ -555,8 +1009,8 @@ func TestReadTimeColumn(t *testing.T) {
 	fileSeq := uint64(1)
 	var idMinMax, tmMinMax MinMax
 	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true)
-	msb := AllocMsBuilder(dir, "mst", conf, 10, fileName, 0, store.Sequencer(), 2)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(dir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
 	write(ids, data, msb)
 	fileSeq++
 	store.AddTable(msb, true, false)
@@ -579,7 +1033,7 @@ func TestReadTimeColumn(t *testing.T) {
 		return
 	}
 
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil)
+	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -601,8 +1055,9 @@ func TestReadTimeColumn(t *testing.T) {
 }
 
 func TestCompactionPlan(t *testing.T) {
-	tier := uint64(meta.Hot)
-	store := NewTableStore("", &tier, false, NewConfig())
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore("", &lockPath, &tier, false, NewConfig())
 
 	type TestCase struct {
 		name         string
@@ -805,7 +1260,7 @@ func TestCompactionPlan(t *testing.T) {
 				t.Fatalf("parse file name (%v) fail", fn)
 			}
 
-			store.addTSSPFile(true, f)
+			store.addTSSPFile(true, f, "mst")
 		}
 
 		fs := store.tableFiles("mst", true)
@@ -821,6 +1276,246 @@ func TestCompactionPlan(t *testing.T) {
 		}
 
 		delete(store.Order, "mst")
+	}
+}
+
+func TestCompactionPlanWithAbnormal(t *testing.T) {
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore("", &lockPath, &tier, false, NewConfig())
+
+	type TestCase struct {
+		name         string
+		tsspFileName []string
+		expGroups    [][]string
+		inCompaction []string
+	}
+
+	cases := []TestCase{
+		TestCase{
+			name: "mergeOutOfOrderInOtherLevel",
+			tsspFileName: []string{
+				"00000001-0000-00000000.tssp",
+				"00000002-0000-00000000.tssp",
+				"00000003-0000-00000000.tssp",
+				"00000004-0000-00000000.tssp",
+				"00000005-0000-00000000.tssp",
+				"00000006-0000-00000000.tssp",
+				"00000007-0000-00000000.tssp",
+				"00000008-0000-00000000.tssp",
+				"00000009-0002-00000000.tssp",
+				"00000011-0002-00000000.tssp",
+				"00000019-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000029-0001-00000000.tssp",
+			},
+			expGroups: [][]string{
+				[]string{
+					"00000009-0002-00000000.tssp",
+					"00000011-0002-00000000.tssp",
+					"00000019-0002-00000000.tssp",
+					"00000021-0002-00000000.tssp",
+				},
+			},
+			inCompaction: []string{
+				"00000002-0000-00000000.tssp",
+				"00000003-0000-00000000.tssp",
+			},
+		},
+		TestCase{
+			name: "mergeOutOfOrderInThisLevel",
+			tsspFileName: []string{
+				"00000000-0000-00000000.tssp",
+				"00000001-0002-00000000.tssp",
+				"00000009-0002-00000000.tssp",
+				"00000011-0002-00000000.tssp",
+				"00000019-0002-00000000.tssp",
+				"00000021-0001-00000000.tssp",
+			},
+			expGroups: [][]string{},
+			inCompaction: []string{
+				"00000001-0002-00000000.tssp",
+			},
+		},
+		TestCase{
+			name: "mergeOutOfOrderInThisLevelV2",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000009-0002-00000000.tssp",
+				"00000011-0002-00000000.tssp",
+				"00000019-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+			},
+			expGroups: [][]string{},
+			inCompaction: []string{
+				"00000001-0002-00000000.tssp",
+			},
+		},
+		TestCase{
+			name: "mergeOutOfOrderInThisLevelV3",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000009-0002-00000000.tssp",
+				"00000011-0002-00000000.tssp",
+				"00000019-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+			},
+			expGroups: [][]string{},
+			inCompaction: []string{
+				"00000011-0002-00000000.tssp",
+			},
+		},
+		TestCase{
+			name: "lowLevelExistBeforeHighLevel",
+			tsspFileName: []string{
+				"00000001-0001-00000000.tssp",
+				"00000002-0001-00000000.tssp",
+				"00000003-0001-00000000.tssp",
+				"00000004-0001-00000000.tssp",
+				"00000009-0002-00000000.tssp",
+				"00000011-0002-00000000.tssp",
+				"00000019-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000029-0000-00000000.tssp",
+			},
+			expGroups: [][]string{
+				[]string{
+					"00000009-0002-00000000.tssp",
+					"00000011-0002-00000000.tssp",
+					"00000019-0002-00000000.tssp",
+					"00000021-0002-00000000.tssp",
+				},
+			},
+			inCompaction: []string{},
+		},
+		TestCase{
+			name: "lowLevelExistBeforeHighLevelV2",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000041-0001-00000000.tssp",
+				"00000049-0001-00000000.tssp",
+				"00000051-0001-00000000.tssp",
+				"00000059-0001-00000000.tssp",
+				"00000061-0002-00000000.tssp",
+				"00000081-0002-00000000.tssp",
+				"000000101-0002-00000000.tssp",
+				"000000121-0002-00000000.tssp",
+			},
+			expGroups: [][]string{
+				[]string{
+					"00000061-0002-00000000.tssp",
+					"00000081-0002-00000000.tssp",
+					"000000101-0002-00000000.tssp",
+					"000000121-0002-00000000.tssp",
+				},
+			},
+			inCompaction: []string{},
+		},
+		TestCase{
+			name: "lowLevelExistBeforeHighLevelV3",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000041-0001-00000000.tssp",
+				"00000049-0001-00000000.tssp",
+				"00000051-0001-00000000.tssp",
+				"00000059-0001-00000000.tssp",
+				"00000061-0002-00000000.tssp",
+				"00000081-0002-00000000.tssp",
+				"000000101-0002-00000000.tssp",
+				"000000121-0002-00000000.tssp",
+			},
+			expGroups: [][]string{},
+			inCompaction: []string{
+				"00000061-0002-00000000.tssp",
+			},
+		},
+		TestCase{
+			name: "mergeOutOfOrderWithSpiltFile",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000001-0002-00000001.tssp",
+				"00000001-0002-00000002.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000021-0002-00000001.tssp",
+				"00000041-0002-00000000.tssp",
+				"00000049-0002-00000000.tssp",
+				"00000051-0002-00000000.tssp",
+			},
+			expGroups: [][]string{},
+			inCompaction: []string{
+				"00000021-0002-00000001.tssp",
+			},
+		},
+		TestCase{
+			name: "mergeOutOfOrderWithSpiltFileV2",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000001-0002-00000001.tssp",
+				"00000001-0002-00000002.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000021-0002-00000001.tssp",
+				"00000041-0002-00000000.tssp",
+				"00000049-0002-00000000.tssp",
+				"00000051-0002-00000000.tssp",
+				"00000059-0002-00000000.tssp",
+				"00000059-0002-00000001.tssp",
+			},
+			expGroups: [][]string{},
+			inCompaction: []string{
+				"00000059-0002-00000001.tssp",
+			},
+		},
+		TestCase{
+			name: "lowLevelExistBeforeHighLevelWithSpiltFile",
+			tsspFileName: []string{
+				"00000001-0002-00000000.tssp",
+				"00000001-0002-00000001.tssp",
+				"00000001-0002-00000002.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000021-0002-00000001.tssp",
+				"00000041-0001-00000000.tssp",
+				"00000049-0001-00000000.tssp",
+				"00000051-0001-00000000.tssp",
+				"00000059-0001-00000000.tssp",
+				"00000061-0002-00000000.tssp",
+				"00000081-0002-00000000.tssp",
+				"000000101-0002-00000000.tssp",
+			},
+			expGroups:    [][]string{},
+			inCompaction: []string{},
+		},
+	}
+
+	for _, c := range cases {
+		for _, fn := range c.tsspFileName {
+			f := genTsspFile(fn)
+			if f == nil {
+				t.Fatalf("parse file name (%v) fail", fn)
+			}
+
+			store.addTSSPFile(true, f, "mst")
+		}
+
+		for _, fn := range c.inCompaction {
+			store.inCompact[fn] = struct{}{}
+		}
+
+		fs := store.tableFiles("mst", true)
+		plans := store.mmsPlan("mst", fs, 2, LeveLMinGroupFiles[2], nil)
+		if len(plans) != len(c.expGroups) {
+			t.Fatalf("exp groups :%v, get:%v", len(c.expGroups), len(plans))
+		}
+		for i, group := range c.expGroups {
+			if !reflect.DeepEqual(group, plans[i].group) {
+				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans)
+			}
+			store.CompactDone(group)
+		}
+
+		delete(store.Order, "mst")
+		store.inCompact = make(map[string]struct{}, defaultCap)
 	}
 }
 
@@ -846,7 +1541,7 @@ type mockTableReader struct {
 	ReadDataFn    func(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error)
 	MetaIndexAtFn func(idx int) (*MetaIndex, error)
 	MetaIndexFn   func(id uint64, tr record.TimeRange) (int, *MetaIndex, error)
-	ChunkMetaFn   func(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta) (*ChunkMeta, error)
+	ChunkMetaFn   func(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error)
 	ChunkMetaAtFn func(index int) (*ChunkMeta, error)
 
 	ReadMetaBlockFn     func(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
@@ -870,9 +1565,12 @@ type mockTableReader struct {
 	VersionFn          func() uint64
 	FreeMemoryFn       func() int64
 	LoadIntoMemoryFn   func() error
-	LoadIndexFn        func() error
+	LoadComponentsFn   func() error
 	AverageChunkRowsFn func() int
 	MaxChunkRowsFn     func() int
+	FreeFileHandleFn   func() error
+	RefFn              func()
+	UnrefFn            func()
 }
 
 func (r *mockTableReader) Open() error  { return r.OpenFn() }
@@ -884,8 +1582,8 @@ func (r *mockTableReader) MetaIndexAt(idx int) (*MetaIndex, error) { return r.Me
 func (r *mockTableReader) MetaIndex(id uint64, tr record.TimeRange) (int, *MetaIndex, error) {
 	return r.MetaIndexFn(id, tr)
 }
-func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta) (*ChunkMeta, error) {
-	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst)
+func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error) {
+	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst, buffer)
 }
 func (r *mockTableReader) ChunkMetaAt(index int) (*ChunkMeta, error) { return r.ChunkMetaAtFn(index) }
 
@@ -918,8 +1616,120 @@ func (r *mockTableReader) Rename(newName string) error                  { return
 func (r *mockTableReader) FileSize() int64                              { return r.FileSizeFn() }
 func (r *mockTableReader) InMemSize() int64                             { return r.InMemSizeFn() }
 func (r *mockTableReader) Version() uint64                              { return r.VersionFn() }
-func (r *mockTableReader) FreeMemory() int64                            { return r.FreeMemoryFn() }
-func (r *mockTableReader) LoadIntoMemory() error                        { return r.LoadIntoMemoryFn() }
-func (r *mockTableReader) LoadIndex() error                             { return r.LoadIndexFn() }
-func (r *mockTableReader) AverageChunkRows() int                        { return r.AverageChunkRowsFn() }
-func (r *mockTableReader) MaxChunkRows() int                            { return r.MaxChunkRowsFn() }
+func (r *mockTableReader) FreeMemory() int64 {
+	if r.FreeMemoryFn == nil {
+		return 0
+	}
+	return r.FreeMemoryFn()
+}
+func (r *mockTableReader) LoadIntoMemory() error { return r.LoadIntoMemoryFn() }
+func (r *mockTableReader) LoadComponents() error { return r.LoadComponentsFn() }
+func (r *mockTableReader) AverageChunkRows() int { return r.AverageChunkRowsFn() }
+func (r *mockTableReader) MaxChunkRows() int     { return r.MaxChunkRowsFn() }
+func (r *mockTableReader) FreeFileHandle() error { return r.FreeFileHandleFn() }
+func (r *mockTableReader) Ref()                  {}
+func (r *mockTableReader) Unref()                {}
+
+func TestCompareFile(t *testing.T) {
+	var setMinMax = func(f TSSPFile, min, max int64) {
+		tmp := f.(*tsspFile)
+		rd := tmp.reader.(*mockTableReader)
+		rd.MinMaxTimeFn = func() (int64, int64, error) {
+			return min, max, nil
+		}
+	}
+
+	f1 := genTsspFile("00000001-0000-00000000.tssp")
+	f2 := genTsspFile("00000002-0000-00000000.tssp")
+	f3 := genTsspFile("00000003-0000-00000000.tssp")
+	f4 := genTsspFile("00000004-0000-00000000.tssp")
+	setMinMax(f1, 10, 20)
+	setMinMax(f2, 10, 30)
+	setMinMax(f3, 15, 18)
+	setMinMax(f4, 13, 20)
+
+	assert.True(t, compareFile(f1, f2))
+	assert.True(t, !compareFile(f1, f3))
+	assert.True(t, compareFile(f3, f2))
+
+	assert.True(t, compareFileByDescend(f1, f4))
+	assert.True(t, compareFileByDescend(f2, f4))
+	assert.True(t, !compareFileByDescend(f3, f4))
+}
+
+func TestFreeMemory(t *testing.T) {
+	f1 := genTsspFile("00000001-0000-00000000.tssp")
+
+	timer := time.NewTimer(3 * time.Second)
+	signal := make(chan struct{})
+
+	go func() {
+		defer close(signal)
+
+		f1.Ref()
+		require.Equal(t, int64(0), f1.FreeMemory(true))
+		f1.Unref()
+	}()
+
+	select {
+	case <-signal:
+		break
+	case <-timer.C:
+		t.Fatalf("failed to FreeMemory")
+	}
+}
+
+func TestReadError(t *testing.T) {
+	EnableReadCache(102400)
+	en := mmapEn
+	EnableMmapRead(false)
+
+	defer func() {
+		EnableMmapRead(en)
+		EnableReadCache(0)
+	}()
+
+	dir := t.TempDir()
+	conf := NewConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(dir, &lockPath, &tier, false, conf)
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			require.NoError(t, msb.WriteData(id, data[id]))
+		}
+	}
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 1, 10, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := AllocMsBuilder(dir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2)
+	write(ids, data, msb)
+	fileSeq++
+	store.AddTable(msb, true, false)
+
+	fs := store.tableFiles("mst", true)
+	require.NotEmpty(t, fs)
+
+	defer fs.StopFiles()
+
+	f := store.File("mst", fs.Files()[0].Path(), true)
+	require.NotEmpty(t, f)
+	defer f.Close()
+
+	tf, ok := f.(*tsspFile)
+	require.True(t, ok)
+
+	var err error
+	buf := make([]byte, 0, 1000)
+	buf, err = f.ReadData(0, 2000, &buf)
+	require.NotEmpty(t, err)
+
+	_, err = tf.reader.ReadDataBlock(0, 2000, &buf)
+	require.NotEmpty(t, err)
+
+	_, err = tf.reader.ReadDataBlock(0, 2000, &buf)
+	require.NotEmpty(t, err)
+}

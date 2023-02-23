@@ -138,8 +138,12 @@ func (vfs) OpenFile(name string, flag int, perm os.FileMode, _ ...FSOption) (Fil
 }
 
 func (vfs) Create(name string, _ ...FSOption) (File, error) {
-	f, err := os.Create(path.Clean(name))
+	f, err := os.OpenFile(path.Clean(name), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0640)
 	return &file{of: f}, err
+}
+
+func (vfs) CreateV1(name string, _ ...FSOption) (File, error) {
+	return Create(name)
 }
 
 func (vfs) Remove(name string, _ ...FSOption) error {

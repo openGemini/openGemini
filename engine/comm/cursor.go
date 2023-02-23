@@ -27,6 +27,7 @@ import (
 type SeriesInfoIntf interface {
 	GetSeriesKey() []byte
 	GetSeriesTags() *influx.PointTags
+	GetSid() uint64
 }
 
 type KeyCursor interface {
@@ -61,16 +62,18 @@ func (cursors KeyCursors) SinkPlan(plan hybridqp.QueryNode) {
 	}
 }
 
+// Close we must continue to close all cursors even if some cursors close failed to avoid resource leak
 func (cursors KeyCursors) Close() error {
+	var firstErr error
 	for _, c := range cursors {
 		if c == nil {
 			continue
 		}
-		if err := c.Close(); err != nil {
-			return err
+		if err := c.Close(); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil
+	return firstErr
 }
 
 type Cursor interface {

@@ -18,8 +18,6 @@ package hybridqp
 
 import (
 	"sync/atomic"
-
-	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
 )
 
 var (
@@ -52,8 +50,6 @@ type QueryNode interface {
 
 	SetInputs([]QueryNode)
 	SetSchema(Catalog)
-	MarshalBinary() ([]byte, error)
-	UnmarshalBinary(pb *internal.QueryNode) error
 }
 
 type QueryNodeVisitor interface {

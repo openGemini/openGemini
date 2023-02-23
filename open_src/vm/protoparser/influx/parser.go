@@ -9,17 +9,19 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/numberenc"
-	"github.com/pkg/errors"
 	"github.com/valyala/fastjson/fastfloat"
 )
 
@@ -36,13 +38,22 @@ var (
 var hasIndexOption byte
 var hasNoIndexOption byte
 
+var streamOnlyOption byte
+var streamDataOption byte
+
 func init() {
 	hasIndexOption = 'y'
 	hasNoIndexOption = 'n'
+	streamOnlyOption = 'y'
+	streamDataOption = 'n'
 }
 
 const (
 	INDEXCOUNT = 1
+)
+
+const (
+	MessageVersion = 1
 )
 
 var NoTimestamp = int64(-100)
@@ -87,6 +98,41 @@ func (rs *PointRows) Unmarshal(s string) error {
 	return err
 }
 
+func GetOriginMstName(nameWithVer string) string {
+	if len(nameWithVer) < 5 {
+		// test case tolerate
+		return nameWithVer
+	}
+	return nameWithVer[:len(nameWithVer)-5]
+}
+
+func appendVersion(buf []byte, version uint32) []byte {
+	for i := 0; i < 4; i++ {
+		v := uint8((version >> (12 - i*4)) & 0xf)
+		if v > 9 {
+			// convert 10-15 to ascii a-f
+			v += 'a' - 10
+		} else {
+			// convert 0-9 to ascii 0-9
+			v += '0'
+		}
+		buf = append(buf, v)
+	}
+	return buf
+}
+
+var versionSuffix = 5
+
+func GetNameWithVersion(name string, version uint32) string {
+	var buf = make([]byte, 0, len(name)+versionSuffix)
+	buf = append(buf, name...)
+	buf = append(buf, '_')
+
+	buf = appendVersion(buf, version)
+
+	return *(*string)(unsafe.Pointer(&buf))
+}
+
 type Rows []Row
 
 type WritePointsIn struct {
@@ -107,15 +153,22 @@ func (rs Rows) Swap(i, j int) {
 
 // Row is a single influx row.
 type Row struct {
-	Name         string
-	Version      uint16
-	Tags         PointTags
-	Fields       Fields
-	ShardKey     []byte
-	Timestamp    int64
-	IndexKey     []byte
-	SeriesId     uint64
-	IndexOptions IndexOptions
+	// if streamOnly is false, it means that the source table data of the stream will also be written,
+	// otherwise the source table data of the stream will not be written
+	StreamOnly              bool
+	Timestamp               int64
+	SeriesId                uint64
+	PrimaryId               uint64
+	Name                    string // measurement name with version
+	Tags                    PointTags
+	Fields                  Fields
+	IndexKey                []byte
+	ShardKey                []byte
+	StreamId                []uint64 // it used to indicate that the data is shared by multiple streams
+	IndexOptions            IndexOptions
+	ColumnToIndex           map[string]int // it indicates the sorted tagKey, fieldKey and index mapping relationship
+	HasTagArray             bool           // it used to indicate that the data contains tag array, 0:no; 1:yes, eg. tg1=[tv1,tv2,tv3]
+	ReadyBuildColumnToIndex bool
 }
 
 func (r *Row) Reset() {
@@ -126,6 +179,37 @@ func (r *Row) Reset() {
 	r.Timestamp = 0
 	r.IndexKey = nil
 	r.SeriesId = 0
+	for i := 0; i < len(r.IndexOptions); i++ {
+		r.IndexOptions[i].IndexList = r.IndexOptions[i].IndexList[:0]
+	}
+	r.IndexOptions = r.IndexOptions[:0]
+	r.StreamId = r.StreamId[:0]
+	r.StreamOnly = false
+	r.ColumnToIndex = nil
+	r.HasTagArray = false
+	r.ReadyBuildColumnToIndex = false
+}
+
+// ReuseSet Reuse Field and Tag, compare with Reset
+func (r *Row) ReuseSet() {
+	r.Name = ""
+	if r.Tags != nil {
+		r.Tags = r.Tags[:0]
+	}
+	if r.Fields != nil {
+		r.Fields = r.Fields[:0]
+	}
+	r.ShardKey = r.ShardKey[:0]
+	r.Timestamp = 0
+	r.IndexKey = nil
+	r.SeriesId = 0
+	for i := range r.IndexOptions {
+		r.IndexOptions[i].IndexList = r.IndexOptions[i].IndexList[:0]
+	}
+	r.IndexOptions = r.IndexOptions[:0]
+	r.StreamId = r.StreamId[:0]
+	r.StreamOnly = false
+	r.ColumnToIndex = nil
 }
 
 func (r *Row) CheckValid() error {
@@ -151,7 +235,12 @@ func (r *Row) Clone(rr *Row) {
 	r.Timestamp = rr.Timestamp
 	r.IndexKey = rr.IndexKey
 	r.SeriesId = rr.SeriesId
+	r.PrimaryId = rr.PrimaryId
 	r.IndexOptions = rr.IndexOptions
+	r.StreamId = rr.StreamId
+	r.StreamOnly = rr.StreamOnly
+	r.ColumnToIndex = rr.ColumnToIndex
+	r.HasTagArray = rr.HasTagArray
 }
 
 func (r *Row) Copy(p *Row) {
@@ -168,11 +257,18 @@ func (r *Row) Copy(p *Row) {
 	}
 }
 
+func (r *Row) UnmarshalShardKeyByDimOrTag(tags []string, dims []string) error {
+	if len(tags) == 0 && len(dims) != 0 {
+		return r.UnmarshalShardKeyByTagOp(dims)
+	}
+	return r.UnmarshalShardKeyByTagOp(tags)
+}
+
 func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 	r.ShardKey = append(r.ShardKey[:0], r.Name...)
 	if len(tags) == 0 {
 		for j := range r.Tags {
-			if err := r.checkDuplicateTag(j); err != nil {
+			if err := r.CheckDuplicateTag(j); err != nil {
 				return err
 			}
 			r.appendShardKey(j)
@@ -183,10 +279,26 @@ func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 	for i < len(tags) && j < len(r.Tags) {
 		cmp := strings.Compare(tags[i], r.Tags[j].Key)
 		if cmp < 0 {
-			return ErrPointShouldHaveAllShardKey
+		searchFields:
+			for _, relation := range r.IndexOptions {
+				if relation.Oid == uint32(2) {
+					for k := range relation.IndexList {
+						cmp = strings.Compare(tags[i], r.Fields[int(relation.IndexList[k])-len(r.Tags)].Key)
+						if cmp == 0 {
+							r.appendShardKeyWithField(int(relation.IndexList[k]) - len(r.Tags))
+							i++
+							break searchFields
+						}
+					}
+				}
+			}
+			if cmp != 0 {
+				return ErrPointShouldHaveAllShardKey
+			}
+			continue
 		}
 
-		if err := r.checkDuplicateTag(j); err != nil {
+		if err := r.CheckDuplicateTag(j); err != nil {
 			return err
 		}
 
@@ -202,7 +314,7 @@ func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 		return ErrPointShouldHaveAllShardKey
 	}
 	for j < len(r.Tags)-1 {
-		if err := r.checkDuplicateTag(j); err != nil {
+		if err := r.CheckDuplicateTag(j); err != nil {
 			return err
 		}
 		j++
@@ -210,13 +322,47 @@ func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 	return nil
 }
 
-func (r *Row) checkDuplicateTag(idx int) error {
-	if idx < len(r.Tags)-1 {
-		if string(r.Tags[idx].Key) == string(r.Tags[idx+1].Key) {
-			return fmt.Errorf("duplicate tag %s", string(r.Tags[idx].Key))
+func (r *Row) UnmarshalShardKeyByTagOp(tags []string) error {
+	r.ShardKey = append(r.ShardKey[:0], r.Name...)
+	if len(tags) == 0 {
+		for j := range r.Tags {
+			r.appendShardKey(j)
+		}
+		return nil
+	}
+	for i := range tags {
+		id, exist := r.ColumnToIndex[tags[i]]
+		if !exist {
+			return ErrPointShouldHaveAllShardKey
+		}
+		if id >= r.Tags.Len() {
+			idx := id - len(r.Tags)
+			if idx >= len(r.Fields) || r.Fields[idx].Key != tags[i] {
+				return ErrPointShouldHaveAllShardKey
+			}
+			r.appendShardKeyWithField(idx)
+		} else {
+			if r.Tags[id].Key != tags[i] {
+				return ErrPointShouldHaveAllShardKey
+			}
+			r.appendShardKey(id)
 		}
 	}
 	return nil
+}
+
+func (r *Row) CheckDuplicateTag(idx int) error {
+	if idx < len(r.Tags)-1 && r.Tags[idx].Key == r.Tags[idx+1].Key {
+		return fmt.Errorf("duplicate tag %s", r.Tags[idx].Key)
+	}
+	return nil
+}
+
+func (r *Row) appendShardKeyWithField(idx int) {
+	r.ShardKey = append(r.ShardKey, ","...)
+	r.ShardKey = append(r.ShardKey, r.Fields[idx].Key...)
+	r.ShardKey = append(r.ShardKey, "="...)
+	r.ShardKey = append(r.ShardKey, r.Fields[idx].StrValue...)
 }
 
 func (r *Row) appendShardKey(idx int) {
@@ -260,6 +406,7 @@ func FastMarshalMultiRows(src []byte, rows []Row) ([]byte, error) {
 	// point number
 	var err error
 	src = encoding.MarshalUint32(src, uint32(len(rows)))
+	src = append(src, uint8(MessageVersion))
 	for i := 0; i < len(rows); i++ {
 		src, err = rows[i].FastMarshalBinary(src)
 		if err != nil {
@@ -273,6 +420,8 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 	indexKeyPool []byte) ([]Row, []Tag, []Field, []IndexOption, []byte, error) {
 	pointsN := int(encoding.UnmarshalUint32(src))
 	src = src[4:]
+	//version := src[0]
+	src = src[1:]
 	var err error
 	for len(src) > 0 {
 		if len(rows) < cap(rows) {
@@ -281,6 +430,7 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 			rows = append(rows, Row{})
 		}
 		row := &rows[len(rows)-1]
+		row.HasTagArray = false
 		src, tagPool, fieldPool, indexOptionPool, indexKeyPool, err =
 			row.FastUnmarshalBinary(src, tagPool, fieldPool, indexOptionPool, indexKeyPool)
 		if err != nil {
@@ -389,6 +539,13 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 		}
 		src = src[2:]
 		tg.Value = bytesutil.ToUnsafeString(src[:vl])
+		tg.IsArray = false
+		if config.EnableTagArray {
+			if strings.HasPrefix(tg.Value, "[") && strings.HasSuffix(tg.Value, "]") {
+				tg.IsArray = true
+				r.HasTagArray = true
+			}
+		}
 		src = src[vl:]
 	}
 	r.Tags = tagpool[start:]
@@ -498,6 +655,7 @@ func (r *Row) marshalIndexOptions(dst []byte) ([]byte, error) {
 
 func (r *Row) unmarshalIndexOptions(src []byte, indexOptionPool []IndexOption) ([]byte, []IndexOption, error) {
 	isIndexOpt := src[:INDEXCOUNT]
+	r.IndexOptions = nil
 	if isIndexOpt[0] == hasNoIndexOption {
 		src = src[INDEXCOUNT:]
 		return src, indexOptionPool, nil
@@ -520,10 +678,14 @@ func (r *Row) unmarshalIndexOptions(src []byte, indexOptionPool []IndexOption) (
 		indexOpt.Oid = encoding.UnmarshalUint32(src[:4])
 		src = src[4:]
 		indexListLen := encoding.UnmarshalUint16(src[:2])
-		indexOpt.IndexList = make([]uint16, indexListLen)
+		if int(indexListLen) < cap(indexOpt.IndexList) {
+			indexOpt.IndexList = indexOpt.IndexList[:indexListLen]
+		} else {
+			indexOpt.IndexList = append(indexOpt.IndexList, make([]uint16, int(indexListLen)-cap(indexOpt.IndexList))...)
+		}
 		src = src[2:]
-		for i := 0; i < int(indexListLen); i++ {
-			indexOpt.IndexList[i] = encoding.UnmarshalUint16(src[:2])
+		for j := 0; j < int(indexListLen); j++ {
+			indexOpt.IndexList[j] = encoding.UnmarshalUint16(src[:2])
 			src = src[2:]
 		}
 	}
@@ -534,7 +696,7 @@ func (r *Row) unmarshalIndexOptions(src []byte, indexOptionPool []IndexOption) (
 func MakeIndexKey(name string, tags PointTags, dst []byte) []byte {
 	indexKl := 4 + // total length of indexkey
 		2 + // measurment name length
-		len(name) + // measurment name
+		len(name) + // measurment name with version
 		2 + // tag count
 		4*len(tags) + // length of each tag key and value
 		tags.TagsSize() // size of tag keys/values
@@ -599,11 +761,19 @@ func MakeGroupTagsKey(dims []string, tags PointTags, dst []byte) []byte {
 func (r *Row) UnmarshalIndexKeys(indexkeypool []byte) []byte {
 	indexKl := 4 + // total length of indexkey
 		2 + // measurment name length
-		len(r.Name) + // measurment name
+		len(r.Name) + // measurment name with version
 		2 + // tag count
 		4*len(r.Tags) + // length of each tag key and value
 		r.Tags.TagsSize() // size of tag keys/values
 	start := len(indexkeypool)
+
+	// if no tag array, marshal count=1
+	if config.EnableTagArray {
+		if r.HasTagArray {
+			// tag array do not use
+			return nil
+		}
+	}
 
 	// marshal total len
 	indexkeypool = encoding.MarshalUint32(indexkeypool, uint32(indexKl))
@@ -689,9 +859,12 @@ func PutBytesBuffer(buf []byte) {
 
 // Parse2SeriesKey parse encoded index key to line protocol series key
 // encoded index key format: [total len][ms len][ms][tagk1 len][tagk1 val]...]
-// parse to line protocol format: mst,tagkey1=tagv1,tagk2=tagv2...
+// parse to line protocol format: mst_0001,tagkey1=tagv1,tagk2=tagv2...
 func Parse2SeriesKey(key []byte, dst []byte) []byte {
-	msName, src, _ := MeasurementName(key)
+	msName, src, err := MeasurementName(key)
+	if err != nil {
+		panic(err)
+	}
 
 	dst = append(dst, msName...)
 	dst = append(dst, ',')
@@ -714,8 +887,57 @@ func Parse2SeriesKey(key []byte, dst []byte) []byte {
 	return dst[:len(dst)-1]
 }
 
+// Parse2SeriesGroupKey support reuse same memory space for src with dst, can reduce half memory space compared with Parse2SeriesKey
+func Parse2SeriesGroupKey(src []byte, dst []byte, dims []string) (PointTags, []byte, int, bool, error) {
+	//group by * or group by all sorted tag
+	groupByAllSortedTag := false
+	msName, data, err := MeasurementName(src)
+	if err != nil {
+		return nil, dst, 0, groupByAllSortedTag, err
+	}
+
+	length := 0
+	length = length + copy(dst[length:], msName)
+	length = length + copy(dst[length:], ",")
+	tagsN := int(encoding.UnmarshalUint16(data))
+	data = data[2:]
+	if len(dims) == tagsN {
+		groupByAllSortedTag = true
+	}
+
+	tags := make(PointTags, tagsN, tagsN)
+	for i := 0; i < tagsN; i++ {
+		l := int(encoding.UnmarshalUint16(data))
+		data = data[2:]
+		if l+2 > len(data) {
+			return tags, dst, len(msName), groupByAllSortedTag, fmt.Errorf("too small data for tag key")
+		}
+		tags[i].Key = bytesutil.ToUnsafeString(dst[length : length+l])
+		length = length + copy(dst[length:], data[:l])
+		length = length + copy(dst[length:], "=")
+		if groupByAllSortedTag && tags[i].Key != dims[i] {
+			groupByAllSortedTag = false
+		}
+		data = data[l:]
+
+		l = int(encoding.UnmarshalUint16(data))
+		data = data[2:]
+		if l > len(data) {
+			return tags, dst, len(msName), groupByAllSortedTag, fmt.Errorf("too small data for tag value")
+		}
+
+		tags[i].Value = bytesutil.ToUnsafeString(dst[length : length+l])
+		length = length + copy(dst[length:], data[:l])
+		length = length + copy(dst[length:], ",")
+
+		data = data[l:]
+	}
+
+	return tags, dst[:length-1], len(msName), groupByAllSortedTag, nil
+}
+
 // MeasurementName extract measurement from series key,
-// return measurement, tail, error
+// return measurement_name_with_version, tail, error
 func MeasurementName(src []byte) ([]byte, []byte, error) {
 	if len(src) < 4 {
 		return nil, nil, fmt.Errorf("too small data for tags")
@@ -752,7 +974,7 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 	r.Reset()
 	start := checkWhitespace(s, 0)
 	s = s[start:]
-	n := nextUnescapedChar(s, ' ', noEscapeChars)
+	n := nextUnescapedChar(s, ' ', noEscapeChars, false)
 	if n < 0 {
 		return tagsPool, fieldsPool, ErrPointMustHaveAField
 	}
@@ -761,7 +983,7 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 
 	// Parse measurement and tags
 	var err error
-	n = nextUnescapedChar(measurementTags, ',', noEscapeChars)
+	n = nextUnescapedChar(measurementTags, ',', noEscapeChars, false)
 	if n >= 0 {
 		tagsStart := len(tagsPool)
 		tagsPool, err = unmarshalTags(tagsPool, measurementTags[n+1:], noEscapeChars)
@@ -778,7 +1000,7 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 
 	// Parse fields
 	fieldsStart := len(fieldsPool)
-	hasQuotedFields := nextUnescapedChar(s, '"', noEscapeChars) >= 0
+	hasQuotedFields := nextUnescapedChar(s, '"', noEscapeChars, false) >= 0
 	n = nextUnquotedChar(s, ' ', noEscapeChars, hasQuotedFields)
 	if n < 0 {
 		// No timestamp.
@@ -827,20 +1049,22 @@ func (r *Row) TagsSize() int {
 
 // PointTag represents influx tag.
 type Tag struct {
-	Key   string
-	Value string
+	Key     string
+	Value   string
+	IsArray bool
 }
 
 func (tag *Tag) Reset() {
 	tag.Key = ""
 	tag.Value = ""
+	tag.IsArray = false
 }
 
 func (tag *Tag) unmarshal(s string, noEscapeChars bool) error {
 	tag.Reset()
-	n := nextUnescapedChar(s, '=', noEscapeChars)
+	n := nextUnescapedChar(s, '=', noEscapeChars, false)
 	if n < 0 {
-		return fmt.Errorf("missing tag value for %q", s)
+		return errno.NewError(errno.WriteMissTagValue, s)
 	}
 	tag.Key = unescapeTagValue(s[:n], noEscapeChars)
 	tag.Value = unescapeTagValue(s[n+1:], noEscapeChars)
@@ -981,7 +1205,7 @@ func (f *Field) Reset() {
 
 func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	f.Reset()
-	n := nextUnescapedChar(s, '=', noEscapeChars)
+	n := nextUnescapedChar(s, '=', noEscapeChars, false)
 	if n < 0 {
 		return ErrPointMustHaveAField
 	}
@@ -989,7 +1213,7 @@ func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	if len(f.Key) == 0 {
 		return fmt.Errorf("field key cannot be empty")
 	}
-	if hasQuotedFields && nextUnescapedChar(s[n:], '"', noEscapeChars) >= 0 {
+	if hasQuotedFields && nextUnescapedChar(s[n:], '"', noEscapeChars, false) >= 0 {
 		vstr, err := parseFieldStrValue(s[n+1:])
 		if err != nil {
 			return fmt.Errorf("cannot parse field value for %q: %w", f.Key, err)
@@ -1057,7 +1281,7 @@ func unmarshalTags(dst []Tag, s string, noEscapeChars bool) ([]Tag, error) {
 			dst = append(dst, Tag{})
 		}
 		tag := &dst[len(dst)-1]
-		n := nextUnescapedChar(s, ',', noEscapeChars)
+		n := nextUnescapedChar(s, ',', noEscapeChars, true)
 		if n < 0 {
 			if err := tag.unmarshal(s, noEscapeChars); err != nil {
 				return dst[:len(dst)-1], err
@@ -1191,15 +1415,25 @@ func parseFieldStrValue(s string) (string, error) {
 	return "", nil
 }
 
-func nextUnescapedChar(s string, ch byte, noEscapeChars bool) int {
+func nextUnescapedChar(s string, ch byte, noEscapeChars, tagParse bool) int {
 	if noEscapeChars {
-		// Fast path: just search for ch in s, since s has no escape chars.
+		// eg,tk1=value1,tk2=[value2,value22],tk3=value3
+		if config.EnableTagArray && tagParse {
+			return nextUnescapedCharForTagArray(s, ch)
+		}
 		return strings.IndexByte(s, ch)
 	}
 
 	sOrig := s
 again:
-	n := strings.IndexByte(s, ch)
+	// eg,tk1=value1,tk2=[value2,value22],tk3=value3
+	var n int
+	if config.EnableTagArray && tagParse {
+		n = nextUnescapedCharForTagArray(s, ch)
+	} else {
+		n = strings.IndexByte(s, ch)
+	}
+
 	if n < 0 {
 		return -1
 	}
@@ -1224,11 +1458,11 @@ again:
 
 func nextUnquotedChar(s string, ch byte, noEscapeChars, hasQuotedFields bool) int {
 	if !hasQuotedFields {
-		return nextUnescapedChar(s, ch, noEscapeChars)
+		return nextUnescapedChar(s, ch, noEscapeChars, false)
 	}
 	sOrig := s
 	for {
-		n := nextUnescapedChar(s, ch, noEscapeChars)
+		n := nextUnescapedChar(s, ch, noEscapeChars, false)
 		if n < 0 {
 			return -1
 		}
@@ -1236,7 +1470,7 @@ func nextUnquotedChar(s string, ch byte, noEscapeChars, hasQuotedFields bool) in
 			return n + len(sOrig) - len(s)
 		}
 		s = s[n+1:]
-		n = nextUnescapedChar(s, '"', noEscapeChars)
+		n = nextUnescapedChar(s, '"', noEscapeChars, false)
 		if n < 0 {
 			return -1
 		}
@@ -1262,7 +1496,7 @@ func nextTimestamp(s string) (int64, error) {
 func isInQuote(s string, noEscapeChars bool) bool {
 	isQuote := false
 	for {
-		n := nextUnescapedChar(s, '"', noEscapeChars)
+		n := nextUnescapedChar(s, '"', noEscapeChars, false)
 		if n < 0 {
 			return isQuote
 		}
@@ -1276,6 +1510,38 @@ func stripLeadingWhitespace(s string) string {
 		s = s[1:]
 	}
 	return s
+}
+
+func nextUnescapedCharForTagArray(s string, ch byte) int {
+	// Fast path: just search for ch in s, since s has no escape chars.
+	lbracket := strings.IndexByte(s, '[')
+	if lbracket < 0 {
+		return strings.IndexByte(s, ch)
+	}
+
+	rbracket := strings.IndexByte(s[lbracket:], ']')
+	if rbracket < 0 {
+		return strings.IndexByte(s, ch)
+	}
+	rbracket += lbracket
+
+	index := strings.IndexByte(s, ch)
+
+	// eg,tk1=value1,tk2=[value2,value22]
+	// this time is tk1=value1
+	if index < lbracket || index > rbracket {
+		return index
+	}
+
+	if rbracket == len(s)-1 {
+		// eg,tk1=value1,tk2=[value2,value22]
+		// this time is tk2=[value2,value22]
+		return -1
+	}
+
+	// eg, eg,tk1=value1,tk2=[value2,value22],tk3=value3
+	// this time is tk2=[value2,value22]
+	return rbracket + 1
 }
 
 type IndexOption struct {

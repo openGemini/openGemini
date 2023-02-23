@@ -17,12 +17,17 @@ limitations under the License.
 package executor
 
 import (
+	"errors"
 	"time"
 
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/services/castor"
+)
+
+var (
+	end = errors.New("break")
 )
 
 func CastorReduce(in []Chunk, out Chunk, args ...interface{}) error {
@@ -42,7 +47,7 @@ func CastorReduce(in []Chunk, out Chunk, args ...interface{}) error {
 		return errno.NewError(errno.TypeAssertFail, influxql.AnyField)
 	}
 	taskId := uuid.TimeUUID().String()
-	recs, err := chunkToArrowRecords(in, taskId, inputs)
+	recs, err := ChunkToArrowRecords(in, taskId, inputs)
 	if err != nil {
 		return err
 	}
@@ -74,12 +79,14 @@ func CastorReduce(in []Chunk, out Chunk, args ...interface{}) error {
 		case resp := <-respChan.C:
 			respCnt++
 			defer resp.Release()
-			if err := copyArrowRecordToChunk(resp, out, castor.DesiredFieldKeySet); err != nil {
+			if err := CopyArrowRecordToChunk(resp, out, castor.DesiredFieldKeySet); err != nil {
 				return err
 			}
 			if respCnt == len(recs) {
 				return nil
 			}
+		case err := <-respChan.ErrCh:
+			return err
 		}
 	}
 }

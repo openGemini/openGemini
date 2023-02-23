@@ -18,7 +18,6 @@ package engine
 
 import (
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -26,18 +25,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/logger"
+	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/pingcap/failpoint"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type shardMock struct {
@@ -46,18 +52,22 @@ type shardMock struct {
 	expired bool
 }
 
-var defaultEngineOption netstorage.EngineOptions
+var DefaultEngineOption netstorage.EngineOptions
 
 func init() {
-	log = logger.New(os.Stderr)
-	defaultEngineOption = netstorage.NewEngineOptions()
-	defaultEngineOption.WriteColdDuration = time.Second * 5000
-	defaultEngineOption.ShardMutableSizeLimit = 30 * 1024 * 1024
-	defaultEngineOption.NodeMutableSizeLimit = 1e9
-	defaultEngineOption.MaxWriteHangTime = time.Second
-	defaultEngineOption.WalSyncInterval = 100 * time.Millisecond
-	defaultEngineOption.WalEnabled = true
-	defaultEngineOption.WalReplayParallel = false
+	DefaultEngineOption = netstorage.NewEngineOptions()
+	DefaultEngineOption.WriteColdDuration = time.Second * 5000
+	DefaultEngineOption.ShardMutableSizeLimit = 30 * 1024 * 1024
+	DefaultEngineOption.NodeMutableSizeLimit = 1e9
+	DefaultEngineOption.MaxWriteHangTime = time.Second
+	DefaultEngineOption.MemDataReadEnabled = true
+	DefaultEngineOption.WalSyncInterval = 100 * time.Millisecond
+	DefaultEngineOption.WalEnabled = true
+	DefaultEngineOption.WalReplayParallel = false
+	DefaultEngineOption.WalReplayAsync = false
+	DefaultEngineOption.DownSampleWriteDrop = true
+	openShardsLimit = limiter.NewFixed(cpu.GetCpuNum())
+	replayWalLimit = limiter.NewFixed(cpu.GetCpuNum())
 }
 
 func newMockDBPartitions() map[string]map[uint64]map[uint64]shardMock {
@@ -151,14 +161,15 @@ func mustParseTime(layout, value string) time.Time {
 func initEngine(dir string) (*Engine, error) {
 	dataPath := filepath.Join(dir, dPath)
 	eng := &Engine{
-		closed:       interruptsignal.NewInterruptSignal(),
-		dataPath:     dataPath + "/data",
-		DBPartitions: make(map[string]map[uint32]*DBPTInfo, 64),
-		droppingDB:   make(map[string]string),
-		droppingRP:   make(map[string]string),
-		droppingMst:  make(map[string]string),
+		closed:        interruptsignal.NewInterruptSignal(),
+		dataPath:      dataPath + "/data",
+		DBPartitions:  make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:    make(map[string]string),
+		droppingRP:    make(map[string]string),
+		droppingMst:   make(map[string]string),
+		migratingDbPT: make(map[string]map[uint32]struct{}),
 	}
-	eng.log = logger.New(os.Stderr)
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
 	eng.engOpt.NodeMutableSizeLimit = 1e9
 	eng.engOpt.MaxWriteHangTime = time.Second
@@ -166,8 +177,12 @@ func initEngine(dir string) (*Engine, error) {
 	loadCtx := getLoadCtx()
 	eng.loadCtx = loadCtx
 	eng.CreateDBPT(defaultDb, defaultPtId)
-	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.New(os.Stderr)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+
 	err := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange)
 	if err != nil {
 		panic(err)
@@ -201,7 +216,7 @@ func getShardDurationInfo(shId uint64) *meta.ShardDurationInfo {
 			OwnerDb:      defaultDb,
 			OwnerPt:      defaultPtId},
 		DurationInfo: meta.DurationDescriptor{
-			Tier: meta.Hot, TierDuration: time.Hour, Duration: time.Hour,
+			Tier: util.Hot, TierDuration: time.Hour, Duration: time.Hour,
 		},
 	}
 	return shardDuration
@@ -231,33 +246,35 @@ func initEngine1(dir string) (*Engine, error) {
 		droppingRP:   make(map[string]string),
 		droppingMst:  make(map[string]string),
 	}
-	eng.log = logger.New(os.Stderr)
-	log = logger.New(os.Stderr)
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 
 	loadCtx := getLoadCtx()
+	lockPath := filepath.Join(eng.dataPath, "LOCK")
 	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx)
+	dbPTInfo.lockPath = &lockPath
 	dbPTInfo.logger = eng.log
 	eng.addDBPTInfo(dbPTInfo)
 	reportLoadFrequency = time.Millisecond // 1ms
 	dbPTInfo.enableReportShardLoad()
 
-	indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory,
+	indexPath := path.Join(dbPTInfo.path, "rp0", config.IndexFileDirectory,
 		"659_946252800000000000_946857600000000000", "mergeset")
 	_ = fileops.MkdirAll(indexPath, 0755)
 
 	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
 
-	dbPTInfo.OpenIndexes("rp0")
+	dbPTInfo.OpenIndexes(0, "rp0")
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
-	shardDuration := &meta.DurationDescriptor{Tier: meta.Hot, TierDuration: time.Hour}
+	shardDuration := &meta.DurationDescriptor{Tier: util.Hot, TierDuration: time.Hour}
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
-	shard := NewShard(eng.dataPath, eng.walPath, shardIdent, indexBuilder, shardDuration, tr, defaultEngineOption)
+	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption)
+	shard.indexBuilder = indexBuilder
 	//shard.wal.logger = eng.log
 	//shard.wal.traceLogger = eng.log
-	err := shard.Open()
+	err := shard.OpenAndEnable(nil)
 	if err != nil {
 		_ = shard.Close()
 		return nil, err
@@ -269,7 +286,25 @@ func initEngine1(dir string) (*Engine, error) {
 func Test_Engine_DropDatabase(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
-	log = eng.log
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	// db not found
+	err = eng.DeleteDatabase("db011", defaultPtId)
+	assert(err == nil, "error is not nil")
+	assert(len(eng.DBPartitions) > 0, "db pt should exist")
+
+	// really drop db
+	err = eng.DeleteDatabase("db0", defaultPtId)
+	assert(err == nil, "error is not nil")
+	assert(len(eng.DBPartitions) == 0, "db pt should not exist")
+}
+
+func Test_Engine_DropDatabaseConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,6 +333,35 @@ func Test_Engine_DropDatabase(t *testing.T) {
 	if len(eng.DBPartitions) != 0 {
 		t.Fatalf("partition not deleted n %d, db0 pt 0 %v ", n, eng.DBPartitions)
 	}
+}
+
+func Test_Engine_DropDatabaseNoPt(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	err = eng.DeleteDatabase(defaultDb, 2)
+	assert(err == nil, "error is not nil")
+	assert(len(eng.DBPartitions) > 0, "db pt should exist")
+}
+
+func Test_Engine_DropDatabaseFail(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	dbPT := eng.getDBPTInfo(defaultDb, defaultPtId)
+	dbPT.exeCount = 1
+
+	err = eng.DeleteDatabase(defaultDb, defaultPtId)
+	assert(err != nil, "error is nil")
+	assert(len(eng.DBPartitions) > 0, "db pt should exist")
 }
 
 func TestEngine_DropRetentionPolicy(t *testing.T) {
@@ -335,6 +399,33 @@ func TestEngine_DropRetentionPolicy(t *testing.T) {
 	if len(dbPTInfo.newestRpShard) != 0 {
 		t.Fatalf("drop retention policy got newestRpShard %d, exp 0", len(dbPTInfo.newestRpShard))
 	}
+
+	delete(eng.DBPartitions["db0"], defaultPtId)
+	require.NoError(t, eng.DropRetentionPolicy("db0", "rp0", defaultPtId))
+}
+
+func TestEngine_DropRetentionPolicyErrorRP(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	res := make(chan error)
+	n := 0
+	n++
+	go func(db, rp string) {
+		res <- eng.DropRetentionPolicy(db, rp, defaultPtId)
+	}("db0", "rpx")
+
+	for i := 0; i < n; i++ {
+		err = <-res
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(res)
 }
 
 func TestEngine_DeleteIndex(t *testing.T) {
@@ -386,7 +477,6 @@ func assert(condition bool, msg string, v ...interface{}) {
 }
 
 func TestEngine_OpenLimitShardError(t *testing.T) {
-	t.Skip()
 	dir := t.TempDir()
 	dataPath := filepath.Join(dir, dPath)
 	eng := &Engine{
@@ -398,9 +488,9 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 		droppingRP:   make(map[string]string),
 		droppingMst:  make(map[string]string),
 		loadCtx:      getLoadCtx(),
-		engOpt:       defaultEngineOption,
+		engOpt:       DefaultEngineOption,
 	}
-	eng.log = logger.New(os.Stderr)
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
 	eng.engOpt.NodeMutableSizeLimit = 1e9
 	eng.engOpt.MaxWriteHangTime = time.Second
@@ -468,13 +558,43 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	for _, fp := range failpoints {
 		require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
 
-		err := eng.Open([]uint32{defaultPtId}, shardDurationInfo)
+		err := eng.Open(shardDurationInfo, nil)
 		if err = fp.expect(err); err != nil {
 			t.Fatal(err)
 		}
 		require.NoError(t, eng.Close())
 		require.NoError(t, failpoint.Disable(fp.failPath))
 	}
+}
+
+func TestEngine_SeriesKeys(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	dbInfo := eng.DBPartitions["db0"][0]
+	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx.DebugFlush()
+
+	// ignore pt not found
+	keys, err := eng.SeriesKeys("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil)
+	assert(len(keys) == 0, "series keys expect 0")
+	require.NoError(t, err)
+
+	// measurement not exist
+	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil)
+	assert(len(keys) == 0, "series keys expect 0")
+	assert(err == nil, "err should bu nil")
 }
 
 func TestEngine_SeriesCardinality(t *testing.T) {
@@ -496,7 +616,17 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
 	idx.DebugFlush()
 
-	mcis, err := eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, nil)
+	// ignore pt not found
+	mcis, err := eng.SeriesCardinality("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil)
+	assert(len(mcis) == 0, "seriesCardinality expect 0")
+	require.NoError(t, err)
+
+	// measurement not exist
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil)
+	assert(len(mcis) == 0, "seriesCardinality expect 0")
+	assert(err == nil, "err is nil")
+
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,14 +653,29 @@ func TestEngine_TagValues(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err = eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
-	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx, ok := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	if !ok {
+		t.Fatal()
+	}
 	idx.DebugFlush()
 
-	tagsets, err := eng.TagValues("db0", []uint32{0}, map[string][][]byte{
+	// ignore pt not exist
+	tagsets, err := eng.TagValues("db0", []uint32{0xff}, map[string][][]byte{
+		msNames[0]: {[]byte("tagkey1")},
+	}, nil)
+	require.NoError(t, err)
+
+	// measurement not found
+	tagsets, err = eng.TagValues("db0", []uint32{0}, map[string][][]byte{
+		"invalid_measurement": {[]byte("tagkey1")},
+	}, nil)
+	require.Equal(t, err, nil)
+
+	tagsets, err = eng.TagValues("db0", []uint32{0}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
 	}, nil)
 	if err != nil {
@@ -538,6 +683,50 @@ func TestEngine_TagValues(t *testing.T) {
 	}
 	require.Equal(t, 1, len(tagsets))
 	require.Equal(t, 10, len(tagsets[0].Values))
+}
+
+func TestEngine_TagValuesCardinality(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	dbInfo := eng.DBPartitions["db0"][0]
+	idx, ok := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	if !ok {
+		t.Fatal()
+	}
+	idx.DebugFlush()
+
+	// ignore pt not exist
+	tagsets, err := eng.TagValuesCardinality("db0", []uint32{0xff}, map[string][][]byte{
+		msNames[0]: {[]byte("tagkey1")},
+	}, nil)
+	require.NoError(t, err)
+
+	// measurement not found
+	tagsets, err = eng.TagValuesCardinality("db0", []uint32{0}, map[string][][]byte{
+		"invalid_measurement": {[]byte("tagkey1")},
+	}, nil)
+	require.Equal(t, err, nil)
+
+	tagsets, err = eng.TagValuesCardinality("db0", []uint32{0}, map[string][][]byte{
+		msNames[0]: {[]byte("tagkey1")},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	require.Equal(t, len(msNames), len(tagsets))
+	require.Equal(t, uint64(10), tagsets[msNames[0]])
 }
 
 func Test_Engine_DropMeasurement(t *testing.T) {
@@ -565,4 +754,25 @@ func TestEngine_UpdateShardDurationInfo(t *testing.T) {
 
 	info := &meta.ShardDurationInfo{Ident: meta.ShardIdentifier{ShardID: 0, OwnerDb: defaultDb, OwnerPt: defaultPtId}}
 	assert2.Equal(t, nil, eng.UpdateShardDurationInfo(info))
+}
+
+func TestGetShard(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	var db, rp = "db0", "auto"
+	var ptID uint32 = 100
+	var shardID = defaultShardId
+	var tr = getTimeRangeInfo()
+
+	eng.CreateDBPT(db, ptID)
+	require.NoError(t, eng.CreateShard(db, rp, ptID, shardID, tr))
+
+	require.NotEmpty(t, eng.GetShard(db, ptID, shardID))
+	require.Empty(t, eng.GetShard(db, ptID+1, shardID))
+	require.Equal(t, 0, eng.GetShardDownSampleLevel(db, ptID, shardID+1))
 }

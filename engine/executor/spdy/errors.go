@@ -112,6 +112,5 @@ func HandleError(err error) {
 		return
 	}
 	logger.NewLogger(errno.ModuleNetwork).
-		With(zap.String("SPDY", "HandleError")).
-		Error("", zap.Error(err))
+		Error("", zap.Error(err), zap.String("SPDY", "HandleError"))
 }

@@ -18,6 +18,8 @@ package statistics
 
 import (
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 const (
@@ -44,9 +46,7 @@ type SQLSlowQueryStatistics struct {
 	QueryBatch       int64
 }
 
-var SlowQueryStat = NewSqlSlowQueryStatistics()
 var SlowQueryTagMap map[string]string
-var SlowQueryStatisticsName = "slow_queries"
 var SqlSlowQueryStatisticsName = "sql_slow_queries"
 var SlowQueries chan *SQLSlowQueryStatistics
 
@@ -56,7 +56,6 @@ func NewSqlSlowQueryStatistics() *SQLSlowQueryStatistics {
 }
 
 func InitSlowQueryStatistics(tags map[string]string) {
-	SlowQueryStat = NewSqlSlowQueryStatistics()
 	SlowQueryTagMap = tags
 }
 
@@ -104,23 +103,45 @@ func (s *SQLSlowQueryStatistics) SetDatabase(db string) {
 	}
 }
 
+func allocSqlSlowQueryValueMap(d *SQLSlowQueryStatistics) map[string]interface{} {
+	return map[string]interface{}{
+		StatTotalDuration:    atomic.LoadInt64(&d.TotalDuration),
+		StatPrepareDuration:  atomic.LoadInt64(&d.PrepareDuration),
+		StatIteratorDuration: atomic.LoadInt64(&d.IteratorDuration),
+		StatEmitDuration:     atomic.LoadInt64(&d.QueryBatch),
+		StatQuery:            d.Query,
+		StatQueryBatch:       atomic.LoadInt64(&d.EmitDuration),
+	}
+}
+
 func CollectSqlSlowQueryStatistics(buffer []byte) ([]byte, error) {
 	durations := getSqlQueryDuration()
 	for _, d := range durations {
 		tagMap := make(map[string]string)
 		tagMap[StatSlowQueryDatabase] = d.DB
 		AllocTagMap(tagMap, SlowQueryTagMap)
-		valueMap := map[string]interface{}{
-			StatTotalDuration:    atomic.LoadInt64(&d.TotalDuration),
-			StatPrepareDuration:  atomic.LoadInt64(&d.PrepareDuration),
-			StatIteratorDuration: atomic.LoadInt64(&d.IteratorDuration),
-			StatEmitDuration:     atomic.LoadInt64(&d.EmitDuration),
-			StatQuery:            d.Query,
-			StatQueryBatch:       atomic.LoadInt64(&d.QueryBatch),
-		}
+		valueMap := allocSqlSlowQueryValueMap(d)
 		buffer = AddPointToBuffer(SqlSlowQueryStatisticsName, tagMap, valueMap, buffer)
 	}
 	return buffer, nil
+}
+
+func CollectOpsSqlSlowQueryStatistics() []opsStat.OpsStatistic {
+	var stats []opsStat.OpsStatistic
+	durations := getSqlQueryDuration()
+	for _, d := range durations {
+		tagMap := make(map[string]string)
+		tagMap[StatSlowQueryDatabase] = d.DB
+		AllocTagMap(tagMap, SlowQueryTagMap)
+		valueMap := allocSqlSlowQueryValueMap(d)
+		stat := opsStat.OpsStatistic{
+			Name:   SqlSlowQueryStatisticsName,
+			Tags:   tagMap,
+			Values: valueMap,
+		}
+		stats = append(stats, stat)
+	}
+	return stats
 }
 
 func AppendSqlQueryDuration(d *SQLSlowQueryStatistics) {
@@ -155,7 +176,6 @@ type StoreSlowQueryStatistics struct {
 	DB                  string
 }
 
-var StoreSlowQueryStat = NewStoreSlowQueryStatistics()
 var StoreSlowQueryTagMap map[string]string
 var StoreSlowQueryStatisticsName = "store_slow_queries"
 var StoreSlowQueries chan *StoreSlowQueryStatistics
@@ -166,7 +186,6 @@ func NewStoreSlowQueryStatistics() *StoreSlowQueryStatistics {
 }
 
 func InitStoreQueryStatistics(tags map[string]string) {
-	StoreSlowQueryStat = NewStoreSlowQueryStatistics()
 	StoreSlowQueryTagMap = tags
 }
 
@@ -207,22 +226,45 @@ func (s *StoreSlowQueryStatistics) SetDatabase(db string) {
 	}
 }
 
+func allocStoreSlowQueryValueMap(d *StoreSlowQueryStatistics) map[string]interface{} {
+	return map[string]interface{}{
+		StatTotalDuration:       d.TotalDuration,
+		StatRpcDuration:         d.RpcDuration,
+		StatChunkReaderDuration: d.ChunkReaderDuration,
+		StatChunkReaderCount:    d.ChunkReaderCount,
+		StatQuery:               d.Query,
+	}
+}
+
 func CollectStoreSlowQueryStatistics(buffer []byte) ([]byte, error) {
 	durations := getStoreQueryDuration()
 	for _, d := range durations {
 		tagMap := make(map[string]string)
 		tagMap[StatSlowQueryDatabase] = d.DB
 		AllocTagMap(tagMap, StoreSlowQueryTagMap)
-		valueMap := map[string]interface{}{
-			StatTotalDuration:       atomic.LoadInt64(&d.TotalDuration),
-			StatRpcDuration:         atomic.LoadInt64(&d.RpcDuration),
-			StatChunkReaderDuration: atomic.LoadInt64(&d.ChunkReaderDuration),
-			StatChunkReaderCount:    atomic.LoadInt64(&d.ChunkReaderCount),
-			StatQuery:               d.Query,
-		}
+		valueMap := allocStoreSlowQueryValueMap(d)
 		buffer = AddPointToBuffer(StoreSlowQueryStatisticsName, tagMap, valueMap, buffer)
 	}
 	return buffer, nil
+}
+
+func CollectOpsStoreSlowQueryStatistics() []opsStat.OpsStatistic {
+	var stats []opsStat.OpsStatistic
+	durations := getStoreQueryDuration()
+	for _, d := range durations {
+		tagMap := make(map[string]string)
+		tagMap[StatSlowQueryDatabase] = d.DB
+		AllocTagMap(tagMap, StoreSlowQueryTagMap)
+		valueMap := allocStoreSlowQueryValueMap(d)
+		stat := opsStat.OpsStatistic{
+			Name:   StoreSlowQueryStatisticsName,
+			Tags:   tagMap,
+			Values: valueMap,
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats
 }
 
 func AppendStoreQueryDuration(d *StoreSlowQueryStatistics) {

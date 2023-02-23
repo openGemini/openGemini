@@ -20,7 +20,8 @@ import (
 	"time"
 
 	log "github.com/influxdata/influxdb/logger"
-	"github.com/openGemini/openGemini/engine"
+	_ "github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
@@ -31,7 +32,7 @@ type Service struct {
 	services.Base
 
 	MetaClient interface {
-		PruneGroupsCommand(shardGroup bool) error
+		PruneGroupsCommand(shardGroup bool, id uint64) error
 		GetShardDurationInfo(index uint64) (*meta.ShardDurationResponse, error)
 		DeleteShardGroup(database, policy string, id uint64) error
 		DeleteIndexGroup(database, policy string, id uint64) error
@@ -88,12 +89,9 @@ func (s *Service) handle() {
 			retryNeeded = true
 			continue
 		}
-	}
 
-	if len(expiredShards) != 0 {
-		// send request to clear deleted shard group from PyMeta.
-		if err := s.MetaClient.PruneGroupsCommand(true); err != nil {
-			logger.Error("Problem pruning shard groups", zap.Error(err))
+		if err := s.MetaClient.PruneGroupsCommand(true, expiredShards[i].ShardID); err != nil {
+			logger.Error("fail to pruning shard groups", zap.Error(err), zap.Uint64("id", expiredShards[i].ShardID))
 		}
 	}
 
@@ -118,12 +116,10 @@ func (s *Service) handle() {
 			retryNeeded = true
 			continue
 		}
-	}
 
-	if len(expiredIndexes) != 0 {
 		// send request to clear deleted shard group from PyMeta.
-		if err := s.MetaClient.PruneGroupsCommand(false); err != nil {
-			logger.Error("Problem pruning index groups", zap.Error(err))
+		if err := s.MetaClient.PruneGroupsCommand(false, expiredIndexes[i].Index.IndexID); err != nil {
+			logger.Error("Problem pruning index groups", zap.Error(err), zap.Uint64("id", expiredIndexes[i].Index.IndexID))
 		}
 	}
 
@@ -146,7 +142,7 @@ func (s *Service) updateDurationInfo() error {
 
 	for i := range res.Durations {
 		err = s.Engine.UpdateShardDurationInfo(&res.Durations[i])
-		if err == engine.ErrPTNotFound {
+		if errno.Equal(err, errno.PtNotFound) || errno.Equal(err, errno.DBPTClosed) {
 			continue
 		}
 		if err != nil {

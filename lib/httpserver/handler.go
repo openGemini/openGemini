@@ -17,12 +17,17 @@ limitations under the License.
 package httpserver
 
 import (
+	"net/http"
+
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/auth"
+	"github.com/openGemini/openGemini/open_src/influx/httpd"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	"go.uber.org/zap"
 )
 
 type Handler struct {
@@ -60,4 +65,51 @@ func NewHandler(authEn bool, jwtSharedSecret string) *Handler {
 	}
 
 	return h
+}
+
+func Authenticate(inner func(http.ResponseWriter, *http.Request), client meta.MetaClient, requireAuthentication bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Return early if we are not authenticating
+		if !requireAuthentication {
+			inner(w, r)
+			return
+		}
+
+		if requireAuthentication && client.AdminUserExists() {
+			creds, err := httpd.ParseCredentials(r)
+			if err != nil {
+				util.HttpError(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+
+			switch creds.Method {
+			case httpd.UserAuthentication:
+				if creds.Username == "" {
+					errMsg := "username required"
+					err := errno.NewError(errno.HttpUnauthorized)
+					log := logger.NewLogger(errno.ModuleHTTP)
+					log.Error(errMsg, zap.Error(err))
+					util.HttpError(w, err.Error(), http.StatusUnauthorized)
+					return
+				}
+
+				_, err = client.Authenticate(creds.Username, creds.Password)
+				if err != nil {
+					errMsg := "authorization failed"
+					if err == meta2.ErrUserLocked {
+						errMsg = err.Error()
+					}
+					err := errno.NewError(errno.HttpUnauthorized)
+					log := logger.NewLogger(errno.ModuleHTTP)
+					log.Error(errMsg, zap.Error(err))
+					util.HttpError(w, err.Error(), http.StatusUnauthorized)
+					return
+				}
+			default:
+				util.HttpError(w, "unsupported authentication", http.StatusUnauthorized)
+			}
+
+		}
+		inner(w, r)
+	})
 }

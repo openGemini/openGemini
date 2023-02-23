@@ -10,12 +10,15 @@ package statistics
 
 import (
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 // Statistics keeps statistics related to the Handler
 type HandlerStatistics struct {
 	Requests                     int64
 	QueryStmtCount               int64
+	Query400ErrorStmtCount       int64 // client error
 	QueryErrorStmtCount          int64
 	QueryRequests                int64
 	WriteRequests                int64
@@ -47,13 +50,17 @@ type HandlerStatistics struct {
 	WriteCreateSgDuration        int64
 	WriteUnmarshalSkDuration     int64
 	WriteStoresDuration          int64
+	WriteUpdateIndexDuration     int64
+	WriteMapRowsDuration         int64
+	WriteStreamRoutineDuration   int64
 }
 
 const (
 	statRequest                      = "req"                     // Number of HTTP requests served.
 	statQueryRequest                 = "queryReq"                // Number of query requests served.
 	statQueryStmtCount               = "queryStmtCount"          // Number of query stmt served.
-	statQueryErrorStmtCount          = "queryErrorStmtCount"     // Number of query stmt occur error.
+	Query400ErrorStmtCount           = "query400ErrorStmtCount"  // Number of query stmt occur 400(client) error.
+	statQueryErrorStmtCount          = "queryErrorStmtCount"     // Number of query stmt occur not 400 error.
 	statWriteRequest                 = "writeReq"                // Number of write requests serverd.
 	statWrite400ErrRequest           = "write400ErrReq"          // Number of write 400 requests occur error.
 	statWrite500ErrRequest           = "write500ErrReq"          // Number of write 500 requests occur error.
@@ -83,6 +90,9 @@ const (
 	statWriteCreateSgDuration        = "writeCreateSgDurationNs"
 	statWriteUnmarshalSkDuration     = "writeUnmarshalSkDurationNs"
 	statWriteWriteStoresDuration     = "writeStoresDurationNs"
+	statWriteUpdateIndexDuration     = "WriteUpdateIndexDurationNs"
+	statWriteMapRowsDuration         = "WriteMapRowsDurationNs"
+	statWriteStreamRoutineDuration   = "WriteStreamRoutineDurationNs"
 )
 
 var HandlerStat = NewHandlerStatistics()
@@ -99,9 +109,17 @@ func InitHandlerStatistics(tags map[string]string) {
 }
 
 func CollectHandlerStatistics(buffer []byte) ([]byte, error) {
+	perfValueMap := genHandlerValueMap()
+
+	buffer = AddPointToBuffer(HandlerStatisticsName, HandlerTagMap, perfValueMap, buffer)
+	return buffer, nil
+}
+
+func genHandlerValueMap() map[string]interface{} {
 	perfValueMap := map[string]interface{}{
 		statRequest:                      atomic.LoadInt64(&HandlerStat.Requests),
 		statQueryStmtCount:               atomic.LoadInt64(&HandlerStat.QueryStmtCount),
+		Query400ErrorStmtCount:           atomic.LoadInt64(&HandlerStat.Query400ErrorStmtCount),
 		statQueryErrorStmtCount:          atomic.LoadInt64(&HandlerStat.QueryErrorStmtCount),
 		statQueryRequest:                 atomic.LoadInt64(&HandlerStat.QueryRequests),
 		statWriteRequest:                 atomic.LoadInt64(&HandlerStat.WriteRequests),
@@ -133,8 +151,19 @@ func CollectHandlerStatistics(buffer []byte) ([]byte, error) {
 		statWriteCreateSgDuration:        atomic.LoadInt64(&HandlerStat.WriteCreateSgDuration),
 		statWriteUnmarshalSkDuration:     atomic.LoadInt64(&HandlerStat.WriteUnmarshalSkDuration),
 		statWriteWriteStoresDuration:     atomic.LoadInt64(&HandlerStat.WriteStoresDuration),
+		statWriteUpdateIndexDuration:     atomic.LoadInt64(&HandlerStat.WriteUpdateIndexDuration),
+		statWriteMapRowsDuration:         atomic.LoadInt64(&HandlerStat.WriteMapRowsDuration),
+		statWriteStreamRoutineDuration:   atomic.LoadInt64(&HandlerStat.WriteStreamRoutineDuration),
 	}
 
-	buffer = AddPointToBuffer(HandlerStatisticsName, HandlerTagMap, perfValueMap, buffer)
-	return buffer, nil
+	return perfValueMap
+}
+
+func CollectOpsHandlerStatistics() []opsStat.OpsStatistic {
+	return []opsStat.OpsStatistic{{
+		Name:   "httpd",
+		Tags:   HandlerTagMap,
+		Values: genHandlerValueMap(),
+	},
+	}
 }

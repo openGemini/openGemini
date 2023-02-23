@@ -25,7 +25,10 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSeriesKeysRequestMessage(t *testing.T) {
@@ -206,7 +209,7 @@ func TestWritePointsRequest(t *testing.T) {
 }
 
 func TestWritePointsResponse(t *testing.T) {
-	req := netstorage.NewWritePointsResponse(1, "ok")
+	req := netstorage.NewWritePointsResponse(1, 0, "ok")
 
 	other, ok := assertCodec(t, req, true, true)
 	if !ok {
@@ -214,6 +217,64 @@ func TestWritePointsResponse(t *testing.T) {
 	}
 
 	assert.Equal(t, req, other.(*netstorage.WritePointsResponse))
+}
+
+func TestStreamVar(t *testing.T) {
+	sv := &netstorage.StreamVar{Only: false, Id: []uint64{0, 1}}
+	if _, ok := sv.Instance().(*netstorage.StreamVar); !ok {
+		t.Fatal("StreamVar Instance failed")
+	}
+
+	var buf []byte
+	sv = &netstorage.StreamVar{}
+	assert.Equal(t, sv.Unmarshal(buf), nil)
+}
+
+func TestWriteStreamPointsRequest(t *testing.T) {
+	req := netstorage.NewWriteStreamPointsRequest([]byte{1, 2, 3, 4, 5, 6, 7}, []*netstorage.StreamVar{
+		{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}},
+	})
+
+	other, ok := assertCodec(t, req, true, false)
+	if !ok {
+		return
+	}
+
+	assert.Equal(t, req.StreamVars(), other.(*netstorage.WriteStreamPointsRequest).StreamVars())
+
+	var err error
+	var buf []byte
+	buf, err = req.Marshal(buf[:0])
+	if err != nil {
+		t.Fatal("WriteStreamPointsRequest Marshal failed")
+	}
+	err = req.Unmarshal(buf)
+	if err != nil {
+		t.Fatal("WriteStreamPointsRequest Unmarshal failed")
+	}
+}
+
+func TestWriteStreamPointsResponse(t *testing.T) {
+	req := netstorage.NewWriteStreamPointsResponse(1, 0, "ok")
+
+	other, ok := assertCodec(t, req, true, true)
+	if !ok {
+		return
+	}
+	assert.Equal(t, req, other.(*netstorage.WriteStreamPointsResponse))
+
+	var err error
+	var buf []byte
+	buf, err = req.Marshal(buf[:0])
+	if err != nil {
+		t.Fatal("WriteStreamPointsResponse Marshal failed")
+	}
+	err = req.Unmarshal(buf)
+	if err != nil {
+		t.Fatal("WriteStreamPointsResponse Unmarshal failed")
+	}
+	assert.Equal(t, req.Size(), len(buf))
+
 }
 
 func TestInvalidDDLMessage(t *testing.T) {
@@ -278,4 +339,43 @@ func assertCodec(t *testing.T, obj transport.Codec, assertSize bool, assertUnmar
 	}
 
 	return other, true
+}
+
+func Test_PtRequest_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.PtRequest{
+		PtRequest: netdata.PtRequest{
+			Pt: &proto2.DbPt{
+				Db: proto.String("DB"),
+				Pt: &proto2.PtInfo{
+					Owner: &proto2.PtOwner{
+						NodeID: proto.Uint64(4),
+					},
+					Status: proto.Uint32(0),
+					PtId:   proto.Uint32(1),
+				},
+			},
+			MigrateType: proto.Int32(2),
+			OpId:        proto.Uint64(1234),
+		},
+	}
+	buf, err := req.Marshal(nil)
+	require.NoError(t, err)
+	req2 := &netstorage.PtRequest{}
+	err = req2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
+}
+
+func Test_PtResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := &netstorage.PtResponse{
+		PtResponse: netdata.PtResponse{
+			Err: proto.String("error"),
+		},
+	}
+	buf, err := resp.Marshal(nil)
+	require.NoError(t, err)
+	resp2 := &netstorage.PtResponse{}
+	err = resp2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, resp.String(), resp2.String())
 }

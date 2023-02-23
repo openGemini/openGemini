@@ -28,6 +28,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/logger"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -150,7 +151,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 		t.Fatalf("got shardKey %v, expected %v", got, exp)
 	}
 
-	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), Hot)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +194,7 @@ func Test_Data_ReSharding(t *testing.T) {
 	must(data.CreateRetentionPolicy("foo", rp, false))
 	must(data.CreateMeasurement("foo", "bar", "cpu",
 		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil))
-	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), Hot))
+	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot))
 
 	sg0, err := data.ShardGroupByTimestamp("foo", "bar", time.Unix(0, 0))
 	if err != nil {
@@ -201,8 +202,8 @@ func Test_Data_ReSharding(t *testing.T) {
 	}
 
 	ptinfo := data.PtView["foo"]
-	dbptInfo := []PtInfo{{PtOwner{1}, Offline, 0},
-		{PtOwner{2}, Offline, 1}}
+	dbptInfo := []PtInfo{{PtOwner{1}, Offline, 0, 1},
+		{PtOwner{2}, Offline, 1, 1}}
 	if !reflect.DeepEqual([]PtInfo(ptinfo), dbptInfo) {
 		t.Fatalf("got %v, exp %v", ptinfo, dbptInfo)
 	}
@@ -215,11 +216,11 @@ func Test_Data_ReSharding(t *testing.T) {
 	}
 
 	shardgroups, err := data.ShardGroups("foo", "bar")
-	shards1 := []ShardInfo{{1, []uint32{0}, "", "", Hot, 1}}
+	shards1 := []ShardInfo{{1, []uint32{0}, "", "", util.Hot, 1, 0, 0, false, false}}
 	sg1 := ShardGroupInfo{1, sg0.StartTime, sg0.EndTime,
 		sg0.DeletedAt, shards1, sg0.TruncatedAt}
-	shards2 := []ShardInfo{{2, []uint32{0}, "", "cpu,hostname=host_5", Hot, 3},
-		{3, []uint32{1}, "cpu,hostname=host_5", "", Hot, 4}}
+	shards2 := []ShardInfo{{2, []uint32{0}, "", "cpu,hostname=host_5", util.Hot, 3, 0, 0, false, false},
+		{3, []uint32{1}, "cpu,hostname=host_5", "", util.Hot, 4, 0, 0, false, false}}
 	sg2 := ShardGroupInfo{2, time.Unix(0, splitTime.UnixNano()+1).UTC(), sg0.EndTime,
 		sg0.DeletedAt, shards2, sg0.TruncatedAt}
 	expSgs := []ShardGroupInfo{sg1, sg2}
@@ -291,9 +292,11 @@ func TestData_PruneGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := data.pruneShardGroups()
-	if err != nil {
-		t.Fatal(err)
+	for i := 1; i <= 4; i++ {
+		err := data.pruneShardGroups(uint64(i))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	rpInfo, err := data.RetentionPolicy(db, rp)
@@ -340,7 +343,7 @@ func Test_Data_DeleteCmd(t *testing.T) {
 	rpName := "bar"
 	mstName := "cpu"
 	must(generateMeasurement(data, dbName, rpName, mstName))
-	must(data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), Hot))
+	must(data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot))
 
 	must(data.MarkDatabaseDelete(dbName))
 
@@ -385,7 +388,8 @@ func Test_Data_DeleteCmd(t *testing.T) {
 	if got, exp := data.Database(dbName).RetentionPolicy(rpName).Measurement(mstName).MarkDeleted, true; got != exp {
 		t.Fatalf("mark measurement delete got %v exp %v", got, exp)
 	}
-	must(data.DropMeasurement(dbName, rpName, mstName))
+	nameWithVer := mstName + "_0000"
+	must(data.DropMeasurement(dbName, rpName, nameWithVer))
 	if got, exp := len(data.Database(dbName).RetentionPolicy(rpName).Measurements), 0; got != exp {
 		t.Fatalf("length of measurement got %v exp %v", got, exp)
 	}
@@ -548,7 +552,7 @@ func TestData_CreateRetentionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2022-06-14T10:20:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, Hot)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +597,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2021-11-26T13:00:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, Hot)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -610,7 +614,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	insertTime = mustParseTime(time.RFC3339Nano, "2021-11-25T13:00:00Z")
 	sg, err = data.ShardGroupByTimestamp(dbName, rpName, insertTime)
 	assert(sg == nil, "shard group contain time %v should not exist", insertTime)
-	err = data.CreateShardGroup(dbName, rpName, insertTime, Hot)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +650,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2022-06-08T09:00:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, Hot)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,12 +664,13 @@ func TestData_CreateShardGroup(t *testing.T) {
 	assert(len(igs) == 1, "err num of index groups")
 	assert(igs[0].StartTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T08:00:00Z")), "index group startTime error")
 	assert(igs[0].EndTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T10:00:00Z")), "index group endTime error")
+	data.ExpandShardsEnable = true
 	err, _ = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401")
 	if err != nil {
 		t.Fatal(err)
 	}
 	insertTime = mustParseTime(time.RFC3339Nano, "2022-06-08T08:30:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, Hot)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,8 +749,7 @@ func TestData_createIndexGroupIfNeeded(t *testing.T) {
 				EndTime:   now.Add(3 * duration),
 				Indexes:   make([]IndexInfo, 2),
 			},
-		},
-	}
+		}}
 	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour))
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
@@ -892,7 +896,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		data.CreateShardGroup(databases[i%n], rpName, times[i%n], Hot)
+		data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot)
 	}
 	b.StopTimer()
 }
@@ -921,7 +925,7 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		if err = data.CreateShardGroup(dbName, rpName, currentTime, Hot); err != nil {
+		if err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot); err != nil {
 			b.Fatal(err)
 		}
 		var sg *ShardGroupInfo
@@ -1051,7 +1055,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 		startTimes[i-1] = currentTime
 		endTimes[i-1] = currentTime.Add(3 * 24 * time.Hour)
 		for j := 0; j < retainSgNum; j++ {
-			err = data.CreateShardGroup(dbName, rpName, currentTime, Hot)
+			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1099,7 +1103,7 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 
 		currentTime = time.Now()
 		for j := 0; j < retainSgNum; j++ {
-			err = data.CreateShardGroup(dbName, rpName, currentTime, Hot)
+			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1178,4 +1182,32 @@ func PrintMemUsage() {
 
 func bToMb(b uint64) float32 {
 	return float32(b) / 1024. / 1024.
+}
+
+func TestUpdateShardInfo(t *testing.T) {
+	data := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"db0": {
+				Name: "db0",
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp0": {
+						ShardGroups: []ShardGroupInfo{{Shards: []ShardInfo{
+							{ID: 1},
+						}}},
+					},
+				},
+			},
+		},
+	}
+	data.UpdateShardDownSampleInfo(&ShardIdentifier{
+		OwnerDb:         "db0",
+		Policy:          "rp0",
+		ShardID:         1,
+		DownSampleID:    2,
+		DownSampleLevel: 2,
+	})
+	s := data.Databases["db0"].RetentionPolicies["rp0"].ShardGroups[0].Shards[0]
+	if s.DownSampleID != 2 || s.DownSampleLevel != 2 {
+		t.Fatal()
+	}
 }

@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/apache/arrow/go/arrow/array"
 	"github.com/apache/arrow/go/arrow/ipc"
@@ -76,20 +77,21 @@ type castorCli struct {
 	dataSocketIn  io.WriteCloser // write into pyworker
 	dataSocketOut ByteReadReader // read from pyworker
 
-	alive     bool
-	logger    *logger.Logger
-	cnt       *int32 // reference of service client quantity
-	mu        sync.Mutex
-	chanSet   *chanSet
-	writeChan chan *data
-	cancel    context.CancelFunc
-	ctx       context.Context
+	alive       bool
+	logger      *logger.Logger
+	cnt         *int32 // reference of pool's client quantity
+	mu          sync.Mutex
+	dataChanSet *dataChanSet
+	writeChan   chan *data
+	cancel      context.CancelFunc
+	ctx         context.Context
+	idleCliChan chan *castorCli
 }
 
-func newClient(addr string, logger *logger.Logger, chanSet *chanSet, cnt *int32) (*castorCli, *errno.Error) {
+func newClient(addr string, logger *logger.Logger, chanSet *dataChanSet, idleCliChan chan *castorCli, cnt *int32) (*castorCli, *errno.Error) {
 	conn, err := getConn(addr)
 	if err != nil {
-		return nil, errno.NewError(errno.FailToConnectToPyworker)
+		return nil, errno.NewError(errno.FailToConnectToPyworker, err)
 	}
 	readerBuf := bufio.NewReader(conn)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,15 +101,26 @@ func newClient(addr string, logger *logger.Logger, chanSet *chanSet, cnt *int32)
 		alive:         true,
 		logger:        logger,
 		cnt:           cnt,
-		chanSet:       chanSet,
+		dataChanSet:   chanSet,
 		writeChan:     make(chan *data, 1),
 		cancel:        cancel,
 		ctx:           ctx,
+		idleCliChan:   idleCliChan,
 	}
 	atomic.AddInt32(cli.cnt, 1)
 	go cli.read()
 	go cli.write()
 	return cli, nil
+}
+
+func (h *castorCli) send(data *data) *errno.Error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.alive {
+		return errno.NewError(errno.ConnectionBroken)
+	}
+	h.writeChan <- data
+	return nil
 }
 
 // write send data to through internal connection
@@ -119,16 +132,12 @@ func (h *castorCli) write() {
 				return
 			}
 			if err := writeData(data.record, h.dataSocketIn); err != nil {
-				if data.retryCnt >= maxSendRetry {
-					h.chanSet.dataFailureChan <- data
-				} else {
-					data.retryCnt++
-					h.chanSet.dataRetryChan <- data
-				}
+				data.retryCnt++
+				h.dataChanSet.dataChan <- data
 				h.close()
 				return
 			}
-			h.chanSet.clientPool <- h
+			h.idleCliChan <- h
 		case <-h.ctx.Done():
 			return
 		}
@@ -140,7 +149,7 @@ func (h *castorCli) read() {
 	for {
 		records, err := readData(h.dataSocketOut)
 		if err != nil {
-			if err == io.EOF || err == io.ErrClosedPipe {
+			if isConnCloseErr(err) {
 				h.logger.Info("connection closed")
 			} else {
 				h.logger.Error(err.Error())
@@ -153,7 +162,7 @@ func (h *castorCli) read() {
 				h.logger.Error(err.Error())
 				continue
 			}
-			h.chanSet.resultChan <- record
+			h.dataChanSet.resultChan <- record
 		}
 	}
 }
@@ -185,5 +194,69 @@ func checkRecordType(rec array.Record) *errno.Error {
 		return nil
 	default:
 		return errno.NewError(errno.UnknownDataMessageType, DATA, msgType)
+	}
+}
+
+func isConnCloseErr(err error) bool {
+	return err == io.EOF || err == io.ErrClosedPipe || strings.Contains(err.Error(), "could not read")
+}
+
+func newClientPool(addr string, size int, log *logger.Logger, getTimeout time.Duration, dataChanSet *dataChanSet) *pool {
+	return &pool{
+		addr:        addr,
+		capacity:    size,
+		cliCnt:      new(int32),
+		idleCliChan: make(chan *castorCli, size),
+		logger:      log,
+		dataChanSet: dataChanSet,
+		getTimeout:  getTimeout,
+	}
+}
+
+type pool struct {
+	addr        string
+	capacity    int
+	cliCnt      *int32
+	idleCliChan chan *castorCli
+	logger      *logger.Logger
+	dataChanSet *dataChanSet
+	getTimeout  time.Duration
+}
+
+func (p *pool) get() *castorCli {
+	timer := time.NewTimer(p.getTimeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return nil
+		case cli, ok := <-p.idleCliChan:
+			if !ok {
+				return nil
+			}
+			if !cli.alive {
+				// kick dead client out of channel
+				continue
+			}
+			return cli
+		}
+	}
+}
+
+func (p *pool) fillUp() *errno.Error {
+	for i := int(atomic.LoadInt32(p.cliCnt)); i < p.capacity; i++ {
+		cli, err := newClient(p.addr, p.logger, p.dataChanSet, p.idleCliChan, p.cliCnt)
+		if err != nil {
+			return err
+		}
+		p.idleCliChan <- cli
+	}
+	return nil
+}
+
+func (p *pool) close() {
+	for len(p.idleCliChan) > 0 {
+		cli := <-p.idleCliChan
+		cli.close()
 	}
 }

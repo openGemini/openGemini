@@ -122,7 +122,7 @@ func (m TypeMapper) MapType(_ *influxql.Measurement, _ string) influxql.DataType
 	return influxql.Unknown
 }
 
-func (m TypeMapper) MapTypeBatch(_ *influxql.Measurement, _ map[string]influxql.DataType, _ *influxql.Schema) error {
+func (m TypeMapper) MapTypeBatch(_ *influxql.Measurement, _ map[string]*influxql.FieldNameSpace, _ *influxql.Schema) error {
 	return nil
 }
 
