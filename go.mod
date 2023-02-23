@@ -9,6 +9,7 @@ require (
 	github.com/VictoriaMetrics/fastcache v1.7.0
 	github.com/apache/arrow/go/arrow v0.0.0-20200923215132-ac86123a3f01
 	github.com/armon/go-metrics v0.3.10
+	github.com/c-bata/go-prompt v0.2.2
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang-jwt/jwt v3.2.1+incompatible
 	github.com/golang/snappy v0.0.4
@@ -19,6 +20,7 @@ require (
 	github.com/influxdata/influxdb v1.9.5
 	github.com/influxdata/influxql v1.1.1-0.20210223160523-b6ab99450c93
 	github.com/influxdata/tdigest v0.0.2-0.20210216194612-fc98d27c9e8b
+	github.com/jedib0t/go-pretty/v6 v6.4.4
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.13.6
 	github.com/mitchellh/cli v1.1.0
@@ -31,7 +33,7 @@ require (
 	github.com/ryanuber/columnize v2.1.2+incompatible
 	github.com/shirou/gopsutil/v3 v3.22.1
 	github.com/spf13/cobra v1.3.0
-	github.com/stretchr/testify v1.7.1
+	github.com/stretchr/testify v1.7.4
 	github.com/tinylib/msgp v1.1.7-0.20220719154719-f3635b96e483
 	github.com/valyala/fastjson v1.6.3
 	github.com/xlab/treeprint v1.1.0
