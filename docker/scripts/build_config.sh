@@ -5,7 +5,7 @@ domain=`echo $OPEN_GEMINI_DOMAIN`
 
 configMount=`echo $OPEN_GEMINI_CONFIG`
 if [[ "$configMount" == "" ]]; then
-	echo "Missing environment variable: OPEN_GEMINI_LAUNCH"
+	echo "Missing environment variable: OPEN_GEMINI_CONFIG"
 	exit 1
 fi
 
