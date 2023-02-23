@@ -27,6 +27,7 @@ import (
 
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/config"
@@ -37,7 +38,10 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/services/sherlock"
+	stream2 "github.com/openGemini/openGemini/services/stream"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -56,10 +60,15 @@ type Server struct {
 	config           *config.TSStore
 	transServer      *transport.Server
 	storage          *storage.Storage
+	stream           stream.Engine
 	statisticsPusher *statisticsPusher.StatisticsPusher
 
 	Logger       *Logger.Logger
 	serfInstance *serf.Serf
+	metaClient   metaclient.MetaClient
+	StoreService *Service
+
+	sherlockService *sherlock.Service
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -77,6 +86,9 @@ func NewServer(c config.Config, cmd *cobra.Command, logger *Logger.Logger) (app.
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
+
+	// set query series limit
+	syscontrol.SetQuerySeriesLimit(conf.Data.QuerySeriesLimit)
 
 	s.storageDataPath = conf.Data.DataDir
 	s.metaPath = conf.Data.MetaDir
@@ -102,6 +114,11 @@ func NewServer(c config.Config, cmd *cobra.Command, logger *Logger.Logger) (app.
 
 	executor.SetPipelineExecutorResourceManagerParas(int64(conf.Common.MemoryLimitSize), time.Duration(conf.Common.MemoryWaitTime))
 
+	s.StoreService = NewService(&conf.Data)
+
+	s.sherlockService = sherlock.NewService(conf.Sherlock)
+	s.sherlockService.WithLogger(s.Logger)
+
 	return s, nil
 }
 
@@ -122,6 +139,11 @@ func (s *Server) Open() error {
 	//Mark start-up in extra log
 	_, _ = fmt.Fprintf(os.Stdout, "%v TSStore starting\n", time.Now())
 
+	s.transServer = transport.NewServer(s.ingestAddr, s.selectAddr)
+	if err := s.transServer.Open(); err != nil {
+		return err
+	}
+
 	startTime := time.Now()
 	storageNodeInfo := metaclient.StorageNodeInfo{
 		InsertAddr: s.config.Data.InsertAddr(),
@@ -140,6 +162,13 @@ func (s *Server) Open() error {
 		panic(err)
 	}
 
+	// update logicClock to max(clock, logicClock) to avoid duplicate sid
+	if s.node.Clock >= metaclient.LogicClock {
+		metaclient.LogicClock = s.node.Clock
+	} else {
+		s.node.Clock = metaclient.LogicClock
+	}
+
 	log := Logger.GetLogger()
 	s.storage, err = storage.OpenStorage(s.storageDataPath, s.node, commHttpHandler.MetaClient.(*metaclient.Client), s.config)
 	if err != nil {
@@ -152,20 +181,32 @@ func (s *Server) Open() error {
 
 	fmt.Printf("successfully opened storage %q in %.3f seconds\n", s.storageDataPath, time.Since(startTime).Seconds())
 
-	s.transServer, err = transport.NewServer(s.ingestAddr, s.selectAddr, s.storage)
+	s.stream, err = stream.NewStream(s.storage, s.Logger.With(zap.String("service", "stream")), commHttpHandler.MetaClient.(*metaclient.Client), stream2.NewConfig())
 	if err != nil {
-		err = fmt.Errorf("cannot create a server with insertAddr=%s: %s", s.ingestAddr, err)
-		panic(err)
+		return err
 	}
 
-	go s.transServer.InsertWorker()
-	go s.transServer.SelectWorker()
+	s.transServer.Run(s.storage, s.stream)
 
 	if s.config.Gossip.Enabled {
 		conf := s.config.Gossip.BuildSerf(s.config.Logging, config.AppStore, strconv.Itoa(int(nid)), nil)
-		s.serfInstance, err = app.CreateSerfInstance(conf, clock, s.config.Gossip.Members, nil)
+		s.serfInstance, err = app.CreateSerfInstance(conf, s.node.Clock, s.config.Gossip.Members, nil)
 	}
 	s.initStatisticsPusher()
+
+	s.metaClient = metaclient.DefaultMetaClient
+	if s.StoreService != nil {
+		// Open store service.
+		if err := s.StoreService.Open(); err != nil {
+			return fmt.Errorf("open meta service: %s", err)
+		}
+		s.StoreService.handler.SetstatisticsPusher(s.statisticsPusher)
+		s.StoreService.handler.metaClient = s.metaClient
+	}
+	s.metaClient.OpenAtStore()
+	if s.sherlockService != nil {
+		s.sherlockService.Open()
+	}
 	return err
 }
 
@@ -180,6 +221,9 @@ func (s *Server) Close() error {
 
 	log.Info("gracefully closing the storage", zap.String("path at", s.storageDataPath))
 	startTime = time.Now()
+	s.stream.Close()
+	log.Info("successfully closed the stream", zap.Float64("in seconds", time.Since(startTime).Seconds()))
+	startTime = time.Now()
 	s.storage.MustClose()
 	log.Info("successfully closed the storage", zap.Float64("in seconds", time.Since(startTime).Seconds()))
 
@@ -187,15 +231,23 @@ func (s *Server) Close() error {
 		s.statisticsPusher.Stop()
 	}
 
+	if s.StoreService != nil {
+		if err := s.StoreService.Close(); err != nil {
+			return err
+		}
+	}
+	if s.sherlockService != nil {
+		s.sherlockService.Stop()
+	}
 	log.Info("the storage has been stopped")
 	return nil
 }
 
 func (s *Server) initStatisticsPusher() {
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(s.config.Monitor.StoreEnabled)
 	if !s.config.Monitor.StoreEnabled {
 		return
 	}
-
 	appName := "ts-store"
 	if app.IsSingle() {
 		appName = "ts-server"
@@ -218,10 +270,14 @@ func (s *Server) initStatisticsPusher() {
 	stat.InitIOStatistics(globalTags)
 	stat.NewMergeStatistics().Init(globalTags)
 	stat.NewCompactStatistics().Init(globalTags)
+	stat.NewDownSampleStatistics().Init(globalTags)
 	stat.InitEngineStatistics(globalTags)
 	stat.InitExecutorStatistics(globalTags)
 	stat.InitFileStatistics(globalTags)
 	stat.NewErrnoStat().Init(globalTags)
+	stat.NewStreamStatistics().Init(globalTags)
+	stat.NewStreamWindowStatistics().Init(globalTags)
+	stat.NewRecordStatistics().Init(globalTags)
 
 	s.statisticsPusher.Register(
 		stat.CollectPerfStatistics,
@@ -232,9 +288,24 @@ func (s *Server) initStatisticsPusher() {
 		stat.CollectIOStatistics,
 		stat.NewMergeStatistics().Collect,
 		stat.NewCompactStatistics().Collect,
+		stat.NewDownSampleStatistics().Collect,
 		stat.CollectEngineStatStatistics,
 		stat.CollectExecutorStatistics,
 		s.storage.GetEngine().Statistics,
-		stat.NewErrnoStat().Collect)
+		stat.NewErrnoStat().Collect,
+		stat.StoreTaskInstance.Collect,
+		stat.NewStreamStatistics().Collect,
+		stat.NewStreamWindowStatistics().Collect,
+		stat.NewRecordStatistics().Collect,
+	)
+
+	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreSlowQueryStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsIOStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewMergeStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
 	s.statisticsPusher.Start()
 }

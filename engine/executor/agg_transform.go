@@ -19,12 +19,13 @@ package executor
 import (
 	"bytes"
 	"context"
-	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/binarysearch"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"go.uber.org/zap"
 )
@@ -57,7 +58,7 @@ type StreamAggregateTransform struct {
 }
 
 func NewStreamAggregateTransform(
-	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions,
+	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, isSubQuery bool,
 ) (*StreamAggregateTransform, error) {
 	if len(inRowDataType) != 1 || len(outRowDataType) != 1 {
 		panic("NewStreamAggregateTransform raise error: the Inputs and Outputs should be 1")
@@ -73,7 +74,7 @@ func NewStreamAggregateTransform(
 		nextChunkCh:   make(chan struct{}),
 		reduceChunkCh: make(chan struct{}),
 		iteratorParam: &IteratorParams{},
-		aggLogger:     logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "AggregateTransform"), zap.Uint64("trace_id", opt.Traceid)),
+		aggLogger:     logger.NewLogger(errno.ModuleQueryEngine),
 		chunkPool:     NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
 	}
 
@@ -87,7 +88,7 @@ func NewStreamAggregateTransform(
 		trans.Outputs = append(trans.Outputs, output)
 	}
 
-	trans.proRes, err = NewProcessors(inRowDataType[0], outRowDataType[0], exprOpt, opt)
+	trans.proRes, err = NewProcessors(inRowDataType[0], outRowDataType[0], exprOpt, opt, isSubQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -107,12 +108,14 @@ func NewStreamAggregateTransform(
 	}
 
 	// post process for multi call
-	if trans.proRes.isTimeUniqueCall {
-		trans.postProcess = trans.postProcessMultiTimeUnique
+	if trans.proRes.isTransformationCall {
+		trans.postProcess = trans.postProcessMultiTransformation
 	} else if trans.proRes.isUDAFCall {
 		trans.postProcess = trans.postProcessWithUDAF
-	} else if trans.proRes.isTransformationCall {
-		trans.postProcess = trans.postProcessMultiTransformation
+	} else if trans.proRes.isTimeUniqueCall {
+		trans.postProcess = trans.postProcessMultiTimeUnique
+	} else if trans.proRes.isCompositeCall {
+		trans.postProcess = trans.postProcessMultiCompositeCall
 	} else {
 		trans.postProcess = trans.postProcessMultiAggAndSelector
 	}
@@ -123,7 +126,16 @@ type StreamAggregateTransformCreator struct {
 }
 
 func (c *StreamAggregateTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
-	p, err := NewStreamAggregateTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), opt)
+	var isSubQuery = false
+	if len(plan.Schema().Sources()) > 0 {
+		switch plan.Schema().Sources()[0].(type) {
+		case *influxql.SubQuery:
+			isSubQuery = true
+		default:
+			isSubQuery = false
+		}
+	}
+	p, err := NewStreamAggregateTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), opt, isSubQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -164,60 +176,34 @@ func (trans *StreamAggregateTransform) Work(ctx context.Context) error {
 		trans.Close()
 	}()
 
-	// there are len(trans.Inputs) + reduce goroutines which are watched
-	errs := NewErrs(len(trans.Inputs) + 2)
-	errSignals := NewErrorSignals(len(trans.Inputs) + 2)
-
-	closeErrs := func() {
-		errs.Close()
-		errSignals.Close()
-	}
-
-	var wg sync.WaitGroup
-
-	runnable := func(in int) {
-		defer func() {
-			tracing.Finish(trans.span)
-			if e := recover(); e != nil {
-				err := errno.NewError(errno.RecoverPanic, e)
-				trans.aggLogger.Error(err.Error())
-				errs.Dispatch(err)
-				errSignals.Dispatch()
-			}
-			defer wg.Done()
-		}()
-
-		trans.running(ctx, in)
-	}
+	errs := errno.NewErrsPool().Get()
+	errs.Init(len(trans.Inputs)+1, trans.Close)
+	defer func() {
+		errno.NewErrsPool().Put(errs)
+	}()
 
 	for i := range trans.Inputs {
-		wg.Add(1)
-		go runnable(i)
+		go trans.runnable(i, ctx, errs)
 	}
 
-	wg.Add(1)
-	go trans.reduce(ctx, &wg, errs, errSignals)
+	go trans.reduce(ctx, errs)
 
-	monitoring := func() {
-		errSignals.Wait(trans.Close)
-	}
-	go monitoring()
+	return errs.Err()
+}
 
-	wg.Wait()
-	closeErrs()
-
-	var err error
-	for e := range errs.ch {
-		if err == nil {
-			err = e
+func (trans *StreamAggregateTransform) runnable(in int, ctx context.Context, errs *errno.Errs) {
+	defer func() {
+		tracing.Finish(trans.span)
+		if e := recover(); e != nil {
+			err := errno.NewError(errno.RecoverPanic, e)
+			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+			errs.Dispatch(err)
+		} else {
+			errs.Dispatch(nil)
 		}
-	}
+	}()
 
-	if err != nil {
-		return err
-	}
-
-	return nil
+	trans.running(ctx, in)
 }
 
 func (trans *StreamAggregateTransform) running(ctx context.Context, in int) {
@@ -284,16 +270,16 @@ func (trans *StreamAggregateTransform) unreadChunk(c Chunk) {
 }
 
 func (trans *StreamAggregateTransform) reduce(
-	_ context.Context, wg *sync.WaitGroup, errs *Errs, errSignals *ErrorSignals,
+	_ context.Context, errs *errno.Errs,
 ) {
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.aggLogger.Error(err.Error())
+			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
 			errs.Dispatch(err)
-			errSignals.Dispatch()
+		} else {
+			errs.Dispatch(nil)
 		}
-		defer wg.Done()
 	}()
 
 	// return true if transform is canceled
@@ -329,8 +315,7 @@ func (trans *StreamAggregateTransform) reduce(
 		tracing.SpanElapsed(trans.computeSpan, func() {
 			trans.compute(c)
 			if trans.iteratorParam.err != nil {
-				errs.ch <- trans.iteratorParam.err
-				errSignals.ch <- struct{}{}
+				errs.Dispatch(trans.iteratorParam.err)
 			}
 		})
 	}
@@ -422,9 +407,9 @@ func (trans *StreamAggregateTransform) postProcessMultiTimeUnique(c Chunk) {
 		}
 
 		// the duplicate timestamp can not be appended
-		ds := UpperBoundInt64(duplicateIndex, int64(start))
+		ds := binarysearch.UpperBoundInt64Ascending(duplicateIndex, int64(start))
 		if ds >= 0 {
-			de := LowerBoundInt64(duplicateIndex, int64(end))
+			de := binarysearch.LowerBoundInt64Ascending(duplicateIndex, int64(end))
 			if de >= ds {
 				trans.updateTagAndTagIndexTimeUniqueOnce(c, duplicateIndex, start, end, ds, i, firstIndex)
 				continue
@@ -531,6 +516,27 @@ func (trans *StreamAggregateTransform) postProcessMultiAggAndSelector(c Chunk) {
 	for i := 0; i < addChunkLen; i++ {
 		trans.newChunk.AppendTime(c.TimeByIndex(c.IntervalIndex()[i]))
 		trans.newChunk.AppendIntervalIndex(trans.prevChunkIntervalLen + i)
+	}
+
+	// update the tags and tagIndex
+	trans.updateTagAndTagIndex(c)
+}
+
+func (trans *StreamAggregateTransform) postProcessMultiCompositeCall(c Chunk) {
+	var addChunkLen int
+	if trans.sameInterval {
+		addChunkLen = c.IntervalLen() - 1
+	} else {
+		addChunkLen = c.IntervalLen()
+	}
+
+	// the time of the first point in each time window is used as the aggregated time.
+	// update time and intervalIndex
+	for i := 0; i < addChunkLen; i++ {
+		for j := 0; j < trans.proRes.clusterNum; j++ {
+			trans.newChunk.AppendTime(c.TimeByIndex(c.IntervalIndex()[i]))
+		}
+		trans.newChunk.AppendIntervalIndex((trans.prevChunkIntervalLen + i) * trans.proRes.clusterNum)
 	}
 
 	// update the tags and tagIndex
@@ -662,90 +668,4 @@ func (trans *StreamAggregateTransform) GetInputNumber(port Port) int {
 		}
 	}
 	return INVALID_NUMBER
-}
-
-type ErrorSignals struct {
-	ch     chan struct{}
-	mu     sync.RWMutex
-	closed bool
-}
-
-func NewErrorSignals(chCount int) *ErrorSignals {
-	return &ErrorSignals{ch: make(chan struct{}, chCount)}
-}
-
-func (s *ErrorSignals) Dispatch() {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.closed {
-		return
-	}
-
-	s.ch <- struct{}{}
-}
-
-//nolint
-func (s *ErrorSignals) Wait(callback func()) {
-	select {
-	case _, ok := <-s.ch:
-		if ok {
-			callback()
-		}
-		return
-	}
-}
-
-func (s *ErrorSignals) Close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-
-	close(s.ch)
-	s.closed = true
-}
-
-type Errs struct {
-	ch     chan error
-	mu     sync.RWMutex
-	closed bool
-}
-
-func NewErrs(chCount int) *Errs {
-	return &Errs{ch: make(chan error, chCount)}
-}
-
-func (s *Errs) Dispatch(err error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.closed {
-		return
-	}
-
-	s.ch <- err
-}
-
-//nolint
-func (s *Errs) Wait(callback func()) {
-	select {
-	case _, ok := <-s.ch:
-		if ok {
-			callback()
-		}
-		return
-	}
-}
-
-func (s *Errs) Close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-
-	close(s.ch)
-	s.closed = true
 }

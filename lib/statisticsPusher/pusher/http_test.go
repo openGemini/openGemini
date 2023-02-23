@@ -26,13 +26,14 @@ import (
 
 func TestHttpConfig(t *testing.T) {
 	cfg := &HttpConfig{
-		Auth: []string{"admin", "abc123"},
+		Username: "admin",
+		Password: "abc123",
 	}
 	name, pwd := cfg.BasicAuth()
-	assert.Equal(t, name, cfg.Auth[0])
-	assert.Equal(t, pwd, cfg.Auth[1])
+	assert.Equal(t, name, cfg.Username)
+	assert.Equal(t, pwd, cfg.Password)
 
-	cfg.Auth = []string{}
+	cfg.Username = ""
 	name, pwd = cfg.BasicAuth()
 	assert.Equal(t, name, "")
 	assert.Equal(t, pwd, "")
@@ -40,7 +41,8 @@ func TestHttpConfig(t *testing.T) {
 
 func TestSetBasicAuth(t *testing.T) {
 	cfg := &HttpConfig{
-		Auth: []string{"admin", "abc123"},
+		Username: "admin",
+		Password: "abc123",
 	}
 
 	req, _ := http.NewRequest(http.MethodPost, "http://127.0.0.1", bytes.NewBuffer(nil))

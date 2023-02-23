@@ -19,6 +19,7 @@ package executor
 import (
 	"reflect"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
@@ -50,25 +51,28 @@ func NewRPCMessage(typ uint8) transport.Codec {
 }
 
 type Error struct {
-	data string
+	errCode errno.Errno
+	data    string
 }
 
-func NewErrorMessage(err string) *rpc.Message {
-	return rpc.NewMessage(ErrorMessage, &Error{data: err})
+func NewErrorMessage(errCode errno.Errno, err string) *rpc.Message {
+	return rpc.NewMessage(ErrorMessage, &Error{errCode: errCode, data: err})
 }
 
 func (e *Error) Marshal(buf []byte) ([]byte, error) {
+	buf = encoding.MarshalUint16(buf, uint16(e.errCode))
 	buf = append(buf, e.data...)
 	return buf, nil
 }
 
 func (e *Error) Unmarshal(buf []byte) error {
-	e.data = string(buf)
+	e.errCode = errno.Errno(encoding.UnmarshalUint16(buf[:2]))
+	e.data = string(buf[2:])
 	return nil
 }
 
 func (e *Error) Size() int {
-	return len(e.data)
+	return 2 + len(e.data)
 }
 
 func (e *Error) Instance() transport.Codec {

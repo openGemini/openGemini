@@ -19,6 +19,7 @@ package hierarchical
 import (
 	"time"
 
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
@@ -52,7 +53,7 @@ func (s *Service) handle() {
 			continue
 		}
 
-		if err := s.MetaClient.UpdateShardInfoTier(sh.ShardID, meta.Warm, sh.OwnerDb, sh.Policy); err != nil {
+		if err := s.MetaClient.UpdateShardInfoTier(sh.ShardID, util.Warm, sh.OwnerDb, sh.Policy); err != nil {
 			s.Logger.Error("fail to update shard tier to warm", zap.Uint64("shardID", sh.ShardID), zap.Error(err))
 		}
 	}
@@ -60,7 +61,7 @@ func (s *Service) handle() {
 	for _, sh := range shardsToCold {
 		// change shard from warm to hot
 
-		if err := s.MetaClient.UpdateShardInfoTier(sh.ShardID, meta.Cold, sh.OwnerDb, sh.Policy); err != nil {
+		if err := s.MetaClient.UpdateShardInfoTier(sh.ShardID, util.Cold, sh.OwnerDb, sh.Policy); err != nil {
 			s.Logger.Error("fail to update shard tier to cold", zap.Uint64("shardID", sh.ShardID), zap.Error(err))
 		}
 	}

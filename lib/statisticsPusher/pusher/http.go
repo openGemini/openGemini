@@ -38,7 +38,8 @@ type Http struct {
 }
 
 type HttpConfig struct {
-	Auth     []string
+	Username string
+	Password string
 	Https    bool
 	EndPoint string
 	Database string
@@ -70,11 +71,11 @@ func (c *HttpConfig) CreateURL() string {
 }
 
 func (c *HttpConfig) BasicAuth() (string, string) {
-	if len(c.Auth) != 2 {
+	if c.Username == "" {
 		return "", ""
 	}
 
-	return c.Auth[0], c.Auth[1]
+	return c.Username, c.Password
 }
 
 func NewHttp(conf *HttpConfig, logger *logger.Logger) *Http {

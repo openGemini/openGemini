@@ -23,17 +23,24 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 var NotAggOnSeries = map[string]bool{
-	"percentile": true,
+	"percentile": true, "percentile_ogsketch": true, "percentile_approx": true,
 	"difference": true, "non_negative_difference": true,
 	"derivative": true, "non_negative_derivative": true,
 	"rate": true, "irate": true, "absent": true, "stddev": true, "mode": true, "median": true,
 	"elapsed": true, "moving_average": true, "cumulative_sum": true, "integral": true, "sample": true,
 	"sliding_window": true,
+}
+
+var OptimizeAgg = map[string]bool{
+	"count": true, "sum": true, "mean": true,
+	"max": true, "min": true, "first": true, "last": true,
 }
 
 func init() {
@@ -170,10 +177,16 @@ type QuerySchema struct {
 	maths         map[string]*influxql.Call
 	strings       map[string]*influxql.Call
 	slidingWindow map[string]*influxql.Call
+	holtWinters   []*influxql.Field
+	compositeCall map[string]*hybridqp.OGSketchCompositeOperator
 	i             int
+	notIncI       bool
 	sources       influxql.Sources
 	// Options is interface now, it must be cloned in internal
 	opt hybridqp.Options
+
+	joinCases         []*influxql.Join
+	hasFieldCondition bool
 }
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options) *QuerySchema {
@@ -194,40 +207,32 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 		maths:         make(map[string]*influxql.Call),
 		strings:       make(map[string]*influxql.Call),
 		slidingWindow: make(map[string]*influxql.Call),
+		holtWinters:   make([]*influxql.Field, 0),
+		compositeCall: make(map[string]*hybridqp.OGSketchCompositeOperator),
 		i:             0,
+		notIncI:       false,
 		opt:           opt,
 		sources:       nil,
 	}
 
 	schema.init()
 
+	if schema.HasPercentileOGSketch() {
+		schema.rewritePercentileOGSketchCompositeCall()
+	}
+
 	return schema
 }
 
-func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options) *QuerySchema {
-	schema := &QuerySchema{
-		tables:        make(map[string]*QueryTable),
-		queryFields:   fields,
-		columnNames:   columnNames,
-		fields:        make(influxql.Fields, 0, len(fields)),
-		fieldsMap:     make(map[string]*influxql.Field),
-		fieldsRef:     make(influxql.VarRefs, 0, len(fields)),
-		mapDeriveType: make(map[influxql.Expr]influxql.DataType),
-		mapping:       make(map[influxql.Expr]influxql.VarRef),
-		symbols:       make(map[string]influxql.VarRef),
-		calls:         make(map[string]*influxql.Call),
-		origCalls:     make(map[string]*influxql.Call),
-		refs:          make(map[string]*influxql.VarRef),
-		binarys:       make(map[string]*influxql.BinaryExpr),
-		maths:         make(map[string]*influxql.Call),
-		strings:       make(map[string]*influxql.Call),
-		slidingWindow: make(map[string]*influxql.Call),
-		i:             0,
-		opt:           opt,
-		sources:       sources,
-	}
+func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, joinCases []*influxql.Join) *QuerySchema {
+	q := NewQuerySchemaWithSources(fields, sources, columnNames, opt)
+	q.joinCases = joinCases
+	return q
+}
 
-	schema.init()
+func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options) *QuerySchema {
+	schema := NewQuerySchema(fields, columnNames, opt)
+	schema.sources = sources
 	if !schema.Options().IsAscending() && schema.MatchPreAgg() && len(schema.opt.GetGroupBy()) == 0 {
 		schema.Options().SetAscending(true)
 	}
@@ -251,6 +256,7 @@ func (qs *QuerySchema) reset(fields influxql.Fields, column []string) {
 	qs.maths = make(map[string]*influxql.Call)
 	qs.strings = make(map[string]*influxql.Call)
 	qs.slidingWindow = make(map[string]*influxql.Call)
+	qs.holtWinters = qs.holtWinters[0:0]
 	qs.i = 0
 	qs.init()
 }
@@ -261,6 +267,9 @@ func (qs *QuerySchema) init() {
 		if call, ok := clone.Expr.(*influxql.Call); ok {
 			if call.Name == "sliding_window" {
 				qs.AddSlidingWindow(call.String(), call)
+				clone.Expr = call.Args[0]
+			} else if call.Name == "holt_winters" || call.Name == "holt_winters_with_fit" {
+				qs.AddHoltWinters(call, f.Alias)
 				clone.Expr = call.Args[0]
 			}
 		}
@@ -279,6 +288,7 @@ func (qs *QuerySchema) init() {
 		}
 		qs.fieldsRef = append(qs.fieldsRef, influxql.VarRef{Val: f.Name(), Type: typ})
 	}
+	qs.InitFieldCondition()
 }
 
 func (qs *QuerySchema) GetColumnNames() []string {
@@ -351,6 +361,30 @@ func (qs *QuerySchema) spreadToMaxSubMin(call *influxql.Call) influxql.Expr {
 
 func (qs *QuerySchema) HasCall() bool {
 	return len(qs.calls) > 0
+}
+
+func (qs *QuerySchema) HasOptimizeAgg() bool {
+	if qs.MatchPreAgg() {
+		return true
+	}
+	if len(qs.Calls()) <= 0 {
+		return false
+	}
+	for _, call := range qs.calls {
+		if !OptimizeAgg[call.Name] {
+			return false
+		}
+	}
+	return true
+}
+
+func (qs *QuerySchema) HasAuxTag() bool {
+	for _, ref := range qs.Refs() {
+		if ref.Type == influxql.Tag {
+			return true
+		}
+	}
+	return false
 }
 
 func (qs *QuerySchema) HasNotInSeriesAgg() bool {
@@ -440,19 +474,111 @@ func (qs *QuerySchema) HasBlankRowCall() bool {
 	return false
 }
 
+func (qs *QuerySchema) HasPercentileOGSketch() bool {
+	for _, f := range qs.queryFields {
+		if c, ok := f.Expr.(*influxql.Call); ok && c.Name == PercentileOGSketch {
+			return true
+		}
+	}
+	return false
+}
+
+func (qs *QuerySchema) CompositeCall() map[string]*hybridqp.OGSketchCompositeOperator {
+	return qs.compositeCall
+}
+
+func (qs *QuerySchema) isPercentileOGSketch(call *influxql.Call) bool {
+	if len(call.Args) == 0 {
+		return false
+	}
+
+	return call.Name == PercentileOGSketch
+}
+
+func (qs *QuerySchema) rewritePercentileOGSketchCompositeCall() {
+	for key, call := range qs.calls {
+		if call.Name == PercentileOGSketch {
+			cc := qs.compositeCall[key]
+
+			io := cc.GetInsertOp()
+			ioInRef, ok := io.Args[0].(*influxql.VarRef)
+			if !ok {
+				panic(fmt.Sprintf("the type of the %s should be *influxql.VarRef", io.Args[0].String()))
+			}
+			oriKey := fmt.Sprintf("%s::%s", ioInRef.Val, ioInRef.Type)
+			inSymbolRef := qs.symbols[oriKey]
+			ioInRef.Val = inSymbolRef.Val
+			ioInRef.Type = inSymbolRef.Type
+
+			qo := cc.GetQueryPerOp()
+			qoOutRef := qs.mapping[qo]
+			outSymbolRef := qs.symbols[key]
+			qoOutRef.Val = outSymbolRef.Val
+			qoOutRef.Type = outSymbolRef.Type
+			qs.mapping[qo] = qoOutRef
+		}
+	}
+}
+
+func (qs *QuerySchema) genOGSketchOperator(call *influxql.Call) {
+	// add the percentile_ogsketch call
+	qs.addCall(call.String(), call)
+	qs.mapSymbol(call.String(), call)
+
+	// ogsketch insert
+	OGSketchInsertCall, ok := influxql.CloneExpr(call).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", call.String()))
+	}
+	OGSketchInsertCall.Name = OGSketchInsert
+	qs.notIncI = true
+	qs.mapSymbol(OGSketchInsertCall.String(), OGSketchInsertCall)
+	qs.notIncI = false
+
+	// ogsketch merge
+	OGSketchMergeCall, ok := influxql.CloneExpr(call).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", call.String()))
+	}
+	insetRef := qs.mapping[OGSketchInsertCall]
+	OGSketchMergeCall.Args[0].(*influxql.VarRef).Val = insetRef.Val
+	OGSketchMergeCall.Args[0].(*influxql.VarRef).Type = insetRef.Type
+	OGSketchMergeCall.Name = OGSketchMerge
+	qs.mapSymbol(OGSketchMergeCall.String(), OGSketchMergeCall)
+
+	// ogsketch query
+	OGSketchPercentileCall, ok := influxql.CloneExpr(call).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", call.String()))
+	}
+	mergeRef := qs.mapping[OGSketchMergeCall]
+	OGSketchPercentileCall.Args[0].(*influxql.VarRef).Val = mergeRef.Val
+	OGSketchPercentileCall.Args[0].(*influxql.VarRef).Type = mergeRef.Type
+	OGSketchPercentileCall.Name = OGSketchPercentile
+	qs.mapSymbol(OGSketchPercentileCall.String(), OGSketchPercentileCall)
+
+	operator := hybridqp.NewOGSketchCompositeOperator(OGSketchInsertCall, OGSketchMergeCall, OGSketchPercentileCall)
+	qs.addCompositeCall(call.String(), operator)
+}
+
 func (qs *QuerySchema) HasInterval() bool {
 	return qs.opt.HasInterval()
 }
 
-func (qs *QuerySchema) HasFieldCondition() bool {
+func (qs *QuerySchema) InitFieldCondition() {
 	if qs.opt.GetCondition() == nil {
-		return false
+		qs.hasFieldCondition = false
+		return
 	}
 
 	v := NewConditionExprVisitor()
 	influxql.Walk(v, qs.opt.GetCondition())
 
-	return v.hasField
+	qs.hasFieldCondition = v.hasField
+}
+
+func (qs *QuerySchema) HasFieldCondition() bool {
+	return qs.hasFieldCondition
 }
 
 func (qs *QuerySchema) IsMultiMeasurements() bool {
@@ -531,6 +657,20 @@ func (qs *QuerySchema) SlidingWindow() map[string]*influxql.Call {
 	return qs.slidingWindow
 }
 
+func (qs *QuerySchema) HoltWinters() []*influxql.Field {
+	return qs.holtWinters
+}
+
+func (qs *QuerySchema) SetHoltWinters(calls []*influxql.Call) {
+	for _, call := range calls {
+		f := &influxql.Field{
+			Expr:  call,
+			Alias: "",
+		}
+		qs.holtWinters = append(qs.holtWinters, f)
+	}
+}
+
 func (qs *QuerySchema) Binarys() map[string]*influxql.BinaryExpr {
 	return qs.binarys
 }
@@ -574,7 +714,7 @@ func (qs *QuerySchema) HasCastorCall() bool {
 
 func (qs *QuerySchema) isMathFunction(call *influxql.Call) bool {
 	switch call.Name {
-	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round":
+	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max":
 		return true
 	}
 	return false
@@ -612,6 +752,14 @@ func (qs *QuerySchema) AddSlidingWindow(key string, str *influxql.Call) {
 	}
 }
 
+func (qs *QuerySchema) AddHoltWinters(call *influxql.Call, alias string) {
+	f := &influxql.Field{
+		Expr:  call,
+		Alias: alias,
+	}
+	qs.holtWinters = append(qs.holtWinters, f)
+}
+
 func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
 	expr, ok := n.(influxql.Expr)
 	if !ok {
@@ -645,6 +793,11 @@ func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
 			return qs
 		}
 
+		if qs.isPercentileOGSketch(n) {
+			qs.genOGSketchOperator(n)
+			return qs
+		}
+
 		qs.addCall(key, n)
 		qs.mapSymbol(key, expr)
 		return qs
@@ -674,6 +827,14 @@ func (qs *QuerySchema) addCall(key string, call *influxql.Call) {
 			panic("QuerySchema addCall call isn't *influxql.Call")
 		}
 		qs.calls[key] = call
+	}
+}
+
+func (qs *QuerySchema) addCompositeCall(key string, operator *hybridqp.OGSketchCompositeOperator) {
+	_, ok := qs.compositeCall[key]
+
+	if !ok {
+		qs.compositeCall[key] = operator
 	}
 }
 
@@ -714,10 +875,17 @@ func (qs *QuerySchema) mapSymbol(key string, expr influxql.Expr) {
 		// Assign this symbol to the symbol table if it is not presently there
 		// and increment the value index number.
 		qs.symbols[key] = symbol
-		qs.i++
+		if !qs.notIncI {
+			qs.i++
+		}
 	}
 
 	qs.mapping[expr] = symbol
+}
+
+func (qs *QuerySchema) GetFieldType(i int) (int64, error) {
+	t, e := qs.deriveType(qs.queryFields[i].Expr)
+	return int64(t), e
 }
 
 func (qs *QuerySchema) deriveType(expr influxql.Expr) (influxql.DataType, error) {
@@ -825,6 +993,9 @@ func (qs *QuerySchema) ContainSeriesIgnoreCall() bool {
 		if op.IsUDAFOp(call) {
 			return true
 		}
+		if call.Name == PercentileOGSketch {
+			return true
+		}
 	}
 	return false
 }
@@ -910,4 +1081,53 @@ func (qs *QuerySchema) HasSlidingWindowCall() bool {
 		}
 	}
 	return false
+}
+
+func (qs *QuerySchema) HasHoltWintersCall() bool {
+	return len(qs.holtWinters) > 0
+}
+
+func (qs *QuerySchema) BuildDownSampleSchema(addPrefix bool) record.Schemas {
+	var outSchema record.Schemas
+	for _, f := range qs.origCalls {
+		c, ok := f.Args[0].(*influxql.VarRef)
+		if !ok {
+			continue
+		}
+		var field record.Field
+		if addPrefix {
+			field = record.Field{Name: f.Name + "_" + c.Val}
+		} else {
+			field = record.Field{Name: c.Val}
+		}
+		switch f.Name {
+		case "min", "first", "last", "max", "sum":
+			field.Type = record.ToModelTypes(c.Type)
+		case "count":
+			field.Type = influx.Field_Type_Int
+		default:
+			panic("wrong call")
+		}
+		outSchema = append(outSchema, field)
+	}
+	outSchema = append(outSchema, record.Field{
+		Name: "time",
+		Type: influx.Field_Type_Int,
+	})
+	return outSchema
+}
+
+func (qs *QuerySchema) HasExcatLimit() bool {
+	return qs.Options().GetHintType() == hybridqp.ExactStatisticQuery && qs.HasLimit() && !qs.HasOptimizeAgg()
+}
+func (qs *QuerySchema) GetSourcesNames() []string {
+	return qs.opt.GetSourcesNames()
+}
+
+func (qs *QuerySchema) GetJoinCaseCount() int {
+	return len(qs.joinCases)
+}
+
+func (qs *QuerySchema) GetJoinCases() []*influxql.Join {
+	return qs.joinCases
 }

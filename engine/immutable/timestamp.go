@@ -87,7 +87,11 @@ func (enc *Time) encodingInit(times []uint64) {
 func (enc *Time) packUncompressedData(in, out []byte) ([]byte, error) {
 	out = append(out, timeUncompressed<<4)
 	out = numberenc.MarshalUint32Append(out, uint32(len(in)))
-	out = append(out, in...)
+
+	// encode int64 value slice
+	dataSlice := record.Bytes2Int64Slice(in)
+	out = append(out, record.Int64Slice2ByteBigEndian(dataSlice)...)
+
 	return out, nil
 }
 
@@ -123,7 +127,7 @@ func (enc *Time) simple8bEncoding(out []byte) ([]byte, error) {
 	out = numberenc.MarshalUint64Append(out, uint64(enc.scale))
 	out = numberenc.MarshalUint32Append(out, uint32(len(encData)+1))  // enc count
 	out = numberenc.MarshalUint32Append(out, uint32(len(enc.deltas))) // src count
-	b := record.Uint64Slice2byte(enc.deltas[:len(encData)+1])
+	b := record.Uint64Slice2ByteBigEndian(enc.deltas[:len(encData)+1])
 	out = append(out, b...)
 	return out, nil
 }
@@ -242,7 +246,7 @@ func (enc *Time) simple8bDecoding(out []byte) ([]byte, error) {
 		return nil, fmt.Errorf("time: too small data for decode %v < %v", len(in), l)
 	}
 
-	src := record.Bytes2Uint64Slice(in[:l])
+	src := record.Bytes2Uint64SliceBigEndian(in[:l])
 	outPos := len(out)
 	srcLen := srcCount * 8
 	out = growBuffer(out, srcLen)
@@ -303,7 +307,9 @@ func (enc *Time) unpackUncompressedData(out []byte) ([]byte, error) {
 	if len(in) < srcLen {
 		return nil, fmt.Errorf("time: too small data %v < %v", len(in), srcLen)
 	}
-	out = append(out, in[:srcLen]...)
+
+	intArr := record.Bytes2Int64SliceBigEndian(in)
+	out = append(out, record.Int64Slice2byte(intArr)...)
 	return out, nil
 }
 

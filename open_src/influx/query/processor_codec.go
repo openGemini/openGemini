@@ -71,6 +71,7 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 		EnableBinaryTreeMerge: opt.EnableBinaryTreeMerge,
 		TraceId:               opt.Traceid,
 		SeriesKey:             opt.SeriesKey,
+		GroupByAllDims:        opt.GroupByAllDims,
 	}
 
 	// Set expression, if set.
@@ -133,6 +134,7 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 		EnableBinaryTreeMerge: pb.GetEnableBinaryTreeMerge(),
 		Traceid:               pb.GetTraceId(),
 		SeriesKey:             pb.GetSeriesKey(),
+		GroupByAllDims:        pb.GetGroupByAllDims(),
 	}
 
 	// Set expression, if set.

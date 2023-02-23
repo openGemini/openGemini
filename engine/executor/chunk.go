@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -28,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 //go:generate tmpl -data=@./tmpldata column.gen.go.tmpl
@@ -128,29 +130,7 @@ func initStringColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []inter
 }
 
 func initTagColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
-	// fast path
-	if col.NilCount() == 0 {
-		for i := bmStart; i < bmEnd; i++ {
-			oriStr := col.StringValue(i)
-			newStr := make([]byte, len(oriStr))
-			copy(newStr, oriStr)
-			dst = append(dst, record.Bytes2str(newStr))
-		}
-		return dst
-	}
-
-	// slow path
-	for j := bmStart; j < bmEnd; j++ {
-		if col.IsNilV2(j) {
-			dst = append(dst, nil)
-		} else {
-			oriStr := col.StringValue(col.GetValueIndexV2(j))
-			newStr := make([]byte, len(oriStr))
-			copy(newStr, oriStr)
-			dst = append(dst, record.Bytes2str(newStr))
-		}
-	}
-	return dst
+	return initStringColumnFunc(col, bmStart, bmEnd, ckLen, dst)
 }
 
 func initColumnTypeFunc() {
@@ -165,6 +145,11 @@ func initColumnTypeFunc() {
 	GetColValsFn[influxql.String] = initStringColumnFunc
 
 	GetColValsFn[influxql.Tag] = initTagColumnFunc
+}
+
+type PointRowIterator interface {
+	GetNext(row *influx.Row, tuple *TargetTuple)
+	HasMore() bool
 }
 
 type Chunk interface {
@@ -202,14 +187,18 @@ type Chunk interface {
 	ResetTagsAndIndexes(tags []ChunkTags, tagIndex []int)
 	AddIntervalIndex(i int)
 	Clone() Chunk
+	CopyTo(Chunk)
 	// CheckChunk TODO: CheckChunk used to check the chunk's structure
 	CheckChunk()
+	GetRecord() *record.Record
 	String() string
 
 	Marshal([]byte) ([]byte, error)
 	Unmarshal([]byte) error
 	Instance() transport.Codec
 	Size() int
+
+	CreatePointRowIterator(string, *FieldsValuer) PointRowIterator
 }
 
 type ChunkWriter interface {
@@ -402,30 +391,45 @@ func (c *ChunkImpl) AddIntervalIndex(i int) {
 	c.intervalIndex = append(c.intervalIndex, i)
 }
 
-func (c *ChunkImpl) Clone() Chunk {
-	clone := NewChunkBuilder(c.RowDataType()).NewChunk(c.Name())
-	clone.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
-	clone.AppendIntervalIndex(c.IntervalIndex()...)
-	clone.AppendTime(c.Time()...)
+func (c *ChunkImpl) GetRecord() *record.Record {
+	return c.Record
+}
 
-	for i := range clone.RowDataType().Fields() {
-		dataType := clone.RowDataType().Field(i).Expr.(*influxql.VarRef).Type
+func (c *ChunkImpl) copy(dst Chunk) Chunk {
+	dst.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
+	dst.AppendIntervalIndex(c.IntervalIndex()...)
+	dst.AppendTime(c.Time()...)
+
+	for i := range dst.RowDataType().Fields() {
+		dataType := dst.RowDataType().Field(i).Expr.(*influxql.VarRef).Type
 		switch dataType {
 		case influxql.Integer:
-			clone.Column(i).AppendIntegerValues(c.Column(i).IntegerValues()...)
+			dst.Column(i).AppendIntegerValues(c.Column(i).IntegerValues()...)
+		case influxql.FloatTuple:
+			dst.Column(i).AppendFloatTuples(c.Column(i).FloatTuples()...)
 		case influxql.Float:
-			clone.Column(i).AppendFloatValues(c.Column(i).FloatValues()...)
+			dst.Column(i).AppendFloatValues(c.Column(i).FloatValues()...)
 		case influxql.Boolean:
-			clone.Column(i).AppendBooleanValues(c.Column(i).BooleanValues()...)
+			dst.Column(i).AppendBooleanValues(c.Column(i).BooleanValues()...)
 		case influxql.String, influxql.Tag:
-			clone.Column(i).CloneStringValues(c.Column(i).GetStringBytes())
+			dst.Column(i).CloneStringValues(c.Column(i).GetStringBytes())
 		}
 		if len(c.Column(i).ColumnTimes()) != 0 {
-			clone.Column(i).AppendColumnTimes(c.Column(i).ColumnTimes()...)
+			dst.Column(i).AppendColumnTimes(c.Column(i).ColumnTimes()...)
 		}
-		c.Column(i).NilsV2().CopyTo(clone.Column(i).NilsV2())
+		c.Column(i).NilsV2().CopyTo(dst.Column(i).NilsV2())
 	}
-	return clone
+	return dst
+}
+
+func (c *ChunkImpl) Clone() Chunk {
+	clone := NewChunkBuilder(c.RowDataType()).NewChunk(c.Name())
+	return c.copy(clone)
+}
+
+func (c *ChunkImpl) CopyTo(dstChunk Chunk) {
+	dstChunk.SetName(c.Name())
+	c.copy(dstChunk)
 }
 
 func (c *ChunkImpl) CheckChunk() {
@@ -515,6 +519,351 @@ func (c *ChunkImpl) String() string {
 	return buffer.String()
 }
 
+func (c *ChunkImpl) CreatePointRowIterator(name string, valuer *FieldsValuer) PointRowIterator {
+	return NewChunkIteratorFromValuer(c, name, valuer)
+}
+
+type IntegerFieldValuer struct {
+	key string
+	typ int32
+}
+
+func (valuer *IntegerFieldValuer) At(col Column, pos int, field *influx.Field) bool {
+	if col.IsNilV2(pos) {
+		return false
+	}
+
+	valueIndex := col.GetValueIndexV2(pos)
+
+	field.Key = valuer.key
+	field.Type = valuer.typ
+	field.NumValue = float64(col.IntegerValue(valueIndex))
+	return true
+}
+
+type FieldValuer interface {
+	At(Column, int, *influx.Field) bool
+}
+
+type FloatFieldValuer struct {
+	key string
+	typ int32
+}
+
+func (valuer *FloatFieldValuer) At(col Column, pos int, field *influx.Field) bool {
+	if col.IsNilV2(pos) {
+		return false
+	}
+
+	valueIndex := col.GetValueIndexV2(pos)
+
+	field.Key = valuer.key
+	field.Type = valuer.typ
+	field.NumValue = col.FloatValue(valueIndex)
+	return true
+}
+
+type StringFieldValuer struct {
+	key string
+	typ int32
+}
+
+func (valuer *StringFieldValuer) At(col Column, pos int, field *influx.Field) bool {
+	if col.IsNilV2(pos) {
+		return false
+	}
+
+	valueIndex := col.GetValueIndexV2(pos)
+
+	field.Key = valuer.key
+	field.Type = valuer.typ
+	field.StrValue = col.StringValue(valueIndex)
+	return true
+}
+
+type BooleanFieldValuer struct {
+	key string
+	typ int32
+}
+
+func (valuer *BooleanFieldValuer) At(col Column, pos int, field *influx.Field) bool {
+	if col.IsNilV2(pos) {
+		return false
+	}
+
+	valueIndex := col.GetValueIndexV2(pos)
+
+	field.Key = valuer.key
+	field.Type = valuer.typ
+	field.StrValue = strconv.FormatBool(col.BooleanValue(valueIndex))
+	return true
+}
+
+func NewFieldValuer(ref *influxql.VarRef) (FieldValuer, error) {
+	switch ref.Type {
+	case influxql.Integer:
+		valuer := &IntegerFieldValuer{}
+		valuer.key = ref.Val
+		valuer.typ = influx.Field_Type_Int
+		return valuer, nil
+	case influxql.Float:
+		valuer := &FloatFieldValuer{}
+		valuer.key = ref.Val
+		valuer.typ = influx.Field_Type_Float
+		return valuer, nil
+	case influxql.Tag:
+		fallthrough
+	case influxql.String:
+		valuer := &StringFieldValuer{}
+		valuer.key = ref.Val
+		valuer.typ = influx.Field_Type_String
+		return valuer, nil
+	case influxql.Boolean:
+		valuer := &BooleanFieldValuer{}
+		valuer.key = ref.Val
+		valuer.typ = influx.Field_Type_Boolean
+		return valuer, nil
+	default:
+		return nil, fmt.Errorf("create field valuer on an unsupport type (%v)", ref.Type)
+	}
+}
+
+type FieldsValuer struct {
+	fvs []FieldValuer
+}
+
+func NewFieldsValuer(rdt hybridqp.RowDataType) (*FieldsValuer, error) {
+	valuer := &FieldsValuer{
+		fvs: make([]FieldValuer, rdt.NumColumn()),
+	}
+
+	for i, f := range rdt.Fields() {
+		fv, err := NewFieldValuer(f.Expr.(*influxql.VarRef))
+		if err != nil {
+			return nil, err
+		}
+		valuer.fvs[i] = fv
+	}
+	return valuer, nil
+}
+
+func (valuer *FieldsValuer) At(chunk Chunk, pos int, tuple *TargetTuple) {
+	for i, fv := range valuer.fvs {
+		hasValue := fv.At(chunk.Column(i), pos, tuple.Allocate())
+		if hasValue {
+			tuple.Commit()
+		}
+	}
+}
+
+type TargetTuple struct {
+	fields []influx.Field
+	len    int
+	cap    int
+}
+
+func NewTargetTuple(cap int) *TargetTuple {
+	return &TargetTuple{
+		fields: make([]influx.Field, cap),
+		len:    0,
+		cap:    cap,
+	}
+}
+
+func (t *TargetTuple) Reset() {
+	for _, field := range t.fields {
+		field.Reset()
+	}
+	t.len = 0
+}
+
+func (t *TargetTuple) CheckAndAllocate() (*influx.Field, bool) {
+	if t.len >= t.cap {
+		return nil, false
+	}
+	return &t.fields[t.len], true
+}
+
+func (t *TargetTuple) Allocate() *influx.Field {
+	return &t.fields[t.len]
+}
+
+func (t *TargetTuple) Commit() {
+	t.len++
+}
+
+func (t *TargetTuple) Active() []influx.Field {
+	return t.fields[0:t.len]
+}
+
+func (t *TargetTuple) Len() int {
+	return t.len
+}
+
+// BatchRows is not thread safe. It can not be used in multi-threading model.
+type TargetTable struct {
+	rows     []influx.Row
+	tuples   []*TargetTuple
+	len      int
+	cap      int
+	tupleCap int
+}
+
+func NewTargetTable(rowCap int, tupleCap int) *TargetTable {
+	tt := &TargetTable{
+		rows:     make([]influx.Row, rowCap),
+		tuples:   make([]*TargetTuple, rowCap),
+		len:      0,
+		cap:      rowCap,
+		tupleCap: tupleCap,
+	}
+
+	tt.initTuples(tt.tuples)
+
+	return tt
+}
+
+func (tt *TargetTable) initTuples(tuples []*TargetTuple) {
+	for i := range tuples {
+		tuples[i] = NewTargetTuple(tt.tupleCap)
+	}
+}
+
+func (tt *TargetTable) Reset() {
+	for _, row := range tt.rows {
+		row.Reset()
+	}
+
+	for _, tuple := range tt.tuples {
+		tuple.Reset()
+	}
+
+	tt.len = 0
+}
+
+func (tt *TargetTable) CheckAndAllocate() (*influx.Row, *TargetTuple, bool) {
+	if tt.len >= tt.cap {
+		return nil, nil, false
+	}
+	return &tt.rows[tt.len], tt.tuples[tt.len], true
+}
+
+func (tt *TargetTable) Allocate() (*influx.Row, *TargetTuple) {
+	if tt.len >= tt.cap {
+		tt.cap = tt.cap * 2
+
+		rows := make([]influx.Row, tt.cap)
+		copy(rows, tt.rows)
+		tt.rows = rows
+
+		tuples := make([]*TargetTuple, tt.cap)
+		tt.initTuples(tuples[tt.len:])
+		copy(tuples, tt.tuples)
+		tt.tuples = tuples
+	}
+
+	tt.rows[tt.len].Reset()
+	tt.tuples[tt.len].Reset()
+	return &tt.rows[tt.len], tt.tuples[tt.len]
+}
+
+func (tt *TargetTable) Commit() {
+	tt.len++
+}
+
+func (tt *TargetTable) Active() []influx.Row {
+	for i := 0; i < tt.len; i++ {
+		tt.rows[i].Fields = tt.tuples[i].Active()
+	}
+	return tt.rows[0:tt.len]
+}
+
+type TargetTablePool struct {
+	sp       sync.Pool
+	rowCap   int
+	tupleCap int
+}
+
+func NewTargetTablePool(rowCap int, tupleCap int) *TargetTablePool {
+	p := &TargetTablePool{
+		sp: sync.Pool{
+			New: func() interface{} {
+				brs := NewTargetTable(rowCap, tupleCap)
+				return brs
+			},
+		},
+		rowCap:   rowCap,
+		tupleCap: tupleCap,
+	}
+
+	return p
+}
+
+func (p *TargetTablePool) Get() *TargetTable {
+	table, ok := p.sp.Get().(*TargetTable)
+	if !ok {
+		panic(fmt.Sprintf("%v is not a TargetTable type", table))
+	}
+	table.Reset()
+	return table
+}
+
+func (p *TargetTablePool) Put(table *TargetTable) {
+	p.sp.Put(table)
+}
+
+type ChunkIterator struct {
+	chunk       *ChunkImpl
+	name        string
+	currTags    influx.PointTags
+	currTagsPos int
+	nextPos     int
+	currPos     int
+	valuer      *FieldsValuer
+}
+
+func NewChunkIteratorFromValuer(chunk *ChunkImpl, name string, valuer *FieldsValuer) *ChunkIterator {
+	iter := &ChunkIterator{
+		chunk:       chunk,
+		name:        name,
+		currTags:    nil,
+		currTagsPos: -1,
+		currPos:     0,
+		valuer:      valuer,
+	}
+
+	if iter.currTagsPos+1 < len(iter.chunk.tags) {
+		iter.nextPos = iter.chunk.tagIndex[iter.currTagsPos+1]
+	}
+
+	return iter
+}
+
+func (iter *ChunkIterator) advance() {
+	iter.currTagsPos++
+	iter.currTags = iter.chunk.tags[iter.currTagsPos].PointTags()
+	if iter.currTagsPos+1 < len(iter.chunk.tags) {
+		iter.nextPos = iter.chunk.tagIndex[iter.currTagsPos+1]
+	}
+}
+
+func (iter *ChunkIterator) GetNext(row *influx.Row, tuple *TargetTuple) {
+	if iter.currPos == iter.nextPos {
+		iter.advance()
+	}
+
+	row.Name = iter.name
+	row.Tags = iter.currTags
+	iter.valuer.At(iter.chunk, iter.currPos, tuple)
+	row.Timestamp = iter.chunk.time[iter.currPos]
+
+	iter.currPos++
+}
+
+func (iter *ChunkIterator) HasMore() bool {
+	return iter.currPos < iter.chunk.Len()
+}
+
 func IntervalIndexGen(chunk Chunk, opt query.ProcessorOptions) {
 	var windowStopTime int64
 	if opt.Ascending {
@@ -535,7 +884,12 @@ func IntervalIndexGen(chunk Chunk, opt query.ProcessorOptions) {
 			}
 			if tagIndexOffset < len(chunk.TagIndex()) && i == chunk.TagIndex()[tagIndexOffset] {
 				chunk.AppendIntervalIndex(i)
-				_, windowStopTime = opt.Window(times[i])
+				if opt.Ascending {
+					_, windowStopTime = opt.Window(times[i])
+				} else {
+					windowStopTime, _ = opt.Window(times[i])
+				}
+
 				tagIndexOffset++
 				continue
 			}

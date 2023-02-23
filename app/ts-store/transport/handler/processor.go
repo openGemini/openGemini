@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"go.uber.org/zap"
@@ -155,7 +156,10 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 		s := NewSelect(p.store, w, req)
 		qm.Add(w.Sequence(), s)
+
+		w.Session().EnableDataACK()
 		defer func() {
+			w.Session().DisableDataACK()
 			qm.Finish(w.Sequence())
 		}()
 
@@ -163,7 +167,12 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		s.Release()
 		if err != nil {
 			logger.GetLogger().Error("failed to process the query request", zap.Error(err))
-			_ = w.Response(executor.NewErrorMessage(err.Error()), true)
+			switch stderr := err.(type) {
+			case *errno.Error:
+				_ = w.Response(executor.NewErrorMessage(stderr.Errno(), stderr.Error()), true)
+			default:
+				_ = w.Response(executor.NewErrorMessage(0, stderr.Error()), true)
+			}
 			return
 		}
 

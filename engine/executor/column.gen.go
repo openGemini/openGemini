@@ -57,6 +57,11 @@ type Column interface {
 	GetTimeIndex(valIdx int) int
 	Reset()
 
+	FloatTuple(int) floatTuple
+	FloatTuples() []floatTuple
+	AppendFloatTuples(...floatTuple)
+	SetFloatTuples([]floatTuple)
+
 	FloatValue(int) float64
 	FloatValues() []float64
 	AppendFloatValues(...float64)
@@ -92,9 +97,20 @@ type Column interface {
 	BitMap() *Bitmap
 }
 
+type floatTuple struct {
+	values []float64
+}
+
+func NewfloatTuple(tuple []float64) *floatTuple {
+	a := new(floatTuple)
+	a.values = tuple
+	return a
+}
+
 type ColumnImpl struct {
 	dataType      influxql.DataType
 	floatValues   []float64
+	floatTuples   []floatTuple
 	integerValues []int64
 	stringBytes   []byte
 	offset        []uint32
@@ -215,12 +231,29 @@ func (c *ColumnImpl) GetTimeIndex(valIdx int) int {
 
 func (c *ColumnImpl) Reset() {
 	c.floatValues = c.floatValues[:0]
+	c.floatTuples = c.floatTuples[:0]
 	c.integerValues = c.integerValues[:0]
 	c.stringBytes = c.stringBytes[:0]
 	c.offset = c.offset[:0]
 	c.booleanValues = c.booleanValues[:0]
 	c.times = c.times[:0]
 	c.nilsV2.Clear()
+}
+
+func (c *ColumnImpl) FloatTuple(idx int) floatTuple {
+	return c.floatTuples[idx]
+}
+
+func (c *ColumnImpl) FloatTuples() []floatTuple {
+	return c.floatTuples
+}
+
+func (c *ColumnImpl) AppendFloatTuples(tuples ...floatTuple) {
+	c.floatTuples = append(c.floatTuples, tuples...)
+}
+
+func (c *ColumnImpl) SetFloatTuples(tuples []floatTuple) {
+	c.floatTuples = tuples
 }
 
 func (c *ColumnImpl) FloatValue(idx int) float64 {

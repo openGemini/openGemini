@@ -27,6 +27,7 @@ import (
 const (
 	SeriesKeyToTSIDCacheName = "seriesKey_tsid"
 	TSIDToSeriesKeyCacheName = "tsid_seriesKey"
+	TSIDToFieldCacheName     = "tsid_field"
 )
 
 type IndexCache struct {
@@ -85,22 +86,6 @@ func (ic *IndexCache) getFromSeriesKeyCache(dst []byte, id uint64) []byte {
 	return ic.TSIDToSeriesKeyCache.Get(dst, key[:])
 }
 
-func (ic *IndexCache) close() error {
-	if err := ic.SeriesKeyToTSIDCache.Save(ic.path + "/" + SeriesKeyToTSIDCacheName); err != nil {
-		return err
-	}
-	ic.SeriesKeyToTSIDCache.Stop()
-
-	if err := ic.TSIDToSeriesKeyCache.Save(ic.path + "/" + TSIDToSeriesKeyCacheName); err != nil {
-		return err
-	}
-	ic.TSIDToSeriesKeyCache.Stop()
-
-	ic.tagCache.Stop()
-
-	return nil
-}
-
 func (ic *IndexCache) UpdateMetrics() {
 	var cs fastcache.Stats
 
@@ -126,7 +111,7 @@ func (ic *IndexCache) UpdateMetrics() {
 	ic.metrics.TagCacheMisses += cs.Misses
 }
 
-func LoadCache(info, name, cachePath string, sizeBytes int) *workingsetcache.Cache {
+func LoadCache(name, cachePath string, sizeBytes int) *workingsetcache.Cache {
 	path := cachePath + "/" + name
 	c := workingsetcache.Load(path, sizeBytes, time.Hour)
 	var cs fastcache.Stats
@@ -134,7 +119,7 @@ func LoadCache(info, name, cachePath string, sizeBytes int) *workingsetcache.Cac
 	return c
 }
 
-func NewIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string) *IndexCache {
+func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string, store bool) *IndexCache {
 	if tsidCacheSize == 0 {
 		tsidCacheSize = defaultTSIDCacheSize
 	}
@@ -145,10 +130,15 @@ func NewIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string) 
 		tagCacheSize = defaultTagCacheSize
 	}
 	ic := &IndexCache{
-		SeriesKeyToTSIDCache: LoadCache("SeriesKey->TSID", SeriesKeyToTSIDCacheName, path, tsidCacheSize),
-		TSIDToSeriesKeyCache: LoadCache("TSID->SeriesKey", TSIDToSeriesKeyCacheName, path, skeyCacheSize),
-		tagCache:             workingsetcache.New(tagCacheSize, time.Hour),
-		path:                 path,
+		tagCache: workingsetcache.New(tagCacheSize, time.Hour),
+		path:     path,
+	}
+	if store {
+		ic.SeriesKeyToTSIDCache = LoadCache(SeriesKeyToTSIDCacheName, path, tsidCacheSize)
+		ic.TSIDToSeriesKeyCache = LoadCache(TSIDToSeriesKeyCacheName, path, skeyCacheSize)
+	} else {
+		ic.SeriesKeyToTSIDCache = workingsetcache.New(tsidCacheSize, time.Hour)
+		ic.TSIDToSeriesKeyCache = workingsetcache.New(skeyCacheSize, time.Hour)
 	}
 	return ic
 }

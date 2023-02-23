@@ -45,8 +45,11 @@ mkdir -p /tmp/openGemini/logs/3
 nohup build/ts-meta -config config/openGemini-1.conf -pidfile /tmp/openGemini/pid/meta1.pid > /tmp/openGemini/logs/1/meta_extra1.log 2>&1 &
 nohup build/ts-meta -config config/openGemini-2.conf -pidfile /tmp/openGemini/pid/meta2.pid > /tmp/openGemini/logs/2/meta_extra2.log 2>&1 &
 nohup build/ts-meta -config config/openGemini-3.conf -pidfile /tmp/openGemini/pid/meta3.pid > /tmp/openGemini/logs/3/meta_extra3.log 2>&1 &
-sleep 3
+sleep 5
 nohup build/ts-store -config config/openGemini-1.conf -pidfile /tmp/openGemini/pid/store1.pid > /tmp/openGemini/logs/1/store_extra1.log 2>&1 &
+sleep 0.1
 nohup build/ts-store -config config/openGemini-2.conf -pidfile /tmp/openGemini/pid/store2.pid > /tmp/openGemini/logs/2/store_extra2.log 2>&1 &
+sleep 0.1
 nohup build/ts-store -config config/openGemini-3.conf -pidfile /tmp/openGemini/pid/store3.pid > /tmp/openGemini/logs/3/store_extra3.log 2>&1 &
+sleep 0.1
 nohup build/ts-sql -config config/openGemini-1.conf -pidfile /tmp/openGemini/pid/sql1.pid > /tmp/openGemini/logs/1/sql_extra1.log 2>&1 &

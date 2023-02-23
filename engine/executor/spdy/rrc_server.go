@@ -56,7 +56,7 @@ func NewRRCServer(cfg config.Spdy, network string, address string) *RRCServer {
 		factories:  nil,
 		listener:   nil,
 		stopSignal: make(chan struct{}),
-		logger:     logger.NewLogger(errno.ModuleNetwork).With(zap.String("SPDY", "RRCServer")),
+		logger:     logger.NewLogger(errno.ModuleNetwork),
 	}
 
 	return s
@@ -82,7 +82,8 @@ func (s *RRCServer) run() {
 			if err := conn.ListenAndServed(); err != nil {
 				s.logger.Warn(err.Error(),
 					zap.String("remote_addr", conn.RemoteAddr().String()),
-					zap.String("local_addr", conn.LocalAddr().String()))
+					zap.String("local_addr", conn.LocalAddr().String()),
+					zap.String("SPDY", "RRCServer"))
 			}
 		}()
 		ms := newMultiplexedServer(s.cfg, time.Now().Unix(), conn, s.factories)
@@ -99,6 +100,14 @@ func (s *RRCServer) Start() error {
 
 	go s.run()
 	return nil
+}
+
+func (s *RRCServer) Open() error {
+	return s.openListener()
+}
+
+func (s *RRCServer) Run() {
+	s.run()
 }
 
 func (s *RRCServer) openListener() error {
@@ -119,6 +128,7 @@ func (s *RRCServer) openListener() error {
 func (s *RRCServer) Stop() {
 	s.stopGuard.Lock()
 	if s.stopped {
+		s.stopGuard.Unlock()
 		return
 	}
 	s.stopped = true

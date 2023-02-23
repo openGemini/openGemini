@@ -24,6 +24,8 @@ package statistics
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type MetaStatistics struct {
@@ -70,6 +72,23 @@ func (s *MetaStatistics) Collect(buffer []byte) ([]byte, error) {
 	}
 
 	return buffer, nil
+}
+
+func (s *MetaStatistics) CollectOps() []opsStat.OpsStatistic {
+	data := map[string]interface{}{
+		"SnapshotTotal":             s.itemSnapshotTotal,
+		"SnapshotDataSize":          s.itemSnapshotDataSize,
+		"SnapshotUnmarshalDuration": s.itemSnapshotUnmarshalDuration,
+		"LeaderSwitchTotal":         s.itemLeaderSwitchTotal,
+		"StoreApplyTotal":           s.itemStoreApplyTotal,
+	}
+
+	return []opsStat.OpsStatistic{{
+		Name:   "meta",
+		Tags:   s.tags,
+		Values: data,
+	},
+	}
 }
 
 func (s *MetaStatistics) AddSnapshotTotal(i int64) {

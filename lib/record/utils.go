@@ -17,10 +17,12 @@ limitations under the License.
 package record
 
 import (
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"unsafe"
 
+	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
@@ -39,6 +41,15 @@ const (
 )
 
 var MinMaxTimeRange = TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
+var typeSize map[int]int
+
+func init() {
+	typeSize = map[int]int{
+		influx.Field_Type_Int:     Int64SizeBytes,
+		influx.Field_Type_Float:   Float64SizeBytes,
+		influx.Field_Type_Boolean: BooleanSizeBytes,
+	}
+}
 
 type TimeRange struct {
 	Min, Max int64
@@ -127,6 +138,14 @@ func Bytes2Uint32Slice(b []byte) []uint32 {
 	return res
 }
 
+func Bytes2Uint32SliceBigEndian(b []byte) []uint32 {
+	ret := make([]uint32, 0, len(b)/Uint32SizeBytes)
+	for pos := 0; pos <= len(b)-Uint32SizeBytes; pos += Uint32SizeBytes {
+		ret = append(ret, numberenc.UnmarshalUint32(b[pos:pos+Uint32SizeBytes]))
+	}
+	return ret
+}
+
 func Uint32Slice2byte(b []uint32) []byte {
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
 
@@ -136,6 +155,14 @@ func Uint32Slice2byte(b []uint32) []byte {
 	s.Len = h.Len * Uint32SizeBytes
 	s.Cap = h.Cap * Uint32SizeBytes
 	return res
+}
+
+func Uint32Slice2ByteBigEndian(b []uint32) []byte {
+	ret := make([]byte, 0, len(b)*Uint32SizeBytes)
+	for _, val := range b {
+		ret = numberenc.MarshalUint32Append(ret, val)
+	}
+	return ret
 }
 
 func BooleanSlice2byte(b []bool) []byte {
@@ -171,6 +198,14 @@ func Int64Slice2byte(b []int64) []byte {
 	return res
 }
 
+func Int64Slice2ByteBigEndian(b []int64) []byte {
+	ret := make([]byte, 0, len(b)*Int64SizeBytes)
+	for _, val := range b {
+		ret = numberenc.MarshalInt64Append(ret, val)
+	}
+	return ret
+}
+
 func Uint64Slice2byte(b []uint64) []byte {
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
 
@@ -182,6 +217,14 @@ func Uint64Slice2byte(b []uint64) []byte {
 	return res
 }
 
+func Uint64Slice2ByteBigEndian(b []uint64) []byte {
+	ret := make([]byte, 0, len(b)*Uint64SizeBytes)
+	for _, val := range b {
+		ret = numberenc.MarshalUint64Append(ret, val)
+	}
+	return ret
+}
+
 func Bytes2Uint64Slice(b []byte) []uint64 {
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
 
@@ -191,6 +234,14 @@ func Bytes2Uint64Slice(b []byte) []uint64 {
 	s.Len = h.Len / Uint64SizeBytes
 	s.Cap = h.Cap / Uint64SizeBytes
 	return res
+}
+
+func Bytes2Uint64SliceBigEndian(b []byte) []uint64 {
+	ret := make([]uint64, 0, len(b)/Uint64SizeBytes)
+	for pos := 0; pos <= len(b)-Uint64SizeBytes; pos += Uint64SizeBytes {
+		ret = append(ret, numberenc.UnmarshalUint64(b[pos:pos+Uint64SizeBytes]))
+	}
+	return ret
 }
 
 func Bytes2Int16Slice(b []byte) []int16 {
@@ -224,6 +275,14 @@ func Bytes2Int64Slice(b []byte) []int64 {
 	s.Len = h.Len / Int64SizeBytes
 	s.Cap = h.Cap / Int64SizeBytes
 	return res
+}
+
+func Bytes2Int64SliceBigEndian(b []byte) []int64 {
+	ret := make([]int64, 0, len(b)/Int64SizeBytes)
+	for pos := 0; pos <= len(b)-Int64SizeBytes; pos += Int64SizeBytes {
+		ret = append(ret, numberenc.UnmarshalInt64(b[pos:pos+Int64SizeBytes]))
+	}
+	return ret
 }
 
 func Float32Slice2byte(b []float32) []byte {
@@ -370,8 +429,14 @@ func Int32Slice2byte(b []int32) []byte {
 	return res
 }
 
-func Uint64ToBytes(id uint64) []byte {
+func Uint64ToBytesUnsafe(id uint64) []byte {
 	return (*(*[8]byte)(unsafe.Pointer(&id)))[:]
+}
+
+func Uint64ToBytes(u uint64) []byte {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, u)
+	return buf
 }
 
 func Float64ToUint64(v float64) uint64 {

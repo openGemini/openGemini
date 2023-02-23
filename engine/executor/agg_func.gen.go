@@ -324,44 +324,6 @@ func IntegerSumMerge(prevPoint, currPoint *IntegerPoint) {
 	prevPoint.value += currPoint.value
 }
 
-func FloatMeanReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-
-	var sum float64
-	var aggregated int
-	for i := vs; i < ve; i++ {
-		sum += c.Column(ordinal).FloatValue(i)
-		aggregated++
-	}
-	return start, float64(sum) / float64(aggregated), false
-}
-
-func IntegerMeanReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-
-	var sum int64
-	var aggregated int
-	for i := vs; i < ve; i++ {
-		sum += c.Column(ordinal).IntegerValue(i)
-		aggregated++
-	}
-	return start, float64(sum) / float64(aggregated), false
-}
-
-func FloatMeanMerge(prevPoint, currPoint *FloatPoint) {
-	if prevPoint.isNil {
-		prevPoint.Assign(currPoint)
-		return
-	}
-	prevPoint.value = (prevPoint.value + currPoint.value) / 2
-}
-
 func FloatMinReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path

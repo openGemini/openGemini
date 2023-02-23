@@ -27,15 +27,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
-)
-
-const (
-	MULTIPLIEXED_CONN_SESSION_ID uint64 = 0
 )
 
 const (
@@ -65,6 +62,11 @@ const (
 	RST_FLAG
 	DATA_ACK_FLAG
 )
+
+type BuffWriter interface {
+	io.Writer
+	Flush() error
+}
 
 type header []byte
 
@@ -156,8 +158,8 @@ type MultiplexedConnection struct {
 	underlying    io.ReadWriteCloser
 	sessions      map[uint64]*MultiplexedSession
 	sessionsGuard sync.Mutex
-	input         *bufio.Reader
-	output        *bufio.Writer
+	input         io.Reader
+	output        BuffWriter
 	outputGuard   sync.Mutex
 	handlers      []handlerFunc
 	dataBp        bufferpool.Pool
@@ -187,7 +189,12 @@ func NewMultiplexedConnection(cfg config.Spdy, underlying io.ReadWriteCloser, cl
 		client:      client,
 		openTimeout: cfg.GetOpenSessionTimeout(),
 		closed:      make(chan struct{}, 1),
-		logger:      logger.NewLogger(errno.ModuleNetwork).With(zap.String("SPDY", "MultiplexedConnection")),
+		logger:      logger.NewLogger(errno.ModuleNetwork),
+	}
+
+	if cfg.CompressEnable {
+		conn.output = snappy.NewBufferedWriter(underlying)
+		conn.input = snappy.NewReader(underlying)
 	}
 
 	if client {
@@ -255,7 +262,8 @@ func (c *MultiplexedConnection) handleError(err error) {
 
 	c.logger.Error("", zap.Error(err),
 		zap.String("remote_addr", c.RemoteAddr().String()),
-		zap.String("local_addr", c.LocalAddr().String()))
+		zap.String("local_addr", c.LocalAddr().String()),
+		zap.String("SPDY", "MultiplexedConnection"))
 
 	var code uint32
 	if e, ok := err.(MultiplexedError); ok {
@@ -330,6 +338,9 @@ func (c *MultiplexedConnection) handleData(hdr []byte) error {
 func (c *MultiplexedConnection) discardData(hdr []byte) error {
 	length := header(hdr).Length()
 	if length > 0 {
+		if err := c.setReadDeadline(); err != nil {
+			return err
+		}
 		if _, err := io.CopyN(ioutil.Discard, c.input, int64(length)); err != nil {
 			return err
 		}
@@ -342,6 +353,7 @@ func (c *MultiplexedConnection) readData(hdr []byte) ([]byte, error) {
 	if length == 0 {
 		return nil, nil
 	}
+
 	data := c.AllocData(length)
 	if _, err := io.ReadFull(c.input, data); err != nil {
 		c.FreeData(data)
@@ -411,6 +423,10 @@ func (c *MultiplexedConnection) Write(hdr []byte, data []byte) error {
 		c.outputGuard.Unlock()
 		c.FreeData(data)
 	}()
+
+	if err := c.setWriteDeadline(); err != nil {
+		return err
+	}
 
 	n, err := c.output.Write(hdr)
 	if err != nil {
@@ -521,7 +537,7 @@ func (c *MultiplexedConnection) Close() error {
 	}
 
 	if err := c.closeRemote(0); err != nil {
-		c.logger.Error(err.Error())
+		c.logger.Error(err.Error(), zap.String("SPDY", "MultiplexedConnection"))
 		return err
 	}
 	return c.close()
@@ -545,6 +561,22 @@ func (c *MultiplexedConnection) LocalAddr() net.Addr {
 		return nil
 	}
 	return underlying.LocalAddr()
+}
+
+func (c *MultiplexedConnection) setWriteDeadline() error {
+	conn, ok := c.underlying.(net.Conn)
+	if ok {
+		return conn.SetWriteDeadline(time.Now().Add(config.TCPWriteTimeout))
+	}
+	return nil
+}
+
+func (c *MultiplexedConnection) setReadDeadline() error {
+	conn, ok := c.underlying.(net.Conn)
+	if ok {
+		return conn.SetDeadline(time.Now().Add(config.TCPReadTimeout))
+	}
+	return nil
 }
 
 type Flags uint16

@@ -404,7 +404,7 @@ func TestFindBestExpWithMockAToBRule(t *testing.T) {
 	builder.AnyInput((&MockLogicalPlanA{}).Type())
 	atoBRule := NewMockAToBRule(builder.Operand(), "")
 
-	pb := executor.NewHeuProgramBuilder()
+	pb := NewHeuProgramBuilder()
 	pb.AddRuleCatagory(executor.RULE_TEST)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
@@ -452,7 +452,7 @@ func TestFindBestExpWithMockMergeBRule(t *testing.T) {
 	builder.OneInput((&MockLogicalPlanB{}).Type(), input)
 	mergeBRule := NewMockMergeBRule(builder.Operand(), "")
 
-	pb := executor.NewHeuProgramBuilder()
+	pb := NewHeuProgramBuilder()
 	pb.AddRuleCatagory(executor.RULE_TEST)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
@@ -506,7 +506,7 @@ func TestFindBestExpWithManyRules(t *testing.T) {
 	builder.OneInput((&MockLogicalPlanB{}).Type(), input)
 	mergeBRule := NewMockMergeBRule(builder.Operand(), "")
 
-	pb := executor.NewHeuProgramBuilder()
+	pb := NewHeuProgramBuilder()
 	pb.AddRuleCatagory(executor.RULE_TEST)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
@@ -538,5 +538,12 @@ func TestFindBestExpWithManyRules(t *testing.T) {
 
 	if visitor.Nodes()[0].Type() != expectNode.Type() {
 		t.Errorf("expect node is %v, but is %v", expectNode.Type(), visitor.Nodes()[0].Type())
+	}
+}
+
+func TestBuildHeuristicPlanner(t *testing.T) {
+	plan := executor.BuildHeuristicPlanner()
+	if plan == nil {
+		t.Fatalf("BuildHeuristicPlanner fail")
 	}
 }

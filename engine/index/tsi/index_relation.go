@@ -17,6 +17,8 @@ limitations under the License.
 package tsi
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -32,22 +34,24 @@ type IndexRelation struct {
 
 func NewIndexRelation(opt *Options, primaryIndex PrimaryIndex, iBuilder *IndexBuilder) (*IndexRelation, error) {
 	relation := &IndexRelation{
-		oid:            GetIndexIdByType(opt.indexType),
-		indexAmRoutine: getIndexAmRoutine(opt, primaryIndex),
-		iBuilder:       iBuilder,
+		oid:      GetIndexIdByType(opt.indexType),
+		iBuilder: iBuilder,
 	}
-
-	return relation, nil
+	var err error
+	relation.indexAmRoutine, err = getIndexAmRoutine(opt, primaryIndex)
+	return relation, err
 }
 
-func getIndexAmRoutine(opt *Options, primaryIndex PrimaryIndex) *IndexAmRoutine {
+func getIndexAmRoutine(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	switch opt.indexType {
 	case MergeSet:
 		return MergeSetIndexHandler(opt, primaryIndex)
 	case Text:
 		return TextIndexHandler(opt, primaryIndex)
+	case Field:
+		return FieldIndexHandler(opt, primaryIndex)
 	}
-	return nil
+	return nil, fmt.Errorf("not found index type %d", opt.indexType)
 }
 
 func (relation *IndexRelation) IndexOpen() error {
@@ -65,10 +69,10 @@ func (relation *IndexRelation) IndexInsert(name []byte, point interface{}) error
 	return err
 }
 
-func (relation *IndexRelation) IndexScan(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (interface{}, error) {
+func (relation *IndexRelation) IndexScan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (interface{}, error) {
 	index := relation.indexAmRoutine.index
 	primaryIndex := relation.indexAmRoutine.primaryIndex
-	return relation.indexAmRoutine.amScan(index, primaryIndex, span, name, opt)
+	return relation.indexAmRoutine.amScan(index, primaryIndex, span, name, opt, groups)
 }
 
 func (relation *IndexRelation) IndexDelete(name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -90,5 +94,6 @@ type PrimaryIndex interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
 	GetDeletePrimaryKeys(name []byte, condition influxql.Expr, tr TimeRange) ([]uint64, error)
+	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, _ interface{}) (GroupSeries, error)
 	Path() string
 }

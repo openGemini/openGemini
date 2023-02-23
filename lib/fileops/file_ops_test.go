@@ -57,37 +57,35 @@ func TestGlob(t *testing.T) {
 		_ = f.Close()
 	}
 
-	tsmfiles := files[0:2]
-	sort.Strings(tsmfiles)
+	tsmfile := files[0:2]
+	sort.Strings(tsmfile)
 	tsmPattern := path.Join(tmpDir, "*.tsm")
 	tmpFiles, err := Glob(tsmPattern)
-	sort.Strings(tmpFiles)
 	if err != nil {
 		t.Fatalf("Glob(%s) failed: %q", tsmPattern, err.Error())
 	}
-	if len(tmpFiles) != len(tsmfiles) {
+	if len(tmpFiles) != len(tsmfile) {
 		t.Fatalf("Glob(%s) failed", tsmPattern)
 	}
 	for i := 0; i < len(tmpFiles); i++ {
-		if path.Join(tmpDir, tsmfiles[i]) != tmpFiles[i] {
-			t.Fatalf("Glob(%s) failed: expected(%s) but(%s)", tsmPattern, tsmfiles[i], tmpFiles[i])
+		if path.Join(tmpDir, tsmfile[i]) != tmpFiles[i] {
+			t.Fatalf("Glob(%s) failed: expected(%s) but(%s)", tsmPattern, tsmfile[i], tmpFiles[i])
 		}
 	}
 
-	walfiles := files[5:8]
-	sort.Strings(walfiles)
+	walfile := files[5:8]
+	sort.Strings(walfile)
 	walPattern := path.Join(tmpDir, "_*.wal")
 	walFiles, err := Glob(walPattern)
-	sort.Strings(walFiles)
 	if err != nil {
 		t.Fatalf("Glob(%s) failed: %q", walPattern, err.Error())
 	}
-	if len(walFiles) != len(walfiles) {
+	if len(walFiles) != len(walfile) {
 		t.Fatalf("Glob(%s) failed", walPattern)
 	}
 	for i := 0; i < len(walFiles); i++ {
-		if path.Join(tmpDir, walfiles[i]) != walFiles[i] {
-			t.Fatalf("Glob(%s) failed: expected(%s) but(%s)", walPattern, walfiles[i], tmpFiles[i])
+		if path.Join(tmpDir, walfile[i]) != walFiles[i] {
+			t.Fatalf("Glob(%s) failed: expected(%s) but(%s)", walPattern, walfile[i], tmpFiles[i])
 		}
 	}
 }
@@ -102,7 +100,7 @@ func TestFileInterface(t *testing.T) {
 		t.Fatalf("remove dir fail, error:%v", err)
 	}
 
-	if err := MkdirAll(rootDir, 0755, lockFile); err != nil {
+	if err := MkdirAll(rootDir, 0750, lockFile); err != nil {
 		t.Fatalf("mkdir dir fail, error:%v", err)
 	}
 
@@ -209,7 +207,7 @@ func TestVFS(t *testing.T) {
 	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
 	lockFile := FileLockOption("/tmp/test_vfs/lock")
 
-	_ = MkdirAll(rootDir, 0755, lockFile)
+	_ = MkdirAll(rootDir, 0750, lockFile)
 	fileName := filepath.Join(rootDir, "file1")
 
 	fd, err := Create(fileName, lockFile, pri)
@@ -267,17 +265,17 @@ func TestVFS1(t *testing.T) {
 	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
 	lockFile := FileLockOption("/tmp/test_vfs/lock")
 
-	if err := MkdirAll(rootDir, 0755, lockFile); err != nil {
+	if err := MkdirAll(rootDir, 0750, lockFile); err != nil {
 		t.Fatalf("mkdir(%v) fail, err:%v", rootDir, err)
 	}
 	fileName := filepath.Join(rootDir, "file1")
 
 	dir1 := filepath.Join(rootDir, "dir1")
 	dir2 := filepath.Join(rootDir, "dir2")
-	if err := MkdirAll(dir1, 0755, lockFile); err != nil {
+	if err := MkdirAll(dir1, 0750, lockFile); err != nil {
 		t.Fatalf("mkdir(%v) fail, err:%v", rootDir, err)
 	}
-	if err := MkdirAll(dir2, 0755, lockFile); err != nil {
+	if err := MkdirAll(dir2, 0750, lockFile); err != nil {
 		t.Fatalf("mkdir(%v) fail, err:%v", rootDir, err)
 	}
 
@@ -327,17 +325,52 @@ func TestVFS1(t *testing.T) {
 }
 
 func TestMMap(t *testing.T) {
-	fp, err := os.OpenFile(os.TempDir()+"/test_mmap.data", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0640)
+	fp, err := os.OpenFile(t.TempDir()+"/test_mmap.data", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0640)
 	if !assert.NoError(t, err) {
 		return
 	}
 	size := 32
-	data, err := Mmap(fp.Fd(), size)
+	data, err := Mmap(int(fp.Fd()), 0, size)
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	if !assert.NoError(t, MUnmap(data)) {
+		return
+	}
+
+	data, err = Mmap(0, -1, 0)
+	if !assert.Error(t, err) {
+		return
+	}
+
+	if !assert.NoError(t, MUnmap(data)) {
+		return
+	}
+}
+
+func TestFdatasync(t *testing.T) {
+	fp, err := os.OpenFile(t.TempDir()+"/data", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0640)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	_, err = fp.Write([]byte("test"))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	f := &file{of: fp}
+	defer f.Close()
+	err = Fdatasync(f)
+	if !assert.NoError(t, err) {
+		return
+	}
+}
+
+func TestFadvise(t *testing.T) {
+	err := Fadvise(111, 0, 0, 0)
+	if !assert.Error(t, err) {
 		return
 	}
 }

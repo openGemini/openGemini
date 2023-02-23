@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckRecord(t *testing.T) {
@@ -52,6 +53,40 @@ func TestCheckRecord(t *testing.T) {
 	nameFloat[1], nameFloat[2] = 'n', 't'
 	err = checkRecord(rec)
 	assert.Contains(t, fmt.Sprintf("%v", err), "same schema")
+}
+
+func TestCheckCol(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendIntegers(1, 2, 3, 4, 5)
+
+	require.NoError(t, checkCol(col))
+	require.NoError(t, checkCol(nil))
+
+	col.NilCount = -1
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "NilCount is less than 0")
+
+	col.Init()
+	col.AppendStrings("a", "b", "c", "d")
+	col.NilCount++
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "NilCount is invalid")
+
+	col.NilCount--
+	col.Bitmap = append(col.Bitmap, 1)
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "Bitmap is invalid")
+
+	col.Bitmap = col.Bitmap[:len(col.Bitmap)-1]
+	col.Offset = append(col.Offset, 100)
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "Offset is invalid")
+}
+
+func checkCol(col *record.ColVal) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = fmt.Errorf("%v", e)
+		}
+	}()
+	record.CheckCol(col)
+	return
 }
 
 func checkRecord(rec *record.Record) (err error) {

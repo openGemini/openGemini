@@ -234,7 +234,8 @@ func (trans *LimitTransform) abortSinkTransform() {
 }
 
 func (trans *LimitTransform) SingleRowLimitHelper() {
-	for i := 0; i < trans.CurrItem.Len(); i++ {
+	i := 0
+	for i < trans.CurrItem.Len() {
 		if !trans.SameGroup(i) {
 			trans.Count = 0
 		}
@@ -242,7 +243,7 @@ func (trans *LimitTransform) SingleRowLimitHelper() {
 		if trans.Count > trans.offset {
 			if trans.Count > trans.offset+trans.limit {
 				if nextValue := trans.GetSingleRowPara() - 1; i <= nextValue {
-					i = nextValue
+					i = nextValue + 1
 					continue
 				}
 			}
@@ -251,6 +252,7 @@ func (trans *LimitTransform) SingleRowLimitHelper() {
 		if trans.NewChunk.Len() >= trans.Opt.ChunkSize {
 			trans.SendChunk()
 		}
+		i++
 	}
 }
 
@@ -281,7 +283,7 @@ func (trans *LimitTransform) MultipleRowsLimitHelper() {
 		if trans.Count > trans.offset {
 			if trans.Count > trans.offset+trans.limit {
 				if nextValue := trans.GetMultiRowsIndexPara() - 1; i < nextValue {
-					i = nextValue
+					i = nextValue + 1
 					continue
 				}
 			}

@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type RPCClient struct {
@@ -223,4 +224,53 @@ func TestTransport_Responser1000(t *testing.T) {
 	}
 
 	assert.NoError(t, trans.Wait())
+}
+
+func TestTransport_Error(t *testing.T) {
+	address := "127.0.0.12:18299"
+	var nodeID uint64 = 18299
+
+	transport.NewNodeManager().Clear()
+	transport.NewNodeManager().Add(nodeID, address)
+	server, err := startServer(address, 1024)
+	require.NoError(t, err)
+
+	client := &RPCClient{}
+	for i := 0; i < 10; i++ {
+		_, err := transport.NewTransport(nodeID, spdy.SelectRequest, client)
+		require.NoError(t, err)
+	}
+
+	server.Stop()
+	node := transport.NewNodeManager().Get(nodeID)
+	node.Close()
+
+	_, err = transport.NewTransport(nodeID, spdy.SelectRequest, client)
+	expErr := errno.NewError(errno.NoConnectionAvailable, nodeID, address).Error()
+	assert.EqualError(t, err, expErr)
+}
+
+func TestTransport_Error2(t *testing.T) {
+	address := "127.0.0.12:18299"
+	var nodeID uint64 = 18299
+
+	transport.NewNodeManager().Clear()
+	transport.NewNodeManager().Add(nodeID, address)
+	server, err := startServer(address, 1024)
+	require.NoError(t, err)
+
+	client := &RPCClient{}
+	for i := 0; i < 10; i++ {
+		_, err := transport.NewTransport(nodeID, spdy.SelectRequest, client)
+		require.NoError(t, err)
+	}
+
+	trans, err := transport.NewTransport(nodeID, spdy.SelectRequest, client)
+	require.NoError(t, err)
+
+	server.Stop()
+	node := transport.NewNodeManager().Get(nodeID)
+	node.Close()
+
+	assert.NotEmpty(t, trans.Send(&Message{data: "12345678"}))
 }

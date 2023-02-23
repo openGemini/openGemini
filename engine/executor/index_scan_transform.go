@@ -19,16 +19,20 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
 type IndexScanTransform struct {
 	BaseProcessor
-
+	downSampleLevel  int
+	downSampleValue  map[string]string
+	outRowDataType   hybridqp.RowDataType
 	output           *ChunkPort
 	builder          *ChunkBuilder
 	ops              []hybridqp.ExprOptions
@@ -38,26 +42,23 @@ type IndexScanTransform struct {
 	pipelineExecutor *PipelineExecutor
 	info             *IndexScanExtraInfo
 
-	inputPort *ChunkPort
-
-	chunkPool *CircularChunkPool
-	NewChunk  Chunk
+	inputPort             *ChunkPort
+	downSampleRowDataType *hybridqp.RowDataTypeImpl
+	chunkPool             *CircularChunkPool
 }
 
 func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions,
 	schema hybridqp.Catalog, input hybridqp.QueryNode, info *IndexScanExtraInfo) *IndexScanTransform {
 	trans := &IndexScanTransform{
-		output:    NewChunkPort(outRowDataType),
-		inputPort: NewChunkPort(outRowDataType),
-		builder:   NewChunkBuilder(outRowDataType),
-		ops:       ops,
-		opt:       *schema.Options().(*query.ProcessorOptions),
-		node:      input,
-		info:      info,
-		chunkPool: NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType)),
+		outRowDataType: outRowDataType,
+		output:         NewChunkPort(outRowDataType),
+		inputPort:      NewChunkPort(outRowDataType),
+		builder:        NewChunkBuilder(outRowDataType),
+		ops:            ops,
+		opt:            *schema.Options().(*query.ProcessorOptions),
+		node:           input,
+		info:           info,
 	}
-
-	trans.NewChunk = trans.chunkPool.GetChunk()
 
 	return trans
 }
@@ -72,13 +73,117 @@ func (c *IndexScanTransformCreator) Create(plan LogicalPlan, opt query.Processor
 
 var _ = RegistryTransformCreator(&LogicalIndexScan{}, &IndexScanTransformCreator{})
 
+func (trans *IndexScanTransform) BuildPlan(downSampleLevel int) (*QuerySchema, hybridqp.QueryNode, error) {
+	schema := trans.node.Schema()
+	if downSampleLevel == 0 || !GetEnableFileCursor() || !schema.HasOptimizeAgg() || schema.HasAuxTag() {
+		trans.chunkPool = NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(trans.outRowDataType))
+		return schema.(*QuerySchema), trans.node, nil
+	}
+	s := trans.BuildDownSampleSchema(schema)
+	plan, err := trans.BuildDownSamplePlan(s)
+	return s, plan, err
+}
+
+func (trans *IndexScanTransform) CanDownSampleRewrite(downSampleLevel int) bool {
+	schema := trans.node.Schema()
+	if downSampleLevel == 0 {
+		return true
+	}
+	if schema.HasOptimizeAgg() {
+		return true
+	}
+	return false
+}
+
+func (trans *IndexScanTransform) BuildDownSampleSchema(schema hybridqp.Catalog) *QuerySchema {
+	var fields influxql.Fields
+	originNames := make([]string, 0)
+	columnNames := make([]string, 0)
+	for k, v := range schema.OrigCalls() {
+		aggType := v.Name
+		if aggType == "count" {
+			f := &influxql.Field{
+				Expr:  &influxql.Call{Name: "sum", Args: []influxql.Expr{&influxql.VarRef{Val: aggType + "_" + v.Args[0].(*influxql.VarRef).Val, Type: influxql.Integer}}},
+				Alias: "",
+			}
+			columnNames = append(columnNames, aggType+"_"+v.Args[0].(*influxql.VarRef).Val)
+			fields = append(fields, f)
+		} else {
+			f := &influxql.Field{
+				Expr:  &influxql.Call{Name: aggType, Args: []influxql.Expr{&influxql.VarRef{Val: aggType + "_" + v.Args[0].(*influxql.VarRef).Val, Type: v.Args[0].(*influxql.VarRef).Type}}},
+				Alias: "",
+			}
+			columnNames = append(columnNames, aggType+"_"+v.Args[0].(*influxql.VarRef).Val)
+			fields = append(fields, f)
+		}
+		originNames = append(originNames, schema.Symbols()[k].Val)
+	}
+	o := *(schema.Options().(*query.ProcessorOptions))
+	o.HintType = hybridqp.ExactStatisticQuery
+	s := NewQuerySchema(fields, columnNames, &o)
+	trans.downSampleValue = make(map[string]string, len(fields))
+	for i, _ := range s.fields {
+		name := s.fields[i].Expr.(*influxql.VarRef).Val
+		originName := originNames[i]
+		trans.downSampleValue[name] = originName
+	}
+	return s
+}
+
+func (trans *IndexScanTransform) SetDownSampleLevel(l int) {
+	trans.downSampleLevel = l
+}
+
+func (trans *IndexScanTransform) IsSink() bool {
+	//IndexScanTransform will create new pipelineExecutor, so is sink
+	return true
+}
+
+func (trans *IndexScanTransform) BuildDownSamplePlan(s hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	var plan hybridqp.QueryNode
+	var pErr error
+	builder := NewLogicalPlanBuilderImpl(s)
+	builder.Series()
+	builder.Aggregate()
+	currNode := builder.stack.Pop()
+	currNode.(*LogicalAggregate).ForwardCallArgs()
+	builder.Push(currNode)
+	builder.TagSetAggregate()
+	currNode = builder.stack.Pop()
+	currNode.(*LogicalAggregate).ForwardCallArgs()
+	currNode.(*LogicalAggregate).DeriveOperations()
+	builder.Push(currNode)
+	builder.Exchange(SERIES_EXCHANGE, nil)
+	builder.Reader()
+	builder.Exchange(READER_EXCHANGE, nil)
+	builder.Aggregate()
+	currNode = builder.stack.Pop()
+	currNode.(*LogicalAggregate).ForwardCallArgs()
+	currNode.(*LogicalAggregate).DeriveOperations()
+	builder.Push(currNode)
+	plan, pErr = builder.Build()
+	if pErr != nil {
+		return nil, pErr
+	}
+	return plan, nil
+}
+
 func (trans *IndexScanTransform) indexScan() error {
 	defer func() {
 		trans.info.Store.UnrefEngineDbPt(trans.info.UnRefDbPt.Db, trans.info.UnRefDbPt.Pt)
 	}()
 	info := trans.info
+	downSampleLevel := trans.info.Store.GetShardDownSampleLevel(info.Req.Database, info.Req.PtID, info.ShardID)
+	if !trans.CanDownSampleRewrite(downSampleLevel) {
+		return fmt.Errorf("nil plan")
+	}
+	trans.downSampleLevel = downSampleLevel
+	subPlanSchema, subPlan, err := trans.BuildPlan(downSampleLevel)
+	if err != nil {
+		return err
+	}
 	plan, err := trans.info.Store.CreateLogicPlanV2(info.ctx, info.Req.Database, info.Req.PtID, info.ShardID,
-		info.Req.Opt.Sources, trans.node.Schema())
+		info.Req.Opt.Sources, subPlanSchema)
 	if err != nil {
 		return err
 	}
@@ -103,7 +208,7 @@ func (trans *IndexScanTransform) indexScan() error {
 	trans.executorBuilder = NewIndexScanExecutorBuilder(traits, trans.opt.EnableBinaryTreeMerge)
 	trans.executorBuilder.Analyze(trans.span)
 
-	p, pipeError := trans.executorBuilder.Build(trans.node)
+	p, pipeError := trans.executorBuilder.Build(subPlan)
 	if pipeError != nil {
 		return pipeError
 	}
@@ -112,7 +217,6 @@ func (trans *IndexScanTransform) indexScan() error {
 	if len(output) > 1 {
 		return errors.New("the output should be 1")
 	}
-	output[0].Redirect(trans.output)
 	return nil
 }
 
@@ -130,6 +234,13 @@ func (trans *IndexScanTransform) Explain() []ValuePair {
 
 func (trans *IndexScanTransform) Close() {
 	trans.output.Close()
+	if trans.chunkPool != nil {
+		trans.chunkPool.Release()
+	}
+	if trans.pipelineExecutor != nil {
+		//when be close, should abort child pipelineExecutor, otherwise child pipelineExecutor will
+		trans.pipelineExecutor.Abort()
+	}
 }
 
 func (trans *IndexScanTransform) Release() error {
@@ -144,10 +255,19 @@ func (trans *IndexScanTransform) Work(ctx context.Context) error {
 		}
 		return nil
 	}
-	var pipError error
-	var wg sync.WaitGroup
+	return trans.WorkHelper(ctx)
+}
 
+func (trans *IndexScanTransform) WorkHelper(ctx context.Context) error {
+	var pipError error
+	output := trans.pipelineExecutor.root.transform.GetOutputs()
+	if len(output) != 1 {
+		return errors.New("the output should be 1")
+	}
+	trans.inputPort.ConnectNoneCache(output[0])
+	var wg sync.WaitGroup
 	wg.Add(1)
+
 	go func() {
 		defer wg.Done()
 		if pipError = trans.pipelineExecutor.ExecuteExecutor(ctx); pipError != nil {
@@ -157,9 +277,54 @@ func (trans *IndexScanTransform) Work(ctx context.Context) error {
 			return
 		}
 	}()
-
+	trans.Running(ctx)
 	wg.Wait()
 	return nil
+}
+
+func (trans *IndexScanTransform) Running(ctx context.Context) {
+	defer func() {
+		trans.pipelineExecutor.Crash()
+	}()
+	for {
+		select {
+		case c, ok := <-trans.inputPort.State:
+			if !ok {
+				return
+			}
+			if trans.downSampleLevel != 0 {
+				c = trans.RewriteChunk(c)
+			}
+			trans.output.State <- c
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (trans *IndexScanTransform) RewriteChunk(c Chunk) Chunk {
+	if trans.downSampleRowDataType == nil {
+		trans.buildDownSampleRowDataType(c)
+	}
+	newChunk := trans.chunkPool.GetChunk()
+	c.CopyTo(newChunk)
+	newChunk.SetRowDataType(trans.downSampleRowDataType)
+	return newChunk
+}
+
+func (trans *IndexScanTransform) buildDownSampleRowDataType(c Chunk) {
+	trans.downSampleRowDataType = hybridqp.NewRowDataTypeImpl()
+	c.RowDataType().CopyTo(trans.downSampleRowDataType)
+	tempMap := make(map[string]int)
+	indexByName := c.RowDataType().IndexByName()
+	for k, v := range c.RowDataType().Fields() {
+		currVal := v.Expr.(*influxql.VarRef).Val
+		originVal := c.RowDataType().Fields()[k].Expr.(*influxql.VarRef).Val
+		trans.downSampleRowDataType.Fields()[k].Expr.(*influxql.VarRef).Val = trans.downSampleValue[currVal]
+		tempMap[trans.downSampleValue[currVal]] = indexByName[originVal]
+	}
+	trans.downSampleRowDataType.SetIndexByName(tempMap)
+	trans.chunkPool = NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(trans.downSampleRowDataType))
 }
 
 func (trans *IndexScanTransform) GetOutputs() Ports {
@@ -167,7 +332,7 @@ func (trans *IndexScanTransform) GetOutputs() Ports {
 }
 
 func (trans *IndexScanTransform) GetInputs() Ports {
-	return nil
+	return Ports{trans.inputPort}
 }
 
 func (trans *IndexScanTransform) GetOutputNumber(_ Port) int {
@@ -176,4 +341,8 @@ func (trans *IndexScanTransform) GetOutputNumber(_ Port) int {
 
 func (trans *IndexScanTransform) GetInputNumber(_ Port) int {
 	return 0
+}
+
+func (trans *IndexScanTransform) SetPipelineExecutor(exec *PipelineExecutor) {
+	trans.pipelineExecutor = exec
 }

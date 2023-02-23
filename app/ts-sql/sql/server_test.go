@@ -18,14 +18,68 @@ package ingestserver
 
 import (
 	"net"
+	"path"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func Test_NewServer(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_Open_Close(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		ValidArgs: []string{"dev", "abcd", "now"},
+		Version:   "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9179"}...)
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).sherlockService)
+
+	server.(*Server).initMetaClientFn = func() error {
+		return nil
+	}
+	err = server.Open()
+	require.NoError(t, err)
+
+	err = server.Close()
+	require.NoError(t, err)
+}
 
 func TestServer_Close(t *testing.T) {
 	var err error
@@ -44,9 +98,13 @@ func TestServer_Close(t *testing.T) {
 
 func TestInitStatisticsPusher(t *testing.T) {
 	server := &Server{}
+	server.Logger = logger.NewLogger(errno.ModuleUnknown)
 	server.config = config.NewTSSql()
+	server.config.Monitor.Pushers = "http"
 	server.config.Monitor.StoreEnabled = true
 
 	app.SwitchToSingle()
 	server.initStatisticsPusher()
+	time.Sleep(10 * time.Millisecond)
+	server.Close()
 }

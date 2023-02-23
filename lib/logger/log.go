@@ -26,12 +26,15 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
+	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
 var logger *zap.Logger
+
 var hooks []*lumberjack.Logger
+
 var initHandler func(*zap.Logger)
+
 var level zapcore.Level
 
 func init() {
@@ -125,7 +128,7 @@ func makeErrFileName(fileName string) string {
 }
 
 func closeHooks() {
-	if hooks == nil {
+	if len(hooks) == 0 {
 		return
 	}
 	for _, h := range hooks {

@@ -144,7 +144,8 @@ func TestSnapshotLimit(t *testing.T) {
 		NameFn:  func() string { return name },
 	}
 	SetSnapshotLimit(64*1024*1024, 70*1024*1024)
-	lw := newFileWriter(fd, false, false)
+	lockPath := ""
+	lw := newFileWriter(fd, false, false, &lockPath)
 	var buf [1024 * 1024]byte
 
 	start := time.Now()
@@ -166,7 +167,7 @@ func TestSnapshotLimit(t *testing.T) {
 
 	// no limit
 	SetSnapshotLimit(0, 0)
-	lw = newFileWriter(fd, false, false)
+	lw = newFileWriter(fd, false, false, &lockPath)
 	start = time.Now()
 	for i := 0; i < 512; i++ {
 		if _, err := lw.WriteData(buf[:]); err != nil {

@@ -150,3 +150,114 @@ func TestQueryError(t *testing.T) {
 	assert.False(t, errno.Equal(err, errno.UnsupportedDataType))
 	assert.False(t, errno.Equal(err, errno.LogicalPlanBuildFail))
 }
+
+func TestQueryErrorNoFieldSelected(t *testing.T) {
+	err := errno.NewError(errno.NoFieldSelected,
+		"initGroupCursors")
+	assert.True(t, errno.Equal(err, errno.NoFieldSelected))
+	assert.False(t, errno.Equal(err, errno.UnsupportedDataType))
+}
+
+func TestErrsDispatchNil(t *testing.T) {
+	errs := errno.NewErrs()
+	errs.Init(1, nil)
+	errs.Dispatch(nil)
+	err := errs.Err()
+	if err != nil {
+		t.Fatalf("expect nil, got %v", err)
+	}
+}
+
+func TestErrsDispatchNotNil(t *testing.T) {
+	errs := errno.NewErrs()
+	err1 := errors.New("t1")
+	errs.Init(1, nil)
+	errs.Dispatch(err1)
+	err := errs.Err()
+	if err != err1 {
+		t.Fatalf("expect %v, got %v", err1, err)
+	}
+}
+
+func TestErrsDispatchMuti(t *testing.T) {
+	errs := errno.NewErrs()
+	err1 := errors.New("t1")
+	err2 := errors.New("t2")
+	errs.Init(2, nil)
+	errs.Dispatch(err1)
+	errs.Dispatch(err2)
+	err := errs.Err()
+	if err != err1 {
+		t.Fatalf("expect %v, got %v", err1, err)
+	}
+}
+
+func TestErrsClean(t *testing.T) {
+	errs := errno.NewErrs()
+	err1 := errors.New("t1")
+	errs.Init(1, nil)
+	errs.Dispatch(err1)
+	err := errs.Err()
+	if err != err1 {
+		t.Fatalf("expect %v, got %v", err1, err)
+	}
+	errs.Clean()
+}
+
+func TestErrsRepeatClean(t *testing.T) {
+	errs := errno.NewErrs()
+	errs.Init(1, nil)
+	err1 := errors.New("t1")
+	errs.Dispatch(err1)
+	err := errs.Err()
+	if err != err1 {
+		t.Fatalf("expect %v, got %v", err1, err)
+	}
+	errs.Clean()
+	errs.Clean()
+}
+
+func BenchmarkErrs(b *testing.B) {
+	errs := errno.NewErrs()
+	err1 := errors.New("t1")
+	for i := 0; i < b.N; i++ {
+		errs.Init(2, nil)
+		errs.Dispatch(err1)
+		errs.Dispatch(err1)
+		err := errs.Err()
+		if err != err1 {
+			b.Fatalf("expect %v, got %v", nil, err)
+		}
+		errs.Clean()
+	}
+}
+
+func BenchmarkErrs1(b *testing.B) {
+	errs := errno.NewErrs()
+	for i := 0; i < b.N; i++ {
+		errs.Init(2, nil)
+		errs.Dispatch(nil)
+		errs.Dispatch(nil)
+		err := errs.Err()
+		if err != nil {
+			b.Fatalf("expect %v, got %v", nil, err)
+		}
+		errs.Clean()
+	}
+}
+
+func TestNewErrsPool(t *testing.T) {
+	errs := errno.NewErrsPool().Get()
+	errno.NewErrsPool().Put(errs)
+	errs1 := errno.NewErrsPool().Get()
+	if errs != errs1 {
+		t.Fatalf("expect %v, got %v", errs, errs1)
+	}
+}
+
+func BenchmarkErrsPool(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		errs := errno.NewErrsPool().Get()
+		errno.NewErrsPool().Put(errs)
+	}
+}

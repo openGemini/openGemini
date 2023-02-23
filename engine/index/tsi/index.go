@@ -27,8 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/cpu"
-	"github.com/openGemini/openGemini/lib/kvstorage"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
@@ -48,14 +48,10 @@ type IndexType int
 
 const (
 	MergeSet IndexType = iota
-
 	Text
+	Field
 
 	defaultSeriesKeyLen = 64
-)
-
-const (
-	KVDirName = "kv"
 )
 
 var (
@@ -111,6 +107,13 @@ func NewTagSetInfo() *TagSetInfo {
 	return setPool.get()
 }
 
+func NewSingleTagSetInfo() *TagSetInfo {
+	return setPool.getInit(1)
+}
+func NewTagSetInfoEmptySpace() *TagSetInfo {
+	return setPool.getEmptySpace()
+}
+
 func (t *TagSetInfo) reset() {
 	t.ref = 0
 	t.key = t.key[:0]
@@ -146,9 +149,14 @@ func (t *TagSetInfo) release() {
 	setPool.put(t)
 }
 
+func (t *TagSetInfo) Sort(schema *executor.QuerySchema) {
+	if schema.HasExcatLimit() {
+		sort.Sort(t)
+	}
+}
+
 type tagSetInfoPool struct {
 	cache chan *TagSetInfo
-	pool  *sync.Pool
 }
 
 var (
@@ -166,7 +174,6 @@ func NewTagSetPool() *tagSetInfoPool {
 
 	return &tagSetInfoPool{
 		cache: make(chan *TagSetInfo, n),
-		pool:  &sync.Pool{},
 	}
 }
 
@@ -174,29 +181,64 @@ func (p *tagSetInfoPool) put(set *TagSetInfo) {
 	select {
 	case p.cache <- set:
 	default:
-		p.pool.Put(set)
 	}
 }
 
 func (p *tagSetInfoPool) get() (set *TagSetInfo) {
-	const defaultElementNum = 64
+	return p.getInit(64)
+}
+
+func (p *tagSetInfoPool) getInit(initNum int) (set *TagSetInfo) {
+	return p.GetBySize(64, false)
+}
+
+func (p *tagSetInfoPool) GetBySize(size int, emptySpace bool) (set *TagSetInfo) {
 	select {
 	case set = <-p.cache:
 		return
 	default:
-		v := p.pool.Get()
-		if v != nil {
-			return v.(*TagSetInfo)
+		t := &TagSetInfo{
+			ref:     0,
+			key:     make([]byte, 0, 32),
+			IDs:     make([]uint64, 0, size),
+			Filters: make([]influxql.Expr, 0, size),
 		}
-		return &TagSetInfo{
-			ref: 0,
-			key: make([]byte, 0, 32),
+		if !emptySpace {
+			t.SeriesKeys = make([][]byte, 0, size)
+			t.TagsVec = make([]influx.PointTags, 0, size)
+		}
+		return t
+	}
+}
 
-			IDs:        make([]uint64, 0, defaultElementNum),
-			SeriesKeys: make([][]byte, 0, defaultElementNum),
-			Filters:    make([]influxql.Expr, 0, defaultElementNum),
-			TagsVec:    make([]influx.PointTags, 0, defaultElementNum),
-		}
+func (p *tagSetInfoPool) getEmptySpace() (set *TagSetInfo) {
+	return p.GetBySize(1, true)
+}
+
+type SortGroupSeries struct {
+	groupSeries []*TagSetInfo
+	ascending   bool
+}
+
+func (s SortGroupSeries) Len() int {
+	return len(s.groupSeries)
+}
+
+func (s SortGroupSeries) Less(i, j int) bool {
+	if s.ascending {
+		return bytes.Compare(s.groupSeries[i].key, s.groupSeries[j].key) < 0
+	}
+	return bytes.Compare(s.groupSeries[i].key, s.groupSeries[j].key) > 0
+}
+
+func (s SortGroupSeries) Swap(i, j int) {
+	s.groupSeries[i], s.groupSeries[j] = s.groupSeries[j], s.groupSeries[i]
+}
+
+func NewSortGroupSeries(groupSeries []*TagSetInfo, ascending bool) *SortGroupSeries {
+	return &SortGroupSeries{
+		groupSeries: groupSeries,
+		ascending:   ascending,
 	}
 }
 
@@ -231,12 +273,10 @@ type Index interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetSeriesIdBySeriesKey(key, name []byte) (uint64, error)
 	SearchSeries(series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error)
-	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (GroupSeries, error)
+	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, _ interface{}) (GroupSeries, error)
 	SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error)
 	SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
-	SearchAllSeriesKeys() ([][]byte, error)
 	SearchTagValues(name []byte, tagKeys [][]byte, condition influxql.Expr) ([][]string, error)
-	SearchAllTagValues(tagKey []byte) (map[string]map[string]struct{}, error)
 	SearchTagValuesCardinality(name, tagKey []byte) (uint64, error)
 
 	// search
@@ -256,12 +296,30 @@ type Index interface {
 }
 
 type Options struct {
-	ident     *meta.IndexIdentifier
-	path      string
-	indexType IndexType
-	endTime   time.Time
-	duration  time.Duration
-	kvStorage kvstorage.KVStorage
+	opId         uint64 // assign task id
+	ident        *meta.IndexIdentifier
+	path         string
+	lock         *string
+	indexType    IndexType
+	endTime      time.Time
+	duration     time.Duration
+	logicalClock uint64
+	sequenceID   *uint64
+}
+
+func (opts *Options) OpId(opId uint64) *Options {
+	opts.opId = opId
+	return opts
+}
+
+func (opts *Options) LogicalClock(clock uint64) *Options {
+	opts.logicalClock = clock
+	return opts
+}
+
+func (opts *Options) SequenceId(id *uint64) *Options {
+	opts.sequenceID = id
+	return opts
 }
 
 func (opts *Options) Ident(ident *meta.IndexIdentifier) *Options {
@@ -271,6 +329,11 @@ func (opts *Options) Ident(ident *meta.IndexIdentifier) *Options {
 
 func (opts *Options) Path(path string) *Options {
 	opts.path = path
+	return opts
+}
+
+func (opts *Options) Lock(lock *string) *Options {
+	opts.lock = lock
 	return opts
 }
 
@@ -286,11 +349,6 @@ func (opts *Options) EndTime(endTime time.Time) *Options {
 
 func (opts *Options) Duration(duration time.Duration) *Options {
 	opts.duration = duration
-	return opts
-}
-
-func (opts *Options) KVStorage(storage kvstorage.KVStorage) *Options {
-	opts.kvStorage = storage
 	return opts
 }
 

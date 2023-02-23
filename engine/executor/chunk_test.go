@@ -362,3 +362,33 @@ func Test_SlimChunk(t *testing.T) {
 	chunk.CheckChunk()
 	chunk.String()
 }
+
+func TestTargetTable(t *testing.T) {
+	rowCap := 1
+	tupleCap := 1
+	table := executor.NewTargetTable(rowCap, tupleCap)
+	table.Reset()
+
+	checkAndAllocate := func(expect bool) {
+		_, _, ok := table.CheckAndAllocate()
+		assert.Equal(t, ok, expect)
+
+		if ok {
+			table.Commit()
+		}
+	}
+
+	onlyAllocate := func() {
+		row, tuple := table.Allocate()
+		assert.NotEqual(t, row, nil)
+		assert.NotEqual(t, tuple, nil)
+		table.Commit()
+	}
+
+	checkAndAllocate(true)
+	checkAndAllocate(false)
+	onlyAllocate()
+	onlyAllocate()
+	checkAndAllocate(true)
+	checkAndAllocate(false)
+}

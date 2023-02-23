@@ -17,52 +17,21 @@ limitations under the License.
 package meta
 
 import (
-	"net"
 	"testing"
 
-	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
 )
 
-type MockMetaService struct {
-	ln      net.Listener
-	service *Service
-}
-
-func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
-	c, err := NewMetaConfig(dir, ip)
-	if err != nil {
-		return nil, err
-	}
-
-	mms := &MockMetaService{}
-	mms.service = NewService(c, nil)
-	mms.service.Node = metaclient.NewNode(c.Dir)
-	mms.ln, mms.service.RaftListener, err = MakeRaftListen(c)
-	if err != nil {
-		return nil, err
-	}
-	return mms, nil
-}
-
-func (mms *MockMetaService) close() {
-	mms.service.Close()
-	mms.ln.Close()
-}
-
 func TestAssignEventStateTransition(t *testing.T) {
 	dir := t.TempDir()
-	mms, err := NewMockMetaService(dir, "127.0.0.1")
+	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mms.close()
-
-	if err := mms.service.Open(); err != nil {
-		t.Fatal(err)
-	}
+	defer mms.Close()
 	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
 	if err := globalService.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
@@ -71,13 +40,16 @@ func TestAssignEventStateTransition(t *testing.T) {
 	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
 		t.Fatal(err)
 	}
-	globalService.store.data.TakeOverEnabled = true
+	config.SetHaEnable(true)
+	globalService.store.NetStore = NewMockNetStorage()
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}}
 	event := NewAssignEvent(dbPt, 1, false)
+	globalService.clusterManager.addClusterMember(1)
+	defer globalService.clusterManager.removeClusterMember(1)
 	assert.Equal(t, dbPt.String(), event.getEventId())
 	assert.Equal(t, Init, event.curState)
 	action, err := event.getNextAction()
@@ -87,7 +59,7 @@ func TestAssignEventStateTransition(t *testing.T) {
 	assert.Equal(t, 1, len(events))
 	assert.Equal(t, uint64(1), events[dbPt.String()].GetOpId())
 	assert.Equal(t, uint64(1), events[dbPt.String()].GetDst())
-	assert.Equal(t, int(Assign), events[dbPt.String()].GetEventType())
+	assert.Equal(t, int(AssignType), events[dbPt.String()].GetEventType())
 	assert.Equal(t, uint64(0), events[dbPt.String()].GetSrc())
 	assert.Equal(t, dbPt.Db, events[dbPt.String()].GetPtInfo().Db)
 	assert.Equal(t, dbPt.Pti.PtId, events[dbPt.String()].GetPtInfo().Pti.PtId)
@@ -98,10 +70,8 @@ func TestAssignEventStateTransition(t *testing.T) {
 	action, err = event.getNextAction()
 	assert.Equal(t, ActionWait, action)
 	assert.Equal(t, nil, err)
-	assert.Equal(t, StartAssign, event.curState)
-
-	scheduleType := event.handleCmdResult(err)
-	assert.Equal(t, ScheduleNormal, scheduleType)
+	assert.Equal(t, Assigned, event.curState)
+	globalService.msm.eventsWg.Wait()
 	assert.Equal(t, Assigned, event.curState)
 	assert.Equal(t, StartAssign, event.preState)
 	assert.Equal(t, Init, event.rollbackState)

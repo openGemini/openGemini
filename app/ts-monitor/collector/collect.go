@@ -339,7 +339,7 @@ func (c *Collector) handleCurrentErrLog(filename string) error {
 
 func (c *Collector) saveErrLogHistory(filename string) {
 	muErrLogHistory.Lock()
-	fd, _ := os.OpenFile(path.Clean(c.errLogHistory), os.O_APPEND|os.O_RDWR, 0600)
+	fd, _ := os.OpenFile(path.Clean(c.errLogHistory), os.O_CREATE|os.O_APPEND|os.O_RDWR, 0600)
 	defer util.MustClose(fd)
 	_, _ = fd.WriteString(fmt.Sprintf("%s\n", filename))
 	muErrLogHistory.Unlock()

@@ -1230,14 +1230,14 @@ func buildDstChunkBug1217() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=a")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5, 6}...)
+	inCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}...)
+	inCk1.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}...)
 
-	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1, 0, 1, 0}...)
-	inCk1.Column(0).AppendManyNotNil(6)
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0}...)
+	inCk1.Column(0).AppendManyNotNil(12)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{1, 0, 0, 1, 1, 1}...)
-	inCk1.Column(1).AppendManyNotNil(6)
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0}...)
+	inCk1.Column(1).AppendManyNotNil(12)
 
 	inCk2 := b.NewChunk("mst")
 
@@ -1245,14 +1245,14 @@ func buildDstChunkBug1217() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=b")},
 		[]int{0})
-	inCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
-	inCk2.AppendTime([]int64{7, 8, 9, 10, 11, 12}...)
+	inCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}...)
+	inCk2.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}...)
 
-	inCk2.Column(0).AppendIntegerValues([]int64{0, 1, 1, 1, 1, 0}...)
-	inCk2.Column(0).AppendManyNotNil(6)
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 0}...)
+	inCk2.Column(0).AppendManyNotNil(12)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{1, 1, 0, 0, 1, 1}...)
-	inCk2.Column(1).AppendManyNotNil(6)
+	inCk2.Column(1).AppendIntegerValues([]int64{0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 1}...)
+	inCk2.Column(1).AppendManyNotNil(12)
 
 	dCks = append(dCks, inCk1, inCk2)
 	return dCks
@@ -1348,8 +1348,344 @@ func TestFillTransformFillNumberBUG2022032201217(t *testing.T) {
 
 	opt := query.ProcessorOptions{
 		Dimensions: []string{"country"},
+		StartTime:  1,
+		EndTime:    12,
+		Ascending:  true,
 		Interval:   hybridqp.Interval{Duration: 1 * time.Nanosecond},
-		ChunkSize:  6,
+		ChunkSize:  12,
+		Fill:       influxql.NumberFill,
+		FillValue:  int64(0),
+	}
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema.SetOpt(&opt)
+
+	testFillTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildRowDataTypeBug1217(), buildRowDataTypeBug1217(),
+		schema,
+	)
+}
+
+func buildSrcChunkSplitMultiGroup() []executor.Chunk {
+	rowDataType := buildRowDataTypeBug1217()
+	sCks := make([]executor.Chunk, 0, 3)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a"), *ParseChunkTags("country=b"), *ParseChunkTags("country=c")},
+		[]int{0, 1, 2})
+	inCk1.AppendIntervalIndex([]int{0, 1, 2}...)
+	inCk1.AppendTime([]int64{3, 2, 1}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1}...)
+	inCk1.Column(0).AppendManyNotNil(3)
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 1, 1}...)
+	inCk1.Column(1).AppendManyNotNil(3)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=c"), *ParseChunkTags("country=d"), *ParseChunkTags("country=e")},
+		[]int{0, 1, 2})
+	inCk2.AppendIntervalIndex([]int{0, 1, 2}...)
+	inCk2.AppendTime([]int64{2, 1, 2}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{1, 1, 1}...)
+	inCk2.Column(0).AppendManyNotNil(3)
+	inCk2.Column(1).AppendIntegerValues([]int64{1, 1, 1}...)
+	inCk2.Column(1).AppendManyNotNil(3)
+
+	inCk3 := b.NewChunk("mst")
+	inCk3.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=f")},
+		[]int{0})
+	inCk3.AppendIntervalIndex([]int{0}...)
+	inCk3.AppendTime([]int64{3}...)
+	inCk3.Column(0).AppendIntegerValues([]int64{1}...)
+	inCk3.Column(0).AppendManyNotNil(1)
+	inCk3.Column(1).AppendIntegerValues([]int64{1}...)
+	inCk3.Column(1).AppendManyNotNil(1)
+
+	sCks = append(sCks, inCk1, inCk2, inCk3)
+	return sCks
+}
+
+func buildDstChunkSplitMultiGroup() []executor.Chunk {
+	rowDataType := buildRowDataTypeBug1217()
+	dCks := make([]executor.Chunk, 0, 3)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a"), *ParseChunkTags("country=b"), *ParseChunkTags("country=c")},
+		[]int{0, 3, 6})
+	inCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6}...)
+	inCk1.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 1, 0, 1, 0, 1}...)
+	inCk1.Column(0).AppendManyNotNil(7)
+	inCk1.Column(1).AppendIntegerValues([]int64{0, 0, 1, 0, 1, 0, 1}...)
+	inCk1.Column(1).AppendManyNotNil(7)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=c"), *ParseChunkTags("country=d"), *ParseChunkTags("country=e")},
+		[]int{0, 2, 5})
+	inCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7}...)
+	inCk2.AppendTime([]int64{2, 3, 1, 2, 3, 1, 2, 3}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{1, 0, 1, 0, 0, 0, 1, 0}...)
+	inCk2.Column(0).AppendManyNotNil(8)
+	inCk2.Column(1).AppendIntegerValues([]int64{1, 0, 1, 0, 0, 0, 1, 0}...)
+	inCk2.Column(1).AppendManyNotNil(8)
+
+	inCk3 := b.NewChunk("mst")
+	inCk3.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=f")},
+		[]int{0})
+	inCk3.AppendIntervalIndex([]int{0, 1, 2}...)
+	inCk3.AppendTime([]int64{1, 2, 3}...)
+	inCk3.Column(0).AppendIntegerValues([]int64{0, 0, 1}...)
+	inCk3.Column(0).AppendManyNotNil(3)
+	inCk3.Column(1).AppendIntegerValues([]int64{0, 0, 1}...)
+	inCk3.Column(1).AppendManyNotNil(3)
+
+	dCks = append(dCks, inCk1, inCk2, inCk3)
+	return dCks
+}
+
+func TestFillTransformFillNumberSplitMultiGroup(t *testing.T) {
+	inChunks := buildSrcChunkSplitMultiGroup()
+	dstChunks := buildDstChunkSplitMultiGroup()
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		StartTime:  1,
+		EndTime:    3,
+		Ascending:  true,
+		Interval:   hybridqp.Interval{Duration: 1 * time.Nanosecond},
+		ChunkSize:  3,
+		Fill:       influxql.NumberFill,
+		FillValue:  int64(0),
+	}
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema.SetOpt(&opt)
+
+	testFillTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildRowDataTypeBug1217(), buildRowDataTypeBug1217(),
+		schema,
+	)
+}
+
+func buildSrcChunkSplitOneGroup() []executor.Chunk {
+	rowDataType := buildRowDataTypeBug1217()
+	sCks := make([]executor.Chunk, 0, 3)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk1.AppendIntervalIndex([]int{0}...)
+	inCk1.AppendTime([]int64{5}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{1}...)
+	inCk1.Column(0).AppendManyNotNil(1)
+	inCk1.Column(1).AppendIntegerValues([]int64{1}...)
+	inCk1.Column(1).AppendManyNotNil(1)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a"), *ParseChunkTags("country=b")},
+		[]int{0, 1})
+	inCk2.AppendIntervalIndex([]int{0, 1}...)
+	inCk2.AppendTime([]int64{3, 2}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{1, 1}...)
+	inCk2.Column(0).AppendManyNotNil(2)
+	inCk2.Column(1).AppendIntegerValues([]int64{1, 1}...)
+	inCk2.Column(1).AppendManyNotNil(2)
+
+	sCks = append(sCks, inCk1, inCk2)
+	return sCks
+}
+
+func buildDstChunkSplitOneGroup() []executor.Chunk {
+	rowDataType := buildRowDataTypeBug1217()
+	dCks := make([]executor.Chunk, 0, 3)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
+	inCk1.AppendTime([]int64{0, 1, 2, 3, 4, 5}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0, 1}...)
+	inCk1.Column(0).AppendManyNotNil(6)
+	inCk1.Column(1).AppendIntegerValues([]int64{0, 0, 0, 0, 0, 1}...)
+	inCk1.Column(1).AppendManyNotNil(6)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk2.AppendIntervalIndex([]int{0, 1, 2}...)
+	inCk2.AppendTime([]int64{6, 7, 8}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 0}...)
+	inCk2.Column(0).AppendManyNotNil(3)
+	inCk2.Column(1).AppendIntegerValues([]int64{0, 0, 0}...)
+	inCk2.Column(1).AppendManyNotNil(3)
+
+	inCk3 := b.NewChunk("mst")
+	inCk3.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=b")},
+		[]int{0})
+	inCk3.AppendIntervalIndex([]int{0, 1, 2}...)
+	inCk3.AppendTime([]int64{0, 1, 2}...)
+	inCk3.Column(0).AppendIntegerValues([]int64{0, 0, 1}...)
+	inCk3.Column(0).AppendManyNotNil(3)
+	inCk3.Column(1).AppendIntegerValues([]int64{0, 0, 1}...)
+	inCk3.Column(1).AppendManyNotNil(3)
+
+	inCk4 := b.NewChunk("mst")
+	inCk4.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=b")},
+		[]int{0})
+	inCk4.AppendIntervalIndex([]int{0, 1}...)
+	inCk4.AppendTime([]int64{3, 4}...)
+	inCk4.Column(0).AppendIntegerValues([]int64{0, 0}...)
+	inCk4.Column(0).AppendManyNotNil(2)
+	inCk4.Column(1).AppendIntegerValues([]int64{0, 0}...)
+	inCk4.Column(1).AppendManyNotNil(2)
+
+	inCk5 := b.NewChunk("mst")
+	inCk5.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=b")},
+		[]int{0})
+	inCk5.AppendIntervalIndex([]int{0, 1, 2, 3}...)
+	inCk5.AppendTime([]int64{5, 6, 7, 8}...)
+	inCk5.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0}...)
+	inCk5.Column(0).AppendManyNotNil(4)
+	inCk5.Column(1).AppendIntegerValues([]int64{0, 0, 0, 0}...)
+	inCk5.Column(1).AppendManyNotNil(4)
+
+	dCks = append(dCks, inCk1, inCk2, inCk3, inCk4, inCk5)
+	return dCks
+}
+
+func TestFillTransformFillNumberSplitOneGroup(t *testing.T) {
+	inChunks := buildSrcChunkSplitOneGroup()
+	dstChunks := buildDstChunkSplitOneGroup()
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		StartTime:  0,
+		EndTime:    8,
+		Ascending:  true,
+		Interval:   hybridqp.Interval{Duration: 1 * time.Nanosecond},
+		ChunkSize:  4,
+		Fill:       influxql.NumberFill,
+		FillValue:  int64(0),
+	}
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema.SetOpt(&opt)
+
+	testFillTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildRowDataTypeBug1217(), buildRowDataTypeBug1217(),
+		schema,
+	)
+}
+
+func buildSrcChunkDescendingSplitOneGroup() []executor.Chunk {
+	rowDataType := buildRowDataTypeBug1217()
+	sCks := make([]executor.Chunk, 0, 1)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk1.AppendIntervalIndex([]int{0}...)
+	inCk1.AppendTime([]int64{5}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{1}...)
+	inCk1.Column(0).AppendManyNotNil(1)
+	inCk1.Column(1).AppendIntegerValues([]int64{1}...)
+	inCk1.Column(1).AppendManyNotNil(1)
+
+	sCks = append(sCks, inCk1)
+	return sCks
+}
+
+func buildDstChunkDescendingSplitOneGroup() []executor.Chunk {
+	rowDataType := buildRowDataTypeBug1217()
+	dCks := make([]executor.Chunk, 0, 3)
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk1.AppendIntervalIndex([]int{0}...)
+	inCk1.AppendTime([]int64{8}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{0}...)
+	inCk1.Column(0).AppendManyNotNil(1)
+	inCk1.Column(1).AppendIntegerValues([]int64{0}...)
+	inCk1.Column(1).AppendManyNotNil(1)
+
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk2.AppendIntervalIndex([]int{0, 1, 2}...)
+	inCk2.AppendTime([]int64{7, 6, 5}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 1}...)
+	inCk2.Column(0).AppendManyNotNil(3)
+	inCk2.Column(1).AppendIntegerValues([]int64{0, 0, 1}...)
+	inCk2.Column(1).AppendManyNotNil(3)
+
+	inCk3 := b.NewChunk("mst")
+	inCk3.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=a")},
+		[]int{0})
+	inCk3.AppendIntervalIndex([]int{0, 1, 2, 3, 4}...)
+	inCk3.AppendTime([]int64{4, 3, 2, 1, 0}...)
+	inCk3.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0}...)
+	inCk3.Column(0).AppendManyNotNil(5)
+	inCk3.Column(1).AppendIntegerValues([]int64{0, 0, 0, 0, 0}...)
+	inCk3.Column(1).AppendManyNotNil(5)
+
+	dCks = append(dCks, inCk1, inCk2, inCk3)
+	return dCks
+}
+
+func TestFillTransformFillNumberDescendingSplitOneGroup(t *testing.T) {
+	inChunks := buildSrcChunkDescendingSplitOneGroup()
+	dstChunks := buildDstChunkDescendingSplitOneGroup()
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		StartTime:  0,
+		EndTime:    8,
+		Ascending:  false,
+		Interval:   hybridqp.Interval{Duration: 1 * time.Nanosecond},
+		ChunkSize:  4,
 		Fill:       influxql.NumberFill,
 		FillValue:  int64(0),
 	}

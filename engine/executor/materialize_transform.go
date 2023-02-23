@@ -18,6 +18,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -42,8 +43,7 @@ func (w *StdoutChunkWriter) Close() {
 
 }
 
-func TransparentForwardIntegerColumn(dst Column, src Column) {
-	dst.AppendIntegerValues(src.IntegerValues()...)
+func AdjustNils(dst Column, src Column) {
 	if src.NilCount() == 0 {
 		dst.AppendManyNotNil(src.Length())
 	} else {
@@ -55,51 +55,152 @@ func TransparentForwardIntegerColumn(dst Column, src Column) {
 			}
 		}
 	}
+}
+
+func TransparentForwardIntegerColumn(dst Column, src Column) {
+	dst.AppendIntegerValues(src.IntegerValues()...)
+	AdjustNils(dst, src)
 }
 
 func TransparentForwardFloatColumn(dst Column, src Column) {
 	dst.AppendFloatValues(src.FloatValues()...)
-	if src.NilCount() == 0 {
-		dst.AppendManyNotNil(src.Length())
-	} else {
-		for i := 0; i < src.Length(); i++ {
-			if src.IsNilV2(i) {
-				dst.AppendNil()
-			} else {
-				dst.AppendNilsV2(true)
-			}
-		}
-	}
+	AdjustNils(dst, src)
 }
 
 func TransparentForwardBooleanColumn(dst Column, src Column) {
 	dst.AppendBooleanValues(src.BooleanValues()...)
-	if src.NilCount() == 0 {
-		dst.AppendManyNotNil(src.Length())
-	} else {
-		for i := 0; i < src.Length(); i++ {
-			if src.IsNilV2(i) {
-				dst.AppendNil()
-			} else {
-				dst.AppendNilsV2(true)
-			}
-		}
-	}
+	AdjustNils(dst, src)
 }
 
 func TransparentForwardStringColumn(dst Column, src Column) {
 	dst.CloneStringValues(src.GetStringBytes())
-	if src.NilCount() == 0 {
-		dst.AppendManyNotNil(src.Length())
-	} else {
-		for i := 0; i < src.Length(); i++ {
-			if src.IsNilV2(i) {
-				dst.AppendNil()
-			} else {
-				dst.AppendNilsV2(true)
+	AdjustNils(dst, src)
+}
+
+func TransparentForwardInteger(dst Column, src Chunk, index []int) {
+	srcCol := src.Column(index[0])
+	TransparentForwardIntegerColumn(dst, srcCol)
+}
+
+func TransparentForwardFloat(dst Column, src Chunk, index []int) {
+	srcCol := src.Column(index[0])
+	TransparentForwardFloatColumn(dst, srcCol)
+}
+
+func TransparentForwardBoolean(dst Column, src Chunk, index []int) {
+	srcCol := src.Column(index[0])
+	TransparentForwardBooleanColumn(dst, srcCol)
+}
+
+func TransparentForwardString(dst Column, src Chunk, index []int) {
+	srcCol := src.Column(index[0])
+	TransparentForwardStringColumn(dst, srcCol)
+}
+
+func TransMath(c *influxql.Call) (func(dst Column, src Chunk, index []int), error) {
+	var f func(dst Column, src Chunk, index []int)
+	switch c.Name {
+	case "row_max":
+		base, ok := c.Args[0].(*influxql.VarRef)
+		if !ok {
+			return nil, errors.New("expect varf in row_max")
+		}
+		for i := 0; i < len(c.Args); i++ {
+			arg, ok := c.Args[i].(*influxql.VarRef)
+			if !ok {
+				return nil, errors.New("expect varf in row_max")
+			}
+			if arg.Type != base.Type {
+				return nil, errors.New("args' type in row_max must be same")
 			}
 		}
+		f = getMaxRowFunc(base.Type)
 	}
+	return f, nil
+}
+
+func rowMaxInteger(dst Column, src Chunk, index []int) {
+	for i := 0; i < src.Len(); i++ {
+		var val int64
+		isNil := true
+		for j := range index {
+			empty := src.Column(index[j]).IsNilV2(i)
+			if empty {
+				continue
+			}
+			v := src.Column(index[j]).IntegerValues()[src.Column(index[j]).GetValueIndexV2(i)]
+			if isNil || v > val {
+				val = v
+				isNil = false
+			}
+		}
+		if isNil {
+			dst.AppendNilsV2(false)
+		} else {
+			dst.AppendIntegerValues(val)
+			dst.AppendNilsV2(true)
+		}
+	}
+}
+
+func rowMaxFloat(dst Column, src Chunk, index []int) {
+	for i := 0; i < src.Len(); i++ {
+		var val float64
+		isNil := true
+		for j := range index {
+			empty := src.Column(index[j]).IsNilV2(i)
+			if empty {
+				continue
+			}
+			v := src.Column(index[j]).FloatValues()[src.Column(index[j]).GetValueIndexV2(i)]
+			if isNil || v > val {
+				val = v
+				isNil = false
+			}
+		}
+		if isNil {
+			dst.AppendNilsV2(false)
+		} else {
+			dst.AppendFloatValues(val)
+			dst.AppendNilsV2(true)
+		}
+	}
+}
+
+func rowMaxBoolean(dst Column, src Chunk, index []int) {
+	for i := 0; i < src.Len(); i++ {
+		var val bool
+		isNil := true
+		for j := range index {
+			empty := src.Column(index[j]).IsNilV2(i)
+			if empty {
+				continue
+			}
+			v := src.Column(index[j]).BooleanValues()[src.Column(index[j]).GetValueIndexV2(i)]
+			if isNil || v {
+				val = v
+				isNil = false
+			}
+		}
+		if isNil {
+			dst.AppendNilsV2(false)
+		} else {
+			dst.AppendBooleanValues(val)
+			dst.AppendNilsV2(true)
+		}
+	}
+}
+
+func getMaxRowFunc(dataType influxql.DataType) func(dst Column, src Chunk, index []int) {
+	switch dataType {
+	case influxql.Integer:
+		return rowMaxInteger
+	case influxql.Float:
+		return rowMaxFloat
+	case influxql.Boolean:
+		return rowMaxBoolean
+	}
+	return nil
 }
 
 func getRowValue(column Column, index int) interface{} {
@@ -117,7 +218,7 @@ func getRowValue(column Column, index int) interface{} {
 	}
 }
 
-func appendRowValue(column Column, value interface{}) {
+func AppendRowValue(column Column, value interface{}) {
 	switch column.DataType() {
 	case influxql.Integer:
 		if v, ok := value.(int64); ok {
@@ -196,28 +297,35 @@ type MaterializeTransform struct {
 	resultChunk     Chunk
 	forward         bool
 	ResetTime       bool
-	transparents    []func(dst Column, src Column)
+	transparents    []func(dst Column, src Chunk, index []int)
 
-	ColumnMap []int
+	ColumnMap [][]int
 
 	ppMaterializeCost *tracing.Span
 }
 
-func createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Column) {
-	transparents := make([]func(dst Column, src Column), len(ops))
+func createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk, index []int) {
+	transparents := make([]func(dst Column, src Chunk, index []int), len(ops))
 
 	for i, opt := range ops {
 		if vr, ok := opt.Expr.(*influxql.VarRef); ok {
 			switch vr.Type {
 			case influxql.Integer:
-				transparents[i] = TransparentForwardIntegerColumn
+				transparents[i] = TransparentForwardInteger
 			case influxql.Float:
-				transparents[i] = TransparentForwardFloatColumn
+				transparents[i] = TransparentForwardFloat
 			case influxql.Boolean:
-				transparents[i] = TransparentForwardBooleanColumn
+				transparents[i] = TransparentForwardBoolean
 			case influxql.String, influxql.Tag:
-				transparents[i] = TransparentForwardStringColumn
+				transparents[i] = TransparentForwardString
 			}
+		}
+		if vr, ok := opt.Expr.(*influxql.Call); ok {
+			f, err := TransMath(vr)
+			if err != nil {
+				panic(err)
+			}
+			transparents[i] = f
 		}
 	}
 
@@ -236,7 +344,7 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		chunkWriter:     writer,
 		forward:         false,
 		transparents:    nil,
-		ColumnMap:       make([]int, len(outRowDataType.Fields())),
+		ColumnMap:       make([][]int, len(outRowDataType.Fields())),
 		ResetTime:       false,
 	}
 
@@ -342,8 +450,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)
 		if f != nil {
-			src := chunk.Column(trans.ColumnMap[i])
-			f(dst, src)
+			f(dst, chunk, trans.ColumnMap[i])
 		} else {
 			for index := 0; index < chunk.NumberOfRows(); index++ {
 				trans.chunkValuer.AtChunkRow(chunk, index)
@@ -356,7 +463,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 					dst.AppendNil()
 					continue
 				}
-				appendRowValue(dst, value)
+				AppendRowValue(dst, value)
 				dst.AppendNilsV2(true)
 			}
 		}
@@ -384,7 +491,17 @@ func (trans *MaterializeTransform) GetInputNumber(_ Port) int {
 func (trans *MaterializeTransform) ColumnMapInit() {
 	for i := range trans.ops {
 		if val, ok := trans.ops[i].Expr.(*influxql.VarRef); ok {
-			trans.ColumnMap[i] = trans.input.RowDataType.FieldIndex(val.Val)
+			trans.ColumnMap[i] = []int{trans.input.RowDataType.FieldIndex(val.Val)}
+			continue
+		}
+		if val, ok := trans.ops[i].Expr.(*influxql.Call); ok {
+			index := make([]int, 0, len(val.Args))
+			for j := range val.Args {
+				if v, k := val.Args[j].(*influxql.VarRef); k {
+					index = append(index, trans.input.RowDataType.FieldIndex(v.Val))
+				}
+			}
+			trans.ColumnMap[i] = index
 		}
 	}
 }

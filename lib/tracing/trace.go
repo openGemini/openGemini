@@ -30,11 +30,14 @@ type Trace struct {
 
 func NewTrace(name string, opt ...tracing.StartSpanOption) (*Trace, *Span) {
 	t, s := tracing.NewTrace(name, opt...)
-
-	return &Trace{trace: t, subs: make(map[uint64]*Trace)}, &Span{span: s}
+	trace := &Trace{trace: t, subs: make(map[uint64]*Trace)}
+	span := &Span{span: s, trace: trace}
+	return trace, span
 }
 
 func (t *Trace) MarshalBinary() ([]byte, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.trace.MarshalBinary()
 }
 
@@ -49,6 +52,8 @@ func (t *Trace) AddSub(trace *Trace, span *Span) {
 }
 
 func (t *Trace) Tree() *tracing.TreeNode {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.trace.Tree()
 }
 

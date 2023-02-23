@@ -7,6 +7,7 @@ This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/se
 Add TagKeys,FieldKeys etc.
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
+
 package metaclient
 
 import (
@@ -25,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -33,15 +35,19 @@ import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	util "github.com/openGemini/openGemini/lib/util"
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/golang.org/x/crypto/pbkdf2"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding/unicode"
@@ -91,8 +97,26 @@ const (
 	maxPasswordLen = 256 // Maximum password length
 )
 
+type Role int
+
+const (
+	SQL Role = iota
+	STORE
+	META
+)
+
 var (
-	ErrNameTooLong = errors.New("database name should fewer than 64 characters")
+	ErrNameTooLong          = errors.New("database name must have fewer than 64 characters")
+	RetryGetUserInfoTimeout = 5 * time.Second
+	RetryExecTimeout        = 60 * time.Second
+	RetryReportTimeout      = 60 * time.Second
+)
+
+var DefaultTypeMapper = influxql.MultiTypeMapper(
+	op.TypeMapper{},
+	query.MathTypeMapper{},
+	query.FunctionTypeMapper{},
+	query.StringFunctionTypeMapper{},
 )
 
 var DefaultMetaClient *Client
@@ -164,6 +188,22 @@ type MetaClient interface {
 	ShowSubscriptions() models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
+	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
+	DropDownSamplePolicy(database, name string, dropAll bool) error
+	ShowDownSamplePolicies(database string) (models.Rows, error)
+	GetMstInfoWithInRp(dbName, rpName string, dataTypes []int64) (*meta2.RpMeasurementsFieldsInfo, error)
+	AdminUserExists() bool
+	Authenticate(username, password string) (u meta2.User, e error)
+	UpdateUserInfo()
+	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
+	OpenAtStore()
+	UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error
+	CreateStreamPolicy(info *meta2.StreamInfo) error
+	GetStreamInfos() map[string]*meta2.StreamInfo
+	GetStreamInfosStore() map[string]*meta2.StreamInfo
+	ShowStreams(database string, showAll bool) (models.Rows, error)
+	DropStream(name string) error
+	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 }
 
 type LoadCtx struct {
@@ -232,7 +272,6 @@ type Client struct {
 	tls            bool
 	logger         *logger.Logger
 	nodeID         uint64
-	ptIds          []uint32
 	ShardDurations map[uint64]*meta2.ShardDurationInfo
 
 	mu          sync.RWMutex
@@ -297,11 +336,17 @@ func NewClient(weakPwdPath string, retentionAutoCreate bool, maxConcurrentWriteL
 
 // Open a connection to a meta service cluster.
 func (c *Client) Open() error {
-	c.cacheData = c.retryUntilSnapshot(0)
-	go c.pollForUpdates()
+	c.cacheData = c.retryUntilSnapshot(SQL, 0)
+	go c.pollForUpdates(SQL)
 
 	go c.updateAuthCacheData()
 	return nil
+}
+
+func (c *Client) OpenAtStore() {
+	c.cacheData = c.retryUntilSnapshot(STORE, 0)
+	go c.pollForUpdates(STORE)
+	go c.verifyDataNodeStatus()
 }
 
 // Close the meta service cluster connection.
@@ -325,13 +370,10 @@ func (c *Client) Close() error {
 
 // NodeID GetNodeID returns the client's node ID.
 func (c *Client) NodeID() uint64 { return c.nodeID }
-func (c *Client) PtIds() []uint32 {
-	return c.ptIds
-}
 
 func (c *Client) SetTier(tier string) error {
 	c.ShardTier = meta2.StringToTier(strings.ToUpper(tier))
-	if c.ShardTier == meta2.TierBegin {
+	if c.ShardTier == util.TierBegin {
 		return fmt.Errorf("invalid tier %s", tier)
 	}
 	return nil
@@ -418,7 +460,6 @@ func (c *Client) CreateDataNode(writeHost, queryHost string) (uint64, uint64, er
 
 		if err == nil && node.NodeId > 0 {
 			c.nodeID = node.NodeId
-			c.ptIds = node.PtIds
 			c.ShardDurations = node.ShardDurationInfos
 			return c.nodeID, node.LTime, nil
 		}
@@ -428,15 +469,6 @@ func (c *Client) CreateDataNode(writeHost, queryHost string) (uint64, uint64, er
 
 		currentServer++
 	}
-}
-
-func (c *Client) AddPt(ptId uint32) {
-	for i := range c.ptIds {
-		if c.ptIds[i] == ptId {
-			return
-		}
-	}
-	c.ptIds = append(c.ptIds, ptId)
 }
 
 // DataNodeByHTTPHost returns the data node with the give http bind address
@@ -510,7 +542,7 @@ func (c *Client) FieldKeys(database string, ms influxql.Measurements) (map[strin
 
 	ret := make(map[string]map[string]int32, len(mis))
 	for _, m := range mis {
-		ret[m.Name] = make(map[string]int32)
+		ret[m.OriginName()] = make(map[string]int32)
 		m.FieldKeys(ret)
 	}
 	return ret, nil
@@ -558,12 +590,12 @@ func (c *Client) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementI
 
 	if m.Regex != nil {
 		rpi.EachMeasurements(func(msti *meta2.MeasurementInfo) {
-			if m.Regex.Val.Match([]byte(msti.Name)) {
+			if m.Regex.Val.Match([]byte(influx.GetOriginMstName(msti.Name))) {
 				measurements = append(measurements, msti)
 			}
 		})
 		sort.Slice(measurements, func(i, j int) bool {
-			return measurements[i].Name < measurements[j].Name
+			return influx.GetOriginMstName(measurements[i].Name) < influx.GetOriginMstName(measurements[j].Name)
 		})
 	} else {
 		msti, err := rpi.GetMeasurement(m.Name)
@@ -579,6 +611,74 @@ func (c *Client) Measurement(database string, rpName string, mstName string) (*m
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.Measurement(database, rpName, mstName)
+}
+
+func (c *Client) RetryGetMeasurementInfoStore(database string, rpName string, mstName string) ([]byte, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	var info []byte
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil, errors.New("GetMeasurementInfoStore fail")
+		default:
+
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		info, err = c.getMeasurementInfo(currentServer, database, rpName, mstName)
+		if err == nil {
+			break
+		}
+
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+	return info, nil
+}
+
+func (c *Client) getMeasurementInfo(currentServer int, database string, rpName string, mstName string) ([]byte, error) {
+	callback := &GetMeasurementInfoCallback{}
+	msg := message.NewMetaMessage(message.GetMeasurementInfoRequestMessage, &message.GetMeasurementInfoRequest{
+		DbName: database, RpName: rpName, MstName: mstName})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		c.logger.Error("GetMeasurementInfoR SendRPCMsg fail", zap.Error(err))
+		return nil, err
+	}
+	return callback.Data, nil
+}
+
+func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+	val := &proto2.GetMeasurementInfoStoreCommand{
+		DbName:  &dbName,
+		RpName:  &rpName,
+		MstName: &mstName,
+	}
+	t := proto2.Command_GetMeasurementInfoStoreCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_GetMeasurementInfoStoreCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := c.RetryGetMeasurementInfoStore(dbName, rpName, mstName)
+	if err != nil {
+		return nil, err
+	}
+	mst := &meta2.MeasurementInfo{}
+	if err = mst.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return mst, nil
 }
 
 // Database returns info for the requested database.
@@ -657,6 +757,11 @@ func (c *Client) UpdateSchema(database string, retentionPolicy string, mst strin
 func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error) {
 	msti, err := c.Measurement(database, retentionPolicy, mst)
 	if msti != nil {
+		// check shardkey equal or not
+		n := len(msti.ShardKeys)
+		if n == 0 || !shardKey.EqualsToAnother(&msti.ShardKeys[n-1]) {
+			return nil, meta2.ErrMeasurementExists
+		}
 		return msti, nil
 	}
 	if err != meta2.ErrMeasurementNotFound {
@@ -681,7 +786,7 @@ func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst 
 		if msti == nil {
 			indexR.Rid = 0
 		} else {
-			indexR.Rid = uint32(len(msti.IndexRelations))
+			indexR.Rid = 1
 		}
 		cmd.IR = indexR.Marshal()
 	}
@@ -741,7 +846,6 @@ func (c *Client) CreateDatabase(name string) (*meta2.DatabaseInfo, error) {
 // This call is only idempotent when the caller provides the exact same
 // retention policy, and that retention policy is already the default for the
 // database.
-//
 func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo) (*meta2.DatabaseInfo, error) {
 	if spec == nil {
 		return nil, errors.New("CreateDatabaseWithRetentionPolicy called with nil spec")
@@ -1796,9 +1900,10 @@ func (c *Client) DeleteShardGroup(database, policy string, id uint64) error {
 }
 
 // PyStore send command to PyMeta. NO need to waitForIndex.
-func (c *Client) PruneGroupsCommand(shardGroup bool) error {
+func (c *Client) PruneGroupsCommand(shardGroup bool, id uint64) error {
 	cmd := &proto2.PruneGroupsCommand{
 		ShardGroup: proto.Bool(shardGroup),
+		ID:         proto.Uint64(id),
 	}
 	_, err := c.retryExec(proto2.Command_PruneGroupsCommand, proto2.E_PruneGroupsCommand_Command, cmd)
 	if err != nil {
@@ -1992,7 +2097,7 @@ func (c *Client) retryExec(typ proto2.Command_Type, desc *proto.ExtensionDesc, v
 	// TODO do not use index to check cache data is newest
 	tries := 0
 	currentServer := connectedServer
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(RetryExecTimeout)
 
 	for {
 		c.mu.RLock()
@@ -2022,9 +2127,6 @@ func (c *Client) retryExec(typ proto2.Command_Type, desc *proto.ExtensionDesc, v
 		index, err = c.exec(currentServer, typ, desc, value, message.ExecuteRequestMessage)
 
 		if err == nil {
-			if currentServer != connectedServer {
-				connectedServer = currentServer
-			}
 			return index, nil
 		}
 		tries++
@@ -2090,9 +2192,10 @@ func (c *Client) waitForIndex(idx uint64) {
 	}
 }
 
-func (c *Client) pollForUpdates() {
+// Role: sql/store/meta
+func (c *Client) pollForUpdates(role Role) {
 	for {
-		data := c.retryUntilSnapshot(c.index())
+		data := c.retryUntilSnapshot(role, c.index())
 		if data == nil {
 			// this will only be nil if the client has been closed,
 			// so we can exit out
@@ -2140,11 +2243,11 @@ func (c *Client) getShardInfo(currentServer int, cmd *proto2.Command) ([]byte, e
 	return callback.Data, nil
 }
 
-func (c *Client) getSnapshot(currentServer int, index uint64) (*meta2.Data, error) {
+func (c *Client) getSnapshot(role Role, currentServer int, index uint64) (*meta2.Data, error) {
 	c.logger.Debug("getting snapshot from start")
 
 	callback := &SnapshotCallback{}
-	msg := message.NewMetaMessage(message.SnapshotRequestMessage, &message.SnapshotRequest{Index: index})
+	msg := message.NewMetaMessage(message.SnapshotRequestMessage, &message.SnapshotRequest{Role: int(role), Index: index})
 	err := c.SendRPCMsg(currentServer, msg, callback)
 	if err != nil {
 		return nil, err
@@ -2168,6 +2271,30 @@ func (c *Client) getSnapshot(currentServer int, index uint64) (*meta2.Data, erro
 	return data, nil
 }
 
+func (c *Client) getDownSampleInfo(currentServer int) ([]byte, error) {
+	callback := &GetDownSampleInfoCallback{}
+	msg := message.NewMetaMessage(message.GetDownSampleInfoRequestMessage, &message.GetDownSampleInfoRequest{})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return nil, err
+	}
+	return callback.Data, nil
+}
+
+func (c *Client) getRpMstInfos(currentServer int, dbName, rpName string, dataTypes []int64) ([]byte, error) {
+	callback := &GetRpMstInfoCallback{}
+	msg := message.NewMetaMessage(message.GetRpMstInfosRequestMessage, &message.GetRpMstInfosRequest{
+		DbName:    dbName,
+		RpName:    rpName,
+		DataTypes: dataTypes,
+	})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return nil, err
+	}
+	return callback.Data, nil
+}
+
 func (c *Client) SendRPCMsg(currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
 	trans, err := transport.NewMetaTransport(uint64(currentServer), spdy.MetaRequest, callback)
 	if err != nil {
@@ -2180,6 +2307,7 @@ func (c *Client) SendRPCMsg(currentServer int, msg *message.MetaMessage, callbac
 	if err = trans.Wait(); err != nil {
 		return err
 	}
+	refreshConnectedServer(currentServer)
 	return nil
 }
 
@@ -2233,7 +2361,7 @@ func (c *Client) url(server string) string {
 
 var connectedServer int
 
-func (c *Client) retryUntilSnapshot(idx uint64) *meta2.Data {
+func (c *Client) retryUntilSnapshot(role Role, idx uint64) *meta2.Data {
 	currentServer := connectedServer
 	for {
 		// get the index to look from and the server to poll
@@ -2253,7 +2381,7 @@ func (c *Client) retryUntilSnapshot(idx uint64) *meta2.Data {
 		server := c.metaServers[currentServer]
 		c.mu.RUnlock()
 
-		data, err := c.getSnapshot(currentServer, idx)
+		data, err := c.getSnapshot(role, currentServer, idx)
 
 		if err == nil && data != nil {
 			return data
@@ -2266,6 +2394,66 @@ func (c *Client) retryUntilSnapshot(idx uint64) *meta2.Data {
 
 		currentServer++
 	}
+}
+
+func (c *Client) RetryDownSampleInfo() ([]byte, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	var downSampleInfo []byte
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil, meta2.ErrClientClosed
+		default:
+		}
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		downSampleInfo, err = c.getDownSampleInfo(currentServer)
+		if err == nil {
+			break
+		}
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+		currentServer++
+	}
+	return downSampleInfo, err
+}
+
+func (c *Client) RetryMstInfosInRp(dbName, rpName string, dataTypes []int64) ([]byte, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	var mstInfos []byte
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil, meta2.ErrClientClosed
+		default:
+		}
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		mstInfos, err = c.getRpMstInfos(currentServer, dbName, rpName, dataTypes)
+		if err == nil {
+			break
+		}
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+		currentServer++
+	}
+	return mstInfos, err
 }
 
 func (c *Client) RetryGetShardAuxInfo(cmd *proto2.Command) ([]byte, error) {
@@ -2291,10 +2479,16 @@ func (c *Client) RetryGetShardAuxInfo(cmd *proto2.Command) ([]byte, error) {
 		if err == nil {
 			break
 		}
-
-		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+		if errno.Equal(err, errno.ShardMetaNotFound) {
+			c.logger.Error("get shard info failed", zap.String("cmd", cmd.String()), zap.Error(err))
 			break
 		}
+
+		if time.Since(startTime).Nanoseconds() > int64(len(c.metaServers))*HttpReqTimeout.Nanoseconds() {
+			c.logger.Error("get shard info timeout", zap.String("cmd", cmd.String()), zap.Error(err))
+			break
+		}
+		c.logger.Error("retry get shard info", zap.String("cmd", cmd.String()), zap.Error(err))
 		time.Sleep(errSleep)
 
 		currentServer++
@@ -2327,7 +2521,7 @@ func (c *Client) GetShardRangeInfo(db string, rp string, shardID uint64) (*meta2
 }
 
 func (c *Client) GetShardDurationInfo(index uint64) (*meta2.ShardDurationResponse, error) {
-	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: c.ptIds}
+	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: nil, NodeId: proto.Uint64(c.nodeID)}
 	t := proto2.Command_ShardDurationCommand
 	cmd := &proto2.Command{Type: &t}
 	if err := proto.SetExtension(cmd, proto2.E_ShardDurationCommand_Command, val); err != nil {
@@ -2374,7 +2568,7 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 func (c *Client) retryReport(typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) error {
 	tries := 0
 	currentServer := connectedServer
-	timeout := time.After(60 * time.Second)
+	timeout := time.After(RetryReportTimeout)
 
 	for {
 		c.mu.RLock()
@@ -2403,9 +2597,6 @@ func (c *Client) retryReport(typ proto2.Command_Type, desc *proto.ExtensionDesc,
 		_, err := c.exec(currentServer, typ, desc, value, message.ReportRequestMessage)
 
 		if err == nil {
-			if currentServer != connectedServer {
-				connectedServer = currentServer
-			}
 			return nil
 		}
 		tries++
@@ -2441,7 +2632,7 @@ func (c *Client) Measurements(database string, ms influxql.Measurements) ([]stri
 	}
 	var measurements []string
 	for _, mi := range mstMaps {
-		measurements = append(measurements, mi.Name)
+		measurements = append(measurements, mi.OriginName())
 	}
 
 	if len(measurements) == 0 {
@@ -2502,6 +2693,367 @@ func (c *Client) QueryTagKeys(database string, ms influxql.Measurements, cond in
 	}
 
 	return ret, nil
+}
+
+func (c *Client) NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error {
+	cmd := &proto2.CreateDownSamplePolicyCommand{
+		Database:             proto.String(database),
+		Name:                 proto.String(name),
+		DownSamplePolicyInfo: info.Marshal(),
+	}
+	err := c.retryUntilExec(proto2.Command_CreateDownSamplePolicyCommand, proto2.E_CreateDownSamplePolicyCommand_Command, cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) DropDownSamplePolicy(database, name string, dropAll bool) error {
+	cmd := &proto2.DropDownSamplePolicyCommand{
+		Database: proto.String(database),
+		RpName:   proto.String(name),
+		DropAll:  proto.Bool(dropAll),
+	}
+	err := c.retryUntilExec(proto2.Command_DropDownSamplePolicyCommand, proto2.E_DropDownSamplePolicyCommand_Command, cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) ShowDownSamplePolicies(database string) (models.Rows, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.ShowDownSamplePolicies(database)
+}
+
+func (c *Client) GetDownSamplePolicies() (*meta2.DownSamplePoliciesInfoWithDbRp, error) {
+	val := &proto2.GetDownSamplePolicyCommand{}
+	t := proto2.Command_GetDownSamplePolicyCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_GetDownSamplePolicyCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := c.RetryDownSampleInfo()
+	if err != nil {
+		return nil, err
+	}
+	return c.unmarshalDownSamplePolicies(b)
+}
+
+func (c *Client) unmarshalDownSamplePolicies(b []byte) (*meta2.DownSamplePoliciesInfoWithDbRp, error) {
+	DownSample := &meta2.DownSamplePoliciesInfoWithDbRp{}
+	if err := DownSample.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return DownSample, nil
+}
+
+func (c *Client) GetMstInfoWithInRp(dbName, rpName string, dataTypes []int64) (*meta2.RpMeasurementsFieldsInfo, error) {
+	val := &proto2.GetMeasurementInfoWithinSameRpCommand{
+		DbName:    &dbName,
+		RpName:    &rpName,
+		DataTypes: dataTypes,
+	}
+	t := proto2.Command_GetMeasurementInfoWithinSameRpCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_GetMeasurementInfoWithinSameRpCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := c.RetryMstInfosInRp(dbName, rpName, dataTypes)
+	if err != nil {
+		return nil, err
+	}
+	return c.unmarshalMstInfoWithInRp(b)
+}
+
+func (c *Client) unmarshalMstInfoWithInRp(b []byte) (*meta2.RpMeasurementsFieldsInfo, error) {
+	DownSample := &meta2.RpMeasurementsFieldsInfo{}
+	if err := DownSample.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return DownSample, nil
+}
+
+func (c *Client) UpdateUserInfo() {
+	go c.retryGetUserInfo()
+}
+
+func (c *Client) retryGetUserInfo() {
+	currentServer := connectedServer
+	ticker := time.NewTicker(RetryGetUserInfoTimeout)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.mu.RLock()
+			server := c.metaServers[currentServer]
+			c.mu.RUnlock()
+			data, err := c.getUserInfo(currentServer, c.index())
+			if err != nil {
+				c.logger.Error("failure getting userinfo from", zap.String("server", server), zap.Error(err))
+			}
+			if data != nil {
+				idx := c.index()
+				if idx < data.Index {
+					c.mu.Lock()
+					c.cacheData = data
+					c.mu.Unlock()
+				}
+			}
+		case <-c.closing:
+			return
+		}
+	}
+}
+
+func (c *Client) getUserInfo(currentServer int, index uint64) (*meta2.Data, error) {
+	callback := &GetUserInfoCallback{}
+	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: index})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(callback.Data) == 0 {
+		return nil, nil
+	}
+
+	data := &meta2.Data{}
+	if err = data.UnmarshalBinary(callback.Data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func (c *Client) UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error {
+	val := &proto2.UpdateShardDownSampleInfoCommand{
+		Ident: Ident.Marshal(),
+	}
+	if _, err := c.retryExec(proto2.Command_UpdateShardDownSampleInfoCommand, proto2.E_UpdateShardDownSampleInfoCommand_Command, val); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) GetStreamInfos() map[string]*meta2.StreamInfo {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.Streams
+}
+
+// GetDstStreamInfos get the stream info whose db and rip of the data are the same as the db and rp of the source table of the stream
+// Note: make sure dstSis is initialized
+func (c *Client) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if len(c.cacheData.Streams) == 0 {
+		return false
+	}
+	i := 0
+	*dstSis = (*dstSis)[:cap(*dstSis)]
+	for _, si := range c.cacheData.Streams {
+		if si.SrcMst.Database == db && si.SrcMst.RetentionPolicy == rp {
+			if len(*dstSis) < i+1 {
+				*dstSis = append(*dstSis, si)
+			} else {
+				(*dstSis)[i] = si
+			}
+			i++
+		}
+	}
+	*dstSis = (*dstSis)[:i]
+	return len(*dstSis) > 0
+}
+
+func (c *Client) UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error {
+	fieldToCreate := make([]*proto2.FieldSchema, 0, len(stmt.Fields)+len(stmt.Dimensions))
+	fields := stmt.Fields
+	for i := range fields {
+		f, ok := fields[i].Expr.(*influxql.Call)
+		if !ok {
+			return errors.New("unexpected call function")
+		}
+		if fields[i].Alias == "" {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(f.Name + "_" + f.Args[0].(*influxql.VarRef).Val),
+			})
+		} else {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(fields[i].Alias),
+			})
+		}
+		valuer := influxql.TypeValuerEval{
+			TypeMapper: DefaultTypeMapper,
+		}
+		t, e := valuer.EvalType(f, false)
+		if e != nil {
+			return e
+		}
+		switch t {
+		case influxql.Float:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_Float)
+		case influxql.Integer:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_Int)
+		case influxql.Boolean:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_Int)
+		case influxql.String:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_String)
+		default:
+			return errors.New("unexpected call type")
+		}
+	}
+	dims := stmt.Dimensions
+	for i := range dims {
+		d, ok := dims[i].Expr.(*influxql.VarRef)
+		if !ok {
+			continue
+		}
+		fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+			FieldName: proto.String(d.Val),
+			FieldType: proto.Int32(influx.Field_Type_Tag),
+		})
+	}
+	return c.UpdateSchema(database, retentionPolicy, mst, fieldToCreate)
+}
+
+func (c *Client) CreateStreamPolicy(info *meta2.StreamInfo) error {
+	cmd := &proto2.CreateStreamCommand{
+		StreamInfo: info.Marshal(),
+	}
+	err := c.retryUntilExec(proto2.Command_CreateStreamCommand, proto2.E_CreateStreamCommand_Command, cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) GetStreamInfosStore() map[string]*meta2.StreamInfo {
+	return c.RetryGetStreamInfosStore()
+}
+
+func (c *Client) RetryGetStreamInfosStore() map[string]*meta2.StreamInfo {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var infos map[string]*meta2.StreamInfo
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil
+		default:
+
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		infos = c.GetStreamInfosForStore(currentServer)
+		if infos != nil {
+			break
+		}
+
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+	return infos
+}
+
+func (c *Client) GetStreamInfosForStore(currentServer int) map[string]*meta2.StreamInfo {
+	callback := &GetStreamInfoCallback{}
+	msg := message.NewMetaMessage(message.GetStreamInfoRequestMessage, &message.GetStreamInfoRequest{Body: nil})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		c.logger.Error("GetStreamInfosForStore SendRPCMsg fail", zap.Error(err))
+		return nil
+	}
+	pb := &proto2.StreamInfos{}
+	err = proto.Unmarshal(callback.Data, pb)
+	if err != nil {
+		c.logger.Error("GetStreamInfosForStore Unmarshal fail", zap.Error(err))
+		return nil
+	}
+	metaInfos := make(map[string]*meta2.StreamInfo)
+	for _, v := range pb.GetInfos() {
+		s := &meta2.StreamInfo{}
+		s.Unmarshal(v)
+		metaInfos[s.Name] = s
+	}
+	return metaInfos
+}
+
+func (c *Client) ShowStreams(database string, showAll bool) (models.Rows, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.ShowStreams(database, showAll)
+}
+
+func (c *Client) DropStream(name string) error {
+	cmd := &proto2.DropStreamCommand{
+		Name: proto.String(name),
+	}
+	if err := c.retryUntilExec(proto2.Command_DropStreamCommand, proto2.E_DropStreamCommand_Command, cmd); err != nil {
+		return nil
+	}
+	return nil
+}
+
+var VerifyNodeEn = true
+
+func (c *Client) verifyDataNodeStatus() {
+	if !config.GetHaEnable() {
+		return
+	}
+
+	tries := 0
+	for {
+		select {
+		case <-c.closing:
+			return
+		default:
+			time.Sleep(10 * time.Second)
+			if !VerifyNodeEn {
+				continue
+			}
+			if err := c.retryVerifyDataNodeStatus(); err != nil {
+				tries++
+				c.logger.Error("Verify retry", zap.Int("tries", tries), zap.Error(err))
+				if tries >= 3 {
+					c.Suicide(err)
+				}
+				continue
+			}
+			tries = 0
+		}
+	}
+}
+
+func (c *Client) retryVerifyDataNodeStatus() error {
+	cmd := &proto2.VerifyDataNodeCommand{
+		NodeID: proto.Uint64(c.nodeID),
+	}
+	return c.retryUntilExec(proto2.Command_VerifyDataNodeCommand, proto2.E_VerifyDataNodeCommand_Command, cmd)
+}
+
+func (c *Client) Suicide(err error) {
+	c.logger.Error("Suicide for fault data node", zap.Error(err))
+	time.Sleep(errSleep)
+	if e := syscall.Kill(syscall.Getpid(), syscall.SIGKILL); e != nil {
+		panic(fmt.Sprintf("FATAL: cannot send SIGKILL to itself: %v", e))
+	}
+}
+
+func refreshConnectedServer(currentServer int) {
+	if currentServer != connectedServer {
+		connectedServer = currentServer
+	}
 }
 
 type Peers []string

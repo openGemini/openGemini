@@ -24,11 +24,23 @@ import (
 )
 
 type MeasurementInfo struct {
-	Name           string
-	ShardKeys      []ShardKeyInfo
-	Schema         map[string]int32
-	IndexRelations []IndexRelation
-	MarkDeleted    bool
+	Name          string // measurement name with version
+	originName    string // cache original measurement name
+	ShardKeys     []ShardKeyInfo
+	Schema        map[string]int32
+	IndexRelation IndexRelation
+	MarkDeleted   bool
+}
+
+func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
+	return &MeasurementInfo{
+		Name:       nameWithVer,
+		originName: influx.GetOriginMstName(nameWithVer),
+	}
+}
+
+func (msti *MeasurementInfo) OriginName() string {
+	return msti.originName
 }
 
 func (msti *MeasurementInfo) walkSchema(fn func(fieldName string, fieldType int32)) {
@@ -66,18 +78,13 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 		}
 	}
 
-	if len(msti.IndexRelations) > 0 {
-		pb.IndexRelations = make([]*proto2.IndexRelation, len(msti.IndexRelations))
-		for i := range msti.IndexRelations {
-			pb.IndexRelations[i] = msti.IndexRelations[i].Marshal()
-		}
-	}
-
+	pb.IndexRelation = msti.IndexRelation.Marshal()
 	return pb
 }
 
 func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 	msti.Name = pb.GetName()
+	msti.originName = influx.GetOriginMstName(msti.Name)
 	msti.MarkDeleted = pb.GetMarkDeleted()
 	if pb.GetShardKeys() != nil {
 		msti.ShardKeys = make([]ShardKeyInfo, len(pb.GetShardKeys()))
@@ -94,10 +101,21 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 		msti.Schema[name] = t
 	}
 
-	msti.IndexRelations = make([]IndexRelation, len(pb.GetIndexRelations()))
-	for i, indexR := range pb.GetIndexRelations() {
-		msti.IndexRelations[i].unmarshal(indexR)
+	msti.IndexRelation.unmarshal(pb.GetIndexRelation())
+}
+
+func (msti *MeasurementInfo) MarshalBinary() ([]byte, error) {
+	pb := msti.marshal()
+	return proto.Marshal(pb)
+}
+
+func (msti *MeasurementInfo) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.MeasurementInfo{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
 	}
+	msti.unmarshal(pb)
+	return nil
 }
 
 func (msti MeasurementInfo) clone() *MeasurementInfo {
@@ -131,7 +149,7 @@ func (msti MeasurementInfo) FieldKeys(ret map[string]map[string]int32) {
 		if msti.Schema[key] == influx.Field_Type_Tag {
 			continue
 		}
-		ret[msti.Name][key] = msti.Schema[key]
+		ret[msti.OriginName()][key] = msti.Schema[key]
 	}
 }
 
@@ -142,7 +160,7 @@ func (msti MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map[
 		}
 		valMap := map[string]interface{}{
 			"_tagKey": key,
-			"_name":   msti.Name,
+			"_name":   msti.OriginName(),
 		}
 		if cond == nil || influxql.EvalBool(cond, valMap) {
 			ret[msti.Name][key] = struct{}{}
@@ -206,10 +224,10 @@ func (ski ShardKeyInfo) clone() ShardKeyInfo {
 }
 
 type IndexRelation struct {
-	Rid       uint32
-	Oid       uint32
-	IndexName []string
-	IndexList []*IndexList
+	Rid        uint32
+	Oids       []uint32
+	IndexNames []string
+	IndexList  []*IndexList
 }
 
 type IndexList struct {
@@ -218,8 +236,8 @@ type IndexList struct {
 
 func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 	pb := &proto2.IndexRelation{Rid: proto.Uint32(indexR.Rid),
-		Oid:       proto.Uint32(indexR.Oid),
-		IndexName: indexR.IndexName}
+		Oid:       indexR.Oids,
+		IndexName: indexR.IndexNames}
 
 	pb.IndexLists = make([]*proto2.IndexList, len(indexR.IndexList))
 	for i, IList := range indexR.IndexList {
@@ -233,8 +251,8 @@ func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 
 func (indexR *IndexRelation) unmarshal(pb *proto2.IndexRelation) {
 	indexR.Rid = pb.GetRid()
-	indexR.Oid = pb.GetOid()
-	indexR.IndexName = pb.GetIndexName()
+	indexR.Oids = pb.GetOid()
+	indexR.IndexNames = pb.GetIndexName()
 	indexLists := pb.GetIndexLists()
 	indexR.IndexList = make([]*IndexList, len(indexLists))
 	for i, iList := range indexLists {
@@ -248,6 +266,49 @@ func (msti *MeasurementInfo) ContainIndexRelation(ID uint64) bool {
 	return true
 }
 
-func (msti *MeasurementInfo) GetIndexRelationIndexList() []IndexRelation {
-	return msti.IndexRelations
+func (msti *MeasurementInfo) GetIndexRelation() IndexRelation {
+	return msti.IndexRelation
+}
+
+func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeFields {
+	infos := make([]*MeasurementTypeFields, 0, len(dataTypes))
+	for _, d := range dataTypes {
+		info := &MeasurementTypeFields{
+			Fields: make([]string, 0),
+		}
+		switch influxql.DataType(d) {
+		case influxql.Float:
+			info.Type = int64(influxql.Float)
+			for name, ty := range msti.Schema {
+				if ty == influx.Field_Type_Float {
+					info.Fields = append(info.Fields, name)
+				}
+			}
+		case influxql.Integer:
+			info.Type = int64(influxql.Integer)
+			for name, ty := range msti.Schema {
+				if ty == influx.Field_Type_Int {
+					info.Fields = append(info.Fields, name)
+				}
+			}
+		case influxql.String:
+			info.Type = int64(influxql.String)
+			for name, ty := range msti.Schema {
+				if ty == influx.Field_Type_String {
+					info.Fields = append(info.Fields, name)
+				}
+			}
+		case influxql.Boolean:
+			info.Type = int64(influxql.Boolean)
+			for name, ty := range msti.Schema {
+				if ty == influx.Field_Type_Boolean {
+					info.Fields = append(info.Fields, name)
+				}
+			}
+		}
+		if len(info.Fields) > 0 {
+			infos = append(infos, info)
+		}
+	}
+	return infos
 }

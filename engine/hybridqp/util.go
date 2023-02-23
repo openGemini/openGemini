@@ -233,3 +233,17 @@ func EqualMap(tags1, tags2 map[string]string) bool {
 	}
 	return isSameTag
 }
+
+func MaxInt64(x, y int64) int64 {
+	if x < y {
+		return y
+	}
+	return x
+}
+
+func AbsInt(x int) int {
+	if x >= 0 {
+		return x
+	}
+	return -x
+}

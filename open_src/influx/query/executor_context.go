@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/influxdata/influxdb/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 // ExecutionContext contains state that the query is currently executing with.
@@ -30,6 +31,11 @@ type ExecutionContext struct {
 
 	// Options used to start this query.
 	ExecutionOptions
+
+	// point writer which belong to the query, it is used for INTO statement
+	PointsWriter interface {
+		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
+	}
 
 	mu   sync.RWMutex
 	done chan struct{}

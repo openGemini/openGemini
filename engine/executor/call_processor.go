@@ -30,7 +30,20 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
-func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions) (*processorResults, error) {
+const (
+	DefaultClusterNum = 100
+	MaxClusterNum     = 100000
+)
+
+const (
+	OGSketchInsert     = "ogsketch_insert"
+	OGSketchMerge      = "ogsketch_merge"
+	OGSketchPercentile = "ogsketch_percentile"
+	PercentileApprox   = "percentile_approx"
+	PercentileOGSketch = "percentile_ogsketch"
+)
+
+func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, isSubQuery bool) (*processorResults, error) {
 	var err error
 	proRes := &processorResults{}
 	coProcessor := NewCoProcessorImpl()
@@ -78,8 +91,33 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 				routine, err = NewMaxRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
 				coProcessor.AppendRoutine(routine)
 			case "percentile":
+				if isSubQuery {
+					isSingleCall = false
+				}
 				routine, err = NewPercentileRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
 				coProcessor.AppendRoutine(routine)
+			case "percentile_approx", "ogsketch_percentile", "ogsketch_merge", "ogsketch_insert":
+				var percentile float64
+				var clusterNum int
+				var err error
+				if isSubQuery {
+					isSingleCall = false
+				}
+				clusterNum, err = getClusterNum(exprOpt[i].Expr.(*influxql.Call), name)
+				if err != nil {
+					return nil, err
+				}
+				percentile, err = getPercentile(exprOpt[i].Expr.(*influxql.Call), name)
+				if err != nil {
+					return nil, err
+				}
+				percentile /= 100
+				routine, err = NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, opt, name, clusterNum, percentile)
+				coProcessor.AppendRoutine(routine)
+				if name == "ogsketch_insert" || name == "ogsketch_merge" {
+					proRes.isCompositeCall = true
+					proRes.clusterNum = clusterNum
+				}
 			case "median":
 				routine, err = NewMedianRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall)
 				coProcessor.AppendRoutine(routine)
@@ -101,7 +139,6 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 					isSingleCall, isNonNegative)
 				coProcessor.AppendRoutine(routine)
 				proRes.isTimeUniqueCall = true
-				proRes.isTransformationCall = true
 				proRes.offset = 1
 			case "derivative", "non_negative_derivative":
 				isNonNegative := name == "non_negative_derivative"
@@ -110,7 +147,6 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 					isSingleCall, isNonNegative, opt.Ascending, interval)
 				coProcessor.AppendRoutine(routine)
 				proRes.isTimeUniqueCall = true
-				proRes.isTransformationCall = true
 				proRes.offset = 1
 			case "elapsed":
 				routine, err = NewElapsedRoutineImpl(inRowDataType, outRowDataType, exprOpt[i],
@@ -178,16 +214,52 @@ func NewWideProcessorImpl(inRowDataType, outRowDataType hybridqp.RowDataType, ex
 		}
 	}
 	var wideRoutine *WideRoutineImpl
-	expr, ok := exprOpts[0].Expr.(*influxql.Call)
-	if !ok {
-		return nil, errors.New("the first expr should be a call")
-	}
+	expr := exprOpts[0].Expr.(*influxql.Call)
+	args := expr.Args[1:]
 	switch expr.Name {
 	case "castor":
-		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce, expr.Args[1:]))
+		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce, args))
 	}
 	wideProcessor := NewWideCoProcessorImpl(wideRoutine)
 	return wideProcessor, nil
+}
+
+func getClusterNum(call *influxql.Call, name string) (int, error) {
+	var clusterNum int
+	if len(call.Args) == 2 {
+		clusterNum = DefaultClusterNum
+		return clusterNum, nil
+	}
+
+	switch arg := call.Args[2].(type) {
+	case *influxql.IntegerLiteral:
+		clusterNum = int(arg.Val)
+	default:
+		return 0, errno.NewError(errno.UnsupportedDataType, fmt.Sprintf("second argument of %s", name), arg.String())
+	}
+	if clusterNum < 1 {
+		return 0, errors.New("the value of clusterNum must be a positive integer")
+	}
+	if clusterNum > MaxClusterNum {
+		return 0, errors.New(fmt.Sprintf("clusterNum is too large. It should not be greater than %d", MaxClusterNum))
+	}
+	return clusterNum, nil
+}
+
+func getPercentile(call *influxql.Call, name string) (float64, error) {
+	var percentile float64
+	switch arg := call.Args[1].(type) {
+	case *influxql.NumberLiteral:
+		percentile = arg.Val
+	case *influxql.IntegerLiteral:
+		percentile = float64(arg.Val)
+	default:
+		return 0, errno.NewError(errno.UnsupportedDataType, fmt.Sprintf("first argument of %s", name), arg.String())
+	}
+	if percentile < 0 || percentile > 100 {
+		return 0, errors.New(fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
+	}
+	return percentile, nil
 }
 
 func countRoutineFactory(args ...interface{}) (interface{}, error) {
@@ -195,6 +267,7 @@ func countRoutineFactory(args ...interface{}) (interface{}, error) {
 	outRowDataType := args[1].(hybridqp.RowDataType)
 	opt := args[2].(hybridqp.ExprOptions)
 	isSingleCall := args[3].(bool)
+
 	return NewCountRoutineImpl(inRowDataType, outRowDataType, opt, isSingleCall)
 }
 
@@ -203,12 +276,13 @@ func sumRoutineFactory(args ...interface{}) (interface{}, error) {
 	outRowDataType := args[1].(hybridqp.RowDataType)
 	opt := args[2].(hybridqp.ExprOptions)
 	isSingleCall := args[3].(bool)
+
 	return NewSumRoutineImpl(inRowDataType, outRowDataType, opt, isSingleCall)
 }
 
 func createRoutineFromUDF(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
-	if ops, ok := op.GetOpFactory().FindAggregateOp(opt.Expr.(*influxql.Call).Name); ok {
-		routine, err := ops.Factory().Create(inRowDataType, outRowDataType, opt, isSingleCall, auxProcessor)
+	if op, ok := op.GetOpFactory().FindAggregateOp(opt.Expr.(*influxql.Call).Name); ok {
+		routine, err := op.Factory().Create(inRowDataType, outRowDataType, opt, isSingleCall, auxProcessor)
 		return routine.(Routine), err
 	}
 	return nil, fmt.Errorf("aggregate operator %s found in UDF before, but disappeared", opt.Expr.(*influxql.Call).Name)
@@ -217,9 +291,8 @@ func createRoutineFromUDF(inRowDataType, outRowDataType hybridqp.RowDataType, op
 type processorResults struct {
 	isSingleCall, isTransformationCall, isUDAFCall    bool
 	isIntegralCall, isTimeUniqueCall, isCompositeCall bool
-	//Time offset in transform operators, for difference(), derivative(), elapsed(), moving_average(), cumulative_sum()
-	offset, clusterNum int
-	coProcessor        CoProcessor
+	offset, clusterNum                                int //Time offset in transform operators, for difference(), derivative(), elapsed(), moving_average(), cumulative_sum()
+	coProcessor                                       CoProcessor
 }
 
 func statCallAndAux(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions) ([]*AuxProcessor, bool) {
@@ -506,6 +579,9 @@ func NewPercentileRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType
 	default:
 		panic("the type of input args of percentile iterator is unsupported")
 	}
+	if percentile < 0 || percentile > 100 {
+		return nil, errors.New(fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
+	}
 	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
 	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
 	if inOrdinal < 0 || outOrdinal < 0 {
@@ -524,6 +600,61 @@ func NewPercentileRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "percentile", dataType.String())
 	}
+}
+
+func NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt hybridqp.ExprOptions, isSingleCall bool, opt query.ProcessorOptions, name string, clusterNum int, percentile float64) (Routine, error) {
+	inOrdinal := inRowDataType.FieldIndex(exprOpt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(exprOpt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, name, "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	outDataType := outRowDataType.Field(outOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		switch name {
+		case OGSketchInsert:
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				NewFloatOGSketchInsertIem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+				inOrdinal, outOrdinal), nil
+		case PercentileApprox:
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				NewFloatPercentileApproxItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+				inOrdinal, outOrdinal), nil
+		}
+	case influxql.Integer:
+		switch name {
+		case OGSketchInsert:
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				NewIntegerOGSketchInsertIem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+				inOrdinal, outOrdinal), nil
+		case PercentileApprox:
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				NewIntegerPercentileApproxItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+				inOrdinal, outOrdinal), nil
+		}
+	case influxql.FloatTuple:
+		switch name {
+		case OGSketchMerge:
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				NewOGSketchMergeItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+				inOrdinal, outOrdinal), nil
+		case OGSketchPercentile:
+			switch outDataType {
+			case influxql.Float:
+				return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+					NewFloatOGSketchPercentileItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+					inOrdinal, outOrdinal), nil
+			case influxql.Integer:
+				return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+					NewIntegerOGSketchPercentileItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
+					inOrdinal, outOrdinal), nil
+			}
+		}
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, name, dataType.String())
+	}
+	return nil, errno.NewError(errno.UnsupportedDataType, name, dataType.String())
 }
 
 func NewTopRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, auxProcessor []*AuxProcessor) (Routine, error) {
@@ -876,10 +1007,10 @@ func NewStddevRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, op
 }
 
 func NewSampleRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
-	var sample_num int64
+	var sampleNum int64
 	switch arg := opt.Expr.(*influxql.Call).Args[1].(type) {
 	case *influxql.IntegerLiteral:
-		sample_num = arg.Val
+		sampleNum = arg.Val
 	default:
 		panic("the type of input args of sample iterator is unsupported")
 	}
@@ -894,19 +1025,19 @@ func NewSampleRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, op
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatSampleIterator(int(sample_num),
+		return NewRoutineImpl(NewFloatColFloatSampleIterator(int(sampleNum),
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerSampleIterator(int(sample_num),
+		return NewRoutineImpl(NewIntegerColIntegerSampleIterator(int(sampleNum),
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.String:
-		return NewRoutineImpl(NewStringColStringSampleIterator(int(sample_num),
+		return NewRoutineImpl(NewStringColStringSampleIterator(int(sampleNum),
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
-		return NewRoutineImpl(NewBooleanColBooleanSampleIterator(int(sample_num),
+		return NewRoutineImpl(NewBooleanColBooleanSampleIterator(int(sampleNum),
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	default:

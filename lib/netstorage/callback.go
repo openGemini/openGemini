@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 type DDLCallback struct {
@@ -78,17 +79,67 @@ func (c *WritePointsCallback) Handle(data interface{}) error {
 	}
 
 	c.data = msg
-	return nil
+	if c.data.Code == 0 {
+		return nil
+	} else if c.data.ErrCode != 0 {
+		err := errno.NewError(c.data.ErrCode)
+		err.SetMessage(c.data.Message)
+		return err
+	}
+	return errors.New(c.data.Message)
 }
 
 func (c *WritePointsCallback) GetCodec() transport.Codec {
 	return &WritePointsResponse{}
 }
 
-func (c *WritePointsCallback) Error() error {
-	if c.data.Code == 0 {
-		return nil
+type WriteStreamPointsCallback struct {
+	data *WriteStreamPointsResponse
+}
+
+func (c *WriteStreamPointsCallback) Handle(data interface{}) error {
+	msg, ok := data.(*WriteStreamPointsResponse)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.WriteStreamPointsResponse", data)
 	}
 
+	c.data = msg
+	if c.data.Code == 0 {
+		return nil
+	} else if c.data.ErrCode != 0 {
+		return errno.NewError(c.data.ErrCode, c.data.Message)
+	}
 	return errors.New(c.data.Message)
+}
+
+func (c *WriteStreamPointsCallback) GetCodec() transport.Codec {
+	return &WriteStreamPointsResponse{}
+}
+
+type MigratePtCallback struct {
+	data interface{}
+	fn   func(err error)
+}
+
+func (c *MigratePtCallback) SetCallbackFn(fn func(err error)) {
+	c.fn = fn
+}
+
+func (c *MigratePtCallback) Handle(data interface{}) error {
+	msg, ok := data.(*PtResponse)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.PtMessage", data)
+	}
+
+	c.data = msg
+	c.fn(msg.Error())
+	return nil
+}
+
+func (c *MigratePtCallback) GetCodec() transport.Codec {
+	return &PtResponse{}
+}
+
+func (c *MigratePtCallback) GetResponse() interface{} {
+	return c.data
 }

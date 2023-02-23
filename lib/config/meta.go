@@ -17,11 +17,11 @@ limitations under the License.
 package config
 
 import (
+	"crypto/tls"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/raft"
-	"github.com/influxdata/influxdb/pkg/tlsconfig"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 )
@@ -40,37 +40,41 @@ const (
 	DefaultLeaseDuration        = 60 * time.Second
 	DefaultConcurrentWriteLimit = 10
 	DefaultVersion              = 0
-	DefaultSplitRowThreshold    = 1000
+	DefaultSplitRowThreshold    = 10000
 	DefaultImbalanceFactor      = 0.3
 	DefaultRaftStore            = "boltdb"
 	DefaultHostname             = "localhost"
 	DefaultSuspicionMult        = 4
 	DefaultProbInterval         = toml.Duration(time.Second)
+	DefaultPtNumPerNode         = 1
 )
 
 // TSMeta represents the configuration format for the ts-meta binary.
 type TSMeta struct {
 	Common  *Common `toml:"common"`
 	Meta    *Meta   `toml:"meta"`
+	Data    Store   `toml:"data"`
 	Logging Logger  `toml:"logging"`
 	Monitor Monitor `toml:"monitor"`
 	Gossip  *Gossip `toml:"gossip"`
 	Spdy    Spdy    `toml:"spdy"`
 
 	// TLS provides configuration options for all https endpoints.
-	TLS tlsconfig.Config `toml:"tls"`
+	TLS *tls.Config `toml:"-"`
+
+	Sherlock *SherlockConfig `toml:"sherlock"`
 }
 
 // NewTSMeta returns an instance of TSMeta with reasonable defaults.
 func NewTSMeta() *TSMeta {
 	c := &TSMeta{}
 	c.Common = NewCommon()
+	c.Data = NewStore()
 	c.Meta = NewMeta()
 	c.Logging = NewLogger(AppMeta)
 	c.Monitor = NewMonitor(AppMeta)
 	c.Gossip = NewGossip()
-	c.TLS = tlsconfig.NewConfig()
-
+	c.Sherlock = NewSherlockConfig()
 	return c
 }
 
@@ -78,12 +82,13 @@ func NewTSMeta() *TSMeta {
 func (c *TSMeta) Validate() error {
 	items := []Validator{
 		c.Common,
+		c.Data,
 		c.Meta,
 		c.Monitor,
-		c.TLS,
 		c.Logging,
 		c.Gossip,
 		c.Spdy,
+		c.Sherlock,
 	}
 
 	for _, item := range items {
@@ -120,12 +125,17 @@ type Meta struct {
 	ClusterTracing      bool `toml:"cluster-tracing"`
 	LoggingEnabled      bool `toml:"logging-enabled"`
 	BatchApplyCh        bool `toml:"batch-enabled"`
+	TakeOverEnable      bool `toml:"takeover-enable"`
+	ExpandShardsEnable  bool `toml:"expand-shards-enable"`
 
+	DataDir                 string
+	WalDir                  string
 	Domain                  string  `toml:"domain"`
 	Dir                     string  `toml:"dir"`
 	HTTPBindAddress         string  `toml:"http-bind-address"`
 	RPCBindAddress          string  `toml:"rpc-bind-address"`
 	BindAddress             string  `toml:"bind-address"`
+	AuthEnabled             bool    `toml:"auth-enabled"`
 	HTTPSCertificate        string  `toml:"https-certificate"`
 	HTTPSPrivateKey         string  `toml:"https-private-key"`
 	MaxConcurrentWriteLimit int     `toml:"-"`
@@ -143,6 +153,8 @@ type Meta struct {
 	CommitTimeout      toml.Duration `toml:"commit-timeout"`
 	LeaseDuration      toml.Duration `toml:"lease-duration"`
 	Logging            Logger        `toml:"logging"`
+
+	PtNumPerNode uint32 `toml:"ptnum-pernode"`
 }
 
 // NewMeta builds a new configuration with default values.
@@ -164,9 +176,12 @@ func NewMeta() *Meta {
 		SplitRowThreshold:       DefaultSplitRowThreshold,
 		ImbalanceFactor:         DefaultImbalanceFactor,
 		BatchApplyCh:            true,
+		TakeOverEnable:          false,
+		ExpandShardsEnable:      false,
 		RaftStore:               DefaultRaftStore,
 		RemoteHostname:          DefaultHostname,
 		ClusterTracing:          true,
+		PtNumPerNode:            DefaultPtNumPerNode,
 	}
 }
 

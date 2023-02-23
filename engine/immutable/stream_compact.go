@@ -25,21 +25,17 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
-	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/pkg/bloom"
-	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -55,281 +51,6 @@ var (
 	fileIteratorPool = sync.Pool{}
 	errEmptyFile     = fmt.Errorf("empty tssp file")
 )
-
-type FileIterator struct {
-	r          TSSPFile
-	tombstones []TombstoneFile
-	err        error
-	chunkN     int
-	chunkUsed  int
-
-	mIndexN   int
-	mIndexPos int
-
-	metaIndex     *MetaIndex
-	cmBuffers     [2][]ChunkMeta
-	chunkMetas    []ChunkMeta
-	cmIdx         int
-	curtChunkMeta *ChunkMeta
-	curtChunkPos  int
-	segPos        int
-
-	log *Log.Logger
-
-	dataOffset int64
-	dataSize   int64
-
-	tBuf   []byte
-	buf    []byte
-	buffer []byte
-	offset int64
-	size   int
-}
-
-func NewFileIterator(r TSSPFile, log *Log.Logger) *FileIterator {
-	var fi *FileIterator
-	trailer := r.FileStat()
-	v := fileIteratorPool.Get()
-	if v == nil {
-		fi = &FileIterator{}
-	} else {
-		fi = v.(*FileIterator)
-	}
-
-	fi.r = r
-	fi.chunkN = int(trailer.idCount)
-	fi.mIndexN = int(trailer.metaIndexItemNum)
-	fi.log = log
-
-	fi.dataOffset = trailer.dataOffset
-	fi.dataSize = trailer.dataSize
-
-	return fi
-}
-
-func (itr *FileIterator) reset() {
-	itr.r = nil
-	itr.tombstones = itr.tombstones[:0]
-	itr.err = nil
-	itr.chunkN = 0
-	itr.chunkUsed = 0
-	itr.mIndexN = 0
-	itr.mIndexPos = 0
-	itr.metaIndex = nil
-	itr.chunkMetas = itr.chunkMetas[:0]
-	itr.cmIdx = 0
-	itr.curtChunkMeta = nil
-	itr.curtChunkPos = 0
-	itr.segPos = 0
-	itr.log = nil
-	itr.buffer = itr.buffer[:0]
-	itr.offset = 0
-	itr.size = 0
-}
-
-func (itr *FileIterator) fromBuffer(segOffset int64, size uint32) []byte {
-	off := segOffset - itr.offset
-	endAt := off + int64(size)
-	return itr.buffer[off:endAt]
-}
-
-func (itr *FileIterator) readData(segOffset int64, size uint32) ([]byte, error) {
-	if itr.size == 0 {
-		return itr.r.ReadData(segOffset, size, &itr.buf)
-	}
-
-	return itr.fromBuffer(segOffset, size), nil
-}
-
-func (itr *FileIterator) readTimeData(segOffset int64, size uint32) ([]byte, error) {
-	if itr.size == 0 {
-		return itr.r.ReadData(segOffset, size, &itr.tBuf)
-	}
-
-	return itr.fromBuffer(segOffset, size), nil
-}
-
-func (itr *FileIterator) readChunkData(chunkOffset int64, chunkSize uint32) error {
-	if itr.offset == chunkOffset && itr.size == int(chunkSize) {
-		return nil
-	}
-
-	if chunkSize > readBufferSize {
-		itr.offset = 0
-		itr.size = 0
-		return nil
-	}
-
-	itr.buffer = bufferpool.Resize(itr.buffer, int(chunkSize))
-	itr.buffer, itr.err = itr.r.ReadData(chunkOffset, chunkSize, &itr.buffer)
-	if itr.err != nil {
-		itr.log.Error("read data fail", zap.String("file", itr.r.Path()), zap.Error(itr.err))
-		return itr.err
-	}
-
-	itr.offset = chunkOffset
-	itr.size = int(chunkSize)
-	return nil
-}
-
-func (itr *FileIterator) Close() {
-	itr.r.Unref()
-	itr.reset()
-	fileIteratorPool.Put(itr)
-}
-
-func (itr *FileIterator) WithLog(log *Log.Logger) {
-	itr.log = log
-}
-
-func (itr *FileIterator) readMetaBlocks() bool {
-	if itr.metaIndex == nil || len(itr.chunkMetas) == 0 {
-		return true
-	}
-
-	if len(itr.chunkMetas) > 0 && itr.curtChunkPos >= len(itr.chunkMetas) {
-		if itr.curtChunkMeta == nil {
-			return itr.mIndexPos < itr.mIndexN
-		}
-
-		if itr.curtChunkMeta != nil && itr.segPos >= len(itr.curtChunkMeta.timeRange) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (itr *FileIterator) NextChunkMeta() bool {
-	if itr.chunkUsed >= itr.chunkN {
-		return false
-	}
-
-	if itr.readMetaBlocks() {
-		itr.metaIndex, itr.err = itr.r.MetaIndexAt(itr.mIndexPos)
-		if itr.err != nil {
-			itr.log.Error("read chunk meta fail", zap.String("file", itr.r.Path()), zap.Int("index", itr.mIndexPos), zap.Error(itr.err))
-			return false
-		}
-		metaIndexAt := itr.mIndexPos
-		itr.mIndexPos++
-
-		if itr.cmIdx >= 2 {
-			itr.cmIdx = 0
-		}
-
-		itr.cmBuffers[itr.cmIdx], itr.err = itr.r.ReadChunkMetaData(metaIndexAt, itr.metaIndex, itr.cmBuffers[itr.cmIdx][:0])
-		if itr.err != nil {
-			itr.log.Error("read chunk metas fail", zap.String("file", itr.r.Path()), zap.Any("index", itr.metaIndex), zap.Error(itr.err))
-			return false
-		}
-
-		itr.chunkMetas = itr.cmBuffers[itr.cmIdx]
-		itr.curtChunkMeta = &itr.chunkMetas[0]
-		itr.curtChunkPos = 1
-		itr.segPos = 0
-		itr.cmIdx++
-	}
-
-	if itr.curtChunkMeta == nil || itr.segPos >= len(itr.curtChunkMeta.timeRange) {
-		itr.curtChunkMeta = &itr.chunkMetas[itr.curtChunkPos]
-		itr.curtChunkPos++
-		itr.segPos = 0
-	}
-
-	return true
-}
-
-type FileIterators []*FileIterator
-
-func (m *MmsTables) NewFileIterators(group *CompactGroup) (FilesInfo, error) {
-	var fi FilesInfo
-	fi.compIts = make(FileIterators, 0, len(group.group))
-	fi.oldFiles = make([]TSSPFile, 0, len(group.group))
-	for _, fn := range group.group {
-		if m.isClosed() {
-			fi.compIts.Close()
-			return fi, ErrCompStopped
-		}
-		if atomic.LoadInt64(group.dropping) > 0 {
-			fi.compIts.Close()
-			return fi, ErrDroppingMst
-		}
-		f := m.File(group.name, fn, true)
-		if f == nil {
-			fi.compIts.Close()
-			return fi, fmt.Errorf("table %v, %v, %v not find", group.name, fn, true)
-		}
-		fi.oldFiles = append(fi.oldFiles, f)
-		itr := NewFileIterator(f, CLog)
-		if itr.NextChunkMeta() {
-			fi.compIts = append(fi.compIts, itr)
-		} else {
-			f.Unref()
-			continue
-		}
-
-		maxRows, avgRows := f.MaxChunkRows(), f.AverageChunkRows()
-		if fi.maxChunkRows < maxRows {
-			fi.maxChunkRows = maxRows
-		}
-
-		fi.avgChunkRows += avgRows
-		if fi.maxChunkN < itr.chunkN {
-			fi.maxChunkN = itr.chunkN
-		}
-
-		if fi.maxColumns < int(itr.curtChunkMeta.columnCount) {
-			fi.maxColumns = int(itr.curtChunkMeta.columnCount)
-		}
-
-		fi.estimateSize += int(itr.r.FileSize())
-	}
-	fi.avgChunkRows /= len(fi.compIts)
-	fi.dropping = group.dropping
-	fi.name = group.name
-	fi.shId = group.shardId
-	fi.toLevel = group.toLevel
-	fi.oldFids = group.group
-
-	return fi, nil
-}
-
-func (i FileIterators) Close() {
-	for _, itr := range i {
-		itr.Close()
-	}
-}
-
-func (i FileIterators) MaxChunkRows() int {
-	max := 0
-	for _, itr := range i {
-		mr := itr.r.MaxChunkRows()
-		if max < mr {
-			max = mr
-		}
-	}
-	return max
-}
-
-func (i FileIterators) AverageRows() int {
-	avg := 0
-	for _, itr := range i {
-		avg += itr.r.AverageChunkRows()
-	}
-	return avg / len(i)
-}
-
-func (i FileIterators) MaxColumns() int {
-	max := -1
-	for _, itr := range i {
-		n := len(itr.curtChunkMeta.colMeta)
-		if max < n {
-			max = n
-		}
-	}
-	return max
-}
 
 func NonStreamingCompaction(fi FilesInfo) bool {
 	flag := MergeFlag()
@@ -420,7 +141,8 @@ type StreamIterators struct {
 	closed        chan struct{}
 	dropping      *int64
 	dir           string
-	name          string
+	name          string // measurement name with version
+	lock          *string
 	itrs          []*StreamIterator
 	chunkItrs     []*StreamIterator
 	segmentIndex  int
@@ -520,19 +242,6 @@ func (c *StreamIterators) Close() {
 	c.fileSize = 0
 	c.colBuilder.resetPreAgg()
 	putStreamIterators(c)
-}
-
-func (c *StreamIterators) stopCompact() bool {
-	if atomic.LoadInt64(c.dropping) > 0 {
-		return true
-	}
-
-	select {
-	case <-c.closed:
-		return true
-	default:
-		return false
-	}
 }
 
 func (c *StreamIterators) swapLastTimeSegment(col *record.ColVal) {
@@ -669,6 +378,7 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error
 	compItrs.dropping = group.dropping
 	compItrs.name = group.name
 	compItrs.dir = m.path
+	compItrs.lock = m.lock
 	compItrs.pair.Reset(group.name)
 	compItrs.Conf = m.Conf
 	compItrs.itrs = compItrs.itrs[:0]
@@ -686,61 +396,10 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error
 	return compItrs, nil
 }
 
-func (m *MmsTables) streamCompactToLevel(group FilesInfo, full bool) error {
-	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
-	compactStatItem.Full = full
-	compactStatItem.Level = group.toLevel - 1
-	compactStat.AddActive(1)
-	defer func() {
-		compactStat.AddActive(-1)
-		compactStat.PushCompaction(compactStatItem)
-	}()
-
-	cLog, logEnd := logger.NewOperation(log, "StreamCompaction", group.name)
-	defer logEnd()
-	lcLog := Log.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
-	start := time.Now()
-	lcLog.Debug("start compact file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
-
-	lcLog.Debug(fmt.Sprintf("compactionGroup: name=%v, groups=%v", group.name, group.oldFids))
-
-	compItrs, err := m.NewStreamIterators(group)
-	if err != nil {
-		lcLog.Error("new chunk readers fail", zap.Error(err))
-		return err
-	}
-
-	compItrs.WithLog(lcLog)
-	oldFilesSize := compItrs.estimateSize
-	newFiles, err := compItrs.compact(group.oldFiles, group.toLevel, true)
-	if err != nil {
-		lcLog.Error("compact fail", zap.Error(err))
-		compItrs.Close()
-		return err
-	}
-
-	compItrs.Close()
-	if err = m.ReplaceFiles(group.name, group.oldFiles, newFiles, true, lcLog); err != nil {
-		lcLog.Error("replace compacted file error", zap.Error(err))
-		return err
-	}
-
-	end := time.Now()
-	lcLog.Debug("compact file done", zap.Any("files", group.oldFids), zap.Time("end", end), zap.Duration("time used", end.Sub(start)))
-
-	if oldFilesSize != 0 {
-		compactStatItem.OriginalFileCount = int64(len(group.oldFiles))
-		compactStatItem.CompactedFileCount = int64(len(newFiles))
-		compactStatItem.OriginalFileSize = int64(oldFilesSize)
-		compactStatItem.CompactedFileSize = sumFilesSize(newFiles)
-	}
-	return nil
-}
-
 func (c *StreamIterators) cacheMetaInMemory() bool {
-	if c.tier == meta.Hot {
+	if c.tier == util.Hot {
 		return c.Conf.cacheMetaData
-	} else if c.tier == meta.Warm {
+	} else if c.tier == util.Warm {
 		return false
 	}
 
@@ -748,9 +407,9 @@ func (c *StreamIterators) cacheMetaInMemory() bool {
 }
 
 func (c *StreamIterators) cacheDataInMemory() bool {
-	if c.tier == meta.Hot {
+	if c.tier == util.Hot {
 		return c.Conf.cacheDataBlock
-	} else if c.tier == meta.Warm {
+	} else if c.tier == util.Warm {
 		return false
 	}
 
@@ -772,14 +431,14 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 		c.fileName.extent++
 	}
 	c.reset()
-	c.trailer.name = append(c.trailer.name[:0], c.name...)
+	c.trailer.name = append(c.trailer.name[:0], influx.GetOriginMstName(c.name)...)
 	c.inMemBlock = emptyMemReader
 	if c.cacheDataInMemory() || c.cacheMetaInMemory() {
 		idx := calcBlockIndex(c.estimateSize)
 		c.inMemBlock = NewMemoryReader(blockSize[idx])
 	}
 
-	lock := fileops.FileLockOption("")
+	lock := fileops.FileLockOption(*c.lock)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 	dir := filepath.Join(c.dir, c.name)
 	_ = fileops.MkdirAll(dir, 0750, lock)
@@ -797,9 +456,9 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 
 	limit := c.fileName.level > 0
 	if c.cacheMetaInMemory() {
-		c.writer = newFileWriter(c.fd, true, limit)
+		c.writer = newFileWriter(c.fd, true, limit, c.lock)
 	} else {
-		c.writer = newFileWriter(c.fd, false, limit)
+		c.writer = newFileWriter(c.fd, false, limit, c.lock)
 	}
 
 	var buf [16]byte
@@ -852,7 +511,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 	cm := &c.dstMeta
 	cm.size = uint32(c.writer.DataSize() - cm.offset)
 	cm.columnCount = uint32(len(cm.colMeta))
-	cm.segCount = uint16(len(cm.timeRange))
+	cm.segCount = uint32(len(cm.timeRange))
 	minT, maxT := cm.MinMaxTime()
 	if c.mIndex.count == 0 {
 		c.mIndex.size = 0
@@ -904,7 +563,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 	}
 
 	if c.mIndex.size >= uint32(c.Conf.maxChunkMetaItemSize) || c.mIndex.count >= uint32(c.Conf.maxChunkMetaItemCount) {
-		offBytes := record.Uint32Slice2byte(c.cmOffset)
+		offBytes := record.Uint32Slice2ByteBigEndian(c.cmOffset)
 		_, err = c.writer.WriteChunkMeta(offBytes)
 		if err != nil {
 			err = errWriteFail(c.writer.Name(), err)
@@ -930,7 +589,8 @@ func (c *StreamIterators) removeEmptyFile() {
 		_ = c.writer.Close()
 		name := c.fd.Name()
 		_ = c.fd.Close()
-		_ = fileops.Remove(name)
+		lock := fileops.FileLockOption(*c.lock)
+		_ = fileops.Remove(name, lock)
 		c.fd = nil
 		c.writer = nil
 	}
@@ -945,7 +605,7 @@ func (c *StreamIterators) NewTSSPFile(tmp bool) (TSSPFile, error) {
 		return nil, err
 	}
 
-	dr, err := CreateTSSPFileReader(c.fileSize, c.fd, &c.trailer, &c.TableData, c.FileVersion(), tmp)
+	dr, err := CreateTSSPFileReader(c.fileSize, c.fd, &c.trailer, &c.TableData, c.FileVersion(), tmp, c.lock)
 	if err != nil {
 		c.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
 		return nil, err
@@ -968,6 +628,7 @@ func (c *StreamIterators) NewTSSPFile(tmp bool) (TSSPFile, error) {
 		name:   c.fileName,
 		reader: dr,
 		ref:    1,
+		lock:   c.lock,
 	}, nil
 }
 
@@ -994,7 +655,7 @@ func (c *StreamIterators) Flush() error {
 	}
 
 	if c.mIndex.count > 0 {
-		offBytes := record.Uint32Slice2byte(c.cmOffset)
+		offBytes := record.Uint32Slice2ByteBigEndian(c.cmOffset)
 		_, err := c.writer.WriteChunkMeta(offBytes)
 		if err != nil {
 			c.log.Error("write chunk meta fail", zap.String("name", c.fd.Name()), zap.Error(err))
@@ -1085,7 +746,7 @@ func (c *StreamIterators) isClosed() bool {
 	}
 }
 
-func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmentIndex int, splitFile bool, err error) {
+func (c *StreamIterators) compactColumn(ref record.Field, needCalPreAgg bool) (iteratorStart, segmentIndex int, splitFile bool, err error) {
 	// merge column ref
 	_ = c.colBuilder.initEncoder(ref)
 	splitFile = false
@@ -1096,6 +757,10 @@ func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmen
 		idx := c.lastSeg.FieldIndexs(ref.Name)
 		col := c.lastSeg.Column(idx)
 		c.col.AppendColVal(col, ref.Type, 0, col.Len)
+		if needCalPreAgg {
+			tmCol := c.lastSeg.TimeColumn()
+			c.timeCol.AppendColVal(tmCol, influx.Field_Type_Int, 0, tmCol.Len)
+		}
 		col.Init()
 	}
 
@@ -1107,10 +772,6 @@ func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmen
 		}
 
 		srcMeta := itr.curtChunkMeta
-		if err = itr.readChunkData(srcMeta.offset, srcMeta.size); err != nil {
-			return
-		}
-
 		tm := srcMeta.TimeMeta()
 		var srcColMeta *ColumnMeta
 
@@ -1133,13 +794,32 @@ func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmen
 
 			if idx >= 0 {
 				colSeg := &srcColMeta.entries[segIndex]
-				segData, er := itr.readData(colSeg.offset, colSeg.size)
-				if er != nil {
-					err = er
-					return
-				}
-				if err = c.decodeSegment(segData, nil, ref); err != nil {
-					return
+				if !needCalPreAgg {
+					segData, er := itr.readData(colSeg.offset, colSeg.size)
+					if er != nil {
+						err = er
+						return
+					}
+					if err = c.decodeSegment(segData, nil, ref); err != nil {
+						return
+					}
+				} else {
+					colData, er := itr.readData(colSeg.offset, colSeg.size)
+					if er != nil {
+						err = er
+						return
+					}
+
+					tmSeg := &tm.entries[segIndex]
+					tmData, er := itr.readTimeData(tmSeg.offset, tmSeg.size)
+					if er != nil {
+						err = er
+						return
+					}
+
+					if err = c.decodeSegment(colData, tmData, ref); err != nil {
+						return
+					}
 				}
 			}
 
@@ -1147,7 +827,7 @@ func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmen
 				break
 			}
 
-			if err = c.writeSegment(srcMeta.sid, ref); err != nil {
+			if err = c.writeSegment(srcMeta.sid, ref, needCalPreAgg); err != nil {
 				return
 			}
 			segmentN++
@@ -1161,7 +841,7 @@ func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmen
 
 			// merge last segment
 			if c.lastSegment(itrIndex, segIndex, segmentN, tm) {
-				if err = c.writeSegment(itr.curtChunkMeta.sid, ref); err != nil {
+				if err = c.writeSegment(itr.curtChunkMeta.sid, ref, needCalPreAgg); err != nil {
 					return
 				}
 				segmentN++
@@ -1177,7 +857,7 @@ func (c *StreamIterators) compactColumn(ref record.Field) (iteratorStart, segmen
 func (c *StreamIterators) writeLastSegment(segmentN int, ref record.Field, id uint64) error {
 	if c.col.Len > 0 {
 		if segmentN < c.Conf.maxSegmentLimit {
-			if err := c.writeSegment(id, ref); err != nil {
+			if err := c.writeSegment(id, ref, false); err != nil {
 				return err
 			}
 		} else {
@@ -1203,7 +883,7 @@ func (c *StreamIterators) writeCrc(crc []byte) error {
 func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) ([]TSSPFile, error) {
 	var crc [4]byte
 	_, seq := files[0].LevelAndSequence()
-	c.fileName = NewTSSPFileName(seq, level, 0, 0, isOrder)
+	c.fileName = NewTSSPFileName(seq, level, 0, 0, isOrder, c.lock)
 	if err := c.NewFile(false); err != nil {
 		panic(err)
 	}
@@ -1220,7 +900,7 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 			id := c.chunkItrs[0].curtChunkMeta.sid
 			c.Init(id, dOff, c.fields)
 			for _, ref := range c.fields {
-				if c.stopCompact() {
+				if c.isClosed() {
 					return nil, ErrCompStopped
 				}
 
@@ -1229,11 +909,7 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 					return nil, err
 				}
 
-				if c.chunkSegments > c.Conf.maxSegmentLimit {
-					iteratorStart, segmentIndex, splitFile, err = c.mergeColumnCalcPreAgg(ref)
-				} else {
-					iteratorStart, segmentIndex, splitFile, err = c.compactColumn(ref)
-				}
+				iteratorStart, segmentIndex, splitFile, err = c.compactColumn(ref, c.chunkSegments > c.Conf.maxSegmentLimit)
 				if err != nil {
 					return nil, err
 				}
@@ -1303,80 +979,31 @@ func (c *StreamIterators) nextChunk() {
 	}
 }
 
-func (c *StreamIterators) splitColumn(ref record.Field) (splitCol bool, lastTmSeg *record.ColVal) {
+func (c *StreamIterators) splitColumn(ref record.Field, needCalPreAgg bool) (splitCol bool, lastTmSeg *record.ColVal) {
 	maxRow := c.Conf.maxRowsPerSegment
 	splitCol = c.col.Len > maxRow
 	if splitCol {
 		c.colSegs = c.col.Split(c.colSegs[:0], maxRow, ref.Type)
 		if len(c.colSegs) != 2 {
-			panic("len(c.colSegs) != 2")
+			panic(fmt.Sprintf("len(c.colSegs) != 2, got: %d", len(c.colSegs)))
 		}
-		if ref.Name != record.TimeField {
-			c.timeSegs = c.timeCol.Split(c.timeSegs[:0], maxRow, influx.Field_Type_Int)
-		} else {
-			c.timeSegs = append(c.timeSegs[:0], c.colSegs...)
+		if needCalPreAgg {
+			if ref.Name != record.TimeField {
+				c.timeSegs = c.timeCol.Split(c.timeSegs[:0], maxRow, influx.Field_Type_Int)
+			} else {
+				c.timeSegs = append(c.timeSegs[:0], c.colSegs...)
+			}
+			lastTmSeg = &c.timeSegs[1]
 		}
-		lastTmSeg = &c.timeSegs[1]
 	} else {
 		c.colSegs = append(c.colSegs[:0], *c.col)
-		if ref.Name != record.TimeField {
-			c.timeSegs = append(c.timeSegs[:0], *c.timeCol)
+		if needCalPreAgg {
+			if ref.Name != record.TimeField {
+				c.timeSegs = append(c.timeSegs[:0], *c.timeCol)
+			}
 		}
 	}
 	return
-}
-
-func (c *StreamIterators) writeSegmentCalcPreAgg(id uint64, ref record.Field) error {
-	if err := c.validate(id, ref); err != nil {
-		return err
-	}
-
-	if c.chunkSegments > c.Conf.maxSegmentLimit {
-		if c.col.Len != c.timeCol.Len && ref.Name != record.TimeField {
-			err := fmt.Errorf("column(%v) rows(%v) neq time rows(%v)", ref.String(), c.col.Len, c.timeCol.Len)
-			c.log.Error(err.Error())
-			return err
-		}
-	}
-
-	splitCol, lastTmSeg := c.splitColumn(ref)
-	var err error
-
-	cols := c.colSegs[:1]
-	off := c.writer.DataSize()
-	c.colBuilder.data = c.colBuilder.data[:0]
-	if ref.Name == record.TimeField {
-		err = c.colBuilder.encodeTimeColumn(cols, off)
-	} else {
-		tmCols := c.timeSegs[:1]
-		err = c.colBuilder.encodeColumnCalcPreAgg(cols, tmCols, off, ref)
-	}
-	if err != nil {
-		c.log.Error("encode column fail", zap.String("field", ref.String()), zap.String("file", c.fd.Name()), zap.Error(err))
-		return err
-	}
-
-	wn, err := c.writer.WriteData(c.colBuilder.data)
-	if err != nil || wn != len(c.colBuilder.data) {
-		c.log.Error("write data segment fail", zap.String("file", c.fd.Name()), zap.Error(err))
-		return err
-	}
-
-	if c.cacheDataInMemory() {
-		c.inMemBlock.AppendDataBlock(c.colBuilder.data)
-	}
-
-	if splitCol {
-		if ref.Name != record.TimeField {
-			c.swapLastTimeSegment(lastTmSeg)
-		}
-		c.swapLastSegment(&ref, &c.colSegs[1])
-	} else {
-		c.col.Init()
-		c.timeCol.Init()
-	}
-
-	return nil
 }
 
 func (c *StreamIterators) validate(id uint64, ref record.Field) error {
@@ -1399,22 +1026,12 @@ func (c *StreamIterators) validate(id uint64, ref record.Field) error {
 	return nil
 }
 
-func (c *StreamIterators) writeSegment(id uint64, ref record.Field) error {
+func (c *StreamIterators) writeSegment(id uint64, ref record.Field, needCalPreAgg bool) error {
 	if err := c.validate(id, ref); err != nil {
 		return err
 	}
 
-	maxRow := c.Conf.maxRowsPerSegment
-	splitCol := c.col.Len > maxRow
-	if splitCol {
-		c.colSegs = c.col.Split(c.colSegs[:0], maxRow, ref.Type)
-		if len(c.colSegs) != 2 {
-			panic("len(c.colSegs) != 2")
-		}
-	} else {
-		c.colSegs = append(c.colSegs[:0], *c.col)
-	}
-
+	splitCol, lastTmSeg := c.splitColumn(ref, needCalPreAgg)
 	var err error
 
 	cols := c.colSegs[:1]
@@ -1423,7 +1040,12 @@ func (c *StreamIterators) writeSegment(id uint64, ref record.Field) error {
 	if ref.Name == record.TimeField {
 		err = c.colBuilder.encodeTimeColumn(cols, off)
 	} else {
-		err = c.colBuilder.encodeColumn(cols, off, ref)
+		if needCalPreAgg {
+			tmCols := c.timeSegs[:1]
+			err = c.colBuilder.encodeColumn(cols, tmCols, off, ref)
+		} else {
+			err = c.colBuilder.encodeColumn(cols, nil, off, ref)
+		}
 	}
 	if err != nil {
 		c.log.Error("encode column fail", zap.String("field", ref.String()), zap.String("file", c.fd.Name()), zap.Error(err))
@@ -1441,9 +1063,13 @@ func (c *StreamIterators) writeSegment(id uint64, ref record.Field) error {
 	}
 
 	if splitCol {
+		if needCalPreAgg && ref.Name != record.TimeField {
+			c.swapLastTimeSegment(lastTmSeg)
+		}
 		c.swapLastSegment(&ref, &c.colSegs[1])
 	} else {
 		c.col.Init()
+		c.timeCol.Init()
 	}
 
 	return nil
@@ -1483,7 +1109,7 @@ func (b *ColumnBuilder) encodeTimeColumn(cols []record.ColVal, offset int64) err
 	return nil
 }
 
-func (b *ColumnBuilder) encodeColumn(segCols []record.ColVal, offset int64, ref record.Field) error {
+func (b *ColumnBuilder) encodeColumn(segCols []record.ColVal, tmCols []record.ColVal, offset int64, ref record.Field) error {
 	var err error
 	for i := range segCols {
 		segCol := &segCols[i]
@@ -1502,61 +1128,24 @@ func (b *ColumnBuilder) encodeColumn(segCols []record.ColVal, offset int64, ref 
 		switch ref.Type {
 		case influx.Field_Type_String:
 			b.data, err = EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
+			if len(tmCols) != 0 {
+				b.stringPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
+			}
 		case influx.Field_Type_Boolean:
 			b.data, err = EncodeBooleanBlock(segCol.Val, b.data, b.coder)
+			if len(tmCols) != 0 {
+				b.boolPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
+			}
 		case influx.Field_Type_Float:
 			b.data, err = EncodeFloatBlock(segCol.Val, b.data, b.coder)
+			if len(tmCols) != 0 {
+				b.floatPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
+			}
 		case influx.Field_Type_Int:
 			b.data, err = EncodeIntegerBlock(segCol.Val, b.data, b.coder)
-		default:
-			panic(ref)
-		}
-		if err != nil {
-			b.log.Error("encode integer value fail", zap.Error(err))
-			return err
-		}
-		size := uint32(len(b.data) - pos)
-		m.setSize(size)
-		offset += int64(size)
-	}
-
-	return err
-}
-
-func (b *ColumnBuilder) encodeColumnCalcPreAgg(segCols []record.ColVal, tmCols []record.ColVal, offset int64, ref record.Field) error {
-	var err error
-	if len(segCols) != len(tmCols) {
-		panic("len(segCols) != len(tmCols)")
-	}
-	for i := range segCols {
-		tmCol := &tmCols[i]
-		segCol := &segCols[i]
-		times := tmCol.IntegerValues()
-
-		b.colMeta.growEntry()
-		m := &b.colMeta.entries[len(b.colMeta.entries)-1]
-		m.setOffset(offset)
-
-		pos := len(b.data)
-		b.data = append(b.data, byte(ref.Type))
-		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		switch ref.Type {
-		case influx.Field_Type_String:
-			b.data, err = EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
-			b.stringPreAggBuilder.addValues(segCol, times)
-		case influx.Field_Type_Boolean:
-			b.data, err = EncodeBooleanBlock(segCol.Val, b.data, b.coder)
-			b.boolPreAggBuilder.addValues(segCol, times)
-		case influx.Field_Type_Float:
-			b.data, err = EncodeFloatBlock(segCol.Val, b.data, b.coder)
-			b.floatPreAggBuilder.addValues(segCol, times)
-		case influx.Field_Type_Int:
-			b.data, err = EncodeIntegerBlock(segCol.Val, b.data, b.coder)
-			b.intPreAggBuilder.addValues(segCol, times)
+			if len(tmCols) != 0 {
+				b.intPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
+			}
 		default:
 			panic(ref)
 		}
@@ -1822,105 +1411,6 @@ func (c *StreamIterators) nextSegmentPosition(itrIndex, segIndex int, tm *Column
 		splitFile = true
 		return
 	}
-	return
-}
-
-func (c *StreamIterators) mergeColumnCalcPreAgg(ref record.Field) (iteratorStart, segmentIndex int, splitFile bool, err error) {
-	// merge column ref
-	_ = c.colBuilder.initEncoder(ref)
-	id := c.chunkItrs[c.iteratorStart].curtChunkMeta.sid
-	splitFile = false
-	segmentN := 0
-	lastSegRows := c.lastSeg.RowNums()
-	if lastSegRows > 0 {
-		idx := c.lastSeg.FieldIndexs(ref.Name)
-		col := c.lastSeg.Column(idx)
-		tmCol := c.lastSeg.TimeColumn()
-		c.col.AppendColVal(col, ref.Type, 0, col.Len)
-		c.timeCol.AppendColVal(tmCol, influx.Field_Type_Int, 0, tmCol.Len)
-		col.Init()
-	}
-
-	for itrIndex := c.iteratorStart; itrIndex < len(c.chunkItrs); itrIndex++ {
-		itr := c.chunkItrs[itrIndex]
-		if c.isClosed() {
-			err = ErrCompStopped
-			return
-		}
-
-		srcMeta := itr.curtChunkMeta
-		if err = itr.readChunkData(srcMeta.offset, srcMeta.size); err != nil {
-			return
-		}
-
-		tm := srcMeta.TimeMeta()
-		var srcColMeta *ColumnMeta
-
-		idx := c.dstMeta.columnIndex(&ref)
-		c.colBuilder.cm = &c.dstMeta
-		c.colBuilder.colMeta = &c.dstMeta.colMeta[idx]
-		idx = srcMeta.columnIndex(&ref)
-		if idx >= 0 {
-			srcColMeta = &srcMeta.colMeta[idx]
-		} else {
-			c.padRows(srcMeta.Rows(c.ctx.preAggBuilders.timeBuilder), &ref)
-		}
-
-		// merge full segments(full segment: rows in segment EQ 1000)
-		for segIndex := c.segmentIndex; segIndex < len(tm.entries); segIndex++ {
-			if c.isClosed() {
-				err = ErrCompStopped
-				return
-			}
-
-			if idx >= 0 {
-				colSeg := &srcColMeta.entries[segIndex]
-				colData, er := itr.readData(colSeg.offset, colSeg.size)
-				if er != nil {
-					err = er
-					return
-				}
-
-				tmSeg := &tm.entries[segIndex]
-				tmData, er := itr.readTimeData(tmSeg.offset, tmSeg.size)
-				if er != nil {
-					err = er
-					return
-				}
-
-				if err = c.decodeSegment(colData, tmData, ref); err != nil {
-					return
-				}
-			}
-
-			if c.continueMerge(segIndex, itrIndex, tm) {
-				break
-			}
-
-			if err = c.writeSegmentCalcPreAgg(srcMeta.sid, ref); err != nil {
-				return
-			}
-			segmentN++
-			if segmentN >= c.Conf.maxSegmentLimit {
-				iteratorStart, segmentIndex, splitFile = c.nextSegmentPosition(itrIndex, segIndex, tm)
-				if splitFile {
-					c.saveSegment(ref)
-					return
-				}
-			}
-
-			// merge last segment
-			if c.lastSegment(itrIndex, segIndex, segmentN, tm) {
-				if err = c.writeSegmentCalcPreAgg(id, ref); err != nil {
-					return
-				}
-				segmentN++
-			}
-		}
-	}
-
-	err = c.writeLastSegment(segmentN, ref, id)
-
 	return
 }
 

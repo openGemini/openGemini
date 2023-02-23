@@ -26,7 +26,6 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/influxdata/influxdb/pkg/limiter"
 	retention2 "github.com/influxdata/influxdb/services/retention"
-	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
@@ -39,9 +38,11 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/openGemini/openGemini/services/downsample"
 	"github.com/openGemini/openGemini/services/hierarchical"
 	"github.com/openGemini/openGemini/services/retention"
 	"go.uber.org/zap"
@@ -65,6 +66,12 @@ type StoreEngine interface {
 	TagValues(string, []uint32, map[string][][]byte, influxql.Expr) (netstorage.TablesTagSets, error)
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr) (map[string]uint64, error)
 	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) error
+	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
+	PreOffload(*meta2.DbPtInfo) error
+	RollbackPreOffload(*meta2.DbPtInfo) error
+	PreAssign(uint64, *meta2.DbPtInfo) error
+	Offload(*meta2.DbPtInfo) error
+	Assign(uint64, *meta2.DbPtInfo) error
 }
 
 type Storage struct {
@@ -111,6 +118,16 @@ func (s *Storage) appendHierarchicalService(c retention2.Config) {
 	s.Services = append(s.Services, srv)
 }
 
+func (s *Storage) appendDownSamplePolicyService(c retention2.Config) {
+	if !c.Enabled {
+		return
+	}
+	srv := downsample.NewService(time.Duration(c.CheckInterval))
+	srv.Engine = s.engine
+	srv.MetaClient = s.metaClient
+	s.Services = append(s.Services, srv)
+}
+
 func (s *Storage) appendAnalysisService(c config.Castor) {
 	if !c.Enabled {
 		return
@@ -138,6 +155,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.ShardMutableSizeLimit = int64(conf.Data.ShardMutableSizeLimit)
 	opt.NodeMutableSizeLimit = int64(conf.Data.NodeMutableSizeLimit)
 	opt.MaxWriteHangTime = time.Duration(conf.Data.MaxWriteHangTime)
+	opt.MemDataReadEnabled = conf.Data.MemDataReadEnabled
 	opt.CompactThroughput = int64(conf.Data.CompactThroughput)
 	opt.CompactThroughputBurst = int64(conf.Data.CompactThroughputBurst)
 	opt.CompactRecovery = conf.Data.CompactRecovery
@@ -149,20 +167,25 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.CacheDataBlock = conf.Data.CacheDataBlock
 	opt.CacheMetaBlock = conf.Data.CacheMetaBlock
 	opt.EnableMmapRead = conf.Data.EnableMmapRead
-	opt.ReadCacheLimit = conf.Data.ReadCacheLimit
+	opt.ReadCacheLimit = uint64(conf.Data.ReadCacheLimit)
 	opt.WalSyncInterval = time.Duration(conf.Data.WalSyncInterval)
 	opt.WalEnabled = conf.Data.WalEnabled
 	opt.WalReplayParallel = conf.Data.WalReplayParallel
+	opt.WalReplayAsync = conf.Data.WalReplayAsync
 	opt.CompactionMethod = conf.Data.CompactionMethod
+	opt.OpenShardLimit = conf.Data.OpenShardLimit
+	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
+
+	executor.IgnoreEmptyTag = conf.Common.IgnoreEmptyTag
 
 	eng, err := newEngineFn(conf.Data.DataDir, conf.Data.WALDir, opt, &loadCtx)
 	if err != nil {
 		return nil, err
 	}
 
-	if conf.Data.WriteConcurrentLimit <= 0 || conf.Data.WriteConcurrentLimit > cgroup.AvailableCPUs() {
-		conf.Data.WriteConcurrentLimit = cgroup.AvailableCPUs()
-	}
+	cpuNum := cgroup.AvailableCPUs()
+	minWriteConcurrentLimit, maxWriteConcurrentLimit := cpuNum, 8*cpuNum
+	conf.Data.WriteConcurrentLimit = util.IntLimit(minWriteConcurrentLimit, maxWriteConcurrentLimit, conf.Data.WriteConcurrentLimit)
 
 	s := &Storage{
 		path:       path,
@@ -176,12 +199,15 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 
 	s.log = logger.NewLogger(errno.ModuleStorageEngine)
 
-	if err := s.engine.Open(s.metaClient.PtIds(), s.metaClient.ShardDurations); err != nil {
-		return nil, fmt.Errorf("err open engine %s", err)
+	if !config.GetHaEnable() {
+		if err := s.engine.Open(s.metaClient.ShardDurations, s.metaClient); err != nil {
+			return nil, fmt.Errorf("err open engine %s", err)
+		}
 	}
 	s.engine.SetReadOnly(conf.Data.Readonly)
 	// Append services.
 	s.appendRetentionPolicyService(conf.Retention)
+	s.appendDownSamplePolicyService(conf.DownSample)
 	s.appendHierarchicalService(conf.HierarchicalStore)
 	s.appendAnalysisService(conf.Analysis)
 
@@ -206,12 +232,19 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 	err = s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
-	switch err {
-	case engine.ErrPTNotFound:
+	err2, ok := err.(*errno.Error)
+	if !ok {
+		return err
+	}
+	switch err2.Errno() {
+	case errno.PtNotFound:
+		// case ha enabled: db pt is created in create database
+		if config.GetHaEnable() {
+			return err
+		}
 		s.engine.CreateDBPT(db, ptId)
-		s.metaClient.AddPt(ptId)
 		fallthrough
-	case engine.ErrShardNotFound:
+	case errno.ShardNotFound:
 		// get index meta data, shard meta data
 		startT := time.Now()
 		timeRangeInfo, err = s.metaClient.GetShardRangeInfo(db, rp, shardID)
@@ -305,6 +338,10 @@ func (s *Storage) UnrefEngineDbPt(db string, ptId uint32) {
 	s.engine.DbPTUnref(db, ptId)
 }
 
+func (s *Storage) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
+	return s.engine.GetShardDownSampleLevel(db, ptId, shardID)
+}
+
 func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
 	plan, err := s.engine.CreateLogicalPlan(ctx, db, ptId, shardID, sources, schema)
 	return plan, err
@@ -347,6 +384,26 @@ func (s *Storage) SeriesExactCardinality(db string, ptIDs []uint32, measurements
 
 func (s *Storage) GetEngine() netstorage.Engine {
 	return s.engine
+}
+
+func (s *Storage) PreOffload(ptInfo *meta2.DbPtInfo) error {
+	return s.engine.PreOffload(ptInfo.Db, ptInfo.Pti.PtId)
+}
+
+func (s *Storage) RollbackPreOffload(ptInfo *meta2.DbPtInfo) error {
+	return s.engine.RollbackPreOffload(ptInfo.Db, ptInfo.Pti.PtId)
+}
+
+func (s *Storage) PreAssign(opId uint64, ptInfo *meta2.DbPtInfo) error {
+	return s.engine.PreAssign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Shards, s.metaClient)
+}
+
+func (s *Storage) Offload(ptInfo *meta2.DbPtInfo) error {
+	return s.engine.Offload(ptInfo.Db, ptInfo.Pti.PtId)
+}
+
+func (s *Storage) Assign(opId uint64, ptInfo *meta2.DbPtInfo) error {
+	return s.engine.Assign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Pti.Ver, ptInfo.Shards, s.metaClient)
 }
 
 func stringSlice2BytesSlice(s []string) [][]byte {

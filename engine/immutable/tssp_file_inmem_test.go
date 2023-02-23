@@ -137,7 +137,7 @@ func getChunkMetaBlocks(mb *MemBlock, n int) {
 			mBlock = cm.marshal(mBlock)
 			sid++
 		}
-		ofs := record.Uint32Slice2byte(mOfs)
+		ofs := record.Uint32Slice2ByteBigEndian(mOfs)
 		mBlock = append(mBlock, ofs...)
 		mb.chunkMetas = append(mb.chunkMetas, mBlock)
 	}
@@ -152,7 +152,8 @@ func TestLoadDataBlock(t *testing.T) {
 	_, _ = fd.Write([]byte{1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
 	_ = fd.Truncate(4*1024*1024 + 1024)
 	fi, _ := fd.Stat()
-	dr := NewDiskFileReader(fd)
+	lockPath := ""
+	dr := NewDiskFileReader(fd, &lockPath)
 	defer dr.Close()
 
 	tr := &Trailer{dataOffset: 16, dataSize: fi.Size() - 16}

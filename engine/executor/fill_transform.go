@@ -20,9 +20,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/binarysearch"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -37,19 +37,25 @@ type FillTransform struct {
 	BaseProcessor
 
 	init                 bool
+	sameTag              bool
 	bufChunkNum          int
+	intervalNum          int
+	fillChunkSize        int
 	startTime            int64
 	endTime              int64
 	interval             int64
 	fillVal              interface{}
 	prevChunk            Chunk
 	newChunk             Chunk
+	tmpChunk             Chunk
+	coProcessor          CoProcessor
 	chunkPool            *CircularChunkPool
 	nextChunkCh          chan struct{}
 	fillChunkCh          chan struct{}
 	prevValues           []interface{}
 	prevReadAts          []int
 	inputReadAts         []int
+	fillReadAts          []int
 	bufChunk             []Chunk
 	fillItem             []*FillItem
 	fillProcessor        []FillProcessor
@@ -103,7 +109,7 @@ func NewFillTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hyb
 		bufChunk:     make([]Chunk, 0, FillBufChunkNum),
 		nextChunkCh:  make(chan struct{}),
 		fillChunkCh:  make(chan struct{}),
-		fillLogger:   logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "FillTransform"), zap.Uint64("trace_id", opt.Traceid)),
+		fillLogger:   logger.NewLogger(errno.ModuleQueryEngine),
 		chunkPool:    NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
 	}
 
@@ -137,6 +143,9 @@ func NewFillTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hyb
 	if err != nil {
 		return nil, err
 	}
+	trans.getIntervalNum()
+	trans.coProcessor = FixedMergeColumnsIteratorHelper(outRowDataType[0])
+	trans.tmpChunk = NewChunkBuilder(outRowDataType[0]).NewChunk("")
 	return trans, nil
 }
 
@@ -203,6 +212,21 @@ func (trans *FillTransform) initSpan() {
 	}
 }
 
+func (trans *FillTransform) getIntervalNum() {
+	if trans.opt.StartTime < 0 || trans.opt.EndTime < 0 {
+		trans.intervalNum = 0
+		return
+	}
+	if trans.opt.Ascending {
+		trans.intervalNum = int((trans.endTime - trans.startTime) / int64(trans.opt.Interval.Duration))
+	} else {
+		trans.intervalNum = int((trans.startTime - trans.endTime) / int64(trans.opt.Interval.Duration))
+	}
+	if trans.intervalNum <= 0 {
+		trans.intervalNum = 0
+	}
+}
+
 func (trans *FillTransform) Work(ctx context.Context) error {
 	trans.initSpan()
 	defer func() {
@@ -210,58 +234,31 @@ func (trans *FillTransform) Work(ctx context.Context) error {
 		tracing.Finish(trans.ppFillCost)
 	}()
 
-	// there are len(trans.Inputs) + merge goroutines which are watched
-	errs := NewErrs(1 + 2)
-	errSignals := NewErrorSignals(1 + 2)
-
-	closeErrs := func() {
-		errs.Close()
-		errSignals.Close()
-	}
-
-	var wg sync.WaitGroup
+	errs := errno.NewErrsPool().Get()
+	errs.Init(len(trans.Inputs)+1, trans.Close)
+	defer func() {
+		errno.NewErrsPool().Put(errs)
+	}()
 
 	runnable := func() {
 		defer func() {
 			tracing.Finish(trans.span)
 			if e := recover(); e != nil {
 				err := errno.NewError(errno.RecoverPanic, e)
-				trans.fillLogger.Error(err.Error())
+				trans.fillLogger.Error(err.Error(), zap.String("query", "FillTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
 				errs.Dispatch(err)
-				errSignals.Dispatch()
+			} else {
+				errs.Dispatch(nil)
 			}
-			defer wg.Done()
 		}()
 
 		trans.running(ctx)
 	}
 
-	wg.Add(1)
 	go runnable()
+	go trans.fill(ctx, errs)
 
-	wg.Add(1)
-	go trans.fill(ctx, &wg, errs, errSignals)
-
-	monitoring := func() {
-		errSignals.Wait(trans.Close)
-	}
-	go monitoring()
-
-	wg.Wait()
-	closeErrs()
-
-	var err error
-	for e := range errs.ch {
-		if err == nil {
-			err = e
-		}
-	}
-
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return errs.Err()
 }
 
 func (trans *FillTransform) running(ctx context.Context) {
@@ -327,15 +324,15 @@ func (trans *FillTransform) unreadChunk(c Chunk) {
 	trans.bufChunk = append([]Chunk{c}, trans.bufChunk...)
 }
 
-func (trans *FillTransform) fill(_ context.Context, wg *sync.WaitGroup, errs *Errs, errSignals *ErrorSignals) {
+func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.fillLogger.Error(err.Error())
+			trans.fillLogger.Error(err.Error(), zap.String("query", "FillTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
 			errs.Dispatch(err)
-			errSignals.Dispatch()
+		} else {
+			errs.Dispatch(nil)
 		}
-		defer wg.Done()
 	}()
 
 	fillStart := func() {
@@ -367,6 +364,16 @@ func (trans *FillTransform) fill(_ context.Context, wg *sync.WaitGroup, errs *Er
 			trans.sendChunk()
 		}
 
+		trans.getFillChunkSize(c)
+		if trans.fillChunkSize > 2*trans.opt.ChunkSize {
+			tracing.SpanElapsed(trans.ppFillCost, func() {
+				trans.multiCompute(c)
+			})
+			trans.fillReadAts = trans.fillReadAts[:0]
+			continue
+		}
+
+		trans.fillReadAts = trans.fillReadAts[:0]
 		tracing.SpanElapsed(trans.ppFillCost, func() {
 			trans.compute(c)
 		})
@@ -456,6 +463,174 @@ func (trans *FillTransform) processInterval(
 	return isStopFillTask
 }
 
+func (trans *FillTransform) getFillChunkSize(c Chunk) {
+	var preFillChunkSize int
+	trans.fillChunkSize = 0
+	if trans.intervalNum == 0 {
+		return
+	}
+	firstIdx, lastIdx := 0, c.TagLen()-1
+	for i := range c.TagIndex() {
+		if i == firstIdx && trans.prevWindow.name != "" {
+			if i == lastIdx && trans.isSameTag(c) {
+				trans.fillChunkSize += hybridqp.AbsInt(int((c.TimeByIndex(c.NumberOfRows()-1) - trans.prevWindow.time) / int64(trans.opt.Interval.Duration)))
+			} else {
+				trans.fillChunkSize += hybridqp.AbsInt(int((trans.endTime - trans.prevWindow.time) / int64(trans.opt.Interval.Duration)))
+			}
+		} else if i == lastIdx && trans.isSameTag(c) {
+			trans.fillChunkSize += hybridqp.AbsInt(int((c.TimeByIndex(c.NumberOfRows()-1)-trans.startTime)/int64(trans.opt.Interval.Duration))) + 1
+		} else {
+			trans.fillChunkSize += trans.intervalNum + 1
+		}
+		trans.fillReadAts = append(trans.fillReadAts, trans.fillChunkSize-preFillChunkSize)
+		preFillChunkSize = trans.fillChunkSize
+	}
+}
+
+func (trans *FillTransform) computeGroup(c Chunk, tagIdxAt, tagStartIdx, tagEndIdx int, st int64) {
+	var startTime, endTime int64
+	var start, end int
+
+	getFillChunkNumFunc := func(fillSize int) int {
+		num, remain := fillSize/trans.opt.ChunkSize, fillSize%trans.opt.ChunkSize
+		if remain > 0 {
+			num += 1
+		}
+		if num == 0 {
+			num = 1
+		}
+		return num
+	}
+	fillChunkNum := getFillChunkNumFunc(trans.fillReadAts[tagIdxAt])
+
+	for j := 0; j < fillChunkNum; j++ {
+		if trans.opt.Ascending {
+			startTime = st + int64(j*trans.opt.ChunkSize)*int64(trans.opt.Interval.Duration)
+			endTime = st + int64((j+1)*trans.opt.ChunkSize)*int64(trans.opt.Interval.Duration)
+		} else {
+			startTime = st - int64(j*trans.opt.ChunkSize)*int64(trans.opt.Interval.Duration)
+			endTime = st - int64((j-1)*trans.opt.ChunkSize)*int64(trans.opt.Interval.Duration)
+		}
+
+		trans.tmpChunk.SetName(c.Name())
+		trans.tmpChunk.AppendTagsAndIndex(c.Tags()[tagIdxAt], 0)
+
+		if trans.opt.Ascending {
+			start = binarysearch.UpperBoundInt64Ascending(c.Time()[tagStartIdx:tagEndIdx], startTime)
+			end = binarysearch.LowerBoundInt64Ascending(c.Time()[tagStartIdx:tagEndIdx], endTime)
+		} else {
+			start = binarysearch.LowerBoundInt64Descending(c.Time()[tagStartIdx:tagEndIdx], endTime)
+			end = binarysearch.UpperBoundInt64Descending(c.Time()[tagStartIdx:tagEndIdx], startTime)
+		}
+
+		if start == -1 || end == -1 || start > end {
+			trans.tmpChunk.AppendTime(startTime)
+			trans.tmpChunk.AppendIntervalIndex(trans.tmpChunk.NumberOfRows() - 1)
+			for m := 0; m < c.NumberOfCols(); m++ {
+				trans.tmpChunk.Column(m).AppendNil()
+			}
+		} else {
+			start = start + tagStartIdx
+			end = end + tagStartIdx + 1
+			trans.tmpChunk.AppendTime(c.Time()[start:end]...)
+			for n := start; n < end; n++ {
+				trans.tmpChunk.AppendIntervalIndex(n - start)
+			}
+			trans.coProcessor.WorkOnChunk(c, trans.tmpChunk, &IteratorParams{start: start, end: end})
+		}
+
+		if j == fillChunkNum-1 {
+			trans.sameTag = false
+		} else {
+			trans.sameTag = true
+		}
+		if tagIdxAt == c.TagLen()-1 && j == fillChunkNum-1 {
+			trans.sameTag = trans.isSameTag(c)
+		}
+		trans.compute(trans.tmpChunk)
+		trans.sendChunk()
+		trans.tmpChunk.Reset()
+	}
+}
+
+func (trans *FillTransform) computeSplitOneGroup(c Chunk) {
+	var tagEndIdx int
+	firstIdx := 0
+	for i, tagStartIdx := range c.TagIndex() {
+		if i == c.TagLen()-1 {
+			tagEndIdx = c.NumberOfRows()
+		} else {
+			tagEndIdx = c.TagIndex()[i+1]
+		}
+
+		if i == firstIdx && trans.prevWindow.name != "" {
+			if trans.opt.Ascending {
+				trans.computeGroup(c, i, tagStartIdx, tagEndIdx, trans.prevWindow.time+int64(trans.opt.Interval.Duration))
+			} else {
+				trans.computeGroup(c, i, tagStartIdx, tagEndIdx, trans.prevWindow.time-int64(trans.opt.Interval.Duration))
+			}
+		} else {
+			trans.computeGroup(c, i, tagStartIdx, tagEndIdx, trans.startTime)
+		}
+	}
+}
+
+func (trans *FillTransform) computeSplitMultiGroup(c Chunk) {
+	var tagEndIdx int
+	var start, end int
+
+	num, remain := trans.opt.ChunkSize/trans.intervalNum, trans.opt.ChunkSize%trans.intervalNum
+	if remain > 0 {
+		num += 1
+	}
+
+	for i, tagStartIdx := range c.TagIndex() {
+		if i == c.TagLen()-1 {
+			tagEndIdx = c.NumberOfRows()
+		} else {
+			tagEndIdx = c.TagIndex()[i+1]
+		}
+		trans.tmpChunk.AppendTagsAndIndex(c.Tags()[i], tagStartIdx-start)
+		for m := tagStartIdx; m < tagEndIdx; m++ {
+			trans.tmpChunk.AppendTime(c.TimeByIndex(m))
+			trans.tmpChunk.AppendIntervalIndex(trans.tmpChunk.NumberOfRows() - 1)
+		}
+		end = tagEndIdx
+
+		if i > 0 && i%num == 0 {
+			trans.tmpChunk.SetName(c.Name())
+			trans.coProcessor.WorkOnChunk(c, trans.tmpChunk, &IteratorParams{start: start, end: end})
+			if i == c.TagLen()-1 {
+				trans.sameTag = trans.isSameTag(c)
+			} else {
+				trans.sameTag = false
+			}
+			trans.compute(trans.tmpChunk)
+			trans.sendChunk()
+			trans.tmpChunk.Reset()
+			start = end
+		}
+
+		if i == c.TagLen()-1 && i%num != 0 {
+			trans.tmpChunk.SetName(c.Name())
+			trans.coProcessor.WorkOnChunk(c, trans.tmpChunk, &IteratorParams{start: start, end: end})
+			trans.sameTag = trans.isSameTag(c)
+			trans.compute(trans.tmpChunk)
+			trans.sendChunk()
+			trans.tmpChunk.Reset()
+		}
+	}
+
+}
+
+func (trans *FillTransform) multiCompute(c Chunk) {
+	if trans.intervalNum > trans.opt.ChunkSize {
+		trans.computeSplitOneGroup(c)
+	} else {
+		trans.computeSplitMultiGroup(c)
+	}
+}
+
 func (trans *FillTransform) compute(c Chunk) {
 	var isStopFillTask bool
 	var tagEndIndex int
@@ -540,6 +715,9 @@ func (trans *FillTransform) updatePrevAndInputAts(c Chunk) {
 }
 
 func (trans *FillTransform) isSameTag(c Chunk) bool {
+	if trans.tmpChunk.NumberOfRows() > 0 && trans.newChunk.NumberOfRows() > 0 {
+		return trans.sameTag
+	}
 	nextChunk := trans.peekChunk()
 	if nextChunk == nil || nextChunk.NumberOfRows() == 0 || nextChunk.Name() != c.Name() {
 		return false

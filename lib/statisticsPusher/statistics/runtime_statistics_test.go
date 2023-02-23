@@ -19,6 +19,7 @@ package statistics_test
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -48,4 +49,38 @@ func TestGetCpuUsage(t *testing.T) {
 	user, sys := statistics.GetCpuUsage()
 	assert.Equal(t, cpuUser/int64(statistics.CpuInterval), user)
 	assert.Equal(t, cpuSys/int64(statistics.CpuInterval), sys)
+}
+
+func TestCollectRuntimeStatistics(t *testing.T) {
+	buf, err := statistics.CollectRuntimeStatistics(nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, true, strings.Contains(string(buf), "runtime"))
+}
+
+func TestOpsGetCpuUsage(t *testing.T) {
+	file := t.TempDir() + "/test_cpu_file.tmp"
+	fp, err := os.OpenFile(file, os.O_CREATE|os.O_TRUNC|os.O_APPEND|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal("openFile fail")
+	}
+
+	var cpuUser int64 = 1000
+	var cpuSys int64 = 2000
+
+	if _, err := fp.WriteString(fmt.Sprintf("user %d\n", cpuUser)); err != nil {
+		return
+	}
+	if _, err := fp.WriteString(fmt.Sprintf("system %d\n", cpuSys)); err != nil {
+		return
+	}
+	if err := fp.Close(); err != nil {
+		return
+	}
+
+	statistics.CpuStatFile = file
+
+	stats := statistics.CollectOpsRuntimeStatistics()
+	assert.Equal(t, len(stats), 1)
 }

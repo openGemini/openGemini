@@ -19,12 +19,13 @@ package netstorage
 import (
 	"fmt"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
-	internal2 "github.com/openGemini/openGemini/lib/netstorage/data"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 )
 
 //go:generate tmpl -data=@message_types.tmpldata message_types.go.tmpl
@@ -90,7 +91,7 @@ type SysCtrlRequest struct {
 }
 
 func (s *SysCtrlRequest) Marshal(buf []byte) ([]byte, error) {
-	req := internal2.SysCtrlRequest{
+	req := netdata.SysCtrlRequest{
 		Mod:   proto.String(s.mod),
 		Param: make(map[string]string, len(s.param)),
 	}
@@ -108,7 +109,7 @@ func (s *SysCtrlRequest) Marshal(buf []byte) ([]byte, error) {
 }
 
 func (s *SysCtrlRequest) Unmarshal(buf []byte) error {
-	var pb internal2.SysCtrlRequest
+	var pb netdata.SysCtrlRequest
 	if err := proto.Unmarshal(buf, &pb); err != nil {
 		return err
 	}
@@ -156,7 +157,7 @@ type SysCtrlResponse struct {
 }
 
 func (s *SysCtrlResponse) Marshal(buf []byte) ([]byte, error) {
-	pb := internal2.SysCtrlResponse{
+	pb := netdata.SysCtrlResponse{
 		Err:    proto.String(s.err),
 		Result: s.result,
 	}
@@ -171,7 +172,7 @@ func (s *SysCtrlResponse) Marshal(buf []byte) ([]byte, error) {
 }
 
 func (s *SysCtrlResponse) Unmarshal(buf []byte) error {
-	var pb internal2.SysCtrlResponse
+	var pb netdata.SysCtrlResponse
 	if err := proto.Unmarshal(buf, &pb); err != nil {
 		return err
 	}
@@ -243,18 +244,21 @@ func (r *WritePointsRequest) Size() int {
 
 type WritePointsResponse struct {
 	Code    uint8
+	ErrCode errno.Errno
 	Message string
 }
 
-func NewWritePointsResponse(code uint8, message string) *WritePointsResponse {
+func NewWritePointsResponse(code uint8, errCode errno.Errno, message string) *WritePointsResponse {
 	return &WritePointsResponse{
 		Code:    code,
+		ErrCode: errCode,
 		Message: message,
 	}
 }
 
 func (r *WritePointsResponse) Marshal(buf []byte) ([]byte, error) {
 	buf = append(buf, r.Code)
+	buf = encoding.MarshalUint16(buf, uint16(r.ErrCode))
 	buf = append(buf, r.Message...)
 	return buf, nil
 }
@@ -263,9 +267,12 @@ func (r *WritePointsResponse) Unmarshal(buf []byte) error {
 	if len(buf) == 0 {
 		return errno.NewError(errno.ShortBufferSize, 0, 0)
 	}
-
-	r.Code = buf[0]
-	r.Message = string(buf[1:])
+	tBuf := buf
+	r.Code = tBuf[0]
+	tBuf = tBuf[1:]
+	r.ErrCode = errno.Errno(encoding.UnmarshalUint16(tBuf[:2]))
+	tBuf = tBuf[2:]
+	r.Message = string(tBuf)
 	return nil
 }
 
@@ -274,5 +281,232 @@ func (r *WritePointsResponse) Instance() transport.Codec {
 }
 
 func (r *WritePointsResponse) Size() int {
-	return 1 + len(r.Message)
+	return 1 + 2 + len(r.Message)
+}
+
+type StreamVar struct {
+	Only bool
+	Id   []uint64
+}
+
+func (s *StreamVar) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBool(buf, s.Only)
+	buf = codec.AppendUint64Slice(buf, s.Id)
+	return buf, err
+}
+
+func (s *StreamVar) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	s.Only = dec.Bool()
+	s.Id = dec.Uint64Slice()
+	return err
+}
+
+func (s *StreamVar) Size() int {
+	size := 0
+	size += codec.SizeOfBool()
+	size += codec.SizeOfUint64Slice(s.Id)
+	return size
+}
+
+func (s *StreamVar) Instance() transport.Codec {
+	return &StreamVar{}
+}
+
+type WriteStreamPointsRequest struct {
+	points     []byte
+	streamVars []*StreamVar
+}
+
+func NewWriteStreamPointsRequest(points []byte, streamVar []*StreamVar) *WriteStreamPointsRequest {
+	return &WriteStreamPointsRequest{
+		points:     points,
+		streamVars: streamVar,
+	}
+}
+
+func (w *WriteStreamPointsRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, w.points)
+
+	buf = codec.AppendUint32(buf, uint32(len(w.streamVars)))
+	for _, item := range w.streamVars {
+		if item == nil {
+			buf = codec.AppendUint32(buf, 0)
+			continue
+		}
+		buf = codec.AppendUint32(buf, uint32(item.Size()))
+		buf, err = item.Marshal(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buf, err
+}
+
+func (w *WriteStreamPointsRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	w.points = dec.Bytes()
+
+	streamVarsLen := int(dec.Uint32())
+	if streamVarsLen > 0 {
+		w.streamVars = make([]*StreamVar, streamVarsLen)
+		for i := 0; i < streamVarsLen; i++ {
+			subBuf := dec.BytesNoCopy()
+			if len(subBuf) == 0 {
+				continue
+			}
+
+			w.streamVars[i] = &StreamVar{}
+			if err := w.streamVars[i].Unmarshal(subBuf); err != nil {
+				return err
+			}
+		}
+	}
+	return err
+}
+
+func (w *WriteStreamPointsRequest) Points() []byte {
+	return w.points
+}
+
+func (w *WriteStreamPointsRequest) StreamVars() []*StreamVar {
+	return w.streamVars
+}
+
+func (w *WriteStreamPointsRequest) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(w.points)
+
+	size += codec.MaxSliceSize
+	for _, item := range w.streamVars {
+		size += codec.SizeOfUint32()
+		if item == nil {
+			continue
+		}
+		size += item.Size()
+	}
+	return size
+}
+
+func (w *WriteStreamPointsRequest) Instance() transport.Codec {
+	return &WriteStreamPointsRequest{}
+}
+
+type WriteStreamPointsResponse struct {
+	Code    uint8
+	ErrCode errno.Errno
+	Message string
+}
+
+func NewWriteStreamPointsResponse(code uint8, errCode errno.Errno, message string) *WriteStreamPointsResponse {
+	return &WriteStreamPointsResponse{
+		Code:    code,
+		ErrCode: errCode,
+		Message: message,
+	}
+}
+
+func (r *WriteStreamPointsResponse) Marshal(buf []byte) ([]byte, error) {
+	buf = append(buf, r.Code)
+	buf = encoding.MarshalUint16(buf, uint16(r.ErrCode))
+	buf = append(buf, r.Message...)
+	return buf, nil
+}
+
+func (r *WriteStreamPointsResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return errno.NewError(errno.ShortBufferSize, 0, 0)
+	}
+	tBuf := buf
+	r.Code = tBuf[0]
+	tBuf = tBuf[1:]
+	r.ErrCode = errno.Errno(encoding.UnmarshalUint16(tBuf[:2]))
+	tBuf = tBuf[2:]
+	r.Message = string(tBuf)
+	return nil
+}
+
+func (r *WriteStreamPointsResponse) Instance() transport.Codec {
+	return &WriteStreamPointsResponse{}
+}
+
+func (r *WriteStreamPointsResponse) Size() int {
+	return 1 + 2 + len(r.Message)
+}
+
+type PtRequest struct {
+	netdata.PtRequest
+}
+
+func NewPtRequest() *PtRequest {
+	return &PtRequest{}
+}
+
+func (r *PtRequest) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&r.PtRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (r *PtRequest) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &r.PtRequest)
+}
+
+func (r *PtRequest) Instance() transport.Codec {
+	return &PtRequest{}
+}
+
+func (r *PtRequest) Size() int {
+	return 0
+}
+
+type PtResponse struct {
+	netdata.PtResponse
+}
+
+func NewPtResponse() *PtResponse {
+	return &PtResponse{}
+}
+
+func (r *PtResponse) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&r.PtResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (r *PtResponse) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &r.PtResponse)
+}
+
+func (r *PtResponse) Instance() transport.Codec {
+	return &PtResponse{}
+}
+
+func (r *PtResponse) Size() int {
+	return 0
+}
+
+func (r *PtResponse) Error() error {
+	if r.Err == nil {
+		return nil
+	}
+	return NormalizeError(r.Err)
 }

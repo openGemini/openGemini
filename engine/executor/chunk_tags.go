@@ -25,10 +25,26 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
+var IgnoreEmptyTag = false
+
 func Str2bytes(s string) []byte {
 	x := (*[2]uintptr)(unsafe.Pointer(&s))
 	h := [3]uintptr{x[0], x[1], x[1]}
 	return *(*[]byte)(unsafe.Pointer(&h))
+}
+
+type TagValues [][]string
+
+func (t TagValues) Less(i, j int) bool {
+	return t[i][0] < t[j][0]
+}
+
+func (t TagValues) Swap(i, j int) {
+	t[i], t[j] = t[j], t[i]
+}
+
+func (t TagValues) Len() int {
+	return len(t)
 }
 
 type ChunkTags struct {
@@ -42,11 +58,21 @@ func NewChunkTags(pts influx.PointTags, dimensions []string) *ChunkTags {
 	return c
 }
 
+func NewChunkTagsByTagKVs(k []string, v []string) *ChunkTags {
+	c := &ChunkTags{}
+	c.encodeTagsByTagKVs(k, v)
+	return c
+}
+
 func NewChunkTagsV2(subset []byte) *ChunkTags {
 	c := &ChunkTags{
 		subset: subset,
 	}
 	return c
+}
+
+func (c *ChunkTags) GetOffsets() []uint16 {
+	return c.offsets
 }
 
 var chunkTagsPool sync.Pool
@@ -137,7 +163,7 @@ func (ct *ChunkTags) KeepKeys(keys []string) *ChunkTags {
 	for _, kv := range ct.decodeTags() {
 		if !ContainDim(keys, kv[0]) {
 			ss = append(ss, kv[0])
-			m = append(m, influx.Tag{kv[0], kv[1]})
+			m = append(m, influx.Tag{kv[0], kv[1], false})
 		}
 	}
 	sort.Sort(&m)
@@ -156,6 +182,20 @@ func (ct *ChunkTags) KeyValues() map[string]string {
 	return m
 }
 
+func (ct *ChunkTags) PointTags() influx.PointTags {
+	if len(ct.subset) == 0 {
+		return nil
+	}
+	tags := make(influx.PointTags, 0, len(ct.offsets))
+
+	tagValues := ct.decodeTags()
+	sort.Sort(TagValues(tagValues))
+	for _, kv := range tagValues {
+		tags = append(tags, influx.Tag{Key: kv[0], Value: kv[1]})
+	}
+	return tags
+}
+
 func ContainDim(des []string, src string) bool {
 	for i := range des {
 		if src == des[i] {
@@ -163,6 +203,29 @@ func ContainDim(des []string, src string) bool {
 		}
 	}
 	return true
+}
+
+func (ct *ChunkTags) encodeTagsByTagKVs(keys []string, vals []string) {
+	ct.offsets = make([]uint16, 0, len(keys)*2)
+	if len(keys) == 0 || len(keys) != len(vals) {
+		return
+	}
+
+	for i, k := range keys {
+		ct.subset = append(ct.subset, k...)
+		ct.subset = append(ct.subset, ' ')
+		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+		ct.subset = append(ct.subset, vals[i]...)
+		ct.subset = append(ct.subset, ' ')
+		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+	}
+	ct.encodeHead()
+}
+
+func (ct *ChunkTags) encodeHead() {
+	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)
+	head := record.Uint16Slice2byte(ct.offsets)
+	ct.subset = append(head, ct.subset...)
 }
 
 func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
@@ -174,6 +237,9 @@ func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
 	for _, k := range keys {
 		t1 := pts.FindPointTag(k)
 		if t1 == nil {
+			if IgnoreEmptyTag {
+				k = ""
+			}
 			ct.subset = append(ct.subset, Str2bytes(k+" ")...)
 			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 			ct.subset = append(ct.subset, Str2bytes(" ")...)
@@ -201,6 +267,10 @@ func (ct *ChunkTags) decodeTags() [][]string {
 	var index uint16
 	for i := uint16(0); i < offsetLen; i += 2 {
 		k := record.Bytes2str(tags[index:ct.offsets[i]])
+		if len(k) == 1 {
+			index = ct.offsets[i+1]
+			continue
+		}
 		v := record.Bytes2str(tags[ct.offsets[i]:ct.offsets[i+1]])
 		TagValues = append(TagValues, []string{k[:len(k)-1], v[:len(v)-1]})
 		index = ct.offsets[i+1]

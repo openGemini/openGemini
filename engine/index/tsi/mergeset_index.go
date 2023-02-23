@@ -30,15 +30,17 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/stringinterner"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -51,7 +53,11 @@ const (
 	nsPrefixKeyToTSID = iota
 	nsPrefixTSIDToKey
 	nsPrefixTagToTSIDs
+	//	nsPrefixCellIDToTSID
 	nsPrefixDeletedTSIDs
+	nsPrefixTSIDToField
+	nsPrefixFieldToPID
+	nsPrefixMstToFieldKey
 )
 
 const (
@@ -60,16 +66,11 @@ const (
 	kvSeparatorChar  = 2
 
 	compositeTagKeyPrefix = '\xfe'
-	MergeSetDirName       = "mergeset"
+	//maxTSIDsPerRow        = 64
+	MergeSetDirName = "mergeset"
 )
 
 var tagFiltersKeyGen uint64
-
-func invalidateTagCache() {
-	// This function must be fast, since it is called each
-	// time new timeseries is added.
-	atomic.AddUint64(&tagFiltersKeyGen, 1)
-}
 
 var (
 	queueSize     uint32
@@ -81,17 +82,25 @@ func init() {
 	queueSizeMask = queueSize - 1
 }
 
+func invalidateTagCache() {
+	// This function must be fast, since it is called each
+	// time new timeseries is added.
+	atomic.AddUint64(&tagFiltersKeyGen, 1)
+}
+
 var kbPool bytesutil.ByteBufferPool
 
 var indexSearchPool sync.Pool
+var dstTagSetsPool TagSetsPool
 
 type MergeSetIndex struct {
 	tb     *mergeset.Table
-	logger *zap.Logger
+	logger *logger.Logger
 	path   string
-
+	lock   *string
 	queues []chan *indexRow
-	cache  *IndexCache
+
+	cache *IndexCache
 
 	// Deleted tsids
 	deletedTSIDs     atomic.Value
@@ -104,7 +113,9 @@ type MergeSetIndex struct {
 
 func NewMergeSetIndex(opts *Options) (*MergeSetIndex, error) {
 	ms := &MergeSetIndex{
-		path: opts.path,
+		path:   opts.path,
+		lock:   opts.lock,
+		logger: logger.NewLogger(errno.ModuleIndex),
 	}
 
 	return ms, nil
@@ -112,16 +123,11 @@ func NewMergeSetIndex(opts *Options) (*MergeSetIndex, error) {
 
 func (idx *MergeSetIndex) Open() error {
 	tablePath := path.Join(idx.path, MergeSetDirName)
-	tb, err := mergeset.OpenTable(tablePath, invalidateTagCache, mergeIndexRows)
+	tb, err := mergeset.OpenTable(tablePath, invalidateTagCache, mergeIndexRows, idx.lock)
 	if err != nil {
 		return fmt.Errorf("cannot open index:%s, err: %+v", tablePath, err)
 	}
 	idx.tb = tb
-	if logger.GetLogger() == nil {
-		idx.logger = zap.NewNop()
-	} else {
-		idx.logger = logger.GetLogger().With(zap.String("index", "mergeset"))
-	}
 
 	mem := memory.Allowed()
 	idx.cache = NewIndexCache(mem/32, mem/32, mem/16, idx.path)
@@ -150,6 +156,7 @@ func (idx *MergeSetIndex) run() {
 		go func(index int) {
 			for row := range idx.queues[index] {
 				row.Row.SeriesId, row.Err = idx.CreateIndexIfNotExistsByRow(row.Row)
+				row.Row.PrimaryId = row.Row.SeriesId
 				row.Wg.Done()
 			}
 		}(i)
@@ -184,17 +191,9 @@ func (idx *MergeSetIndex) putIndexSearch(is *indexSearch) {
 }
 
 func (idx *MergeSetIndex) GetSeriesIdBySeriesKey(seriesKey []byte, name []byte) (uint64, error) {
-	var err error
-	version, loaded := idx.indexBuilder.loadOrStore(stringinterner.InternSafe(record.Bytes2str(name)))
-	if !loaded {
-		if err = idx.indexBuilder.saveVersion(name, version); err != nil {
-			return 0, err
-		}
-	}
 	vkey := kbPool.Get()
 	defer kbPool.Put(vkey)
 	vkey.B = append(vkey.B[:0], seriesKey...)
-	vkey.B = encoding.MarshalUint16(vkey.B, version)
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.getSeriesIdBySeriesKey(vkey.B)
@@ -241,23 +240,15 @@ func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 		if !ok {
 			return fmt.Errorf("create index failed due to rows are not belong to type row")
 		}
-		version, loaded := idx.indexBuilder.loadOrStore(stringinterner.InternSafe(mmRows.D[mmIdx].Key))
-		if !loaded {
-			if err = idx.indexBuilder.saveVersion([]byte(mmRows.D[mmIdx].Key), version); err != nil {
-				return err
-			}
-		}
+
 		vname.B = append(vname.B[:0], []byte(mmRows.D[mmIdx].Key)...)
-		vname.B = encoding.MarshalUint16(vname.B, version)
 		for rowIdx := range *rows {
 			if (*rows)[rowIdx].SeriesId != 0 {
 				continue
 			}
 
-			// retry get seriesId in Lock
 			vkey.B = append(vkey.B[:0], (*rows)[rowIdx].IndexKey...)
-			vkey.B = encoding.MarshalUint16(vkey.B, version)
-			(*rows)[rowIdx].SeriesId, err = idx.createIndexesIfNotExists(vkey.B, vname.B, (*rows)[rowIdx].Tags, (*rows)[rowIdx].ShardKey)
+			(*rows)[rowIdx].SeriesId, err = idx.createIndexesIfNotExists(vkey.B, vname.B, (*rows)[rowIdx].Tags)
 			if err != nil {
 				return err
 			}
@@ -266,23 +257,32 @@ func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 	return nil
 }
 
+/*
+	for row with no tags, eg: insert foo foo.bar.baz=1
+	use old path
+*/
 func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row) (uint64, error) {
 	vkey := kbPool.Get()
 	defer kbPool.Put(vkey)
 	vname := kbPool.Get()
 	defer kbPool.Put(vname)
 
-	var sid uint64
 	vname.B = append(vname.B[:0], []byte(row.Name)...)
-	vname.B = encoding.MarshalUint16(vname.B, row.Version)
-	// retry get seriesId in Lock
 	vkey.B = append(vkey.B[:0], row.IndexKey...)
-	vkey.B = encoding.MarshalUint16(vkey.B, row.Version)
-	sid, err := idx.createIndexesIfNotExists(vkey.B, vname.B, row.Tags, row.ShardKey)
+
+	if config.EnableTagArray {
+		if row.HasTagArray {
+			sid, err := idx.createIndexesIfNotExistsWithTagArray(vkey.B, vname.B, row.Tags)
+			return sid, err
+		}
+	}
+
+	// original path
+	sid, err := idx.createIndexesIfNotExists(vkey.B, vname.B, row.Tags)
 	return sid, err
 }
 
-func (idx *MergeSetIndex) createIndexesIfNotExists(vkey, vname []byte, tags []influx.Tag, shardKey []byte) (uint64, error) {
+func (idx *MergeSetIndex) createIndexesIfNotExists(vkey, vname []byte, tags []influx.Tag) (uint64, error) {
 	tsid, err := idx.getSeriesIdBySeriesKey(vkey)
 	if err != nil {
 		return 0, err
@@ -298,14 +298,55 @@ func (idx *MergeSetIndex) createIndexesIfNotExists(vkey, vname []byte, tags []in
 		}
 	}(&tsid)
 
-	tsid, err = idx.createIndexes(vkey, vname, tags)
+	tsid, err = idx.createIndexes(vkey, vname, tags, nil, false)
+	return tsid, err
+}
+
+func (idx *MergeSetIndex) createIndexesIfNotExistsWithTagArray(vkey, vname []byte, tags []influx.Tag) (uint64, error) {
+	dstTagSets := dstTagSetsPool.Get()
+	defer dstTagSetsPool.Put(dstTagSets)
+	err := analyzeTagSets(dstTagSets, tags)
+	if err != nil {
+		return 0, err
+	}
+
+	// combineIndexKey = indexkey1 + indexkey2 + ...
+	combineIndexKey := kbPool.Get()
+	defer kbPool.Put(combineIndexKey)
+
+	combineIndexKey.B, err = marshalCombineIndexKeys(vname, dstTagSets.tagsArray, combineIndexKey.B)
+	if err != nil {
+		return 0, err
+	}
+
+	tsid, err := idx.getSeriesIdBySeriesKey(combineIndexKey.B)
+	if err != nil {
+		return 0, err
+	}
+
+	if tsid != 0 {
+		return tsid, nil
+	}
+
+	defer func(id *uint64) {
+		if *id != 0 {
+			idx.cache.PutTSIDToTSIDCache(id, vkey)
+		}
+	}(&tsid)
+
+	tsid, err = idx.createIndexes(combineIndexKey.B, vname, tags, dstTagSets.tagsArray, true)
 	return tsid, err
 }
 
 var idxItemsPool mergeindex.IndexItemsPool
 
-func (idx *MergeSetIndex) createIndexes(seriesKey []byte, name []byte, tags []influx.Tag) (uint64, error) {
-	tsid := GenerateUUID()
+func (idx *MergeSetIndex) createIndexes(seriesKey []byte, name []byte, tags []influx.Tag, tagArray [][]influx.Tag, enableTagArray bool) (uint64, error) {
+	var tsid uint64
+	if config.GetHaEnable() {
+		tsid = idx.indexBuilder.GenerateUUID()
+	} else {
+		tsid = GenerateUUID()
+	}
 
 	ii := idxItemsPool.Get()
 	defer idxItemsPool.Put(ii)
@@ -325,14 +366,18 @@ func (idx *MergeSetIndex) createIndexes(seriesKey []byte, name []byte, tags []in
 
 	// Create Tag -> TSID index
 	compositeKey := kbPool.Get()
-
-	for i := range tags {
-		compositeKey.B = marshalCompositeTagKey(compositeKey.B[:0], name, []byte(tags[i].Key))
-		ii.B = append(ii.B, nsPrefixTagToTSIDs)
-		ii.B = marshalTagValue(ii.B, compositeKey.B)
-		ii.B = marshalTagValue(ii.B, []byte(tags[i].Value))
-		ii.B = encoding.MarshalUint64(ii.B, tsid)
-		ii.Next()
+	if enableTagArray {
+		for _, tags := range tagArray {
+			for i := range tags {
+				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+				ii.Next()
+			}
+		}
+	} else {
+		for i := range tags {
+			ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+			ii.Next()
+		}
 	}
 
 	compositeKey.B = marshalCompositeTagKey(compositeKey.B[:0], name, nil)
@@ -351,13 +396,17 @@ func (idx *MergeSetIndex) createIndexes(seriesKey []byte, name []byte, tags []in
 	return tsid, nil
 }
 
-func (idx *MergeSetIndex) SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error) {
-	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
+// Create Tag -> TSID index
+func (idx *MergeSetIndex) marshalTagToTSIDs(tmpB []byte, dstB []byte, name []byte, tag influx.Tag, tsid uint64) []byte {
+	tmpB = marshalCompositeTagKey(tmpB[:0], name, []byte(tag.Key))
+	dstB = append(dstB, nsPrefixTagToTSIDs)
+	dstB = marshalTagValue(dstB, tmpB)
+	dstB = marshalTagValue(dstB, []byte(tag.Value))
+	dstB = encoding.MarshalUint64(dstB, tsid)
+	return dstB
+}
 
-	if !ok {
-		return 0, nil
-	}
-	name = encoding.MarshalUint16(name, version)
+func (idx *MergeSetIndex) SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error) {
 	if condition == nil {
 		return idx.seriesCardinality(name)
 	}
@@ -370,11 +419,6 @@ func (idx *MergeSetIndex) SeriesCardinality(name []byte, condition influxql.Expr
 }
 
 func (idx *MergeSetIndex) SearchSeries(series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error) {
-	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
-	if !ok {
-		return series, nil
-	}
-	name = encoding.MarshalUint16(name, version)
 	tsids, err := idx.searchTSIDs(name, condition, tr)
 	if err != nil {
 		return series, err
@@ -401,39 +445,50 @@ func (idx *MergeSetIndex) SearchSeries(series [][]byte, name []byte, condition i
 	return series, nil
 }
 
-func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (GroupSeries, error) {
-	var indexSpan, search, tsid_iter, sortTs *tracing.Span
-	if span != nil {
-		indexSpan = span.StartSpan("index_stat").StartPP()
-		defer indexSpan.Finish()
-	}
-	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
-	if !ok {
-		return nil, nil
-	}
+func (idx *MergeSetIndex) SearchSeriesIterator(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (index.SeriesIDIterator, error) {
+	var search *tracing.Span
+
 	// need add version for delete measurement safeguard
-	if indexSpan != nil {
-		search = indexSpan.StartSpan("tsid_search")
+	if span != nil {
+		search = span.StartSpan("tsid_search")
 		search.StartPP()
 	}
-
-	nameWithVer := encoding.MarshalUint16(name, version)
 
 	var tsid uint64
 	var err error
 	tsid, err = idx.GetSeriesIdBySeriesKey(opt.SeriesKey, name)
 	if err != nil {
+		idx.logger.Error("getSeriesIdBySeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
 		return nil, err
 	}
 
 	is := idx.getIndexSearch()
 	defer idx.putIndexSearch(is)
 
-	itr, err := is.measurementSeriesByExprIterator(nameWithVer, opt.Condition, TimeRange{Min: opt.StartTime, Max: opt.EndTime}, opt.GetHintType() == hybridqp.FullSeriesQuery, tsid)
+	itr, err := is.measurementSeriesByExprIterator(name, opt.Condition, TimeRange{Min: opt.StartTime, Max: opt.EndTime}, opt.GetHintType() == hybridqp.FullSeriesQuery, tsid)
 	if search != nil {
 		search.Finish()
 	}
 
+	if err != nil {
+		idx.logger.Error("measurementSeriesByExprIterator fail", zap.Error(err), zap.String("index", "mergeset"))
+		return nil, err
+	}
+	if itr == nil {
+		idx.logger.Warn("itr is nil", zap.String("index", "mergeset"))
+		return nil, nil
+	}
+	return itr, nil
+}
+
+func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, _ interface{}) (GroupSeries, error) {
+	var indexSpan, tsidIter, sortTs *tracing.Span
+	if span != nil {
+		indexSpan = span.StartSpan("index_stat").StartPP()
+		defer indexSpan.Finish()
+	}
+
+	itr, err := idx.SearchSeriesIterator(indexSpan, name, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -441,37 +496,53 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 		return nil, nil
 	}
 
-	var dims []string
-	var totalSeriesKeyLen int64
-	if len(opt.Dimensions) > 0 {
-		dims = make([]string, len(opt.Dimensions))
-		copy(dims, opt.Dimensions)
-		sort.Strings(dims)
+	dims := make([]string, len(opt.Dimensions))
+	copy(dims, opt.Dimensions)
+	sort.Strings(dims)
+	dimPos := genDimensionPosition(opt.Dimensions)
+
+	var tagSetMap map[string]*TagSetInfo
+	var sortedTagSets []*TagSetInfo
+	if opt.GroupByAllDims {
+		sortedTagSets = make([]*TagSetInfo, 0, itr.Ids().Len())
+	} else {
+		tagSetMap = make(map[string]*TagSetInfo)
 	}
 
-	kvReflection := NewTagKeyReflection(opt.Dimensions, dims)
-	tagSets := make(map[string]*TagSetInfo)
 	releaseSeriesInfo := func() {
-		for _, v := range tagSets {
-			v.release()
+		if opt.GroupByAllDims {
+			for i := range sortedTagSets {
+				sortedTagSets[i].release()
+			}
+		} else {
+			for _, v := range tagSetMap {
+				v.release()
+			}
 		}
 	}
 
 	if indexSpan != nil {
-		tsid_iter = indexSpan.StartSpan("tsid_iter")
-		tsid_iter.StartPP()
+		tsidIter = indexSpan.StartSpan("tsid_iter")
+		tsidIter.StartPP()
 	}
 
 	deletedTSIDs := idx.getDeletedTSIDs()
 	var seriesN int
-	var indexKeyBuf []byte // reused
+	var ok bool
 	var groupTagKey []byte // reused
+	var totalSeriesKeyLen int64
+	var tagSet *TagSetInfo
+	var querySeriesUpperBound = syscontrol.GetQuerySeriesLimit()
+	var tagsBuf influx.PointTags
+	var seriesKeys [][]byte
+	var combineSeriesKey []byte
+	var isExpectSeries []bool
 
 	for {
-		var tagsBuf influx.PointTags
 		se, err := itr.Next()
 		if err != nil {
 			releaseSeriesInfo()
+			idx.logger.Error("itr.Next() fail", zap.Error(err), zap.String("index", "mergeset"))
 			return nil, err
 		} else if se.SeriesID == 0 {
 			break
@@ -481,81 +552,104 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 			continue
 		}
 
-		indexKeyBuf, err = idx.searchSeriesKey(indexKeyBuf, se.SeriesID)
+		seriesKeys, isExpectSeries, err := idx.searchSeriesWithTagArray(se.SeriesID, seriesKeys, combineSeriesKey, isExpectSeries, opt.Condition)
 		if err != nil {
 			releaseSeriesInfo()
+			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
 			return nil, err
 		}
 
-		// there is no need to sort tags since it is already sorted when writing point
-		_, err = influx.IndexKeyToTags(indexKeyBuf, true, &tagsBuf)
-		if err != nil {
-			releaseSeriesInfo()
-			return nil, err
+		for i := range seriesKeys {
+			if !isExpectSeries[i] {
+				continue
+			}
+
+			var seriesKey []byte
+			seriesKey = append(seriesKey, seriesKeys[i]...)
+			totalSeriesKeyLen += int64(len(seriesKey))
+			var mLen int
+			groupByAllSortedTag := false
+			// when group by * or group by all sorted tag, groupByAllSortedTag is true
+			// there is no need to sort tags since it is already sorted when writing point
+			tagsBuf, seriesKey, mLen, groupByAllSortedTag, err = influx.Parse2SeriesGroupKey(seriesKey, seriesKey, dims)
+			if err != nil {
+				releaseSeriesInfo()
+				return nil, err
+			}
+
+			if len(dims) > 0 {
+				if groupByAllSortedTag {
+					// when group by all sorted tag, do not need to calculate groupKey again
+					groupTagKey = append(groupTagKey, seriesKey[mLen+1:]...)
+				} else {
+					groupTagKey = MakeGroupTagsKey(dims, tagsBuf, groupTagKey, dimPos)
+				}
+			}
+
+			if opt.GroupByAllDims {
+				tagSet = NewSingleTagSetInfo()
+				tagSet.key = append(tagSet.key, groupTagKey...)
+				sortedTagSets = append(sortedTagSets, tagSet)
+			} else {
+				tagSet, ok = tagSetMap[bytesutil.ToUnsafeString(groupTagKey)]
+				if !ok {
+					tagSet = NewTagSetInfo()
+					tagSet.key = append(tagSet.key, groupTagKey...)
+				}
+				tagSetMap[string(groupTagKey)] = tagSet
+			}
+
+			tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf)
+			groupTagKey = groupTagKey[:0]
+			seriesN++
 		}
 
-		if len(dims) > 0 {
-			kvReflection.Reset()
-			groupTagKey = MakeGroupTagsKey(dims, tagsBuf, groupTagKey, kvReflection)
+		if querySeriesUpperBound > 0 && seriesN >= querySeriesUpperBound {
+			idx.logger.Error("", zap.Error(errno.NewError(errno.ErrQuerySeriesUpperBound)),
+				zap.Int("querySeriesLimit", querySeriesUpperBound),
+				zap.String("index_path", idx.Path()),
+				zap.ByteString("measurement", name),
+			)
+			break
 		}
-
-		tagSet, ok := tagSets[string(groupTagKey)]
-		if !ok {
-			tagSet = NewTagSetInfo()
-			tagSet.key = append(tagSet.key, groupTagKey...)
-		}
-
-		// seriesKey buf will be released when the cursor closed
-		seriesKey := getSeriesKeyBuf()
-		seriesKey = influx.Parse2SeriesKey(indexKeyBuf, seriesKey)
-
-		totalSeriesKeyLen += int64(len(indexKeyBuf))
-		tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf)
-		tagSets[string(groupTagKey)] = tagSet
-		indexKeyBuf = indexKeyBuf[:0]
-		groupTagKey = groupTagKey[:0]
-		seriesN++
 	}
 
-	if tsid_iter != nil {
-		tsid_iter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
-			len(tagSets), seriesN, totalSeriesKeyLen))
-		tsid_iter.Finish()
+	if tsidIter != nil {
+		if !opt.GroupByAllDims {
+			tsidIter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
+				len(tagSetMap), seriesN, totalSeriesKeyLen))
+		} else {
+			tsidIter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
+				len(sortedTagSets), seriesN, totalSeriesKeyLen))
+		}
+		tsidIter.Finish()
 	}
 
 	if indexSpan != nil {
 		sortTs = indexSpan.StartSpan("sort_tagset")
 		sortTs.StartPP()
 	}
-	// Sort the series in each tag set.
-	for _, t := range tagSets {
-		sort.Sort(t)
-	}
 
 	// The TagSets have been created, as a map of TagSets. Just send
 	// the values back as a slice, sorting for consistency.
-	sortedTagsSets := make([]*TagSetInfo, 0, len(tagSets))
-	for _, v := range tagSets {
-		sortedTagsSets = append(sortedTagsSets, v)
+	if !opt.GroupByAllDims {
+		sortedTagSets = make([]*TagSetInfo, 0, len(tagSetMap))
+		for _, v := range tagSetMap {
+			sortedTagSets = append(sortedTagSets, v)
+		}
 	}
-	sort.Sort(GroupSeries(sortedTagsSets))
+	sgs := NewSortGroupSeries(sortedTagSets, opt.Ascending)
+	sort.Sort(sgs)
 
 	if sortTs != nil {
 		sortTs.Finish()
 	}
 
-	return sortedTagsSets, nil
+	return sortedTagSets, nil
 }
 
 func (idx *MergeSetIndex) SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 	return idx.SearchSeries(series, name, condition, DefaultTR)
-}
-
-func (idx *MergeSetIndex) SearchAllSeriesKeys() ([][]byte, error) {
-	is := idx.getIndexSearch()
-	keys, err := is.getAllSeriesKeys()
-	idx.putIndexSearch(is)
-	return keys, err
 }
 
 func (idx *MergeSetIndex) SearchTagValues(name []byte, tagKeys [][]byte, condition influxql.Expr) ([][]string, error) {
@@ -566,58 +660,13 @@ func (idx *MergeSetIndex) SearchTagValues(name []byte, tagKeys [][]byte, conditi
 	is := idx.getIndexSearch()
 	defer idx.putIndexSearch(is)
 
-	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
-	if !ok {
-		return nil, nil
-	}
-
-	name = encoding.MarshalUint16(name, version)
 	return is.searchTagValues(name, tagKeys, condition)
-}
-
-func (idx *MergeSetIndex) SearchAllTagValues(tagKey []byte) (map[string]map[string]struct{}, error) {
-	if len(tagKey) == 0 {
-		return nil, nil
-	}
-
-	is := idx.getIndexSearch()
-	defer idx.putIndexSearch(is)
-
-	result := make(map[string]map[string]struct{}, 16)
-	var err error
-	err = idx.indexBuilder.walkVersions(func(key string, value uint16) error {
-		var tvs map[string]struct{}
-		name := key
-		version, ok := idx.indexBuilder.mVersion[key]
-		if !ok {
-			err = fmt.Errorf("measurement %s does not exist", name)
-			return err
-		}
-
-		tvs, err = is.searchTagValuesBySingleKey(encoding.MarshalUint16([]byte(name), version), tagKey, nil)
-		if err != nil {
-			return err
-		}
-		result[name] = tvs
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
 }
 
 func (idx *MergeSetIndex) SearchTagValuesCardinality(name, tagKey []byte) (uint64, error) {
 	is := idx.getIndexSearch()
 	defer idx.putIndexSearch(is)
 
-	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
-	if !ok {
-		return 0, fmt.Errorf("measurement %s does not exist", name)
-	}
-
-	name = encoding.MarshalUint16(name, version)
 	tagValueMap, err := is.searchTagValuesBySingleKey(name, tagKey, nil)
 	if err != nil {
 		return 0, err
@@ -638,12 +687,11 @@ func (idx *MergeSetIndex) searchSeriesKey(dst []byte, tsid uint64) ([]byte, erro
 	dst, err = is.searchSeriesKey(dst, tsid)
 	idx.putIndexSearch(is)
 	if err == nil {
-		if len(dst) < 3 {
+		if len(dst) == 0 {
 			return nil, fmt.Errorf("invalid seriesKey: %q", dst)
 		}
-		seriesKey := dst[:len(dst)-2]
-		idx.cache.putToSeriesKeyCache(tsid, seriesKey)
-		return seriesKey, nil
+		idx.cache.putToSeriesKeyCache(tsid, dst)
+		return dst, nil
 	}
 
 	return nil, err
@@ -770,6 +818,10 @@ func (idx *MergeSetIndex) dumpSeriesByTsids(tw *tabwriter.Writer, tsids []uint64
 func (idx *MergeSetIndex) Close() error {
 	idx.tb.MustClose()
 
+	for i := 0; i < len(idx.queues); i++ {
+		close(idx.queues[i])
+	}
+
 	if err := idx.cache.close(); err != nil {
 		return err
 	}
@@ -827,12 +879,6 @@ func (idx *MergeSetIndex) DeleteTSIDs(name []byte, condition influxql.Expr, tr T
 		return fmt.Errorf("too much dates [%d] to delete, it must less or equal %d days", maxDate-minDate, maxDaysForSearch)
 	}
 
-	version, ok := idx.indexBuilder.getVersion(record.Bytes2str(name))
-	if !ok {
-		return fmt.Errorf("measurement %s doesn't exist", name)
-	}
-	name = encoding.MarshalUint16(name, version)
-
 	tsids, err := idx.searchTSIDs(name, condition, tr)
 	if err != nil {
 		return err
@@ -877,7 +923,7 @@ func (idx *MergeSetIndex) DebugFlush() {
 	idx.tb.DebugFlush()
 }
 
-func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) *IndexAmRoutine {
+func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	return &IndexAmRoutine{
 		amKeyType:    MergeSet,
 		amOpen:       MergeSetOpen,
@@ -888,7 +934,7 @@ func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) *IndexAmRouti
 		amClose:      MergeSetClose,
 		index:        primaryIndex,
 		primaryIndex: nil,
-	}
+	}, nil
 }
 
 // indexRelation contains MergeSetIndex
@@ -898,8 +944,11 @@ func MergeSetBuild(relation *IndexRelation) error {
 }
 
 func MergeSetOpen(index interface{}) error {
-	mergeindex := index.(*MergeSetIndex)
-	return mergeindex.Open()
+	mergeIndex, ok := index.(*MergeSetIndex)
+	if !ok {
+		return fmt.Errorf("index %v is not a MergeSetIndex", index)
+	}
+	return mergeIndex.Open()
 }
 
 func MergeSetInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row interface{}) (uint64, error) {
@@ -912,9 +961,12 @@ func MergeSetInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, r
 }
 
 // upper function call should analyze result
-func MergeSetScan(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions) (interface{}, error) {
-	mergeindex := index.(*MergeSetIndex)
-	return mergeindex.SearchSeriesWithOpts(span, name, opt)
+func MergeSetScan(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, _ interface{}) (interface{}, error) {
+	mergeIndex, ok := index.(*MergeSetIndex)
+	if !ok {
+		return nil, fmt.Errorf("index %v is not a MergeSetIndex", index)
+	}
+	return mergeIndex.SearchSeriesWithOpts(span, name, opt, nil)
 }
 
 func MergeSetDelete(index interface{}, primaryIndex PrimaryIndex, name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -923,13 +975,24 @@ func MergeSetDelete(index interface{}, primaryIndex PrimaryIndex, name []byte, c
 }
 
 func MergeSetClose(index interface{}) error {
-	mergeindex := index.(*MergeSetIndex)
-	return mergeindex.Close()
+	mergeIndex, ok := index.(*MergeSetIndex)
+	if !ok {
+		return fmt.Errorf("index %v is not a MergeSetIndex", index)
+	}
+	return mergeIndex.Close()
 }
 
 type tagKeyReflection struct {
 	order []int
 	buf   [][]byte
+}
+
+func genDimensionPosition(dims []string) map[string]int {
+	dimPos := make(map[string]int, len(dims))
+	for i, dim := range dims {
+		dimPos[dim] = i
+	}
+	return dimPos
 }
 
 func NewTagKeyReflection(src, curr []string) *tagKeyReflection {
@@ -951,37 +1014,28 @@ func NewTagKeyReflection(src, curr []string) *tagKeyReflection {
 	return t
 }
 
-func (t *tagKeyReflection) Reset() {
-	for i := range t.buf {
-		t.buf[i] = t.buf[i][:0]
-	}
-}
-
-func MakeGroupTagsKey(dims []string, tags influx.PointTags, dst []byte, reflect *tagKeyReflection) []byte {
+func MakeGroupTagsKey(dims []string, tags influx.PointTags, dst []byte, dimPos map[string]int) []byte {
 	if len(dims) == 0 || len(tags) == 0 {
 		return nil
 	}
 
+	result := make([]string, len(dims))
 	i, j := 0, 0
 	for i < len(dims) && j < len(tags) {
 		if dims[i] < tags[j].Key {
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(dims[i])...)
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], []byte{'=', ','}...)
+			result[dimPos[dims[i]]] = dims[i] + "=,"
 			i++
 		} else if dims[i] > tags[j].Key {
 			j++
 		} else {
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(dims[i])...)
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], '=')
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], bytesutil.ToUnsafeBytes(tags[j].Value)...)
-			reflect.buf[reflect.order[i]] = append(reflect.buf[reflect.order[i]], ',')
+			result[dimPos[dims[i]]] = dims[i] + "=" + tags[j].Value + ","
 
 			i++
 			j++
 		}
 	}
-	for k := range reflect.order {
-		dst = append(dst, reflect.buf[k]...)
+	for k := range result {
+		dst = append(dst, bytesutil.ToUnsafeBytes(result[k])...)
 	}
 
 	// skip last ','

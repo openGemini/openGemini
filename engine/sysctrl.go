@@ -18,11 +18,10 @@ package engine
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
-	"time"
 
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
@@ -33,20 +32,34 @@ import (
  curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=compen&switchon=true&allshards=true&shid=4'
  curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=merge&switchon=true&allshards=true&shid=4'
  curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=snapshot&duration=30m'
+ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=downsample_in_order&order=true'
+ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=verifynode&switchon=false'
 */
 
 const (
-	dataFlush    = "flush"
-	compactionEn = "compen"
-	compmerge    = "merge"
-	snapshot     = "snapshot"
-	Failpoint    = "failpoint"
-	Readonly     = "readonly"
+	dataFlush         = "flush"
+	compactionEn      = "compen"
+	compmerge         = "merge"
+	snapshot          = "snapshot"
+	downSampleInOrder = "downsample_in_order"
+	Failpoint         = "failpoint"
+	Readonly          = "readonly"
+	verifyNode        = "verifynode"
 )
 
-var (
-	ErrNoSuchParam = fmt.Errorf("no parameter find")
-)
+func getReqParam(req *netstorage.SysCtrlRequest) (error, int64, bool) {
+	en, err := syscontrol.GetBoolValue(req.Param(), "switchon")
+	if err != nil {
+		log.Error("get switch from param fail", zap.Error(err))
+		return err, 0, false
+	}
+	shardId, err := syscontrol.GetIntValue(req.Param(), "shid")
+	if err != nil {
+		log.Error("get shard id  from param fail", zap.Error(err))
+		return err, 0, false
+	}
+	return nil, shardId, en
+}
 
 func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
 	switch req.Mod() {
@@ -54,56 +67,49 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
 		e.ForceFlush()
 		return nil
 	case compactionEn:
-		allEn, err := boolValue(req.Param(), "allshards")
-		if err != nil {
-			if err != ErrNoSuchParam {
-				log.Error("get compaction switchon from param fail", zap.Error(err))
-				return err
-			}
+		allEn, err := syscontrol.GetBoolValue(req.Param(), "allshards")
+		if err != nil && err != syscontrol.ErrNoSuchParam {
+			log.Error("get compaction switchon from param fail", zap.Error(err))
+			return err
+		}
 
-			en, err := boolValue(req.Param(), "switchon")
-			if err != nil {
-				log.Error("get compaction switchon from param fail", zap.Error(err))
-				return err
-			}
-			shid, err := intValue(req.Param(), "shid")
-			if err != nil {
-				log.Error("get shard id  from param fail", zap.Error(err))
-				return err
-			}
-			compWorker.ShardCompactionSwitch(uint64(shid), en)
-			log.Info("set shard compaction switch", zap.Bool("switch", allEn), zap.Int64("shid", shid))
-		} else {
+		if err == nil {
 			compWorker.SetAllShardsCompactionSwitch(allEn)
 			log.Info("set all shard compaction switch", zap.Bool("switch", allEn))
+			return nil
 		}
+
+		err, shardId, en := getReqParam(req)
+		if err != nil {
+			return err
+		}
+
+		compWorker.ShardCompactionSwitch(uint64(shardId), en)
+		log.Info("set shard compaction switch", zap.Bool("switch", allEn), zap.Int64("shardId", shardId))
 		return nil
 	case compmerge:
-		allEn, err := boolValue(req.Param(), "allshards")
-		if err != nil {
-			if err != ErrNoSuchParam {
-				log.Error("get compaction switchon from param fail", zap.Error(err))
-				return err
-			}
-			en, err := boolValue(req.Param(), "switchon")
-			if err != nil {
-				log.Error("get compaction switchon from param fail", zap.Error(err))
-				return err
-			}
-			shid, err := intValue(req.Param(), "shid")
-			if err != nil {
-				log.Error("get shard id  from param fail", zap.Error(err))
-				return err
-			}
-			compWorker.ShardOutOfOrderMergeSwitch(uint64(shid), en)
-			log.Info("set shard merge switch", zap.Bool("switch", allEn), zap.Int64("shid", shid))
-		} else {
+		allEn, err := syscontrol.GetBoolValue(req.Param(), "allshards")
+		if err != nil && err != syscontrol.ErrNoSuchParam {
+			log.Error("get merge switchon from param fail", zap.Error(err))
+			return err
+
+		}
+		if err == nil {
 			compWorker.SetAllOutOfOrderMergeSwitch(allEn)
 			log.Info("set all shard merge switch", zap.Bool("switch", allEn))
+			return nil
 		}
+
+		err, shardId, en := getReqParam(req)
+		if err != nil {
+			return err
+		}
+
+		compWorker.ShardOutOfOrderMergeSwitch(uint64(shardId), en)
+		log.Info("set shard merge switch", zap.Bool("switch", allEn), zap.Int64("shid", shardId))
 		return nil
 	case snapshot:
-		d, err := durationToInt(req.Param(), "duration")
+		d, err := syscontrol.GetDurationValue(req.Param(), "duration")
 		if err != nil {
 			log.Error("get shard snapshot duration from param fail", zap.Error(err))
 			return err
@@ -120,13 +126,30 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
 		return nil
 	case Readonly:
 		return e.handleReadonly(req)
+	case downSampleInOrder:
+		order, err := syscontrol.GetBoolValue(req.Param(), "order")
+		if err != nil {
+			log.Error("get downsample order from param fail", zap.Error(err))
+			return err
+		}
+		downSampleInorder = order
+		return nil
+	case verifyNode:
+		en, err := syscontrol.GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			log.Error("get verify switch from param fail", zap.Error(err))
+			return err
+		}
+		metaclient.VerifyNodeEn = en
+		log.Info("set verify switch ok", zap.String("switchon", req.Param()["switchon"]))
+		return nil
 	default:
 		return fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}
 }
 
 func handleFailpoint(req *netstorage.SysCtrlRequest) error {
-	switchon, err := boolValue(req.Param(), "switchon")
+	switchon, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 	if err != nil {
 		log.Error("get switchon from param fail", zap.Error(err))
 		return err
@@ -159,7 +182,7 @@ func handleFailpoint(req *netstorage.SysCtrlRequest) error {
 }
 
 func (e *Engine) handleReadonly(req *netstorage.SysCtrlRequest) error {
-	switchon, err := boolValue(req.Param(), "switchon")
+	switchon, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 	if err != nil {
 		log.Error("get switchon from param fail", zap.Error(err))
 		return err
@@ -169,40 +192,4 @@ func (e *Engine) handleReadonly(req *netstorage.SysCtrlRequest) error {
 	e.mu.Unlock()
 	log.Info("readonly status switch ok", zap.String("switchon", req.Param()["switchon"]))
 	return nil
-}
-
-func intValue(param map[string]string, key string) (int64, error) {
-	str, ok := param[key]
-	if !ok {
-		return 0, fmt.Errorf("no %v in parameter", key)
-	}
-
-	n, err := strconv.ParseUint(str, 10, strconv.IntSize)
-	if err != nil {
-		return 0, err
-	}
-	return int64(n), nil
-}
-
-func boolValue(param map[string]string, key string) (bool, error) {
-	switchStr, ok := param[key]
-	if !ok {
-		return false, ErrNoSuchParam
-	}
-	return strconv.ParseBool(switchStr)
-}
-
-func durationToInt(param map[string]string, key string) (time.Duration, error) {
-	text, ok := param[key]
-	if !ok || len(text) == 0 {
-		return 0, ErrNoSuchParam
-	}
-	text = strings.Trim(text, " ")
-	text = strings.ToLower(text)
-	if len(text) < 1 {
-		return 0, fmt.Errorf("unknow low query time")
-	}
-
-	d, err := time.ParseDuration(text)
-	return d, err
 }

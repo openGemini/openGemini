@@ -3,14 +3,12 @@
 import sys
 import os
 import subprocess
-import time
 from datetime import datetime
 import shutil
-import tempfile
-import hashlib
 import re
 import logging
 import argparse
+import stat
 
 ################
 #### OpenGemini Variables
@@ -67,9 +65,9 @@ def run_tests(race, parallel, timeout, no_vet, junit=False):
     if race:
         logging.info("Race is enabled.")
     if parallel is not None:
-        logging.info("Using parallel: {}".format(parallel))
+        logging.info("Using parallel: %s", parallel)
     if timeout is not None:
-        logging.info("Using timeout: {}".format(timeout))
+        logging.info("Using timeout: %s", parallel)
 
     logging.info("Fetching module dependencies...")
     run("go mod download")
@@ -78,14 +76,14 @@ def run_tests(race, parallel, timeout, no_vet, junit=False):
     out = run("go fmt ./...")
     if len(out) > 0:
         logging.error("Code not formatted. Please use 'go fmt ./...' to fix formatting errors.")
-        logging.error("{}".format(out))
+        logging.error(out)
         return False
     if not no_vet:
         logging.info("Running 'go vet'...")
         out = run(go_vet_command)
         if len(out) > 0:
             logging.error("Go vet failed. Please run 'go vet ./...' and fix any errors.")
-            logging.error("{}".format(out))
+            logging.error(out)
             write_to_gobuild(out)
             return False
     else:
@@ -104,29 +102,32 @@ def run_tests(race, parallel, timeout, no_vet, junit=False):
 
         # Retrieve the output from this command.
         logging.info("Running tests...")
-        logging.debug("{}".format(test_command))
+        logging.debug(test_command)
         proc = subprocess.Popen(test_command.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        output, unused_err = proc.communicate()
+        output, unused_err = proc.communicate(timeout=30)
         output = output.decode('utf-8').strip()
 
+        file = 'test-results.xml'
+        flags = os.O_WRONLY | os.O_CREAT
+        modes = stat.S_IWUSR | stat.S_IRUSR
         # Process the output through go-junit-report.
-        with open('test-results.xml', 'w') as f:
-            logging.debug("{}".format("go-junit-report"))
+        with os.fdopen(os.open(file, flags, modes), 'w', encoding="utf-8") as f:
+            logging.debug("go-junit-report")
             junit_proc = subprocess.Popen(["go-junit-report"], stdin=subprocess.PIPE, stdout=f, stderr=subprocess.PIPE)
-            unused_output, err = junit_proc.communicate(output.encode('ascii', 'ignore'))
+            unused_output, err = junit_proc.communicate(output.encode('ascii', 'ignore'), timeout=30)
             if junit_proc.returncode != 0:
-                logging.error("Command '{}' failed with error: {}".format("go-junit-report", err))
+                logging.error("Command '%s' failed with error: %s", "go-junit-report", err)
                 sys.exit(1)
 
         if proc.returncode != 0:
-            logging.error("Command '{}' failed with error: {}".format(test_command, output.encode('ascii', 'ignore')))
+            logging.error("Command '%s' failed with error: %s", test_command, output.encode('ascii', 'ignore'))
             sys.exit(1)
     else:
         logging.info("Running tests...")
         output = run(test_command)
         if "FAIL" in output:
                     write_to_gobuild(output)
-        logging.debug("Test output:\n{}".format(out.encode('ascii', 'ignore')))
+        logging.debug("Test output:\n%s", out.encode('ascii', 'ignore'))
     return True
 
 ################
@@ -137,7 +138,7 @@ def run(command, allow_failure=False, shell=False):
     """Run shell command (convenience wrapper around subprocess).
     """
     out = None
-    logging.debug("{}".format(command))
+    logging.debug(command)
     try:
         if shell:
             out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=shell)
@@ -146,18 +147,18 @@ def run(command, allow_failure=False, shell=False):
         out = out.decode('utf-8').strip()
     except subprocess.CalledProcessError as e:
         if allow_failure:
-            logging.warn("Command '{}' failed with error: {}".format(command, e.output))
+            logging.warning("Command '%s' failed with error: %s", command, e.output)
             return None
         else:
-            logging.error("Command '{}' failed with error: {}".format(command, e.output))
+            logging.error("Command '%s' failed with error: %s", command, e.output)
             write_to_gobuild(e.output)
             sys.exit(1)
     except OSError as e:
         if allow_failure:
-            logging.warn("Command '{}' failed with error: {}".format(command, e))
+            logging.warning("Command '%s' failed with error: %s", command, e)
             return out
         else:
-            logging.error("Command '{}' failed with error: {}".format(command, e))
+            logging.error("Command '%s' failed with error: %s", command, e)
             write_to_gobuild(e.output)
             sys.exit(1)
     else:
@@ -169,12 +170,12 @@ def increment_minor_version(version):
     """
     ver_list = version.split('.')
     if len(ver_list) != 3:
-        logging.warn("Could not determine how to increment version '{}', will just use provided version.".format(version))
+        logging.warning("Could not determine how to increment version '%s', will just use provided version.", version)
         return version
     ver_list[1] = str(int(ver_list[1]) + 1)
     ver_list[2] = str(0)
     inc_version = '.'.join(ver_list)
-    logging.debug("Incremented version from '{}' to '{}'.".format(version, inc_version))
+    logging.debug("Incremented version from '%s' to '%s'.", version, inc_version)
     return inc_version
 
 def get_current_version_tag():
@@ -272,11 +273,11 @@ def check_environ(build_dir = None):
     """
     logging.info("Checking environment...")
     for v in [ "GOPATH", "GOBIN", "GOROOT" ]:
-        logging.debug("Using '{}' for {}".format(os.environ.get(v), v))
+        logging.debug("Using '%s' for %s", os.environ.get(v), v)
 
     cwd = os.getcwd()
     if build_dir is None and os.environ.get("GOPATH") and os.environ.get("GOPATH") in cwd:
-        logging.warn("Your current directory is under your GOPATH. This may lead to build failures when using modules.")
+        logging.warning("Your current directory is under your GOPATH. This may lead to build failures when using modules.")
     return True
 
 def check_prereqs():
@@ -285,7 +286,7 @@ def check_prereqs():
     logging.info("Checking for dependencies...")
     for req in prereqs:
         if not check_path_for(req):
-            logging.error("Could not find dependency: {}".format(req))
+            logging.error("Could not find dependency: %s", req)
             return False
     return True
 
@@ -296,33 +297,35 @@ def build(version=None,
           race=False,
           clean=False,
           outdir=".",
-          tags=[],
+          tags=None,
           static=False):
     """Build each target for the specified architecture and platform.
     """
-    logging.info("Starting build for {}/{}...".format(platform, arch))
-    logging.info("Using Go version: {}".format(get_go_version()))
-    logging.info("Using git branch: {}".format(get_current_branch()))
-    logging.info("Using git commit: {}".format(get_current_commit()))
+    if tags is None:
+        tags = []
+    logging.info("Starting build for %s/%s...", platform, arch)
+    logging.info("Using Go version: %s", get_go_version())
+    logging.info("Using git branch: %s", get_current_branch())
+    logging.info("Using git commit: %s", get_current_commit())
     if static:
         logging.info("Using statically-compiled output.")
     if race:
         logging.info("Race is enabled.")
     if len(tags) > 0:
-        logging.info("Using build tags: {}".format(','.join(tags)))
+        logging.info("Using build tags: %s", ','.join(tags))
 
-    logging.info("Sending build output to: {}".format(outdir))
+    logging.info("Sending build output to: %s", outdir)
     if not os.path.exists(outdir):
         os.makedirs(outdir)
     elif clean and outdir != '/' and outdir != ".":
-        logging.info("Cleaning build directory '{}' before building.".format(outdir))
+        logging.info("Cleaning build directory '%s' before building.", outdir)
         shutil.rmtree(outdir)
         os.makedirs(outdir)
 
-    logging.info("Using version '{}' for build.".format(version))
+    logging.info("Using version '%s' for build.", version)
 
     for target, path in targets.items():
-        logging.info("Building target: {}".format(target))
+        logging.info("Building target: %s", target)
         build_command = ""
 
         # Handle static binary output
@@ -346,7 +349,7 @@ def build(version=None,
                 # TODO(rossmcdonald) - Verify this is the correct setting for arm64
                 build_command += "GOARM=7 "
             else:
-                logging.error("Invalid ARM architecture specified: {}".format(arch))
+                logging.error("Invalid ARM architecture specified: %s", arch)
                 logging.error("Please specify either 'armel', 'armhf', or 'arm64'.")
                 return False
         if "arm" in arch:
@@ -373,14 +376,19 @@ def build(version=None,
         logging.info(build_command)
         run(build_command, shell=True)
         end_time = datetime.utcnow()
-        logging.info("Time taken: {}s".format((end_time - start_time).total_seconds()))
+        logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
     return True
+
 
 def write_to_gobuild(content):
     logging.info("write to file")
-    with open(gobuild_out, 'wb+') as f:
+
+    flags = os.O_WRONLY | os.O_CREAT
+    modes = stat.S_IWUSR | stat.S_IRUSR
+    with os.fdopen(os.open(gobuild_out, flags, modes), 'w', encoding="utf-8") as f:
         f.write("error\n")
         f.write(content)
+
 
 def main(args):
     global PACKAGE_NAME
@@ -408,7 +416,7 @@ def main(args):
     orig_branch = get_current_branch()
 
     if args.platform not in supported_builds and args.platform != 'all':
-        logging.error("Invalid build platform: {}".format(args.platform))
+        logging.error("Invalid build platform: %s", args.platform)
         return 1
 
     build_output = {}
@@ -417,10 +425,10 @@ def main(args):
         logging.error("Can only specify one branch or commit to build from.")
         return 1
     elif args.branch != orig_branch:
-        logging.info("Moving to git branch: {}".format(args.branch))
+        logging.info("Moving to git branch: %s", args.branch)
         run("git checkout {}".format(args.branch))
     elif args.commit != orig_commit:
-        logging.info("Moving to git commit: {}".format(args.commit))
+        logging.info("Moving to git commit: %s", args.commit)
         run("git checkout {}".format(args.commit))
 
     if not args.no_get:
@@ -447,7 +455,7 @@ def main(args):
             archs = supported_builds.get(platform)
         else:
             if args.arch not in supported_builds.get(platform):
-                logging.error("Invalid build arch: {}".format(args.arch))
+                logging.error("Invalid build arch: %s", args.arch)
                 return 1
             archs = [args.arch]
 
@@ -468,10 +476,11 @@ def main(args):
             build_output.get(platform).update( { arch : od } )
 
     if orig_branch != get_current_branch():
-        logging.info("Moving back to original git branch: {}".format(orig_branch))
+        logging.info("Moving back to original git branch: %s", orig_branch)
         run("git checkout {}".format(orig_branch))
 
     return 0
+
 
 if __name__ == '__main__':
     LOG_LEVEL = logging.INFO
@@ -569,6 +578,6 @@ if __name__ == '__main__':
                         metavar='<timeout>',
                         type=str,
                         help='Timeout for tests before failing')
-    args = parser.parse_args()
+    main_args = parser.parse_args()
     print_banner()
-    sys.exit(main(args))
+    sys.exit(main(main_args))

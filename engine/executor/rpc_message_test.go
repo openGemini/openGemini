@@ -131,7 +131,7 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	qm.Add(w.Sequence(), c)
 	defer qm.Finish(w.Sequence())
 
-	if err := w.Response(executor.NewErrorMessage("some error"), true); err != nil {
+	if err := w.Response(executor.NewErrorMessage(0, "some error"), true); err != nil {
 		return err
 	}
 
@@ -226,6 +226,6 @@ func TestHandlerError(t *testing.T) {
 	err := client.Handle(msg)
 	assert.EqualError(t, err, fmt.Sprintf("invalid data type, exp: *rpc.Message, got: %s", reflect.TypeOf(msg)))
 
-	err = client.Handle(executor.NewErrorMessage("error"))
+	err = client.Handle(executor.NewErrorMessage(0, "error"))
 	assert.EqualError(t, err, fmt.Sprintf("unknown message type: %d", executor.ErrorMessage))
 }

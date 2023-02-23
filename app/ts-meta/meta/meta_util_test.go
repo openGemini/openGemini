@@ -28,10 +28,12 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/tcp"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"go.uber.org/zap"
@@ -72,7 +74,6 @@ func NewMetaConfig(dir, ip string) (*config.Meta, error) {
 	c := config.NewMeta()
 	c.ClusterTracing = true
 	_, err := toml.Decode(fmt.Sprintf(`
-join = ["%s:9092"]
 dir = "%s"
 logging-enabled = true
 bind-address="%s:9088"
@@ -85,7 +86,7 @@ leader-lease-timeout = "500ms"
 commit-timeout = "50ms"
 split-row-threshold = 1000
 imbalance-factor = 0.3
-`, ip, dir, ip, ip, ip), c)
+`, dir, ip, ip, ip), c)
 	c.JoinPeers = []string{ip + ":9092"}
 	return c, err
 }
@@ -143,6 +144,59 @@ func InitStore(dir string, ip string) (*MetaService, error) {
 		return ms, err
 	}
 	return ms, nil
+}
+
+type MockMetaService struct {
+	ln      net.Listener
+	service *Service
+}
+
+func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
+	transport.NewMetaNodeManager().Clear()
+
+	c, err := NewMetaConfig(dir, ip)
+	if err != nil {
+		return nil, err
+	}
+
+	mms := &MockMetaService{}
+	mms.service = NewService(c, nil)
+	mms.service.Node = metaclient.NewNode(c.Dir)
+	mms.ln, mms.service.RaftListener, err = MakeRaftListen(c)
+	if err != nil {
+		return nil, err
+	}
+	mms.service.msm = NewMigrateStateMachine()
+	mms.service.balanceManager = NewBalanceManager()
+	balanceInterval = 200 * time.Millisecond
+
+	if err := mms.service.Open(); err != nil {
+		mms.Close()
+		return nil, err
+	}
+	return mms, nil
+}
+
+func (mms *MockMetaService) Close() {
+	mms.service.Close()
+	mms.ln.Close()
+	config.SetHaEnable(false)
+}
+
+func (mms *MockMetaService) GetService() *Service {
+	return mms.service
+}
+
+func (mms *MockMetaService) GetListener() net.Listener {
+	return mms.ln
+}
+
+func (mms *MockMetaService) GetStore() *Store {
+	return mms.service.store
+}
+
+func (mms *MockMetaService) GetConfig() *config.Meta {
+	return mms.service.config
 }
 
 type MockHandler struct {
@@ -292,8 +346,8 @@ func GenerateGetShardRangeInfoCmd(db, rp string, shardId uint64) *proto2.Command
 	return cmd
 }
 
-func GenerateShardDurationCmd(index uint64, pts []uint32) *proto2.Command {
-	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: pts}
+func GenerateShardDurationCmd(index uint64, pts []uint32, nodeId uint64) *proto2.Command {
+	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: pts, NodeId: proto.Uint64(nodeId)}
 	t := proto2.Command_ShardDurationCommand
 	cmd := &proto2.Command{Type: &t}
 	if err := proto.SetExtension(cmd, proto2.E_ShardDurationCommand_Command, val); err != nil {
@@ -336,6 +390,158 @@ func GenerateMarkMeasurementDeleteCmd(db, rp, mst string) *proto2.Command {
 	t1 := proto2.Command_MarkMeasurementDeleteCommand
 	cmd := &proto2.Command{Type: &t1}
 	if err := proto.SetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+type MockStore interface {
+	GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
+		shardId uint64, idxes []int64) ([]string, error)
+	DeleteDatabase(node *meta2.DataNode, database string, ptId uint32) error
+	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, ptId uint32) error
+	DeleteMeasurement(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
+	MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
+}
+
+type MockNetStorage struct {
+	GetShardSplitPointsFn func(node *meta2.DataNode, database string, pt uint32,
+		shardId uint64, idxes []int64) ([]string, error)
+	DeleteDatabaseFn        func(node *meta2.DataNode, database string, ptId uint32) error
+	DeleteRetentionPolicyFn func(node *meta2.DataNode, db string, rp string, ptId uint32) error
+	DeleteMeasurementFn     func(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
+	MigratePtFn             func(nodeID uint64, data transport.Codec, cb transport.Callback) error
+}
+
+func (s *MockNetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
+	shardId uint64, idxes []int64) ([]string, error) {
+	return s.GetShardSplitPointsFn(node, database, pt, shardId, idxes)
+}
+
+func (s *MockNetStorage) DeleteDatabase(node *meta2.DataNode, database string, ptId uint32) error {
+	return s.DeleteDatabaseFn(node, database, ptId)
+}
+
+func (s *MockNetStorage) DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, ptId uint32) error {
+	return s.DeleteRetentionPolicyFn(node, db, rp, ptId)
+}
+
+func (s *MockNetStorage) DeleteMeasurement(node *meta2.DataNode, db, rp, name string, shardIds []uint64) error {
+	return s.DeleteMeasurementFn(node, db, rp, name, shardIds)
+}
+
+func (s *MockNetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error {
+	return s.MigratePtFn(nodeID, data, cb)
+}
+
+func NewMockNetStorage() *MockNetStorage {
+	netStore := &MockNetStorage{}
+	netStore.DeleteDatabaseFn = func(node *meta2.DataNode, database string, ptId uint32) error {
+		return nil
+	}
+	netStore.DeleteRetentionPolicyFn = func(node *meta2.DataNode, db string, rp string, ptId uint32) error {
+		return nil
+	}
+	netStore.DeleteMeasurementFn = func(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error {
+		return nil
+	}
+	netStore.GetShardSplitPointsFn = func(node *meta2.DataNode, database string, pt uint32, shardId uint64, idxes []int64) ([]string, error) {
+		return nil, nil
+	}
+	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
+		cb.Handle(&netstorage.PtResponse{})
+		return nil
+	}
+	return netStore
+}
+
+func GenerateCreateDownSampleCmd(db, rp string, duration time.Duration, sampleIntervals, timeIntervals []time.Duration, calls []*meta2.DownSampleOperators) *proto2.Command {
+	val := &proto2.CreateDownSamplePolicyCommand{
+		Database: proto.String(db),
+		Name:     proto.String(rp),
+	}
+	info := make([]*meta2.DownSamplePolicy, len(sampleIntervals))
+	for i := range sampleIntervals {
+		info[i] = &meta2.DownSamplePolicy{
+			SampleInterval: sampleIntervals[i],
+			TimeInterval:   timeIntervals[i],
+		}
+	}
+	dp := &meta2.DownSamplePolicyInfo{
+		Duration:           duration,
+		DownSamplePolicies: info,
+		Calls:              calls,
+	}
+	val.DownSamplePolicyInfo = dp.Marshal()
+	t1 := proto2.Command_CreateDownSamplePolicyCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateUpdateShardDownSampleInfoCmd(ident *meta2.ShardIdentifier) *proto2.Command {
+	val := &proto2.UpdateShardDownSampleInfoCommand{
+		Ident: ident.Marshal(),
+	}
+	t1 := proto2.Command_UpdateShardDownSampleInfoCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateDropDownSampleCmd(db, rp string, dropAll bool) *proto2.Command {
+	val := &proto2.DropDownSamplePolicyCommand{
+		Database: proto.String(db),
+		RpName:   proto.String(rp),
+		DropAll:  proto.Bool(dropAll),
+	}
+	t1 := proto2.Command_DropDownSamplePolicyCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateCreateStreamCmd(db, rp, srcMst, desMst, name string, calls []*meta2.StreamCall, dims []string, id uint64, delay time.Duration) *proto2.Command {
+	val := &proto2.CreateStreamCommand{}
+	info := &meta2.StreamInfo{
+		Name: name,
+		ID:   id,
+		SrcMst: &meta2.StreamMeasurementInfo{
+			Name:            srcMst,
+			Database:        db,
+			RetentionPolicy: rp,
+		},
+		DesMst: &meta2.StreamMeasurementInfo{
+			Name:            desMst,
+			Database:        db,
+			RetentionPolicy: rp,
+		},
+		Dims:  dims,
+		Calls: calls,
+		Delay: delay,
+	}
+	val.StreamInfo = info.Marshal()
+	t1 := proto2.Command_CreateStreamCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_CreateStreamCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateDropStreamCmd(name string) *proto2.Command {
+	val := &proto2.DropStreamCommand{
+		Name: proto.String(name),
+	}
+	t1 := proto2.Command_DropStreamCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_DropStreamCommand_Command, val); err != nil {
 		panic(err)
 	}
 	return cmd

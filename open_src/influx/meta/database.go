@@ -182,6 +182,7 @@ type PtInfo struct {
 	Owner  PtOwner
 	Status PtStatus
 	PtId   uint32
+	Ver    uint64
 }
 
 func GetNodeDBPts(pi DBPtInfos, nodeId uint64) []uint32 {
@@ -198,6 +199,7 @@ func (pi *PtInfo) Marshal() *proto2.PtInfo {
 	pb := &proto2.PtInfo{
 		Status: proto.Uint32(uint32(pi.Status)),
 		PtId:   proto.Uint32(pi.PtId),
+		Ver:    proto.Uint64(pi.Ver),
 	}
 	pb.Owner = pi.Owner.marshal()
 	return pb
@@ -207,6 +209,7 @@ func (pi *PtInfo) unmarshal(pb *proto2.PtInfo) {
 	pi.Status = PtStatus(pb.GetStatus())
 	pi.Owner.unmarshal(pb.Owner)
 	pi.PtId = pb.GetPtId()
+	pi.Ver = pb.GetVer()
 }
 
 func (di *DatabaseInfo) WalkRetentionPolicy(fn func(rp *RetentionPolicyInfo)) {

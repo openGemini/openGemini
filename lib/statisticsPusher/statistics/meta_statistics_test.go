@@ -104,3 +104,35 @@ func TestMetaStatCollector_Clear(t *testing.T) {
 	col.Clear(statistics.TypeMetaRaftStatItem)
 	assert.Equal(t, 0, len(col.Items()))
 }
+
+func Test_SaveMetadataNodes_enable(t *testing.T) {
+	statistics.MetadataInstance = statistics.NewMetadataStatistics(true)
+	defer func() {
+		statistics.MetadataInstance = nil
+	}()
+
+	statistics.MetadataInstance.SaveMetadataNodes("test", "127.0.0.1", 1, 0)
+
+	buf, err := statistics.MetadataInstance.Collect(nil)
+	assert.NoError(t, err)
+	assert.Contains(t, string(buf), "Category=test")
+	assert.Contains(t, string(buf), `Hostname=127.0.0.1`)
+	assert.Contains(t, string(buf), `NodeID=1`)
+	assert.Contains(t, string(buf), `Status=0`)
+}
+
+func Test_SaveMetadataParam_enable(t *testing.T) {
+	statistics.MetadataInstance = statistics.NewMetadataStatistics(true)
+	defer func() {
+		statistics.MetadataInstance = nil
+	}()
+
+	statistics.MetadataInstance.SaveMetadataParam("param", true, false, 2)
+
+	buf, err := statistics.MetadataInstance.Collect(nil)
+	assert.NoError(t, err)
+	assert.Contains(t, string(buf), "Category=param")
+	assert.Contains(t, string(buf), "TakeOverEnabled=true")
+	assert.Contains(t, string(buf), "BalancerEnabled=false")
+	assert.Contains(t, string(buf), "PtNumPerNode=2")
+}

@@ -21,9 +21,7 @@ import (
 	"fmt"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logger"
-	"go.uber.org/zap"
+	"github.com/openGemini/openGemini/lib/pool"
 )
 
 type HeuInstruction interface {
@@ -39,6 +37,16 @@ type HeuPlanner interface {
 
 type RuleSet map[OptRule]struct{}
 
+var listPool = pool.NewListPool()
+
+var sqlHeuInstruction []HeuInstruction
+var storeHeuInstruction []HeuInstruction
+
+func init() {
+	initSqlHeuInstruction()
+	initStoreHeuInstruction()
+}
+
 func (rs RuleSet) Add(rule OptRule) {
 	rs[rule] = struct{}{}
 }
@@ -47,43 +55,6 @@ func (rs RuleSet) AddAll(ruleSet RuleSet) {
 	for rule := range ruleSet {
 		rs[rule] = struct{}{}
 	}
-}
-
-type BeginGroup struct {
-}
-
-func NewBeginGroup() *BeginGroup {
-	return &BeginGroup{}
-}
-
-func (g *BeginGroup) Initialize(clearCache bool) {
-
-}
-
-func (g *BeginGroup) Execute(planner HeuPlanner) {
-	planner.ExecuteInstruction(g)
-}
-
-type EndGroup struct {
-	ruleSet    RuleSet
-	collecting bool
-}
-
-func NewEndGroup() *EndGroup {
-	return &EndGroup{}
-}
-
-func (g *EndGroup) Initialize(clearCache bool) {
-	if !clearCache {
-		return
-	}
-
-	g.ruleSet = make(RuleSet)
-	g.collecting = true
-}
-
-func (g *EndGroup) Execute(planner HeuPlanner) {
-	planner.ExecuteInstruction(g)
 }
 
 type RuleInstruction struct {
@@ -127,7 +98,6 @@ type HeuProgram struct {
 	instructions []HeuInstruction
 	matchLimit   int
 	matchOrder   HeuMatchOrder
-	group        *EndGroup
 }
 
 func NewHeuProgram(instructions []HeuInstruction) *HeuProgram {
@@ -141,41 +111,10 @@ func NewHeuProgram(instructions []HeuInstruction) *HeuProgram {
 func (p *HeuProgram) Initialize(clearCache bool) {
 	p.matchLimit = int(^uint(0) >> 1)
 	p.matchOrder = DEPTH_FIRST
-	p.group = nil
 
 	for _, instruction := range p.instructions {
 		instruction.Initialize(clearCache)
 	}
-}
-
-type HeuProgramBuilder struct {
-	instructions []HeuInstruction
-	group        *BeginGroup
-}
-
-func NewHeuProgramBuilder() *HeuProgramBuilder {
-	return &HeuProgramBuilder{
-		instructions: nil,
-		group:        nil,
-	}
-}
-
-func (b *HeuProgramBuilder) AddRuleCatagory(ruleCatagory OptRuleCatagory) *HeuProgramBuilder {
-	ri := NewRuleInstruction(ruleCatagory)
-	b.instructions = append(b.instructions, ri)
-	return b
-}
-
-func (b *HeuProgramBuilder) Clear() {
-	b.instructions = nil
-	b.group = nil
-}
-
-func (b *HeuProgramBuilder) Build() *HeuProgram {
-	program := NewHeuProgram(b.instructions)
-	b.Clear()
-
-	return program
 }
 
 type HeuEdge struct {
@@ -526,13 +465,13 @@ func (iter *GraphIterator) Size() int {
 }
 
 type HeuPlannerImpl struct {
-	mainProgram     *HeuProgram
-	currentProgram  *HeuProgram
+	mainProgram    *HeuProgram
+	currentProgram *HeuProgram
+	// deprecation, only for mock or test
 	mapDescToRule   map[string]OptRule
 	dag             *HeuDag
 	root            *HeuVertex
 	nTransformation int
-	heuLogger       *logger.Logger
 }
 
 func NewHeuPlannerImpl(program *HeuProgram) *HeuPlannerImpl {
@@ -543,7 +482,6 @@ func NewHeuPlannerImpl(program *HeuProgram) *HeuPlannerImpl {
 		dag:             NewHeuDag(),
 		root:            nil,
 		nTransformation: 0,
-		heuLogger:       logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "HeuPlanner")),
 	}
 
 	return planner
@@ -554,20 +492,24 @@ func (p *HeuPlannerImpl) Vertex(node hybridqp.QueryNode) (*HeuVertex, bool) {
 }
 
 func (p *HeuPlannerImpl) AddRule(rule OptRule) bool {
+	b, _ := AddRule(p.mapDescToRule, rule)
+	return b
+}
+
+func AddRule(mapDescToRule map[string]OptRule, rule OptRule) (bool, map[string]OptRule) {
 	description := rule.Description()
-	existingRule, ok := p.mapDescToRule[description]
+	existingRule, ok := mapDescToRule[description]
 
 	if ok {
 		if existingRule.Equals(rule) {
-			return false
+			return false, mapDescToRule
 		} else {
 			panic(fmt.Sprintf("description of rules must be unique, existing rule(%v), new rule(%v)", existingRule, rule))
 		}
 	}
 
-	p.mapDescToRule[description] = rule
-
-	return true
+	mapDescToRule[description] = rule
+	return true, mapDescToRule
 }
 
 func (p *HeuPlannerImpl) equalNodes(lhs []hybridqp.QueryNode, rhs []hybridqp.QueryNode) bool {
@@ -654,10 +596,6 @@ func (p *HeuPlannerImpl) buildFinalPlan(vertex *HeuVertex) hybridqp.QueryNode {
 
 func (p *HeuPlannerImpl) ExecuteInstruction(instruction HeuInstruction) {
 	switch t := instruction.(type) {
-	case *BeginGroup:
-		p.executeBeginGroup(t)
-	case *EndGroup:
-		p.executeEndGroup(t)
 	case *RuleInstruction:
 		p.executeRuleInstruction(t)
 	default:
@@ -666,19 +604,13 @@ func (p *HeuPlannerImpl) ExecuteInstruction(instruction HeuInstruction) {
 }
 
 func (p *HeuPlannerImpl) skippingGroup() bool {
-	if p.currentProgram != nil && p.currentProgram.group != nil {
-		return !p.currentProgram.group.collecting
-	} else {
-		return false
-	}
+	return false
 }
 
 func (p *HeuPlannerImpl) executeRuleInstruction(instruction *RuleInstruction) {
 	if p.skippingGroup() {
 		return
 	}
-
-	p.heuLogger.Debug(fmt.Sprintf("Apply rule type %v", instruction))
 
 	if instruction.ruleSet == nil {
 		instruction.ruleSet = make(RuleSet)
@@ -694,12 +626,6 @@ func (p *HeuPlannerImpl) executeRuleInstruction(instruction *RuleInstruction) {
 }
 
 func (p *HeuPlannerImpl) applyRules(ruleSet RuleSet, forceConversions bool) {
-	if p.currentProgram.group != nil {
-		ruleSet.AddAll(p.currentProgram.group.ruleSet)
-		return
-	}
-	p.heuLogger.Debug(fmt.Sprintf("Apply rule set %v", ruleSet))
-
 	forceRestartAfterTransformation := p.currentProgram.matchOrder != ARBITRARY &&
 		p.currentProgram.matchOrder != DEPTH_FIRST
 	nMatches := 0
@@ -755,17 +681,22 @@ func (p *HeuPlannerImpl) applyRule(rule OptRule, vertex *HeuVertex, forceConvers
 		return nil
 	}
 
-	parent := list.New()
-	nodes := list.New()
-	nodeChildren := make(map[hybridqp.QueryNode][]hybridqp.QueryNode)
+	// prune advance for type unmatched
+	if rule.GetOperand().Policy() != AFTER && !rule.GetOperand().Matches(vertex.node) {
+		return nil
+	}
 
-	match := p.matchOperands(rule.GetOperand(), vertex.node, nodes, nodeChildren)
+	nodes := listPool.Get()
+	defer func() {
+		listPool.Put(nodes)
+	}()
 
+	match := p.matchOperands(rule.GetOperand(), vertex.node, nodes)
 	if !match {
 		return nil
 	}
 
-	call := NewOptRuleCall(p, rule.GetOperand(), p.nodeListToSlice(nodes), nodeChildren, p.nodeListToSlice(parent))
+	call := NewOptRuleCall(p, rule.GetOperand(), p.nodeListToSlice(nodes))
 
 	if !rule.Matches(call) {
 		return nil
@@ -830,8 +761,7 @@ func (p *HeuPlannerImpl) fireRule(call *OptRuleCall) {
 
 func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 	node hybridqp.QueryNode,
-	nodes *list.List,
-	nodeChildren map[hybridqp.QueryNode][]hybridqp.QueryNode) bool {
+	nodes *list.List) bool {
 
 	if operand.Policy() == AFTER {
 		for _, node := range node.Children() {
@@ -886,7 +816,7 @@ func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 			for _, child := range children {
 				midChild := child.Clone()
 				for {
-					matchChild := p.matchOperands(operandChild, midChild.(*HeuVertex).Node(), nodes, nodeChildren)
+					matchChild := p.matchOperands(operandChild, midChild.(*HeuVertex).Node(), nodes)
 					if matchChild {
 						match = true
 						break
@@ -907,7 +837,7 @@ func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 		for _, operandChild := range operandChildren {
 			match := false
 			for _, child := range children {
-				match = p.matchOperands(operandChild, child.(*HeuVertex).Node(), nodes, nodeChildren)
+				match = p.matchOperands(operandChild, child.(*HeuVertex).Node(), nodes)
 				if match {
 					break
 				}
@@ -917,11 +847,6 @@ func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 				return false
 			}
 		}
-		nodes := make([]hybridqp.QueryNode, 0, len(children))
-		for _, child := range children {
-			nodes = append(nodes, child.(*HeuVertex).Node())
-		}
-		nodeChildren[node] = nodes
 		return true
 	default:
 		operandChildren := operand.Children()
@@ -930,7 +855,7 @@ func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 		}
 
 		for i, operandChild := range operandChildren {
-			match := p.matchOperands(operandChild, children[i].(*HeuVertex).Node(), nodes, nodeChildren)
+			match := p.matchOperands(operandChild, children[i].(*HeuVertex).Node(), nodes)
 			if !match {
 				return false
 			}
@@ -963,21 +888,13 @@ func (p *HeuPlannerImpl) depthFirstApply(iter *GraphIterator, ruleSet RuleSet, f
 	return nMatches
 }
 
-func (p *HeuPlannerImpl) executeBeginGroup(group *BeginGroup) {
-	panic("impl me")
-}
-
-func (p *HeuPlannerImpl) executeEndGroup(group *EndGroup) {
-	panic("impl me")
-}
-
 func (p *HeuPlannerImpl) executeProgram(program *HeuProgram) {
 	savedProgram := p.currentProgram
 	p.currentProgram = program
-	p.currentProgram.Initialize(program == p.mainProgram)
+	p.currentProgram.Initialize(false)
 
 	for _, instruction := range p.currentProgram.instructions {
-		instruction.Execute(p)
+		p.ExecuteInstruction(instruction)
 	}
 
 	p.currentProgram = savedProgram
@@ -1000,4 +917,87 @@ func IsSubTreeEqual(node hybridqp.QueryNode, comparedNode hybridqp.QueryNode) bo
 			return false
 		}
 	}
+}
+
+func initSqlHeuInstruction() {
+	rules := []OptRuleCatagory{
+		RULE_SUBQUERY,
+		RULE_PUSHDOWN_LIMIT,
+		RULE_PUSHDOWN_AGG,
+		RULE_SPREAD_AGG,
+		RULE_HEIMADLL_PUSHDOWN,
+	}
+	for _, r := range rules {
+		ri := NewRuleInstruction(r)
+		sqlHeuInstruction = append(sqlHeuInstruction, ri)
+	}
+	mapDescToRule := make(map[string]OptRule)
+	AddRule(mapDescToRule, NewAggPushDownToSubQueryRule(""))
+	AddRule(mapDescToRule, NewAggToProjectInSubQueryRule(""))
+	AddRule(mapDescToRule, NewReaderUpdateInSubQueryRule(""))
+
+	AddRule(mapDescToRule, NewLimitPushdownToExchangeRule(""))
+	AddRule(mapDescToRule, NewLimitPushdownToReaderRule(""))
+	AddRule(mapDescToRule, NewLimitPushdownToSeriesRule(""))
+	AddRule(mapDescToRule, NewAggPushdownToExchangeRule(""))
+	AddRule(mapDescToRule, NewAggPushdownToReaderRule(""))
+	AddRule(mapDescToRule, NewAggPushdownToSeriesRule(""))
+
+	AddRule(mapDescToRule, NewCastorAggCutRule(""))
+
+	AddRule(mapDescToRule, NewAggSpreadToSortAppendRule(""))
+	AddRule(mapDescToRule, NewAggSpreadToExchangeRule(""))
+	AddRule(mapDescToRule, NewAggSpreadToReaderRule(""))
+	AddRule(mapDescToRule, NewSlideWindowSpreadRule(""))
+
+	for _, rule := range mapDescToRule {
+		for i := range sqlHeuInstruction {
+			instruction, _ := sqlHeuInstruction[i].(*RuleInstruction)
+			if instruction.ruleSet == nil {
+				instruction.ruleSet = make(RuleSet)
+			}
+			if rule.Catagory() == instruction.RuleCatagory() {
+				instruction.ruleSet.Add(rule)
+				break
+			}
+		}
+	}
+}
+
+func initStoreHeuInstruction() {
+	rules := []OptRuleCatagory{
+		RULE_SPREAD_AGG,
+	}
+	for _, r := range rules {
+		ri := NewRuleInstruction(r)
+		storeHeuInstruction = append(storeHeuInstruction, ri)
+	}
+	mapDescToRule := make(map[string]OptRule)
+	AddRule(mapDescToRule, NewAggSpreadToSortAppendRule(""))
+	AddRule(mapDescToRule, NewAggSpreadToExchangeRule(""))
+	AddRule(mapDescToRule, NewAggSpreadToReaderRule(""))
+	AddRule(mapDescToRule, NewSlideWindowSpreadRule(""))
+
+	for _, rule := range mapDescToRule {
+		for i := range storeHeuInstruction {
+			instruction, _ := storeHeuInstruction[i].(*RuleInstruction)
+			if instruction.ruleSet == nil {
+				instruction.ruleSet = make(RuleSet)
+			}
+			if rule.Catagory() == instruction.RuleCatagory() {
+				instruction.ruleSet.Add(rule)
+				break
+			}
+		}
+	}
+}
+
+func BuildHeuristicPlannerForStore() hybridqp.Planner {
+	planner := NewHeuPlannerImpl(NewHeuProgram(storeHeuInstruction))
+	return planner
+}
+
+func BuildHeuristicPlanner() hybridqp.Planner {
+	planner := NewHeuPlannerImpl(NewHeuProgram(sqlHeuInstruction))
+	return planner
 }

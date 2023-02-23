@@ -148,6 +148,7 @@ func makeChunk() executor.Chunk {
 	c1 := chunk.Column(1)
 	c2 := chunk.Column(2)
 	c3 := executor.NewColumnImpl(influxql.Boolean)
+	c4 := executor.NewColumnImpl(influxql.FloatTuple)
 
 	for i := 0; i < 4096; i++ {
 		chunk.AppendTime(time.Now().UnixNano())
@@ -155,11 +156,13 @@ func makeChunk() executor.Chunk {
 		c1.AppendStringValues(fmt.Sprintf("tid_%04d", i))
 		c2.AppendFloatValues(float64(i) * 78.67)
 		c3.AppendBooleanValues(i%2 == 0)
+		c4.AppendFloatTuples(*executor.NewfloatTuple([]float64{float64(i), float64(i)}))
 
 		c0.AppendNilsV2(true)
 		c1.AppendNilsV2(true)
 		c2.AppendNilsV2(true)
 		c3.AppendNilsV2(true)
+		c4.AppendNilsV2(true)
 	}
 
 	for i := 0; i < 50; i++ {
@@ -183,9 +186,17 @@ func makeChunk() executor.Chunk {
 			c2.AppendNil()
 			c3.AppendNil()
 		}
+
+		if i%4 == 0 {
+			c4.AppendFloatTuples(*executor.NewfloatTuple([]float64{float64(i), float64(i)}))
+			c4.AppendNilsV2(true)
+		} else {
+			c4.AppendNil()
+		}
 	}
 
 	chunk.AddColumn(c3)
+	chunk.AddColumn(c4)
 
 	return chunk
 }

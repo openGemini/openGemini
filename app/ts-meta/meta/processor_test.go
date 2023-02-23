@@ -18,6 +18,7 @@ package meta
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	ast "github.com/influxdata/influxdb/pkg/testing/assert"
@@ -59,6 +60,8 @@ func sendTestMsg(msg *message.MetaMessage, callback transport.Callback) error {
 	return nil
 }
 
+var mockAfterIndexFail bool = true
+
 type MockRPCStore struct {
 }
 
@@ -77,12 +80,15 @@ func (s *MockRPCStore) peers() []string {
 func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr string) ([]byte, error) {
 	nodeStartInfo := meta.NodeStartInfo{}
 	nodeStartInfo.NodeId = 1
-	nodeStartInfo.PtIds = []uint32{2}
 	nodeStartInfo.ShardDurationInfos = nil
 	return nodeStartInfo.MarshalBinary()
 }
 
 func (s *MockRPCStore) afterIndex(index uint64) <-chan struct{} {
+	if !mockAfterIndexFail {
+		return nil
+	}
+
 	a := make(chan struct{})
 	go func() {
 		a <- struct{}{}
@@ -91,12 +97,14 @@ func (s *MockRPCStore) afterIndex(index uint64) <-chan struct{} {
 	return a
 }
 
-func (s *MockRPCStore) getSnapshot() []byte {
+func (s *MockRPCStore) getSnapshot(role metaclient.Role) []byte {
 	return []byte{255, 128}
 }
 
+var isCandidateTrue bool = false
+
 func (s *MockRPCStore) isCandidate() bool {
-	return false
+	return isCandidateTrue
 }
 
 func (s *MockRPCStore) apply(b []byte) error {
@@ -115,6 +123,14 @@ func (s *MockRPCStore) getShardAuxInfo(body []byte) ([]byte, error) {
 	panic("implement me")
 }
 
+func (s *MockRPCStore) getStreamInfo() ([]byte, error) {
+	return []byte{}, nil
+}
+
+func (s *MockRPCStore) getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error) {
+	return []byte{}, nil
+}
+
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,
@@ -122,6 +138,23 @@ func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 		TCPHost: address,
 	}
 	return node, nil
+}
+
+func (s *MockRPCStore) GetDownSampleInfo() ([]byte, error) {
+	return nil, nil
+}
+
+func (s *MockRPCStore) GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, error) {
+	return nil, nil
+}
+
+var mockGetUserInfoFail bool = false
+
+func (s *MockRPCStore) GetUserInfo() ([]byte, error) {
+	if mockGetUserInfoFail {
+		return nil, fmt.Errorf("GetUserInfo Fail")
+	}
+	return nil, nil
 }
 
 func TestPing(t *testing.T) {
@@ -163,7 +196,6 @@ func TestCreateNode(t *testing.T) {
 		t.Errorf("send msg error: %s", err)
 	}
 	ast.Equal(t, uint64(1), callback.NodeStartInfo.NodeId)
-	ast.Equal(t, []uint32{2}, callback.NodeStartInfo.PtIds)
 }
 
 func Test_Snapshot(t *testing.T) {
@@ -216,4 +248,34 @@ func Test_Join(t *testing.T) {
 	}
 	ast.Equal(t, uint64(0), callback.NodeInfo.ID)
 	ast.Equal(t, "", callback.NodeInfo.Host)
+}
+
+func TestGetDownSampleMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	// case 1. normal
+	callback := &metaclient.GetDownSampleInfoCallback{}
+	msg := message.NewMetaMessage(message.GetDownSampleInfoRequestMessage, &message.GetDownSampleInfoRequest{})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}
+
+func TestGetRpMstInfoMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	// case 1. normal
+	callback := &metaclient.GetRpMstInfoCallback{}
+	msg := message.NewMetaMessage(message.GetRpMstInfosRequestMessage, &message.GetRpMstInfosRequest{
+		DbName:    "test",
+		RpName:    "rp0",
+		DataTypes: []int64{1},
+	})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
 }

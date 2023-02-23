@@ -17,12 +17,12 @@ limitations under the License.
 package meta
 
 import (
+	"errors"
 	"sort"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/pkg/errors"
 )
 
 type DurationDescriptor struct {
@@ -81,12 +81,15 @@ type ShardTimeRangeInfo struct {
 }
 
 type ShardIdentifier struct {
-	ShardID      uint64
-	ShardGroupID uint64
-	Policy       string
-	OwnerDb      string
-	OwnerPt      uint32
-	ShardType    string
+	ShardID         uint64
+	ShardGroupID    uint64
+	Policy          string
+	OwnerDb         string
+	OwnerPt         uint32
+	ShardType       string
+	DownSampleLevel int
+	DownSampleID    uint64
+	ReadOnly        bool
 }
 
 type IndexIdentifier struct {
@@ -208,7 +211,18 @@ func (i *ShardIdentifier) marshal() *proto2.ShardIdentifier {
 	pb.ShardGroupID = proto.Uint64(i.ShardGroupID)
 	pb.Policy = proto.String(i.Policy)
 	pb.ShardType = proto.String(i.ShardType)
+	pb.DownSampleLevel = proto.Int64(int64(i.DownSampleLevel))
+	pb.DownSampleID = proto.Uint64(i.DownSampleID)
+	pb.ReadOnly = proto.Bool(i.ReadOnly)
 	return pb
+}
+
+func (i *ShardIdentifier) Marshal() *proto2.ShardIdentifier {
+	return i.marshal()
+}
+
+func (i *ShardIdentifier) Unmarshal(ident *proto2.ShardIdentifier) {
+	i.unmarshal(ident)
 }
 
 func (i *ShardIdentifier) unmarshal(ident *proto2.ShardIdentifier) {
@@ -218,6 +232,9 @@ func (i *ShardIdentifier) unmarshal(ident *proto2.ShardIdentifier) {
 	i.ShardGroupID = ident.GetShardGroupID()
 	i.Policy = ident.GetPolicy()
 	i.ShardType = ident.GetShardType()
+	i.DownSampleLevel = int(ident.GetDownSampleLevel())
+	i.DownSampleID = ident.GetDownSampleID()
+	i.ReadOnly = ident.GetReadOnly()
 }
 
 type NodeStartInfo struct {

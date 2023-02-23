@@ -1,20 +1,20 @@
 /*
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 
-Licensed under the Apche License, Version 2.0 (the "License");
+Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
  http://www.apache.org/licenses/LICENSE-2.0
 
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
-package executor
+package executor_test
 
 import (
 	"fmt"
@@ -24,6 +24,7 @@ import (
 
 	"github.com/apache/arrow/go/arrow"
 	"github.com/apache/arrow/go/arrow/array"
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -52,7 +53,7 @@ func newTimeValTuple(timestamp []int64, values []interface{}) *timeValList {
 func (t timeValList) Len() int           { return len(t) }
 func (t timeValList) Swap(i, j int)      { t[i], t[j] = t[j], t[i] }
 func (t timeValList) Less(i, j int) bool { return t[i].timestamp < t[j].timestamp }
-func matchContent(c Chunk, recs []array.Record) bool {
+func matchContent(c executor.Chunk, recs []array.Record) bool {
 	// timestamp store as a column in array.Record
 
 	// one series one record
@@ -170,7 +171,7 @@ func matchContent(c Chunk, recs []array.Record) bool {
 	return true
 }
 
-func isTagMatch(c Chunk, recs []array.Record) bool {
+func isTagMatch(c executor.Chunk, recs []array.Record) bool {
 	rKeyVals := make(map[string]map[string]struct{})
 	for _, r := range recs {
 		for i, k := range r.Schema().Metadata().Keys() {
@@ -198,7 +199,7 @@ func isTagMatch(c Chunk, recs []array.Record) bool {
 	return true
 }
 
-func isTimeEqual(c Chunk, recs []array.Record) bool {
+func isTimeEqual(c executor.Chunk, recs []array.Record) bool {
 	cTimes := c.Time()
 	var rTimes []int64
 
@@ -213,7 +214,7 @@ func isTimeEqual(c Chunk, recs []array.Record) bool {
 	return reflect.DeepEqual(cTimes, rTimes)
 }
 
-func matchMultiContent(chunks []Chunk, recs []array.Record) error {
+func matchMultiContent(chunks []executor.Chunk, recs []array.Record) error {
 	chunkVals := make(map[string][]interface{})
 	chunkTimes := make(map[string][]int64)
 	for _, c := range chunks {
@@ -333,99 +334,99 @@ func matchMultiContent(chunks []Chunk, recs []array.Record) error {
 	return nil
 }
 
-func buildIntegerChunk() []Chunk {
+func buildIntegerChunk() []executor.Chunk {
 	row2 := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Integer})
-	cb2 := NewChunkBuilder(row2)
+	cb2 := executor.NewChunkBuilder(row2)
 	ch2 := cb2.NewChunk("castor")
 	timestamp2 := []int64{1, 2, 3, 4, 5, 6}
 	ch2.AppendTime(timestamp2...)
 	seriesIdx2 := []int{0, 3}
-	ch2.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=1"), *ParseChunkTags("t=2")}, seriesIdx2)
+	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1"), *ParseChunkTags("t=2")}, seriesIdx2)
 	ch2.AppendIntervalIndex(seriesIdx2...)
 	ch2.Column(0).AppendIntegerValues(1, 2, 3, 4, 5, 6)
 	ch2.Column(0).AppendNilsV2(true, true, true, true, true, true)
 	ch2.CheckChunk()
 
-	return []Chunk{ch2}
+	return []executor.Chunk{ch2}
 }
 
-func buildDiffDtypeChunk() []Chunk {
+func buildDiffDtypeChunk() []executor.Chunk {
 	row := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Float})
-	cb := NewChunkBuilder(row)
+	cb := executor.NewChunkBuilder(row)
 	ch := cb.NewChunk("castor")
 	ch.AppendTime(0)
-	ch.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=1")}, []int{0})
+	ch.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
 	ch.AppendIntervalIndex(0)
 	ch.Column(0).AppendFloatValues(0.0)
 	ch.Column(0).AppendNilsV2(true)
 	ch.CheckChunk()
 
 	row2 := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Integer})
-	cb2 := NewChunkBuilder(row2)
+	cb2 := executor.NewChunkBuilder(row2)
 	ch2 := cb2.NewChunk("castor")
 	ch2.AppendTime(0)
-	ch2.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=1")}, []int{0})
+	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
 	ch2.AppendIntervalIndex(0)
 	ch2.Column(0).AppendIntegerValues(0)
 	ch2.Column(0).AppendNilsV2(true)
 	ch2.CheckChunk()
 
-	return []Chunk{ch, ch2}
+	return []executor.Chunk{ch, ch2}
 }
 
-func buildUnsupportDtypeChunk() []Chunk {
+func buildUnsupportDtypeChunk() []executor.Chunk {
 	row := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.String})
-	cb := NewChunkBuilder(row)
+	cb := executor.NewChunkBuilder(row)
 	ch := cb.NewChunk("castor")
 	ch.AppendTime(0)
-	ch.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=1")}, []int{0})
+	ch.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
 	ch.AppendIntervalIndex(0)
 	ch.Column(0).AppendStringValues("str")
 	ch.Column(0).AppendNilsV2(true)
 	ch.CheckChunk()
 
-	return []Chunk{ch}
+	return []executor.Chunk{ch}
 }
 
-func buildMultiFloatChunk() []Chunk {
+func buildMultiFloatChunk() []executor.Chunk {
 	row1 := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Float})
-	cb1 := NewChunkBuilder(row1)
+	cb1 := executor.NewChunkBuilder(row1)
 	ch1 := cb1.NewChunk("castor")
 	timestamp1 := []int64{0, 1, 2, 3, 4, 5, 6}
 	ch1.AppendTime(timestamp1...)
 	seriesIdx := []int{0, 3}
 	interval := []int{0, 1, 3, 4, 6}
-	ch1.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=1"), *ParseChunkTags("t=2")}, seriesIdx)
+	ch1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1"), *ParseChunkTags("t=2")}, seriesIdx)
 	ch1.AppendIntervalIndex(interval...)
 	ch1.Column(0).AppendFloatValues(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
 	ch1.Column(0).AppendNilsV2(true, true, true, true, true, true, true)
 	ch1.CheckChunk()
 
 	row2 := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Float})
-	cb2 := NewChunkBuilder(row2)
+	cb2 := executor.NewChunkBuilder(row2)
 	ch2 := cb2.NewChunk("castor")
 	timestamp2 := []int64{7, 8, 9}
 	ch2.AppendTime(timestamp2...)
 	seriesIdx2 := []int{0}
-	ch2.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=1")}, seriesIdx2)
+	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, seriesIdx2)
 	ch2.AppendIntervalIndex(seriesIdx2...)
 	ch2.Column(0).AppendFloatValues(7.0, 8.0, 9.0)
 	ch2.Column(0).AppendNilsV2(true, true, true)
 	ch2.CheckChunk()
 
 	row3 := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Float})
-	cb3 := NewChunkBuilder(row3)
+	cb3 := executor.NewChunkBuilder(row3)
 	ch3 := cb3.NewChunk("castor")
 	timestamp3 := []int64{7, 8, 9}
 	ch3.AppendTime(timestamp3...)
 	seriesIdx3 := []int{0}
-	ch3.AppendTagsAndIndexes([]ChunkTags{*ParseChunkTags("t=2")}, seriesIdx3)
+	ch3.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=2")}, seriesIdx3)
 	ch3.AppendIntervalIndex(seriesIdx3...)
 	ch3.Column(0).AppendFloatValues(7.0, 8.0, 9.0)
 	ch3.Column(0).AppendNilsV2(true, true, true)
 	ch3.CheckChunk()
 
-	return []Chunk{ch1, ch2, ch3}
+	return []executor.Chunk{ch1, ch2, ch3}
 }
 
 func Test_arrowRecordToChunk(t *testing.T) {
@@ -435,9 +436,9 @@ func Test_arrowRecordToChunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb := NewChunkBuilder(row)
+	cb := executor.NewChunkBuilder(row)
 	chunk := cb.NewChunk("castor")
-	if err = copyArrowRecordToChunk(rec, chunk, nil); err != nil {
+	if err = executor.CopyArrowRecordToChunk(rec, chunk, nil); err != nil {
 		t.Fatal("convert pure numeric record fail")
 	}
 	if !matchContent(chunk, []array.Record{rec}) {
@@ -453,7 +454,7 @@ func Test_ChunkToArrowRecord_Float(t *testing.T) {
 		&influxql.StringLiteral{Val: "xx.conf"},
 		&influxql.StringLiteral{Val: "detect"},
 	}
-	recs, err := chunkToArrowRecords(chunks, "123", args)
+	recs, err := executor.ChunkToArrowRecords(chunks, "123", args)
 	if err != nil {
 		t.Fatal("convert pure numeric chunk fail")
 	}
@@ -469,7 +470,7 @@ func Test_ChunkToArrowRecord_Int(t *testing.T) {
 		&influxql.StringLiteral{Val: "xx.conf"},
 		&influxql.StringLiteral{Val: "detect"},
 	}
-	recs, err := chunkToArrowRecords(chunks, "123", args)
+	recs, err := executor.ChunkToArrowRecords(chunks, "123", args)
 	if err != nil {
 		t.Fatal("convert pure numeric chunk fail")
 	}
@@ -485,7 +486,7 @@ func Test_chunkToArrowRecords_NoneNumeric(t *testing.T) {
 		&influxql.StringLiteral{Val: "xx.conf"},
 		&influxql.StringLiteral{Val: "detect"},
 	}
-	_, err := chunkToArrowRecords(chunks, "123", args)
+	_, err := executor.ChunkToArrowRecords(chunks, "123", args)
 	if err == nil || !errno.Equal(err, errno.DtypeNotSupport) {
 		t.Fatal("only support numeric data type, but no expected error return")
 	}
@@ -498,14 +499,35 @@ func Test_chunkToArrowRecords_InvalidArgsType(t *testing.T) {
 		&influxql.IntegerLiteral{Val: 0},
 		&influxql.IntegerLiteral{Val: 0},
 	}
-	_, err := chunkToArrowRecords(chunks, "123", args)
+	_, err := executor.ChunkToArrowRecords(chunks, "123", args)
 	if err == nil || !errno.Equal(err, errno.TypeAssertFail) {
 		t.Fatal("args should be string type, but no expected error return")
 	}
 }
 func Test_getFieldInfo_TypeNotEqual(t *testing.T) {
 	chunks := buildDiffDtypeChunk()
-	if _, err := getFieldInfo(chunks); err == nil || !errno.Equal(err, errno.FieldTypeNotEqual) {
+	if _, err := executor.GetFieldInfo(chunks); err == nil || !errno.Equal(err, errno.FieldTypeNotEqual) {
 		t.Fatal("data type change in chunks but not detected")
 	}
+}
+
+func buildChunkSchema(schema *arrow.Schema) (*hybridqp.RowDataTypeImpl, *errno.Error) {
+	varRefs := make([]influxql.VarRef, len(schema.Fields())-1) // minus 1 for timestamp
+	idx := 0
+	for _, f := range schema.Fields() {
+		if f.Name == string(castor.DataTime) {
+			continue
+		}
+		switch f.Type {
+		case arrow.PrimitiveTypes.Float64:
+			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.Float}
+		case arrow.PrimitiveTypes.Int64:
+			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.Integer}
+		default:
+			return nil, errno.NewError(errno.DtypeNotSupport)
+		}
+		idx++
+	}
+	row := hybridqp.NewRowDataTypeImpl(varRefs...)
+	return row, nil
 }

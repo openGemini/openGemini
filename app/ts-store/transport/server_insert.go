@@ -17,86 +17,116 @@ limitations under the License.
 package transport
 
 import (
-	"fmt"
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
-func (s *Server) InsertWorker() {
-	if err := s.insertServer.Start(); err != nil {
-		err = fmt.Errorf("cannot create a server with selectAddr=%s: %s", s.selectServer.addr, err)
-		panic(err)
-	}
-}
-
 type InsertServer struct {
-	addr    string
-	storage *storage.Storage
-	server  *spdy.RRCServer
+	addr   string
+	server *spdy.RRCServer
 }
 
-func NewInsertServer(addr string, storage *storage.Storage) *InsertServer {
+func NewInsertServer(addr string) *InsertServer {
 	return &InsertServer{
-		addr:    addr,
-		storage: storage,
+		addr: addr,
 	}
 }
 
-func (s *InsertServer) Start() error {
+func (s *InsertServer) Open() error {
 	s.server = spdy.NewRRCServer(spdy.DefaultConfiguration(), "tcp", s.addr)
-	s.register()
 
-	if err := s.server.Start(); err != nil {
-		return err
-	}
-	return nil
+	return s.server.Open()
+}
+
+func (s *InsertServer) Run(store *storage.Storage, stream stream.Engine) {
+	s.register(store, stream)
+	s.server.Run()
 }
 
 func (s *InsertServer) Close() {
 	s.server.Stop()
 }
 
-func (s *InsertServer) register() {
+func (s *InsertServer) register(store *storage.Storage, stream stream.Engine) {
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.WritePointsRequest,
-		NewInsertProcessor(s.storage), &netstorage.WritePointsRequest{}))
+		NewInsertProcessor(store, stream), &netstorage.WritePointsRequest{}))
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.WriteStreamPointsRequest,
+		NewInsertProcessor(store, stream), &netstorage.WriteStreamPointsRequest{}))
 }
 
 type InsertProcessor struct {
-	store *storage.Storage
+	store  *storage.Storage
+	stream stream.Engine
 }
 
-func NewInsertProcessor(store *storage.Storage) *InsertProcessor {
+func NewInsertProcessor(store *storage.Storage, stream stream.Engine) *InsertProcessor {
 	return &InsertProcessor{
-		store: store,
+		store:  store,
+		stream: stream,
 	}
 }
 
 func (p *InsertProcessor) Handle(w spdy.Responser, data interface{}) error {
 	p.store.WriteLimit.Take()
 	defer p.store.WriteLimit.Release()
-	msg, ok := data.(*netstorage.WritePointsRequest)
-	if !ok {
+	switch msg := data.(type) {
+	case *netstorage.WritePointsRequest:
+		return p.processWritePointsRequest(w, msg)
+	case *netstorage.WriteStreamPointsRequest:
+		return p.processWriteStreamPointsRequest(w, msg)
+	default:
 		return executor.NewInvalidTypeError("*netstorage.WritePointsRequest", data)
 	}
+}
+
+func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netstorage.WritePointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
-
 	ww := getWritePointsWork()
 	ww.storage = p.store
 	ww.reqBuf = msg.Points()
 	err := ww.WritePoints()
 	putWritePointsWork(ww)
 
-	rsp := netstorage.NewWritePointsResponse(0, "")
-	if err != nil {
-		rsp = netstorage.NewWritePointsResponse(1, err.Error())
+	var rsp *netstorage.WritePointsResponse
+	switch stdErr := err.(type) {
+	case *errno.Error:
+		rsp = netstorage.NewWritePointsResponse(1, stdErr.Errno(), stdErr.Error())
+	case error:
+		rsp = netstorage.NewWritePointsResponse(1, 0, err.Error())
+	default:
+		rsp = netstorage.NewWritePointsResponse(0, 0, "")
 	}
+	return w.Response(rsp, true)
+}
 
+func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg *netstorage.WriteStreamPointsRequest) error {
+	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
+	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
+	ww := getWritePointsWork()
+	ww.storage = p.store
+	ww.stream = p.stream
+	ww.reqBuf = msg.Points()
+	ww.streamVars = msg.StreamVars()
+	err := ww.WritePoints()
+	putWritePointsWork(ww)
+
+	var rsp *netstorage.WriteStreamPointsResponse
+	switch stdErr := err.(type) {
+	case *errno.Error:
+		rsp = netstorage.NewWriteStreamPointsResponse(1, stdErr.Errno(), stdErr.Error())
+	case error:
+		rsp = netstorage.NewWriteStreamPointsResponse(1, 0, err.Error())
+	default:
+		rsp = netstorage.NewWriteStreamPointsResponse(0, 0, "")
+	}
 	return w.Response(rsp, true)
 }

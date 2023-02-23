@@ -27,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage/data"
+	netstorage_data "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
@@ -69,13 +69,13 @@ func (c *RPCServer) HandleDDL(w spdy.Responser, msg *DDLMessage) error {
 }
 
 func (c *RPCServer) HandleWritePoints(w spdy.Responser, msg *WritePointsRequest) error {
-	return w.Response(NewWritePointsResponse(0, "ok"), true)
+	return w.Response(NewWritePointsResponse(0, 0, "ok"), true)
 }
 
 var rsp = &ShowTagValuesResponse{}
 
 func startServer(address string) (*spdy.RRCServer, error) {
-	rsp.Values = []*internal.TagValuesSlice{
+	rsp.Values = []*netstorage_data.TagValuesSlice{
 		{
 			Measurement: proto.String("mst"),
 			Keys:        []string{"tid", "aid", "sid"},

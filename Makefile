@@ -25,7 +25,7 @@ FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" |
 PACKAGE_LIST_OPEN_GEMINI_TESTS  := go list ./... | grep -vE "tests|open_src\/github.com\/hashicorp"
 PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
 
-COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/mergeindex/item.go"
+COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go"
 COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
 COPYRIGHT_HEADER  := "Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd."
 

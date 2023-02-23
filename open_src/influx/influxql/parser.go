@@ -2731,6 +2731,8 @@ func (p *Parser) ParseVarRef() (*VarRef, error) {
 			switch strings.ToLower(lit) {
 			case "float":
 				dtype = Float
+			case "floattuple":
+				dtype = FloatTuple
 			case "integer":
 				dtype = Integer
 			case "unsigned":
@@ -2742,7 +2744,7 @@ func (p *Parser) ParseVarRef() (*VarRef, error) {
 			case "tag":
 				dtype = Tag
 			default:
-				return nil, newParseError(tokstr(tok, lit), []string{"float", "integer", "unsigned", "string", "boolean", "field", "tag"}, pos)
+				return nil, newParseError(tokstr(tok, lit), []string{"float", "floattuple", "integer", "unsigned", "string", "boolean", "field", "tag"}, pos)
 			}
 		case FIELD:
 			dtype = AnyField

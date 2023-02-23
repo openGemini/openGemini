@@ -19,6 +19,10 @@ type responseLogger struct {
 	size   int
 }
 
+func NewResponseLogger(w http.ResponseWriter) http.ResponseWriter {
+	return &responseLogger{w: w}
+}
+
 func (l *responseLogger) CloseNotify() <-chan bool {
 	if notifier, ok := l.w.(http.CloseNotifier); ok {
 		return notifier.CloseNotify()
