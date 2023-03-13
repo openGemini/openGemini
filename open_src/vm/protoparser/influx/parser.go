@@ -219,11 +219,6 @@ func (r *Row) CheckValid() error {
 	if len(r.Fields) == 0 {
 		return ErrPointMustHaveAField
 	}
-	for i := range r.Fields {
-		if r.Fields[i].Key == "time" {
-			return ErrPointInvalidTimeField
-		}
-	}
 	return nil
 }
 
