@@ -457,7 +457,7 @@ func generateRows(num int, rows []influx.Row) []influx.Row {
 	return rows[:num]
 }
 
-func TestCheckFields(t *testing.T) {
+func TestFixFields(t *testing.T) {
 	fields := influx.Fields{
 		{
 			Key:  "foo",
@@ -467,14 +467,40 @@ func TestCheckFields(t *testing.T) {
 			Key:  "foo",
 			Type: influx.Field_Type_Int,
 		},
+		{
+			Key:  "time",
+			Type: influx.Field_Type_Int,
+		},
+		{
+			Key:  "time",
+			Type: influx.Field_Type_Int,
+		},
+		{
+			Key:  "zing",
+			Type: influx.Field_Type_String,
+		},
 	}
 
-	err := checkFields(fields)
+	_, err := fixFields(fields)
 	assert.EqualError(t, err, errno.NewError(errno.DuplicateField, "foo").Error())
 
 	fields[0].Key = "foo2"
-	err = checkFields(fields)
+	fields, err = fixFields(fields)
 	assert.NoError(t, err)
+	assert.Equal(t, influx.Fields{
+		{
+			Key:  "foo2",
+			Type: influx.Field_Type_Float,
+		},
+		{
+			Key:  "foo",
+			Type: influx.Field_Type_Int,
+		},
+		{
+			Key:  "zing",
+			Type: influx.Field_Type_String,
+		},
+	}, fields)
 }
 
 func TestStreamSymbolMarshalUnmarshal(t *testing.T) {
