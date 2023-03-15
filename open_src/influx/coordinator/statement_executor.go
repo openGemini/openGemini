@@ -47,10 +47,12 @@ import (
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 )
 
 var dbStatCount int
@@ -523,28 +525,30 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		indexR.IndexList = indexLists
 	}
 
-	if _, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR) ; err != nil {
+	if _, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR); err != nil {
 		return err
 	}
 
-	if len(stmt.Tags) + len(stmt.Fields) > 0 {
-		fieldToCreate := make([]*proto2.FieldSchema, 0, len(stmt.Tags) + len(stmt.Fields))
+	if len(stmt.Tags)+len(stmt.Fields) > 0 {
+		fieldToCreate := make([]*proto2.FieldSchema, 0, len(stmt.Tags)+len(stmt.Fields))
 		for _, tag := range stmt.Tags {
 			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
 				FieldName: proto.String(tag),
 				FieldType: proto.Int32(influx.Field_Type_Tag),
 			})
 		}
-		for field, type := range stmt.Fields {
+		for k, v := range stmt.Fields {
 			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
-				FieldName: proto.String(field),
-				FieldType: proto.Int32(type),
+				FieldName: proto.String(k),
+				FieldType: proto.Int32(v),
 			})
 		}
-		_, err = e.MetaClient.UpdateSchema(stmt.Database, stmt.RetentionPolicy, stmt.Name, fieldToCreate)
+		if err := e.MetaClient.UpdateSchema(stmt.Database, stmt.RetentionPolicy, stmt.Name, fieldToCreate); err != nil {
+			return err
+		}
 	}
 
-	return err
+	return nil
 }
 
 func (e *StatementExecutor) executeAlterShardKeyStatement(stmt *influxql.AlterShardKeyStatement) error {

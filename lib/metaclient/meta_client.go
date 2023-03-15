@@ -166,6 +166,7 @@ type MetaClient interface {
 	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error)
 	TruncateShardGroups(t time.Time) error
 	UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error
+	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
 	UpdateUser(name, password string) error
 	UserPrivilege(username, database string) (*originql.Privilege, error)
 	UserPrivileges(username string) (map[string]originql.Privilege, error)
