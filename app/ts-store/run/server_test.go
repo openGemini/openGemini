@@ -40,6 +40,7 @@ import (
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
 
 var storageDataPath = "/tmp/data/"
@@ -325,6 +326,9 @@ func (client *MockMetaClient) TruncateShardGroups(t time.Time) error {
 	return nil
 }
 func (client *MockMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error {
+	return nil
+}
+func (client *MockMetaClient) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error {
 	return nil
 }
 func (client *MockMetaClient) UpdateUser(name, password string) error {

@@ -1524,8 +1524,7 @@ func (m *UserPrivilege) GetPrivilege() int32 {
 type IndexRelation struct {
 	Rid                  *uint32      `protobuf:"varint,1,req,name=Rid" json:"Rid,omitempty"`
 	Oid                  []uint32     `protobuf:"varint,2,rep,name=Oid" json:"Oid,omitempty"`
-	IndexName            []string     `protobuf:"bytes,3,rep,name=IndexName" json:"IndexName,omitempty"`
-	IndexLists           []*IndexList `protobuf:"bytes,4,rep,name=IndexLists" json:"IndexLists,omitempty"`
+	IndexLists           []*IndexList `protobuf:"bytes,3,rep,name=IndexLists" json:"IndexLists,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
 	XXX_unrecognized     []byte       `json:"-"`
 	XXX_sizecache        int32        `json:"-"`
@@ -1537,6 +1536,7 @@ func (*IndexRelation) ProtoMessage()    {}
 func (*IndexRelation) Descriptor() ([]byte, []int) {
 	return fileDescriptor_4aed0c02de55ead8, []int{17}
 }
+
 func (m *IndexRelation) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_IndexRelation.Unmarshal(m, b)
 }
@@ -1569,13 +1569,6 @@ func (m *IndexRelation) GetOid() []uint32 {
 	return nil
 }
 
-func (m *IndexRelation) GetIndexName() []string {
-	if m != nil {
-		return m.IndexName
-	}
-	return nil
-}
-
 func (m *IndexRelation) GetIndexLists() []*IndexList {
 	if m != nil {
 		return m.IndexLists
@@ -1583,19 +1576,83 @@ func (m *IndexRelation) GetIndexLists() []*IndexList {
 	return nil
 }
 
-type IndexList struct {
-	IList                []string `protobuf:"bytes,1,rep,name=IList" json:"IList,omitempty"`
+type IndexInfor struct {
+	FieldName            *string  `protobuf:"bytes,1,req,name=FieldName" json:"FieldName,omitempty"`
+	Tokens               *string  `protobuf:"bytes,2,req,name=Tokens" json:"Tokens,omitempty"`
+	Tokenizers           *string  `protobuf:"bytes,3,req,name=Tokenizers" json:"Tokenizers,omitempty"`
+	IndexName            *string  `protobuf:"bytes,4,req,name=IndexName" json:"IndexName,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *IndexInfor) Reset()         { *m = IndexInfor{} }
+func (m *IndexInfor) String() string { return proto.CompactTextString(m) }
+func (*IndexInfor) ProtoMessage()    {}
+func (*IndexInfor) Descriptor() ([]byte, []int) {
+	return fileDescriptor_4aed0c02de55ead8, []int{18}
+}
+
+func (m *IndexInfor) XXX_Unmarshal(b []byte) error {
+	return xxx_messageInfo_IndexInfor.Unmarshal(m, b)
+}
+func (m *IndexInfor) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	return xxx_messageInfo_IndexInfor.Marshal(b, m, deterministic)
+}
+func (m *IndexInfor) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_IndexInfor.Merge(m, src)
+}
+func (m *IndexInfor) XXX_Size() int {
+	return xxx_messageInfo_IndexInfor.Size(m)
+}
+func (m *IndexInfor) XXX_DiscardUnknown() {
+	xxx_messageInfo_IndexInfor.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_IndexInfor proto.InternalMessageInfo
+
+func (m *IndexInfor) GetFieldName() string {
+	if m != nil && m.FieldName != nil {
+		return *m.FieldName
+	}
+	return ""
+}
+
+func (m *IndexInfor) GetTokens() string {
+	if m != nil && m.Tokens != nil {
+		return *m.Tokens
+	}
+	return ""
+}
+
+func (m *IndexInfor) GetTokenizers() string {
+	if m != nil && m.Tokenizers != nil {
+		return *m.Tokenizers
+	}
+	return ""
+}
+
+func (m *IndexInfor) GetIndexName() string {
+	if m != nil && m.IndexName != nil {
+		return *m.IndexName
+	}
+	return ""
+}
+
+type IndexList struct {
+	IList                []*IndexInfor `protobuf:"bytes,1,rep,name=IList" json:"IList,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}      `json:"-"`
+	XXX_unrecognized     []byte        `json:"-"`
+	XXX_sizecache        int32         `json:"-"`
 }
 
 func (m *IndexList) Reset()         { *m = IndexList{} }
 func (m *IndexList) String() string { return proto.CompactTextString(m) }
 func (*IndexList) ProtoMessage()    {}
 func (*IndexList) Descriptor() ([]byte, []int) {
-	return fileDescriptor_4aed0c02de55ead8, []int{18}
+	return fileDescriptor_4aed0c02de55ead8, []int{19}
 }
+
 func (m *IndexList) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_IndexList.Unmarshal(m, b)
 }
@@ -1614,7 +1671,7 @@ func (m *IndexList) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_IndexList proto.InternalMessageInfo
 
-func (m *IndexList) GetIList() []string {
+func (m *IndexList) GetIList() []*IndexInfor {
 	if m != nil {
 		return m.IList
 	}

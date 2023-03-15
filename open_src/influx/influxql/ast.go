@@ -344,6 +344,7 @@ func (*EndPrepareSnapshotStatement) node() {}
 func (*GetRuntimeInfoStatement) node()     {}
 func (*Hint) node()                        {}
 func (Hints) node()                        {}
+func (*MatchExpr) node()                   {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
@@ -479,6 +480,7 @@ func (*StringLiteral) expr()   {}
 func (*TimeLiteral) expr()     {}
 func (*VarRef) expr()          {}
 func (*Wildcard) expr()        {}
+func (*MatchExpr) expr()       {}
 
 // Literal represents a static literal.
 type Literal interface {
@@ -727,8 +729,19 @@ type CreateMeasurementStatement struct {
 	Name            string
 	ShardKey        []string
 	Type            string
+	Tags            []string
+	Fields          map[string]int32
 	IndexType       []string
 	IndexList       [][]string
+	IndexInfo       []*IndexInfo
+}
+
+type IndexInfo struct {
+	FieldName  string
+	IndexName  string
+	IndexType  string
+	Tokens     string
+	Tokenizers string
 }
 
 func (s *CreateMeasurementStatement) String() string {
@@ -755,16 +768,20 @@ func (s *CreateMeasurementStatement) String() string {
 		_, _ = buf.WriteString(shardKey)
 	}
 
-	if len(s.IndexList) > 0 {
-		for i := range s.IndexType {
-			_, _ = buf.WriteString(" INDEXTYPE ")
-			_, _ = buf.WriteString(s.IndexType[i])
-
-			IndexList := strings.Join(s.IndexList[i], ",")
-			_, _ = buf.WriteString(" INDEXLIST ")
-			_, _ = buf.WriteString(IndexList)
+	if len(s.IndexInfo) > 0 {
+		_, _ = buf.WriteString(" INDEX: ")
+		for i := range s.IndexInfo {
+			_, _ = buf.WriteString(s.IndexInfo[i].IndexType)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].FieldName)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].Tokens)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].Tokenizers)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].IndexName)
+			_, _ = buf.WriteString(",")
 		}
-
 	}
 
 	return buf.String()
@@ -1898,8 +1915,8 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 //
 // Conditions that can currently be simplified are:
 //
-//     - host =~ /^foo$/ becomes host = 'foo'
-//     - host !~ /^foo$/ becomes host != 'foo'
+//   - host =~ /^foo$/ becomes host = 'foo'
+//   - host !~ /^foo$/ becomes host != 'foo'
 //
 // Note: if the regex contains groups, character classes, repetition or
 // similar, it's likely it won't be rewritten. In order to support rewriting
@@ -4460,6 +4477,19 @@ func (v *binaryExprNameVisitor) Visit(n Node) Visitor {
 		return nil
 	}
 	return v
+}
+
+type MatchExpr struct {
+	Field Expr
+	Value Expr
+	Op    string
+}
+
+func (m *MatchExpr) String() string {
+	return m.Field.String() + m.Op + m.Value.String()
+}
+func (m *MatchExpr) RewriteNameSpace(alias, mst string) {
+
 }
 
 // ParenExpr represents a parenthesized expression.
