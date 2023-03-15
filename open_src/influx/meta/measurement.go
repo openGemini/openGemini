@@ -224,27 +224,33 @@ func (ski ShardKeyInfo) clone() ShardKeyInfo {
 }
 
 type IndexRelation struct {
-	Rid        uint32
-	Oids       []uint32
-	IndexNames []string
-	IndexList  []*IndexList
+	Rid       uint32
+	Oids      []uint32
+	IndexList []*IndexList
+}
+
+type IndexInfor struct {
+	FieldName  string
+	Tokens     string
+	Tokenizers string
+	IndexName  string
 }
 
 type IndexList struct {
-	IList []string
+	IList []*IndexInfor
 }
 
 func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 	pb := &proto2.IndexRelation{Rid: proto.Uint32(indexR.Rid),
-		Oid:       indexR.Oids,
-		IndexName: indexR.IndexNames}
+		Oid: indexR.Oids}
 
 	pb.IndexLists = make([]*proto2.IndexList, len(indexR.IndexList))
 	for i, IList := range indexR.IndexList {
-		indexList := &proto2.IndexList{
-			IList: IList.IList,
+		ilist := make([]*proto2.IndexInfor, len(IList.IList))
+		for j, index := range IList.IList {
+			ilist[j] = index.Marshal()
 		}
-		pb.IndexLists[i] = indexList
+		pb.IndexLists[i] = &proto2.IndexList{IList: ilist}
 	}
 	return pb
 }
@@ -252,14 +258,36 @@ func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 func (indexR *IndexRelation) unmarshal(pb *proto2.IndexRelation) {
 	indexR.Rid = pb.GetRid()
 	indexR.Oids = pb.GetOid()
-	indexR.IndexNames = pb.GetIndexName()
 	indexLists := pb.GetIndexLists()
 	indexR.IndexList = make([]*IndexList, len(indexLists))
 	for i, iList := range indexLists {
-		indexR.IndexList[i] = &IndexList{
-			IList: iList.GetIList(),
+		indexlist := make([]*IndexInfor, len(iList.GetIList()))
+		for j, index := range iList.GetIList() {
+			indexlist[j] = &IndexInfor{
+				FieldName:  index.GetFieldName(),
+				Tokens:     index.GetTokens(),
+				Tokenizers: index.GetTokenizers(),
+				IndexName:  index.GetIndexName()}
 		}
+		indexR.IndexList[i] = &IndexList{IList: indexlist}
 	}
+}
+
+func (indexinfo *IndexInfor) Marshal() *proto2.IndexInfor {
+	ii := &proto2.IndexInfor{
+		FieldName:  proto.String(indexinfo.FieldName),
+		Tokens:     proto.String(indexinfo.Tokens),
+		Tokenizers: proto.String(indexinfo.Tokenizers),
+		IndexName:  proto.String(indexinfo.IndexName),
+	}
+	return ii
+}
+
+func (indexinfo *IndexInfor) unmarshal(pb *proto2.IndexInfor) {
+	indexinfo.FieldName = pb.GetFieldName()
+	indexinfo.Tokens = pb.GetTokens()
+	indexinfo.Tokenizers = pb.GetTokenizers()
+	indexinfo.IndexName = pb.GetIndexName()
 }
 
 func (msti *MeasurementInfo) ContainIndexRelation(ID uint64) bool {

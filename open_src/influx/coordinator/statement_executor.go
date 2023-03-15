@@ -489,10 +489,13 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if err := meta2.ValidShardKey(stmt.ShardKey); err != nil {
 		return err
 	}
+
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
+	indexR.IndexList = make([]*meta2.IndexList, len(stmt.IndexList))
 	if len(stmt.IndexList) > 0 {
+		indexLists := make([]*meta2.IndexList, len(stmt.IndexList))
 		for i, indexType := range stmt.IndexType {
 			oid, err := tsi.GetIndexIdByName(indexType)
 			if err != nil {
@@ -502,15 +505,24 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 				return fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
 			}
 			indexR.Oids = append(indexR.Oids, oid)
+
+			indexList := stmt.IndexList[i]
+			IList := make([]*meta2.IndexInfor, len(indexList))
+			for j, index := range indexList {
+				IList[j] = &meta2.IndexInfor{
+					FieldName: index,
+					//Tokens:      nil,
+					//Tokenizers:  nil,
+					//IndexName:   nil
+				}
+			}
+			indexLists[i] = &meta2.IndexList{
+				IList: IList,
+			}
 		}
+		indexR.IndexList = indexLists
 	}
-	indexLists := make([]*meta2.IndexList, len(stmt.IndexList))
-	for i, indexList := range stmt.IndexList {
-		indexLists[i] = &meta2.IndexList{
-			IList: indexList,
-		}
-	}
-	indexR.IndexList = indexLists
+
 	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR)
 	return err
 }

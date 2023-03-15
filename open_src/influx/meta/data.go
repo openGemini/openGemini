@@ -382,16 +382,21 @@ func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *pr
 
 	if indexR != nil {
 		newIndexR := IndexRelation{
-			Rid:        indexR.GetRid(),
-			Oids:       indexR.GetOid(),
-			IndexNames: indexR.GetIndexName(),
+			Rid:  indexR.GetRid(),
+			Oids: indexR.GetOid(),
 		}
 		indexLists := indexR.GetIndexLists()
 		newIndexR.IndexList = make([]*IndexList, len(indexLists))
 		for i, iList := range indexLists {
-			newIndexR.IndexList[i] = &IndexList{
-				IList: iList.GetIList(),
+			indexlist := make([]*IndexInfor, len(iList.GetIList()))
+			for j, index := range iList.GetIList() {
+				indexlist[j] = &IndexInfor{
+					FieldName:  index.GetFieldName(),
+					Tokens:     index.GetTokens(),
+					Tokenizers: index.GetTokenizers(),
+					IndexName:  index.GetIndexName()}
 			}
+			newIndexR.IndexList[i] = &IndexList{IList: indexlist}
 		}
 		msti.IndexRelation = newIndexR
 	}

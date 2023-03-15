@@ -171,12 +171,18 @@ message UserPrivilege {
 message IndexRelation {
     required uint32 Rid = 1;
 		repeated uint32 Oid = 2;
-    repeated string IndexName = 3;
-    repeated IndexList IndexLists = 4;
+    repeated IndexList IndexLists = 3;
+}
+
+message IndexInfor {
+	required string FieldName = 1;
+	required string Tokens string = 2;
+	required string Tokenizers = 3;
+	required string IndexName = 4;
 }
 
 message IndexList {
-    repeated string IList = 1;
+    repeated IndexInfor IList = 1;
 }
 
 message RpMeasurementsFieldsInfo {
