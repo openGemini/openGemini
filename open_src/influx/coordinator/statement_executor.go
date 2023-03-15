@@ -512,10 +512,10 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 			IList := make([]*meta2.IndexInfor, len(indexList))
 			for j, index := range indexList {
 				IList[j] = &meta2.IndexInfor{
-					FieldName: index,
-					//Tokens:      nil,
-					//Tokenizers:  nil,
-					//IndexName:   nil
+					FieldName:  index.FieldName,
+					Tokens:     index.Tokens,
+					Tokenizers: index.Tokenizers,
+					IndexName:  index.IndexName,
 				}
 			}
 			indexLists[i] = &meta2.IndexList{

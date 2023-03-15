@@ -730,7 +730,14 @@ type CreateMeasurementStatement struct {
 	Tags            []string
 	Fields          map[string]int32
 	IndexType       []string
-	IndexList       [][]string
+	IndexList       [][]IndexInfor
+}
+
+type IndexInfor struct {
+	FieldName  string
+	Tokens     string
+	Tokenizers string
+	IndexName  string
 }
 
 func (s *CreateMeasurementStatement) String() string {
@@ -762,9 +769,17 @@ func (s *CreateMeasurementStatement) String() string {
 			_, _ = buf.WriteString(" INDEXTYPE ")
 			_, _ = buf.WriteString(s.IndexType[i])
 
-			IndexList := strings.Join(s.IndexList[i], ",")
 			_, _ = buf.WriteString(" INDEXLIST ")
-			_, _ = buf.WriteString(IndexList)
+			for _, index := range s.IndexList[i] {
+				_, _ = buf.WriteString(index.FieldName)
+				_, _ = buf.WriteString(" ")
+				_, _ = buf.WriteString(index.Tokens)
+				_, _ = buf.WriteString(" ")
+				_, _ = buf.WriteString(index.Tokenizers)
+				_, _ = buf.WriteString(" ")
+				_, _ = buf.WriteString(index.IndexName)
+				_, _ = buf.WriteString(",")
+			}
 		}
 
 	}
