@@ -726,9 +726,9 @@ type CreateMeasurementStatement struct {
 	RetentionPolicy string
 	Name            string
 	ShardKey        []string
-	Type            string //lkxtodo
+	Type            string
 	Tags            []string
-	Fields          map[string]int
+	Fields          map[string]int32
 	IndexType       []string
 	IndexList       [][]string
 }
