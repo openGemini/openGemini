@@ -344,6 +344,7 @@ func (*EndPrepareSnapshotStatement) node() {}
 func (*GetRuntimeInfoStatement) node()     {}
 func (*Hint) node()                        {}
 func (Hints) node()                        {}
+func (*MatchExpr) node()                   {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
@@ -479,6 +480,7 @@ func (*StringLiteral) expr()   {}
 func (*TimeLiteral) expr()     {}
 func (*VarRef) expr()          {}
 func (*Wildcard) expr()        {}
+func (*MatchExpr) expr()       {}
 
 // Literal represents a static literal.
 type Literal interface {
@@ -730,14 +732,16 @@ type CreateMeasurementStatement struct {
 	Tags            []string
 	Fields          map[string]int32
 	IndexType       []string
-	IndexList       [][]IndexInfor
+	IndexList       [][]string
+	IndexInfo       []*IndexInfo
 }
 
-type IndexInfor struct {
+type IndexInfo struct {
 	FieldName  string
 	Tokens     string
 	Tokenizers string
 	IndexName  string
+	IndexType  string
 }
 
 func (s *CreateMeasurementStatement) String() string {
@@ -770,16 +774,16 @@ func (s *CreateMeasurementStatement) String() string {
 			_, _ = buf.WriteString(s.IndexType[i])
 
 			_, _ = buf.WriteString(" INDEXLIST ")
-			for _, index := range s.IndexList[i] {
-				_, _ = buf.WriteString(index.FieldName)
-				_, _ = buf.WriteString(" ")
-				_, _ = buf.WriteString(index.Tokens)
-				_, _ = buf.WriteString(" ")
-				_, _ = buf.WriteString(index.Tokenizers)
-				_, _ = buf.WriteString(" ")
-				_, _ = buf.WriteString(index.IndexName)
-				_, _ = buf.WriteString(",")
-			}
+			//for _, index := range s.IndexList[i] {
+			// _, _ = buf.WriteString(index.FieldName)
+			//_, _ = buf.WriteString(" ")
+			//_, _ = buf.WriteString(index.Tokens)
+			//_, _ = buf.WriteString(" ")
+			//_, _ = buf.WriteString(index.Tokenizers)
+			//_, _ = buf.WriteString(" ")
+			//_, _ = buf.WriteString(index.IndexName)
+			//_, _ = buf.WriteString(",")
+			//}
 		}
 
 	}
@@ -4477,6 +4481,19 @@ func (v *binaryExprNameVisitor) Visit(n Node) Visitor {
 		return nil
 	}
 	return v
+}
+
+type MatchExpr struct {
+	Field Expr
+	Value Expr
+	Op    string
+}
+
+func (m *MatchExpr) String() string {
+	return m.Field.String() + m.Op + m.Value.String()
+}
+func (m *MatchExpr) RewriteNameSpace(alias, mst string) {
+
 }
 
 // ParenExpr represents a parenthesized expression.

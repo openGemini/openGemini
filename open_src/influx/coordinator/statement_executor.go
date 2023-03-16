@@ -508,19 +508,19 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 			}
 			indexR.Oids = append(indexR.Oids, oid)
 
-			indexList := stmt.IndexList[i]
-			IList := make([]*meta2.IndexInfor, len(indexList))
-			for j, index := range indexList {
-				IList[j] = &meta2.IndexInfor{
-					FieldName:  index.FieldName,
-					Tokens:     index.Tokens,
-					Tokenizers: index.Tokenizers,
-					IndexName:  index.IndexName,
-				}
-			}
-			indexLists[i] = &meta2.IndexList{
-				IList: IList,
-			}
+			//indexList := stmt.IndexInfo[i]
+			//IList := make([]*meta2.IndexInfor, len(indexList))
+			//for j, index := range indexList {
+			//	IList[j] = &meta2.IndexInfor{
+			//		FieldName:  index.FieldName,
+			//		Tokens:     index.Tokens,
+			//		Tokenizers: index.Tokenizers,
+			//		IndexName:  index.IndexName,
+			//	}
+			//}
+			//indexLists[i] = &meta2.IndexList{
+			//	IList: IList,
+			//}
 		}
 		indexR.IndexList = indexLists
 	}

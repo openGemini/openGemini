@@ -159,3 +159,8 @@ type cqSamplePolicyInfo struct {
 	ResampleEvery time.Duration
 	ResampleFor   time.Duration
 }
+type fieldList struct {
+	fieldName  string
+	fieldType  string
+	tagOrField string
+}
