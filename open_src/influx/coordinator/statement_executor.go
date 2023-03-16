@@ -495,34 +495,42 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
-	indexR.IndexList = make([]*meta2.IndexList, len(stmt.IndexList))
-	if len(stmt.IndexList) > 0 {
-		indexLists := make([]*meta2.IndexList, len(stmt.IndexList))
-		for i, indexType := range stmt.IndexType {
-			oid, err := tsi.GetIndexIdByName(indexType)
+
+	if len(stmt.IndexInfo) > 0 {
+		var textIndexs []*meta2.IndexInfor
+		var fieldIndexs []*meta2.IndexInfor
+		for _, IndexInfo := range stmt.IndexInfo {
+			oid, err := tsi.GetIndexIdByName(IndexInfo.IndexType)
 			if err != nil {
 				return err
 			}
-			if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
-				return fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
+			index := &meta2.IndexInfor{
+				FieldName:  IndexInfo.FieldName,
+				Tokens:     IndexInfo.Tokens,
+				Tokenizers: IndexInfo.Tokenizers,
+				IndexName:  IndexInfo.IndexName,
 			}
-			indexR.Oids = append(indexR.Oids, oid)
-
-			//indexList := stmt.IndexInfo[i]
-			//IList := make([]*meta2.IndexInfor, len(indexList))
-			//for j, index := range indexList {
-			//	IList[j] = &meta2.IndexInfor{
-			//		FieldName:  index.FieldName,
-			//		Tokens:     index.Tokens,
-			//		Tokenizers: index.Tokenizers,
-			//		IndexName:  index.IndexName,
-			//	}
-			//}
-			//indexLists[i] = &meta2.IndexList{
-			//	IList: IList,
-			//}
+			if oid == uint32(tsi.Field) {
+				fieldIndexs = append(fieldIndexs, index)
+			} else if oid == uint32(tsi.Text) {
+				textIndexs = append(textIndexs, index)
+			}
 		}
-		indexR.IndexList = indexLists
+		if len(fieldIndexs) > 1 {
+			return fmt.Errorf("cannot create field index for multiple columns: %v", fieldIndexs)
+		}
+		if len(textIndexs) > 0 {
+			indexR.Oids = append(indexR.Oids, uint32(tsi.Text))
+			indexR.IndexList = append(indexR.IndexList, &meta2.IndexList{
+				IList: textIndexs,
+			})
+		}
+		if len(fieldIndexs) > 0 {
+			indexR.Oids = append(indexR.Oids, uint32(tsi.Field))
+			indexR.IndexList = append(indexR.IndexList, &meta2.IndexList{
+				IList: fieldIndexs,
+			})
+		}
 	}
 
 	if _, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR); err != nil {

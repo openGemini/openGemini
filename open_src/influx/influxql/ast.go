@@ -768,24 +768,20 @@ func (s *CreateMeasurementStatement) String() string {
 		_, _ = buf.WriteString(shardKey)
 	}
 
-	if len(s.IndexList) > 0 {
-		for i := range s.IndexType {
-			_, _ = buf.WriteString(" INDEXTYPE ")
-			_, _ = buf.WriteString(s.IndexType[i])
-
-			_, _ = buf.WriteString(" INDEXLIST ")
-			//for _, index := range s.IndexList[i] {
-			// _, _ = buf.WriteString(index.FieldName)
-			//_, _ = buf.WriteString(" ")
-			//_, _ = buf.WriteString(index.Tokens)
-			//_, _ = buf.WriteString(" ")
-			//_, _ = buf.WriteString(index.Tokenizers)
-			//_, _ = buf.WriteString(" ")
-			//_, _ = buf.WriteString(index.IndexName)
-			//_, _ = buf.WriteString(",")
-			//}
+	if len(s.IndexInfo) > 0 {
+		_, _ = buf.WriteString(" INDEX: ")
+		for i := range s.IndexInfo {
+			_, _ = buf.WriteString(s.IndexInfo[i].IndexType)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].FieldName)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].Tokens)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].Tokenizers)
+			_, _ = buf.WriteString(" ")
+			_, _ = buf.WriteString(s.IndexInfo[i].IndexName)
+			_, _ = buf.WriteString(",")
 		}
-
 	}
 
 	return buf.String()
