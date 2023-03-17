@@ -497,6 +497,23 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		return fmt.Errorf("measurement exist : %s/%s/%s", stmt.Database, stmt.RetentionPolicy, stmt.Name)
 	}
 
+	schema := make(map[string]int32)
+	for _, tag := range stmt.Tags {
+		if _, ok := schema[tag]; !ok {
+			schema[tag] = 0
+		} else {
+			return fmt.Errorf("field or tag conflict %s", tag)
+		}
+	}
+
+	for field, _ := range stmt.Fields {
+		if _, ok := schema[field]; !ok {
+			schema[field] = 0
+		} else {
+			return fmt.Errorf("field or tag conflict %s", field)
+		}
+	}
+
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
 
@@ -504,12 +521,16 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		var textIndexs []*meta2.IndexInfor
 		var fieldIndexs []*meta2.IndexInfor
 		for _, IndexInfo := range stmt.IndexInfo {
+			if IndexInfo.IndexType == "keyword" {
+				IndexInfo.IndexType = "field"
+			}
+
 			oid, err := tsi.GetIndexIdByName(IndexInfo.IndexType)
 			if err != nil {
 				return err
 			}
 			if _, ok := stmt.Fields[IndexInfo.FieldName]; !ok {
-				return fmt.Errorf("%s index only create on field  %s", IndexInfo.IndexName, IndexInfo.FieldName)
+				return fmt.Errorf("%s index only create on field, but not field: %s", IndexInfo.IndexType, IndexInfo.FieldName)
 			}
 
 			index := &meta2.IndexInfor{
@@ -526,7 +547,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 					textIndexs = append(textIndexs, index)
 					continue
 				} else {
-					return fmt.Errorf("text index only create on string  %s", IndexInfo.FieldName)
+					return fmt.Errorf("text index only create on string, but not: %s", IndexInfo.FieldName)
 				}
 			}
 		}
