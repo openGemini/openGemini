@@ -508,16 +508,26 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 			if err != nil {
 				return err
 			}
+			if _, ok := stmt.Fields[IndexInfo.FieldName]; !ok {
+				return fmt.Errorf("%s index only create on field  %s", IndexInfo.IndexName, IndexInfo.FieldName)
+			}
+
 			index := &meta2.IndexInfor{
 				FieldName:  IndexInfo.FieldName,
 				Tokens:     IndexInfo.Tokens,
 				Tokenizers: IndexInfo.Tokenizers,
 				IndexName:  IndexInfo.IndexName,
 			}
+
 			if oid == uint32(tsi.Field) {
 				fieldIndexs = append(fieldIndexs, index)
 			} else if oid == uint32(tsi.Text) {
-				textIndexs = append(textIndexs, index)
+				if val, _ := stmt.Fields[IndexInfo.FieldName]; val == influx.Field_Type_String {
+					textIndexs = append(textIndexs, index)
+					continue
+				} else {
+					return fmt.Errorf("text index only create on string  %s", IndexInfo.FieldName)
+				}
 			}
 		}
 		if len(fieldIndexs) > 1 {
