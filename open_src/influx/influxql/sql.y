@@ -2202,20 +2202,25 @@ COLUMN_LISTS:
 	for i := range $2{
 	    fType := $2[i].tagOrField
 	    if  fType == "tag" {
-		stmt.Tags = append(stmt.Tags, $2[i].fieldName)
-	    }else if fType == "field" {
-		filedType := strings.ToLower($2[i].fieldType)
-		if filedType == "int" {
-		    stmt.Fields[$2[i].fieldName] = 1
-		}else if filedType == "uint" {
+            if  strings.ToLower($2[i].fieldType) != "string" {
+                yylex.Error("tag only support string")
+            }
+		    stmt.Tags = append(stmt.Tags, $2[i].fieldName)
+	    } else if fType == "field" {
+		    filedType := strings.ToLower($2[i].fieldType)
+		    if filedType == "int" || filedType == "integer" {
+		        stmt.Fields[$2[i].fieldName] = 1
+		    } else if filedType == "uint" {
     		    stmt.Fields[$2[i].fieldName] = 2
-		}else if filedType == "float" {
-		    stmt.Fields[$2[i].fieldName] = 3
-		}else if filedType == "string"{
-		    stmt.Fields[$2[i].fieldName] = 4
-		}else if filedType == "boolean"{
-		    stmt.Fields[$2[i].fieldName] = 5
-		}
+		    } else if filedType == "float" {
+		        stmt.Fields[$2[i].fieldName] = 3
+		    } else if filedType == "string"{
+		        stmt.Fields[$2[i].fieldName] = 4
+		    } else if filedType == "boolean" || filedType == "bool" {
+		        stmt.Fields[$2[i].fieldName] = 5
+		    } else {
+                yylex.Error("field only support string,bool,int,float")
+            }
 	    }
 	}
 	stmt.IndexInfo = $3
@@ -2247,7 +2252,7 @@ INDEX_INFO:
         $$ = &IndexInfo{
             IndexName: $2,
             FieldName: $3,
-            IndexType: $5,
+            IndexType: strings.ToLower($5),
             Tokens: $6,
      	    Tokenizers: $7,
         }
@@ -2272,10 +2277,10 @@ TOKENIZERS_CLAUSE:
         $$ = ""
     }
 FIELD_OPTIONS:
-    FIELD_OPTION COMMA FIELD_OPTIONS
+    FIELD_OPTION FIELD_OPTIONS
     {
         fields := []*fieldList{$1}
-        $$ = append(fields, $3...)
+        $$ = append(fields, $2...)
     }
     |
     FIELD_OPTION
@@ -2283,7 +2288,7 @@ FIELD_OPTIONS:
         $$ = []*fieldList{$1}
     }
 FIELD_OPTION:
-    STRING_TYPE STRING_TYPE TAG
+    STRING_TYPE STRING_TYPE TAG COMMA
     {
         $$ = &fieldList{
             fieldName: $1,
@@ -2292,7 +2297,7 @@ FIELD_OPTION:
         }
     }
     |
-    STRING_TYPE STRING_TYPE FIELD
+    STRING_TYPE STRING_TYPE FIELD COMMA
     {
         $$ = &fieldList{
             fieldName: $1,

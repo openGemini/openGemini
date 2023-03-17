@@ -493,6 +493,10 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	}
 
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
+	if _, err := e.MetaClient.Measurement(stmt.Database, stmt.RetentionPolicy, stmt.Name); err != meta2.ErrMeasurementNotFound {
+		return fmt.Errorf("measurement exist : %s/%s/%s", stmt.Database, stmt.RetentionPolicy, stmt.Name)
+	}
+
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
 
