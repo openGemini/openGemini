@@ -192,6 +192,41 @@ func (s *fileLoopCursor) ReadPreAggDataOnlyInMemTable() (*record.Record, *comm.F
 	return nil, nil, nil
 }
 
+func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, seriesKey *seriesInfo) (*record.Record, *comm.FileInfo) {
+	if re != nil {
+		if s.schema.Options().IsAscending() {
+			re = immutable.FilterByTime(re, s.ctx.tr)
+		} else {
+			re = immutable.FilterByTimeDescend(re, s.ctx.tr)
+		}
+	}
+	// filter by field
+	var filterOpts *immutable.FilterOptions
+	if re != nil {
+		index := s.mergeRecIters[s.currSid].index
+		filterOpts = immutable.NewFilterOpts(s.tagSetInfo.Filters[index], s.ctx.m, s.ctx.filterFieldsIdx, s.ctx.filterTags, &seriesKey.tags)
+		re = immutable.FilterByOpts(re, filterOpts)
+	}
+	if re == nil {
+		return nil, nil
+	}
+	r := re.KickNilRow()
+	if r == nil || r.RowNums() == 0 {
+		return nil, nil
+	}
+	rec := s.recPool.Get()
+	if s.isCutSchema {
+		rec.AppendRecForSeries(r, 0, r.RowNums(), s.ridIdx)
+	} else {
+		rec.CopyImpl(r, false, false)
+	}
+	info := s.FilesInfoPool.Get()
+	info.MinTime = s.minTime
+	info.MaxTime = s.maxTime
+	info.SeriesInfo = seriesKey
+	return rec, info
+}
+
 func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.FileInfo, error) {
 	if !s.memTableInit {
 		s.memTableInit = true
@@ -212,12 +247,11 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 			if s.recordSchema == nil {
 				s.recordSchema = re.Schema
 			}
-			re.Schema = s.recordSchema
-			return re, &comm.FileInfo{
-				MinTime:    s.minTime,
-				MaxTime:    s.maxTime,
-				SeriesInfo: seriesKey,
-			}, nil
+			rec, info := s.FilterRecInMemTable(re, seriesKey)
+			if rec == nil {
+				continue
+			}
+			return rec, info, nil
 		} else {
 			delete(s.mergeRecIters, s.currSid)
 			s.currSid = s.GetSid()

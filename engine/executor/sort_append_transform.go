@@ -67,7 +67,6 @@ func (c *SortAppendTransformCreator) Create(plan LogicalPlan, _ query.ProcessorO
 
 	p := NewBaseMergeTransform(inRowDataTypes, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema().(*QuerySchema),
 		plan.Children(), &SortAppendTransf{})
-	p.InitOnce()
 	return p, nil
 }
 

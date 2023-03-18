@@ -17,11 +17,10 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/flagutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/app"
@@ -29,30 +28,26 @@ import (
 	ingestserver "github.com/openGemini/openGemini/app/ts-sql/sql"
 	store "github.com/openGemini/openGemini/app/ts-store/run"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/spf13/cobra"
 )
 
 var (
-	TsVersion   string
+	TsVersion   = "v1.0.1"
 	TsCommit    string
 	TsBranch    string
 	TsBuildTime string
 )
 
-var versionUsage = `ts-server -config=config_file_path`
+const TsServer = "ts-server"
 
-func usage() {
-	flagutil.Usage(versionUsage)
-}
+var serverUsage = fmt.Sprintf(app.MainUsage, TsServer, TsServer)
+var runUsage = fmt.Sprintf(app.RunUsage, TsServer, TsServer)
 
 func main() {
-	_ = flag.String("config", "", "-config=sql config file path")
-	flag.CommandLine.SetOutput(os.Stdout)
-	flag.Usage = usage
-	flag.Parse()
-
+	app.InitParse()
 	if err := doRun(os.Args[1:]...); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -90,9 +85,12 @@ func doRun(args ...string) error {
 		util.MustClose(metaCommand)
 		util.MustClose(sqlCommand)
 		util.MustClose(storeCommand)
+		crypto.Destruct()
 		fmt.Println("Single service shutdown successfully!")
+	case "version":
+		fmt.Printf(app.VERSION, TsServer, TsVersion, TsCommit, runtime.GOOS, runtime.GOARCH)
 	default:
-		return fmt.Errorf(`unknown command, usage:\n "%s"`+"\n\n", versionUsage)
+		return fmt.Errorf(serverUsage)
 	}
 	return nil
 }
@@ -105,7 +103,7 @@ func runMeta(args ...string) (*app.Command, error) {
 		DisableFlagParsing: true,
 	}
 	cmdMeta.Logo = app.METALOGO
-	cmdMeta.Usage = app.MetaUsage
+	cmdMeta.Usage = runUsage
 	cmdMeta.Config = config.NewTSMeta()
 	cmdMeta.ServiceName = "meta"
 	cmdMeta.NewServerFunc = meta.NewServer
@@ -124,7 +122,7 @@ func runSql(args ...string) (*app.Command, error) {
 		DisableFlagParsing: true,
 	}
 	cmdSql.Logo = app.SQLLOGO
-	cmdSql.Usage = app.SqlUsage
+	cmdSql.Usage = runUsage
 	cmdSql.Config = config.NewTSSql()
 	cmdSql.ServiceName = "sql"
 	cmdSql.NewServerFunc = ingestserver.NewServer
@@ -144,7 +142,7 @@ func runStore(args ...string) (*app.Command, error) {
 		DisableFlagParsing: true,
 	}
 	cmdStore.Logo = app.STORELOGO
-	cmdStore.Usage = app.StoreUsage
+	cmdStore.Usage = runUsage
 	cmdStore.Config = config.NewTSStore()
 	cmdStore.ServiceName = "store"
 	cmdStore.NewServerFunc = store.NewServer

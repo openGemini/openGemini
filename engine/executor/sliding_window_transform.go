@@ -100,7 +100,6 @@ type SlidingWindowTransformCreator struct {
 
 func (c *SlidingWindowTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
 	p := NewSlidingWindowTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), opt, plan.Schema())
-	p.InitOnce()
 	return p, nil
 }
 

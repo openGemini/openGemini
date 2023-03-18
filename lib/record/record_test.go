@@ -2485,6 +2485,77 @@ func TestMergeRecordLimitRowsCase7(t *testing.T) {
 
 }
 
+// fix the BUG of method MergeRecordByMaxTimeOfOldRec #BUG2023021301427
+//	old.time [31, 32, 33, 34, 45, 46, 47] pos: 1->7
+//	new.time [48, 49, 50, 51, 52, 53, 54] pos: 0->0
+func TestMergeRecordByMaxTimeOfOldRecCase1(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(schema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{48, 49, 50, 51, 52, 53, 54})
+	expectRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1}, []int64{300, 0, 400, 500, 600, 700},
+		[]int{0, 1, 0, 1, 1, 0}, []float64{0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 0, 0, 1, 0, 1}, []string{"hello", "", "", "world", "", "test"},
+		[]int{0, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, false},
+		[]int64{32, 33, 34, 45, 46, 47})
+	var mergeRec record.Record
+	_, newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, true)
+	if !testRecsEqual(&mergeRec, expectRec) || newPos != 0 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+}
+
+//	old.time [47, 46, 45, 34, 33, 32, 31] pos: 1->7
+//	new.time [30, 29, 28, 27, 26, 25, 24] pos: 0->0
+func TestMergeRecordByMaxTimeOfOldRecCase2(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(schema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{30, 29, 28, 27, 26, 25, 24})
+	expectRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1}, []int64{300, 0, 400, 500, 600, 700},
+		[]int{0, 1, 0, 1, 1, 0}, []float64{0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 0, 0, 1, 0, 1}, []string{"hello", "", "", "world", "", "test"},
+		[]int{0, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, false},
+		[]int64{46, 45, 34, 33, 32, 31})
+	var mergeRec record.Record
+	_, newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, false)
+	if !testRecsEqual(&mergeRec, expectRec) || newPos != 0 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+}
+
 // rows = 7, slice [0, 7)
 func TestRecord_SliceFromRecordCase1(t *testing.T) {
 	schema := record.Schemas{

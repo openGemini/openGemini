@@ -43,7 +43,7 @@ func (e *Engine) PreOffload(db string, ptId uint32) error {
 		}
 		return err
 	}
-	if err := dbPt.disableDBPtBgr(); err != nil {
+	if err = dbPt.disableDBPtBgr(); err != nil {
 		dbPt.unref()
 		return err
 	}
@@ -253,18 +253,18 @@ func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durationInfos map[u
 	return nil
 }
 
-func (e *Engine) trySetDbPtMigrating(db string, ptId uint32) bool {
+func (e *Engine) trySetDbPtMigrating(database string, ptId uint32) bool {
 	e.mgtLock.Lock()
 	defer e.mgtLock.Unlock()
-	mdb, mdbExist := e.migratingDbPT[db]
-	if !mdbExist {
-		mpt := make(map[uint32]struct{})
-		mpt[ptId] = struct{}{}
-		e.migratingDbPT[db] = mpt
+	db, dbExist := e.migratingDbPT[database]
+	if !dbExist {
+		pt := make(map[uint32]struct{})
+		pt[ptId] = struct{}{}
+		e.migratingDbPT[database] = pt
 		return true
 	}
-	if _, ptExist := mdb[ptId]; !ptExist {
-		mdb[ptId] = struct{}{}
+	if _, ptExist := db[ptId]; !ptExist {
+		db[ptId] = struct{}{}
 		return true
 	}
 	return false

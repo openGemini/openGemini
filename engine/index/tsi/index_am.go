@@ -99,7 +99,8 @@ type IndexAmRoutine struct {
 	amBuild        func(relation *IndexRelation) error
 	amInsert       func(index interface{}, primaryIndex PrimaryIndex, name []byte, row interface{}) (uint64, error)
 	amDelete       func(index interface{}, primaryIndex PrimaryIndex, name []byte, condition influxql.Expr, tr TimeRange) error
-	amScan         func(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (interface{}, error)
+	amScan         func(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, groups interface{}) (interface{}, int64, error)
 	amScanrelation func(oid1 int, oid2 int, result1 interface{}, result2 interface{}) (interface{}, error)
 	amClose        func(index interface{}) error
+	amFlush        func(index interface{})
 }

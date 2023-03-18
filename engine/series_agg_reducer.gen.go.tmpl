@@ -125,6 +125,9 @@ func (r *{{$k.name}}Col{{$v.Name}}Reducer) Aggregate(p *ReducerEndpoint, param *
         {{else}}
 		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], r.strArr, int(start), end)
         {{end}}
+        if inRecord.ColVals[inOrdinal].NilCount == inRecord.ColVals[inOrdinal].Len{
+              index = int(start)
+        }
 		if !isNil {
 			// A.the aggregation result is not empty.
 			if i == firstIndex && !r.prevBuf.isNil {
@@ -269,6 +272,9 @@ func (r *{{$k.name}}Col{{$v.Name}}Reducer) Aggregate(p *ReducerEndpoint, param *
         {{else}}
 		index, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], r.strArr, int(start), end)
         {{end}}
+        if inRecord.ColVals[inOrdinal].NilCount == inRecord.ColVals[inOrdinal].Len{
+            index = int(start)
+        }
 		if !isNil {
 			// A.the aggregation result is not empty.
 			if i == firstIndex && !r.prevBuf.isNil {

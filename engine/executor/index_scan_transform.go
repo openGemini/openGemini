@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
@@ -41,14 +42,20 @@ type IndexScanTransform struct {
 	executorBuilder  *ExecutorBuilder
 	pipelineExecutor *PipelineExecutor
 	info             *IndexScanExtraInfo
+	wg               sync.WaitGroup
+	aborted          bool
+	abortMu          sync.Mutex
 
 	inputPort             *ChunkPort
 	downSampleRowDataType *hybridqp.RowDataTypeImpl
 	chunkPool             *CircularChunkPool
+
+	chunkReaderNum int64
+	limiter        chan struct{}
 }
 
 func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions,
-	schema hybridqp.Catalog, input hybridqp.QueryNode, info *IndexScanExtraInfo) *IndexScanTransform {
+	schema hybridqp.Catalog, input hybridqp.QueryNode, info *IndexScanExtraInfo, limiter chan struct{}) *IndexScanTransform {
 	trans := &IndexScanTransform{
 		outRowDataType: outRowDataType,
 		output:         NewChunkPort(outRowDataType),
@@ -58,6 +65,8 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 		opt:            *schema.Options().(*query.ProcessorOptions),
 		node:           input,
 		info:           info,
+		limiter:        limiter,
+		aborted:        false,
 	}
 
 	return trans
@@ -67,7 +76,7 @@ type IndexScanTransformCreator struct {
 }
 
 func (c *IndexScanTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
-	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil)
+	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil, nil)
 	return p, nil
 }
 
@@ -168,10 +177,30 @@ func (trans *IndexScanTransform) BuildDownSamplePlan(s hybridqp.Catalog) (hybrid
 	return plan, nil
 }
 
+func (trans *IndexScanTransform) GetResFromAllocator() {
+	if trans.limiter != nil {
+		trans.limiter <- struct{}{}
+	}
+}
+
+func (trans *IndexScanTransform) FreeResFromAllocator() {
+	if trans.limiter != nil {
+		<-trans.limiter
+	}
+}
+
 func (trans *IndexScanTransform) indexScan() error {
+	if trans.info == nil {
+		return fmt.Errorf("nil index scan transform extra info")
+	}
+	trans.abortMu.Lock()
 	defer func() {
 		trans.info.Store.UnrefEngineDbPt(trans.info.UnRefDbPt.Db, trans.info.UnRefDbPt.Pt)
+		trans.abortMu.Unlock()
 	}()
+	if trans.aborted {
+		return errors.New("nil plan")
+	}
 	info := trans.info
 	downSampleLevel := trans.info.Store.GetShardDownSampleLevel(info.Req.Database, info.Req.PtID, info.ShardID)
 	if !trans.CanDownSampleRewrite(downSampleLevel) {
@@ -182,8 +211,10 @@ func (trans *IndexScanTransform) indexScan() error {
 	if err != nil {
 		return err
 	}
+	trans.GetResFromAllocator()
 	plan, err := trans.info.Store.CreateLogicPlanV2(info.ctx, info.Req.Database, info.Req.PtID, info.ShardID,
 		info.Req.Opt.Sources, subPlanSchema)
+	trans.FreeResFromAllocator()
 	if err != nil {
 		return err
 	}
@@ -191,6 +222,7 @@ func (trans *IndexScanTransform) indexScan() error {
 		return errors.New("nil plan")
 	}
 	var keyCursors [][]interface{}
+	trans.chunkReaderNum += int64(len(plan.(*LogicalDummyShard).Readers()))
 	for _, curs := range plan.(*LogicalDummyShard).Readers() {
 		keyCursors = append(keyCursors, make([]interface{}, 0, len(curs)))
 		for _, cur := range curs {
@@ -232,23 +264,34 @@ func (trans *IndexScanTransform) Explain() []ValuePair {
 	return pairs
 }
 
+func (trans *IndexScanTransform) Abort() {
+	trans.Once(func() {
+		trans.abortMu.Lock()
+		defer trans.abortMu.Unlock()
+		trans.aborted = true
+		if trans.pipelineExecutor != nil {
+			//when be close, should abort child pipelineExecutor, otherwise child pipelineExecutor will
+			trans.pipelineExecutor.Abort()
+		}
+	})
+}
+
 func (trans *IndexScanTransform) Close() {
-	trans.output.Close()
-	if trans.chunkPool != nil {
-		trans.chunkPool.Release()
-	}
-	if trans.pipelineExecutor != nil {
-		//when be close, should abort child pipelineExecutor, otherwise child pipelineExecutor will
-		trans.pipelineExecutor.Abort()
-	}
+	trans.Once(func() {
+		trans.output.Close()
+		if trans.pipelineExecutor != nil {
+			//when be close, should abort child pipelineExecutor, otherwise child pipelineExecutor will
+			trans.pipelineExecutor.Crash()
+		}
+	})
 }
 
 func (trans *IndexScanTransform) Release() error {
-	return nil
+	return resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, trans.chunkReaderNum)
 }
 
 func (trans *IndexScanTransform) Work(ctx context.Context) error {
-	defer trans.Close()
+	defer trans.output.Close()
 	if e := trans.indexScan(); e != nil {
 		if e.Error() != "nil plan" {
 			return e
@@ -265,11 +308,12 @@ func (trans *IndexScanTransform) WorkHelper(ctx context.Context) error {
 		return errors.New("the output should be 1")
 	}
 	trans.inputPort.ConnectNoneCache(output[0])
-	var wg sync.WaitGroup
-	wg.Add(1)
+
+	var wgChild sync.WaitGroup
+	wgChild.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer wgChild.Done()
 		if pipError = trans.pipelineExecutor.ExecuteExecutor(ctx); pipError != nil {
 			if trans.pipelineExecutor.Aborted() {
 				return
@@ -278,14 +322,14 @@ func (trans *IndexScanTransform) WorkHelper(ctx context.Context) error {
 		}
 	}()
 	trans.Running(ctx)
-	wg.Wait()
+	wgChild.Wait()
+	trans.wg.Wait()
 	return nil
 }
 
 func (trans *IndexScanTransform) Running(ctx context.Context) {
-	defer func() {
-		trans.pipelineExecutor.Crash()
-	}()
+	trans.wg.Add(1)
+	defer trans.wg.Done()
 	for {
 		select {
 		case c, ok := <-trans.inputPort.State:

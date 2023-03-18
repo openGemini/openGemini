@@ -23,42 +23,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFsReader_Read(t *testing.T) {
-	fn := "/tmp/test_diskreader.data"
-	_ = fileops.Remove(fn)
-	defer fileops.Remove(fn)
+	fn := t.TempDir() + "/test_diskreader.data"
 	var buf [4096]byte
 
 	fd, err := fileops.OpenFile(fn, os.O_CREATE|os.O_RDWR, 0640)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	_, err = fd.Write(buf[:])
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, fd.Sync())
+
 	lockPath := ""
 	dr := NewDiskFileReader(fd, &lockPath)
 	defer dr.Close()
 
 	rb, err := dr.ReadAt(0, 0, nil)
-	if err != nil || len(rb) > 0 {
-		t.Fatalf("no data shoul be read, but read some")
-	}
+	require.NoError(t, err)
+	require.Equal(t, 0, len(rb), "no data shoul be read, but read some")
 
 	_, err = dr.ReadAt(int64(len(buf)+1), 10, nil)
 	if err == nil || !strings.Contains(err.Error(), "table store read file failed") {
 		t.Fatalf("invalid error: %v", err)
 	}
 
-	rb, _ = dr.ReadAt(10, 20, nil)
-	if len(rb) != 20 {
-		t.Fatalf("read file fail")
-	}
+	dr.fileSize += 100
+	_, err = dr.ReadAt(int64(len(buf)+1), 10, nil)
+	require.NotEmpty(t, err)
+	dr.fileSize -= 100
+
+	rb, _ = dr.ReadAt(10, 20, &([]byte{}))
+	require.Equal(t, 20, len(rb), "read file fail")
 
 	dst := make([]byte, 64)
 	dst[0] = 255
@@ -80,11 +80,8 @@ func TestFsReader_Read(t *testing.T) {
 		t.Fatalf("read file fail")
 	}
 
-	dst[0] = 255
-	rb, _ = dr.ReadAt(4096-64+1, uint32(len(dst))+10, &dst)
-	if len(rb) != 63 && bytes.Compare(rb, buf[:63]) != 0 {
-		t.Fatalf("read file fail")
-	}
+	_, err = dr.ReadAt(4096-64+1, uint32(len(dst))+10, &dst)
+	require.True(t, errno.Equal(err, errno.ShortRead))
 }
 
 func TestFsReader_Rename(t *testing.T) {
@@ -152,7 +149,6 @@ func TestFsReader_Rename_With_FileHandle_Optimize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("test rename error fail")
 	}
-
 }
 
 type mockFile struct {

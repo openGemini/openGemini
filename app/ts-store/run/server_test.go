@@ -40,6 +40,7 @@ import (
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/spf13/cobra"
 )
 
 var storageDataPath = "/tmp/data/"
@@ -206,6 +207,15 @@ func TestNilService(t *testing.T) {
 	if server.StoreService != nil {
 		t.Fatal("new service fail")
 	}
+}
+
+func TestNewServer(t *testing.T) {
+	config := config.NewTSStore()
+	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
+	config.Common.EnableTagArray = true
+	cmd := &cobra.Command{}
+
+	NewServer(config, cmd, logger.NewLogger(errno.ModuleUnknown))
 }
 
 type MockMetaClient struct {
