@@ -17,6 +17,7 @@ limitations under the License.
 package downsample
 
 import (
+	"fmt"
 	"time"
 
 	log "github.com/influxdata/influxdb/logger"
@@ -72,6 +73,7 @@ func (s *Service) handle() {
 		logger.Warn("get shard downSample info failed:", zap.Error(err))
 	}
 	for _, sdsp := range infos {
+		logger.Info(fmt.Sprintf("start run downsample task with shardID:%d,downsample level:%d", sdsp.ShardId, sdsp.DownSamplePolicyLevel))
 		policy := s.Engine.GetDownSamplePolicy(sdsp.DbName + "." + sdsp.RpName)
 		infos, err := s.MetaClient.GetMstInfoWithInRp(sdsp.DbName, sdsp.RpName, policy.Info.GetTypes())
 		if err != nil {

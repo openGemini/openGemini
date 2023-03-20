@@ -259,8 +259,10 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 			}
 		}
 
-		if _, ok := f.memRecIters[sid]; ok && f.memRecIters[sid].iter.hasRemainData() {
-			f.memIter.init(f.getSeriesNotInFile(sid))
+		if !f.memIter.hasRemainData() {
+			if _, ok := f.memRecIters[sid]; ok && f.memRecIters[sid].iter.hasRemainData() {
+				f.memIter.init(f.getSeriesNotInFile(sid))
+			}
 		}
 		filter := f.tagSet.Filters[i]
 		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)

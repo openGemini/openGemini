@@ -759,6 +759,10 @@ func FilterByTimeDescend(rec *record.Record, tr record.TimeRange) *record.Record
 	return nil
 }
 
+func FilterByOpts(rec *record.Record, opt *FilterOptions) *record.Record {
+	return FilterByField(rec, opt.filtersMap, opt.cond, opt.fieldsIdx, opt.filterTags, opt.pointTags)
+}
+
 func FilterByField(rec *record.Record, filterMap map[string]interface{}, con influxql.Expr, idField []int, idTags []string, tags *influx.PointTags) *record.Record {
 	if con == nil || rec == nil {
 		return rec

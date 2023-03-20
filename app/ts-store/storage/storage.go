@@ -33,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
@@ -175,6 +176,23 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.CompactionMethod = conf.Data.CompactionMethod
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
 	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
+	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
+
+	// init chunkReader resource allocator.
+	if e := resourceallocator.InitResAllocator(int64(conf.Data.ChunkReaderThreshold), int64(conf.Data.MinChunkReaderConcurrency), int64(conf.Data.MinShardsConcurrency),
+		resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0); e != nil {
+		return nil, e
+	}
+	// init shards parallelism resource allocator.
+	if e := resourceallocator.InitResAllocator(int64(conf.Data.MaxShardsParallelismNum), 0, int64(conf.Data.MinShardsConcurrency),
+		0, resourceallocator.ShardsParallelismRes, time.Duration(conf.Data.MaxWaitResourceTime)); e != nil {
+		return nil, e
+	}
+	// init series parallelism resource allocator.
+	if e := resourceallocator.InitResAllocator(int64(conf.Data.MaxSeriesParallelismNum), 0, int64(conf.Data.MinShardsConcurrency),
+		0, resourceallocator.SeriesParallelismRes, time.Duration(conf.Data.MaxWaitResourceTime)); e != nil {
+		return nil, e
+	}
 
 	executor.IgnoreEmptyTag = conf.Common.IgnoreEmptyTag
 

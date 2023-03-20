@@ -139,7 +139,6 @@ func (c *StreamAggregateTransformCreator) Create(plan LogicalPlan, opt query.Pro
 	if err != nil {
 		return nil, err
 	}
-	p.InitOnce()
 	return p, nil
 }
 

@@ -351,8 +351,6 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string) error {
 			dbPT.mu.Lock()
 			// init indexBuilder and default indexRelation
 			indexBuilder := tsi.NewIndexBuilder(opts)
-			indexBuilder.Relations = make(map[uint32]*tsi.IndexRelation)
-
 			// init primary Index
 			primaryIndex, err := tsi.NewIndex(opts)
 			if err != nil {
@@ -637,8 +635,6 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		indexBuilder = tsi.NewIndexBuilder(opts)
 		indexid := timeRangeInfo.OwnerIndex.IndexID
 		dbPT.indexBuilder[indexid] = indexBuilder
-		dbPT.indexBuilder[indexid].Relations = make(map[uint32]*tsi.IndexRelation)
-
 		primaryIndex, _ := tsi.NewIndex(opts)
 		primaryIndex.SetIndexBuilder(indexBuilder)
 		indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)

@@ -27,6 +27,8 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 )
 
+type LogWriters []LogWriter
+
 type LogWriter struct {
 	writeMu         sync.Mutex
 	syncMu          sync.Mutex
@@ -39,6 +41,12 @@ type LogWriter struct {
 	fileNames       []string
 	currentFd       fileops.File
 	currentFileSize int
+}
+
+type LogReplays []LogReplay
+
+type LogReplay struct {
+	fileNames []string
 }
 
 func (w *LogWriter) closeCurrentFile() error {

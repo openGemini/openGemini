@@ -195,3 +195,23 @@ func MergeRecovery(path string, name string, ctx *mergeContext) {
 		log.Error(panicInfo, zap.Error(errMsg))
 	}
 }
+
+func newNilCol(size int, ref *record.Field) *record.ColVal {
+	if size == 0 {
+		return nil
+	}
+
+	col := &record.ColVal{
+		Val:          nil,
+		Offset:       nil,
+		BitMapOffset: 0,
+		Len:          size,
+		NilCount:     size,
+	}
+
+	col.FillBitmap(0)
+	if ref.IsString() {
+		col.Offset = make([]uint32, size)
+	}
+	return col
+}

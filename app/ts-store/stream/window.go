@@ -120,9 +120,6 @@ type WindowCache struct {
 func (s *Task) stop() error {
 	close(s.abort)
 	err := <-s.err
-	close(s.err)
-	close(s.updateWindow)
-	close(s.cleanPreWindow)
 	return err
 }
 
@@ -286,7 +283,12 @@ func (s *Task) consumeDataAndUpdateMeta() {
 			s.stats.Reset()
 			s.stats.StatWindowOutMinTime(s.start.UnixNano())
 			s.stats.StatWindowOutMaxTime(s.end.UnixNano())
-			s.cleanPreWindow <- struct{}{}
+			select {
+			case s.cleanPreWindow <- struct{}{}:
+				continue
+			case <-s.abort:
+				return
+			}
 		case <-s.abort:
 			return
 		case cache := <-s.cache:
@@ -531,7 +533,12 @@ func (s *Task) flush() error {
 		bufferpool.PutPoints(indexKeyPool)
 		s.stats.StatWindowFlushCost(int64(time.Now().Sub(t)))
 		s.stats.Push()
-		s.updateWindow <- struct{}{}
+		select {
+		case s.updateWindow <- struct{}{}:
+			return
+		case <-s.abort:
+			return
+		}
 	}()
 
 	validNum, _, err := s.flushRows(indexKeyPool)

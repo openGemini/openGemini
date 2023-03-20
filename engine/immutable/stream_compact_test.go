@@ -795,6 +795,8 @@ func TestStreamWriteFile_WriteData_panic(t *testing.T) {
 		col.AppendFloat(1)
 	}
 
+	require.EqualError(t, sw.WriteData(0, ref, record.ColVal{}, nil), "series id is 0")
+
 	var err string
 	var write = func() {
 		defer func() {

@@ -117,7 +117,6 @@ func (c *TargetTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOpt
 	if err != nil {
 		return nil, err
 	}
-	p.InitOnce()
 
 	return p, nil
 }

@@ -18,7 +18,9 @@ package handler
 
 import (
 	"context"
+	"math"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -29,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	qry "github.com/openGemini/openGemini/open_src/influx/query"
@@ -240,11 +243,26 @@ func TestSelectProcessor(t *testing.T) {
 	resp := &EmptyResponser{}
 	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
 
-	msg := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Node: []byte{10}})
-	msg.SetClientID(100)
+	msg1 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1, 2, 3}})
+	msg1.SetClientID(100)
 
+	msg2 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1, 2}})
+	msg2.SetClientID(100)
+
+	msg3 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1}})
+	msg3.SetClientID(100)
+
+	e := resourceallocator.InitResAllocator(2, 0, 2, 0, resourceallocator.ShardsParallelismRes, time.Second)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() {
+		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	}()
 	p := NewSelectProcessor(nil)
-	require.NoError(t, p.Handle(resp, msg))
+	require.NoError(t, p.Handle(resp, msg1))
+	require.NoError(t, p.Handle(resp, msg2))
+	require.NoError(t, p.Handle(resp, msg3))
 }
 
 var storageDataPath = "/tmp/data/"

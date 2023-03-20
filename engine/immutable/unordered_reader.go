@@ -67,7 +67,7 @@ func (r *UnorderedColumnReader) findColumnIndex(ref *record.Field) (int, bool) {
 	return 0, false
 }
 
-func (r *UnorderedColumnReader) readTime() ([]int64, error) {
+func (r *UnorderedColumnReader) initTime() error {
 	if len(r.times) == 0 {
 		meta := &r.cm.colMeta[r.cm.columnCount-1]
 		ref := &record.Field{Name: record.TimeField, Type: int(meta.ty)}
@@ -75,12 +75,29 @@ func (r *UnorderedColumnReader) readTime() ([]int64, error) {
 		r.changOffset(len(r.cm.colMeta) - 1)
 		col, err := r.read(len(r.cm.colMeta)-1, math.MaxInt64, ref)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		r.times = col.IntegerValues()
 	}
-	return r.times, nil
+	return nil
+}
+
+func (r *UnorderedColumnReader) readTime(colIdx int, maxTime int64) ([]int64, error) {
+	r.changOffset(colIdx)
+
+	end := sort.Search(len(r.times), func(i int) bool {
+		return r.times[i] > maxTime
+	})
+
+	start := r.lineOffset.value()
+	if end < start {
+		return nil, nil
+	}
+
+	times := r.times[start:end]
+	r.lineOffset.incr(len(times))
+	return times, nil
 }
 
 // reads all unordered data whose time is earlier than maxTime
@@ -90,32 +107,21 @@ func (r *UnorderedColumnReader) Read(ref *record.Field, maxTime int64) (*record.
 		return nil, nil, nil
 	}
 
-	times, err := r.readTime()
+	if err := r.initTime(); err != nil {
+		return nil, nil, err
+	}
+
+	times, err := r.readTime(idx, maxTime)
+	if err != nil || len(times) == 0 {
+		return nil, nil, err
+	}
+
+	col, err := r.read(idx, len(times), ref)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if times[0] > maxTime {
-		return nil, nil, nil
-	}
-
-	end := sort.Search(len(times), func(i int) bool {
-		return times[i] > maxTime
-	})
-
-	r.changOffset(idx)
-	start := r.lineOffset.value()
-	if end <= start {
-		return nil, nil, nil
-	}
-
-	col, err := r.read(idx, end-start, ref)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	r.lineOffset.incr(col.Len)
-	return col, times[start:end], nil
+	return col, times, nil
 }
 
 func (r *UnorderedColumnReader) ReadSchema(res map[string]record.Field, maxTime int64) {
@@ -191,15 +197,18 @@ type UnorderedReader struct {
 	log *logger.Logger
 
 	// map key is sid
-	meta  map[uint64][]*UnorderedColumnReader
-	sid   []uint64
-	times []int64
+	meta    map[uint64][]*UnorderedColumnReader
+	sid     []uint64
+	times   []int64
+	offsets map[string]int
+	timeCol record.ColVal
 }
 
 func NewUnorderedReader(log *logger.Logger) *UnorderedReader {
 	return &UnorderedReader{
-		log:  log,
-		meta: make(map[uint64][]*UnorderedColumnReader),
+		log:     log,
+		meta:    make(map[uint64][]*UnorderedColumnReader),
+		offsets: make(map[string]int),
 	}
 }
 
@@ -253,12 +262,17 @@ func (r *UnorderedReader) ReadRemain(sid uint64, cb remainCallback) error {
 }
 
 func (r *UnorderedReader) readRemain(sid uint64, cb remainCallback) error {
+	if err := r.InitTimes(sid, math.MaxInt64); err != nil {
+		return err
+	}
+	if len(r.times) == 0 {
+		return nil
+	}
+
 	schemas := r.ReadSeriesSchemas(sid, math.MaxInt64)
 	if len(schemas) == 0 {
 		return nil
 	}
-
-	timeCol := &record.ColVal{}
 
 	for i := 0; i < len(schemas); i++ {
 		col, times, err := r.Read(sid, &schemas[i], math.MaxInt64)
@@ -266,16 +280,36 @@ func (r *UnorderedReader) readRemain(sid uint64, cb remainCallback) error {
 			return err
 		}
 
-		if i == 0 {
-			timeCol.AppendIntegers(times...)
-		}
-
 		if err := cb(sid, record.Field{Name: schemas[i].Name, Type: schemas[i].Type}, col, times); err != nil {
 			return err
 		}
 	}
 
-	return cb(sid, timeField, timeCol, timeCol.IntegerValues())
+	r.timeCol.Init()
+	r.timeCol.AppendTimes(r.times)
+	return cb(sid, timeField, &r.timeCol, r.times)
+}
+
+func (r *UnorderedReader) ReadAllTimes() []int64 {
+	return r.times
+}
+
+func (r *UnorderedReader) ReadTimes(ref *record.Field, maxTime int64) []int64 {
+	ofs, ok := r.offsets[ref.Name]
+	if !ok {
+		ofs = 0
+	}
+
+	if ofs >= len(r.times) || r.times[ofs] >= maxTime {
+		return nil
+	}
+
+	end := sort.Search(len(r.times), func(i int) bool {
+		return r.times[i] > maxTime
+	})
+
+	r.offsets[ref.Name] = end
+	return r.times[ofs:end]
 }
 
 // Read reads data based on the series ID, column, and time range
@@ -284,6 +318,11 @@ func (r *UnorderedReader) Read(sid uint64, ref *record.Field, maxTime int64) (*r
 	if !ok || len(items) == 0 {
 		return nil, nil, nil
 	}
+	nilTimes := r.ReadTimes(ref, maxTime)
+	if len(nilTimes) == 0 {
+		return nil, nil, nil
+	}
+	nilCol := newNilCol(len(nilTimes), ref)
 
 	var colList []*record.ColVal
 	var timesList [][]int64
@@ -301,17 +340,14 @@ func (r *UnorderedReader) Read(sid uint64, ref *record.Field, maxTime int64) (*r
 	}
 
 	if len(colList) == 0 {
-		return nil, nil, nil
-	}
-	if len(colList) == 1 {
-		return colList[0], timesList[0], nil
+		return nilCol, nilTimes, nil
 	}
 	mh := record.NewMergeHelper()
-	for i := 1; i < len(colList); i++ {
+	for i := 0; i < len(colList); i++ {
 		mh.AddUnorderedCol(colList[i], timesList[i], ref.Type)
 	}
 
-	return mh.Merge(colList[0], timesList[0], ref.Type)
+	return mh.Merge(nilCol, nilTimes, ref.Type)
 }
 
 func (r *UnorderedReader) ReadSeriesSchemas(sid uint64, maxTime int64) record.Schemas {
@@ -324,8 +360,7 @@ func (r *UnorderedReader) ReadSeriesSchemas(sid uint64, maxTime int64) record.Sc
 		item.ReadSchema(tmp, maxTime)
 	}
 
-	if len(tmp) == 0 && maxTime == math.MaxInt64 {
-		delete(r.meta, sid)
+	if len(tmp) == 0 {
 		return nil
 	}
 
@@ -337,9 +372,12 @@ func (r *UnorderedReader) ReadSeriesSchemas(sid uint64, maxTime int64) record.Sc
 	return res
 }
 
-// InitSeriesTimes init the time column of a series
-func (r *UnorderedReader) InitSeriesTimes(sid uint64) error {
+// InitTimes initialize the time column of unordered data
+func (r *UnorderedReader) InitTimes(sid uint64, maxTime int64) error {
 	r.times = r.times[:0]
+	for k := range r.offsets {
+		delete(r.offsets, k)
+	}
 
 	meta, ok := r.meta[sid]
 	if !ok || len(meta) == 0 {
@@ -347,8 +385,12 @@ func (r *UnorderedReader) InitSeriesTimes(sid uint64) error {
 	}
 
 	for _, item := range meta {
-		times, err := item.readTime()
-		if err != nil || len(times) == 0 {
+		if err := item.initTime(); err != nil {
+			return err
+		}
+
+		times, err := item.readTime(len(item.cm.colMeta)-1, maxTime)
+		if err != nil {
 			return err
 		}
 
@@ -356,21 +398,6 @@ func (r *UnorderedReader) InitSeriesTimes(sid uint64) error {
 	}
 
 	return nil
-}
-
-func (r *UnorderedReader) ReadTimes(min, max int64) []int64 {
-	if len(r.times) == 0 {
-		return nil
-	}
-
-	begin := sort.Search(len(r.times), func(i int) bool {
-		return r.times[i] > min
-	})
-	end := sort.Search(len(r.times), func(i int) bool {
-		return r.times[i] > max
-	})
-
-	return r.times[begin:end]
 }
 
 func (r *UnorderedReader) Close() {

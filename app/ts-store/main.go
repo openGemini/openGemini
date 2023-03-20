@@ -17,9 +17,9 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
@@ -34,28 +34,19 @@ import (
 )
 
 var (
-	TsVersion   string
+	TsVersion   = "v1.0.1"
 	TsCommit    string
 	TsBranch    string
 	TsBuildTime string
 )
 
-var (
-	confPath = flag.String("config", "", "-config=store config file path")
-	pidPath  = flag.String("pidfile", "", "-pidfile=store config file path")
-)
+const TsStore = "ts-store"
 
-var versionUsage = `ts-store -config=config_file_path -pidfile=pid_file_path`
-
-func usage() {
-	fmt.Println(versionUsage)
-}
+var storeUsage = fmt.Sprintf(app.MainUsage, TsStore, TsStore)
+var runUsage = fmt.Sprintf(app.RunUsage, TsStore, TsStore)
 
 func main() {
-	flag.CommandLine.SetOutput(os.Stdout)
-	flag.Usage = usage
-	flag.Parse()
-
+	app.InitParse()
 	if err := doRun(os.Args[1:]...); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -64,19 +55,25 @@ func main() {
 
 func doRun(args ...string) error {
 	errno.SetNode(errno.NodeStore)
-	name, _ := cmd.ParseCommandName(args)
+	name, args := cmd.ParseCommandName(args)
 
 	switch name {
 	case "", "run":
+		options, err := app.ParseFlags(func() {
+			fmt.Println(runUsage)
+		}, args...)
+		if err != nil {
+			return err
+		}
 		mainCmd := app.NewCommand()
-		err := mainCmd.InitConfig(config.NewTSStore(), *confPath)
+		err = mainCmd.InitConfig(config.NewTSStore(), options.ConfigPath)
 		if err != nil {
 			return err
 		}
 
 		mainCmd.Logger = logger.NewLogger(errno.ModuleUnknown)
 		mainCmd.Command = &cobra.Command{
-			Use:                app.StoreUsage,
+			Use:                storeUsage,
 			Version:            TsVersion,
 			ValidArgs:          []string{TsBranch, TsCommit, TsBuildTime},
 			DisableFlagParsing: true,
@@ -84,10 +81,10 @@ func doRun(args ...string) error {
 				fmt.Fprint(os.Stdout, app.STORELOGO)
 
 				// Write the PID file.
-				if err := app.WritePIDFile(*pidPath); err != nil {
+				if err := app.WritePIDFile(options.PIDFile); err != nil {
 					return fmt.Errorf("write pid file: %s", err)
 				}
-				mainCmd.Pidfile = *pidPath
+				mainCmd.Pidfile = options.PIDFile
 
 				s, err := run.NewServer(mainCmd.Config, cmd, mainCmd.Logger)
 				if err != nil {
@@ -111,8 +108,10 @@ func doRun(args ...string) error {
 		mainCmd.Logger.Info("Store service received shutdown signal", zap.Any("signal", signal))
 		util.MustClose(mainCmd)
 		mainCmd.Logger.Info("Store shutdown successfully!")
+	case "version":
+		fmt.Printf(app.VERSION, TsStore, TsVersion, TsCommit, runtime.GOOS, runtime.GOARCH)
 	default:
-		return fmt.Errorf(`unknown command, usage:\n "%s"`+"\n\n", versionUsage)
+		return fmt.Errorf(storeUsage)
 	}
 	return nil
 }

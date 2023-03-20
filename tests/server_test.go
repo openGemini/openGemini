@@ -3847,6 +3847,63 @@ func TestServer_difference_derivative_time_duplicate(t *testing.T) {
 	}
 }
 
+func TestServer_top_bottom_nul_column(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,country=china,name=azhu height=11i 1629129600000000000`),
+		fmt.Sprintf(`mst,country=american,name=alan age=2,height=12i 1629129601000000000`),
+		fmt.Sprintf(`mst,country=germany,name=alang height=13i 1629129602000000000`),
+		fmt.Sprintf(`mst,country=china,name=azhu age=4,height=24i 1629129603000000000`),
+		fmt.Sprintf(`mst,country=american,name=alan age=5,height=25i 1629129604000000000`),
+		fmt.Sprintf(`mst,country=germany,name=alang height=26i 1629129605000000000`),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "top",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select top(sum_age, 3) from (select sum(age) as sum_age, sum(height) as sum_height from db0.rp0.mst where time >= 1629129600000000000 and time <= 1629129605000000000 group by time(1s)) where time >= 1629129600000000000 and time <= 1629129605000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","top"],"values":[["2021-08-16T16:00:01Z",2],["2021-08-16T16:00:03Z",4],["2021-08-16T16:00:04Z",5]]}]}]}`,
+		},
+		&Query{
+			name:    "bottom",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select bottom(sum_age, 3) from (select sum(age) as sum_age, sum(height) as sum_height from db0.rp0.mst where time >= 1629129600000000000 and time <= 1629129605000000000 group by time(1s)) where time >= 1629129600000000000 and time <= 1629129605000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","bottom"],"values":[["2021-08-16T16:00:01Z",2],["2021-08-16T16:00:03Z",4],["2021-08-16T16:00:04Z",5]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 //TODO:partial Compare
 func TestServer_Query_Complex_Aggregate(t *testing.T) {
 	t.Parallel()
@@ -10809,4 +10866,85 @@ func TestServer_HoltWinters(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServer_FieldIndex_Query(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	createQuery := &Query{
+		name:    `create measurement cpu`,
+		command: "CREATE MEASUREMENT cpu with indextype \"field\" indexlist field_index",
+		params:  url.Values{"db": []string{"db0"}},
+		exp:     `{"results":[{"statement_id":0}]}`,
+	}
+
+	t.Run(createQuery.name, func(t *testing.T) {
+		if err := createQuery.Execute(s); err != nil {
+			t.Error(createQuery.Error(err))
+		} else if !createQuery.success() {
+			t.Error(createQuery.failureMessage())
+		}
+	})
+
+	writes := []string{
+		fmt.Sprintf(`cpu,host=server01,region=uswest value=100,field_index="127.0.0.1" %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server02,region=uswest value=100,field_index="127.0.0.2" %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server03,region=uswest value=100,field_index="127.0.0.3" %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server04,region=uswest value=100,field_index="127.0.0.4" %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server05,region=uswest value=100,field_index="127.0.0.5" %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server06,region=uswest value=100,field_index="127.0.0.6" %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	if err := test.init(s); err != nil {
+		t.Fatalf("test init failed: %s", err)
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    `show series exact cardinality`,
+			command: "SHOW SERIES EXACT CARDINALITY",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["count"],"values":[[6]]}]}]}`,
+		},
+		&Query{
+			name:    `show series cardinality`,
+			command: "SHOW SERIES CARDINALITY",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",6]]}]}]}`,
+		},
+		&Query{
+			name:    `select * from cpu group by field_index`,
+			command: "SELECT * FROM cpu GROUP BY field_index",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"field_index":"127.0.0.1"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.1","server01","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.2"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.2","server02","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.3"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.3","server03","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.4"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.4","server04","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.5"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.5","server05","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.6"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.6","server06","uswest",100]]}]}]}`,
+		},
+	}...)
+
+	InitHaTestEnv(t)
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+
+	ReleaseHaTestEnv(t)
 }

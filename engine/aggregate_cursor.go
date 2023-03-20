@@ -89,6 +89,7 @@ func (c *aggregateCursor) NextAggData() (*record.Record, *comm.FileInfo, error) 
 	if !c.init {
 		c.recordPool = record.NewCircularRecordPool(c.globalPool, aggCursorRecordNum, c.outSchema, c.initColMeta)
 		c.intervalIndex = record.Bytes2Uint16Slice(bufferpool.Get())
+		c.intervalIndex = c.intervalIndex[:0]
 		c.init = true
 	}
 
@@ -104,6 +105,9 @@ func (c *aggregateCursor) NextAggData() (*record.Record, *comm.FileInfo, error) 
 				return newRecord, currInfo, err
 			}
 			return nil, nil, nil
+		}
+		if inRecord.RowNums() == 0 {
+			continue
 		}
 		if c.fileInfo != nil && info != c.fileInfo {
 			c.unreadRecordWithInfo(inRecord, info)
@@ -155,8 +159,12 @@ func (c *aggregateCursor) inNextWindowWithInfo(currRecord *record.Record) error 
 	if err != nil {
 		return err
 	}
-	if nextRecord == nil || nextRecord.RowNums() == 0 || currRecord.RowNums() == 0 {
+	if nextRecord == nil || currRecord.RowNums() == 0 {
 		c.inNextWin = false
+		return nil
+	}
+	if nextRecord.RowNums() == 0 {
+		c.inNextWin = true
 		return nil
 	}
 
@@ -269,6 +277,8 @@ func (c *aggregateCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 				return newRecord, info, err
 			}
 			return nil, nil, nil
+		} else if inRecord.RowNums() == 0 {
+			continue
 		} else if newRecord.RowNums() >= c.maxRecordSize {
 			c.unreadRecord(inRecord)
 			return newRecord, info, nil
@@ -294,8 +304,12 @@ func (c *aggregateCursor) inNextWindow(currRecord *record.Record) error {
 	if err != nil {
 		return err
 	}
-	if nextRecord == nil || nextRecord.RowNums() == 0 || currRecord.RowNums() == 0 {
+	if nextRecord == nil || currRecord.RowNums() == 0 {
 		c.inNextWin = false
+		return nil
+	}
+	if nextRecord.RowNums() == 0 {
+		c.inNextWin = true
 		return nil
 	}
 
@@ -364,6 +378,7 @@ func (c *aggregateCursor) GetSchema() record.Schemas {
 
 func (c *aggregateCursor) Close() error {
 	if c.recordPool != nil {
+		c.clear()
 		c.recordPool.Put()
 		bufferpool.Put(record.Uint16Slice2byte(c.intervalIndex))
 	}

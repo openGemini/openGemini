@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/services/httpd"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -74,7 +75,7 @@ func NewService(c config.Config) *Service {
 func (s *Service) Openlistener(addr string) error {
 	// Open listener.
 	if s.https {
-		cert, err := tls.LoadX509KeyPair(s.cert, s.key)
+		cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(s.cert)), []byte(crypto.DecryptFromFile(s.key)))
 		if err != nil {
 			return err
 		}

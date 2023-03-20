@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"go.uber.org/zap"
@@ -171,14 +172,24 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 		}
 	}()
 
+	shardsNum := int64(len(req.ShardIDs))
+	parallelism, e := resourceallocator.AllocRes(resourceallocator.ShardsParallelismRes, shardsNum)
+	if e != nil {
+		return e
+	}
+	defer func() {
+		_ = resourceallocator.FreeRes(resourceallocator.ShardsParallelismRes, parallelism)
+	}()
+
 	traits, unrefs, err := s.NewShardTraits(req, w)
 	if err != nil {
 		return err
 	}
+
 	if !traits.HasShard() {
 		return nil
 	}
-	executorBuilder := executor.NewScannerStoreExecutorBuilder(traits, s.store, req, ctx, unrefs)
+	executorBuilder := executor.NewScannerStoreExecutorBuilder(traits, s.store, req, ctx, unrefs, int(parallelism))
 	executorBuilder.Analyze(s.rootSpan)
 	p, err := executorBuilder.Build(node)
 	if err != nil {

@@ -8,7 +8,7 @@ function splittingLine()
 }
 
 splittingLine "commit lint check start"
-go install github.com/conventionalcommit/commitlint@latest
+go install github.com/conventionalcommit/commitlint@v0.10.1
 
 git log -1 --pretty=format:"%s%n%n%b" | tee COMMIT_EDITMSG
 
@@ -19,6 +19,17 @@ if [[ $? -ne 0 ]]; then
     exit 1
 fi
 rm -f COMMIT_EDITMSG
+
+########################### check licence header ###############################################
+splittingLine "start: check licence header"
+
+make licence-check
+
+if [[ $? -ne 0 ]]; then
+    exit 1
+fi
+
+splittingLine "end: check licence header"
 
 rm -f go.sum
 go mod tidy
@@ -52,8 +63,18 @@ splittingLine "end run ut test"
 splittingLine "failpoint disable"
 find $PROJECT_DIR -type d | grep -vE "(\.cid|\.build_config|tests)" | xargs failpoint-ctl disable
 
+########################### test build for multi platform ###############################################
+splittingLine "start: test build for multi platform"
 
-python build.py  --clean
+python build.py  --version v1.0.0 --clean --platform darwin --arch amd64
+
+python build.py  --version v1.0.0 --clean --platform darwin --arch arm64
+
+python build.py  --version v1.0.0 --clean --platform linux --arch arm64
+
+python build.py  --version v1.0.0 --clean --platform linux --arch amd64
+
+splittingLine "end: test build for multi platform"
 
 
 sed -i 's/# time-range-limit = \["72h", "24h"\]/time-range-limit = ["0s", "24h"]/g' config/openGemini.conf

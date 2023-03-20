@@ -39,8 +39,8 @@ import (
 type IndexBuilder struct {
 	opId uint64 // assign task id
 
-	path      string                    // eg, data/db/pt/rp/index/indexid
-	Relations map[uint32]*IndexRelation // <oid, indexRelation>
+	path      string           // eg, data/db/pt/rp/index/indexid
+	Relations []*IndexRelation // <oid, indexRelation>
 	ident     *meta.IndexIdentifier
 	endTime   time.Time
 	duration  time.Duration
@@ -61,6 +61,7 @@ func NewIndexBuilder(opt *Options) *IndexBuilder {
 		logicalClock: opt.logicalClock,
 		sequenceID:   opt.sequenceID,
 		lock:         opt.lock,
+		Relations:    make([]*IndexRelation, IndexTypeAll),
 	}
 	return iBuilder
 }
@@ -74,10 +75,10 @@ type indexRow struct {
 type indexRows []indexRow
 
 func (rows *indexRows) reset() {
-	for _, row := range *rows {
-		row.Wg = nil
-		row.Row = nil
-		row.Err = nil
+	for i := range *rows {
+		(*rows)[i].Wg = nil
+		(*rows)[i].Row = nil
+		(*rows)[i].Err = nil
 	}
 }
 
@@ -119,18 +120,23 @@ func (iBuilder *IndexBuilder) GenerateUUID() uint64 {
 }
 
 func (iBuilder *IndexBuilder) Flush() {
-	idx := iBuilder.GetPrimaryIndex().(*MergeSetIndex)
-	idx.DebugFlush()
+	for i := range iBuilder.Relations {
+		if iBuilder.isRelationInited(uint32(i)) {
+			iBuilder.Relations[i].IndexFlush()
+		}
+	}
 }
 
 func (iBuilder *IndexBuilder) Open() error {
 	start := time.Now()
 
 	// Open all indexes
-	for _, relation := range iBuilder.Relations {
-		if err := relation.IndexOpen(); err != nil {
-			logger.GetLogger().Error("Index open fail", zap.Error(err))
-			return err
+	for i := range iBuilder.Relations {
+		if iBuilder.isRelationInited(uint32(i)) {
+			if err := iBuilder.Relations[i].IndexOpen(); err != nil {
+				logger.GetLogger().Error("Index open fail", zap.Error(err))
+				return err
+			}
 		}
 	}
 	statistics.IndexTaskInit(iBuilder.GetIndexID(), iBuilder.opId, iBuilder.ident.OwnerDb, iBuilder.ident.OwnerPt, iBuilder.RPName())
@@ -246,15 +252,11 @@ func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex
 				path:      primaryIndex.Path(),
 				lock:      iBuilder.lock,
 			}
-			var err error
-			relation, err = NewIndexRelation(opt, primaryIndex, iBuilder)
-			if err != nil {
+			if err := iBuilder.initRelation(indexOpt.Oid, opt, primaryIndex); err != nil {
 				return err
 			}
-			if err = relation.IndexOpen(); err != nil {
-				return err
-			}
-			iBuilder.Relations[indexOpt.Oid] = relation
+
+			relation = iBuilder.Relations[indexOpt.Oid]
 		}
 		if err := relation.IndexInsert([]byte(row.Name), row); err != nil {
 			return err
@@ -263,39 +265,78 @@ func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex
 	return nil
 }
 
-func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (interface{}, error) {
+func (iBuilder *IndexBuilder) isRelationInited(oid uint32) bool {
+	return iBuilder.Relations[oid] != nil
+}
+
+func (iBuilder *IndexBuilder) initRelation(oid uint32, opt *Options, primaryIndex PrimaryIndex) error {
+	if iBuilder.isRelationInited(oid) {
+		return nil
+	}
+
+	iBuilder.mu.Lock()
+	defer iBuilder.mu.Unlock()
+	if iBuilder.isRelationInited(oid) {
+		return nil
+	}
+
+	var err error
+	relation, err := NewIndexRelation(opt, primaryIndex, iBuilder)
+	if err != nil {
+		return err
+	}
+	if err = relation.IndexOpen(); err != nil {
+		return err
+	}
+
+	iBuilder.Relations[oid] = relation
+	return nil
+}
+
+func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error) (interface{}, int64, error) {
 	// 1st, use primary index to scan.
 	relation := iBuilder.Relations[uint32(MergeSet)]
 	if relation == nil {
-		return nil, fmt.Errorf("not exist index for %s", name)
+		return nil, 0, fmt.Errorf("not exist index for %s", name)
 	}
-	groups, err := relation.IndexScan(span, name, opt, nil)
+	groups, seriesNum, err := relation.IndexScan(span, name, opt, nil, callBack)
 	if err != nil {
-		return nil, err
-	}
-	// 2nd, use secondary index to scan.
-	for oid, relation := range iBuilder.Relations {
-		if oid == uint32(MergeSet) {
-			continue
-		}
-		groups, err = relation.IndexScan(span, name, opt, groups)
-		if err != nil {
-			return nil, err
-		}
+		return nil, seriesNum, err
 	}
 
-	return groups, nil
+	// 2nd, use secondary index to scan.
+	for i := range iBuilder.Relations {
+		indexSeriesNum := int64(0)
+		if !iBuilder.isRelationInited(uint32(i)) {
+			continue
+		}
+
+		if iBuilder.Relations[i].oid == uint32(MergeSet) {
+			continue
+		}
+		groups, indexSeriesNum, err = iBuilder.Relations[i].IndexScan(span, name, opt, groups, callBack)
+		if err != nil {
+			return nil, seriesNum, err
+		}
+		seriesNum += indexSeriesNum
+	}
+
+	return groups, seriesNum, nil
 }
 
 func (iBuilder *IndexBuilder) Delete(name []byte, condition influxql.Expr, tr TimeRange) error {
 	var err error
-	var index uint32
-	for i, relation := range iBuilder.Relations {
-		if relation.oid == uint32(MergeSet) {
+	var index int
+	for i := range iBuilder.Relations {
+		if !iBuilder.isRelationInited(uint32(i)) {
+			continue
+		}
+
+		if iBuilder.Relations[i].oid == uint32(MergeSet) {
 			index = i
 			continue
 		}
-		err = relation.IndexDelete(name, condition, tr)
+		err = iBuilder.Relations[i].IndexDelete(name, condition, tr)
 		if err != nil {
 			return err
 		}
@@ -306,8 +347,12 @@ func (iBuilder *IndexBuilder) Delete(name []byte, condition influxql.Expr, tr Ti
 }
 
 func (iBuilder *IndexBuilder) Close() error {
-	for _, relation := range iBuilder.Relations {
-		if err := relation.IndexClose(); err != nil {
+	for i := range iBuilder.Relations {
+		if !iBuilder.isRelationInited(uint32(i)) {
+			continue
+		}
+
+		if err := iBuilder.Relations[i].IndexClose(); err != nil {
 			return err
 		}
 	}

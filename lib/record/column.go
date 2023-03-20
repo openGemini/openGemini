@@ -1707,6 +1707,11 @@ func (cv *ColVal) AppendTimes(times []int64) {
 	cv.Len += len(times)
 
 	cv.FillBitmap(255)
+	if cv.Len%8 > 0 {
+		for i := cv.Len; i < len(cv.Bitmap)*8; i++ {
+			cv.resetBitMap(i)
+		}
+	}
 }
 
 func (cv *ColVal) FillBitmap(val uint8) {
@@ -1715,13 +1720,8 @@ func (cv *ColVal) FillBitmap(val uint8) {
 		bitmapSize--
 	}
 
-	preSize := len(cv.Bitmap)
-	if preSize == bitmapSize {
-		return
-	}
-
 	cv.Bitmap = bufferpool.Resize(cv.Bitmap, bitmapSize)
-	for i := preSize; i < bitmapSize; i++ {
+	for i := 0; i < bitmapSize; i++ {
 		cv.Bitmap[i] = val
 	}
 }

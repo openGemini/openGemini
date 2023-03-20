@@ -114,7 +114,7 @@ func (exec *PipelineExecutor) init() {
 
 func (exec *PipelineExecutor) Visit(vertex *TransformVertex) TransformVertexVisitor {
 	if vertex.transform.IsSink() {
-		vertex.transform.Close()
+		vertex.transform.Abort()
 	}
 	return exec
 }
@@ -245,6 +245,8 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 						zap.Error(errno.NewError(errno.RecoverPanic, e)),
 						zap.Bool("aborted", exec.aborted),
 						zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
+					exec.Crash()
+					err = nil
 				}
 
 				if err != nil {
@@ -513,6 +515,8 @@ type ExecutorBuilder struct {
 	info                  *IndexScanExtraInfo
 	unRefDbPt             []UnRefDbPt
 
+	parallelismLimiter chan struct{}
+
 	span *tracing.Span
 }
 
@@ -554,7 +558,7 @@ func NewStoreExecutorBuilder(traits *StoreExchangeTraits, enableBinaryTreeMerge 
 }
 
 func NewScannerStoreExecutorBuilder(traits *StoreExchangeTraits, s hybridqp.StoreEngine,
-	req *RemoteQuery, ctx context.Context, unrefs *[]UnRefDbPt) *ExecutorBuilder {
+	req *RemoteQuery, ctx context.Context, unrefs *[]UnRefDbPt, limitSize int) *ExecutorBuilder {
 	builder := &ExecutorBuilder{
 		dag:                   NewTransformDag(),
 		root:                  nil,
@@ -567,6 +571,9 @@ func NewScannerStoreExecutorBuilder(traits *StoreExchangeTraits, s hybridqp.Stor
 			ctx:   ctx,
 		},
 		unRefDbPt: *unrefs,
+	}
+	if len(req.ShardIDs) > 1 {
+		builder.parallelismLimiter = make(chan struct{}, limitSize)
 	}
 
 	return builder
@@ -624,11 +631,9 @@ func (builder *ExecutorBuilder) createMergeTransform(exchange *LogicalExchange, 
 	if len(exchange.Schema().Calls()) > 0 && !exchange.Schema().HasStreamCall() ||
 		(exchange.Schema().HasInterval() && exchange.Schema().HasSlidingWindowCall()) {
 		p := NewMergeTransform(inRowDataTypes, []hybridqp.RowDataType{exchange.RowDataType()}, exchange.RowExprOptions(), exchange.Schema().(*QuerySchema))
-		p.InitOnce()
 		merge = p
 	} else {
 		p := NewSortedMergeTransform(inRowDataTypes, []hybridqp.RowDataType{exchange.RowDataType()}, exchange.RowExprOptions(), exchange.Schema().(*QuerySchema))
-		p.InitOnce()
 		merge = p
 	}
 	return merge
@@ -636,8 +641,7 @@ func (builder *ExecutorBuilder) createMergeTransform(exchange *LogicalExchange, 
 
 func (builder *ExecutorBuilder) createIndexScanTransform(indexScan *LogicalIndexScan) Processor {
 	info := builder.info.Clone()
-	p := NewIndexScanTransform(indexScan.RowDataType(), indexScan.RowExprOptions(), indexScan.Schema(), indexScan.inputs[0], info)
-	p.InitOnce()
+	p := NewIndexScanTransform(indexScan.RowDataType(), indexScan.RowExprOptions(), indexScan.Schema(), indexScan.inputs[0], info, builder.parallelismLimiter)
 	return p
 }
 

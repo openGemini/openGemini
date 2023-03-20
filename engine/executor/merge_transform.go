@@ -644,7 +644,6 @@ func CreateBaseMergeTransform(plan LogicalPlan, mergeType MergeType) (Processor,
 	}
 
 	p := NewBaseMergeTransform(inRowDataTypes, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema().(*QuerySchema), nil, mergeType)
-	p.InitOnce()
 	return p, nil
 }
 

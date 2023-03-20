@@ -60,21 +60,23 @@ var (
 type WAL struct {
 	log            *logger.Logger
 	mu             sync.RWMutex
-	wg             sync.WaitGroup // wait for replay wal finish
+	replayWG       sync.WaitGroup // wait for replay wal finish
 	logPath        string
 	lock           *string
 	partitionNum   int
 	writeReq       uint64
-	logWriter      []LogWriter
+	logWriter      LogWriters
+	logReplay      LogReplays
 	walEnabled     bool
 	replayParallel bool
 }
 
-func NewWAL(path string, lockPath *string, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int, writeWal bool) *WAL {
+func NewWAL(path string, lockPath *string, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int) *WAL {
 	wal := &WAL{
 		logPath:        path,
 		partitionNum:   partitionNum,
-		logWriter:      make([]LogWriter, partitionNum),
+		logWriter:      make(LogWriters, partitionNum),
+		logReplay:      make(LogReplays, partitionNum),
 		walEnabled:     walEnabled,
 		replayParallel: replayParallel,
 		log:            logger.NewLogger(errno.ModuleWal),
@@ -89,21 +91,29 @@ func NewWAL(path string, lockPath *string, walSyncInterval time.Duration, walEna
 			SyncInterval: walSyncInterval,
 			lock:         lockPath,
 		}
-		err := fileops.MkdirAll(wal.logWriter[i].logPath, 0750, lock)
-		if err != nil {
-			panic(err)
-		}
-		wal.setLastSeqAndFiles(&wal.logWriter[i])
-		if writeWal {
-			wal.logWriter[i].fileNames = wal.logWriter[i].fileNames[:0]
+		_, err := fileops.Stat(wal.logWriter[i].logPath)
+		if err != nil && os.IsNotExist(err) {
+			err = fileops.MkdirAll(wal.logWriter[i].logPath, 0750, lock)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
-
 	return wal
 }
 
-func (l *WAL) setLastSeqAndFiles(logWriter *LogWriter) {
-	logPath := logWriter.logPath
+// restoreLogs reloads the wal file on the disk
+func (l *WAL) restoreLogs() {
+	for i := range l.logWriter {
+		writer := &l.logWriter[i]
+		replay := &l.logReplay[i]
+		l.restoreLog(writer, replay)
+	}
+}
+
+// restoreLog sets logWriter max file seq and logReplay the fileNames on the disk
+func (l *WAL) restoreLog(writer *LogWriter, replay *LogReplay) {
+	logPath := writer.logPath
 	// read logPath
 	dirs, err := fileops.ReadDir(logPath)
 	if err != nil {
@@ -126,11 +136,11 @@ func (l *WAL) setLastSeqAndFiles(logWriter *LogWriter) {
 		l.log.Error("parse wal file failed", zap.String("path", logPath), zap.Error(err))
 		return
 	}
-	logWriter.fileSeq = maxSeq
+	writer.fileSeq = maxSeq
 	// traverse files from old to new
 	for n := len(dirs) - 1; n >= 0; n-- {
 		walFile := filepath.Join(logPath, dirs[n].Name())
-		logWriter.fileNames = append(logWriter.fileNames, walFile)
+		replay.fileNames = append(replay.fileNames, walFile)
 	}
 }
 
@@ -323,7 +333,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 }
 
 func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(binary []byte) error) error {
-	for _, fileName := range l.logWriter[idx].fileNames {
+	for _, fileName := range l.logReplay[idx].fileNames {
 		select {
 		case <-ctx.Done():
 			l.log.Info("cancel replay wal", zap.String("filename", fileName))
@@ -413,8 +423,8 @@ func (l *WAL) sendWal2ptChs(ctx context.Context, ptChs []chan []byte, idx int, b
 func (l *WAL) productRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error) []string {
 	var wg sync.WaitGroup
 	var walFileNames []string
-	wg.Add(len(l.logWriter))
-	for i := range l.logWriter {
+	wg.Add(len(l.logReplay))
+	for i := range l.logReplay {
 		go func(idx int) {
 			err := l.replayOnePartition(ctx, idx, func(binary []byte) error {
 				l.sendWal2ptChs(ctx, ptChs, idx, binary)
@@ -425,7 +435,7 @@ func (l *WAL) productRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs [
 			if err != nil {
 				*errs = append(*errs, err)
 			}
-			walFileNames = append(walFileNames, l.logWriter[idx].fileNames...)
+			walFileNames = append(walFileNames, l.logReplay[idx].fileNames...)
 			mu.Unlock()
 			wg.Done()
 		}(i)
@@ -434,38 +444,50 @@ func (l *WAL) productRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs [
 	return walFileNames
 }
 
+func (l *WAL) ref() {
+	l.replayWG.Add(1)
+}
+
+func (l *WAL) unref() {
+	l.replayWG.Done()
+}
+
+func (l *WAL) wait() {
+	l.replayWG.Wait()
+}
+
 func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte) error) ([]string, error) {
 	if !l.walEnabled {
 		return nil, nil
 	}
-	l.wg.Add(2) // productRecord and consumeRecord
 
 	// replay wal files
 	var mu = sync.Mutex{}
 	var errs []error
 	var ptChs []chan []byte
 	consumeFinish := make(chan struct{})
-	for i := 0; i < len(l.logWriter); i++ {
+	for i := 0; i < len(l.logReplay); i++ {
 		ptChs = append(ptChs, make(chan []byte, 4))
 	}
 
 	if l.replayParallel {
 		// multi partition wal files replayed parallel, the update of the same time at a certain series is not guaranteed
+		l.ref()
 		go func() {
-			defer l.wg.Done()
+			defer l.unref()
 			consumeRecordParallel(ctx, &mu, ptChs, &errs, consumeFinish, callBack)
 		}()
 	} else {
+		l.ref()
 		// multi partition wal files replayed serial, the update of the same time at a certain series is guaranteed
 		go func() {
-			defer l.wg.Done()
+			defer l.unref()
 			consumeRecordSerial(ctx, &mu, ptChs, &errs, consumeFinish, callBack)
 		}()
 	}
 
 	// production wal data to channel
 	walFileNames := l.productRecordParallel(ctx, &mu, ptChs, &errs)
-	l.wg.Done()
 	<-consumeFinish
 	close(consumeFinish)
 	for i := range ptChs {

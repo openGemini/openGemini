@@ -202,6 +202,15 @@ type Store struct {
 	OpenShardLimit       int       `toml:"open-shard-limit"`
 
 	DownSampleWriteDrop bool `toml:"downsample-write-drop"`
+
+	//parallelism allocator
+	MaxWaitResourceTime          toml.Duration `toml:"max-wait-resource-time"`
+	MaxSeriesParallelismNum      int           `toml:"max-series-parallelism-num"`
+	MaxShardsParallelismNum      int           `toml:"max-shards-parallelism-num"`
+	ChunkReaderThreshold         int           `toml:"chunk-reader-threshold"`
+	MinChunkReaderConcurrency    int           `toml:"min-chunk-reader-concurrency"`
+	MinShardsConcurrency         int           `toml:"min-shards-concurrency"`
+	MaxDownSampleTaskConcurrency int           `toml:"max-downsample-task-concurrency"`
 }
 
 // NewStore returns the default configuration for tsdb.

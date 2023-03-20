@@ -415,7 +415,7 @@ func (c *cursor) GetSchema() record.Schemas {
 
 func newCursor(records []*record.Record, indexKey []byte) comm.KeyCursor {
 	var info sInfo
-	info.key = influx.Parse2SeriesKey(indexKey, info.key)
+	info.key = influx.Parse2SeriesKey(indexKey, info.key, true)
 	if _, err := influx.IndexKeyToTags(indexKey, false, &info.tags); err != nil {
 		panic(err)
 	}
@@ -800,6 +800,45 @@ func TestAggregateCursor_Multi_Count(t *testing.T) {
 	querySchema := executor.NewQuerySchema(nil, nil, opt)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
+	// 2.  select count(*) from mst : the number of rows in one input record is 0.
+	srcRecords[1] = record.NewRecordBuilder(inSchema)
+	dst1 = record.NewRecordBuilder(outSchema)
+	dst1.RecMeta = &record.RecMeta{}
+	dst1.IntervalIndex = append(dst1.IntervalIndex, 0)
+	dst1.ColVals[0].AppendInteger(6)
+	dst1.ColVals[1].AppendInteger(6)
+	dst1.ColVals[2].AppendInteger(6)
+	dst1.ColVals[3].AppendInteger(6)
+	dst1.AppendTime(7)
+	dstRecords = dstRecords[:0]
+	dstRecords = append(dstRecords, dst1)
+	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
+
+	// it is used to test the NextAggData method.
+	srcCursor := newReaderKeyCursor(srcRecords)
+	aggCursor := engine.NewAggregateCursor(srcCursor, querySchema, AggPool, false)
+	aggCursor.SetSchema(inSchema, outSchema, exprOpt)
+	var i int
+	for {
+		outRecord, _, err := aggCursor.NextAggData()
+		if err != nil {
+			t.Fatal(fmt.Sprintf("aggCursor Next() error: %s", err.Error()))
+		}
+		if outRecord == nil {
+			break
+		}
+
+		if !isRecEqual(outRecord, dstRecords[i]) {
+			t.Log(fmt.Sprintf("output record is not equal to the expected"))
+			t.Fatal(
+				fmt.Sprintf("***output record***:\n %s\n ***expect record***:\n %s\n",
+					outRecord.String(),
+					dstRecords[i].String(),
+				))
+		}
+		i++
+	}
+
 	// 2. select count(*) from mst group by time(2)
 	opt = &query.ProcessorOptions{
 		Exprs:     []influxql.Expr{hybridqp.MustParseExpr(`count(*)`)},
@@ -828,6 +867,7 @@ func TestAggregateCursor_Multi_Count(t *testing.T) {
 	dst2.ColVals[3].AppendIntegers(2, 2)
 	dst2.AppendTime(7, 8)
 	dstRecords = append(dstRecords, dst1, dst2)
+	srcRecords = buildSrcRecords(inSchema)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 }

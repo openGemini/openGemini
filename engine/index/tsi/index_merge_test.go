@@ -291,7 +291,7 @@ func TestMakeGroupTagsKey(t *testing.T) {
 	tags = append(tags, influx.Tag{Key: "country", Value: "china"})
 	tags = append(tags, influx.Tag{Key: "sex", Value: "male"})
 	res1 := MakeGroupTagsKey([]string{"address", "sex"}, tags, []byte{}, r)
-	assert.Equal(t, "sex=male,address=shanghai", string(res1))
+	assert.Equal(t, "sex\x00male\x00address\x00shanghai", string(res1))
 	sortResult = append(sortResult, string(res1))
 
 	tags2 := influx.PointTags{}
@@ -300,7 +300,7 @@ func TestMakeGroupTagsKey(t *testing.T) {
 	tags2 = append(tags2, influx.Tag{Key: "country", Value: "china"})
 	tags2 = append(tags2, influx.Tag{Key: "sex", Value: "female"})
 	res2 := MakeGroupTagsKey([]string{"address", "sex"}, tags2, []byte{}, r)
-	assert.Equal(t, "sex=female,address=shanghai", string(res2))
+	assert.Equal(t, "sex\x00female\x00address\x00shanghai", string(res2))
 	sortResult = append(sortResult, string(res2))
 
 	tags3 := influx.PointTags{}
@@ -309,9 +309,9 @@ func TestMakeGroupTagsKey(t *testing.T) {
 	tags3 = append(tags3, influx.Tag{Key: "country", Value: "china"})
 	tags3 = append(tags3, influx.Tag{Key: "sex", Value: "female"})
 	res3 := MakeGroupTagsKey([]string{"address", "sex"}, tags3, []byte{}, r)
-	assert.Equal(t, "sex=female,address=beijing", string(res3))
+	assert.Equal(t, "sex\x00female\x00address\x00beijing", string(res3))
 	sortResult = append(sortResult, string(res3))
 
 	sort.Strings(sortResult)
-	assert.Equal(t, []string{"sex=female,address=beijing", "sex=female,address=shanghai", "sex=male,address=shanghai"}, sortResult)
+	assert.Equal(t, []string{"sex\x00female\x00address\x00beijing", "sex\x00female\x00address\x00shanghai", "sex\x00male\x00address\x00shanghai"}, sortResult)
 }

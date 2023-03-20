@@ -71,7 +71,8 @@ type EngineOptions struct {
 	CompactionMethod int // 0:auto, 1:stream, 2: non-stream
 	OpenShardLimit   int
 
-	DownSampleWriteDrop bool
+	DownSampleWriteDrop          bool
+	MaxDownSampleTaskConcurrency int
 }
 
 func NewEngineOptions() EngineOptions {

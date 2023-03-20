@@ -46,6 +46,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
@@ -62,6 +63,7 @@ func init() {
 	immutable.EnableMergeOutOfOrder = false
 	logger.InitLogger(config.NewLogger(config.AppStore))
 	immutable.Init()
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
 }
 
 const defaultDb = "db0"
@@ -234,7 +236,6 @@ func createShard(db, rp string, ptId uint32, pathName string) (*shard, error) {
 		SequenceId(&ltime).
 		Lock(&lockPath)
 	indexBuilder := tsi.NewIndexBuilder(opts)
-	indexBuilder.Relations = make(map[uint32]*tsi.IndexRelation)
 	primaryIndex, err := tsi.NewIndex(opts)
 	if err != nil {
 		return nil, err
@@ -446,7 +447,7 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 			continue
 		}
 		var seriesKey []byte
-		seriesKey = influx.Parse2SeriesKey(point.IndexKey, seriesKey)
+		seriesKey = influx.Parse2SeriesKey(point.IndexKey, seriesKey, true)
 
 		ptRec := transRowToRecordNew(&point, recSchema)
 		newSeries := seriesData{tags: point.Tags, rec: ptRec}
@@ -861,6 +862,54 @@ type LimitTestParas struct {
 	offset int
 }
 
+func TestCreateGroupCursorWithLimiter(t *testing.T) {
+	if e := resourceallocator.InitResAllocator(16, 2, 1, -1, resourceallocator.ChunkReaderRes, 0); e == nil {
+		t.Fatal()
+	}
+	if e := resourceallocator.InitResAllocator(16, 2, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0); e != nil {
+		t.Fatal(e)
+	}
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seriesNum := 8
+	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+	rows, startTime, endTime := GenDataRecord([]string{"mst"}, seriesNum, 1, 1, time.Now(), false, true, false)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := TestCase{"AllField", startTime, endTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true}
+	opt := genQueryOpt(&c, "mst", true)
+	opt.Limit = 1
+	opt.Offset = 1
+	opt.GroupByAllDims = true
+	querySchema := genQuerySchema(c.fieldAux, opt)
+
+	_, span := tracing.NewTrace("root")
+	ctx := tracing.NewContextWithSpan(context.Background(), span)
+	cursors, err := sh.CreateCursor(ctx, querySchema)
+	defer func() {
+		_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum))
+		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	}()
+	if len(cursors) != 8 {
+		t.Fatal()
+	}
+	for i := range cursors {
+		cursors[i].Close()
+	}
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestShard_AsyncWalReplay_serial(t *testing.T) {
 	testDir := t.TempDir()
 	// step1: create shard
@@ -929,7 +978,7 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
 	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions)
 	newSh.indexBuilder = sh.indexBuilder
-	require.Equal(t, 1, len(newSh.replayWAL.logWriter[0].fileNames))
+	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -3206,6 +3255,9 @@ func TestLastFlushTime(t *testing.T) {
 	assertLastFlushTime("mst_not_exists", sid, int64(math.MinInt64))
 	assertLastFlushTime(mst, sid+1000, int64(math.MinInt64))
 
+	require.True(t, sh.immTables.FreeSequencer())
+	assertLastFlushTime(mst, sid, 100)
+
 	sh.activeTbl = sh.snapshotTbl
 	sh.snapshotTbl = nil
 	sh.ForceFlush()
@@ -3339,6 +3391,17 @@ func TestWriteIndexFail(t *testing.T) {
 	err = writeOneRow(sh, string(mst), begin)
 	if !strings.Contains(err.Error(), "it looks like the item is too large") {
 		t.Fatal("TestWriteIndexFail Fail")
+	}
+}
+
+func TestInitDownSampleTaskNum(t *testing.T) {
+	initMaxDownSampleParallelism(0)
+	if maxDownSampleTaskNum != 1 {
+		t.Fatal()
+	}
+	initMaxDownSampleParallelism(1)
+	if maxDownSampleTaskNum != 1 {
+		t.Fatal()
 	}
 }
 

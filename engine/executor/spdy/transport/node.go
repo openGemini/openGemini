@@ -19,8 +19,10 @@ package transport
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
@@ -58,12 +60,18 @@ func (n *Node) GetPool() *spdy.MultiplexedSessionPool {
 }
 
 func (n *Node) dial(idx uint64) error {
+	start := time.Now()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	p := n.pools[idx]
 	if p != nil && p.Available() {
 		return nil
+	}
+
+	if time.Since(start).Nanoseconds() > spdy.TCPDialTimeout().Nanoseconds() {
+		statistics.NewSpdyStatistics().Add(n.failedJob)
+		return errno.NewError(errno.NoConnectionAvailable, n.nodeID, n.address)
 	}
 
 	mcp := spdy.NewMultiplexedSessionPool(spdy.DefaultConfiguration(), "tcp", n.address)

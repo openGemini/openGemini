@@ -1,5 +1,6 @@
-//go:build !streamfs
+//go:build !streamfs && (linux || freebsd)
 // +build !streamfs
+// +build linux freebsd
 
 /*
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.

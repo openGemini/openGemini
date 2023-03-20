@@ -18,13 +18,19 @@ package executor_test
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
+
+func init() {
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+}
 
 func buildIRowDataType() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
@@ -63,26 +69,34 @@ func TestIndexScanTransformDemo(t *testing.T) {
 	chunk1 := BuildIChunk("m")
 	ctx := context.Background()
 	outputRowDataType := buildIRowDataType()
-	source1 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
 	schema := buildISchema()
-	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil)
+
+	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1))
 	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
 	executor.Connect(trans.GetOutputs()[0], sink.Input)
-	var procs []executor.Processor
-	procs = append(procs, source1)
-	procs = append(procs, sink)
-	exec := executor.NewPipelineExecutor(procs)
-	dag := executor.NewTransformDag()
+	var process []executor.Processor
+	process = append(process, sink)
+	process = append(process, trans)
+	exec := executor.NewPipelineExecutor(process)
+	// build child pipeline executor
+	childTrans := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	var childProcess []executor.Processor
+	childProcess = append(childProcess, childTrans)
+	childExec := executor.NewPipelineExecutor(childProcess)
+	childDag := executor.NewTransformDag()
 	inputQn := executor.NewLogicalSeries(schema)
 	qn := executor.NewLogicalIndexScan(inputQn, schema)
-	root := executor.NewTransformVertex(qn, source1)
-	out := executor.NewTransformVertex(qn, sink)
-	dag.AddVertex(root)
-	dag.AddVertex(out)
-	exec.SetRoot(root)
-	exec.SetDag(dag)
-	trans.SetPipelineExecutor(exec)
-	trans.WorkHelper(ctx)
+	root := executor.NewTransformVertex(qn, childTrans)
+	childDag.AddVertex(root)
+	childExec.SetRoot(root)
+	childExec.SetDag(childDag)
+	trans.GetResFromAllocator()
+	trans.FreeResFromAllocator()
+	trans.SetPipelineExecutor(childExec)
+	// execute
+	trans.Work(ctx)
+	childExec.Release()
+	exec.Release()
 }

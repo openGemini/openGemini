@@ -78,6 +78,10 @@ type StreamWriteFile struct {
 	newFile           TSSPFile
 	log               *Log.Logger
 	lock              *string
+
+	// count the number of rows in each column
+	// used only for data verification
+	rowCount map[string]int
 }
 
 func NewWriteScanFile(mst string, m *MmsTables, file TSSPFile, schema record.Schemas) (*StreamWriteFile, error) {
@@ -95,6 +99,7 @@ func getStreamWriteFile() *StreamWriteFile {
 		ctx:        NewReadContext(true),
 		colBuilder: NewColumnBuilder(),
 		Conf:       NewConfig(),
+		rowCount:   make(map[string]int),
 	}
 }
 
@@ -217,6 +222,9 @@ func (c *StreamWriteFile) InitMergedFile(f TSSPFile) error {
 }
 
 func (c *StreamWriteFile) ChangeSid(sid uint64) {
+	for k := range c.rowCount {
+		delete(c.rowCount, k)
+	}
 	dOff := c.writer.DataSize()
 	c.Init(sid, dOff, c.schema)
 	return
@@ -270,7 +278,23 @@ func (c *StreamWriteFile) WriteCurrentMeta() error {
 	return c.WriteMeta(&c.dstMeta)
 }
 
+func (c *StreamWriteFile) validation() {
+	exp, ok := c.rowCount[record.TimeField]
+	if !ok {
+		panic("missing time column")
+	}
+
+	for name, got := range c.rowCount {
+		if got != exp {
+			panic(fmt.Sprintf("number of rows is different. exp=%d, got=%d, ref=%s",
+				exp, got, name))
+		}
+	}
+}
+
 func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
+	c.validation()
+
 	var newColMeta []ColumnMeta
 	for _, v := range cm.colMeta {
 		if v.entries != nil && len(v.entries) > 0 {
@@ -360,6 +384,9 @@ func (c *StreamWriteFile) WriteData(id uint64, ref record.Field, col record.ColV
 	if err := c.validate(id, ref); err != nil {
 		return err
 	}
+
+	c.rowCount[ref.Name] += col.Len
+
 	var err error
 	c.colSegs[0] = col
 	off := c.writer.DataSize()
@@ -527,6 +554,10 @@ func (c *StreamWriteFile) Size() int64 {
 }
 
 func (c *StreamWriteFile) validate(id uint64, ref record.Field) error {
+	if id == 0 {
+		return fmt.Errorf("series id is 0")
+	}
+
 	if c.trailer.maxId != 0 {
 		if id <= c.trailer.maxId {
 			err := fmt.Errorf("file(%v) series id(%d) must be greater than %d", c.fd.Name(), id, c.trailer.maxId)

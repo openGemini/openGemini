@@ -17,6 +17,7 @@ limitations under the License.
 package tsi
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -25,10 +26,19 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 )
+
+func init() {
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
+}
 
 func unmarshalTag(tag *influx.Tag, s string, noEscapeChars bool) error {
 	tag.Reset()
@@ -207,7 +217,8 @@ func generateKeyWithTagArray3() []string {
 
 func generateKeyWithTagArray4() []string {
 	keys := []string{
-		"mn-1,tk1=[value1,value11],tk2=[value2,value22],tk3=[value3,value33]",
+		"mn-1,tk1=value1,tk2=value2,tk3=[value3,value33,value333]",
+		"mn-1,tk1=value11,tk2=[value2,value22,value222],tk3=[value3,value33,]",
 	}
 
 	return keys
@@ -229,6 +240,7 @@ func CreateIndexByPts_TagArray(iBuilder *IndexBuilder, idx Index, genKeys func()
 		for i, tag := range tagsPool {
 			pt.Tags[i].Key = tag.Key
 			pt.Tags[i].Value = tag.Value
+			pt.Tags[i].IsArray = false
 			if strings.HasPrefix(pt.Tags[i].Value, "[") && strings.HasSuffix(pt.Tags[i].Value, "]") {
 				pt.Tags[i].IsArray = true
 				pt.HasTagArray = true
@@ -328,17 +340,6 @@ func TestWriteTagArray_Fail1(t *testing.T) {
 	CreateIndexByPts_TagArray_Error(idxBuilder, idx, generateKeyWithTagArray3)
 }
 
-func TestWriteTagArray_Fai2(t *testing.T) {
-	config.EnableTagArray = true
-	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
-	CreateIndexByPts_TagArray_Error(idxBuilder, idx, generateKeyWithTagArray4)
-}
-
 func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 	config.EnableTagArray = true
 	path := t.TempDir()
@@ -350,7 +351,7 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
-		groups, err := idx.SearchSeriesWithOpts(nil, name, opt, nil)
+		groups, _, err := idx.SearchSeriesWithOpts(nil, name, opt, resourceallocator.DefaultSeriesAllocateFunc, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -375,11 +376,11 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 			Condition: nil,
 		}
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 	})
 
@@ -390,31 +391,31 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 			Condition: MustParseExpr(`tk1='value11' AND field_float1>1.0`),
 		}
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 
 		opt.Condition = MustParseExpr(`field_float1>1.0 AND tk3='value3'`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
 		})
 
 		// Test condition with or field filter
 		opt.Condition = MustParseExpr(`tk1='value1' OR field_float1>1.0`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 
 		// Test condition from tag array
 		opt.Condition = MustParseExpr(`tk3='value3' AND field_float1>1.0`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
 		})
 	})
 
@@ -425,22 +426,22 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 			Condition: MustParseExpr(`tk1='value1' AND tk3='value3'`),
 		}
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
 		})
 
 		opt.Condition = MustParseExpr(`tk1='value1' OR tk3='value3'`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
 		})
 
 		opt.Condition = MustParseExpr(`tk3!='value3''`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 	})
 }
@@ -452,7 +453,7 @@ func TestSearchSeriesWithOpts_NoTagArray(t *testing.T) {
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray2)
 
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
-		groups, err := idx.SearchSeriesWithOpts(nil, name, opt, nil)
+		groups, _, err := idx.SearchSeriesWithOpts(nil, name, opt, resourceallocator.DefaultSeriesAllocateFunc, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -477,31 +478,31 @@ func TestSearchSeriesWithOpts_NoTagArray(t *testing.T) {
 			Condition: MustParseExpr(`tk1='value11' AND field_float1>1.0`),
 		}
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 
 		opt.Condition = MustParseExpr(`field_float1>1.0 AND tk1='value11'`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 
 		// Test condition with or field filter
 		opt.Condition = MustParseExpr(`tk1='value1' OR field_float1>1.0`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 
 		// Test condition from tag array
 		opt.Condition = MustParseExpr(`tk3='value3' AND field_float1>1.0`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
 		})
 	})
 
@@ -512,22 +513,22 @@ func TestSearchSeriesWithOpts_NoTagArray(t *testing.T) {
 			Condition: MustParseExpr(`tk1='value1' AND tk3='value3'`),
 		}
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
 		})
 
 		opt.Condition = MustParseExpr(`tk1='value1' OR tk3='value3'`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value3",
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
 		})
 
 		opt.Condition = MustParseExpr(`tk3!='value3''`)
 		f([]byte("mn-1"), opt, []string{
-			"mn-1,tk1=value1,tk2=value2,tk3=value33",
-			"mn-1,tk1=value1,tk2=value2,tk3=value333",
-			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
 		})
 	})
 }
@@ -564,6 +565,508 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expect searchSeriesWithTagArray fail, but success")
 	}
+}
+
+func TestSeriesByExprIterator_TagArray(t *testing.T) {
+	config.EnableTagArray = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		idxBuilder.Close()
+		config.EnableTagArray = false
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+	}
+
+	f := func(name []byte, expr influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		index := idx.(*MergeSetIndex)
+		is := index.getIndexSearch()
+		defer index.putIndexSearch(is)
+
+		var tsids *uint64set.Set
+		iterator, err := is.seriesByExprIterator(name, expr, tr, &tsids, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ids := iterator.Ids().AppendTo(nil)
+
+		keys := make([]string, 0, len(ids))
+		var seriesKeys [][]byte
+		var combineSeriesKey []byte
+		var isExpectSeries []bool
+		for _, id := range ids {
+			seriesKeys, isExpectSeries, err := index.searchSeriesWithTagArray(id, seriesKeys, combineSeriesKey, isExpectSeries, opt.Condition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range seriesKeys {
+				if !isExpectSeries[i] {
+					continue
+				}
+
+				var seriesKey []byte
+				seriesKey = append(seriesKey, seriesKeys[i]...)
+				keys = append(keys, string(influx.Parse2SeriesKey(seriesKey, nil, true)))
+			}
+
+		}
+		sort.Strings(keys)
+		assert.Equal(t, len(keys), len(expectedSeriesKeys))
+
+		for i := 0; i < len(keys); i++ {
+			assert.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	// tag AND field
+	opt.Condition = MustParseExpr(`tk1='value11' AND field_float1>1.0`)
+	t.Run("tag AND field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// field AND tag
+	opt.Condition = MustParseExpr(`field_float1>1.0 AND tk1='value11'`)
+	t.Run("field AND tag", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// field AND field
+	opt.Condition = MustParseExpr(`field_float1>1.0 AND field_float1>0'`)
+	t.Run("field AND field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// tag AND parent field
+	opt.Condition = MustParseExpr(`tk1='value11' AND ((field_float1))>1.0`)
+	t.Run("tag AND parent field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// parent field AND tag
+	opt.Condition = MustParseExpr(`((field_float1))>1.0 AND tk1='value11'`)
+	t.Run("parent field AND tag", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// parent field AND parent field
+	opt.Condition = MustParseExpr(`((field_float1>1.0)) AND ((field_float1>0))'`)
+	t.Run("parent field AND parent field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// tag OR field
+	opt.Condition = MustParseExpr(`tk1='value11' OR field_float1>1.0`)
+	t.Run("tag OR field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// field OR tag
+	opt.Condition = MustParseExpr(`field_float1>1.0 OR tk1='value11'`)
+	t.Run("field OR tag", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// field OR field
+	opt.Condition = MustParseExpr(`field_float1>1.0 OR field_float1<0.5`)
+	t.Run("field OR field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// tag OR parent field
+	opt.Condition = MustParseExpr(`tk3='value33' OR ((field_float1>1.0))`)
+	t.Run("tag OR parent field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// parent field OR tag
+	opt.Condition = MustParseExpr(`((field_float1>1.0)) OR tk3='value33'`)
+	t.Run("parent field OR tag", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	// parent field OR parent field
+	opt.Condition = MustParseExpr(`((field_float1>1.0)) OR ((field_float1<0.5))`)
+	t.Run("parent field OR parent field", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value333",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+}
+
+func TestSearchSeries_With_TagArray(t *testing.T) {
+	config.EnableTagArray = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		idxBuilder.Close()
+		config.EnableTagArray = false
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		dst := make([][]byte, 1)
+		dst, err := idx.SearchSeries(dst[:0], name, opts, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Slice(dst, func(i, j int) bool {
+			return string(dst[i]) < string(dst[j])
+		})
+
+		assert.Equal(t, len(dst), len(expectedSeriesKeys))
+		for i := 0; i < len(dst); i++ {
+			assert.Equal(t, string(dst[i]), expectedSeriesKeys[i])
+		}
+		for _, key := range dst {
+			influx.PutBytesBuffer(key)
+		}
+	}
+	t.Run("NoCond", func(t *testing.T) {
+		f([]byte("mn-1"), nil, defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+	})
+
+	t.Run("EQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3='value3'`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+		})
+	})
+
+	t.Run("NEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3!='value3'`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+	})
+
+	t.Run("AND", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`(tk1='value11') AND (tk3='value33')`), defaultTR, []string{
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+	})
+
+	t.Run("OR", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`(tk1='value11') OR (tk3='value33')`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+	})
+
+	t.Run("RegEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3=~/val.*3/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+
+		f([]byte("mn-1"), MustParseExpr(`tk3=~/val.*33/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+
+		f([]byte("mn-1"), MustParseExpr(`tk3=~/(val.*e3|val.*33)/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+		})
+	})
+
+	t.Run("RegNEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3!~/val.*33/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+		})
+	})
+}
+
+func TestSearchTagValues_With_TagArray(t *testing.T) {
+	config.EnableTagArray = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		idxBuilder.Close()
+		config.EnableTagArray = false
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	f := func(name []byte, tagKeys [][]byte, condition influxql.Expr, expectedTagValues [][]string) {
+		tagValues, err := idx.SearchTagValues(name, tagKeys, condition)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		assert.Equal(t, len(expectedTagValues), len(tagValues))
+
+		for i := 0; i < len(tagValues); i++ {
+			assert.Equal(t, len(expectedTagValues[i]), len(tagValues[i]))
+			sort.Strings(tagValues[i])
+			sort.Strings(expectedTagValues[i])
+			for j := 0; j < len(tagValues[i]); j++ {
+				assert.Equal(t, tagValues[i][j], expectedTagValues[i][j])
+			}
+		}
+	}
+
+	t.Run("SingleKeyWithoutCond", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, nil, [][]string{{
+			"value1",
+			"value11",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk2")}, nil, [][]string{{
+			"value2",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3")}, nil, [][]string{{
+			"value3",
+			"value33",
+			"value333",
+		}})
+	})
+
+	t.Run("SingleKeyWithCond", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, MustParseExpr(`tk3="value33"`), [][]string{{
+			"value1",
+			"value11",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk2")}, MustParseExpr(`tk3="value33"`), [][]string{{
+			"value2",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3")}, MustParseExpr(`tk1="value1"`), [][]string{{
+			"value3",
+			"value33",
+			"value333",
+		}})
+	})
+
+	t.Run("MultiKeysWithCond", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1"), []byte("tk2")}, MustParseExpr(`tk3="value33"`), [][]string{
+			{
+				"value1",
+				"value11",
+			},
+			{
+				"value2",
+			},
+		})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3"), []byte("tk2")}, MustParseExpr(`tk1="value1"`), [][]string{
+			{
+				"value3",
+				"value33",
+				"value333",
+			},
+			{
+				"value2",
+			},
+		})
+	})
+}
+
+func TestSeriesCardinality_With_TagArray(t *testing.T) {
+	config.EnableTagArray = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		idxBuilder.Close()
+		config.EnableTagArray = false
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	f := func(name []byte, condition influxql.Expr, expectCardinality uint64) {
+		count, err := idx.SeriesCardinality(name, condition, defaultTR)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, count, expectCardinality)
+	}
+
+	t.Run("cardinality from measurement", func(t *testing.T) {
+		f([]byte("mn-1"), nil, 5)
+	})
+
+	t.Run("cardinality with condition", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr("tk3=value3"), 2)
+	})
+}
+
+func TestSearchSeries_With_Multi_TagArray(t *testing.T) {
+	config.EnableTagArray = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		idxBuilder.Close()
+		config.EnableTagArray = false
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray4)
+
+	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		dst := make([][]byte, 1)
+		dst, err := idx.SearchSeries(dst[:0], name, opts, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Slice(dst, func(i, j int) bool {
+			return string(dst[i]) < string(dst[j])
+		})
+
+		assert.Equal(t, len(dst), len(expectedSeriesKeys))
+		for i := 0; i < len(dst); i++ {
+			assert.Equal(t, string(dst[i]), expectedSeriesKeys[i])
+		}
+		for _, key := range dst {
+			influx.PutBytesBuffer(key)
+		}
+	}
+	t.Run("NoCond", func(t *testing.T) {
+		f([]byte("mn-1"), nil, defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1,tk1=value11,tk2=value222",
+		})
+	})
+
+	t.Run("EQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3='value3'`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+		})
+	})
+
+	t.Run("NEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3!='value3'`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("AND", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`(tk1='value11') AND (tk3='value33')`), defaultTR, []string{
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("OR", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`(tk1='value11') OR (tk3='value33')`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1,tk1=value11,tk2=value222",
+		})
+	})
+
+	t.Run("RegEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3=~/val.*3/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+
+		f([]byte("mn-1"), MustParseExpr(`tk3=~/val.*33/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+
+		f([]byte("mn-1"), MustParseExpr(`tk3=~/(val.*e3|val.*33)/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value2,tk3=value33",
+			"mn-1,tk1=value1,tk2=value2,tk3=value333",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("RegNEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk3!~/val.*33/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value3",
+		})
+	})
 }
 
 func BenchmarkWrite_With_TagArray(b *testing.B) {
@@ -677,7 +1180,7 @@ func BenchmarkQuery_With_TagArray(b *testing.B) {
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
-		_, err := idx.SearchSeriesWithOpts(nil, name, opt, nil)
+		_, _, err := idx.SearchSeriesWithOpts(nil, name, opt, nil, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -707,7 +1210,7 @@ func BenchmarkQuery_With_NoTagArray(b *testing.B) {
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray2)
 
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
-		_, err := idx.SearchSeriesWithOpts(nil, name, opt, nil)
+		_, _, err := idx.SearchSeriesWithOpts(nil, name, opt, nil, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -723,5 +1226,105 @@ func BenchmarkQuery_With_NoTagArray(b *testing.B) {
 		f([]byte("mn-1"), opt, []string{
 			"mn-1,tk1=value1,tk2=value2,tk3=value3",
 		})
+	}
+}
+
+func searchSeriesWithTagArray1(idx *MergeSetIndex, series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error) {
+	tsids, err := idx.searchTSIDs(name, condition, tr)
+	if err != nil {
+		return series, err
+	}
+	if cap(series) >= len(tsids) {
+		series = series[:len(tsids)]
+	} else {
+		series = series[:cap(series)]
+		series = append(series, make([][]byte, len(tsids)-cap(series))...)
+	}
+
+	var combineSeriesKey []byte
+	var combineKeys [][]byte
+	var isExpectSeries []bool
+	var index int
+	for i := range tsids {
+		combineKeys, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, combineSeriesKey, isExpectSeries, condition)
+		if err != nil {
+			return nil, err
+		}
+
+		for j := range combineKeys {
+			if !isExpectSeries[j] {
+				continue
+			}
+
+			bufSeries := influx.GetBytesBuffer()
+			bufSeries = influx.Parse2SeriesKey(combineKeys[j], bufSeries, true)
+			if index >= len(tsids) {
+				series = append(series, bufSeries)
+			} else {
+				series[index] = bufSeries
+				index++
+			}
+		}
+	}
+	return series, nil
+}
+
+func BenchmarkShowSeries_With_TagArray1(b *testing.B) {
+	config.EnableTagArray = true
+	path := b.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		config.EnableTagArray = false
+		idxBuilder.Close()
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	series := make([][]byte, 1)
+	for i := 0; i < b.N; i++ {
+		searchSeriesWithTagArray1(idx.(*MergeSetIndex), series, []byte("mn-1"), nil, defaultTR)
+	}
+}
+
+func searchSeriesWithTagArray2(idx *MergeSetIndex, series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error) {
+	tsids, err := idx.searchTSIDs(name, condition, tr)
+	if err != nil {
+		return series, err
+	}
+
+	var combineSeriesKey []byte
+	var combineKeys [][]byte
+	var isExpectSeries []bool
+	for i := range tsids {
+		combineKeys, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, combineSeriesKey, isExpectSeries, condition)
+		if err != nil {
+			return nil, err
+		}
+
+		for j := range combineKeys {
+			if !isExpectSeries[j] {
+				continue
+			}
+
+			bufSeries := influx.GetBytesBuffer()
+			bufSeries = influx.Parse2SeriesKey(combineKeys[j], bufSeries, true)
+			series = append(series, bufSeries)
+		}
+	}
+	return series, nil
+}
+
+func BenchmarkShowSeries_With_TagArray2(b *testing.B) {
+	config.EnableTagArray = true
+	path := b.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		config.EnableTagArray = false
+		idxBuilder.Close()
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	series := make([][]byte, 1)
+	for i := 0; i < b.N; i++ {
+		searchSeriesWithTagArray2(idx.(*MergeSetIndex), series, []byte("mn-1"), nil, defaultTR)
 	}
 }

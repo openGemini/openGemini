@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -282,7 +283,8 @@ func (s *httpServer) open(handler *httpHandler) error {
 }
 
 func (s *httpServer) httpsListener() (net.Listener, error) {
-	cert, err := tls.LoadX509KeyPair(s.conf.HTTPSCertificate, s.conf.HTTPSCertificate)
+	cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(s.conf.HTTPSCertificate)),
+		[]byte(crypto.DecryptFromFile(s.conf.HTTPSPrivateKey)))
 	if err != nil {
 		return nil, err
 	}

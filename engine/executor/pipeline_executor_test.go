@@ -1833,3 +1833,12 @@ func createSortedMergeFields1() influxql.Fields {
 
 	return fields
 }
+
+func TestMaxFunction(t *testing.T) {
+	if hybridqp.MaxInt(1, 2) != 2 {
+		t.Fatal()
+	}
+	if hybridqp.MaxInt(2, 1) != 2 {
+		t.Fatal()
+	}
+}

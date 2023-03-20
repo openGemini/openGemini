@@ -63,6 +63,8 @@ func TestInterruptEvent(t *testing.T) {
 	netStore := NewMockNetStorage()
 	globalService.store.NetStore = netStore
 	globalService.clusterManager.addClusterMember(2)
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)

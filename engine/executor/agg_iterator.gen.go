@@ -3426,12 +3426,8 @@ func (r *FloatColFloatHeapIterator) processMiddleWindow(
 }
 
 func (r *FloatColFloatHeapIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
-	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() {
-		return
-	}
-
 	var end int
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
@@ -3698,12 +3694,8 @@ func (r *IntegerColIntegerHeapIterator) processMiddleWindow(
 }
 
 func (r *IntegerColIntegerHeapIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
-	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() {
-		return
-	}
-
 	var end int
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {

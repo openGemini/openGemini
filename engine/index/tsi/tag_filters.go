@@ -830,5 +830,5 @@ func (tf *tagFilter) Contains(tagsBuf *influx.PointTags, matchKey, matchValue st
 		}
 	}
 
-	return true
+	return false
 }

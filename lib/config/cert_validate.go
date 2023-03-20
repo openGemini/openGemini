@@ -25,6 +25,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 )
 
@@ -49,7 +50,7 @@ func NewCertValidator(certFile, keyFile string) *CertValidator {
 }
 
 func (c *CertValidator) init() error {
-	cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+	cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(c.certFile)), []byte(crypto.DecryptFromFile(c.keyFile)))
 	if err != nil {
 		return err
 	}

@@ -17,9 +17,9 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
@@ -34,27 +34,19 @@ import (
 )
 
 var (
-	TsVersion   string
+	TsVersion   = "v1.0.1"
 	TsCommit    string
 	TsBranch    string
 	TsBuildTime string
 )
 
-var (
-	confPath = flag.String("config", "", "-config=sql config file path")
-	pidPath  = flag.String("pidfile", "", "-pid=sql pid file path")
-)
-var versionUsage = `ts-sql -config=config_file_path -pidfile=pid_file_path`
+const TsSql = "ts-sql"
 
-func usage() {
-	fmt.Println(versionUsage)
-}
+var sqlUsage = fmt.Sprintf(app.MainUsage, TsSql, TsSql)
+var runUsage = fmt.Sprintf(app.RunUsage, TsSql, TsSql)
 
 func main() {
-	flag.CommandLine.SetOutput(os.Stdout)
-	flag.Usage = usage
-	flag.Parse()
-
+	app.InitParse()
 	if err := doRun(os.Args[1:]...); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -63,19 +55,24 @@ func main() {
 
 func doRun(args ...string) error {
 	errno.SetNode(errno.NodeSql)
-	name, _ := cmd.ParseCommandName(os.Args[1:])
+	name, args := cmd.ParseCommandName(args)
 
 	switch name {
 	case "", "run":
+		options, err := app.ParseFlags(func() {
+			fmt.Println(runUsage)
+		}, args...)
+		if err != nil {
+			return err
+		}
 		mainCmd := app.NewCommand()
-		err := mainCmd.InitConfig(config.NewTSSql(), *confPath)
+		err = mainCmd.InitConfig(config.NewTSSql(), options.ConfigPath)
 		if err != nil {
 			return err
 		}
 
 		mainCmd.Logger = logger.NewLogger(errno.ModuleUnknown)
 		mainCmd.Command = &cobra.Command{
-			Use:                app.SqlUsage,
 			Version:            TsVersion,
 			ValidArgs:          []string{TsBranch, TsCommit, TsBuildTime},
 			DisableFlagParsing: true,
@@ -83,10 +80,10 @@ func doRun(args ...string) error {
 				fmt.Fprint(os.Stdout, app.SQLLOGO)
 
 				// Write the PID file.
-				if err := app.WritePIDFile(*pidPath); err != nil {
+				if err := app.WritePIDFile(options.PIDFile); err != nil {
 					return fmt.Errorf("write pid file: %s", err)
 				}
-				mainCmd.Pidfile = *pidPath
+				mainCmd.Pidfile = options.PIDFile
 
 				s, err := ingestserver.NewServer(mainCmd.Config, cmd, mainCmd.Logger)
 				if err != nil {
@@ -110,8 +107,10 @@ func doRun(args ...string) error {
 		mainCmd.Logger.Info("Sql service received shutdown signal", zap.Any("signal", signal))
 		util.MustClose(mainCmd)
 		mainCmd.Logger.Info("Sql shutdown successfully!")
+	case "version":
+		fmt.Printf(app.VERSION, TsSql, TsVersion, TsCommit, runtime.GOOS, runtime.GOARCH)
 	default:
-		return fmt.Errorf(`unknown command, usage:\n "%s"`+"\n\n", versionUsage)
+		return fmt.Errorf(sqlUsage)
 	}
 	return nil
 }

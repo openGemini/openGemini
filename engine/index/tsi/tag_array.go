@@ -99,15 +99,17 @@ func (pool *TagSetsPool) Put(tags *tagSets) {
 */
 func analyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
 	var arrayLen int
-	var arrayCount int
 	for i := range tags {
 		if tags[i].IsArray {
-			arrayLen = strings.Count(tags[i].Value, ",") + 1
-			arrayCount++
+			tagCount := strings.Count(tags[i].Value, ",") + 1
+			if arrayLen == 0 {
+				arrayLen = tagCount
+			}
+
+			if arrayLen != tagCount {
+				return errno.NewError(errno.ErrorTagArrayFormat)
+			}
 		}
-	}
-	if arrayCount > 1 {
-		return errno.NewError(errno.WriteMultiArray)
 	}
 
 	dstTagSets.resize(arrayLen, len(tags))
@@ -116,9 +118,6 @@ func analyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
 		if tags[cIndex].IsArray {
 			values := strings.Split(tags[cIndex].Value[1:len(tags[cIndex].Value)-1], ",")
 			for rIndex := range values {
-				if len(values[rIndex]) == 0 {
-					return errno.NewError(errno.WriteErrorArray)
-				}
 				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
 				dstTagSets.tagsArray[rIndex][cIndex].Value = values[rIndex]
 			}
@@ -151,6 +150,9 @@ func unmarshalIndexKeys(name []byte, tags []influx.Tag, indexkeypool []byte) ([]
 		len(name) + // measurment name with version
 		2 // tag count
 	tagLen, tagSize := getTagsSizeAndLen(tags)
+	if tagLen == 0 {
+		return indexkeypool, 0, true
+	}
 	indexKl += 4 * tagLen // length of each tag key and value
 	indexKl += tagSize    // size of tag keys/values
 	start := len(indexkeypool)
@@ -164,7 +166,6 @@ func unmarshalIndexKeys(name []byte, tags []influx.Tag, indexkeypool []byte) ([]
 	indexkeypool = encoding.MarshalUint16(indexkeypool, uint16(tagLen))
 
 	// eg, series is mst,tk1=tv1,tk2=tv2,tk3=[,],
-	emptyTagValue := true
 	for i := range tags {
 		// eg, tags[i] is tk3=[,]
 		if len(tags[i].Value) == 0 {
@@ -176,12 +177,11 @@ func unmarshalIndexKeys(name []byte, tags []influx.Tag, indexkeypool []byte) ([]
 		vl := len(tags[i].Value)
 		indexkeypool = encoding.MarshalUint16(indexkeypool, uint16(vl))
 		indexkeypool = append(indexkeypool, tags[i].Value...)
-		emptyTagValue = false
 	}
 
 	end := len(indexkeypool)
 	newLen := end - start
-	return indexkeypool, newLen, emptyTagValue
+	return indexkeypool, newLen, false
 }
 
 /*
@@ -314,6 +314,8 @@ func analyzeSeriesWithCondition(series [][]byte, condition influxql.Expr, isExpe
 		if ok {
 			isExpectSeries[i] = true
 			expectCount++
+		} else {
+			isExpectSeries[i] = false
 		}
 	}
 	return expectCount, isExpectSeries, nil
@@ -403,7 +405,7 @@ func matchTagFilter(tagsBuf *influx.PointTags, n *influxql.BinaryExpr) (bool, er
 
 	// Not tag, regard as field
 	if key.Type != influxql.Tag {
-		return false, ErrFieldExpr
+		return true, ErrFieldExpr
 	}
 
 	tf := new(tagFilter)
@@ -471,16 +473,6 @@ func (idx *MergeSetIndex) searchSeriesWithTagArray(tsid uint64, seriesKeys [][]b
 		return nil, nil, err
 	}
 
-	// if config.EnableTagArray = false, then combineKey only has one key
-	if !config.EnableTagArray {
-		seriesKeys = resizeSeriesKeys(seriesKeys, 1)
-		seriesKeys[0] = combineKey
-
-		isExpectSeries = resizeExpectSeries(isExpectSeries, 1)
-		isExpectSeries[0] = true
-		return seriesKeys, isExpectSeries, nil
-	}
-
 	seriesKeys, _, err = unmarshalCombineIndexKeys(seriesKeys, combineKey)
 	if err != nil {
 		return nil, nil, err
@@ -525,4 +517,65 @@ func (is *indexSearch) getTSIDSWithOneKey(tsids *uint64set.Set) (*uint64set.Set,
 		}
 	}
 	return subIDs, nil
+}
+
+func (is *indexSearch) isExpectTagWithTagArray(tsid uint64, seriesKeys [][]byte, combineKey []byte,
+	condition influxql.Expr, tag Tag) bool {
+	if !config.EnableTagArray {
+		return true
+	}
+	combineKey = combineKey[:0]
+	combineKey, err := is.idx.searchSeriesKey(combineKey, tsid)
+	if err != nil {
+		is.idx.logger.Error("searchSeriesKey fail", zap.Error(err))
+		return false
+	}
+
+	seriesKeys, _, err = unmarshalCombineIndexKeys(seriesKeys, combineKey)
+	if err != nil {
+		return false
+	}
+
+	return isMatchedTag(seriesKeys, condition, tag)
+}
+
+func isMatchedTag(series [][]byte, condition influxql.Expr, tag Tag) bool {
+	// no need to analyze one series
+	if len(series) == 1 {
+		return true
+	}
+
+	if condition == nil {
+		return true
+	}
+
+	var tagsBuf influx.PointTags
+	for i := range series {
+		_, err := influx.IndexKeyToTags(series[i], true, &tagsBuf)
+		if err != nil {
+			return false
+		}
+
+		if !isCurrentTag(tagsBuf, tag) {
+			continue
+		}
+		ok, err := hasExpectedTag(&tagsBuf, condition)
+		if err != nil {
+			return false
+		}
+
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func isCurrentTag(seriesTags influx.PointTags, currentItemTag Tag) bool {
+	for i := range seriesTags {
+		if seriesTags[i].Key == string(currentItemTag.Key) && seriesTags[i].Value == string(currentItemTag.Value) {
+			return true
+		}
+	}
+	return false
 }

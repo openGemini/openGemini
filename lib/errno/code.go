@@ -96,6 +96,7 @@ const (
 	LogicalPlainBuildFailInShard = 1115
 	SchemaNotAligned             = 1116
 	NoFieldSelected              = 1117
+	BucketResourceExceeded       = 1118
 )
 
 // store engine error codes
@@ -228,7 +229,7 @@ const (
 	WritePointShardKeyTooLarge = 5014
 	EngineClosed               = 5015
 	WriteMissTagValue          = 5016
-	WriteMultiArray            = 5017
+	ErrorTagArrayFormat        = 5017
 	WriteErrorArray            = 5018
 )
 

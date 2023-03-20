@@ -316,7 +316,7 @@ func TestAppendTimes(t *testing.T) {
 	col.AppendTimes([]int64{9})
 
 	require.Equal(t, []int64{1, 2, 3, 4, 5, 6, 7, 8, 9}, col.IntegerValues())
-	require.Equal(t, []byte{255, 255}, col.Bitmap)
+	require.Equal(t, []byte{255, 1}, col.Bitmap)
 
 	col = &record.ColVal{}
 	col.AppendBooleanNulls(10)

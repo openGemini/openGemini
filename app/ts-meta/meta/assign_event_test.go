@@ -42,6 +42,8 @@ func TestAssignEventStateTransition(t *testing.T) {
 	}
 	config.SetHaEnable(true)
 	globalService.store.NetStore = NewMockNetStorage()
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)

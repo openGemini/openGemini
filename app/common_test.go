@@ -124,15 +124,19 @@ func TestSetStatsResponse_When_Nil(t *testing.T) {
 	app.SetStatsResponse(nil, nil, nil)
 }
 
+func Test_InitParse(t *testing.T) {
+	app.InitParse()
+}
+
 func TestParseFlags(t *testing.T) {
 	file := t.TempDir() + "/openGemini.conf"
 	opt, err := app.ParseFlags(nil, "-config", file)
 
 	require.NoError(t, err)
-	require.Equal(t, opt.GetConfigPath(), file)
+	require.Equal(t, opt.ConfigPath, file)
 
 	opt.ConfigPath = ""
-	require.Equal(t, opt.GetConfigPath(), "")
+	require.Equal(t, opt.ConfigPath, "")
 }
 
 func TestHideQueryPassword(t *testing.T) {

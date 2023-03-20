@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/pusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -102,7 +103,7 @@ func newHttpPusher(mc *config.Monitor, logger *logger.Logger) pusher.Pusher {
 		Gzipped:  false,
 		Https:    mc.HttpsEnabled,
 		Username: mc.Username,
-		Password: mc.Password,
+		Password: crypto.Decrypt(mc.Password),
 	}
 
 	return pusher.NewHttp(&conf, logger)
