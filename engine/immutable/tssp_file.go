@@ -54,7 +54,7 @@ var (
 type TSSPFileReader struct {
 	ref            int64
 	r              DiskFileReader
-	opened         chan struct{}
+	inited         int32
 	metaIndexItems []MetaIndex
 	trailer        Trailer
 	bloom          *bloom.Filter
@@ -64,10 +64,10 @@ type TSSPFileReader struct {
 	avgChunkRows   int
 	maxChunkRows   int
 	mu             sync.RWMutex
+	openMu         sync.RWMutex
 
 	// in memory data and meta block
 	inMemBlock MemoryReader
-	inited     int32
 }
 
 func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *TableData, ver uint64, tmp bool, lockPath *string) (*TSSPFileReader, error) {
@@ -125,13 +125,12 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 
 	r := getTSSPFileReader()
 	r.r = NewDiskFileReader(fd, lockPath)
-	r.opened = make(chan struct{})
 	r.trailer = Trailer{}
 	r.trailerOffset = size - int64(len(tb.trailerData))
 	r.fileSize = size
 	r.version = ver
-	r.inited = 0
 	r.ref = 0
+	atomic.StoreInt32(&r.inited, 0)
 
 	r.bloom = bloomFilter
 	trailer.copyTo(&r.trailer)
@@ -233,9 +232,8 @@ func NewTSSPFileReader(name string, lockPath *string) (*TSSPFileReader, error) {
 	r.fileSize = size
 	r.version = version
 	r.r = dr
-	r.opened = make(chan struct{})
-	r.inited = 0
 	r.ref = 0
+	atomic.StoreInt32(&r.inited, 0)
 
 	return r, nil
 }
@@ -250,12 +248,7 @@ func (r *TSSPFileReader) copyMetaIndex(items []MetaIndex) {
 }
 
 func (r *TSSPFileReader) initialized() bool {
-	select {
-	case <-r.opened:
-		return true
-	default:
-		return false
-	}
+	return atomic.LoadInt32(&r.inited) == 1
 }
 
 func (r *TSSPFileReader) Open() error {
@@ -280,11 +273,10 @@ func (r *TSSPFileReader) FreeFileHandle() error {
 		return nil
 	}
 	defer util.TimeCost("close file")()
-	atomic.CompareAndSwapInt32(&r.inited, 1, 0)
 	if err := r.r.FreeFileHandle(); err != nil {
 		return err
 	}
-	r.opened = make(chan struct{})
+	atomic.StoreInt32(&r.inited, 0)
 	return nil
 }
 
@@ -892,11 +884,9 @@ func (r *TSSPFileReader) LoadComponents() error {
 		return nil
 	}
 
-	if !atomic.CompareAndSwapInt32(&r.inited, 0, 1) {
-		return nil
-	}
+	r.openMu.Lock()
+	defer r.openMu.Unlock()
 
-	defer close(r.opened)
 	if !r.r.IsOpen() {
 		if err := r.loadDiskFileReader(); err != nil {
 			err = errLoadFail(r.FileName(), err)
@@ -917,6 +907,7 @@ func (r *TSSPFileReader) LoadComponents() error {
 		return err
 	}
 
+	atomic.StoreInt32(&r.inited, 1)
 	return nil
 }
 
@@ -983,11 +974,9 @@ func (r *TSSPFileReader) FreeMemory() int64 {
 }
 
 func (r *TSSPFileReader) LoadIntoMemory() error {
-	if !r.initialized() {
-		if err := r.LoadComponents(); err != nil {
-			log.Error("load index fail", zap.String("file", r.r.Name()), zap.Error(err))
-			return err
-		}
+	if err := r.LoadComponents(); err != nil {
+		log.Error("load index fail", zap.String("file", r.r.Name()), zap.Error(err))
+		return err
 	}
 
 	return r.inMemBlock.LoadIntoMemory(r.r, &r.trailer, r.metaIndexItems)
@@ -996,7 +985,6 @@ func (r *TSSPFileReader) LoadIntoMemory() error {
 func (r *TSSPFileReader) reset() {
 	r.trailer.reset()
 	r.bloom = nil
-	r.opened = nil
 	r.version = version
 	r.metaIndexItems = r.metaIndexItems[:0]
 	r.trailerOffset = 0
@@ -1004,6 +992,7 @@ func (r *TSSPFileReader) reset() {
 	r.r = nil
 	r.avgChunkRows = 0
 	r.maxChunkRows = 0
+	atomic.StoreInt32(&r.inited, 0)
 
 	r.inMemBlock.Reset()
 }
@@ -1048,16 +1037,10 @@ func (r *TSSPFileReader) lazyInit() error {
 		failpoint.Return(fmt.Errorf("lazyInit error"))
 	})
 
-	select {
-	case <-r.opened:
-		return nil
-	default:
-		if err := r.LoadComponents(); err != nil {
-			return err
-		}
-		<-r.opened
-		return nil
+	if err := r.LoadComponents(); err != nil {
+		return err
 	}
+	return nil
 }
 
 func (r *TSSPFileReader) Ref() {

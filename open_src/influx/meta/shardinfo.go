@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cespare/xxhash/v2"
 	"github.com/gogo/protobuf/proto"
-	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
@@ -522,10 +522,7 @@ func (so *ShardOwner) unmarshal(pb *proto2.ShardOwner) {
 }
 
 func HashID(key []byte) uint64 {
-	h := models.NewInlineFNV64a()
-	h.Write(key)
-	sum := h.Sum64()
-	return sum
+	return xxhash.Sum64(key)
 }
 
 func TierToString(tier uint64) string {

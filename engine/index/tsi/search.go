@@ -34,17 +34,28 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/errno"
+	CLog "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
+	"go.uber.org/zap"
 )
+
+type indexSearchHook func(uint64) bool
 
 type indexSearch struct {
 	idx *MergeSetIndex
 	ts  mergeset.TableSearch
 	kb  bytesutil.ByteBuffer
 	mp  tagToTSIDsRowParser
+
+	deleted *uint64set.Set
+}
+
+func (is *indexSearch) setDeleted(set *uint64set.Set) {
+	is.deleted = set
 }
 
 func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {
@@ -680,10 +691,25 @@ func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, er
 		return tsids, nil
 	}
 
+	querySeriesLimit := syscontrol.GetQuerySeriesLimit()
 	// Slow path - scan for all the rows with the given prefix.
 	// Pass nil filter to getTSIDsForTagFilterSlow, since it works faster on production workloads
 	// than non-nil filter with many entries.
-	err := is.getTSIDsForTagFilterSlow(tf, nil, tsids.Add)
+	err := is.getTSIDsForTagFilterSlow(tf, nil, func(u uint64) bool {
+		if is.deleted != nil && is.deleted.Has(u) {
+			return true
+		}
+
+		tsids.Add(u)
+		if querySeriesLimit > 0 && tsids.Len() >= querySeriesLimit {
+			CLog.NewLogger(errno.ModuleIndex).Error("",
+				zap.Error(errno.NewError(errno.ErrQuerySeriesUpperBound)),
+				zap.Int("querySeriesLimit", querySeriesLimit),
+				zap.String("index_path", is.idx.path))
+			return false
+		}
+		return true
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error when searching for tsids for tagFilter in slow path: %w; tagFilter=%s", err, tf)
 	}
@@ -743,7 +769,7 @@ func (is *indexSearch) searchTSIDs(name []byte, expr influxql.Expr, tr TimeRange
 	return tsids.AppendTo(nil), nil
 }
 
-func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set.Set, f func(tsid uint64)) error {
+func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set.Set, hook indexSearchHook) error {
 	if len(tf.orSuffixes) > 0 {
 		logger.Panicf("BUG: the getTSIDsForTagFilterSlow must be called only for empty tf.orSuffixes; got %s", tf.orSuffixes)
 	}
@@ -780,7 +806,9 @@ func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set
 				if filter != nil && !filter.Has(tsid) {
 					continue
 				}
-				f(tsid)
+				if !hook(tsid) {
+					return nil
+				}
 			}
 			continue
 		}
@@ -793,7 +821,9 @@ func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set
 				if filter != nil && !filter.Has(tsid) {
 					continue
 				}
-				f(tsid)
+				if !hook(tsid) {
+					return nil
+				}
 			}
 			continue
 		}
@@ -833,7 +863,9 @@ func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set
 			if filter != nil && !filter.Has(tsid) {
 				continue
 			}
-			f(tsid)
+			if !hook(tsid) {
+				return nil
+			}
 		}
 	}
 	if err := ts.Error(); err != nil {
@@ -990,7 +1022,7 @@ func (is *indexSearch) searchTagValues(name []byte, tagKeys [][]byte, condition 
 	}
 
 	for i, tagKey := range tagKeys {
-		tvm, err := is.searchTagValuesBySingleKey(name, tagKey, eligibleTSIDs)
+		tvm, err := is.searchTagValuesBySingleKey(name, tagKey, eligibleTSIDs, condition)
 		if err != nil {
 			return nil, err
 		}
@@ -1003,7 +1035,7 @@ func (is *indexSearch) searchTagValues(name []byte, tagKeys [][]byte, condition 
 	return result, nil
 }
 
-func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleTSIDs *uint64set.Set) (map[string]struct{}, error) {
+func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleTSIDs *uint64set.Set, condition influxql.Expr) (map[string]struct{}, error) {
 	ts := &is.ts
 	kb := &is.kb
 	mp := &is.mp
@@ -1019,6 +1051,9 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 	kb.B = marshalTagValue(kb.B, compositeKey.B)
 	prefix := kb.B
 	ts.Seek(prefix)
+
+	var seriesKeys [][]byte
+	var combineSeriesKey []byte
 	for ts.NextItem() {
 		item := ts.Item
 		if !bytes.HasPrefix(item, prefix) {
@@ -1027,7 +1062,13 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 		if err := mp.Init(item, nsPrefixTagToTSIDs); err != nil {
 			return nil, err
 		}
-		if !mp.IsExpectedTag(deletedTSIDs, eligibleTSIDs) {
+
+		isExpect, tsid := mp.IsExpectedTag(deletedTSIDs, eligibleTSIDs)
+		if !isExpect {
+			continue
+		}
+
+		if !is.isExpectTagWithTagArray(tsid, seriesKeys, combineSeriesKey, condition, mp.Tag) {
 			continue
 		}
 

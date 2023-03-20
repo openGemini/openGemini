@@ -86,7 +86,6 @@ func NewTsspSequenceReader(outputRowDataType hybridqp.RowDataType, ops []hybridq
 		stop:    stop,
 		closed:  make(chan struct{}, 2),
 	}
-	r.InitOnce()
 	return r
 }
 
@@ -133,7 +132,7 @@ func (r *TsspSequenceReader) Work(ctx context.Context) error {
 
 	err := r.init()
 	if err != nil {
-		r.sendRecord(executor.NewSeriesRecord(nil, 0, nil, 0, err))
+		r.sendRecord(executor.NewSeriesRecord(nil, 0, nil, 0, nil, err))
 		return err
 	}
 
@@ -145,10 +144,10 @@ func (r *TsspSequenceReader) Work(ctx context.Context) error {
 			return nil
 		default:
 			tracing.StartPP(r.span)
-			ch, sid, err := r.readRecord()
+			ch, sid, tr, err := r.readRecord()
 			tracing.EndPP(r.span)
 			if err != nil {
-				r.sendRecord(executor.NewSeriesRecord(ch, sid, nil, 0, err))
+				r.sendRecord(executor.NewSeriesRecord(ch, sid, nil, 0, nil, err))
 				close(r.closed)
 				return err
 			}
@@ -159,26 +158,27 @@ func (r *TsspSequenceReader) Work(ctx context.Context) error {
 			}
 			rowCount += ch.RowNums()
 			tracing.SpanElapsed(r.outputSpan, func() {
-				r.sendRecord(executor.NewSeriesRecord(ch, sid, r.files.Files()[r.fileIndex], r.newSeqs[r.fileIndex], nil))
+				r.sendRecord(executor.NewSeriesRecord(ch, sid, r.files.Files()[r.fileIndex], r.newSeqs[r.fileIndex], tr, nil))
 			})
 		}
 	}
 }
 
-func (r *TsspSequenceReader) readRecord() (*record.Record, uint64, error) {
+func (r *TsspSequenceReader) readRecord() (*record.Record, uint64, *record.TimeRange, error) {
 	if r.emptyCol {
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
 	var rec *record.Record
 	var err error
 	var sid uint64
+	var tr *record.TimeRange
 	for {
 		select {
 		case <-r.stop:
-			return nil, 0, fmt.Errorf("downSample Stop")
+			return nil, 0, tr, fmt.Errorf("downSample Stop")
 		default:
 			for rec == nil {
-				rec, sid, err = r.metaIndexIterator.next()
+				rec, sid, tr, err = r.metaIndexIterator.next()
 				if err != nil {
 					break
 				}
@@ -189,11 +189,11 @@ func (r *TsspSequenceReader) readRecord() (*record.Record, uint64, error) {
 					r.fileIndex += 1
 					err = r.init()
 					if err != nil {
-						return nil, 0, err
+						return nil, 0, tr, err
 					}
 				}
 			}
-			return rec, sid, err
+			return rec, sid, tr, err
 		}
 	}
 }
@@ -361,6 +361,7 @@ type ChunkMetaByFieldIters struct {
 	currentChunkMetaIter *ChunkMetaByField
 	recordPool           *record.CircularRecordPool
 	chunkMetas           []immutable.ChunkMeta
+	tr                   *record.TimeRange
 }
 
 func NewChunkMetaByFieldIters(chunkMetas []immutable.ChunkMeta, file immutable.TSSPFile, fieldIter *FieldIter, recordPool *record.CircularRecordPool) *ChunkMetaByFieldIters {
@@ -381,22 +382,27 @@ func (r *ChunkMetaByFieldIters) init() {
 	r.currentChunkMetaIter = NewChunkMetaByField(r.file, r.fieldIter, r.chunkMetas[r.pos], r.recordPool)
 }
 
-func (r *ChunkMetaByFieldIters) next() (*record.Record, uint64, error) {
+func (r *ChunkMetaByFieldIters) next() (*record.Record, uint64, *record.TimeRange, error) {
 	for {
 		data, sid, err := r.currentChunkMetaIter.next()
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		if data != nil {
-			return data, sid, nil
+			if r.tr == nil {
+				min, max := r.currentChunkMetaIter.chunkMeta.MinMaxTime()
+				r.tr = &record.TimeRange{Min: min, Max: max}
+			}
+			return data, sid, r.tr, nil
 		}
 
 		if r.pos < len(r.chunkMetas)-1 {
 			r.addPos()
+			r.tr = nil
 			continue
 		}
 
-		return nil, 0, nil
+		return nil, 0, nil, nil
 	}
 }
 
@@ -451,23 +457,23 @@ func (r *MetaIndexIterator) init() error {
 	return nil
 }
 
-func (r *MetaIndexIterator) next() (*record.Record, uint64, error) {
+func (r *MetaIndexIterator) next() (*record.Record, uint64, *record.TimeRange, error) {
 	for {
-		rec, sid, err := r.currentChunkMetaByFieldIters.next()
+		rec, sid, tr, err := r.currentChunkMetaByFieldIters.next()
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, nil, err
 		}
 		if rec == nil {
 			if !r.hasRemain() {
-				return nil, 0, nil
+				return nil, 0, nil, nil
 			}
 			err = r.nextChunkMetaByFieldIters()
 			if err != nil {
-				return nil, 0, err
+				return nil, 0, nil, err
 			}
 			continue
 		}
-		return rec, sid, nil
+		return rec, sid, tr, nil
 	}
 }
 
@@ -538,7 +544,6 @@ func NewWriteIntoStorageTransform(outputRowDataType hybridqp.RowDataType, ops []
 		closed:      make(chan struct{}, 2),
 		addPrefix:   addPrefix,
 	}
-	r.InitOnce()
 	r.recordSchema = r.schema.BuildDownSampleSchema(addPrefix)
 	return r
 }
@@ -871,10 +876,14 @@ type FileSequenceAggregator struct {
 	exprOpt       []hybridqp.ExprOptions
 	coProcessor   CoProcessor
 	file          immutable.TSSPFile
+	tr            *record.TimeRange
 	addPrefix     bool
+	appendTail    bool
+
+	shardTr *record.TimeRange
 }
 
-func NewFileSequenceAggregator(schema hybridqp.Catalog, addPrefix bool) executor.Processor {
+func NewFileSequenceAggregator(schema hybridqp.Catalog, addPrefix bool, shardStartTime, shardEndTime int64) executor.Processor {
 	r := &FileSequenceAggregator{
 		schema:        schema,
 		Output:        executor.NewSeriesRecordPort(nil),
@@ -884,8 +893,10 @@ func NewFileSequenceAggregator(schema hybridqp.Catalog, addPrefix bool) executor
 		recordChan: make(chan *executor.SeriesRecord),
 		keep:       true,
 		addPrefix:  addPrefix,
+		tr:         &record.TimeRange{},
+
+		shardTr: &record.TimeRange{Min: shardStartTime, Max: shardEndTime},
 	}
-	r.InitOnce()
 	return r
 }
 
@@ -895,7 +906,7 @@ func (r *FileSequenceAggregator) Create(plan executor.LogicalPlan, opt query.Pro
 		err := fmt.Errorf("%v is not a fileAggregator plan", plan.String())
 		return r, err
 	}
-	p := NewFileSequenceAggregator(plan.Schema().(*executor.QuerySchema), true)
+	p := NewFileSequenceAggregator(plan.Schema().(*executor.QuerySchema), true, 0, 0)
 	return p, nil
 }
 
@@ -1010,6 +1021,8 @@ func (r *FileSequenceAggregator) Aggregate() {
 		r.currSid = rec.GetSid()
 		r.file = rec.GetTsspFile()
 		r.newSeq = rec.GetSeq()
+		r.tr.Min, _ = r.schema.Options().Window(rec.GetTr().Min - int64(r.schema.Options().GetInterval()))
+		r.tr.Max, _ = r.schema.Options().Window(rec.GetTr().Max + int64(r.schema.Options().GetInterval()))
 		if !r.init {
 			r.recordPool = record.NewCircularRecordPool(SequenceAggPool, SequenceAggRecordNum, r.outSchema, true)
 			r.outRecordPool = record.NewCircularRecordPool(SequenceAggPool, SequenceAggRecordNum, r.outSchema, true)
@@ -1023,6 +1036,7 @@ func (r *FileSequenceAggregator) Aggregate() {
 }
 
 func (r *FileSequenceAggregator) GetProcessors() {
+	r.multiCall = true
 	r.coProcessor, r.initColMeta, r.multiCall = newProcessor(r.inSchema[:r.inSchema.Len()-1], r.outSchema[:r.outSchema.Len()-1], r.exprOpt)
 	r.reducerParams.multiCall = r.multiCall
 	r.timeOrdinal = r.outSchema.Len() - 1
@@ -1034,8 +1048,10 @@ func (r *FileSequenceAggregator) SendRecord(re *record.Record) {
 	newSeq := r.newSeq
 	r.outRecord = r.outRecordPool.GetBySchema(r.outSchema)
 	r.outRecord.ResizeBySchema(r.outSchema, r.initColMeta)
-	AppendRecWithNilRows(r.outRecord, re, r.schema.Options())
-	r.Output.State <- executor.NewSeriesRecord(r.outRecord, sid, file, newSeq, nil)
+	start, end := r.tr.Min, r.tr.Max
+	AppendRecWithNilRows(r.outRecord, re, r.schema.Options(), start, end, r.shardTr.Min, r.appendTail)
+	r.tr.Min = r.outRecord.Time(r.outRecord.RowNums() - 1)
+	r.Output.State <- executor.NewSeriesRecord(r.outRecord, sid, file, newSeq, nil, nil)
 }
 
 func (r *FileSequenceAggregator) unreadRecordForSplit(inRecord *executor.SeriesRecord) (uint64, immutable.TSSPFile) {
@@ -1048,6 +1064,7 @@ func (r *FileSequenceAggregator) unreadRecordForSplit(inRecord *executor.SeriesR
 }
 
 func (r *FileSequenceAggregator) AggregateSameSchema() error {
+	r.appendTail = false
 	newRecord := r.recordPool.GetBySchema(r.outSchema)
 	for {
 		inRecord, err := r.nextRecord()
@@ -1057,6 +1074,7 @@ func (r *FileSequenceAggregator) AggregateSameSchema() error {
 		if inRecord == nil {
 			r.keep = false
 			if newRecord.RowNums() > 0 {
+				r.appendTail = true
 				r.SendRecord(newRecord)
 			}
 			return nil
@@ -1066,6 +1084,7 @@ func (r *FileSequenceAggregator) AggregateSameSchema() error {
 			inRecord.GetTsspFile().Path() != r.file.Path() {
 			r.unreadRecord(inRecord)
 			if newRecord.RowNums() > 0 {
+				r.appendTail = true
 				r.SendRecord(newRecord)
 			}
 			return nil
@@ -1076,6 +1095,11 @@ func (r *FileSequenceAggregator) AggregateSameSchema() error {
 			newRecord = r.recordPool.GetBySchema(r.outSchema)
 			continue
 		}
+		kr := inRecord.GetRec().KickNilRow()
+		if kr.RowNums() == 0 {
+			continue
+		}
+		inRecord.SetRec(kr)
 		err = r.inNextWindow(inRecord)
 		if err != nil {
 			return err
@@ -1234,24 +1258,31 @@ func (r *FileSequenceAggregator) clear() {
 	r.inNextWin = false
 }
 
-func AppendRecWithNilRows(rec, re *record.Record, opt hybridqp.Options) {
+func AppendRecWithNilRows(rec, re *record.Record, opt hybridqp.Options, seriesStart, seriesEnd, shardStart int64, last bool) {
 	times := re.Times()
-	rec.AppendRec(re, 0, 1)
-	for i := 1; i < len(times); i++ {
-		start, _ := opt.Window(times[i-1])
+	for i := 0; i < len(times); i++ {
+		if i > 0 {
+			seriesStart, _ = opt.Window(times[i-1])
+		}
 		end, _ := opt.Window(times[i])
-		if opt.IsAscending() {
-			step := (end - start) / int64(opt.GetInterval())
-			for j := int64(1); j < step; j++ {
-				AppendNilRowWithTime(rec, times[i-1]+int64(opt.GetInterval())*j)
-			}
-		} else {
-			step := (start - end) / int64(opt.GetInterval())
-			for j := int64(1); j < step; j++ {
-				AppendNilRowWithTime(rec, times[i-1]-int64(opt.GetInterval())*j)
-			}
+
+		step := (end - seriesStart) / int64(opt.GetInterval())
+		for j := int64(1); j < step; j++ {
+			AppendNilRowWithTime(rec, seriesStart+int64(opt.GetInterval())*j)
 		}
 		rec.AppendRec(re, i, i+1)
+		rec.Times()[rec.RowNums()-1] = end
+	}
+	if last {
+		// append tail times
+		rEnd := rec.Time(rec.RowNums() - 1)
+		step := (seriesEnd - rEnd) / int64(opt.GetInterval())
+		for j := int64(1); j < step; j++ {
+			AppendNilRowWithTime(rec, rEnd+int64(opt.GetInterval())*j)
+		}
+	}
+	if rec.Time(0) < shardStart {
+		rec.Times()[0] = shardStart
 	}
 }
 

@@ -17,6 +17,9 @@ limitations under the License.
 package spdy
 
 import (
+	"time"
+
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 )
 
@@ -34,4 +37,12 @@ func ConnPoolSize() int {
 func SetDefaultConfiguration(cfg config.Spdy) {
 	config.FormatSpdy(&cfg)
 	defaultCfg = cfg
+}
+
+func TCPDialTimeout() time.Duration {
+	return time.Duration(defaultCfg.TCPDialTimeout)
+}
+
+func SetTCPDialTimeout(timeout time.Duration) {
+	defaultCfg.TCPDialTimeout = toml.Duration(timeout)
 }

@@ -241,7 +241,6 @@ func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprO
 		r.buildFieldIndex(schema, outputRowDataType, ops, seriesPlan)
 	}
 	r.ResultChunkPool = executor.NewCircularChunkPool(executor.CircularChunkNum, executor.NewChunkBuilder(outputRowDataType))
-	r.InitOnce()
 	return r
 }
 
@@ -810,6 +809,10 @@ func (r *ChunkReader) Close() {
 	r.Once(func() {
 		r.Output.Close()
 	})
+}
+
+func (r *ChunkReader) Abort() {
+	r.Close()
 }
 
 func (r *ChunkReader) Release() error {

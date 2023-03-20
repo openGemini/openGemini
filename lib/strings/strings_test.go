@@ -17,12 +17,10 @@ limitations under the License.
 package strings_test
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 	"testing"
 
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/stretchr/testify/assert"
 )
@@ -37,78 +35,25 @@ func TestUnionSlice(t *testing.T) {
 		{"b", "a"},
 		{"a", "b", "b", "b"},
 	}
-
-	for _, s := range data {
-		s2 := make([]string, len(s))
-		copy(s2, s)
-		exp := strings.Union([]string{}, s2)
-		got := strings.UnionSlice(s)
-
-		sort.Strings(exp)
-		sort.Strings(got)
-
-		if !reflect.DeepEqual(exp, got) {
-			t.Fatalf("failed, exp: %+v; got:%+v", exp, got)
-		}
-	}
-}
-
-func TestHashUnionSlice(t *testing.T) {
-	var data = [][]string{
-		{"a", "a", "d", "a", "x", "b", "b", "c", "x", "x"},
+	var exp = [][]string{
+		{"a", "d", "b", "c", "x"},
 		{},
 		{"a"},
-		{"a", "a", "a"},
+		{"a"},
 		{"a", "c", "d"},
 		{"b", "a"},
-		{"a", "b", "b", "b"},
+		{"a", "b"},
 	}
 
-	for _, s := range data {
-		s2 := make([]string, len(s))
-		copy(s2, s)
-		exp := strings.Union([]string{}, s2)
+	for i, s := range data {
 		got := strings.UnionSlice(s)
 
-		sort.Strings(exp)
+		sort.Strings(exp[i])
 		sort.Strings(got)
 
-		if !reflect.DeepEqual(exp, got) {
-			t.Fatalf("failed, exp: %+v; got:%+v", exp, got)
+		if !reflect.DeepEqual(exp[i], got) {
+			t.Fatalf("failed, exp: %+v; got:%+v", exp[i], got)
 		}
-	}
-}
-
-func makeStringSlice() []string {
-	n := 5000
-	s := make([]string, n)
-	for k := 0; k < n; k++ {
-		s[k] = fmt.Sprintf("ss_%d", k%(n*3/4))
-	}
-	sort.Slice(s, func(i, j int) bool {
-		return rand.Float64() > 0.5
-	})
-	return s
-}
-
-// BenchmarkUnionSlice-12    	      26	  39023485 ns/op
-func BenchmarkUnionSlice(b *testing.B) {
-	s := makeStringSlice()
-
-	for i := 0; i < b.N; i++ {
-		s2 := make([]string, len(s))
-		copy(s2, s)
-		strings.Union([]string{}, s2)
-	}
-}
-
-// BenchmarkHashUnionSlice-12    	    4785	    252293 ns/op
-func BenchmarkHashUnionSlice(b *testing.B) {
-	s := makeStringSlice()
-	for i := 0; i < b.N; i++ {
-		s2 := make([]string, len(s))
-		copy(s2, s)
-		strings.UnionSlice(s2)
 	}
 }
 

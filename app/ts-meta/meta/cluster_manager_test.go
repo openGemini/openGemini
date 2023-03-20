@@ -293,6 +293,8 @@ func TestClusterManager_LeaderChanged(t *testing.T) {
 	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
 		t.Fatal(err)
 	}
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	db := "db0"
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
 	globalService.clusterManager.eventCh <- e
@@ -324,7 +326,6 @@ waitEventProcess:
 		}
 		time.Sleep(time.Millisecond)
 	}
-	assert.Equal(t, meta.Offline, globalService.store.data.PtView[db][0].Status)
 	globalService.store.notifyCh <- false
 	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, MSMState(Stopping), globalService.msm.state)

@@ -17,9 +17,9 @@ limitations under the License.
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
@@ -34,28 +34,19 @@ import (
 )
 
 var (
-	TsVersion   string
+	TsVersion   = "v1.0.1"
 	TsCommit    string
 	TsBranch    string
 	TsBuildTime string
 )
 
-var (
-	ConfPath = flag.String("config", "", "-config=monitor config file path")
-	PidPath  = flag.String("pidfile", "", "-pid=monitor pid file path")
-)
+const TsMonitor = "ts-monitor"
 
-var versionUsage = `ts-monitor -config=config_file_path -pidfile=pid_file_path`
-
-func usage() {
-	fmt.Println(versionUsage)
-}
+var monitorUsage = fmt.Sprintf(app.MainUsage, TsMonitor, TsMonitor)
+var runUsage = fmt.Sprintf(app.RunUsage, TsMonitor, TsMonitor)
 
 func main() {
-	flag.CommandLine.SetOutput(os.Stdout)
-	flag.Usage = usage
-	flag.Parse()
-
+	app.InitParse()
 	if err := doRun(os.Args[1:]...); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -63,19 +54,25 @@ func main() {
 }
 
 func doRun(args ...string) error {
-	name, _ := cmd.ParseCommandName(args)
+	name, args := cmd.ParseCommandName(args)
 
 	switch name {
 	case "", "run":
+		options, err := app.ParseFlags(func() {
+			fmt.Println(runUsage)
+		}, args...)
+		if err != nil {
+			return err
+		}
 		mainCmd := app.NewCommand()
-		err := mainCmd.InitConfig(config.NewTSMonitor(), *ConfPath)
+		err = mainCmd.InitConfig(config.NewTSMonitor(), options.ConfigPath)
 		if err != nil {
 			return err
 		}
 
 		mainCmd.Logger = logger.NewLogger(errno.ModuleUnknown)
 		mainCmd.Command = &cobra.Command{
-			Use:                app.MonitorUsage,
+			Use:                monitorUsage,
 			Version:            TsVersion,
 			ValidArgs:          []string{TsBranch, TsCommit, TsBuildTime},
 			DisableFlagParsing: true,
@@ -83,10 +80,10 @@ func doRun(args ...string) error {
 				fmt.Fprint(os.Stdout, app.MONITORLOGO)
 
 				// Write the PID file.
-				if err := app.WritePIDFile(*PidPath); err != nil {
+				if err := app.WritePIDFile(options.PIDFile); err != nil {
 					return fmt.Errorf("write pid file: %s", err)
 				}
-				mainCmd.Pidfile = *PidPath
+				mainCmd.Pidfile = options.PIDFile
 
 				s, err := run.NewServer(mainCmd.Config, cmd, mainCmd.Logger)
 				if err != nil {
@@ -110,8 +107,10 @@ func doRun(args ...string) error {
 		mainCmd.Logger.Info("Monitor service received shutdown signal", zap.Any("signal", signal))
 		util.MustClose(mainCmd)
 		mainCmd.Logger.Info("Monitor shutdown successfully!")
+	case "version":
+		fmt.Printf(app.VERSION, TsMonitor, TsVersion, TsCommit, runtime.GOOS, runtime.GOARCH)
 	default:
-		return fmt.Errorf(`unknown command, usage:\n "%s"`+"\n\n", versionUsage)
+		return fmt.Errorf(monitorUsage)
 	}
 	return nil
 }

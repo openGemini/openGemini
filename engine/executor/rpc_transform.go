@@ -45,7 +45,6 @@ func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, opt query.Proces
 		abortSignal: make(chan struct{}),
 		rpcLogger:   logger.NewLogger(errno.ModuleQueryEngine),
 	}
-	trans.InitOnce()
 	return trans
 }
 

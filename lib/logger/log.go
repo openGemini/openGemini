@@ -23,6 +23,7 @@ import (
 
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -52,6 +53,7 @@ func InitLogger(conf config.Logger) {
 		initHandler(logger)
 	}
 	util.SetLogger(logger)
+	crypto.SetLogger(logger)
 }
 
 func GetLogger() *zap.Logger {

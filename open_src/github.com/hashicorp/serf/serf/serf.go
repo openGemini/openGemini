@@ -1221,6 +1221,11 @@ func (s *Serf) handleNodeJoinIntent(joinMsg *messageJoin) bool {
 		return false
 	}
 
+	if member.Status == StatusFailed || member.Status == StatusLeft {
+		s.failedMembers = removeOldMember(s.failedMembers, member.Name)
+		s.leftMembers = removeOldMember(s.leftMembers, member.Name)
+	}
+
 	// Update the LTime
 	member.statusLTime = joinMsg.LTime
 	if s.config.EventCh != nil {

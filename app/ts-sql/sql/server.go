@@ -93,6 +93,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	if err != nil {
 		return nil, fmt.Errorf("tls configuration: %v", err)
 	}
+	config.EnableTagArray = c.Common.EnableTagArray
 
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", c.HTTP.BindAddress)))
 	// Update the TLS values on each of the configs to be the parsed one if

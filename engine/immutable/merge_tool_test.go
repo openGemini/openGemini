@@ -17,6 +17,7 @@ limitations under the License.
 package immutable_test
 
 import (
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -311,6 +312,60 @@ func TestMergeTool_Merge_mod8(t *testing.T) {
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
 }
 
+func TestMergeTool_Merge_mod9(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 16)()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int_1"},
+	}
+
+	mh.addRecord(100, rg.generate(schema, 16))
+	mh.addRecord(100, rg.setBegin(begin).incrBegin(20).generate(schema, 32))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.setBegin(begin+1).incrBegin(-5).generate(schema, 16))
+	require.NoError(t, mh.saveToUnordered())
+
+	schema = record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int_2"},
+	}
+	mh.addRecord(100, rg.setBegin(begin+1).incrBegin(17).generate(schema, 16))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestMergeTool_Merge_mod10(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int_1"},
+	}
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	schema[0].Name = "int_2"
+	mh.addRecord(100, rg.setBegin(begin+1).incrBegin(9).generate(schema, 5))
+	require.NoError(t, mh.saveToOrder())
+
+	schema[0].Name = "int_3"
+	mh.addRecord(100, rg.setBegin(begin+2).incrBegin(5).generate(schema, 9))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
 func TestMergeTool_SkipMerge(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
@@ -377,7 +432,6 @@ func TestMergeTool_MergeUnorderedSelf(t *testing.T) {
 }
 
 func TestMergeTool_MergeAndCompact(t *testing.T) {
-	t.Skip()
 	var begin int64 = 1e12
 	defer beforeTest(t, 256)()
 	schemas := getDefaultSchemas()
@@ -537,4 +591,28 @@ func TestMergeTool_WriteCurrentMetaError(t *testing.T) {
 
 		require.NoError(t, mh.mergeAndCompact(true))
 	}()
+}
+
+func TestCompactionDiffSchemas(t *testing.T) {
+	t.Skip()
+	var begin int64 = 1e12
+	defer beforeTest(t, 16)()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	for i := 0; i < 4; i++ {
+		schema := record.Schemas{
+			record.Field{Type: influx.Field_Type_Int, Name: fmt.Sprintf("int_%d", i+1)},
+		}
+		mh.addRecord(100, rg.incrBegin(200).generate(schema, 100+i*10))
+		require.NoError(t, mh.saveToOrder())
+	}
+
+	immutable.SegMergeFlag(immutable.StreamingCompact)
+	require.NoError(t, mh.store.FullCompact(1))
+	mh.store.Wait()
+
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
 }

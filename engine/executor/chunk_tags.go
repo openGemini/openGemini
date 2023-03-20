@@ -213,10 +213,10 @@ func (ct *ChunkTags) encodeTagsByTagKVs(keys []string, vals []string) {
 
 	for i, k := range keys {
 		ct.subset = append(ct.subset, k...)
-		ct.subset = append(ct.subset, ' ')
+		ct.subset = append(ct.subset, influx.ByteSplit)
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 		ct.subset = append(ct.subset, vals[i]...)
-		ct.subset = append(ct.subset, ' ')
+		ct.subset = append(ct.subset, influx.ByteSplit)
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 	}
 	ct.encodeHead()
@@ -240,15 +240,15 @@ func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
 			if IgnoreEmptyTag {
 				k = ""
 			}
-			ct.subset = append(ct.subset, Str2bytes(k+" ")...)
+			ct.subset = append(ct.subset, Str2bytes(k+influx.StringSplit)...)
 			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
-			ct.subset = append(ct.subset, Str2bytes(" ")...)
+			ct.subset = append(ct.subset, influx.ByteSplit)
 			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 			continue
 		}
-		ct.subset = append(ct.subset, Str2bytes(t1.Key+" ")...)
+		ct.subset = append(ct.subset, Str2bytes(t1.Key+influx.StringSplit)...)
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
-		ct.subset = append(ct.subset, Str2bytes(t1.Value+" ")...)
+		ct.subset = append(ct.subset, Str2bytes(t1.Value+influx.StringSplit)...)
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 	}
 	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)

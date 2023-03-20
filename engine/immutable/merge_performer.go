@@ -59,23 +59,18 @@ type mergePerformer struct {
 	// schema of unordered data
 	unorderedSchemas record.Schemas
 
-	// all times of ordered data in the current series
-	orderTimes []int64
-
-	// Maximum time after data merge
-	maxMergedTime int64
-
 	// merged time column
-	mergedTimes *record.ColVal
+	mergedTimes   []int64
+	mergedTimeCol *record.ColVal
 }
 
 func NewMergePerformer(ur *UnorderedReader, stat *statistics.MergeStatItem) *mergePerformer {
 	return &mergePerformer{
-		mh:          record.NewMergeHelper(),
-		ur:          ur,
-		mergedFiles: TSSPFiles{},
-		mergedTimes: &record.ColVal{},
-		stat:        stat,
+		mh:            record.NewMergeHelper(),
+		ur:            ur,
+		mergedFiles:   TSSPFiles{},
+		mergedTimeCol: &record.ColVal{},
+		stat:          stat,
 	}
 }
 
@@ -97,13 +92,7 @@ func (p *mergePerformer) Handle(col *record.ColVal, times []int64, lastSeg bool)
 		maxOrderTime = math.MaxInt64
 	}
 
-	minOrderTime := times[0]
-	if minOrderTime == p.orderTimes[0] {
-		// first segment
-		minOrderTime = math.MinInt64
-	}
-
-	unorderedCol, unorderedTimes, err := p.readUnordered(minOrderTime, maxOrderTime)
+	unorderedCol, unorderedTimes, err := p.readUnordered(maxOrderTime)
 	if err != nil {
 		return err
 	}
@@ -121,29 +110,32 @@ func (p *mergePerformer) SeriesChanged(sid uint64, orderTimes []int64) error {
 		return err
 	}
 
-	if err := p.ur.InitSeriesTimes(sid); err != nil {
-		return err
-	}
-
 	maxOrderTime := orderTimes[len(orderTimes)-1]
 	if p.lastFile {
 		maxOrderTime = math.MaxInt64
 	}
 
-	p.unorderedSchemas = p.ur.ReadSeriesSchemas(sid, maxOrderTime)
-	p.noUnorderedSeries = len(p.unorderedSchemas) == 0
-	p.sid = sid
-	p.orderTimes = append(p.orderTimes[:0], orderTimes...)
-	p.mergedTimes.Init()
-	p.ref = nil
-	p.maxMergedTime = math.MinInt64
+	if err := p.ur.InitTimes(sid, maxOrderTime); err != nil {
+		return err
+	}
+
+	unorderedTimes := p.ur.ReadAllTimes()
+	p.noUnorderedSeries = len(unorderedTimes) == 0
 
 	if p.noUnorderedSeries {
-		p.appendMergedTime(orderTimes)
+		p.unorderedSchemas = nil
+		p.mergedTimes = append(p.mergedTimes[:0], orderTimes...)
 	} else {
+		p.unorderedSchemas = p.ur.ReadSeriesSchemas(sid, maxOrderTime)
+		p.mergedTimes = mergeTimes(orderTimes, unorderedTimes, p.mergedTimes[:0])
 		p.stat.IntersectSeriesCount++
 	}
 
+	p.mergedTimeCol.Init()
+	p.mergedTimeCol.AppendTimes(p.mergedTimes)
+
+	p.sid = sid
+	p.ref = nil
 	p.sw.ChangeSid(p.sid)
 
 	return nil
@@ -244,6 +236,7 @@ func (p *mergePerformer) writeRemainCol() error {
 		}
 	}
 
+	p.unorderedSchemas = nil
 	return nil
 }
 
@@ -282,28 +275,26 @@ func (p *mergePerformer) merge(orderCol, unorderedCol *record.ColVal,
 	orderTimes, unorderedTimes []int64, ref *record.Field, lastSeg bool) error {
 	// No unordered data exists in the time range
 	if len(unorderedTimes) == 0 {
-		p.appendMergedTime(orderTimes)
 		return p.write(ref, orderCol, orderTimes, lastSeg)
 	}
 
 	p.mh.AddUnorderedCol(unorderedCol, unorderedTimes, ref.Type)
-	mergedCol, mergedTimes, err := p.mh.Merge(orderCol, orderTimes, ref.Type)
+	mergedCol, mergedTimeCol, err := p.mh.Merge(orderCol, orderTimes, ref.Type)
 	if err != nil {
 		return err
 	}
 
-	p.appendMergedTime(mergedTimes)
-	return p.write(ref, mergedCol, mergedTimes, lastSeg)
+	return p.write(ref, mergedCol, mergedTimeCol, lastSeg)
 }
 
-func (p *mergePerformer) readUnordered(min, max int64) (*record.ColVal, []int64, error) {
+func (p *mergePerformer) readUnordered(max int64) (*record.ColVal, []int64, error) {
 	var times []int64
 	var col *record.ColVal
 	var err error
 
 	if p.noUnorderedColumn {
-		times = p.ur.ReadTimes(min, max)
-		col = p.newNilCol(len(times), p.ref)
+		times = p.ur.ReadTimes(p.ref, max)
+		col = newNilCol(len(times), p.ref)
 	} else {
 		col, times, err = p.ur.Read(p.sid, p.ref, max)
 	}
@@ -316,41 +307,17 @@ func (p *mergePerformer) writeUnorderedCol(ref *record.Field) error {
 		return err
 	}
 
-	batchSize := int(maxRowsPerSegment)
-	tl := len(p.orderTimes)
-
-	for i := 0; i < tl; i += batchSize {
-		end := i + batchSize
-		if end > tl {
-			end = tl
-		}
-
-		maxOrderTime := p.orderTimes[end-1]
-		if p.lastFile && end == tl {
-			maxOrderTime = math.MaxInt64
-		}
-
-		unorderedCol, unorderedTimes, err := p.ur.Read(p.sid, ref, maxOrderTime)
-		if err != nil {
-			return err
-		}
-
-		orderCol := p.newNilCol(end-i, ref)
-		err = p.merge(orderCol, unorderedCol, p.orderTimes[i:end], unorderedTimes, ref, end == tl)
-		if err != nil {
-			return err
-		}
+	maxTime := p.mergedTimes[len(p.mergedTimes)-1]
+	if p.lastFile {
+		maxTime = math.MaxInt64
 	}
 
-	return nil
-}
-
-func (p *mergePerformer) appendMergedTime(times []int64) {
-	max := times[len(times)-1]
-	if max > p.maxMergedTime {
-		p.maxMergedTime = max
-		p.mergedTimes.AppendTimes(times)
+	orderCol := newNilCol(len(p.mergedTimes), ref)
+	unorderedCol, unorderedTimes, err := p.ur.Read(p.sid, ref, maxTime)
+	if err != nil {
+		return err
 	}
+	return p.merge(orderCol, unorderedCol, p.mergedTimes, unorderedTimes, ref, true)
 }
 
 func (p *mergePerformer) writeMergedTime() error {
@@ -362,7 +329,7 @@ func (p *mergePerformer) writeMergedTime() error {
 		return err
 	}
 
-	return p.cw.writeAll(p.sid, timeRef, p.mergedTimes)
+	return p.cw.writeAll(p.sid, timeRef, p.mergedTimeCol)
 }
 
 func (p *mergePerformer) write(ref *record.Field, col *record.ColVal, times []int64, lastSeg bool) error {
@@ -375,26 +342,6 @@ func (p *mergePerformer) write(ref *record.Field, col *record.ColVal, times []in
 	}
 
 	return nil
-}
-
-func (p *mergePerformer) newNilCol(size int, ref *record.Field) *record.ColVal {
-	if size == 0 {
-		return nil
-	}
-
-	col := &record.ColVal{
-		Val:          nil,
-		Offset:       nil,
-		BitMapOffset: 0,
-		Len:          size,
-		NilCount:     size,
-	}
-
-	col.FillBitmap(0)
-	if ref.IsString() {
-		col.Offset = make([]uint32, size)
-	}
-	return col
 }
 
 type columnWriter struct {

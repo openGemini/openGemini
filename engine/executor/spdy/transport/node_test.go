@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/stretchr/testify/assert"
 )
@@ -72,6 +73,30 @@ func TestNodeException(t *testing.T) {
 	got := false
 	if err := node.dial(0); err != nil {
 		got = strings.HasPrefix(err.Error(), fmt.Sprintf("dial tcp %s:", node.address))
+	}
+	assert.Equal(t, true, got, "expected error for dial failed")
+}
+
+func TestNodeTimeOut(t *testing.T) {
+	node := &Node{
+		nodeID:  1,
+		address: "127.0.0.10:17979",
+		pools:   make([]*spdy.MultiplexedSessionPool, 4),
+		mu:      sync.RWMutex{},
+		cursor:  0,
+	}
+
+	cfg := spdy.DefaultConfiguration()
+	cfg.ConnPoolSize = 4
+	spdy.SetDefaultConfiguration(cfg)
+	timeOut := spdy.TCPDialTimeout()
+	spdy.SetTCPDialTimeout(0)
+	defer spdy.SetTCPDialTimeout(timeOut)
+	node.pools[0] = nil
+
+	got := false
+	if err := node.dial(0); err != nil {
+		got = errno.Equal(err, errno.NoConnectionAvailable)
 	}
 	assert.Equal(t, true, got, "expected error for dial failed")
 }

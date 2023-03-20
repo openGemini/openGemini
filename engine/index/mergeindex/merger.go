@@ -17,7 +17,6 @@ limitations under the License.
 package mergeindex
 
 import (
-	"bytes"
 	"log"
 	"sync/atomic"
 
@@ -51,7 +50,6 @@ func MergeItems(data []byte, items []mergeset.Item,
 	mpPrev := rowsMerger.GetPreMergeParser()
 	dstData := data[:0]
 	dstItems := items[:0]
-	var prevItem []byte
 	for i, it := range items {
 		item := it.Bytes(data)
 		if len(item) == 0 || item[0] != nsPrefix || i == 0 || i == len(items)-1 {
@@ -64,14 +62,8 @@ func MergeItems(data []byte, items []mergeset.Item,
 				Start: uint32(len(dstData) - len(item)),
 				End:   uint32(len(dstData)),
 			})
-			prevItem = item
 			continue
 		}
-
-		if bytes.Equal(prevItem, item) {
-			continue
-		}
-		prevItem = item
 
 		if err := mp.Init(item, nsPrefix); err != nil {
 			log.Panicf("FATAL: cannot parse row starting with NsPrefix %d during merge: %s", nsPrefix, err)
