@@ -19,6 +19,7 @@ package index
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -59,6 +61,9 @@ func init() {
 	DefaultEngineOption.WalEnabled = true
 	DefaultEngineOption.WalReplayParallel = false
 	DefaultEngineOption.DownSampleWriteDrop = true
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
 }
 
 func mustParseTime(layout, value string) time.Time {
@@ -87,7 +92,6 @@ func createShard(db, rp string, ptId uint32, pathName string) (engine.Shard, err
 		SequenceId(&ltime).
 		Lock(&lockPath)
 	indexBuilder := tsi.NewIndexBuilder(opts)
-	indexBuilder.Relations = make(map[uint32]*tsi.IndexRelation)
 	primaryIndex, err := tsi.NewIndex(opts)
 	if err != nil {
 		return nil, err
@@ -403,7 +407,7 @@ func BenchmarkTestIndex(b *testing.B) {
 	time.Sleep(time.Second * 5)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		_, err = sh.Scan(nil, querySchema)
+		_, _, err = sh.Scan(nil, querySchema, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
 			b.Fatal(err)
 		}

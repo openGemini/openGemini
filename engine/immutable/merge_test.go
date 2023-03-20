@@ -17,7 +17,9 @@ limitations under the License.
 package immutable_test
 
 import (
+	"bytes"
 	"fmt"
+	"reflect"
 	"sort"
 	"time"
 
@@ -221,6 +223,38 @@ func compareRecords(expect, got map[uint64]*record.Record) error {
 func compareRecordCols(expect, got *record.Record) error {
 	if expect.RowNums() != got.RowNums() {
 		return fmt.Errorf("different row nums")
+	}
+
+	for i := 0; i < expect.Len(); i++ {
+		if err := compareColVal(&expect.ColVals[i], &got.ColVals[i], &expect.Schema[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func compareColVal(expect, got *record.ColVal, ref *record.Field) error {
+	if expect.Len != got.Len {
+		return fmt.Errorf("different col.Len. exp: %d, got %d, ref: %s",
+			expect.Len, got.Len, ref.String())
+	}
+
+	if expect.NilCount != got.NilCount {
+		return fmt.Errorf("different col.NilCount. exp: %d, got %d, ref: %s",
+			expect.NilCount, got.NilCount, ref.String())
+	}
+
+	if !bytes.Equal(expect.Val, got.Val) {
+		return fmt.Errorf("different col.Val: %s", ref.String())
+	}
+
+	if !bytes.Equal(expect.Bitmap, got.Bitmap) {
+		return fmt.Errorf("different col.Bitmap: %s", ref.String())
+	}
+
+	if !reflect.DeepEqual(expect.Offset, got.Offset) {
+		return fmt.Errorf("different col.Offset: %s", ref.String())
 	}
 
 	return nil

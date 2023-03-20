@@ -85,6 +85,7 @@ func NewServer(c config.Config, cmd *cobra.Command, logger *Logger.Logger) (app.
 	}
 
 	s.config = conf
+	config.EnableTagArray = conf.Common.EnableTagArray
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
 
 	// set query series limit

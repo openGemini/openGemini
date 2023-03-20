@@ -70,6 +70,9 @@ func (b *Int64bucket) ReleaseResource(freeResource int64) {
 }
 
 func (b *Int64bucket) GetResource(cost int64) error {
+	if cost > b.totalResource {
+		return errno.NewError(errno.BucketResourceExceeded)
+	}
 	// timer used to send time-out signal.
 	timer := time.NewTimer(b.timeout)
 	var freeMem int64

@@ -60,11 +60,14 @@ func TestMoveEventTransition(t *testing.T) {
 	globalService.store.NetStore = NewMockNetStorage()
 	globalService.clusterManager.addClusterMember(2)
 	globalService.clusterManager.addClusterMember(3)
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	dataNode = globalService.store.data.DataNodeByHttpHost("127.0.0.2:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	err = globalService.store.updateNodeStatus(3, int32(serf.StatusAlive), 3, "127.0.0.2:8011")
 	if err != nil {
 		t.Fatal(err)

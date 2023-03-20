@@ -516,9 +516,13 @@ func (fsm *storeFSM) applyCreateDataNodeCommand(cmd *proto2.Command) interface{}
 	if dataNode != nil {
 		if len(fsm.data.MetaNodes) == 1 {
 			dataNode.LTime += 1
+			return nil
 		}
+		fsm.data.MaxConnID++
+		dataNode.ConnID = fsm.data.MaxConnID
 		return nil
 	}
+
 	fsm.data.ExpandShardsEnable = fsm.config.ExpandShardsEnable
 	err, _ := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr())
 	return err

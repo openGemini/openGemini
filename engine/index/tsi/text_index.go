@@ -106,9 +106,10 @@ func TextInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row i
 }
 
 // upper function call should analyze result
-func TextScan(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (interface{}, error) {
+func TextScan(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, groups interface{}) (interface{}, int64, error) {
 	textIndex := index.(*TextIndex)
-	return textIndex.Search(primaryIndex, span, name, opt, groups)
+	result, err := textIndex.Search(primaryIndex, span, name, opt, groups)
+	return result, 0, err
 }
 
 func TextDelete(index interface{}, primaryIndex PrimaryIndex, name []byte, condition influxql.Expr, tr TimeRange) error {

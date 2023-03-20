@@ -2361,8 +2361,8 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 	}
 
 	updateStatus := serf.MemberStatus(status)
-	// node cannot join into cluster after split-brain
-	if config.GetHaEnable() && updateStatus == serf.StatusAlive && lTime == dn.LTime {
+	// node cannot join into cluster after network faulty and no need to handle repeated event
+	if config.GetHaEnable() && updateStatus == serf.StatusAlive && dn.ConnID == dn.AliveConnID {
 		return errno.NewError(errno.DataNodeSplitBrain)
 	}
 	dn.Status = updateStatus

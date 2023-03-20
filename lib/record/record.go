@@ -1064,7 +1064,10 @@ func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, 
 	var newEnd, oldEnd int
 	if ascending {
 		if newTimeVals[newPos] > oldTimeVals[len(oldTimeVals)-1] {
-			return oldRec, newPos, len(oldTimeVals)
+			rec.Schema = append(rec.Schema, oldRec.Schema...)
+			rec.ColVals = make([]ColVal, len(rec.Schema))
+			rec.AppendRec(oldRec, oldPos, len(oldTimeVals))
+			return nil, newPos, len(oldTimeVals)
 		} else if newTimeVals[len(newTimeVals)-1] < oldTimeVals[oldPos] {
 			oldEnd, newEnd = rec.mergeRecordNonOverlap(oldRec, newRec, oldPos, newPos, len(oldTimeVals), len(newTimeVals), limitRows)
 		} else {
@@ -1076,7 +1079,10 @@ func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, 
 		if newTimeVals[len(newTimeVals)-1] > oldTimeVals[oldPos] {
 			oldEnd, newEnd = rec.mergeRecordNonOverlap(oldRec, newRec, oldPos, newPos, len(oldTimeVals), len(newTimeVals), limitRows)
 		} else if newTimeVals[newPos] < oldTimeVals[len(oldTimeVals)-1] {
-			return oldRec, newPos, len(oldTimeVals)
+			rec.Schema = append(rec.Schema, oldRec.Schema...)
+			rec.ColVals = make([]ColVal, len(rec.Schema))
+			rec.AppendRec(oldRec, oldPos, len(oldTimeVals))
+			return nil, newPos, len(oldTimeVals)
 		} else {
 			newEndIndex := GetTimeRangeEndIndexDescend(newTimeVals, newPos, oldTimeVals[len(oldTimeVals)-1])
 			newTimeVals = newTimeVals[:newEndIndex+1]

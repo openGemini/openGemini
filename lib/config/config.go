@@ -92,10 +92,12 @@ func fromToml(c Config, input string) error {
 type Common struct {
 	MetaJoin       []string `toml:"meta-join"`
 	HaEnable       bool     `toml:"ha-enable"`
-	ClusterID      string   `toml:"cluster-id"`
-	CPUNum         int      `toml:"cpu-num"`
 	IgnoreEmptyTag bool     `toml:"ignore-empty-tag"`
 	ReportEnable   bool     `toml:"report-enable"`
+	EnableTagArray bool     `toml:"enable-tag-array"`
+	CryptoConfig   string   `toml:"crypto-config"`
+	ClusterID      string   `toml:"cluster-id"`
+	CPUNum         int      `toml:"cpu-num"`
 
 	MemorySize      itoml.Size     `toml:"memory-size"`
 	MemoryLimitSize itoml.Size     `toml:"executor-memory-size-limit"`

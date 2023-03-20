@@ -1,7 +1,5 @@
 该文档指导Docker环境部署openGemini，若有任何问题，请及时给社区提issue反馈
 
-**开始前，建议点击查看下** [Q&A](https://github.com/openGemini/openGemini/issues/59)
-
 ## 说明
 
 openGemini 在配置文件中指定了 meta 节点的信息，用于节点发现。虚拟机部署时，我们直接使用 meta 节点的IP，但是在docker中，节点的IP可能在重启后变化，将导致节点不可用。因此，在docker环境中需要使用域名代替节点IP（虚拟机环境同样可以使用域名）
@@ -115,7 +113,6 @@ spec:
           value: "ts-meta,ts-sql,ts-store"
         # 【必填】配置域名，一般由[servername].[namespace].svc.cluster.local几部分组成
         - name: OPEN_GEMINI_DOMAIN
-          # 【特别注意，此处出错的人很多】
           value: "svc-opengemini-001.opengemini.svc.cluster.local"
         # 【必填】配置文件挂载点，value是配置文件的完整路径（含配置文件名），与mountPath配置的目录需要保持一致
         - name: OPEN_GEMINI_CONFIG

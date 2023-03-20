@@ -28,6 +28,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -36,6 +37,10 @@ import (
 	assert1 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
+}
 
 func getTestIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	ltime := uint64(time.Now().Unix())
@@ -54,7 +59,6 @@ func getTestIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		Lock(&lockPath)
 
 	indexBuilder := NewIndexBuilder(opts)
-	indexBuilder.Relations = make(map[uint32]*IndexRelation)
 
 	primaryIndex, err := NewIndex(opts)
 	if err != nil {
@@ -93,7 +97,6 @@ func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		Lock(&lockPath)
 
 	indexBuilder := NewIndexBuilder(opts)
-	indexBuilder.Relations = make(map[uint32]*IndexRelation)
 
 	opt := new(Options).
 		Path(path).
@@ -133,7 +136,6 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		Lock(&lockPath)
 
 	indexBuilder := NewIndexBuilder(opts)
-	indexBuilder.Relations = make(map[uint32]*IndexRelation)
 
 	indexIdent = &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
 	indexIdent.Index = &meta.IndexDescriptor{IndexID: 1, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
@@ -603,7 +605,7 @@ func TestWriteTextData(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := idxBuilder.Scan(nil, nil, &query.ProcessorOptions{})
+	_, _, err := idxBuilder.Scan(nil, nil, &query.ProcessorOptions{}, resourceallocator.DefaultSeriesAllocateFunc)
 	require.Nil(t, err)
 }
 
@@ -612,11 +614,11 @@ func TestWriteFieldIndex(t *testing.T) {
 	_, idxBuilder := getFieldIndexAndBuilder(path)
 
 	SeriesKeys := []string{
-		"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
-		"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
-		"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
-		"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
-		"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value33",
 	}
 
 	opt := influx.IndexOption{
@@ -653,11 +655,11 @@ func TestFieldIndexSearch(t *testing.T) {
 	defer idxBuilder.Close()
 
 	SeriesKeys := []string{
-		"mn-1_0000,tk1=value1,tk2=value2,tk3=value3",
-		"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
-		"mn-1_0000,tk1=value1,tk2=value22,tk3=value3",
-		"mn-1_0000,tk1=value11,tk2=value2,tk3=value33",
-		"mn-1_0000,tk1=value11,tk2=value22,tk3=value3",
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value33",
 	}
 
 	opt := influx.IndexOption{
@@ -671,7 +673,7 @@ func TestFieldIndexSearch(t *testing.T) {
 
 	// No group by and without filter.
 	nameWithVer := "mn-1_0000"
-	result, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer})
+	result, _, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer}, resourceallocator.DefaultSeriesAllocateFunc)
 	if !assert1.Nil(t, err) {
 		t.Fatal()
 	}
@@ -695,10 +697,10 @@ func TestFieldIndexSearch(t *testing.T) {
 	}
 
 	// No group by and with field filter.
-	result, err = idxBuilder.Scan(nil, []byte(nameWithVer),
+	result, _, err = idxBuilder.Scan(nil, []byte(nameWithVer),
 		&query.ProcessorOptions{
 			Name:      "mn-1_0000",
-			Condition: MustParseExpr(`field_str0='value-1'`)})
+			Condition: MustParseExpr(`field_str0='value-1'`)}, resourceallocator.DefaultSeriesAllocateFunc)
 	if !assert1.Nil(t, err) {
 		t.Fatal()
 	}
@@ -709,15 +711,15 @@ func TestFieldIndexSearch(t *testing.T) {
 	if !assert1.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0=value-1")) {
+	if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
 		t.Fatal()
 	}
 
 	// Group by field.
-	result, err = idxBuilder.Scan(nil, []byte(nameWithVer),
+	result, _, err = idxBuilder.Scan(nil, []byte(nameWithVer),
 		&query.ProcessorOptions{
 			Name:       "mn-1_0000",
-			Dimensions: []string{"field_str0"}})
+			Dimensions: []string{"field_str0"}}, resourceallocator.DefaultSeriesAllocateFunc)
 	if !assert1.Nil(t, err) {
 		t.Fatal()
 	}
@@ -729,9 +731,49 @@ func TestFieldIndexSearch(t *testing.T) {
 		t.Fatal()
 	}
 	for i, tagSet := range tagSets {
-		if !assert1.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0=value-%d", i))) {
+		if !assert1.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
 			t.Fatal()
 		}
+	}
+}
+
+func TestPartialFieldIndexSearch(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getFieldIndexAndBuilder(path)
+	defer idxBuilder.Close()
+
+	SeriesKeys := []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value33",
+	}
+
+	opt := influx.IndexOption{
+		IndexList: []uint16{3},
+		Oid:       uint32(Field),
+	}
+	mmPoints := genPartialRowsByOpt(opt, SeriesKeys)
+	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
+		t.Fatal(err)
+	}
+
+	// No group by and without filter.
+	nameWithVer := "mn-1_0000"
+	result, _, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer}, resourceallocator.DefaultSeriesAllocateFunc)
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok := result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 1, len(tagSets)) {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+		t.Fatal()
 	}
 }
 
@@ -751,13 +793,60 @@ func genRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.Dict {
 				},
 			},
 		}
-		strs := strings.Split(key, ",")
-		pt.Name = strs[0]
-		pt.Tags = make(influx.PointTags, len(strs)-1)
-		for i, str := range strs[1:] {
-			kv := strings.Split(str, "=")
-			pt.Tags[i].Key = kv[0]
-			pt.Tags[i].Value = kv[1]
+		s := strings.Split(key, ",")
+		strs := strings.Split(s[1], string(byte(0)))
+		pt.Name = s[0]
+		pt.Tags = make(influx.PointTags, len(strs)/2)
+		for i := 0; i < len(strs); i += 2 {
+			pt.Tags[i/2].Key = strs[i]
+			pt.Tags[i/2].Value = strs[i+1]
+		}
+		sort.Sort(&pt.Tags)
+		pt.Timestamp = time.Now().UnixNano()
+		pt.UnmarshalIndexKeys(nil)
+		pt.ShardKey = pt.IndexKey
+		pts = append(pts, pt)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &pts)
+	return mmPoints
+}
+
+func genPartialRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.Dict {
+	pts := make([]influx.Row, 0, len(seriesKeys))
+
+	indexOptions := make([]influx.IndexOption, 0)
+	indexOptions = append(indexOptions, opt)
+
+	tmpOpt := influx.IndexOption{
+		IndexList: []uint16{0},
+		Oid:       uint32(MergeSet),
+	}
+	tmpIndexOptions := make([]influx.IndexOption, 0)
+	tmpIndexOptions = append(tmpIndexOptions, tmpOpt)
+	for i, key := range seriesKeys {
+		pt := influx.Row{
+			Fields: []influx.Field{
+				{
+					Key:      "field_str0",
+					Type:     influx.Field_Type_String,
+					StrValue: fmt.Sprintf("value-%d", i),
+				},
+			},
+		}
+		if i == 0 {
+			pt.IndexOptions = tmpIndexOptions
+		} else {
+			pt.IndexOptions = indexOptions
+		}
+		s := strings.Split(key, ",")
+		strs := strings.Split(s[1], string(byte(0)))
+		pt.Name = s[0]
+		pt.Tags = make(influx.PointTags, len(strs)/2)
+		for i := 0; i < len(strs); i += 2 {
+			pt.Tags[i/2].Key = strs[i]
+			pt.Tags[i/2].Value = strs[i+1]
 		}
 		sort.Sort(&pt.Tags)
 		pt.Timestamp = time.Now().UnixNano()
@@ -923,4 +1012,201 @@ func GetIndexKey(serieskey string) []byte {
 	pt.Timestamp = time.Now().UnixNano()
 	pt.UnmarshalIndexKeys(nil)
 	return pt.IndexKey
+}
+
+func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
+	lockPath := ""
+	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 3, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	opts := new(Options).
+		Path(path).
+		IndexType(Field).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour).
+		Ident(indexIdent).
+		Lock(&lockPath)
+
+	indexBuilder := NewIndexBuilder(opts)
+
+	indexIdent = &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 1, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	opt := new(Options).
+		Path(path).
+		IndexType(MergeSet).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour).
+		Ident(indexIdent).
+		Lock(&lockPath)
+	primaryIndex, err := NewIndex(opt)
+	if err != nil {
+		panic(err)
+	}
+	primaryIndex.SetIndexBuilder(indexBuilder)
+	invertedIndexRelation, err := NewIndexRelation(opt, primaryIndex, indexBuilder)
+	if err != nil {
+		panic(err)
+	}
+
+	indexBuilder.Relations[uint32(MergeSet)] = invertedIndexRelation
+
+	err = indexBuilder.Open()
+	if err != nil {
+		panic(err)
+	}
+
+	return primaryIndex, indexBuilder
+}
+
+func TestCreateFieldIndex(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getIndexAndBuilder(path)
+	defer idxBuilder.Close()
+
+	SeriesKeys := []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value1\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value2\x00tk3\x00value33",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value3",
+		"mn-1_0000,tk1\x00value11\x00tk2\x00value22\x00tk3\x00value33",
+	}
+
+	opt := influx.IndexOption{
+		IndexList: []uint16{3},
+		Oid:       uint32(Field),
+	}
+	mmPoints := genRowsByOpt(opt, SeriesKeys)
+	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
+		t.Fatal(err)
+	}
+
+	idxBuilder.Flush()
+
+	// No group by and without filter.
+	nameWithVer := "mn-1_0000"
+	result, _, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer}, resourceallocator.DefaultSeriesAllocateFunc)
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok := result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 1, len(tagSets)) {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+		t.Fatal()
+	}
+
+	sort.Strings(SeriesKeys)
+	sort.Sort(tagSets[0])
+	for i, key := range SeriesKeys {
+		if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
+			t.Fatal(string(tagSets[0].SeriesKeys[i]), key)
+		}
+	}
+
+	// No group by and with field filter.
+	result, _, err = idxBuilder.Scan(nil, []byte(nameWithVer),
+		&query.ProcessorOptions{
+			Name:      "mn-1_0000",
+			Condition: MustParseExpr(`field_str0='value-1'`)}, resourceallocator.DefaultSeriesAllocateFunc)
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok = result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, 1, len(tagSets)) {
+		t.Fatal()
+	}
+	if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
+		t.Fatal()
+	}
+
+	// Group by field.
+	result, _, err = idxBuilder.Scan(nil, []byte(nameWithVer),
+		&query.ProcessorOptions{
+			Name:       "mn-1_0000",
+			Dimensions: []string{"field_str0"}}, resourceallocator.DefaultSeriesAllocateFunc)
+	if !assert1.Nil(t, err) {
+		t.Fatal()
+	}
+	tagSets, ok = result.(GroupSeries)
+	if !ok {
+		t.Fatal()
+	}
+	if !assert1.Equal(t, len(SeriesKeys), len(tagSets)) {
+		t.Fatal()
+	}
+	for i, tagSet := range tagSets {
+		if !assert1.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
+			t.Fatal()
+		}
+	}
+}
+
+func TestCreateFieldIndexError1(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getFieldIndexAndBuilder(path)
+	defer idxBuilder.Close()
+	for i := range idxBuilder.Relations {
+		if i == int(Field) {
+			break
+		}
+	}
+
+	opts := new(Options).
+		Path(path).
+		IndexType(Field).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour)
+
+	err := idxBuilder.initRelation(uint32(Field), opts, nil)
+	if err != nil {
+		t.Fatal()
+	}
+}
+
+func TestCreateFieldIndexError2(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getIndexAndBuilder(path)
+	defer idxBuilder.Close()
+
+	opts := new(Options).
+		Path(path).
+		IndexType(Field + 1).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour)
+
+	err := idxBuilder.initRelation(uint32(Field), opts, nil)
+	if err == nil {
+		t.Fatal()
+	}
+}
+
+func TestMergeSetFlush(t *testing.T) {
+	path := t.TempDir()
+	opts := new(Options).
+		Path(path).
+		IndexType(Field)
+
+	fi, err := NewFieldIndex(opts)
+	if err != nil {
+		t.Fatal()
+	}
+
+	MergeSetFlush(fi)
+}
+
+func TestDeleteIndex(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getIndexAndBuilder(path)
+	defer idxBuilder.Close()
+
+	err := idxBuilder.Delete([]byte("mn-1"), nil, defaultTR)
+	if err != nil {
+		t.Fatal()
+	}
 }

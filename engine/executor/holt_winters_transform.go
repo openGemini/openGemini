@@ -484,7 +484,6 @@ type HoltWintersTransformCreator struct {
 
 func (c *HoltWintersTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
 	p, err := NewHoltWintersTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), opt, plan.Schema())
-	p.InitOnce()
 	return p, err
 }
 

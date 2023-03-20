@@ -401,7 +401,7 @@ func dropFieldByIndex(r *influx.Row, dropFieldIndex []int) {
 	r.Fields = remainField
 }
 
-// fixFields checks and fixes fields: gnore specified time fields
+// fixFields checks and fixes fields: ignore specified time fields
 func fixFields(fields influx.Fields) (influx.Fields, error) {
 	var lastIdx = -1
 	var timeLen = 0
@@ -421,11 +421,11 @@ func fixFields(fields influx.Fields) (influx.Fields, error) {
 			return nil, errno.NewError(errno.DuplicateField, fields[i].Key)
 		}
 	}
+
 	if timeLen > 0 {
 		startIdx := lastIdx - timeLen + 1
 		fields = append(fields[0:startIdx], fields[startIdx+timeLen:]...)
 	}
-
 	return fields, nil
 }
 
@@ -501,7 +501,7 @@ func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []i
 	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
 
 	if err != nil {
-		if errno.Equal(err, errno.WriteMultiArray) || errno.Equal(err, errno.WriteErrorArray) {
+		if errno.Equal(err, errno.ErrorTagArrayFormat) || errno.Equal(err, errno.WriteErrorArray) {
 			return netstorage.PartialWriteError{Reason: err, Dropped: dropped}
 		}
 		return err
@@ -564,7 +564,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 	database, retentionPolicy string, rows []influx.Row, ctx *injestionCtx,
 ) (error, int, error) {
 	var partialErr error // the last write partial error
-	var dropped int      // number of missing poits due to write failures
+	var dropped int      // number of missing points due to write failures
 	var err error        // the error returned immediately
 
 	var isDropRow bool
@@ -587,6 +587,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			continue
 		}
 		sort.Sort(r.Fields)
+
 		if r.Fields, pErr = fixFields(r.Fields); pErr != nil {
 			partialErr = pErr
 			dropped++

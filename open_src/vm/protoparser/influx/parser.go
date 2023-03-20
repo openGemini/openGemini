@@ -56,7 +56,11 @@ const (
 	MessageVersion = 1
 )
 
-var NoTimestamp = int64(-100)
+var (
+	NoTimestamp = int64(-100)
+	ByteSplit   = byte(0)
+	StringSplit = string(ByteSplit)
+)
 
 // Rows contains parsed influx rows.
 type PointRows struct {
@@ -855,10 +859,16 @@ func PutBytesBuffer(buf []byte) {
 // Parse2SeriesKey parse encoded index key to line protocol series key
 // encoded index key format: [total len][ms len][ms][tagk1 len][tagk1 val]...]
 // parse to line protocol format: mst_0001,tagkey1=tagv1,tagk2=tagv2...
-func Parse2SeriesKey(key []byte, dst []byte) []byte {
+func Parse2SeriesKey(key []byte, dst []byte, splittWithNull bool) []byte {
 	msName, src, err := MeasurementName(key)
 	if err != nil {
 		panic(err)
+	}
+	var split [2]byte
+	if splittWithNull {
+		split[0], split[1] = ByteSplit, ByteSplit
+	} else {
+		split[0], split[1] = '=', ','
 	}
 
 	dst = append(dst, msName...)
@@ -870,13 +880,13 @@ func Parse2SeriesKey(key []byte, dst []byte) []byte {
 		keyLen := encoding.UnmarshalUint16(src)
 		src = src[2:]
 		dst = append(dst, src[:keyLen]...)
-		dst = append(dst, '=')
+		dst = append(dst, split[0])
 		src = src[keyLen:]
 
 		valLen := encoding.UnmarshalUint16(src)
 		src = src[2:]
 		dst = append(dst, src[:valLen]...)
-		dst = append(dst, ',')
+		dst = append(dst, split[1])
 		src = src[valLen:]
 	}
 	return dst[:len(dst)-1]
@@ -909,7 +919,7 @@ func Parse2SeriesGroupKey(src []byte, dst []byte, dims []string) (PointTags, []b
 		}
 		tags[i].Key = bytesutil.ToUnsafeString(dst[length : length+l])
 		length = length + copy(dst[length:], data[:l])
-		length = length + copy(dst[length:], "=")
+		length = length + copy(dst[length:], StringSplit)
 		if groupByAllSortedTag && tags[i].Key != dims[i] {
 			groupByAllSortedTag = false
 		}
@@ -923,7 +933,7 @@ func Parse2SeriesGroupKey(src []byte, dst []byte, dims []string) (PointTags, []b
 
 		tags[i].Value = bytesutil.ToUnsafeString(dst[length : length+l])
 		length = length + copy(dst[length:], data[:l])
-		length = length + copy(dst[length:], ",")
+		length = length + copy(dst[length:], StringSplit)
 
 		data = data[l:]
 	}

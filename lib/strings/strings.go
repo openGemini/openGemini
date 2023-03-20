@@ -19,13 +19,7 @@ package strings
 import (
 	"strings"
 	"unsafe"
-
-	strings2 "github.com/openGemini/openGemini/open_src/github.com/savsgio/gotils/strings"
 )
-
-func Union(s1, s2 []string) []string {
-	return strings2.UniqueAppend(s1, s2...)
-}
 
 func UnionSlice(s []string) []string {
 	if len(s) <= 1 {

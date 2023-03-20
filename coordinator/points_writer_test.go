@@ -28,11 +28,13 @@ import (
 	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -466,7 +468,7 @@ func generateRows(num int, rows []influx.Row) []influx.Row {
 	return rows[:num]
 }
 
-func TestFixFields(t *testing.T) {
+func TestCheckFields(t *testing.T) {
 	fields := influx.Fields{
 		{
 			Key:  "foo",
@@ -655,6 +657,78 @@ func TestPointsWriter_TimeRangeLimit(t *testing.T) {
 
 	exp := "partial write: " + errno.NewError(errno.WritePointOutOfRP).Error() + " dropped=1"
 	assert.EqualError(t, err, exp)
+}
+
+func TestPointsWriter_WritePointRows_DuplicateFields(t *testing.T) {
+	streamDistribution = sameShard
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	// just one row for duplicateFields
+	rows := []influx.Row{
+		{
+			Name: "mst_0000",
+			Fields: influx.Fields{
+				{
+					Key:  "foo",
+					Type: influx.Field_Type_Float,
+				},
+				{
+					Key:  "foo",
+					Type: influx.Field_Type_String,
+				},
+			},
+			Timestamp: time.Now().UnixNano(),
+		},
+	}
+	err := pw.writePointRows("db0", "rp0", rows)
+	werr, ok := err.(netstorage.PartialWriteError)
+	if !ok {
+		t.Fatal(err)
+	}
+	require.EqualError(t, werr, "partial write: duplicate field: foo dropped=1")
+}
+
+func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	// two rows:
+	// 1. duplicateFields
+	// 2. normal row
+	rows := []influx.Row{
+		{
+			Name: "mst_0000",
+			Fields: influx.Fields{
+				{
+					Key:  "foo",
+					Type: influx.Field_Type_Float,
+				},
+				{
+					Key:  "foo",
+					Type: influx.Field_Type_String,
+				},
+			},
+			Timestamp: time.Now().UnixNano(),
+		},
+		{
+			Name: "mst_0000",
+			Fields: influx.Fields{
+				{
+					Key:  "foo",
+					Type: influx.Field_Type_String,
+				},
+			},
+			Timestamp: time.Now().UnixNano(),
+		},
+	}
+	err := pw.writePointRows("db0", "rp0", rows)
+	werr, ok := err.(netstorage.PartialWriteError)
+	if !ok {
+		t.Fatal(err)
+	}
+	require.EqualError(t, werr, "partial write: duplicate field: foo dropped=1")
 }
 
 func TestColumnToIndexUpdate(t *testing.T) {

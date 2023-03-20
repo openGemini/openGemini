@@ -23,10 +23,10 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var single = false
@@ -69,23 +69,19 @@ func (cmd *Command) Run(args ...string) error {
 		return err
 	}
 
-	err = cmd.InitConfig(cmd.Config, options.GetConfigPath())
+	// Write the PID file.
+	if err = WritePIDFile(options.PIDFile); err != nil {
+		return fmt.Errorf("write pid file: %s", err)
+	}
+	cmd.Pidfile = options.PIDFile
+	err = cmd.InitConfig(cmd.Config, options.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("parse config: %s", err)
 	}
 
-	logger.InitLogger(*cmd.Config.GetLogging())
 	cmd.Logger = logger.NewLogger(errno.ModuleUnknown)
 
-	var logErr error
-
 	fmt.Fprint(os.Stdout, cmd.Logo)
-
-	if logErr != nil {
-		cmd.Logger.Error("Unable to configure logger", zap.Error(logErr))
-	}
-
-	cmd.Pidfile = options.PIDFile
 
 	s, err := cmd.NewServerFunc(cmd.Config, cmd.Command, cmd.Logger)
 	if err != nil {
@@ -100,6 +96,8 @@ func (cmd *Command) Run(args ...string) error {
 }
 
 func (cmd *Command) Close() error {
+	crypto.Destruct()
+
 	defer close(cmd.Closed)
 	defer RemovePIDFile(cmd.Pidfile)
 	close(cmd.closing)
@@ -112,10 +110,6 @@ func (cmd *Command) Close() error {
 func (cmd *Command) InitConfig(conf config.Config, path string) error {
 	if err := config.Parse(conf, path); err != nil {
 		return fmt.Errorf("parse config: %s", err)
-	}
-
-	if err := conf.Validate(); err != nil {
-		return err
 	}
 
 	if sc := conf.GetSpdy(); sc != nil {
@@ -133,6 +127,11 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		common.Corrector()
 		cpu.SetCpuNum(common.CPUNum)
 		config.SetHaEnable(common.HaEnable)
+	}
+
+	crypto.Initialize(conf.GetCommon().CryptoConfig)
+	if err := conf.Validate(); err != nil {
+		return err
 	}
 
 	cmd.Config = conf

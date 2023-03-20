@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/readcache"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
@@ -108,39 +109,44 @@ func (r *diskFileReader) ReadAt(off int64, size uint32, dstPtr *[]byte) ([]byte,
 	}
 
 	if len(r.mmapData) > 0 {
-		if off > int64(len(r.mmapData)) {
-			err := fmt.Errorf("off=%d, size=%v is out of allowed len=%d", off, size, len(r.mmapData))
-			err = errReadFail(r.Name(), err)
-			log.Error(err.Error())
-			return nil, err
-		}
-
-		end := off + int64(size)
-		rb := r.mmapData[off:end]
-
-		if dstPtr != nil && len(*dstPtr) > 0 {
-			*dstPtr = bufferpool.Resize(*dstPtr, int(size))
-			n := copy(*dstPtr, rb)
-			return (*dstPtr)[:n], nil
-		}
-
-		return rb, nil
+		return r.mmapReadAt(off, size, dstPtr)
 	}
 
 	*dstPtr = bufferpool.Resize(*dstPtr, int(size))
 	dst := *dstPtr
 
 	n, err := r.fd.ReadAt(dst, off)
-	if err != nil {
-		if err == io.EOF {
-			return dst[:n], nil
-		}
+	if err != nil && err != io.EOF {
 		err = errReadFail(r.Name(), err)
 		log.Error(err.Error())
 		return nil, err
 	}
 
+	if n < int(size) {
+		return nil, errno.NewError(errno.ShortRead, n, size).SetModule(errno.ModuleTssp)
+	}
+
 	return dst[:n], nil
+}
+
+func (r *diskFileReader) mmapReadAt(off int64, size uint32, dstPtr *[]byte) ([]byte, error) {
+	if off > int64(len(r.mmapData)) {
+		err := fmt.Errorf("off=%d, size=%v is out of allowed len=%d", off, size, len(r.mmapData))
+		err = errReadFail(r.Name(), err)
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	end := off + int64(size)
+	rb := r.mmapData[off:end]
+
+	if dstPtr != nil && len(*dstPtr) > 0 {
+		*dstPtr = bufferpool.Resize(*dstPtr, int(size))
+		n := copy(*dstPtr, rb)
+		return (*dstPtr)[:n], nil
+	}
+
+	return rb, nil
 }
 
 func (r *diskFileReader) FreeFileHandle() error {

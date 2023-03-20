@@ -84,80 +84,35 @@ const MONITORLOGO = `
   |_____|   \______.'|_____||_____|'.___.'|_____|\____||_____|  |_____|   '.___.'|____| |___|
 `
 
-const MetaUsage = `Runs the TSMeta server.
+const MainUsage = `Configure and start the process of openGemini.
 
-Usage: ts-meta run [flags]
+Usage: %s [[command]] [arguments]
 
-    -config <path>
-            Set the path to the configuration file.
-            This defaults to the environment variable META_CONFIG_PATH,
-            ~/.ts/meta.conf, or /etc/ts/meta.conf if a file
-            is present at any of these locations.
-            Disable the automatic loading of a configuration file using
-            the null device (such as /dev/null).
-    -pidfile <path>
-            Write process ID to a file.
-    -cpuprofile <path>
-            Write CPU profiling information to a file.
-    -memprofile <path>
-            Write memory usage information to a file.
+The commands are:
+	help            display this help message
+	run             start with specified configuration
+	version         display the openGemini version
+
+"run" is the default command.
+
+Use "%s [command] -help" for more information about a command.
 `
 
-const SqlUsage = `Runs the TSSQL server.
+const RunUsage = `Runs the %s server.
 
-Usage: ts-sql run [flags]
+Usage: %s run [flags]
 
     -config <path>
             Set the path to the configuration file.
-            This defaults to the environment variable TSSQL_CONFIG_PATH,
-            ~/.ts/tssql.conf, or /etc/ts/tssql.conf if a file
-            is present at any of these locations.
-            Disable the automatic loading of a configuration file using
-            the null device (such as /dev/null).
     -pidfile <path>
             Write process ID to a file.
-    -cpuprofile <path>
-            Write CPU profiling information to a file.
-    -memprofile <path>
-            Write memory usage information to a file.
 `
 
-const StoreUsage = `Runs the TSStore server.
-
-Usage: ts-store run [flags]
-
-    -config <path>
-            Set the path to the configuration file.
-            This defaults to the environment variable STORE_CONFIG_PATH,
-            ~/.ts/store.conf, or /etc/ts/store.conf if a file
-            is present at any of these locations.
-            Disable the automatic loading of a configuration file using
-            the null device (such as /dev/null).
-    -pidfile <path>
-            Write process ID to a file.
-    -cpuprofile <path>
-            Write CPU profiling information to a file.
-    -memprofile <path>
-            Write memory usage information to a file.
-`
-
-const MonitorUsage = `Runs the TSMonitor server.
-
-Usage: ts-monitor run [flags]
-
-    -config <path>
-            Set the path to the configuration file.
-            This defaults to the environment variable MONITOR_CONFIG_PATH,
-            ~/.ts/monitor.conf, or /etc/ts/monitor.conf if a file
-            is present at any of these locations.
-            Disable the automatic loading of a configuration file using
-            the null device (such as /dev/null).
-    -pidfile <path>
-            Write process ID to a file.
-    -cpuprofile <path>
-            Write CPU profiling information to a file.
-    -memprofile <path>
-            Write memory usage information to a file.
+const VERSION = `openGemini version info:
+%s: %s
+git: HEAD %s
+os: %s
+arch: %s
 `
 
 // BuildInfo represents the build details for the server code.
@@ -176,18 +131,24 @@ type Options struct {
 	Hostname   string
 }
 
-func (opt *Options) GetConfigPath() string {
-	if opt.ConfigPath != "" {
-		return opt.ConfigPath
-	}
+var (
+	_ = flag.String("config", "", "-config=config file path")
+	_ = flag.String("pidfile", "", "-pid=pid file path")
+)
 
-	return ""
+// InitParse inits the command line parse flogs
+func InitParse() {
+	flag.CommandLine.SetOutput(os.Stdout)
+	flag.Usage = func() { println("please run the help command `ts-* help`") }
+	flag.Parse()
 }
 
 func ParseFlags(usage func(), args ...string) (Options, error) {
 	var options Options
 	fs := flag.NewFlagSet("", flag.ExitOnError)
+	fs.Usage = usage
 	fs.StringVar(&options.ConfigPath, "config", "", "")
+	fs.StringVar(&options.PIDFile, "pidfile", "", "")
 	if err := fs.Parse(args); err != nil {
 		return Options{}, err
 	}

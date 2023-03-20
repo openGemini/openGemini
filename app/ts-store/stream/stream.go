@@ -290,8 +290,13 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []FieldCall, fi
 }
 
 func (s *Stream) filter() {
+	var r *CacheRow
 	for {
-		r := <-s.cache
+		select {
+		case r = <-s.cache:
+		case <-s.abort:
+			return
+		}
 		s.stats.AddStreamFilter(1)
 
 		ref := false

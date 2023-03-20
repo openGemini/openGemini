@@ -182,7 +182,6 @@ func (c *FillTransformCreator) Create(plan LogicalPlan, _ query.ProcessorOptions
 	if err != nil {
 		return nil, err
 	}
-	p.InitOnce()
 	return p, nil
 }
 
