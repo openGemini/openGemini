@@ -345,21 +345,24 @@ func (tok Token) String() string {
 }
 
 var operatorMap = map[Token]int{
-	OR:       OR,
-	AND:      AND,
-	EQ:       EQ,
-	NEQ:      NEQ,
-	EQREGEX:  EQREGEX,
-	NEQREGEX: NEQREGEX,
-	LT:       LT,
-	LTE:      LTE,
-	GT:       GT,
-	GTE:      GTE,
-	ADD:      ADD,
-	SUB:      SUB,
-	MUL:      MUL,
-	DIV:      DIV,
-	MOD:      1, //fixme
+	OR:           OR,
+	AND:          AND,
+	EQ:           EQ,
+	NEQ:          NEQ,
+	EQREGEX:      EQREGEX,
+	NEQREGEX:     NEQREGEX,
+	LT:           LT,
+	LTE:          LTE,
+	GT:           GT,
+	GTE:          GTE,
+	ADD:          ADD,
+	SUB:          SUB,
+	MUL:          MUL,
+	DIV:          DIV,
+	MOD:          1, //fixme
+	MATCH:        MATCH,
+	MATCH_PHRASE: MATCH_PHRASE,
+	LIKE:         LIKE,
 }
 
 // Precedence returns the operator precedence of the binary operator token.
@@ -375,6 +378,8 @@ func (tok Token) Precedence() int {
 		return 4
 	case MUL, DIV, MOD, BITWISE_AND:
 		return 5
+	case MATCH, MATCH_PHRASE, LIKE:
+		return 6
 	}
 	return 0
 }
