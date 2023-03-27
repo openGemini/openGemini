@@ -176,7 +176,6 @@ var messageMap = map[Errno]*Message{
 	UnsupportedConditionInFullJoin: newWarnMessage("unsupported condition in full join", ModuleQueryEngine),
 	UnsupportedHoltWinterInit:      newWarnMessage("unsupported holt_winters init", ModuleQueryEngine),
 	BucketLacks:                    newWarnMessage("get resources out of time: bucket lacks of resources", ModuleQueryEngine),
-	BucketResourceExceeded:         newWarnMessage("get resources out of limit: bucket lacks of resources", ModuleQueryEngine),
 
 	// meta error codes
 	FieldTypeConflict:      newWarnMessage(`field type conflict: input field "%s" on measurement "%s" is type %s, already exists as type %s`, ModuleMeta),

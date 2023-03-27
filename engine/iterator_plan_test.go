@@ -8495,3 +8495,23 @@ func TestAppendColumnTimes(t *testing.T) {
 		t.Errorf("unexpected error")
 	}
 }
+
+func TestMatchPreAgg(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{
+		Expr: &influxql.Call{
+			Name: "sum",
+			Args: []influxql.Expr{&influxql.VarRef{Val: "a", Type: influxql.Integer}},
+		},
+	}}
+	opt := &query.ProcessorOptions{
+		Condition: &influxql.BinaryExpr{
+			LHS: &influxql.VarRef{Val: "a", Type: influxql.Integer},
+			Op:  influxql.EQ,
+			RHS: &influxql.StringLiteral{Val: "1"},
+		},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"a"}, opt)
+	if matchPreAgg(schema, &idKeyCursorContext{}) {
+		t.Fatal()
+	}
+}

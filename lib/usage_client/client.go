@@ -27,7 +27,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var URL = ""
+var URL = "http://opengemini.org/api/connect/cluster"
 
 type Client struct {
 	URL    string // Defaults to `usage_client.URL`

@@ -45,7 +45,6 @@ type StreamWriteFile struct {
 	chunkRows     int64
 	maxChunkRows  int64
 	chunkSegments int
-	dropping      *int64
 	maxN          int
 	fileSize      int64
 	preCmOff      int64

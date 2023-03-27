@@ -895,7 +895,7 @@ func TestCreateGroupCursorWithLimiter(t *testing.T) {
 	ctx := tracing.NewContextWithSpan(context.Background(), span)
 	cursors, err := sh.CreateCursor(ctx, querySchema)
 	defer func() {
-		_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum))
+		_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum), int64(seriesNum))
 		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
 	}()
 	if len(cursors) != 8 {
