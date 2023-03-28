@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -219,6 +220,15 @@ func generateKeyWithTagArray4() []string {
 	keys := []string{
 		"mn-1,tk1=value1,tk2=value2,tk3=[value3,value33,value333]",
 		"mn-1,tk1=value11,tk2=[value2,value22,value222],tk3=[value3,value33,]",
+	}
+
+	return keys
+}
+
+func generateKeyWithTagArray5() []string {
+	keys := []string{
+		"mn-1,tk1=value1,tk2=value2,tk3=[value3,value33]",
+		"mn-1,tk1=value1,tk2=value2,tk3=value3",
 	}
 
 	return keys
@@ -553,7 +563,7 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 
 	src := []byte{1, 2}
 	var isExpectSeries []bool
-	_, _, err := mergeIndex.searchSeriesWithTagArray(1, nil, src, isExpectSeries, nil)
+	_, _, _, err := mergeIndex.searchSeriesWithTagArray(1, nil, nil, src, isExpectSeries, nil)
 	if err == nil {
 		t.Fatal("expect searchSeriesWithTagArray fail, but success")
 	}
@@ -561,7 +571,7 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 	condition := MustParseExpr(`tk1='value11'`)
 	src = []byte{0, 0, 0, 0, 0, 2, 0, 49, 0, 0, 0, 49, 0, 8, 99, 112, 117, 95, 48, 48, 48, 48, 0, 3, 0, 3, 116, 107, 49, 0, 6, 118, 97, 108, 117, 101, 49, 0, 3, 116, 107, 50, 0, 6, 118, 97, 108, 117, 101, 50, 0, 3, 116, 107, 51, 0, 6,
 		0, 49, 0, 0, 0, 49, 0, 8, 99, 112, 117, 95, 48, 48, 48, 48, 0, 3, 0, 3, 116, 107, 49, 0, 6, 118, 97, 108, 117, 101, 49, 0, 3, 116, 107, 50, 0, 6, 118, 97, 108, 117, 101, 50, 0, 3, 116, 107, 51, 0, 6}
-	_, _, err = mergeIndex.searchSeriesWithTagArray(1, nil, src, isExpectSeries, condition)
+	_, _, _, err = mergeIndex.searchSeriesWithTagArray(1, nil, nil, src, isExpectSeries, condition)
 	if err == nil {
 		t.Fatal("expect searchSeriesWithTagArray fail, but success")
 	}
@@ -600,7 +610,7 @@ func TestSeriesByExprIterator_TagArray(t *testing.T) {
 		var combineSeriesKey []byte
 		var isExpectSeries []bool
 		for _, id := range ids {
-			seriesKeys, isExpectSeries, err := index.searchSeriesWithTagArray(id, seriesKeys, combineSeriesKey, isExpectSeries, opt.Condition)
+			seriesKeys, _, isExpectSeries, err := index.searchSeriesWithTagArray(id, seriesKeys, nil, combineSeriesKey, isExpectSeries, opt.Condition)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1069,6 +1079,104 @@ func TestSearchSeries_With_Multi_TagArray(t *testing.T) {
 	})
 }
 
+func TestSearchSeriesWithOrOpts(t *testing.T) {
+	config.EnableTagArray = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer func() {
+		idxBuilder.Close()
+		config.EnableTagArray = false
+	}()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray5)
+
+	f := func(name []byte, opt *query.ProcessorOptions, tr TimeRange, expectedSeriesKeys []string, filtersIndex []int) {
+		_, span := tracing.NewTrace("root")
+		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		keys := make([]string, 0)
+		filterCount := 0
+		for _, group := range groups {
+			for _, key := range group.SeriesKeys {
+				keys = append(keys, string(key))
+			}
+
+			for _, filter := range group.Filters {
+				if filter != nil {
+					filterCount++
+				}
+			}
+		}
+		assert.Equal(t, filterCount, len(filtersIndex))
+
+		sort.Strings(keys)
+		sort.Strings(expectedSeriesKeys)
+		assert.Equal(t, len(keys), len(expectedSeriesKeys))
+
+		for i := 0; i < len(keys); i++ {
+			assert.Equal(t, string(keys[i]), expectedSeriesKeys[i])
+		}
+	}
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+	}
+	t.Run("OR", func(t *testing.T) {
+		opt.Condition = MustParseExpr(`tk3='value3' OR field_float1>1.0`)
+		filterIndex := []int{2}
+		f([]byte("mn-1"), opt, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		}, filterIndex)
+
+		opt.Condition = MustParseExpr(`tk3='value333' OR field_float1>1.0`)
+		filterIndex = []int{0, 1, 2}
+		f([]byte("mn-1"), opt, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		}, filterIndex)
+
+		opt.Condition = MustParseExpr(`field_float1>1.0 OR tk3='value3'`)
+		filterIndex = []int{2}
+		f([]byte("mn-1"), opt, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		}, filterIndex)
+
+		opt.Condition = MustParseExpr(`field_float1>1.0 OR tk3='value333'`)
+		filterIndex = []int{0, 1, 2}
+		f([]byte("mn-1"), opt, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		}, filterIndex)
+
+		opt.Condition = MustParseExpr(`field_float1>1.0 OR field_float1>2.0`)
+		filterIndex = []int{0, 1, 2}
+		f([]byte("mn-1"), opt, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		}, filterIndex)
+
+		opt.Condition = MustParseExpr(`tk3='value3' OR tk3='value333'`)
+		filterIndex = nil
+		f([]byte("mn-1"), opt, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
+		}, filterIndex)
+	})
+}
+
 func BenchmarkWrite_With_TagArray(b *testing.B) {
 	config.EnableTagArray = true
 	path := b.TempDir()
@@ -1246,7 +1354,7 @@ func searchSeriesWithTagArray1(idx *MergeSetIndex, series [][]byte, name []byte,
 	var isExpectSeries []bool
 	var index int
 	for i := range tsids {
-		combineKeys, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, combineSeriesKey, isExpectSeries, condition)
+		combineKeys, _, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition)
 		if err != nil {
 			return nil, err
 		}
@@ -1295,7 +1403,7 @@ func searchSeriesWithTagArray2(idx *MergeSetIndex, series [][]byte, name []byte,
 	var combineKeys [][]byte
 	var isExpectSeries []bool
 	for i := range tsids {
-		combineKeys, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, combineSeriesKey, isExpectSeries, condition)
+		combineKeys, _, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition)
 		if err != nil {
 			return nil, err
 		}

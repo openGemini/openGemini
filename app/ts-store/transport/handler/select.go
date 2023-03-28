@@ -173,12 +173,12 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	}()
 
 	shardsNum := int64(len(req.ShardIDs))
-	parallelism, e := resourceallocator.AllocRes(resourceallocator.ShardsParallelismRes, shardsNum)
+	parallelism, totalSource, e := resourceallocator.AllocRes(resourceallocator.ShardsParallelismRes, shardsNum)
 	if e != nil {
 		return e
 	}
 	defer func() {
-		_ = resourceallocator.FreeRes(resourceallocator.ShardsParallelismRes, parallelism)
+		_ = resourceallocator.FreeRes(resourceallocator.ShardsParallelismRes, parallelism, totalSource)
 	}()
 
 	traits, unrefs, err := s.NewShardTraits(req, w)

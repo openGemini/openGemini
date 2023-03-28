@@ -120,7 +120,7 @@ func writeTestData(t *testing.T, file string, interval time.Duration) {
 	}
 }
 
-func snappyRead(file string, wg *sync.WaitGroup, delay time.Duration) error {
+func snappyRead(file string, delay time.Duration) error {
 	if delay > 0 {
 		time.Sleep(delay)
 	}
@@ -130,7 +130,7 @@ func snappyRead(file string, wg *sync.WaitGroup, delay time.Duration) error {
 		return err
 	}
 	defer r.Close()
-	defer wg.Done()
+
 	_, err := r.ReadBlock()
 	return err
 }
@@ -145,7 +145,6 @@ func writeData(writer *pusher.SnappyWriter, buf []byte) error {
 }
 
 func TestSnappy_ReadRetry(t *testing.T) {
-	t.Skip()
 	file := t.TempDir() + "/stat_file_push_retry.data"
 	writer := pusher.NewSnappyWriter()
 	require.NoError(t, writer.OpenFile(file))
@@ -157,7 +156,8 @@ func TestSnappy_ReadRetry(t *testing.T) {
 
 	var readErr error
 	go func() {
-		readErr = snappyRead(file, &wg, 0)
+		defer wg.Done()
+		readErr = snappyRead(file, 0)
 	}()
 
 	for i := 0; i < 2; i++ {
@@ -181,18 +181,20 @@ func TestSnappy_ReadErr(t *testing.T) {
 
 	var readErr error
 	go func() {
-		readErr = snappyRead(file, &wg, 0)
+		defer wg.Done()
+		readErr = snappyRead(file, 0)
 	}()
 	wg.Wait()
 	require.EqualError(t, readErr, errno.NewError(errno.ShortRead, 0, 20).Error())
 
 	wg.Add(1)
 	go func() {
-		readErr = snappyRead(file, &wg, time.Second/10)
+		defer wg.Done()
+		readErr = snappyRead(file, time.Second/10)
 	}()
 	for i := 0; i < 11; i++ {
 		require.NoError(t, writeData(writer, []byte{1}))
-		time.Sleep(time.Second / 5)
+		time.Sleep(time.Second / 8)
 	}
 
 	wg.Wait()

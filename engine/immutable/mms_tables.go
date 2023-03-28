@@ -835,7 +835,6 @@ func (m *MmsTables) getTSSPFiles(mstName string, isOrder bool) (*TSSPFiles, bool
 func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 	sw := getStreamWriteFile()
 	sw.closed = m.closed
-	sw.dropping = &m.Order[mst].closing
 	sw.name = mst
 	sw.dir = m.path
 	sw.pair.Reset(mst)

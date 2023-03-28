@@ -70,6 +70,10 @@ func (p *Parser) SetParams(params map[string]interface{}) {
 	p.params = params
 }
 
+func (p *Parser) GetPara() map[string]interface{} {
+	return p.params
+}
+
 func (p *Parser) GetScanner() *Scanner {
 	return p.s.s
 }

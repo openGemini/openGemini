@@ -243,6 +243,20 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 	return nil
 }
 
+func (iBuilder *IndexBuilder) CreateSecondaryIndexIfNotExist(mmRows *dictpool.Dict) error {
+	primaryIndex := iBuilder.GetPrimaryIndex()
+	for mmIdx := range mmRows.D {
+		rows, _ := mmRows.D[mmIdx].Value.(*[]influx.Row)
+		for rowIdx := range *rows {
+			row := &(*rows)[rowIdx]
+			if err := iBuilder.createSecondaryIndex(row, primaryIndex); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex PrimaryIndex) error {
 	for _, indexOpt := range row.IndexOptions {
 		relation := iBuilder.Relations[indexOpt.Oid]

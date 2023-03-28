@@ -25,7 +25,7 @@ import (
 var bucket ResourceBucket
 
 func init() {
-	bucket = NewInt64Bucket(3*time.Second, 100000)
+	bucket = NewInt64Bucket(3*time.Second, 100000, false)
 }
 
 func ResetBucket(totalRe int64) {

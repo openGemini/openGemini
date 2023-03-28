@@ -36,8 +36,8 @@ const (
 )
 
 type ResourceManager interface {
-	Alloc(num int64) (int64, error)
-	Free(num int64)
+	Alloc(num int64) (allocNum int64, totalNum int64, err error)
+	Free(num, totalNum int64)
 }
 
 type ShardParallelismAllocator struct {
@@ -52,28 +52,28 @@ func NewShardsParallelismAllocator(maxTime time.Duration, maxShardsParallelism, 
 	if maxShardsParallelism <= 0 {
 		maxShardsParallelism = int64(cpu.GetCpuNum()) * 2
 	}
-	alloc, err := NewBaseResAllocator(maxShardsParallelism/2, minShardsAllocNum, GradientDesc)
+	alloc, err := NewBaseResAllocator(maxShardsParallelism/8, minShardsAllocNum, GradientDesc)
 	if err != nil {
 		return nil, err
 	}
 	return &ShardParallelismAllocator{
-		sharedParallelismPool:   bucket.NewInt64Bucket(maxTime, maxShardsParallelism),
+		sharedParallelismPool:   bucket.NewInt64Bucket(maxTime, maxShardsParallelism, true),
 		maxParallelismAllocator: alloc,
 	}, nil
 }
 
-func (s *ShardParallelismAllocator) Alloc(num int64) (int64, error) {
-	n, _ := s.maxParallelismAllocator.Alloc(num)
-	if e := s.sharedParallelismPool.GetResource(n); e != nil {
-		s.maxParallelismAllocator.Free(n)
-		return 0, e
+func (s *ShardParallelismAllocator) Alloc(num int64) (int64, int64, error) {
+	n, _, _ := s.maxParallelismAllocator.Alloc(num)
+	if e := s.sharedParallelismPool.GetResource(num); e != nil {
+		s.maxParallelismAllocator.Free(n, n)
+		return 0, 0, e
 	}
-	return n, nil
+	return n, num, nil
 }
 
-func (s *ShardParallelismAllocator) Free(num int64) {
-	s.sharedParallelismPool.ReleaseResource(num)
-	s.maxParallelismAllocator.Free(num)
+func (s *ShardParallelismAllocator) Free(num, totalNum int64) {
+	s.sharedParallelismPool.ReleaseResource(totalNum)
+	s.maxParallelismAllocator.Free(num, totalNum)
 }
 
 type SeriesResAllocator struct {
@@ -88,15 +88,15 @@ func NewSeriesParallelismAllocator(maxTime time.Duration, maxSeriesParallelism i
 		maxSeriesParallelism = int64(DefaultMaxSeriesParallelismNumRatio * cpu.GetCpuNum())
 	}
 	return &SeriesResAllocator{
-		seriesParallelismPool: bucket.NewInt64Bucket(maxTime, maxSeriesParallelism),
+		seriesParallelismPool: bucket.NewInt64Bucket(maxTime, maxSeriesParallelism, false),
 	}
 }
 
-func (s *SeriesResAllocator) Alloc(num int64) (int64, error) {
-	return num, s.seriesParallelismPool.GetResource(num)
+func (s *SeriesResAllocator) Alloc(num int64) (int64, int64, error) {
+	return num, num, s.seriesParallelismPool.GetResource(num)
 }
 
-func (s *SeriesResAllocator) Free(num int64) {
+func (s *SeriesResAllocator) Free(num, totalNum int64) {
 	s.seriesParallelismPool.ReleaseResource(num)
 }
 
@@ -128,13 +128,13 @@ func NewBaseResAllocator(threshold, minAllocNum, funcType int64) (*BaseResAlloca
 	return r, nil
 }
 
-func (p *BaseResAllocator) Alloc(num int64) (int64, error) {
+func (p *BaseResAllocator) Alloc(num int64) (int64, int64, error) {
 	allocNum := p.computeALGO(p.threshold, atomic.LoadInt64(&p.aliveCount), num, p.minAllocNum)
 	atomic.AddInt64(&p.aliveCount, allocNum)
-	return allocNum, nil
+	return allocNum, allocNum, nil
 }
 
-func (p *BaseResAllocator) Free(num int64) {
+func (p *BaseResAllocator) Free(num, totalNum int64) {
 	atomic.AddInt64(&p.aliveCount, -num)
 }
 
@@ -147,12 +147,12 @@ func NewChunkReaderResAllocator(threshold, minAllocNum, funcType int64) (*ChunkR
 	return &ChunkReaderResAllocator{allocator: allocator}, err
 }
 
-func (p *ChunkReaderResAllocator) Alloc(num int64) (int64, error) {
+func (p *ChunkReaderResAllocator) Alloc(num int64) (int64, int64, error) {
 	return p.allocator.Alloc(num)
 }
 
-func (p *ChunkReaderResAllocator) Free(num int64) {
-	p.allocator.Free(num)
+func (p *ChunkReaderResAllocator) Free(num, totalNum int64) {
+	p.allocator.Free(num, totalNum)
 }
 
 func gradientDescAllocation(threshold, aliveNum, allocNum, minimumAllocNum int64) (returnNum int64) {
