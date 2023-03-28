@@ -1182,8 +1182,9 @@ func (s *PreAggTagSetCursor) RecordInitPreAgg() error {
 		if s.baseAggCursorInfo.recordBuf == nil {
 			break
 		}
-		immutable.AggregateData(s.baseCursorInfo.RecordResult, s.baseAggCursorInfo.recordBuf, s.ops)
-		s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
+		if immutable.AggregateData(s.baseCursorInfo.RecordResult, s.baseAggCursorInfo.recordBuf, s.ops) && len(s.ops) == 1 {
+			s.baseCursorInfo.currSeriesInfo = s.baseAggCursorInfo.fileInfo.SeriesInfo
+		}
 		if err != nil {
 			return err
 		}

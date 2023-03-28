@@ -442,7 +442,7 @@ func (idx *MergeSetIndex) seriesCardinalityEnableTagArray(name []byte, condition
 	var combineKeys [][]byte
 	var isExpectSeries []bool
 	for i := range tsids {
-		combineKeys, isExpectSeries, err = idx.searchSeriesWithTagArray(tsids[i], combineKeys, combineSeriesKey, isExpectSeries, condition)
+		combineKeys, _, isExpectSeries, err = idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition)
 		if err != nil {
 			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
 			return 0, err
@@ -476,7 +476,7 @@ func (idx *MergeSetIndex) SearchSeries(series [][]byte, name []byte, condition i
 	var isExpectSeries []bool
 	sIndex := 0
 	for i := range tsids {
-		combineKeys, isExpectSeries, err = idx.searchSeriesWithTagArray(tsids[i], combineKeys, combineSeriesKey, isExpectSeries, condition)
+		combineKeys, _, isExpectSeries, err = idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition)
 		if err != nil {
 			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
 			return nil, err
@@ -590,6 +590,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	var seriesKeys [][]byte
 	var combineSeriesKey []byte
 	var isExpectSeries []bool
+	var exprs []*influxql.BinaryExpr
 
 	for {
 		se, err := itr.Next()
@@ -600,7 +601,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 			break
 		}
 
-		seriesKeys, isExpectSeries, err = idx.searchSeriesWithTagArray(se.SeriesID, seriesKeys, combineSeriesKey, isExpectSeries, opt.Condition)
+		seriesKeys, exprs, isExpectSeries, err = idx.searchSeriesWithTagArray(se.SeriesID, seriesKeys, exprs, combineSeriesKey, isExpectSeries, opt.Condition)
 		if err != nil {
 			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
 			return nil, seriesNum, err
@@ -645,7 +646,11 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 				tagSetMap[string(groupTagKey)] = tagSet
 			}
 
-			tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf)
+			if exprs[i] != nil {
+				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf)
+			} else {
+				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf)
+			}
 			groupTagKey = groupTagKey[:0]
 			seriesN++
 		}

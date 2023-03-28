@@ -366,6 +366,63 @@ func TestMergeTool_Merge_mod10(t *testing.T) {
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
 }
 
+func TestMergeTool_Merge_mod11(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.setBegin(begin).incrBegin(11).generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.setBegin(begin).incrBegin(9).generate(schema, 5))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestMergeTool_Merge_mod12(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	schema := getDefaultSchemas()
+	recs := []*record.Record{
+		rg.generate(schema, 10),
+		rg.setBegin(begin).incrBegin(9).generate(schema, 10),
+	}
+
+	var err error
+	func() {
+		defer func() {
+			if e := recover(); e != nil {
+				err = fmt.Errorf("%v", e)
+			}
+		}()
+
+		sh := &record.SortHelper{}
+		aux := &record.SortAux{}
+		for i := range recs {
+			aux.InitRecord(recs[i].Schema)
+			aux.Init(recs[i].Times())
+			sh.Sort(recs[i], aux)
+			recs[i], aux.SortRec = aux.SortRec, recs[i]
+			record.CheckRecord(recs[i])
+		}
+	}()
+	require.NoError(t, err)
+}
+
 func TestMergeTool_SkipMerge(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()

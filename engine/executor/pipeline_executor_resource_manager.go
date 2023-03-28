@@ -49,7 +49,7 @@ type PipelineExecutorManager struct {
 func NewPipelineExecutorManager() *PipelineExecutorManager {
 	p := &PipelineExecutorManager{}
 	mem, _ := memory.SysMem()
-	p.memBucket = bucket.NewInt64Bucket(DefaultTimeOut, mem*KBytes2Bytes)
+	p.memBucket = bucket.NewInt64Bucket(DefaultTimeOut, mem*KBytes2Bytes, false)
 	return p
 }
 

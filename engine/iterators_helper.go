@@ -100,7 +100,7 @@ func matchPreAgg(schema *executor.QuerySchema, ctx *idKeyCursorContext) bool {
 		return false
 	}
 
-	if ctx.hasFieldCondition() {
+	if ctx.hasFieldCondition() || schema.HasFieldCondition() {
 		return false
 	}
 

@@ -1,15 +1,17 @@
 package tests
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"reflect"
-	_ "regexp"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -3904,7 +3906,7 @@ func TestServer_top_bottom_nul_column(t *testing.T) {
 	}
 }
 
-//TODO:partial Compare
+// TODO:partial Compare
 func TestServer_Query_Complex_Aggregate(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -8387,7 +8389,7 @@ func TestServer_Query_By_Chunked_SingleMst(t *testing.T) {
 	}
 }
 
-//FixMe: show measurements doesn't support regular expression
+// FixMe: show measurements doesn't support regular expression
 func TestServer_Query_ShowMeasurementExactCardinality(t *testing.T) {
 
 	t.Parallel()
@@ -10622,6 +10624,58 @@ func TestServer_DuplicateField(t *testing.T) {
 	}
 }
 
+func TestServer_Field_Not_In_Condition(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: fmt.Sprintf("mst,tk1=tv9 f1=9i 1610380800000000000\n" +
+			"mst,tk1=tv2 f1=2i    1610380800000000000\n" +
+			"mst,tk1=tv3 f1=3i 1610380800000000000\n" +
+			"mst,tk1=tv4 f1=4i  1610380800000000000\n" +
+			"mst,tk1=tv5 f1=5i 1610380800000000000\n" +
+			"mst,tk1=tv6 f1=6i 1610380800000000000\n" +
+			"mst,tk1=tv7 f1=7i 1610380800000000000\n" +
+			"mst,tk1=tv8 f1=8i 1610380800000000000\n" +
+			"mst,tk1=tv1 f1=1i 1610380800000000000\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "field condition exists",
+			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
+			command: `select sum(*) from mst where f1= 2`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}`),
+		},
+		&Query{
+			name:    "field condition not exist",
+			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
+			command: `select sum(*) from mst where f2=3`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0}]}`),
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func RegisteredIndexes() []string {
 	a := make([]string, 0, 1)
 	a = append(a, "tsi")
@@ -10819,6 +10873,42 @@ func TestRegisteredIndexes(t *testing.T) {
 	}
 }
 
+func holtWinterResultCompare(dst []byte, exp []byte) bool {
+	sampleRegex := regexp.MustCompile(`[1-9]\d*\.\d+`)
+	dstNumsIndexs := sampleRegex.FindAllIndex(dst, len(dst))
+	expNumsIndexs := sampleRegex.FindAllIndex(exp, len(exp))
+	if len(dstNumsIndexs) != len(expNumsIndexs) {
+		return false
+	}
+	var dstNums []float64
+	var expNums []float64
+	var dLast []byte
+	var eLast []byte
+	dStart := 0
+	eStart := 0
+	for i, dIndex := range dstNumsIndexs {
+		if len(dIndex) != 2 || len(expNumsIndexs[i]) != 2 {
+			return false
+		}
+		dnum, _ := strconv.ParseFloat(string(dst[dIndex[0]:dIndex[1]]), 64)
+		dstNums = append(dstNums, dnum)
+		enum, _ := strconv.ParseFloat(string(exp[expNumsIndexs[i][0]:expNumsIndexs[i][1]]), 64)
+		expNums = append(expNums, enum)
+		dLast = append(dLast, dst[dStart:dIndex[0]]...)
+		dStart = dIndex[1]
+		eLast = append(eLast, exp[eStart:expNumsIndexs[i][0]]...)
+		eStart = expNumsIndexs[i][1]
+	}
+	dLast = append(dLast, dst[dStart:]...)
+	eLast = append(eLast, exp[eStart:]...)
+	for i, dnum := range dstNums {
+		if math.Abs(dnum-expNums[i]) >= 0.0001 {
+			return false
+		}
+	}
+	return bytes.Equal(dLast, eLast)
+}
+
 func TestServer_HoltWinters(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -10861,7 +10951,7 @@ func TestServer_HoltWinters(t *testing.T) {
 			}
 			if err := query.Execute(s); err != nil {
 				t.Error(query.Error(err))
-			} else if !query.success() {
+			} else if !holtWinterResultCompare([]byte(query.act), []byte(query.exp)) {
 				t.Error(query.failureMessage())
 			}
 		})

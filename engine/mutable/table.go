@@ -96,12 +96,12 @@ func (msi *MsInfo) Init(row *influx.Row) {
 	msi.Name = row.Name
 	genMsSchema(&msi.Schema, row.Fields)
 	msi.TimeAsd = true
-	msi.sidMap = make(map[uint64]*WriteChunk, 1024)
+	msi.sidMap = make(map[uint64]*WriteChunk)
 }
 
 func (msi *MsInfo) allocChunk() *WriteChunk {
 	if cap(msi.chunkBufs) == len(msi.chunkBufs) {
-		msi.chunkBufs = make([]WriteChunk, 0, 1024)
+		msi.chunkBufs = make([]WriteChunk, 0, 64)
 	}
 	msi.chunkBufs = msi.chunkBufs[:len(msi.chunkBufs)+1]
 
@@ -129,6 +129,7 @@ type MemTable struct {
 	idx  *ski.ShardKeyIndex
 
 	msInfoMap     map[string]*MsInfo // measurements schemas, {"cpu_0001": *MsInfo}
+	msInfos       []MsInfo           // pre-allocation
 	concurLimiter limiter.Fixed
 
 	log     *zap.Logger
@@ -555,6 +556,16 @@ func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, f
 	return t.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
+func (t *MemTable) allocMsInfo() *MsInfo {
+	size := len(t.msInfos)
+	if cap(t.msInfos) == size {
+		t.msInfos = make([]MsInfo, 0, 64)
+		size = 0
+	}
+	t.msInfos = t.msInfos[:size+1]
+	return &t.msInfos[size]
+}
+
 func (t *MemTable) createMsInfo(name string, row *influx.Row) *MsInfo {
 	t.mu.RLock()
 	msInfo, ok := t.msInfoMap[name]
@@ -567,7 +578,7 @@ func (t *MemTable) createMsInfo(name string, row *influx.Row) *MsInfo {
 	t.mu.Lock()
 	msInfo, ok = t.msInfoMap[name]
 	if !ok {
-		msInfo = &MsInfo{}
+		msInfo = t.allocMsInfo()
 		msInfo.Init(row)
 		t.msInfoMap[name] = msInfo
 	}
@@ -633,7 +644,8 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 
 func (t *MemTable) Reset() {
 	t.memSize = 0
-	t.msInfoMap = make(map[string]*MsInfo)
+	t.msInfos = make([]MsInfo, 0, len(t.msInfoMap))
+	t.msInfoMap = make(map[string]*MsInfo, len(t.msInfoMap))
 	t.idx = nil
 }
 
