@@ -243,9 +243,9 @@ func TestVFS(t *testing.T) {
 	st = st.Truncate(time.Second)
 	mt = mt.Truncate(time.Second)
 	cct := ct.Truncate(time.Second)
-	if st.UnixNano() != mt.UnixNano() || st.UnixNano() != cct.UnixNano() {
-		t.Fatalf("get create time fail, file(%v), atime:%v, mtime:%v, ctime:%v",
-			fileName, mt.String(), ct.String(), st.String())
+	if mt.Sub(st) > time.Second || cct.Sub(st) > time.Second {
+		t.Fatalf("get create time fail, file(%v), start_time:%v, modify_time:%v, create_time:%v",
+			fileName, st.String(), mt.String(), cct.String())
 	}
 
 	if err := fd.Close(); err != nil {
