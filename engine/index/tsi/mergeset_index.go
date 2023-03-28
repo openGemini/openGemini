@@ -258,8 +258,8 @@ func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 }
 
 /*
-	for row with no tags, eg: insert foo foo.bar.baz=1
-	use old path
+for row with no tags, eg: insert foo foo.bar.baz=1
+use old path
 */
 func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row) (uint64, error) {
 	vkey := kbPool.Get()

@@ -393,9 +393,9 @@ func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *pr
 				indexlist[j] = &IndexInfor{
 					FieldName:  index.GetFieldName(),
 					IndexName:  index.GetIndexName(),
+					Type:       index.GetType(),
 					Tokens:     index.GetTokens(),
-					Tokenizers: index.GetTokenizers(),
-				}
+					Tokenizers: index.GetTokenizers()}
 			}
 			newIndexR.IndexList[i] = &IndexList{IList: indexlist}
 		}

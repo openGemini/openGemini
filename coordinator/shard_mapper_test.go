@@ -267,6 +267,10 @@ func (m mocShardMapperMetaClient) QueryTagKeys(database string, ms influxql.Meas
 	return nil, nil
 }
 
+func (m mocShardMapperMetaClient) QueryMeasurement(database string, ms string) (models.Rows, error) {
+	return nil, nil
+}
+
 func (m mocShardMapperMetaClient) MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta.MeasurementInfo, error) {
 	return nil, nil
 }

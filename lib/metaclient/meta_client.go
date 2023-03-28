@@ -182,6 +182,7 @@ type MetaClient interface {
 	TagKeys(database string) map[string]set.Set
 	FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error)
 	QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error)
+	QueryMeasurement(database string, ms string) (models.Rows, error)
 	MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error)
 	Measurements(database string, ms influxql.Measurements) ([]string, error)
 	ShowShards() models.Rows
@@ -2694,6 +2695,67 @@ func (c *Client) QueryTagKeys(database string, ms influxql.Measurements, cond in
 	}
 
 	return ret, nil
+}
+
+func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	dbi, err := c.cacheData.GetDatabase(database)
+	if err != nil {
+		return nil, err
+	}
+
+	for rpName := range dbi.RetentionPolicies {
+		rp := dbi.RetentionPolicies[rpName]
+
+		version := rp.MstVersions[ms]
+		nameWithVer := influx.GetNameWithVersion(ms, version)
+
+		if measurement, ok := rp.Measurements[nameWithVer]; ok {
+			row := &models.Row{
+				Name:    "Col Info",
+				Columns: []string{"ColName", "Type", "Tag/Filed"}}
+			for name, t := range measurement.Schema {
+				if t == influx.Field_Type_Tag {
+					row.Values = append(row.Values, []interface{}{name, "string", "Tag"})
+				} else {
+					row.Values = append(row.Values, []interface{}{name, influx.FieldTypeString(t), "Field"})
+				}
+			}
+
+			rows := make([]*models.Row, 0, 0)
+			rows = append(rows, row)
+
+			shardrow := &models.Row{
+				Name:    "Shard Info",
+				Columns: []string{"ShardType", "ShardKey", "ShardGroup"}}
+			for _, shard := range measurement.ShardKeys {
+				shardrow.Values = append(shardrow.Values, []interface{}{shard.Type, strings.Join(shard.ShardKey, ","), shard.ShardGroup})
+			}
+
+			rows = append(rows, shardrow)
+
+			if len(measurement.IndexRelation.Oids) > 0 {
+				indexes := &models.Row{
+					Name:    "Index Info",
+					Columns: []string{"IndexName", "Type", "ColName", "Token", "Tokenizers"}}
+				for i, _ := range measurement.IndexRelation.Oids {
+					for _, indexInfo := range measurement.IndexRelation.IndexList[i].IList {
+						indexes.Values = append(indexes.Values, []interface{}{indexInfo.IndexName,
+							indexInfo.Type,
+							indexInfo.FieldName,
+							indexInfo.Tokens,
+							indexInfo.Tokenizers})
+					}
+				}
+				rows = append(rows, indexes)
+			}
+
+			return rows, nil
+		}
+	}
+
+	return nil, fmt.Errorf("Measurement not exist %s", ms)
 }
 
 func (c *Client) NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error {

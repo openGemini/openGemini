@@ -3496,6 +3496,9 @@ func (client *MockMetaClient) FieldKeys(database string, ms influxql.Measurement
 func (client *MockMetaClient) QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error) {
 	return nil, nil
 }
+func (client *MockMetaClient) QueryMeasurement(database string, ms string) (models.Rows, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error) {
 	return nil, nil
 }

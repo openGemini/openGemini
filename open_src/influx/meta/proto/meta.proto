@@ -176,9 +176,10 @@ message IndexRelation {
 
 message IndexInfor {
 	required string FieldName = 1;
-	required string Tokens string = 2;
-	required string Tokenizers = 3;
-	required string IndexName = 4;
+	required string IndexName = 2;
+	required string Type = 3;
+	required string Tokens = 4;
+	required string Tokenizers = 5;
 }
 
 message IndexList {
