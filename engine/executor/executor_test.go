@@ -248,7 +248,7 @@ func TestMultiPipelineExecutors_ALLTimeout(t *testing.T) {
 		defer wg.Done()
 		executor := PipelineExecutorGen()
 		if e := executor.ExecuteExecutor(context.Background()); e != nil {
-			if !assert.Equal(t, e.Error(), errno.NewError(errno.BucketResourceExceeded).Error()) {
+			if !assert.Equal(t, e.Error(), errno.NewError(errno.BucketLacks).Error()) {
 				t.Errorf(e.Error())
 			}
 		}

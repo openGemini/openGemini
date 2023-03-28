@@ -238,7 +238,7 @@ func (r *SnappyReader) retryRead(b []byte) (err error) {
 		n, err := r.f.Read(tmp)
 		if err == io.EOF {
 			if !wait() {
-				return errno.NewError(errno.ShortRead, n, len(b))
+				return errno.NewError(errno.ShortRead, readN, len(b))
 			}
 			continue
 		}

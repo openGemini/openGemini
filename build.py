@@ -21,6 +21,7 @@ prereqs = [ 'git', 'go' ]
 go_vet_command = "go vet ./..."
 
 targets = {
+    'ts-cli' : './app/ts-cli',
     'ts-sql' : './app/ts-sql',
     'ts-meta' : './app/ts-meta',
     'ts-store' : './app/ts-store',

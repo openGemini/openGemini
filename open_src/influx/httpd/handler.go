@@ -513,7 +513,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		p.SetParams(params)
 	}
 
-	YyParser := influxql.NewYyParser(p.GetScanner())
+	YyParser := influxql.NewYyParser(p.GetScanner(), p.GetPara())
 	YyParser.ParseTokens()
 
 	/*	// Parse query from query string.

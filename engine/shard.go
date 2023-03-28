@@ -241,7 +241,7 @@ func (nodeLimit *nodeMemBucket) initNodeMemBucket(timeOut time.Duration, memThre
 	nodeLimit.once.Do(func() {
 		log.Info("New node mem limit bucket", zap.Int64("node mutable size limit", memThreshold),
 			zap.Duration("max write hang duration", timeOut))
-		nodeLimit.memBucket = bucket.NewInt64Bucket(timeOut, memThreshold)
+		nodeLimit.memBucket = bucket.NewInt64Bucket(timeOut, memThreshold, false)
 	})
 }
 
@@ -621,9 +621,12 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	}
 	atomic.AddInt64(&statistics.PerfStat.WriteSortIndexDurationNs, time.Since(start).Nanoseconds())
 
+	var writeIndexRequired bool
 	start = time.Now()
 
 	tm := int64(math.MinInt64)
+	primaryIndex := s.indexBuilder.GetPrimaryIndex()
+	mergetIndex := primaryIndex.(*tsi.MergeSetIndex)
 	for i := 0; i < len(rows); i++ {
 		if s.closed.Closed() {
 			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
@@ -654,6 +657,18 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 		if rows[i].Timestamp > tm {
 			tm = rows[i].Timestamp
 		}
+		if !writeIndexRequired {
+			ri.SeriesId, err = mergetIndex.GetSeriesIdBySeriesKey(rows[i].IndexKey, record.Str2bytes(rows[i].Name))
+			if err != nil {
+				return err
+			}
+			// PrimaryId is equal to SeriesId by default.
+			ri.PrimaryId = ri.SeriesId
+
+			if ri.SeriesId == 0 {
+				writeIndexRequired = true
+			}
+		}
 		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len()))
 	}
 
@@ -661,8 +676,14 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 
 	failpoint.Inject("SlowDownCreateIndex", nil)
 
-	if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
-		return err
+	if writeIndexRequired {
+		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+			return err
+		}
+	} else {
+		if err = s.indexBuilder.CreateSecondaryIndexIfNotExist(mmPoints); err != nil {
+			return err
+		}
 	}
 	atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(start).Nanoseconds())
 

@@ -34,7 +34,7 @@ func Test_createAndGetFileInfo(t *testing.T) {
 	defer fi.Close()
 	require.Equal(t, true, strings.Contains(filename, tmpDir))
 	file := path.Base(filename)
-	require.Equal(t, true, strings.HasPrefix(file, "cpu"))
+	require.Equal(t, true, strings.Contains(file, "cpu"))
 	require.Equal(t, true, strings.HasSuffix(file, "pb.gz"))
 }
 
@@ -48,6 +48,6 @@ func Test_writeFile(t *testing.T) {
 	})
 	require.NoError(t, err)
 	file := path.Base(filename)
-	require.Equal(t, true, strings.HasPrefix(file, "mem"))
+	require.Equal(t, true, strings.Contains(file, "mem"))
 	require.Equal(t, true, strings.HasSuffix(file, "pb.gz"))
 }

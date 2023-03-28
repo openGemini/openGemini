@@ -28,16 +28,16 @@ func TestResourceAllocator(t *testing.T) {
 		t.Fatal()
 	}
 	r, _ := NewChunkReaderResAllocator(10, 4, GradientDesc)
-	if num, _ := r.Alloc(4); num != 4 {
+	if num, _, _ := r.Alloc(4); num != 4 {
 		t.Fatal(fmt.Sprintf("unexpected pipeline number,expected: 4,got:%d", num))
 	}
-	if num, _ := r.Alloc(6); num != 4 {
+	if num, _, _ := r.Alloc(6); num != 4 {
 		t.Fatal(fmt.Sprintf("unexpected pipeline number,expected: 4,got:%d", num))
 	}
-	if num, _ := r.Alloc(2); num != 2 {
+	if num, _, _ := r.Alloc(2); num != 2 {
 		t.Fatal(fmt.Sprintf("unexpected pipeline number,expected: 2,got:%d", num))
 	}
-	r.Free(10)
+	r.Free(10, 10)
 	if r.allocator.aliveCount != 0 {
 		t.Fatal(fmt.Sprintf("unexpected alive pipeline number,expected: 0,got:%d", r.allocator.aliveCount))
 	}
@@ -47,23 +47,21 @@ func TestShardPipelineManager(t *testing.T) {
 	NewShardsParallelismAllocator(0, 0, 0)
 	a1, _ := NewShardsParallelismAllocator(time.Second, 10, 1)
 	NewSeriesParallelismAllocator(0, 0)
-	a2 := NewSeriesParallelismAllocator(time.Second, 10)
-	if num, _ := a1.Alloc(10); num != 2 {
+	a2 := NewSeriesParallelismAllocator(time.Second, 20)
+	if num, _, _ := a1.Alloc(10); num != 1 {
 		t.Fatal()
 	}
-	for i := 0; i < 8; i++ {
-		if num, _ := a1.Alloc(1); num != 1 {
-			t.Fatal()
-		}
-	}
-	if _, err := a1.Alloc(1); err == nil {
+	if num, _, _ := a1.Alloc(1); num != 1 {
 		t.Fatal()
 	}
-	a1.Free(10)
-	if _, e := a2.Alloc(10); e != nil {
+	if _, _, err := a1.Alloc(1); err == nil {
+		t.Fatal()
+	}
+	a1.Free(2, 11)
+	if _, _, e := a2.Alloc(10); e != nil {
 		t.Fatal(e)
 	}
-	a2.Free(10)
+	a2.Free(10, 20)
 }
 
 func TestResourceAllocatorImpl(t *testing.T) {
@@ -76,16 +74,16 @@ func TestResourceAllocatorImpl(t *testing.T) {
 	if e := InitResAllocator(0, 0, 1, GradientDesc, ChunkReaderRes, 0); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := AllocRes(ChunkReaderRes, 1); e != nil {
+	if _, _, e := AllocRes(ChunkReaderRes, 1); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := AllocRes(5, 1); e == nil {
+	if _, _, e := AllocRes(5, 1); e == nil {
 		t.Fatal()
 	}
-	if e := FreeRes(5, 1); e == nil {
+	if e := FreeRes(5, 1, 1); e == nil {
 		t.Fatal()
 	}
-	if e := FreeRes(ChunkReaderRes, 1); e != nil {
+	if e := FreeRes(ChunkReaderRes, 1, 1); e != nil {
 		t.Fatal(e)
 	}
 	if e := InitResAllocator(0, 0, 1, -1, ShardsParallelismRes, 0); e != nil {

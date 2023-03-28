@@ -822,6 +822,9 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 	if err != nil {
 		return
 	}
+	if len(*asis) == 0 {
+		sameSg = false
+	}
 
 	if !sameSg {
 		if len(di.ShardKey.ShardKey) > 0 {

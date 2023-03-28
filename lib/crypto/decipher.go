@@ -26,6 +26,7 @@ import (
 var defaultDecipher Decipher
 var logger *zap.Logger
 var cacheData = make(map[string]string)
+var cacheMu sync.RWMutex
 
 func SetLogger(lg *zap.Logger) {
 	logger = lg
@@ -69,7 +70,10 @@ func DecryptFromFile(path string) string {
 		return ""
 	}
 
+	cacheMu.RLock()
 	s, ok := cacheData[path]
+	cacheMu.RUnlock()
+
 	if !ok {
 		buf, err := os.ReadFile(path)
 		if err != nil {
@@ -77,7 +81,9 @@ func DecryptFromFile(path string) string {
 			return ""
 		}
 		s = string(buf)
+		cacheMu.Lock()
 		cacheData[path] = s
+		cacheMu.Unlock()
 	}
 
 	return Decrypt(s)

@@ -300,7 +300,7 @@ func (r *UnorderedReader) ReadTimes(ref *record.Field, maxTime int64) []int64 {
 		ofs = 0
 	}
 
-	if ofs >= len(r.times) || r.times[ofs] >= maxTime {
+	if ofs >= len(r.times) || r.times[ofs] > maxTime {
 		return nil
 	}
 

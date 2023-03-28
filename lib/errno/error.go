@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -215,6 +216,7 @@ type Errs struct {
 	err      error
 	lock     sync.Mutex
 	wg       sync.WaitGroup
+	cnt      int32
 	callback func()
 }
 
@@ -231,7 +233,9 @@ func NewErrs() *Errs {
 
 // Dispatch no lock, use len 1 error chan for lock
 func (s *Errs) Dispatch(err error) {
-	s.wg.Add(-1)
+	if atomic.AddInt32(&s.cnt, -1) >= 0 {
+		s.wg.Add(-1)
+	}
 	if err == nil {
 		return
 	}
@@ -251,6 +255,7 @@ func (s *Errs) Err() error {
 }
 
 func (s *Errs) Init(count int, callback func()) {
+	s.cnt = int32(count)
 	s.wg.Add(count)
 	s.callback = callback
 }
@@ -258,6 +263,7 @@ func (s *Errs) Init(count int, callback func()) {
 func (s *Errs) Clean() {
 	s.err = nil
 	s.callback = nil
+	s.cnt = 0
 }
 
 type ErrsPool struct {

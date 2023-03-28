@@ -22,10 +22,20 @@ import (
 	"os"
 	"path"
 	"time"
+
+	"github.com/shirou/gopsutil/v3/process"
 )
 
 func createAndGetFileInfo(filePath string, dumpType configureType) (*os.File, string, error) {
-	filepath := formatFilename(filePath, dumpType)
+	pn, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return nil, "", err
+	}
+	pName, err := pn.Name()
+	if err != nil {
+		return nil, "", err
+	}
+	filepath := formatFilename(filePath, dumpType, pName)
 	f, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0640)
 	if err != nil && os.IsNotExist(err) {
 		if err = os.MkdirAll(filePath, 0750); err != nil {
@@ -39,9 +49,9 @@ func createAndGetFileInfo(filePath string, dumpType configureType) (*os.File, st
 	return f, filepath, err
 }
 
-func formatFilename(filePath string, dumpType configureType) string {
+func formatFilename(filePath string, dumpType configureType, pName string) string {
 	suffix := time.Now().Format("20060102150405.000") + ".pb.gz"
-	return path.Join(filePath, check2name[dumpType]+"."+suffix)
+	return path.Join(filePath, fmt.Sprintf("%s.%s.%s", pName, check2name[dumpType], suffix))
 }
 
 func writeFile(data bytes.Buffer, dumpType configureType, dumpOpts *dumpOptions) (string, error) {

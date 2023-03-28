@@ -38,6 +38,7 @@ func (h *SortHelper) Sort(rec *Record, aux *SortAux) {
 	sort.Stable(aux)
 	rows := aux.RowIds
 	h.initNilCount(rec, times)
+	h.times = h.times[:0]
 
 	start := 0
 

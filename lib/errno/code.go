@@ -96,7 +96,6 @@ const (
 	LogicalPlainBuildFailInShard = 1115
 	SchemaNotAligned             = 1116
 	NoFieldSelected              = 1117
-	BucketResourceExceeded       = 1118
 )
 
 // store engine error codes

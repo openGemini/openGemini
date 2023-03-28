@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 	"unsafe"
-
 )
 
 const DefaultQueryTimeout = time.Duration(0) 
@@ -112,6 +111,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %token <str>    STRING
 %token <float64> NUMBER
 %token <hints>  HINT
+%token <expr>   BOUNDPARAM
 
 %left  <int>  AND OR
 %left  <int>  ADD SUB BITWISE_OR BITWISE_XOR
@@ -1034,6 +1034,10 @@ COLUMN_VAREF:
     |IDENT DOT IDENT
     {
         $$ = &VarRef{Val:$1+"."+$3,Type: Tag}
+    }
+    |BOUNDPARAM
+    {
+        $$ = $1
     }
 
 COLUMN_VAREF_TYPE:

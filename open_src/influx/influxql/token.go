@@ -26,7 +26,7 @@ const (
 	literalBeg
 	// IDENT and the following are InfluxQL literal tokens.
 	//IDENT       // main
-	BOUNDPARAM // $param
+	//BOUNDPARAM // $param
 	//NUMBER      // 12345.67
 	//INTEGER     // 12345
 	//DURATIONVAL // 13h

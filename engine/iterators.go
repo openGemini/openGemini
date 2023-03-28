@@ -136,7 +136,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	}
 	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
 	defer func() {
-		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum)
+		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum, seriesNum)
 	}()
 
 	if err != nil {
@@ -345,7 +345,7 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 	}
 
 	// get parallelism num from resource allocator.
-	num, _ := resourceallocator.AllocRes(resourceallocator.ChunkReaderRes, int64(parallelism))
+	num, _, _ := resourceallocator.AllocRes(resourceallocator.ChunkReaderRes, int64(parallelism))
 	parallelism = int(num)
 
 	var groupSpan *tracing.Span

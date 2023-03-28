@@ -1,5 +1,5 @@
-//go:build !streamfs
-// +build !streamfs
+//go:build !streamfs && !windows
+// +build !streamfs,!windows
 
 package fs
 

@@ -287,7 +287,7 @@ func (trans *IndexScanTransform) Close() {
 }
 
 func (trans *IndexScanTransform) Release() error {
-	return resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, trans.chunkReaderNum)
+	return resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, trans.chunkReaderNum, trans.chunkReaderNum)
 }
 
 func (trans *IndexScanTransform) Work(ctx context.Context) error {

@@ -1399,7 +1399,7 @@ func (c *compiledStatement) RewriteJoinSourceDFS(joinSources *[]*influxql.Join, 
 	for i := range sources {
 		switch s := sources[i].(type) {
 		case *influxql.SubQuery:
-			c.RewriteJoinSourceDFS(joinSources, s.Statement.Sources)
+			c.RewriteJoinSourceDFS(&s.Statement.JoinSource, s.Statement.Sources)
 		case *influxql.Join:
 			*joinSources = append(*joinSources, influxql.CloneSource(s).(*influxql.Join))
 		}

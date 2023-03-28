@@ -62,24 +62,26 @@ func InitResAllocator(threshold, minAllocNum, minShardsAllocNum, funcType int64,
 	return nil
 }
 
-func AllocRes(resourceType ResourceType, num int64) (int64, error) {
+func AllocRes(resourceType ResourceType, num int64) (int64, int64, error) {
 	if resourceType >= Bottom {
-		return 0, ResTypeNotFound
+		return 0, 0, ResTypeNotFound
 	}
 	r := resourceArr[resourceType]
 	return r.Alloc(num)
 }
 
-func FreeRes(resourceType ResourceType, num int64) error {
+func FreeRes(resourceType ResourceType, num, totalNum int64) error {
 	if resourceType >= Bottom {
 		return ResTypeNotFound
 	}
 	r := resourceArr[resourceType]
-	r.Free(num)
+	r.Free(num, totalNum)
 	return nil
 }
 
 func DefaultSeriesAllocateFunc(seriesNum int64) error {
-	_, e := AllocRes(SeriesParallelismRes, seriesNum)
-	return e
+	if _, _, e := AllocRes(SeriesParallelismRes, seriesNum); e != nil {
+		return e
+	}
+	return nil
 }

@@ -30,7 +30,7 @@ func TestIsFullSeriesQuery(t *testing.T) {
 	sql := `select /*+ full_series */ value from cpu where (host = 'server05' AND region = 'uswest')`
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
-	yaccParser := influxql.NewYyParser(parser.GetScanner())
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
 	yaccParser.ParseTokens()
 	query, err := yaccParser.GetQuery()
 	if err != nil {
@@ -54,7 +54,7 @@ func TestIsSpecificSeriesQuery(t *testing.T) {
 	sql := `select /*+ specific_series */ value from cpu where (host = 'server01')`
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
-	yaccParser := influxql.NewYyParser(parser.GetScanner())
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
 	yaccParser.ParseTokens()
 	query, err := yaccParser.GetQuery()
 	if err != nil {
@@ -79,7 +79,7 @@ func TestVerifyHintStmt(t *testing.T) {
 	sql := `select /*+ Exact_Statistic_Query */ value from cpu limit 1`
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
-	yaccParser := influxql.NewYyParser(parser.GetScanner())
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
 	yaccParser.ParseTokens()
 	query, err := yaccParser.GetQuery()
 	if err != nil {
