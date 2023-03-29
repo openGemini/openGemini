@@ -48,7 +48,6 @@ const (
 	DefaultMaxConcurrentCompactions = 0
 
 	DefaultWriteColdDuration = 5 * time.Second
-	Is32BitPtr               = (^uintptr(0) >> 32) == 0
 
 	DefaultSnapshotThroughput      = 48 * MB
 	DefaultSnapshotThroughputBurst = 64 * MB
@@ -231,7 +230,7 @@ func NewStore() Store {
 		MemDataReadEnabled:           true,
 		CacheDataBlock:               false,
 		CacheMetaBlock:               false,
-		EnableMmapRead:               !Is32BitPtr,
+		EnableMmapRead:               false,
 		ReadCacheLimit:               toml.Size(readCacheLimit),
 		WriteConcurrentLimit:         0,
 		WalSyncInterval:              toml.Duration(DefaultWALSyncInterval),

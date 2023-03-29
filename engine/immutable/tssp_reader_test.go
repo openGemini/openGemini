@@ -633,13 +633,17 @@ func TestFullCompacted(t *testing.T) {
 
 }
 
-func TestFileHandlesRef(t *testing.T) {
+func TestFileHandlesRef_EnableMmap(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
 		fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
+
+	EnableMmapRead(true)
+	defer EnableMmapRead(false)
+
 	conf := NewConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
