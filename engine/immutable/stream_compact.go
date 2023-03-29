@@ -28,6 +28,7 @@ import (
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -595,7 +596,7 @@ func (c *StreamIterators) NewTSSPFile(tmp bool) (TSSPFile, error) {
 
 	dr, err := CreateTSSPFileReader(c.fileSize, c.fd, &c.trailer, &c.TableData, c.FileVersion(), tmp, c.lock)
 	if err != nil {
-		c.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
+		c.log.Error("create tssp file reader fail", zap.String("name", dr.Path()), zap.Error(err))
 		return nil, err
 	}
 
@@ -1087,13 +1088,13 @@ func (b *ColumnBuilder) encodeTimeColumn(cols []record.ColVal, offset int64) err
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, BlockInteger)
+		b.data = append(b.data, encoding.BlockInteger)
 		nilBitMap, bitmapOffset := col.SubBitmapBytes()
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
 		b.data = append(b.data, nilBitMap...)
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(col.NilCount))
-		b.data, err = EncodeTimestampBlock(col.Val, b.data, b.coder)
+		b.data, err = encoding.EncodeTimestampBlock(col.Val, b.data, b.coder)
 		if err != nil {
 			b.log.Error("encode integer value fail", zap.Error(err))
 			return err
@@ -1126,22 +1127,22 @@ func (b *ColumnBuilder) encodeColumn(segCols []record.ColVal, tmCols []record.Co
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
 		switch ref.Type {
 		case influx.Field_Type_String:
-			b.data, err = EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
+			b.data, err = encoding.EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
 			if len(tmCols) != 0 {
 				b.stringPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
 			}
 		case influx.Field_Type_Boolean:
-			b.data, err = EncodeBooleanBlock(segCol.Val, b.data, b.coder)
+			b.data, err = encoding.EncodeBooleanBlock(segCol.Val, b.data, b.coder)
 			if len(tmCols) != 0 {
 				b.boolPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
 			}
 		case influx.Field_Type_Float:
-			b.data, err = EncodeFloatBlock(segCol.Val, b.data, b.coder)
+			b.data, err = encoding.EncodeFloatBlock(segCol.Val, b.data, b.coder)
 			if len(tmCols) != 0 {
 				b.floatPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
 			}
 		case influx.Field_Type_Int:
-			b.data, err = EncodeIntegerBlock(segCol.Val, b.data, b.coder)
+			b.data, err = encoding.EncodeIntegerBlock(segCol.Val, b.data, b.coder)
 			if len(tmCols) != 0 {
 				b.intPreAggBuilder.addValues(segCol, tmCols[i].IntegerValues())
 			}

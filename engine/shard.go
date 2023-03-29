@@ -753,7 +753,7 @@ func flushChunkImp(dataPath, msName string, lockPath *string, totalChunks int, t
 	if orderRec.RowNums() != 0 {
 		if orderMs == nil {
 			orderFileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, true, lockPath)
-			orderMs = immutable.AllocMsBuilder(dataPath, msName, lockPath, conf, totalChunks,
+			orderMs = immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks,
 				orderFileName, tbStore.Tier(), tbStore.Sequencer(), orderRec.Len())
 		}
 
@@ -771,7 +771,7 @@ func flushChunkImp(dataPath, msName string, lockPath *string, totalChunks int, t
 	if unOrderRec.RowNums() != 0 {
 		if unOrderMs == nil {
 			disorderFileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, false, lockPath)
-			unOrderMs = immutable.AllocMsBuilder(dataPath, msName, lockPath, conf,
+			unOrderMs = immutable.NewMsBuilder(dataPath, msName, lockPath, conf,
 				totalChunks, disorderFileName, tbStore.Tier(), tbStore.Sequencer(), unOrderRec.Len())
 		}
 

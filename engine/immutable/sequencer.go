@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"go.uber.org/zap"
@@ -275,7 +276,7 @@ func (p *IdTimePairs) Reset(name string) {
 	p.Rows = p.Rows[:0]
 }
 
-func (p *IdTimePairs) Marshal(isOrder bool, dst []byte, ctx *CoderContext) []byte {
+func (p *IdTimePairs) Marshal(isOrder bool, dst []byte, ctx *encoding.CoderContext) []byte {
 	var err error
 	maxBlock := uint32(DefaultMaxRowsPerSegment) * 2
 	rows := uint32(len(p.Tms))
@@ -297,7 +298,7 @@ func (p *IdTimePairs) Marshal(isOrder bool, dst []byte, ctx *CoderContext) []byt
 		var buf [4]byte
 		pos := len(dst)
 		dst = append(dst, buf[:]...)
-		dst, err = EncodeUnsignedBlock(record.Uint64Slice2byte(p.Ids[startIdx:startIdx+count]), dst, ctx)
+		dst, err = encoding.EncodeUnsignedBlock(record.Uint64Slice2byte(p.Ids[startIdx:startIdx+count]), dst, ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -308,7 +309,7 @@ func (p *IdTimePairs) Marshal(isOrder bool, dst []byte, ctx *CoderContext) []byt
 		// encode row counts
 		pos = len(dst)
 		dst = append(dst, buf[:]...)
-		dst, err = EncodeIntegerBlock(record.Int64Slice2byte(p.Rows[startIdx:startIdx+count]), dst, ctx)
+		dst, err = encoding.EncodeIntegerBlock(record.Int64Slice2byte(p.Rows[startIdx:startIdx+count]), dst, ctx)
 		if err != nil {
 			panic(err)
 		}
@@ -320,7 +321,7 @@ func (p *IdTimePairs) Marshal(isOrder bool, dst []byte, ctx *CoderContext) []byt
 			// encode flush times
 			pos = len(dst)
 			dst = append(dst, buf[:]...)
-			dst, err = EncodeIntegerBlock(record.Int64Slice2byte(p.Tms[startIdx:startIdx+count]), dst, ctx)
+			dst, err = encoding.EncodeIntegerBlock(record.Int64Slice2byte(p.Tms[startIdx:startIdx+count]), dst, ctx)
 			if err != nil {
 				panic(err)
 			}
@@ -363,10 +364,10 @@ func (p *IdTimePairs) Unmarshal(isOrder bool, src []byte) ([]byte, error) {
 	blocks := numberenc.UnmarshalUint32(src)
 	src = src[4:]
 
-	decoder := NewCoderContext()
+	decoder := encoding.NewCoderContext()
 	defer decoder.Release()
 
-	decoder.timeCoder = GetTimeCoder()
+	decoder.SetTimeCoder(encoding.GetTimeCoder())
 	startIdx := 0
 	for i := uint32(0); i < blocks; i++ {
 		if len(src) < 8 {
@@ -387,7 +388,7 @@ func (p *IdTimePairs) Unmarshal(isOrder bool, src []byte) ([]byte, error) {
 		src = src[4:]
 		idBytes := record.Uint64Slice2byte(p.Ids[startIdx : startIdx+n])
 		idBytes = idBytes[:0]
-		_, err = DecodeUnsignedBlock(src[:idLen], &idBytes, decoder)
+		_, err = encoding.DecodeUnsignedBlock(src[:idLen], &idBytes, decoder)
 		if err != nil {
 			return nil, err
 		}
@@ -401,7 +402,7 @@ func (p *IdTimePairs) Unmarshal(isOrder bool, src []byte) ([]byte, error) {
 		src = src[4:]
 		rowCountsBytes := record.Int64Slice2byte(p.Rows[startIdx : startIdx+n])
 		rowCountsBytes = rowCountsBytes[:0]
-		_, err = DecodeIntegerBlock(src[:rowCountsLen], &rowCountsBytes, decoder)
+		_, err = encoding.DecodeIntegerBlock(src[:rowCountsLen], &rowCountsBytes, decoder)
 		if err != nil {
 			return nil, err
 		}
@@ -416,7 +417,7 @@ func (p *IdTimePairs) Unmarshal(isOrder bool, src []byte) ([]byte, error) {
 			src = src[4:]
 			timeBytes := record.Int64Slice2byte(p.Tms[startIdx : startIdx+n])
 			timeBytes = timeBytes[:0]
-			_, err = DecodeIntegerBlock(src[:timeLen], &timeBytes, decoder)
+			_, err = encoding.DecodeIntegerBlock(src[:timeLen], &timeBytes, decoder)
 			if err != nil {
 				return nil, err
 			}

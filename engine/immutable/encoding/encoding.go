@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package immutable
+package encoding
 
 import (
 	"fmt"
@@ -118,7 +118,7 @@ var (
 	timePool   = sync.Pool{}
 )
 
-func GetInterCoder() *Integer {
+func GetIntCoder() *Integer {
 	v := intPool.Get()
 	if v != nil {
 		return v.(*Integer)
@@ -217,13 +217,53 @@ func (ctx *CoderContext) Release() {
 	}
 }
 
+func (ctx *CoderContext) GetTimeCoder() *Time {
+	return ctx.timeCoder
+}
+
+func (ctx *CoderContext) SetTimeCoder(timeCoder *Time) {
+	ctx.timeCoder = timeCoder
+}
+
+func (ctx *CoderContext) GetIntCoder() *Integer {
+	return ctx.intCoder
+}
+
+func (ctx *CoderContext) SetIntCoder(intCoder *Integer) {
+	ctx.intCoder = intCoder
+}
+
+func (ctx *CoderContext) GetFloatCoder() *Float {
+	return ctx.floatCoder
+}
+
+func (ctx *CoderContext) SetFloatCoder(floatCoder *Float) {
+	ctx.floatCoder = floatCoder
+}
+
+func (ctx *CoderContext) GetStringCoder() *String {
+	return ctx.stringCoder
+}
+
+func (ctx *CoderContext) SetStringCoder(stringCoder *String) {
+	ctx.stringCoder = stringCoder
+}
+
+func (ctx *CoderContext) GetBoolCoder() *Boolean {
+	return ctx.boolCoder
+}
+
+func (ctx *CoderContext) SetBoolCoder(boolCoder *Boolean) {
+	ctx.boolCoder = boolCoder
+}
+
 func EncodeIntegerBlock(in, out []byte, ctx *CoderContext) ([]byte, error) {
 	if len(in) == 0 {
 		return out, nil
 	}
 
 	if ctx.intCoder == nil {
-		ctx.intCoder = GetInterCoder()
+		ctx.intCoder = GetIntCoder()
 	}
 	return ctx.intCoder.Encoding(in, out)
 }
@@ -234,7 +274,7 @@ func DecodeIntegerBlock(in []byte, out *[]byte, ctx *CoderContext) ([]int64, err
 	}
 
 	if ctx.intCoder == nil {
-		ctx.intCoder = GetInterCoder()
+		ctx.intCoder = GetIntCoder()
 	}
 
 	values, err := ctx.intCoder.Decoding(in, *out)
@@ -397,7 +437,7 @@ func EncodeUnsignedBlock(in, out []byte, ctx *CoderContext) ([]byte, error) {
 
 func DecodeUnsignedBlock(in []byte, out *[]byte, ctx *CoderContext) ([]uint64, error) {
 	if ctx.intCoder == nil {
-		ctx.intCoder = GetInterCoder()
+		ctx.intCoder = GetIntCoder()
 	}
 
 	values, err := ctx.intCoder.Decoding(in, *out)

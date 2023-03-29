@@ -19,6 +19,7 @@ package immutable
 import (
 	"fmt"
 
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
@@ -38,12 +39,12 @@ type ColumnBuilder struct {
 	boolPreAggBuilder   PreAggBuilder
 	timePreAggBuilder   PreAggBuilder
 
-	coder *CoderContext
+	coder *encoding.CoderContext
 	log   *Log.Logger
 }
 
 func NewColumnBuilder() *ColumnBuilder {
-	return &ColumnBuilder{coder: NewCoderContext()}
+	return &ColumnBuilder{coder: encoding.NewCoderContext()}
 }
 
 func (b *ColumnBuilder) resetPreAgg() {
@@ -66,8 +67,8 @@ func (b *ColumnBuilder) resetPreAgg() {
 
 func (b *ColumnBuilder) initEncoder(ref record.Field) error {
 	if ref.Name == record.TimeField && ref.Type == influx.Field_Type_Int {
-		if b.coder.timeCoder == nil {
-			b.coder.timeCoder = GetTimeCoder()
+		if b.coder.GetTimeCoder() == nil {
+			b.coder.SetTimeCoder(encoding.GetTimeCoder())
 		}
 		if b.timePreAggBuilder == nil {
 			b.timePreAggBuilder = acquireTimePreAggBuilder()
@@ -78,8 +79,8 @@ func (b *ColumnBuilder) initEncoder(ref record.Field) error {
 
 	switch ref.Type {
 	case influx.Field_Type_Int:
-		if b.coder.intCoder == nil {
-			b.coder.intCoder = GetInterCoder()
+		if b.coder.GetIntCoder() == nil {
+			b.coder.SetIntCoder(encoding.GetIntCoder())
 		}
 		if b.intPreAggBuilder == nil {
 			b.intPreAggBuilder = acquireColumnBuilder(influx.Field_Type_Int)
@@ -87,8 +88,8 @@ func (b *ColumnBuilder) initEncoder(ref record.Field) error {
 		b.intPreAggBuilder.reset()
 		return nil
 	case influx.Field_Type_Float:
-		if b.coder.floatCoder == nil {
-			b.coder.floatCoder = GetFloatCoder()
+		if b.coder.GetFloatCoder() == nil {
+			b.coder.SetFloatCoder(encoding.GetFloatCoder())
 		}
 		if b.floatPreAggBuilder == nil {
 			b.floatPreAggBuilder = acquireColumnBuilder(influx.Field_Type_Float)
@@ -96,8 +97,8 @@ func (b *ColumnBuilder) initEncoder(ref record.Field) error {
 		b.floatPreAggBuilder.reset()
 		return nil
 	case influx.Field_Type_String:
-		if b.coder.stringCoder == nil {
-			b.coder.stringCoder = GetStringCoder()
+		if b.coder.GetStringCoder() == nil {
+			b.coder.SetStringCoder(encoding.GetStringCoder())
 		}
 		if b.stringPreAggBuilder == nil {
 			b.stringPreAggBuilder = acquireColumnBuilder(influx.Field_Type_String)
@@ -105,8 +106,8 @@ func (b *ColumnBuilder) initEncoder(ref record.Field) error {
 		b.stringPreAggBuilder.reset()
 		return nil
 	case influx.Field_Type_Boolean:
-		if b.coder.boolCoder == nil {
-			b.coder.boolCoder = GetBoolCoder()
+		if b.coder.GetBoolCoder() == nil {
+			b.coder.SetBoolCoder(encoding.GetBoolCoder())
 		}
 		if b.boolPreAggBuilder == nil {
 			b.boolPreAggBuilder = acquireColumnBuilder(influx.Field_Type_Boolean)
@@ -142,13 +143,13 @@ func (b *ColumnBuilder) encIntegerColumn(timeCols []record.ColVal, segCols []rec
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, BlockInteger)
+		b.data = append(b.data, encoding.BlockInteger)
 		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
 		b.data = append(b.data, nilBitMap...)
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		b.data, err = EncodeIntegerBlock(segCol.Val, b.data, b.coder)
+		b.data, err = encoding.EncodeIntegerBlock(segCol.Val, b.data, b.coder)
 		if err != nil {
 			b.log.Error("encode integer value fail", zap.Error(err))
 			return err
@@ -185,13 +186,13 @@ func (b *ColumnBuilder) encFloatColumn(timeCols []record.ColVal, segCols []recor
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, BlockFloat64)
+		b.data = append(b.data, encoding.BlockFloat64)
 		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
 		b.data = append(b.data, nilBitMap...)
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		b.data, err = EncodeFloatBlock(segCol.Val, b.data, b.coder)
+		b.data, err = encoding.EncodeFloatBlock(segCol.Val, b.data, b.coder)
 		if err != nil {
 			b.log.Error("encode float value fail", zap.Error(err))
 			return err
@@ -229,13 +230,13 @@ func (b *ColumnBuilder) encStringColumn(timeCols []record.ColVal, segCols []reco
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, BlockString)
+		b.data = append(b.data, encoding.BlockString)
 		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
 		b.data = append(b.data, nilBitMap...)
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		b.data, err = EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
+		b.data, err = encoding.EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
 		if err != nil {
 			b.log.Error("encode string value fail", zap.Error(err))
 			return err
@@ -272,14 +273,14 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, BlockBoolean)
+		b.data = append(b.data, encoding.BlockBoolean)
 		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
 		b.data = append(b.data, nilBitMap...)
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
 		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
 
-		b.data, err = EncodeBooleanBlock(segCol.Val, b.data, b.coder)
+		b.data, err = encoding.EncodeBooleanBlock(segCol.Val, b.data, b.coder)
 		if err != nil {
 			b.log.Error("encode boolean value fail", zap.Error(err))
 			return err

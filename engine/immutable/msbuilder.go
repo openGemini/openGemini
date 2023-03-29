@@ -72,8 +72,8 @@ type MsBuilder struct {
 	log      *Log.Logger
 }
 
-func GetMsBuilder(dir, name string, lockPath *string, fileName TSSPFileName, conf *Config,
-	sequencer *Sequencer, tier uint64, estimateSize int) *MsBuilder {
+func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
+	tier uint64, sequencer *Sequencer, estimateSize int) *MsBuilder {
 	msBuilder := &MsBuilder{}
 
 	if msBuilder.chunkBuilder == nil {
@@ -117,14 +117,22 @@ func GetMsBuilder(dir, name string, lockPath *string, fileName TSSPFileName, con
 	limit := fileName.level > 0
 	if msBuilder.cacheMetaInMemory() {
 		msBuilder.diskFileWriter = newFileWriter(msBuilder.fd, true, limit, lockPath)
+		n := idCount/DefaultMaxChunkMetaItemCount + 1
+		msBuilder.inMemBlock.ReserveMetaBlock(n)
 	} else {
 		msBuilder.diskFileWriter = newFileWriter(msBuilder.fd, false, limit, lockPath)
+		if msBuilder.cm == nil {
+			msBuilder.cm = &ChunkMeta{}
+		}
 	}
 	msBuilder.keys = make(map[uint64]struct{}, 256)
 	msBuilder.sequencer = sequencer
 	msBuilder.msName = name
 	msBuilder.Files = msBuilder.Files[:0]
 	msBuilder.FileName = fileName
+
+	msBuilder.MaxIds = idCount
+	msBuilder.bf = nil
 
 	return msBuilder
 }
@@ -265,7 +273,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, nextFile func(fn
 			msb.FileName.SetExtend(ext)
 			msb.FileName.SetLevel(lv)
 			n := msb.MaxIds
-			builder := AllocMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, n, msb.FileName, msb.tier, msb.sequencer, recs[i].Len())
+			builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, n, msb.FileName, msb.tier, msb.sequencer, recs[i].Len())
 			builder.Files = append(builder.Files, msb.Files...)
 			builder.WithLog(msb.log)
 			msb = builder
@@ -286,7 +294,7 @@ func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
 
 	dr, err := CreateTSSPFileReader(b.fileSize, b.fd, b.trailer, &b.TableData, b.FileVersion(), tmp, b.lock)
 	if err != nil {
-		b.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
+		b.log.Error("create tssp file reader fail", zap.String("name", dr.Path()), zap.Error(err))
 		return nil, err
 	}
 
@@ -309,7 +317,7 @@ func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
 	}
 
 	///todo for test check, delete after the version is stable
-	validateFileName(b.FileName, dr.FileName(), b.lock)
+	validateFileName(b.FileName, dr.Path(), b.lock)
 	return &tsspFile{
 		name:   b.FileName,
 		reader: dr,
@@ -585,22 +593,6 @@ func (b *MsBuilder) cacheMetaInMemory() bool {
 	}
 
 	return b.Conf.cacheMetaData
-}
-
-func AllocMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
-	tier uint64, sequencer *Sequencer, estimateSize int) *MsBuilder {
-	builder := GetMsBuilder(dir, name, lockPath, fileName, conf, sequencer, tier, estimateSize)
-	builder.MaxIds = idCount
-	if builder.cacheMetaInMemory() {
-		n := idCount/DefaultMaxChunkMetaItemCount + 1
-		builder.inMemBlock.ReserveMetaBlock(n)
-	} else {
-		if builder.cm == nil {
-			builder.cm = &ChunkMeta{}
-		}
-	}
-	builder.bf = nil
-	return builder
 }
 
 func ReleaseMsBuilder(msb *MsBuilder) {
