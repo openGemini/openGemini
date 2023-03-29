@@ -20,7 +20,6 @@ import (
 	"math"
 	"sync/atomic"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"go.uber.org/zap"
 )
 
@@ -70,7 +69,6 @@ type Config struct {
 	fileSizeLimit         int64
 	maxChunkMetaItemSize  int
 	maxChunkMetaItemCount int
-	enableMmapRead        bool
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
@@ -83,7 +81,6 @@ func NewConfig() *Config {
 		maxRowsPerSegment:     MaxRowsPerSegment(),
 		maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
 		maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
-		enableMmapRead:        !config.Is32BitPtr,
 		fileSizeLimit:         atomic.LoadInt64(&maxTSSPFileSize),
 		cacheDataBlock:        atomic.LoadInt32(&cacheDataBlock) > 0,
 		cacheMetaData:         atomic.LoadInt32(&cacheMetaData) > 0,

@@ -39,6 +39,7 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/services/sherlock"
 	stream2 "github.com/openGemini/openGemini/services/stream"
@@ -144,6 +145,9 @@ func (s *Server) Open() error {
 	if err := s.transServer.Open(); err != nil {
 		return err
 	}
+
+	// set index mmap enable or disable before storage start.
+	fs.SetDisableMmap(!s.config.Data.EnableMmapRead)
 
 	startTime := time.Now()
 	storageNodeInfo := metaclient.StorageNodeInfo{

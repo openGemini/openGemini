@@ -28,9 +28,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFsReader_Read(t *testing.T) {
+func TestFsReader_Read_EnableMmap(t *testing.T) {
 	fn := t.TempDir() + "/test_diskreader.data"
 	var buf [4096]byte
+
+	EnableMmapRead(true)
+	defer EnableMmapRead(false)
 
 	fd, err := fileops.OpenFile(fn, os.O_CREATE|os.O_RDWR, 0640)
 	require.NoError(t, err)

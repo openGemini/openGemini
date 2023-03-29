@@ -23,14 +23,13 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable/readcache"
 	"github.com/openGemini/openGemini/lib/bufferpool"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
-var mmapEn = !config.Is32BitPtr
+var mmapEn = false
 var readCacheEn = false
 
 func EnableMmapRead(en bool) {
