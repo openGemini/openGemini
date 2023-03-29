@@ -29,7 +29,7 @@ import (
 
 const (
 	// DefaultPath is default path for storing logs
-	DefaultPath = "/opt/openGemini/logs/"
+	DefaultPath = "/tmp/openGemini/logs/"
 
 	// DefaultLevel is the level of logs will be emitted
 	DefaultLevel = zap.InfoLevel

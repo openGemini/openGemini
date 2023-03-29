@@ -1,19 +1,14 @@
 package fs
 
 import (
-	"flag"
 	"fmt"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/fileops"
 )
 
-var disableMmap = flag.Bool("fs.disableMMap", is32BitPtr, "Whether to use pread() instead of mmap() for reading data files. "+
-	"By default mmap() is used for 64-bit arches and pread() is used for 32-bit arches, since they cannot read data files bigger than 2^32 bytes in memory. "+
-	"mmap() is usually faster for reading small data chunks than pread()")
-
-// Disable mmap for architectures with 32-bit pointers in order to be able to work with files exceeding 2^32 bytes.
-const is32BitPtr = (^uintptr(0) >> 32) == 0
+// Disable mmap by default
+var disableMmap = false
 
 // MustReadAtCloser is rand-access read interface.
 type MustReadAtCloser interface {
@@ -89,7 +84,7 @@ func MustOpenReaderAt(path string) *ReaderAt {
 	}
 	var r ReaderAt
 	r.f = f
-	if !*disableMmap {
+	if !disableMmap {
 		fi, err := f.Stat()
 		if err != nil {
 			MustClose(f)
