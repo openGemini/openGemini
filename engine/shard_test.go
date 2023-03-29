@@ -52,6 +52,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
@@ -3445,6 +3446,10 @@ func (client *MockMetaClient) TruncateShardGroups(t time.Time) error {
 func (client *MockMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error {
 	return nil
 }
+func (client *MockMetaClient) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error {
+	return nil
+}
+
 func (client *MockMetaClient) UpdateUser(name, password string) error {
 	return nil
 }

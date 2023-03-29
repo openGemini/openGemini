@@ -28,6 +28,7 @@ import (
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
 )
@@ -191,6 +192,10 @@ func (m mocShardMapperMetaClient) TruncateShardGroups(t time.Time) error {
 }
 
 func (m mocShardMapperMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta.RetentionPolicyUpdate, makeDefault bool) error {
+	return nil
+}
+
+func (m mocShardMapperMetaClient) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error {
 	return nil
 }
 

@@ -47,10 +47,12 @@ import (
 	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 )
 
 var dbStatCount int
@@ -489,30 +491,114 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if err := meta2.ValidShardKey(stmt.ShardKey); err != nil {
 		return err
 	}
+
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
+	if _, err := e.MetaClient.Measurement(stmt.Database, stmt.RetentionPolicy, stmt.Name); err != meta2.ErrMeasurementNotFound {
+		return meta2.ErrMeasurementExists
+	}
+
+	schema := make(map[string]struct{})
+	for _, tag := range stmt.Tags {
+		if _, ok := schema[tag]; !ok {
+			schema[tag] = struct{}{}
+		} else {
+			return fmt.Errorf("field or tag conflict %s", tag)
+		}
+	}
+
+	for field, _ := range stmt.Fields {
+		if _, ok := schema[field]; !ok {
+			schema[field] = struct{}{}
+		} else {
+			return fmt.Errorf("field or tag conflict %s", field)
+		}
+	}
+
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
-	if len(stmt.IndexList) > 0 {
-		for i, indexType := range stmt.IndexType {
-			oid, err := tsi.GetIndexIdByName(indexType)
+
+	if len(stmt.IndexInfo) > 0 {
+		var textIndexs []*meta2.IndexInfor
+		var fieldIndexs []*meta2.IndexInfor
+		for _, IndexInfo := range stmt.IndexInfo {
+
+			if val, _ := stmt.Fields[IndexInfo.FieldName]; val != influx.Field_Type_String {
+				return fmt.Errorf("text/keyword index only create on string %s", IndexInfo.FieldName)
+			}
+
+			if IndexInfo.IndexType == "keyword" {
+				IndexInfo.IndexType = "field"
+			}
+
+			oid, err := tsi.GetIndexIdByName(IndexInfo.IndexType)
 			if err != nil {
 				return err
 			}
-			if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
-				return fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
+			if _, ok := stmt.Fields[IndexInfo.FieldName]; !ok {
+				return fmt.Errorf("%s index only create on field, but not field: %s", IndexInfo.IndexType, IndexInfo.FieldName)
 			}
-			indexR.Oids = append(indexR.Oids, oid)
+
+			if !meta2.ValidName(IndexInfo.FieldName) {
+				return fmt.Errorf("Invalid FiledName %s", IndexInfo.FieldName)
+			}
+			if !meta2.ValidName(IndexInfo.IndexName) {
+				return fmt.Errorf("Invalid IndexName %s", IndexInfo.IndexName)
+			}
+
+			index := &meta2.IndexInfor{
+				FieldName:  IndexInfo.FieldName,
+				IndexName:  IndexInfo.IndexName,
+				Tokens:     IndexInfo.Tokens,
+				Tokenizers: IndexInfo.Tokenizers,
+			}
+
+			if oid == uint32(tsi.Field) {
+				fieldIndexs = append(fieldIndexs, index)
+			} else if oid == uint32(tsi.Text) {
+				textIndexs = append(textIndexs, index)
+			}
+		}
+		if len(fieldIndexs) > 1 {
+			return fmt.Errorf("cannot create field index for multiple columns: %v", fieldIndexs)
+		}
+		if len(textIndexs) > 0 {
+			indexR.Oids = append(indexR.Oids, uint32(tsi.Text))
+			indexR.IndexList = append(indexR.IndexList, &meta2.IndexList{
+				IList: textIndexs,
+			})
+		}
+		if len(fieldIndexs) > 0 {
+			indexR.Oids = append(indexR.Oids, uint32(tsi.Field))
+			indexR.IndexList = append(indexR.IndexList, &meta2.IndexList{
+				IList: fieldIndexs,
+			})
 		}
 	}
-	indexLists := make([]*meta2.IndexList, len(stmt.IndexList))
-	for i, indexList := range stmt.IndexList {
-		indexLists[i] = &meta2.IndexList{
-			IList: indexList,
+
+	if _, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR); err != nil {
+		return err
+	}
+
+	if len(stmt.Tags)+len(stmt.Fields) > 0 {
+		fieldToCreate := make([]*proto2.FieldSchema, 0, len(stmt.Tags)+len(stmt.Fields))
+		for _, tag := range stmt.Tags {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(tag),
+				FieldType: proto.Int32(influx.Field_Type_Tag),
+			})
+		}
+		for k, v := range stmt.Fields {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(k),
+				FieldType: proto.Int32(v),
+			})
+		}
+		if err := e.MetaClient.UpdateSchema(stmt.Database, stmt.RetentionPolicy, stmt.Name, fieldToCreate); err != nil {
+			return err
 		}
 	}
-	indexR.IndexList = indexLists
-	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR)
-	return err
+
+	return nil
 }
 
 func (e *StatementExecutor) executeAlterShardKeyStatement(stmt *influxql.AlterShardKeyStatement) error {

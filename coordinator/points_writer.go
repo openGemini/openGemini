@@ -1062,10 +1062,10 @@ func IsRetryErrorForPtView(err error) bool {
 		errno.Equal(err, errno.DBPTClosed)
 }
 
-func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16, bool) {
+func selectIndexList(columnToIndex map[string]int, indexList []*meta2.IndexInfor) ([]uint16, bool) {
 	index := make([]uint16, len(indexList))
 	for i, iCol := range indexList {
-		v, exist := columnToIndex[iCol]
+		v, exist := columnToIndex[iCol.FieldName]
 		if !exist {
 			return nil, false
 		}

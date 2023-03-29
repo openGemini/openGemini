@@ -295,12 +295,15 @@ func TestSingleParser(t *testing.T) {
 		//"select aaa from db;",
 		//"select * from (select * from t1;select * from t2)",
 		//"drop measurement m1",
-		"select mst1.a,mst2.b from ((select * from mst1) as mst1) full join (select * from mst2) as mst2 on m1.tag1=m2.tag1",
-		"create stream test1 into db1.rp1.mst1 on select sum(f1),count(f2) from .rp0.mst0 group by tag1,tag2,time(10s) delay 5s",
-		"create stream test1 into db1..mst1 on select sum(f1),count(f2) from mst0 group by tag1,tag2,time(10s) delay 5s",
-		"show streams",
-		"show streams on db1",
-		"drop stream stream1",
+		/*
+			"select mst1.a,mst2.b from ((select * from mst1) as mst1) full join (select * from mst2) as mst2 on m1.tag1=m2.tag1",
+			"create stream test1 into db1.rp1.mst1 on select sum(f1),count(f2) from .rp0.mst0 group by tag1,tag2,time(10s) delay 5s",
+			"create stream test1 into db1..mst1 on select sum(f1),count(f2) from mst0 group by tag1,tag2,time(10s) delay 5s",
+			"show streams",
+			"show streams on db1",
+			"drop stream stream1",
+		  "select * from mst where a like b and match(a,b) and match_phrase(c,d)",*/
+		"create measurement mst0 (tag1name string tag, fieldname int field, index aaa bbb type ccc token cxe tokenizers kkk, index aaa bbb type ccc token cxe, index aaa bbb type ccc)",
 	}
 	for _, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

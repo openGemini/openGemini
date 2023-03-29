@@ -278,7 +278,16 @@ func NewMeasurement(mst string) *meta2.MeasurementInfo {
 		"tk2": influx.Field_Type_Tag,
 	}
 	if enableFieldIndex {
-		ilist := []string{"tk3", "tk1"}
+		var ilist []*meta2.IndexInfor
+		ilist = append(ilist, &meta2.IndexInfor{
+			FieldName: "tk3",
+			IndexName: "index1",
+		})
+		ilist = append(ilist, &meta2.IndexInfor{
+			FieldName: "tk1",
+			IndexName: "index2",
+		})
+
 		msti.IndexRelation = meta2.IndexRelation{
 			IndexList: []*meta2.IndexList{{ilist}},
 			Oids:      []uint32{0},
@@ -521,11 +530,14 @@ func TestPointsWriter_xx(t *testing.T) {
 func TestSelectIndexList(t *testing.T) {
 	size := 1
 	columnToIndex := map[string]int{}
-	indexList := make([]string, size)
+
+	indexList := make([]*meta2.IndexInfor, size)
 	for i := 0; i < size; i++ {
 		key := fmt.Sprintf("name%v", i)
 		columnToIndex[key] = i
-		indexList[i] = key
+		indexList[i] = &meta2.IndexInfor{
+			FieldName: key,
+		}
 	}
 	index, ok := selectIndexList(columnToIndex, indexList)
 	if !assert2.Equal(t, index, []uint16{0}) {
@@ -712,11 +724,14 @@ func Benchmark_selectIndexList(t *testing.B) {
 	t.N = 10
 	columnToIndex := map[string]int{}
 	size := 1
-	indexList := make([]string, size)
+
+	indexList := make([]*meta2.IndexInfor, size)
 	for i := 0; i < size; i++ {
 		key := fmt.Sprintf("name%v", i)
 		columnToIndex[key] = i
-		indexList[i] = key
+		indexList[i] = &meta2.IndexInfor{
+			FieldName: key,
+		}
 	}
 	t.ReportAllocs()
 	t.ResetTimer()
