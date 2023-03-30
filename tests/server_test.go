@@ -10584,17 +10584,95 @@ func TestServer_FullJoin(t *testing.T) {
 		})
 	}
 }
-func TestServer_DuplicateField(t *testing.T) {
+
+func TestServer_Write_Compatible(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
 	defer s.Close()
 
-	nowTime := time.Now().UnixNano()
-
 	test := NewTest("db0", "rp0")
-	test.writes = Writes{
-		&Write{data: fmt.Sprintf("mst,tk1=tv1 f1=0,f1=2 %d\n"+
-			"mst,tk3=tv4 f3=99  %d", nowTime, nowTime)},
+
+	type TestCase struct {
+		name      string
+		writes    []string
+		skip      bool
+		expectErr error
+	}
+
+	var testCases = []TestCase{
+		{
+			name: "duplicated fields",
+			writes: []string{
+				fmt.Sprintf(`mst,tk1=tv1 f1=0,f1=2 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:00:00Z").UnixNano()),
+			},
+			expectErr: nil,
+		},
+		{
+			name: "duplicated time",
+			writes: []string{
+				fmt.Sprintf(`mst,tk1=tv1 f1=3,time=1,f2=2,time=2 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:01:00Z").UnixNano()),
+			},
+			expectErr: nil,
+		},
+		{
+			name: "duplicated field, diffrent type",
+			writes: []string{
+				fmt.Sprintf(`mst,tk1=tv1 f1=4,f1="foo" %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:02:00Z").UnixNano()),
+			},
+			expectErr: fmt.Errorf("conflict field type: f1"),
+		},
+		{
+			name: "duplicated field, diffrent type",
+			writes: []string{
+				fmt.Sprintf(`mst,tk1=tv1 f1="bar",f1=5 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:03:00Z").UnixNano()),
+			},
+			expectErr: fmt.Errorf("conflict field type: f1"),
+		},
+		{
+			name: "duplicated tag",
+			writes: []string{
+				fmt.Sprintf(`mst,tk1=tv1,tk1=tv2 f1=6 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:05:00Z").UnixNano()),
+			},
+			expectErr: fmt.Errorf("duplicate tag tk1"),
+		},
+		{
+			name: "time tag",
+			writes: []string{
+				fmt.Sprintf(`mst,tk1=tv1,time=123 f1=6 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:05:00Z").UnixNano()),
+			},
+			skip:      true,
+			expectErr: fmt.Errorf("not support time tag"),
+		},
+		{
+			name: "normal",
+			writes: []string{
+				fmt.Sprintf(`mst,tk3=tv4 f3=99 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T23:00:00Z").UnixNano()),
+			},
+			expectErr: nil,
+		},
+	}
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.skip {
+				t.Skipf("SKIP:: %s", tt.name)
+			}
+			test.initialized = false
+			test.writes = Writes{
+				&Write{data: strings.Join(tt.writes, "\n")},
+			}
+			err := test.init(s)
+			if tt.expectErr == nil && err == nil {
+				return
+			} else if tt.expectErr != nil && err != nil {
+				if !strings.Contains(err.Error(), tt.expectErr.Error()) {
+					t.Fatal(err)
+				}
+			} else if tt.expectErr == nil && err != nil {
+				t.Fatal(err)
+			} else if tt.expectErr != nil && err == nil {
+				t.Fatal("should be error:", tt.expectErr.Error())
+			}
+		})
 	}
 
 	test.addQueries([]*Query{
@@ -10602,7 +10680,59 @@ func TestServer_DuplicateField(t *testing.T) {
 			name:    "select count(*) from mst",
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select count(*) from mst`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","count_f3"],"values":[["1970-01-01T00:00:00Z",1]]}]}]}`),
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","count_f1","count_f2","count_f3"],"values":[["1970-01-01T00:00:00Z",2,1,1]]}]}]}`),
+		},
+		{
+			name:    "select * from mst",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select * from mst`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","f2","f3","tk1","tk3"],"values":[["2022-06-10T22:00:00Z",2,null,null,"tv1",null],["2022-06-10T22:01:00Z",3,2,null,"tv1",null],["2022-06-10T23:00:00Z",null,null,99,null,"tv4"]]}]}]}`),
+		},
+	}...)
+	_, _ = http.Post(s.URL()+"/debug/ctrl?mod=flush", "", nil)
+	time.Sleep(time.Second / 10)
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_DuplicateField(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := NewTest("db0", "rp0")
+
+	writes := []string{
+		fmt.Sprintf(`mst,tk1=tv1 f1=0,f1=2 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T22:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,tk3=tv4 f3=99 %d`, mustParseTime(time.RFC3339Nano, "2022-06-10T23:00:00Z").UnixNano()),
+	}
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select count(*) from mst",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select count(*) from mst`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","count_f1","count_f3"],"values":[["1970-01-01T00:00:00Z",1,1]]}]}]}`),
+		},
+		{
+			name:    "select * from mst",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select * from mst`,
+			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","f3","tk1","tk3"],"values":[["2022-06-10T22:00:00Z",2,null,"tv1",null],["2022-06-10T23:00:00Z",null,99,null,"tv4"]]}]}]}`),
 		},
 	}...)
 

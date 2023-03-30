@@ -109,7 +109,7 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 					}
 				})
 
-				err = errno.NewError(errno.FieldTypeConflict, field.Key, r.Name, influx.FieldTypeString(field.Type),
+				err = errno.NewError(errno.FieldTypeConflict, field.Key, originName, influx.FieldTypeString(field.Type),
 					influx.FieldTypeString(fieldType)).SetModule(errno.ModuleWrite)
 				dropFieldIndex = append(dropFieldIndex, i)
 			}
