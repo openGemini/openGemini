@@ -2194,9 +2194,9 @@ yydefault:
 //line sql.y:943
 		{
 			yyVAL.expr = &MatchExpr{
-				Field: &VarRef{Val: yyDollar[3].str},
+				Field: &StringLiteral{Val: yyDollar[3].str},
 				Value: &VarRef{Val: yyDollar[5].str},
-				Op:    "match",
+				Op:    MATCH,
 			}
 		}
 	case 138:
@@ -2204,9 +2204,9 @@ yydefault:
 //line sql.y:951
 		{
 			yyVAL.expr = &MatchExpr{
-				Field: &VarRef{Val: yyDollar[3].str},
+				Field: &StringLiteral{Val: yyDollar[3].str},
 				Value: &VarRef{Val: yyDollar[5].str},
-				Op:    "match_phrase",
+				Op:    MATCH_PHRASE,
 			}
 		}
 	case 139:

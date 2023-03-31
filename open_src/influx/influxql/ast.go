@@ -4482,11 +4482,20 @@ func (v *binaryExprNameVisitor) Visit(n Node) Visitor {
 type MatchExpr struct {
 	Field Expr
 	Value Expr
-	Op    string
+	Op    int
 }
 
 func (m *MatchExpr) String() string {
-	return m.Field.String() + m.Op + m.Value.String()
+	s := m.Field.String()
+	if m.Op == MATCH {
+		s += " MATCH "
+	} else if m.Op == MATCH_PHRASE {
+		s += " MATCH_PHRASE "
+	} else {
+		panic(s)
+	}
+	s += m.Value.String()
+	return s
 }
 func (m *MatchExpr) RewriteNameSpace(alias, mst string) {
 
@@ -4590,6 +4599,8 @@ func CloneExpr(expr Expr) Expr {
 		return &VarRef{Val: expr.Val, Type: expr.Type}
 	case *Wildcard:
 		return &Wildcard{Type: expr.Type}
+	case *MatchExpr:
+		return &MatchExpr{Op: expr.Op, Field: expr.Field, Value: expr.Value}
 	}
 	panic("unreachable")
 }
@@ -6716,6 +6727,12 @@ func conditionExpr(cond Expr, valuer Valuer) (Expr, TimeRange, error) {
 		return reduce(&ParenExpr{Expr: expr}, nil), timeRange, nil
 	case *BooleanLiteral:
 		return cond, TimeRange{}, nil
+	case *MatchExpr:
+		return reduce(&MatchExpr{
+			Op:    cond.Op,
+			Field: cond.Field,
+			Value: cond.Value,
+		}, nil), TimeRange{}, nil
 	default:
 		return nil, TimeRange{}, fmt.Errorf("invalid condition expression: %s", cond)
 	}
