@@ -1578,9 +1578,10 @@ func (m *IndexRelation) GetIndexLists() []*IndexList {
 
 type IndexInfor struct {
 	FieldName            *string  `protobuf:"bytes,1,req,name=FieldName" json:"FieldName,omitempty"`
-	Tokens               *string  `protobuf:"bytes,2,req,name=Tokens" json:"Tokens,omitempty"`
-	Tokenizers           *string  `protobuf:"bytes,3,req,name=Tokenizers" json:"Tokenizers,omitempty"`
-	IndexName            *string  `protobuf:"bytes,4,req,name=IndexName" json:"IndexName,omitempty"`
+	IndexName            *string  `protobuf:"bytes,2,req,name=IndexName" json:"IndexName,omitempty"`
+	Type                 *string  `protobuf:"bytes,3,req,name=Type" json:"Type,omitempty"`
+	Tokens               *string  `protobuf:"bytes,4,req,name=Tokens" json:"Tokens,omitempty"`
+	Tokenizers           *string  `protobuf:"bytes,5,req,name=Tokenizers" json:"Tokenizers,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -1618,6 +1619,20 @@ func (m *IndexInfor) GetFieldName() string {
 	return ""
 }
 
+func (m *IndexInfor) GetIndexName() string {
+	if m != nil && m.IndexName != nil {
+		return *m.IndexName
+	}
+	return ""
+}
+
+func (m *IndexInfor) GetType() string {
+	if m != nil && m.Type != nil {
+		return *m.Type
+	}
+	return ""
+}
+
 func (m *IndexInfor) GetTokens() string {
 	if m != nil && m.Tokens != nil {
 		return *m.Tokens
@@ -1628,13 +1643,6 @@ func (m *IndexInfor) GetTokens() string {
 func (m *IndexInfor) GetTokenizers() string {
 	if m != nil && m.Tokenizers != nil {
 		return *m.Tokenizers
-	}
-	return ""
-}
-
-func (m *IndexInfor) GetIndexName() string {
-	if m != nil && m.IndexName != nil {
-		return *m.IndexName
 	}
 	return ""
 }

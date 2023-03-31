@@ -1166,6 +1166,24 @@ func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement
 	return stmt, nil
 }
 
+// parseShowMeasurementStatement parses a string and returns a Statement.
+// This function assumes the "SHOW MEASUREMENT" tokens have already been consumed.
+func (p *Parser) parseShowMeasurementStatement() (*ShowMeasurementStatement, error) {
+	stmt := &ShowMeasurementStatement{}
+	var err error
+	// Parse optional ON clause.
+	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
+		// Parse the database.
+		stmt.Database, err = p.ParseIdent()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		p.Unscan()
+	}
+	return stmt, nil
+}
+
 // parseShowMeasurementsStatement parses a string and returns a Statement.
 // This function assumes the "SHOW MEASUREMENTS" tokens have already been consumed.
 func (p *Parser) parseShowMeasurementsStatement() (*ShowMeasurementsStatement, error) {
@@ -2099,8 +2117,9 @@ func (p *Parser) parseDropRetentionPolicyStatement() (*DropRetentionPolicyStatem
 
 // parseCreateUserStatement parses a string and returns a CreateUserStatement.
 // This function assumes the "CREATE USER" tokens have already been consumed.
-//e.g create user <name> with 'pwd' all PRIVILEGES :create admin user
-//    create user <name> with 'pwd'   :user  must bt granted by admin
+// e.g create user <name> with 'pwd' all PRIVILEGES :create admin user
+//
+//	create user <name> with 'pwd'   :user  must bt granted by admin
 func (p *Parser) parseCreateUserStatement() (*CreateUserStatement, error) {
 	stmt := &CreateUserStatement{}
 

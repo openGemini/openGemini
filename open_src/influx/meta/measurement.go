@@ -232,6 +232,7 @@ type IndexRelation struct {
 type IndexInfor struct {
 	FieldName  string
 	IndexName  string
+	Type       string
 	Tokens     string
 	Tokenizers string
 }
@@ -266,6 +267,7 @@ func (indexR *IndexRelation) unmarshal(pb *proto2.IndexRelation) {
 			indexlist[j] = &IndexInfor{
 				FieldName:  index.GetFieldName(),
 				IndexName:  index.GetIndexName(),
+				Type:       index.GetType(),
 				Tokens:     index.GetTokens(),
 				Tokenizers: index.GetTokenizers()}
 		}
@@ -277,6 +279,7 @@ func (indexinfo *IndexInfor) Marshal() *proto2.IndexInfor {
 	ii := &proto2.IndexInfor{
 		FieldName:  proto.String(indexinfo.FieldName),
 		IndexName:  proto.String(indexinfo.IndexName),
+		Type:       proto.String(indexinfo.Type),
 		Tokens:     proto.String(indexinfo.Tokens),
 		Tokenizers: proto.String(indexinfo.Tokenizers),
 	}
@@ -285,9 +288,10 @@ func (indexinfo *IndexInfor) Marshal() *proto2.IndexInfor {
 
 func (indexinfo *IndexInfor) unmarshal(pb *proto2.IndexInfor) {
 	indexinfo.FieldName = pb.GetFieldName()
+	indexinfo.IndexName = pb.GetIndexName()
+	indexinfo.Type = pb.GetType()
 	indexinfo.Tokens = pb.GetTokens()
 	indexinfo.Tokenizers = pb.GetTokenizers()
-	indexinfo.IndexName = pb.GetIndexName()
 }
 
 func (msti *MeasurementInfo) ContainIndexRelation(ID uint64) bool {

@@ -233,6 +233,9 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		_, err = e.retryExecuteStatement(stmt, ctx)
 		return err
+	case *influxql.ShowMeasurementStatement:
+		_, err = e.retryExecuteStatement(stmt, ctx)
+		return err
 	case *influxql.ShowMeasurementCardinalityStatement:
 		if stmt.Condition != nil {
 			return meta2.ErrUnsupportCommand
@@ -353,6 +356,8 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 			err = e.executeShowSeries(stmt, ctx)
 		case *influxql.ShowMeasurementsStatement:
 			err = e.executeShowMeasurementsStatement(stmt, ctx)
+		case *influxql.ShowMeasurementStatement:
+			err = e.executeShowMeasurementStatement(stmt, ctx)
 		case *influxql.ShowMeasurementCardinalityStatement:
 			rows, err = e.executeShowMeasurementCardinalityStatement(stmt)
 		case *influxql.ShowSeriesCardinalityStatement:
@@ -521,11 +526,11 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		var textIndexs []*meta2.IndexInfor
 		var fieldIndexs []*meta2.IndexInfor
 		for _, IndexInfo := range stmt.IndexInfo {
-
 			if val, _ := stmt.Fields[IndexInfo.FieldName]; val != influx.Field_Type_String {
 				return fmt.Errorf("text/keyword index only create on string %s", IndexInfo.FieldName)
 			}
 
+			indexType := IndexInfo.IndexType
 			if IndexInfo.IndexType == "keyword" {
 				IndexInfo.IndexType = "field"
 			}
@@ -535,7 +540,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 				return err
 			}
 			if _, ok := stmt.Fields[IndexInfo.FieldName]; !ok {
-				return fmt.Errorf("%s index only create on field, but not field: %s", IndexInfo.IndexType, IndexInfo.FieldName)
+				return fmt.Errorf("%s index only create on field, but not field: %s", indexType, IndexInfo.FieldName)
 			}
 
 			if !meta2.ValidName(IndexInfo.FieldName) {
@@ -549,6 +554,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 				FieldName:  IndexInfo.FieldName,
 				IndexName:  IndexInfo.IndexName,
 				Tokens:     IndexInfo.Tokens,
+				Type:       indexType,
 				Tokenizers: IndexInfo.Tokenizers,
 			}
 
@@ -1111,6 +1117,20 @@ func (e *StatementExecutor) executeShowGrantsForUserStatement(q *influxql.ShowGr
 		row.Values = append(row.Values, []interface{}{d, p.String()})
 	}
 	return []*models.Row{row}, nil
+}
+
+func (e *StatementExecutor) executeShowMeasurementStatement(q *influxql.ShowMeasurementStatement, ctx *query2.ExecutionContext) error {
+	if q.Database == "" {
+		return coordinator.ErrDatabaseNameRequired
+	}
+	row, err := e.MetaClient.QueryMeasurement(q.Database, q.Measurement)
+	if err != nil {
+		return err
+	}
+
+	return ctx.Send(&query.Result{
+		Series: row,
+	})
 }
 
 func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMeasurementsStatement, ctx *query2.ExecutionContext) error {
@@ -1709,6 +1729,10 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 				node.Database = defaultDatabase
 			}
 		case *influxql.ShowMeasurementsStatement:
+			if node.Database == "" {
+				node.Database = defaultDatabase
+			}
+		case *influxql.ShowMeasurementStatement:
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}
