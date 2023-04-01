@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-monitor/collector"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/shirou/gopsutil/v3/process"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -92,10 +93,73 @@ func (s *Server) Open() error {
 	//Mark start-up in extra log
 	_, _ = fmt.Fprintf(os.Stdout, "%v ts-monitor starting\n", time.Now())
 
+	if err := s.singletonMonitor(); err != nil {
+		return err
+	}
+
 	go s.collect()
 	go s.nodeMonitor.Start()
 	if s.config.QueryConfig.QueryEnable {
 		go s.queryMetric.Start()
+	}
+	return nil
+}
+
+func (s *Server) singletonMonitor() error {
+	pn, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return err
+	}
+	pName, err := pn.Name()
+	pConfigs, err := pn.CmdlineSlice()
+	if err != nil {
+		return fmt.Errorf("check singletone monitor CmdlineSlice failed err:%s", err.Error())
+	}
+	if len(pConfigs) == 0 {
+		return fmt.Errorf("process should run with config file")
+	}
+	pConfig := pConfigs[len(pConfigs)-1]
+	pUser, err := pn.Username()
+	if err != nil {
+		return fmt.Errorf("check singletone monitor Username failed err:%s", err.Error())
+	}
+	pros, err := process.Processes()
+	if err != nil {
+		return err
+	}
+
+	for _, ps := range pros {
+		if ps.Pid == int32(os.Getpid()) {
+			continue
+		}
+
+		user, err := ps.Username()
+		if err != nil {
+			continue
+		}
+		if user != pUser {
+			continue
+		}
+
+		name, err := ps.Name()
+		if err != nil {
+			continue
+		}
+		if name != pName {
+			continue
+		}
+
+		configs, err := ps.CmdlineSlice()
+		if err != nil {
+			continue
+		}
+		if len(configs) == 0 {
+			continue
+		}
+		cfg := configs[len(configs)-1]
+		if cfg == pConfig {
+			return fmt.Errorf("only one process can be started")
+		}
 	}
 	return nil
 }
