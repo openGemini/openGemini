@@ -174,7 +174,7 @@ openGemini支持三种方式创建measurement数据表
 数据Schemaless写入(样例)
 
 ```
-> insert sensor,farmID=f1,deviceID=d0 sensorID=s20,value=50.98
+> insert sensor,farmID=f1,deviceID=d0 sensorID="s20",value=50.98
 ```
 
 数据查询(样例)
