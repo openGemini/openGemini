@@ -107,7 +107,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
-		        TOKEN TOKENIZERS MATCH LIKE MATCH_PHRASE
+		        TOKEN TOKENIZERS MATCH LIKE MATCH_PHRASE SCHEMA
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -124,7 +124,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %right UMINUS
 
 %type <stmt>                        STATEMENT SHOW_DATABASES_STATEMENT CREATE_DATABASE_STATEMENT WITH_CLAUSES CREATE_USER_STATEMENT
-                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_MEASUREMENT_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
+                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_SCHEMA_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
                                     CREATE_RENTRENTION_POLICY_STATEMENT RP_DURATION_OPTIONS SHOW_SERIES_STATEMENT
                                     SHOW_USERS_STATEMENT DROP_SERIES_STATEMENT DROP_DATABASE_STATEMENT DELETE_SERIES_STATEMENT
                                     ALTER_RENTRENTION_POLICY_STATEMENT
@@ -219,7 +219,7 @@ STATEMENT:
     {
         $$ = $1
     }
-    |SHOW_MEASUREMENT_STATEMENT
+    |SHOW_SCHEMA_STATEMENT
     {
         $$ = $1
     }
@@ -1363,18 +1363,18 @@ CREAT_DATABASE_POLICY:
     }
 
 
-SHOW_MEASUREMENT_STATEMENT:
-    SHOW MEASUREMENT IDENT ON IDENT
+SHOW_SCHEMA_STATEMENT:
+    SHOW SCHEMA ON_DATABASE FROM IDENT
     {
-        sms := &ShowMeasurementStatement{}
-        sms.Database = $5
-        sms.Measurement = $3
+        sms := &ShowSchemaStatement{}
+        sms.Database = $3
+        sms.Measurement = $5
         $$ = sms
     }
-    |SHOW MEASUREMENT IDENT
+    |SHOW SCHEMA FROM IDENT
     {
-        sms := &ShowMeasurementStatement{}
-        sms.Measurement = $3
+        sms := &ShowSchemaStatement{}
+        sms.Measurement = $4
         $$ = sms
     }
 

@@ -316,7 +316,7 @@ type ExecuteStatementMessage struct {
 
 const (
 	ShowMeasurementsStatement           = "ShowMeasurementsStatement"
-	ShowMeasurementStatement            = "ShowMeasurementStatement"
+	ShowSchemaStatement                 = "ShowSchemaStatement"
 	ShowTagKeysStatement                = "ShowTagKeysStatement"
 	ShowTagValuesStatement              = "ShowTagValuesStatement"
 	ShowSeriesCardinalityStatement      = "ShowSeriesCardinalityStatement"

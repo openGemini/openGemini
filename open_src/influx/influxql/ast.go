@@ -297,7 +297,7 @@ func (*ShowFieldKeysStatement) node()              {}
 func (*ShowRetentionPoliciesStatement) node()      {}
 func (*ShowMeasurementCardinalityStatement) node() {}
 func (*ShowMeasurementsStatement) node()           {}
-func (*ShowMeasurementStatement) node()            {}
+func (*ShowSchemaStatement) node()                 {}
 func (*ShowQueriesStatement) node()                {}
 func (*ShowSeriesStatement) node()                 {}
 func (*ShowSeriesCardinalityStatement) node()      {}
@@ -432,7 +432,7 @@ func (*ShowFieldKeyCardinalityStatement) stmt()    {}
 func (*ShowFieldKeysStatement) stmt()              {}
 func (*ShowMeasurementCardinalityStatement) stmt() {}
 func (*ShowMeasurementsStatement) stmt()           {}
-func (*ShowMeasurementStatement) stmt()            {}
+func (*ShowSchemaStatement) stmt()                 {}
 func (*ShowQueriesStatement) stmt()                {}
 func (*ShowRetentionPoliciesStatement) stmt()      {}
 func (*ShowSeriesStatement) stmt()                 {}
@@ -3193,15 +3193,15 @@ func (s *ShowMeasurementCardinalityStatement) DefaultDatabase() string {
 	return s.Database
 }
 
-// ShowMeasurementStatement represents a command for listing measurements.
-type ShowMeasurementStatement struct {
+// ShowSchemaStatement represents a command for listing measurements.
+type ShowSchemaStatement struct {
 	// Database to query. If blank, use the default database.
 	Database string
 	//Measurement name
 	Measurement string
 }
 
-func (s *ShowMeasurementStatement) String() string {
+func (s *ShowSchemaStatement) String() string {
 	var buf bytes.Buffer
 	_, _ = buf.WriteString("SHOW MEASUREMENT ")
 	_, _ = buf.WriteString(s.Measurement)
@@ -3212,12 +3212,12 @@ func (s *ShowMeasurementStatement) String() string {
 	return buf.String()
 }
 
-func (s *ShowMeasurementStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+func (s *ShowSchemaStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 	return ExecutionPrivileges{{Admin: false, Name: s.Database, Rwuser: true, Privilege: ReadPrivilege}}, nil
 }
 
 // DefaultDatabase returns the default database from the statement.
-func (s *ShowMeasurementStatement) DefaultDatabase() string {
+func (s *ShowSchemaStatement) DefaultDatabase() string {
 	return s.Database
 }
 

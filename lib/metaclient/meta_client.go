@@ -2713,7 +2713,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 
 		if measurement, ok := rp.Measurements[nameWithVer]; ok {
 			row := &models.Row{
-				Name:    "Col Info",
+				Name:    "Column Information",
 				Columns: []string{"ColName", "Type", "Tag/Filed"}}
 			for name, t := range measurement.Schema {
 				if t == influx.Field_Type_Tag {
@@ -2727,7 +2727,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 			rows = append(rows, row)
 
 			shardrow := &models.Row{
-				Name:    "Shard Info",
+				Name:    "ShardKey Information",
 				Columns: []string{"ShardType", "ShardKey", "ShardGroup"}}
 			for _, shard := range measurement.ShardKeys {
 				shardrow.Values = append(shardrow.Values, []interface{}{shard.Type, strings.Join(shard.ShardKey, ","), shard.ShardGroup})
@@ -2737,7 +2737,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 
 			if len(measurement.IndexRelation.Oids) > 0 {
 				indexes := &models.Row{
-					Name:    "Index Info",
+					Name:    "Indexes Information",
 					Columns: []string{"IndexName", "Type", "ColName", "Token", "Tokenizers"}}
 				for i, _ := range measurement.IndexRelation.Oids {
 					for _, indexInfo := range measurement.IndexRelation.IndexList[i].IList {

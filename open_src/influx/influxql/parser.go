@@ -1168,8 +1168,8 @@ func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement
 
 // parseShowMeasurementStatement parses a string and returns a Statement.
 // This function assumes the "SHOW MEASUREMENT" tokens have already been consumed.
-func (p *Parser) parseShowMeasurementStatement() (*ShowMeasurementStatement, error) {
-	stmt := &ShowMeasurementStatement{}
+func (p *Parser) parseShowMeasurementStatement() (*ShowSchemaStatement, error) {
+	stmt := &ShowSchemaStatement{}
 	var err error
 	// Parse optional ON clause.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {

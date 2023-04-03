@@ -233,7 +233,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		_, err = e.retryExecuteStatement(stmt, ctx)
 		return err
-	case *influxql.ShowMeasurementStatement:
+	case *influxql.ShowSchemaStatement:
 		_, err = e.retryExecuteStatement(stmt, ctx)
 		return err
 	case *influxql.ShowMeasurementCardinalityStatement:
@@ -356,8 +356,8 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 			err = e.executeShowSeries(stmt, ctx)
 		case *influxql.ShowMeasurementsStatement:
 			err = e.executeShowMeasurementsStatement(stmt, ctx)
-		case *influxql.ShowMeasurementStatement:
-			err = e.executeShowMeasurementStatement(stmt, ctx)
+		case *influxql.ShowSchemaStatement:
+			err = e.executeShowSchameStatement(stmt, ctx)
 		case *influxql.ShowMeasurementCardinalityStatement:
 			rows, err = e.executeShowMeasurementCardinalityStatement(stmt)
 		case *influxql.ShowSeriesCardinalityStatement:
@@ -1119,7 +1119,7 @@ func (e *StatementExecutor) executeShowGrantsForUserStatement(q *influxql.ShowGr
 	return []*models.Row{row}, nil
 }
 
-func (e *StatementExecutor) executeShowMeasurementStatement(q *influxql.ShowMeasurementStatement, ctx *query2.ExecutionContext) error {
+func (e *StatementExecutor) executeShowSchameStatement(q *influxql.ShowSchemaStatement, ctx *query2.ExecutionContext) error {
 	if q.Database == "" {
 		return coordinator.ErrDatabaseNameRequired
 	}
@@ -1732,7 +1732,7 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}
-		case *influxql.ShowMeasurementStatement:
+		case *influxql.ShowSchemaStatement:
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}

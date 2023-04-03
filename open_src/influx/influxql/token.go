@@ -260,6 +260,7 @@ var tokens = [...]string{
 	KILL:           "KILL",
 	LIMIT:          "LIMIT",
 	MEASUREMENT:    "MEASUREMENT",
+	SCHEMA:         "SCHEMA",
 	MEASUREMENTS:   "MEASUREMENTS",
 	NAME:           "NAME",
 	OFFSET:         "OFFSET",
