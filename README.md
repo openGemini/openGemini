@@ -166,7 +166,7 @@ The openGemini supports three ways for creating a measurement.
 Write data
 
 ```
-insert sensor,farmID=f1,deviceID=d0 sensorID=s20,value=50.98
+insert sensor,farmID=f1,deviceID=d0 sensorID="s20",value=50.98
 ```
 
 Query data
