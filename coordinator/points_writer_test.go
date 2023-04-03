@@ -28,7 +28,6 @@ import (
 	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -364,7 +363,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 		}
 
 		for i, r := range rows {
-			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.Name, fs)
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
 
 			if errors[i] == "" {
 				assert.NoError(t, err)
@@ -468,7 +467,7 @@ func generateRows(num int, rows []influx.Row) []influx.Row {
 	return rows[:num]
 }
 
-func TestCheckFields(t *testing.T) {
+func TestCheckFields_Conflict(t *testing.T) {
 	fields := influx.Fields{
 		{
 			Key:  "foo",
@@ -492,20 +491,36 @@ func TestCheckFields(t *testing.T) {
 		},
 	}
 
-	_, err := fixFields(fields)
-	assert.EqualError(t, err, errno.NewError(errno.DuplicateField, "foo").Error())
+	fields, err := fixFields(fields)
+	assert.EqualError(t, err, "conflict field type: foo")
+	assert.Empty(t, nil, fields)
+}
 
-	fields[0].Key = "foo2"
-	fields, err = fixFields(fields)
+func TestCheckFields_Ignore(t *testing.T) {
+	fields := influx.Fields{
+		{
+			Key:      "foo",
+			Type:     influx.Field_Type_Float,
+			NumValue: 1,
+		},
+		{
+			Key:      "foo",
+			Type:     influx.Field_Type_Float,
+			NumValue: 2,
+		},
+		{
+			Key:  "zing",
+			Type: influx.Field_Type_String,
+		},
+	}
+
+	fields, err := fixFields(fields)
 	assert.NoError(t, err)
 	assert.Equal(t, influx.Fields{
 		{
-			Key:  "foo2",
-			Type: influx.Field_Type_Float,
-		},
-		{
-			Key:  "foo",
-			Type: influx.Field_Type_Int,
+			Key:      "foo",
+			Type:     influx.Field_Type_Float,
+			NumValue: 2,
 		},
 		{
 			Key:  "zing",
@@ -659,8 +674,8 @@ func TestPointsWriter_TimeRangeLimit(t *testing.T) {
 	assert.EqualError(t, err, exp)
 }
 
-func TestPointsWriter_WritePointRows_DuplicateFields(t *testing.T) {
-	streamDistribution = sameShard
+func TestPointsWriter_WritePointRows_DuplicateFields_TypeConflict(t *testing.T) {
+	streamDistribution = diffDis
 	pw := NewPointsWriter(time.Second * 10)
 	pw.MetaClient = NewMockMetaClient()
 	pw.TSDBStore = NewMockNetStore()
@@ -668,25 +683,29 @@ func TestPointsWriter_WritePointRows_DuplicateFields(t *testing.T) {
 	rows := []influx.Row{
 		{
 			Name: "mst_0000",
+			Tags: []influx.Tag{
+				{
+					Key:   "t1",
+					Value: "v1",
+				},
+			},
 			Fields: influx.Fields{
 				{
-					Key:  "foo",
-					Type: influx.Field_Type_Float,
+					Key:      "foo",
+					Type:     influx.Field_Type_Float,
+					NumValue: 1,
 				},
 				{
-					Key:  "foo",
-					Type: influx.Field_Type_String,
+					Key:      "foo",
+					Type:     influx.Field_Type_String,
+					StrValue: "str",
 				},
 			},
 			Timestamp: time.Now().UnixNano(),
 		},
 	}
 	err := pw.writePointRows("db0", "rp0", rows)
-	werr, ok := err.(netstorage.PartialWriteError)
-	if !ok {
-		t.Fatal(err)
-	}
-	require.EqualError(t, werr, "partial write: duplicate field: foo dropped=1")
+	require.EqualError(t, err, "partial write: conflict field type: foo dropped=1")
 }
 
 func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
@@ -702,12 +721,14 @@ func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
 			Name: "mst_0000",
 			Fields: influx.Fields{
 				{
-					Key:  "foo",
-					Type: influx.Field_Type_Float,
+					Key:      "foo",
+					Type:     influx.Field_Type_Float,
+					NumValue: 1,
 				},
 				{
-					Key:  "foo",
-					Type: influx.Field_Type_String,
+					Key:      "foo",
+					Type:     influx.Field_Type_Float,
+					NumValue: 2,
 				},
 			},
 			Timestamp: time.Now().UnixNano(),
@@ -724,11 +745,7 @@ func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
 		},
 	}
 	err := pw.writePointRows("db0", "rp0", rows)
-	werr, ok := err.(netstorage.PartialWriteError)
-	if !ok {
-		t.Fatal(err)
-	}
-	require.EqualError(t, werr, "partial write: duplicate field: foo dropped=1")
+	require.NoError(t, err)
 }
 
 func TestColumnToIndexUpdate(t *testing.T) {
