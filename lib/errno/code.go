@@ -223,7 +223,7 @@ const (
 
 	ErrUnmarshalPoints         = 5010
 	ErrWriteReadonly           = 5011
-	DuplicateField             = 5012
+	ParseFieldTypeConflict     = 5012
 	WritePointOutOfRP          = 5013
 	WritePointShardKeyTooLarge = 5014
 	EngineClosed               = 5015

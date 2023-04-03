@@ -42,7 +42,6 @@ import (
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -403,28 +402,21 @@ func dropFieldByIndex(r *influx.Row, dropFieldIndex []int) {
 
 // fixFields checks and fixes fields: ignore specified time fields
 func fixFields(fields influx.Fields) (influx.Fields, error) {
-	var lastIdx = -1
-	var timeLen = 0
 	for i := 0; i < len(fields); i++ {
 		if fields[i].Key == "time" {
-			lastIdx = i
-			timeLen++
+			fields = append(fields[:i], fields[i+1:]...) // remove the i index item for time field
+			i--                                          // fix the i index
 			continue
 		}
 		if i > 0 && fields[i-1].Key == fields[i].Key {
-			failpoint.Inject("skip-duplicate-field-check", func(val failpoint.Value) {
-				if strings2.EqualInterface(val, fields[i].Key) {
-					failpoint.Continue()
-				}
-			})
-
-			return nil, errno.NewError(errno.DuplicateField, fields[i].Key)
+			if fields[i-1].Type != fields[i].Type {
+				// same field key, diffrent field type
+				return nil, errno.NewError(errno.ParseFieldTypeConflict, fields[i].Key)
+			}
+			fields = append(fields[:i-1], fields[i:]...) // remove the i-1 index item
+			i--                                          // fix the i index
+			continue
 		}
-	}
-
-	if timeLen > 0 {
-		startIdx := lastIdx - timeLen + 1
-		fields = append(fields[0:startIdx], fields[startIdx+timeLen:]...)
 	}
 	return fields, nil
 }
@@ -586,7 +578,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			dropped++
 			continue
 		}
-		sort.Sort(r.Fields)
+		sort.Stable(r.Fields)
 
 		if r.Fields, pErr = fixFields(r.Fields); pErr != nil {
 			partialErr = pErr

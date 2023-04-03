@@ -8,7 +8,7 @@ import (
 )
 
 // Disable mmap by default
-var disableMmap = false
+var disableMmap = true
 
 // MustReadAtCloser is rand-access read interface.
 type MustReadAtCloser interface {
