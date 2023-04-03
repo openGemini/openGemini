@@ -90,7 +90,7 @@ func TestNodeTimeOut(t *testing.T) {
 	cfg.ConnPoolSize = 4
 	spdy.SetDefaultConfiguration(cfg)
 	timeOut := spdy.TCPDialTimeout()
-	spdy.SetTCPDialTimeout(0)
+	spdy.SetTCPDialTimeout(-1)
 	defer spdy.SetTCPDialTimeout(timeOut)
 	node.pools[0] = nil
 
