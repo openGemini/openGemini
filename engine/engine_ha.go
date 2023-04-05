@@ -80,14 +80,14 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	}
 	defer e.clearDbPtMigrating(db, ptId)
 	log.Info("prepare load pt start", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
-	dbPt, err := e.getPartition(db, ptId, false)
+	_, err := e.getPartition(db, ptId, false)
 	if err == nil {
 		return nil
 	}
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := ""
-	dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
+	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
 	dbPt.SetOption(e.engOpt)
 	dbPt.unload = make(chan struct{})
 	dbPt.preload = true
@@ -141,7 +141,6 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := path.Join(ptPath, "LOCK")
 	dbPt, err := e.getPartition(db, ptId, false)
-	start = time.Now()
 	if err != nil {
 		if errno.Equal(err, errno.DBPTClosed) {
 			return err

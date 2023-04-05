@@ -430,7 +430,6 @@ func (p *LogicalAggregate) init() {
 		var ref influxql.VarRef
 		if p.isPercentileOGSketch && c.Name == PercentileOGSketch {
 			c = p.getOGSketchOp(k, level, cc)
-			k = c.String()
 			ref = p.schema.Mapping()[c]
 		} else {
 			ref = p.schema.Mapping()[p.schema.Calls()[k]]
@@ -2658,13 +2657,9 @@ func (p *LogicalTSSPScan) Children() []hybridqp.QueryNode {
 	return nil
 }
 
-func (p *LogicalTSSPScan) ReplaceChildren(children []hybridqp.QueryNode) {
-	return
-}
+func (p *LogicalTSSPScan) ReplaceChildren(children []hybridqp.QueryNode) {}
 
-func (p *LogicalTSSPScan) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
-	return
-}
+func (p *LogicalTSSPScan) ReplaceChild(ordinal int, child hybridqp.QueryNode) {}
 
 func (p *LogicalTSSPScan) ExplainIterms(writer LogicalPlanWriter) {
 	explainIterms(writer, p.id, p.mstName, p.dimensions)
@@ -2764,13 +2759,9 @@ func (p *LogicalWriteIntoStorage) Clone() hybridqp.QueryNode {
 	return clone
 }
 
-func (p *LogicalWriteIntoStorage) ReplaceChildren(children []hybridqp.QueryNode) {
-	return
-}
+func (p *LogicalWriteIntoStorage) ReplaceChildren(children []hybridqp.QueryNode) {}
 
-func (p *LogicalWriteIntoStorage) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
-	return
-}
+func (p *LogicalWriteIntoStorage) ReplaceChild(ordinal int, child hybridqp.QueryNode) {}
 
 func (p *LogicalWriteIntoStorage) ExplainIterms(writer LogicalPlanWriter) {
 	explainIterms(writer, p.id, p.mstName, p.dimensions)

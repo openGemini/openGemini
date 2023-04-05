@@ -289,7 +289,7 @@ func (c *GetStreamInfoCallback) Handle(data interface{}) error {
 	}
 	msg, ok := metaMsg.Data().(*message.GetStreamInfoResponse)
 	if !ok {
-		return errors.New(fmt.Sprintf("data is not a GetStreamInfoResponse, type %T", metaMsg.Data()))
+		return fmt.Errorf("data is not a GetStreamInfoResponse, type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)
@@ -311,7 +311,7 @@ func (c *GetMeasurementInfoCallback) Handle(data interface{}) error {
 	}
 	msg, ok := metaMsg.Data().(*message.GetMeasurementInfoResponse)
 	if !ok {
-		return errors.New(fmt.Sprintf("data is not a GetMeasurementInfoResponse, type %T", metaMsg.Data()))
+		return fmt.Errorf("data is not a GetMeasurementInfoResponse, type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)

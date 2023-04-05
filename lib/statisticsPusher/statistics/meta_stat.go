@@ -119,9 +119,8 @@ func (c *MetaStatCollector) Stop() {
 type MetadataStatistics struct {
 	enable bool
 
-	mu        sync.RWMutex
-	metadata  []*MetadataMetrics
-	bufPoints []byte
+	mu       sync.RWMutex
+	metadata []*MetadataMetrics
 
 	log *logger.Logger
 }

@@ -80,7 +80,7 @@ func (rle *RLE) Encoding(in []byte, out []byte) ([]byte, error) {
 			continue
 		}
 
-		if 0 == values[i-1] {
+		if values[i-1] == 0 {
 			in = in[int(n)*rle.step:]
 			n |= 1 << 15
 			out = append(out, uint8(n>>8), uint8(n&0xff))

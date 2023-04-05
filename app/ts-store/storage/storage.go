@@ -39,7 +39,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/castor"
@@ -68,11 +67,11 @@ type StoreEngine interface {
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr) (map[string]uint64, error)
 	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) error
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
-	PreOffload(*meta2.DbPtInfo) error
-	RollbackPreOffload(*meta2.DbPtInfo) error
-	PreAssign(uint64, *meta2.DbPtInfo) error
-	Offload(*meta2.DbPtInfo) error
-	Assign(uint64, *meta2.DbPtInfo) error
+	PreOffload(*meta.DbPtInfo) error
+	RollbackPreOffload(*meta.DbPtInfo) error
+	PreAssign(uint64, *meta.DbPtInfo) error
+	Offload(*meta.DbPtInfo) error
+	Assign(uint64, *meta.DbPtInfo) error
 }
 
 type Storage struct {
@@ -304,7 +303,6 @@ func (s *Storage) ReportLoad() {
 					rCtxes = append(rCtxes, rCtx)
 					s.log.Info("get load from dbPT", zap.String("load", rCtx.String()))
 				default:
-					break
 				}
 			}
 
@@ -404,23 +402,23 @@ func (s *Storage) GetEngine() netstorage.Engine {
 	return s.engine
 }
 
-func (s *Storage) PreOffload(ptInfo *meta2.DbPtInfo) error {
+func (s *Storage) PreOffload(ptInfo *meta.DbPtInfo) error {
 	return s.engine.PreOffload(ptInfo.Db, ptInfo.Pti.PtId)
 }
 
-func (s *Storage) RollbackPreOffload(ptInfo *meta2.DbPtInfo) error {
+func (s *Storage) RollbackPreOffload(ptInfo *meta.DbPtInfo) error {
 	return s.engine.RollbackPreOffload(ptInfo.Db, ptInfo.Pti.PtId)
 }
 
-func (s *Storage) PreAssign(opId uint64, ptInfo *meta2.DbPtInfo) error {
+func (s *Storage) PreAssign(opId uint64, ptInfo *meta.DbPtInfo) error {
 	return s.engine.PreAssign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Shards, s.metaClient)
 }
 
-func (s *Storage) Offload(ptInfo *meta2.DbPtInfo) error {
+func (s *Storage) Offload(ptInfo *meta.DbPtInfo) error {
 	return s.engine.Offload(ptInfo.Db, ptInfo.Pti.PtId)
 }
 
-func (s *Storage) Assign(opId uint64, ptInfo *meta2.DbPtInfo) error {
+func (s *Storage) Assign(opId uint64, ptInfo *meta.DbPtInfo) error {
 	return s.engine.Assign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Pti.Ver, ptInfo.Shards, s.metaClient)
 }
 

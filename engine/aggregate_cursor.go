@@ -197,10 +197,8 @@ func (c *aggregateCursor) SinkPlan(plan hybridqp.QueryNode) {
 	var outSchema record.Schemas
 	outRowDataType := plan.RowDataType()
 	ops := plan.RowExprOptions()
-	opsCopy := make([]hybridqp.ExprOptions, 0, len(ops))
-	for i := range ops {
-		opsCopy = append(opsCopy, ops[i])
-	}
+	opsCopy := make([]hybridqp.ExprOptions, len(ops))
+	copy(opsCopy, ops)
 
 	inSchema := c.input.GetSchema()
 	tagRef := make(map[influxql.VarRef]bool)

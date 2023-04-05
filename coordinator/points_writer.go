@@ -620,7 +620,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		updateIndexOptions(r, ctx.ms.GetIndexRelation())
 
 		start = time.Now()
-		err, pErr, sh = w.updateShardGroupAndShardKey(database, retentionPolicy, r, ctx, false, nil, 0, false)
+		err, sh, pErr = w.updateShardGroupAndShardKey(database, retentionPolicy, r, ctx, false, nil, 0, false)
 		if err != nil {
 			return nil, dropped, err
 		}
@@ -671,7 +671,7 @@ func (w *PointsWriter) updateSrcStreamDstShardIdMapWithShardKey(
 	srcStreamDstShardIdMap := ctx.getSrcStreamDstShardIdMap()
 	for _, r := range *rs {
 		var pErr error
-		err, pErr, sh := w.updateShardGroupAndShardKey(si.DesMst.Database, si.DesMst.RetentionPolicy, r, ctx, true, nil, idx, true)
+		err, sh, pErr := w.updateShardGroupAndShardKey(si.DesMst.Database, si.DesMst.RetentionPolicy, r, ctx, true, nil, idx, true)
 		if err != nil {
 			return err
 		}
@@ -787,7 +787,7 @@ func buildTagsFields(info *meta2.StreamInfo, srcSchema map[string]int32) ([]stri
 
 func (w *PointsWriter) updateShardGroupAndShardKey(
 	database, retentionPolicy string, r *influx.Row, ctx *injestionCtx, stream bool, dims []string, index int, reuseShardKey bool,
-) (err error, partialErr error, sh *meta2.ShardInfo) {
+) (err error, sh *meta2.ShardInfo, partialErr error) {
 	var wh *writeHelper
 	var di *meta2.DatabaseInfo
 	var si **meta2.ShardKeyInfo

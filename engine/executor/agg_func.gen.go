@@ -1850,7 +1850,7 @@ func FloatIrateFinalReduce(ft int64, st int64, fv float64, sv float64,
 
 func FloatIrateUpdate(prevPoints, currPoints [2]*FloatPoint) {
 	samePrevPoint := (!prevPoints[0].isNil && !prevPoints[1].isNil) &&
-		(prevPoints[0].time == prevPoints[1].time && prevPoints[1].value == prevPoints[1].value)
+		(prevPoints[0].time == prevPoints[1].time && prevPoints[0].value == prevPoints[1].value)
 	for i := range currPoints {
 		if currPoints[i].isNil || currPoints[i].time < prevPoints[0].time ||
 			(currPoints[i].time == prevPoints[0].time && currPoints[i].value < prevPoints[0].value) {
@@ -1986,7 +1986,7 @@ func IntegerIrateFinalReduce(ft int64, st int64, fv int64, sv int64,
 
 func IntegerIrateUpdate(prevPoints, currPoints [2]*IntegerPoint) {
 	samePrevPoint := (!prevPoints[0].isNil && !prevPoints[1].isNil) &&
-		(prevPoints[0].time == prevPoints[1].time && prevPoints[1].value == prevPoints[1].value)
+		(prevPoints[0].time == prevPoints[1].time && prevPoints[0].value == prevPoints[1].value)
 	for i := range currPoints {
 		if currPoints[i].isNil || currPoints[i].time < prevPoints[0].time ||
 			(currPoints[i].time == prevPoints[0].time && currPoints[i].value < prevPoints[0].value) {

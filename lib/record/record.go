@@ -504,7 +504,6 @@ func (rec *Record) CopyImpl(srcRec *Record, setSchema, reserveColVal bool) {
 		}
 		return
 	}
-	return
 }
 
 func (rec *Record) Clone() *Record {
