@@ -171,7 +171,6 @@ func (a *Analyzer) findLongestTokens(tokens []string) (VToken, int) {
 }
 
 func (a *Analyzer) InsertToDictionary(tokens string) {
-	fmt.Printf("load dictionary:%s\n", tokens)
 	ts := strings.Split(tokens, " ")
 	a.insertToDic(ts)
 }

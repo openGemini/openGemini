@@ -19,6 +19,7 @@ package clv
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -556,7 +557,22 @@ func (idx *TokenIndex) Match(queryStr string) (*InvertIndex, error) {
 	return pre, nil
 }
 
-func (idx *TokenIndex) Match_Phrase(queryStr string) (*InvertIndex, error) {
+func queryStrToPattern(queryStr string) string {
+	sb := strings.Builder{}
+	for i := 0; i < len(queryStr); i++ {
+		if queryStr[i] == '?' {
+			sb.WriteString(".{1}")
+		} else if queryStr[i] == '*' {
+			sb.WriteString(".*")
+		} else {
+			sb.WriteByte(queryStr[i])
+		}
+	}
+
+	return sb.String()
+}
+
+func (idx *TokenIndex) MatchPhrase(queryStr string) (*InvertIndex, error) {
 	ts := idx.getTokenSearch()
 	defer idx.putTokenSearch(ts)
 
@@ -593,13 +609,56 @@ func (idx *TokenIndex) Match_Phrase(queryStr string) (*InvertIndex, error) {
 	return pre, nil
 }
 
+func (idx *TokenIndex) Fuzzy(queryStr string) (*InvertIndex, error) {
+	ts := idx.getTokenSearch()
+	defer idx.putTokenSearch(ts)
+
+	regex, err := regexp.Compile(queryStrToPattern(queryStr))
+	if err != nil {
+		return nil, err
+	}
+
+	index := strings.IndexFunc(queryStr, func(r rune) bool {
+		return r == '*' || r == '?'
+	})
+
+	queryStr = queryStr[0:index]
+
+	terms := ts.searchTermsIndex(queryStr, regex.Match)
+	c := make([]*InvertIndex, len(terms))
+	var wg sync.WaitGroup
+	wg.Add(len(terms))
+	for i, term := range terms {
+		go func(t string, i int) {
+			invertIndex, err := idx.Match(t)
+			if err == nil {
+				c[i] = invertIndex
+			}
+
+			wg.Done()
+		}(term, i)
+	}
+
+	wg.Wait()
+	var invert *InvertIndex
+	for _, invertIndex := range c {
+		invert = UnionInvertIndex(invertIndex, invert)
+	}
+
+	invert.Sort()
+	return invert, nil
+}
+
 // if not found any matched text, need return a empty InvertIndex, not nil InvertIndex.
 func (idx *TokenIndex) Search(t QueryType, queryStr string) (*InvertIndex, error) {
 	if t == Match {
 		return idx.Match(queryStr)
 	} else if t == Match_Phrase {
-		return idx.Match_Phrase(queryStr)
+		return idx.MatchPhrase(queryStr)
+	} else if t == Fuzzy {
+		return idx.Fuzzy(queryStr)
 	}
+
 	return nil, fmt.Errorf("cannot find the query type:%d", t)
 }
 

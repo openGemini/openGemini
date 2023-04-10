@@ -82,3 +82,34 @@ func (ts *tokenSearch) searchInvertIndexByPrefixVtoken(vtoken string, invert *In
 		unmarshal(tbs.Item, invert)
 	}
 }
+
+func (ts *tokenSearch) searchTermsIndex(term string, filter ...func(b []byte) bool) []string {
+	var fn func(b []byte) bool
+	if len(filter) == 1 {
+		fn = filter[0]
+	} else if len(filter) > 1 {
+		panic("only one apply function is supported")
+	}
+
+	tbs := &ts.tbs
+	kb := &ts.kb
+
+	kb.B = append(kb.B[:0], txPrefixTerm)
+	kb.B = append(kb.B, []byte(term)...)
+	var terms []string
+	tbs.Seek(kb.B)
+	for tbs.NextItem() {
+		if !bytes.HasPrefix(tbs.Item, kb.B) {
+			break
+		}
+
+		t := tbs.Item[1:] // remove prefix
+		if fn != nil && !fn(t) {
+			continue
+		}
+
+		terms = append(terms, string(t))
+	}
+
+	return terms
+}

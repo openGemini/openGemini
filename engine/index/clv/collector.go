@@ -149,12 +149,10 @@ func (d *collector) prune(th int) {
 func (d *collector) genItemsFromCollectTree(node *collectNode, tokensCount int, vtoken []byte, dicItems *dicItems) {
 	if len(node.children) == 0 {
 		if tokensCount <= 1 { // only one token, no need to save.
-			fmt.Printf("Not save items:%s\n", string(vtoken))
 			return
 		}
 		dicItems.items = append(dicItems.items, vtoken)
 		// fot test
-		fmt.Printf("dictonary:%s\n", string(vtoken))
 		return
 	}
 

@@ -172,6 +172,8 @@ func (idx *TextIndex) SearchByTokenIndex(name string, n *influxql.BinaryExpr) (*
 		return tokenIndex.Search(clv.Match, value.Val)
 	case influxql.MATCH_PHRASE:
 		return tokenIndex.Search(clv.Match_Phrase, value.Val)
+	case influxql.LIKE:
+		return tokenIndex.Search(clv.Fuzzy, value.Val)
 	default:
 	}
 	return nil, nil
@@ -201,7 +203,7 @@ func (idx *TextIndex) SearchTextIndex(name string, expr influxql.Expr) (*clv.Inv
 				return clv.UnionInvertIndex(li, ri), nil
 			}
 
-		case influxql.MATCH, influxql.MATCH_PHRASE:
+		case influxql.MATCH, influxql.MATCH_PHRASE, influxql.LIKE:
 			return idx.SearchByTokenIndex(name, expr)
 		default:
 			return nil, nil
@@ -219,11 +221,9 @@ func copyTagSetInfo(tagset *TagSetInfo, group *TagSetInfo, filterTime []int64, i
 	tagset.SeriesKeys = append(tagset.SeriesKeys, group.SeriesKeys[i])
 	tagset.TagsVec = append(tagset.TagsVec, group.TagsVec[i])
 	tagset.FilterTimes = append(tagset.FilterTimes, filterTime)
-	// how to deal this?
 	tagset.key = group.key
 }
 
-// something wrong about the relation of primary index and secondary index, eg.. where host="1.1.1.1" or/and match("masseage", "error")... or/and is different.
 func (idx *TextIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (GroupSeries, error) {
 	groupSeries, ok := groups.(GroupSeries)
 	if !ok {
