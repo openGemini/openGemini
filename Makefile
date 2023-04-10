@@ -12,24 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-GOPATH ?= $(shell go env GOPATH)
-export PATH := $(PATH):$(GOPATH)/bin
+include Makefile.common
 
-GO          := GO111MODULE=on go
-GOTEST      := $(GO) test
-PYTHON      := python
-
-FAILPOINT_ENABLE  := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl enable
-FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl disable
-
-PACKAGE_LIST_OPEN_GEMINI_TESTS  := go list ./... | grep -vE "tests|open_src\/github.com\/hashicorp"
-PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
-
-COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go"
-COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
-COPYRIGHT_HEADER  := "Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd."
-
-.PHONY: go-build style-check gotest integration-test buildsucc
+.PHONY: go-build style-check gotest integration-test buildsucc static-check
 
 default: gotest
 
@@ -40,9 +25,6 @@ go-build:
 
 buildsucc:
 	@echo Build openGemini successfully!
-
-install-goimports-reviser:
-	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.1.0
 
 licence-check:
 	@echo "run licence check"
@@ -60,6 +42,8 @@ licence-check:
 		exit 0; \
 	fi
 
+go-version-check:
+	bash ./scripts/ci/go_version_check.sh
 
 style-check: install-goimports-reviser
 	@echo "run style check for import pkg order"
@@ -78,19 +62,25 @@ style-check: install-goimports-reviser
 			exit 1; \
 		fi
 
-install-failpoint:
-	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl
+go-vet-check:
+	bash ./scripts/ci/go_vet.sh
 
-failpoint-enable:
-	@$(FAILPOINT_ENABLE)
+static-check: install-staticcheck
+	bash ./scripts/ci/static_check.sh
 
-failpoint-disable:
-	@$(FAILPOINT_DISABLE)
+golangci-lint-check: install-golangci-lint
+	bash ./scripts/ci/golangci_lint_check.sh
 
 gotest: install-failpoint failpoint-enable
 	@echo "running gotest begin."
 	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
 	@$(FAILPOINT_DISABLE)
+
+build-check:
+	@$(PYTHON) build.py --clean --platform darwin --arch amd64
+	@$(PYTHON) build.py --clean --platform darwin --arch arm64
+	@$(PYTHON) build.py --clean --platform linux --arch amd64
+	@$(PYTHON) build.py --clean --platform linux --arch arm64
 
 integration-test:
 	@echo "running integration test begin."

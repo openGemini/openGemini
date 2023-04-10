@@ -221,7 +221,7 @@ func (ww *WritePointsWork) decodePoints() (db string, rp string, ptId uint32, sh
 	if len(streamShardIdList) > 0 {
 		// set stream vars into the rows
 		if len(ww.rows) != len(ww.streamVars) {
-			errStr := fmt.Sprintf("unmarshal rows failed, the num of the rows is not equal to the stream vars")
+			errStr := "unmarshal rows failed, the num of the rows is not equal to the stream vars"
 			ww.logger.Error(errStr, zap.String("db", db),
 				zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
 			err = errors.New(errStr)

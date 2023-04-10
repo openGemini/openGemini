@@ -73,12 +73,7 @@ func (d *DataBlock) Exchange(reqBuf *[]byte, rows *[]influx.Row, tagPool *[]infl
 	d.LastResetTime, *lastResetTime = *lastResetTime, d.LastResetTime
 }
 
-type DataBlockPool struct {
-	pool  sync.Pool
-	cache chan *DataBlock
-}
-
-//DataBlock in pool can be gc, so use sync.Pool
+// DataBlock in pool can be gc, so use sync.Pool
 var dataBlockPool sync.Pool
 
 func StreamDataBlockGet() *DataBlock {

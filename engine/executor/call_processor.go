@@ -113,6 +113,9 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 				}
 				percentile /= 100
 				routine, err = NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, opt, name, clusterNum, percentile)
+				if err != nil {
+					return nil, err
+				}
 				coProcessor.AppendRoutine(routine)
 				if name == "ogsketch_insert" || name == "ogsketch_merge" {
 					proRes.isCompositeCall = true
@@ -241,7 +244,7 @@ func getClusterNum(call *influxql.Call, name string) (int, error) {
 		return 0, errors.New("the value of clusterNum must be a positive integer")
 	}
 	if clusterNum > MaxClusterNum {
-		return 0, errors.New(fmt.Sprintf("clusterNum is too large. It should not be greater than %d", MaxClusterNum))
+		return 0, fmt.Errorf("clusterNum is too large. It should not be greater than %d", MaxClusterNum)
 	}
 	return clusterNum, nil
 }
@@ -257,7 +260,7 @@ func getPercentile(call *influxql.Call, name string) (float64, error) {
 		return 0, errno.NewError(errno.UnsupportedDataType, fmt.Sprintf("first argument of %s", name), arg.String())
 	}
 	if percentile < 0 || percentile > 100 {
-		return 0, errors.New(fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
+		return 0, fmt.Errorf("invalid percentile, the value range must be 0 to 100")
 	}
 	return percentile, nil
 }
@@ -580,7 +583,7 @@ func NewPercentileRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType
 		panic("the type of input args of percentile iterator is unsupported")
 	}
 	if percentile < 0 || percentile > 100 {
-		return nil, errors.New(fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
+		return nil, fmt.Errorf("invalid percentile, the value range must be 0 to 100")
 	}
 	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
 	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)

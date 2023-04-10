@@ -40,16 +40,15 @@ const (
 )
 
 type StreamWriteFile struct {
-	closed        chan struct{}
-	version       uint64
-	chunkRows     int64
-	maxChunkRows  int64
-	chunkSegments int
-	maxN          int
-	fileSize      int64
-	preCmOff      int64
-	dir           string
-	name          string // measurement name with version
+	closed       chan struct{}
+	version      uint64
+	chunkRows    int64
+	maxChunkRows int64
+	maxN         int
+	fileSize     int64
+	preCmOff     int64
+	dir          string
+	name         string // measurement name with version
 	TableData
 	mIndex MetaIndex
 	keys   map[uint64]struct{}
@@ -62,7 +61,6 @@ type StreamWriteFile struct {
 	fd         fileops.File
 	writer     FileWriter
 	pair       IdTimePairs
-	sequencer  *Sequencer
 	dstMeta    ChunkMeta
 	fileName   TSSPFileName
 
@@ -226,7 +224,6 @@ func (c *StreamWriteFile) ChangeSid(sid uint64) {
 	}
 	dOff := c.writer.DataSize()
 	c.Init(sid, dOff, c.schema)
-	return
 }
 
 func (c *StreamWriteFile) AppendColumn(ref record.Field) error {

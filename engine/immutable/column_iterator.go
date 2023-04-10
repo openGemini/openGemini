@@ -23,7 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 )
 
-var closedError = errors.New("column iterator closed")
+var errClosed = errors.New("column iterator closed")
 
 type ColumnIteratorPerformer interface {
 	Handle(col *record.ColVal, times []int64, lastSeg bool) error
@@ -35,9 +35,8 @@ type ColumnIteratorPerformer interface {
 type segWalkHandler func(col *record.ColVal, lastSeg bool) error
 
 type ColumnIterator struct {
-	fi  *FileIterator
-	ctx *ReadContext
-	sr  *SegmentReader
+	fi *FileIterator
+	sr *SegmentReader
 
 	col   *record.ColVal
 	times []int64
@@ -95,7 +94,7 @@ func (itr *ColumnIterator) Run(p ColumnIteratorPerformer) error {
 
 	for {
 		if itr.isClosed() {
-			return closedError
+			return errClosed
 		}
 
 		if !itr.NextChunkMeta() {
@@ -133,7 +132,7 @@ func (itr *ColumnIterator) walkColumn(p ColumnIteratorPerformer) error {
 
 	for {
 		if itr.isClosed() {
-			return closedError
+			return errClosed
 		}
 
 		ref, ok := itr.NextColumn(colIdx)
@@ -160,7 +159,7 @@ func (itr *ColumnIterator) walkSegment(ref *record.Field, colIdx int, handle seg
 
 	for {
 		if itr.isClosed() {
-			return closedError
+			return errClosed
 		}
 
 		col, err := itr.read(colIdx, segIdx, ref)

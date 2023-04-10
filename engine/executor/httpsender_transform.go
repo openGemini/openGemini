@@ -247,8 +247,8 @@ func (r *RowChunk) RowsGen(c Chunk) []*Row {
 		for i, col := range c.Columns() {
 			length := len(seriesValues[i])
 			seriesValues[i] = seriesValues[i][:length+end-start]
-			colVals := seriesValues[i][length:][:0] // reference this memory
-			colVals = GetColValsFn[col.DataType()](col, start, end, c.Len(), colVals)
+			// seriesValues[i][length:][:0] : reference this memory
+			seriesValues[i] = GetColValsFn[col.DataType()](col, start, end, c.Len(), seriesValues[i][length:][:0])
 		}
 		r.Series[index].time = c.Time()[start:end]
 		r.Series[index].values = seriesValues

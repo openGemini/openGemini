@@ -151,49 +151,47 @@ func (s *Sherlock) startDumpLoop() {
 	ticker := time.NewTicker(s.opts.MonitorInterval)
 	defer ticker.Stop()
 	for {
-		select {
-		case <-ticker.C:
-			if atomic.LoadInt64(&s.closed) == 1 {
-				s.opts.logger.Info("[Sherlock] dump loop stopped")
-				return
-			}
-
-			cpuCore := cpu.GetCpuNum()
-			if cpuCore == 0 {
-				s.opts.logger.Error("[Sherlock] get CPU core failed", zap.Int("core", cpuCore))
-				return
-			}
-
-			memoryLimit, err := s.getMemoryLimit()
-			if memoryLimit == 0 || err != nil {
-				s.opts.logger.Error("[Sherlock] get memory limit failed", zap.Uint64("memory", memoryLimit), zap.Error(err))
-				return
-			}
-
-			cpuN, memN, gNum, err := s.collectFn(cpuCore, memoryLimit)
-			if err != nil {
-				s.opts.logger.Error("[Sherlock] failed to collect metrics usage", zap.Error(err))
-				continue
-			}
-
-			s.cpuStats.push(cpuN)
-			s.memStats.push(memN)
-			s.grtStats.push(gNum)
-
-			s.collectCount++
-			if s.collectCount < minMetricsBeforeDump {
-				continue
-			}
-
-			if err = s.enableDump(cpuN); err != nil {
-				s.opts.logger.Info("[Sherlock] unable to dump", zap.Error(err))
-				continue
-			}
-
-			s.memCheckAndDump(memN)
-			s.cpuCheckAndDump(cpuN)
-			s.goroutineCheckAndDump(gNum)
+		<-ticker.C
+		if atomic.LoadInt64(&s.closed) == 1 {
+			s.opts.logger.Info("[Sherlock] dump loop stopped")
+			return
 		}
+
+		cpuCore := cpu.GetCpuNum()
+		if cpuCore == 0 {
+			s.opts.logger.Error("[Sherlock] get CPU core failed", zap.Int("core", cpuCore))
+			return
+		}
+
+		memoryLimit, err := s.getMemoryLimit()
+		if memoryLimit == 0 || err != nil {
+			s.opts.logger.Error("[Sherlock] get memory limit failed", zap.Uint64("memory", memoryLimit), zap.Error(err))
+			return
+		}
+
+		cpuN, memN, gNum, err := s.collectFn(cpuCore, memoryLimit)
+		if err != nil {
+			s.opts.logger.Error("[Sherlock] failed to collect metrics usage", zap.Error(err))
+			continue
+		}
+
+		s.cpuStats.push(cpuN)
+		s.memStats.push(memN)
+		s.grtStats.push(gNum)
+
+		s.collectCount++
+		if s.collectCount < minMetricsBeforeDump {
+			continue
+		}
+
+		if err = s.enableDump(cpuN); err != nil {
+			s.opts.logger.Info("[Sherlock] unable to dump", zap.Error(err))
+			continue
+		}
+
+		s.memCheckAndDump(memN)
+		s.cpuCheckAndDump(cpuN)
+		s.goroutineCheckAndDump(gNum)
 	}
 }
 
@@ -348,7 +346,6 @@ func (s *Sherlock) writeProfileDataToFile(data bytes.Buffer, dumpType configureT
 		return
 	}
 	s.opts.logger.Info("[Sherlock] profile write to file successfully", zap.String("type", check2name[dumpType]), zap.String("filename", filename))
-	return
 }
 
 func (s *Sherlock) getMemoryLimit() (uint64, error) {

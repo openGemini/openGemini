@@ -244,7 +244,7 @@ func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprO
 	return r
 }
 
-//nolint
+// nolint
 func (r *ChunkReader) initPreAggCallForAux() {
 	var callCount, refCount, colIdx int
 	preAggSlice := make([]*influxql.Call, 0, 1)
@@ -270,10 +270,10 @@ func (r *ChunkReader) initPreAggCallForAux() {
 	}
 }
 
-//nolint
+// nolint
 func (r *ChunkReader) buildFieldIndex(querySchema *executor.QuerySchema, dtype hybridqp.RowDataType, ops []hybridqp.ExprOptions, seriesPlan hybridqp.QueryNode) {
 	var schema record.Schemas
-	r.auxTag, schema = NewRecordSchema(querySchema, r.auxTag[:0], schema, nil)
+	r.auxTag, _ = NewRecordSchema(querySchema, r.auxTag[:0], schema, nil)
 	r.dimTag = append(r.dimTag, querySchema.Options().(*query.ProcessorOptions).Dimensions...)
 	if len(r.cursor) == 0 {
 		return
@@ -522,7 +522,7 @@ func (r *ChunkReader) selectPreAgg(
 	return times
 }
 
-//nolint
+// nolint
 func (r *ChunkReader) selectNoPreAgg(rec *record.Record, column executor.Column, times []int64, i int) []int64 {
 	recIndex := r.fieldItemIndex[i].index
 	recColumn := rec.Column(recIndex)
@@ -531,7 +531,7 @@ func (r *ChunkReader) selectNoPreAgg(rec *record.Record, column executor.Column,
 		if rec.RecMeta != nil && len(rec.RecMeta.Times) > 0 {
 			columnTimes = rec.RecMeta.Times[recIndex]
 		}
-		transFun, _ := transColAuxFun[column.DataType()]
+		transFun := transColAuxFun[column.DataType()]
 		transFun(recColumn, column)
 		if recColumn.NilCount == recColumn.Length() {
 			column.AppendManyNil(len(times))
@@ -569,7 +569,7 @@ func (r *ChunkReader) isPreAggSameAsAuxField(i int) (bool, string, int) {
 	return r.pa.fieldVal == r.ops[i].Expr.(*influxql.VarRef).Val, r.pa.callName, r.pa.colIdx
 }
 
-//nolint
+// nolint
 func (r *ChunkReader) transToChunkByPreAgg(rec *record.Record, info comm.SeriesInfoIntf, chunk executor.Chunk) error {
 	if len(r.auxTag) > 0 || len(r.dimTag) > 0 {
 		r.tags = info.GetSeriesTags()

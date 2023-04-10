@@ -406,10 +406,6 @@ func (r *ChunkMetaByFieldIters) next() (*record.Record, uint64, *record.TimeRang
 	}
 }
 
-func (r *ChunkMetaByFieldIters) hasRemain() bool {
-	return r.pos < len(r.chunkMetas)
-}
-
 func (r *ChunkMetaByFieldIters) addPos() {
 	r.pos += 1
 	r.currentChunkMetaIter.reInit(r.chunkMetas[r.pos])
@@ -502,7 +498,6 @@ type WriteIntoStorageTransform struct {
 	maxRowCount         int
 	rowCount            int
 	currFieldName       string
-	fileName            string
 	currStreamWriteFile *immutable.StreamWriteFile
 	m                   *immutable.MmsTables
 	currFile            immutable.TSSPFile
@@ -518,11 +513,7 @@ type WriteIntoStorageTransform struct {
 	currRecord   *record.Record
 	closed       chan struct{}
 	conf         *immutable.Config
-	inputSpan    *tracing.Span
-	span         *tracing.Span
 	log          *logger.Logger
-	logEnd       func()
-	transSpan    *tracing.Span
 	addPrefix    bool
 }
 
@@ -562,20 +553,6 @@ func (r *WriteIntoStorageTransform) Create(plan executor.LogicalPlan, opt query.
 
 	p := NewWriteIntoStorageTransform(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, opt.Sources, plan.Schema().(*executor.QuerySchema), immutable.NewConfig(), lr.GetMmsTables(), true)
 	return p, nil
-}
-
-func (r *WriteIntoStorageTransform) initSpan() {
-	r.inputSpan = r.StartSpan("transform_input", false)
-	r.span = r.StartSpan("write_into_storage", false)
-}
-
-func (r *WriteIntoStorageTransform) isClosed() {
-	for {
-		select {
-		case <-r.closed:
-			return
-		}
-	}
 }
 
 func (r *WriteIntoStorageTransform) Work(ctx context.Context) error {
@@ -846,14 +823,11 @@ func (r *WriteIntoStorageTransform) Explain() []executor.ValuePair {
 
 type FileSequenceAggregator struct {
 	executor.BaseProcessor
-	ops           []hybridqp.ExprOptions
 	schema        hybridqp.Catalog
 	Input         *executor.SeriesRecordPort
 	Output        *executor.SeriesRecordPort
-	breakFunction func() bool
 	timeOrdinal   int
 	init          bool
-	initRecMeta   bool
 	multiCall     bool
 	inNextWin     bool
 	initColMeta   bool
@@ -1052,15 +1026,6 @@ func (r *FileSequenceAggregator) SendRecord(re *record.Record) {
 	AppendRecWithNilRows(r.outRecord, re, r.schema.Options(), start, end, r.shardTr.Min, r.appendTail)
 	r.tr.Min = r.outRecord.Time(r.outRecord.RowNums() - 1)
 	r.Output.State <- executor.NewSeriesRecord(r.outRecord, sid, file, newSeq, nil, nil)
-}
-
-func (r *FileSequenceAggregator) unreadRecordForSplit(inRecord *executor.SeriesRecord) (uint64, immutable.TSSPFile) {
-	sid := r.currSid
-	file := r.file
-	r.currSid = inRecord.GetSid()
-	r.file = inRecord.GetTsspFile()
-	r.newSeq = inRecord.GetSeq()
-	return sid, file
 }
 
 func (r *FileSequenceAggregator) AggregateSameSchema() error {

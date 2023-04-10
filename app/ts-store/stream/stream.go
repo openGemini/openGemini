@@ -101,7 +101,6 @@ type Stream struct {
 	rowPool         *CacheRowPool
 	bp              *BuilderPool
 	windowCachePool *WindowCachePool
-	dataBlockPool   *pool.DataBlockPool
 	goPool          *ants.Pool
 
 	//key stream task id
@@ -138,7 +137,7 @@ func (s *Stream) Run() {
 		case <-ticker.C:
 			streams := s.cli.GetStreamInfosStore()
 			if streams == nil {
-				s.Logger.Info(fmt.Sprintf("get stream is nil"))
+				s.Logger.Info("get stream is nil")
 				continue
 			}
 			s.Logger.Info(fmt.Sprintf("get stream len %v", len(streams)))

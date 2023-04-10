@@ -232,7 +232,7 @@ func (c *CommandLine) executeInsert(stmt *geminiql.InsertStatement) error {
 func (c *CommandLine) executeUse(stmt *geminiql.UseStatement) error {
 	c.database = stmt.DB
 	if stmt.RP == "" {
-		c.retentionPolicy = "autogen"
+		c.retentionPolicy = ""
 	} else {
 		c.retentionPolicy = stmt.RP
 	}

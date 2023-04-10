@@ -955,7 +955,6 @@ func (s *Store) getSnapshot(role mclient.Role) []byte {
 	default:
 		panic("not exist role")
 	}
-	return nil
 }
 
 func (s *Store) getSnapshotBySql() []byte {
@@ -1579,7 +1578,7 @@ func (s *Store) getDbPtNumPerAliveNode() *map[uint64]uint32 {
 			aliveNodes[dataNode.ID] = struct{}{}
 		}
 	}
-	for db, _ := range s.data.PtView {
+	for db := range s.data.PtView {
 		for _, ptInfo := range s.data.PtView[db] {
 			if _, ok := aliveNodes[ptInfo.Owner.NodeID]; ok {
 				nodePtNumMap[ptInfo.Owner.NodeID]++

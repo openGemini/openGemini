@@ -62,12 +62,9 @@ func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema map[string]int32
 	tagDimKeys, fieldIndexKeys := buildTagsFields(info, srcSchema)
 	w.tagDimKeys = make([]string, len(tagDimKeys))
 	w.fieldIndexKeys = make([]string, len(fieldIndexKeys))
-	for i := range tagDimKeys {
-		w.tagDimKeys[i] = tagDimKeys[i]
-	}
-	for i := range fieldIndexKeys {
-		w.fieldIndexKeys[i] = fieldIndexKeys[i]
-	}
+
+	copy(w.tagDimKeys, tagDimKeys)
+	copy(w.fieldIndexKeys, fieldIndexKeys)
 	return w, nil
 }
 
@@ -226,7 +223,7 @@ func (s *Stream) calculate(
 
 	task, ok := s.tasks[si.Name]
 	if !ok {
-		return errors.New(fmt.Sprintf("%s have no task", si.Name))
+		return fmt.Errorf("%s have no task", si.Name)
 	}
 
 	err := ctx.checkDBRP(si.DesMst.Database, si.DesMst.RetentionPolicy, s)
@@ -263,17 +260,11 @@ func (s *Stream) calculateWindow(rows []*influx.Row, si *meta2.StreamInfo, task 
 		et = et - 1
 		v, ok := ctx.dataCache[groupKey]
 		if !ok {
-			v = make(map[int64][]*float64)
-			vs, ok := v[et]
-			if !ok {
-				vs = make([]*float64, len(task.calls))
-				v[et] = vs
-			}
-			ctx.dataCache[groupKey] = v
-		}
-		if vs, ok := v[et]; !ok {
-			vs = make([]*float64, len(task.calls))
-			v[et] = vs
+			ctx.dataCache[groupKey] = make(map[int64][]*float64)
+			v = ctx.dataCache[groupKey]
+			ctx.dataCache[groupKey][et] = make([]*float64, len(task.calls))
+		} else if _, ok := v[et]; !ok {
+			v[et] = make([]*float64, len(task.calls))
 		}
 		for i := range task.calls {
 			id, ok := r.ColumnToIndex[task.calls[i].name]
@@ -284,8 +275,7 @@ func (s *Stream) calculateWindow(rows []*influx.Row, si *meta2.StreamInfo, task 
 			fv := r.Fields[id-r.Tags.Len()]
 			if fv.Type == influx.Field_Type_String {
 				// the computation of string type is not supported
-				errStr := fmt.Sprintf("the %s string type is not supported for stream task %s", fv.Key, si.Name)
-				return errors.New(errStr)
+				return fmt.Errorf("the %s string type is not supported for stream task %s", fv.Key, si.Name)
 			}
 			curVal := fv.NumValue
 			if task.calls[i].call == "count" {
@@ -389,7 +379,7 @@ func (s *Stream) mapRowsToShard(
 			r.Name = mstName
 			r.Timestamp = t
 			r.StreamOnly = true
-			err, pErr, sh := s.updateShardGroupAndShardKey(si.DesMst.Database, si.DesMst.RetentionPolicy, r, ctx, si.Dims)
+			err, sh, pErr := s.updateShardGroupAndShardKey(si.DesMst.Database, si.DesMst.RetentionPolicy, r, ctx, si.Dims)
 			if err != nil {
 				return err
 			}
@@ -415,7 +405,7 @@ func (s *Stream) mapRowsToShard(
 }
 
 func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r *influx.Row, ctx *streamCtx,
-	dims []string) (err error, partialErr error, sh *meta2.ShardInfo) {
+	dims []string) (err error, sh *meta2.ShardInfo, partialErr error) {
 	var wh *writeHelper
 	var di *meta2.DatabaseInfo
 	var shardKeyInfo **meta2.ShardKeyInfo
@@ -522,9 +512,9 @@ func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.R
 				builder.WriteString(value.Fields[j].Key)
 				builder.WriteString("-")
 			}
-			err = errors.New(fmt.Sprintf("the group key is incomplite, r.TagKey-r.FieldKey: %s,", builder.String()))
+			err = fmt.Errorf("the group key is incomplite, r.TagKey-r.FieldKey: %s", builder.String())
 		} else {
-			err = errors.New(fmt.Sprintf("the group key is incomplite, r.TagKey: %s,", builder.String()))
+			err = fmt.Errorf("the group key is incomplite, r.TagKey: %s", builder.String())
 		}
 		return "", err
 	}
@@ -552,7 +542,7 @@ func BuildFieldCall(info *meta2.StreamInfo, srcSchema map[string]int32, destSche
 		case "count":
 			calls[i].callFunc = atomic2.AddFloat64
 		default:
-			return nil, errors.New(fmt.Sprintf("not support stream func %v", calls[i].call))
+			return nil, fmt.Errorf("not support stream func %v", calls[i].call)
 		}
 	}
 	return calls, nil

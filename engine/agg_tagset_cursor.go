@@ -405,7 +405,7 @@ func (s *fileLoopCursor) initMemitrs() {
 }
 
 /*
-	Init out of order and memtable in mergeRecIters which key is sid.
+Init out of order and memtable in mergeRecIters which key is sid.
 */
 func (s *fileLoopCursor) initMergeIters() error {
 	s.initMemitrs()
@@ -523,14 +523,12 @@ func (s *fileLoopCursor) initOutOfOrderItersByRecord(data *DataBlockInfo, limitR
 }
 
 type baseAggCursorInfo struct {
-	ascending     bool
-	minTime       int64
-	maxTime       int64
-	intervalTime  int64
-	recordBuf     *record.Record
-	fileInfo      *comm.FileInfo
-	cacheRecord   *record.Record
-	cacheFileInfo *comm.FileInfo
+	ascending    bool
+	minTime      int64
+	maxTime      int64
+	intervalTime int64
+	recordBuf    *record.Record
+	fileInfo     *comm.FileInfo
 }
 
 type baseCursorInfo struct {

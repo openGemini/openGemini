@@ -33,11 +33,11 @@ func TestUint32Array(t *testing.T) {
 	s := p.Get(16)
 	assert.Equal(t, 16, len(s))
 
-	p.Put(s)
+	p.Put(&s)
 	s = p.Get(32)
 	assert.Equal(t, 32, len(s))
 
-	p.Put(s)
+	p.Put(&s)
 	s = p.Get(16)
 	assert.Equal(t, 16, len(s))
 

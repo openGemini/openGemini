@@ -451,7 +451,6 @@ func (idx *fieldIndex) extractField(expr influxql.Expr, fieldKey string) []byte 
 	default:
 		return nil
 	}
-	return nil
 }
 
 func (idx *fieldIndex) Delete(primaryIndex PrimaryIndex, name []byte, condition influxql.Expr, tr TimeRange) error {

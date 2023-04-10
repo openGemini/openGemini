@@ -43,21 +43,21 @@ func NewUint32Array() *Uint32Array {
 func (u *Uint32Array) Get(size int) []uint32 {
 	atomic.AddInt64(&u.total, 1)
 
-	v, ok := u.pool.Get().([]uint32)
+	v, ok := u.pool.Get().(*[]uint32)
 	if !ok || v == nil {
 		return make([]uint32, size)
 	}
 
-	if cap(v) < size {
+	if cap(*v) < size {
 		u.pool.Put(v)
 		return make([]uint32, size)
 	}
 
 	atomic.AddInt64(&u.hit, 1)
-	return v[:size]
+	return (*v)[:size]
 }
 
-func (u *Uint32Array) Put(v []uint32) {
+func (u *Uint32Array) Put(v *[]uint32) {
 	u.pool.Put(v)
 }
 

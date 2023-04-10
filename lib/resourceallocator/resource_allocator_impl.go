@@ -23,7 +23,7 @@ import (
 
 type ResourceType int64
 
-var ResTypeNotFound = errors.New("resource type not found")
+var ErrResTypeNotFound = errors.New("resource type not found")
 
 const (
 	ChunkReaderRes ResourceType = iota
@@ -57,14 +57,14 @@ func InitResAllocator(threshold, minAllocNum, minShardsAllocNum, funcType int64,
 	case SeriesParallelismRes:
 		resourceArr[SeriesParallelismRes] = NewSeriesParallelismAllocator(maxWaitTime, threshold)
 	default:
-		return ResTypeNotFound
+		return ErrResTypeNotFound
 	}
 	return nil
 }
 
 func AllocRes(resourceType ResourceType, num int64) (int64, int64, error) {
 	if resourceType >= Bottom {
-		return 0, 0, ResTypeNotFound
+		return 0, 0, ErrResTypeNotFound
 	}
 	r := resourceArr[resourceType]
 	return r.Alloc(num)
@@ -72,7 +72,7 @@ func AllocRes(resourceType ResourceType, num int64) (int64, int64, error) {
 
 func FreeRes(resourceType ResourceType, num, totalNum int64) error {
 	if resourceType >= Bottom {
-		return ResTypeNotFound
+		return ErrResTypeNotFound
 	}
 	r := resourceArr[resourceType]
 	r.Free(num, totalNum)

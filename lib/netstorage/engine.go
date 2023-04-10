@@ -25,7 +25,6 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -103,9 +102,9 @@ type Engine interface {
 
 	PreOffload(db string, ptId uint32) error
 	RollbackPreOffload(db string, ptId uint32) error
-	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta2.ShardDurationInfo, client metaclient.MetaClient) error
+	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, client metaclient.MetaClient) error
 	Offload(db string, ptId uint32) error
-	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, client metaclient.MetaClient) error
+	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, client metaclient.MetaClient) error
 
 	SysCtrl(req *SysCtrlRequest) error
 	Statistics(buffer []byte) ([]byte, error)
@@ -120,6 +119,6 @@ type Engine interface {
 	StartDownSampleTask(info *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {
 		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 	}) error
-	UpdateDownSampleInfo(policies *meta2.DownSamplePoliciesInfoWithDbRp)
-	UpdateShardDownSampleInfo(infos *meta2.ShardDownSampleUpdateInfos)
+	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
+	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
 }

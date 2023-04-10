@@ -90,7 +90,7 @@ func (p *ChunkPort) Connect(to Port) {
 }
 
 func (p *ChunkPort) ConnectNoneCache(to Port) {
-	p.State = make(chan Chunk, 0)
+	p.State = make(chan Chunk)
 	to.(*ChunkPort).State = p.State
 }
 
@@ -132,7 +132,7 @@ func (p *ChunkPort) Release() {}
 
 func Connect(from Port, to Port) error {
 	if !from.Equal(to) {
-		return fmt.Errorf("Can't connect different ports(%v and %v)", from, to)
+		return fmt.Errorf("can't connect different ports(%v and %v)", from, to)
 	}
 
 	from.Connect(to)
@@ -405,7 +405,7 @@ func (p *DownSampleStatePort) Connect(to Port) {
 
 func (p *DownSampleStatePort) ConnectStateReserve(to Port) {
 	if p.State == nil {
-		p.State = make(chan *DownSampleState, 0)
+		p.State = make(chan *DownSampleState)
 	}
 	to.(*DownSampleStatePort).State = p.State
 }

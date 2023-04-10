@@ -67,22 +67,13 @@ func NewBlockChunkPool(chunkNum int, chunkBuilder *ChunkBuilder) *BlockChunkPool
 }
 
 func (cp *BlockChunkPool) Get() Chunk {
-	for {
-		select {
-		case c := <-cp.pool:
-			return c
-		}
-	}
+	c := <-cp.pool
+	return c
 }
 
 func (cp *BlockChunkPool) Put(c Chunk) {
 	c.Reset()
-	for {
-		select {
-		case cp.pool <- c:
-			return
-		}
-	}
+	cp.pool <- c
 }
 
 func (cp *BlockChunkPool) Release() {

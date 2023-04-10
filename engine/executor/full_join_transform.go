@@ -126,7 +126,7 @@ func NewFullJoinTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType 
 		opt:            schema.opt.(*query.ProcessorOptions),
 		fulljoinLogger: logger.NewLogger(errno.ModuleQueryEngine),
 	}
-	for i, _ := range inRowDataTypes {
+	for i := range inRowDataTypes {
 		trans.inputs = append(trans.inputs, NewChunkPort(inRowDataTypes[i]))
 		trans.nextChunks = append(trans.nextChunks, make(chan Semaphore))
 		trans.lock = append(trans.lock, sync.Mutex{})
@@ -183,12 +183,12 @@ func (trans *FullJoinTransform) initInputChunksFiledMap() {
 	for i, field := range outFileds {
 		val := field.Expr.String()
 		for j, lfield := range leftFields {
-			if lfield.Expr.String() == val && trans.fieldMap[i] == false {
+			if lfield.Expr.String() == val && !trans.fieldMap[i] {
 				trans.outFiledMap = append(trans.outFiledMap, j)
 			}
 		}
 		for j, rfield := range rightFileds {
-			if rfield.Expr.String() == val && trans.fieldMap[i] == true {
+			if rfield.Expr.String() == val && trans.fieldMap[i] {
 				trans.outFiledMap = append(trans.outFiledMap, j+len(outFileds))
 			}
 		}

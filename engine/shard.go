@@ -48,7 +48,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logger"
-	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
@@ -216,7 +215,6 @@ type shard struct {
 	defaultTags map[string]string
 	fileStat    *statistics.FileStatistics
 
-	downSampleStatus        int
 	shardDownSampleTaskInfo *shardDownSampleTaskInfo
 
 	stopDownSample chan struct{}
@@ -493,17 +491,15 @@ func (mw *mstWriteCtx) getRowsPool() []influx.Row {
 	if v == nil {
 		return []influx.Row{}
 	}
-	rp := v.([]influx.Row)
-
-	return rp
+	return *(v.(*[]influx.Row))
 }
 
 // nolint
-func (mw *mstWriteCtx) putRowsPool(rp []influx.Row) {
-	for _, r := range rp {
+func (mw *mstWriteCtx) putRowsPool(rp *[]influx.Row) {
+	for _, r := range *rp {
 		r.Reset()
 	}
-	rp = rp[:0]
+	*rp = (*rp)[:0]
 	mw.rowsPool.Put(rp)
 }
 
@@ -527,7 +523,7 @@ func putMstWriteCtx(mw *mstWriteCtx) {
 		if !ok {
 			panic("can't map mmPoints")
 		}
-		mw.putRowsPool(*rows)
+		mw.putRowsPool(rows)
 	}
 
 	mw.Reset()
@@ -1259,7 +1255,7 @@ func readDownSampleLogFile(name string, info *DownSampleFilesInfo) error {
 		return fmt.Errorf("invalid downsample log file(%v) crc", name)
 	}
 
-	if buf, err = info.unmarshal(buf); err != nil {
+	if _, err = info.unmarshal(buf); err != nil {
 		return fmt.Errorf("unmarshal downSample log %v fail", name)
 	}
 
@@ -1385,7 +1381,7 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 }) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	info, schemas, logger := s.shardDownSampleTaskInfo.sdsp, s.shardDownSampleTaskInfo.schema, s.shardDownSampleTaskInfo.log
+	info, schemas, dlog := s.shardDownSampleTaskInfo.sdsp, s.shardDownSampleTaskInfo.schema, s.shardDownSampleTaskInfo.log
 	var err error
 
 	s.dswg.Add(1)
@@ -1396,12 +1392,12 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 	}
 	s.DisableCompAndMerge()
 
-	lcLog := Log.NewLogger(errno.ModuleDownSample).SetZapLogger(logger)
+	lcLog := logger.NewLogger(errno.ModuleDownSample).SetZapLogger(dlog)
 	taskNum := len(schemas)
 	parallelism := maxDownSampleTaskNum
 	filesMap := make(map[int]*immutable.TSSPFiles, taskNum)
 	allDownSampleFiles := make(map[int][]immutable.TSSPFile, taskNum)
-	logger.Info("DownSample Start", zap.Any("shardId", info.ShardId))
+	dlog.Info("DownSample Start", zap.Any("shardId", info.ShardId))
 	for i := 0; i < taskNum; i += parallelism {
 		var num int
 		if i+parallelism <= taskNum {
@@ -1409,7 +1405,7 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 		} else {
 			num = taskNum - i
 		}
-		err = s.StartDownSampleTaskBySchema(i, filesMap, allDownSampleFiles, schemas[i:i+num], info, logger)
+		err = s.StartDownSampleTaskBySchema(i, filesMap, allDownSampleFiles, schemas[i:i+num], info, dlog)
 		if err != nil {
 			break
 		}
@@ -1439,7 +1435,7 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 			s.DeleteDownSampleFiles(allDownSampleFiles)
 			return e
 		}
-		logger.Info("DownSample Success", zap.Any("shardId", info.ShardId))
+		dlog.Info("DownSample Success", zap.Any("shardId", info.ShardId))
 	} else {
 		for _, v := range filesMap {
 			for _, f := range v.Files() {
@@ -1464,7 +1460,7 @@ func (s *shard) DeleteDownSampleFiles(allDownSampleFiles map[int][]immutable.TSS
 }
 
 func (s *shard) ReplaceDownSampleFiles(mstNames []string, originFiles [][]immutable.TSSPFile, newFiles [][]immutable.TSSPFile,
-	log *Log.Logger, taskID uint64, level int, sdsp *meta.ShardDownSamplePolicyInfo,
+	log *logger.Logger, taskID uint64, level int, sdsp *meta.ShardDownSamplePolicyInfo,
 	meta interface {
 		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 	}) (err error) {
@@ -1620,25 +1616,24 @@ func (s *shard) StartDownSampleTaskBySchema(start int, filesMap map[int]*immutab
 		return err
 	}
 	for {
-		select {
-		case state, _ := <-ch.State:
-			mstTaskNum -= 1
-			s.dswg.Done()
-			downSampleStatItem.AddActive(-1)
-			taskID := state.GetTaskID()
-			allDownSampleFiles[taskID] = state.GetNewFiles()
-			if state.GetErr() != nil {
-				err = state.GetErr()
-				downSampleStatItem.AddErrors(1)
-				if mstTaskNum == 0 {
-					return err
-				}
-				continue
-			}
-			logger.Info("DownSample Measurement Success", zap.Any("Measurement", schemas[taskID-start].Options().OptionsName()))
+		state := <-ch.State
+
+		mstTaskNum -= 1
+		s.dswg.Done()
+		downSampleStatItem.AddActive(-1)
+		taskID := state.GetTaskID()
+		allDownSampleFiles[taskID] = state.GetNewFiles()
+		if state.GetErr() != nil {
+			err = state.GetErr()
+			downSampleStatItem.AddErrors(1)
 			if mstTaskNum == 0 {
 				return err
 			}
+			continue
+		}
+		logger.Info("DownSample Measurement Success", zap.Any("Measurement", schemas[taskID-start].Options().OptionsName()))
+		if mstTaskNum == 0 {
+			return err
 		}
 	}
 }

@@ -131,7 +131,7 @@ func (trans *IndexScanTransform) BuildDownSampleSchema(schema hybridqp.Catalog) 
 	o.HintType = hybridqp.ExactStatisticQuery
 	s := NewQuerySchema(fields, columnNames, &o)
 	trans.downSampleValue = make(map[string]string, len(fields))
-	for i, _ := range s.fields {
+	for i := range s.fields {
 		name := s.fields[i].Expr.(*influxql.VarRef).Val
 		originName := originNames[i]
 		trans.downSampleValue[name] = originName

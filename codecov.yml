@@ -1,7 +1,17 @@
 ignore:
   - "open_src"
   - "tests"
-  - "yacc"
   - "main.go"
   - "app/ts-meta/meta/handler.go"
   - "lib/netstorage/data"
+
+codecov:
+  notify:
+    wait_for_ci: false
+
+coverage:
+  status:
+    project:
+      default:
+        target: 70%
+        threshold: 1%
