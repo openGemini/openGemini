@@ -85,17 +85,16 @@ func (pool *TagSetsPool) Put(tags *tagSets) {
 }
 
 /*
-	eg, inputTags:{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
-					{Key: "tk2", Value: "[tv2,tv22]", IsArray: 0},
-					{Key: "tk3", Value: "[tv3,tv33]", IsArray: 0}}
+		eg, inputTags:{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
+						{Key: "tk2", Value: "[tv2,tv22]", IsArray: 0},
+						{Key: "tk3", Value: "[tv3,tv33]", IsArray: 0}}
 
-	tagArray:[[{Key: "tk1", Value: "tv1", IsArray: 0},
-             {Key: "tk2", Value: "tv2", IsArray: 0},
-	         {Key: "tk3", Value: "tv3", IsArray: 0},]
-			 [{Key: "tk1", Value: "tv11", IsArray: 0},
-             {Key: "tk2", Value: "tv22", IsArray: 0},
-	         {Key: "tk3", Value: "tv33", IsArray: 0},]]
-
+		tagArray:[[{Key: "tk1", Value: "tv1", IsArray: 0},
+	             {Key: "tk2", Value: "tv2", IsArray: 0},
+		         {Key: "tk3", Value: "tv3", IsArray: 0},]
+				 [{Key: "tk1", Value: "tv11", IsArray: 0},
+	             {Key: "tk2", Value: "tv22", IsArray: 0},
+		         {Key: "tk3", Value: "tv33", IsArray: 0},]]
 */
 func analyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
 	var arrayLen int
@@ -185,9 +184,9 @@ func unmarshalIndexKeys(name []byte, tags []influx.Tag, indexkeypool []byte) ([]
 }
 
 /*
-	format
-	one key: 1 + key, 1 means one key
-	two keys: 2 + len(key1) + key1 + len(key2) + key2
+format
+one key: 1 + key, 1 means one key
+two keys: 2 + len(key1) + key1 + len(key2) + key2
 */
 func marshalCombineIndexKeys(name []byte, tagsArray [][]influx.Tag, dst []byte) ([]byte, error) {
 	indexkey := kbPool.Get()
@@ -266,10 +265,7 @@ func getKeyCount(combineKey []byte) int {
 }
 
 func hasOneKey(combineKey []byte) bool {
-	if getKeyCount(combineKey) > 0 {
-		return true
-	}
-	return false
+	return getKeyCount(combineKey) > 0
 }
 
 func resizeSeriesKeys(indexKeys [][]byte, keyCount int) [][]byte {
@@ -320,7 +316,7 @@ func analyzeSeriesWithCondition(series [][]byte, exprs []*influxql.BinaryExpr, c
 			return 0, nil, nil, err
 		}
 
-		ok, err, expr := hasExpectedTag(&tagsBuf, condition)
+		ok, expr, err := hasExpectedTag(&tagsBuf, condition)
 		if err != nil && err != ErrFieldExpr {
 			return 0, nil, nil, err
 		}
@@ -339,33 +335,33 @@ func analyzeSeriesWithCondition(series [][]byte, exprs []*influxql.BinaryExpr, c
 	return expectCount, isExpectSeries, exprs, nil
 }
 
-func hasExpectedTag(tagsBuf *influx.PointTags, expr influxql.Expr) (bool, error, *influxql.BinaryExpr) {
+func hasExpectedTag(tagsBuf *influx.PointTags, expr influxql.Expr) (bool, *influxql.BinaryExpr, error) {
 	switch expr := expr.(type) {
 	case *influxql.BinaryExpr:
 		switch expr.Op {
 		case influxql.AND, influxql.OR:
 			// If the tagsBuf matches filter expressions for the LHS.
-			lbool, lerr, lexpr := hasExpectedTag(tagsBuf, expr.LHS)
+			lbool, lexpr, lerr := hasExpectedTag(tagsBuf, expr.LHS)
 			if lerr != nil && lerr != ErrFieldExpr {
-				return false, lerr, lexpr
+				return false, lexpr, lerr
 			}
 
 			// If the tagsBuf matches filter expressions for the RHS.
-			rbool, rerr, rexpr := hasExpectedTag(tagsBuf, expr.RHS)
+			rbool, rexpr, rerr := hasExpectedTag(tagsBuf, expr.RHS)
 			if rerr != nil && rerr != ErrFieldExpr {
-				return false, rerr, rexpr
+				return false, rexpr, rerr
 			}
 
 			// if expression is "AND".
 			if expr.Op == influxql.AND {
 				// field and tag, tag match, eg, field_float1>1.0 AND tk1='value11', tk1 match
 				if lerr == ErrFieldExpr && rbool {
-					return true, nil, lexpr
+					return true, lexpr, nil
 				}
 
 				// tag or field, tag match, eg, tk1='value11' AND field_float1>1.0, tk1 match
 				if lbool && rerr == ErrFieldExpr {
-					return true, nil, rexpr
+					return true, rexpr, nil
 				}
 
 				// filed and field, eg, field_float1>1.0 AND field_float2>1.0
@@ -394,7 +390,7 @@ func hasExpectedTag(tagsBuf *influx.PointTags, expr influxql.Expr) (bool, error,
 				if err != nil {
 					return false, nil, nil
 				}
-				return false, ErrFieldExpr, lexpr
+				return false, lexpr, ErrFieldExpr
 			}
 
 			// tag or field, tag match, eg, tk1='value11' OR field_float1>1.0, tk1 match
@@ -408,7 +404,7 @@ func hasExpectedTag(tagsBuf *influx.PointTags, expr influxql.Expr) (bool, error,
 				if err != nil {
 					return false, nil, nil
 				}
-				return false, ErrFieldExpr, rexpr
+				return false, rexpr, ErrFieldExpr
 			}
 
 			// field or field, eg, field_float1>1.0 OR field_float2=1
@@ -426,7 +422,7 @@ func hasExpectedTag(tagsBuf *influx.PointTags, expr influxql.Expr) (bool, error,
 
 		default:
 			result, err := matchTagFilter(tagsBuf, expr)
-			return result, err, nil
+			return result, nil, err
 		}
 
 	case *influxql.ParenExpr:
@@ -481,8 +477,8 @@ func matchTagFilter(tagsBuf *influx.PointTags, n *influxql.BinaryExpr) (bool, er
 }
 
 /*
-  regexValue: val.*1
-  value: value
+regexValue: val.*1
+value: value
 */
 func matchWithRegex(regexValue, value string) bool {
 	match, err := regexp.MatchString(regexValue, value)
@@ -493,15 +489,11 @@ func matchWithRegex(regexValue, value string) bool {
 }
 
 /*
-  expectValue: value
-  value: value
+expectValue: value
+value: value
 */
 func matchWithNoRegex(expectValue, value string) bool {
-	if expectValue == value {
-		return true
-	}
-
-	return false
+	return expectValue == value
 }
 
 func resizeExpectSeries(expectSeries []bool, keyCount int) []bool {
@@ -610,7 +602,7 @@ func isMatchedTag(series [][]byte, condition influxql.Expr, tag Tag) bool {
 		if !isCurrentTag(tagsBuf, tag) {
 			continue
 		}
-		ok, err, _ := hasExpectedTag(&tagsBuf, condition)
+		ok, _, err := hasExpectedTag(&tagsBuf, condition)
 		if err != nil {
 			return false
 		}

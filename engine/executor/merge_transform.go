@@ -891,7 +891,6 @@ func NewStringMergeIterator() *StringMergeIterator {
 }
 
 func (f *StringMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
-	var start, end uint32
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	index := endpoint.InputPoint.Chunk.RowDataType().FieldIndex(endpoint.OutputPoint.Chunk.RowDataType().Field(endpoint.OutputPoint.Ordinal).Name())
 	f.input = endpoint.InputPoint.Chunk.Column(index)
@@ -900,14 +899,6 @@ func (f *StringMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 		f.output.AppendManyNil(params.end - params.start)
 		return
 	}
-	stringBytes, stringOffset := f.input.GetStringBytes()
-	start = stringOffset[startValue]
-	if endValue == len(stringOffset) {
-		end = uint32(len(stringBytes))
-	} else {
-		end = stringOffset[endValue]
-	}
-	stringBytes = stringBytes[start:end]
 	f.output.AppendStringValues(f.input.StringValuesRange(f.stringValues[:0], startValue, endValue)...)
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {

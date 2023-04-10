@@ -47,18 +47,18 @@ const (
 	verifyNode        = "verifynode"
 )
 
-func getReqParam(req *netstorage.SysCtrlRequest) (error, int64, bool) {
+func getReqParam(req *netstorage.SysCtrlRequest) (int64, bool, error) {
 	en, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 	if err != nil {
 		log.Error("get switch from param fail", zap.Error(err))
-		return err, 0, false
+		return 0, false, err
 	}
 	shardId, err := syscontrol.GetIntValue(req.Param(), "shid")
 	if err != nil {
 		log.Error("get shard id  from param fail", zap.Error(err))
-		return err, 0, false
+		return 0, false, err
 	}
-	return nil, shardId, en
+	return shardId, en, nil
 }
 
 func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
@@ -79,7 +79,7 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
 			return nil
 		}
 
-		err, shardId, en := getReqParam(req)
+		shardId, en, err := getReqParam(req)
 		if err != nil {
 			return err
 		}
@@ -100,7 +100,7 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
 			return nil
 		}
 
-		err, shardId, en := getReqParam(req)
+		shardId, en, err := getReqParam(req)
 		if err != nil {
 			return err
 		}

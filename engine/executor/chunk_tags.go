@@ -18,7 +18,6 @@ package executor
 
 import (
 	"sort"
-	"sync"
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/record"
@@ -75,45 +74,6 @@ func (c *ChunkTags) GetOffsets() []uint16 {
 	return c.offsets
 }
 
-var chunkTagsPool sync.Pool
-
-func GetChunkTags() *ChunkTags {
-	v := chunkTagsPool.Get()
-	if v == nil {
-		return &ChunkTags{}
-	}
-	return v.(*ChunkTags)
-}
-
-func PutChunkTags(ct *ChunkTags) {
-	ct.Reset()
-	chunkTagsPool.Put(ct)
-}
-
-func (ct *ChunkTags) funkSubset(pts influx.PointTags, keys []string) {
-	if len(keys) == 0 {
-		return
-	}
-
-	for i, k := range keys {
-		t1 := pts.FindPointTag(k)
-		if t1 == nil {
-			ct.subset = append(ct.subset, Str2bytes(k)...)
-			ct.subset = append(ct.subset, Str2bytes("=")...)
-			if i < len(keys)-1 {
-				ct.subset = append(ct.subset, Str2bytes(",")...)
-			}
-			continue
-		}
-		ct.subset = append(ct.subset, Str2bytes(t1.Key)...)
-		ct.subset = append(ct.subset, Str2bytes("=")...)
-		ct.subset = append(ct.subset, Str2bytes(t1.Value)...)
-		if i < len(keys)-1 {
-			ct.subset = append(ct.subset, Str2bytes(",")...)
-		}
-	}
-}
-
 func (ct *ChunkTags) GetChunkTagValue(name string) (string, bool) {
 	for _, kv := range ct.decodeTags() {
 		if name == kv[0] {
@@ -163,7 +123,7 @@ func (ct *ChunkTags) KeepKeys(keys []string) *ChunkTags {
 	for _, kv := range ct.decodeTags() {
 		if !ContainDim(keys, kv[0]) {
 			ss = append(ss, kv[0])
-			m = append(m, influx.Tag{kv[0], kv[1], false})
+			m = append(m, influx.Tag{Key: kv[0], Value: kv[1], IsArray: false})
 		}
 	}
 	sort.Sort(&m)

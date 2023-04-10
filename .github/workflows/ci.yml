@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   pull_request:
     paths-ignore:
-      - '.github/**'
       - 'config/**'
       - 'docker/**'
       - 'docs/**'
@@ -26,26 +25,69 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: 5
-      - name: commitlint
+          fetch-depth: 100
+      - name: Run commitlint
         uses: wagoid/commitlint-github-action@v5
-      - name: licence check
+      - name: Run licence check
         run: make licence-check
-      - name: style check
-        run: make style-check
-  UT:
-    name: unit test
+  StaticCheck:
+    name: "static check"
     needs: CommitLint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+        with:
+          fetch-depth: 1
+      - uses: WillAbides/setup-go-faster@v1.7.0
+        with:
+          go-version: "1.19"
+      - name: Run static check
+        run: make static-check
+  OtherGoLint:
+    name: "style check, go vet and other go lint"
+    needs: CommitLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+        with:
+          fetch-depth: 1
+      - uses: WillAbides/setup-go-faster@v1.7.0
+        with:
+          go-version: "1.16"
+      - name: Run go version check
+        run: make go-version-check
+      - name: Run style check
+        run: make style-check
+      - name: Run go vet check
+        run: make go-vet-check
+#      - name: Run golangci-lint  ## TODO: use github-action below
+#        run: make golangci-lint-check
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3.4.0
+        with:
+          version: v1.47.3
+#          args: --timeout=10m --tests=false --skip-dirs=open_src
+          args: --timeout=10m
+          only-new-issues: true
+          skip-pkg-cache: true
+          skip-build-cache: true
+  UT:
+    name: unit test
+    needs: [StaticCheck, OtherGoLint]
+    strategy:
+      fail-fast: true
+      matrix:
+        os: ["ubuntu-latest"] # "macOS-latest"
+        go: ["1.18.x", "1.20.x"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 1
-      - name: Setup Go environment
-        uses: actions/setup-go@v3
+      - uses: WillAbides/setup-go-faster@v1.7.0
         with:
-          go-version: '>=1.16.8'
-      - name: gotest
+          go-version: ${{ matrix.go }}
+      - name: Run gotest
         run: |
           go mod tidy
           make gotest
@@ -53,16 +95,25 @@ jobs:
         uses: codecov/codecov-action@v3
   IntegrationTest:
     name: integration test
-    needs: UT
-    runs-on: ubuntu-latest
+    needs: [StaticCheck, OtherGoLint]
+    strategy:
+      fail-fast: true
+      matrix:
+        os: ["ubuntu-latest"] # "macOS-latest"
+        go: ["1.18.x", "1.20.x"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 1
-      - name: build and serve
+      - uses: WillAbides/setup-go-faster@v1.7.0
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Run build and serve
         run: |
+          make build-check
           make go-build
           bash scripts/install_cluster.sh
           ps -ef | grep ts- | grep -v grep
-      - name: run integration test
+      - name: Run integration test
         run: make integration-test

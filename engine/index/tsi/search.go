@@ -31,10 +31,9 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/errno"
-	CLog "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
@@ -65,7 +64,7 @@ func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {
 	kb.B = append(kb.B, indexkey...)
 	kb.B = append(kb.B, kvSeparatorChar)
 	ts.Seek(kb.B)
-	for ts.NextItem() {
+	if ts.NextItem() {
 		if !bytes.HasPrefix(ts.Item, kb.B) {
 			// Nothing found.
 			return 0, io.EOF
@@ -90,7 +89,7 @@ func (is *indexSearch) getPidByPkey(key []byte) (uint64, error) {
 	kb.B = append(kb.B, key...)
 	kb.B = append(kb.B, kvSeparatorChar)
 	ts.Seek(kb.B)
-	for ts.NextItem() {
+	if ts.NextItem() {
 		if !bytes.HasPrefix(ts.Item, kb.B) {
 			// Nothing found.
 			return 0, nil
@@ -267,8 +266,9 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 					}
 					if singleSeries {
 						litr = is.genSeriesIDIterator(*tsids, lexpr)
+					} else {
+						litr = index.NewSeriesIDExprIteratorWithSeries(ritr.Ids(), lexpr)
 					}
-					litr = index.NewSeriesIDExprIteratorWithSeries(ritr.Ids(), lexpr)
 				}
 
 				if lerr != ErrFieldExpr && rerr == ErrFieldExpr {
@@ -278,8 +278,9 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 					}
 					if singleSeries {
 						ritr = is.genSeriesIDIterator(*tsids, rexpr)
+					} else {
+						ritr = index.NewSeriesIDExprIteratorWithSeries(litr.Ids(), rexpr)
 					}
-					ritr = index.NewSeriesIDExprIteratorWithSeries(litr.Ids(), rexpr)
 				}
 
 				if lerr == ErrFieldExpr && rerr == ErrFieldExpr {
@@ -400,10 +401,10 @@ func (is *indexSearch) searchTSIDsInternal(name []byte, expr influxql.Expr, tr T
 func (is indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr TimeRange) (*uint64set.Set, error) {
 	// TODO Don not know which query condition can enter this branch
 	if _, ok := n.LHS.(*influxql.BinaryExpr); ok {
-		logger.Infof("%s", n)
+		logger.GetLogger().Info(n.String())
 		return nil, nil
 	} else if _, ok := n.RHS.(*influxql.BinaryExpr); ok {
-		logger.Infof("%s", n)
+		logger.GetLogger().Info(n.String())
 		return nil, nil
 	}
 
@@ -678,7 +679,7 @@ func (is *indexSearch) getTSIDsByMeasurementName(name []byte) (*uint64set.Set, e
 
 func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, error) {
 	if tf.isNegative {
-		logger.Panicf("BUG: isNegative must be false")
+		logger.GetLogger().Panic("BUG: isNegative must be false")
 	}
 
 	tsids := &uint64set.Set{}
@@ -702,7 +703,7 @@ func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, er
 
 		tsids.Add(u)
 		if querySeriesLimit > 0 && tsids.Len() >= querySeriesLimit {
-			CLog.NewLogger(errno.ModuleIndex).Error("",
+			logger.NewLogger(errno.ModuleIndex).Error("",
 				zap.Error(errno.NewError(errno.ErrQuerySeriesUpperBound)),
 				zap.Int("querySeriesLimit", querySeriesLimit),
 				zap.String("index_path", is.idx.path))
@@ -725,7 +726,7 @@ func (is *indexSearch) measurementSeriesByExprIterator(name []byte, expr influxq
 		return nil, err
 	} else if !ok {
 		// Fast path - the index doesn't contain measurement for the given name.
-		logger.Infof("measurement not found")
+		logger.GetLogger().Error("measurement not found")
 		return nil, nil
 	}
 
@@ -771,7 +772,7 @@ func (is *indexSearch) searchTSIDs(name []byte, expr influxql.Expr, tr TimeRange
 
 func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set.Set, hook indexSearchHook) error {
 	if len(tf.orSuffixes) > 0 {
-		logger.Panicf("BUG: the getTSIDsForTagFilterSlow must be called only for empty tf.orSuffixes; got %s", tf.orSuffixes)
+		logger.GetLogger().Panic("BUG: the getTSIDsForTagFilterSlow must be called only for empty tf.orSuffixes", zap.Strings("orSuffixes", tf.orSuffixes))
 	}
 
 	// Scan all the rows with tf.prefix and call f on every tf match.
@@ -876,7 +877,7 @@ func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set
 
 func (is *indexSearch) updateTSIDsByOrSuffixesOfTagFilter(tf *tagFilter, tsids *uint64set.Set) error {
 	if tf.isNegative {
-		logger.Panicf("BUG: isNegative must be false")
+		logger.GetLogger().Panic("BUG: isNegative must be false")
 	}
 	kb := kbPool.Get()
 	defer kbPool.Put(kb)
@@ -1119,10 +1120,4 @@ func (is *indexSearch) getFieldsByTSID(tsid uint64) ([][]byte, error) {
 		}
 	}
 	return ips, nil
-}
-
-func cloneBytes(b []byte) []byte {
-	bb := make([]byte, len(b))
-	copy(bb, b)
-	return bb
 }
