@@ -81,6 +81,8 @@ type TagSetInfo struct {
 	SeriesKeys [][]byte           // encoded series key
 	TagsVec    []influx.PointTags // tags of all series
 	key        []byte             // group by tag sets key
+
+	FilterTimes [][]int64
 }
 
 func (t *TagSetInfo) String() string {
@@ -120,6 +122,7 @@ func (t *TagSetInfo) reset() {
 	t.IDs = t.IDs[:0]
 	t.Filters = t.Filters[:0]
 	t.TagsVec = t.TagsVec[:0]
+	t.FilterTimes = t.FilterTimes[:0]
 
 	for i := range t.SeriesKeys {
 		putSeriesKeyBuf(t.SeriesKeys[i])

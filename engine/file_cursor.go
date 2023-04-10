@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
- http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -186,7 +186,7 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		}
 
 		filter := f.tagSet.Filters[i]
-		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)
+		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags, nil)
 		orderRec := f.recordPool.Get()
 		rec, err := f.loc.ReadData(filterOpts, orderRec)
 		if err != nil {
@@ -263,7 +263,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 			f.memIter.init(f.getSeriesNotInFile(sid))
 		}
 		filter := f.tagSet.Filters[i]
-		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags)
+		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags, nil)
 		orderRec := f.recordPool.Get()
 		rec, err := f.loc.ReadData(filterOpts, orderRec)
 		if err != nil {

@@ -922,6 +922,9 @@ func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *execut
 		return nil, err
 	}
 
+	if idx < len(tagSet.FilterTimes) {
+		tsmCursor.filterTimes = tagSet.FilterTimes[idx]
+	}
 	// only if tsm or mem table have data, we will create series cursor
 	if tsmCursor != nil || (memTableRecord != nil && memTableRecord.RowNums() > 0) {
 		seriesCursor := getSeriesKeyCursor()
