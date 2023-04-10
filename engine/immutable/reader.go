@@ -545,7 +545,7 @@ func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.ReserveBitmap(len(col.Val))
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
-			values = reverseBooleanValues(values)
+			_ = reverseBooleanValues(values)
 			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
@@ -1112,6 +1112,7 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 		}
 		err = readTimeColumn(tmSeg, timeCol, ctx, cr, copied)
 		if err != nil {
+			// TODO: return err
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
@@ -1125,7 +1126,8 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 		ctx.origData = data
 
 		ri, ok, er := readMinMaxRowIndex(ref, col, timeCol, ctx, meta, copied, isMin)
-		if err != nil {
+		if er != nil {
+			err = er
 			log.Error("read min max column data fail", zap.Error(err), zap.Bool("isMin", isMin))
 			return
 		}

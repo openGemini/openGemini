@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-//This code is implemented by referring to https://github.com/UWHustle/Efficiently-Searching-In-Memory-Sorted-Arrays.
+// This code is implemented by referring to https://github.com/UWHustle/Efficiently-Searching-In-Memory-Sorted-Arrays.
 package binarysearch
 
 import (
@@ -58,6 +58,7 @@ type ISSet struct {
 	F_width_range float64
 }
 
+//lint:ignore U1000 test used only
 func newISSet(a []byte, sz int) *ISSet {
 	low, high := int(0), int(len(a)-sz)
 	lowValue := float64(binary.BigEndian.Uint32(a[0:sz]))
@@ -91,12 +92,13 @@ func (is *ISSet) Intrpolation2(value int, sz int) int {
 }
 
 type TSSet struct {
-	A                               *[]byte
-	d                               int
-	y_1                             int
-	diff_y_01, a_0, diff_scale, d_a float64
+	A                    *[]byte
+	d                    int
+	y_1                  int
+	a_0, diff_scale, d_a float64
 }
 
+//lint:ignore U1000 test used only
 func newTSSet(a []byte, sz int) *TSSet {
 
 	d := len(a) >> 1
@@ -104,7 +106,7 @@ func newTSSet(a []byte, sz int) *TSSet {
 
 	y_1 := int(binary.BigEndian.Uint32(a[d : d+sz]))
 	value0 := int(binary.BigEndian.Uint32(a[0:sz]))
-	valueLen := int(binary.BigEndian.Uint32(a[len(a)-1*sz : len(a)]))
+	valueLen := int(binary.BigEndian.Uint32(a[len(a)-1*sz:]))
 
 	diff_y_01 := value0 - y_1
 	a_0 := 0.0
@@ -121,7 +123,6 @@ func newTSSet(a []byte, sz int) *TSSet {
 		A:          &a,
 		d:          d,
 		y_1:        y_1,
-		diff_y_01:  float64(diff_y_01),
 		a_0:        a_0,
 		diff_scale: diff_scale,
 		d_a:        d_a,

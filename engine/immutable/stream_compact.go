@@ -359,19 +359,6 @@ func (c *StreamIterators) Init(id uint64, chunkDataOffset int64, schema record.S
 	c.colBuilder.resetPreAgg()
 }
 
-func (c *StreamIterators) padRows(rows int, ref *record.Field) {
-	switch ref.Type {
-	case influx.Field_Type_String:
-		c.col.AppendStringNulls(rows)
-	case influx.Field_Type_Boolean:
-		c.col.AppendBooleanNulls(rows)
-	case influx.Field_Type_Float:
-		c.col.AppendFloatNulls(rows)
-	case influx.Field_Type_Int:
-		c.col.AppendIntegerNulls(rows)
-	}
-}
-
 func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error) {
 	compItrs := getStreamIterators()
 	compItrs.closed = m.closed

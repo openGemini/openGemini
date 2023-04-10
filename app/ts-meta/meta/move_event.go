@@ -107,6 +107,7 @@ func (e *MoveEvent) isDstEvent() bool {
 	return e.curState == MovePreAssign || e.curState == MoveAssign || e.curState == MoveRollbackPreAssign
 }
 
+//lint:ignore U1000 keep this
 func (e *MoveEvent) isSrcEvent() bool {
 	return e.curState == MovePreOffload || e.curState == MoveOffload || e.curState == MoveRollbackPreOffload
 }

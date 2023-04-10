@@ -61,6 +61,7 @@ var (
 
 var seriesKeyPool = &sync.Pool{}
 
+//lint:ignore U1000 TODO performance improvement use sync.pool
 func getSeriesKeyBuf() []byte {
 	v := seriesKeyPool.Get()
 	if v != nil {
@@ -69,8 +70,11 @@ func getSeriesKeyBuf() []byte {
 	return make([]byte, 0, defaultSeriesKeyLen)
 }
 
-func putSeriesKeyBuf(buf []byte) {
-	buf = buf[:0]
+func putSeriesKeyBuf(buf *[]byte) {
+	if buf == nil {
+		return
+	}
+	*buf = (*buf)[:0]
 	seriesKeyPool.Put(buf)
 }
 
@@ -123,7 +127,7 @@ func (t *TagSetInfo) reset() {
 	t.TagsVec = t.TagsVec[:0]
 
 	for i := range t.SeriesKeys {
-		putSeriesKeyBuf(t.SeriesKeys[i])
+		putSeriesKeyBuf(&t.SeriesKeys[i])
 	}
 	t.SeriesKeys = t.SeriesKeys[:0]
 }

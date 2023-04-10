@@ -287,10 +287,6 @@ func (t *Times) incrOffset() {
 	t.limit = 0
 }
 
-func (t *Times) max() int64 {
-	return t.values[len(t.values)-1]
-}
-
 func (t *Times) isEnd() bool {
 	return t.offset+t.limit == len(t.values)
 }

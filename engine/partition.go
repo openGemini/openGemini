@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
@@ -85,7 +84,6 @@ type DBPTInfo struct {
 	logicClock          uint64
 	sequenceID          uint64
 	lockPath            *string
-	openShardsLimit     limiter.Fixed
 }
 
 func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx) *DBPTInfo {
@@ -791,7 +789,7 @@ func (dbPT *DBPTInfo) disableDBPtBgr() error {
 func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
 	var shardIds []uint64
 	dbPT.mu.RLock()
-	for id, _ := range dbPT.shards {
+	for id := range dbPT.shards {
 		shardIds = append(shardIds, id)
 	}
 	dbPT.mu.RUnlock()

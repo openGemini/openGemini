@@ -121,7 +121,6 @@ func (p *RowsPool) Put(r *[]influx.Row) {
 
 type WindowDataPool struct {
 	cache  chan *WindowCache
-	pool   sync.Pool
 	length int64
 }
 
@@ -141,11 +140,9 @@ func NewWindowDataPool() *WindowDataPool {
 }
 
 func (p *WindowDataPool) Get() *WindowCache {
-	select {
-	case cache := <-p.cache:
-		p.IncreaseChan()
-		return cache
-	}
+	cache := <-p.cache
+	p.IncreaseChan()
+	return cache
 }
 
 func (p *WindowDataPool) IncreaseChan() {
@@ -153,9 +150,7 @@ func (p *WindowDataPool) IncreaseChan() {
 }
 
 func (p *WindowDataPool) Put(cache *WindowCache) {
-	select {
-	case p.cache <- cache:
-	}
+	p.cache <- cache
 	atomic.AddInt64(&p.length, 1)
 }
 

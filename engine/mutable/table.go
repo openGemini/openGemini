@@ -446,18 +446,18 @@ func (t *MemTable) appendFieldToCol(col *record.ColVal, field *influx.Field, siz
 	return nil
 }
 
-func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Field, time int64, sameSchema bool) (error, int64) {
+func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Field, time int64, sameSchema bool) (int64, error) {
 	// fast path
 	var size int64
 	if sameSchema {
 		for i := range fields {
 			if err := t.appendFieldToCol(&rec.ColVals[i], &fields[i], &size); err != nil {
-				return err, size
+				return size, err
 			}
 		}
 		rec.ColVals[len(fields)].AppendInteger(time)
 		size += int64(record.Int64SizeBytes)
-		return nil, size
+		return size, nil
 	}
 
 	// slow path
@@ -468,7 +468,7 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 	for recSchemaIdx < recSchemaLen && pointSchemaIdx < pointSchemaLen {
 		if rec.Schema[recSchemaIdx].Name == fields[pointSchemaIdx].Key {
 			if err := t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
-				return err, size
+				return size, err
 			}
 			recSchemaIdx++
 			pointSchemaIdx++
@@ -483,7 +483,7 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 			rec.Schema[appendColIdx].Type = int(fields[pointSchemaIdx].Type)
 			rec.ColVals[appendColIdx].PadColVal(int(fields[pointSchemaIdx].Type), oldRowNum)
 			if err := t.appendFieldToCol(&rec.ColVals[appendColIdx], &fields[pointSchemaIdx], &size); err != nil {
-				return err, size
+				return size, err
 			}
 			pointSchemaIdx++
 			appendColIdx++
@@ -502,7 +502,7 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 		rec.Schema[appendColIdx].Type = int(fields[pointSchemaIdx].Type)
 		rec.ColVals[appendColIdx].PadColVal(int(fields[pointSchemaIdx].Type), oldRowNum)
 		if err := t.appendFieldToCol(&rec.ColVals[appendColIdx], &fields[pointSchemaIdx], &size); err != nil {
-			return err, size
+			return size, err
 		}
 		pointSchemaIdx++
 		appendColIdx++
@@ -516,10 +516,10 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 	rec.ColVals[newColNum-1].AppendInteger(time)
 	size += int64(record.Int64SizeBytes)
 
-	return nil, size
+	return size, nil
 }
 
-func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, fields []influx.Field) (error, int64) {
+func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, fields []influx.Field) (int64, error) {
 	chunk.Mu.Lock()
 	defer chunk.Mu.Unlock()
 
@@ -628,7 +628,7 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 				atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
 			}
 
-			err, _ = t.appendFields(msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
+			_, err = t.appendFields(msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
 			if err != nil {
 				return err
 			}
