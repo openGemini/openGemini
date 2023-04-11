@@ -71,13 +71,13 @@ var messageMap = map[Errno]*Message{
 	WriteMapMetaShardInfo:           newWarnMessage("can't map meta.ShardInfo", ModuleWrite),
 	WritePointOutOfRP:               newWarnMessage("point time is expired, compared with rp duration", ModuleWrite),
 
-	ErrUnmarshalPoints: newWarnMessage("unmarshal points error, err: %s", ModuleWrite),
-	ErrWriteReadonly:   newWarnMessage("this node is readonly status", ModuleWrite),
-	DuplicateField:     newWarnMessage("duplicate field: %s", ModuleWrite),
-	EngineClosed:       newWarnMessage("engine is closed", ModuleWrite),
-	WriteMissTagValue:  newWarnMessage("missing tag value for %q", ModuleWrite),
-	WriteMultiArray:    newWarnMessage("point contains multi tag array", ModuleWrite),
-	WriteErrorArray:    newWarnMessage("error tag array", ModuleWrite),
+	ErrUnmarshalPoints:     newWarnMessage("unmarshal points error, err: %s", ModuleWrite),
+	ErrWriteReadonly:       newWarnMessage("this node is readonly status", ModuleWrite),
+	ParseFieldTypeConflict: newWarnMessage("conflict field type: %s", ModuleWrite),
+	EngineClosed:           newWarnMessage("engine is closed", ModuleWrite),
+	WriteMissTagValue:      newWarnMessage("missing tag value for %q", ModuleWrite),
+	ErrorTagArrayFormat:    newWarnMessage("error tag array format", ModuleWrite),
+	WriteErrorArray:        newWarnMessage("error tag array", ModuleWrite),
 
 	// network module error codes
 	NoConnectionAvailable: newFatalMessage("no connections available, node: %v, %v", ModuleNetwork),

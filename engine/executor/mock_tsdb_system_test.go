@@ -887,7 +887,7 @@ func (s *TSDBSystem) ExecSQL(sql string,
 	intoValidator func(database, retentionPolicy string, points []influx.Row)) error {
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
-	yaccParser := influxql.NewYyParser(parser.GetScanner())
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
 	yaccParser.ParseTokens()
 	query, err := yaccParser.GetQuery()
 	if err != nil {

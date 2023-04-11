@@ -26,6 +26,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -293,13 +294,26 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 	}
 
 	var err error
+	var hasFieldIndexFilter bool
 	for _, group := range groupSeries {
 		tagSet := new(TagSetInfo)
 		for i, sid := range group.IDs {
 			var fieldValues [][]byte
-			fieldValues, group.Filters[i], err = idx.getAllFields(fieldKey, group.Filters[i], sid)
+			fieldValues, group.Filters[i], err = idx.getAllFields(fieldKey, group.Filters[i], sid, &hasFieldIndexFilter)
 			if err != nil {
 				return nil, err
+			}
+
+			if groupByField && len(fieldValues) == 0 {
+				continue
+			}
+
+			if !groupByField && len(fieldValues) == 0 {
+				tagSet.IDs = append(tagSet.IDs, sid)
+				tagSet.TagsVec = append(tagSet.TagsVec, group.TagsVec[i])
+				tagSet.key = append(tagSet.key, group.key...)
+				tagSet.SeriesKeys = append(tagSet.SeriesKeys, group.SeriesKeys[i])
+				tagSet.Filters = append(tagSet.Filters, group.Filters[i])
 			}
 
 			// Generate TagSet for each field value.
@@ -315,8 +329,12 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 			}
 		}
 
-		if !groupByField {
-			sortedTagsSets = append(sortedTagsSets, tagSet)
+		if len(tagSet.IDs) == 0 && !hasFieldIndexFilter {
+			sortedTagsSets = append(sortedTagsSets, group)
+		} else {
+			if !groupByField {
+				sortedTagsSets = append(sortedTagsSets, tagSet)
+			}
 		}
 	}
 
@@ -324,13 +342,14 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 	return sortedTagsSets, nil
 }
 
-func (idx *fieldIndex) getAllFields(fieldKey string, filter influxql.Expr, sid uint64) ([][]byte, influxql.Expr, error) {
+func (idx *fieldIndex) getAllFields(fieldKey string, filter influxql.Expr, sid uint64, flag *bool) ([][]byte, influxql.Expr, error) {
 	var fieldValues [][]byte
 	if filter != nil {
 		// Extract field value from value filter.
 		fieldValue := idx.extractField(filter, fieldKey)
 		if fieldValue != nil {
 			fieldValues = append(fieldValues, fieldValue)
+			*flag = true
 			return fieldValues, nil, nil
 		}
 	}
@@ -361,8 +380,8 @@ func (idx *fieldIndex) addPidToTagSet(tagSet *TagSetInfo, fieldValue []byte, sid
 func (idx *fieldIndex) addSeriesToTagSet(tagSet *TagSetInfo, fieldKey string, fieldValue, oldSeriesKey []byte) error {
 	var seriesKey []byte
 	seriesKey = append(seriesKey, oldSeriesKey...)
-	seriesKey = append(seriesKey, ","...)
-	seriesKey = append(seriesKey, fmt.Sprintf("%s=", fieldKey)...)
+	seriesKey = append(seriesKey, influx.StringSplit...)
+	seriesKey = append(seriesKey, fmt.Sprintf("%s"+influx.StringSplit, fieldKey)...)
 	seriesKey = append(seriesKey, fieldValue...)
 	tagSet.SeriesKeys = append(tagSet.SeriesKeys, seriesKey)
 
@@ -432,7 +451,6 @@ func (idx *fieldIndex) extractField(expr influxql.Expr, fieldKey string) []byte 
 	default:
 		return nil
 	}
-	return nil
 }
 
 func (idx *fieldIndex) Delete(primaryIndex PrimaryIndex, name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -443,6 +461,10 @@ func (idx *fieldIndex) Delete(primaryIndex PrimaryIndex, name []byte, condition 
 func (idx *fieldIndex) Close() error {
 	idx.tb.MustClose()
 	return nil
+}
+
+func (idx *fieldIndex) DebugFlush() {
+	idx.tb.DebugFlush()
 }
 
 func FieldIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
@@ -458,6 +480,7 @@ func FieldIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine
 		amDelete:     FieldDelete,
 		amScan:       FieldScan,
 		amClose:      FieldClose,
+		amFlush:      FieldFlush,
 		index:        index,
 		primaryIndex: primaryIndex,
 	}, nil
@@ -484,12 +507,13 @@ func FieldInsert(index interface{}, primaryIndex PrimaryIndex, name []byte, row 
 	return fi.CreateIndexIfNotExists(primaryIndex, insertRow)
 }
 
-func FieldScan(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (interface{}, error) {
+func FieldScan(index interface{}, primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, groups interface{}) (interface{}, int64, error) {
 	fi, ok := index.(*fieldIndex)
 	if !ok {
-		return nil, fmt.Errorf("not a field index: %v", index)
+		return nil, 0, fmt.Errorf("not a field index: %v", index)
 	}
-	return fi.Search(primaryIndex, span, name, opt, groups)
+	re, err := fi.Search(primaryIndex, span, name, opt, groups)
+	return re, 0, err
 }
 
 func FieldDelete(index interface{}, primaryIndex PrimaryIndex, name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -500,4 +524,13 @@ func FieldDelete(index interface{}, primaryIndex PrimaryIndex, name []byte, cond
 func FieldClose(index interface{}) error {
 	fi := index.(*fieldIndex)
 	return fi.Close()
+}
+
+func FieldFlush(index interface{}) {
+	fi, ok := index.(*fieldIndex)
+	if !ok {
+		logger.GetLogger().Error(fmt.Sprintf("index %v is not a FieldIndex", index))
+		return
+	}
+	fi.DebugFlush()
 }

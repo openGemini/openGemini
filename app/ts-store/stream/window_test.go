@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
 
@@ -59,4 +60,49 @@ func Test_CompressDictKey(t *testing.T) {
 	if key != v {
 		t.Error(fmt.Sprintf("expect %v ,got %v", key, v))
 	}
+}
+
+func Test_ConsumeDataAbort(t *testing.T) {
+	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}
+	go task.consumeDataAndUpdateMeta()
+	// wait run
+	time.Sleep(3 * time.Second)
+	task.updateWindow <- struct{}{}
+	close(task.abort)
+	// wait abort
+	time.Sleep(3 * time.Second)
+}
+
+func Test_ConsumeDataClean(t *testing.T) {
+	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
+		cleanPreWindow: make(chan struct{})}
+	go task.consumeDataAndUpdateMeta()
+	// wait run
+	time.Sleep(3 * time.Second)
+	task.updateWindow <- struct{}{}
+	<-task.cleanPreWindow
+	// wait clean consume
+	time.Sleep(3 * time.Second)
+}
+
+func Test_FlushAbort(t *testing.T) {
+	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
+		cleanPreWindow: make(chan struct{}), Logger: MockLogger{}}
+	go task.flush()
+	// wait abort
+	close(task.abort)
+	time.Sleep(3 * time.Second)
+}
+
+func Test_FlushUpdate(t *testing.T) {
+	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
+		cleanPreWindow: make(chan struct{}), Logger: MockLogger{}}
+	go task.flush()
+	// wait update
+	<-task.updateWindow
+	time.Sleep(3 * time.Second)
 }

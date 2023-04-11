@@ -245,7 +245,7 @@ func (r *DBPTCtx) GetRpStat() []*proto2.RpShardStatus {
 	if v == nil {
 		return []*proto2.RpShardStatus{}
 	}
-	return v.([]*proto2.RpShardStatus)
+	return *(v.(*[]*proto2.RpShardStatus))
 }
 
 func (r *DBPTCtx) putRpStat(rss *[]*proto2.RpShardStatus) {
@@ -257,7 +257,7 @@ func (r *DBPTCtx) putRpStat(rss *[]*proto2.RpShardStatus) {
 		(*rss)[i].ShardStats.MaxTime = proto.Int64(0)
 	}
 	*rss = (*rss)[:0]
-	r.RpStatusPool.Put(*rss)
+	r.RpStatusPool.Put(rss)
 }
 
 func (r *DBPTCtx) String() string {
@@ -1126,22 +1126,6 @@ func (c *Client) saltedHash(password string) (salt, hash []byte, err error) {
 	return salt, c.hashWithSalt(salt, password), nil
 }
 
-// generates the salted hash value of the password (using SHA256).
-func (c *Client) genHashPwdVal(password string) (string, error) {
-	// 1.generate a salt and hash of the password for the cache
-	salt, hashed, err := c.saltedHash(password)
-	if err != nil {
-		c.logger.Error("saltedHash fail", zap.Error(err))
-		return "", err
-	}
-
-	// 2.assemble (verFlag + salt + hashedVal)
-	rstVal := hashAlgoVerOne
-	rstVal += fmt.Sprintf("%02X", salt)   // convert to  hex string
-	rstVal += fmt.Sprintf("%02X", hashed) // convert to hex string
-	return rstVal, nil
-}
-
 // pbkdf2WithSalt returns an encryption of password using salt.
 func (c *Client) pbkdf2WithSalt(salt []byte, password string) []byte {
 	dk := pbkdf2.Key([]byte(password), salt, pbkdf2Iter, pbkdf2KeyLen, sha256.New)
@@ -1616,7 +1600,6 @@ func (c *Client) dealOnceAuthRecord(r *authRcd) {
 		case rcd := <-c.arChan:
 			rcdLst = append(rcdLst, rcd)
 		default:
-			break
 		}
 	}
 
@@ -2347,18 +2330,6 @@ func (c *Client) updateAuthCache() {
 	}
 
 	c.authCache = newCache
-}
-
-func (c *Client) url(server string) string {
-	url := fmt.Sprintf("://%s", server)
-
-	if c.tls {
-		url = "https" + url
-	} else {
-		url = "http" + url
-	}
-
-	return url
 }
 
 var connectedServer int

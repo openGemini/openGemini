@@ -17,6 +17,7 @@ limitations under the License.
 package sysinfo
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 	"time"

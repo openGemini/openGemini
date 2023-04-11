@@ -40,17 +40,13 @@ func (mb *MemBlock) CopyBlocks(src MemoryReader) {
 	dataBlocks := src.DataBlocks()
 	if len(dataBlocks) > 0 {
 		mb.ReserveDataBlock(len(dataBlocks))
-		for i := range dataBlocks {
-			mb.data = append(mb.data, dataBlocks[i])
-		}
+		mb.data = append(mb.data, dataBlocks...)
 	}
 
 	metaBlocks := src.MetaBlocks()
 	if len(metaBlocks) > 0 {
 		mb.ReserveMetaBlock(len(metaBlocks))
-		for i := range metaBlocks {
-			mb.chunkMetas = append(mb.chunkMetas, metaBlocks[i])
-		}
+		mb.chunkMetas = append(mb.chunkMetas, metaBlocks...)
 	}
 
 	if len(mb.data) > 0 {
@@ -94,7 +90,7 @@ func (mb *MemBlock) loadDataBlock(dr DiskFileReader, tr *Trailer) error {
 	defer func() {
 		if err != nil {
 			for i := range mb.data {
-				putDataBlockBuffer(mb.data[i])
+				putDataBlockBuffer(&mb.data[i])
 			}
 			mb.data = mb.data[:0]
 		}
@@ -150,7 +146,7 @@ func (mb *MemBlock) loadMetaBlock(dr DiskFileReader, metaIndexItems []MetaIndex)
 		buf = bufferpool.Resize(buf, int(mi.size))
 		buf, err = dr.ReadAt(mi.offset, mi.size, &buf)
 		if err != nil {
-			freeMetaBlockBuffer(buf)
+			freeMetaBlockBuffer(&buf)
 			log.Error("read chunkmeta fail", zap.String("file", dr.Name()),
 				zap.Int64s("offset/size", []int64{mi.offset, int64(mi.size)}), zap.Error(err))
 			return err

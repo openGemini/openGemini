@@ -101,7 +101,6 @@ type Stream struct {
 	rowPool         *CacheRowPool
 	bp              *BuilderPool
 	windowCachePool *WindowCachePool
-	dataBlockPool   *pool.DataBlockPool
 	goPool          *ants.Pool
 
 	//key stream task id
@@ -138,7 +137,7 @@ func (s *Stream) Run() {
 		case <-ticker.C:
 			streams := s.cli.GetStreamInfosStore()
 			if streams == nil {
-				s.Logger.Info(fmt.Sprintf("get stream is nil"))
+				s.Logger.Info("get stream is nil")
 				continue
 			}
 			s.Logger.Info(fmt.Sprintf("get stream len %v", len(streams)))
@@ -290,8 +289,13 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []FieldCall, fi
 }
 
 func (s *Stream) filter() {
+	var r *CacheRow
 	for {
-		r := <-s.cache
+		select {
+		case r = <-s.cache:
+		case <-s.abort:
+			return
+		}
 		s.stats.AddStreamFilter(1)
 
 		ref := false

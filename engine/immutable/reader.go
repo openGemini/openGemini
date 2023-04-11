@@ -545,7 +545,7 @@ func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.ReserveBitmap(len(col.Val))
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
-			values = reverseBooleanValues(values)
+			_ = reverseBooleanValues(values)
 			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
@@ -757,6 +757,10 @@ func FilterByTimeDescend(rec *record.Record, tr record.TimeRange) *record.Record
 	}
 	// all data out of time ranges, continue to read data
 	return nil
+}
+
+func FilterByOpts(rec *record.Record, opt *FilterOptions) *record.Record {
+	return FilterByField(rec, opt.filtersMap, opt.cond, opt.fieldsIdx, opt.filterTags, opt.pointTags)
 }
 
 func FilterByField(rec *record.Record, filterMap map[string]interface{}, con influxql.Expr, idField []int, idTags []string, tags *influx.PointTags) *record.Record {
@@ -1108,6 +1112,7 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 		}
 		err = readTimeColumn(tmSeg, timeCol, ctx, cr, copied)
 		if err != nil {
+			// TODO: return err
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
@@ -1121,7 +1126,8 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 		ctx.origData = data
 
 		ri, ok, er := readMinMaxRowIndex(ref, col, timeCol, ctx, meta, copied, isMin)
-		if err != nil {
+		if er != nil {
+			err = er
 			log.Error("read min max column data fail", zap.Error(err), zap.Bool("isMin", isMin))
 			return
 		}
@@ -1370,30 +1376,34 @@ func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *Re
 	return nil
 }
 
-func AggregateData(newRec, baseRec *record.Record, ops []*comm.CallOption) {
+func AggregateData(newRec, baseRec *record.Record, ops []*comm.CallOption) bool {
 	if newRec.RecMeta == nil || baseRec.RecMeta == nil {
-		return
+		return false
 	}
 
+	var swap bool
 	for _, call := range ops {
 		idx := newRec.Schema.FieldIndex(call.Ref.Val)
 		switch call.Call.Name {
 		case "min":
-			minMeta(newRec, baseRec, idx)
+			swap = minMeta(newRec, baseRec, idx)
 		case "max":
-			maxMeta(newRec, baseRec, idx)
+			swap = maxMeta(newRec, baseRec, idx)
 		case "count":
 			countMeta(newRec, baseRec, idx)
+			swap = false
 		case "sum":
 			sumMeta(newRec, baseRec, idx)
+			swap = false
 		case "first":
-			firstMeta(newRec, baseRec, idx)
+			swap = firstMeta(newRec, baseRec, idx)
 		case "last":
-			lastMeta(newRec, baseRec, idx)
+			swap = lastMeta(newRec, baseRec, idx)
 		default:
 			fmt.Println("not support", call.Call.Name)
 		}
 	}
+	return swap
 }
 
 func ResetAggregateData(newRec *record.Record, ops []*comm.CallOption) {
@@ -1439,16 +1449,16 @@ func ResetAggregateData(newRec *record.Record, ops []*comm.CallOption) {
 	}
 }
 
-func minMeta(newRec, baseRec *record.Record, idx int) {
+func minMeta(newRec, baseRec *record.Record, idx int) bool {
 	newRecV, newRecTime := newRec.RecMeta.ColMeta[idx].Min()
 	baseRecV, baseRecTime := baseRec.RecMeta.ColMeta[idx].Min()
 	if IsInterfaceNil(baseRecV) {
-		return
+		return false
 	}
 	if IsInterfaceNil(newRecV) {
 		newRec.RecMeta.ColMeta[idx].SetMin(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	}
 	switch newRecV.(type) {
 	case int64:
@@ -1459,8 +1469,9 @@ func minMeta(newRec, baseRec *record.Record, idx int) {
 		if newRecV.(int64) > base || (newRecV.(int64) == base && newRecTime > baseRecTime) {
 			newRec.RecMeta.ColMeta[idx].SetMin(baseRecV, baseRecTime)
 			newRec.ColVals = baseRec.CopyColVals()
+			return true
 		} else {
-			return
+			return false
 		}
 	case float64:
 		base, ok := baseRecV.(float64)
@@ -1470,18 +1481,18 @@ func minMeta(newRec, baseRec *record.Record, idx int) {
 		if newRecV.(float64) > base || (newRecV.(float64) == base && newRecTime > baseRecTime) {
 			newRec.RecMeta.ColMeta[idx].SetMin(baseRecV, baseRecTime)
 			newRec.ColVals = baseRec.CopyColVals()
+			return true
 		} else {
-			return
+			return false
 		}
 	case bool:
-		minBool(newRec, baseRec, idx)
-		return
+		return minBool(newRec, baseRec, idx)
 	default:
 		panic("meta can't min")
 	}
 }
 
-func minBool(newRec, baseRec *record.Record, idx int) {
+func minBool(newRec, baseRec *record.Record, idx int) bool {
 	newRecV, newRecTime := newRec.RecMeta.ColMeta[idx].Min()
 	baseRecV, baseRecTime := baseRec.RecMeta.ColMeta[idx].Min()
 	base, ok := baseRecV.(bool)
@@ -1492,29 +1503,31 @@ func minBool(newRec, baseRec *record.Record, idx int) {
 		if baseRecTime < newRecTime {
 			newRec.RecMeta.ColMeta[idx].SetMin(baseRecV, baseRecTime)
 			newRec.ColVals = baseRec.CopyColVals()
+			return true
 		} else {
-			return
+			return false
 		}
 	} else if !base {
 		newRec.RecMeta.ColMeta[idx].SetMin(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
+		return false
 	} else {
-		return
+		return true
 	}
 }
 
-func maxMeta(newRec, baseRec *record.Record, idx int) {
+func maxMeta(newRec, baseRec *record.Record, idx int) bool {
 	newRecV, newRecTime := newRec.RecMeta.ColMeta[idx].Max()
 	baseRecV, baseRecTime := baseRec.RecMeta.ColMeta[idx].Max()
 
 	if IsInterfaceNil(baseRecV) {
-		return
+		return false
 	}
 
 	if IsInterfaceNil(newRecV) {
 		newRec.RecMeta.ColMeta[idx].SetMax(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	}
 	switch newRecV.(type) {
 	case int64:
@@ -1525,8 +1538,9 @@ func maxMeta(newRec, baseRec *record.Record, idx int) {
 		if newRecV.(int64) < base || (newRecV.(int64) == base && newRecTime > baseRecTime) {
 			newRec.RecMeta.ColMeta[idx].SetMax(baseRecV, baseRecTime)
 			newRec.ColVals = baseRec.CopyColVals()
+			return true
 		} else {
-			return
+			return false
 		}
 	case float64:
 		base, ok := baseRecV.(float64)
@@ -1536,18 +1550,18 @@ func maxMeta(newRec, baseRec *record.Record, idx int) {
 		if newRecV.(float64) < base || (newRecV.(float64) == base && newRecTime > baseRecTime) {
 			newRec.RecMeta.ColMeta[idx].SetMax(baseRecV, baseRecTime)
 			newRec.ColVals = baseRec.CopyColVals()
+			return true
 		} else {
-			return
+			return false
 		}
 	case bool:
-		maxBool(newRec, baseRec, idx)
-		return
+		return maxBool(newRec, baseRec, idx)
 	default:
 		panic("meta can't Max")
 	}
 }
 
-func maxBool(newRec, baseRec *record.Record, idx int) {
+func maxBool(newRec, baseRec *record.Record, idx int) bool {
 	newRecV, newRecTime := newRec.RecMeta.ColMeta[idx].Max()
 	baseRecV, baseRecTime := baseRec.RecMeta.ColMeta[idx].Max()
 	base, ok := baseRecV.(bool)
@@ -1559,14 +1573,16 @@ func maxBool(newRec, baseRec *record.Record, idx int) {
 		if baseRecTime < newRecTime {
 			newRec.RecMeta.ColMeta[idx].SetMax(baseRecV, baseRecTime)
 			newRec.ColVals = baseRec.CopyColVals()
+			return true
 		} else {
-			return
+			return false
 		}
 	} else if base {
 		newRec.RecMeta.ColMeta[idx].SetMax(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
+		return true
 	} else {
-		return
+		return false
 	}
 }
 
@@ -1634,27 +1650,27 @@ func sumMeta(newRec, baseRec *record.Record, idx int) {
 	}
 }
 
-func firstMeta(newRec, baseRec *record.Record, idx int) {
+func firstMeta(newRec, baseRec *record.Record, idx int) bool {
 	newRecV, newRecTime := newRec.RecMeta.ColMeta[idx].First()
 	baseRecV, baseRecTime := baseRec.RecMeta.ColMeta[idx].First()
 	if IsInterfaceNil(baseRecV) {
-		return
+		return false
 	}
 	if IsInterfaceNil(newRecV) && !IsInterfaceNil(baseRecV) {
 		newRec.RecMeta.ColMeta[idx].SetFirst(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	}
 	if newRecTime > baseRecTime {
 		newRec.RecMeta.ColMeta[idx].SetFirst(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	} else if newRecTime == baseRecTime && compareMin(newRecV, baseRecV) {
 		newRec.RecMeta.ColMeta[idx].SetFirst(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	} else {
-		return
+		return false
 	}
 }
 
@@ -1698,27 +1714,27 @@ func compareMin(newRecV, baseRecV interface{}) bool {
 	}
 }
 
-func lastMeta(newRec, baseRec *record.Record, idx int) {
+func lastMeta(newRec, baseRec *record.Record, idx int) bool {
 	newRecV, newRecTime := newRec.RecMeta.ColMeta[idx].Last()
 	baseRecV, baseRecTime := baseRec.RecMeta.ColMeta[idx].Last()
 	if IsInterfaceNil(baseRecV) {
-		return
+		return false
 	}
 	if IsInterfaceNil(newRecV) && !IsInterfaceNil(baseRecV) {
 		newRec.RecMeta.ColMeta[idx].SetLast(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	}
 	if newRecTime < baseRecTime {
 		newRec.RecMeta.ColMeta[idx].SetLast(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	} else if newRecTime == baseRecTime && compareMin(newRecV, baseRecV) {
 		newRec.RecMeta.ColMeta[idx].SetLast(baseRecV, baseRecTime)
 		newRec.ColVals = baseRec.CopyColVals()
-		return
+		return true
 	} else {
-		return
+		return false
 	}
 }
 

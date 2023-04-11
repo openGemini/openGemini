@@ -61,3 +61,125 @@ func Test_fileLoopCursor_SinkPlan(t *testing.T) {
 	}
 	require.Equal(t, true, cursor.isCutSchema)
 }
+
+func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatValBitmap []int, floatVal []float64,
+	stringValBitmap []int, stringVal []string, booleanValBitmap []int, boolVal []bool, time []int64) *record.Record {
+	var rec record.Record
+
+	rec.Schema = append(rec.Schema, schema...)
+	for i, v := range rec.Schema {
+		var colVal record.ColVal
+		if v.Type == influx.Field_Type_Int {
+			if i == len(rec.Schema)-1 {
+				// time col
+				for index := range time {
+					colVal.AppendInteger(time[index])
+				}
+			} else {
+				for index := range time {
+					if intValBitmap[index] == 1 {
+						colVal.AppendInteger(intVal[index])
+					} else {
+						colVal.AppendIntegerNull()
+					}
+				}
+			}
+		} else if v.Type == influx.Field_Type_Boolean {
+			for index := range time {
+				if booleanValBitmap[index] == 1 {
+					colVal.AppendBoolean(boolVal[index])
+				} else {
+					colVal.AppendBooleanNull()
+				}
+			}
+		} else if v.Type == influx.Field_Type_Float {
+			for index := range time {
+				if floatValBitmap[index] == 1 {
+					colVal.AppendFloat(floatVal[index])
+				} else {
+					colVal.AppendFloatNull()
+				}
+			}
+		} else if v.Type == influx.Field_Type_String {
+			for index := range time {
+				if stringValBitmap[index] == 1 {
+					colVal.AppendString(stringVal[index])
+				} else {
+					colVal.AppendStringNull()
+				}
+			}
+		} else {
+			panic("error type")
+		}
+		rec.ColVals = append(rec.ColVals, colVal)
+	}
+	rec.RecMeta = &record.RecMeta{}
+	return &rec
+}
+
+func TestFilterRecInMemTable(t *testing.T) {
+	sInfo := &seriesInfo{
+		sid:  1,
+		key:  []byte{'a', 'b'},
+		tags: influx.PointTags{{"a", "b", false}},
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 1}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{57, 56, 55, 37, 3, 2, 1})
+	s := &fileLoopCursor{}
+	s.ctx = &idKeyCursorContext{
+		tr: record.TimeRange{0, 100},
+		m:  map[string]interface{}{},
+	}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true})
+	s.mergeRecIters = make(map[uint64]*SeriesIter)
+	s.mergeRecIters[0] = &SeriesIter{nil, 0}
+	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.ridIdx = map[int]struct{}{}
+	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
+	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
+	re, _ := s.FilterRecInMemTable(rec, sInfo)
+	for i := range re.Times() {
+		if re.Times()[i] != rec.Times()[i] {
+			t.Fatal()
+		}
+	}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: false})
+	r, _ := s.FilterRecInMemTable(rec, sInfo)
+	for i := range rec.Times() {
+		if rec.Times()[i] != r.Times()[i] {
+			t.Fatal()
+		}
+	}
+	s.isCutSchema = true
+	r2, _ := s.FilterRecInMemTable(rec, sInfo)
+	for i := range rec.Times() {
+		if rec.Times()[i] != r2.Times()[i] {
+			t.Fatal()
+		}
+	}
+	rec2 := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 1}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{157, 156, 155, 137, 113, 112, 111})
+	s.FilterRecInMemTable(rec2, sInfo)
+	rec3 := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 0}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{157, 156, 155, 137, 113, 112, 99})
+	s.FilterRecInMemTable(rec3, sInfo)
+}

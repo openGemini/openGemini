@@ -67,7 +67,6 @@ func (c *SortAppendTransformCreator) Create(plan LogicalPlan, _ query.ProcessorO
 
 	p := NewBaseMergeTransform(inRowDataTypes, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema().(*QuerySchema),
 		plan.Children(), &SortAppendTransf{})
-	p.InitOnce()
 	return p, nil
 }
 
@@ -352,7 +351,6 @@ func NewStringAppendIterator() *StringAppendIterator {
 
 // nolint
 func (f *StringAppendIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
-	var start, end uint32
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	f.input = endpoint.InputPoint.Chunk.Column(params.Table[endpoint.OutputPoint.Ordinal])
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
@@ -360,14 +358,6 @@ func (f *StringAppendIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 		f.output.AppendManyNil(params.end - params.start)
 		return
 	}
-	stringBytes, stringOffset := f.input.GetStringBytes()
-	start = stringOffset[startValue]
-	if endValue == len(stringOffset) {
-		end = uint32(len(stringBytes))
-	} else {
-		end = stringOffset[endValue]
-	}
-	stringBytes = stringBytes[start:end]
 	f.output.AppendStringValues(f.input.StringValuesRange(f.stringValues[:0], startValue, endValue)...)
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {

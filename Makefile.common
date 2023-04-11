@@ -1,0 +1,53 @@
+# Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+export GOROOT=$(shell go env GOROOT)
+export GOPATH=$(shell go env GOPATH)
+export GOOS=$(shell go env GOOS)
+export GOARCH=$(shell go env GOARCH)
+export PATH := $(PATH):$(GOROOT)/bin:$(GOPATH)/bin
+
+GO          := GO111MODULE=on go
+GOTEST      := $(GO) test
+PYTHON      := python
+STATICCHECK := staticcheck
+
+FAILPOINT_ENABLE  := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl enable
+FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl disable
+
+PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|open_src\/github.com\/hashicorp"
+PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
+
+COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go"
+COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
+COPYRIGHT_HEADER  := "Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd."
+
+
+install-goimports-reviser:
+	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.1.0
+
+install-staticcheck:
+	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.3
+
+install-golangci-lint:
+	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.47.3
+
+install-failpoint:
+	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl
+
+failpoint-enable:
+	@$(FAILPOINT_ENABLE)
+
+failpoint-disable:
+	@$(FAILPOINT_DISABLE)

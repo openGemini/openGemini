@@ -1113,7 +1113,7 @@ func {{.Name}}IrateFinalReduce(ft int64, st int64, fv {{.Type}}, sv {{.Type}},
 
 func {{.Name}}IrateUpdate(prevPoints, currPoints [2]*{{.Name}}Point) {
 	samePrevPoint := (!prevPoints[0].isNil && !prevPoints[1].isNil) &&
-		(prevPoints[0].time == prevPoints[1].time && prevPoints[1].value == prevPoints[1].value)
+		(prevPoints[0].time == prevPoints[1].time && prevPoints[0].value == prevPoints[1].value)
 	for i := range currPoints {
 		if currPoints[i].isNil || currPoints[i].time < prevPoints[0].time ||
 			(currPoints[i].time == prevPoints[0].time && currPoints[i].value < prevPoints[0].value) {

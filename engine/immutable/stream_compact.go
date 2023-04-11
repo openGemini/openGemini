@@ -359,19 +359,6 @@ func (c *StreamIterators) Init(id uint64, chunkDataOffset int64, schema record.S
 	c.colBuilder.resetPreAgg()
 }
 
-func (c *StreamIterators) padRows(rows int, ref *record.Field) {
-	switch ref.Type {
-	case influx.Field_Type_String:
-		c.col.AppendStringNulls(rows)
-	case influx.Field_Type_Boolean:
-		c.col.AppendBooleanNulls(rows)
-	case influx.Field_Type_Float:
-		c.col.AppendFloatNulls(rows)
-	case influx.Field_Type_Int:
-		c.col.AppendIntegerNulls(rows)
-	}
-}
-
 func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error) {
 	compItrs := getStreamIterators()
 	compItrs.closed = m.closed
@@ -524,6 +511,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 	c.updateChunkStat(cm.sid, maxT)
 	c.keys[cm.sid] = struct{}{}
 
+	cm.validation()
 	c.encChunkMeta = cm.marshal(c.encChunkMeta[:0])
 	cmOff := c.writer.ChunkMetaSize()
 	c.cmOffset = append(c.cmOffset, uint32(cmOff-c.preCmOff))
@@ -764,6 +752,9 @@ func (c *StreamIterators) compactColumn(ref record.Field, needCalPreAgg bool) (i
 		col.Init()
 	}
 
+	var rowCount = 0
+	var maxRows = MaxRowsPerSegment()
+
 	for itrIndex := c.iteratorStart; itrIndex < len(c.chunkItrs); itrIndex++ {
 		itr := c.chunkItrs[itrIndex]
 		if c.isClosed() {
@@ -778,11 +769,12 @@ func (c *StreamIterators) compactColumn(ref record.Field, needCalPreAgg bool) (i
 		idx := c.dstMeta.columnIndex(&ref)
 		c.colBuilder.cm = &c.dstMeta
 		c.colBuilder.colMeta = &c.dstMeta.colMeta[idx]
+
 		idx = srcMeta.columnIndex(&ref)
 		if idx >= 0 {
 			srcColMeta = &srcMeta.colMeta[idx]
 		} else {
-			c.padRows(srcMeta.Rows(c.ctx.preAggBuilders.timeBuilder), &ref)
+			rowCount = srcMeta.Rows(c.ctx.preAggBuilders.timeBuilder)
 		}
 
 		// merge full segments(full segment: rows in segment EQ 1000)
@@ -820,6 +812,13 @@ func (c *StreamIterators) compactColumn(ref record.Field, needCalPreAgg bool) (i
 					if err = c.decodeSegment(colData, tmData, ref); err != nil {
 						return
 					}
+				}
+			} else {
+				if rowCount > maxRows {
+					c.col.AppendColVal(newNilCol(maxRows, &ref), ref.Type, 0, maxRows)
+					rowCount -= maxRows
+				} else {
+					c.col.AppendColVal(newNilCol(rowCount, &ref), ref.Type, 0, rowCount)
 				}
 			}
 

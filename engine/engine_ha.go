@@ -43,7 +43,7 @@ func (e *Engine) PreOffload(db string, ptId uint32) error {
 		}
 		return err
 	}
-	if err := dbPt.disableDBPtBgr(); err != nil {
+	if err = dbPt.disableDBPtBgr(); err != nil {
 		dbPt.unref()
 		return err
 	}
@@ -80,14 +80,14 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	}
 	defer e.clearDbPtMigrating(db, ptId)
 	log.Info("prepare load pt start", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
-	dbPt, err := e.getPartition(db, ptId, false)
+	_, err := e.getPartition(db, ptId, false)
 	if err == nil {
 		return nil
 	}
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := ""
-	dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
+	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
 	dbPt.SetOption(e.engOpt)
 	dbPt.unload = make(chan struct{})
 	dbPt.preload = true
@@ -141,7 +141,6 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := path.Join(ptPath, "LOCK")
 	dbPt, err := e.getPartition(db, ptId, false)
-	start = time.Now()
 	if err != nil {
 		if errno.Equal(err, errno.DBPTClosed) {
 			return err
@@ -253,18 +252,18 @@ func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durationInfos map[u
 	return nil
 }
 
-func (e *Engine) trySetDbPtMigrating(db string, ptId uint32) bool {
+func (e *Engine) trySetDbPtMigrating(database string, ptId uint32) bool {
 	e.mgtLock.Lock()
 	defer e.mgtLock.Unlock()
-	mdb, mdbExist := e.migratingDbPT[db]
-	if !mdbExist {
-		mpt := make(map[uint32]struct{})
-		mpt[ptId] = struct{}{}
-		e.migratingDbPT[db] = mpt
+	db, dbExist := e.migratingDbPT[database]
+	if !dbExist {
+		pt := make(map[uint32]struct{})
+		pt[ptId] = struct{}{}
+		e.migratingDbPT[database] = pt
 		return true
 	}
-	if _, ptExist := mdb[ptId]; !ptExist {
-		mdb[ptId] = struct{}{}
+	if _, ptExist := db[ptId]; !ptExist {
+		db[ptId] = struct{}{}
 		return true
 	}
 	return false

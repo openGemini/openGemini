@@ -33,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -90,20 +91,20 @@ func init() {
 	}
 }
 
-func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema) (tsi.GroupSeries, error) {
-	result, err := s.indexBuilder.Scan(span, record.Str2bytes(schema.Options().OptionsName()), schema.Options().(*query.ProcessorOptions))
+func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error) {
+	result, num, err := s.indexBuilder.Scan(span, record.Str2bytes(schema.Options().OptionsName()), schema.Options().(*query.ProcessorOptions), callBack)
 	if err != nil {
-		return nil, err
+		return nil, num, err
 	}
 	tagSets, ok := result.(tsi.GroupSeries)
 	if !ok {
-		return nil, fmt.Errorf("type error: expect tsi.GroupSeries: got %T", result)
+		return nil, num, fmt.Errorf("type error: expect tsi.GroupSeries: got %T", result)
 	}
 	if len(tagSets) == 0 {
-		return nil, nil
+		return nil, num, nil
 	}
 
-	return tagSets, nil
+	return tagSets, num, nil
 }
 
 func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error) {
@@ -128,12 +129,15 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	start := time.Now()
 
 	var lazyInit bool
-
+	var seriesNum int64
 	//  #sort series for query with:1.limit 2.no aux tag 3.group by * 4.no call functions
 	if !schema.HasCall() && schema.HasLimit() && !schema.HasAuxTag() && schema.Options().IsGroupByAllDims() {
 		lazyInit = true
 	}
-	result, err := s.Scan(span, schema)
+	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
+	defer func() {
+		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum, seriesNum)
+	}()
 
 	if err != nil {
 		s.log.Error("get index result fail", zap.Error(err))
@@ -339,6 +343,10 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 	if parallelism > totalSid {
 		parallelism = totalSid
 	}
+
+	// get parallelism num from resource allocator.
+	num, _, _ := resourceallocator.AllocRes(resourceallocator.ChunkReaderRes, int64(parallelism))
+	parallelism = int(num)
 
 	var groupSpan *tracing.Span
 	if span != nil {

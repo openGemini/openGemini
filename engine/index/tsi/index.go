@@ -50,6 +50,7 @@ const (
 	MergeSet IndexType = iota
 	Text
 	Field
+	IndexTypeAll
 
 	defaultSeriesKeyLen = 64
 )
@@ -60,6 +61,7 @@ var (
 
 var seriesKeyPool = &sync.Pool{}
 
+//lint:ignore U1000 TODO performance improvement use sync.pool
 func getSeriesKeyBuf() []byte {
 	v := seriesKeyPool.Get()
 	if v != nil {
@@ -68,8 +70,11 @@ func getSeriesKeyBuf() []byte {
 	return make([]byte, 0, defaultSeriesKeyLen)
 }
 
-func putSeriesKeyBuf(buf []byte) {
-	buf = buf[:0]
+func putSeriesKeyBuf(buf *[]byte) {
+	if buf == nil {
+		return
+	}
+	*buf = (*buf)[:0]
 	seriesKeyPool.Put(buf)
 }
 
@@ -122,7 +127,7 @@ func (t *TagSetInfo) reset() {
 	t.TagsVec = t.TagsVec[:0]
 
 	for i := range t.SeriesKeys {
-		putSeriesKeyBuf(t.SeriesKeys[i])
+		putSeriesKeyBuf(&t.SeriesKeys[i])
 	}
 	t.SeriesKeys = t.SeriesKeys[:0]
 }
@@ -189,7 +194,7 @@ func (p *tagSetInfoPool) get() (set *TagSetInfo) {
 }
 
 func (p *tagSetInfoPool) getInit(initNum int) (set *TagSetInfo) {
-	return p.GetBySize(64, false)
+	return p.GetBySize(initNum, false)
 }
 
 func (p *tagSetInfoPool) GetBySize(size int, emptySpace bool) (set *TagSetInfo) {
@@ -273,7 +278,7 @@ type Index interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetSeriesIdBySeriesKey(key, name []byte) (uint64, error)
 	SearchSeries(series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error)
-	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, _ interface{}) (GroupSeries, error)
+	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)
 	SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error)
 	SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
 	SearchTagValues(name []byte, tagKeys [][]byte, condition influxql.Expr) ([][]string, error)

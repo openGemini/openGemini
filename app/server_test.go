@@ -82,6 +82,7 @@ func TestCommand_InitConfig(t *testing.T) {
 
 	conf := config.NewTSSql()
 	cmd := app.NewCommand()
+	defer cmd.Close()
 
 	err = cmd.InitConfig(conf, dir+"/invalid.conf")
 	if !strings.HasPrefix(err.Error(), "parse config") {

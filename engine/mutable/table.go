@@ -96,12 +96,12 @@ func (msi *MsInfo) Init(row *influx.Row) {
 	msi.Name = row.Name
 	genMsSchema(&msi.Schema, row.Fields)
 	msi.TimeAsd = true
-	msi.sidMap = make(map[uint64]*WriteChunk, 1024)
+	msi.sidMap = make(map[uint64]*WriteChunk)
 }
 
 func (msi *MsInfo) allocChunk() *WriteChunk {
 	if cap(msi.chunkBufs) == len(msi.chunkBufs) {
-		msi.chunkBufs = make([]WriteChunk, 0, 1024)
+		msi.chunkBufs = make([]WriteChunk, 0, 64)
 	}
 	msi.chunkBufs = msi.chunkBufs[:len(msi.chunkBufs)+1]
 
@@ -129,6 +129,7 @@ type MemTable struct {
 	idx  *ski.ShardKeyIndex
 
 	msInfoMap     map[string]*MsInfo // measurements schemas, {"cpu_0001": *MsInfo}
+	msInfos       []MsInfo           // pre-allocation
 	concurLimiter limiter.Fixed
 
 	log     *zap.Logger
@@ -445,18 +446,18 @@ func (t *MemTable) appendFieldToCol(col *record.ColVal, field *influx.Field, siz
 	return nil
 }
 
-func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Field, time int64, sameSchema bool) (error, int64) {
+func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Field, time int64, sameSchema bool) (int64, error) {
 	// fast path
 	var size int64
 	if sameSchema {
 		for i := range fields {
 			if err := t.appendFieldToCol(&rec.ColVals[i], &fields[i], &size); err != nil {
-				return err, size
+				return size, err
 			}
 		}
 		rec.ColVals[len(fields)].AppendInteger(time)
 		size += int64(record.Int64SizeBytes)
-		return nil, size
+		return size, nil
 	}
 
 	// slow path
@@ -467,7 +468,7 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 	for recSchemaIdx < recSchemaLen && pointSchemaIdx < pointSchemaLen {
 		if rec.Schema[recSchemaIdx].Name == fields[pointSchemaIdx].Key {
 			if err := t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
-				return err, size
+				return size, err
 			}
 			recSchemaIdx++
 			pointSchemaIdx++
@@ -482,7 +483,7 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 			rec.Schema[appendColIdx].Type = int(fields[pointSchemaIdx].Type)
 			rec.ColVals[appendColIdx].PadColVal(int(fields[pointSchemaIdx].Type), oldRowNum)
 			if err := t.appendFieldToCol(&rec.ColVals[appendColIdx], &fields[pointSchemaIdx], &size); err != nil {
-				return err, size
+				return size, err
 			}
 			pointSchemaIdx++
 			appendColIdx++
@@ -501,7 +502,7 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 		rec.Schema[appendColIdx].Type = int(fields[pointSchemaIdx].Type)
 		rec.ColVals[appendColIdx].PadColVal(int(fields[pointSchemaIdx].Type), oldRowNum)
 		if err := t.appendFieldToCol(&rec.ColVals[appendColIdx], &fields[pointSchemaIdx], &size); err != nil {
-			return err, size
+			return size, err
 		}
 		pointSchemaIdx++
 		appendColIdx++
@@ -515,10 +516,10 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 	rec.ColVals[newColNum-1].AppendInteger(time)
 	size += int64(record.Int64SizeBytes)
 
-	return nil, size
+	return size, nil
 }
 
-func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, fields []influx.Field) (error, int64) {
+func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, fields []influx.Field) (int64, error) {
 	chunk.Mu.Lock()
 	defer chunk.Mu.Unlock()
 
@@ -555,6 +556,16 @@ func (t *MemTable) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, f
 	return t.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
+func (t *MemTable) allocMsInfo() *MsInfo {
+	size := len(t.msInfos)
+	if cap(t.msInfos) == size {
+		t.msInfos = make([]MsInfo, 0, 64)
+		size = 0
+	}
+	t.msInfos = t.msInfos[:size+1]
+	return &t.msInfos[size]
+}
+
 func (t *MemTable) createMsInfo(name string, row *influx.Row) *MsInfo {
 	t.mu.RLock()
 	msInfo, ok := t.msInfoMap[name]
@@ -567,7 +578,7 @@ func (t *MemTable) createMsInfo(name string, row *influx.Row) *MsInfo {
 	t.mu.Lock()
 	msInfo, ok = t.msInfoMap[name]
 	if !ok {
-		msInfo = &MsInfo{}
+		msInfo = t.allocMsInfo()
 		msInfo.Init(row)
 		t.msInfoMap[name] = msInfo
 	}
@@ -617,7 +628,7 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 				atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
 			}
 
-			err, _ = t.appendFields(msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
+			_, err = t.appendFields(msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
 			if err != nil {
 				return err
 			}
@@ -633,7 +644,8 @@ func (t *MemTable) WriteRows(rowsD *dictpool.Dict, getLastFlushTime func(msName 
 
 func (t *MemTable) Reset() {
 	t.memSize = 0
-	t.msInfoMap = make(map[string]*MsInfo)
+	t.msInfos = make([]MsInfo, 0, len(t.msInfoMap))
+	t.msInfoMap = make(map[string]*MsInfo, len(t.msInfoMap))
 	t.idx = nil
 }
 

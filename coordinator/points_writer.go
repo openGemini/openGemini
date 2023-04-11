@@ -42,7 +42,6 @@ import (
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -401,20 +400,25 @@ func dropFieldByIndex(r *influx.Row, dropFieldIndex []int) {
 	r.Fields = remainField
 }
 
-func checkFields(fields influx.Fields) error {
+// fixFields checks and fixes fields: ignore specified time fields
+func fixFields(fields influx.Fields) (influx.Fields, error) {
 	for i := 0; i < len(fields); i++ {
+		if fields[i].Key == "time" {
+			fields = append(fields[:i], fields[i+1:]...) // remove the i index item for time field
+			i--                                          // fix the i index
+			continue
+		}
 		if i > 0 && fields[i-1].Key == fields[i].Key {
-			failpoint.Inject("skip-duplicate-field-check", func(val failpoint.Value) {
-				if strings2.EqualInterface(val, fields[i].Key) {
-					failpoint.Continue()
-				}
-			})
-
-			return errno.NewError(errno.DuplicateField, fields[i].Key)
+			if fields[i-1].Type != fields[i].Type {
+				// same field key, diffrent field type
+				return nil, errno.NewError(errno.ParseFieldTypeConflict, fields[i].Key)
+			}
+			fields = append(fields[:i-1], fields[i:]...) // remove the i-1 index item
+			i--                                          // fix the i index
+			continue
 		}
 	}
-
-	return nil
+	return fields, nil
 }
 
 // RetryWritePointRows make sure sql client got the latest metadata.
@@ -489,7 +493,7 @@ func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []i
 	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
 
 	if err != nil {
-		if errno.Equal(err, errno.WriteMultiArray) || errno.Equal(err, errno.WriteErrorArray) {
+		if errno.Equal(err, errno.ErrorTagArrayFormat) || errno.Equal(err, errno.WriteErrorArray) {
 			return netstorage.PartialWriteError{Reason: err, Dropped: dropped}
 		}
 		return err
@@ -550,9 +554,13 @@ func (w *PointsWriter) writeShardMap(database, retentionPolicy string, ctx *inje
 // if there is a stream aggregation, then map rows to mst.
 func (w *PointsWriter) routeAndMapOriginRows(
 	database, retentionPolicy string, rows []influx.Row, ctx *injestionCtx,
-) (partialErr error, dropped int, err error) {
+) (error, int, error) {
+	var partialErr error // the last write partial error
+	var dropped int      // number of missing points due to write failures
+	var err error        // the error returned immediately
+
 	var isDropRow bool
-	var pErr error
+	var pErr error // the temporary error
 	var sh *meta2.ShardInfo
 
 	wh := ctx.getWriteHelper(w)
@@ -570,10 +578,10 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			dropped++
 			continue
 		}
-		sort.Sort(r.Fields)
+		sort.Stable(r.Fields)
 
-		if err := checkFields(r.Fields); err != nil {
-			partialErr = err
+		if r.Fields, pErr = fixFields(r.Fields); pErr != nil {
+			partialErr = pErr
 			dropped++
 			continue
 		}
@@ -588,7 +596,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 				err = nil
 				continue
 			}
-			return
+			return nil, dropped, err
 		}
 		r.Name = ctx.ms.Name
 
@@ -601,7 +609,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 					continue
 				}
 			} else {
-				return
+				return nil, dropped, err
 			}
 		}
 		atomic.AddInt64(&statistics.HandlerStat.WriteUpdateSchemaDuration, time.Since(start).Nanoseconds())
@@ -612,9 +620,9 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		updateIndexOptions(r, ctx.ms.GetIndexRelation())
 
 		start = time.Now()
-		err, pErr, sh = w.updateShardGroupAndShardKey(database, retentionPolicy, r, ctx, false, nil, 0, false)
+		err, sh, pErr = w.updateShardGroupAndShardKey(database, retentionPolicy, r, ctx, false, nil, 0, false)
 		if err != nil {
-			return
+			return nil, dropped, err
 		}
 		if pErr != nil {
 			partialErr = pErr
@@ -630,17 +638,17 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		if len(*ctx.getDstSis()) > 0 {
 			err = w.MapRowToMeasurement(ctx, sh.ID, originName, r)
 			if err != nil {
-				return
+				return nil, dropped, err
 			}
 		}
 
 		if err = w.MapRowToShard(ctx, id, r); err != nil {
-			return
+			return nil, dropped, err
 		}
 		atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(r.Fields.Len()))
 		atomic.AddInt64(&statistics.HandlerStat.WriteMapRowsDuration, time.Since(start).Nanoseconds())
 	}
-	return
+	return partialErr, dropped, nil
 }
 
 func (w *PointsWriter) updateSrcStreamDstShardIdMap(
@@ -663,7 +671,7 @@ func (w *PointsWriter) updateSrcStreamDstShardIdMapWithShardKey(
 	srcStreamDstShardIdMap := ctx.getSrcStreamDstShardIdMap()
 	for _, r := range *rs {
 		var pErr error
-		err, pErr, sh := w.updateShardGroupAndShardKey(si.DesMst.Database, si.DesMst.RetentionPolicy, r, ctx, true, nil, idx, true)
+		err, sh, pErr := w.updateShardGroupAndShardKey(si.DesMst.Database, si.DesMst.RetentionPolicy, r, ctx, true, nil, idx, true)
 		if err != nil {
 			return err
 		}
@@ -779,7 +787,7 @@ func buildTagsFields(info *meta2.StreamInfo, srcSchema map[string]int32) ([]stri
 
 func (w *PointsWriter) updateShardGroupAndShardKey(
 	database, retentionPolicy string, r *influx.Row, ctx *injestionCtx, stream bool, dims []string, index int, reuseShardKey bool,
-) (err error, partialErr error, sh *meta2.ShardInfo) {
+) (err error, sh *meta2.ShardInfo, partialErr error) {
 	var wh *writeHelper
 	var di *meta2.DatabaseInfo
 	var si **meta2.ShardKeyInfo
@@ -805,6 +813,9 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 	sg, sameSg, err = wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp))
 	if err != nil {
 		return
+	}
+	if len(*asis) == 0 {
+		sameSg = false
 	}
 
 	if !sameSg {

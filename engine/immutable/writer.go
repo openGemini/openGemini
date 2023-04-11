@@ -1426,23 +1426,27 @@ func getMetaBlockBuffer(size int) []byte {
 	if v == nil {
 		return make([]byte, 0, size)
 	}
-	buf, ok := v.([]byte)
+	buf, ok := v.(*[]byte)
 	if !ok {
-		buf = make([]byte, 0, size)
+		return make([]byte, 0, size)
 	}
-	return buf[:0]
+	return (*buf)[:0]
 }
 
 // nolint
-func freeMetaBlockBuffer(b []byte) {
-	metaBlkPool.Put(b[:0])
+func freeMetaBlockBuffer(b *[]byte) {
+	if b == nil {
+		return
+	}
+	*b = (*b)[:0]
+	metaBlkPool.Put(b)
 }
 
 func freeMetaBlocks(buffers [][]byte) int {
 	n := 0
 	for i := range buffers {
 		n += cap(buffers[i])
-		freeMetaBlockBuffer(buffers[i])
+		freeMetaBlockBuffer(&buffers[i])
 	}
 	return n
 }
@@ -1609,10 +1613,10 @@ func (w *indexWriter) Close() error {
 
 	if w.cacheMeta {
 		for _, b := range w.metas {
-			freeMetaBlockBuffer(b)
+			freeMetaBlockBuffer(&b)
 		}
 		if w.buf != nil {
-			freeMetaBlockBuffer(w.buf)
+			freeMetaBlockBuffer(&w.buf)
 		}
 		w.buf = nil
 	}

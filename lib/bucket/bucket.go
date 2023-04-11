@@ -47,14 +47,17 @@ type Int64bucket struct {
 	blockExecutor int64
 
 	lock sync.RWMutex
+
+	outOfLimitOnce bool
 }
 
-func NewInt64Bucket(timeOut time.Duration, TotalResource int64) ResourceBucket {
+func NewInt64Bucket(timeOut time.Duration, TotalResource int64, outOfLimitOnce bool) ResourceBucket {
 	b := &Int64bucket{}
 	b.broadcast = make(chan struct{})
 	b.totalResource = TotalResource
 	b.freeResource = b.totalResource
 	b.timeout = timeOut
+	b.outOfLimitOnce = outOfLimitOnce
 	return b
 }
 
@@ -78,7 +81,7 @@ func (b *Int64bucket) GetResource(cost int64) error {
 	for {
 		currMem = atomic.LoadInt64(&b.freeResource)
 		freeMem = currMem - cost
-		if freeMem >= 0 {
+		if (currMem >= 0 && b.outOfLimitOnce) || (!b.outOfLimitOnce && freeMem >= 0) {
 			// CAS guarantees the atomic operation for the reResource info.
 			if ok := atomic.CompareAndSwapInt64(&b.freeResource, currMem, freeMem); ok {
 				return nil

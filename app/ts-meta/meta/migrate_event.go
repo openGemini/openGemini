@@ -139,6 +139,7 @@ func (e *BaseEvent) increaseRetryCnt() {
 }
 
 //nolint
+//lint:ignore U1000 keep this
 func (e *BaseEvent) setIsolate(isolate bool) {
 	e.needIsolate = isolate
 }

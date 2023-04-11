@@ -19,10 +19,10 @@ package config
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"io/ioutil"
 	"time"
 
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 )
 
@@ -109,11 +109,7 @@ func (c *Spdy) NewTLSConfig() (*tls.Config, error) {
 
 	if c.TLSClientAuth {
 		pool := x509.NewCertPool()
-		pem, err := ioutil.ReadFile(c.TLSCARoot)
-		if err != nil {
-			return nil, err
-		}
-		pool.AppendCertsFromPEM(pem)
+		pool.AppendCertsFromPEM([]byte(crypto.DecryptFromFile(c.TLSCARoot)))
 		conf.ClientAuth = tls.RequireAndVerifyClientCert
 		conf.ClientCAs = pool
 	}
@@ -139,7 +135,7 @@ func (c *Spdy) newTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 		return nil, errno.NewError(errno.InvalidTLSConfig)
 	}
 
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(certFile)), []byte(crypto.DecryptFromFile(keyFile)))
 	if err != nil {
 		return nil, err
 	}

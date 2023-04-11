@@ -33,6 +33,7 @@ import (
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -362,7 +363,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 		}
 
 		for i, r := range rows {
-			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.Name, fs)
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
 
 			if errors[i] == "" {
 				assert.NoError(t, err)
@@ -466,7 +467,7 @@ func generateRows(num int, rows []influx.Row) []influx.Row {
 	return rows[:num]
 }
 
-func TestCheckFields(t *testing.T) {
+func TestCheckFields_Conflict(t *testing.T) {
 	fields := influx.Fields{
 		{
 			Key:  "foo",
@@ -476,14 +477,56 @@ func TestCheckFields(t *testing.T) {
 			Key:  "foo",
 			Type: influx.Field_Type_Int,
 		},
+		{
+			Key:  "time",
+			Type: influx.Field_Type_Int,
+		},
+		{
+			Key:  "time",
+			Type: influx.Field_Type_Int,
+		},
+		{
+			Key:  "zing",
+			Type: influx.Field_Type_String,
+		},
 	}
 
-	err := checkFields(fields)
-	assert.EqualError(t, err, errno.NewError(errno.DuplicateField, "foo").Error())
+	fields, err := fixFields(fields)
+	assert.EqualError(t, err, "conflict field type: foo")
+	assert.Empty(t, nil, fields)
+}
 
-	fields[0].Key = "foo2"
-	err = checkFields(fields)
+func TestCheckFields_Ignore(t *testing.T) {
+	fields := influx.Fields{
+		{
+			Key:      "foo",
+			Type:     influx.Field_Type_Float,
+			NumValue: 1,
+		},
+		{
+			Key:      "foo",
+			Type:     influx.Field_Type_Float,
+			NumValue: 2,
+		},
+		{
+			Key:  "zing",
+			Type: influx.Field_Type_String,
+		},
+	}
+
+	fields, err := fixFields(fields)
 	assert.NoError(t, err)
+	assert.Equal(t, influx.Fields{
+		{
+			Key:      "foo",
+			Type:     influx.Field_Type_Float,
+			NumValue: 2,
+		},
+		{
+			Key:  "zing",
+			Type: influx.Field_Type_String,
+		},
+	}, fields)
 }
 
 func TestStreamSymbolMarshalUnmarshal(t *testing.T) {
@@ -629,6 +672,80 @@ func TestPointsWriter_TimeRangeLimit(t *testing.T) {
 
 	exp := "partial write: " + errno.NewError(errno.WritePointOutOfRP).Error() + " dropped=1"
 	assert.EqualError(t, err, exp)
+}
+
+func TestPointsWriter_WritePointRows_DuplicateFields_TypeConflict(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	// just one row for duplicateFields
+	rows := []influx.Row{
+		{
+			Name: "mst_0000",
+			Tags: []influx.Tag{
+				{
+					Key:   "t1",
+					Value: "v1",
+				},
+			},
+			Fields: influx.Fields{
+				{
+					Key:      "foo",
+					Type:     influx.Field_Type_Float,
+					NumValue: 1,
+				},
+				{
+					Key:      "foo",
+					Type:     influx.Field_Type_String,
+					StrValue: "str",
+				},
+			},
+			Timestamp: time.Now().UnixNano(),
+		},
+	}
+	err := pw.writePointRows("db0", "rp0", rows)
+	require.EqualError(t, err, "partial write: conflict field type: foo dropped=1")
+}
+
+func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
+	streamDistribution = diffDis
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	// two rows:
+	// 1. duplicateFields
+	// 2. normal row
+	rows := []influx.Row{
+		{
+			Name: "mst_0000",
+			Fields: influx.Fields{
+				{
+					Key:      "foo",
+					Type:     influx.Field_Type_Float,
+					NumValue: 1,
+				},
+				{
+					Key:      "foo",
+					Type:     influx.Field_Type_Float,
+					NumValue: 2,
+				},
+			},
+			Timestamp: time.Now().UnixNano(),
+		},
+		{
+			Name: "mst_0000",
+			Fields: influx.Fields{
+				{
+					Key:  "foo",
+					Type: influx.Field_Type_String,
+				},
+			},
+			Timestamp: time.Now().UnixNano(),
+		},
+	}
+	err := pw.writePointRows("db0", "rp0", rows)
+	require.NoError(t, err)
 }
 
 func TestColumnToIndexUpdate(t *testing.T) {

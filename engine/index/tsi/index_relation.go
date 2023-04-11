@@ -69,10 +69,10 @@ func (relation *IndexRelation) IndexInsert(name []byte, point interface{}) error
 	return err
 }
 
-func (relation *IndexRelation) IndexScan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (interface{}, error) {
+func (relation *IndexRelation) IndexScan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}, callBack func(num int64) error) (interface{}, int64, error) {
 	index := relation.indexAmRoutine.index
 	primaryIndex := relation.indexAmRoutine.primaryIndex
-	return relation.indexAmRoutine.amScan(index, primaryIndex, span, name, opt, groups)
+	return relation.indexAmRoutine.amScan(index, primaryIndex, span, name, opt, callBack, groups)
 }
 
 func (relation *IndexRelation) IndexDelete(name []byte, condition influxql.Expr, tr TimeRange) error {
@@ -90,10 +90,15 @@ func (relation *IndexRelation) IndexClose() error {
 	return relation.indexAmRoutine.amClose(index)
 }
 
+func (relation *IndexRelation) IndexFlush() {
+	index := relation.indexAmRoutine.index
+	relation.indexAmRoutine.amFlush(index)
+}
+
 type PrimaryIndex interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
 	GetDeletePrimaryKeys(name []byte, condition influxql.Expr, tr TimeRange) ([]uint64, error)
-	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, _ interface{}) (GroupSeries, error)
+	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)
 	Path() string
 }

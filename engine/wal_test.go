@@ -17,6 +17,7 @@ package engine
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,9 +25,14 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/require"
 )
+
+func init() {
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+}
 
 func TestWalReplayParallel(t *testing.T) {
 	testDir := t.TempDir()
@@ -203,14 +209,15 @@ func TestRemove(t *testing.T) {
 	require.NotEmpty(t, err)
 }
 
-func Test_NewWal_setLastSeqAndFiles(t *testing.T) {
+func Test_NewWal_restoreLogs(t *testing.T) {
 	tmpDir := t.TempDir()
 	wal := &WAL{
 		log: logger.NewLogger(errno.ModuleUnknown),
-		logWriter: []LogWriter{{
+		logWriter: LogWriters{{
 			logPath: tmpDir,
 		},
 		},
+		logReplay: LogReplays{{}},
 	}
 	_ = os.WriteFile(filepath.Join(tmpDir, "1.wal"), []byte{1}, 0600)
 	time.Sleep(10 * time.Millisecond)
@@ -220,7 +227,7 @@ func Test_NewWal_setLastSeqAndFiles(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	_ = os.WriteFile(filepath.Join(tmpDir, "4.wal"), []byte{4}, 0600)
 	time.Sleep(100 * time.Millisecond)
-	wal.setLastSeqAndFiles(&wal.logWriter[0])
+	wal.restoreLogs()
 
 	require.Equal(t, 4, wal.logWriter[0].fileSeq)
 	require.Equal(t, []string{
@@ -228,26 +235,26 @@ func Test_NewWal_setLastSeqAndFiles(t *testing.T) {
 		filepath.Join(tmpDir, "2.wal"),
 		filepath.Join(tmpDir, "3.wal"),
 		filepath.Join(tmpDir, "4.wal"),
-	}, wal.logWriter[0].fileNames)
+	}, wal.logReplay[0].fileNames)
 }
 
-func Test_NewWal_setLastSeqAndFiles_error(t *testing.T) {
+func Test_NewWal_restoreLogs_error(t *testing.T) {
 	tmpDir := t.TempDir()
 	wal := &WAL{
 		log: logger.NewLogger(errno.ModuleUnknown),
-		logWriter: []LogWriter{{
+		logWriter: LogWriters{{
 			logPath: tmpDir,
 		},
 		},
+		logReplay: LogReplays{{}},
 	}
-	require.Panics(t, func() { wal.setLastSeqAndFiles(&LogWriter{logPath: ""}) })
+	require.Panics(t, func() { wal.restoreLog(&LogWriter{logPath: ""}, &LogReplay{}) })
 
 	_ = os.WriteFile(filepath.Join(tmpDir, "error1.wal"), []byte{1}, 0600)
 	time.Sleep(10 * time.Millisecond)
 	_ = os.WriteFile(filepath.Join(tmpDir, "error2.wal"), []byte{4}, 0600)
 	time.Sleep(100 * time.Millisecond)
-	wal.setLastSeqAndFiles(&wal.logWriter[0])
+	wal.restoreLogs()
 
-	require.Equal(t, 0, wal.logWriter[0].fileSeq)
-	require.Equal(t, 0, len(wal.logWriter[0].fileNames))
+	require.Equal(t, 0, len(wal.logReplay[0].fileNames))
 }

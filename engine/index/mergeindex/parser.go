@@ -34,7 +34,7 @@ type ItemParser interface {
 	TSIDsLen() int
 	ParseTSIDs()
 	HasCommonTSIDs(filter *uint64set.Set) bool
-	IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set) bool
+	IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set) (bool, uint64)
 	EqualPrefix(x ItemParser) bool
 	GetTSIDs() []uint64
 }
@@ -91,18 +91,18 @@ func (brp *BasicRowParser) HasCommonTSIDs(filter *uint64set.Set) bool {
 	return false
 }
 
-func (brp *BasicRowParser) IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set) bool {
+func (brp *BasicRowParser) IsExpectedTag(deletedTSIDs *uint64set.Set, eligibleTSIDs *uint64set.Set) (bool, uint64) {
 	if eligibleTSIDs != nil && eligibleTSIDs.Len() == 0 {
-		return false
+		return false, 0
 	}
 
 	brp.ParseTSIDs()
 	for _, tsid := range brp.TSIDs {
 		if !deletedTSIDs.Has(tsid) && (eligibleTSIDs == nil || eligibleTSIDs.Has(tsid)) {
-			return true
+			return true, tsid
 		}
 	}
-	return false
+	return false, 0
 }
 
 func (brp *BasicRowParser) ParseTSIDs() {

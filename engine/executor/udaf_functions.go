@@ -17,17 +17,12 @@ limitations under the License.
 package executor
 
 import (
-	"errors"
 	"time"
 
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/services/castor"
-)
-
-var (
-	end = errors.New("break")
 )
 
 func CastorReduce(in []Chunk, out Chunk, args ...interface{}) error {

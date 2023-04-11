@@ -35,7 +35,7 @@ func UnmarshalBinary(buf []byte, schema hybridqp.Catalog) (hybridqp.QueryNode, e
 		return nil, err
 	}
 
-	err, node := UnmarshalBinaryNode(pb, schema)
+	node, err := UnmarshalBinaryNode(pb, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func unmarshalNodes(plansBuf [][]byte, schema hybridqp.Catalog) ([]hybridqp.Quer
 			return nil, err
 		}
 
-		err, node := UnmarshalBinaryNode(pb, schema)
+		node, err := UnmarshalBinaryNode(pb, schema)
 		if err != nil {
 			return nil, err
 		}
@@ -442,13 +442,13 @@ func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 	}
 }
 
-func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (error, hybridqp.QueryNode) {
+func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	var nodes []hybridqp.QueryNode
 	var err error
 	if len(pb.Inputs) != 0 {
 		nodes, err = unmarshalNodes(pb.Inputs, schema)
 		if err != nil {
-			return err, nil
+			return nil, err
 		}
 	}
 
@@ -461,7 +461,7 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (error
 			if eRole == PRODUCER_ROLE {
 				node.ToProducer()
 			}
-			return nil, node
+			return node, nil
 		}
 	case internal.LogicPlanType_LogicalLimit:
 		if len(nodes) == 1 {
@@ -471,68 +471,68 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (error
 				LimitType: hybridqp.LimitType(pb.LimitType),
 			}
 			node := NewLogicalLimit(nodes[0], schema, limitPara)
-			return nil, node
+			return node, nil
 		}
 	case internal.LogicPlanType_LogicalIndexScan:
 		if len(nodes) == 1 {
-			return nil, NewLogicalIndexScan(nodes[0], schema)
+			return NewLogicalIndexScan(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalAggregate:
 		if len(nodes) == 1 {
 			switch pb.AggType {
 			case internal.AggType_Normal:
-				return nil, NewLogicalAggregate(nodes[0], schema)
+				return NewLogicalAggregate(nodes[0], schema), nil
 			case internal.AggType_CountDistinct:
-				return nil, NewCountDistinctAggregate(nodes[0], schema)
+				return NewCountDistinctAggregate(nodes[0], schema), nil
 			case internal.AggType_TagSet:
-				return nil, NewLogicalTagSetAggregate(nodes[0], schema)
+				return NewLogicalTagSetAggregate(nodes[0], schema), nil
 			}
 		}
 	case internal.LogicPlanType_LogicalMerge:
-		return nil, NewLogicalMerge(nodes, schema)
+		return NewLogicalMerge(nodes, schema), nil
 	case internal.LogicPlanType_LogicalSortMerge:
-		return nil, NewLogicalSortMerge(nodes, schema)
+		return NewLogicalSortMerge(nodes, schema), nil
 	case internal.LogicPlanType_LogicalFilter:
 		if len(nodes) == 1 {
-			return nil, NewLogicalFilter(nodes[0], schema)
+			return NewLogicalFilter(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalDedupe:
 		if len(nodes) == 1 {
-			return nil, NewLogicalDedupe(nodes[0], schema)
+			return NewLogicalDedupe(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalInterval:
 		if len(nodes) == 1 {
-			return nil, NewLogicalInterval(nodes[0], schema)
+			return NewLogicalInterval(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalSeries:
-		return nil, NewLogicalSeries(schema)
+		return NewLogicalSeries(schema), nil
 	case internal.LogicPlanType_LogicalReader:
 		if len(nodes) == 1 {
-			return nil, NewLogicalReader(nodes[0], schema)
+			return NewLogicalReader(nodes[0], schema), nil
 		} else if len(nodes) == 0 {
-			return nil, NewLogicalReader(nil, schema)
+			return NewLogicalReader(nil, schema), nil
 		}
 	case internal.LogicPlanType_LogicalTagSubset:
 		if len(nodes) == 1 {
-			return nil, NewLogicalTagSubset(nodes[0], schema)
+			return NewLogicalTagSubset(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalFill:
 		if len(nodes) == 1 {
-			return nil, NewLogicalFill(nodes[0], schema)
+			return NewLogicalFill(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalAlign:
 		if len(nodes) == 1 {
-			return nil, NewLogicalAlign(nodes[0], schema)
+			return NewLogicalAlign(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalMst:
 		// unused
 	case internal.LogicPlanType_LogicalProject:
 		if len(nodes) == 1 {
-			return nil, NewLogicalProject(nodes[0], schema)
+			return NewLogicalProject(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalSlidingWindow:
 		if len(nodes) == 1 {
-			return nil, NewLogicalSlidingWindow(nodes[0], schema)
+			return NewLogicalSlidingWindow(nodes[0], schema), nil
 		}
 	default:
 		panic(fmt.Sprintf("unsupoorted type %v", pb.Name))

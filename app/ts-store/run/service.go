@@ -22,6 +22,7 @@ import (
 	"net/http"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
@@ -122,7 +123,8 @@ func (s *httpServer) open(handler *httpHandler) error {
 }
 
 func (s *httpServer) httpsListener() (net.Listener, error) {
-	cert, err := tls.LoadX509KeyPair(s.conf.OpsMonitor.HttpsCertificate, s.conf.OpsMonitor.HttpsCertificate)
+	cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(s.conf.OpsMonitor.HttpsCertificate)),
+		[]byte(crypto.DecryptFromFile(s.conf.OpsMonitor.HttpsCertificate)))
 	if err != nil {
 		return nil, err
 	}

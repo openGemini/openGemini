@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
@@ -85,7 +84,6 @@ type DBPTInfo struct {
 	logicClock          uint64
 	sequenceID          uint64
 	lockPath            *string
-	openShardsLimit     limiter.Fixed
 }
 
 func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx) *DBPTInfo {
@@ -351,8 +349,6 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string) error {
 			dbPT.mu.Lock()
 			// init indexBuilder and default indexRelation
 			indexBuilder := tsi.NewIndexBuilder(opts)
-			indexBuilder.Relations = make(map[uint32]*tsi.IndexRelation)
-
 			// init primary Index
 			primaryIndex, err := tsi.NewIndex(opts)
 			if err != nil {
@@ -637,8 +633,6 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		indexBuilder = tsi.NewIndexBuilder(opts)
 		indexid := timeRangeInfo.OwnerIndex.IndexID
 		dbPT.indexBuilder[indexid] = indexBuilder
-		dbPT.indexBuilder[indexid].Relations = make(map[uint32]*tsi.IndexRelation)
-
 		primaryIndex, _ := tsi.NewIndex(opts)
 		primaryIndex.SetIndexBuilder(indexBuilder)
 		indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
@@ -795,7 +789,7 @@ func (dbPT *DBPTInfo) disableDBPtBgr() error {
 func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
 	var shardIds []uint64
 	dbPT.mu.RLock()
-	for id, _ := range dbPT.shards {
+	for id := range dbPT.shards {
 		shardIds = append(shardIds, id)
 	}
 	dbPT.mu.RUnlock()

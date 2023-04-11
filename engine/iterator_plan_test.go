@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -44,6 +45,9 @@ import (
 func init() {
 	immutable.EnableMergeOutOfOrder = false
 	logger.InitLogger(config.NewLogger(config.AppStore))
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
 }
 
 func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
@@ -8489,5 +8493,25 @@ func TestAppendColumnTimes(t *testing.T) {
 	if column.ColumnTimes()[0] != columnTimes[0] ||
 		column.ColumnTimes()[1] != columnTimes[2] {
 		t.Errorf("unexpected error")
+	}
+}
+
+func TestMatchPreAgg(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{
+		Expr: &influxql.Call{
+			Name: "sum",
+			Args: []influxql.Expr{&influxql.VarRef{Val: "a", Type: influxql.Integer}},
+		},
+	}}
+	opt := &query.ProcessorOptions{
+		Condition: &influxql.BinaryExpr{
+			LHS: &influxql.VarRef{Val: "a", Type: influxql.Integer},
+			Op:  influxql.EQ,
+			RHS: &influxql.StringLiteral{Val: "1"},
+		},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"a"}, opt)
+	if matchPreAgg(schema, &idKeyCursorContext{}) {
+		t.Fatal()
 	}
 }

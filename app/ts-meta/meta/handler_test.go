@@ -101,10 +101,13 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	if err = mms.GetStore().data.UpdateNodeStatus(node1, int32(serf.StatusAlive), 1, "127.0.0.1:8011"); err != nil {
 		t.Fatal(err)
 	}
-
+	dataNode = globalService.store.data.DataNodeByHttpHost("127.0.0.2:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
 	if err = mms.GetStore().data.UpdateNodeStatus(node2, int32(serf.StatusAlive), 1, "127.0.0.2:8011"); err != nil {
 		t.Fatal(err)
 	}

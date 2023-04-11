@@ -48,7 +48,6 @@ const (
 	DefaultMaxConcurrentCompactions = 0
 
 	DefaultWriteColdDuration = 5 * time.Second
-	Is32BitPtr               = (^uintptr(0) >> 32) == 0
 
 	DefaultSnapshotThroughput      = 48 * MB
 	DefaultSnapshotThroughputBurst = 64 * MB
@@ -202,6 +201,15 @@ type Store struct {
 	OpenShardLimit       int       `toml:"open-shard-limit"`
 
 	DownSampleWriteDrop bool `toml:"downsample-write-drop"`
+
+	//parallelism allocator
+	MaxWaitResourceTime          toml.Duration `toml:"max-wait-resource-time"`
+	MaxSeriesParallelismNum      int           `toml:"max-series-parallelism-num"`
+	MaxShardsParallelismNum      int           `toml:"max-shards-parallelism-num"`
+	ChunkReaderThreshold         int           `toml:"chunk-reader-threshold"`
+	MinChunkReaderConcurrency    int           `toml:"min-chunk-reader-concurrency"`
+	MinShardsConcurrency         int           `toml:"min-shards-concurrency"`
+	MaxDownSampleTaskConcurrency int           `toml:"max-downsample-task-concurrency"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -222,7 +230,7 @@ func NewStore() Store {
 		MemDataReadEnabled:           true,
 		CacheDataBlock:               false,
 		CacheMetaBlock:               false,
-		EnableMmapRead:               !Is32BitPtr,
+		EnableMmapRead:               false,
 		ReadCacheLimit:               toml.Size(readCacheLimit),
 		WriteConcurrentLimit:         0,
 		WalSyncInterval:              toml.Duration(DefaultWALSyncInterval),

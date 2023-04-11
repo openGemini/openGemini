@@ -260,10 +260,7 @@ func (m *MmsTables) isCompMergeStopped() bool {
 }
 
 func (m *MmsTables) isPreLoading() bool {
-	if *m.lock == "" {
-		return true
-	}
-	return false
+	return *m.lock == ""
 }
 
 func (m *MmsTables) Close() error {
@@ -354,10 +351,7 @@ func (m *MmsTables) Sequencer() *Sequencer {
 func (m *MmsTables) IsOutOfOrderFilesExist() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if len(m.OutOfOrder) != 0 {
-		return true
-	}
-	return false
+	return len(m.OutOfOrder) != 0
 }
 
 func (m *MmsTables) addTSSPFile(isOrder bool, f TSSPFile, nameWithVer string) {
@@ -619,7 +613,7 @@ func (m *MmsTables) ReplaceDownSampleFiles(mstNames []string, originFiles [][]TS
 		}
 	}
 
-	for k, _ := range allFs {
+	for k := range allFs {
 		allFs[k].files = append(allFs[k].files, newFiles[k]...)
 		sort.Sort(allFs[k])
 	}
@@ -835,7 +829,6 @@ func (m *MmsTables) getTSSPFiles(mstName string, isOrder bool) (*TSSPFiles, bool
 func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 	sw := getStreamWriteFile()
 	sw.closed = m.closed
-	sw.dropping = &m.Order[mst].closing
 	sw.name = mst
 	sw.dir = m.path
 	sw.pair.Reset(mst)
@@ -844,7 +837,7 @@ func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 	sw.maxChunkRows = 0
 	cLog, _ := influxLogger.NewOperation(log, "StreamDownSample", mst)
 	sw.log = logger.NewLogger(errno.ModuleDownSample).SetZapLogger(cLog)
-	sw.colSegs = make([]record.ColVal, 1, 1)
+	sw.colSegs = make([]record.ColVal, 1)
 	sw.lock = m.lock
 	return sw
 }
@@ -879,6 +872,7 @@ func recoverFile(shardDir string, lockPath *string) error {
 	return nil
 }
 
+//lint:ignore U1000 test used only
 func compareFile(f1, f2 interface{}) bool {
 	firstMin, firstMax, _ := f1.(TSSPFile).MinMaxTime()
 	secondMin, secondMax, _ := f2.(TSSPFile).MinMaxTime()
@@ -891,6 +885,7 @@ func compareFile(f1, f2 interface{}) bool {
 	return true
 }
 
+//lint:ignore U1000 test used only
 func compareFileByDescend(f1, f2 interface{}) bool {
 	firstMin, firstMax, _ := f1.(TSSPFile).MinMaxTime()
 	secondMin, secondMax, _ := f2.(TSSPFile).MinMaxTime()

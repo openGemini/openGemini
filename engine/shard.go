@@ -48,7 +48,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logger"
-	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
@@ -65,16 +64,18 @@ import (
 )
 
 const (
-	MaxDownSampleTaskNum     = 4
-	MaxRetryUpdateOnShardNum = 4
-	CRCLen                   = 4
-	BufferSize               = 1024 * 1024
+	MaxRetryUpdateOnShardNum    = 4
+	minDownSampleConcurrencyNum = 1
+	cpuDownSampleRatio          = 16
+	CRCLen                      = 4
+	BufferSize                  = 1024 * 1024
 )
 
 var (
-	DownSampleWriteDrop = true
-	downSampleLogSeq    = uint64(time.Now().UnixNano())
-	downSampleInorder   = false
+	DownSampleWriteDrop  = true
+	downSampleLogSeq     = uint64(time.Now().UnixNano())
+	downSampleInorder    = false
+	maxDownSampleTaskNum int
 )
 
 type Shard interface {
@@ -163,7 +164,7 @@ type Shard interface {
 
 	SetIndexBuilder(builder *tsi.IndexBuilder)
 	CloseIndexBuilder() error
-	Scan(span *tracing.Span, schema *executor.QuerySchema) (tsi.GroupSeries, error)
+	Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error)
 	CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error)
 }
 
@@ -180,11 +181,11 @@ type shard struct {
 	ident    *meta.ShardIdentifier
 
 	cacheClosed        int32
-	isAsyncReplayWal   bool
-	cancelFn           context.CancelFunc // to cancel replayWal replay
-	loadWalDone        bool               // is replayWAL replay done
-	replayWAL          *WAL               // this is READONLY WAL to replay in background
-	wal                *WAL
+	isAsyncReplayWal   bool               // async replay wal switch
+	cancelLock         sync.RWMutex       // lock for cancelFn
+	cancelFn           context.CancelFunc // to cancel wal replay
+	loadWalDone        bool               // is replay wal done
+	wal                *WAL               // for cases: 1. write 2. replay
 	snapshotLock       sync.RWMutex
 	memDataReadEnabled bool
 	activeTbl          *mutable.MemTable
@@ -214,7 +215,6 @@ type shard struct {
 	defaultTags map[string]string
 	fileStat    *statistics.FileStatistics
 
-	downSampleStatus        int
 	shardDownSampleTaskInfo *shardDownSampleTaskInfo
 
 	stopDownSample chan struct{}
@@ -239,7 +239,7 @@ func (nodeLimit *nodeMemBucket) initNodeMemBucket(timeOut time.Duration, memThre
 	nodeLimit.once.Do(func() {
 		log.Info("New node mem limit bucket", zap.Int64("node mutable size limit", memThreshold),
 			zap.Duration("max write hang duration", timeOut))
-		nodeLimit.memBucket = bucket.NewInt64Bucket(timeOut, memThreshold)
+		nodeLimit.memBucket = bucket.NewInt64Bucket(timeOut, memThreshold, false)
 	})
 }
 
@@ -257,6 +257,13 @@ func getWalPartitionNum() int {
 		return cpuNum
 	}
 	return 16
+}
+
+func initMaxDownSampleParallelism(parallelism int) {
+	if parallelism <= 0 {
+		parallelism = hybridqp.MaxInt(cpu.GetCpuNum()/cpuDownSampleRatio, minDownSampleConcurrencyNum)
+	}
+	maxDownSampleTaskNum = parallelism
 }
 
 func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdentifier, durationInfo *meta.DurationDescriptor, tr *meta.TimeRangeInfo,
@@ -283,8 +290,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		lock:               lockPath,
 		ident:              ident,
 		isAsyncReplayWal:   options.WalReplayAsync,
-		replayWAL:          NewWAL(walPath, lockPath, options.WalSyncInterval, options.WalEnabled, options.WalReplayParallel, getWalPartitionNum(), false),
-		wal:                NewWAL(walPath, lockPath, options.WalSyncInterval, options.WalEnabled, options.WalReplayParallel, getWalPartitionNum(), true),
+		wal:                NewWAL(walPath, lockPath, options.WalSyncInterval, options.WalEnabled, options.WalReplayParallel, getWalPartitionNum()),
 		activeTbl:          mutable.NewMemTable(mutable.NewConfig(), dataPath),
 		memDataReadEnabled: options.MemDataReadEnabled,
 		maxTime:            0,
@@ -304,6 +310,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		downSampleEn:   0,
 	}
 	DownSampleWriteDrop = options.DownSampleWriteDrop
+	initMaxDownSampleParallelism(options.MaxDownSampleTaskConcurrency)
 
 	s.log = logger.NewLogger(errno.ModuleShard)
 	s.SetMutableSizeLimit(options.ShardMutableSizeLimit)
@@ -484,17 +491,15 @@ func (mw *mstWriteCtx) getRowsPool() []influx.Row {
 	if v == nil {
 		return []influx.Row{}
 	}
-	rp := v.([]influx.Row)
-
-	return rp
+	return *(v.(*[]influx.Row))
 }
 
 // nolint
-func (mw *mstWriteCtx) putRowsPool(rp []influx.Row) {
-	for _, r := range rp {
+func (mw *mstWriteCtx) putRowsPool(rp *[]influx.Row) {
+	for _, r := range *rp {
 		r.Reset()
 	}
-	rp = rp[:0]
+	*rp = (*rp)[:0]
 	mw.rowsPool.Put(rp)
 }
 
@@ -518,7 +523,7 @@ func putMstWriteCtx(mw *mstWriteCtx) {
 		if !ok {
 			panic("can't map mmPoints")
 		}
-		mw.putRowsPool(*rows)
+		mw.putRowsPool(rows)
 	}
 
 	mw.Reset()
@@ -526,15 +531,21 @@ func putMstWriteCtx(mw *mstWriteCtx) {
 }
 
 func (s *shard) getLastFlushTime(msName string, sid uint64) (int64, error) {
-	tm := int64(math.MinInt64)
-	var err error
-	if s.snapshotTbl != nil {
-		tm = s.snapshotTbl.GetMaxTimeBySidNoLock(msName, sid)
+	tm, err := s.immTables.GetLastFlushTimeBySid(msName, sid)
+	if err != nil {
+		return 0, err
 	}
-	if tm == math.MinInt64 {
-		tm, err = s.immTables.GetLastFlushTimeBySid(msName, sid)
+
+	if tm == math.MaxInt64 || s.snapshotTbl == nil {
+		return tm, nil
 	}
-	return tm, err
+
+	snapshotTm := s.snapshotTbl.GetMaxTimeBySidNoLock(msName, sid)
+	if snapshotTm > tm {
+		tm = snapshotTm
+	}
+
+	return tm, nil
 }
 
 func (s *shard) addRowCountsBySid(msName string, sid uint64, rowCounts int64) {
@@ -606,9 +617,12 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	}
 	atomic.AddInt64(&statistics.PerfStat.WriteSortIndexDurationNs, time.Since(start).Nanoseconds())
 
+	var writeIndexRequired bool
 	start = time.Now()
 
 	tm := int64(math.MinInt64)
+	primaryIndex := s.indexBuilder.GetPrimaryIndex()
+	mergetIndex := primaryIndex.(*tsi.MergeSetIndex)
 	for i := 0; i < len(rows); i++ {
 		if s.closed.Closed() {
 			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
@@ -639,6 +653,18 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 		if rows[i].Timestamp > tm {
 			tm = rows[i].Timestamp
 		}
+		if !writeIndexRequired {
+			ri.SeriesId, err = mergetIndex.GetSeriesIdBySeriesKey(rows[i].IndexKey, record.Str2bytes(rows[i].Name))
+			if err != nil {
+				return err
+			}
+			// PrimaryId is equal to SeriesId by default.
+			ri.PrimaryId = ri.SeriesId
+
+			if ri.SeriesId == 0 {
+				writeIndexRequired = true
+			}
+		}
 		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len()))
 	}
 
@@ -646,8 +672,14 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 
 	failpoint.Inject("SlowDownCreateIndex", nil)
 
-	if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
-		return err
+	if writeIndexRequired {
+		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+			return err
+		}
+	} else {
+		if err = s.indexBuilder.CreateSecondaryIndexIfNotExist(mmPoints); err != nil {
+			return err
+		}
 	}
 	atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(start).Nanoseconds())
 
@@ -928,7 +960,7 @@ func (s *shard) Close() error {
 		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
 	}
 
-	s.StopDownSample()
+	s.DisableDownSample()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -999,11 +1031,25 @@ func (s *shard) writeWalBuffer(binary []byte) error {
 	return s.writeRowsToTable(rows, nil)
 }
 
-func (s *shard) replayWal() error {
-	ctx, cancel := context.WithCancel(context.Background())
+func (s *shard) setCancelWalFunc(cancel context.CancelFunc) {
+	s.cancelLock.Lock()
 	s.cancelFn = cancel
+	s.cancelLock.Unlock()
+}
+
+func (s *shard) replayWal() error {
+	// make sure the wal files exist in the disk
+	s.wal.restoreLogs()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.setCancelWalFunc(cancel)
+	s.wal.ref()
 	if !s.isAsyncReplayWal {
-		return s.syncReplayWal(ctx)
+		err := s.syncReplayWal(ctx)
+		s.setCancelWalFunc(nil)
+		s.loadWalDone = true
+		s.wal.unref()
+		return err
 	}
 	go func() {
 		defer replayWalLimit.Release()
@@ -1012,20 +1058,18 @@ func (s *shard) replayWal() error {
 		if err != nil {
 			s.log.Error("async replay wal failed", zap.Uint64("id", s.ident.ShardID), zap.Error(err))
 		}
+		s.setCancelWalFunc(nil)
+		s.loadWalDone = true
+		s.wal.unref()
 	}()
 	return nil
 
 }
 
 func (s *shard) syncReplayWal(ctx context.Context) error {
-	defer func() {
-		s.cancelFn = nil
-		s.loadWalDone = true
-	}()
-	s.loadWalDone = false
 	wStart := time.Now()
 
-	walFileNames, err := s.replayWAL.Replay(ctx,
+	walFileNames, err := s.wal.Replay(ctx,
 		func(binary []byte) error {
 			return s.writeWalBuffer(binary)
 		},
@@ -1033,11 +1077,11 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.log.Info("replay wal files ok")
+	s.log.Info("replay wal files ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId))
 
 	s.ForceFlush()
-	s.log.Info("force flush shard ok")
-	err = s.replayWAL.Remove(walFileNames)
+	s.log.Info("force flush shard ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId))
+	err = s.wal.Remove(walFileNames)
 	if err != nil {
 		return err
 	}
@@ -1211,7 +1255,7 @@ func readDownSampleLogFile(name string, info *DownSampleFilesInfo) error {
 		return fmt.Errorf("invalid downsample log file(%v) crc", name)
 	}
 
-	if buf, err = info.unmarshal(buf); err != nil {
+	if _, err = info.unmarshal(buf); err != nil {
 		return fmt.Errorf("unmarshal downSample log %v fail", name)
 	}
 
@@ -1225,7 +1269,7 @@ func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
 		return err
 	}
 	// replay wal files
-	s.log.Info("replay wal start...", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Bool("async replay", s.isAsyncReplayWal))
+	s.log.Info("replay wal start", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Bool("async replay", s.isAsyncReplayWal))
 	wStart := time.Now()
 	err = s.replayWal()
 	if err != nil {
@@ -1296,35 +1340,16 @@ func (s *shard) RPName() string {
 	return s.ident.Policy
 }
 
-func (s *shard) StopDownSample() {
-	if !s.isDownSampleStop() {
+func (s *shard) DisableDownSample() {
+	if atomic.CompareAndSwapInt32(&s.downSampleEn, 1, 0) {
 		close(s.stopDownSample)
 	}
 	s.dswg.Wait()
 }
 
-func (s *shard) DisableDownSample() {
-	atomic.StoreInt32(&s.downSampleEn, 0)
-	s.StopDownSample()
-}
-
 func (s *shard) EnableDownSample() {
-	atomic.StoreInt32(&s.downSampleEn, 1)
-	if s.isDownSampleStop() {
+	if atomic.CompareAndSwapInt32(&s.downSampleEn, 0, 1) {
 		s.stopDownSample = make(chan struct{})
-	}
-}
-
-func (s *shard) downSampleEnabled() bool {
-	return atomic.LoadInt32(&s.downSampleEn) == 1
-}
-
-func (s *shard) isDownSampleStop() bool {
-	select {
-	case <-s.stopDownSample:
-		return true
-	default:
-		return false
 	}
 }
 
@@ -1335,12 +1360,20 @@ func (s *shard) CanDoDownSample() bool {
 	return true
 }
 
+func (s *shard) downSampleEnabled() bool {
+	return atomic.LoadInt32(&s.downSampleEn) == 1
+}
+
 // notify async goroutines to cancel the wal replay
 func (s *shard) cancelWalReplay() {
-	if s.cancelFn != nil {
-		s.cancelFn()
-		s.replayWAL.wg.Wait()
+	s.cancelLock.RLock()
+	if s.cancelFn == nil {
+		s.cancelLock.RUnlock()
+		return
 	}
+	s.cancelFn()
+	s.cancelLock.RUnlock()
+	s.wal.wait()
 }
 
 func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSamplePolicyInfo, meta interface {
@@ -1348,23 +1381,23 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 }) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	info, schemas, logger := s.shardDownSampleTaskInfo.sdsp, s.shardDownSampleTaskInfo.schema, s.shardDownSampleTaskInfo.log
+	info, schemas, dlog := s.shardDownSampleTaskInfo.sdsp, s.shardDownSampleTaskInfo.schema, s.shardDownSampleTaskInfo.log
 	var err error
 
 	s.dswg.Add(1)
 	defer s.dswg.Done()
 
-	if s.isDownSampleStop() {
+	if !s.downSampleEnabled() {
 		return nil
 	}
 	s.DisableCompAndMerge()
 
-	lcLog := Log.NewLogger(errno.ModuleDownSample).SetZapLogger(logger)
+	lcLog := logger.NewLogger(errno.ModuleDownSample).SetZapLogger(dlog)
 	taskNum := len(schemas)
-	parallelism := MaxDownSampleTaskNum
+	parallelism := maxDownSampleTaskNum
 	filesMap := make(map[int]*immutable.TSSPFiles, taskNum)
 	allDownSampleFiles := make(map[int][]immutable.TSSPFile, taskNum)
-	logger.Info("DownSample Start", zap.Any("shardId", info.ShardId))
+	dlog.Info("DownSample Start", zap.Any("shardId", info.ShardId))
 	for i := 0; i < taskNum; i += parallelism {
 		var num int
 		if i+parallelism <= taskNum {
@@ -1372,13 +1405,13 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 		} else {
 			num = taskNum - i
 		}
-		err = s.StartDownSampleTaskBySchema(i, filesMap, allDownSampleFiles, schemas[i:i+num], info, logger)
+		err = s.StartDownSampleTaskBySchema(i, filesMap, allDownSampleFiles, schemas[i:i+num], info, dlog)
 		if err != nil {
 			break
 		}
 	}
 
-	if s.isDownSampleStop() {
+	if !s.downSampleEnabled() {
 		err = fmt.Errorf("downsample cancel")
 	}
 	if err == nil {
@@ -1402,7 +1435,7 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 			s.DeleteDownSampleFiles(allDownSampleFiles)
 			return e
 		}
-		logger.Info("DownSample Success", zap.Any("shardId", info.ShardId))
+		dlog.Info("DownSample Success", zap.Any("shardId", info.ShardId))
 	} else {
 		for _, v := range filesMap {
 			for _, f := range v.Files() {
@@ -1427,11 +1460,13 @@ func (s *shard) DeleteDownSampleFiles(allDownSampleFiles map[int][]immutable.TSS
 }
 
 func (s *shard) ReplaceDownSampleFiles(mstNames []string, originFiles [][]immutable.TSSPFile, newFiles [][]immutable.TSSPFile,
-	log *Log.Logger, taskID uint64, level int, sdsp *meta.ShardDownSamplePolicyInfo,
+	log *logger.Logger, taskID uint64, level int, sdsp *meta.ShardDownSamplePolicyInfo,
 	meta interface {
 		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 	}) (err error) {
 	if len(mstNames) == 0 || len(originFiles) == 0 || len(newFiles) == 0 {
+		s.UpdateDownSampleOnShard(sdsp.TaskID, sdsp.DownSamplePolicyLevel)
+		s.updateShardIentOnMeta(meta)
 		return nil
 	}
 	if len(mstNames) != len(originFiles) || len(mstNames) != len(newFiles) {
@@ -1581,25 +1616,24 @@ func (s *shard) StartDownSampleTaskBySchema(start int, filesMap map[int]*immutab
 		return err
 	}
 	for {
-		select {
-		case state, _ := <-ch.State:
-			mstTaskNum -= 1
-			s.dswg.Done()
-			downSampleStatItem.AddActive(-1)
-			taskID := state.GetTaskID()
-			allDownSampleFiles[taskID] = state.GetNewFiles()
-			if state.GetErr() != nil {
-				err = state.GetErr()
-				downSampleStatItem.AddErrors(1)
-				if mstTaskNum == 0 {
-					return err
-				}
-				continue
-			}
-			logger.Info("DownSample Measurement Success", zap.Any("Measurement", schemas[taskID-start].Options().OptionsName()))
+		state := <-ch.State
+
+		mstTaskNum -= 1
+		s.dswg.Done()
+		downSampleStatItem.AddActive(-1)
+		taskID := state.GetTaskID()
+		allDownSampleFiles[taskID] = state.GetNewFiles()
+		if state.GetErr() != nil {
+			err = state.GetErr()
+			downSampleStatItem.AddErrors(1)
 			if mstTaskNum == 0 {
 				return err
 			}
+			continue
+		}
+		logger.Info("DownSample Measurement Success", zap.Any("Measurement", schemas[taskID-start].Options().OptionsName()))
+		if mstTaskNum == 0 {
+			return err
 		}
 	}
 }
@@ -1635,7 +1669,7 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 	source := influxql.Sources{&influxql.Measurement{Database: db, RetentionPolicy: rpName, Name: mstName}}
 	sidSequenceReader := NewTsspSequenceReader(nil, nil, nil, source, querySchema, files, newSeqs, s.stopDownSample)
 	writeIntoStorage := NewWriteIntoStorageTransform(nil, nil, nil, source, querySchema, immutable.NewConfig(), mmsTables, s.ident.DownSampleLevel == 0)
-	fileSequenceAgg := NewFileSequenceAggregator(querySchema, s.ident.DownSampleLevel == 0)
+	fileSequenceAgg := NewFileSequenceAggregator(querySchema, s.ident.DownSampleLevel == 0, s.startTime.UnixNano(), s.endTime.UnixNano())
 	sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 	fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
 	port.ConnectStateReserve(writeIntoStorage.GetOutputs()[0])

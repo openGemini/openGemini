@@ -215,6 +215,8 @@ func Test_Call(t *testing.T) {
 	}
 	stream.Close()
 	stream.DeleteTask(1)
+	// wait stream filter close
+	time.Sleep(time.Second * 3)
 }
 
 func Test_MaxDelay(t *testing.T) {

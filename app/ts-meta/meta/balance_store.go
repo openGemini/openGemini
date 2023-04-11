@@ -43,7 +43,7 @@ func (s *Store) selectDbPtsToMove() []*MoveEvent {
 		return nil
 	}
 
-	for db, _ := range s.data.PtView {
+	for db := range s.data.PtView {
 		if s.data.CheckCanMoveDb(db) != nil {
 			continue
 		}

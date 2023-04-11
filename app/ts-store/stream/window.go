@@ -120,9 +120,6 @@ type WindowCache struct {
 func (s *Task) stop() error {
 	close(s.abort)
 	err := <-s.err
-	close(s.err)
-	close(s.updateWindow)
-	close(s.cleanPreWindow)
 	return err
 }
 
@@ -183,14 +180,14 @@ func (s *Task) buildFieldCalls() error {
 		case "count":
 			s.fieldCalls[c].f = atomic2.AddFloat64
 		default:
-			return errors.New(fmt.Sprintf("not support stream func %v", s.fieldCalls[c].call))
+			return fmt.Errorf("not support stream func %v", s.fieldCalls[c].call)
 		}
 	}
 	return nil
 }
 
-//cycle flush data form cache, period is group time
-//TODO support stream not contain group time
+// cycle flush data form cache, period is group time
+// TODO support stream not contain group time
 func (s *Task) cycleFlush() {
 	var err error
 	defer func() {
@@ -223,8 +220,8 @@ func (s *Task) cycleFlush() {
 	}
 }
 
-//consume data from inner cache, inner cache size equal to concurrency
-//TODO share calculate goroutine with other stream task
+// consume data from inner cache, inner cache size equal to concurrency
+// TODO share calculate goroutine with other stream task
 func (s *Task) parallelCalculate() {
 	for i := 0; i < s.concurrency; i++ {
 		go func() {
@@ -248,8 +245,8 @@ func (s *Task) parallelCalculate() {
 	}
 }
 
-//clean old window values, set value nil
-//TODO clean window unused key
+// clean old window values, set value nil
+// TODO clean window unused key
 func (s *Task) cleanWindow() {
 	for {
 		select {
@@ -259,14 +256,14 @@ func (s *Task) cleanWindow() {
 			}
 			t := time.Now()
 			s.values.Range(s.walkUpdate)
-			s.stats.StatWindowUpdateCost(int64(time.Now().Sub(t)))
+			s.stats.StatWindowUpdateCost(int64(time.Since(t)))
 		case <-s.abort:
 			return
 		}
 	}
 }
 
-//consume data from window cache, and update window metadata, calculate cannot parallel with update window
+// consume data from window cache, and update window metadata, calculate cannot parallel with update window
 func (s *Task) consumeDataAndUpdateMeta() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -286,7 +283,12 @@ func (s *Task) consumeDataAndUpdateMeta() {
 			s.stats.Reset()
 			s.stats.StatWindowOutMinTime(s.start.UnixNano())
 			s.stats.StatWindowOutMaxTime(s.end.UnixNano())
-			s.cleanPreWindow <- struct{}{}
+			select {
+			case s.cleanPreWindow <- struct{}{}:
+				continue
+			case <-s.abort:
+				return
+			}
 		case <-s.abort:
 			return
 		case cache := <-s.cache:
@@ -304,17 +306,15 @@ func (s *Task) consumeDataAndUpdateMeta() {
 						count++
 						if count >= s.concurrency {
 							loop = false
-							break
 						}
 					default:
 						//currently no new data to calculate
 						loop = false
-						break
 					}
 				}
 			}
 			for i := 0; i < count; i++ {
-				_ = <-s.innerRes
+				<-s.innerRes
 			}
 		}
 	}
@@ -416,7 +416,6 @@ func (s *Task) flushRows(indexKeyPool []byte) (int, []byte, error) {
 		values := strings.Split(key, " ")
 		if len(values) != len(s.groupKeys) {
 			panic(fmt.Sprintf("cannot occur this values %v len %v groupkeys %v key %v", values, len(values), s.groupKeys, key))
-			return false
 		}
 		var fields []influx.Field
 		var tags []influx.Tag
@@ -480,7 +479,7 @@ func (s *Task) flushRows(indexKeyPool []byte) (int, []byte, error) {
 	return validNum, indexKeyPool, err
 }
 
-//corpusIndexes array not need lock
+// corpusIndexes array not need lock
 func (s *Task) unCompressDictKey(key string) (string, error) {
 	intV, err := strconv.Atoi(key)
 	if err != nil {
@@ -488,13 +487,13 @@ func (s *Task) unCompressDictKey(key string) (string, error) {
 		return "", err
 	}
 	if len(s.corpusIndexes) < intV-1 {
-		err = errors.New(fmt.Sprintf("corpusIndexes len is less than %v", intV-1))
+		err = fmt.Errorf("corpusIndexes len is less than %v", intV-1)
 		return "", err
 	}
 	return s.corpusIndexes[intV], nil
 }
 
-//no lock to compress dict key
+// no lock to compress dict key
 func (s *Task) compressDictKey(key string) (string, error) {
 	vv, ok := s.corpus.Load(key)
 	if ok {
@@ -529,9 +528,14 @@ func (s *Task) flush() error {
 	indexKeyPool := bufferpool.GetPoints()
 	defer func() {
 		bufferpool.PutPoints(indexKeyPool)
-		s.stats.StatWindowFlushCost(int64(time.Now().Sub(t)))
+		s.stats.StatWindowFlushCost(int64(time.Since(t)))
 		s.stats.Push()
-		s.updateWindow <- struct{}{}
+		select {
+		case s.updateWindow <- struct{}{}:
+			return
+		case <-s.abort:
+			return
+		}
 	}()
 
 	validNum, _, err := s.flushRows(indexKeyPool)
@@ -546,7 +550,7 @@ func (s *Task) flush() error {
 	// if the number of rows is not greater than the FlushParallelMinRowNum, the rows will be flushed serially.
 	if validNum <= FlushParallelMinRowNum {
 		err = s.WriteRowsToShard(0, validNum)
-		s.Logger.Info(fmt.Sprintf("stream flush over"))
+		s.Logger.Info("stream flush over")
 		s.rows = s.rows[0:]
 		return err
 	}
@@ -571,7 +575,7 @@ func (s *Task) flush() error {
 	}
 	s.flushWG.Wait()
 
-	s.Logger.Info(fmt.Sprintf("stream flush over"))
+	s.Logger.Info("stream flush over")
 	s.rows = s.rows[0:]
 	return err
 }

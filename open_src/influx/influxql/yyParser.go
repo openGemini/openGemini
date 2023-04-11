@@ -17,6 +17,7 @@ limitations under the License.
 package influxql
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type YyParser struct {
 	Query   Query
 	Scanner *Scanner
 	error   YyParserError
+	Params  map[string]interface{}
 }
 
 type YyParserError string
@@ -34,8 +36,8 @@ func (p YyParserError) Error() string {
 	return string(p)
 }
 
-func NewYyParser(s *Scanner) YyParser {
-	return YyParser{Scanner: s}
+func NewYyParser(s *Scanner, para map[string]interface{}) YyParser {
+	return YyParser{Scanner: s, Params: para}
 }
 
 func (p *YyParser) ParseTokens() {
@@ -115,6 +117,31 @@ func (p *YyParser) Lex(lval *yySymType) int {
 					}
 				}
 				lval.hints = hints
+			}
+		case BOUNDPARAM:
+			{
+				k := strings.TrimPrefix(val, "$")
+				if len(k) == 0 {
+					p.Error("empty bound parameter")
+				}
+
+				v := p.Params[k]
+				if v == nil {
+					p.Error(fmt.Sprintf("missing parameter: %s", k))
+				}
+
+				switch v := v.(type) {
+				case float64:
+					lval.expr = &NumberLiteral{Val: v}
+				case int64:
+					lval.expr = &IntegerLiteral{Val: v}
+				case string:
+					lval.expr = &StringLiteral{Val: v}
+				case bool:
+					lval.expr = &BooleanLiteral{Val: v}
+				default:
+					p.Error(fmt.Sprintf("unable to bind parameter with type %T", v))
+				}
 			}
 		}
 		if typ >= EQ && typ <= GTE {

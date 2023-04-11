@@ -572,7 +572,7 @@ func (s *Store) setOpen() error {
 	return nil
 }
 
-//getData is used to get the Data in the Store
+// getData is used to get the Data in the Store
 func (s *Store) GetData() *meta.Data {
 	s.mu.RLock()
 	data := s.data
@@ -665,10 +665,15 @@ func (s *Store) deleteMeasurement(db string, rp *meta.RetentionPolicyInfo, mst s
 	for sgIdx := range rp.ShardGroups {
 		for shIdx := range rp.ShardGroups[sgIdx].Shards {
 			originName := influx.GetOriginMstName(mst)
-			if rp.ShardGroups[sgIdx].Shards[shIdx].ContainPrefix(originName) {
-				ptId := rp.ShardGroups[sgIdx].Shards[shIdx].Owners[0]
-				nodeId := s.cacheData.PtView[db][ptId].Owner.NodeID
-				nodeShardsMap[nodeId] = append(nodeShardsMap[nodeId], rp.ShardGroups[sgIdx].Shards[shIdx].ID)
+			if !rp.ShardGroups[sgIdx].Shards[shIdx].ContainPrefix(originName) {
+				continue
+			}
+			ptId := rp.ShardGroups[sgIdx].Shards[shIdx].Owners[0]
+			if pts, ok := s.cacheData.PtView[db]; ok {
+				if int(ptId) < len(pts) {
+					nodeId := pts[ptId].Owner.NodeID
+					nodeShardsMap[nodeId] = append(nodeShardsMap[nodeId], rp.ShardGroups[sgIdx].Shards[shIdx].ID)
+				}
 			}
 		}
 	}
@@ -950,7 +955,6 @@ func (s *Store) getSnapshot(role mclient.Role) []byte {
 	default:
 		panic("not exist role")
 	}
-	return nil
 }
 
 func (s *Store) getSnapshotBySql() []byte {
@@ -1574,7 +1578,7 @@ func (s *Store) getDbPtNumPerAliveNode() *map[uint64]uint32 {
 			aliveNodes[dataNode.ID] = struct{}{}
 		}
 	}
-	for db, _ := range s.data.PtView {
+	for db := range s.data.PtView {
 		for _, ptInfo := range s.data.PtView[db] {
 			if _, ok := aliveNodes[ptInfo.Owner.NodeID]; ok {
 				nodePtNumMap[ptInfo.Owner.NodeID]++

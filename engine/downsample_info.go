@@ -32,7 +32,7 @@ type DownSampleFilesInfo struct {
 	NewFiles [][]string
 }
 
-func (info DownSampleFilesInfo) reset() {
+func (info *DownSampleFilesInfo) reset() {
 	info.Names = info.Names[:0]
 	info.OldFiles = info.OldFiles[:0]
 	info.NewFiles = info.NewFiles[:0]
@@ -75,13 +75,12 @@ func (info *DownSampleFilesInfo) unmarshal(src []byte) ([]byte, error) {
 		return src, fmt.Errorf("too small data for name length, %v", len(src))
 	}
 	info.taskID = numberenc.UnmarshalUint64(src)
-	l := int(info.taskID)
 	src = src[8:]
 
 	info.level = int(numberenc.UnmarshalInt64(src))
-	l, src = info.level, src[8:]
+	_, src = info.level, src[8:]
 
-	l = int(numberenc.UnmarshalUint16(src))
+	l := int(numberenc.UnmarshalUint16(src))
 	src = src[2:]
 	if len(src) < l+4 {
 		return src, fmt.Errorf("too small data for name, %v < %v", len(src), l+4)

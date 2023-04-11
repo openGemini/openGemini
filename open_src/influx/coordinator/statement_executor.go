@@ -489,7 +489,7 @@ func (e *StatementExecutor) getRpLimit() int {
 }
 
 func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.CreateMeasurementStatement) error {
-	if !meta2.ValidName(stmt.Name) {
+	if !meta2.ValidMeasurementName(stmt.Name) {
 		return meta2.ErrInvalidName
 	}
 

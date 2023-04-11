@@ -85,8 +85,6 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 		fl.loadFile(filepath.Join(dir, item.Name()), mst, isOrder)
 		fl.total++
 	}
-
-	return
 }
 
 func (fl *fileLoader) loadFile(file, mst string, isOrder bool) {
