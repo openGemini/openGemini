@@ -11,6 +11,7 @@ require (
 	github.com/armon/go-metrics v0.3.10
 	github.com/c-bata/go-prompt v0.2.2
 	github.com/cespare/xxhash/v2 v2.1.2
+	github.com/clipperhouse/uax29 v1.12.4
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang-jwt/jwt v3.2.1+incompatible
 	github.com/golang/snappy v0.0.4
@@ -28,6 +29,7 @@ require (
 	github.com/mitchellh/copystructure v1.2.0
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pingcap/failpoint v0.0.0-20200702092429-9f69995143ce
+	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.12.1
 	github.com/prometheus/common v0.32.1
 	github.com/prometheus/prometheus v1.8.2-0.20201119142752-3ad25a6dc3d9
