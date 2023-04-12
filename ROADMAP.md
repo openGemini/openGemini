@@ -13,14 +13,20 @@
 - [x] Supports KubeEdge.
 - [x] Real-time analysis framework.
 
-**v1.0.0 (2022.12)**
+**v1.0.0 (2023.02)**
 
-- [ ] Time series data prediction.
-- [ ] Time series data anomaly detection.
-- [ ] Stream
-- [ ] down-sampling
+- [x] Full join
+- [x] Stream computing
+- [x] mult-level down-sampling
+- [x] Time series data prediction.
+- [x] Time series data anomaly detection.
 
-**v1.1.0 （2022.06）**
+**v1.1.0 （2023.07）**
 
-- [ ] Reliability capability
-- [ ] Continue Query
+- [ ] Full-text indexing
+- [ ] Reliability(data replication)
+- [ ] Non-partitioning key filter
+
+**v1.2.0 （2023.11）**
+- [ ] High cardinality
+- [ ] Continuous query
