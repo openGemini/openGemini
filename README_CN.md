@@ -1,11 +1,13 @@
 # README
 
-![License](https://img.shields.io/badge/license-Apache2.0-green)                                                                                                                                     
+![color](https://user-images.githubusercontent.com/49023462/231386185-a18cd5dd-30ef-4d03-b86b-3119b16843a0.png)
+
+![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)   
+ 
 
 [简体中文]() | [English](README.md)
 
-[官网](http://www.openGemini.org) | [文档](http://www.openGemini.org/docs) | [贡献指南](http://www.openGemini.org/contribution) 
-
+[官网](http://www.openGemini.org) | [文档](http://www.openGemini.org/docs) | [贡献指南](http://www.openGemini.org/contribution) | [RoadMap](./ROADMAP.md)
 
 ## 关于openGemini
 
