@@ -946,7 +946,7 @@ CONDITION:
     |MATCH LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
     {	
 	$$ = &MatchExpr{
-	    Field:  &StringLiteral{Val: $3},
+	    Field:  &VarRef{Val: $3},
 	    Value:  &VarRef{Val: $5},
 	    Op: MATCH,
         }
@@ -954,7 +954,7 @@ CONDITION:
     |MATCH_PHRASE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
     {
 	$$ = &MatchExpr{
-        Field:  &StringLiteral{Val: $3},
+        Field:  &VarRef{Val: $3},
 	    Value:  &VarRef{Val: $5},
 	    Op: MATCH_PHRASE,
 	}

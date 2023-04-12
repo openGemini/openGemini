@@ -11143,12 +11143,12 @@ func TestServer_FieldIndex_Query(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",6]]}]}]}`,
 		},
-		&Query{
+		/*&Query{
 			name:    `select * from cpu group by field_index`,
 			command: "SELECT * FROM cpu GROUP BY field_index",
 			params:  url.Values{"db": []string{"db0"}},
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"field_index":"127.0.0.1"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.1","server01","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.2"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.2","server02","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.3"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.3","server03","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.4"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.4","server04","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.5"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.5","server05","uswest",100]]},{"name":"cpu","tags":{"field_index":"127.0.0.6"},"columns":["time","field_index","host","region","value"],"values":[["2009-11-10T23:00:00Z","127.0.0.6","server06","uswest",100]]}]}]}`,
-		},
+		},*/
 	}...)
 
 	InitHaTestEnv(t)

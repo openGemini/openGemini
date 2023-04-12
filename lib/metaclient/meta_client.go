@@ -2694,7 +2694,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 				}
 			}
 
-			rows := make([]*models.Row, 0, 0)
+			rows := make([]*models.Row, 0)
 			rows = append(rows, row)
 
 			shardrow := &models.Row{
@@ -2710,7 +2710,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 				indexes := &models.Row{
 					Name:    "Indexes Information",
 					Columns: []string{"IndexName", "Type", "ColName", "Token", "Tokenizers"}}
-				for i, _ := range measurement.IndexRelation.Oids {
+				for i := range measurement.IndexRelation.Oids {
 					for _, indexInfo := range measurement.IndexRelation.IndexList[i].IList {
 						indexes.Values = append(indexes.Values, []interface{}{indexInfo.IndexName,
 							indexInfo.Type,
