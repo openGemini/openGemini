@@ -71,12 +71,14 @@ func Test_NewServer_Open_Close(t *testing.T) {
 
 	// case 2: normal config
 	conf := config.NewTSMeta()
-	conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9192"}...)
+	if len(conf.Common.MetaJoin) == 0 {
+		conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9192"}...)
+	}
 	conf.Common.ReportEnable = false
 
 	conf.Meta.BindAddress = "127.0.0.1:9099"
 	conf.Meta.HTTPBindAddress = "127.0.0.1:9191"
-	conf.Meta.RPCBindAddress = "127.0.0.1:9192"
+	conf.Meta.RPCBindAddress = "127.0.0.1:8092"
 	conf.Meta.Dir = path.Join(tmpDir, "meta")
 
 	conf.Data.DataDir = path.Join(tmpDir, "data")
