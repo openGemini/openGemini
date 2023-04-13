@@ -63,10 +63,7 @@ func (m *merger) keysEqual(item []byte) bool {
 	}
 
 	prefix := bytes.IndexByte(item, txSuffix)
-	if string(m.prefixKey) == string(item[:prefix]) {
-		return true
-	}
-	return false
+	return string(m.prefixKey) == string(item[:prefix])
 }
 
 func (m *merger) flushPendingItem(dst []byte, dstItems []mergeset.Item) ([]byte, []mergeset.Item) {
@@ -126,10 +123,7 @@ func keysEqual(item0 []byte, item1 []byte) bool {
 		return false
 	}
 
-	if string(item0[:prefix]) == string(item1[:prefix]) {
-		return true
-	}
-	return false
+	return string(item0[:prefix]) == string(item1[:prefix])
 }
 
 var mergerPool MergerPool
@@ -178,7 +172,7 @@ func mergeDocIdxItems(data []byte, items []mergeset.Item) ([]byte, []mergeset.It
 			continue
 		}
 
-		if m.keysEqual(item) == false {
+		if !m.keysEqual(item) {
 			dstData, dstItems = m.flushPendingItem(dstData, dstItems)
 		}
 

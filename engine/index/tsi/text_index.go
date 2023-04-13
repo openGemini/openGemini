@@ -268,6 +268,10 @@ func (idx *TextIndex) Delete(primaryIndex PrimaryIndex, name []byte, condition i
 	return nil
 }
 
+func (idx *TextIndex) Flush() {
+	// todo
+}
+
 func TextIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	index, err := NewTextIndex(opt)
 	if err != nil {
@@ -320,6 +324,6 @@ func TextClose(index interface{}) error {
 }
 
 func TextFlush(index interface{}) {
-	// Todo
-	return
+	textIndex := index.(*TextIndex)
+	textIndex.Flush()
 }

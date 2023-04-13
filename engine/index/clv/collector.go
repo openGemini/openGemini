@@ -228,5 +228,4 @@ func (d *collector) Collect(tokens []string) {
 	}
 
 	d.lock.Unlock()
-	return
 }

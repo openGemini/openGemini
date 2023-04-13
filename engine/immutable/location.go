@@ -180,8 +180,8 @@ func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*rec
 			l.nextSegment()
 			continue
 		}
-		isContinue, startIndex, endIndex := l.overlapsForFiltertime(filterOpts.filterTimes)
-		if isContinue == false {
+		overlaps, startIndex, endIndex := l.overlapsForFiltertime(filterOpts.filterTimes)
+		if !overlaps {
 			l.nextSegment()
 			continue
 		}

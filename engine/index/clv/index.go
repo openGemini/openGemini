@@ -312,8 +312,6 @@ func (idx *TokenIndex) insertSuffixToTrie(vtoken []string, id uint32) {
 	}
 	node.invertIndex.AddId(id)
 	idx.trieLock.Unlock()
-
-	return
 }
 
 var idxItemsPool mergeindex.IndexItemsPool
@@ -389,7 +387,7 @@ func (idx *TokenIndex) processDocument() {
 		vtokens := token + " "
 		err := idx.writeDocumentIndex(vtokens, child)
 		if err != nil {
-			panic(fmt.Errorf("Write document index failed, err: %+v", err))
+			panic(fmt.Errorf("write document index failed, err: %+v", err))
 		}
 		// update the token set
 		idx.termSetLock.Lock()
@@ -402,7 +400,7 @@ func (idx *TokenIndex) processDocument() {
 
 	err := idx.createTermIndex(terms)
 	if err != nil {
-		panic(fmt.Errorf("Write term index failed, err: %+v", err))
+		panic(fmt.Errorf("write term index failed, err: %+v", err))
 	}
 }
 
@@ -691,7 +689,7 @@ func IntersectInvertByDistance(pre *InvertIndex, cur *InvertIndex, dis uint16) *
 		}
 
 		for i := 0; i < len(preIss.invertState); i++ {
-			if swap == true {
+			if swap {
 				if preIss.invertState[i].position < dis {
 					continue
 				}

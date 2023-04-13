@@ -230,14 +230,8 @@ func unmarshal(item []byte, invert *InvertIndex) {
 	}
 
 	if idsLen != 0 {
-		tail = unmarshalIdList(tail, idsLen, invert)
+		unmarshalIdList(tail, idsLen, invert)
 	}
-}
-
-func isOnlyHaveIds(item []byte) bool {
-	itemLen := len(item)
-	flag := item[itemLen-3]
-	return flag == idFlag
 }
 
 func marshalDicVersion(dst []byte, version uint32) []byte {

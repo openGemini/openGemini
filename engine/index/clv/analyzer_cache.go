@@ -225,7 +225,7 @@ func loadAnalyzer(dicPath, name, field string, version uint32) (*Analyzer, error
 // find from the cache, if not existed, load from mergeset table.
 func getAnalyzer(path, name, field string, version uint32) (*Analyzer, error) {
 	if version < Default {
-		return nil, fmt.Errorf("Incorrect dictionary version: %d", version)
+		return nil, fmt.Errorf("incorrect dictionary version: %d", version)
 	}
 
 	a := cache.getAnalyzer(path, name, field, version)
@@ -271,7 +271,7 @@ func GetAnalyzer(path, name, field string, version uint32) (*Analyzer, error) {
 	}
 
 	collector := cache.getCollector(path, name, field)
-	if needCollect == true && collector.IsStopped() {
+	if needCollect && collector.IsStopped() {
 		collector.StartCollect()
 	}
 
