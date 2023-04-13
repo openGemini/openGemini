@@ -237,7 +237,7 @@ def get_system_arch():
         arch = "arm64"
     elif 'arm' in arch:
         # Prevent uname from reporting full ARM arch (eg 'armv7l')
-        arch = "arm"
+        arch = "arm64"
     return arch
 
 def get_system_platform():
@@ -447,7 +447,6 @@ def main(args):
         single_build = False
     else:
         platforms = [args.platform]
-
     for platform in platforms:
         build_output.update( { platform : {} } )
         archs = []
