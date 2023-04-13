@@ -27,12 +27,13 @@ import (
 )
 
 const (
+	DefaultDir                  = "/tmp/openGemini/meta"
 	DefaultLoggingEnabled       = true
 	DefaultRaftFileName         = "raft"
 	DefaultGossipFileName       = "gossip"
-	DefaultHTTPBindAddress      = ":8091"
-	DefaultRPCBindAddress       = ":8092"
-	DefaultRaftBindAddress      = ":8088"
+	DefaultHTTPBindAddress      = "127.0.0.1:8091"
+	DefaultRPCBindAddress       = "127.0.0.1:8092"
+	DefaultRaftBindAddress      = "127.0.0.1:8088"
 	DefaultCommitTimeout        = 50 * time.Millisecond
 	DefaultLeaderLeaseTimeout   = 500 * time.Millisecond
 	DefaultElectionTimeout      = 1000 * time.Millisecond
@@ -48,6 +49,8 @@ const (
 	DefaultProbInterval         = toml.Duration(time.Second)
 	DefaultPtNumPerNode         = 1
 )
+
+var DefaultMetaJoin = []string{"127.0.0.1:8092"}
 
 // TSMeta represents the configuration format for the ts-meta binary.
 type TSMeta struct {
@@ -160,6 +163,7 @@ type Meta struct {
 // NewMeta builds a new configuration with default values.
 func NewMeta() *Meta {
 	return &Meta{
+		Dir:                     DefaultDir,
 		HTTPBindAddress:         DefaultHTTPBindAddress,
 		RPCBindAddress:          DefaultRPCBindAddress,
 		BindAddress:             DefaultRaftBindAddress,
@@ -286,7 +290,7 @@ func (c *Gossip) BuildSerf(lg Logger, app App, name string, event chan<- serf.Ev
 
 func NewGossip() *Gossip {
 	return &Gossip{
-		Enabled:       true,
+		Enabled:       false,
 		LogEnabled:    true,
 		ProbInterval:  DefaultProbInterval,
 		SuspicionMult: DefaultSuspicionMult,
