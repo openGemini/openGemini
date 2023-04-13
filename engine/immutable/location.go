@@ -137,6 +137,37 @@ func (l *Location) nextSegment() {
 	}
 }
 
+func (l *Location) getCurSegMinMax() (int64, int64) {
+	minMaxSeg := l.meta.timeRange[l.segPos]
+	min, max := minMaxSeg.minTime(), minMaxSeg.maxTime()
+	return min, max
+}
+
+func (l *Location) overlapsForFiltertime(filterTime []int64) (bool, int, int) {
+	if len(filterTime) == 0 {
+		return true, 0, 0
+	}
+	min, max := l.getCurSegMinMax()
+
+	startIndex := record.GetTimeRangeStartIndex(filterTime, 0, min)
+	// on the right of the filterTime boundary
+	if startIndex >= len(filterTime) || startIndex < 0 {
+		return false, 0, 0
+	}
+	// on the left of the filterTime boundary
+	if filterTime[startIndex] > max {
+		return false, 0, 0
+	}
+
+	// find the endIndex
+	endIndex := record.GetTimeRangeStartIndex(filterTime, 0, max)
+	if endIndex >= len(filterTime) {
+		endIndex = len(filterTime) - 1
+	}
+
+	return true, startIndex, endIndex
+}
+
 func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
 	return l.readData(filterOpts, dst)
 }
@@ -149,7 +180,11 @@ func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*rec
 			l.nextSegment()
 			continue
 		}
-
+		overlaps, startIndex, endIndex := l.overlapsForFiltertime(filterOpts.filterTimes)
+		if !overlaps {
+			l.nextSegment()
+			continue
+		}
 		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.ctx)
 		if err != nil {
 			return nil, err
@@ -171,6 +206,10 @@ func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*rec
 		if rec != nil {
 			rec = FilterByField(rec, filterOpts.filtersMap, filterOpts.cond, filterOpts.fieldsIdx,
 				filterOpts.filterTags, filterOpts.pointTags)
+		}
+		// filter by fiterTime
+		if rec != nil {
+			rec = FilterByFilterTime(rec, filterOpts.filterTimes, startIndex, endIndex)
 		}
 	}
 

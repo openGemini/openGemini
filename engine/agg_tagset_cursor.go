@@ -204,7 +204,7 @@ func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, seriesKey *serie
 	var filterOpts *immutable.FilterOptions
 	if re != nil {
 		index := s.mergeRecIters[s.currSid].index
-		filterOpts = immutable.NewFilterOpts(s.tagSetInfo.Filters[index], s.ctx.m, s.ctx.filterFieldsIdx, s.ctx.filterTags, &seriesKey.tags)
+		filterOpts = immutable.NewFilterOpts(s.tagSetInfo.Filters[index], s.ctx.m, s.ctx.filterFieldsIdx, s.ctx.filterTags, &seriesKey.tags, nil)
 		re = immutable.FilterByOpts(re, filterOpts)
 	}
 	if re == nil {
