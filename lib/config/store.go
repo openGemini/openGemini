@@ -57,6 +57,12 @@ const (
 	MinFlavorMemory                = 8 * GB
 	MaxFlavorMemory                = 512 * GB
 
+	DefaultIngesterAddress = "127.0.0.1:8400"
+	DefaultSelectAddress   = "127.0.0.1:8401"
+	DefaultDataDir         = "/tmp/openGemini/data"
+	DefaultWalDir          = "/tmp/openGemini/wal"
+	DefaultMetaDir         = "/tmp/openGemini/meta"
+
 	IndexFileDirectory = "index"
 	DataDirectory      = "data"
 	WalDirectory       = "wal"
@@ -218,6 +224,11 @@ func NewStore() Store {
 	memorySize := toml.Size(size * KB)
 	readCacheLimit := getCacheLimitSize(uint64(memorySize))
 	return Store{
+		IngesterAddress:              DefaultIngesterAddress,
+		SelectAddress:                DefaultSelectAddress,
+		DataDir:                      DefaultDataDir,
+		WALDir:                       DefaultWalDir,
+		MetaDir:                      DefaultMetaDir,
 		Engine:                       DefaultEngine,
 		ImmTableMaxMemoryPercentage:  DefaultImmutableMaxMemoryPercent,
 		CompactFullWriteColdDuration: toml.Duration(DefaultCompactFullWriteColdDuration),

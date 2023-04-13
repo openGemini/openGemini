@@ -155,7 +155,7 @@ func TestTSStore(t *testing.T) {
 	conf.Spdy.ConnPoolSize = 10
 	conf.Common.CPUNum = 10
 
-	assert.EqualError(t, conf.Validate(), "data store-wal-dir must not be empty")
+	assert.NoError(t, conf.Validate())
 	conf.Data.WALDir = "/opt/gemini/wal"
 
 	conf.Data.MaxConcurrentCompactions = -1

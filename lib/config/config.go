@@ -107,6 +107,7 @@ type Common struct {
 // NewCommon builds a new CommonConfiguration with default values.
 func NewCommon() *Common {
 	return &Common{
+		MetaJoin:     DefaultMetaJoin,
 		ReportEnable: true,
 	}
 }
