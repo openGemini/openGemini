@@ -63,6 +63,8 @@ type tsmMergeCursor struct {
 	limitFirstTime  int64
 	init            bool
 	lazyInit        bool
+
+	filterTimes []int64
 }
 
 func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr, tags *influx.PointTags, lazyInit bool, _ *tracing.Span) (*tsmMergeCursor, error) {
@@ -229,7 +231,7 @@ func (c *tsmMergeCursor) AddLoc() error {
 
 func (c *tsmMergeCursor) readData(orderLoc bool, dst *record.Record) (*record.Record, error) {
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
-	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags)
+	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.filterTimes)
 	if orderLoc {
 		return c.locations.ReadData(filterOpts, dst)
 	}
@@ -323,6 +325,8 @@ func (c *tsmMergeCursor) reset() {
 	c.init = false
 	c.lazyInit = false
 
+	c.filterTimes = c.filterTimes[:0]
+
 	c.orderRecIter.reset()
 	c.outOrderRecIter.reset()
 
@@ -369,7 +373,7 @@ func (c *tsmMergeCursor) FirstTimeOutOfOrderInit() error {
 	//isFirst := true
 	var outRec *record.Record
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
-	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags)
+	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.filterTimes)
 	dst := record.NewRecordBuilder(c.ctx.schema)
 	rec, err := c.outOfOrderLocations.ReadOutOfOrderMeta(filterOpts, dst)
 	if err != nil {

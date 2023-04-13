@@ -704,21 +704,23 @@ func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, ctx *R
 }
 
 type FilterOptions struct {
-	filtersMap map[string]interface{}
-	cond       influxql.Expr
-	fieldsIdx  []int    // field index in schema
-	filterTags []string // filter tag name
-	pointTags  *influx.PointTags
+	filtersMap  map[string]interface{}
+	cond        influxql.Expr
+	fieldsIdx   []int    // field index in schema
+	filterTags  []string // filter tag name
+	pointTags   *influx.PointTags
+	filterTimes []int64 // filter by timestamp
 }
 
 func NewFilterOpts(cond influxql.Expr, filterMap map[string]interface{}, fieldsIdx []int, idTags []string,
-	tags *influx.PointTags) *FilterOptions {
+	tags *influx.PointTags, filterTimes []int64) *FilterOptions {
 	return &FilterOptions{
-		cond:       cond,
-		filtersMap: filterMap,
-		fieldsIdx:  fieldsIdx,
-		filterTags: idTags,
-		pointTags:  tags,
+		cond:        cond,
+		filtersMap:  filterMap,
+		fieldsIdx:   fieldsIdx,
+		filterTags:  idTags,
+		pointTags:   tags,
+		filterTimes: filterTimes,
 	}
 }
 
@@ -761,6 +763,52 @@ func FilterByTimeDescend(rec *record.Record, tr record.TimeRange) *record.Record
 
 func FilterByOpts(rec *record.Record, opt *FilterOptions) *record.Record {
 	return FilterByField(rec, opt.filtersMap, opt.cond, opt.fieldsIdx, opt.filterTags, opt.pointTags)
+}
+
+func AddRecordToOther(dstRecord, srcRecord *record.Record) {
+	for i := range srcRecord.ColVals {
+		dstRecord.ColVals[i].AppendColVal(&srcRecord.ColVals[i], dstRecord.Schema[i].Type, 0, srcRecord.RowNums())
+	}
+}
+
+func RecordInitByOther(dstRecord, srcRecord *record.Record) {
+	schemaLen := len(srcRecord.Schema)
+	dstRecord.ColVals = make([]record.ColVal, schemaLen)
+	dstRecord.Schema = make([]record.Field, schemaLen)
+	copy(dstRecord.Schema, srcRecord.Schema)
+	// colMeta
+	dstRecord.RecMeta = &record.RecMeta{}
+	dstRecord.ColMeta = append(dstRecord.ColMeta[:cap(dstRecord.ColMeta)], make([]record.ColMeta, len(dstRecord.Schema)-0)...)
+}
+
+func FilterByFilterTime(rec *record.Record, filterTime []int64, startIndex, endIndex int) *record.Record { //, startIndex, endIndex int
+	lenFilter := len(filterTime)
+	if lenFilter == 0 {
+		return rec
+	}
+	times := rec.Times()
+	startTime := times[0]
+	endTime := times[len(times)-1]
+
+	newRec := record.Record{}
+	RecordInitByOther(&newRec, rec)
+	startPos := 0
+	for i := startIndex; i <= endIndex; i++ {
+		if filterTime[i] < startTime || filterTime[i] > endTime {
+			continue
+		}
+
+		index := record.GetTimeRangeStartIndex(times, startPos, filterTime[i])
+		startPos = index
+		sliceRec := record.Record{}
+		sliceRec.SliceFromRecord(rec, index, index+1)
+		AddRecordToOther(&newRec, &sliceRec)
+	}
+	// all data out of time ranges, continue to read data
+	if newRec.Times() == nil {
+		return nil
+	}
+	return &newRec
 }
 
 func FilterByField(rec *record.Record, filterMap map[string]interface{}, con influxql.Expr, idField []int, idTags []string, tags *influx.PointTags) *record.Record {
