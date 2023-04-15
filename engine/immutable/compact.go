@@ -288,7 +288,7 @@ func (m *MmsTables) compactToLevel(group FilesInfo, full, isNonStream bool) erro
 func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16, isOrder bool, cLog *Log.Logger) ([]TSSPFile, error) {
 	_, seq := files[0].LevelAndSequence()
 	fileName := NewTSSPFileName(seq, level, 0, 0, isOrder, m.lock)
-	tableBuilder := AllocMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize)
+	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize)
 	tableBuilder.WithLog(cLog)
 	for {
 		select {

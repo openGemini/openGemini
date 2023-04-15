@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/comm"
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -34,44 +35,6 @@ import (
 func init() {
 	initIgnoreTypeFun()
 	InitDecFunctions()
-}
-
-type TableReader interface {
-	Open() error
-	Close() error
-	ReadData(cm *ChunkMeta, segment int, dst *record.Record, ctx *ReadContext) (*record.Record, error)
-	Ref()
-	Unref()
-	MetaIndexAt(idx int) (*MetaIndex, error)
-	MetaIndex(id uint64, tr record.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error)
-	ChunkMetaAt(index int) (*ChunkMeta, error)
-
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
-	ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	Read(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error)
-	BlockHeader(meta *ChunkMeta, dst []record.Field) ([]record.Field, error)
-
-	Stat() *Trailer
-	MinMaxSeriesID() (min, max uint64, err error)
-	MinMaxTime() (min, max int64, err error)
-	Contains(id uint64, tm record.TimeRange) bool
-	ContainsTime(tm record.TimeRange) bool
-	ContainsId(id uint64) bool
-	CreateTime() int64
-	Name() string
-	FileName() string
-	Rename(newName string) error
-	FileSize() int64
-	InMemSize() int64
-	Version() uint64
-	FreeMemory() int64
-	FreeFileHandle() error
-	LoadIntoMemory() error
-	LoadComponents() error
-	AverageChunkRows() int
-	MaxChunkRows() int
 }
 
 type MmsReaders struct {
@@ -484,7 +447,7 @@ func sumRangeValues(ref *record.Field, col *record.ColVal, rowIdxStart, rowIdxSt
 func appendIntegerColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, nilCount uint32, col *record.ColVal, ctx *ReadContext) error {
 	col.Init()
 	if len(encData) != 0 {
-		values, err := DecodeIntegerBlock(encData, &col.Val, ctx.coderCtx)
+		values, err := encoding.DecodeIntegerBlock(encData, &col.Val, ctx.coderCtx)
 		if err != nil {
 			return err
 		}
@@ -511,7 +474,7 @@ func appendIntegerColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 func appendFloatColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, nilCount uint32, col *record.ColVal, ctx *ReadContext) error {
 	col.Init()
 	if len(encData) != 0 {
-		values, err := DecodeFloatBlock(encData, &col.Val, ctx.coderCtx)
+		values, err := encoding.DecodeFloatBlock(encData, &col.Val, ctx.coderCtx)
 		if err != nil {
 			return err
 		}
@@ -536,7 +499,7 @@ func appendFloatColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, ni
 func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, nilCount uint32, col *record.ColVal, ctx *ReadContext) error {
 	col.Init()
 	if len(encData) != 0 {
-		values, err := DecodeBooleanBlock(encData, &col.Val, ctx.coderCtx)
+		values, err := encoding.DecodeBooleanBlock(encData, &col.Val, ctx.coderCtx)
 		if err != nil {
 			return err
 		}
@@ -569,7 +532,7 @@ func appendStringColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, n
 		strVar = &ctx.decBuf
 		offs = &ctx.offset
 	}
-	value, offsets, err := DecodeStringBlock(encData, strVar, offs, ctx.coderCtx)
+	value, offsets, err := encoding.DecodeStringBlock(encData, strVar, offs, ctx.coderCtx)
 	if err != nil {
 		return err
 	}
@@ -615,7 +578,7 @@ func appendColumnData(dataType int, nilBitmap []byte, bitmapOffset uint32, encDa
 }
 
 func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, ctx *ReadContext, copied bool) error {
-	if tmData[0] != BlockInteger {
+	if tmData[0] != encoding.BlockInteger {
 		err := fmt.Errorf("column data type not time, %v", tmData[0])
 		log.Error(err.Error())
 		return err
@@ -641,12 +604,12 @@ func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, ctx *ReadContex
 	nilCount := numberenc.UnmarshalUint32(tmData)
 	tmData = tmData[4:]
 
-	if ctx.coderCtx.timeCoder == nil {
-		ctx.coderCtx.timeCoder = GetTimeCoder()
+	if ctx.coderCtx.GetTimeCoder() == nil {
+		ctx.coderCtx.SetTimeCoder(encoding.GetTimeCoder())
 	}
 
 	timeCol.Init()
-	values, err := DecodeTimestampBlock(tmData, &timeCol.Val, ctx.coderCtx)
+	values, err := encoding.DecodeTimestampBlock(tmData, &timeCol.Val, ctx.coderCtx)
 	if err != nil {
 		return err
 	}

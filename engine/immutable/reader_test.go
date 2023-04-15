@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
@@ -194,7 +195,7 @@ func (m MocTsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs
 	return nil, nil
 }
 
-func (m MocTsspFile) ChunkAt(index int) (*ChunkMeta, error) {
+func (m MocTsspFile) ChunkMetaAt(index int) (*ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -226,7 +227,7 @@ func (m MocTsspFile) Contains(id uint64) (bool, error) {
 	return false, nil
 }
 
-func (m MocTsspFile) ContainsByTime(tr record.TimeRange) (bool, error) {
+func (m MocTsspFile) ContainsTime(tr record.TimeRange) (bool, error) {
 	return false, nil
 }
 
@@ -282,7 +283,7 @@ func (m MocTsspFile) Remove() error {
 	return nil
 }
 
-func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
+func (m MocTsspFile) Free(evictLock bool) int64 {
 	return 0
 }
 
@@ -310,6 +311,26 @@ func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 	return
 }
 
+func (m MocTsspFile) FreeMemory() int64 {
+	return 0
+}
+
+func (m MocTsspFile) BlockHeader(meta *ChunkMeta, dst []record.Field) ([]record.Field, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) MinMaxSeriesID() (min, max uint64, err error) {
+	return 0, 0, nil
+}
+
+func (m MocTsspFile) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error) {
+	return nil, nil
+}
+
 func TestGetTsspFiles(t *testing.T) {
 	m := &MmsTables{
 		Order: map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
@@ -332,12 +353,12 @@ func TestDecodeColumnData(t *testing.T) {
 		col.BitMapOffset = 7
 		ref := record.Field{Name: "foo", Type: typ}
 		ctx := &ReadContext{
-			coderCtx:  &CoderContext{},
+			coderCtx:  &encoding.CoderContext{},
 			Ascending: false,
 		}
 		builder := ColumnBuilder{}
 		builder.colMeta = &ColumnMeta{name: "foo", ty: uint8(typ), entries: make([]Segment, 1)}
-		builder.coder = &CoderContext{}
+		builder.coder = &encoding.CoderContext{}
 
 		switch typ {
 		case influx.Field_Type_Int:

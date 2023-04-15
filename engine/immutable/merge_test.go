@@ -393,8 +393,8 @@ func saveRecordToFile(seq uint64, records map[uint64]*record.Record, order bool,
 	}
 	lockPath := ""
 	fileName := immutable.NewTSSPFileName(seq, 0, 0, 0, order, &lockPath)
-	builder := immutable.GetMsBuilder(saveDir, "mst", &lockPath, fileName,
-		conf, nil, 1, 2)
+	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, conf, 1, fileName,
+		1, nil, 2)
 
 	sort.Slice(sidList, func(i, j int) bool {
 		return sidList[i] < sidList[j]

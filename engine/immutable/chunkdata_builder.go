@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/crc32"
 
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
@@ -57,8 +58,8 @@ func (b *ChunkDataBuilder) reset(dst []byte) {
 
 func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 	var err error
-	if b.colBuilder.coder.timeCoder == nil {
-		b.colBuilder.coder.timeCoder = GetTimeCoder()
+	if b.colBuilder.coder.GetTimeCoder() == nil {
+		b.colBuilder.coder.SetTimeCoder(encoding.GetTimeCoder())
 	}
 
 	if b.colBuilder.timePreAggBuilder == nil {
@@ -76,13 +77,13 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 		m := &tm.entries[i]
 
 		pos := len(b.chunk)
-		b.chunk = append(b.chunk, BlockInteger)
+		b.chunk = append(b.chunk, encoding.BlockInteger)
 		nilBitMap, bitmapOffset := col.SubBitmapBytes()
 		b.chunk = numberenc.MarshalUint32Append(b.chunk, uint32(len(nilBitMap)))
 		b.chunk = append(b.chunk, nilBitMap...)
 		b.chunk = numberenc.MarshalUint32Append(b.chunk, uint32(bitmapOffset))
 		b.chunk = numberenc.MarshalUint32Append(b.chunk, uint32(col.NilCount))
-		b.chunk, err = EncodeTimestampBlock(col.Val, b.chunk, b.colBuilder.coder)
+		b.chunk, err = encoding.EncodeTimestampBlock(col.Val, b.chunk, b.colBuilder.coder)
 		if err != nil {
 			b.log.Error("encode integer value fail", zap.Error(err))
 			return err

@@ -1838,7 +1838,7 @@ func (m MocTsspFile) ReadAt(cm *immutable.ChunkMeta, segment int, dst *record.Re
 	return nil, nil
 }
 
-func (m MocTsspFile) ChunkAt(index int) (*immutable.ChunkMeta, error) {
+func (m MocTsspFile) ChunkMetaAt(index int) (*immutable.ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -1870,7 +1870,7 @@ func (m MocTsspFile) Contains(id uint64) (bool, error) {
 	return false, nil
 }
 
-func (m MocTsspFile) ContainsByTime(tr record.TimeRange) (bool, error) {
+func (m MocTsspFile) ContainsTime(tr record.TimeRange) (bool, error) {
 	return false, nil
 }
 
@@ -1926,7 +1926,7 @@ func (m MocTsspFile) Remove() error {
 	return nil
 }
 
-func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
+func (m MocTsspFile) Free(evictLock bool) int64 {
 	return 0
 }
 
@@ -1952,6 +1952,26 @@ func (m MocTsspFile) AddToEvictList(level uint16) {
 
 func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 	return
+}
+
+func (m MocTsspFile) FreeMemory() int64 {
+	return 0
+}
+
+func (m MocTsspFile) BlockHeader(meta *immutable.ChunkMeta, dst []record.Field) ([]record.Field, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) MinMaxSeriesID() (min, max uint64, err error) {
+	return 0, 0, nil
+}
+
+func (m MocTsspFile) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (m MocTsspFile) ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error) {
+	return nil, nil
 }
 
 func TestCanDoDownSample(t *testing.T) {

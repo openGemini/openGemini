@@ -166,7 +166,7 @@ func (c *StreamWriteFile) NewTSSPFile(tmp bool) (TSSPFile, error) {
 
 	dr, err := CreateTSSPFileReader(c.fileSize, c.fd, &c.trailer, &c.TableData, c.version, tmp, c.lock)
 	if err != nil {
-		c.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
+		c.log.Error("create tssp file reader fail", zap.String("name", dr.Path()), zap.Error(err))
 		return nil, err
 	}
 

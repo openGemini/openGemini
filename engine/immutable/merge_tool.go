@@ -305,7 +305,7 @@ func (mt *mergeTool) saveRecords(ctx *mergeContext, fileName TSSPFileName,
 
 	fileName.merge++
 	fileName.lock = mt.mts.lock
-	builder := AllocMsBuilder(mt.mts.path, ctx.mst, mt.mts.lock, mt.mts.Conf,
+	builder := NewMsBuilder(mt.mts.path, ctx.mst, mt.mts.lock, mt.mts.Conf,
 		len(data), fileName, 0, nil, int(ctx.unordered.size))
 
 	var err error

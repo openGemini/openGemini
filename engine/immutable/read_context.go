@@ -18,12 +18,13 @@ package immutable
 
 import (
 	"github.com/openGemini/openGemini/engine/comm"
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/record"
 )
 
 type ReadContext struct {
-	coderCtx       *CoderContext
+	coderCtx       *encoding.CoderContext
 	preAggBuilders *PreAggBuilders
 	decBuf         []byte
 	offset         []uint32
@@ -45,7 +46,7 @@ func NewReadContext(ascending bool) *ReadContext {
 	}
 	b := bufferpool.Get()
 	return &ReadContext{
-		coderCtx:       NewCoderContext(),
+		coderCtx:       encoding.NewCoderContext(),
 		preAggBuilders: newPreAggBuilders(),
 		decBuf:         b[:0],
 		Ascending:      ascending,

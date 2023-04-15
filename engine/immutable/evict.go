@@ -66,7 +66,7 @@ func (ctx *memReaderEvictCtx) evictMemReader(evictSize int64) {
 		for e != nil {
 			f := e.Value.(TSSPFile)
 			e = e.Prev()
-			size := f.FreeMemory(false)
+			size := f.Free(false)
 			if size > 0 {
 				evictSize -= size
 			}
@@ -214,7 +214,7 @@ func (sgc *TableStoreGC) GC() {
 
 		for fn, f := range sgc.freeFiles {
 			if !f.Inuse() {
-				_ = f.FreeMemory(true)
+				_ = f.Free(true)
 				delete(sgc.freeFiles, fn)
 			}
 		}
