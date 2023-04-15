@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -159,7 +160,7 @@ func TestMarshalIdTime(t *testing.T) {
 		tm += time.Millisecond.Nanoseconds()
 	}
 
-	ctx := immutable.NewCoderContext()
+	ctx := encoding.NewCoderContext()
 	defer func() {
 		ctx.Release()
 	}()

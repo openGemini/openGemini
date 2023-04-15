@@ -217,7 +217,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -244,7 +244,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 
 	for i, f := range fids.files {
 		check("mst", f.Path(), recs[i])
-		fr := f.(*tsspFile).reader.(*TSSPFileReader)
+		fr := f.(*tsspFile).reader.(*tsspFileReader)
 		if fr.ref != 0 {
 			t.Fatal("ref error")
 		}
@@ -386,7 +386,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -544,7 +544,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -715,7 +715,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		for i := 0; i < filesN; i++ {
 			ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-			msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
+			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
 			write(ids, data, msb)
 
 			for j, id := range ids {
@@ -792,7 +792,7 @@ func mustCreateTsspFiles(path string, fileNames []string) []TSSPFile {
 		fileName := NewTSSPFileName(1, 0, 0, 0, true, &lockPath)
 		f := &tsspFile{
 			name: fileName,
-			reader: &TSSPFileReader{
+			reader: &tsspFileReader{
 				r:          dr,
 				inMemBlock: NewMemReader(),
 			},
@@ -1172,7 +1172,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 			}
 
 			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-			msb := AllocMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
 			write(ids, data, msb, oldRec)
 			for _, v := range data {
 				recs = append(recs, v)

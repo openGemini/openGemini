@@ -14,18 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package immutable
+package encoding_test
 
 import (
 	"reflect"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/github.com/jwilder/encoding/simple8b"
 )
 
 func TestTimeEncoder_simple8b(t *testing.T) {
-	coder := GetTimeCoder()
+	coder := encoding.GetTimeCoder()
 
 	inArr := []int64{
 		1655189096973640419, 1655189096982730400, 1655189097038068410, 1655189097051959505,
@@ -58,7 +59,7 @@ func TestTimeEncoder_simple8b(t *testing.T) {
 }
 
 func TestTimeEncoder_Uncompressed(t *testing.T) {
-	coder := GetTimeCoder()
+	coder := encoding.GetTimeCoder()
 
 	inArr := []int64{
 		1655189096973640419, 1655189096982730400, 1655189097038068410, 1655189097051959505,
@@ -93,7 +94,7 @@ func TestTimeEncoder_Uncompressed(t *testing.T) {
 }
 
 func TestTimeEncoder_Snappy(t *testing.T) {
-	coder := GetTimeCoder()
+	coder := encoding.GetTimeCoder()
 
 	inArr := []int64{
 		1655190265000000000, 1655190266000000000, 1655190267000000000, 1655190268000000000,

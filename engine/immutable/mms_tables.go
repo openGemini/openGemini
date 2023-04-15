@@ -36,6 +36,46 @@ import (
 	"go.uber.org/zap"
 )
 
+type TablesStore interface {
+	SetOpId(shardId uint64, opId uint64)
+	Open() (int64, error)
+	Close() error
+	AddTable(ms *MsBuilder, isOrder bool, tmp bool)
+	AddTSSPFiles(name string, isOrder bool, f ...TSSPFile)
+	FreeAllMemReader()
+	ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isOrder bool) error
+	GetBothFilesRef(measurement string, hasTimeFilter bool, tr record.TimeRange) ([]TSSPFile, []TSSPFile)
+	ReplaceDownSampleFiles(mstNames []string, originFiles [][]TSSPFile, newFiles [][]TSSPFile, isOrder bool, callBack func()) error
+	NextSequence() uint64
+	Sequencer() *Sequencer
+	GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool)
+	Tier() uint64
+	File(name string, namePath string, isOrder bool) TSSPFile
+	CompactDone(seq []string)
+	CompactionEnable()
+	CompactionDisable()
+	MergeEnable()
+	MergeDisable()
+	CompactionEnabled() bool
+	MergeEnabled() bool
+	IsOutOfOrderFilesExist() bool
+	MergeOutOfOrder(shId uint64, force bool) error
+	LevelCompact(level uint16, shid uint64) error
+	FullCompact(shid uint64) error
+	SetAddFunc(addFunc func(int64))
+	GetLastFlushTimeBySid(measurement string, sid uint64) (int64, error)
+	GetRowCountsBySid(measurement string, sid uint64) (int64, error)
+	AddRowCountsBySid(measurement string, sid uint64, rowCounts int64) error
+	GetOutOfOrderFileNum() int
+	GetMstFileStat() *stats.FileStat
+	DropMeasurement(ctx context.Context, name string) error
+	GetFileSeq() uint64
+	DisableCompAndMerge()
+	EnableCompAndMerge()
+	FreeSequencer() bool
+	UnRefSequencer()
+}
+
 type MmsTables struct {
 	mu   sync.RWMutex
 	wg   sync.WaitGroup
@@ -294,7 +334,7 @@ func (m *MmsTables) getFiles(inFiles *TSSPFiles, hasTimeFilter bool, tr record.T
 	reFiles := make([]TSSPFile, 0, inFiles.Len())
 	for _, f := range inFiles.files {
 		if hasTimeFilter {
-			contains, err := f.ContainsByTime(tr)
+			contains, err := f.ContainsTime(tr)
 			if !contains || err != nil {
 				continue
 			}
@@ -655,7 +695,7 @@ func (m *MmsTables) FreeAllMemReader() {
 			v.lock.Lock()
 			for _, f := range v.files {
 				if !f.Inuse() {
-					_ = f.FreeMemory(true)
+					_ = f.Free(true)
 					continue
 				}
 				nodeTableStoreGC.Add(true, f)
