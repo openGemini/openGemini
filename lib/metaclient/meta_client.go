@@ -176,7 +176,7 @@ type MetaClient interface {
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
+	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]int32, err error)
 	GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error)
 	TagKeys(database string) map[string]set.Set
 	FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error)
@@ -549,29 +549,29 @@ func (c *Client) FieldKeys(database string, ms influxql.Measurements) (map[strin
 }
 
 func (c *Client) TagKeys(database string) map[string]set.Set {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	dbi := c.cacheData.Database(database)
-	uniqueMap := make(map[string]set.Set)
+	//c.mu.RLock()
+	//defer c.mu.RUnlock()
+	//dbi := c.cacheData.Database(database)
+	//uniqueMap := make(map[string]set.Set)
+	//
+	//dbi.WalkRetentionPolicy(func(rp *meta2.RetentionPolicyInfo) {
+	//	rp.EachMeasurements(func(mst *meta2.MeasurementInfo) {
+	//		s := set.NewSet()
+	//		for key := range mst.Schema {
+	//			if mst.Schema[key] == influx.Field_Type_Tag {
+	//				s.Add(key)
+	//			}
+	//		}
+	//		_, ok := uniqueMap[mst.Name]
+	//		if ok {
+	//			uniqueMap[mst.Name] = uniqueMap[mst.Name].Union(s)
+	//			return
+	//		}
+	//		uniqueMap[mst.Name] = s
+	//	})
+	//})
 
-	dbi.WalkRetentionPolicy(func(rp *meta2.RetentionPolicyInfo) {
-		rp.EachMeasurements(func(mst *meta2.MeasurementInfo) {
-			s := set.NewSet()
-			for key := range mst.Schema {
-				if mst.Schema[key] == influx.Field_Type_Tag {
-					s.Add(key)
-				}
-			}
-			_, ok := uniqueMap[mst.Name]
-			if ok {
-				uniqueMap[mst.Name] = uniqueMap[mst.Name].Union(s)
-				return
-			}
-			uniqueMap[mst.Name] = s
-		})
-	})
-
-	return uniqueMap
+	return nil
 }
 
 func (c *Client) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error) {
@@ -720,23 +720,12 @@ func (c *Client) ShowRetentionPolicies(database string) (models.Rows, error) {
 	return c.cacheData.ShowRetentionPolicies(database)
 }
 
-func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,
-	dimensions map[string]struct{}, err error) {
-	fields = make(map[string]int32)
-	dimensions = make(map[string]struct{})
+func (c *Client) Schema(database string, retentionPolicy string, mst string) (map[string]int32, map[string]int32, error) {
 	msti, err := c.Measurement(database, retentionPolicy, mst)
 	if err != nil {
 		return nil, nil, err
 	}
-
-	for key := range msti.Schema {
-		if msti.Schema[key] == influx.Field_Type_Tag {
-			dimensions[key] = struct{}{}
-		} else {
-			fields[key] = msti.Schema[key]
-		}
-	}
-	return fields, dimensions, nil
+	return msti.Fields, msti.Tags, nil
 }
 
 func (c *Client) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {

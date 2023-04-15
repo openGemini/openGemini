@@ -234,7 +234,7 @@ func (m mocShardMapperMetaClient) Measurement(database string, rpName string, ms
 	return nil, nil
 }
 
-func (m mocShardMapperMetaClient) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error) {
+func (m mocShardMapperMetaClient) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]int32, err error) {
 	return nil, nil, nil
 }
 

@@ -272,11 +272,13 @@ func NewMeasurement(mst string) *meta2.MeasurementInfo {
 		msti.ShardKeys = []meta2.ShardKeyInfo{{Type: "hash"}}
 	}
 
-	msti.Schema = map[string]int32{
-		"fk1": influx.Field_Type_Float,
-		"fk2": influx.Field_Type_Int,
+	msti.Tags = map[string]int32{
 		"tk1": influx.Field_Type_Tag,
 		"tk2": influx.Field_Type_Tag,
+	}
+	msti.Fields = map[string]int32{
+		"fk1": influx.Field_Type_Float,
+		"fk2": influx.Field_Type_Int,
 	}
 	if enableFieldIndex {
 		ilist := []string{"tk3", "tk1"}
@@ -317,7 +319,7 @@ func TestPointsWriter_WritePointRows(t *testing.T) {
 
 func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 	mi := meta2.NewMeasurementInfo("mst_0000")
-	mi.Schema = map[string]int32{
+	mi.Fields = map[string]int32{
 		"value1": influx.Field_Type_Float,
 		"value2": influx.Field_Type_String,
 	}
@@ -331,7 +333,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 		}
 
 		for _, item := range fieldToCreate {
-			mi.Schema[item.GetFieldName()] = item.GetFieldType()
+			mi.Fields[item.GetFieldName()] = item.GetFieldType()
 		}
 		return nil
 	}

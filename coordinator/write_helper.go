@@ -80,7 +80,8 @@ func (wh *writeHelper) createMeasurement(database, retentionPolicy, name string)
 func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
 	// update schema if needed
-	schemaMap := mst.Schema
+	tagsMap := mst.Tags
+	fieldsMap := mst.Fields
 
 	// check tag need to add or not
 	for i, tag := range r.Tags {
@@ -88,7 +89,7 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 			return fieldToCreatePool, true, err
 		}
 
-		_, ok := schemaMap[tag.Key]
+		_, ok := tagsMap[tag.Key]
 		if !ok {
 			fieldToCreatePool = reserveField(fieldToCreatePool)
 			fieldToCreatePool[len(fieldToCreatePool)-1].FieldName = proto.String(tag.Key)
@@ -100,7 +101,7 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 	var dropFieldIndex []int
 	var err error
 	for i, field := range r.Fields {
-		fieldType, ok := schemaMap[field.Key]
+		fieldType, ok := fieldsMap[field.Key]
 		if ok {
 			if fieldType != field.Type {
 				failpoint.Inject("skip-field-type-conflict", func(val failpoint.Value) {

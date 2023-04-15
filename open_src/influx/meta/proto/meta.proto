@@ -95,9 +95,10 @@ message RetentionPolicySpec {
 message MeasurementInfo {
     required string Name = 1;
     repeated ShardKeyInfo ShardKeys = 2;
-    map<string, int32> Schema = 3;
-    optional bool MarkDeleted = 4;
-		optional IndexRelation indexRelation = 5;
+    map<string, int32> Tags = 3;
+    map<string, int32> Fields = 4;
+    optional bool MarkDeleted = 5;
+    optional IndexRelation indexRelation = 6;
 }
 
 message RetentionPolicyInfo {

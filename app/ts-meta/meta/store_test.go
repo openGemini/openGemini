@@ -735,7 +735,7 @@ func TestDownSampleCommands(t *testing.T) {
 	rpInfos := &meta2.RetentionPolicyInfo{
 		Measurements: map[string]*meta2.MeasurementInfo{"mst_0000": {
 			Name:   "mst_0000",
-			Schema: map[string]int32{"age": influx.Field_Type_Int},
+			Fields: map[string]int32{"age": influx.Field_Type_Int},
 		}},
 		MstVersions: map[string]uint32{
 			"mst": 0,

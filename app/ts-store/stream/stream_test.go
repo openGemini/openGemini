@@ -129,15 +129,18 @@ type MockMetaclient struct {
 }
 
 func (m MockMetaclient) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
-	schema := map[string]int32{}
-	schema["bps"] = influx.Field_Type_Float
+	fields := map[string]int32{}
+	fields["bps"] = influx.Field_Type_Float
+
+	tags := map[string]int32{}
 	for i := 0; i < 8; i++ {
-		schema[fmt.Sprintf("tagkey%v", i)] = influx.Field_Type_Tag
+		tags[fmt.Sprintf("tagkey%v", i)] = influx.Field_Type_Tag
 	}
 	return &meta.MeasurementInfo{
 		Name:          "flow",
 		ShardKeys:     nil,
-		Schema:        schema,
+		Tags:          tags,
+		Fields:        fields,
 		IndexRelation: meta.IndexRelation{},
 		MarkDeleted:   false,
 	}, nil

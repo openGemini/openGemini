@@ -227,11 +227,11 @@ func (csm *ClusterShardMapping) NodeNumbers() int {
 	return len(nods)
 }
 
-func (csm *ClusterShardMapping) getSchema(database string, retentionPolicy string, mst string) (map[string]int32, map[string]struct{}, error) {
+func (csm *ClusterShardMapping) getSchema(database string, retentionPolicy string, mst string) (map[string]int32, map[string]int32, error) {
 	startTime := time.Now()
 
 	var metaFields map[string]int32
-	var metaDimensions map[string]struct{}
+	var metaDimensions map[string]int32
 	var err error
 
 	for {
@@ -289,7 +289,7 @@ func (csm *ClusterShardMapping) FieldDimensions(m *influxql.Measurement) (fields
 	}
 	for i := range measurements {
 		var metaFields map[string]int32
-		var metaDimensions map[string]struct{}
+		var metaDimensions map[string]int32
 		metaFields, metaDimensions, err = csm.getSchema(m.Database, m.RetentionPolicy, measurements[i].OriginName())
 		if err != nil {
 			return nil, nil, nil, err

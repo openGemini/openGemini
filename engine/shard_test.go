@@ -3538,7 +3538,7 @@ func (client *MockMetaClient) ShardOwner(shardID uint64) (database, policy strin
 func (client *MockMetaClient) Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error) {
+func (client *MockMetaClient) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]int32, err error) {
 	return nil, nil, nil
 }
 

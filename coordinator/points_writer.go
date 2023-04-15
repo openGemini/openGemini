@@ -753,7 +753,7 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 				// the two-tier computing framework based on sql-store is adopted,
 				// the following is calculated at the sql layer.
 				if _, ok := ctx.stream.tasks[(*dstSis)[idx].Name]; !ok {
-					task, err := newStreamTask((*dstSis)[idx], mi.Schema, (*mis)[idx].Schema)
+					task, err := newStreamTask((*dstSis)[idx], mi.Tags, mi.Fields, (*mis)[idx].Fields)
 					if err != nil {
 						return err
 					}
@@ -769,17 +769,14 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 	return
 }
 
-func buildTagsFields(info *meta2.StreamInfo, srcSchema map[string]int32) ([]string, []string) {
+func buildTagsFields(info *meta2.StreamInfo, srcTags map[string]int32, srcFields map[string]int32) ([]string, []string) {
 	var tags []string
 	var fields []string
 	for _, v := range info.Dims {
-		t, exist := srcSchema[v]
-		if exist {
-			if t == influx.Field_Type_Tag {
-				tags = append(tags, v)
-			} else {
-				fields = append(fields, v)
-			}
+		if _, exist := srcTags[v]; exist {
+			tags = append(tags, v)
+		} else if _, exist = srcFields[v]; exist {
+			fields = append(fields, v)
 		}
 	}
 	return tags, fields

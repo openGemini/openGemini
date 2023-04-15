@@ -72,19 +72,14 @@ func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.Po
 }
 
 func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, opt *query.SelectOptions, aliveShardIdxes []int) ([]ShardInfo, []byte) {
-	tagsGroup := getConditionTags(condition, mst.Schema)
+	tagsGroup := getConditionTags(condition, mst.Tags)
 	if len(tagsGroup) != 1 {
 		return sgi.Shards, nil
 	}
 
 	// it's used for specific series of the hint query
 	if opt.HintType == hybridqp.SpecificSeriesQuery {
-		var tagCount int
-		for key := range mst.Schema {
-			if mst.Schema[key] == influx.Field_Type_Tag {
-				tagCount++
-			}
-		}
+		tagCount := len(mst.Tags)
 		// check whether the query contains the all tags of the measurement
 		if tagCount != len(*tagsGroup[0]) {
 			return sgi.Shards, nil
@@ -92,7 +87,7 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *Shard
 
 		// check whether the query's tagKey matches the schema's tagKey
 		for i := 0; i < tagCount; i++ {
-			if _, ok := mst.Schema[(*tagsGroup[0])[i].Key]; !ok {
+			if _, ok := mst.Tags[(*tagsGroup[0])[i].Key]; !ok {
 				return sgi.Shards, nil
 			}
 		}
@@ -115,7 +110,7 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 		return shards
 	}
 
-	tagsGroup := getConditionTags(condition, mst.Schema)
+	tagsGroup := getConditionTags(condition, mst.Tags)
 	if len(tagsGroup) == 0 {
 		return sgi.Shards
 	}

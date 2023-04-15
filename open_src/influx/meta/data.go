@@ -255,23 +255,40 @@ func (data *Data) UpdateSchema(database string, retentionPolicy string, mst stri
 		return err
 	}
 
-	schema := make(map[string]int32)
-	for field := range msti.Schema {
-		schema[field] = msti.Schema[field]
+	tags := make(map[string]int32)
+	for tag := range msti.Tags {
+		tags[tag] = msti.Tags[tag]
+	}
+
+	fields := make(map[string]int32)
+	for field := range msti.Fields {
+		fields[field] = msti.Fields[field]
 	}
 
 	for i := range fieldToCreate {
-		existType, ok := schema[fieldToCreate[i].GetFieldName()]
-		if !ok {
-			schema[fieldToCreate[i].GetFieldName()] = fieldToCreate[i].GetFieldType()
-			continue
-		}
-		if existType != fieldToCreate[i].GetFieldType() {
-			return ErrFieldTypeConflict
+		if fieldToCreate[i].GetFieldType() == influx.Field_Type_Tag {
+			existType, ok := tags[fieldToCreate[i].GetFieldName()]
+			if !ok {
+				tags[fieldToCreate[i].GetFieldName()] = influx.Field_Type_Tag
+				continue
+			}
+			if existType != fieldToCreate[i].GetFieldType() {
+				return ErrFieldTypeConflict
+			}
+		} else {
+			existType, ok := fields[fieldToCreate[i].GetFieldName()]
+			if !ok {
+				fields[fieldToCreate[i].GetFieldName()] = fieldToCreate[i].GetFieldType()
+				continue
+			}
+			if existType != fieldToCreate[i].GetFieldType() {
+				return ErrFieldTypeConflict
+			}
 		}
 	}
 
-	msti.Schema = schema
+	msti.Tags = tags
+	msti.Fields = fields
 	return nil
 }
 

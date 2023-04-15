@@ -47,11 +47,11 @@ type streamTask struct {
 	fieldIndexKeys []string
 }
 
-func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema map[string]int32) (*streamTask, error) {
+func newStreamTask(info *meta2.StreamInfo, srcTags, srcFields, dstSchema map[string]int32) (*streamTask, error) {
 	w := &streamTask{
 		info: info,
 	}
-	calls, err := BuildFieldCall(info, srcSchema, dstSchema)
+	calls, err := BuildFieldCall(info, srcTags, dstSchema)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema map[string]int32
 	for i := range calls {
 		w.calls[i] = &calls[i]
 	}
-	tagDimKeys, fieldIndexKeys := buildTagsFields(info, srcSchema)
+	tagDimKeys, fieldIndexKeys := buildTagsFields(info, srcTags, srcFields)
 	w.tagDimKeys = make([]string, len(tagDimKeys))
 	w.fieldIndexKeys = make([]string, len(fieldIndexKeys))
 

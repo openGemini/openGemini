@@ -27,7 +27,8 @@ type MeasurementInfo struct {
 	Name          string // measurement name with version
 	originName    string // cache original measurement name
 	ShardKeys     []ShardKeyInfo
-	Schema        map[string]int32
+	Tags          map[string]int32
+	Fields        map[string]int32
 	IndexRelation IndexRelation
 	MarkDeleted   bool
 }
@@ -41,12 +42,6 @@ func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
 
 func (msti *MeasurementInfo) OriginName() string {
 	return msti.originName
-}
-
-func (msti *MeasurementInfo) walkSchema(fn func(fieldName string, fieldType int32)) {
-	for fieldName := range msti.Schema {
-		fn(fieldName, msti.Schema[fieldName])
-	}
 }
 
 func (msti *MeasurementInfo) GetShardKey(ID uint64) *ShardKeyInfo {
@@ -71,10 +66,17 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 		}
 	}
 
-	if msti.Schema != nil {
-		pb.Schema = make(map[string]int32, len(msti.Schema))
-		for n, t := range msti.Schema {
-			pb.Schema[n] = t
+	if msti.Tags != nil {
+		pb.Tags = make(map[string]int32, len(msti.Tags))
+		for n, t := range msti.Tags {
+			pb.Tags[n] = t
+		}
+	}
+
+	if msti.Fields != nil {
+		pb.Fields = make(map[string]int32, len(msti.Fields))
+		for n, t := range msti.Fields {
+			pb.Fields[n] = t
 		}
 	}
 
@@ -93,12 +95,20 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 		}
 	}
 
-	if len(pb.GetSchema()) > 0 {
-		msti.Schema = make(map[string]int32, len(pb.GetSchema()))
+	if len(pb.GetTags()) > 0 {
+		msti.Tags = make(map[string]int32, len(pb.GetTags()))
 	}
 
-	for name, t := range pb.GetSchema() {
-		msti.Schema[name] = t
+	for name, t := range pb.GetTags() {
+		msti.Tags[name] = t
+	}
+
+	if len(pb.GetFields()) > 0 {
+		msti.Fields = make(map[string]int32, len(pb.GetFields()))
+	}
+
+	for name, t := range pb.GetFields() {
+		msti.Fields[name] = t
 	}
 
 	msti.IndexRelation.unmarshal(pb.GetIndexRelation())
@@ -120,7 +130,8 @@ func (msti *MeasurementInfo) UnmarshalBinary(buf []byte) error {
 
 func (msti MeasurementInfo) clone() *MeasurementInfo {
 	other := msti
-	other.Schema = msti.cloneSchema()
+	other.Tags = msti.cloneTags()
+	other.Fields = msti.cloneFields()
 	if msti.ShardKeys == nil {
 		return &other
 	}
@@ -132,32 +143,38 @@ func (msti MeasurementInfo) clone() *MeasurementInfo {
 	return &other
 }
 
-func (msti MeasurementInfo) cloneSchema() map[string]int32 {
-	if msti.Schema == nil {
+func (msti MeasurementInfo) cloneTags() map[string]int32 {
+	if msti.Tags == nil {
 		return nil
 	}
 
-	schema := make(map[string]int32, len(msti.Schema))
-	for name, info := range msti.Schema {
-		schema[name] = info
+	tags := make(map[string]int32, len(msti.Tags))
+	for name, t := range msti.Tags {
+		tags[name] = t
 	}
-	return schema
+	return tags
+}
+
+func (msti MeasurementInfo) cloneFields() map[string]int32 {
+	if msti.Fields == nil {
+		return nil
+	}
+
+	fields := make(map[string]int32, len(msti.Fields))
+	for name, t := range msti.Fields {
+		fields[name] = t
+	}
+	return fields
 }
 
 func (msti MeasurementInfo) FieldKeys(ret map[string]map[string]int32) {
-	for key := range msti.Schema {
-		if msti.Schema[key] == influx.Field_Type_Tag {
-			continue
-		}
-		ret[msti.OriginName()][key] = msti.Schema[key]
+	for key := range msti.Fields {
+		ret[msti.OriginName()][key] = msti.Fields[key]
 	}
 }
 
 func (msti MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map[string]struct{}) {
-	for key, typ := range msti.Schema {
-		if typ != influx.Field_Type_Tag {
-			continue
-		}
+	for key := range msti.Tags {
 		valMap := map[string]interface{}{
 			"_tagKey": key,
 			"_name":   msti.OriginName(),
@@ -279,28 +296,28 @@ func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeF
 		switch influxql.DataType(d) {
 		case influxql.Float:
 			info.Type = int64(influxql.Float)
-			for name, ty := range msti.Schema {
+			for name, ty := range msti.Fields {
 				if ty == influx.Field_Type_Float {
 					info.Fields = append(info.Fields, name)
 				}
 			}
 		case influxql.Integer:
 			info.Type = int64(influxql.Integer)
-			for name, ty := range msti.Schema {
+			for name, ty := range msti.Fields {
 				if ty == influx.Field_Type_Int {
 					info.Fields = append(info.Fields, name)
 				}
 			}
 		case influxql.String:
 			info.Type = int64(influxql.String)
-			for name, ty := range msti.Schema {
+			for name, ty := range msti.Fields {
 				if ty == influx.Field_Type_String {
 					info.Fields = append(info.Fields, name)
 				}
 			}
 		case influxql.Boolean:
 			info.Type = int64(influxql.Boolean)
-			for name, ty := range msti.Schema {
+			for name, ty := range msti.Fields {
 				if ty == influx.Field_Type_Boolean {
 					info.Fields = append(info.Fields, name)
 				}
