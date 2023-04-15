@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -209,6 +210,10 @@ func (c *CommandLine) executeOnLocal(stmt geminiql.Statement) error {
 		return c.executeInsert(stmt)
 	case *geminiql.UseStatement:
 		return c.executeUse(stmt)
+	case *geminiql.ChunkedStatement:
+		return c.executeChunked(stmt)
+	case *geminiql.ChunkSizeStatement:
+		return c.executeChunkSize(stmt)
 	default:
 		return fmt.Errorf("unsupport stmt %s", stmt)
 	}
@@ -293,6 +298,31 @@ func (c *CommandLine) executeQuery(query string) error {
 		c.prettyResult(result, os.Stdout)
 	}
 
+	return nil
+}
+
+func (c *CommandLine) executeChunked(stmt *geminiql.ChunkedStatement) error {
+	// switch chunked model
+	if stmt.Negate {
+		c.chunked = !c.chunked
+	}
+	displayFlag := "disabled"
+	if c.chunked {
+		displayFlag = "enabled"
+	}
+	fmt.Printf("Chunked responses %s\n", displayFlag)
+	return nil
+}
+
+func (c *CommandLine) executeChunkSize(stmt *geminiql.ChunkSizeStatement) error {
+	if stmt.Size < 0 {
+		fmt.Printf("No allowed chunk size smaller than 0. Chunk size has been set to 0.")
+		c.chunkSize = 0
+	} else if math.MaxInt < stmt.Size {
+		fmt.Printf("allow max size is %v", math.MaxInt)
+	} else {
+		c.chunkSize = int(stmt.Size)
+	}
 	return nil
 }
 

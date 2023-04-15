@@ -128,6 +128,20 @@ func TestParser(t *testing.T) {
 				RP: "",
 			},
 		},
+		{
+			name: "switch chunk model",
+			cmd:  "chunked",
+			expect: &ChunkedStatement{
+				Negate: true,
+			},
+		},
+		{
+			name: "set chunk size",
+			cmd:  "chunk_size 1000",
+			expect: &ChunkSizeStatement{
+				Size: 1000,
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ast := &QLAst{}
