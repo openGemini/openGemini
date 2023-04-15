@@ -18,7 +18,7 @@ package cmd
 
 import (
 	"flag"
-
+	
 	"github.com/influxdata/influxdb/client"
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 )
@@ -52,6 +52,9 @@ func (c *CompatibleCommand) Bind(config *geminicli.CommandLineConfig) {
 	c.fs.StringVar(&config.Database, "database", "", "Database to connect to the server.")
 	c.fs.BoolVar(&config.Ssl, "ssl", false, "Use https for connecting to cluster.")
 	c.fs.BoolVar(&config.IgnoreSsl, "unsafeSsl", false, "Set this when connecting to the cluster using https and not use SSL verification.")
+	c.fs.BoolVar(&config.Import, "import", false, "Import a previous database export from file")
+	c.fs.StringVar(&config.ImportConfig.Path, "path", "", "Path to the file to import to OpenGemini.")
+	c.fs.BoolVar(&config.ImportConfig.Compressed, "compressed", false, "Set to true when importing a compressed file.")
 }
 
 func (c *CompatibleCommand) Usage() {

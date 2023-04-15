@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
-
+	
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 )
 
@@ -30,7 +30,7 @@ const (
 
 var (
 	gFlags = geminicli.CommandLineConfig{}
-
+	
 	cli *geminicli.CommandLine
 )
 
@@ -50,11 +50,11 @@ func connectCLI() error {
 	} else {
 		cli = c
 	}
-
+	
 	if err := cli.Connect(""); err != nil {
 		return err
 	}
-
+	
 	return nil
 }
 
@@ -68,12 +68,20 @@ func executeCompatible() error {
 	if err := compatibleCmd.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-
+	
 	unknownArgs := compatibleCmd.Args()
 	if len(unknownArgs) > 0 {
 		compatibleCmd.Usage()
 		return fmt.Errorf("unknown arguments: %s", strings.Join(unknownArgs, " "))
 	}
-
+	
+	if err := gFlags.InitConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
+	}
+	if err := gFlags.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
+	}
 	return interactiveCmd.RunE(interactiveCmd, nil)
 }

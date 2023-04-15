@@ -28,7 +28,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
+	
 	"github.com/c-bata/go-prompt"
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/models"
@@ -41,6 +41,9 @@ const (
 	CLIENT_VERSION    = "0.1.0"
 	DEFAULT_PRECISION = "ns"
 	DEFAULT_FORMAT    = "column"
+	batchSize         = 5000
+	DEFAULT_HOST      = "localhost"
+	DEFAULT_PORT      = 8086
 )
 
 var (
@@ -57,6 +60,12 @@ type CommandLineConfig struct {
 	Type       string
 	Ssl        bool
 	IgnoreSsl  bool
+	Import     bool
+	
+	Client       *client.Client
+	ClientConfig client.Config // Client config options.
+	ImportConfig Config        // Importer configuration options.
+	URL          url.URL
 }
 
 type HttpClient interface {
@@ -81,7 +90,7 @@ func (f CommandLineFactory) CreateCommandLine(config CommandLineConfig) (*Comman
 		parser:        geminiql.QLNewParser(),
 		clientCreator: defaultHttpClientCreator,
 	}
-
+	
 	addr := fmt.Sprintf("%s:%d/%s", config.Host, config.Port, "")
 	url, err := client.ParseConnectionString(addr, config.Ssl)
 	if err != nil {
@@ -89,18 +98,18 @@ func (f CommandLineFactory) CreateCommandLine(config CommandLineConfig) (*Comman
 	}
 	c.url = url
 	c.ssl = config.Ssl
-
+	
 	c.config.UnixSocket = config.UnixSocket
 	c.config.Username = config.Username
 	c.config.Password = config.Password
 	c.config.UnsafeSsl = config.IgnoreSsl
-
+	
 	c.config.Precision = DEFAULT_PRECISION
-
+	
 	c.database = config.Database
-
+	
 	signal.Notify(c.osSignals, syscall.SIGINT, syscall.SIGTERM)
-
+	
 	return c, nil
 }
 
@@ -112,23 +121,23 @@ type CommandLine struct {
 	client        HttpClient
 	clientCreator HttpClientCreator
 	osSignals     chan os.Signal
-
+	
 	parser geminiql.QLParser
-
+	
 	retentionPolicy string
 	database        string
 	chunked         bool
 	chunkSize       int
 	nodeID          int
-
+	
 	startTime time.Time
-
+	
 	serverVersion string
 }
 
 func (c *CommandLine) Connect(addr string) error {
 	config := c.config
-
+	
 	addr = strings.TrimSpace(strings.Replace(strings.ToLower(addr), "connect", "", -1))
 	if addr == "" {
 		config.URL = c.url
@@ -139,24 +148,24 @@ func (c *CommandLine) Connect(addr string) error {
 		}
 		config.URL = url
 	}
-
+	
 	config.UserAgent = "openGemini CLI/" + CLIENT_VERSION
 	config.Proxy = http.ProxyFromEnvironment
-
+	
 	client, err := c.clientCreator(config)
 	if err != nil {
 		return fmt.Errorf("create http client failed: %s", err)
 	}
 	c.client = client
-
+	
 	_, v, err := c.client.Ping()
 	if err != nil {
 		return err
 	}
 	c.serverVersion = v
-
+	
 	c.config.URL = config.URL
-
+	
 	return nil
 }
 
@@ -171,29 +180,29 @@ func (c *CommandLine) elapse() {
 
 func (c *CommandLine) Execute(s string) error {
 	var err error
-
+	
 	if s == "" {
 		return nil
 	} else if s == "quit" || s == "exit" {
 		fmt.Println("Bye!")
 		os.Exit(0)
 	}
-
+	
 	ast := &geminiql.QLAst{}
 	lexer := geminiql.QLNewLexer(geminiql.NewTokenizer(strings.NewReader(s)), ast)
 	c.parser.Parse(lexer)
-
+	
 	c.startTime = time.Now()
-
+	
 	c.begin()
 	defer c.elapse()
-
+	
 	if ast.Error == nil {
 		err = c.executeOnLocal(ast.Stmt)
 	} else {
 		err = c.executeOnRemote(s)
 	}
-
+	
 	return err
 }
 
@@ -222,7 +231,7 @@ func (c *CommandLine) executeInsert(stmt *geminiql.InsertStatement) error {
 	bp := c.clientBatchPoints(stmt.DB,
 		stmt.RP,
 		stmt.LineProtocol)
-
+	
 	if _, err := c.client.Write(*bp); err != nil {
 		return err
 	}
@@ -261,14 +270,14 @@ func (c *CommandLine) executeQuery(query string) error {
 		}
 		query = pq.String()
 	}
-
+	
 	ctx := context.Background()
 	var cancel context.CancelFunc
 	ctx, cancel = context.WithCancel(ctx)
-
+	
 	done := make(chan struct{})
 	defer close(done)
-
+	
 	go func() {
 		select {
 		case <-done:
@@ -276,23 +285,23 @@ func (c *CommandLine) executeQuery(query string) error {
 			cancel()
 		}
 	}()
-
+	
 	response, err := c.client.QueryContext(ctx, c.clientQuery(query))
 	if err != nil {
 		return err
 	}
-
+	
 	if err := response.Error(); err != nil {
 		return err
 	}
-
+	
 	for _, result := range response.Results {
 		for _, m := range result.Messages {
 			fmt.Printf("%s: %s.\n", m.Level, m.Text)
 		}
 		c.prettyResult(result, os.Stdout)
 	}
-
+	
 	return nil
 }
 
@@ -303,14 +312,14 @@ func (c *CommandLine) prettyResult(result client.Result, w io.Writer) {
 			tags = append(tags, fmt.Sprintf("%s=%s", k, v))
 			sort.Strings(tags)
 		}
-
+		
 		if serie.Name != "" {
 			fmt.Fprintf(w, "name: %s\n", serie.Name)
 		}
 		if len(tags) != 0 {
 			fmt.Fprintf(w, "tags: %s\n", strings.Join(tags, ", "))
 		}
-
+		
 		writer := table.NewWriter()
 		writer.SetOutputMirror(w)
 		c.prettyTable(serie, writer)
@@ -326,7 +335,7 @@ func (c *CommandLine) prettyTable(serie models.Row, w table.Writer) {
 	}
 	w.AppendRow(columnNames)
 	w.AppendSeparator()
-
+	
 	for _, value := range serie.Values {
 		tuple := table.Row{}
 		for _, v := range value {
@@ -352,11 +361,11 @@ func (c *CommandLine) clientBatchPoints(db string, rp string, raw string) *clien
 	if db == "" {
 		db = c.database
 	}
-
+	
 	if rp == "" {
 		rp = c.retentionPolicy
 	}
-
+	
 	return &client.BatchPoints{
 		Points: []client.Point{
 			{Raw: raw},
