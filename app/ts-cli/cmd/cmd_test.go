@@ -62,6 +62,9 @@ func TestCobraCmd(t *testing.T) {
 				"true",
 				"--unsafeSsl",
 				"true",
+				"--import",
+				"--path",
+				"path",
 			},
 			validator: func() {
 				assert.Equal(t, gFlags.Host, "192.168.0.1")
@@ -72,6 +75,9 @@ func TestCobraCmd(t *testing.T) {
 				assert.Equal(t, gFlags.Database, "db0")
 				assert.Equal(t, gFlags.Ssl, true)
 				assert.Equal(t, gFlags.IgnoreSsl, true)
+				assert.Equal(t, gFlags.IgnoreSsl, true)
+				assert.Equal(t, gFlags.Import, true)
+				assert.Equal(t, gFlags.ImportConfig.Path, "path")
 			},
 		},
 	} {
@@ -108,6 +114,9 @@ func TestCapatibleCmd(t *testing.T) {
 				"db0",
 				"-ssl",
 				"-unsafeSsl",
+				"-import",
+				"-path",
+				"path",
 			},
 			validator: func() {
 				assert.Equal(t, gFlags.Host, "192.168.0.1")
@@ -118,6 +127,8 @@ func TestCapatibleCmd(t *testing.T) {
 				assert.Equal(t, gFlags.Database, "db0")
 				assert.Equal(t, gFlags.Ssl, true)
 				assert.Equal(t, gFlags.IgnoreSsl, true)
+				assert.Equal(t, gFlags.Import, true)
+				assert.Equal(t, gFlags.ImportConfig.Path, "path")
 			},
 		},
 	} {
