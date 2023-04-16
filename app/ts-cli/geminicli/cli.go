@@ -302,7 +302,7 @@ func (c *CommandLine) executeQuery(query string) error {
 }
 
 func (c *CommandLine) executeChunked(stmt *geminiql.ChunkedStatement) error {
-	// switch chunked model
+	// switch chunked model enable or disable
 	if stmt.Negate {
 		c.chunked = !c.chunked
 	}
@@ -315,6 +315,7 @@ func (c *CommandLine) executeChunked(stmt *geminiql.ChunkedStatement) error {
 }
 
 func (c *CommandLine) executeChunkSize(stmt *geminiql.ChunkSizeStatement) error {
+	// The chunk size is only allowed between 0 and 9223372036854775807
 	if stmt.Size < 0 {
 		fmt.Printf("No allowed chunk size smaller than 0. Chunk size has been set to 0.")
 		c.chunkSize = 0
