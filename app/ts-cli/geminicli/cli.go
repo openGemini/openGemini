@@ -41,6 +41,9 @@ const (
 	CLIENT_VERSION    = "0.1.0"
 	DEFAULT_PRECISION = "ns"
 	DEFAULT_FORMAT    = "column"
+	batchSize         = 5000
+	DEFAULT_HOST      = "localhost"
+	DEFAULT_PORT      = 8086
 )
 
 var (
@@ -57,6 +60,12 @@ type CommandLineConfig struct {
 	Type       string
 	Ssl        bool
 	IgnoreSsl  bool
+	Import     bool
+
+	Client       *client.Client
+	ClientConfig client.Config // Client config options.
+	ImportConfig Config        // Importer configuration options.
+	URL          url.URL
 }
 
 type HttpClient interface {

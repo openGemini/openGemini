@@ -75,5 +75,15 @@ func executeCompatible() error {
 		return fmt.Errorf("unknown arguments: %s", strings.Join(unknownArgs, " "))
 	}
 
+	if gFlags.Import {
+		if err := gFlags.InitConfig(); err != nil {
+			return fmt.Errorf("fail to init import config %s", err)
+		}
+		if err := gFlags.Run(); err != nil {
+			return fmt.Errorf("%s", err)
+		}
+		return nil
+	}
+
 	return interactiveCmd.RunE(interactiveCmd, nil)
 }
