@@ -66,3 +66,14 @@ type SetStatement struct {
 }
 
 func (s *SetStatement) stmt() {}
+
+type ChunkedStatement struct {
+}
+
+func (s *ChunkedStatement) stmt() {}
+
+type ChunkSizeStatement struct {
+	Size int64
+}
+
+func (s *ChunkSizeStatement) stmt() {}

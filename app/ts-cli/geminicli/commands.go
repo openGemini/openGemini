@@ -26,6 +26,8 @@ var cmds = []prompt.Suggest{
 	{Text: "use", Description: "use <db>.[<rp>], specify the database and retention policy to be used"},
 	{Text: "insert", Description: "insert datapoint to openGemini."},
 	{Text: "select", Description: "query dataset from openGemini."},
+	{Text: "chunked", Description: "turns on chunked responses from server."},
+	{Text: "chunk_size", Description: "sets the size of the chunked responses."},
 }
 
 var subcmds = map[string][]prompt.Suggest{
