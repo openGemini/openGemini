@@ -37,11 +37,30 @@
 
 6. 添加你的**代码**和**测试用例**
 
-7. 将您的分支推送到Github
+7. 使用git工具完成您的commit。
+
+    ```
+    // 添加文件到暂存区
+    git add .
+    
+    // 提交暂存区到本地仓库，增加-s参数，自动签名
+    git commit -m -s "<your commit message>"
+    ```
+   其中，`<your commit message>`是您的提交信息，需要遵循以下命名规范：
+   - feat: feature的缩写, 新的功能或特性
+   - fix: bug的修复
+   - docs: 文档修改
+   - style: 格式修改. 比如改变缩进, 空格, 删除多余的空行, 补上漏掉的分号. 总之, 就是不影响代码含义和功能的修改
+   - refactor: 代码重构. 一些不算修复bug也没有加入新功能的代码修改
+   - perf: performance的缩写, 提升代码性能
+   - test: 测试文件的修改
+   - chore: 其他的小改动. 一般为仅仅一两行的改动, 或者连续几次提交的小改动属于这种
+
+8. 将您的分支推送到Github
 
    `git push origin my-fix-branch`
 
-8. 打开PR开始合并请求
+9. 打开PR开始合并请求
    当你提交一个PR的时候，就意味您已经开始给社区贡献代码了。请参考 openGemini社区PR提交指导。
    为了使您的提交更容易被接受，您需要：
 
