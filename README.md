@@ -3,9 +3,9 @@
 ![color](https://user-images.githubusercontent.com/49023462/231386185-a18cd5dd-30ef-4d03-b86b-3119b16843a0.png)
 
 ![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)                                                                                                
-[简体中文](README_CN.md) | [English]()
+[简体中文](README_CN.md) | English
 
-[Official Website](http://www.openGemini.org) | [Docs](http://www.openGemini.org/docs) | [Contribution Guide](http://www.openGemini.org/contribution) 
+[Official Website](http://www.openGemini.org) | [Docs](http://www.openGemini.org/docs) | [Contribution Guide](CONTRIBUTION.md) 
  | [RoadMap](./ROADMAP.md)
 
 ## About openGemini
@@ -40,9 +40,9 @@ openGemini is an open-source,cloud-native time-series database(TSDB) that can be
 
 currently openGemini only supports Linux OS, and supports InfluxDB ecosystem toolchains, such as:
 
-Drivers: [JavaScript](https://github.com/node-influx/node-influx), [Java](https://github.com/influxdata/influxdb-java), [C/C++](C/C++), [Ruby](https://github.com/influxdata/influxdb-ruby), [Go](https://github.com/influxdata/influxdb1-client), [Python](https://github.com/influxdata/influxdb-python), [PHP](https://github.com/influxdata/influxdb-php)
+Drivers: [JavaScript](https://github.com/node-influx/node-influx), [Java](https://github.com/influxdata/influxdb-java), [C/C++](), [Ruby](https://github.com/influxdata/influxdb-ruby), [Go](https://github.com/influxdata/influxdb1-client), [Python](https://github.com/influxdata/influxdb-python), [PHP](https://github.com/influxdata/influxdb-php)
 
-Client: Influx
+Client: ts-cli
 
 Data access tools: StatsD, EMQ, Telegraf, Icinga2, HiveMQ, Kafka, MQTT
 
