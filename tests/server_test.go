@@ -19,6 +19,7 @@ import (
 	"time"
 
 	models "github.com/influxdata/influxdb/models"
+	"github.com/stretchr/testify/assert"
 )
 
 // Global server used by benchmarks
@@ -334,7 +335,7 @@ func TestServer_Query_DropDatabaseIsolated(t *testing.T) {
 func TestServer_RetentionPolicyCommands(t *testing.T) {
 	t.Parallel()
 	c := NewConfig()
-	//c.Meta.RetentionAutoCreate = false
+	// c.Meta.RetentionAutoCreate = false
 	s := OpenServer(c)
 	defer s.Close()
 
@@ -655,6 +656,20 @@ func TestServer_Write_FieldTypeConflict(t *testing.T) {
 	} else if exp := `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2015-01-01T00:00:01Z",1],["2015-01-01T00:00:02Z",2],["2015-01-01T00:00:04Z",4]]}]}]}`; exp != res {
 		t.Fatalf("unexpected results\nexp: %s\ngot: %s\n", exp, res)
 	}
+}
+
+// Ensure the server will write all points possible with exception to the field name conflict.
+func TestServer_Write_TagKeyConflict(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.Write("db0", "rp0", fmt.Sprintf("mst,tag=1,time=12 f1=2 %d", mustParseTime(time.RFC3339Nano, "2015-01-01T00:00:01Z").UnixNano()), nil)
+	assert.EqualError(t, err, "invalid status code: code=500, body={\"error\":\"tag key can't be 'time'\"}\n")
 }
 
 // Ensure the server will write all points possible with exception to the field type conflict.
@@ -3358,35 +3373,35 @@ func TestServer_Query_Null_Aggregate(t *testing.T) {
 			name:    "SELECT top(age, 2), age - height",
 			command: `SELECT top(age, 2), age - height AS value FROM db0.rp0.mst`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","top","value"],"values":[["2021-08-16T16:00:10Z",102,-89],["2021-08-16T16:00:11Z",123,-80]]}]}]}`,
-			//skip:    true,
+			// skip:    true,
 		},
 		// BUG2021121601543
 		&Query{
 			name:    "SELECT max(age), age - height",
 			command: `SELECT max(age), age - height AS value FROM db0.rp0.mst GROUP BY country`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":""},"columns":["time","max","value"],"values":[["2021-08-16T16:00:10Z",102,-89]]},{"name":"mst","tags":{"country":"american"},"columns":["time","max","value"],"values":[["2021-08-16T16:00:06Z",52.7,-100.3]]},{"name":"mst","tags":{"country":"canada"},"columns":["time","max","value"],"values":[["2021-08-16T16:00:09Z",60.8,-119.2]]},{"name":"mst","tags":{"country":"china"},"columns":["time","max","value"],"values":[["2021-08-16T16:00:11Z",123,-80]]},{"name":"mst","tags":{"country":"germany"},"columns":["time","max","value"],"values":[["2021-08-16T16:00:07Z",28.3,null]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","max","value"],"values":[["2021-08-16T16:00:03Z",30,-91]]}]}]}`,
-			//skip:    true,
+			// skip:    true,
 		},
 		// BUG2021121702524
 		&Query{
 			name:    "SELECT BOTTOM(value, 2) FROM (SELECT BOTTOM(age, 3), age - height AS value FROM db0.rp0.mst)",
 			command: `SELECT BOTTOM(value, 2) FROM (SELECT BOTTOM(age, 3), age - height AS value FROM db0.rp0.mst GROUP BY country) WHERE time >= '2021-08-16T16:00:00Z' AND time < '2021-08-16T16:00:11Z'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","bottom"],"values":[["2021-08-16T16:00:04Z",-103],["2021-08-16T16:00:09Z",-119.2]]}]}]}`,
-			//skip:    true,
+			// skip:    true,
 		},
 		// BUG2021121702480
 		&Query{
 			name:    "SELECT LAST(*) group by time(12m) limit 5",
 			command: `SELECT LAST(*) FROM db0.rp0.mst group by time(12m) order by time limit 5`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","last_address","last_age","last_alive","last_height"],"values":[["2021-08-16T16:00:00Z","zhengzhou",123,false,203],["2021-08-16T16:12:00Z",null,null,null,null],["2021-08-16T16:24:00Z",null,null,null,null],["2021-08-16T16:36:00Z",null,null,null,null],["2021-08-16T16:48:00Z",null,null,null,null]]}]}]}`,
-			//skip:    true,
+			// skip:    true,
 		},
 		// BUG2021121702512
 		&Query{
 			name:    "SELECT FIRST(*) FROM (SELECT * FROM db0.rp0.mst)",
 			command: `SELECT FIRST(*) FROM (SELECT * FROM db0.rp0.mst)`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","first_address","first_age","first_alive","first_height"],"values":[["1970-01-01T00:00:00Z","shenzhen",12.3,true,70]]}]}]}`,
-			//skip:    true,
+			// skip:    true,
 		},
 		&Query{
 			name:    "SELECT DIFFERENCE(*) FROM db0.rp0.mst",
@@ -4639,25 +4654,25 @@ func TestServer_Query_Null_Group(t *testing.T) {
 					i, i, i*2048+j, generateFloat(i*2048+j), generateBool(i*2048+j), generateString(i*2048+j), time.Unix(int64(i*2048+j), int64(0)).UTC().UnixNano())
 				writes = append(writes, data)
 			}
-		} else if i == 2 { //v1=null
+		} else if i == 2 { // v1=null
 			for j := 0; j < 2048; j++ {
 				data := fmt.Sprintf(`cpu,region=region_%d,az=az_%d v2=%f,v3=%t,v4="%s" %d`,
 					i, i, generateFloat(i*2048+j), generateBool(i*2048+j), generateString(i*2048+j), time.Unix(int64(i*2048+j), int64(0)).UTC().UnixNano())
 				writes = append(writes, data)
 			}
-		} else if i == 3 { //v2=null
+		} else if i == 3 { // v2=null
 			for j := 0; j < 2048; j++ {
 				data := fmt.Sprintf(`cpu,region=region_%d,az=az_%d v1=%di,v3=%t,v4="%s" %d`,
 					i, i, i*2048+j, generateBool(i*2048+j), generateString(i*2048+j), time.Unix(int64(i*2048+j), int64(0)).UTC().UnixNano())
 				writes = append(writes, data)
 			}
-		} else if i == 4 { //v3=null
+		} else if i == 4 { // v3=null
 			for j := 0; j < 2048; j++ {
 				data := fmt.Sprintf(`cpu,region=region_%d,az=az_%d v1=%di,v2=%f,v4="%s" %d`,
 					i, i, i*2048+j, generateFloat(i*2048+j), generateString(i*2048+j), time.Unix(int64(i*2048+j), int64(0)).UTC().UnixNano())
 				writes = append(writes, data)
 			}
-		} else if i == 5 { //v4=null
+		} else if i == 5 { // v4=null
 			for j := 0; j < 2048; j++ {
 				data := fmt.Sprintf(`cpu,region=region_%d,az=az_%d v1=%di,v2=%f,v3=%t %d`,
 					i, i, i*2048+j, generateFloat(i*2048+j), generateBool(i*2048+j), time.Unix(int64(i*2048+j), int64(0)).UTC().UnixNano())
@@ -4670,25 +4685,25 @@ func TestServer_Query_Null_Group(t *testing.T) {
 		&Write{data: strings.Join(writes, "\n")},
 	}
 	test.addQueries([]*Query{
-		&Query{ //BUG:BUG2022060902489
+		&Query{ // BUG:BUG2022060902489
 			name:    "percentile with group by * : innerChunkSize=1",
 			params:  url.Values{"db": []string{"db0"}, "inner_chunk_size": []string{"1"}},
 			command: `SELECT percentile(*,95) FROM cpu group by *`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",1945,1945]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",3993,3993]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",null,6041]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",8089,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",10137,10137]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",12185,12185]]}]}]}`,
 		},
-		&Query{ //BUG:BUG2022060902489
+		&Query{ // BUG:BUG2022060902489
 			name:    "percentile with group by * : innerChunkSize=1024",
 			params:  url.Values{"db": []string{"db0"}, "inner_chunk_size": []string{"1024"}},
 			command: `SELECT percentile(*,95) FROM cpu group by *`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",1945,1945]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",3993,3993]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",null,6041]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",8089,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",10137,10137]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",12185,12185]]}]}]}`,
 		},
-		&Query{ //BUG:BUG2022060902489
+		&Query{ // BUG:BUG2022060902489
 			name:    "percentile : innerChunkSize=1",
 			params:  url.Values{"db": []string{"db0"}, "inner_chunk_size": []string{"1"}},
 			command: `SELECT percentile(*,95) FROM cpu`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",11775,11775]]}]}]}`,
 		},
-		&Query{ //BUG:BUG2022060902489
+		&Query{ // BUG:BUG2022060902489
 			name:    "percentile : innerChunkSize=1024",
 			params:  url.Values{"db": []string{"db0"}, "inner_chunk_size": []string{"1024"}},
 			command: `SELECT percentile(*,95) FROM cpu`,
@@ -7973,7 +7988,7 @@ func TestServer_Query_With_EmptyTags(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select value from cpu where host = ''`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:02Z",1]]}]}]}`,
-			skip:    true, //Issue #54
+			skip:    true, // Issue #54
 		},
 		&Query{
 			name:    "where not empty tag",
