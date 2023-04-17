@@ -2,88 +2,182 @@
 
 欢迎来到openGemini！
 
-## 1. 体验openGemini
+## 1. 提交Issue/处理issue任务
 
-- 从社区下载安装体验，见[用户指南-->Getting Started](http://opengemini.org/docs)
-
-- [华为云沙箱实验]()（待上线）
-
-## 2. 社区账号及DCO协议签署
-
-### 2.1 申请注册GitHub社区账号
-
-登录Github并使用常用邮箱进行注册，该邮箱需要用于签署DCO，以及用于配置SSH公钥。
-
-### 2.2 签署DCO
-
-签署openGemini [DCO]([Developer Certificate of Origin](https://developercertificate.org/))（Developer Certificate of Origin，开发者原创声明），并遵守原创契约。每次提交PR时，都需使用邮箱进行签署。
-
-## 3. 参与openGemini社区
-
-### 3.1 参与社区活动
-
-您可以了解并参与丰富多彩的社区活动：
-
-- [Meeting](http://opengemini.org/events)
-- [Meetups](http://opengemini.org/events)
-- [直播](https://space.bilibili.com/1560037308)
-- [峰会](https://space.bilibili.com/1560037308)
-
-### 3.2 找到您想参与的SIG
-
-SIG就是Special Interest Group的缩写，openGemini社区按照不同的SIG来组织，以便于更好的管理和改善工作流程。因此参与社区事务正确的起始姿势是先找到您感兴趣的SIG， SIG组均是开放的，欢迎任何人来参与。
-
-目前，openGemini社区刚成立，SIG正在筹备中。
-
-如果您对openGemini的某个方向有浓厚的兴趣，希望在社区成立一个新的相关SIG进行维护和发展，那您可以参考 [申请新SIG流程指南]() 来申请创建新的SIG.
-
-### 3.3 参与社区贡献
-
-#### 提交Issue/处理issue任务
-
-- 找到Issue列表：
-  在您感兴趣的SIG项目仓内，点击“Issues”，您可以找到其Issue列表
 - 提交Issue
   如果您准备向社区上报Bug或者提交需求，或者为openGemini社区贡献自己的意见或建议，请在openGemini社区对应的仓库上提交Issue。
-  提交Issue请参考 [Issue提交指南]()。为了吸引更广泛的注意，您也可以把Issue的链接附在邮件内，通过[邮件列表]()发送给所有人。
+
 - 参与Issue内的讨论
   每个Issue下面可能已经有参与者们的交流和讨论，如果您感兴趣，也可以在评论框中发表自己的意见。
+
 - 找到愿意处理的Issue
   如果您愿意处理其中的一个issue，可以将它分配给自己。只需要在评论框内输入 /assign或 /assign @yourself，机器人就会将问题分配给您，您的名字将显示在负责人列表里。
 
-#### 贡献编码
+  > **@yourself** 替换为您的 GitHub 用户名，比如 /assign @bob
 
-- 准备openGemini的开发环境
-  如果您想参与编码贡献，需要准备Go和Python语言的开发环境。
+## 2. 贡献源码
 
-- 了解不同SIG使用开发语言的编程规范，安全设计规范等。
+### 2.1 提交拉取请求详细步骤
 
-- 下载代码和拉分支
-  如果要参与代码贡献，您还需要了解如何在GitHub下载代码，通过PR合入代码等。openGemini使用GitHub代码托管平台，想了解具体的指导，请参考[GitHub Workflow Guide](https://docs.github.com/cn)。
+1. 在提交拉取请求之前，请先在 [Github](https://github.com/openGemini/openGemini/pulls) 中搜索关闭或开启的相关PR，以避免重复工作。
 
-- 修改、构建和本地验证
-  在本地分支上完成修改后，进行构建和本地调试验证，参考[代码调试指南]()。
+2. 确保问题描述了您正在修复的问题，或记录了您要添加的功能的设计。提前讨论设计有助于确保我们准备好接受您的工作。
 
-- 提交一个Pull-Request
-  当你提交一个PR的时候，就意味您已经开始给社区贡献代码了。请参考 openGemini社区PR提交指导。
-  为了使您的提交更容易被接受，您需要：
+3. 签署openGemini [DCO](https://developercertificate.org)（Developer Certificate of Origin，开发者原创声明），并遵守原创契约。每次提交PR时，都需使用邮箱进行签署 ，因为我们不能接受没有签名DCO的代码。
 
-  - 遵循SIG组的编码约定，如果有的话
-  - 准备完善的提交信息
-  - 如果一次提交的代码量较大，建议将大型的内容分解成一系列逻辑上较小的内容，分别进行提交会更便于检视者理解您的想法
-  - 使用适当的SIG组和监视者标签去标记PR：社区机器人会发送给您消息，以方便您更好的完成整个PR的过程
+   > git commit 命令中增加-s参数，即可自动签名。比如：git commit -s -m "fix: xxxxxxxx"
 
-  注意：如果您的PR请求没有引起足够的关注，可以在SIG的邮件列表或community.ts@opengemini.org求助。
+4. [Fork](https://github.com/openGemini/openGemini/fork) openGemini/openGemini 仓库
 
-#### 贡献生态工具
+   您需要了解如何在GitHub下载代码，通过PR合入代码等。openGemini使用GitHub代码托管平台，想了解具体的指导，请参考[GitHub Workflow Guide](https://docs.github.com/cn)。
+
+5. Clone您的仓库，在您的仓库中，在新的git分支中更改：
+
+   `git checkout -b my-fix-branch main`
+
+6. 添加你的**代码**和**测试用例**
+
+7. 将您的分支推送到Github
+
+   `git push origin my-fix-branch`
+
+8. 打开PR开始合并请求
+   当你提交一个PR的时候，就意味您已经开始给社区贡献代码了。请参考 openGemini社区PR提交指导。
+   为了使您的提交更容易被接受，您需要：
+
+   - 填写完善的提交信息，并且签署DCO。
+   - 如果一次提交的代码量较大，建议将大型的内容分解成一系列逻辑上较小的内容，分别进行提交会更便于检视者理解您的想法
+
+   注意：如果您的PR请求没有引起足够的关注，可以发送邮件到community.ts@opengemini.org求助。
+
+### 2.2 编译源码
+
+#### 2.2.1 支持平台
+
+我们支持以下平台:
+
+- Linux x86/arm
+- Darwin x86/arm
+
+#### 2.2.2 编译环境信息
+
+[GO](https://golang.org/dl/) version v1.16+
+
+[Python](https://www.python.org/downloads/) version v3.7+
+
+[Git](https://git-scm.com/downloads)
+
+#### 2.2.3 GO环境变量设置
+
+打开 `~/.profile`配置文件，在文件末尾添加如下配置：
+
+```bash
+# 设置GOPATH(可自定义目录)
+export GOPATH=$HOME/gocodez
+export GOPROXY=https://goproxy.cn,direct
+export GO111MODULE=on
+export GONOSUMDB=*
+export GOSUMDB=off
+```
+
+#### 2.2.4 下载源码编译
+
+```bash
+cd $GOPATH
+mkdir -p {pkg,bin,src}
+cd src
+git clone git@github.com:<username>/openGemini.git
+cd openGemini
+python3 build.py --clean
+```
+
+编译成功后，二进制保存在`build`目录中。
+
+### 2.3 启动服务
+
+#### 2.3.1 启动单机版
+
+- 默认参数启动
+
+  ```bash
+  ./build/ts-server
+  ```
+
+- 带配置文件启动
+
+  ```
+  ./build/ts-server run -config=config/openGemini.singlenode.conf  
+  ```
+
+- 使用脚本启动
+
+  ```bash
+  bash scripts/install.sh
+  ```
+
+#### 2.3.2 启动伪集群版
+
+```bash
+bash scripts/install_cluster.sh
+```
+
+> maxOS用户可能第一次运行需要输入admin的密码，参考 https://superuser.com/questions/458875/how-do-you-get-loopback-addresses-other-than-127-0-0-1-to-work-on-os-x
+
+> 临时放开 127.0.0.2和127.0.0.3
+
+### 2.4 CI和静态分析工具
+
+#### 2.4.1 CI
+
+所有的pull requests都会运行CI。 社区贡献者应该查看PR checks的结果，来检查是否符合代码合入的最低门槛。 如果有任何问题请解决，以确保团队成员及时进行审核。
+
+openGemini 项目在内部也有很多检查流程。 这可能需要一些时间，并且对社区贡献者来说并不真正可见。我们会定期将问题以及修复代码同步到社区。
+
+#### 2.4.2 Static Analysis
+
+该项目使用以下静态分析工具。 运行这些工具中的任何一个失败都会导致构建失败。 通常，必须调整代码以满足这些工具的要求，但也有例外。
+
+- [go vet](https://golang.org/cmd/vet/) checks for Go code that should be considered incorrect.
+
+  通过在本项目根目录执行以下命令，即可：
+
+  ```bash
+  make go-vet-check
+  ```
+
+- [goimports-reviser](https://github.com/incu6us/goimports-reviser) checks that Go code is correctly formatted.
+
+  通过在本项目根目录执行以下命令，即可：
+
+  > 注意：本地go版本在1.19及以上，请不要尝试执行，会有很多误报，社区正在修复中。
+
+  ```
+  make style-check
+  ```
+
+- [go mod tidy](https://tip.golang.org/cmd/go/#hdr-Add_missing_and_remove_unused_modules) ensures that the source code and go.mod agree.
+
+- [staticcheck](https://staticcheck.io/docs/) checks for things like: unused code, code that can be simplified, code that is incorrect and code that will have performance issues.
+
+  通过在本项目根目录执行以下命令，即可：
+
+  > 注意：由于static-check本身的问题，所以本地go版本在1.19及以上，才能执行。
+
+  ```bash
+  make static-check
+  ```
+
+## 3. 参与社区其他贡献
+
+### 3.1 贡献生态工具
 
 如果你发现其他第三方软件系统、工具缺失了对openGemini的支持，或者openGemini缺失了对南向操作系统、CPU架构、存储系统的支持，可以帮openGemini把这个支持补上。与此同时，社区也会在ISSUE中发布生态工具的开发任务，您也可以主动接下任务。实际上贡献生态工具的过程就是帮助openGemini繁荣生态的过程，让openGemini成为一个具有广泛技术生态的开源时序数据库系统。
 
-#### 贡献原创开源项目
+### 3.2 贡献原创开源项目
 
 如果您想将自己原创的基于openGemini开发的应用或解决方案贡献到openGemini社区，直接在https://github.com/openGemini中建立原创项目，将项目“托管”到openGemini社区。
 
-#### 检视代码
+### 3.3 检视代码
 
 openGemini是一个开放的社区，我们希望所有参与社区的人都能成为活跃的代码检视者。当成为SIG组的committer或maintainer角色时，便拥有审核代码的责任与权利。
 强烈建议本着[行为准则]()，相互尊重和促进协作，希望能够促进新的贡献者积极参与，而不会使贡献者一开始就被细微的错误淹没，所以检视的时候，可以重点关注包括：
@@ -91,11 +185,11 @@ openGemini是一个开放的社区，我们希望所有参与社区的人都能�
  2.贡献的架构是否正确
  3.贡献是否完善
 
-#### 测试
+### 3.4 测试
 
 为了成功发行一个社区版本，需要完成多种测试活动。不同的测试活动，测试代码的位置也有所不同，成功运行测试所需的环境的细节也会有差异，有关的信息可以参考：[社区开发者测试贡献指南]()。
 
-#### 参与非代码类贡献
+### 3.5 参与非代码类贡献
 
 如果您的兴趣不在编写代码方面，可以在[ 非代码贡献指南 ]()中找到感兴趣的工作。
 
