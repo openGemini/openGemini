@@ -3,11 +3,10 @@
 ![color](https://user-images.githubusercontent.com/49023462/231386185-a18cd5dd-30ef-4d03-b86b-3119b16843a0.png)
 
 ![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)   
- 
 
-[简体中文]() | [English](README.md)
+简体中文 | [English](README.md)
 
-[官网](http://www.openGemini.org) | [文档](http://www.openGemini.org/docs) | [贡献指南](http://www.openGemini.org/contribution) | [RoadMap](./ROADMAP.md)
+[官网](http://www.openGemini.org) | [文档](http://www.openGemini.org/docs) | [贡献指南](CONTRIBUTION_CN.md) | [RoadMap](ROADMAP.md)
 
 ## 关于openGemini
 
@@ -41,17 +40,15 @@ openGemini是华为云开源的一款云原生分布式时序数据库，可广�
 
 openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工具链，比如：
 
-主流开发语言驱动：[JavaScript](https://github.com/node-influx/node-influx)、[Java](https://github.com/influxdata/influxdb-java)、[C/C++](C/C++)、[Ruby](https://github.com/influxdata/influxdb-ruby)、[Go](https://github.com/influxdata/influxdb1-client)、[Python](https://github.com/influxdata/influxdb-python)、[PHP](https://github.com/influxdata/influxdb-php)
+主流开发语言驱动：[JavaScript](https://github.com/node-influx/node-influx)、[Java](https://github.com/influxdata/influxdb-java)、[C/C++]()、[Ruby](https://github.com/influxdata/influxdb-ruby)、[Go](https://github.com/influxdata/influxdb1-client)、[Python](https://github.com/influxdata/influxdb-python)、[PHP](https://github.com/influxdata/influxdb-php)
 
-客户端：Influx
+客户端：ts-cli
 
 数据接入工具：StatsD、EMQX、Telegraf、Icinga2、HiveMQ、Kafka、MQTT
 
 数据洞察工具：Chronograf、Grafana
 
 大数据和数据分析系统：Zeppelin、Flink、Spark、Kapacitor等。
-
-
 
 ## 快速开始
 
@@ -89,30 +86,30 @@ export GOSUMDB=off
 
 1. 从 GitHub 克隆源代码
 
-```
-> cd $GOPATH
-> mkdir -p {pkg,bin,src}
-> cd src
-> git clone https://github.com/openGemini/openGemini.git
+```bash
+cd $GOPATH
+mkdir -p {pkg,bin,src}
+cd src
+git clone https://github.com/openGemini/openGemini.git
 ```
 
 2. 进入主目录
 
-```
+```bash
 > cd openGemini
 ```
 
 3. 编译
 
-```
+```bash
 > export CGO_LDFLAGS="-Wl,-z,now -Wl,-z,relro -Wl,-z,noexecstack -fPIE -ftrapv"
 > export CGO_CFLAGS="-fstack-protector-strong -D_FORTIFY_SOURCE=2 -O2"
-> python build.py
+> python build.py -clean
 ```
 
 编译好的二进制在build目录中
 
-```
+```bash
 > ls build
 ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store  
 ```
@@ -195,7 +192,7 @@ Elapsed: 7.723332ms
 
 ## 加入贡献
 
-[贡献指南](./CONTRIBUTION_CN.md)
+[贡献指南](CONTRIBUTION_CN.md)
 
 ## 联系我们
 
