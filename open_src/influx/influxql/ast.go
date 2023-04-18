@@ -1533,7 +1533,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	// Iterate through the sources and rewrite any subqueries first.
 	sources := make(Sources, 0, len(other.Sources))
 	for _, src := range other.Sources {
-		switch src := src.(type) {
+		switch src := src.(type) { // in like case, src type is influx.measurement
 		case *SubQuery:
 			stmt, err := src.Statement.RewriteFields(m, batchEn, hasJoin)
 			if err == nil {
@@ -4521,6 +4521,8 @@ func (m *MatchExpr) String() string {
 		s += " MATCH "
 	} else if m.Op == MATCH_PHRASE {
 		s += " MATCH_PHRASE "
+	} else if m.Op == LIKE {
+		s += " LIKE "
 	} else {
 		panic(s)
 	}
