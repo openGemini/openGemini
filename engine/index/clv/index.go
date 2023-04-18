@@ -649,15 +649,25 @@ func (idx *TokenIndex) Fuzzy(queryStr string) (*InvertIndex, error) {
 
 // if not found any matched text, need return a empty InvertIndex, not nil InvertIndex.
 func (idx *TokenIndex) Search(t QueryType, queryStr string) (*InvertIndex, error) {
-	if t == Match {
-		return idx.Match(queryStr)
-	} else if t == Match_Phrase {
-		return idx.MatchPhrase(queryStr)
-	} else if t == Fuzzy {
-		return idx.Fuzzy(queryStr)
+	var invert *InvertIndex
+	var err error
+	switch t {
+	case Match:
+		invert, err = idx.Match(queryStr)
+	case Match_Phrase:
+		invert, err = idx.MatchPhrase(queryStr)
+	case Fuzzy:
+		invert, err = idx.Fuzzy(queryStr)
+	default:
+		return nil, fmt.Errorf("cannot find the query type:%d", t)
 	}
 
-	return nil, fmt.Errorf("cannot find the query type:%d", t)
+	if invert == nil {
+		ii := NewInvertIndex()
+		invert = &ii
+	}
+
+	return invert, err
 }
 
 func removeDuplicateTimestamp(iss []InvertState) []InvertState {
