@@ -50,10 +50,13 @@ func NewTextIndex(opts *Options) (*TextIndex, error) {
 
 func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 	txtIdxPath := path.Join(idxPath, TextDirectory)
+	fieldName := make([]byte, len(field))
+	copy(fieldName, field)
+
 	opts := clv.Options{
 		Path:        txtIdxPath,
 		Measurement: measurement,
-		Field:       field,
+		Field:       string(fieldName),
 	}
 	tokenIndex, err := clv.NewTokenIndex(&opts)
 	if err != nil {
@@ -63,7 +66,7 @@ func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 		idx.fieldTable[measurement] = make(map[string]*clv.TokenIndex)
 	}
 
-	idx.fieldTable[measurement][field] = tokenIndex
+	idx.fieldTable[measurement][string(fieldName)] = tokenIndex
 	return nil
 }
 
@@ -93,7 +96,9 @@ func (idx *TextIndex) Open() error {
 				continue
 			}
 			field := fieldDirs[fieldIdx].Name()
+			idx.fieldTableLock.Lock()
 			err := idx.NewTokenIndex(idx.path, measurement, field)
+			idx.fieldTableLock.Unlock()
 			if err != nil {
 				return err
 			}
@@ -135,6 +140,7 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 				if idx.fieldTable[row.Name][field.Key] == nil {
 					err := idx.NewTokenIndex(idx.path, row.Name, field.Key)
 					if err != nil {
+						idx.fieldTableLock.Unlock()
 						return 0, err
 					}
 				}
