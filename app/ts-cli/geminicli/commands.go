@@ -28,6 +28,7 @@ var cmds = []prompt.Suggest{
 	{Text: "select", Description: "query dataset from openGemini."},
 	{Text: "chunked", Description: "turns on chunked responses from server."},
 	{Text: "chunk_size", Description: "sets the size of the chunked responses."},
+	{Text: "precision", Description: "set the precision of timestamps."},
 }
 
 var subcmds = map[string][]prompt.Suggest{

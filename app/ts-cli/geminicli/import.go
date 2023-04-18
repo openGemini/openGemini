@@ -119,6 +119,14 @@ func parseConnectionString(path string) (url.URL, error) {
 
 func (c *CommandLineConfig) Run() error {
 	config := c.ImportConfig
+	if config.Precision == "" {
+		config.Precision = "ns"
+	}
+	if config.Precision != "rfc3339" && config.Precision != "h" && config.Precision != "m" && config.Precision != "s" && config.Precision != "ms" && config.Precision != "u" && config.Precision != "ns" {
+		return fmt.Errorf("precision must be rfc3339, h, m, s, ms, u or ns")
+	} else if config.Precision == "rfc3339" {
+		config.Precision = ""
+	}
 	config.Config = c.ClientConfig
 
 	i := NewImporter(config)
