@@ -959,6 +959,14 @@ CONDITION:
 	    Op: MATCH_PHRASE,
 	}
     }
+    |STRING_TYPE LIKE STRING_TYPE
+    {
+     $$ = &MatchExpr{
+        Field:  &VarRef{Val: $1},
+	    Value:  &VarRef{Val: $3},
+	    Op: LIKE,
+	}   
+    }
 
 OPERATION_EQUAL:
     CONDITION_COLUMN CONDITION_OPERATOR CONDITION_COLUMN
@@ -1015,10 +1023,6 @@ CONDITION_OPERATOR:
     |NEQREGEX
     {
         $$ = NEQREGEX
-    }
-    |LIKE
-    {
-	$$ = LIKE
     }
 
 REGULAR_EXPRESSION:

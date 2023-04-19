@@ -4521,6 +4521,8 @@ func (m *MatchExpr) String() string {
 		s += " MATCH "
 	} else if m.Op == MATCH_PHRASE {
 		s += " MATCH_PHRASE "
+	} else if m.Op == LIKE {
+		s += " LIKE "
 	} else {
 		panic(s)
 	}
