@@ -2694,10 +2694,15 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 					fields = append(fields, []interface{}{name, influx.FieldTypeString(t), "Field"})
 				}
 			}
-			row.Values = append(row.Values, fields...)
 			sort.SliceStable(row.Values, func(i, j int) bool {
 				return row.Values[i][0].(string) < row.Values[j][0].(string)
 			})
+
+			sort.SliceStable(fields, func(i, j int) bool {
+				return fields[i][0].(string) < fields[j][0].(string)
+			})
+
+			row.Values = append(row.Values, fields...)
 			rows := make([]*models.Row, 0)
 			rows = append(rows, row)
 
