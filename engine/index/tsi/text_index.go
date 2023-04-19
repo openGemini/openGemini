@@ -164,7 +164,7 @@ func (idx *TextIndex) SearchByTokenIndex(name string, n *influxql.BinaryExpr) (*
 
 	tokenIndex, ok := idx.fieldTable[name][key.Val]
 	if !ok {
-		return nil, fmt.Errorf("The filed(%s) of measurement(%s) has no text index.", key.Val, name)
+		return nil, fmt.Errorf("The field(%s) of measurement(%s) has no text index.", key.Val, name)
 	}
 
 	switch n.Op {
