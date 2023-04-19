@@ -610,6 +610,7 @@ func (idx *TokenIndex) Fuzzy(queryStr string) (*InvertIndex, error) {
 	ts := idx.getTokenSearch()
 	defer idx.putTokenSearch(ts)
 
+	queryStr = strings.ToLower(queryStr)
 	regex, err := regexp.Compile(queryStrToPattern(queryStr))
 	if err != nil {
 		return nil, err
@@ -620,6 +621,8 @@ func (idx *TokenIndex) Fuzzy(queryStr string) (*InvertIndex, error) {
 	})
 	if index > 0 {
 		queryStr = queryStr[0:index]
+	} else {
+		return idx.Match(queryStr)
 	}
 
 	terms := ts.searchTermsIndex(queryStr, regex.Match)
