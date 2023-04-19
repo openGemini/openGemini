@@ -299,11 +299,31 @@ func DecodeBooleanBlock(in []byte, out *[]byte, ctx *CoderContext) ([]bool, erro
 	return record.Bytes2BooleanSlice(values), nil
 }
 
+func encodeOffset(offset []uint32) []byte {
+	ret := make([]byte, 0, (len(offset)-1)*record.Uint16SizeBytes)
+	for i := 1; i < len(offset); i++ {
+		ret = numberenc.MarshalUint16Append(ret, uint16(offset[i]-offset[i-1]))
+	}
+	return ret
+}
+
+func decodeOffset(b []byte) []uint32 {
+	offLen := len(b)/record.Uint16SizeBytes + 1
+	ret := make([]uint32, offLen)
+	ret[0] = 0
+	for i := 1; i < offLen; i++ {
+		off := (i - 1) * record.Uint16SizeBytes
+		ret[i] = ret[i-1] + uint32(numberenc.UnmarshalUint16(b[off:off+record.Uint16SizeBytes]))
+	}
+
+	return ret
+}
+
 func packString(in []byte, offset []uint32, ctx *CoderContext) []byte {
 	ctx.buf = numberenc.MarshalUint32Append(ctx.buf[:0], uint32(len(in)))
 	ctx.buf = append(ctx.buf, in...)
 
-	offBytes := record.Uint32Slice2ByteBigEndian(offset)
+	offBytes := encodeOffset(offset)
 	ctx.buf = numberenc.MarshalUint32Append(ctx.buf, uint32(len(offBytes)))
 	ctx.buf = append(ctx.buf, offBytes...)
 	return ctx.buf
@@ -322,11 +342,10 @@ func unpackString(src []byte) ([]byte, []uint32, error) {
 	src = src[byteLen:]
 	offLen := int(numberenc.UnmarshalUint32(src))
 	src = src[4:]
-	off := record.Bytes2Uint32SliceBigEndian(src[:offLen])
 	if len(src) < offLen {
 		return nil, nil, fmt.Errorf("too small data for string offset, %v < %v", len(src), offLen)
 	}
-
+	off := decodeOffset(src[:offLen])
 	return in, off, nil
 }
 
