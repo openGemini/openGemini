@@ -50,10 +50,13 @@ func NewTextIndex(opts *Options) (*TextIndex, error) {
 
 func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 	txtIdxPath := path.Join(idxPath, TextDirectory)
+	fieldName := make([]byte, len(field))
+	copy(fieldName, field)
+
 	opts := clv.Options{
 		Path:        txtIdxPath,
 		Measurement: measurement,
-		Field:       field,
+		Field:       string(fieldName),
 	}
 	tokenIndex, err := clv.NewTokenIndex(&opts)
 	if err != nil {
@@ -63,7 +66,7 @@ func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 		idx.fieldTable[measurement] = make(map[string]*clv.TokenIndex)
 	}
 
-	idx.fieldTable[measurement][field] = tokenIndex
+	idx.fieldTable[measurement][string(fieldName)] = tokenIndex
 	return nil
 }
 
@@ -93,7 +96,9 @@ func (idx *TextIndex) Open() error {
 				continue
 			}
 			field := fieldDirs[fieldIdx].Name()
+			idx.fieldTableLock.Lock()
 			err := idx.NewTokenIndex(idx.path, measurement, field)
+			idx.fieldTableLock.Unlock()
 			if err != nil {
 				return err
 			}
@@ -119,14 +124,18 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 	timestamp := row.Timestamp
 	// Find the field need to be created index.
 	for _, opt := range row.IndexOptions {
-		if opt.Oid == uint32(Text) {
-			if int(opt.IndexList[0]) < len(row.Tags) {
-				return 0, fmt.Errorf("cannot create text index for tag: %s", row.Tags[opt.IndexList[0]].Key)
+		if opt.Oid != uint32(Text) {
+			continue
+		}
+
+		for i := 0; i < len(opt.IndexList); i++ {
+			if int(opt.IndexList[i]) < len(row.Tags) {
+				return 0, fmt.Errorf("cannot create text index for tag: %s", row.Tags[opt.IndexList[i]].Key)
 			}
 
-			field = row.Fields[int(opt.IndexList[0])-len(row.Tags)]
+			field = row.Fields[int(opt.IndexList[i])-len(row.Tags)]
 			if field.Type != influx.Field_Type_String {
-				return 0, fmt.Errorf("field type must be string for TextIndex")
+				return 0, fmt.Errorf("field type must be string for TextIndex, field: %s", field.Key)
 			}
 
 			tokenIndex, ok := idx.fieldTable[row.Name][field.Key]
@@ -135,6 +144,7 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 				if idx.fieldTable[row.Name][field.Key] == nil {
 					err := idx.NewTokenIndex(idx.path, row.Name, field.Key)
 					if err != nil {
+						idx.fieldTableLock.Unlock()
 						return 0, err
 					}
 				}
@@ -145,7 +155,6 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 			if err != nil {
 				return 0, err
 			}
-
 		}
 	}
 
@@ -164,7 +173,7 @@ func (idx *TextIndex) SearchByTokenIndex(name string, n *influxql.BinaryExpr) (*
 
 	tokenIndex, ok := idx.fieldTable[name][key.Val]
 	if !ok {
-		return nil, fmt.Errorf("The filed(%s) of measurement(%s) has no text index.", key.Val, name)
+		return nil, fmt.Errorf("The field(%s) of measurement(%s) has no text index.", key.Val, name)
 	}
 
 	switch n.Op {

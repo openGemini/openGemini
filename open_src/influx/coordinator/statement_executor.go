@@ -498,8 +498,11 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	}
 
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
-	if _, err := e.MetaClient.Measurement(stmt.Database, stmt.RetentionPolicy, stmt.Name); err != meta2.ErrMeasurementNotFound {
+	_, err := e.MetaClient.Measurement(stmt.Database, stmt.RetentionPolicy, stmt.Name)
+	if err == nil {
 		return meta2.ErrMeasurementExists
+	} else if err != meta2.ErrMeasurementNotFound {
+		return err
 	}
 
 	schema := make(map[string]struct{})
