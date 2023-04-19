@@ -1074,13 +1074,17 @@ func IsRetryErrorForPtView(err error) bool {
 }
 
 func selectIndexList(columnToIndex map[string]int, indexList []*meta2.IndexInfor) ([]uint16, bool) {
-	index := make([]uint16, len(indexList))
-	for i, iCol := range indexList {
+	index := make([]uint16, 0, len(indexList))
+	for _, iCol := range indexList {
 		v, exist := columnToIndex[iCol.FieldName]
 		if !exist {
-			return nil, false
+			continue
 		}
-		index[i] = uint16(v)
+		index = append(index, uint16(v))
+	}
+
+	if len(index) == 0 {
+		return nil, false
 	}
 	return index, true
 }
