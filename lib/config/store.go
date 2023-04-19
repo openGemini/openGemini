@@ -79,9 +79,10 @@ type TSStore struct {
 	Stream            stream.Config    `toml:"stream"`
 
 	// TLS provides configuration options for all https endpoints.
-	TLS      tlsconfig.Config `toml:"tls"`
-	Analysis Castor           `toml:"castor"`
-	Sherlock *SherlockConfig  `toml:"sherlock"`
+	TLS       tlsconfig.Config `toml:"tls"`
+	Analysis  Castor           `toml:"castor"`
+	Sherlock  *SherlockConfig  `toml:"sherlock"`
+	ClvConfig *ClvConfig       `toml:"clv_config"`
 }
 
 // NewTSStore returns an instance of Config with reasonable defaults.
@@ -104,6 +105,7 @@ func NewTSStore() *TSStore {
 	c.Analysis = NewCastor()
 	c.Stream = stream.NewConfig()
 	c.Sherlock = NewSherlockConfig()
+	c.ClvConfig = NewClvConfig()
 	return c
 }
 
@@ -353,4 +355,14 @@ func NewOpsMonitorConfig() *OpsMonitor {
 
 func getCacheLimitSize(size uint64) uint64 {
 	return size * DefaultReadCachePercent / 100
+}
+
+type ClvConfig struct {
+	QMax int    `toml:"q_max"`
+	T    int    `toml:"t"`
+	N    uint32 `toml:"n"`
+}
+
+func NewClvConfig() *ClvConfig {
+	return &ClvConfig{}
 }
