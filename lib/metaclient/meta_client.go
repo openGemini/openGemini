@@ -2682,6 +2682,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 		version := rp.MstVersions[ms]
 		nameWithVer := influx.GetNameWithVersion(ms, version)
 
+		var fields [][]interface{}
 		if measurement, ok := rp.Measurements[nameWithVer]; ok {
 			row := &models.Row{
 				Name:    "Column Information",
@@ -2690,9 +2691,10 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 				if t == influx.Field_Type_Tag {
 					row.Values = append(row.Values, []interface{}{name, "string", "Tag"})
 				} else {
-					row.Values = append(row.Values, []interface{}{name, influx.FieldTypeString(t), "Field"})
+					fields = append(fields, []interface{}{name, influx.FieldTypeString(t), "Field"})
 				}
 			}
+			row.Values = append(row.Values, fields...)
 
 			rows := make([]*models.Row, 0)
 			rows = append(rows, row)
@@ -2726,7 +2728,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 		}
 	}
 
-	return nil, fmt.Errorf("Measurement not exist %s", ms)
+	return nil, fmt.Errorf("Measurement not exist")
 }
 
 func (c *Client) NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error {
