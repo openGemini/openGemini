@@ -124,14 +124,18 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 	timestamp := row.Timestamp
 	// Find the field need to be created index.
 	for _, opt := range row.IndexOptions {
-		if opt.Oid == uint32(Text) {
-			if int(opt.IndexList[0]) < len(row.Tags) {
-				return 0, fmt.Errorf("cannot create text index for tag: %s", row.Tags[opt.IndexList[0]].Key)
+		if opt.Oid != uint32(Text) {
+			continue
+		}
+
+		for i := 0; i < len(opt.IndexList); i++ {
+			if int(opt.IndexList[i]) < len(row.Tags) {
+				return 0, fmt.Errorf("cannot create text index for tag: %s", row.Tags[opt.IndexList[i]].Key)
 			}
 
-			field = row.Fields[int(opt.IndexList[0])-len(row.Tags)]
+			field = row.Fields[int(opt.IndexList[i])-len(row.Tags)]
 			if field.Type != influx.Field_Type_String {
-				return 0, fmt.Errorf("field type must be string for TextIndex")
+				return 0, fmt.Errorf("field type must be string for TextIndex, field: %s", field.Key)
 			}
 
 			tokenIndex, ok := idx.fieldTable[row.Name][field.Key]
@@ -151,7 +155,6 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 			if err != nil {
 				return 0, err
 			}
-
 		}
 	}
 
