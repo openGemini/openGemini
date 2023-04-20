@@ -148,29 +148,29 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 	info.Interval = time.Duration(5)
 	info.Calls = []*meta2.StreamCall{
 		{
-			"sum",
-			"fk1",
-			"sum_fk1",
+			Call:  "sum",
+			Field: "fk1",
+			Alias: "sum_fk1",
 		},
 		{
-			"sum",
-			"fk2",
-			"sum_fk2",
+			Call:  "sum",
+			Field: "fk2",
+			Alias: "sum_fk2",
 		},
 		{
-			"count",
-			"fk2",
-			"count_fk2",
+			Call:  "count",
+			Field: "fk2",
+			Alias: "count_fk2",
 		},
 		{
-			"min",
-			"fk2",
-			"min_fk2",
+			Call:  "min",
+			Field: "fk2",
+			Alias: "min_fk2",
 		},
 		{
-			"max",
-			"fk2",
-			"max_fk2",
+			Call:  "max",
+			Field: "fk2",
+			Alias: "max_fk2",
 		},
 	}
 	infos[info.Name] = info
@@ -281,7 +281,7 @@ func NewMeasurement(mst string) *meta2.MeasurementInfo {
 	if enableFieldIndex {
 		ilist := []string{"tk3", "tk1"}
 		msti.IndexRelation = meta2.IndexRelation{
-			IndexList: []*meta2.IndexList{{ilist}},
+			IndexList: []*meta2.IndexList{{IList: ilist}},
 			Oids:      []uint32{0},
 		}
 	}

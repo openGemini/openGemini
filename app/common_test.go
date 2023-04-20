@@ -69,7 +69,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func mockHTTPServer(t *testing.T) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		t.Fatalf("%v", err)
+		t.Error(err)
 	}
 
 	testHandler := newHandler()
@@ -77,7 +77,7 @@ func mockHTTPServer(t *testing.T) {
 
 	err = http.Serve(ln, testHandler)
 	if err != nil && !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("listener failed: addr=%s, err=%s", ln.Addr(), err)
+		t.Errorf("listener failed: addr=%s, err=%s", ln.Addr(), err)
 	}
 }
 

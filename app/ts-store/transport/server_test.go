@@ -328,13 +328,13 @@ func mockMarshaledStreamPoint() []byte {
 func TestDecodePoints(t *testing.T) {
 	ww := getWritePointsWork()
 	ww.reqBuf = mockMarshaledStreamPoint()
-	ww.streamVars = []*netstorage.StreamVar{{false, []uint64{0}}, {true, []uint64{1}}}
+	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}, {Only: true, Id: []uint64{1}}}
 	_, _, _, _, _, _, err := ww.decodePoints()
 	if err != nil {
 		t.Fatal("DecodePoints failed")
 	}
 
-	ww.streamVars = []*netstorage.StreamVar{{false, []uint64{0}}}
+	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}}
 	_, _, _, _, _, _, err = ww.decodePoints()
 	if err == nil {
 		t.Fatal("DecodePoints failed")

@@ -3353,7 +3353,7 @@ func TestDownSampleRedo(t *testing.T) {
 	oldFiles := []immutable.TSSPFile{oFiles.Files()[1]}
 	_, err = sh.writeDownSampleInfo(msNames, [][]immutable.TSSPFile{oldFiles}, [][]immutable.TSSPFile{newFiles}, 0, 1)
 	require.NoError(t, err)
-	sh2 := NewShard(sh.dataPath, sh.walPath, sh.lock, sh.ident, sh.durationInfo, &meta.TimeRangeInfo{sh.startTime, sh.endTime}, DefaultEngineOption)
+	sh2 := NewShard(sh.dataPath, sh.walPath, sh.lock, sh.ident, sh.durationInfo, &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}, DefaultEngineOption)
 	m := mockMetaClient()
 	err = sh2.OpenAndEnable(m)
 	if err != nil {

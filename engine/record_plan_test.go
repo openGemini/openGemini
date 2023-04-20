@@ -103,7 +103,7 @@ func TestFileSequenceAggregator(t *testing.T) {
 				times := r.GetRec().Times()
 				for i := 1; i < r.GetRec().RowNums(); i++ {
 					if times[i]-times[i-1] != int64(opt.GetInterval()) {
-						t.Fatal("unexpected time to fill")
+						t.Errorf("unexpected time to fill")
 					}
 				}
 			}
@@ -179,7 +179,7 @@ func TestFileSequenceAggregator_Empty(t *testing.T) {
 				times := r.GetRec().Times()
 				for i := 1; i < r.GetRec().RowNums(); i++ {
 					if times[i]-times[i-1] != int64(opt.GetInterval()) {
-						t.Fatal("unexpected time to fill")
+						t.Errorf("unexpected time to fill")
 					}
 				}
 			}
@@ -434,7 +434,7 @@ func NewMocDataSender(records []*record.Record, files []immutable.TSSPFile, sids
 
 func (m *MocDataSender) Work() {
 	for i := range m.records {
-		sRec := executor.NewSeriesRecord(m.records[i], m.sids[i], m.files[i], m.newSeqs[i], &record.TimeRange{0, 100}, nil)
+		sRec := executor.NewSeriesRecord(m.records[i], m.sids[i], m.files[i], m.newSeqs[i], &record.TimeRange{Max: 100}, nil)
 		m.output.State <- sRec
 	}
 	close(m.output.State)

@@ -209,13 +209,13 @@ func TestClient_BasicFunctions(t *testing.T) {
 			ClusterID:    1,
 			DataNodes: []meta2.DataNode{
 				meta2.DataNode{
-					meta2.NodeInfo{
+					NodeInfo: meta2.NodeInfo{
 						ID:      1,
 						Host:    "127.0.0.1:8090",
 						TCPHost: "127.0.0.1:8091",
 					},
-					0,
-					0,
+					ConnID:      0,
+					AliveConnID: 0,
 				},
 			},
 			MetaNodes: []meta2.NodeInfo{
@@ -440,7 +440,7 @@ func TestClient_Stream(t *testing.T) {
 		},
 		Dimensions: influxql.Dimensions{
 			{
-				&influxql.VarRef{Val: "tag1", Type: influxql.Tag},
+				Expr: &influxql.VarRef{Val: "tag1", Type: influxql.Tag},
 			},
 		},
 	}

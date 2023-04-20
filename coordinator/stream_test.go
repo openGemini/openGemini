@@ -106,24 +106,24 @@ func TestStreamBuildFieldCall(t *testing.T) {
 	info.Interval = time.Duration(5)
 	info.Calls = []*meta2.StreamCall{
 		{
-			"sum",
-			"fk1",
-			"sum_fk1",
+			Call:  "sum",
+			Field: "fk1",
+			Alias: "sum_fk1",
 		},
 		{
-			"max",
-			"fk2",
-			"max_fk2",
+			Call:  "max",
+			Field: "fk2",
+			Alias: "max_fk2",
 		},
 		{
-			"min",
-			"fk3",
-			"min_fk3",
+			Call:  "min",
+			Field: "fk3",
+			Alias: "min_fk3",
 		},
 		{
-			"count",
-			"fk4",
-			"count_fk2",
+			Call:  "count",
+			Field: "fk4",
+			Alias: "count_fk2",
 		},
 	}
 	infos[info.Name] = info
