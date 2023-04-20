@@ -121,7 +121,7 @@ func TestFilterRecInMemTable(t *testing.T) {
 	sInfo := &seriesInfo{
 		sid:  1,
 		key:  []byte{'a', 'b'},
-		tags: influx.PointTags{{"a", "b", false}},
+		tags: influx.PointTags{{Key: "a", Value: "b", IsArray: false}},
 	}
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -138,7 +138,7 @@ func TestFilterRecInMemTable(t *testing.T) {
 		[]int64{57, 56, 55, 37, 3, 2, 1})
 	s := &fileLoopCursor{}
 	s.ctx = &idKeyCursorContext{
-		tr: record.TimeRange{0, 100},
+		tr: record.TimeRange{Max: 100},
 		m:  map[string]interface{}{},
 	}
 	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true})

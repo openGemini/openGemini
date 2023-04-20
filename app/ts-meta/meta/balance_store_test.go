@@ -43,12 +43,12 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	store.data.CreateDatabase("db0", nil, nil)
 
 	store.data.PtView = map[string]meta.DBPtInfos{
-		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 1, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 2, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 3, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 4, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 5, Owner: meta.PtOwner{n3}, Status: meta.Online},
+		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 1, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 2, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 3, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 4, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 5, Owner: meta.PtOwner{NodeID: n3}, Status: meta.Online},
 		}}
 
 	events := store.selectDbPtsToMove()
@@ -58,12 +58,12 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	assert.Equal(t, uint32(0), events[0].pt.Pti.PtId)
 
 	store.data.PtView = map[string]meta.DBPtInfos{
-		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 1, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 2, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 3, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 4, Owner: meta.PtOwner{n3}, Status: meta.Online},
-			{PtId: 5, Owner: meta.PtOwner{n3}, Status: meta.Online},
+		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 1, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 2, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 3, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 4, Owner: meta.PtOwner{NodeID: n3}, Status: meta.Online},
+			{PtId: 5, Owner: meta.PtOwner{NodeID: n3}, Status: meta.Online},
 		}}
 
 	events = store.selectDbPtsToMove()
@@ -76,12 +76,12 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	assert.Equal(t, n1, events[1].dst)
 
 	store.data.PtView = map[string]meta.DBPtInfos{
-		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 1, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 2, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 3, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 4, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 5, Owner: meta.PtOwner{n2}, Status: meta.Online},
+		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 1, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 2, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 3, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 4, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 5, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
 		}}
 
 	events = store.selectDbPtsToMove()
@@ -91,12 +91,12 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	assert.NotEqual(t, uint32(3), events[0].pt.Pti.PtId)
 
 	store.data.PtView = map[string]meta.DBPtInfos{
-		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 1, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 2, Owner: meta.PtOwner{n3}, Status: meta.Online},
-			{PtId: 3, Owner: meta.PtOwner{n1}, Status: meta.Online},
-			{PtId: 4, Owner: meta.PtOwner{n2}, Status: meta.Online},
-			{PtId: 5, Owner: meta.PtOwner{n2}, Status: meta.Online},
+		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 1, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 2, Owner: meta.PtOwner{NodeID: n3}, Status: meta.Online},
+			{PtId: 3, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+			{PtId: 4, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
+			{PtId: 5, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
 		}}
 
 	events = store.selectDbPtsToMove()
