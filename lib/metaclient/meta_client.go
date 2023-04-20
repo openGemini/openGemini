@@ -2686,7 +2686,7 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 		if measurement, ok := rp.Measurements[nameWithVer]; ok {
 			row := &models.Row{
 				Name:    "Column Information",
-				Columns: []string{"ColName", "Type", "Tag/Filed"}}
+				Columns: []string{"ColName", "Type", "Tag/Field"}}
 			for name, t := range measurement.Schema {
 				if t == influx.Field_Type_Tag {
 					row.Values = append(row.Values, []interface{}{name, "string", "Tag"})
@@ -2694,6 +2694,15 @@ func (c *Client) QueryMeasurement(database string, ms string) (models.Rows, erro
 					fields = append(fields, []interface{}{name, influx.FieldTypeString(t), "Field"})
 				}
 			}
+
+			sort.SliceStable(row.Values, func(i, j int) bool {
+				return row.Values[i][0].(string) < row.Values[j][0].(string)
+			})
+
+			sort.SliceStable(fields, func(i, j int) bool {
+				return fields[i][0].(string) < fields[j][0].(string)
+			})
+
 			row.Values = append(row.Values, fields...)
 
 			rows := make([]*models.Row, 0)
