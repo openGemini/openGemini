@@ -48,4 +48,5 @@ func bindFlags(cmd *cobra.Command, c *geminicli.CommandLineConfig) {
 	cmd.PersistentFlags().BoolVar(&c.IgnoreSsl, "unsafeSsl", true, "Ignore ssl verification when connecting openGemini by https.")
 	cmd.PersistentFlags().BoolVar(&c.Import, "import", false, "Import a previous database export from file")
 	cmd.PersistentFlags().StringVar(&c.ImportConfig.Path, "path", "", "Path to the file to import to OpenGemini.")
+	cmd.PersistentFlags().StringVar(&c.ImportConfig.Precision, "precision", "ns", "Specify the format of the timestamp:  rfc3339, h, m, s, ms, u or ns.")
 }
