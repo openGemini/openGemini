@@ -44,7 +44,7 @@
     git add .
     
     // 提交暂存区到本地仓库，增加-s参数，自动签名
-    git commit -m -s "<your commit message>"
+    git commit -s -m "<your commit message>"
     ```
    其中，`<your commit message>`是您的提交信息，需要遵循以下命名规范：
    - feat: feature的缩写, 新的功能或特性
@@ -55,6 +55,8 @@
    - perf: performance的缩写, 提升代码性能
    - test: 测试文件的修改
    - chore: 其他的小改动. 一般为仅仅一两行的改动, 或者连续几次提交的小改动属于这种
+   
+   更多详细信息，您可以参考[约定式提交](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。
 
 8. 将您的分支推送到Github
 

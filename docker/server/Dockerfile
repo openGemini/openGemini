@@ -1,5 +1,6 @@
-FROM openeuler/openeuler
+FROM ubuntu:18.04
 
+RUN apt-get update && apt-get install -y net-tools
 
 RUN mkdir -p /opt/openGemini /var/log/openGemini/ \
     && chmod ugo+Xrw -R /opt/openGemini \
