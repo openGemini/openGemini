@@ -358,9 +358,10 @@ func getCacheLimitSize(size uint64) uint64 {
 }
 
 type ClvConfig struct {
-	QMax int    `toml:"q_max"`
-	T    int    `toml:"t"`
-	N    uint32 `toml:"n"`
+	QMax    int    `toml:"q_max"`
+	T       int    `toml:"t"`
+	N       uint32 `toml:"n"`
+	Enabled bool   `toml:"enabled"`
 }
 
 func NewClvConfig() *ClvConfig {

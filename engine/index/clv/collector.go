@@ -31,7 +31,7 @@ var T = 100
 var N uint32 = 500000
 
 func Init(cfg *config.ClvConfig) {
-	if cfg != nil {
+	if cfg != nil && cfg.Enabled {
 		Qmax = cfg.QMax
 		T = cfg.T
 		N = cfg.N
