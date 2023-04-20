@@ -140,6 +140,13 @@ func TestParser(t *testing.T) {
 				Size: 1000,
 			},
 		},
+		{
+			name: "set precision",
+			cmd:  "precision ns",
+			expect: &PrecisionStatement{
+				Precision: "ns",
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ast := &QLAst{}

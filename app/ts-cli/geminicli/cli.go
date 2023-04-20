@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,12 +38,11 @@ import (
 )
 
 const (
-	CLIENT_VERSION    = "0.1.0"
-	DEFAULT_PRECISION = "ns"
-	DEFAULT_FORMAT    = "column"
-	batchSize         = 5000
-	DEFAULT_HOST      = "localhost"
-	DEFAULT_PORT      = 8086
+	CLIENT_VERSION = "0.1.0"
+	DEFAULT_FORMAT = "column"
+	batchSize      = 5000
+	DEFAULT_HOST   = "localhost"
+	DEFAULT_PORT   = 8086
 )
 
 var (
@@ -62,6 +60,7 @@ type CommandLineConfig struct {
 	Ssl        bool
 	IgnoreSsl  bool
 	Import     bool
+	Precision  string
 
 	Client       *client.Client
 	ClientConfig client.Config // Client config options.
@@ -73,6 +72,7 @@ type HttpClient interface {
 	Ping() (time.Duration, string, error)
 	QueryContext(context.Context, client.Query) (*client.Response, error)
 	Write(bp client.BatchPoints) (*client.Response, error)
+	SetPrecision(precision string)
 }
 
 type HttpClientCreator func(client.Config) (HttpClient, error)
@@ -104,8 +104,7 @@ func (f CommandLineFactory) CreateCommandLine(config CommandLineConfig) (*Comman
 	c.config.Username = config.Username
 	c.config.Password = config.Password
 	c.config.UnsafeSsl = config.IgnoreSsl
-
-	c.config.Precision = DEFAULT_PRECISION
+	c.config.Precision = config.Precision
 
 	c.database = config.Database
 
@@ -223,6 +222,8 @@ func (c *CommandLine) executeOnLocal(stmt geminiql.Statement) error {
 		return c.executeChunked(stmt)
 	case *geminiql.ChunkSizeStatement:
 		return c.executeChunkSize(stmt)
+	case *geminiql.PrecisionStatement:
+		return c.executePrecision(stmt)
 	default:
 		return fmt.Errorf("unsupport stmt %s", stmt)
 	}
@@ -240,6 +241,21 @@ func (c *CommandLine) executeInsert(stmt *geminiql.InsertStatement) error {
 	if _, err := c.client.Write(*bp); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (c *CommandLine) executePrecision(stmt *geminiql.PrecisionStatement) error {
+	if stmt.Precision == "" {
+		stmt.Precision = "ns"
+	}
+	if stmt.Precision != "rfc3339" && stmt.Precision != "h" && stmt.Precision != "m" && stmt.Precision != "s" && stmt.Precision != "ms" && stmt.Precision != "u" && stmt.Precision != "ns" {
+		return fmt.Errorf("precision must be rfc3339, h, m, s, ms, u or ns")
+	} else if stmt.Precision == "rfc3339" {
+		stmt.Precision = ""
+	}
+	c.config.Precision = stmt.Precision
+	// set precision for client
+	c.client.SetPrecision(c.config.Precision)
 	return nil
 }
 
@@ -326,8 +342,6 @@ func (c *CommandLine) executeChunkSize(stmt *geminiql.ChunkSizeStatement) error 
 	if stmt.Size < 0 {
 		fmt.Printf("No allowed chunk size smaller than 0. Chunk size has been set to 0.")
 		c.chunkSize = 0
-	} else if math.MaxInt64 < stmt.Size {
-		fmt.Printf("allow max size is %v", math.MaxInt64)
 	} else {
 		c.chunkSize = int(stmt.Size)
 	}

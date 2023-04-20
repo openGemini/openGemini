@@ -65,6 +65,12 @@ type SetStatement struct {
 	KVS []Pair
 }
 
+type PrecisionStatement struct {
+	Precision string
+}
+
+func (s *PrecisionStatement) stmt() {}
+
 func (s *SetStatement) stmt() {}
 
 type ChunkedStatement struct {
