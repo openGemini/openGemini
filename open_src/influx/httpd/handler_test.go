@@ -19,7 +19,7 @@ var addr = "127.0.0.2:8901"
 func mockHTTPServer(t *testing.T) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		t.Fatalf("%v", err)
+		t.Error(err)
 	}
 
 	h := &Handler{
@@ -38,7 +38,7 @@ func mockHTTPServer(t *testing.T) {
 
 	err = http.Serve(ln, h)
 	if err != nil && !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("listener failed: addr=%s, err=%s", ln.Addr(), err)
+		t.Errorf("listener failed: addr=%s, err=%s", ln.Addr(), err)
 	}
 }
 

@@ -71,7 +71,7 @@ func mockStorage() *storage.Storage {
 func mockHTTPServer(server *Server, authEnabled bool, addr string, t *testing.T) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		t.Fatalf("%v", err)
+		t.Error(err)
 	}
 
 	pusher := mockStatisticsPusher(server)
@@ -87,7 +87,7 @@ func mockHTTPServer(server *Server, authEnabled bool, addr string, t *testing.T)
 
 	err = http.Serve(ln, h)
 	if err != nil && !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("listener failed: addr=%s, err=%s", ln.Addr(), err)
+		t.Errorf("listener failed: addr=%s, err=%s", ln.Addr(), err)
 	}
 }
 

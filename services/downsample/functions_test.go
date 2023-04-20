@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package downsample
 
 import (
@@ -169,8 +170,8 @@ func TestMocService(t *testing.T) {
 	}
 	s.MetaClient.(*mocMetaClient).AddMeasurementInfos(mstInfo, "db0", "rp0")
 	s.Engine = NewMocEngine([]*meta.ShardDownSamplePolicyInfo{
-		{"db0", "rp0", 1, 1, 2, 1, &meta.ShardIdentifier{
-			1, 1, "rp0", "db0", 1, "hash", 0, 0, true}},
+		{DbName: "db0", RpName: "rp0", ShardId: 1, PtId: 1, TaskID: 2, DownSamplePolicyLevel: 1, Ident: &meta.ShardIdentifier{
+			ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 1, ShardType: "hash", ReadOnly: true}},
 	})
 	s.Engine.(*mocEngine).DownSamplePolicies["db0"+"."+"rp0"] = &meta.StoreDownSamplePolicy{
 		Info: policy,

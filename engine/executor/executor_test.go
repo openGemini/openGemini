@@ -122,7 +122,7 @@ func ParseChunkTagsNew(kv [][]string) *executor.ChunkTags {
 		if len(kv[i]) != 2 {
 			continue
 		}
-		m = append(m, influx.Tag{kv[i][0], kv[i][1], false})
+		m = append(m, influx.Tag{Key: kv[i][0], Value: kv[i][1]})
 	}
 	sort.Sort(&m)
 	return executor.NewChunkTags(m, ss)

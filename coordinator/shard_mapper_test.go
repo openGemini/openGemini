@@ -334,7 +334,7 @@ func TestMapMstShards(t *testing.T) {
 	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
 	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
 	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
-	shards1 := []meta.ShardInfo{{1, []uint32{0}, "", "", util.Hot, 1, 0, 0, false, false}}
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
 	csm := &ClusterShardMapper{
 		Logger: logger.NewLogger(1),
 	}

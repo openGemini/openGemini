@@ -52,7 +52,7 @@ func TestCompactLimitWriter(t *testing.T) {
 			for i := 0; i < 10; i++ {
 				n, err := lw.Write(b)
 				if err != nil {
-					t.Fatal(err)
+					t.Error(err)
 				}
 				wn += n
 			}
@@ -83,7 +83,7 @@ func TestCompactLimitWriter(t *testing.T) {
 			for i := 0; i < 10; i++ {
 				n, err := lw.Write(b)
 				if err != nil {
-					t.Fatal(err)
+					t.Error(err)
 				}
 				wn += n
 			}

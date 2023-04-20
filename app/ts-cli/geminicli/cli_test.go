@@ -26,6 +26,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCommandLine_executeChunkSize(t *testing.T) {
+	//  create CommandLine object and ChunkSizeStatement object
+	c := &CommandLine{}
+	stmt1 := &geminiql.ChunkSizeStatement{Size: 1024}
+	stmt2 := &geminiql.ChunkSizeStatement{Size: -1}
+
+	// test ChunkSize in range
+	err := c.executeChunkSize(stmt1)
+	if err != nil {
+		t.Errorf("executeChunkSize() returned error: %v", err)
+	}
+	if c.chunkSize != 1024 {
+		t.Errorf("Expected chunkSize %v, but got %v", 1024, c.chunkSize)
+	}
+
+	// test minus ChunkSize
+	err = c.executeChunkSize(stmt2)
+	if err != nil {
+		t.Errorf("executeChunkSize() returned error: %v", err)
+	}
+	if c.chunkSize != 0 {
+		t.Errorf("Expected chunkSize %v, but got %v", 0, c.chunkSize)
+	}
+}
+
 type mockClient struct{}
 
 func (m mockClient) Ping() (time.Duration, string, error) {
