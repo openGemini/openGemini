@@ -790,24 +790,56 @@ func TestServer_Write_LineProtocol_String(t *testing.T) {
 	s := OpenServer(NewParseConfig(testCfgPath))
 	defer s.Close()
 
-	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 1*time.Hour), true); err != nil {
-		t.Fatal(err)
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: `cpu,host=server01 value="disk mem" 1610467200000000000
+cpu,host=server01 value="disk\ mem" 1610467300000000000
+cpu,host=server01 value="disk\\ mem" 1610467400000000000
+cpu,host=server01 value="disk\\\ mem" 1610467500000000000
+cpu,host=server01 value="disk\\\\ mem" 1610467600000000000
+
+cpu,host=server01 value="disk\ mem\ host " 1610467700000000000
+cpu,host=server01 value="disk\ mem\\ host " 1610467800000000000
+cpu,host=server01 value="disk\ mem\\\ host " 1610467900000000000
+cpu,host=server01 value="disk\ mem\\\\ host " 1610468000000000000
+
+cpu,host=server01 value="disk\\ mem\ host " 1610468100000000000
+cpu,host=server01 value="disk\\ mem\\ host " 1610468200000000000
+
+cpu,host=server01 value="disk\\\ mem\ host " 1610468300000000000
+cpu,host=server01 value="disk\\\\ mem\ host " 1610468400000000000
+
+cpu,host=server01 value="disk\" mem\\\"" 1610468500000000000
+cpu,host=server01 value="disk\" mem\\\" host\\" 1610468600000000000
+`},
 	}
 
-	now := now()
-	if res, err := s.Write("db0", "rp0", `cpu,host=server01 value="disk full" `+strconv.FormatInt(now.UnixNano(), 10), nil); err != nil {
-		t.Fatal(err)
-	} else if exp := ``; exp != res {
-		t.Fatalf("unexpected results\nexp: %s\ngot: %s\n", exp, res)
+	test.addQueries([]*Query{
+		&Query{
+			name:    "SELECT * FROM db0.rp0.cpu",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM db0.rp0.cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","host","value"],"values":[["2021-01-12T16:00:00Z","server01","disk mem"],["2021-01-12T16:01:40Z","server01","disk\\ mem"],["2021-01-12T16:03:20Z","server01","disk\\ mem"],["2021-01-12T16:05:00Z","server01","disk\\\\ mem"],["2021-01-12T16:06:40Z","server01","disk\\\\ mem"],["2021-01-12T16:08:20Z","server01","disk\\ mem\\ host "],["2021-01-12T16:10:00Z","server01","disk\\ mem\\ host "],["2021-01-12T16:11:40Z","server01","disk\\ mem\\\\ host "],["2021-01-12T16:13:20Z","server01","disk\\ mem\\\\ host "],["2021-01-12T16:15:00Z","server01","disk\\ mem\\ host "],["2021-01-12T16:16:40Z","server01","disk\\ mem\\ host "],["2021-01-12T16:18:20Z","server01","disk\\\\ mem\\ host "],["2021-01-12T16:20:00Z","server01","disk\\\\ mem\\ host "],["2021-01-12T16:21:40Z","server01","disk\" mem\\\""],["2021-01-12T16:23:20Z","server01","disk\" mem\\\" host\\"]]}]}]}`,
+		},
+	}...)
+
+	if err := test.init(s); err != nil {
+		t.Fatalf("test init failed: %s", err)
 	}
 
 	http.Post(s.URL()+"/debug/ctrl?mod=flush", "", nil)
 
-	// Verify the data was written.
-	if res, err := s.Query(`SELECT * FROM db0.rp0.cpu GROUP BY *`); err != nil {
-		t.Fatal(err)
-	} else if exp := fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"host":"server01"},"columns":["time","value"],"values":[["%s","disk full"]]}]}]}`, now.Format(time.RFC3339Nano)); exp != res {
-		t.Fatalf("unexpected results\nexp: %s\ngot: %s\n", exp, res)
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
 	}
 }
 
