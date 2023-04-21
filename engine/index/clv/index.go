@@ -565,6 +565,10 @@ func queryStrToPattern(queryStr string) string {
 		} else {
 			sb.WriteByte(queryStr[i])
 		}
+
+		if i+1 == len(queryStr) {
+			sb.WriteString("$")
+		}
 	}
 
 	return sb.String()

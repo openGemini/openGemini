@@ -28,6 +28,7 @@ import (
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -176,7 +177,8 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
 	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
 	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
-
+	// init clv
+	clv.Init(conf.ClvConfig)
 	// init chunkReader resource allocator.
 	if e := resourceallocator.InitResAllocator(int64(conf.Data.ChunkReaderThreshold), int64(conf.Data.MinChunkReaderConcurrency), int64(conf.Data.MinShardsConcurrency),
 		resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0); e != nil {

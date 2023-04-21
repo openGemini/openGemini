@@ -23,13 +23,20 @@ import (
 	"sync/atomic"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/openGemini/openGemini/lib/config"
 )
 
-const (
-	Qmax = 7
-	T    = 100
-	N    = 500000
-)
+var Qmax = 7
+var T = 100
+var N uint32 = 500000
+
+func Init(cfg *config.ClvConfig) {
+	if cfg != nil {
+		Qmax = cfg.QMax
+		T = cfg.T
+		N = cfg.N
+	}
+}
 
 // the status of collector
 const (
