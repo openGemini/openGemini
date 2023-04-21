@@ -234,6 +234,7 @@ func NewTokenIndex(opts *Options) (*TokenIndex, error) {
 	var version uint32
 	version, err = idx.searchDicVersion()
 	if err != nil {
+		idx.Close()
 		return nil, err
 	}
 
@@ -246,6 +247,7 @@ func NewTokenIndex(opts *Options) (*TokenIndex, error) {
 	analyzerPath = analyzerPath + "directory"
 	idx.analyzer, err = GetAnalyzer(analyzerPath, opts.Measurement, opts.Field, version)
 	if err != nil {
+		idx.Close()
 		return nil, err
 	}
 
@@ -253,6 +255,7 @@ func NewTokenIndex(opts *Options) (*TokenIndex, error) {
 	if version == Unknown {
 		err = idx.writeDicVersion(idx.analyzer.Version())
 		if err != nil {
+			idx.Close()
 			return nil, err
 		}
 	}
