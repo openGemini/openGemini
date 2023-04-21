@@ -1412,10 +1412,44 @@ func parseFieldStrValue(s string) (string, error) {
 		if len(s) < 2 || s[len(s)-1] != '"' {
 			return "", fmt.Errorf("missing closing quote for quoted field value %s", s)
 		}
-		// Try converting quoted string to number, since sometimes Influx agents
-		// send numbers as strings.
 		s = s[1 : len(s)-1]
-		return s, nil
+		n := strings.IndexByte(s, '\\')
+		if n < 0 {
+			// no '\' escape chars
+			return s, nil
+		}
+		// Try to unquote string, since sometimes insert escape chars.
+		// s: "disk\" mem\\\" cpu\ host\\ server\\\"
+		var ret strings.Builder
+		for ; n >= 0; n = strings.IndexByte(s, '\\') {
+			origN := n
+			// count the slashes
+			slashes := 1
+			for n < len(s)-1 && s[n+1] == '\\' {
+				slashes++
+				n++
+			}
+			if n < len(s)-1 && s[n+1] == '"' {
+				// next char is '"', no need keep one '/'
+				ret.WriteString(s[:origN+slashes/2])
+				ret.WriteByte('"')
+				n++
+			} else {
+				// next char is not '"', keep one '/' at last
+				if slashes&1 == 0 {
+					ret.WriteString(s[:origN+slashes/2])
+				} else {
+					ret.WriteString(s[:origN+slashes/2+1])
+				}
+			}
+			if n < len(s)-1 {
+				s = s[n+1:]
+				continue
+			}
+			s = ""
+		}
+		ret.WriteString(s)
+		return ret.String(), nil
 	}
 	return "", nil
 }
