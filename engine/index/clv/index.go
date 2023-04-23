@@ -653,7 +653,10 @@ func (idx *TokenIndex) Fuzzy(queryStr string) (*InvertIndex, error) {
 		invert = UnionInvertIndex(invertIndex, invert)
 	}
 
-	invert.Sort()
+	if invert != nil {
+		invert.Sort()
+	}
+
 	return invert, nil
 }
 
