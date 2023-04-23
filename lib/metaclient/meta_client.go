@@ -395,7 +395,10 @@ func (c *Client) SetMetaServers(a []string) {
 func (c *Client) SetTLS(v bool) { c.tls = v }
 
 // Ping will hit the ping endpoint for the metaservice and return nil if
-// it returns 200. If checkAllMetaServers is set to true, it will hit the
+// it returns 200. If checkAllMetaServers is 
+
+
+to true, it will hit the
 // ping endpoint and tell it to verify the health of all metaservers in the
 // cluster
 func (c *Client) Ping(checkAllMetaServers bool) error {
