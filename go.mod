@@ -47,6 +47,7 @@ require (
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
 	google.golang.org/protobuf v1.27.1
 	gopkg.in/natefinch/lumberjack.v2 v2.0.1-0.20190411184413-94d9e492cc53
+	github.com/deckarep/golang-set v1.8.0
 )
 
 replace github.com/openGemini/openGemini/open_src/influx/influxql => ./protocol/influxql
