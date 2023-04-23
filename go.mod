@@ -43,6 +43,7 @@ require (
 	golang.org/x/crypto v0.5.0
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	golang.org/x/sys v0.4.0
+	golang.org/x/term v0.4.0
 	golang.org/x/text v0.6.0
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
 	google.golang.org/protobuf v1.27.1

@@ -67,6 +67,8 @@ func (m mockClient) Write(bp client.BatchPoints) (*client.Response, error) {
 
 func (m mockClient) SetPrecision(precision string) {}
 
+func (m mockClient) SetAuth(username, password string) {}
+
 func TestPrecisionParser(t *testing.T) {
 	gFlags := CommandLineConfig{}
 	factory := CommandLineFactory{}
