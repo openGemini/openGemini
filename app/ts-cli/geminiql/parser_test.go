@@ -141,6 +141,11 @@ func TestParser(t *testing.T) {
 			},
 		},
 		{
+			name:   "auth with username & passowrd",
+			cmd:    "auth",
+			expect: &AuthStatement{},
+		},
+		{
 			name: "set precision",
 			cmd:  "precision ns",
 			expect: &PrecisionStatement{

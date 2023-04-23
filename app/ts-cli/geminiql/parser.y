@@ -43,7 +43,7 @@ func updateStmt(QLlex interface{}, stmt Statement) {
 // any non-terminal which returns a value needs a type, which is
 // really a field name in the above union struct
 %type <stmts> STATEMENTS
-%type <stmt> INSERT_STATEMENT USE_STATEMENT SET_STATEMENT CHUNKED_STATEMENT CHUNK_SIZE_STATEMENT PRECISION_STATEMENT
+%type <stmt> INSERT_STATEMENT USE_STATEMENT SET_STATEMENT CHUNKED_STATEMENT CHUNK_SIZE_STATEMENT AUTH_STATEMENT PRECISION_STATEMENT
 %type <str> LINE_PROTOCOL TIME_SERIE MEASUREMENT KV_RAW KV_RAWS TIME
 %type <integer> NUM_CHUNK_SIZE
 %type <strslice> NAMESPACE
@@ -51,7 +51,7 @@ func updateStmt(QLlex interface{}, stmt Statement) {
 %type <pairs> KEY_VALUES
 
 // same for terminals
-%token <str> INSERT INTO USE SET CHUNKED CHUNK_SIZE PRECISION
+%token <str> INSERT INTO USE SET CHUNKED CHUNK_SIZE AUTH PRECISION
 %token <str> DOT COMMA
 %token <str> EQ
 %token <str> IDENT
@@ -80,6 +80,10 @@ STATEMENTS:
         updateStmt(QLlex, $1)
     }
     |CHUNK_SIZE_STATEMENT
+    {
+        updateStmt(QLlex, $1)
+    }
+    |AUTH_STATEMENT
     {
         updateStmt(QLlex, $1)
     }
@@ -158,6 +162,13 @@ NUM_CHUNK_SIZE:
     INTEGER
     {
         $$ = $1
+    }
+
+AUTH_STATEMENT:
+    AUTH
+    {
+        stmt := &AuthStatement{}
+        $$ = stmt
     }
 
 PRECISION_STATEMENT:
