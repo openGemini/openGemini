@@ -112,14 +112,14 @@ func TestShowTagValuesExecutor(t *testing.T) {
 func TestApplyLimit(t *testing.T) {
 	e := &ShowTagValuesExecutor{}
 	data := netstorage.TagSets{
-		{"a", "aaa"},
-		{"b", "bbb"},
-		{"a", "aaa111"},
-		{"a", "aaa"},
-		{"b", "bbb"},
-		{"b", "bbb111"},
-		{"b", "bbb"},
-		{"c", "ccc"},
+		{Key: "a", Value: "aaa"},
+		{Key: "b", Value: "bbb"},
+		{Key: "a", Value: "aaa111"},
+		{Key: "a", Value: "aaa"},
+		{Key: "b", Value: "bbb"},
+		{Key: "b", Value: "bbb111"},
+		{Key: "b", Value: "bbb"},
+		{Key: "c", Value: "ccc"},
 	}
 
 	format := "limit failed. exp: len=%d, got: len=%d"
@@ -187,9 +187,9 @@ func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map
 		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
 			Name: "mst",
 			Values: netstorage.TagSets{
-				{"author", "petter"},
-				{"author", "van"},
-				{"author", "san"},
+				{Key: "author", Value: "petter"},
+				{Key: "author", Value: "van"},
+				{Key: "author", Value: "san"},
 			},
 		}), nil
 	}
@@ -198,8 +198,8 @@ func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map
 		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
 			Name: "mst_2",
 			Values: netstorage.TagSets{
-				{"author", "mao"},
-				{"author", "tai"},
+				{Key: "author", Value: "mao"},
+				{Key: "author", Value: "tai"},
 			},
 		}), nil
 	}
@@ -214,9 +214,9 @@ func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map
 	return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
 		Name: "mst",
 		Values: netstorage.TagSets{
-			{"author", "mao"},
-			{"author", "tai"},
-			{"author", "san"},
+			{Key: "author", Value: "mao"},
+			{Key: "author", Value: "tai"},
+			{Key: "author", Value: "san"},
 		},
 	}), nil
 }

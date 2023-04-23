@@ -71,6 +71,38 @@ func TestUnmarshalRows_error(t *testing.T) {
 	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], `missing tag value for "hostname"`)
 	req = "cpu,hostname=,region=eu-west-1 usage_user=58i,usage_system=2i 1622851200000000000\ncpu,hostname,region usage_user=47i,usage_system=93i 1622851200000000000\ncpu,hostname=host_2,region=eu-central-1  usage_user=93i,usage_system=39i 1622851200000000000\n"
 	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+
+	req = `cpu,host=server01 value="disk mem" 1610467200000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\ mem" 1610467300000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\ mem" 1610467400000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\\ mem" 1610467500000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\\\ mem" 1610467600000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\ mem\ host " 1610467700000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\ mem\\ host " 1610467800000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\ mem\\\ host " 1610467900000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\ mem\\\\ host " 1610468000000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\ mem\ host " 1610468100000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\ mem\\ host " 1610468200000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\\ mem\ host " 1610468300000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\\\\ mem\ host " 1610468400000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\" mem\\\"" 1610468500000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	req = `cpu,host=server01 value="disk\" mem\\\" host\\" 1610468600000000000`
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+
 }
 
 func TestNextUnquotedChar(t *testing.T) {

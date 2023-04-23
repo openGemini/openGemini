@@ -360,7 +360,6 @@ func Test_SlimChunk(t *testing.T) {
 	assert.Equal(t, chunk.Column(1).FloatValues(), []float64{1.0, 3.0, 5.0})
 
 	chunk.CheckChunk()
-	chunk.String()
 }
 
 func TestTargetTable(t *testing.T) {
