@@ -42,6 +42,7 @@ require (
 	go.uber.org/zap v1.19.1
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 	golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f
+	golang.org/x/term v0.0.0-20220526004731-065cf7ba2467
 	golang.org/x/text v0.4.0
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
 	google.golang.org/protobuf v1.27.1

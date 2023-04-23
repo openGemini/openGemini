@@ -83,3 +83,8 @@ type ChunkSizeStatement struct {
 }
 
 func (s *ChunkSizeStatement) stmt() {}
+
+type AuthStatement struct {
+}
+
+func (s *AuthStatement) stmt() {}

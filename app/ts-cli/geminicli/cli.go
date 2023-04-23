@@ -35,6 +35,7 @@ import (
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/openGemini/openGemini/app/ts-cli/geminiql"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"golang.org/x/term"
 )
 
 const (
@@ -72,6 +73,7 @@ type HttpClient interface {
 	Ping() (time.Duration, string, error)
 	QueryContext(context.Context, client.Query) (*client.Response, error)
 	Write(bp client.BatchPoints) (*client.Response, error)
+	SetAuth(username, password string)
 	SetPrecision(precision string)
 }
 
@@ -222,6 +224,8 @@ func (c *CommandLine) executeOnLocal(stmt geminiql.Statement) error {
 		return c.executeChunked(stmt)
 	case *geminiql.ChunkSizeStatement:
 		return c.executeChunkSize(stmt)
+	case *geminiql.AuthStatement:
+		return c.executeAuth(stmt)
 	case *geminiql.PrecisionStatement:
 		return c.executePrecision(stmt)
 	default:
@@ -345,6 +349,17 @@ func (c *CommandLine) executeChunkSize(stmt *geminiql.ChunkSizeStatement) error 
 	} else {
 		c.chunkSize = int(stmt.Size)
 	}
+	return nil
+}
+
+func (c *CommandLine) executeAuth(stmt *geminiql.AuthStatement) error {
+	fmt.Printf("username: ")
+	fmt.Scanf("%s\n", &c.config.Username)
+	fmt.Printf("password: ")
+	password, _ := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Printf("\n")
+	c.config.Password = string(password)
+	c.client.SetAuth(c.config.Username, c.config.Password)
 	return nil
 }
 
