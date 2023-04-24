@@ -1545,7 +1545,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 		sgi.Shards = make([]ShardInfo, shardN)
 	}
 
-	//check index group contain this shard group
+	// check index group contain this shard group
 	igi := data.createIndexGroupIfNeeded(rpi, timestamp)
 
 	for i := range sgi.Shards {
