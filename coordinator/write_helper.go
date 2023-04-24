@@ -17,6 +17,7 @@ limitations under the License.
 package coordinator
 
 import (
+	"errors"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -84,6 +85,9 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 
 	// check tag need to add or not
 	for i, tag := range r.Tags {
+		if tag.Key == "time" {
+			return fieldToCreatePool, true, errors.New("tag key can't be 'time'")
+		}
 		if err := r.CheckDuplicateTag(i); err != nil {
 			return fieldToCreatePool, true, err
 		}
