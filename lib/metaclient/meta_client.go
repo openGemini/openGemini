@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	set "github.com/deckarep/golang-set"
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
@@ -42,7 +43,6 @@ import (
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	util "github.com/openGemini/openGemini/lib/util"
-	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
