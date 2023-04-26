@@ -750,92 +750,20 @@ func flushChunkImp(dataPath, msName string, lockPath *string, totalChunks int, t
 	unOrderRec := chunk.UnOrderWriteRec.GetRecord()
 	conf := immutable.NewConfig()
 	var err error
-	if orderRec.RowNums() != 0 {
-		if orderMs == nil {
-			orderFileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, true, lockPath)
-			orderMs = immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks,
-				orderFileName, tbStore.Tier(), tbStore.Sequencer(), orderRec.Len())
-		}
 
-		orderMs, err = orderMs.WriteRecord(chunk.Sid, orderRec, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
-			return tbStore.NextSequence(), 0, 0, 0
-		})
-		if err != nil {
-			tbStore.UnRefSequencer()
-			panic(err)
-		}
-		atomic.AddInt64(&statistics.PerfStat.FlushRowsCount, int64(orderRec.RowNums()))
-		atomic.AddInt64(&statistics.PerfStat.FlushOrderRowsCount, int64(orderRec.RowNums()))
+	orderMs, err = writeRecordToTssp(dataPath, msName, lockPath, totalChunks, tbStore, chunk, orderMs, conf, orderRec, true)
+	if err != nil {
+		panic(err)
 	}
 
-	if unOrderRec.RowNums() != 0 {
-		if unOrderMs == nil {
-			disorderFileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, false, lockPath)
-			unOrderMs = immutable.NewMsBuilder(dataPath, msName, lockPath, conf,
-				totalChunks, disorderFileName, tbStore.Tier(), tbStore.Sequencer(), unOrderRec.Len())
-		}
-
-		unOrderMs, err = unOrderMs.WriteRecord(chunk.Sid, unOrderRec, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
-			return tbStore.NextSequence(), 0, 0, 0
-		})
-		if err != nil {
-			tbStore.UnRefSequencer()
-			panic(err)
-		}
-
-		atomic.AddInt64(&statistics.PerfStat.FlushRowsCount, int64(unOrderRec.RowNums()))
-		atomic.AddInt64(&statistics.PerfStat.FlushUnOrderRowsCount, int64(unOrderRec.RowNums()))
+	unOrderMs, err = writeRecordToTssp(dataPath, msName, lockPath, totalChunks, tbStore, chunk, unOrderMs, conf, unOrderRec, false)
+	if err != nil {
+		panic(err)
 	}
 
 	if finish {
-		if orderMs != nil {
-			f, err := orderMs.NewTSSPFile(true)
-			if err != nil {
-				tbStore.UnRefSequencer()
-				panic(err)
-			}
-			if f != nil {
-				orderMs.Files = append(orderMs.Files, f)
-			}
-
-			if err = immutable.RenameTmpFiles(orderMs.Files); err != nil {
-				if os.IsNotExist(err) {
-					orderMs = nil
-					unOrderMs = nil
-					tbStore.UnRefSequencer()
-					logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
-					return orderMs, unOrderMs
-				}
-				panic(err)
-			}
-			tbStore.AddTSSPFiles(orderMs.Name(), true, orderMs.Files...)
-			orderMs = nil
-			tbStore.UnRefSequencer()
-		}
-
-		if unOrderMs != nil {
-			f, err := unOrderMs.NewTSSPFile(true)
-			if err != nil {
-				tbStore.UnRefSequencer()
-				panic(err)
-			}
-			if f != nil {
-				unOrderMs.Files = append(unOrderMs.Files, f)
-			}
-			if err = immutable.RenameTmpFiles(unOrderMs.Files); err != nil {
-				if os.IsNotExist(err) {
-					orderMs = nil
-					unOrderMs = nil
-					tbStore.UnRefSequencer()
-					logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
-					return orderMs, unOrderMs
-				}
-				panic(err)
-			}
-			tbStore.AddTSSPFiles(unOrderMs.Name(), false, unOrderMs.Files...)
-			unOrderMs = nil
-			tbStore.UnRefSequencer()
-		}
+		orderMs = RenameTempFiles(msName, orderMs, tbStore, true)
+		unOrderMs = RenameTempFiles(msName, unOrderMs, tbStore, false)
 	}
 
 	return orderMs, unOrderMs
@@ -1854,4 +1782,54 @@ func decodeShardPath(shardPath string) (database, retentionPolicy string) {
 	_, db := filepath.Split(filepath.Clean(path))
 
 	return db, rp
+}
+
+func writeRecordToTssp(dataPath, msName string, lockPath *string, totalChunks int, tbStore immutable.TablesStore, chunk *mutable.WriteChunk,
+	dataMs *immutable.MsBuilder, conf *immutable.Config, dataRec *record.Record, isOrder bool) (*immutable.MsBuilder, error) {
+	var err error
+	recRow := dataRec.RowNums()
+	if recRow != 0 {
+		if dataMs == nil {
+			dataFileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, isOrder, lockPath)
+			dataMs = immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks,
+				dataFileName, tbStore.Tier(), tbStore.Sequencer(), dataRec.Len())
+		}
+
+		dataMs, err = dataMs.WriteRecord(chunk.Sid, dataRec, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
+			return tbStore.NextSequence(), 0, 0, 0
+		})
+		if err != nil {
+			tbStore.UnRefSequencer()
+			panic(err)
+		}
+		atomic.AddInt64(&statistics.PerfStat.FlushRowsCount, int64(recRow))
+		atomic.AddInt64(&statistics.PerfStat.FlushOrderRowsCount, int64(recRow))
+	}
+	return dataMs, err
+}
+
+func RenameTempFiles(msName string, dataMs *immutable.MsBuilder, tbStore immutable.TablesStore, isOrder bool) *immutable.MsBuilder {
+	if dataMs != nil {
+		f, err := dataMs.NewTSSPFile(true)
+		if err != nil {
+			tbStore.UnRefSequencer()
+			panic(err)
+		}
+		if f != nil {
+			dataMs.Files = append(dataMs.Files, f)
+		}
+
+		if err = immutable.RenameTmpFiles(dataMs.Files); err != nil {
+			if os.IsNotExist(err) {
+				dataMs = nil
+				tbStore.UnRefSequencer()
+				logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
+			}
+			panic(err)
+		}
+		tbStore.AddTSSPFiles(dataMs.Name(), isOrder, dataMs.Files...)
+		dataMs = nil
+		tbStore.UnRefSequencer()
+	}
+	return dataMs
 }
