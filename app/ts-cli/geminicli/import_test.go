@@ -125,7 +125,7 @@ func TestCommandLineConfig_Run(t *testing.T) {
 	if err3 == nil {
 		t.Errorf("Expected error but got nil")
 	}
-	if err3.Error() != "precision must be rfc3339, h, m, s, ms, u or ns" {
+	if err3.Error() != "ERROR: unknown precision \"\". precision must be rfc3339, h, m, s, ms, u or ns" {
 		t.Errorf("Expected error message not found")
 	}
 }
@@ -217,4 +217,42 @@ func TestWriteLineProtocol(t *testing.T) {
 	if err != nil {
 		t.Errorf("WriteLineProtocol() returned error: %v", err)
 	}
+}
+
+func TestSetPrecision(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantError bool
+	}{
+		{input: "h", wantError: false},
+		{input: "m", wantError: false},
+		{input: "s", wantError: false},
+		{input: "ms", wantError: false},
+		{input: "u", wantError: false},
+		{input: "ns", wantError: false},
+		{input: "rfc3339", wantError: false},
+		{input: "unknown", wantError: true},
+	}
+
+	for _, tc := range tests {
+		c := &CommandLineConfig{}
+		err := c.SetPrecision(tc.input)
+		if tc.wantError {
+			if err == nil {
+				t.Errorf("SetPrecision(%q) = nil, want error", tc.input)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("SetPrecision(%q) = %v, want nil", tc.input, err)
+			continue
+		}
+		if tc.input != "rfc3339" && c.ImportConfig.Precision != tc.input {
+			t.Errorf("SetPrecision(%q) set precision to %q, want %q", tc.input, c.ImportConfig.Precision, tc.input)
+		}
+		if tc.input == "rfc3339" && c.ImportConfig.Precision != "" {
+			t.Errorf("When precision is rfc3339, precision should be empty, but got %q", c.ImportConfig.Precision)
+		}
+	}
+
 }
