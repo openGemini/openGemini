@@ -82,6 +82,7 @@ func (c *CommandLineConfig) InitConfig() error {
 
 	c.ImportConfig.URL = u
 	c.ImportConfig.URL.Host = addr
+	c.ImportConfig.Precision = c.Precision
 	c.ClientConfig.URL = u
 	c.ClientConfig.URL.Host = addr
 	c.ClientConfig.Username = c.Username
@@ -117,15 +118,26 @@ func parseConnectionString(path string) (url.URL, error) {
 	return u, nil
 }
 
+func (c *CommandLineConfig) SetPrecision(precision string) error {
+	precision = strings.ToLower(precision)
+
+	switch precision {
+	case "h", "m", "s", "ms", "u", "ns":
+		c.ImportConfig.Precision = precision
+	case "rfc3339":
+		c.ImportConfig.Precision = ""
+	default:
+		return fmt.Errorf("unknown precision %q. precision must be rfc3339, h, m, s, ms, u or ns", precision)
+	}
+
+	return nil
+}
+
 func (c *CommandLineConfig) Run() error {
 	config := c.ImportConfig
-	if config.Precision == "" {
-		config.Precision = "ns"
-	}
-	if config.Precision != "rfc3339" && config.Precision != "h" && config.Precision != "m" && config.Precision != "s" && config.Precision != "ms" && config.Precision != "u" && config.Precision != "ns" {
-		return fmt.Errorf("precision must be rfc3339, h, m, s, ms, u or ns")
-	} else if config.Precision == "rfc3339" {
-		config.Precision = ""
+	if err := c.SetPrecision(c.Precision); err != nil {
+		err = fmt.Errorf("ERROR: %s", err)
+		return err
 	}
 	config.Config = c.ClientConfig
 
