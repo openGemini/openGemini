@@ -54,6 +54,12 @@ func TestParser(t *testing.T) {
 			fieldName: "chunkSize",
 			expect:    1000,
 		},
+		{
+			name:      "switch timer model from disable to enable",
+			cmd:       "timer",
+			fieldName: "timer",
+			expect:    true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err = cli.Execute(tc.cmd)
