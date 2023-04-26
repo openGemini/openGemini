@@ -28,14 +28,5 @@ func NewCompleter() *Completer {
 }
 
 func (c *Completer) completer(d prompt.Document) []prompt.Suggest {
-	if d.TextBeforeCursor() == "" {
-		return []prompt.Suggest{}
-	}
-
-	w := d.GetWordBeforeCursor()
-	if w == " " {
-		return []prompt.Suggest{}
-	}
-
-	return c.argumentsCompleter(d)
+	return []prompt.Suggest{}
 }
