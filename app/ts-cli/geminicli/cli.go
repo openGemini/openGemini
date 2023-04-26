@@ -129,6 +129,7 @@ type CommandLine struct {
 	retentionPolicy string
 	database        string
 	chunked         bool
+	timer           bool
 	chunkSize       int
 	nodeID          int
 
@@ -177,7 +178,10 @@ func (c *CommandLine) begin() {
 
 func (c *CommandLine) elapse() {
 	d := time.Since(c.startTime)
-	fmt.Printf("Elapsed: %v\n", d)
+	if c.timer {
+		fmt.Printf("Elapsed: %v\n", d)
+	}
+
 }
 
 func (c *CommandLine) Execute(s string) error {
@@ -186,7 +190,6 @@ func (c *CommandLine) Execute(s string) error {
 	if s == "" {
 		return nil
 	} else if s == "quit" || s == "exit" {
-		fmt.Println("Bye!")
 		os.Exit(0)
 	}
 
@@ -228,6 +231,8 @@ func (c *CommandLine) executeOnLocal(stmt geminiql.Statement) error {
 		return c.executeAuth(stmt)
 	case *geminiql.PrecisionStatement:
 		return c.executePrecision(stmt)
+	case *geminiql.TimerStatement:
+		return c.executeTimer(stmt)
 	default:
 		return fmt.Errorf("unsupport stmt %s", stmt)
 	}
@@ -363,6 +368,17 @@ func (c *CommandLine) executeAuth(stmt *geminiql.AuthStatement) error {
 	return nil
 }
 
+func (c *CommandLine) executeTimer(stmt *geminiql.TimerStatement) error {
+	// switch timer model enable or disable
+	c.timer = !c.timer
+	displayFlag := "disabled"
+	if c.timer {
+		displayFlag = "enabled"
+	}
+	fmt.Printf("Timer is %s\n", displayFlag)
+	return nil
+}
+
 func (c *CommandLine) prettyResult(result client.Result, w io.Writer) {
 	for _, serie := range result.Series {
 		tags := []string{}
@@ -438,15 +454,34 @@ func (c *CommandLine) clientBatchPoints(db string, rp string, raw string) *clien
 func (c *CommandLine) Run() error {
 	fmt.Printf("openGemini CLI %s (rev-%s)\n", CLIENT_VERSION, "revision")
 	fmt.Println("Please use `quit`, `exit` or `Ctrl-D` to exit this program.")
-	defer fmt.Println("Bye!")
 	completer := NewCompleter()
 	p := prompt.New(
 		c.executor,
 		completer.completer,
 		prompt.OptionTitle("openGemini: interactive openGemini client"),
-		prompt.OptionPrefix(">>> "),
+		prompt.OptionPrefix("> "),
 		prompt.OptionPrefixTextColor(prompt.DefaultColor),
 		prompt.OptionCompletionWordSeparator(FilePathCompletionSeparator),
+		prompt.OptionAddASCIICodeBind(
+			prompt.ASCIICodeBind{
+				ASCIICode: []byte{0x1b, 0x62},
+				Fn:        prompt.GoLeftWord,
+			},
+			prompt.ASCIICodeBind{
+				ASCIICode: []byte{0x1b, 0x66},
+				Fn:        prompt.GoRightWord,
+			},
+		),
+		prompt.OptionAddKeyBind(
+			prompt.KeyBind{
+				Key: prompt.ShiftLeft,
+				Fn:  prompt.GoLeftWord,
+			},
+			prompt.KeyBind{
+				Key: prompt.ShiftRight,
+				Fn:  prompt.GoRightWord,
+			},
+		),
 	)
 	p.Run()
 	return nil
