@@ -12,6 +12,18 @@ on:
       - 'tests/**'
       - '**.md'
       - '**.yml'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'config/**'
+      - 'docker/**'
+      - 'docs/**'
+      - 'images/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '**.md'
+      - '**.yml'
 
 env:
   GO111MODULE: on
