@@ -41,7 +41,6 @@ import (
 const (
 	CLIENT_VERSION = "0.1.0"
 	DEFAULT_FORMAT = "column"
-	batchSize      = 5000
 	DEFAULT_HOST   = "localhost"
 	DEFAULT_PORT   = 8086
 )
@@ -60,19 +59,18 @@ type CommandLineConfig struct {
 	Type       string
 	Ssl        bool
 	IgnoreSsl  bool
-	Import     bool
 	Precision  string
 
-	Client       *client.Client
-	ClientConfig client.Config // Client config options.
-	ImportConfig Config        // Importer configuration options.
-	URL          url.URL
+	// import cmd options
+	Import bool
+	Path   string
 }
 
 type HttpClient interface {
 	Ping() (time.Duration, string, error)
 	QueryContext(context.Context, client.Query) (*client.Response, error)
 	Write(bp client.BatchPoints) (*client.Response, error)
+	WriteLineProtocol(data, database, retentionPolicy, precision, writeConsistency string) (*client.Response, error)
 	SetAuth(username, password string)
 	SetPrecision(precision string)
 }
@@ -253,14 +251,25 @@ func (c *CommandLine) executeInsert(stmt *geminiql.InsertStatement) error {
 	return nil
 }
 
-func (c *CommandLine) executePrecision(stmt *geminiql.PrecisionStatement) error {
-	if stmt.Precision == "" {
-		stmt.Precision = "ns"
+func parsePrecision(precision string) (string, error) {
+	epoch := strings.ToLower(precision)
+
+	switch epoch {
+	case "":
+		return "ns", nil
+	case "h", "m", "s", "ms", "u", "ns":
+		return epoch, nil
+	case "rfc3339":
+		return "", nil
+	default:
+		return "", fmt.Errorf("unknown precision %q. precision must be rfc3339, h, m, s, ms, u or ns", precision)
 	}
-	if stmt.Precision != "rfc3339" && stmt.Precision != "h" && stmt.Precision != "m" && stmt.Precision != "s" && stmt.Precision != "ms" && stmt.Precision != "u" && stmt.Precision != "ns" {
-		return fmt.Errorf("precision must be rfc3339, h, m, s, ms, u or ns")
-	} else if stmt.Precision == "rfc3339" {
-		stmt.Precision = ""
+}
+
+func (c *CommandLine) executePrecision(stmt *geminiql.PrecisionStatement) error {
+	var err error
+	if stmt.Precision, err = parsePrecision(stmt.Precision); err != nil {
+		return err
 	}
 	c.config.Precision = stmt.Precision
 	// set precision for client

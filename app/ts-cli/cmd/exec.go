@@ -76,11 +76,9 @@ func executeCompatible() error {
 	}
 
 	if gFlags.Import {
-		if err := gFlags.InitConfig(); err != nil {
-			return fmt.Errorf("fail to init import config %s", err)
-		}
-		if err := gFlags.Run(); err != nil {
-			return fmt.Errorf("%s", err)
+		importCmd := geminicli.NewImporter()
+		if err := importCmd.Import(&gFlags); err != nil {
+			return err
 		}
 		return nil
 	}

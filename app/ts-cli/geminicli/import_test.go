@@ -17,10 +17,9 @@ limitations under the License.
 package geminicli
 
 import (
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"net/url"
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -75,184 +74,98 @@ func TestParseConnectionString(t *testing.T) {
 	}
 }
 
-func TestCommandLineConfig_Run(t *testing.T) {
+func TestImporter_Import_Check(t *testing.T) {
+	testImporter := NewImporter()
+	testImporter.clientCreator = func(config client.Config) (HttpClient, error) {
+		return &mockClient{}, nil
+	}
+	mockedClient, _ := testImporter.clientCreator(client.Config{})
+	testImporter.client = mockedClient
 
-	// test Case when Precision is empty
-	c1 := CommandLineConfig{
-		ImportConfig: Config{
-			Precision: "ns",
-		},
-	}
+	t.Run("parse precision", func(t *testing.T) {
+		// Create a test case with invalid Database and Table
+		testConfig := CommandLineConfig{
+			Host:      "127.0.0.1",
+			Port:      8086,
+			Precision: "bad precision",
+		}
+		// Run Import() and check for error
+		err := testImporter.Import(&testConfig)
+		assert.EqualError(t, err, `unknown precision "bad precision". precision must be rfc3339, h, m, s, ms, u or ns`)
+	})
 
-	err1 := c1.Run()
-	if err1 == nil {
-		t.Errorf("Expected error but got nil")
-	}
-	if c1.ImportConfig.Precision != "ns" {
-		t.Errorf("Expected Precision to be ns but got %s", c1.ImportConfig.Precision)
-	}
+	t.Run("missing path", func(t *testing.T) {
+		// Create a test case with invalid path
+		testConfig := CommandLineConfig{
+			Host: "127.0.0.1",
+			Port: 8086,
+		}
 
-	// test Case when Precision is rfc3339
-	c2 := CommandLineConfig{
-		ImportConfig: Config{
-			Precision: "rfc3339",
-		},
-		ClientConfig: client.Config{
-			Username: "test",
-			Password: "test",
-		},
-	}
+		// Run Import() and check for error
+		err := testImporter.Import(&testConfig)
+		assert.EqualError(t, err, `execute -import cmd, -path is required`)
+	})
 
-	err2 := c2.Run()
-	if err2 == nil {
-		t.Errorf("Expected error but got nil")
-	}
-	if c2.ImportConfig.Precision != "rfc3339" {
-		t.Errorf("Expected Precision to be empty but got %s", c2.ImportConfig.Precision)
-	}
-	if c2.ClientConfig.Username != "test" {
-		t.Error("Expected Config to be config but got:", c2.ImportConfig.Config)
-	}
-
-	// test Case when Precision is invalid
-	c3 := CommandLineConfig{
-		ImportConfig: Config{
-			Precision: "invalid",
-		},
-	}
-
-	err3 := c3.Run()
-	if err3 == nil {
-		t.Errorf("Expected error but got nil")
-	}
-	if err3.Error() != "ERROR: unknown precision \"\". precision must be rfc3339, h, m, s, ms, u or ns" {
-		t.Errorf("Expected error message not found")
-	}
-}
-
-func TestImporter_Import(t *testing.T) {
 	t.Run("missing_file", func(t *testing.T) {
-		// Create a test case with invalid Path
-		testConfig := Config{
+		// Create a test case with invalid path
+		testConfig := CommandLineConfig{
 			Path:      "does_not_exist.txt",
 			Precision: "ns",
 		}
-		testImporter := NewImporter(testConfig)
 
 		// Run Import() and check for error
-		err := testImporter.Import()
-		assert.Error(t, err)
-	})
-
-	t.Run("invalid_database_and_table", func(t *testing.T) {
-		// Create a test case with invalid Database and Table
-		testConfig := Config{
-			Path:      "../testdata/sample-data.txt",
-			Precision: "ns",
-		}
-		testImporter := NewImporter(testConfig)
-
-		// Run Import() and check for error
-		err := testImporter.Import()
-		assert.Error(t, err)
+		err := testImporter.Import(&testConfig)
+		assert.Contains(t, err.Error(), "fail to open file does_not_exist.txt")
 	})
 }
 
-func TestWriteLineProtocol(t *testing.T) {
-	// create a test openGemini server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/write":
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				t.Errorf("Error reading request body: %v", err)
-				return
-			}
-			if !strings.EqualFold(r.Header.Get("Content-Type"), "") {
-				t.Errorf("Expected content type header to be empty, but got %q", r.Header.Get("Content-Type"))
-			}
-			if !strings.EqualFold(r.Header.Get("User-Agent"), "test-agent") {
-				t.Errorf("Expected user agent header to be %q, but got %q", "test-agent", r.Header.Get("User-Agent"))
-			}
-			if r.URL.Query().Get("db") != "test-db" {
-				t.Errorf("Expected query param 'db' to be %q, but got %q", "test-db", r.URL.Query().Get("db"))
-			}
-			if r.URL.Query().Get("rp") != "test-rp" {
-				t.Errorf("Expected query param 'rp' to be %q, but got %q", "test-rp", r.URL.Query().Get("rp"))
-			}
-			if r.URL.Query().Get("precision") != "" {
-				t.Errorf("Expected query param 'precision' to be %q, but got %q", "ns", r.URL.Query().Get("precision"))
-			}
-			if r.URL.Query().Get("consistency") != "" {
-				t.Errorf("Expected query param 'consistency' to be %q, but got %q", "all", r.URL.Query().Get("consistency"))
-			}
-			if string(body) != "test-line" {
-				t.Errorf("Expected request body to be %q, but got %q", "test-line", string(body))
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	// create an Importer with a test config
-	u, _ := url.Parse(ts.URL)
-	config := client.Config{
-		URL:              *u,
-		UserAgent:        "test-agent",
-		Precision:        "ns",
-		WriteConsistency: "all",
-	}
-	i := &Importer{
-		config: Config{
-			Config: config,
-		},
-		database:        "test-db",
-		retentionPolicy: "test-rp",
-	}
-
-	// test WriteLineProtocol()
-	err := i.WriteLineProtocol("test-line")
-	if err != nil {
-		t.Errorf("WriteLineProtocol() returned error: %v", err)
-	}
+type importMockClient struct {
+	mockClient
 }
 
-func TestSetPrecision(t *testing.T) {
-	tests := []struct {
-		input     string
-		wantError bool
-	}{
-		{input: "h", wantError: false},
-		{input: "m", wantError: false},
-		{input: "s", wantError: false},
-		{input: "ms", wantError: false},
-		{input: "u", wantError: false},
-		{input: "ns", wantError: false},
-		{input: "rfc3339", wantError: false},
-		{input: "unknown", wantError: true},
-	}
+func (m importMockClient) QueryContext(ctx context.Context, query client.Query) (*client.Response, error) {
+	return &client.Response{}, nil
+}
 
-	for _, tc := range tests {
-		c := &CommandLineConfig{}
-		err := c.SetPrecision(tc.input)
-		if tc.wantError {
-			if err == nil {
-				t.Errorf("SetPrecision(%q) = nil, want error", tc.input)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("SetPrecision(%q) = %v, want nil", tc.input, err)
-			continue
-		}
-		if tc.input != "rfc3339" && c.ImportConfig.Precision != tc.input {
-			t.Errorf("SetPrecision(%q) set precision to %q, want %q", tc.input, c.ImportConfig.Precision, tc.input)
-		}
-		if tc.input == "rfc3339" && c.ImportConfig.Precision != "" {
-			t.Errorf("When precision is rfc3339, precision should be empty, but got %q", c.ImportConfig.Precision)
-		}
-	}
+func (m importMockClient) WriteLineProtocol(data, database, retentionPolicy, precision, writeConsistency string) (*client.Response, error) {
+	return &client.Response{}, nil
+}
 
+func TestImporter_Import(t *testing.T) {
+	testImporter := NewImporter()
+	testImporter.clientCreator = func(config client.Config) (HttpClient, error) {
+		return &importMockClient{}, nil
+	}
+	mockedClient, _ := testImporter.clientCreator(client.Config{})
+	testImporter.client = mockedClient
+
+	tmpDir := t.TempDir()
+
+	testContent := `
+# DDL
+
+CREATE DATABASE NOAA_water_database
+
+# DML
+
+# CONTEXT-DATABASE: NOAA_water_database
+
+h2o_feet,location=coyote_creek water_level=8.120,level\ description="between 6 and 9 feet" 1566000000
+h2o_feet,location=coyote_creek water_level=8.005,level\ description="between 6 and 9 feet" 1566000360
+`
+	file := filepath.Join(tmpDir, "sample_data.txt")
+	_ = os.WriteFile(file, []byte(testContent), 0600)
+
+	t.Run("missing path", func(t *testing.T) {
+		// Create a test case with invalid path
+		testConfig := CommandLineConfig{
+			Host: "127.0.0.1",
+			Port: 8086,
+			Path: file,
+		}
+
+		// Run Import() and check for error
+		err := testImporter.Import(&testConfig)
+		assert.NoError(t, err)
+	})
 }

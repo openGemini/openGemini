@@ -53,7 +53,7 @@ func (c *CompatibleCommand) Bind(config *geminicli.CommandLineConfig) {
 	c.fs.BoolVar(&config.Ssl, "ssl", false, "Use https for connecting to cluster.")
 	c.fs.BoolVar(&config.IgnoreSsl, "unsafeSsl", false, "Set this when connecting to the cluster using https and not use SSL verification.")
 	c.fs.BoolVar(&config.Import, "import", false, "Import a previous database export from file")
-	c.fs.StringVar(&config.ImportConfig.Path, "path", "", "Path to the file to import to OpenGemini.")
+	c.fs.StringVar(&config.Path, "path", "", "path to the file to import to OpenGemini.")
 	c.fs.StringVar(&config.Precision, "precision", "ns", "Specify the format of the timestamp: rfc3339, h, m, s, ms, u or ns. default is ns.")
 }
 

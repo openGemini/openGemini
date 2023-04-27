@@ -23,6 +23,7 @@ import (
 
 	"github.com/influxdata/influxdb/client"
 	"github.com/openGemini/openGemini/app/ts-cli/geminiql"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,6 +63,10 @@ func (m mockClient) QueryContext(ctx context.Context, query client.Query) (*clie
 }
 
 func (m mockClient) Write(bp client.BatchPoints) (*client.Response, error) {
+	return nil, nil
+}
+
+func (m mockClient) WriteLineProtocol(data, database, retentionPolicy, precision, writeConsistency string) (*client.Response, error) {
 	return nil, nil
 }
 
@@ -124,8 +129,35 @@ func TestPrecisionParser(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err = cli.executeOnLocal(tc.stmt)
-			require.EqualError(t, err, "precision must be rfc3339, h, m, s, ms, u or ns")
+			require.EqualError(t, err, `unknown precision "none". precision must be rfc3339, h, m, s, ms, u or ns`)
 		})
 	}
 
+}
+
+func TestParsePrecision(t *testing.T) {
+	tests := []struct {
+		input     string
+		expected  string
+		wantError bool
+	}{
+		{input: "H", expected: "h", wantError: false},
+		{input: "M", expected: "m", wantError: false},
+		{input: "s", expected: "s", wantError: false},
+		{input: "ms", expected: "ms", wantError: false},
+		{input: "u", expected: "u", wantError: false},
+		{input: "ns", expected: "ns", wantError: false},
+		{input: "rfc3339", expected: "", wantError: false},
+		{input: "unknown", expected: "", wantError: true},
+	}
+
+	for _, tc := range tests {
+		precision, err := parsePrecision(tc.input)
+		if tc.wantError {
+			assert.EqualError(t, err, `unknown precision "unknown". precision must be rfc3339, h, m, s, ms, u or ns`)
+			continue
+		}
+
+		assert.Equal(t, tc.expected, precision)
+	}
 }
