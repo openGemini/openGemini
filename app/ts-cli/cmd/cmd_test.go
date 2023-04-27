@@ -77,7 +77,7 @@ func TestCobraCmd(t *testing.T) {
 				assert.Equal(t, gFlags.IgnoreSsl, true)
 				assert.Equal(t, gFlags.IgnoreSsl, true)
 				assert.Equal(t, gFlags.Import, true)
-				assert.Equal(t, gFlags.ImportConfig.Path, "path")
+				assert.Equal(t, gFlags.Path, "path")
 			},
 		},
 	} {
@@ -128,7 +128,7 @@ func TestCapatibleCmd(t *testing.T) {
 				assert.Equal(t, gFlags.Ssl, true)
 				assert.Equal(t, gFlags.IgnoreSsl, true)
 				assert.Equal(t, gFlags.Import, true)
-				assert.Equal(t, gFlags.ImportConfig.Path, "path")
+				assert.Equal(t, gFlags.Path, "path")
 			},
 		},
 	} {
