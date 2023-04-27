@@ -18,14 +18,13 @@ package geminicli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -33,62 +32,40 @@ import (
 	"github.com/influxdata/influxdb/client"
 )
 
+const (
+	batchSize = 5000
+)
+
 // Importer is the importer used for importing data
 type Importer struct {
-	client                *client.Client
-	config                Config
+	client           HttpClient
+	clientCreator    HttpClientCreator
+	database         string
+	retentionPolicy  string
+	precision        string
+	writeConsistency string
+
 	batch                 []string
 	totalInserts          int
 	failedInserts         int
 	totalCommands         int
 	throttlePointsWritten int
 	startTime             time.Time
-	endTime               time.Time
 	throttle              *time.Ticker
-	database              string
-	retentionPolicy       string
 
 	stderrLogger *log.Logger
 	stdoutLogger *log.Logger
 }
 
 // NewImporter will return an initialized Importer struct
-func NewImporter(config Config) *Importer {
-	config.UserAgent = fmt.Sprintf("openGemini importer/%s", CLIENT_VERSION)
+func NewImporter() *Importer {
+
 	return &Importer{
-		config:       config,
-		batch:        make([]string, 0, batchSize),
-		stdoutLogger: log.New(os.Stdout, "", log.LstdFlags),
-		stderrLogger: log.New(os.Stderr, "", log.LstdFlags),
+		batch:         make([]string, 0, batchSize),
+		clientCreator: defaultHttpClientCreator,
+		stdoutLogger:  log.New(os.Stdout, "", log.LstdFlags),
+		stderrLogger:  log.New(os.Stderr, "", log.LstdFlags),
 	}
-}
-
-type Config struct {
-	Version          string
-	Path             string
-	Precision        string
-	WriteConsistency string
-
-	client.Config
-}
-
-// InitConfig is used to initialize the config
-func (c *CommandLineConfig) InitConfig() error {
-	addr := net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
-	u, err := parseConnectionString(addr)
-	if err != nil {
-		return fmt.Errorf("[ERR] %s", err)
-	}
-
-	c.ImportConfig.URL = u
-	c.ImportConfig.URL.Host = addr
-	c.ImportConfig.Precision = c.Precision
-	c.ClientConfig.URL = u
-	c.ClientConfig.URL.Host = addr
-	c.ClientConfig.Username = c.Username
-	c.ClientConfig.Password = c.Password
-
-	return nil
 }
 
 // parseConnectionString converts a path string into an url.URL.
@@ -118,64 +95,63 @@ func parseConnectionString(path string) (url.URL, error) {
 	return u, nil
 }
 
-func (c *CommandLineConfig) SetPrecision(precision string) error {
-	precision = strings.ToLower(precision)
+// parseClientConfig initialize the client.config
+func parseClientConfig(clc *CommandLineConfig) (*client.Config, error) {
+	config := client.NewConfig()
 
-	switch precision {
-	case "h", "m", "s", "ms", "u", "ns":
-		c.ImportConfig.Precision = precision
-	case "rfc3339":
-		c.ImportConfig.Precision = ""
-	default:
-		return fmt.Errorf("unknown precision %q. precision must be rfc3339, h, m, s, ms, u or ns", precision)
+	addr := net.JoinHostPort(clc.Host, strconv.Itoa(clc.Port))
+	u, err := parseConnectionString(addr)
+	if err != nil {
+		return nil, err
 	}
+	config.URL = u
+	config.URL.Host = addr
 
-	return nil
-}
-
-func (c *CommandLineConfig) Run() error {
-	config := c.ImportConfig
-	if err := c.SetPrecision(c.Precision); err != nil {
-		err = fmt.Errorf("ERROR: %s", err)
-		return err
+	if clc.Precision, err = parsePrecision(clc.Precision); err != nil {
+		return nil, err
 	}
-	config.Config = c.ClientConfig
+	config.Precision = clc.Precision
 
-	i := NewImporter(config)
-	if err := i.Import(); err != nil {
-		err = fmt.Errorf("ERROR: %s", err)
-		return err
-	}
-	return nil
+	config.UnixSocket = clc.UnixSocket
+	config.Username = clc.Username
+	config.Password = clc.Password
+	config.UnsafeSsl = clc.IgnoreSsl
+	return &config, nil
 }
 
 // Import processes the specified file in the Config and writes the data to the databases in chunks specified by batchSize
-func (i *Importer) Import() error {
+func (ipt *Importer) Import(clc *CommandLineConfig) error {
+	config, err := parseClientConfig(clc)
+	if err != nil {
+		return err
+	}
+	ipt.precision = config.Precision
+	ipt.writeConsistency = config.WriteConsistency
+	if clc.Path == "" {
+		return fmt.Errorf("execute -import cmd, -path is required")
+	}
+
 	// Create a new client and ping it.
-	cli, err := client.NewClient(i.config.Config)
+	cli, err := ipt.clientCreator(*config)
 	if err != nil {
 		return fmt.Errorf("could not create client %s", err)
 	}
-	i.client = cli
-	if _, _, e := i.client.Ping(); e != nil {
-		return fmt.Errorf("failed to connect to %s", i.client.Addr())
-	}
-
-	if i.config.Path == "" {
-		return fmt.Errorf("file path required")
+	ipt.client = cli
+	if _, _, err = ipt.client.Ping(); err != nil {
+		return err
 	}
 
 	defer func() {
-		if i.totalInserts > 0 {
-			i.stdoutLogger.Printf("Processed %d commands\n", i.totalCommands)
-			i.stdoutLogger.Printf("Processed %d inserts\n", i.totalInserts)
-			i.stdoutLogger.Printf("Failed %d inserts\n", i.failedInserts)
+		if ipt.totalInserts > 0 {
+			ipt.stdoutLogger.Printf("Processed %d commands\n", ipt.totalCommands)
+			ipt.stdoutLogger.Printf("Processed %d inserts\n", ipt.totalInserts)
+			ipt.stdoutLogger.Printf("Failed %d inserts\n", ipt.failedInserts)
 		}
 	}()
 
-	f, err := os.Open(i.config.Path)
+	f, err := os.Open(clc.Path)
 	if err != nil {
-		return fmt.Errorf("fail to open file %s, %s", i.config.Path, err)
+		return fmt.Errorf("fail to open file %s, %s", clc.Path, err)
 	}
 	defer f.Close()
 
@@ -184,35 +160,32 @@ func (i *Importer) Import() error {
 	scanner := bufio.NewReader(r)
 
 	// Process the DDL
-	if err := i.processDDL(scanner); err != nil {
+	if err := ipt.processDDL(scanner); err != nil {
 		return fmt.Errorf("reading standard input: %s", err)
 	}
 
 	// Set up a throttle channel.
-	i.throttle = time.NewTicker(time.Microsecond)
-	defer i.throttle.Stop()
-
-	// Prime the last write
-	i.endTime = time.Now()
+	ipt.throttle = time.NewTicker(time.Microsecond) // TODO: to use
+	defer ipt.throttle.Stop()
 
 	// Process the DML
-	if err := i.processDML(scanner); err != nil {
+	if err := ipt.processDML(scanner); err != nil {
 		return fmt.Errorf("reading standard input: %s", err)
 	}
 
-	if i.failedInserts > 0 {
+	if ipt.failedInserts > 0 {
 		plural := " was"
-		if i.failedInserts > 1 {
+		if ipt.failedInserts > 1 {
 			plural = "s were"
 		}
 		// If we failed any inserts, then return an error with the amount failed inserts.
-		return fmt.Errorf("%d point%s not inserted", i.failedInserts, plural)
+		return fmt.Errorf("%d point%s not inserted", ipt.failedInserts, plural)
 	}
 
 	return nil
 }
 
-func (i *Importer) processDDL(scanner *bufio.Reader) error {
+func (ipt *Importer) processDDL(scanner *bufio.Reader) error {
 	for {
 		line, err := scanner.ReadString(byte('\n'))
 		if err != nil && err != io.EOF {
@@ -231,27 +204,29 @@ func (i *Importer) processDDL(scanner *bufio.Reader) error {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		i.queryExecutor(line)
+		ipt.queryExecutor(line)
 	}
 }
 
-func (i *Importer) processDML(scanner *bufio.Reader) error {
-	i.startTime = time.Now()
+func (ipt *Importer) processDML(scanner *bufio.Reader) error {
+	ipt.startTime = time.Now()
 	for {
 		line, err := scanner.ReadString(byte('\n'))
 		if err != nil && err != io.EOF {
 			return err
 		} else if err == io.EOF {
-			i.batchWrite()
+			ipt.batchWrite()
 			return nil
 		}
 		if strings.HasPrefix(line, "# CONTEXT-DATABASE:") {
-			i.batchWrite()
-			i.database = strings.TrimSpace(strings.Split(line, ":")[1])
+			ipt.batchWrite()
+			ipt.database = strings.TrimSpace(strings.Split(line, ":")[1])
+			continue
 		}
 		if strings.HasPrefix(line, "# CONTEXT-RETENTION-POLICY:") {
-			i.batchWrite()
-			i.retentionPolicy = strings.TrimSpace(strings.Split(line, ":")[1])
+			ipt.batchWrite()
+			ipt.retentionPolicy = strings.TrimSpace(strings.Split(line, ":")[1])
+			continue
 		}
 		if strings.HasPrefix(line, "#") {
 			continue
@@ -260,102 +235,65 @@ func (i *Importer) processDML(scanner *bufio.Reader) error {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		i.batchAccumulator(line)
+		ipt.batchAccumulator(line)
 	}
 }
 
-func (i *Importer) execute(command string) {
-	response, err := i.client.Query(client.Query{Command: command, Database: i.database})
+func (ipt *Importer) execute(command string) {
+	response, err := ipt.client.QueryContext(context.TODO(), client.Query{Command: command, Database: ipt.database})
 	if err != nil {
-		i.stderrLogger.Printf("error: %s\n", err)
+		ipt.stderrLogger.Printf("error: %s\n", err.Error())
 		return
 	}
-	if err := response.Error(); err != nil {
-		i.stderrLogger.Printf("error: %s\n", response.Error())
+	if err = response.Error(); err != nil {
+		ipt.stderrLogger.Printf("error: %s\n", err.Error())
 	}
 }
 
-func (i *Importer) queryExecutor(command string) {
-	i.totalCommands++
-	i.execute(command)
+func (ipt *Importer) queryExecutor(command string) {
+	ipt.totalCommands++
+	ipt.execute(command)
 }
 
-func (i *Importer) batchAccumulator(line string) {
-	i.batch = append(i.batch, line)
-	if len(i.batch) == batchSize {
-		i.batchWrite()
+func (ipt *Importer) batchAccumulator(line string) {
+	ipt.batch = append(ipt.batch, line)
+	if len(ipt.batch) == batchSize {
+		ipt.batchWrite()
 	}
 }
 
-func (i *Importer) batchWrite() {
+func (ipt *Importer) batchWrite() {
 	// Exit early if there are no points in the batch
-	if len(i.batch) == 0 {
+	if len(ipt.batch) == 0 {
 		return
 	}
 
 	// Accumulate the batch size to see how many points we have written this second
-	i.throttlePointsWritten += len(i.batch)
+	ipt.throttlePointsWritten += len(ipt.batch)
 
-	err := i.WriteLineProtocol(strings.Join(i.batch, "\n"))
+	resp, err := ipt.client.WriteLineProtocol(strings.Join(ipt.batch, "\n"), ipt.database, ipt.retentionPolicy, ipt.precision, ipt.writeConsistency)
 	if err != nil {
-		i.stderrLogger.Println("error writing batch: ", err)
-		i.stderrLogger.Println(strings.Join(i.batch, "\n"))
-		i.failedInserts += len(i.batch)
+		ipt.stderrLogger.Println("error writing batch: ", err)
+		ipt.stderrLogger.Println(strings.Join(ipt.batch, "\n"))
+		ipt.failedInserts += len(ipt.batch)
+	} else if resp != nil && resp.Error() != nil {
+		ipt.stderrLogger.Println("error writing batch: ", resp.Error())
+		ipt.stderrLogger.Println(strings.Join(ipt.batch, "\n"))
+		ipt.stderrLogger.Println("error writing response: ")
+		ipt.stderrLogger.Println(resp.MarshalJSON())
+		ipt.failedInserts += len(ipt.batch)
 	} else {
-		i.totalInserts += len(i.batch)
+		ipt.totalInserts += len(ipt.batch)
 	}
-	i.throttlePointsWritten = 0
-	i.endTime = time.Now()
+	ipt.throttlePointsWritten = 0
 
 	// Clear the batch and record the number of processed points.
-	i.batch = i.batch[:0]
+	ipt.batch = ipt.batch[:0]
 	// Give some status feedback every 100000 lines processed
-	processed := i.totalInserts + i.failedInserts
+	processed := ipt.totalInserts + ipt.failedInserts
 	if processed%100000 == 0 {
-		since := time.Since(i.startTime)
+		since := time.Since(ipt.startTime)
 		pps := float64(processed) / since.Seconds()
-		i.stdoutLogger.Printf("Processed %d lines.  Time elapsed: %s.  Points per second (PPS): %d", processed, since.String(), int64(pps))
+		ipt.stdoutLogger.Printf("Processed %d lines.  Time elapsed: %s.  Points per second (PPS): %d", processed, since.String(), int64(pps))
 	}
-}
-
-// WriteLineProtocol takes a string with line returns to delimit each write
-func (i *Importer) WriteLineProtocol(data string) error {
-	u := i.config.URL
-	u.Path = path.Join(u.Path, "write")
-	r := strings.NewReader(data)
-
-	req, err := http.NewRequest("POST", u.String(), r)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "")
-	req.Header.Set("User-Agent", i.config.UserAgent)
-	if i.config.Config.Username != "" {
-		req.SetBasicAuth(i.config.Config.Username, i.config.Config.Password)
-	}
-	params := req.URL.Query()
-	params.Set("db", i.database)
-	params.Set("rp", i.retentionPolicy)
-	params.Set("precision", i.config.Precision)
-	params.Set("consistency", i.config.WriteConsistency)
-	req.URL.RawQuery = params.Encode()
-
-	httpClient := &http.Client{Timeout: i.config.Config.Timeout}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		err := fmt.Errorf(string(body))
-		return fmt.Errorf("error writing: %s", err)
-	}
-
-	return nil
 }
