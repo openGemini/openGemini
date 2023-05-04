@@ -43,8 +43,8 @@ func isChar(ch rune) bool {
 	return unicode.IsLetter(ch) || ch == '_'
 }
 
-func isIdentChar(ch rune) bool {
-	return isChar(ch) || unicode.IsDigit(ch)
+func isSplitChar(ch rune) bool {
+	return ch == ',' || ch == ' ' || ch == '=' || ch == '.'
 }
 
 type Tokenizer struct {
@@ -133,7 +133,12 @@ func (t *Tokenizer) scanIdentifier() (int, string) {
 		ch := t.read()
 		if ch == EOF {
 			break
-		} else if !isIdentChar(ch) {
+		} else if ch == '\\' {
+			// support escape character
+			buf.WriteRune(ch)
+			ch = t.read()
+			buf.WriteRune(ch)
+		} else if isSplitChar(ch) {
 			t.unRead()
 			break
 		} else {
@@ -154,15 +159,44 @@ func (t *Tokenizer) scanKeywords(s string) int {
 
 func (t *Tokenizer) scanRaw() (int, string) {
 	var buf bytes.Buffer
+	isString := false
 	for {
 		ch := t.read()
-		if ch == ',' || ch == ' ' {
-			t.unRead()
-			return RAW, buf.String()
-		} else if ch == EOF {
-			return RAW, buf.String()
-		} else {
+		if !isString && ch == '"' {
+			isString = true
 			buf.WriteRune(ch)
+			continue
+		}
+		if isString {
+			if ch == '\\' {
+				// support escape character
+				buf.WriteRune(ch)
+				ch = t.read()
+				buf.WriteRune(ch)
+			} else if ch == '"' {
+				isString = false
+				buf.WriteRune(ch)
+			} else if ch == EOF {
+				return BAD_STRING, buf.String()
+			} else {
+				buf.WriteRune(ch)
+			}
+		} else {
+			if ch == '\\' {
+				// support escape character
+				buf.WriteRune(ch)
+				ch = t.read()
+				buf.WriteRune(ch)
+			} else if ch == ',' || ch == ' ' {
+				if err := t.unRead(); err != nil {
+					return BAD_STRING, buf.String()
+				}
+				return RAW, buf.String()
+			} else if ch == EOF {
+				return RAW, buf.String()
+			} else {
+				buf.WriteRune(ch)
+			}
 		}
 	}
 }

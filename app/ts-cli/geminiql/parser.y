@@ -134,12 +134,6 @@ INSERT_STATEMENT:
             $$ = stmt
         }
     }
-    |INSERT INTO LINE_PROTOCOL
-    {
-        stmt := &InsertStatement{}
-        stmt.LineProtocol = $3
-        $$ = stmt
-    }
     |INSERT LINE_PROTOCOL
     {
         stmt := &InsertStatement{}
@@ -215,6 +209,10 @@ TIME_SERIE:
     MEASUREMENT COMMA KV_RAWS KV_RAWS
     {
         $$ = $1 + $2 + $3 + " " + $4
+    }
+    |MEASUREMENT KV_RAWS
+    {
+        $$ = $1 + " " + $2
     }
 
 KEY_VALUE:
