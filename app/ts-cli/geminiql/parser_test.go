@@ -230,6 +230,15 @@ func TestParser(t *testing.T) {
 			},
 		},
 		{
+			name: "insert without tags",
+			cmd:  `insert mst f=2`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `mst f=2`,
+			},
+		},
+		{
 			name: "use db and rp",
 			cmd:  "use db.rp",
 			expect: &UseStatement{
