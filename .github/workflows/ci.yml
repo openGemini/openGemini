@@ -12,18 +12,7 @@ on:
       - 'tests/**'
       - '**.md'
       - '**.yml'
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - 'config/**'
-      - 'docker/**'
-      - 'docs/**'
-      - 'images/**'
-      - 'scripts/**'
-      - 'tests/**'
-      - '**.md'
-      - '**.yml'
+      - '.gitignore'
 
 env:
   GO111MODULE: on
@@ -33,6 +22,7 @@ env:
 jobs:
   CommitLint:
     name: commit lint
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -44,6 +34,7 @@ jobs:
         run: make licence-check
   StaticCheck:
     name: "static check"
+    if: github.event.pull_request.draft == false
     needs: CommitLint
     runs-on: ubuntu-latest
     steps:
@@ -57,6 +48,7 @@ jobs:
         run: make static-check
   OtherGoLint:
     name: "style check, go vet and other go lint"
+    if: github.event.pull_request.draft == false
     needs: CommitLint
     runs-on: ubuntu-latest
     steps:
@@ -85,6 +77,7 @@ jobs:
           skip-build-cache: true
   UT:
     name: unit test
+    if: github.event.pull_request.draft == false
     needs: [StaticCheck, OtherGoLint]
     strategy:
       fail-fast: true
@@ -105,8 +98,12 @@ jobs:
           make gotest
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
   IntegrationTest:
     name: integration test
+    if: github.event.pull_request.draft == false
     needs: [StaticCheck, OtherGoLint]
     strategy:
       fail-fast: true
