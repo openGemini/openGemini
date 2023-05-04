@@ -113,6 +113,123 @@ func TestParser(t *testing.T) {
 			},
 		},
 		{
+			name: "field_value with blank space insert",
+			cmd:  `insert weather,location=us-midwest temperature_str="too warm" 1465839840100400200`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temperature_str="too warm" 1465839840100400200`,
+			},
+		},
+		{
+			name: "field_value with comma insert",
+			cmd:  `insert weather,location=us-midwest temperature_str="too,warm" 1465839840100400200`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temperature_str="too,warm" 1465839840100400200`,
+			},
+		},
+		{
+			name: "field_value with double quota insert",
+			cmd:  `insert weather,location=us-midwest temperature_str="too\"hot\"" 1465839830100400213`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temperature_str="too\"hot\"" 1465839830100400213`,
+			},
+		},
+		{
+			name: "field_value with back slash insert",
+			cmd:  `insert weather,location=us-midwest temperature_str="too hot\cold" 1465839830100400213`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temperature_str="too hot\cold" 1465839830100400213`,
+			},
+		},
+		{
+			name: "field_value with forward slash insert",
+			cmd:  `insert weather,location=us-midwest temperature_str="too hot/cold" 1465839830100400213`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temperature_str="too hot/cold" 1465839830100400213`,
+			},
+		},
+		{
+			name: "field_value with many back slash insert",
+			cmd:  `insert weather,location=us-midwest temperature_str="too hot\\\\\cold" 1465839830100400213`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temperature_str="too hot\\\\\cold" 1465839830100400213`,
+			},
+		},
+		{
+			name: "tag_value with back slash and comma insert",
+			cmd:  `insert weather,location=us\,midwest temperature=82 1465839830100400190`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us\,midwest temperature=82 1465839830100400190`,
+			},
+		},
+		{
+			name: "tag_key with back slash and blank space insert",
+			cmd:  `insert weather,location\ place=us-midwest temperature=82 1465839830100400192`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location\ place=us-midwest temperature=82 1465839830100400192`,
+			},
+		},
+		{
+			name: "field_key with back slash insert",
+			cmd:  `insert weather,location=us-midwest temp\=rature=82 1465839830100400191`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `weather,location=us-midwest temp\=rature=82 1465839830100400191`,
+			},
+		},
+		// {
+		// 	name: "measurement with back slash and comma insert",
+		// 	cmd:  `insert wea\,ther,location=us-midwest temperature=82 1465839830100400200`,
+		// 	expect: &InsertStatement{
+		// 		DB:           "",
+		// 		RP:           "",
+		// 		LineProtocol: `wea\,ther,location=us-midwest temperature=82 1465839830100400200`,
+		// 	},
+		// },
+		// {
+		// 	name: "measurement with three back slash and blank space insert",
+		// 	cmd:  `insert wea\\\ ther,location=us-midwest temperature=82 1465839830100400200`,
+		// 	expect: &InsertStatement{
+		// 		DB:           "",
+		// 		RP:           "",
+		// 		LineProtocol: `wea\\\ ther,location=us-midwest temperature=82 1465839830100400200`,
+		// 	},
+		// },
+		{
+			name: "measurement with back slash and blank space insert",
+			cmd:  `insert wea\ ther,location=us-midwest temperature=82 1465839830100400200`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `wea\ ther,location=us-midwest temperature=82 1465839830100400200`,
+			},
+		},
+		{
+			name: "measurement with emoji insert",
+			cmd:  `insert we⛅️ther,location=us-midwest temper🔥ture=82 1465839830100400200`,
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `we⛅️ther,location=us-midwest temper🔥ture=82 1465839830100400200`,
+			},
+		},
+		{
 			name: "use db and rp",
 			cmd:  "use db.rp",
 			expect: &UseStatement{
