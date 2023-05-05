@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	set "github.com/deckarep/golang-set"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
 	originql "github.com/influxdata/influxql"
@@ -37,7 +38,6 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	set "github.com/openGemini/openGemini/open_src/github.com/deckarep/golang-set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/spf13/cobra"
