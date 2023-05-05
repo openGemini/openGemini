@@ -66,7 +66,7 @@ openGemini提供了基于AI的时序数据异常检测库，详细可见[openGem
 
 ### 编译环境信息
 
-[GO](https://golang.org/dl/) version v1.16+
+[GO](https://golang.org/dl/) version v1.18+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 
