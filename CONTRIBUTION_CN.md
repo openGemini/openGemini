@@ -82,7 +82,7 @@
 
 #### 2.2.2 编译环境信息
 
-[GO](https://golang.org/dl/) version v1.16+
+[GO](https://golang.org/dl/) version v1.18+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 

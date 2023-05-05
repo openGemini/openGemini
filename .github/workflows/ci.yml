@@ -57,7 +57,7 @@ jobs:
           fetch-depth: 1
       - uses: WillAbides/setup-go-faster@v1.7.0
         with:
-          go-version: "1.16"
+          go-version: "1.18"
       - name: Run go version check
         run: make go-version-check
       - name: Run style check
