@@ -24,6 +24,7 @@ jobs:
     name: commit lint
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v3
         with:
@@ -37,6 +38,7 @@ jobs:
     if: github.event.pull_request.draft == false
     needs: CommitLint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v1
         with:
@@ -51,6 +53,7 @@ jobs:
     if: github.event.pull_request.draft == false
     needs: CommitLint
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v1
         with:
@@ -85,6 +88,7 @@ jobs:
         os: ["ubuntu-latest"] # "macOS-latest"
         go: ["1.18.x", "1.20.x"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v3
         with:
@@ -111,6 +115,7 @@ jobs:
         os: ["ubuntu-latest"] # "macOS-latest"
         go: ["1.18.x", "1.20.x"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v3
         with:
