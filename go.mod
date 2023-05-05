@@ -11,6 +11,7 @@ require (
 	github.com/armon/go-metrics v0.3.10
 	github.com/c-bata/go-prompt v0.2.2
 	github.com/cespare/xxhash/v2 v2.1.2
+	github.com/deckarep/golang-set v1.8.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang-jwt/jwt v3.2.1+incompatible
 	github.com/golang/snappy v0.0.4
