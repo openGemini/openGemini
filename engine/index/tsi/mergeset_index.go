@@ -647,9 +647,9 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 			}
 
 			if exprs[i] != nil {
-				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf)
+				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
 			} else {
-				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf)
+				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
 			}
 			groupTagKey = groupTagKey[:0]
 			seriesN++

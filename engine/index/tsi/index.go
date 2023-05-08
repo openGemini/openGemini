@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -83,11 +84,10 @@ type TagSetInfo struct {
 
 	IDs        []uint64
 	Filters    []influxql.Expr
+	RowFilters [][]clv.RowFilter
 	SeriesKeys [][]byte           // encoded series key
 	TagsVec    []influx.PointTags // tags of all series
 	key        []byte             // group by tag sets key
-
-	FilterTimes [][]int64
 }
 
 func (t *TagSetInfo) String() string {
@@ -108,6 +108,7 @@ func (t *TagSetInfo) Swap(i, j int) {
 	t.IDs[i], t.IDs[j] = t.IDs[j], t.IDs[i]
 	t.TagsVec[i], t.TagsVec[j] = t.TagsVec[j], t.TagsVec[i]
 	t.Filters[i], t.Filters[j] = t.Filters[j], t.Filters[i]
+	t.RowFilters[i], t.RowFilters[j] = t.RowFilters[j], t.RowFilters[i]
 }
 
 func NewTagSetInfo() *TagSetInfo {
@@ -127,7 +128,7 @@ func (t *TagSetInfo) reset() {
 	t.IDs = t.IDs[:0]
 	t.Filters = t.Filters[:0]
 	t.TagsVec = t.TagsVec[:0]
-	t.FilterTimes = t.FilterTimes[:0]
+	t.RowFilters = t.RowFilters[:0]
 
 	for i := range t.SeriesKeys {
 		putSeriesKeyBuf(&t.SeriesKeys[i])
@@ -135,11 +136,12 @@ func (t *TagSetInfo) reset() {
 	t.SeriesKeys = t.SeriesKeys[:0]
 }
 
-func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags) {
+func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags, rowFilter []clv.RowFilter) {
 	t.IDs = append(t.IDs, id)
 	t.Filters = append(t.Filters, filter)
 	t.TagsVec = append(t.TagsVec, tags)
 	t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+	t.RowFilters = append(t.RowFilters, rowFilter)
 }
 
 func (t *TagSetInfo) Ref() {

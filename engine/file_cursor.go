@@ -186,7 +186,8 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		}
 
 		filter := f.tagSet.Filters[i]
-		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags, nil)
+		rowFilter := f.tagSet.RowFilters[i]
+		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags, rowFilter)
 		orderRec := f.recordPool.Get()
 		rec, err := f.loc.ReadData(filterOpts, orderRec)
 		if err != nil {
@@ -265,7 +266,8 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 			}
 		}
 		filter := f.tagSet.Filters[i]
-		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags, nil)
+		rowFilter := f.tagSet.RowFilters[i]
+		filterOpts := immutable.NewFilterOpts(filter, f.ctx.m, f.ctx.filterFieldsIdx, f.ctx.filterTags, ptTags, rowFilter)
 		orderRec := f.recordPool.Get()
 		rec, err := f.loc.ReadData(filterOpts, orderRec)
 		if err != nil {

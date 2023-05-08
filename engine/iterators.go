@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -857,12 +858,16 @@ func itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 func newSeriesCursorLazyInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, idx int, lazyInit bool) (*seriesCursor, error) {
 	var err error
+	var rowFilters []clv.RowFilter
 	sid := tagSet.IDs[idx]
 	filter := tagSet.Filters[idx]
 	ptTags := &(tagSet.TagsVec[idx])
+	if idx < len(tagSet.RowFilters) {
+		rowFilters = tagSet.RowFilters[idx]
+	}
 
 	var tsmCursor *tsmMergeCursor
-	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, ptTags, lazyInit, span)
+	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, ptTags, rowFilters, lazyInit, span)
 
 	if err != nil {
 		return nil, err
@@ -916,23 +921,24 @@ func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, idx int, lazyInit bool) (*seriesCursor, error) {
 	var err error
+	var rowFilters []clv.RowFilter
 	sid := tagSet.IDs[idx]
 	filter := tagSet.Filters[idx]
 	ptTags := &(tagSet.TagsVec[idx])
+	if idx < len(tagSet.RowFilters) {
+		rowFilters = tagSet.RowFilters[idx]
+	}
 
 	memTableRecord := getMemTableRecord(ctx, span, schema, sid, filter, ptTags)
 
 	// create tsm cursor
 	var tsmCursor *tsmMergeCursor
-	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, ptTags, lazyInit, span)
+	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, ptTags, rowFilters, lazyInit, span)
 
 	if err != nil {
 		return nil, err
 	}
 
-	if idx < len(tagSet.FilterTimes) {
-		tsmCursor.filterTimes = tagSet.FilterTimes[idx]
-	}
 	// only if tsm or mem table have data, we will create series cursor
 	if tsmCursor != nil || (memTableRecord != nil && memTableRecord.RowNums() > 0) {
 		seriesCursor := getSeriesKeyCursor()

@@ -16,7 +16,10 @@ limitations under the License.
 
 package immutable
 
-import "github.com/openGemini/openGemini/lib/record"
+import (
+	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/lib/record"
+)
 
 type Location struct {
 	ctx    *ReadContext
@@ -143,29 +146,18 @@ func (l *Location) getCurSegMinMax() (int64, int64) {
 	return min, max
 }
 
-func (l *Location) overlapsForFiltertime(filterTime []int64) (bool, int, int) {
-	if len(filterTime) == 0 {
-		return true, 0, 0
+func (l *Location) overlapsForRowFilter(rowFilters []clv.RowFilter) bool {
+	if len(rowFilters) == 0 {
+		return true
 	}
+
 	min, max := l.getCurSegMinMax()
-
-	startIndex := record.GetTimeRangeStartIndex(filterTime, 0, min)
-	// on the right of the filterTime boundary
-	if startIndex >= len(filterTime) || startIndex < 0 {
-		return false, 0, 0
-	}
-	// on the left of the filterTime boundary
-	if filterTime[startIndex] > max {
-		return false, 0, 0
+	if (max < rowFilters[0].RowId) ||
+		(min > rowFilters[len(rowFilters)-1].RowId) {
+		return false
 	}
 
-	// find the endIndex
-	endIndex := record.GetTimeRangeStartIndex(filterTime, 0, max)
-	if endIndex >= len(filterTime) {
-		endIndex = len(filterTime) - 1
-	}
-
-	return true, startIndex, endIndex
+	return true
 }
 
 func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
@@ -176,15 +168,12 @@ func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*rec
 	var rec *record.Record
 	var err error
 	for rec == nil && l.hasNext() {
-		if !l.ctx.tr.Overlaps(l.meta.MinMaxTime()) {
+		if (!l.ctx.tr.Overlaps(l.meta.MinMaxTime())) ||
+			(!l.overlapsForRowFilter(filterOpts.rowFilters)) {
 			l.nextSegment()
 			continue
 		}
-		overlaps, startIndex, endIndex := l.overlapsForFiltertime(filterOpts.filterTimes)
-		if !overlaps {
-			l.nextSegment()
-			continue
-		}
+
 		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.ctx)
 		if err != nil {
 			return nil, err
@@ -204,12 +193,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*rec
 		}
 		// filter by field
 		if rec != nil {
-			rec = FilterByField(rec, filterOpts.filtersMap, filterOpts.cond, filterOpts.fieldsIdx,
-				filterOpts.filterTags, filterOpts.pointTags)
-		}
-		// filter by fiterTime
-		if rec != nil {
-			rec = FilterByFilterTime(rec, filterOpts.filterTimes, startIndex, endIndex)
+			rec = FilterByfilterOpts(rec, filterOpts)
 		}
 	}
 

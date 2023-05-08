@@ -17,9 +17,11 @@ limitations under the License.
 package tsi
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
+	"reflect"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/index/clv"
@@ -38,14 +40,49 @@ type TextIndex struct {
 	fieldTable     map[string]map[string]*clv.TokenIndex // (measurementName, fieldName) -> *TokenIndex table
 	fieldTableLock sync.RWMutex
 	path           string
+	lock           *string
 }
 
 func NewTextIndex(opts *Options) (*TextIndex, error) {
 	textIndex := &TextIndex{
 		fieldTable: make(map[string]map[string]*clv.TokenIndex),
 		path:       opts.path, // = data/db/pt/rp/index/indexid..
+		lock:       opts.lock,
 	}
 	return textIndex, nil
+}
+
+func getAllDataInvert(expr influxql.Expr) (*clv.InvertIndex, error) {
+	rexpr, err := expr2BinaryExpr(expr)
+	if err != nil {
+		return nil, err
+	}
+	invert := clv.NewInvertIndexPointer()
+	invert.SetFilter(rexpr)
+
+	return invert, nil
+}
+
+func haveTextFilter(expr influxql.Expr) bool {
+	if expr == nil {
+		return false
+	}
+
+	switch expr := expr.(type) {
+	case *influxql.BinaryExpr:
+		switch expr.Op {
+		case influxql.AND, influxql.OR:
+			return haveTextFilter(expr.LHS) || haveTextFilter(expr.RHS)
+		case influxql.MATCH, influxql.MATCH_PHRASE, influxql.LIKE:
+			return true
+		default:
+			return false
+		}
+	case *influxql.ParenExpr:
+		return haveTextFilter(expr.Expr)
+	default:
+	}
+	return false
 }
 
 func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
@@ -57,6 +94,7 @@ func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 		Path:        txtIdxPath,
 		Measurement: measurement,
 		Field:       string(fieldName),
+		Lock:        idx.lock,
 	}
 	tokenIndex, err := clv.NewTokenIndex(&opts)
 	if err != nil {
@@ -161,12 +199,12 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 	return 0, nil
 }
 
-func (idx *TextIndex) SearchByTokenIndex(name string, n *influxql.BinaryExpr) (*clv.InvertIndex, error) {
+func (idx *TextIndex) SearchByTokenIndex(name string, sids []uint64, n *influxql.BinaryExpr) (*clv.InvertIndex, error) {
 	key, ok := n.LHS.(*influxql.VarRef)
 	if !ok {
 		return nil, fmt.Errorf("The type of LHS value is wrong.")
 	}
-	value, ok := n.RHS.(*influxql.VarRef)
+	value, ok := n.RHS.(*influxql.StringLiteral)
 	if !ok {
 		return nil, fmt.Errorf("The type of RHS value is wrong.")
 	}
@@ -178,59 +216,110 @@ func (idx *TextIndex) SearchByTokenIndex(name string, n *influxql.BinaryExpr) (*
 
 	switch n.Op {
 	case influxql.MATCH:
-		return tokenIndex.Search(clv.Match, value.Val)
+		return tokenIndex.Search(clv.Match, value.Val, sids)
 	case influxql.MATCH_PHRASE:
-		return tokenIndex.Search(clv.Match_Phrase, value.Val)
+		return tokenIndex.Search(clv.Match_Phrase, value.Val, sids)
 	case influxql.LIKE:
-		return tokenIndex.Search(clv.Fuzzy, value.Val)
+		return tokenIndex.Search(clv.Fuzzy, value.Val, sids)
 	default:
 	}
 	return nil, nil
 }
 
-func (idx *TextIndex) SearchTextIndex(name string, expr influxql.Expr) (*clv.InvertIndex, error) {
+var ErrTextExpr = errors.New("no text expr")
+
+func (idx *TextIndex) SearchTextIndexByExpr(name string, sids []uint64, expr influxql.Expr) (*clv.InvertIndex, error) {
 	if expr == nil {
 		return nil, nil
 	}
 
+	var err error
 	switch expr := expr.(type) {
 	case *influxql.BinaryExpr:
 		switch expr.Op {
 		case influxql.AND, influxql.OR:
-			li, lerr := idx.SearchTextIndex(name, expr.LHS)
-			if lerr != nil {
+			li, lerr := idx.SearchTextIndexByExpr(name, sids, expr.LHS)
+			if lerr != nil && lerr != ErrTextExpr {
 				return nil, lerr
 			}
-			ri, rerr := idx.SearchTextIndex(name, expr.RHS)
-			if rerr != nil {
+			ri, rerr := idx.SearchTextIndexByExpr(name, sids, expr.RHS)
+			if rerr != nil && rerr != ErrTextExpr {
 				return nil, rerr
 			}
 
-			if expr.Op == influxql.AND {
-				return clv.IntersectInvertIndex(li, ri), nil
-			} else {
-				return clv.UnionInvertIndex(li, ri), nil
+			if lerr == ErrTextExpr {
+				li, err = getAllDataInvert(expr.LHS)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if rerr == ErrTextExpr {
+				ri, err = getAllDataInvert(expr.RHS)
+				if err != nil {
+					return nil, err
+				}
 			}
 
+			// Intersect invertIndex and expr
+			if expr.Op == influxql.AND {
+				return clv.IntersectInvertIndexAndExpr(li, ri), nil
+			} else {
+				return clv.UnionInvertIndexAndExpr(li, ri), nil
+			}
 		case influxql.MATCH, influxql.MATCH_PHRASE, influxql.LIKE:
-			return idx.SearchByTokenIndex(name, expr)
+			return idx.SearchByTokenIndex(name, sids, expr)
 		default:
-			return nil, nil
+			return nil, ErrTextExpr
 		}
 	case *influxql.ParenExpr:
-		return idx.SearchTextIndex(name, expr.Expr)
+		return idx.SearchTextIndexByExpr(name, sids, expr.Expr)
 	default:
 	}
 	return nil, nil
 }
 
-func copyTagSetInfo(tagset *TagSetInfo, group *TagSetInfo, filterTime []int64, i int) {
-	tagset.IDs = append(tagset.IDs, group.IDs[i])
-	tagset.Filters = append(tagset.Filters, group.Filters[i])
-	tagset.SeriesKeys = append(tagset.SeriesKeys, group.SeriesKeys[i])
-	tagset.TagsVec = append(tagset.TagsVec, group.TagsVec[i])
-	tagset.FilterTimes = append(tagset.FilterTimes, filterTime)
-	tagset.key = group.key
+// It is necessary to strictly confirm whether the expression is the same.
+// If it cannot be confirmed, it will return notEequal, but this will reduce query efficiency.
+func exprDeepEqual(expr0, expr1 influxql.Expr) bool {
+	if expr0 == expr1 { // both nil
+		return true
+	}
+	if expr0 == nil || expr1 == nil {
+		return false
+	}
+
+	if !reflect.DeepEqual(expr0, expr1) {
+		return false
+	}
+
+	return true
+}
+
+// The Filter for each ID of the srcSet is the same.
+func (idx *TextIndex) SearchTextIndex(name []byte, srcSet *TagSetInfo) (*TagSetInfo, error) {
+	if len(srcSet.IDs) == 0 || srcSet.Filters[0] == nil {
+		return srcSet, nil
+	}
+
+	invert, err := idx.SearchTextIndexByExpr(string(name), srcSet.IDs, srcSet.Filters[0])
+	if err != nil {
+		if err == ErrTextExpr {
+			return srcSet, nil
+		}
+		return nil, err
+	}
+
+	tagSet := new(TagSetInfo)
+	for i, sid := range srcSet.IDs {
+		filter := invert.GetFilter()
+		rowFilter := invert.GetRowFilterBySid(sid)
+		if filter == nil && rowFilter == nil {
+			continue
+		}
+		tagSet.Append(sid, srcSet.SeriesKeys[i], filter, srcSet.TagsVec[i], rowFilter)
+	}
+
+	return tagSet, nil
 }
 
 func (idx *TextIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, name []byte, opt *query.ProcessorOptions, groups interface{}) (GroupSeries, error) {
@@ -239,31 +328,37 @@ func (idx *TextIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, name
 		return nil, fmt.Errorf("not a group series: %v", groups)
 	}
 
+	if !haveTextFilter(opt.Condition) {
+		return groupSeries, nil
+	}
+
 	if _, ok := idx.fieldTable[string(name)]; !ok {
 		return groupSeries, nil
 	}
 
-	invert, err := idx.SearchTextIndex(string(name), opt.Condition)
-	if err != nil {
-		return nil, err
-	}
-
-	if invert == nil {
-		return groupSeries, nil
-	}
-
+	var preFilter influxql.Expr
 	sortedTagsSets := make(GroupSeries, 0, len(groupSeries))
 	for _, group := range groupSeries {
 		tagSet := new(TagSetInfo)
-		for i, sid := range group.IDs {
-			filterTime := invert.GetFilterTimeBySid(sid)
-			if len(filterTime) == 0 {
-				continue
+		for i := range group.IDs {
+			if i != 0 && !exprDeepEqual(group.Filters[i], preFilter) {
+				tmpTagSet, err := idx.SearchTextIndex(name, tagSet)
+				if err != nil {
+					return nil, err
+				}
+				sortedTagsSets = append(sortedTagsSets, tmpTagSet)
+				tagSet = new(TagSetInfo)
 			}
-			copyTagSetInfo(tagSet, group, filterTime, i)
+			tagSet.Append(group.IDs[i], group.SeriesKeys[i], group.Filters[i], group.TagsVec[i], nil)
+			preFilter = group.Filters[i]
 		}
+		// the last one
 		if len(tagSet.IDs) > 0 {
-			sortedTagsSets = append(sortedTagsSets, tagSet)
+			tmpTagSet, err := idx.SearchTextIndex(name, tagSet)
+			if err != nil {
+				return nil, err
+			}
+			sortedTagsSets = append(sortedTagsSets, tmpTagSet)
 		}
 	}
 

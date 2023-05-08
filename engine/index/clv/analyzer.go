@@ -201,7 +201,7 @@ func (a *Analyzer) assignId(id uint32, node *dicNode) uint32 {
 
 func (a *Analyzer) AssignId() error {
 	if a.dictionary == nil {
-		return fmt.Errorf("Can not assign id for dictionary{%s-%s-%d}, because it is blank", a.measurement, a.field, a.version)
+		return fmt.Errorf("can not assign id for dictionary{%s-%s-%d}, because it is blank", a.measurement, a.field, a.version)
 	}
 
 	// sort the dictionary.

@@ -145,6 +145,7 @@ func TestFilterRecInMemTable(t *testing.T) {
 	s.mergeRecIters = make(map[uint64]*SeriesIter)
 	s.mergeRecIters[0] = &SeriesIter{nil, 0}
 	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.tagSetInfo.RowFilters = append(s.tagSetInfo.RowFilters, nil)
 	s.ridIdx = map[int]struct{}{}
 	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
 	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)

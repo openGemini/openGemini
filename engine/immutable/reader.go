@@ -23,6 +23,7 @@ import (
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/comm"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -704,23 +705,23 @@ func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, ctx *R
 }
 
 type FilterOptions struct {
-	filtersMap  map[string]interface{}
-	cond        influxql.Expr
-	fieldsIdx   []int    // field index in schema
-	filterTags  []string // filter tag name
-	pointTags   *influx.PointTags
-	filterTimes []int64 // filter by timestamp
+	filtersMap map[string]interface{}
+	cond       influxql.Expr
+	fieldsIdx  []int    // field index in schema
+	filterTags []string // filter tag name
+	pointTags  *influx.PointTags
+	rowFilters []clv.RowFilter // filter for every row.
 }
 
 func NewFilterOpts(cond influxql.Expr, filterMap map[string]interface{}, fieldsIdx []int, idTags []string,
-	tags *influx.PointTags, filterTimes []int64) *FilterOptions {
+	tags *influx.PointTags, rowFilters []clv.RowFilter) *FilterOptions {
 	return &FilterOptions{
-		cond:        cond,
-		filtersMap:  filterMap,
-		fieldsIdx:   fieldsIdx,
-		filterTags:  idTags,
-		pointTags:   tags,
-		filterTimes: filterTimes,
+		cond:       cond,
+		filtersMap: filterMap,
+		fieldsIdx:  fieldsIdx,
+		filterTags: idTags,
+		pointTags:  tags,
+		rowFilters: rowFilters,
 	}
 }
 
@@ -765,50 +766,97 @@ func FilterByOpts(rec *record.Record, opt *FilterOptions) *record.Record {
 	return FilterByField(rec, opt.filtersMap, opt.cond, opt.fieldsIdx, opt.filterTags, opt.pointTags)
 }
 
-func AddRecordToOther(dstRecord, srcRecord *record.Record) {
-	for i := range srcRecord.ColVals {
-		dstRecord.ColVals[i].AppendColVal(&srcRecord.ColVals[i], dstRecord.Schema[i].Type, 0, srcRecord.RowNums())
-	}
-}
-
-func RecordInitByOther(dstRecord, srcRecord *record.Record) {
-	schemaLen := len(srcRecord.Schema)
-	dstRecord.ColVals = make([]record.ColVal, schemaLen)
-	dstRecord.Schema = make([]record.Field, schemaLen)
-	copy(dstRecord.Schema, srcRecord.Schema)
-	// colMeta
-	dstRecord.RecMeta = &record.RecMeta{}
-	dstRecord.ColMeta = append(dstRecord.ColMeta[:cap(dstRecord.ColMeta)], make([]record.ColMeta, len(dstRecord.Schema)-0)...)
-}
-
-func FilterByFilterTime(rec *record.Record, filterTime []int64, startIndex, endIndex int) *record.Record { //, startIndex, endIndex int
-	lenFilter := len(filterTime)
-	if lenFilter == 0 {
-		return rec
-	}
-	times := rec.Times()
-	startTime := times[0]
-	endTime := times[len(times)-1]
-
-	newRec := record.Record{}
-	RecordInitByOther(&newRec, rec)
-	startPos := 0
-	for i := startIndex; i <= endIndex; i++ {
-		if filterTime[i] < startTime || filterTime[i] > endTime {
-			continue
-		}
-
-		index := record.GetTimeRangeStartIndex(times, startPos, filterTime[i])
-		startPos = index
-		sliceRec := record.Record{}
-		sliceRec.SliceFromRecord(rec, index, index+1)
-		AddRecordToOther(&newRec, &sliceRec)
-	}
-	// all data out of time ranges, continue to read data
-	if newRec.Times() == nil {
+func findRowFilterByRowId(rowFilters []clv.RowFilter, rowId int64) *clv.RowFilter {
+	if rowId < rowFilters[0].RowId ||
+		rowId > rowFilters[len(rowFilters)-1].RowId {
 		return nil
 	}
-	return &newRec
+	n := sort.Search(len(rowFilters), func(i int) bool {
+		return rowId <= rowFilters[i].RowId
+	})
+	if n == len(rowFilters) || rowId != rowFilters[n].RowId {
+		return nil
+	}
+	return &rowFilters[n]
+}
+
+func FilterByfilterOpts(rec *record.Record, filterOpts *FilterOptions) *record.Record {
+	filterMap := filterOpts.filtersMap
+	rowFilters := filterOpts.rowFilters
+	if rec == nil || (filterOpts.cond == nil && len(rowFilters) == 0) ||
+		(len(filterOpts.fieldsIdx) == 0 && len(filterOpts.filterTags) == 0) {
+		return rec
+	}
+
+	var reserveId []int
+	var con influxql.Expr
+	times := rec.Times()
+	for i := 0; i < rec.RowNums(); i++ {
+		if len(rowFilters) == 0 {
+			con = filterOpts.cond
+		} else {
+			rowFilter := findRowFilterByRowId(rowFilters, times[i])
+			if rowFilter != nil {
+				if rowFilter.Filter != nil {
+					con = rowFilter.Filter
+				} else {
+					reserveId = append(reserveId, i)
+					continue
+				}
+			} else {
+				if filterOpts.cond == nil {
+					continue
+				} else {
+					con = filterOpts.cond
+				}
+			}
+		}
+		for _, id := range filterOpts.fieldsIdx {
+			function := ignoreTypeFun[record.ToInfluxqlTypes(rec.Schema[id].Type)]
+			filterMap[rec.Schema[id].Name] = function(i, rec.ColVals[id])
+		}
+		for _, id := range filterOpts.filterTags {
+			tag := filterOpts.pointTags.FindPointTag(id)
+			if tag == nil {
+				filterMap[id] = (*string)(nil)
+			} else {
+				filterMap[id] = tag.Value
+			}
+		}
+		valuer := influxql.ValuerEval{
+			Valuer: influxql.MultiValuer(
+				query.MathValuer{},
+				influxql.MapValuer(filterMap),
+			),
+		}
+		if valuer.EvalBool(con) {
+			reserveId = append(reserveId, i)
+		}
+	}
+	if len(reserveId) == rec.ColVals[len(rec.ColVals)-1].Len {
+		return rec
+	}
+	if len(reserveId) == 0 {
+		return nil
+	}
+
+	startIndex := 0
+	endIndex := 0
+	newRecord := record.NewRecordBuilder(rec.Schema)
+	newRecord.RecMeta = rec.RecMeta
+	for endIndex < len(reserveId) {
+		for endIndex < len(reserveId)-1 && reserveId[endIndex+1]-1 == reserveId[endIndex] {
+			endIndex++
+		}
+		if startIndex == endIndex {
+			newRecord.AppendRec(rec, reserveId[startIndex], reserveId[startIndex]+1)
+			endIndex++
+		} else {
+			newRecord.AppendRec(rec, reserveId[startIndex], reserveId[endIndex-1]+1)
+		}
+		startIndex = endIndex
+	}
+	return newRecord
 }
 
 func FilterByField(rec *record.Record, filterMap map[string]interface{}, con influxql.Expr, idField []int, idTags []string, tags *influx.PointTags) *record.Record {

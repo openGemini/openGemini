@@ -23,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -54,8 +55,9 @@ type tsmMergeCursor struct {
 	locationInit        bool
 	onlyFirstOrLast     bool
 
-	filter influxql.Expr
-	tags   *influx.PointTags
+	filter     influxql.Expr
+	rowFilters []clv.RowFilter
+	tags       *influx.PointTags
 
 	orderRecIter    recordIter
 	outOrderRecIter recordIter
@@ -63,16 +65,16 @@ type tsmMergeCursor struct {
 	limitFirstTime  int64
 	init            bool
 	lazyInit        bool
-
-	filterTimes []int64
 }
 
-func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr, tags *influx.PointTags, lazyInit bool, _ *tracing.Span) (*tsmMergeCursor, error) {
+func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr, tags *influx.PointTags, rowFilters []clv.RowFilter,
+	lazyInit bool, _ *tracing.Span) (*tsmMergeCursor, error) {
 
 	c := getTsmCursor()
 	c.ctx = ctx
 	c.lazyInit = lazyInit
 	c.filter = filter
+	c.rowFilters = rowFilters
 	c.tags = tags
 	c.orderRecIter.reset()
 	c.outOrderRecIter.reset()
@@ -91,6 +93,7 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 		c.locations = nil
 		c.outOfOrderLocations = nil
 	}
+
 	return c, nil
 }
 
@@ -231,7 +234,7 @@ func (c *tsmMergeCursor) AddLoc() error {
 
 func (c *tsmMergeCursor) readData(orderLoc bool, dst *record.Record) (*record.Record, error) {
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
-	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.filterTimes)
+	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.rowFilters)
 	if orderLoc {
 		return c.locations.ReadData(filterOpts, dst)
 	}
@@ -325,7 +328,7 @@ func (c *tsmMergeCursor) reset() {
 	c.init = false
 	c.lazyInit = false
 
-	c.filterTimes = c.filterTimes[:0]
+	c.rowFilters = c.rowFilters[:0]
 
 	c.orderRecIter.reset()
 	c.outOrderRecIter.reset()
@@ -373,7 +376,7 @@ func (c *tsmMergeCursor) FirstTimeOutOfOrderInit() error {
 	//isFirst := true
 	var outRec *record.Record
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
-	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.filterTimes)
+	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.rowFilters)
 	dst := record.NewRecordBuilder(c.ctx.schema)
 	rec, err := c.outOfOrderLocations.ReadOutOfOrderMeta(filterOpts, dst)
 	if err != nil {

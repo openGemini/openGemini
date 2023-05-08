@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 )
 
 // dictonary version
@@ -31,6 +31,8 @@ const (
 	Unknown uint32 = 0
 	Default uint32 = 1
 )
+
+var lockFile = "dicitonary.lock"
 
 type analyzerInfo struct {
 	analyzers []*Analyzer
@@ -43,6 +45,11 @@ func newAnalyzerInfo(path, measurement, field string) *analyzerInfo {
 		collector: newCollector(path, measurement, field),
 	}
 	return ai
+}
+
+func getLockFilePath(path string) *string {
+	lockPath := path + "/" + lockFile
+	return &lockPath
 }
 
 type analyzerCache struct {
@@ -123,7 +130,7 @@ func init() {
 
 // get lastest version of dictonary from mergeset
 func getLatestVersion(dicPath, name, field string) (uint32, error) {
-	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil)
+	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
 	if err != nil {
 		return 0, err
 	}
@@ -156,7 +163,7 @@ func getNextValidVersion(dicPath, name, field string) (uint32, error) {
 		return 0, err
 	}
 
-	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil)
+	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
 	if err != nil {
 		return 0, err
 	}
@@ -191,7 +198,7 @@ func genPrefixForDic(version uint32) []byte {
 }
 
 func loadAnalyzer(dicPath, name, field string, version uint32) (*Analyzer, error) {
-	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil)
+	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
 	if err != nil {
 		return nil, err
 	}
