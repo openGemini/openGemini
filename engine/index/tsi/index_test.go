@@ -946,8 +946,8 @@ func TestSortTagsets(t *testing.T) {
 	tag2 = append(tag2, "tag2"...)
 	var tag1 []byte
 	tag1 = append(tag1, "tag1"...)
-	tagset.Append(2, tag2, nil, nil)
-	tagset.Append(1, tag1, nil, nil)
+	tagset.Append(2, tag2, nil, nil, nil)
+	tagset.Append(1, tag1, nil, nil, nil)
 	opt := query.ProcessorOptions{
 		Limit:    1,
 		HintType: hybridqp.ExactStatisticQuery,

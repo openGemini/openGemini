@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 )
 
 const (

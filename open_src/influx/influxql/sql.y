@@ -945,27 +945,19 @@ CONDITION:
     }
     |MATCH LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
     {	
-	$$ = &MatchExpr{
-	    Field:  &VarRef{Val: $3},
-	    Value:  &VarRef{Val: $5},
-	    Op: MATCH,
-        }
+    	$$ = &BinaryExpr{
+    		LHS:  &VarRef{Val: $3},
+    		RHS:  &StringLiteral{Val: $5},
+    		Op: MATCH,
+    	}
     }
     |MATCH_PHRASE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
     {
-	$$ = &MatchExpr{
-        Field:  &VarRef{Val: $3},
-	    Value:  &VarRef{Val: $5},
-	    Op: MATCH_PHRASE,
-	}
-    }
-    |STRING_TYPE LIKE STRING_TYPE
-    {
-     $$ = &MatchExpr{
-        Field:  &VarRef{Val: $1},
-	    Value:  &VarRef{Val: $3},
-	    Op: LIKE,
-	}   
+    	$$ = &BinaryExpr{
+    		LHS:  &VarRef{Val: $3},
+    		RHS:  &StringLiteral{Val: $5},
+    		Op: MATCH_PHRASE,
+    	}
     }
 
 OPERATION_EQUAL:
@@ -1023,6 +1015,10 @@ CONDITION_OPERATOR:
     |NEQREGEX
     {
         $$ = NEQREGEX
+    }
+    |LIKE
+    {
+        $$ = LIKE
     }
 
 REGULAR_EXPRESSION:
@@ -1377,12 +1373,6 @@ SHOW_SCHEMA_STATEMENT:
         sms := &ShowSchemaStatement{}
         sms.Database = $3
         sms.Measurement = $5
-        $$ = sms
-    }
-    |SHOW SCHEMA FROM IDENT
-    {
-        sms := &ShowSchemaStatement{}
-        sms.Measurement = $4
         $$ = sms
     }
 

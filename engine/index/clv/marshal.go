@@ -90,7 +90,7 @@ func unmarshalPosList(tail []byte, sidLens []uint16, invert *InvertIndex) []byte
 			tail = tail[8:]
 			position := encoding.UnmarshalUint16(tail)
 			tail = tail[2:]
-			invertState.invertState = append(invertState.invertState, InvertState{timestamp, position})
+			invertState.invertState = append(invertState.invertState, InvertState{timestamp, position, nil})
 		}
 	}
 
@@ -201,7 +201,7 @@ func marshal(dst []byte, vtoken string, invert *InvertIndex) []byte {
 	dst = append(dst, []byte(vtoken)...)
 	dst = append(dst, txSuffix)
 
-	invert.Sort()
+	invert.Sort(nil)
 	// sids
 	var sidLens []uint16
 	if len(invert.invertStates) != 0 {
