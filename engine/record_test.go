@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
@@ -69,33 +71,40 @@ func TestXxx(t *testing.T) {
 		fmt.Errorf(err.Error())
 	}
 	index, err := tsi.NewMergeSetIndex(opts)
-	fmt.Errorf(index.Path())
+	fmt.Println(index.Path())
 }
 
-// func Testxxxx(t *testing.T) {
-// 	testDir := t.TempDir()
+func TestItrTSSPFile(t *testing.T) {
+	pathName := "/tmp/openGemini"
+	lockPath := ""
+	f, err := immutable.OpenTSSPFile(pathName, &lockPath, true, false)
+	if err != nil {
+		fmt.Println(err)
+	}
+	itrTSSPFile(f, func(sid uint64, rec *record.Record) {
+		fmt.Sprintf("sid : %s, recordString: %s", sid, rec.String())
+		fmt.Sprintf("sid: %s, recordTimes: %s", sid, rec.Times())
 
-// 	// step1: clean env
-// 	_ = os.RemoveAll(testDir)
+		record.CheckRecord(rec)
+	})
+}
 
-// 	// step2: create shard
-// 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+func itrTSSPFile(f immutable.TSSPFile, hook func(sid uint64, rec *record.Record)) {
+	fi := immutable.NewFileIterator(f, immutable.CLog)
+	itr := immutable.NewChunkIterator(fi)
 
-// 	// not flush data to snapshot
-// 	sh.SetWriteColdDuration(1000 * time.Second)
-// 	sh.SetMutableSizeLimit(10000000000)
+	for {
+		if !itr.Next() {
+			break
+		}
 
-// 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-// 	rows, startTime, endTime := GenDataRecord(50, 10, time.Now(), true, true, false, map[string]interface{}{
-// 		"agentSN": defaultString, "bn": defaultString, "chunkdid": defaultString, "client_ip": defaultString, "cmpt": defaultString, "collection": defaultString, "dbname": defaultString, "errcode": defaultString, "metrictype": defaultString, "mk": defaultString, "ns": defaultString, "opt": defaultString, "request_method": defaultString, "rgn": defaultString, "schema_name": defaultString, "shard_ip": defaultString, "svc": defaultString,
-// 	}, map[string]interface{}{
-// 		"field4_float": int64(1),
-// 	})
-// 	err = writeData(sh, rows, false)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// }
+		sid := itr.GetSeriesID()
+		if sid == 0 {
+			panic("series ID is zero")
+		}
+		rec := itr.GetRecord()
+		record.CheckRecord(rec)
+
+		hook(sid, rec)
+	}
+}
