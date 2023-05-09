@@ -6,19 +6,21 @@
 Package influxql is a generated protocol buffer package.
 
 It is generated from these files:
+
 	data/data.proto
 
 It has these top-level messages:
+
 	Measurements
 	Measurement
 */
 package influxql
 
 import (
-	fmt "fmt"
-	math "math"
+	"fmt"
+	"math"
 
-	proto "github.com/gogo/protobuf/proto"
+	"github.com/gogo/protobuf/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
