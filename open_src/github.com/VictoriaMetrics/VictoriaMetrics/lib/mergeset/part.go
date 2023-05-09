@@ -323,10 +323,12 @@ type inmemoryBlockCache struct {
 
 type inmemoryBlockCacheKey struct {
 	itemsBlockOffset uint64
+	itemsBlockSize   uint32
 }
 
 func (ibck *inmemoryBlockCacheKey) Init(bh *blockHeader) {
 	ibck.itemsBlockOffset = bh.itemsBlockOffset
+	ibck.itemsBlockSize = bh.itemsBlockSize
 }
 
 type inmemoryBlockCacheEntry struct {
