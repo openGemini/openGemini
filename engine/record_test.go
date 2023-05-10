@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -75,15 +76,15 @@ func TestXxx(t *testing.T) {
 }
 
 func TestItrTSSPFile(t *testing.T) {
-	pathName := "/tmp/openGemini"
+	pathName := "/tmp/openGemini/data/data/db0/0/autogen/1_1683504000000000000_1684108800000000000_1/tssp/cpu_load_0000/00000001-0000-00000000.tssp"
 	lockPath := ""
 	f, err := immutable.OpenTSSPFile(pathName, &lockPath, true, false)
 	if err != nil {
 		fmt.Println(err)
 	}
 	itrTSSPFile(f, func(sid uint64, rec *record.Record) {
-		fmt.Sprintf("sid : %s, recordString: %s", sid, rec.String())
-		fmt.Sprintf("sid: %s, recordTimes: %s", sid, rec.Times())
+		fmt.Sprintf("sid : %s, recordString: %s", strconv.FormatUint(sid, 10), rec.String())
+		fmt.Println(strconv.FormatUint(sid, 10), rec.Times())
 
 		record.CheckRecord(rec)
 	})
