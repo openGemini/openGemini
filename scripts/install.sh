@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 ps -ef | grep -v grep | grep ts-server | grep $USER > /dev/null
-if [ $? == 0 ];then
-	killall -9 ts-server
-	sleep 1
-fi
+#if [ $? == 0 ];then
+#	killall -9 ts-server
+#	sleep 1
+#fi
 
 rm -rf /tmp/openGemini/logs/
 mkdir -p /tmp/openGemini/logs/
