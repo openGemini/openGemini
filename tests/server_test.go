@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	models "github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/models"
 	"github.com/stretchr/testify/assert"
 )
 
