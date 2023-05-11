@@ -32,7 +32,8 @@ const (
 	Default uint32 = 1
 )
 
-var lockFile = "dicitonary.lock"
+var mergeSetLockFile = "dicitonary.lock"
+var mergeSetLock sync.RWMutex
 
 type analyzerInfo struct {
 	analyzers []*Analyzer
@@ -48,7 +49,7 @@ func newAnalyzerInfo(path, measurement, field string) *analyzerInfo {
 }
 
 func getLockFilePath(path string) *string {
-	lockPath := path + "/" + lockFile
+	lockPath := path + "/" + mergeSetLockFile
 	return &lockPath
 }
 
@@ -130,6 +131,8 @@ func init() {
 
 // get lastest version of dictonary from mergeset
 func getLatestVersion(dicPath, name, field string) (uint32, error) {
+	mergeSetLock.Lock()
+	defer mergeSetLock.Unlock()
 	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
 	if err != nil {
 		return 0, err
@@ -163,6 +166,8 @@ func getNextValidVersion(dicPath, name, field string) (uint32, error) {
 		return 0, err
 	}
 
+	mergeSetLock.Lock()
+	defer mergeSetLock.Unlock()
 	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
 	if err != nil {
 		return 0, err
@@ -197,7 +202,20 @@ func genPrefixForDic(version uint32) []byte {
 	return prefix
 }
 
+func saveAnalyzerToMergeSet(dicPath, name, field string, items [][]byte) error {
+	mergeSetLock.Lock()
+	defer mergeSetLock.Unlock()
+	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
+	if err != nil {
+		return err
+	}
+	defer tb.MustClose()
+	return tb.AddItems(items)
+}
+
 func loadAnalyzer(dicPath, name, field string, version uint32) (*Analyzer, error) {
+	mergeSetLock.Lock()
+	defer mergeSetLock.Unlock()
 	tb, err := mergeset.OpenTable(path.Join(dicPath, name, field), nil, nil, getLockFilePath(dicPath))
 	if err != nil {
 		return nil, err
