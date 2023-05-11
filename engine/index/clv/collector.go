@@ -18,12 +18,10 @@ package clv
 
 import (
 	"fmt"
-	"path"
 	"sync"
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 )
 
 var Qmax = 7
@@ -186,12 +184,7 @@ func (d *collector) saveDictionaryToMergeset() error {
 	d.genItemsFromCollectTree(d.root, 0, b, dicItems)
 	d.genItemsByVersion(nextVersion, dicItems)
 
-	tb, err := mergeset.OpenTable(path.Join(d.path, d.measurement, d.field), nil, nil, getLockFilePath(d.path))
-	if err != nil {
-		return err
-	}
-	defer tb.MustClose()
-	return tb.AddItems(dicItems.items)
+	return saveAnalyzerToMergeSet(d.path, d.measurement, d.field, dicItems.items)
 }
 
 func (d *collector) saveDictionary() {

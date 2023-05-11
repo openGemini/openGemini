@@ -202,16 +202,16 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 func (idx *TextIndex) SearchByTokenIndex(name string, sids []uint64, n *influxql.BinaryExpr) (*clv.InvertIndex, error) {
 	key, ok := n.LHS.(*influxql.VarRef)
 	if !ok {
-		return nil, fmt.Errorf("The type of LHS value is wrong.")
+		return nil, fmt.Errorf("the type of LHS value is wrong")
 	}
 	value, ok := n.RHS.(*influxql.StringLiteral)
 	if !ok {
-		return nil, fmt.Errorf("The type of RHS value is wrong.")
+		return nil, fmt.Errorf("the type of RHS value is wrong")
 	}
 
 	tokenIndex, ok := idx.fieldTable[name][key.Val]
 	if !ok {
-		return nil, fmt.Errorf("The field(%s) of measurement(%s) has no text index.", key.Val, name)
+		return nil, fmt.Errorf("the field(%s) of measurement(%s) has no text index", key.Val, name)
 	}
 
 	switch n.Op {
