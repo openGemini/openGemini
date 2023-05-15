@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -672,4 +673,21 @@ func TestCompactionDiffSchemas(t *testing.T) {
 	mh.store.Wait()
 
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestItrTSSPFile(t *testing.T) {
+	pathName := "00000001-0000-00000000.tssp"
+	lockPath := ""
+	f, err := immutable.OpenTSSPFile(pathName, &lockPath, true, false)
+	if err != nil {
+		fmt.Println(err)
+	}
+	itrTSSPFile(f, func(sid uint64, rec *record.Record) {
+		assert.Equal(t, strconv.FormatUint(sid, 10), "12096311501173")
+		times := []int64([]int64{1683596485519169600})
+		assert.Equal(t, rec.Times(), times)
+		assert.Equal(t, rec.String(), "field(value):[]float64{75.3}\nfield(time):[]int64{1683596485519169600}\n")
+
+		record.CheckRecord(rec)
+	})
 }
