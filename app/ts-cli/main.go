@@ -19,13 +19,32 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 
+	parse "github.com/influxdata/influxdb/cmd"
+	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-cli/cmd"
 )
 
+var (
+	TsVersion = "v1.0.1"
+	TsCommit  string
+	TsBranch  string
+)
+
+const TsStore = "TsCli"
+
 func main() {
+	doRun(os.Args[1:]...)
 	if err := cmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+func doRun(args ...string) {
+	name, _ := parse.ParseCommandName(args)
+	if name == "version" {
+		fmt.Printf(app.VERSION, TsStore, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
 		os.Exit(1)
 	}
 }

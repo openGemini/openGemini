@@ -88,7 +88,7 @@ func doRun(args ...string) error {
 		crypto.Destruct()
 		fmt.Println("Single service shutdown successfully!")
 	case "version":
-		fmt.Printf(app.VERSION, TsServer, TsVersion, TsCommit, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf(app.VERSION, TsServer, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
 	default:
 		return fmt.Errorf(serverUsage)
 	}
