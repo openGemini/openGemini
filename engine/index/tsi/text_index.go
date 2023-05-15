@@ -89,10 +89,12 @@ func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 	txtIdxPath := path.Join(idxPath, TextDirectory)
 	fieldName := make([]byte, len(field))
 	copy(fieldName, field)
+	mstName := make([]byte, len(measurement))
+	copy(mstName, measurement)
 
 	opts := clv.Options{
 		Path:        txtIdxPath,
-		Measurement: measurement,
+		Measurement: string(mstName),
 		Field:       string(fieldName),
 		Lock:        idx.lock,
 	}
@@ -100,11 +102,11 @@ func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 	if err != nil {
 		return err
 	}
-	if _, ok := idx.fieldTable[measurement]; !ok {
-		idx.fieldTable[measurement] = make(map[string]*clv.TokenIndex)
+	if _, ok := idx.fieldTable[string(mstName)]; !ok {
+		idx.fieldTable[string(mstName)] = make(map[string]*clv.TokenIndex)
 	}
 
-	idx.fieldTable[measurement][string(fieldName)] = tokenIndex
+	idx.fieldTable[string(mstName)][string(fieldName)] = tokenIndex
 	return nil
 }
 
