@@ -613,7 +613,7 @@ func (idx *TokenIndex) Match(queryStr string, sids []uint64) (*InvertIndex, erro
 	for i := 0; i < len(tokens); i++ {
 		cur := idx.searchInvertByPrefixVtokenAndId([]string{tokens[i]}, ts)
 		cur.Sort(sids)
-		pre = IntersectInvertIndex(pre, cur, sids)
+		pre = UnionInvertIndex(pre, cur, sids)
 	}
 	return pre, nil
 }
@@ -787,38 +787,6 @@ func IntersectInvertByDistance(pre *InvertIndex, cur *InvertIndex, dis uint16, s
 					res.AddInvertState(sid, preIss.invertState[i])
 				}
 			}
-		}
-	}
-
-	return &res
-}
-
-func IntersectInvertIndex(lii *InvertIndex, rii *InvertIndex, sids []uint64) *InvertIndex {
-	if lii == nil {
-		return rii
-	}
-	if rii == nil {
-		return lii
-	}
-
-	res := NewInvertIndex()
-	for sid, lIss := range lii.invertStates {
-		rIss, ok := rii.invertStates[sid]
-		if !ok {
-			continue
-		}
-		if len(lIss.invertState) > len(rIss.invertState) {
-			lIss.invertState, rIss.invertState = rIss.invertState, lIss.invertState
-		}
-
-		var preTimestamp int64
-		for i := 0; i < len(lIss.invertState); i++ {
-			if !rIss.InvertTimestampIsExisted(lIss.invertState[i].timestamp) ||
-				preTimestamp == lIss.invertState[i].timestamp {
-				continue
-			}
-			res.AddInvertState(sid, lIss.invertState[i])
-			preTimestamp = lIss.invertState[i].timestamp
 		}
 	}
 

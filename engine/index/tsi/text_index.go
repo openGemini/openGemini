@@ -206,23 +206,29 @@ func (idx *TextIndex) SearchByTokenIndex(name string, sids []uint64, n *influxql
 	if !ok {
 		return nil, fmt.Errorf("the type of LHS value is wrong")
 	}
-	value, ok := n.RHS.(*influxql.StringLiteral)
-	if !ok {
-		return nil, fmt.Errorf("the type of RHS value is wrong")
-	}
-
 	tokenIndex, ok := idx.fieldTable[name][key.Val]
 	if !ok {
 		return nil, fmt.Errorf("the field(%s) of measurement(%s) has no text index", key.Val, name)
 	}
 
+	// Like
+	if n.Op == influxql.LIKE {
+		value, ok := n.RHS.(*influxql.VarRef)
+		if !ok {
+			return nil, fmt.Errorf("the type of RHS value is wrong")
+		}
+		return tokenIndex.Search(clv.Fuzzy, value.Val, sids)
+	}
+	// MATCH, MATCH_PHRASE
+	value, ok := n.RHS.(*influxql.StringLiteral)
+	if !ok {
+		return nil, fmt.Errorf("the type of RHS value is wrong")
+	}
 	switch n.Op {
 	case influxql.MATCH:
 		return tokenIndex.Search(clv.Match, value.Val, sids)
 	case influxql.MATCH_PHRASE:
 		return tokenIndex.Search(clv.Match_Phrase, value.Val, sids)
-	case influxql.LIKE:
-		return tokenIndex.Search(clv.Fuzzy, value.Val, sids)
 	default:
 	}
 	return nil, nil
