@@ -110,7 +110,7 @@ Usage: %s run [flags]
 
 const VERSION = `openGemini version info:
 %s: %s
-git: HEAD %s
+git: %s %s
 os: %s
 arch: %s
 `

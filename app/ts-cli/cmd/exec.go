@@ -68,7 +68,6 @@ func executeCompatible() error {
 	if err := compatibleCmd.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-
 	unknownArgs := compatibleCmd.Args()
 	if len(unknownArgs) > 0 {
 		compatibleCmd.Usage()
