@@ -108,7 +108,7 @@ func doRun(args ...string) error {
 		util.MustClose(mainCmd)
 		mainCmd.Logger.Info("Sql shutdown successfully!")
 	case "version":
-		fmt.Printf(app.VERSION, TsSql, TsVersion, TsCommit, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf(app.VERSION, TsSql, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
 	default:
 		return fmt.Errorf(sqlUsage)
 	}
