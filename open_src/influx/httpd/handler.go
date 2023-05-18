@@ -525,6 +525,14 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		}*/
 
 	q, err := YyParser.GetQuery()
+	
+	var i int
+	for ; i < len(q.Statements); i++ {
+		if stmt, ok := q.Statements[i].(*influxql.SelectStatement); ok {
+			stmt.DisableWithoutTimeFilter = h.Config.DisableQueryWithoutTimeFilter
+			q.Statements[i] = stmt
+		}
+	}
 
 	if err != nil {
 		h.httpError(rw, "error parsing query: "+err.Error(), http.StatusBadRequest)
