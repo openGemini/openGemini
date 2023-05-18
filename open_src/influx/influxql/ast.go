@@ -1292,7 +1292,10 @@ type SelectStatement struct {
 
 	// Data sources (measurements) that fields are extracted from.
 	Sources Sources
-
+	
+	// Disable query if without time filter.
+	DisableWithoutTimeFilter bool
+	
 	// An expression evaluated on data point.
 	Condition Expr
 
