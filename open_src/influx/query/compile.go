@@ -173,6 +173,10 @@ func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 	// Retrieve the fill option for the statement.
 	c.FillOption = stmt.Fill
 
+	if stmt.DisableWithoutTimeFilter && c.TimeRange.Min.IsZero() && c.TimeRange.Max.IsZero() {
+		return fmt.Errorf("must with a time range")
+	}
+	
 	// Resolve the min and max times now that we know if there is an interval or not.
 	if c.TimeRange.Min.IsZero() {
 		c.TimeRange.Min = time.Unix(0, influxql.MinTime).UTC()
