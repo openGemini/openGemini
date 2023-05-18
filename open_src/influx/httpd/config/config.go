@@ -76,6 +76,7 @@ type Config struct {
 	QueryMemoryLimitEnabled bool           `toml:"query-memory-limit-enabled"`
 	ChunkReaderParallel     int            `toml:"chunk-reader-parallel"`
 	ReadBlockSize           toml.Size      `toml:"read-block-size"`
+	DisableQueryWithoutTimeFilter bool           `toml:"disable-query-without-time-filter"`
 }
 
 // NewHttpConfig returns a new Config with default settings.
@@ -102,6 +103,7 @@ func NewConfig() Config {
 		QueryMemoryLimitEnabled: true,
 		ChunkReaderParallel:     cpu.GetCpuNum(),
 		ReadBlockSize:           toml.Size(DefaultBlockSize),
+		DisableQueryWithoutTimeFilter: false,
 	}
 }
 
