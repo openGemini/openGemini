@@ -202,13 +202,17 @@ Elapsed: 7.723332ms
 
 2. 扫描下方二维码关注openGemini公众号
 
-![img](images/qrt.png)
+  ![img](images/qrt.png)
 
-3. 社区邮箱：community.ts@opengemini.org
+3. 社区邮箱   
 
-4. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
+   community.ts@opengemini.org
 
-5. [Twitter](https://twitter.com/openGemini)
+4. [邮件列表(mailing list)](https://groups.google.com/g/openGemini)
+
+5. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
+
+6. [Twitter](https://twitter.com/openGemini)
 
 ## License
 
