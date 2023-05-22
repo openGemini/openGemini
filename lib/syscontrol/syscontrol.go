@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
 var (
@@ -68,23 +69,25 @@ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=print_logical_plan&enabled=
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=sliding_window_push_up&enabled=1'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=log_rows&switchon=true&rules=mst,tk1=tv1'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=force_broadcast_query&enabled=1'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=time_filter_protection&enabled=true'
 */
 
 const (
-	DataFlush           = "flush"
-	DownSampleInOrder   = "downsample_in_order"
-	compactionEn        = "compen"
-	compmerge           = "merge"
-	snapshot            = "snapshot"
-	ChunkReaderParallel = "chunk_reader_parallel"
-	BinaryTreeMerge     = "binary_tree_merge"
-	PrintLogicalPlan    = "print_logical_plan"
-	SlidingWindowPushUp = "sliding_window_push_up"
-	ForceBroadcastQuery = "force_broadcast_query"
-	Failpoint           = "failpoint"
-	Readonly            = "readonly"
-	LogRows             = "log_rows"
-	verifyNode          = "verifynode"
+	DataFlush            = "flush"
+	DownSampleInOrder    = "downsample_in_order"
+	compactionEn         = "compen"
+	compmerge            = "merge"
+	snapshot             = "snapshot"
+	ChunkReaderParallel  = "chunk_reader_parallel"
+	BinaryTreeMerge      = "binary_tree_merge"
+	PrintLogicalPlan     = "print_logical_plan"
+	SlidingWindowPushUp  = "sliding_window_push_up"
+	ForceBroadcastQuery  = "force_broadcast_query"
+	Failpoint            = "failpoint"
+	Readonly             = "readonly"
+	LogRows              = "log_rows"
+	verifyNode           = "verifynode"
+	TimeFilterProtection = "time_filter_protection"
 )
 
 var (
@@ -104,6 +107,14 @@ func SetQuerySeriesLimit(limit int) {
 
 func GetQuerySeriesLimit() int {
 	return querySeriesLimit
+}
+
+func SetTimeFilterProtection(enabled bool) {
+	query.TimeFilterProtection = enabled
+}
+
+func GetTimeFilterProtection() bool {
+	return query.TimeFilterProtection
 }
 
 type LogRowsRule struct {
@@ -223,6 +234,14 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 			return fmt.Errorf("invalid enabled:%v", enabled)
 		}
 		executor.SetEnableForceBroadcastQuery(enabled)
+		res := "\n\tsuccess"
+		resp.WriteString(res)
+	case TimeFilterProtection:
+		enabled, err := GetBoolValue(req.Param(), "enabled")
+		if err != nil {
+			return err
+		}
+		SetTimeFilterProtection(enabled)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
 	default:
