@@ -151,3 +151,21 @@ func TestQuerySeriesLimit(t *testing.T) {
 	limit := GetQuerySeriesLimit()
 	assert.Equal(t, limit, 123)
 }
+
+func TestSetTimeFilterProtection(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("time_filter_protection")
+	req.SetParam(map[string]string{
+		"enabled": "true",
+	})
+	var sb strings.Builder
+	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "success")
+	sb.Reset()
+
+	SetTimeFilterProtection(false)
+	enable := GetTimeFilterProtection()
+	assert.Equal(t, enable, false)
+}
