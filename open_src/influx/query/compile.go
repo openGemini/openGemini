@@ -146,6 +146,8 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 	return c, nil
 }
 
+var TimeFilterProtection bool
+
 // preprocess retrieves and records the global attributes of the current statement.
 func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 	c.Ascending = stmt.TimeAscending()
@@ -172,6 +174,9 @@ func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 
 	// Retrieve the fill option for the statement.
 	c.FillOption = stmt.Fill
+	if TimeFilterProtection && c.TimeRange.Min.IsZero() && c.TimeRange.Max.IsZero() {
+		return fmt.Errorf("disabled the query because without specifying the time filter")
+	}
 
 	// Resolve the min and max times now that we know if there is an interval or not.
 	if c.TimeRange.Min.IsZero() {
