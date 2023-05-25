@@ -198,6 +198,8 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 		return fsm.applyExpandGroupsCommand(&cmd)
 	case proto2.Command_UpdatePtVersionCommand:
 		return fsm.applyUpdatePtVersionCommand(&cmd)
+	case proto2.Command_CreateContinuousQueryCommand:
+		return nil
 	default:
 		panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
 	}

@@ -145,6 +145,11 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
 		err = e.executeCreateRetentionPolicyStatement(stmt)
+	case *influxql.CreateContinuousQueryStatement:
+		if ctx.ReadOnly { // Benevor TODO: for what?
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeCreateContinuousQueryStatement(stmt)
 	case *influxql.CreateUserStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
@@ -597,6 +602,25 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 
 	// Create new retention policy.
 	_, err := e.MetaClient.CreateRetentionPolicy(stmt.Database, &spec, stmt.Default)
+	return err
+}
+
+func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql.CreateContinuousQueryStatement) error {
+	if !meta2.ValidName(stmt.Name) {
+		// TODO This should probably be in `(*meta.Data).CreateContinuousQuery`
+		// but can't go there until 1.1 is used everywhere
+		return meta2.ErrInvalidName
+	}
+
+	// Benevor TODO: Check if the number of existing cqs exceeds the upper limit
+
+	spec := meta2.ContinuousQuerySpec{
+		Name:  stmt.Name,
+		Query: stmt.String(),
+	}
+
+	// Create new continuous query.
+	_, err := e.MetaClient.CreateContinuousQuery(stmt.Database, &spec)
 	return err
 }
 

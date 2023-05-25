@@ -3445,6 +3445,9 @@ func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spe
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
 	return nil, nil
 }
+func (client *MockMetaClient) CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }
