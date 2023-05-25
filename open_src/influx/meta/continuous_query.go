@@ -20,11 +20,7 @@ type ContinuousQueryInfo struct {
 // NewContinuousQueryInfo returns a new instance of ContinuousQueryInfo
 // with default values.
 func NewContinuousQueryInfo() *ContinuousQueryInfo {
-	return &ContinuousQueryInfo{
-		Name:        "",
-		Query:       "",
-		MarkDeleted: false,
-	}
+	return &ContinuousQueryInfo{}
 }
 
 // Apply applies a specification to the continuous query info.

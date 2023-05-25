@@ -146,7 +146,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		err = e.executeCreateRetentionPolicyStatement(stmt)
 	case *influxql.CreateContinuousQueryStatement:
-		if ctx.ReadOnly { // Benevor TODO: for what?
+		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
 		err = e.executeCreateContinuousQueryStatement(stmt)

@@ -1151,6 +1151,57 @@ func (data *Data) MarkRetentionPolicyDelete(database, name string) error {
 	return nil
 }
 
+func (data *Data) CheckCanCreateContinuousQuery(dbi *DatabaseInfo, cqi *ContinuousQueryInfo) error {
+	// Validate continuous query.
+	if cqi == nil {
+		return ErrContinuosQueryRequired
+	} else if cqi.Name == "" {
+		return ErrContinuosQueryNameRequired
+	} else if cqi.Query == "" {
+		return ErrContinuosQuerySourceRequired
+	}
+
+	if err := cqi.CheckSpecValid(); err != nil {
+		return err
+	}
+
+	// check same name
+	if dbi.ContinuousQuery(cqi.Name) != nil {
+		// Benevor TODO: how about a cq with the same name but marked as deleted.
+		return ErrSameContinuosQueryName
+	}
+
+	// check same action
+	if err := dbi.CheckConfilctWithConfiltCq(cqi); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (data *Data) SetContinuousQuery(dbi *DatabaseInfo, cqi *ContinuousQueryInfo) {
+	if dbi.ContinuousQueries == nil {
+		dbi.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
+	}
+	dbi.ContinuousQueries[cqi.Name] = cqi
+}
+
+func (data *Data) CreateContinuousQuery(dbName string, cqi *ContinuousQueryInfo) error {
+	dbi, err := data.GetDatabase(dbName)
+	if err != nil {
+		return err
+	}
+	err = data.CheckCanCreateContinuousQuery(dbi, cqi)
+	if err != nil {
+		if err == ErrContinuousQueryExists {
+			return nil
+		}
+		return err
+	}
+	data.SetContinuousQuery(dbi, cqi)
+	return nil
+}
+
 func (data *Data) MarkMeasurementDelete(database, policy, measurement string) error {
 	mst, err := data.Measurement(database, policy, measurement)
 	if err != nil {
