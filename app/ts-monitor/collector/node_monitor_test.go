@@ -45,7 +45,8 @@ func TestNodeCollector(t *testing.T) {
 	fname := filepath.Join(dname, "file1")
 	_ = os.WriteFile(fname, make([]byte, 10240000), 0600)
 	nc := NewNodeCollector(log, &conf)
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", time.Hour, false, false, log, "errLogHistory")
+	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "",
+		false, time.Hour, false, false, log, "errLogHistory")
 	nc.Reporter = rj
 
 	doFn := func(r *http.Request) (*http.Response, error) {
@@ -75,7 +76,8 @@ func TestNodeCollector_Manual(t *testing.T) {
 	}
 	nc := NewNodeCollector(logger, &conf)
 	defer nc.Close()
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", time.Hour, false, false, logger, "errLogHistory")
+	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "",
+		false, time.Hour, false, false, logger, "errLogHistory")
 	nc.Reporter = rj
 
 	type TestCase struct {

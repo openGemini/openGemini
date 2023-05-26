@@ -102,12 +102,17 @@ type ReportJob struct {
 	reportStat *ReportStat
 }
 
-func NewReportJob(addr, database, storeRP string, rpDuration time.Duration, gzipped, compress bool, logger *logger.Logger, errLogHistory string) *ReportJob {
+func NewReportJob(addr, database, storeRP, username, password string, useHttps bool, rpDuration time.Duration, gzipped, compress bool, logger *logger.Logger, errLogHistory string) *ReportJob {
+	protocol := "http"
+	if useHttps {
+		protocol = "https"
+	}
+
 	mr := &ReportJob{
 		storeDatabase: database,
 		storeRP:       storeRP,
 		storeDuration: rpDuration,
-		writeUrl:      fmt.Sprintf("http://%s/write?db=%s&rp=%s", addr, database, storeRP),
+		writeUrl:      fmt.Sprintf("%s://%s/write?db=%s&rp=%s&u=%s&p=%s", protocol, addr, database, storeRP, username, password),
 		queryUrl:      fmt.Sprintf("http://%s/query", addr),
 		compress:      compress,
 		gzipped:       gzipped,
