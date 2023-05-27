@@ -154,6 +154,8 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 		return fsm.applyReShardingCommand(&cmd)
 	case proto2.Command_UpdateSchemaCommand:
 		return fsm.applyUpdateSchemaCommand(&cmd)
+	case proto2.Command_UpdateSchemaBitmapCommand:
+		return fsm.applyUpdateSchemaBitmapCommand(&cmd)
 	case proto2.Command_AlterShardKeyCmd:
 		return fsm.applyAlterShardKeyCommand(&cmd)
 	case proto2.Command_PruneGroupsCommand:
@@ -214,6 +216,15 @@ func (fsm *storeFSM) applyReShardingCommand(cmd *proto2.Command) interface{} {
 		Bounds:       v.GetShardBounds(),
 	}
 	return fsm.data.ReSharding(info)
+}
+
+func (fsm *storeFSM) applyUpdateSchemaBitmapCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSchemaBitmapCommand_Command)
+	v, ok := ext.(*proto2.UpdateSchemaBitmapCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateSchemaBitmapCommand", ext))
+	}
+	return fsm.data.UpdateSchemaBitmap(v.GetDatabase(), v.GetRpName(), v.GetMeasurement(), v.GetIds(), time.Unix(0, v.GetTimestamp()))
 }
 
 func (fsm *storeFSM) applyUpdateSchemaCommand(cmd *proto2.Command) interface{} {

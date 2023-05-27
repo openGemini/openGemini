@@ -183,22 +183,22 @@ func (s *Stream) Run() {
 						name:         v.Field,
 						alias:        v.Alias,
 						call:         v.Call,
-						inFieldType:  inFieldType,
-						outFieldType: outFieldType,
+						inFieldType:  inFieldType.Type,
+						outFieldType: outFieldType.Type,
 						f:            nil,
 					}
 				}
 				//TODO detect src schema change
 				fieldsDims := map[string]int32{}
 				for i := range stream.Dims {
-					ty, ok := srcMst.Schema[stream.Dims[i]]
+					info, ok := srcMst.Schema[stream.Dims[i]]
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, dim: %s check fail", stream.Name, dstMst.Name, stream.Dims[i]))
 						canRegisterTask = false
 						break
 					}
-					if influx.Field_Type_Tag != ty {
-						fieldsDims[stream.Dims[i]] = ty
+					if influx.Field_Type_Tag != info.Type {
+						fieldsDims[stream.Dims[i]] = info.Type
 					}
 				}
 				if canRegisterTask {

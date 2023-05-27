@@ -34,6 +34,9 @@ type RetentionPolicyInfo struct {
 	Subscriptions        []SubscriptionInfo
 	DownSamplePolicyInfo *DownSamplePolicyInfo
 	MarkDeleted          bool
+
+	// 新增
+	KeyID uint64 // 此RP，保证每一个tag/field能分配一个递增的ID
 }
 
 // NewRetentionPolicyInfo returns a new instance of RetentionPolicyInfo
@@ -44,6 +47,7 @@ func NewRetentionPolicyInfo(name string) *RetentionPolicyInfo {
 		ReplicaN:    DefaultRetentionPolicyReplicaN,
 		Duration:    DefaultRetentionPolicyDuration,
 		MarkDeleted: false,
+		KeyID:       0,
 	}
 }
 
@@ -51,6 +55,12 @@ func NewRetentionPolicyInfo(name string) *RetentionPolicyInfo {
 // with default name, replication, and duration.
 func DefaultRetentionPolicyInfo() *RetentionPolicyInfo {
 	return NewRetentionPolicyInfo(DefaultRetentionPolicyName)
+}
+
+func (rpi *RetentionPolicyInfo) getKeyID() uint64 {
+	keyid := rpi.KeyID
+	rpi.KeyID++
+	return keyid
 }
 
 func (rpi *RetentionPolicyInfo) updateWithOtherRetentionPolicy(newRpi *RetentionPolicyInfo) {

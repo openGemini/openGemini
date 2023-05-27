@@ -76,7 +76,9 @@ type PWMetaClient interface {
 	CreateShardGroup(database, policy string, timestamp time.Time) (*meta2.ShardGroupInfo, error)
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	GetIndexGroupInfo(database, retentionPolicy string, timestamp time.Time) (*meta2.IndexGroupInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
+	UpdateSchemaBitmap(database string, rp string, originName string, ids []uint64, timestamp time.Time) error
 	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	GetStreamInfos() map[string]*meta2.StreamInfo
@@ -631,6 +633,12 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		}
 		atomic.AddInt64(&statistics.HandlerStat.WriteCreateSgDuration, time.Since(start).Nanoseconds())
 
+		// 更新indexGroupInfo
+		indexGroupInfo, err := wh.getIndexGroupInfo(database, retentionPolicy, time.Unix(0, r.Timestamp))
+		if err == nil {
+			wh.updateSchemaBitmapIfNeeded(database, retentionPolicy, r, indexGroupInfo, ctx.ms, originName, time.Unix(0, r.Timestamp))
+		}
+
 		start = time.Now()
 		id := strconv.FormatInt(int64(sh.ID), 10)
 		ctx.getShardMap().Set(id, sh)
@@ -753,7 +761,15 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 				// the two-tier computing framework based on sql-store is adopted,
 				// the following is calculated at the sql layer.
 				if _, ok := ctx.stream.tasks[(*dstSis)[idx].Name]; !ok {
-					task, err := newStreamTask((*dstSis)[idx], mi.Schema, (*mis)[idx].Schema)
+					miSchemaType := make(map[string]int32, len(mi.Schema))
+					for name, schema := range mi.Schema {
+						miSchemaType[name] = schema.Type
+					}
+					misSchemaType := make(map[string]int32, len((*mis)[idx].Schema))
+					for name, schema := range (*mis)[idx].Schema {
+						misSchemaType[name] = schema.Type
+					}
+					task, err := newStreamTask((*dstSis)[idx], miSchemaType, misSchemaType)
 					if err != nil {
 						return err
 					}

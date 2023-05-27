@@ -41,6 +41,9 @@ type IndexGroupInfo struct {
 	EndTime   time.Time
 	Indexes   []IndexInfo
 	DeletedAt time.Time
+
+	// 新增
+	SchemaBitmap map[uint64]string // keyID->measurement original name
 }
 
 func (igi *IndexGroupInfo) canDelete() bool {
@@ -89,7 +92,10 @@ func (igi *IndexGroupInfo) marshal() *proto2.IndexGroupInfo {
 	for i := range igi.Indexes {
 		pb.Indexes[i] = igi.Indexes[i].marshal()
 	}
-
+	pb.SchemaBitmap = make(map[uint64]string, len(igi.SchemaBitmap))
+	for id, _ := range igi.SchemaBitmap {
+		pb.SchemaBitmap[id] = igi.SchemaBitmap[id]
+	}
 	return pb
 }
 
@@ -111,6 +117,13 @@ func (igi *IndexGroupInfo) unmarshal(pb *proto2.IndexGroupInfo) {
 		igi.Indexes = make([]IndexInfo, len(pb.GetIndexes()))
 		for i, x := range pb.GetIndexes() {
 			igi.Indexes[i].unmarshal(x)
+		}
+	}
+
+	if len(pb.GetSchemaBitmap()) > 0 {
+		igi.SchemaBitmap = make(map[uint64]string, len(pb.SchemaBitmap))
+		for id, mstName := range pb.GetSchemaBitmap() {
+			igi.SchemaBitmap[id] = mstName
 		}
 	}
 }

@@ -78,6 +78,53 @@ func (wh *writeHelper) createMeasurement(database, retentionPolicy, name string)
 	return mst, err
 }
 
+func (wh *writeHelper) getIndexGroupInfo(database, retentionPolicy string, timestamp time.Time) (*meta2.IndexGroupInfo, error) {
+	var indexGroupInfo *meta2.IndexGroupInfo
+	var err error
+	indexGroupInfo, err = wh.pw.MetaClient.GetIndexGroupInfo(database, retentionPolicy, timestamp)
+	if err != nil {
+		return nil, err
+	}
+	return indexGroupInfo, err
+}
+
+func (wh *writeHelper) updateSchemaBitmapIfNeeded(database, rp string, r *influx.Row, idi *meta2.IndexGroupInfo, mst *meta2.MeasurementInfo,
+	originName string, timestamp time.Time) error {
+	schemaBitmap := idi.SchemaBitmap
+	var ids []uint64
+
+	for _, tag := range r.Tags {
+		for keyName, keyInfo := range mst.Schema {
+			if keyName == tag.Key {
+				_, ok := schemaBitmap[keyInfo.ID]
+				if !ok {
+					ids = append(ids, keyInfo.ID)
+				}
+				break
+			}
+		}
+	}
+
+	for _, field := range r.Fields {
+		for keyName, keyInfo := range mst.Schema {
+			if keyName == field.Key {
+				_, ok := schemaBitmap[keyInfo.ID]
+				if !ok {
+					ids = append(ids, keyInfo.ID)
+				}
+				break
+			}
+		}
+	}
+
+	if len(ids) == 0 {
+		return nil
+	}
+	err := wh.pw.MetaClient.UpdateSchemaBitmap(database, rp, originName, ids, timestamp)
+	return err
+
+}
+
 func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
 	// update schema if needed
@@ -104,9 +151,9 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 	var dropFieldIndex []int
 	var err error
 	for i, field := range r.Fields {
-		fieldType, ok := schemaMap[field.Key]
+		fieldInfo, ok := schemaMap[field.Key]
 		if ok {
-			if fieldType != field.Type {
+			if fieldInfo.Type != field.Type {
 				failpoint.Inject("skip-field-type-conflict", func(val failpoint.Value) {
 					if strings2.EqualInterface(val, field.Key) {
 						failpoint.Continue()
@@ -114,7 +161,7 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 				})
 
 				err = errno.NewError(errno.FieldTypeConflict, field.Key, originName, influx.FieldTypeString(field.Type),
-					influx.FieldTypeString(fieldType)).SetModule(errno.ModuleWrite)
+					influx.FieldTypeString(fieldInfo.Type)).SetModule(errno.ModuleWrite)
 				dropFieldIndex = append(dropFieldIndex, i)
 			}
 			continue

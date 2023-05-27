@@ -249,24 +249,78 @@ func (data *Data) Measurement(database, retentionPolicy, mst string) (*Measureme
 	return msti, nil
 }
 
+func (data *Data) GetIndexGroupInfo(database, retentionPolicy string, timestamp time.Time) (*IndexGroupInfo, error) {
+	rp, err := data.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return nil, err
+	}
+	var igIdx int
+	for igIdx = 0; igIdx < len(rp.IndexGroups); igIdx++ {
+		if rp.IndexGroups[igIdx].Contains(timestamp) {
+			break
+		}
+	}
+	if igIdx < len(rp.IndexGroups) && len(rp.IndexGroups[igIdx].Indexes) >= int(data.ClusterPtNum) {
+		return &rp.IndexGroups[igIdx], nil
+	}
+	return nil, ErrIndexGroupNotFound
+}
+
+func (data *Data) UpdateSchemaBitmap(database string, retentionPolicy string, mst string, ids []uint64, timestamp time.Time) error {
+	msti, err := data.Measurement(database, retentionPolicy, mst)
+	if err != nil {
+		return err
+	}
+	indexGroupInfo, err := data.GetIndexGroupInfo(database, retentionPolicy, timestamp)
+	if err != nil {
+		return err
+	}
+
+	schemaBitmap := indexGroupInfo.SchemaBitmap
+
+	for _, id := range ids {
+		_, ok := schemaBitmap[id]
+		if !ok {
+			schemaBitmap[id] = mst
+			for key, info := range msti.Schema {
+				if info.ID == id {
+					info.Ref++
+					msti.Schema[key] = info
+					break
+				}
+			}
+		}
+	}
+	return nil
+
+}
+
 func (data *Data) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
 	msti, err := data.Measurement(database, retentionPolicy, mst)
 	if err != nil {
 		return err
 	}
+	rp, err := data.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return err
+	}
 
-	schema := make(map[string]int32)
+	schema := make(map[string]KeyInfo)
 	for field := range msti.Schema {
 		schema[field] = msti.Schema[field]
 	}
 
 	for i := range fieldToCreate {
-		existType, ok := schema[fieldToCreate[i].GetFieldName()]
+		existKeyInfo, ok := schema[fieldToCreate[i].GetFieldName()]
 		if !ok {
-			schema[fieldToCreate[i].GetFieldName()] = fieldToCreate[i].GetFieldType()
+			ki := KeyInfo{}
+			ki.ID = rp.getKeyID()
+			ki.Ref = 0
+			ki.Type = fieldToCreate[i].GetFieldType()
+			schema[fieldToCreate[i].GetFieldName()] = ki
 			continue
 		}
-		if existType != fieldToCreate[i].GetFieldType() {
+		if existKeyInfo.Type != fieldToCreate[i].GetFieldType() {
 			return ErrFieldTypeConflict
 		}
 	}
@@ -1725,8 +1779,30 @@ func (data *Data) pruneIndexGroups(id uint64) error {
 					rp.IndexGroups[idx].Indexes[pos].MarkDelete = true
 				}
 				if rp.IndexGroups[idx].canDelete() {
+					tempBitMap := make(map[uint64]string, len(rp.IndexGroups[idx].SchemaBitmap))
+					for k, v := range rp.IndexGroups[idx].SchemaBitmap {
+						tempBitMap[k] = v
+					}
 					rp.IndexGroups = append(rp.IndexGroups[:idx],
 						rp.IndexGroups[idx+1:]...)
+					for keyID, mst := range tempBitMap {
+						msti := rp.Measurement(mst)
+						if msti == nil {
+							continue
+						}
+						for keyName, keyInfo := range msti.Schema {
+							if keyInfo.ID == keyID {
+								keyInfo.Ref--
+								if keyInfo.Ref <= 0 {
+									delete(msti.Schema, keyName)
+								} else {
+									msti.Schema[keyName] = keyInfo
+								}
+								break
+							}
+						}
+					}
+
 				} else {
 					idx++
 				}
