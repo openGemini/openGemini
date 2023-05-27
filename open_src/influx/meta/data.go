@@ -276,7 +276,10 @@ func (data *Data) UpdateSchemaBitmap(database string, retentionPolicy string, ms
 		return err
 	}
 
-	schemaBitmap := indexGroupInfo.SchemaBitmap
+	schemaBitmap := make(map[uint64]string)
+	for id := range indexGroupInfo.SchemaBitmap {
+		schemaBitmap[id] = indexGroupInfo.SchemaBitmap[id]
+	}
 
 	for _, id := range ids {
 		_, ok := schemaBitmap[id]
@@ -291,6 +294,7 @@ func (data *Data) UpdateSchemaBitmap(database string, retentionPolicy string, ms
 			}
 		}
 	}
+	indexGroupInfo.SchemaBitmap = schemaBitmap
 	return nil
 
 }

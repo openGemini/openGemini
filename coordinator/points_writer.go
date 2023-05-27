@@ -634,6 +634,17 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		atomic.AddInt64(&statistics.HandlerStat.WriteCreateSgDuration, time.Since(start).Nanoseconds())
 
 		// 更新indexGroupInfo
+		ctx.ms, err = wh.createMeasurement(database, retentionPolicy, originName)
+		if err != nil {
+			if errno.Equal(err, errno.InvalidMeasurement) {
+				w.logger.Error("invalid measurement", zap.Error(err))
+				partialErr = err
+				dropped++
+				err = nil
+				continue
+			}
+			return nil, dropped, err
+		}
 		indexGroupInfo, err := wh.getIndexGroupInfo(database, retentionPolicy, time.Unix(0, r.Timestamp))
 		if err == nil {
 			wh.updateSchemaBitmapIfNeeded(database, retentionPolicy, r, indexGroupInfo, ctx.ms, originName, time.Unix(0, r.Timestamp))
