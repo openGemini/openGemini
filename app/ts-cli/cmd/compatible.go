@@ -55,6 +55,17 @@ func (c *CompatibleCommand) Bind(config *geminicli.CommandLineConfig) {
 	c.fs.BoolVar(&config.Import, "import", false, "Import a previous database export from file")
 	c.fs.StringVar(&config.Path, "path", "", "path to the file to import to OpenGemini.")
 	c.fs.StringVar(&config.Precision, "precision", "ns", "Specify the format of the timestamp: rfc3339, h, m, s, ms, u or ns. default is ns.")
+	c.fs.BoolVar(&config.Export, "export", false, "Export a database from specific data file")
+	c.fs.StringVar(&config.DataDir, "datadir", "", "Data storage path to export.")
+	c.fs.StringVar(&config.WalDir, "waldir", "", "WAL storage path to export.")
+	c.fs.StringVar(&config.Out, "out", "/tmp/openGemini/out.txt", "'-' for standard out or the destination file to export to")
+	c.fs.StringVar(&config.Retentions, "retention", "", "Optional. Retention policies to export, note that it can only be used when exporting a single database. eg. rpname1,rpname2")
+	c.fs.StringVar(&config.Databases, "databases", "", "Optional. Databases to export. eg. dbname1,dbname2")
+	c.fs.StringVar(&config.Start, "start", "", "Optional. As the start filtering time of export data.  eg. YYYY-MM-DDTHH:MM:SSZ")
+	c.fs.StringVar(&config.End, "end", "", "Optional. As the end filtering time of export data. eg. YYYY-MM-DDTHH:MM:SSZ")
+	c.fs.BoolVar(&config.Compress, "compress", false, "Optional. Compress the export output.")
+	c.fs.BoolVar(&config.LpOnly, "lponly", false, "Only export line protocol.")
+	flag.CommandLine = c.fs
 }
 
 func (c *CompatibleCommand) Usage() {

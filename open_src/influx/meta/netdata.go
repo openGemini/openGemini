@@ -114,6 +114,10 @@ func (t *TimeRangeInfo) equals(t1 *TimeRangeInfo) bool {
 	return t.StartTime.Equal(t1.StartTime) && t.EndTime.Equal(t1.EndTime)
 }
 
+func (t *TimeRangeInfo) Interval() time.Duration {
+	return t.EndTime.Sub(t.StartTime)
+}
+
 func (t *ShardTimeRangeInfo) MarshalBinary() ([]byte, error) {
 	pb := &proto2.ShardTimeRangeInfo{}
 	pb.TimeRange = t.TimeRange.marshal()

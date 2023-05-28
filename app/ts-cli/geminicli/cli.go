@@ -64,6 +64,19 @@ type CommandLineConfig struct {
 	// import cmd options
 	Import bool
 	Path   string
+
+	// export cmd options
+	Export       bool
+	Databases    string
+	DataDir      string
+	WalDir       string
+	Out          string
+	Retentions   string
+	Measurements string
+	Start        string
+	End          string
+	Compress     bool
+	LpOnly       bool
 }
 
 type HttpClient interface {

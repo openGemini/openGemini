@@ -82,5 +82,13 @@ func executeCompatible() error {
 		return nil
 	}
 
+	if gFlags.Export {
+		exportCmd := geminicli.NewExporter()
+		if err := exportCmd.Export(&gFlags); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	return interactiveCmd.RunE(interactiveCmd, nil)
 }
