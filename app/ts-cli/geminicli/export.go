@@ -99,25 +99,25 @@ func (l *LineFilter) Filter(t int64) bool {
 }
 
 type DatabaseDiskInfo struct {
-	dbName              string              // ie. "NOAA_water_database"
-	rps                 map[string]struct{} // ie. ["autogen","every_one_day"]
-	dataDir             string              // ie. "/tmp/openGemini/data/data"
-	walDir              string              // ie. "/tmp/openGemini/data/wal"
-	rpNameToTsspDirMap  map[string]string   // ie. {"autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen"}
-	rpNameToWalDirMap   map[string]string   // ie. {"autogen", "/tmp/openGemini/data/wal/NOAA_water_database/0/autogen"}
-	rpNameToIndexDirMap map[string]string   // ie. {"autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen/index"}
+	dbName          string              // ie. "NOAA_water_database"
+	rps             map[string]struct{} // ie. ["0:autogen","1:every_one_day"]
+	dataDir         string              // ie. "/tmp/openGemini/data/data"
+	walDir          string              // ie. "/tmp/openGemini/data/wal"
+	rpToTsspDirMap  map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen"}
+	rpToWalDirMap   map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/wal/NOAA_water_database/0/autogen"}
+	rpToIndexDirMap map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen/index"}
 }
 
 func NewDatabaseDiskInfo() *DatabaseDiskInfo {
 	return &DatabaseDiskInfo{
-		rps:                 make(map[string]struct{}),
-		rpNameToTsspDirMap:  make(map[string]string),
-		rpNameToWalDirMap:   make(map[string]string),
-		rpNameToIndexDirMap: make(map[string]string),
+		rps:             make(map[string]struct{}),
+		rpToTsspDirMap:  make(map[string]string),
+		rpToWalDirMap:   make(map[string]string),
+		rpToIndexDirMap: make(map[string]string),
 	}
 }
 
-func (d *DatabaseDiskInfo) Init(actualDataDir string, actualWalDir string, databaseName string, retentionPolicyName string) error {
+func (d *DatabaseDiskInfo) Init(actualDataDir string, actualWalDir string, databaseName string, retentionPolicy string) error {
 	d.dbName = databaseName
 
 	// check whether the database is in actualDataPath
@@ -140,53 +140,60 @@ func (d *DatabaseDiskInfo) Init(actualDataDir string, actualWalDir string, datab
 	}
 	// TODO(wtsclwq) Will there be multiple PTs in an instance?
 	for _, ptDir := range ptDirs {
-		// ie./tmp/openGemini/data/data/my_db/0
-		dataRpPath := path.Join(d.dataDir, ptDir.Name())
-		walRpPath := path.Join(d.walDir, ptDir.Name())
-		if retentionPolicyName != "" {
-			rpTsspDir := path.Join(dataRpPath, retentionPolicyName)
-			if fileInfo, err := os.Stat(rpTsspDir); err != nil {
-				return fmt.Errorf("retention policy %q invalid : %s", retentionPolicyName, err)
-			} else {
-				d.rps[fileInfo.Name()] = struct{}{}
-				d.rpNameToTsspDirMap[fileInfo.Name()] = rpTsspDir
-				d.rpNameToIndexDirMap[fileInfo.Name()] = path.Join(rpTsspDir, "index")
-			}
-			rpWalDir := path.Join(walRpPath, retentionPolicyName)
-			if fileInfo, err := os.Stat(rpWalDir); err != nil {
-				return fmt.Errorf("retention policy %q invalid : %s", retentionPolicyName, err)
-			} else {
-				d.rpNameToWalDirMap[fileInfo.Name()] = rpWalDir
+		// ie. /tmp/openGemini/data/data/my_db/0
+		ptTsspPath := path.Join(d.dataDir, ptDir.Name())
+		// ie. /tmp/openGemini/data/wal/my_db/0
+		ptWalPath := path.Join(d.walDir, ptDir.Name())
+
+		if retentionPolicy != "" {
+			rpNames := strings.Split(retentionPolicy, ",")
+			for _, rpName := range rpNames {
+				ptWithRp := ptDir.Name() + ":" + rpName
+				rpTsspPath := path.Join(ptTsspPath, rpName)
+				if _, err := os.Stat(rpTsspPath); err != nil {
+					return fmt.Errorf("retention policy %q invalid : %s", retentionPolicy, err)
+				} else {
+					d.rps[ptWithRp] = struct{}{}
+					d.rpToTsspDirMap[ptWithRp] = rpTsspPath
+					d.rpToIndexDirMap[ptWithRp] = path.Join(rpTsspPath, "index")
+				}
+				rpWalPath := path.Join(ptWalPath, rpName)
+				if _, err := os.Stat(rpWalPath); err != nil {
+					return fmt.Errorf("retention policy %q invalid : %s", retentionPolicy, err)
+				} else {
+					d.rpToWalDirMap[ptWithRp] = rpWalPath
+				}
 			}
 			continue
 		}
 
-		files, err := os.ReadDir(dataRpPath)
-		if err != nil {
+		rpTsspDirs, err1 := os.ReadDir(ptTsspPath)
+		if err1 != nil {
 			return err
 		}
-
-		for _, file := range files {
-			if file.IsDir() {
-				d.rps[file.Name()] = struct{}{}
-				rpDir := path.Join(dataRpPath, file.Name())
-				d.rpNameToTsspDirMap[file.Name()] = rpDir
-				d.rpNameToIndexDirMap[file.Name()] = path.Join(rpDir, "index")
+		for _, rpDir := range rpTsspDirs {
+			if rpDir.IsDir() {
+				ptWithRp := ptDir.Name() + ":" + rpDir.Name()
+				rpPath := path.Join(ptTsspPath, rpDir.Name())
+				d.rps[ptWithRp] = struct{}{}
+				d.rpToTsspDirMap[ptWithRp] = rpPath
+				d.rpToIndexDirMap[ptWithRp] = path.Join(rpPath, "index")
 			}
 		}
 
-		if retentionPolicyName != "" && len(d.rps) == 0 {
-			return fmt.Errorf("invalid retention policy '%q'", retentionPolicyName)
+		if retentionPolicy != "" && len(d.rps) == 0 {
+			return fmt.Errorf("invalid retention policy '%q'", retentionPolicy)
 		}
 
-		files, err = os.ReadDir(walRpPath)
-		if err != nil {
+		rpWalDirs, err2 := os.ReadDir(ptWalPath)
+		if err2 != nil {
 			return err
 		}
-		for _, file := range files {
-			if file.IsDir() {
-				rpDir := path.Join(walRpPath, file.Name())
-				d.rpNameToWalDirMap[file.Name()] = rpDir
+		for _, rpDir := range rpWalDirs {
+			ptWithRp := ptDir.Name() + ":" + rpDir.Name()
+			if rpDir.IsDir() {
+				rpPath := path.Join(ptWalPath, rpDir.Name())
+				d.rpToWalDirMap[ptWithRp] = rpPath
 			}
 		}
 	}
@@ -282,7 +289,6 @@ func (e *Exporter) parseDatabaseInfos() error {
 	}
 
 	dbNames := strings.Split(e.databases, ",")
-	rpNames := strings.Split(e.retentions, ",")
 	// If the user specifies multiple databases, find info one by one
 	if len(dbNames) > 1 {
 		if e.retentions != "" {
@@ -301,14 +307,12 @@ func (e *Exporter) parseDatabaseInfos() error {
 
 	// If the user specifies only one database, but specifies multiple retentions, find info one by one
 	if e.retentions != "" {
-		for _, rpName := range rpNames {
-			dbDiskInfo := NewDatabaseDiskInfo()
-			err := dbDiskInfo.Init(e.actualDataPath, e.actualWalPath, dbNames[0], rpName)
-			if err != nil {
-				return fmt.Errorf("can't find database files for %s : %s", dbNames[0], err)
-			}
-			e.databaseDiskInfos = append(e.databaseDiskInfos, dbDiskInfo)
+		dbDiskInfo := NewDatabaseDiskInfo()
+		err := dbDiskInfo.Init(e.actualDataPath, e.actualWalPath, dbNames[0], e.retentions)
+		if err != nil {
+			return fmt.Errorf("can't find database files for %s : %s", dbNames[0], err)
 		}
+		e.databaseDiskInfos = append(e.databaseDiskInfos, dbDiskInfo)
 		return nil
 	}
 
@@ -459,8 +463,8 @@ func (e *Exporter) writeFull(metaWriter io.Writer, outputWriter io.Writer) error
 
 // walkTsspFile walk all tssp files for every database.
 func (e *Exporter) walkTsspFile(dbDiskInfo *DatabaseDiskInfo) error {
-	for rp := range dbDiskInfo.rps {
-		rpDir := dbDiskInfo.rpNameToTsspDirMap[rp]
+	for ptWithRp := range dbDiskInfo.rps {
+		rpDir := dbDiskInfo.rpToTsspDirMap[ptWithRp]
 		if err := filepath.Walk(rpDir, func(path string, info fs.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -472,7 +476,9 @@ func (e *Exporter) walkTsspFile(dbDiskInfo *DatabaseDiskInfo) error {
 			tsspPathSplits := strings.Split(path, string(byte(os.PathSeparator)))
 			measurementDirWithVersion := tsspPathSplits[len(tsspPathSplits)-2]
 			measurementName := influx.GetOriginMstName(measurementDirWithVersion)
-			key := dbDiskInfo.dbName + ":" + rp
+			// eg. "0:autogen" to ["0","autogen"]
+			splitPtWithRp := strings.Split(ptWithRp, ":")
+			key := dbDiskInfo.dbName + ":" + splitPtWithRp[1]
 			e.manifest[key] = struct{}{}
 			if _, ok := e.rpNameToMeasurementTsspFilesMap[key]; !ok {
 				e.rpNameToMeasurementTsspFilesMap[key] = make(map[string][]string)
@@ -487,8 +493,8 @@ func (e *Exporter) walkTsspFile(dbDiskInfo *DatabaseDiskInfo) error {
 }
 
 func (e *Exporter) walkWalFile(dbDiskInfo *DatabaseDiskInfo) error {
-	for rp := range dbDiskInfo.rps {
-		rpDir := dbDiskInfo.rpNameToWalDirMap[rp]
+	for ptWithRp := range dbDiskInfo.rps {
+		rpDir := dbDiskInfo.rpToWalDirMap[ptWithRp]
 		if err := filepath.Walk(rpDir, func(path string, info fs.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -496,8 +502,9 @@ func (e *Exporter) walkWalFile(dbDiskInfo *DatabaseDiskInfo) error {
 			if filepath.Ext(path) != "."+walFileExtension {
 				return nil
 			}
-
-			key := dbDiskInfo.dbName + ":" + rp
+			//eg. "0:autogen" to ["0","autogen"]
+			splitPtWithRp := strings.Split(ptWithRp, ":")
+			key := dbDiskInfo.dbName + ":" + splitPtWithRp[1]
 			e.manifest[key] = struct{}{}
 			e.rpNameToWalFilesMap[key] = append(e.rpNameToWalFilesMap[key], path)
 			return nil
@@ -509,8 +516,8 @@ func (e *Exporter) walkWalFile(dbDiskInfo *DatabaseDiskInfo) error {
 }
 
 func (e *Exporter) walkIndexFiles(dbDiskInfo *DatabaseDiskInfo) error {
-	for rp := range dbDiskInfo.rps {
-		indexPath := dbDiskInfo.rpNameToIndexDirMap[rp]
+	for ptWithRp := range dbDiskInfo.rps {
+		indexPath := dbDiskInfo.rpToIndexDirMap[ptWithRp]
 		files, err := os.ReadDir(indexPath)
 		if err != nil {
 			return err
@@ -521,7 +528,9 @@ func (e *Exporter) walkIndexFiles(dbDiskInfo *DatabaseDiskInfo) error {
 				if err2 != nil {
 					return err2
 				}
-				key := dbDiskInfo.dbName + ":" + rp
+				// eg. "0:autogen" to ["0","autogen"]
+				splitPtWithRp := strings.Split(ptWithRp, ":")
+				key := dbDiskInfo.dbName + ":" + splitPtWithRp[1]
 				lockPath := ""
 				opt := &tsi.Options{}
 				opt.Path(path.Join(indexPath, file.Name()))
@@ -551,18 +560,23 @@ func parseShardGroupDuration(str string) (time.Duration, error) {
 
 // writeDDL write every "database:retention policy" DDL
 func (e *Exporter) writeDDL(metaWriter io.Writer, outputWriter io.Writer) error {
-	fmt.Fprintf(metaWriter, "# DDL\n")
+	fmt.Fprintf(metaWriter, "# DDL\n\n")
 	for _, dbDiskInfo := range e.databaseDiskInfos {
+		avoidRepetition := map[string]struct{}{}
 		databaseName := dbDiskInfo.dbName
 		fmt.Fprintf(outputWriter, "CREATE DATABASE %s\n", databaseName)
-		for rpName := range dbDiskInfo.rps {
-			rpPath := dbDiskInfo.rpNameToTsspDirMap[rpName]
+		for ptWithRp := range dbDiskInfo.rps {
+			rpName := strings.Split(ptWithRp, ":")[1]
+			rpPath := dbDiskInfo.rpToTsspDirMap[ptWithRp]
 			subDirs, err := os.ReadDir(rpPath)
 			if err != nil {
 				panic(err)
 			}
 			if shardGroupDuration, err := parseShardGroupDuration(subDirs[0].Name()); err == nil {
-				fmt.Fprintf(outputWriter, "CREATE RETENTION POLICY %s ON %s DURATION 0s REPLICATION 1 SHARD DURATION %s\n", rpName, databaseName, shardGroupDuration)
+				if _, ok := avoidRepetition[rpName]; !ok {
+					fmt.Fprintf(outputWriter, "CREATE RETENTION POLICY %s ON %s DURATION 0s REPLICATION 1 SHARD DURATION %s\n", rpName, databaseName, shardGroupDuration)
+					avoidRepetition[rpName] = struct{}{}
+				}
 			} else {
 				return err
 			}
@@ -574,14 +588,14 @@ func (e *Exporter) writeDDL(metaWriter io.Writer, outputWriter io.Writer) error 
 
 // writeDML write every "database:retention policy" DDL
 func (e *Exporter) writeDML(metaWriter io.Writer, outputWriter io.Writer) error {
-	fmt.Fprintf(metaWriter, "# DML\n")
+	fmt.Fprintf(metaWriter, "# DML\n\n")
 	var curDatabaseName string
 	// write DML for every item which key = "database:retention policy"
 	for key := range e.manifest {
 		keySplits := strings.Split(key, ":")
 
 		if keySplits[0] != curDatabaseName {
-			fmt.Fprintf(metaWriter, "# CONTEXT-DATABASE:%s\n", keySplits[0])
+			fmt.Fprintf(metaWriter, "# CONTEXT-DATABASE: %s\n\n", keySplits[0])
 			curDatabaseName = keySplits[0]
 		}
 
@@ -591,7 +605,7 @@ func (e *Exporter) writeDML(metaWriter io.Writer, outputWriter io.Writer) error 
 			return fmt.Errorf("cant find rpNameToIdToIndexMap for %q", key)
 		}
 
-		fmt.Fprintf(metaWriter, "# CONTEXT-RETENTION-POLICY:%s\n\n", keySplits[1])
+		fmt.Fprintf(metaWriter, "# CONTEXT-RETENTION-POLICY: %s\n\n", keySplits[1])
 
 		// Write all tssp files from this "database:retention policy"
 		if measurementToTsspFileMap, ok := e.rpNameToMeasurementTsspFilesMap[key]; ok {
@@ -616,9 +630,9 @@ func (e *Exporter) writeDML(metaWriter io.Writer, outputWriter io.Writer) error 
 
 // writeAllTsspFilesInRp writes all tssp files in a "database:retention policy"
 func (e *Exporter) writeAllTsspFilesInRp(metaWriter io.Writer, outputWriter io.Writer, measurementFilesMap map[string][]string, indexesMap map[uint64]*tsi.MergeSetIndex) error {
-	fmt.Fprintf(metaWriter, "# FROM TSSP FILE.\n")
+	fmt.Fprintf(metaWriter, "# FROM TSSP FILE.\n\n")
 	for measurementName, files := range measurementFilesMap {
-		fmt.Fprintf(metaWriter, "# CONTEXT-MEASUREMENT %s \n", measurementName)
+		fmt.Fprintf(metaWriter, "# CONTEXT-MEASUREMENT: %s \n", measurementName)
 		for _, file := range files {
 			// ie./tmp/openGemini/data/data/db1/0/autogen/1_1567382400000000000_1567987200000000000_1/tssp/average_temperature_0000/00000002-0000-00000000.tssp
 			splits := strings.Split(file, string(os.PathSeparator))
@@ -756,7 +770,7 @@ func (e *Exporter) writeSingleRecord(outputWriter io.Writer, seriesKey [][]byte,
 
 // writeAllWalFilesInRp writes all wal files in a "database:retention policy"
 func (e *Exporter) writeAllWalFilesInRp(metaWriter io.Writer, outputWriter io.Writer, files []string) error {
-	fmt.Fprintf(metaWriter, "# FROM WAL FILE.\n")
+	fmt.Fprintf(metaWriter, "# FROM WAL FILE.\n\n")
 	for _, file := range files {
 		if err := e.writeSingleWalFile(file, outputWriter); err != nil {
 			return err

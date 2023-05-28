@@ -47,15 +47,15 @@ var mockDbDiskInfo DatabaseDiskInfo = DatabaseDiskInfo{
 	}{}},
 	dataDir: "/tmp/og_test/data/data/test_db2",
 	walDir:  "/tmp/og_test/wal/wal/test_db2",
-	rpNameToTsspDirMap: map[string]string{
+	rpToTsspDirMap: map[string]string{
 		"test_db2_rp1": "/tmp/og_test/data/data/test_db2/0/test_db2_rp1",
 		"test_db2_rp2": "/tmp/og_test/data/data/test_db2/0/test_db2_rp2",
 	},
-	rpNameToWalDirMap: map[string]string{
+	rpToWalDirMap: map[string]string{
 		"test_db2_rp1": "/tmp/og_test/wal/wal/test_db2/0/test_db2_rp1",
 		"test_db2_rp2": "/tmp/og_test/wal/wal/test_db2/0/test_db2_rp2",
 	},
-	rpNameToIndexDirMap: map[string]string{
+	rpToIndexDirMap: map[string]string{
 		"test_db2_rp1": "/tmp/og_test/data/data/test_db2/0/test_db2_rp1/index",
 		"test_db2_rp2": "/tmp/og_test/data/data/test_db2/0/test_db2_rp2/index",
 	},
@@ -444,13 +444,13 @@ func TestDatabaseDiskInfo_Init(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := &DatabaseDiskInfo{
-				dbName:              tt.fields.dbName,
-				rps:                 tt.fields.rps,
-				dataDir:             tt.fields.dataDir,
-				walDir:              tt.fields.walDir,
-				rpNameToTsspDirMap:  tt.fields.rpNameToTsspDirMap,
-				rpNameToWalDirMap:   tt.fields.rpNameToWalDirMap,
-				rpNameToIndexDirMap: tt.fields.rpNameToIndexDirMap,
+				dbName:          tt.fields.dbName,
+				rps:             tt.fields.rps,
+				dataDir:         tt.fields.dataDir,
+				walDir:          tt.fields.walDir,
+				rpToTsspDirMap:  tt.fields.rpNameToTsspDirMap,
+				rpToWalDirMap:   tt.fields.rpNameToWalDirMap,
+				rpToIndexDirMap: tt.fields.rpNameToIndexDirMap,
 			}
 			err := d.Init(tt.args.actualDataDir, tt.args.actualWalDir, tt.args.databaseName, "test_db2_rp1")
 			assert.NoError(t, err)
