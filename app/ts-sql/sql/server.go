@@ -115,6 +115,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 		metaUseTLS:    false,
 		config:        c,
 	}
+	s.httpService.Handler.Version = cmd.Version
+	s.httpService.Handler.BuildType = "OSS"
 	s.initMetaClientFn = s.initializeMetaClient
 
 	go openServer(c, logger)

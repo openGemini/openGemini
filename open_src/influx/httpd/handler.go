@@ -351,9 +351,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer atomic.AddInt64(&statistics.HandlerStat.ActiveRequests, -1)
 	start := time.Now()
 
-	// Add version and build header to all InfluxDB requests.
-	w.Header().Add("X-Influxdb-Version", h.Version)
-	w.Header().Add("X-Influxdb-Build", h.BuildType)
+	// Add version and build header to all Geminidb requests.
+	w.Header().Add("X-Geminidb-Version", h.Version)
+	w.Header().Add("X-Geminidb-Build", h.BuildType)
 
 	if strings.HasPrefix(r.URL.Path, "/debug/pprof") && h.Config.PprofEnabled {
 		h.handleProfiles(w, r)
