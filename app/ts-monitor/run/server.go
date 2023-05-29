@@ -56,7 +56,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *logger.Logger) (a
 
 	errLogHistory := filepath.Join(c.MonitorConfig.ErrLogPath, c.MonitorConfig.History)
 	reporterJob := collector.NewReportJob(c.ReportConfig.Address, c.ReportConfig.Database, c.ReportConfig.Rp,
-		time.Duration(c.ReportConfig.RpDuration), false, c.MonitorConfig.Compress, logger, errLogHistory)
+		c.ReportConfig.Username, c.ReportConfig.Password, c.ReportConfig.HTTPSEnabled, time.Duration(c.ReportConfig.RpDuration),
+		false, c.MonitorConfig.Compress, logger, errLogHistory)
 
 	s.collector.Reporter = reporterJob
 	s.nodeMonitor.Reporter = reporterJob
