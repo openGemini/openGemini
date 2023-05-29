@@ -22,6 +22,17 @@ import (
 	"compress/gzip"
 	"encoding/binary"
 	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"math"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/golang/snappy"
 	"github.com/influxdata/influxdb/models"
@@ -35,16 +46,6 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"io"
-	"io/fs"
-	"log"
-	"math"
-	"os"
-	"path"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const (
@@ -96,6 +97,14 @@ func (l *LineFilter) Init(clc *CommandLineConfig) error {
 
 func (l *LineFilter) Filter(t int64) bool {
 	return t >= l.startTime && t <= l.endTime
+}
+
+func (l *LineFilter) StartFilter(t int64) bool {
+	return t >= l.startTime
+}
+
+func (l *LineFilter) EndFilter(t int64) bool {
+	return t <= l.endTime
 }
 
 type DatabaseDiskInfo struct {
@@ -636,7 +645,7 @@ func (e *Exporter) writeAllTsspFilesInRp(metaWriter io.Writer, outputWriter io.W
 			if err != nil {
 				return err
 			}
-			if err := e.writSingleTsspFile(file, outputWriter, indexesMap[indexId]); err != nil {
+			if err := e.writeSingleTsspFile(file, outputWriter, indexesMap[indexId]); err != nil {
 				return err
 			}
 		}
@@ -645,8 +654,8 @@ func (e *Exporter) writeAllTsspFilesInRp(metaWriter io.Writer, outputWriter io.W
 	return nil
 }
 
-// writSingleTsspFile writes a single tssp file's all records.
-func (e *Exporter) writSingleTsspFile(filePath string, outputWriter io.Writer, index *tsi.MergeSetIndex) error {
+// writeSingleTsspFile writes a single tssp file's all records.
+func (e *Exporter) writeSingleTsspFile(filePath string, outputWriter io.Writer, index *tsi.MergeSetIndex) error {
 	lockPath := ""
 	tsspFile, err := immutable.OpenTSSPFile(filePath, &lockPath, true, false)
 	defer util.MustClose(tsspFile)
@@ -657,6 +666,8 @@ func (e *Exporter) writSingleTsspFile(filePath string, outputWriter io.Writer, i
 	fi := immutable.NewFileIterator(tsspFile, immutable.CLog)
 	itr := immutable.NewChunkIterator(fi)
 
+	var maxTime int64
+	var minTime int64
 	for {
 		if !itr.Next() {
 			break
@@ -668,8 +679,11 @@ func (e *Exporter) writSingleTsspFile(filePath string, outputWriter io.Writer, i
 		rec := itr.GetRecord()
 		record.CheckRecord(rec)
 
+		maxTime = rec.MaxTime(true)
+		minTime = rec.MinTime(true)
+
 		// filter time range
-		if rec.MaxTime(true) < e.filter.startTime || rec.MinTime(true) > e.filter.endTime {
+		if !e.filter.StartFilter(maxTime) || !e.filter.EndFilter(minTime) {
 			continue
 		}
 
@@ -692,24 +706,37 @@ func (e *Exporter) writeSeriesRecords(outputWriter io.Writer, sid uint64, rec *r
 	if seriesKeys, _, isExpectSeries, err = index.SearchSeriesWithTagArray(sid, seriesKeys, nil, combineKey, isExpectSeries, nil); err != nil {
 		return err
 	}
-	var series [][]byte
+	series := make([][]byte, 1)
+	sIndex := 0
 	for i := range seriesKeys {
 		if !isExpectSeries[i] {
 			continue
 		}
-		bufSeries := influx.GetBytesBuffer()
-		// parse series key to line protocol and escaping special characters to make it valid to import
-		bufSeries, err = Parse2SeriesKeyWithoutVersion(seriesKeys[i], bufSeries, false)
-		if err != nil {
-			return err
+		if sIndex >= 1 {
+			bufSeries := influx.GetBytesBuffer()
+			bufSeries, err = Parse2SeriesKeyWithoutVersion(seriesKeys[i], bufSeries, false)
+			if err != nil {
+				return err
+			}
+			series = append(series, bufSeries)
+		} else {
+			if series[sIndex] == nil {
+				series[sIndex] = influx.GetBytesBuffer()
+			}
+			series[sIndex], err = Parse2SeriesKeyWithoutVersion(seriesKeys[i], series[sIndex][:0], false)
+			if err != nil {
+				return err
+			}
+			sIndex++
 		}
-		series = append(series, bufSeries)
+
 	}
 
 	var recs []record.Record
 	recs = rec.Split(recs, 1)
+	buf := influx.GetBytesBuffer()
 	for _, r := range recs {
-		if err := e.writeSingleRecord(outputWriter, series, r); err != nil {
+		if buf, err = e.writeSingleRecord(outputWriter, series, r, buf); err != nil {
 			return err
 		}
 	}
@@ -717,13 +744,13 @@ func (e *Exporter) writeSeriesRecords(outputWriter io.Writer, sid uint64, rec *r
 }
 
 // writeSingleRecord parses a record and a series key to line protocol, and writes it.
-func (e *Exporter) writeSingleRecord(outputWriter io.Writer, seriesKey [][]byte, rec record.Record) error {
+func (e *Exporter) writeSingleRecord(outputWriter io.Writer, seriesKey [][]byte, rec record.Record, buf []byte) ([]byte, error) {
 	tm := rec.Times()[0]
 	if !e.filter.Filter(tm) {
-		return nil
+		return buf, nil
 	}
 
-	buf := bytes.Join(seriesKey, []byte(","))
+	buf = bytes.Join(seriesKey, []byte(","))
 	buf = append(buf, ' ')
 	for i, field := range rec.Schema {
 		if field.Name == "time" {
@@ -757,10 +784,11 @@ func (e *Exporter) writeSingleRecord(outputWriter io.Writer, seriesKey [][]byte,
 	buf = strconv.AppendInt(buf, tm, 10)
 	buf = append(buf, '\n')
 	if _, err := outputWriter.Write(buf); err != nil {
-		return err
+		return buf, err
 	}
 	e.lineCount++
-	return nil
+	buf = buf[:0]
+	return buf, nil
 }
 
 // writeAllWalFilesInRp writes all wal files in a "database:retention policy"
@@ -864,8 +892,10 @@ func (e *Exporter) readWalRows(fd fileops.File, offset, fileSize int64, recordCo
 
 // writeRows process a cluster of rows
 func (e *Exporter) writeRows(rows []influx.Row, outputWriter io.Writer) error {
+	buf := influx.GetBytesBuffer()
+	var err error
 	for _, r := range rows {
-		if err := e.writeSingleRow(r, outputWriter); err != nil {
+		if buf, err = e.writeSingleRow(r, outputWriter, buf); err != nil {
 			return err
 		}
 	}
@@ -873,20 +903,19 @@ func (e *Exporter) writeRows(rows []influx.Row, outputWriter io.Writer) error {
 }
 
 // writeSingleRow parse a single row to lint protocol, and writes it.
-func (e *Exporter) writeSingleRow(row influx.Row, outputWriter io.Writer) error {
+func (e *Exporter) writeSingleRow(row influx.Row, outputWriter io.Writer, buf []byte) ([]byte, error) {
 	measurementWithVersion := row.Name
-	var measurementName string
-	measurementName = influx.GetOriginMstName(measurementWithVersion)
+	measurementName := influx.GetOriginMstName(measurementWithVersion)
 	measurementName = EscapeMstName(measurementName)
 	tags := row.Tags
 	fields := row.Fields
 	tm := row.Timestamp
 
 	if !e.filter.Filter(tm) {
-		return nil
+		return buf, nil
 	}
 
-	buf := []byte(measurementName)
+	buf = []byte(measurementName)
 	buf = append(buf, ',')
 	for i, tag := range tags {
 		buf = append(buf, EscapeTagKey(tag.Key)+"="...)
@@ -924,10 +953,11 @@ func (e *Exporter) writeSingleRow(row influx.Row, outputWriter io.Writer) error 
 	buf = strconv.AppendInt(buf, tm, 10)
 	buf = append(buf, '\n')
 	if _, err := outputWriter.Write(buf); err != nil {
-		return err
+		return buf, err
 	}
 	e.lineCount++
-	return nil
+	buf = buf[:0]
+	return buf, nil
 }
 
 // Parse2SeriesKeyWithoutVersion parse encoded index key to line protocol series key,without version and escape special characters

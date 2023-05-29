@@ -19,13 +19,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"github.com/openGemini/openGemini/engine"
-	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"log"
 	"math"
@@ -38,6 +31,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 )
 
 const defaultDb = "db0"
