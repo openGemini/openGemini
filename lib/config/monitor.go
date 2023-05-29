@@ -132,10 +132,13 @@ func newMonitorQuery() MonitorQuery {
 }
 
 type MonitorReport struct {
-	Address    string        `toml:"address"`
-	Database   string        `toml:"database"`
-	Rp         string        `toml:"rp"`
-	RpDuration toml.Duration `toml:"rp-duration"`
+	Address      string        `toml:"address"`
+	Database     string        `toml:"database"`
+	Rp           string        `toml:"rp"`
+	RpDuration   toml.Duration `toml:"rp-duration"`
+	Username     string        `toml:"username"`
+	Password     string        `toml:"password"`
+	HTTPSEnabled bool          `toml:"https-enable"`
 }
 
 func newMonitorReport() MonitorReport {

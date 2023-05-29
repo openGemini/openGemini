@@ -50,7 +50,7 @@ func TestQueryMetric(t *testing.T) {
 		QueryInterval: toml.Duration(10 * time.Second), // 10s
 	}
 	q := NewQueryMetric(log, &conf)
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", time.Hour, false, false, log, "errLogHistory")
+	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "", false, time.Hour, false, false, log, "errLogHistory")
 	q.Reporter = rj
 
 	showFn := func(r *http.Request) (*http.Response, error) {
@@ -113,7 +113,7 @@ func TestQueryMetric_Manual(t *testing.T) {
 	}
 	nc := NewQueryMetric(logger, &conf)
 	defer nc.Close()
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", time.Hour, false, false, logger, "errLogHistory")
+	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "", false, time.Hour, false, false, logger, "errLogHistory")
 	nc.Reporter = rj
 
 	type TestCase struct {
