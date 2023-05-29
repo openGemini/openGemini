@@ -40,54 +40,6 @@ import (
 	"time"
 )
 
-var mockDbDiskInfo DatabaseDiskInfo = DatabaseDiskInfo{
-	dbName: "test_db2",
-	rps: map[string]struct{}{"test_db2_rp1": struct {
-	}{}, "test_db2_rp2": struct {
-	}{}},
-	dataDir: "/tmp/og_test/data/data/test_db2",
-	walDir:  "/tmp/og_test/wal/wal/test_db2",
-	rpToTsspDirMap: map[string]string{
-		"test_db2_rp1": "/tmp/og_test/data/data/test_db2/0/test_db2_rp1",
-		"test_db2_rp2": "/tmp/og_test/data/data/test_db2/0/test_db2_rp2",
-	},
-	rpToWalDirMap: map[string]string{
-		"test_db2_rp1": "/tmp/og_test/wal/wal/test_db2/0/test_db2_rp1",
-		"test_db2_rp2": "/tmp/og_test/wal/wal/test_db2/0/test_db2_rp2",
-	},
-	rpToIndexDirMap: map[string]string{
-		"test_db2_rp1": "/tmp/og_test/data/data/test_db2/0/test_db2_rp1/index",
-		"test_db2_rp2": "/tmp/og_test/data/data/test_db2/0/test_db2_rp2/index",
-	},
-}
-
-func createTestDirs() {
-	err := os.MkdirAll("/tmp/og_test/data/data/test_db1/0/test_db1_rp1/1_1568592000000000000_1569196800000000000_1", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	err = os.MkdirAll("/tmp/og_test/wal/wal/test_db1/0/test_db1_rp1/1_1568592000000000000_1569196800000000000_1", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	err = os.MkdirAll("/tmp/og_test/data/data/test_db2/0/test_db2_rp1/1_1568592000000000000_1569196800000000000_1", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	err = os.MkdirAll("/tmp/og_test/data/data/test_db2/0/test_db2_rp2/1_1568592000000000000_1569196800000000000_1", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	err = os.MkdirAll("/tmp/og_test/wal/wal/test_db2/0/test_db2_rp1/1_1568592000000000000_1569196800000000000_1", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-	err = os.MkdirAll("/tmp/og_test/wal/wal/test_db2/0/test_db2_rp2/1_1568592000000000000_1569196800000000000_1", os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-}
-
 const defaultDb = "db0"
 const defaultRp = "rp0"
 const defaultShGroupId = uint64(1)
@@ -113,6 +65,18 @@ func init() {
 	DefaultEngineOption.WalReplayParallel = false
 	DefaultEngineOption.WalReplayAsync = false
 	DefaultEngineOption.DownSampleWriteDrop = true
+}
+
+func createTestDirs(tempPath, pt, dbName string, rpNames []string) error {
+	for _, rpName := range rpNames {
+		if err := os.MkdirAll(path.Join(tempPath, "data", dbName, pt, rpName, defaultShardDir), os.ModePerm); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(path.Join(tempPath, "wal", dbName, pt, rpName, defaultShardDir), os.ModePerm); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func mustParseTime(layout, value string) time.Time {
@@ -358,13 +322,6 @@ func copyPointRows(rs []influx.Row, copyCnt int, interval time.Duration, inc boo
 	return copyRs
 }
 
-func removeTestDirs() {
-	err := os.RemoveAll("/tmp/og_test/")
-	if err != nil {
-		panic(err)
-	}
-}
-
 func compareStrings(t *testing.T, file1, file2 io.Reader) error {
 
 	// Read the lines from the first file, sort them, and remove empty lines
@@ -399,8 +356,28 @@ func compareStrings(t *testing.T, file1, file2 io.Reader) error {
 	return nil
 }
 
+func createMockDbDiskInfo(tempDir, dbName, pt string, rpNames []string) *DatabaseDiskInfo {
+	a := &DatabaseDiskInfo{
+		dbName:          dbName,
+		rps:             make(map[string]struct{}),
+		dataDir:         path.Join(tempDir, "data", dbName),
+		walDir:          path.Join(tempDir, "wal", dbName),
+		rpToTsspDirMap:  make(map[string]string),
+		rpToWalDirMap:   make(map[string]string),
+		rpToIndexDirMap: make(map[string]string),
+	}
+	for _, rp := range rpNames {
+		key := pt + ":" + rp
+		a.rps[key] = struct{}{}
+		a.rpToTsspDirMap[key] = path.Join(tempDir, "data", dbName, pt, rp)
+		a.rpToWalDirMap[key] = path.Join(tempDir, "wal", dbName, pt, rp)
+		a.rpToIndexDirMap[key] = path.Join(tempDir, "data", dbName, pt, rp, "index")
+	}
+	return a
+}
+
 func TestDatabaseDiskInfo_Init(t *testing.T) {
-	createTestDirs()
+	tempDir := t.TempDir()
 	type fields struct {
 		dbName              string
 		rps                 map[string]struct{}
@@ -411,10 +388,10 @@ func TestDatabaseDiskInfo_Init(t *testing.T) {
 		rpNameToIndexDirMap map[string]string
 	}
 	type args struct {
-		actualDataDir       string
-		actualWalDir        string
-		databaseName        string
-		retentionPolicyName string
+		actualDataDir string
+		actualWalDir  string
+		databaseName  string
+		rpNames       string
 	}
 	tests := []struct {
 		name    string
@@ -434,10 +411,13 @@ func TestDatabaseDiskInfo_Init(t *testing.T) {
 				rpNameToIndexDirMap: make(map[string]string),
 			},
 			args: args{
-				actualDataDir:       "/tmp/og_test/data/data",
-				actualWalDir:        "/tmp/og_test/wal/wal",
-				databaseName:        "test_db2",
-				retentionPolicyName: "test_db2_rp1,test_db2_rp2",
+				actualDataDir: path.Join(tempDir, "data"),
+				actualWalDir:  path.Join(tempDir, "wal"),
+				databaseName:  "test_db2",
+				rpNames:       "test_db2_rp1,test_db2_rp2",
+			},
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				return err != nil
 			},
 		},
 	}
@@ -452,14 +432,13 @@ func TestDatabaseDiskInfo_Init(t *testing.T) {
 				rpToWalDirMap:   tt.fields.rpNameToWalDirMap,
 				rpToIndexDirMap: tt.fields.rpNameToIndexDirMap,
 			}
-			err := d.Init(tt.args.actualDataDir, tt.args.actualWalDir, tt.args.databaseName, "test_db2_rp1")
+			err := createTestDirs(tempDir, "0", tt.args.databaseName, strings.Split(tt.args.rpNames, ","))
 			assert.NoError(t, err)
-			err = d.Init(tt.args.actualDataDir, tt.args.actualWalDir, tt.args.databaseName, "test_db2_rp2")
-			assert.NoError(t, err)
-			assert.EqualValues(t, mockDbDiskInfo, *d)
+			tt.wantErr(t, d.Init(tt.args.actualDataDir, tt.args.actualWalDir, tt.args.databaseName, tt.args.rpNames))
+			mockDbDiskInfo := createMockDbDiskInfo(tempDir, tt.args.databaseName, "0", strings.Split(tt.args.rpNames, ","))
+			assert.EqualValues(t, mockDbDiskInfo, d)
 		})
 	}
-	removeTestDirs()
 }
 
 func TestExporter_Export(t *testing.T) {
@@ -601,13 +580,18 @@ func TestEscapeTagValue(t *testing.T) {
 }
 
 func TestExporter_writeDDL(t *testing.T) {
-	createTestDirs()
+	tempPath := t.TempDir()
 	type fields struct {
 		databaseDiskInfos []*DatabaseDiskInfo
+	}
+	type args struct {
+		dbName  string
+		rpNames []string
 	}
 	tests := []struct {
 		name             string
 		fields           fields
+		args             args
 		wantMetaWriter   string
 		wantOutputWriter string
 		wantErr          assert.ErrorAssertionFunc
@@ -615,29 +599,38 @@ func TestExporter_writeDDL(t *testing.T) {
 		{
 			name: "T1",
 			fields: fields{databaseDiskInfos: []*DatabaseDiskInfo{
-				&mockDbDiskInfo,
+				createMockDbDiskInfo(tempPath, "test_db2", "0", []string{"test_db2_rp1", "test_db2_rp1"}),
 			}},
+			args: args{
+				dbName:  "test_db2",
+				rpNames: []string{"test_db2_rp1", "test_db2_rp1"},
+			},
 			wantMetaWriter: "# DDL",
 			wantOutputWriter: `CREATE DATABASE test_db2
 CREATE RETENTION POLICY test_db2_rp1 ON test_db2 DURATION 0s REPLICATION 1 SHARD DURATION 168h0m0s
 CREATE RETENTION POLICY test_db2_rp2 ON test_db2 DURATION 0s REPLICATION 1 SHARD DURATION 168h0m0s
 `,
+			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
+				return err == nil
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			err := createTestDirs(tempPath, "0", tt.args.dbName, tt.args.rpNames)
+			assert.NoError(t, err)
+
 			e := &Exporter{
 				databaseDiskInfos: tt.fields.databaseDiskInfos,
 			}
 			metaWriter := &bytes.Buffer{}
 			outputWriter := &bytes.Buffer{}
-			err := e.writeDDL(metaWriter, outputWriter)
-			assert.NoError(t, err)
-			assert.NoError(t, compareStrings(t, metaWriter, strings.NewReader(tt.wantMetaWriter)))
-			assert.NoError(t, compareStrings(t, outputWriter, strings.NewReader(tt.wantOutputWriter)))
+
+			tt.wantErr(t, e.writeDDL(metaWriter, outputWriter))
+			tt.wantErr(t, compareStrings(t, metaWriter, strings.NewReader(tt.wantMetaWriter)))
+			tt.wantErr(t, compareStrings(t, outputWriter, strings.NewReader(tt.wantOutputWriter)))
 		})
 	}
-	removeTestDirs()
 }
 
 func TestExporter_writeDML(t *testing.T) {

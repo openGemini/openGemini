@@ -101,8 +101,8 @@ func (l *LineFilter) Filter(t int64) bool {
 type DatabaseDiskInfo struct {
 	dbName          string              // ie. "NOAA_water_database"
 	rps             map[string]struct{} // ie. ["0:autogen","1:every_one_day"]
-	dataDir         string              // ie. "/tmp/openGemini/data/data"
-	walDir          string              // ie. "/tmp/openGemini/data/wal"
+	dataDir         string              // ie. "/tmp/openGemini/data/data/NOAA_water_database"
+	walDir          string              // ie. "/tmp/openGemini/data/wal/NOAA_water_database"
 	rpToTsspDirMap  map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen"}
 	rpToWalDirMap   map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/wal/NOAA_water_database/0/autogen"}
 	rpToIndexDirMap map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen/index"}
@@ -138,7 +138,6 @@ func (d *DatabaseDiskInfo) Init(actualDataDir string, actualWalDir string, datab
 	if err != nil {
 		return err
 	}
-	// TODO(wtsclwq) Will there be multiple PTs in an instance?
 	for _, ptDir := range ptDirs {
 		// ie. /tmp/openGemini/data/data/my_db/0
 		ptTsspPath := path.Join(d.dataDir, ptDir.Name())
@@ -179,10 +178,6 @@ func (d *DatabaseDiskInfo) Init(actualDataDir string, actualWalDir string, datab
 				d.rpToTsspDirMap[ptWithRp] = rpPath
 				d.rpToIndexDirMap[ptWithRp] = path.Join(rpPath, "index")
 			}
-		}
-
-		if retentionPolicy != "" && len(d.rps) == 0 {
-			return fmt.Errorf("invalid retention policy '%q'", retentionPolicy)
 		}
 
 		rpWalDirs, err2 := os.ReadDir(ptWalPath)
