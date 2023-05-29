@@ -176,6 +176,7 @@ type MetaClient interface {
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	// IndexGroupInfo(database, retentionPolicy string, timestamp time.Time) (*meta2.IndexGroupInfo, error)
 	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
 	GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error)
 	TagKeys(database string) map[string]set.Set
@@ -558,7 +559,7 @@ func (c *Client) TagKeys(database string) map[string]set.Set {
 		rp.EachMeasurements(func(mst *meta2.MeasurementInfo) {
 			s := set.NewSet()
 			for key := range mst.Schema {
-				if mst.Schema[key] == influx.Field_Type_Tag {
+				if mst.Schema[key].Type == influx.Field_Type_Tag {
 					s.Add(key)
 				}
 			}
@@ -605,6 +606,12 @@ func (c *Client) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementI
 		measurements = append(measurements, msti)
 	}
 	return measurements, nil
+}
+
+func (c *Client) GetIndexGroupInfo(database, retentionPolicy string, timestamp time.Time) (*meta2.IndexGroupInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetIndexGroupInfo(database, retentionPolicy, timestamp)
 }
 
 func (c *Client) Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
@@ -730,13 +737,29 @@ func (c *Client) Schema(database string, retentionPolicy string, mst string) (fi
 	}
 
 	for key := range msti.Schema {
-		if msti.Schema[key] == influx.Field_Type_Tag {
+		if msti.Schema[key].Type == influx.Field_Type_Tag {
 			dimensions[key] = struct{}{}
 		} else {
-			fields[key] = msti.Schema[key]
+			fields[key] = msti.Schema[key].Type
 		}
 	}
 	return fields, dimensions, nil
+}
+
+func (c *Client) UpdateSchemaKeySet(database string, rp string, originName string, ids []uint64, fieldToCreate []*proto2.FieldSchema, timestamp time.Time) error {
+	cmd := &proto2.UpdateSchemaKeySetCommand{
+		Database:      proto.String(database),
+		RpName:        proto.String(rp),
+		Measurement:   proto.String(originName),
+		Ids:           ids,
+		FieldToCreate: fieldToCreate,
+		Timestamp:     proto.Int64(timestamp.UnixNano()),
+	}
+	err := c.retryUntilExec(proto2.Command_UpdateSchemaKeySetCommand, proto2.E_UpdateSchemaKeySetCommand_Command, cmd)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Client) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {

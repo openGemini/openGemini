@@ -41,6 +41,8 @@ type IndexGroupInfo struct {
 	EndTime   time.Time
 	Indexes   []IndexInfo
 	DeletedAt time.Time
+
+	SchemaKeySet map[uint64]struct{}
 }
 
 func (igi *IndexGroupInfo) canDelete() bool {
@@ -89,7 +91,10 @@ func (igi *IndexGroupInfo) marshal() *proto2.IndexGroupInfo {
 	for i := range igi.Indexes {
 		pb.Indexes[i] = igi.Indexes[i].marshal()
 	}
-
+	pb.SchemaKeySet = make([]uint64, len(igi.SchemaKeySet))
+	for id := range igi.SchemaKeySet {
+		pb.SchemaKeySet = append(pb.SchemaKeySet, id)
+	}
 	return pb
 }
 
@@ -111,6 +116,13 @@ func (igi *IndexGroupInfo) unmarshal(pb *proto2.IndexGroupInfo) {
 		igi.Indexes = make([]IndexInfo, len(pb.GetIndexes()))
 		for i, x := range pb.GetIndexes() {
 			igi.Indexes[i].unmarshal(x)
+		}
+	}
+
+	if len(pb.GetSchemaKeySet()) > 0 {
+		igi.SchemaKeySet = make(map[uint64]struct{}, len(pb.SchemaKeySet))
+		for _, id := range pb.GetSchemaKeySet() {
+			igi.SchemaKeySet[id] = struct{}{}
 		}
 	}
 }

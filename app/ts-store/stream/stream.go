@@ -167,13 +167,13 @@ func (s *Stream) Run() {
 				canRegisterTask := true
 				calls := make([]FieldCall, len(stream.Calls))
 				for i, v := range stream.Calls {
-					inFieldType, ok := srcMst.Schema[v.Field]
+					inField, ok := srcMst.Schema[v.Field]
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst: %s, inField: %s, get input field type failed", stream.Name, srcMst.Name, v.Field))
 						canRegisterTask = false
 						break
 					}
-					outFieldType, ok := dstMst.Schema[v.Alias]
+					outField, ok := dstMst.Schema[v.Alias]
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, outField: %s, get output field type failed", stream.Name, dstMst.Name, v.Alias))
 						canRegisterTask = false
@@ -183,22 +183,22 @@ func (s *Stream) Run() {
 						name:         v.Field,
 						alias:        v.Alias,
 						call:         v.Call,
-						inFieldType:  inFieldType,
-						outFieldType: outFieldType,
+						inFieldType:  inField.Type,
+						outFieldType: outField.Type,
 						f:            nil,
 					}
 				}
 				//TODO detect src schema change
 				fieldsDims := map[string]int32{}
 				for i := range stream.Dims {
-					ty, ok := srcMst.Schema[stream.Dims[i]]
+					info, ok := srcMst.Schema[stream.Dims[i]]
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, dim: %s check fail", stream.Name, dstMst.Name, stream.Dims[i]))
 						canRegisterTask = false
 						break
 					}
-					if influx.Field_Type_Tag != ty {
-						fieldsDims[stream.Dims[i]] = ty
+					if influx.Field_Type_Tag != info.Type {
+						fieldsDims[stream.Dims[i]] = info.Type
 					}
 				}
 				if canRegisterTask {

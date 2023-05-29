@@ -34,6 +34,8 @@ type RetentionPolicyInfo struct {
 	Subscriptions        []SubscriptionInfo
 	DownSamplePolicyInfo *DownSamplePolicyInfo
 	MarkDeleted          bool
+
+	KeyID uint64 // Each Tag/Field can allocate an increasing ID
 }
 
 // NewRetentionPolicyInfo returns a new instance of RetentionPolicyInfo
@@ -44,6 +46,7 @@ func NewRetentionPolicyInfo(name string) *RetentionPolicyInfo {
 		ReplicaN:    DefaultRetentionPolicyReplicaN,
 		Duration:    DefaultRetentionPolicyDuration,
 		MarkDeleted: false,
+		KeyID:       0,
 	}
 }
 
@@ -51,6 +54,12 @@ func NewRetentionPolicyInfo(name string) *RetentionPolicyInfo {
 // with default name, replication, and duration.
 func DefaultRetentionPolicyInfo() *RetentionPolicyInfo {
 	return NewRetentionPolicyInfo(DefaultRetentionPolicyName)
+}
+
+func (rpi *RetentionPolicyInfo) getKeyID() uint64 {
+	keyid := rpi.KeyID
+	rpi.KeyID++
+	return keyid
 }
 
 func (rpi *RetentionPolicyInfo) updateWithOtherRetentionPolicy(newRpi *RetentionPolicyInfo) {
