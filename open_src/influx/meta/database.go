@@ -21,6 +21,7 @@ type DatabaseInfo struct {
 	RetentionPolicies      map[string]*RetentionPolicyInfo
 	MarkDeleted            bool
 	ShardKey               ShardKeyInfo
+	ContinuousQueries      map[string]*ContinuousQueryInfo
 }
 
 func NewDatabase(name string) *DatabaseInfo {
@@ -63,6 +64,36 @@ func (di *DatabaseInfo) checkUpdateRetentionPolicyName(name string, updateName *
 	return nil
 }
 
+// Expecting to obtain the corresponding cq, so there is no error reported.
+func (di *DatabaseInfo) GetContinuousQuery(name string) (*ContinuousQueryInfo, error) {
+	cqi := di.ContinuousQueries[name]
+	if cqi == nil {
+		return nil, ErrContinuousQueryNotFound
+	}
+	if cqi.MarkDeleted {
+		return nil, ErrContinuousQueryIsBeingDelete
+	}
+	return cqi, nil
+}
+
+// return the cq with corresponding name.
+func (di *DatabaseInfo) ContinuousQuery(name string) *ContinuousQueryInfo {
+	return di.ContinuousQueries[name]
+}
+
+// Check if there is a cq with the same action.
+func (di *DatabaseInfo) CheckConfilctWithConfiltCq(checked *ContinuousQueryInfo) error {
+	// Benevor TODO:
+	// how about a cq with the same action but marked as deleted.
+
+	// for _, cq := range di.ContinuousQueries {
+	// 	if checked.EqualsAnotherCq(cq) {
+	// 		return ErrContinuosQueryConflict
+	// 	}
+	// }
+	return nil
+}
+
 // ShardInfos returns a list of all shards' info for the database.
 func (di DatabaseInfo) ShardInfos() []ShardInfo {
 	shards := map[uint64]*ShardInfo{}
@@ -99,6 +130,13 @@ func (di DatabaseInfo) clone() *DatabaseInfo {
 		}
 	}
 
+	if di.ContinuousQueries != nil {
+		other.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
+		for _, cq := range di.ContinuousQueries {
+			other.ContinuousQueries[cq.Name] = cq.Clone()
+		}
+	}
+
 	return &other
 }
 
@@ -112,6 +150,13 @@ func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 	i := 0
 	for _, rp := range di.RetentionPolicies {
 		pb.RetentionPolicies[i] = rp.Marshal()
+		i++
+	}
+
+	pb.ContinuousQueries = make([]*proto2.ContinuousQueryInfo, len(di.ContinuousQueries))
+	i = 0
+	for _, cq := range di.ContinuousQueries {
+		pb.ContinuousQueries[i] = cq.Marshal()
 		i++
 	}
 
@@ -134,6 +179,15 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 			rp := &RetentionPolicyInfo{}
 			rp.unmarshal(x)
 			di.RetentionPolicies[rp.Name] = rp
+		}
+	}
+
+	if len(pb.GetContinuousQueries()) > 0 {
+		di.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
+		for _, x := range pb.GetContinuousQueries() {
+			cq := &ContinuousQueryInfo{}
+			cq.unmarshal(x)
+			di.ContinuousQueries[cq.Name] = cq
 		}
 	}
 

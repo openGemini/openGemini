@@ -81,6 +81,7 @@ message DatabaseInfo {
 	required string Name = 1;
 	required string DefaultRetentionPolicy = 2;
 	repeated RetentionPolicyInfo RetentionPolicies = 3;
+	repeated ContinuousQueryInfo ContinuousQueries = 4;
 	optional bool MarkDeleted  = 5;
 	optional ShardKeyInfo ShardKey = 6;
 }
@@ -115,6 +116,12 @@ message RetentionPolicyInfo {
 	required int64 IndexGroupDuration = 11;
 	repeated IndexGroupInfo IndexGroups = 12;
 	optional DownSamplePolicyInfo DownSamplePolicyInfo = 13;
+}
+
+message ContinuousQueryInfo {
+	required string Name = 1;
+	required string Query = 2;
+	optional bool MarkDeleted = 3;
 }
 
 message ShardGroupInfo {
@@ -286,6 +293,7 @@ message Command {
 		VerifyDataNodeCommand                      = 80;
 		ExpandGroupsCommand                        = 81;
 		UpdatePtVersionCommand                     = 82;
+		CreateContinuousQueryCommand               = 83;
 	}
 
 	required Type type = 1;
@@ -299,6 +307,7 @@ message CreateDatabaseCommand {
 	optional RetentionPolicyInfo RetentionPolicy = 2;
 	optional uint32 ReplicaNum = 3;
 	optional ShardKeyInfo Ski = 4;
+	optional ContinuousQueryInfo ContinuousQuery = 5;
 }
 
 message DropDatabaseCommand {
@@ -954,4 +963,13 @@ message UpdatePtVersionCommand {
 	}
 	required string Db = 1;
 	required uint32 Pt = 2;
+}
+
+
+message CreateContinuousQueryCommand {
+	extend Command {
+		optional CreateContinuousQueryCommand command = 183;
+	}
+	required string Database = 1;
+	required ContinuousQueryInfo ContinuousQuery = 2;
 }

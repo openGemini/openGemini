@@ -145,6 +145,7 @@ type MetaClient interface {
 	CreateDatabase(name string) (*meta2.DatabaseInfo, error)
 	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo) (*meta2.DatabaseInfo, error)
 	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
+	CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error)
 	CreateSubscription(database, rp, name, mode string, destinations []string) error
 	CreateUser(name, password string, admin, rwuser bool) (meta2.User, error)
 	Databases() map[string]*meta2.DatabaseInfo
@@ -970,6 +971,24 @@ func (c *Client) CreateRetentionPolicy(database string, spec *meta2.RetentionPol
 	return c.RetentionPolicy(database, rpi.Name)
 }
 
+func (c *Client) CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) {
+	// Benevor TODO: Check if all durations are valid
+
+	cqi := spec.NewContinuousQueryInfoBySpec()
+	// Benevor TODO: Check if the length of the cq name is legal
+
+	cmd := &proto2.CreateContinuousQueryCommand{
+		Database:        proto.String(database),
+		ContinuousQuery: cqi.Marshal(),
+	}
+
+	if err := c.retryUntilExec(proto2.Command_CreateContinuousQueryCommand, proto2.E_CreateContinuousQueryCommand_Command, cmd); err != nil {
+		return nil, err
+	}
+
+	return c.ContinuousQuery(database, cqi.Name)
+}
+
 // RetentionPolicy returns the requested retention policy info.
 func (c *Client) RetentionPolicy(database, name string) (rpi *meta2.RetentionPolicyInfo, err error) {
 	c.mu.RLock()
@@ -981,6 +1000,19 @@ func (c *Client) RetentionPolicy(database, name string) (rpi *meta2.RetentionPol
 	}
 
 	return db.RetentionPolicy(name), nil
+}
+
+// ContinuousQuery returns the requested continuous query info.
+func (c *Client) ContinuousQuery(database, name string) (cqi *meta2.ContinuousQueryInfo, err error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	db := c.cacheData.Database(database)
+	if db == nil || db.MarkDeleted {
+		return nil, errno.NewError(errno.DatabaseNotFound, database)
+	}
+
+	return db.GetContinuousQuery(name)
 }
 
 func (c *Client) DBPtView(database string) (meta2.DBPtInfos, error) {
