@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/services/httpd"
-	"github.com/openGemini/openGemini/open_src/github.com/bmizerany/pat"
+	"github.com/bmizerany/pat"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 )
 
