@@ -121,6 +121,9 @@ type MonitorQuery struct {
 	QueryEnable   bool          `toml:"query-enable"`
 	HttpEndpoint  string        `toml:"http-endpoint"`
 	QueryInterval toml.Duration `toml:"query-interval"`
+	Username      string        `toml:"username"`
+	Password      string        `toml:"password"`
+	HTTPSEnabled  bool          `toml:"https-enable"`
 }
 
 func newMonitorQuery() MonitorQuery {
