@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/bmizerany/pat"
+	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 )
 
