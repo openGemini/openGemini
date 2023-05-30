@@ -9,6 +9,7 @@ require (
 	github.com/VictoriaMetrics/fastcache v1.7.0
 	github.com/apache/arrow/go/arrow v0.0.0-20200923215132-ac86123a3f01
 	github.com/armon/go-metrics v0.3.10
+	github.com/bmizerany/pat v0.0.0-20210406213842-e4b6760bdd6f
 	github.com/c-bata/go-prompt v0.2.2
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/deckarep/golang-set v1.8.0
@@ -65,7 +66,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bgentry/speakeasy v0.1.0 // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
-	github.com/bmizerany/pat v0.0.0-20210406213842-e4b6760bdd6f // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgryski/go-bitstream v0.0.0-20180413035011-3522498ce2c8 // indirect
