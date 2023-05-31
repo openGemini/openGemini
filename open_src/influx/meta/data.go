@@ -1415,6 +1415,25 @@ func (data *Data) UpdateRetentionPolicy(database, name string, rpu *RetentionPol
 	return nil
 }
 
+// ShowContinuousQueries shows all continuous queries group by db.
+func (data *Data) ShowContinuousQueries() (models.Rows, error) {
+	rows := []*models.Row{}
+
+	data.WalkDatabases(func(dbi *DatabaseInfo) {
+		row := &models.Row{Name: dbi.Name, Columns: []string{"name", "query"}}
+		dbi.WalkContinuousQuery(func(cq *ContinuousQueryInfo) {
+			row.Values = append(row.Values, []interface{}{cq.Name, cq.Query})
+		})
+
+		sort.Slice(row.Values, func(i, j int) bool {
+			return row.Values[i][0].(string) < row.Values[j][0].(string)
+		})
+		rows = append(rows, row)
+	})
+
+	return rows, nil
+}
+
 // DropShard removes a shard by ID.
 //
 // DropShard won't return an error if the shard can't be found, which

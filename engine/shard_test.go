@@ -3575,6 +3575,9 @@ func (client *MockMetaClient) ShowSubscriptions() models.Rows {
 func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Rows, error) {
 	return nil, nil
 }
+func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
 	return nil
 }

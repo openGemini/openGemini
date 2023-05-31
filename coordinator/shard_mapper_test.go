@@ -290,6 +290,10 @@ func (m mocShardMapperMetaClient) ShowRetentionPolicies(database string) (models
 	return nil, nil
 }
 
+func (m mocShardMapperMetaClient) ShowContinuousQueries() (models.Rows, error) {
+	return nil, nil
+}
+
 func (m mocShardMapperMetaClient) GetAliveShards(database string, sgi *meta.ShardGroupInfo) []int {
 	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
 	for i := range sgi.Shards {

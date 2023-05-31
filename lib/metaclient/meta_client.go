@@ -188,6 +188,7 @@ type MetaClient interface {
 	ShowShardGroups() models.Rows
 	ShowSubscriptions() models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
+	ShowContinuousQueries() (models.Rows, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
 	DropDownSamplePolicy(database, name string, dropAll bool) error
@@ -719,6 +720,12 @@ func (c *Client) ShowRetentionPolicies(database string) (models.Rows, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.ShowRetentionPolicies(database)
+}
+
+func (c *Client) ShowContinuousQueries() (models.Rows, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.ShowContinuousQueries()
 }
 
 func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,

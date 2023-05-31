@@ -243,6 +243,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		rows, err = e.retryExecuteStatement(stmt, ctx)
 	case *influxql.ShowRetentionPoliciesStatement:
 		rows, err = e.executeShowRetentionPoliciesStatement(stmt)
+	case *influxql.ShowContinuousQueriesStatement:
+		rows, err = e.executeShowContinuousQueriesStatement(stmt)
 	case *influxql.ShowSeriesCardinalityStatement:
 		rows, err = e.retryExecuteStatement(stmt, ctx)
 	case *influxql.ShowShardsStatement:
@@ -1108,6 +1110,10 @@ func (e *StatementExecutor) executeShowRetentionPoliciesStatement(q *influxql.Sh
 	}
 
 	return e.MetaClient.ShowRetentionPolicies(q.Database)
+}
+
+func (e *StatementExecutor) executeShowContinuousQueriesStatement(q *influxql.ShowContinuousQueriesStatement) (models.Rows, error) {
+	return e.MetaClient.ShowContinuousQueries()
 }
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {

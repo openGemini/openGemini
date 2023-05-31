@@ -271,3 +271,9 @@ func (di *DatabaseInfo) WalkRetentionPolicy(fn func(rp *RetentionPolicyInfo)) {
 		fn(di.RetentionPolicies[rpName])
 	}
 }
+
+func (di *DatabaseInfo) WalkContinuousQuery(fn func(cq *ContinuousQueryInfo)) {
+	for cqName := range di.ContinuousQueries {
+		fn(di.ContinuousQueries[cqName])
+	}
+}
