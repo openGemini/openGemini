@@ -43,10 +43,8 @@ import (
 
 const defaultDb = "db0"
 const defaultRp = "rp0"
-const defaultShGroupId = uint64(1)
 const defaultShardId = uint64(1)
 const defaultPtId = uint32(0)
-const defaultChunkSize = 1000
 const defaultMeasurementName = "cpu"
 
 const defaultShardDir = "1_1566777600000000000_1567382400000000000_1"
@@ -112,6 +110,9 @@ func createShard(db, rp string, ptId uint32, pathName string) (engine.Shard, err
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
 	indexRelation, err := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+	if err != nil {
+		return nil, err
+	}
 	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
 	err = indexBuilder.Open()
 	if err != nil {
@@ -195,9 +196,9 @@ func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interva
 			"field1_string":   fmt.Sprintf("test-test-test-test-%d", i),
 		}
 		if fixBool {
-			fields["field3_bool"] = (i%2 == 0)
+			fields["field3_bool"] = i%2 == 0
 		} else {
-			fields["field3_bool"] = (rand.Int31n(100) > 50)
+			fields["field3_bool"] = rand.Int31n(100) > 50
 		}
 
 		if !fullField {
@@ -221,19 +222,19 @@ func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interva
 		j := 0
 		for k, v := range fields {
 			r.Fields[j].Key = k
-			switch v.(type) {
+			switch v := v.(type) {
 			case int64:
 				r.Fields[j].Type = influx.Field_Type_Int
-				r.Fields[j].NumValue = float64(v.(int64))
+				r.Fields[j].NumValue = float64(v)
 			case float64:
 				r.Fields[j].Type = influx.Field_Type_Float
-				r.Fields[j].NumValue = v.(float64)
+				r.Fields[j].NumValue = v
 			case string:
 				r.Fields[j].Type = influx.Field_Type_String
-				r.Fields[j].StrValue = v.(string)
+				r.Fields[j].StrValue = v
 			case bool:
 				r.Fields[j].Type = influx.Field_Type_Boolean
-				if v.(bool) == false {
+				if v == false {
 					r.Fields[j].NumValue = 0
 				} else {
 					r.Fields[j].NumValue = 1
@@ -274,9 +275,10 @@ func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interva
 		tm := basicTime.Add(offset)
 		r.Timestamp = tm.UnixNano()
 		r.UnmarshalIndexKeys(indexKeyPool)
-		r.UnmarshalShardKeyByTag(nil)
-		tm = tm.Add(interval)
-
+		err := r.UnmarshalShardKeyByTag(nil)
+		if err != nil {
+			return nil, 0, 0
+		}
 		pts = append(pts, r)
 	}
 	if pointNumOfPerSeries > 1 {
@@ -485,7 +487,6 @@ func TestExporter_Export(t *testing.T) {
 	assert.NoError(t, err)
 	lpOnlyReader := strings.NewReader(lpOnlyContent)
 	exportFile, err := os.Open(exportPath)
-	defer exportFile.Close()
 	assert.NoError(t, err)
 	assert.NoError(t, compareStrings(t, lpOnlyReader, exportFile))
 }
