@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bmizerany/pat"
 	"github.com/golang-jwt/jwt"
 	"github.com/golang/snappy"
 	"github.com/influxdata/influxdb"
@@ -37,7 +38,6 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/bmizerany/pat"
 	"github.com/openGemini/openGemini/open_src/influx/auth"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
