@@ -446,7 +446,7 @@ func (e *Exporter) write() error {
 
 // writeFull writes all DDL and DML
 func (e *Exporter) writeFull(metaWriter io.Writer, outputWriter io.Writer) error {
-	start, end := time.Unix(0, e.filter.startTime).Format(time.RFC3339), time.Unix(0, e.filter.endTime).Format(time.RFC3339)
+	start, end := time.Unix(0, e.filter.startTime).UTC().Format(time.RFC3339), time.Unix(0, e.filter.endTime).UTC().Format(time.RFC3339)
 	fmt.Fprintf(metaWriter, "# openGemini EXPORT: %s - %s\n\n", start, end)
 
 	if err := e.writeDDL(metaWriter, outputWriter); err != nil {

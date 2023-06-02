@@ -777,7 +777,7 @@ var lpOnlyContent = `# CONTEXT-DATABASE: db0
 # DDL
 # DML
 # FROM TSSP FILE.
-# openGemini EXPORT: 1677-09-21T08:18:26+08:05 - 2262-04-12T07:47:16+08:00
+# openGemini EXPORT: 1677-09-21T00:12:43Z - 2262-04-11T23:47:16Z
 CREATE DATABASE db0
 CREATE RETENTION POLICY rp0 ON db0 DURATION 0s REPLICATION 1
 cpu,tag\ ke\,y\=2=tagvalue2_1,tagkey1=tagvalue1_1,tagkey3=tagvalue3_1,tagkey4=ta\ valu\,e\=4_1 fie\ ld4_\,fl\=oat=1.1,field2_int=1i 1685292814231278675
