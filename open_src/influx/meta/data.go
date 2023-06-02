@@ -249,24 +249,86 @@ func (data *Data) Measurement(database, retentionPolicy, mst string) (*Measureme
 	return msti, nil
 }
 
+func (data *Data) GetIndexGroupInfo(database, retentionPolicy string, timestamp time.Time) (*IndexGroupInfo, error) {
+	rp, err := data.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return nil, err
+	}
+	var igIdx int
+	for igIdx = 0; igIdx < len(rp.IndexGroups); igIdx++ {
+		if rp.IndexGroups[igIdx].Contains(timestamp) {
+			break
+		}
+	}
+	if igIdx < len(rp.IndexGroups) && len(rp.IndexGroups[igIdx].Indexes) >= int(data.ClusterPtNum) {
+		return &rp.IndexGroups[igIdx], nil
+	}
+	return nil, ErrIndexGroupNotFound
+}
+
+func (data *Data) UpdateSchemaKeySet(database string, retentionPolicy string, mst string, ids []uint64, fieldToCreate []*proto2.FieldSchema, timestamp time.Time) error {
+	msti, err := data.Measurement(database, retentionPolicy, mst)
+	if err != nil {
+		return err
+	}
+	indexGroupInfo, err := data.GetIndexGroupInfo(database, retentionPolicy, timestamp)
+	if err != nil {
+		return err
+	}
+
+	SchemaKeySet := make(map[uint64]struct{})
+	for id := range indexGroupInfo.SchemaKeySet {
+		SchemaKeySet[id] = struct{}{}
+	}
+
+	for i, id := range ids {
+		_, ok := SchemaKeySet[id]
+		if !ok {
+			SchemaKeySet[id] = struct{}{}
+			existKeyInfo, ok := msti.Schema[fieldToCreate[i].GetFieldName()]
+			if ok {
+				existKeyInfo.Ref++
+				msti.Schema[fieldToCreate[i].GetFieldName()] = existKeyInfo
+			} else {
+				ki := KeyInfo{}
+				ki.ID = ids[i]
+				ki.Ref = 1
+				ki.Type = fieldToCreate[i].GetFieldType()
+				msti.Schema[fieldToCreate[i].GetFieldName()] = ki
+			}
+		}
+	}
+	indexGroupInfo.SchemaKeySet = SchemaKeySet
+	return nil
+
+}
+
 func (data *Data) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
 	msti, err := data.Measurement(database, retentionPolicy, mst)
 	if err != nil {
 		return err
 	}
+	rp, err := data.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return err
+	}
 
-	schema := make(map[string]int32)
+	schema := make(map[string]KeyInfo)
 	for field := range msti.Schema {
 		schema[field] = msti.Schema[field]
 	}
 
 	for i := range fieldToCreate {
-		existType, ok := schema[fieldToCreate[i].GetFieldName()]
+		existKeyInfo, ok := schema[fieldToCreate[i].GetFieldName()]
 		if !ok {
-			schema[fieldToCreate[i].GetFieldName()] = fieldToCreate[i].GetFieldType()
+			ki := KeyInfo{}
+			ki.ID = rp.getKeyID()
+			ki.Ref = 0
+			ki.Type = fieldToCreate[i].GetFieldType()
+			schema[fieldToCreate[i].GetFieldName()] = ki
 			continue
 		}
-		if existType != fieldToCreate[i].GetFieldType() {
+		if existKeyInfo.Type != fieldToCreate[i].GetFieldType() {
 			return ErrFieldTypeConflict
 		}
 	}
@@ -1725,8 +1787,33 @@ func (data *Data) pruneIndexGroups(id uint64) error {
 					rp.IndexGroups[idx].Indexes[pos].MarkDelete = true
 				}
 				if rp.IndexGroups[idx].canDelete() {
+					tempKeySet := make(map[uint64]struct{}, len(rp.IndexGroups[idx].SchemaKeySet))
+					for id := range rp.IndexGroups[idx].SchemaKeySet {
+						tempKeySet[id] = struct{}{}
+					}
 					rp.IndexGroups = append(rp.IndexGroups[:idx],
 						rp.IndexGroups[idx+1:]...)
+					for keyID := range tempKeySet {
+						for _, msti := range rp.Measurements {
+							hasFound := false
+							for keyName, keyInfo := range msti.Schema {
+								if keyInfo.ID == keyID {
+									keyInfo.Ref--
+									if keyInfo.Ref <= 0 {
+										delete(msti.Schema, keyName)
+									} else {
+										msti.Schema[keyName] = keyInfo
+									}
+									hasFound = true
+									break
+								}
+							}
+							if hasFound {
+								break
+							}
+						}
+					}
+
 				} else {
 					idx++
 				}

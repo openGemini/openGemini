@@ -92,10 +92,16 @@ message RetentionPolicySpec {
 	optional uint32 ReplicaN           = 4;
 }
 
+message KeyInfo {
+	optional uint64 ID = 1;
+	optional int32 Ref = 2;
+	optional int32 Type = 3;
+}
+
 message MeasurementInfo {
     required string Name = 1;
     repeated ShardKeyInfo ShardKeys = 2;
-    map<string, int32> Schema = 3;
+    map<string, KeyInfo> Schema = 3;
     optional bool MarkDeleted = 4;
 		optional IndexRelation indexRelation = 5;
 }
@@ -286,6 +292,7 @@ message Command {
 		VerifyDataNodeCommand                      = 80;
 		ExpandGroupsCommand                        = 81;
 		UpdatePtVersionCommand                     = 82;
+		UpdateSchemaKeySetCommand				   = 83;
 	}
 
 	required Type type = 1;
@@ -595,6 +602,7 @@ message IndexGroupInfo {
 	required int64 EndTime = 3;
 	required int64 DeletedAt = 4;
 	repeated IndexInfo Indexes = 5;
+	repeated uint64 SchemaKeySet = 6;
 }
 
 message ShardStatus {
@@ -954,4 +962,16 @@ message UpdatePtVersionCommand {
 	}
 	required string Db = 1;
 	required uint32 Pt = 2;
+}
+
+message UpdateSchemaKeySetCommand {
+	extend Command {
+        optional UpdateSchemaKeySetCommand command = 183;
+    }
+    required string Database    = 1;
+    required string RpName      = 2;
+    required string Measurement = 3;
+	repeated uint64 Ids 		= 4;
+	repeated FieldSchema FieldToCreate = 5;
+	required int64 Timestamp 	= 6;
 }
