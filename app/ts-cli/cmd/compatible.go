@@ -64,8 +64,6 @@ func (c *CompatibleCommand) Bind(config *geminicli.CommandLineConfig) {
 	c.fs.StringVar(&config.Start, "start", "", "Optional. As the start filtering time of export data.  eg. YYYY-MM-DDTHH:MM:SSZ")
 	c.fs.StringVar(&config.End, "end", "", "Optional. As the end filtering time of export data. eg. YYYY-MM-DDTHH:MM:SSZ")
 	c.fs.BoolVar(&config.Compress, "compress", false, "Optional. Compress the export output.")
-	c.fs.BoolVar(&config.LpOnly, "lponly", false, "Only export line protocol.")
-	flag.CommandLine = c.fs
 }
 
 func (c *CompatibleCommand) Usage() {

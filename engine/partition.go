@@ -253,10 +253,6 @@ func (dbPT *DBPTInfo) unref() {
 	dbPT.ch = nil
 }
 
-func ParseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
-	return parseIndexDir(indexDirName)
-}
-
 func parseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
 	indexDir := strings.Split(indexDirName, pathSeparator)
 	if len(indexDir) != 3 {
@@ -416,10 +412,6 @@ func containOtherIndexes(dirName string) bool {
 		return false
 	}
 	return true
-}
-
-func ParseShardDir(shardDirName string) (uint64, uint64, *meta.TimeRangeInfo, error) {
-	return parseShardDir(shardDirName)
 }
 
 func parseShardDir(shardDirName string) (uint64, uint64, *meta.TimeRangeInfo, error) {

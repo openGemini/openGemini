@@ -379,7 +379,7 @@ func createMockDbDiskInfo(tempDir, dbName, pt string, rpNames []string) *Databas
 	return a
 }
 
-func TestDatabaseDiskInfo_Init(t *testing.T) {
+func TestDatabaseDiskInfo_init(t *testing.T) {
 	tempDir := t.TempDir()
 	type fields struct {
 		dbName              string
@@ -437,7 +437,7 @@ func TestDatabaseDiskInfo_Init(t *testing.T) {
 			}
 			err := createTestDirs(tempDir, "0", tt.args.databaseName, strings.Split(tt.args.rpNames, ","))
 			assert.NoError(t, err)
-			tt.wantErr(t, d.Init(tt.args.actualDataDir, tt.args.actualWalDir, tt.args.databaseName, tt.args.rpNames))
+			tt.wantErr(t, d.init(tt.args.actualDataDir, tt.args.actualWalDir, tt.args.databaseName, tt.args.rpNames))
 			mockDbDiskInfo := createMockDbDiskInfo(tempDir, tt.args.databaseName, "0", strings.Split(tt.args.rpNames, ","))
 			assert.EqualValues(t, mockDbDiskInfo, d)
 		})
@@ -473,7 +473,7 @@ func TestExporter_Export(t *testing.T) {
 	}
 	clc := &CommandLineConfig{
 		Database:   "",
-		Export:     false,
+		Export:     true,
 		DataDir:    dir,
 		WalDir:     dir,
 		Out:        exportPath,
@@ -481,7 +481,6 @@ func TestExporter_Export(t *testing.T) {
 		Start:      "",
 		End:        "",
 		Compress:   false,
-		LpOnly:     true,
 	}
 	err = e.Export(clc)
 	assert.NoError(t, err)
@@ -609,8 +608,8 @@ func TestExporter_writeDDL(t *testing.T) {
 			},
 			wantMetaWriter: "# DDL",
 			wantOutputWriter: `CREATE DATABASE test_db2
-CREATE RETENTION POLICY test_db2_rp1 ON test_db2 DURATION 0s REPLICATION 1 SHARD DURATION 168h0m0s
-CREATE RETENTION POLICY test_db2_rp2 ON test_db2 DURATION 0s REPLICATION 1 SHARD DURATION 168h0m0s
+CREATE RETENTION POLICY test_db2_rp1 ON test_db2 DURATION 0s REPLICATION 1
+CREATE RETENTION POLICY test_db2_rp2 ON test_db2 DURATION 0s REPLICATION 1
 `,
 			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
 				return err == nil
@@ -767,91 +766,58 @@ func TestLineFilter_Filter(t *testing.T) {
 				startTime: tt.fields.startTime,
 				endTime:   tt.fields.endTime,
 			}
-			assert.Equalf(t, tt.want, l.Filter(tt.args.t), "Filter(%v)", tt.args.t)
+			assert.Equalf(t, tt.want, l.filter(tt.args.t), "Filter(%v)", tt.args.t)
 		})
 	}
 }
 
-func Test_parseShardGroupDuration(t *testing.T) {
-	type args struct {
-		str string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		want    time.Duration
-		wantErr assert.ErrorAssertionFunc
-	}{
-		{
-			name: "T1",
-			args: args{
-				str: "1568592000000000000_1569196800000000000",
-			},
-			want: time.Duration(1568592000000000000 - 1569196800000000000),
-			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
-				return t == nil
-			},
-		},
-		{
-			name: "T2",
-			args: args{
-				str: "156859200xxx0000000_156919abs0000000",
-			},
-			want: time.Duration(0),
-			wantErr: func(t assert.TestingT, err error, i ...interface{}) bool {
-				return t != nil
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseShardGroupDuration(tt.args.str)
-			if !tt.wantErr(t, err, fmt.Sprintf("parseShardGroupDuration(%v)", tt.args.str)) {
-				return
-			}
-			assert.Equalf(t, tt.want, got, "parseShardGroupDuration(%v)", tt.args.str)
-		})
-	}
-}
-
-var lpOnlyContent = `cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=4.4,field1_string="test-test-test-test-3",field2_int=4i,field3_bool=false 1685318046526624009
-cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=5.4,field1_string="test-test-test-test-3-1",field2_int=5i,field3_bool=true 1685318047526624009
-cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=6.4,field1_string="test-test-test-test-3-2",field2_int=6i,field3_bool=false 1685318048526624009
-cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=7.4,field1_string="test-test-test-test-3-3",field2_int=7i,field3_bool=true 1685318049526624009
-cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=8.4,field1_string="test-test-test-test-3-4",field2_int=8i,field3_bool=false 1685318050526624009
-cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=8.799999999999999,field1_string="test-test-test-test-7",field2_int=8i,field3_bool=false 1685278962062614208
-cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=9.799999999999999,field1_string="test-test-test-test-7-1",field2_int=9i,field3_bool=true 1685278963062614208
-cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=10.799999999999999,field1_string="test-test-test-test-7-2",field2_int=10i,field3_bool=false 1685278964062614208
-cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=11.799999999999999,field1_string="test-test-test-test-7-3",field2_int=11i,field3_bool=true 1685278965062614208
-cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=12.799999999999999,field1_string="test-test-test-test-7-4",field2_int=12i,field3_bool=false 1685278966062614208
-cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=3.3000000000000003,field1_string="test-test-test-test-2",field2_int=3i,field3_bool=true 1685266998101878760
-cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=4.300000000000001,field1_string="test-test-test-test-2-1",field2_int=4i,field3_bool=true 1685266999101878760
-cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=5.300000000000001,field1_string="test-test-test-test-2-2",field2_int=5i,field3_bool=false 1685267000101878760
-cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=6.300000000000001,field1_string="test-test-test-test-2-3",field2_int=6i,field3_bool=true 1685267001101878760
-cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=7.300000000000001,field1_string="test-test-test-test-2-4",field2_int=7i,field3_bool=false 1685267002101878760
-cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=2.2,field1_string="test-test-test-test-1",field2_int=2i,field3_bool=false 1685306996543856411
-cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=3.2,field1_string="test-test-test-test-1-1",field2_int=3i,field3_bool=true 1685306997543856411
-cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=4.2,field1_string="test-test-test-test-1-2",field2_int=4i,field3_bool=false 1685306998543856411
-cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=5.2,field1_string="test-test-test-test-1-3",field2_int=5i,field3_bool=true 1685306999543856411
-cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=6.2,field1_string="test-test-test-test-1-4",field2_int=6i,field3_bool=false 1685307000543856411
-cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=6.6,field1_string="test-test-test-test-5",field2_int=6i,field3_bool=false 1685303827214237261
-cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=7.6,field1_string="test-test-test-test-5-1",field2_int=7i,field3_bool=true 1685303828214237261
-cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=8.6,field1_string="test-test-test-test-5-2",field2_int=8i,field3_bool=false 1685303829214237261
-cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=9.6,field1_string="test-test-test-test-5-3",field2_int=9i,field3_bool=true 1685303830214237261
-cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=10.6,field1_string="test-test-test-test-5-4",field2_int=10i,field3_bool=false 1685303831214237261
-cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=7.699999999999999,field1_string="test-test-test-test-6",field2_int=7i,field3_bool=true 1685269704883513247
-cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=8.7,field1_string="test-test-test-test-6-1",field2_int=8i,field3_bool=true 1685269705883513247
-cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=9.7,field1_string="test-test-test-test-6-2",field2_int=9i,field3_bool=false 1685269706883513247
-cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=10.7,field1_string="test-test-test-test-6-3",field2_int=10i,field3_bool=true 1685269707883513247
-cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=11.7,field1_string="test-test-test-test-6-4",field2_int=11i,field3_bool=false 1685269708883513247
+var lpOnlyContent = `# CONTEXT-DATABASE: db0
+# CONTEXT-MEASUREMENT: cpu 
+# CONTEXT-RETENTION-POLICY: rp0
+# DDL
+# DML
+# FROM TSSP FILE.
+# openGemini EXPORT: 1677-09-21T08:18:26+08:05 - 2262-04-12T07:47:16+08:00
+CREATE DATABASE db0
+CREATE RETENTION POLICY rp0 ON db0 DURATION 0s REPLICATION 1
 cpu,tag\ ke\,y\=2=tagvalue2_1,tagkey1=tagvalue1_1,tagkey3=tagvalue3_1,tagkey4=ta\ valu\,e\=4_1 fie\ ld4_\,fl\=oat=1.1,field2_int=1i 1685292814231278675
 cpu,tag\ ke\,y\=2=tagvalue2_1,tagkey1=tagvalue1_1,tagkey3=tagvalue3_1,tagkey4=ta\ valu\,e\=4_1 fie\ ld4_\,fl\=oat=2.1,field2_int=2i 1685292815231278675
 cpu,tag\ ke\,y\=2=tagvalue2_1,tagkey1=tagvalue1_1,tagkey3=tagvalue3_1,tagkey4=ta\ valu\,e\=4_1 fie\ ld4_\,fl\=oat=3.1,field2_int=3i 1685292816231278675
 cpu,tag\ ke\,y\=2=tagvalue2_1,tagkey1=tagvalue1_1,tagkey3=tagvalue3_1,tagkey4=ta\ valu\,e\=4_1 fie\ ld4_\,fl\=oat=4.1,field2_int=4i 1685292817231278675
 cpu,tag\ ke\,y\=2=tagvalue2_1,tagkey1=tagvalue1_1,tagkey3=tagvalue3_1,tagkey4=ta\ valu\,e\=4_1 fie\ ld4_\,fl\=oat=5.1,field2_int=5i 1685292818231278675
+cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=2.2,field1_string="test-test-test-test-1",field2_int=2i,field3_bool=false 1685306996543856411
+cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=3.2,field1_string="test-test-test-test-1-1",field2_int=3i,field3_bool=true 1685306997543856411
+cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=4.2,field1_string="test-test-test-test-1-2",field2_int=4i,field3_bool=false 1685306998543856411
+cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=5.2,field1_string="test-test-test-test-1-3",field2_int=5i,field3_bool=true 1685306999543856411
+cpu,tag\ ke\,y\=2=tagvalue2_2,tagkey1=tagvalue1_2,tagkey3=tagvalue3_2,tagkey4=ta\ valu\,e\=4_2 fie\ ld4_\,fl\=oat=6.2,field1_string="test-test-test-test-1-4",field2_int=6i,field3_bool=false 1685307000543856411
+cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=3.3000000000000003,field1_string="test-test-test-test-2",field2_int=3i,field3_bool=true 1685266998101878760
+cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=4.300000000000001,field1_string="test-test-test-test-2-1",field2_int=4i,field3_bool=true 1685266999101878760
+cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=5.300000000000001,field1_string="test-test-test-test-2-2",field2_int=5i,field3_bool=false 1685267000101878760
+cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=6.300000000000001,field1_string="test-test-test-test-2-3",field2_int=6i,field3_bool=true 1685267001101878760
+cpu,tag\ ke\,y\=2=tagvalue2_3,tagkey1=tagvalue1_3,tagkey3=tagvalue3_3,tagkey4=ta\ valu\,e\=4_3 fie\ ld4_\,fl\=oat=7.300000000000001,field1_string="test-test-test-test-2-4",field2_int=7i,field3_bool=false 1685267002101878760
+cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=4.4,field1_string="test-test-test-test-3",field2_int=4i,field3_bool=false 1685318046526624009
+cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=5.4,field1_string="test-test-test-test-3-1",field2_int=5i,field3_bool=true 1685318047526624009
+cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=6.4,field1_string="test-test-test-test-3-2",field2_int=6i,field3_bool=false 1685318048526624009
+cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=7.4,field1_string="test-test-test-test-3-3",field2_int=7i,field3_bool=true 1685318049526624009
+cpu,tag\ ke\,y\=2=tagvalue2_4,tagkey1=tagvalue1_4,tagkey3=tagvalue3_4,tagkey4=ta\ valu\,e\=4_4 fie\ ld4_\,fl\=oat=8.4,field1_string="test-test-test-test-3-4",field2_int=8i,field3_bool=false 1685318050526624009
 cpu,tag\ ke\,y\=2=tagvalue2_5,tagkey1=tagvalue1_5,tagkey3=tagvalue3_5,tagkey4=ta\ valu\,e\=4_5 fie\ ld4_\,fl\=oat=5.5,field1_string="test-test-test-test-4",field2_int=5i,field3_bool=true 1685309005743547657
 cpu,tag\ ke\,y\=2=tagvalue2_5,tagkey1=tagvalue1_5,tagkey3=tagvalue3_5,tagkey4=ta\ valu\,e\=4_5 fie\ ld4_\,fl\=oat=6.5,field1_string="test-test-test-test-4-1",field2_int=6i,field3_bool=true 1685309006743547657
 cpu,tag\ ke\,y\=2=tagvalue2_5,tagkey1=tagvalue1_5,tagkey3=tagvalue3_5,tagkey4=ta\ valu\,e\=4_5 fie\ ld4_\,fl\=oat=7.5,field1_string="test-test-test-test-4-2",field2_int=7i,field3_bool=false 1685309007743547657
 cpu,tag\ ke\,y\=2=tagvalue2_5,tagkey1=tagvalue1_5,tagkey3=tagvalue3_5,tagkey4=ta\ valu\,e\=4_5 fie\ ld4_\,fl\=oat=8.5,field1_string="test-test-test-test-4-3",field2_int=8i,field3_bool=true 1685309008743547657
 cpu,tag\ ke\,y\=2=tagvalue2_5,tagkey1=tagvalue1_5,tagkey3=tagvalue3_5,tagkey4=ta\ valu\,e\=4_5 fie\ ld4_\,fl\=oat=9.5,field1_string="test-test-test-test-4-4",field2_int=9i,field3_bool=false 1685309009743547657
+cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=10.6,field1_string="test-test-test-test-5-4",field2_int=10i,field3_bool=false 1685303831214237261
+cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=6.6,field1_string="test-test-test-test-5",field2_int=6i,field3_bool=false 1685303827214237261
+cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=7.6,field1_string="test-test-test-test-5-1",field2_int=7i,field3_bool=true 1685303828214237261
+cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=8.6,field1_string="test-test-test-test-5-2",field2_int=8i,field3_bool=false 1685303829214237261
+cpu,tag\ ke\,y\=2=tagvalue2_6,tagkey1=tagvalue1_6,tagkey3=tagvalue3_6,tagkey4=ta\ valu\,e\=4_6 fie\ ld4_\,fl\=oat=9.6,field1_string="test-test-test-test-5-3",field2_int=9i,field3_bool=true 1685303830214237261
+cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=10.7,field1_string="test-test-test-test-6-3",field2_int=10i,field3_bool=true 1685269707883513247
+cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=11.7,field1_string="test-test-test-test-6-4",field2_int=11i,field3_bool=false 1685269708883513247
+cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=7.699999999999999,field1_string="test-test-test-test-6",field2_int=7i,field3_bool=true 1685269704883513247
+cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=8.7,field1_string="test-test-test-test-6-1",field2_int=8i,field3_bool=true 1685269705883513247
+cpu,tag\ ke\,y\=2=tagvalue2_7,tagkey1=tagvalue1_7,tagkey3=tagvalue3_7,tagkey4=ta\ valu\,e\=4_7 fie\ ld4_\,fl\=oat=9.7,field1_string="test-test-test-test-6-2",field2_int=9i,field3_bool=false 1685269706883513247
+cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=10.799999999999999,field1_string="test-test-test-test-7-2",field2_int=10i,field3_bool=false 1685278964062614208
+cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=11.799999999999999,field1_string="test-test-test-test-7-3",field2_int=11i,field3_bool=true 1685278965062614208
+cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=12.799999999999999,field1_string="test-test-test-test-7-4",field2_int=12i,field3_bool=false 1685278966062614208
+cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=8.799999999999999,field1_string="test-test-test-test-7",field2_int=8i,field3_bool=false 1685278962062614208
+cpu,tag\ ke\,y\=2=tagvalue2_8,tagkey1=tagvalue1_8,tagkey3=tagvalue3_8,tagkey4=ta\ valu\,e\=4_8 fie\ ld4_\,fl\=oat=9.799999999999999,field1_string="test-test-test-test-7-1",field2_int=9i,field3_bool=true 1685278963062614208
 `

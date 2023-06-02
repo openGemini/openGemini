@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -83,6 +84,17 @@ func executeCompatible() error {
 	}
 
 	if gFlags.Export {
+		// 1. Improve the log level of VictoriaMetrics
+		//  For details: VictoriaMetrics/lib/logger/logger.go
+		// 2. resolved the problem of "When opening index files,VictoriaMetrics will check the flag.Parsed()"
+		//  For details:
+		// 	 export.go Explorer.walkDatabase()
+		// 	 VictoriaMetrics/lib/memory/memory.go
+		err := flag.CommandLine.Parse([]string{"-loggerLevel=ERROR"})
+		if err != nil {
+			return err
+		}
+
 		exportCmd := geminicli.NewExporter()
 		if err := exportCmd.Export(&gFlags); err != nil {
 			return err

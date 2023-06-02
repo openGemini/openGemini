@@ -76,7 +76,6 @@ type CommandLineConfig struct {
 	Start        string
 	End          string
 	Compress     bool
-	LpOnly       bool
 }
 
 type HttpClient interface {

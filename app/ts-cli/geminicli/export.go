@@ -35,7 +35,6 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/golang/snappy"
-	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
@@ -51,6 +50,8 @@ import (
 const (
 	tsspFileExtension = "tssp"
 	walFileExtension  = "wal"
+	dirNameSeparator  = "_"
+	writerBufferSize  = 1024 * 1024
 )
 
 type LineFilter struct {
@@ -65,7 +66,7 @@ func NewLineFilter() *LineFilter {
 	}
 }
 
-func (l *LineFilter) Init(clc *CommandLineConfig) error {
+func (l *LineFilter) parseTime(clc *CommandLineConfig) error {
 	// set defaults
 	if clc.Start != "" {
 		s, err := time.Parse(time.RFC3339, clc.Start)
@@ -95,16 +96,16 @@ func (l *LineFilter) Init(clc *CommandLineConfig) error {
 	return nil
 }
 
-func (l *LineFilter) Filter(t int64) bool {
+func (l *LineFilter) filter(t int64) bool {
 	return t >= l.startTime && t <= l.endTime
 }
 
-func (l *LineFilter) StartFilter(t int64) bool {
-	return t >= l.startTime
+func (l *LineFilter) isBelowMinFilter(t int64) bool {
+	return t < l.startTime
 }
 
-func (l *LineFilter) EndFilter(t int64) bool {
-	return t <= l.endTime
+func (l *LineFilter) isAboveMaxFilter(t int64) bool {
+	return t > l.endTime
 }
 
 type DatabaseDiskInfo struct {
@@ -117,7 +118,7 @@ type DatabaseDiskInfo struct {
 	rpToIndexDirMap map[string]string   // ie. {"0:autogen", "/tmp/openGemini/data/data/NOAA_water_database/0/autogen/index"}
 }
 
-func NewDatabaseDiskInfo() *DatabaseDiskInfo {
+func newDatabaseDiskInfo() *DatabaseDiskInfo {
 	return &DatabaseDiskInfo{
 		rps:             make(map[string]struct{}),
 		rpToTsspDirMap:  make(map[string]string),
@@ -126,7 +127,7 @@ func NewDatabaseDiskInfo() *DatabaseDiskInfo {
 	}
 }
 
-func (d *DatabaseDiskInfo) Init(actualDataDir string, actualWalDir string, databaseName string, retentionPolicy string) error {
+func (d *DatabaseDiskInfo) init(actualDataDir string, actualWalDir string, databaseName string, retentionPolicy string) error {
 	d.dbName = databaseName
 
 	// check whether the database is in actualDataPath
@@ -216,7 +217,6 @@ type Exporter struct {
 	filter            *LineFilter
 	compress          bool
 	lineCount         uint64
-	lponly            bool
 
 	stderrLogger  *log.Logger
 	stdoutLogger  *log.Logger
@@ -278,11 +278,14 @@ func (e *Exporter) parseDatabaseInfos() error {
 			return fmt.Errorf("retention policies can only be specified when specifying a database separately")
 		}
 		// If user doesn't specified a database, get all db's path info.
-		files, _ := os.ReadDir(e.actualDataPath)
+		files, err := os.ReadDir(e.actualDataPath)
+		if err != nil {
+			return err
+		}
 		for _, file := range files {
 			if file.IsDir() {
-				dbDiskInfo := NewDatabaseDiskInfo()
-				err := dbDiskInfo.Init(e.actualDataPath, e.actualWalPath, file.Name(), "")
+				dbDiskInfo := newDatabaseDiskInfo()
+				err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, file.Name(), "")
 				if err != nil {
 					return err
 				}
@@ -299,8 +302,8 @@ func (e *Exporter) parseDatabaseInfos() error {
 			return fmt.Errorf("retention policies can only be specified when specifying only one database separately")
 		}
 		for _, dbName := range dbNames {
-			dbDiskInfo := NewDatabaseDiskInfo()
-			err := dbDiskInfo.Init(e.actualDataPath, e.actualWalPath, dbName, "")
+			dbDiskInfo := newDatabaseDiskInfo()
+			err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, dbName, "")
 			if err != nil {
 				return fmt.Errorf("can't find database files for %s : %s", dbName, err)
 			}
@@ -311,8 +314,8 @@ func (e *Exporter) parseDatabaseInfos() error {
 
 	// If the user specifies only one database, but specifies multiple retentions, find info one by one
 	if e.retentions != "" {
-		dbDiskInfo := NewDatabaseDiskInfo()
-		err := dbDiskInfo.Init(e.actualDataPath, e.actualWalPath, dbNames[0], e.retentions)
+		dbDiskInfo := newDatabaseDiskInfo()
+		err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, dbNames[0], e.retentions)
 		if err != nil {
 			return fmt.Errorf("can't find database files for %s : %s", dbNames[0], err)
 		}
@@ -321,8 +324,8 @@ func (e *Exporter) parseDatabaseInfos() error {
 	}
 
 	// If the user specifies only one database, and doesn't specify retentions.
-	dbDiskInfo := NewDatabaseDiskInfo()
-	err := dbDiskInfo.Init(e.actualDataPath, e.actualWalPath, dbNames[0], "")
+	dbDiskInfo := newDatabaseDiskInfo()
+	err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, dbNames[0], "")
 	if err != nil {
 		return fmt.Errorf("can't find database files for %s : %s", dbNames[0], err)
 	}
@@ -338,7 +341,6 @@ func (e *Exporter) Init(clc *CommandLineConfig) error {
 	// A filter to filter points by time.
 	// TODO(wtsclwq) Support filter measurement.
 	e.filter = NewLineFilter()
-	e.lponly = clc.LpOnly
 	e.compress = clc.Compress
 
 	// If output fd is stdout.
@@ -348,7 +350,7 @@ func (e *Exporter) Init(clc *CommandLineConfig) error {
 		e.defaultLogger = e.stdoutLogger
 	}
 
-	if err := e.filter.Init(clc); err != nil {
+	if err := e.filter.parseTime(clc); err != nil {
 		return err
 	}
 
@@ -392,10 +394,9 @@ func (e *Exporter) walkDatabase(dbDiskInfo *DatabaseDiskInfo) error {
 	if err := e.walkWalFile(dbDiskInfo); err != nil {
 		return err
 	}
-	for key, idxMap := range e.rpNameToIdToIndexMap {
-		for id, idx := range idxMap {
+	for _, idxMap := range e.rpNameToIdToIndexMap {
+		for _, idx := range idxMap {
 			err := idx.Open()
-			e.defaultLogger.Printf("%s : %d index opened.", key, id)
 			if err != nil {
 				panic(err)
 			}
@@ -422,7 +423,7 @@ func (e *Exporter) write() error {
 	}
 
 	// 1mb buffer size to sync file
-	bufWriter := bufio.NewWriterSize(outputWriter, 1024*1024)
+	bufWriter := bufio.NewWriterSize(outputWriter, writerBufferSize)
 	defer func(bufWriter *bufio.Writer) {
 		_ = bufWriter.Flush()
 	}(bufWriter)
@@ -439,10 +440,6 @@ func (e *Exporter) write() error {
 
 	// metaWriter to write information that are not line-protocols
 	metaWriter := outputWriter
-	// If user specifics line-protocols only, make metaWriter writes into black hole
-	if e.lponly {
-		metaWriter = io.Discard
-	}
 
 	return e.writeFull(metaWriter, outputWriter)
 }
@@ -452,15 +449,14 @@ func (e *Exporter) writeFull(metaWriter io.Writer, outputWriter io.Writer) error
 	start, end := time.Unix(0, e.filter.startTime).Format(time.RFC3339), time.Unix(0, e.filter.endTime).Format(time.RFC3339)
 	fmt.Fprintf(metaWriter, "# openGemini EXPORT: %s - %s\n\n", start, end)
 
-	if !e.lponly {
-		if err := e.writeDDL(metaWriter, outputWriter); err != nil {
-			return err
-		}
+	if err := e.writeDDL(metaWriter, outputWriter); err != nil {
+		return err
 	}
 
 	if err := e.writeDML(metaWriter, outputWriter); err != nil {
 		return err
 	}
+
 	e.defaultLogger.Printf("Summarize %d line protocol\n", e.lineCount)
 	return nil
 }
@@ -528,7 +524,7 @@ func (e *Exporter) walkIndexFiles(dbDiskInfo *DatabaseDiskInfo) error {
 		}
 		for _, file := range files {
 			if file.IsDir() {
-				indexId, _, err2 := engine.ParseIndexDir(file.Name())
+				indexId, err2 := parseIndexDir(file.Name())
 				if err2 != nil {
 					return err2
 				}
@@ -553,15 +549,6 @@ func (e *Exporter) walkIndexFiles(dbDiskInfo *DatabaseDiskInfo) error {
 	return nil
 }
 
-// parseShardGroupDuration parse a shard dir name to ShardGroupDuration
-func parseShardGroupDuration(str string) (time.Duration, error) {
-	if _, _, timeRangeInfo, err := engine.ParseShardDir(str); err == nil {
-		return timeRangeInfo.Interval(), nil
-	} else {
-		return 0, err
-	}
-}
-
 // writeDDL write every "database:retention policy" DDL
 func (e *Exporter) writeDDL(metaWriter io.Writer, outputWriter io.Writer) error {
 	fmt.Fprintf(metaWriter, "# DDL\n\n")
@@ -571,18 +558,9 @@ func (e *Exporter) writeDDL(metaWriter io.Writer, outputWriter io.Writer) error 
 		fmt.Fprintf(outputWriter, "CREATE DATABASE %s\n", databaseName)
 		for ptWithRp := range dbDiskInfo.rps {
 			rpName := strings.Split(ptWithRp, ":")[1]
-			rpPath := dbDiskInfo.rpToTsspDirMap[ptWithRp]
-			subDirs, err := os.ReadDir(rpPath)
-			if err != nil {
-				panic(err)
-			}
-			if shardGroupDuration, err := parseShardGroupDuration(subDirs[0].Name()); err == nil {
-				if _, ok := avoidRepetition[rpName]; !ok {
-					fmt.Fprintf(outputWriter, "CREATE RETENTION POLICY %s ON %s DURATION 0s REPLICATION 1 SHARD DURATION %s\n", rpName, databaseName, shardGroupDuration)
-					avoidRepetition[rpName] = struct{}{}
-				}
-			} else {
-				return err
+			if _, ok := avoidRepetition[rpName]; !ok {
+				fmt.Fprintf(outputWriter, "CREATE RETENTION POLICY %s ON %s DURATION 0s REPLICATION 1\n", rpName, databaseName)
+				avoidRepetition[rpName] = struct{}{}
 			}
 		}
 		fmt.Fprintf(outputWriter, "\n")
@@ -635,17 +613,26 @@ func (e *Exporter) writeDML(metaWriter io.Writer, outputWriter io.Writer) error 
 // writeAllTsspFilesInRp writes all tssp files in a "database:retention policy"
 func (e *Exporter) writeAllTsspFilesInRp(metaWriter io.Writer, outputWriter io.Writer, measurementFilesMap map[string][]string, indexesMap map[uint64]*tsi.MergeSetIndex) error {
 	fmt.Fprintf(metaWriter, "# FROM TSSP FILE.\n\n")
+	var isOrder bool
 	for measurementName, files := range measurementFilesMap {
 		fmt.Fprintf(metaWriter, "# CONTEXT-MEASUREMENT: %s \n", measurementName)
 		for _, file := range files {
-			// ie./tmp/openGemini/data/data/db1/0/autogen/1_1567382400000000000_1567987200000000000_1/tssp/average_temperature_0000/00000002-0000-00000000.tssp
 			splits := strings.Split(file, string(os.PathSeparator))
-			shardDir := splits[len(splits)-4]
-			_, indexId, _, err := engine.ParseShardDir(shardDir)
+			var shardDir string
+			if strings.Contains(file, "out-of-order") {
+				isOrder = false
+				// ie./tmp/openGemini/data/data/db1/0/autogen/1_1567382400000000000_1567987200000000000_1/tssp/average_temperature_0000/out-of-order/00000002-0000-00000000.tssp
+				shardDir = splits[len(splits)-5]
+			} else {
+				isOrder = true
+				// ie./tmp/openGemini/data/data/db1/0/autogen/1_1567382400000000000_1567987200000000000_1/tssp/average_temperature_0000/00000002-0000-00000000.tssp
+				shardDir = splits[len(splits)-4]
+			}
+			_, indexId, err := parseShardDir(shardDir)
 			if err != nil {
 				return err
 			}
-			if err := e.writeSingleTsspFile(file, outputWriter, indexesMap[indexId]); err != nil {
+			if err := e.writeSingleTsspFile(file, outputWriter, indexesMap[indexId], isOrder); err != nil {
 				return err
 			}
 		}
@@ -655,9 +642,9 @@ func (e *Exporter) writeAllTsspFilesInRp(metaWriter io.Writer, outputWriter io.W
 }
 
 // writeSingleTsspFile writes a single tssp file's all records.
-func (e *Exporter) writeSingleTsspFile(filePath string, outputWriter io.Writer, index *tsi.MergeSetIndex) error {
+func (e *Exporter) writeSingleTsspFile(filePath string, outputWriter io.Writer, index *tsi.MergeSetIndex, isOrder bool) error {
 	lockPath := ""
-	tsspFile, err := immutable.OpenTSSPFile(filePath, &lockPath, true, false)
+	tsspFile, err := immutable.OpenTSSPFile(filePath, &lockPath, isOrder, false)
 	defer util.MustClose(tsspFile)
 
 	if err != nil {
@@ -683,7 +670,7 @@ func (e *Exporter) writeSingleTsspFile(filePath string, outputWriter io.Writer, 
 		minTime = rec.MinTime(true)
 
 		// filter time range
-		if !e.filter.StartFilter(maxTime) || !e.filter.EndFilter(minTime) {
+		if e.filter.isBelowMinFilter(maxTime) || e.filter.isAboveMaxFilter(minTime) {
 			continue
 		}
 
@@ -746,7 +733,7 @@ func (e *Exporter) writeSeriesRecords(outputWriter io.Writer, sid uint64, rec *r
 // writeSingleRecord parses a record and a series key to line protocol, and writes it.
 func (e *Exporter) writeSingleRecord(outputWriter io.Writer, seriesKey [][]byte, rec record.Record, buf []byte) ([]byte, error) {
 	tm := rec.Times()[0]
-	if !e.filter.Filter(tm) {
+	if !e.filter.filter(tm) {
 		return buf, nil
 	}
 
@@ -769,7 +756,7 @@ func (e *Exporter) writeSingleRecord(outputWriter io.Writer, seriesKey [][]byte,
 			var str []string
 			str = rec.Column(i).StringValues(str)
 			buf = append(buf, '"')
-			buf = append(buf, models.EscapeStringField(str[0])...)
+			buf = append(buf, EscapeStringFieldValue(str[0])...)
 			buf = append(buf, '"')
 		default:
 			// This shouldn't be possible, but we'll format it anyway.
@@ -911,7 +898,7 @@ func (e *Exporter) writeSingleRow(row influx.Row, outputWriter io.Writer, buf []
 	fields := row.Fields
 	tm := row.Timestamp
 
-	if !e.filter.Filter(tm) {
+	if !e.filter.filter(tm) {
 		return buf, nil
 	}
 
@@ -938,7 +925,7 @@ func (e *Exporter) writeSingleRow(row influx.Row, outputWriter io.Writer, buf []
 			buf = strconv.AppendBool(buf, field.NumValue == 1)
 		case influx.Field_Type_String:
 			buf = append(buf, '"')
-			buf = append(buf, models.EscapeStringField(field.StrValue)...)
+			buf = append(buf, EscapeStringFieldValue(field.StrValue)...)
 			buf = append(buf, '"')
 		default:
 			// This shouldn't be possible, but we'll format it anyway.
@@ -1001,15 +988,51 @@ func Parse2SeriesKeyWithoutVersion(key []byte, dst []byte, splitWithNull bool) (
 	return dst[:len(dst)-1], nil
 }
 
+func parseShardDir(shardDirName string) (uint64, uint64, error) {
+	shardDir := strings.Split(shardDirName, dirNameSeparator)
+	if len(shardDir) != 4 {
+		return 0, 0, errno.NewError(errno.InvalidDataDir)
+	}
+	shardID, err := strconv.ParseUint(shardDir[0], 10, 64)
+	if err != nil {
+		return 0, 0, errno.NewError(errno.InvalidDataDir)
+	}
+	indexID, err := strconv.ParseUint(shardDir[3], 10, 64)
+	if err != nil {
+		return 0, 0, errno.NewError(errno.InvalidDataDir)
+	}
+	return shardID, indexID, nil
+}
+
+func parseIndexDir(indexDirName string) (uint64, error) {
+	indexDir := strings.Split(indexDirName, dirNameSeparator)
+	if len(indexDir) != 3 {
+		return 0, errno.NewError(errno.InvalidDataDir)
+	}
+
+	indexID, err := strconv.ParseUint(indexDir[0], 10, 64)
+	if err != nil {
+		return 0, errno.NewError(errno.InvalidDataDir)
+	}
+	return indexID, nil
+}
+
 var escapeFieldKeyReplacer = strings.NewReplacer(`,`, `\,`, `=`, `\=`, ` `, `\ `)
 var escapeTagKeyReplacer = strings.NewReplacer(`,`, `\,`, `=`, `\=`, ` `, `\ `)
 var escapeTagValueReplacer = strings.NewReplacer(`,`, `\,`, `=`, `\=`, ` `, `\ `)
 var escapeMstNameReplacer = strings.NewReplacer(`=`, `\=`, ` `, `\ `)
+var escapeStringFieldReplacer = strings.NewReplacer(`"`, `\"`, `\`, `\\`)
 
 // EscapeFieldKey returns a copy of in with any comma or equal sign or space
 // with escaped values.
 func EscapeFieldKey(in string) string {
 	return escapeFieldKeyReplacer.Replace(in)
+}
+
+// EscapeStringFieldValue returns a copy of in with any double quotes or
+// backslashes with escaped values.
+func EscapeStringFieldValue(in string) string {
+	return escapeStringFieldReplacer.Replace(in)
 }
 
 // EscapeTagKey returns a copy of in with any "comma" or "equal sign" or "space"
