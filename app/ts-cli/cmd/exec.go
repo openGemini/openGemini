@@ -84,7 +84,7 @@ func executeCompatible() error {
 	}
 
 	if gFlags.Export {
-		// 1. Improve the log level of VictoriaMetrics
+		// 1. Increase the log level of VictoriaMetrics
 		//  For details: VictoriaMetrics/lib/logger/logger.go
 		// 2. resolved the problem of "When opening index files,VictoriaMetrics will check the flag.Parsed()"
 		//  For details:

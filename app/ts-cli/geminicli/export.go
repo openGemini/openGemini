@@ -669,7 +669,7 @@ func (e *Exporter) writeSingleTsspFile(filePath string, outputWriter io.Writer, 
 		maxTime = rec.MaxTime(true)
 		minTime = rec.MinTime(true)
 
-		// filter time range
+		// Check if the maximum and minimum time of records that the SID points to are in the filter range of e.filter
 		if e.filter.isBelowMinFilter(maxTime) || e.filter.isAboveMaxFilter(minTime) {
 			continue
 		}
