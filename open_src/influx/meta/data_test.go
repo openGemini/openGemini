@@ -27,6 +27,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/logger"
+	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -1210,4 +1211,61 @@ func TestUpdateShardInfo(t *testing.T) {
 	if s.DownSampleID != 2 || s.DownSampleLevel != 2 {
 		t.Fatal()
 	}
+}
+
+func TestTokenStorage(t *testing.T) {
+	tokenStorage := TokenStorage{}
+	privledge1 := make(map[string]originql.Privilege)
+	privledge1["table1"] = originql.AllPrivileges
+	privledge1["table2"] = originql.NoPrivileges
+	privledge2 := make(map[string]originql.Privilege)
+	privledge2["table1"] = originql.NoPrivileges
+	privledge2["table2"] = originql.AllPrivileges
+
+	// gen first token
+	token1, err := tokenStorage.NewToken(privledge1, 2, 32, 5)
+	assert2.Equal(t, err == nil, true)
+	// gen second token
+	token2, err := tokenStorage.NewToken(privledge2, 5, 32, 5)
+	assert2.Equal(t, err == nil, true)
+	// get privilege of token1
+	privledge, err := tokenStorage.GetTokenPrivilege(token1)
+	assert2.Equal(t, err == nil, true)
+	priv, exist := privledge["table1"]
+	assert2.Equal(t, exist, true)
+	assert2.Equal(t, priv, originql.AllPrivileges)
+	priv, exist = privledge["table2"]
+	assert2.Equal(t, exist, true)
+	assert2.Equal(t, priv, originql.NoPrivileges)
+
+	// check wether token1 exist after timeout, allow small delay
+	time.Sleep(time.Millisecond * 2200)
+	_, err = tokenStorage.GetTokenPrivilege(token1)
+	assert2.Equal(t, err != nil, true)
+
+	// get privilege of token2
+	privledge, err = tokenStorage.GetTokenPrivilege(token2)
+	assert2.Equal(t, err == nil, true)
+	priv, exist = privledge["table1"]
+	assert2.Equal(t, exist, true)
+	assert2.Equal(t, priv, originql.NoPrivileges)
+	priv, exist = privledge["table2"]
+	assert2.Equal(t, exist, true)
+	assert2.Equal(t, priv, originql.AllPrivileges)
+
+	// check wether token2 exist after timeout
+	time.Sleep(time.Second * 3)
+	_, err = tokenStorage.GetTokenPrivilege(token2)
+	assert2.Equal(t, err != nil, true)
+
+	// test max token cnt
+	for i := 0; i < 3; i++ {
+		_, err := tokenStorage.NewToken(privledge2, 1, 32, 3)
+		assert2.Equal(t, err == nil, true)
+	}
+	_, err = tokenStorage.NewToken(privledge2, 1, 32, 3)
+	assert2.Equal(t, err != nil, true)
+	time.Sleep(time.Second * 1)
+	_, err = tokenStorage.NewToken(privledge2, 1, 32, 3)
+	assert2.Equal(t, err == nil, true)
 }

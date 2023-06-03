@@ -26,6 +26,7 @@ import (
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/influxdata/influxdb/uuid"
+	originql "github.com/influxdata/influxql"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -95,6 +96,9 @@ const (
 
 	// Authenticate with jwt.
 	BearerAuthentication
+
+	// Authenticate with non-jwt token.
+	TokenAuthentication
 )
 
 // TODO: Check HTTP response codes: 400, 401, 403, 409.
@@ -122,6 +126,8 @@ type Handler struct {
 		AdminUserExists() bool
 		DataNodes() ([]meta2.DataNode, error)
 		ShowShards() models.Rows
+		NewToken(privilege map[string]originql.Privilege, timeout int64, length int, maxCnt int) (string, error)
+		GetTokenPrivilege(token string) (map[string]originql.Privilege, error)
 	}
 
 	QueryAuthorizer interface {
@@ -241,6 +247,10 @@ func NewHandler(c config.Config) *Handler {
 		Route{ // sysCtrl
 			"sysCtrl",
 			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
+		},
+		Route{
+			"authorization",
+			"POST", "/authorization", false, true, h.serveAuthorization,
 		},
 	}...)
 
@@ -406,6 +416,19 @@ func (h *Handler) serveSysCtrl(w http.ResponseWriter, r *http.Request, user meta
 	h.serveDebug(w, r)
 }
 
+func getTokenFromHeader(r *http.Request) (string, error) {
+	if s := r.Header.Get("Authorization"); s != "" {
+		strs := strings.Split(s, " ")
+		if len(strs) == 2 {
+			switch strs[0] {
+			case "Token":
+				return strs[1], nil
+			}
+		}
+	}
+	return "", errors.New("No token.")
+}
+
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
@@ -533,23 +556,36 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	}
 	// Check authorization.
 	if h.Config.AuthEnabled {
-		var userID string
+		// var userID string
 		if user != nil {
 			// no users in system
-			userID = user.ID()
-		}
-		if err := h.QueryAuthorizer.AuthorizeQuery(user, q, db); err != nil {
-			if err, ok := err.(meta2.ErrAuthorize); ok {
-				h.Logger.Info("Unauthorized request",
-					zap.String("user", err.User),
-					zap.Stringer("query", err.Query),
-					zap.String("database", err.Database))
+			userID := user.ID()
+			if err := h.QueryAuthorizer.AuthorizeQuery(user, q, db); err != nil {
+				if err, ok := err.(meta2.ErrAuthorize); ok {
+					h.Logger.Info("Unauthorized request",
+						zap.String("user", err.User),
+						zap.Stringer("query", err.Query),
+						zap.String("database", err.Database))
+				}
+				h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
+				h.Logger.Error("query error! authorizing query", zap.Error(err), zap.String("db", db), zap.Any("r", r), zap.String("userID", userID))
+				return
 			}
-			h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
-			h.Logger.Error("query error! authorizing query", zap.Error(err), zap.String("db", db), zap.Any("r", r), zap.String("userID", userID))
-			return
+			h.Logger.Info("login success", zap.String("userID", userID))
+		} else {
+			token, err := getTokenFromHeader(r)
+			if err != nil || !h.authTokenQuery(token, db, q) {
+				err = errors.New("token privileges not match querys.")
+				h.Logger.Info("Unauthorized request",
+					zap.String("token", token),
+					zap.Stringer("query", q),
+					zap.String("database", db))
+				h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
+				h.Logger.Error("query error! authorizing query", zap.Error(err), zap.String("db", db), zap.Any("r", r), zap.String("token", token))
+				return
+			}
+			h.Logger.Info("login success", zap.String("token", token))
 		}
-		h.Logger.Info("login success", zap.String("userID", userID))
 	}
 
 	// Parse chunk size. Use default if not provided or unparsable.
@@ -816,6 +852,45 @@ func (h *Handler) logRowsIfNecessary(rows []influx.Row, ReqBuf []byte) {
 	}
 }
 
+// check whether the token has write privilege on database
+// return true if auth success
+func (h *Handler) authTokenWrite(token string, database string) bool {
+	privs, err := h.MetaClient.GetTokenPrivilege(token)
+	if err != nil {
+		return false
+	}
+	p, ok := privs[database]
+	return ok && (p == originql.AllPrivileges || p == originql.WritePrivilege)
+}
+
+func (h *Handler) authTokenQuery(token string, database string, query *influxql.Query) bool {
+	tokenPrivs, err := h.MetaClient.GetTokenPrivilege(token)
+	if err != nil {
+		return false
+	}
+	// Check each statement in the query.
+	for _, stmt := range query.Statements {
+		privs, err := stmt.RequiredPrivileges()
+		if err != nil {
+			return false
+		}
+		for _, p := range privs {
+			if p.Admin {
+				return false
+			}
+			db := p.Name
+			if db == "" {
+				db = database
+			}
+			tokenPriv, ok := tokenPrivs[db]
+			if !ok || !(tokenPriv == originql.AllPrivileges || tokenPriv == originql.Privilege(p.Privilege)) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // serveWrite receives incoming series data in line protocol format and writes it to the database.
 func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
@@ -847,14 +922,22 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 
 	if h.Config.AuthEnabled {
 		if user == nil {
-			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
-			err := errno.NewError(errno.HttpForbidden)
-			h.Logger.Error("write error: user is required to write to database", zap.Error(err), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
-			return
-		}
-
-		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), database); err != nil {
+			token, err := getTokenFromHeader(r)
+			if err != nil {
+				h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
+				err := errno.NewError(errno.HttpForbidden)
+				h.Logger.Error("write error: user is required to write to database", zap.Error(err), zap.String("db", database))
+				atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+				return
+			}
+			if !h.authTokenWrite(token, database) {
+				h.httpError(w, fmt.Sprintf("token has no write privilege on %s", database), http.StatusForbidden)
+				err := errno.NewError(errno.HttpForbidden)
+				h.Logger.Error("write error: token has no write privilege on: ", zap.Error(err), zap.String("db", database))
+				atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+				return
+			}
+		} else if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), database); err != nil {
 			err := errno.NewError(errno.HttpForbidden)
 			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
 			h.Logger.Error("write error:user is not authorized to write to database", zap.Error(err), zap.String("db", database), zap.String("user", user.ID()))
@@ -1072,6 +1155,84 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.writeHeader(w, http.StatusBadRequest)
 	}
+}
+
+func (h *Handler) serveAuthorization(w http.ResponseWriter, r *http.Request) {
+	// check username & password
+	username := r.URL.Query().Get("username")
+	password := r.URL.Query().Get("password")
+	user, err := h.MetaClient.Authenticate(username, password)
+	if err != nil {
+		h.httpError(w, "Invalid username or password.", http.StatusUnauthorized)
+		return
+	}
+
+	// get timeout
+	timeout := r.URL.Query().Get("timeout")
+	t, err := strconv.ParseInt(timeout, 10, 64)
+	if err != nil {
+		h.httpError(w, "Invalid timeout arg.", http.StatusUnauthorized)
+		return
+	}
+	if t > h.Config.MaxTokenTimeout {
+		t = h.Config.MaxTokenTimeout
+	}
+
+	rawPrivs := r.FormValue("privilege")
+	if rawPrivs == "" {
+		h.httpError(w, "Expected privilege declarations in request body.", http.StatusUnauthorized)
+		return
+	}
+
+	// parse the privilege declarations
+	var privDecs map[string]string
+	Privileges := make(map[string]originql.Privilege)
+	decoder := json.NewDecoder(strings.NewReader(rawPrivs))
+	if err := decoder.Decode(&privDecs); err != nil {
+		h.httpError(w, "error parsing privilege declarations: "+err.Error(), http.StatusBadRequest)
+		h.Logger.Error("authorization error! fail to decode json: ", zap.Error(err), zap.Any("r", r))
+		return
+	}
+	for k, v := range privDecs {
+		if v == "W" || v == "w" {
+			Privileges[k] = originql.WritePrivilege
+		} else if v == "R" || v == "r" {
+			Privileges[k] = originql.ReadPrivilege
+		} else if v == "A" || v == "a" || v == "RW" || v == "rw" {
+			Privileges[k] = originql.AllPrivileges
+		} else {
+			h.httpError(w, "invalid privilege type: "+v, http.StatusBadRequest)
+			h.Logger.Error("authorization error! find invalid privilege type: ", zap.Any("r", r))
+			return
+		}
+	}
+
+	// check whether the privilege declarations is valid
+	for db, privilege := range Privileges {
+		if valid := user.AuthorizeDatabase(privilege, db); !valid {
+			h.httpError(w, "Invalid privilege on "+db, http.StatusUnauthorized)
+			h.Logger.Error("authorization error! invalid privilege: ", zap.Any("r", r))
+			return
+		}
+	}
+
+	// try to create new token
+	token, err := h.MetaClient.NewToken(Privileges, t, h.Config.TokenLength, h.Config.MaxTokenCount)
+	if err != nil {
+		h.httpError(w, "Fail to create new token.", http.StatusUnauthorized)
+		h.Logger.Error("authorization error! fail to create new token: ", zap.Error(err), zap.Any("r", r))
+		return
+	}
+
+	h.writeHeader(w, http.StatusOK)
+	b, _ := json.Marshal(map[string]string{"token": token})
+	if _, err := w.Write(b); err != nil {
+		h.httpError(w, "Fail to create new token.", http.StatusUnauthorized)
+		h.Logger.Error("authorization error! err occured in w.Write: ", zap.Error(err), zap.Any("r", r))
+		return
+	}
+
+	h.Logger.Info("create token succ: ", zap.String("token", token), zap.Int64("timeout", t), zap.String("priv", rawPrivs))
 }
 
 // convertToEpoch converts result timestamps from time.Time to the specified epoch.
@@ -1575,6 +1736,11 @@ func ParseCredentials(r *http.Request) (*credentials, error) {
 						Username: u,
 						Password: p,
 					}, nil
+				} else {
+					return &credentials{
+						Method: TokenAuthentication,
+						Token:  strs[1],
+					}, nil
 				}
 			}
 		}
@@ -1693,6 +1859,11 @@ func authenticate(inner func(http.ResponseWriter, *http.Request, meta2.User), h 
 					return
 				} else if user == nil {
 					h.httpError(w, meta2.ErrUserNotFound.Error(), http.StatusUnauthorized)
+					return
+				}
+			case TokenAuthentication:
+				if _, err := h.MetaClient.GetTokenPrivilege(creds.Token); err != nil {
+					h.httpError(w, err.Error(), http.StatusUnauthorized)
 					return
 				}
 			default:
