@@ -386,6 +386,41 @@ func TestServer_DatabaseRetentionPolicyAutoCreate(t *testing.T) {
 	}
 }
 
+func TestServer_ContinuousQueryCommand(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	test := tests.load(t, "continuous_query_commands")
+
+	// Create all databases.
+	if _, err := s.CreateDatabase("db0"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.CreateDatabase("db1"); err != nil {
+		t.Fatal(err)
+	}
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_ShowDatabases_NoAuth(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
