@@ -15,3 +15,6 @@ coverage:
       default:
         target: 70%
         threshold: 1%
+
+comment:                  # this is a top-level key
+  layout: "diff"

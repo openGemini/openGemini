@@ -3,6 +3,7 @@ name: Continuous Integration
 on:
   workflow_dispatch:
   pull_request:
+    types: [ opened, synchronize, reopened, ready_for_review ]
     paths-ignore:
       - 'config/**'
       - 'docker/**'
@@ -11,7 +12,19 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - '**.md'
-      - '**.yml'
+      - '.gitignore'
+  push:
+    branches:
+      - full-text-index
+      - main
+    paths-ignore:
+      - 'config/**'
+      - 'docker/**'
+      - 'docs/**'
+      - 'images/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '**.md'
       - '.gitignore'
 
 env:
@@ -22,7 +35,6 @@ env:
 jobs:
   CommitLint:
     name: commit lint
-    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -35,7 +47,6 @@ jobs:
         run: make licence-check
   StaticCheck:
     name: "static check"
-    if: github.event.pull_request.draft == false
     needs: CommitLint
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -50,7 +61,6 @@ jobs:
         run: make static-check
   OtherGoLint:
     name: "style check, go vet and other go lint"
-    if: github.event.pull_request.draft == false
     needs: CommitLint
     runs-on: ubuntu-latest
     timeout-minutes: 30
