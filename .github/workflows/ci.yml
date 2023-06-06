@@ -13,19 +13,6 @@ on:
       - 'tests/**'
       - '**.md'
       - '.gitignore'
-  push:
-    branches:
-      - full-text-index
-      - main
-    paths-ignore:
-      - 'config/**'
-      - 'docker/**'
-      - 'docs/**'
-      - 'images/**'
-      - 'scripts/**'
-      - 'tests/**'
-      - '**.md'
-      - '.gitignore'
 
 env:
   GO111MODULE: on

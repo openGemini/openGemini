@@ -1,0 +1,48 @@
+name: UT and Upload Coverage
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - full-text-index
+      - main
+    paths-ignore:
+      - 'config/**'
+      - 'docker/**'
+      - 'docs/**'
+      - 'images/**'
+      - 'scripts/**'
+      - 'tests/**'
+      - '**.md'
+      - '.gitignore'
+
+env:
+  GO111MODULE: on
+  GONOSUMDB: "*"
+  GOSUMDB: off
+
+jobs:
+  UT:
+    name: unit test
+    strategy:
+      fail-fast: true
+      matrix:
+        os: ["ubuntu-latest"] # "macOS-latest"
+        go: ["1.18.x"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 1
+      - uses: WillAbides/setup-go-faster@v1.7.0
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Run gotest
+        run: |
+          go mod tidy
+          make gotest
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
