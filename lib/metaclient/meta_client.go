@@ -14,6 +14,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -279,6 +280,7 @@ type Client struct {
 	closing     chan struct{}
 	changed     chan chan struct{}
 	cacheData   *meta2.Data
+	tokenStore  meta2.TokenStorage
 
 	// Authentication cache.
 	authCache map[string]authUser
@@ -3019,6 +3021,28 @@ func (c *Client) Suicide(err error) {
 	if e := syscall.Kill(syscall.Getpid(), syscall.SIGKILL); e != nil {
 		panic(fmt.Sprintf("FATAL: cannot send SIGKILL to itself: %v", e))
 	}
+}
+
+func (c *Client) NewToken(privilege map[string]originql.Privilege, timeout int64, length int, maxCnt int) (string, error) {
+	t, err := c.tokenStore.NewToken(privilege, timeout, length, maxCnt)
+	if err != nil {
+		return "", err
+	}
+	encodedToken := base64.StdEncoding.EncodeToString([]byte(string(t)))
+	return encodedToken, nil
+}
+
+func (c *Client) GetTokenPrivilege(token string) (map[string]originql.Privilege, error) {
+	b, err := base64.StdEncoding.DecodeString(token)
+	if err != nil {
+		return map[string]originql.Privilege{}, errors.New("fail to decode token")
+	}
+	t := meta2.Token(string(b))
+	privilege, err := c.tokenStore.GetTokenPrivilege(t)
+	if err != nil {
+		return map[string]originql.Privilege{}, errors.New("no such token")
+	}
+	return privilege, nil
 }
 
 func refreshConnectedServer(currentServer int) {

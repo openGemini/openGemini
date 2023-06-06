@@ -28,6 +28,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -35,6 +36,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -75,6 +77,73 @@ var dropStreamFirstError = errors.New("stream task exists, drop it first")
 func assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
 		panic(fmt.Sprintf("assert failed: "+msg, v...))
+	}
+}
+
+// use string to represent token
+type Token string
+
+type TokenInfo struct {
+	Privileges map[string]originql.Privilege
+}
+
+// storage of tokens
+type TokenStorage struct {
+	sync.RWMutex
+	tokens map[Token]TokenInfo
+}
+
+func (s *TokenStorage) ClearToken(token Token, timeout int64) {
+	ticker := time.NewTicker(time.Second * time.Duration(timeout))
+	for range ticker.C {
+		s.Lock()
+		delete(s.tokens, token)
+		s.Unlock()
+		return
+	}
+}
+
+func (s *TokenStorage) NewToken(privilege map[string]originql.Privilege, timeout int64, length int, maxCnt int) (Token, error) {
+	s.RLock()
+	if len(s.tokens) >= maxCnt {
+		s.RUnlock()
+		return Token(""), errors.New("the number of tokens has reached the upper limit")
+	}
+	s.RUnlock()
+	bytes := make([]byte, length)
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return Token(""), errors.New("fail to generate new unique token")
+	}
+
+	token := Token(bytes)
+	// almost impossible to generate duplicate tokens
+	s.RLock()
+	_, exist := s.tokens[token]
+	if exist {
+		s.RUnlock()
+		return Token(""), errors.New("fail to generate new unique token")
+	}
+	s.RUnlock()
+
+	s.Lock()
+	if s.tokens == nil {
+		s.tokens = make(map[Token]TokenInfo)
+	}
+	s.tokens[token] = TokenInfo{privilege}
+	s.Unlock()
+	go s.ClearToken(token, timeout)
+	return Token(token), nil
+}
+
+func (s *TokenStorage) GetTokenPrivilege(token Token) (map[string]originql.Privilege, error) {
+	s.RLock()
+	defer s.RUnlock()
+	info, exist := s.tokens[token]
+	if !exist {
+		return nil, errors.New("token not exist")
+	} else {
+		return info.Privileges, nil
 	}
 }
 
