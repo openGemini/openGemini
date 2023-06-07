@@ -63,9 +63,10 @@ type TSSql struct {
 	HTTP httpdConfig.Config `toml:"http"`
 
 	// TLS provides configuration options for all https endpoints.
-	TLS      tlsconfig.Config `toml:"tls"`
-	Analysis Castor           `toml:"castor"`
-	Sherlock *SherlockConfig  `toml:"sherlock"`
+	TLS             tlsconfig.Config      `toml:"tls"`
+	Analysis        Castor                `toml:"castor"`
+	Sherlock        *SherlockConfig       `toml:"sherlock"`
+	ContinuousQuery ContinuousQueryConfig `toml:"continuous_query"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -78,6 +79,7 @@ func NewTSSql() *TSSql {
 	c.HTTP = httpdConfig.NewConfig()
 	c.Analysis = NewCastor()
 	c.Sherlock = NewSherlockConfig()
+	c.ContinuousQuery = NewContinuousQueryConfig()
 	return c
 }
 
@@ -93,6 +95,7 @@ func (c *TSSql) Validate() error {
 		c.Spdy,
 		c.Analysis,
 		c.Sherlock,
+		c.ContinuousQuery,
 	}
 
 	for _, item := range items {
