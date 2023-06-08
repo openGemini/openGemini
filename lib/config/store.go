@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
+	"github.com/influxdata/influxdb/services/continuous_querier"
 	"github.com/influxdata/influxdb/services/retention"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -78,11 +79,12 @@ type TSStore struct {
 	Gossip      *Gossip     `toml:"gossip"`
 	Spdy        Spdy        `toml:"spdy"`
 
-	HTTPD             httpdConf.Config `toml:"http"`
-	Retention         retention.Config `toml:"retention"`
-	DownSample        retention.Config `toml:"downsample"`
-	HierarchicalStore retention.Config `toml:"hierarchical-storage"`
-	Stream            stream.Config    `toml:"stream"`
+	HTTPD             httpdConf.Config          `toml:"http"`
+	Retention         retention.Config          `toml:"retention"`
+	DownSample        retention.Config          `toml:"downsample"`
+	HierarchicalStore retention.Config          `toml:"hierarchical-storage"`
+	Stream            stream.Config             `toml:"stream"`
+	ContinuousQuery   continuous_querier.Config `toml:"continuous_queries"`
 
 	// TLS provides configuration options for all https endpoints.
 	TLS      tlsconfig.Config `toml:"tls"`
@@ -208,7 +210,7 @@ type Store struct {
 
 	DownSampleWriteDrop bool `toml:"downsample-write-drop"`
 
-	//parallelism allocator
+	// parallelism allocator
 	MaxWaitResourceTime          toml.Duration `toml:"max-wait-resource-time"`
 	MaxSeriesParallelismNum      int           `toml:"max-series-parallelism-num"`
 	MaxShardsParallelismNum      int           `toml:"max-shards-parallelism-num"`

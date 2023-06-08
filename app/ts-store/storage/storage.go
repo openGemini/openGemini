@@ -25,6 +25,7 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/influxdata/influxdb/services/continuous_querier"
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -42,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/downsample"
 	"github.com/openGemini/openGemini/services/hierarchical"
 	"github.com/openGemini/openGemini/services/retention"
@@ -123,6 +125,17 @@ func (s *Storage) appendDownSamplePolicyService(c retention2.Config) {
 		return
 	}
 	srv := downsample.NewService(time.Duration(c.CheckInterval))
+	srv.Engine = s.engine
+	srv.MetaClient = s.metaClient
+	s.Services = append(s.Services, srv)
+}
+
+func (s *Storage) appendContinuousQueryService(c continuous_querier.Config) {
+	if !c.Enabled {
+		return
+	}
+
+	srv := continuousquery.NewService(time.Duration(c.RunInterval))
 	srv.Engine = s.engine
 	srv.MetaClient = s.metaClient
 	s.Services = append(s.Services, srv)
@@ -227,6 +240,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	s.appendDownSamplePolicyService(conf.DownSample)
 	s.appendHierarchicalService(conf.HierarchicalStore)
 	s.appendAnalysisService(conf.Analysis)
+	s.appendContinuousQueryService(conf.ContinuousQuery)
 
 	for _, service := range s.Services {
 		if err := service.Open(); err != nil {
