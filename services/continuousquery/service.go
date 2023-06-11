@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	log "github.com/influxdata/influxdb/logger"
 	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -49,7 +48,7 @@ type ContinuousQuery struct {
 	q        *influxql.SelectStatement
 }
 
-// Service include query and store engine for CQ
+// Service represents a service for managing continuous queries.
 type Service struct {
 	services.Base
 
@@ -57,46 +56,40 @@ type Service struct {
 		Databases() map[string]*meta.DatabaseInfo
 	}
 
-	mu            sync.RWMutex
-	lastRuns      map[string]time.Time
-	QueryExecutor *query.Executor
-	RunInterval   time.Duration
+	mu             sync.RWMutex
+	lastRuns       map[string]time.Time
+	QueryExecutor  *query.Executor
+	ReportInterval time.Duration
 }
 
 // NewService creates a new Service instance named continuousQuery
 func NewService(interval time.Duration) *Service {
 	s := &Service{
-		lastRuns:      map[string]time.Time{},
-		RunInterval:   DefaultReportTime,
-		QueryExecutor: query.NewExecutor(),
+		lastRuns:       map[string]time.Time{},
+		ReportInterval: DefaultReportTime,
+		QueryExecutor:  query.NewExecutor(),
 	}
 	s.Init("continuousQuery", interval, s.handle)
 	return s
 }
 
 func (s *Service) handle() {
-	logger, logEnd := log.NewOperation(s.Logger.GetZapLogger(), "continuous query check", "continuousQuery_check")
-	defer logEnd()
-	s.Logger.Info("Starting continuous query service")
-	for {
-		if s.hasContinuousQuery() {
-			// get all databases
-			dbs := s.MetaClient.Databases()
-			// gets CQs from the meta and runs them.
-			if dbs == nil {
-				logger.Warn("No database found")
-			}
-			for _, db := range dbs {
-				for _, cq := range db.ContinuousQueries {
-					if ok, err := s.ExecuteContinuousQuery(db, cq, time.Now()); err != nil {
-						s.Logger.Info("Error executing query",
-							zap.String("query", cq.Query), zap.Error(err))
+	if !s.hasContinuousQuery() {
+		return
+	}
 
-					} else if ok {
-						s.Logger.Info("Executed query",
-							zap.String("query", cq.Query))
-					}
-				}
+	// get all databases
+	dbs := s.MetaClient.Databases()
+
+	// look through all databases and run CQs.
+	for _, db := range dbs {
+		for _, cq := range db.ContinuousQueries {
+			if ok, err := s.ExecuteContinuousQuery(db, cq, time.Now()); err != nil {
+				s.Logger.Info("Error executing query",
+					zap.String("query", cq.Query), zap.Error(err))
+			} else if ok {
+				s.Logger.Info("Executed query",
+					zap.String("query", cq.Query))
 			}
 		}
 	}
@@ -119,7 +112,7 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 	// set cq.LastRun and cq.HasRun
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cq.LastRun = s.lastRuns[cqi.Name]
+	cq.LastRun, cq.HasRun = s.lastRuns[cqi.Name]
 
 	// If no rp is specified, use the default one.
 	if cq.q.Target.Measurement.RetentionPolicy == "" {
@@ -133,11 +126,11 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 	} else if interval == 0 {
 		return false, nil
 	}
-	// if interval < 5 minutes, set s.Interval to 5 minutes.
+	// if interval < 5 minutes, set s.ReportInterval to 5 minutes.
 	if interval < DefaultReportTime {
-		s.Interval = DefaultReportTime
+		s.ReportInterval = DefaultReportTime
 	} else {
-		s.Interval = interval
+		s.ReportInterval = interval
 	}
 
 	// Get the group by offset.
@@ -147,21 +140,21 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 	}
 
 	// Check if the CQ should be run.
-	run, nextRun, err := cq.shouldRunContinuousQuery(now, interval)
+	ok, nextRun, err := cq.shouldRunContinuousQuery(now, interval)
 	if err != nil {
 		return false, err
-	} else if !run {
+	} else if !ok {
 		return false, nil
 	}
 
 	// update cq.LastRun and s.lastRuns
 	cq.LastRun = nextRun
 	s.lastRuns[cqi.Name] = cq.LastRun
-	cq.HasRun = true
 
 	// Calculate and set the time range for the query.
-	startTime := nextRun.Add(offset)
-	endTime := nextRun.Add(interval).Add(offset)
+	// startTime should be earlier than current time.
+	startTime := nextRun.Add(-interval - offset - 1).Truncate(interval).Add(offset)
+	endTime := startTime.Add(interval - offset).Truncate(interval).Add(offset)
 	if !endTime.After(startTime) {
 		// Invalid time interval.
 		return false, nil
@@ -183,10 +176,20 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 // NewContinuousQuery returns a ContinuousQuery object with a parsed SQL statement.
 func NewContinuousQuery(database string, cqi *meta.ContinuousQueryInfo) (*ContinuousQuery, error) {
 	// Parse the query.
-	stmt, err := influxql.NewParser(strings.NewReader(cqi.Query)).ParseStatement()
+	p := influxql.NewParser(strings.NewReader(cqi.Query))
+	defer p.Release()
+
+	YyParser := influxql.NewYyParser(p.GetScanner(), p.GetPara())
+	YyParser.ParseTokens()
+
+	qr, err := YyParser.GetQuery()
 	if err != nil {
 		return nil, err
 	}
+	if len(qr.Statements) == 0 {
+		return nil, nil
+	}
+	stmt := qr.Statements[0]
 
 	// Check if the statement is a valid continuous query.
 	q, ok := stmt.(*influxql.CreateContinuousQueryStatement)
@@ -213,11 +216,14 @@ func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time, interval time
 	}
 
 	// Determine if we should run the continuous query based on the last time it ran.
-	if cq.HasRun { // the query has run before.
-		// Retrieve the zone offset for the previous window.
-		nextRun := cq.LastRun.Add(interval)
-		return true, nextRun, nil
-	} else { // the query never ran before.
+	if cq.HasRun { // The query has run before.
+		// Return the nextRun time for cq.
+		nextRun := cq.LastRun.Add(interval).Truncate(interval)
+		if nextRun.UnixNano() <= now.UnixNano() {
+			return true, nextRun, nil
+		}
+		return false, cq.LastRun, nil
+	} else { // The query never ran before.
 		// Retrieve the location from the CQ.
 		loc := cq.q.Location
 		if loc == nil {

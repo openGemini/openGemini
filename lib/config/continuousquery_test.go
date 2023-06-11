@@ -22,20 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_ContinuousQueryConfig_Disable(t *testing.T) {
-	conf := NewContinuousQueryConfig()
-	require.NoError(t, conf.Validate())
-
-	conf.Enabled = false
-	require.NoError(t, conf.Validate())
-
-	_ = conf.ApplyEnvOverrides(func(s string) string { return "" })
-}
-
 func Test_ContinuousQueryConfig_Validate(t *testing.T) {
 	conf := NewContinuousQueryConfig()
 	conf.RunInterval = -5
-	require.EqualError(t, conf.Validate(), "continuous query run interval must be greater than 0")
+	require.EqualError(t, conf.Validate(), "continuous query run interval must be must be at least 1 second")
 
 	conf = NewContinuousQueryConfig()
 	conf.MaxProcessCQNumber = -5

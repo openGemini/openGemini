@@ -112,7 +112,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 		cmd:                    cmd,
 		Logger:                 logger,
 		httpService:            httpd.NewService(c.HTTP),
-		continuousQueryService: continuousquery.NewService(time.Second),
+		continuousQueryService: continuousquery.NewService(c.ContinuousQuery.RunInterval),
 		MetaClient:             meta.NewClient(c.HTTP.WeakPwdPath, false, metaMaxConcurrentWriteLimit),
 
 		metaJoinPeers: c.Common.MetaJoin,

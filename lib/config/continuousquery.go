@@ -23,9 +23,6 @@ import (
 
 // ContinuousQueryConfig is the configuration for the continuous query service.
 type ContinuousQueryConfig struct {
-	// Enables logging in CQ service to display when CQ's are processed and how many points were written.
-	LogEnabled bool `toml:"log-enabled"`
-
 	// If this flag is set to false, both the brokers and data nodes should ignore any CQ processing.
 	Enabled bool `toml:"enabled"`
 
@@ -37,8 +34,6 @@ type ContinuousQueryConfig struct {
 }
 
 const (
-	// DefaultLogEnabled is the default value for the log-enabled flag.
-	DefaultLogEnabled = true
 	// DefaultEnabled is the default value for the enabled flag.
 	DefaultEnabled = true
 	// DefaultRunInterval is the default interval at which the CQ service will run.
@@ -50,7 +45,6 @@ const (
 // NewContinuousQueryConfig returns a new instance of ContinuousQueryConfig with defaults.
 func NewContinuousQueryConfig() ContinuousQueryConfig {
 	return ContinuousQueryConfig{
-		LogEnabled:         DefaultLogEnabled,
 		Enabled:            DefaultEnabled,
 		RunInterval:        DefaultRunInterval,
 		MaxProcessCQNumber: DefaultMaxProcessCQNumber,
@@ -59,12 +53,8 @@ func NewContinuousQueryConfig() ContinuousQueryConfig {
 
 // Validate returns an error if the config is invalid.
 func (c ContinuousQueryConfig) Validate() error {
-	if !c.Enabled {
-		return nil
-	}
-
-	if c.RunInterval <= 0 {
-		return errors.New("continuous query run interval must be greater than 0")
+	if c.RunInterval < time.Second { // RunInterval must be at least 1 second
+		return errors.New("continuous query run interval must be must be at least 1 second")
 	}
 	if c.MaxProcessCQNumber <= 0 {
 		return errors.New("continuous query max process CQ number must be greater than 0")
