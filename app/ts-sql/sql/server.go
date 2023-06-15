@@ -78,7 +78,7 @@ type Server struct {
 
 	sherlockService *sherlock.Service
 
-	continuousQueryService *continuousquery.Service
+	cqService *continuousquery.Service
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -109,11 +109,11 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	}
 
 	s := &Server{
-		cmd:                    cmd,
-		Logger:                 logger,
-		httpService:            httpd.NewService(c.HTTP),
-		continuousQueryService: continuousquery.NewService(c.ContinuousQuery.RunInterval),
-		MetaClient:             meta.NewClient(c.HTTP.WeakPwdPath, false, metaMaxConcurrentWriteLimit),
+		cmd:         cmd,
+		Logger:      logger,
+		httpService: httpd.NewService(c.HTTP),
+		cqService:   continuousquery.NewService(c.ContinuousQuery.RunInterval),
+		MetaClient:  meta.NewClient(c.HTTP.WeakPwdPath, false, metaMaxConcurrentWriteLimit),
 
 		metaJoinPeers: c.Common.MetaJoin,
 		metaUseTLS:    false,
@@ -162,7 +162,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.QueryExecutor.TaskManager.MaxConcurrentQueries = c.Coordinator.MaxConcurrentQueries
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
-	s.continuousQueryService.QueryExecutor = s.QueryExecutor
+	s.cqService.QueryExecutor = s.QueryExecutor
 
 	s.initStatisticsPusher()
 	s.httpService.Handler.StatisticsPusher = s.statisticsPusher
@@ -218,18 +218,18 @@ func (s *Server) Open() error {
 
 	s.PointsWriter.MetaClient = s.MetaClient
 	s.httpService.Handler.MetaClient = s.MetaClient
-	s.continuousQueryService.MetaClient = s.MetaClient
+	s.cqService.MetaClient = s.MetaClient
 
 	if err := s.httpService.Open(); err != nil {
 		return err
 	}
-	if err := s.continuousQueryService.Open(); err != nil {
+	if err := s.cqService.Open(); err != nil {
 		return err
 	}
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
-	s.continuousQueryService.QueryExecutor.PointsWriter = s.PointsWriter
+	s.cqService.QueryExecutor.PointsWriter = s.PointsWriter
 
 	if err := s.castorService.Open(); err != nil {
 		return err
@@ -254,8 +254,8 @@ func (s *Server) Close() error {
 		util.MustClose(s.httpService)
 	}
 
-	if s.continuousQueryService != nil {
-		util.MustClose(s.continuousQueryService)
+	if s.cqService != nil {
+		util.MustClose(s.cqService)
 	}
 
 	if s.QueryExecutor != nil {

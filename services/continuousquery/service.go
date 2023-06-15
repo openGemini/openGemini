@@ -84,13 +84,8 @@ func (s *Service) handle() {
 	// look through all databases and run CQs.
 	for _, db := range dbs {
 		for _, cq := range db.ContinuousQueries {
-			if ok, err := s.ExecuteContinuousQuery(db, cq, time.Now()); err != nil {
-				s.Logger.Info("Error executing query",
-					zap.String("query", cq.Query), zap.Error(err))
-			} else if ok {
-				s.Logger.Info("Executed query",
-					zap.String("query", cq.Query))
-			}
+			ok, err := s.ExecuteContinuousQuery(db, cq, time.Now())
+			s.Logger.Info("execute query", zap.String("query", cq.Query), zap.Bool("ok", ok), zap.Error(err))
 		}
 	}
 }
@@ -120,12 +115,7 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 	}
 
 	// Get the group by interval and report time for cq service.
-	interval, err := cq.q.GroupByInterval()
-	if err != nil {
-		return false, err
-	} else if interval == 0 {
-		return false, nil
-	}
+	interval, _ := cq.q.GroupByInterval()
 	// if interval < 5 minutes, set s.ReportInterval to 5 minutes.
 	if interval < DefaultReportTime {
 		s.ReportInterval = DefaultReportTime
@@ -134,31 +124,18 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 	}
 
 	// Get the group by offset.
-	offset, err := cq.q.GroupByOffset()
-	if err != nil {
-		return false, err
-	}
+	offset, _ := cq.q.GroupByOffset()
 
 	// Check if the CQ should be run.
-	ok, nextRun, err := cq.shouldRunContinuousQuery(now, interval)
-	if err != nil {
+	ok, nextRun := cq.shouldRunContinuousQuery(now, interval)
+	if !ok {
 		return false, err
-	} else if !ok {
-		return false, nil
 	}
-
-	// update cq.LastRun and s.lastRuns
-	cq.LastRun = nextRun
-	s.lastRuns[cqi.Name] = cq.LastRun
 
 	// Calculate and set the time range for the query.
 	// startTime should be earlier than current time.
 	startTime := nextRun.Add(-interval - offset - 1).Truncate(interval).Add(offset)
 	endTime := startTime.Add(interval - offset).Truncate(interval).Add(offset)
-	if !endTime.After(startTime) {
-		// Invalid time interval.
-		return false, nil
-	}
 
 	if err := cq.q.SetTimeRange(startTime, endTime); err != nil {
 		return false, fmt.Errorf("unable to set time range: %s", err)
@@ -169,6 +146,10 @@ func (s *Service) ExecuteContinuousQuery(dbi *meta.DatabaseInfo, cqi *meta.Conti
 	if res.Err != nil {
 		return false, res.Err
 	}
+
+	// update cq.LastRun and s.lastRuns
+	cq.LastRun = now.Truncate(interval)
+	s.lastRuns[cqi.Name] = cq.LastRun
 
 	return true, nil
 }
@@ -209,29 +190,18 @@ func NewContinuousQuery(database string, cqi *meta.ContinuousQueryInfo) (*Contin
 }
 
 // shouldRunContinuousQuery returns true if the CQ should run.
-func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time, interval time.Duration) (bool, time.Time, error) {
-	// check whether the query is an aggregate query.
-	if cq.q.IsRawQuery { // cq.q.IsRawQuery is true when is not an aggregate query.
-		return false, cq.LastRun, errors.New("continuous queries must be aggregate queries")
-	}
-
+func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time, interval time.Duration) (bool, time.Time) {
 	// Determine if we should run the continuous query based on the last time it ran.
 	if cq.HasRun { // The query has run before.
 		// Return the nextRun time for cq.
 		nextRun := cq.LastRun.Add(interval).Truncate(interval)
 		if nextRun.UnixNano() <= now.UnixNano() {
-			return true, nextRun, nil
+			return true, nextRun
 		}
-		return false, cq.LastRun, nil
-	} else { // The query never ran before.
-		// Retrieve the location from the CQ.
-		loc := cq.q.Location
-		if loc == nil {
-			loc = time.UTC
-		}
-		// If the query has never run, execute it using the current time.
-		return true, now.In(loc), nil
+		return false, cq.LastRun
 	}
+	// if the query has never run, run now.
+	return true, now
 }
 
 // hasContinuousQuery returns true if any CQs exist.
