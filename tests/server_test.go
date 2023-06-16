@@ -402,6 +402,10 @@ func TestServer_ContinuousQueryCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := s.CreateDatabase("db2"); err != nil {
+		t.Fatal(err)
+	}
+
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
 			if i == 0 {

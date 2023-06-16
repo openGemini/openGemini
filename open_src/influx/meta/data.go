@@ -1428,9 +1428,11 @@ func (data *Data) ShowContinuousQueries() (models.Rows, error) {
 		sort.Slice(row.Values, func(i, j int) bool {
 			return row.Values[i][0].(string) < row.Values[j][0].(string)
 		})
-		if len(row.Values) > 0 {
-			rows = append(rows, row)
-		}
+		rows = append(rows, row)
+	})
+
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Name < rows[j].Name
 	})
 
 	return rows, nil

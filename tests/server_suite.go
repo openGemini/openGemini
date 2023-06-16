@@ -1154,7 +1154,7 @@ func init() {
 			&Query{
 				name:    "show continuous query should succeed",
 				command: `SHOW CONTINUOUS QUERIES`,
-				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq0_1","CREATE CONTINUOUS QUERY cq0_1 ON db0 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean(passengers) INTO db0.autogen.average_passengers FROM db0.autogen.bus_data GROUP BY time(30m) END"]]},{"name":"db1","columns":["name","query"],"values":[["cq1_1","CREATE CONTINUOUS QUERY cq1_1 ON db1 RESAMPLE EVERY 1h FOR 30m BEGIN SELECT min(passengers) INTO db1.autogen.min_passengers FROM db1.autogen.bus_data GROUP BY time(15m) END"]]}]}]}`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq0_1","CREATE CONTINUOUS QUERY cq0_1 ON db0 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean(passengers) INTO db0.autogen.average_passengers FROM db0.autogen.bus_data GROUP BY time(30m) END"]]},{"name":"db1","columns":["name","query"],"values":[["cq1_1","CREATE CONTINUOUS QUERY cq1_1 ON db1 RESAMPLE EVERY 1h FOR 30m BEGIN SELECT min(passengers) INTO db1.autogen.min_passengers FROM db1.autogen.bus_data GROUP BY time(15m) END"]]},{"name":"db2","columns":["name","query"]}]}]}`,
 			},
 		},
 	}
