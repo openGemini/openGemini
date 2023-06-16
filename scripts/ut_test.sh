@@ -65,6 +65,9 @@ find $PROJECT_DIR -type d | grep -vE "(\.cid|\.build_config|tests)" | xargs fail
 
 ########################### test build for multi platform ###############################################
 splittingLine "start: test build for multi platform"
+python build.py  --version v1.0.0 --clean --platform windows --arch amd64
+
+python build.py  --version v1.0.0 --clean --platform windows --arch arm64
 
 python build.py  --version v1.0.0 --clean --platform darwin --arch amd64
 

@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	set "github.com/deckarep/golang-set"
@@ -3171,14 +3170,6 @@ func (c *Client) retryVerifyDataNodeStatus() error {
 		NodeID: proto.Uint64(c.nodeID),
 	}
 	return c.retryUntilExec(proto2.Command_VerifyDataNodeCommand, proto2.E_VerifyDataNodeCommand_Command, cmd)
-}
-
-func (c *Client) Suicide(err error) {
-	c.logger.Error("Suicide for fault data node", zap.Error(err))
-	time.Sleep(errSleep)
-	if e := syscall.Kill(syscall.Getpid(), syscall.SIGKILL); e != nil {
-		panic(fmt.Sprintf("FATAL: cannot send SIGKILL to itself: %v", e))
-	}
 }
 
 func (c *Client) RetryDBBriefInfo(dbName string) ([]byte, error) {

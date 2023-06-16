@@ -85,7 +85,7 @@ func (ph *partHeader) ParseFromPath(partPath string) error {
 	partPath = filepath.Clean(partPath)
 
 	// Extract encoded part name.
-	n := strings.LastIndexByte(partPath, '/')
+	n := strings.LastIndexByte(partPath, filepath.Separator)
 	if n < 0 {
 		return fmt.Errorf("cannot find encoded part name in the path %q", partPath)
 	}
@@ -123,7 +123,7 @@ func (ph *partHeader) ParseFromPath(partPath string) error {
 	}
 
 	// Read other ph fields from metadata.
-	metadataPath := partPath + "/metadata.json"
+	metadataPath := filepath.Join(partPath, "metadata.json")
 	metadata, err := fileops.ReadFile(metadataPath)
 	if err != nil {
 		return fmt.Errorf("cannot read %q: %w", metadataPath, err)
@@ -163,7 +163,7 @@ func (ph *partHeader) WriteMetadata(partPath string, lock *string) error {
 	if err != nil {
 		return fmt.Errorf("cannot marshal metadata: %w", err)
 	}
-	metadataPath := partPath + "/metadata.json"
+	metadataPath := filepath.Join(partPath, "metadata.json")
 	if err := fs.WriteFileAtomically(metadataPath, lock, metadata); err != nil {
 		return fmt.Errorf("cannot create %q: %w", metadataPath, err)
 	}
