@@ -44,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/httpd"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -76,6 +77,8 @@ type Server struct {
 	castorService *castor.Service
 
 	sherlockService *sherlock.Service
+
+	cqService *continuousquery.Service
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -109,6 +112,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 		cmd:         cmd,
 		Logger:      logger,
 		httpService: httpd.NewService(c.HTTP),
+		cqService:   continuousquery.NewService(c.ContinuousQuery.RunInterval),
 		MetaClient:  meta.NewClient(c.HTTP.WeakPwdPath, false, metaMaxConcurrentWriteLimit),
 
 		metaJoinPeers: c.Common.MetaJoin,
@@ -158,6 +162,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.QueryExecutor.TaskManager.MaxConcurrentQueries = c.Coordinator.MaxConcurrentQueries
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
+	s.cqService.QueryExecutor = s.QueryExecutor
 
 	s.initStatisticsPusher()
 	s.httpService.Handler.StatisticsPusher = s.statisticsPusher
@@ -213,13 +218,18 @@ func (s *Server) Open() error {
 
 	s.PointsWriter.MetaClient = s.MetaClient
 	s.httpService.Handler.MetaClient = s.MetaClient
+	s.cqService.MetaClient = s.MetaClient
 
 	if err := s.httpService.Open(); err != nil {
+		return err
+	}
+	if err := s.cqService.Open(); err != nil {
 		return err
 	}
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
+	s.cqService.QueryExecutor.PointsWriter = s.PointsWriter
 
 	if err := s.castorService.Open(); err != nil {
 		return err
@@ -242,6 +252,10 @@ func (s *Server) Close() error {
 
 	if s.httpService != nil {
 		util.MustClose(s.httpService)
+	}
+
+	if s.cqService != nil {
+		util.MustClose(s.cqService)
 	}
 
 	if s.QueryExecutor != nil {

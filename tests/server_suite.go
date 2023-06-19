@@ -1159,6 +1159,36 @@ func init() {
 		},
 	}
 
+	tests["run_continuous_queries"] = Test{
+		queries: []*Query{
+			&Query{
+				name:    `create a new retention policy for CQ to write into`,
+				command: `CREATE RETENTION POLICY rp1 ON db0 DURATION 1h REPLICATION 1`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query with backreference",
+				command: `CREATE CONTINUOUS QUERY cq1 ON db0 BEGIN SELECT min(value) INTO db0.rp1.min_value FROM cpu GROUP BY time(5s) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `create another retention policy for CQ to write into`,
+				command: `CREATE RETENTION POLICY rp2 ON db0 DURATION 1h REPLICATION 1`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query with backreference and group by time",
+				command: `CREATE CONTINUOUS QUERY "cq2" ON db0 BEGIN SELECT max(value) INTO db0.rp2.max_value FROM cpu GROUP BY time(5s) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `show continuous queries`,
+				command: `SHOW CONTINUOUS QUERIES`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq1","CREATE CONTINUOUS QUERY cq1 ON db0 BEGIN SELECT min(value) INTO db0.rp1.min_value FROM db0.rp0.cpu GROUP BY time(5s) END"],["cq2","CREATE CONTINUOUS QUERY cq2 ON db0 BEGIN SELECT max(value) INTO db0.rp2.max_value FROM db0.rp0.cpu GROUP BY time(5s) END"]]}]}]}`,
+			},
+		},
+	}
+
 }
 
 func (tests Tests) load(t *testing.T, key string) Test {
