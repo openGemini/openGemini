@@ -170,6 +170,8 @@ func NewChunkResponse(chunk Chunk) *rpc.Message {
 }
 
 type RemoteQuery struct {
+	QueryId  uint64
+	SQL      string
 	Database string
 	PtID     uint32
 	NodeID   uint64
@@ -193,6 +195,8 @@ func (c *RemoteQuery) Marshal(buf []byte) ([]byte, error) {
 		Opt:       opt,
 		Analyze:   c.Analyze,
 		QueryNode: c.Node,
+		QueryId:   c.QueryId,
+		SQL:       c.SQL,
 	})
 
 	ret := make([]byte, len(buf)+len(msg))
@@ -214,7 +218,8 @@ func (c *RemoteQuery) Unmarshal(buf []byte) error {
 	c.Analyze = pb.GetAnalyze()
 	c.NodeID = pb.GetNodeID()
 	c.Node = pb.QueryNode
-
+	c.QueryId = pb.QueryId
+	c.SQL = pb.SQL
 	if err := c.Opt.UnmarshalBinary(pb.GetOpt()); err != nil {
 		return err
 	}

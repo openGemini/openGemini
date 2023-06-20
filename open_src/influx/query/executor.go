@@ -51,6 +51,9 @@ var (
 
 	// ErrAlreadyKilled is returned when attempting to kill a query that has already been killed.
 	ErrAlreadyKilled = errors.New("already killed")
+
+	// ErrQueryIDExhausted is returned when task manager assign a new query id that overflow range
+	ErrQueryIDExhausted = errors.New("query id has been exhausted")
 )
 
 // Statistics for the Executor
@@ -60,6 +63,10 @@ const (
 	PanicCrashEnv = "INFLUXDB_PANIC_CRASH"
 
 	QueryDurationKey = "QueryDuration"
+
+	QueryIDKey = "QueryID"
+
+	SQLKey = "SQL"
 )
 
 // ErrDatabaseNotFound returns a database not found error for the given database name.
@@ -187,6 +194,8 @@ type ExecutionOptions struct {
 
 	// The results of the query executor
 	RowsChan chan RowsChan
+
+	SQLNodeHost string
 }
 
 type (

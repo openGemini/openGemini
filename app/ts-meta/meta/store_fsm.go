@@ -198,6 +198,8 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 		return fsm.applyExpandGroupsCommand(&cmd)
 	case proto2.Command_UpdatePtVersionCommand:
 		return fsm.applyUpdatePtVersionCommand(&cmd)
+	case proto2.Command_RegisterQueryIDOffsetCommand:
+		return fsm.applyRegisterQueryIDOffsetCommand(&cmd)
 	default:
 		panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
 	}
@@ -703,4 +705,11 @@ func (fsm *storeFSM) applyVerifyDataNodeCommand(cmd *proto2.Command) interface{}
 	}
 
 	return nil
+}
+
+func (fsm *storeFSM) applyRegisterQueryIDOffsetCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command)
+	v := ext.(*proto2.RegisterQueryIDOffsetCommand)
+	err := fsm.data.RegisterQueryIDOffset(v.GetHost())
+	return err
 }

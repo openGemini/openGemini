@@ -204,6 +204,8 @@ type MetaClient interface {
 	ShowStreams(database string, showAll bool) (models.Rows, error)
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	RegisterQueryIDOffset(host string) error
+	GetQueryIDOffset(host string) (uint64, error)
 }
 
 type LoadCtx struct {
@@ -3018,6 +3020,24 @@ func (c *Client) Suicide(err error) {
 	time.Sleep(errSleep)
 	if e := syscall.Kill(syscall.Getpid(), syscall.SIGKILL); e != nil {
 		panic(fmt.Sprintf("FATAL: cannot send SIGKILL to itself: %v", e))
+	}
+}
+
+func (c *Client) RegisterQueryIDOffset(host string) error {
+	if _, ok := c.cacheData.QueryIDInit[host]; ok {
+		c.logger.Warn("current host has already registered in ts-meta")
+		return nil
+	}
+	cmd := &proto2.RegisterQueryIDOffsetCommand{Host: proto.String(host)}
+	err := c.retryUntilExec(proto2.Command_RegisterQueryIDOffsetCommand, proto2.E_RegisterQueryIDOffsetCommand_Command, cmd)
+	return err
+}
+
+func (c *Client) GetQueryIDOffset(host string) (uint64, error) {
+	if offset, ok := c.cacheData.QueryIDInit[host]; !ok {
+		return 0, fmt.Errorf("unregisterd query range offset in meta")
+	} else {
+		return offset, nil
 	}
 }
 

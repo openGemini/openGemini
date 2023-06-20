@@ -3631,3 +3631,11 @@ func (client *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 func (client *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
 }
+
+func (client *MockMetaClient) RegisterQueryIDOffset(host string, isReRegister bool) error {
+	return nil
+}
+
+func (client *MockMetaClient) GetQueryIDOffset(host string) (uint64, error) {
+	return 0, nil
+}

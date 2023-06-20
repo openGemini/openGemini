@@ -44,6 +44,8 @@ message Data {
 	repeated StreamInfo Streams  = 24;
 	optional uint64 MaxStreamID = 25;
 	optional uint64 MaxConnId = 26;
+	map<string,uint64> QueryIDInit = 27;
+	optional uint64 NextOffset = 28;
 }
 
 message PtOwner {
@@ -286,6 +288,7 @@ message Command {
 		VerifyDataNodeCommand                      = 80;
 		ExpandGroupsCommand                        = 81;
 		UpdatePtVersionCommand                     = 82;
+		RegisterQueryIDOffsetCommand               = 83;
 	}
 
 	required Type type = 1;
@@ -954,4 +957,11 @@ message UpdatePtVersionCommand {
 	}
 	required string Db = 1;
 	required uint32 Pt = 2;
+}
+
+message RegisterQueryIDOffsetCommand {
+	extend Command {
+		optional  RegisterQueryIDOffsetCommand command = 183;
+	}
+	required string Host = 1;
 }

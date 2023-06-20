@@ -11,5 +11,5 @@
 	"GetRpMstInfos",
 	"GetUserInfo",
 	"GetStreamInfo",
-	"GetMeasurementInfo",
+	"GetMeasurementInfo"
 ]

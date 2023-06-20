@@ -30,6 +30,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"sort"
@@ -62,6 +63,12 @@ const (
 
 	// MinRetentionPolicyDuration represents the minimum duration for a policy.
 	MinRetentionPolicyDuration = time.Hour
+
+	// QueryIDSpan is the default id range span.
+	QueryIDSpan = 1000000
+
+	//QueryIDUpperLimit is the max query id
+	QueryIDUpperLimit = math.MaxUint64
 )
 
 const (
@@ -94,6 +101,10 @@ type Data struct {
 	Streams       map[string]*StreamInfo
 	Users         []UserInfo
 	MigrateEvents map[string]*MigrateEventInfo
+
+	// Query ID range segment allocated by all sql nodes
+	QueryIDInit map[string]uint64 // {"127.0.0.1:8086": 0, "127.0.0.2:8086": 10w, "127.0.0.3:8086": 20w}, span is QueryIDSpan
+	NextOffset  uint64
 
 	// adminUserExists provides a constant time mechanism for determining
 	// if there is at least one admin GetUser.
@@ -856,6 +867,17 @@ func (data *Data) CloneMetaNodes() []NodeInfo {
 		mns[i] = data.MetaNodes[i].clone()
 	}
 	return mns
+}
+
+func (data *Data) CloneQueryIDInit() map[string]uint64 {
+	if data.QueryIDInit == nil {
+		return nil
+	}
+	cloneIdInit := make(map[string]uint64, len(data.QueryIDInit))
+	for host, _ := range data.QueryIDInit {
+		cloneIdInit[host] = data.QueryIDInit[host]
+	}
+	return cloneIdInit
 }
 
 // assign db to all data nodes that have been joined.
@@ -1949,7 +1971,7 @@ func (data *Data) SetAdminPrivilege(name string, admin bool) error {
 }
 
 // AdminUserExist returns true if an admin GetUser exists.
-func (data Data) AdminUserExist() bool {
+func (data *Data) AdminUserExist() bool {
 	return data.AdminUserExists
 }
 
@@ -1992,6 +2014,9 @@ func (data *Data) Clone() *Data {
 	other.Users = data.CloneUsers()
 	other.PtView = data.CloneDBPtView()
 	other.MigrateEvents = data.CloneMigrateEvents()
+
+	other.QueryIDInit = data.CloneQueryIDInit()
+
 	return &other
 }
 
@@ -2019,6 +2044,8 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxDownSampleID: proto.Uint64(data.MaxDownSampleID),
 		MaxStreamID:     proto.Uint64(data.MaxStreamID),
 		MaxConnId:       proto.Uint64(data.MaxConnID),
+
+		NextOffset: proto.Uint64(data.NextOffset),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2067,6 +2094,12 @@ func (data *Data) Marshal() *proto2.Data {
 		pb.MigrateEvents[i] = data.MigrateEvents[eventStr].marshal()
 		i++
 	}
+
+	pb.QueryIDInit = make(map[string]uint64, len(data.QueryIDInit))
+	for host := range data.QueryIDInit {
+		pb.QueryIDInit[host] = data.QueryIDInit[host]
+	}
+
 	return pb
 }
 
@@ -2083,14 +2116,15 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.PtNumPerNode = pb.GetPtNumPerNode()
 	data.MaxIndexGroupID = pb.GetMaxIndexGroupID()
 	data.MaxIndexID = pb.GetMaxIndexID()
-	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	data.MaxEventOpId = pb.GetMaxEventOpId()
 	data.TakeOverEnabled = pb.GetTakeOverEnabled()
 	data.BalancerEnabled = pb.GetBalancerEnabled()
 	data.MaxDownSampleID = pb.GetMaxDownSampleID()
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
+	data.NextOffset = pb.GetNextOffset()
 
+	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {
 		data.DataNodes[i].unmarshal(x)
 	}
@@ -2139,6 +2173,12 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	// Exhaustively determine if there is an admin GetUser. The marshalled cache
 	// value may not be correct.
 	data.AdminUserExists = data.HasAdminUser()
+
+	data.QueryIDInit = make(map[string]uint64, len(pb.GetQueryIDInit()))
+	for host := range pb.QueryIDInit {
+		data.QueryIDInit[host] = pb.QueryIDInit[host]
+	}
+
 }
 
 // MarshalBinary encodes the metadata to a binary format.
@@ -2766,6 +2806,24 @@ func (data *Data) checkDDLConflict(e *proto2.MigrateEventInfo) error {
 			}
 		}
 	}
+	return nil
+}
+
+func (data *Data) RegisterQueryIDOffset(host string) error {
+	if data.QueryIDInit == nil {
+		data.QueryIDInit = make(map[string]uint64)
+		data.NextOffset = 0
+	}
+
+	offset := data.NextOffset
+	// check overflow
+	if data.NextOffset >= QueryIDUpperLimit-QueryIDSpan {
+		return errno.NewError(errno.QueryIDOverflow)
+	}
+	data.NextOffset += QueryIDSpan
+
+	data.QueryIDInit[host] = offset
+
 	return nil
 }
 

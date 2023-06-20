@@ -24,6 +24,7 @@ const (
 	// DefaultQueryTimeout is the default timeout for executing a query.
 	// A value of zero will have no query timeout.
 	DefaultQueryTimeout = time.Duration(0)
+	IdSpan              = 1000000
 )
 
 type TaskStatus int
@@ -83,6 +84,9 @@ type TaskManager struct {
 	Logger *zap.Logger
 
 	// Used for managing and tracking running queries.
+	QueryIDOffset     uint64
+	QueryIDUpperLimit uint64
+
 	queries  map[uint64]*Task
 	nextID   uint64
 	mu       sync.RWMutex
@@ -189,7 +193,12 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 		return nil, nil, ErrMaxConcurrentQueriesLimitExceeded(len(t.queries), t.MaxConcurrentQueries)
 	}
 
-	qid := t.nextID
+	qid, err := t.AssignQueryID()
+	if err != nil {
+		t.Logger.Error(fmt.Sprintf("assign query id faild, current id offset=%d, upper limit=%d : %s", t.QueryIDOffset, t.QueryIDUpperLimit, err))
+		return nil, nil, err
+	}
+
 	query := &Task{
 		query:     q.String(),
 		database:  opt.Database,
@@ -218,8 +227,11 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 	t.nextID++
 
 	qCtx := context.Background()
+	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
+	qCtx = context.WithValue(qCtx, SQLKey, q.String())
+	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)
 	ctx := &ExecutionContext{
-		Context:          context.WithValue(qCtx, QueryDurationKey, qStat),
+		Context:          qCtx,
 		QueryID:          qid,
 		task:             query,
 		ExecutionOptions: opt,
@@ -328,4 +340,31 @@ func (t *TaskManager) Close() error {
 
 func (t *TaskManager) Statistics(buffer []byte) ([]byte, error) {
 	return nil, nil
+}
+
+func (t *TaskManager) SetQueryIDRange(offset uint64) {
+	t.QueryIDOffset = offset
+	t.QueryIDUpperLimit = offset + IdSpan
+}
+
+func (t *TaskManager) AssignQueryID() (uint64, error) {
+	qid := t.nextID + t.QueryIDOffset
+	if qid >= t.QueryIDUpperLimit {
+		var err error
+		qid, err = t.reuseQueryIDFromBeginning()
+		if err != nil {
+			return 0, err
+		}
+	}
+	return qid, nil
+}
+
+func (t *TaskManager) reuseQueryIDFromBeginning() (uint64, error) {
+	t.nextID = 1
+	for resID := t.nextID + t.QueryIDOffset; resID < t.QueryIDUpperLimit; resID++ {
+		if _, ok := t.queries[resID]; !ok {
+			return resID, nil
+		}
+	}
+	return 0, ErrQueryIDExhausted
 }

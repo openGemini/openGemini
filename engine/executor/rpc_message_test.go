@@ -80,6 +80,8 @@ func makeRemoteQueryMsg(nodeID uint64) *executor.RemoteQuery {
 		},
 		Analyze: false,
 		Node:    []byte{1, 2, 3, 4, 5, 6, 7},
+		QueryId: 100001,
+		SQL:     "SELECT * FROM mst1 limit 10",
 	}
 }
 

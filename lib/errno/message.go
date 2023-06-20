@@ -197,6 +197,7 @@ var messageMap = map[Errno]*Message{
 	RpIsBeingDelete:        newWarnMessage("retention policy is being delete", ModuleMeta),
 	ShardIsBeingDelete:     newWarnMessage("shard is being delete", ModuleMeta),
 	MstIsBeingDelete:       newWarnMessage("measurement is being delete", ModuleMeta),
+	QueryIDOverflow:        newFatalMessage("sql nodes too many", ModuleMeta),
 
 	NeedChangeStore:            newWarnMessage("need change store", ModuleHA),
 	StateMachineIsNotRunning:   newWarnMessage("state machine is not running", ModuleHA),
