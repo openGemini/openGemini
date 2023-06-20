@@ -138,12 +138,30 @@ func __TestMetaMessage(t *testing.T) {
 		Err:  "err",
 	}
 	objs = append(objs, getDownSampleInfoRequest, getDownSampleInfoResponse)
+
 	getRpMstInfoRequest := message.GetRpMstInfosRequest{}
 	getRpMstInfoResponse := message.GetRpMstInfosResponse{
 		Data: []byte{1, 2, 3},
 		Err:  "err",
 	}
 	objs = append(objs, getRpMstInfoRequest, getRpMstInfoResponse)
+
+	getUserinfoRequest := message.GetUserInfoRequest{}
+	getUserInfoResponse := message.GetUserInfoResponse{
+		Data: []byte{1, 2, 3},
+		Err:  "err",
+	}
+	objs = append(objs, getUserinfoRequest, getUserInfoResponse)
+
+	registerQueryIDOffsetRequest := message.RegisterQueryIDOffsetRequest{
+		Host: "host1",
+	}
+	registerQueryIDOffsetResponse := message.RegisterQueryIDOffsetResponse{
+		Offset: 0,
+		Err:    "err",
+	}
+	objs = append(objs, registerQueryIDOffsetRequest, registerQueryIDOffsetResponse)
+
 	g := gen.NewCodecGen("message")
 	for _, obj := range objs {
 		g.Gen(obj)
@@ -292,6 +310,14 @@ func TestNewMessage(t *testing.T) {
 	}
 	msgType = message.GetResponseMessageType(message.GetMeasurementInfoRequestMessage)
 	if msgType == message.UnknownMessage {
+		t.Fatal("no such message type")
+	}
+	msg = message.NewMessage(message.RegisterQueryIDOffsetRequestMessage)
+	if msg == nil {
+		t.Fatal("no such message type")
+	}
+	msg = message.NewMessage(message.RegisterQueryIDOffsetResponseMessage)
+	if msg == nil {
 		t.Fatal("no such message type")
 	}
 }
