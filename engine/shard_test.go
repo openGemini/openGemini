@@ -3632,7 +3632,7 @@ func (client *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.
 	return false
 }
 
-func (client *MockMetaClient) RegisterQueryIDOffset(host string, isReRegister bool) error {
+func (client *MockMetaClient) RegisterQueryIDOffset(host string) error {
 	return nil
 }
 

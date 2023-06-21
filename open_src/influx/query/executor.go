@@ -53,7 +53,7 @@ var (
 	ErrAlreadyKilled = errors.New("already killed")
 
 	// ErrQueryIDExhausted is returned when task manager assign a new query id that overflow range
-	ErrQueryIDExhausted = errors.New("query id has been exhausted")
+	ErrQueryIDExhausted = errors.New("query id exhausted")
 )
 
 // Statistics for the Executor
@@ -194,8 +194,6 @@ type ExecutionOptions struct {
 
 	// The results of the query executor
 	RowsChan chan RowsChan
-
-	SQLNodeHost string
 }
 
 type (

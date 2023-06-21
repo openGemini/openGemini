@@ -24,7 +24,7 @@ const (
 	// DefaultQueryTimeout is the default timeout for executing a query.
 	// A value of zero will have no query timeout.
 	DefaultQueryTimeout = time.Duration(0)
-	IdSpan              = 1000000
+	IdSpan              = 100000
 )
 
 type TaskStatus int
@@ -84,11 +84,11 @@ type TaskManager struct {
 	Logger *zap.Logger
 
 	// Used for managing and tracking running queries.
-	QueryIDOffset     uint64
-	QueryIDUpperLimit uint64
+	nextID            uint64
+	queryIDOffset     uint64
+	queryIDUpperLimit uint64
+	queries           map[uint64]*Task
 
-	queries  map[uint64]*Task
-	nextID   uint64
 	mu       sync.RWMutex
 	shutdown bool
 }
@@ -99,7 +99,6 @@ func NewTaskManager() *TaskManager {
 		QueryTimeout: DefaultQueryTimeout,
 		Logger:       zap.NewNop(),
 		queries:      make(map[uint64]*Task),
-		nextID:       1,
 	}
 }
 
@@ -195,7 +194,7 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 
 	qid, err := t.AssignQueryID()
 	if err != nil {
-		t.Logger.Error(fmt.Sprintf("assign query id faild, current id offset=%d, upper limit=%d : %s", t.QueryIDOffset, t.QueryIDUpperLimit, err))
+		t.Logger.Error(fmt.Sprintf("assign query id faild, current id range: (%d, %d), all id are using : %s", t.queryIDOffset, t.queryIDUpperLimit, err))
 		return nil, nil, err
 	}
 
@@ -224,7 +223,6 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 			return nil
 		})
 	}
-	t.nextID++
 
 	qCtx := context.Background()
 	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
@@ -342,26 +340,54 @@ func (t *TaskManager) Statistics(buffer []byte) ([]byte, error) {
 	return nil, nil
 }
 
-func (t *TaskManager) SetQueryIDRange(offset uint64) {
-	t.QueryIDOffset = offset
-	t.QueryIDUpperLimit = offset + IdSpan
+func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
+	t.nextID = offset + 1
+	t.queryIDOffset = offset
+	t.queryIDUpperLimit = offset + IdSpan
 }
 
+// AssignQueryID assign a query id for a sql
 func (t *TaskManager) AssignQueryID() (uint64, error) {
-	qid := t.nextID + t.QueryIDOffset
-	if qid >= t.QueryIDUpperLimit {
-		var err error
-		qid, err = t.reuseQueryIDFromBeginning()
-		if err != nil {
-			return 0, err
+	var qid uint64
+	var err error
+	// Why we can't just use t.nextID, but use for range ?
+	// Think this case:
+	// There is coming a new query: "select xxx", and t.nextID = 2
+	// If the reuseQueryIDFromBeginning() has been executed once.
+	// So it may like this :
+	// t.queries = {
+	//					2     : &Task{"select aaa",...},
+	//					3     : &Task{"select bbb",...},
+	//					999999: &Task{"select ccc",...},
+	//				}
+	// We can't assign 2 to the new query, but find 4.
+	for qid = t.nextID; qid < t.queryIDUpperLimit; qid++ {
+		if _, ok := t.queries[qid]; !ok {
+			t.nextID = qid + 1
+			return qid, nil
 		}
 	}
+	// If we can assign a qid in [t.nextID, t.queryIDUpperLimit], try to reuseQueryIDFromBeginning.
+	// Like this:
+	// t.next = 2
+	// t.queries = {
+	//					2     : &Task{"select aaa",...},
+	//					3     : &Task{"select bbb",...},
+	//					.......
+	//					999999: &Task{"select ccc",...},
+	//				}
+	// We need find 1
+	if qid, err = t.reuseQueryIDFromBeginning(); err != nil {
+		return 0, err
+	}
+	t.nextID = qid + 1
 	return qid, nil
 }
 
+// reuseQueryIDFromBeginning Used to find available qid from the beginning of (queryIDOffset,queryIDUpperLimit)
 func (t *TaskManager) reuseQueryIDFromBeginning() (uint64, error) {
-	t.nextID = 1
-	for resID := t.nextID + t.QueryIDOffset; resID < t.QueryIDUpperLimit; resID++ {
+	// find a free query id from queryIDOffset to queryIDUpperLimit
+	for resID := t.queryIDOffset + 1; resID < t.queryIDUpperLimit; resID++ {
 		if _, ok := t.queries[resID]; !ok {
 			return resID, nil
 		}

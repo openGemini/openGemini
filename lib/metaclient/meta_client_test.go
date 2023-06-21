@@ -866,3 +866,60 @@ func TestDBPTCtx_String(t *testing.T) {
 	ctx.DBPTStat = nil
 	require.Equal(t, "", ctx.String())
 }
+
+func TestClient_RegisterQueryIDOffset(t *testing.T) {
+	type fields struct {
+		metaServers []string
+		cacheData   *meta2.Data
+		logger      *logger.Logger
+	}
+
+	type args struct {
+		host string
+	}
+
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "TimeOut",
+			fields: fields{
+				metaServers: []string{"127.0.0.1:8092"},
+				cacheData: &meta2.Data{
+					QueryIDInit: map[string]uint64{},
+				},
+				logger: logger.NewLogger(errno.ModuleMetaClient),
+			},
+			args:    args{host: "127.0.0.1:8086"},
+			wantErr: true,
+		},
+		{
+			name: "DuplicateRegistration",
+			fields: fields{
+				metaServers: []string{"127.0.0.1:8092"},
+				cacheData: &meta2.Data{
+					QueryIDInit: map[string]uint64{"127.0.0.1:8086": 0},
+				},
+				logger: logger.NewLogger(errno.ModuleMetaClient),
+			},
+			args:    args{"127.0.0.1:8086"},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{
+				metaServers: tt.fields.metaServers,
+				cacheData:   tt.fields.cacheData,
+				logger:      tt.fields.logger,
+			}
+			if err := c.RegisterQueryIDOffset(tt.args.host); (err != nil) != tt.wantErr {
+				t.Errorf("RegisterQueryIDOffset() error = %v, wantErr %v", err, tt.wantErr)
+				require.EqualError(t, err, "execute command timeout")
+			}
+		})
+	}
+}

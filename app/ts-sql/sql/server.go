@@ -234,7 +234,7 @@ func (s *Server) Open() error {
 	if offset, err := s.MetaClient.GetQueryIDOffset(host); err != nil {
 		return err
 	} else {
-		s.httpService.Handler.QueryExecutor.TaskManager.SetQueryIDRange(offset)
+		s.httpService.Handler.QueryExecutor.TaskManager.InitQueryIDByOffset(offset)
 	}
 
 	if err := s.castorService.Open(); err != nil {

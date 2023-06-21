@@ -586,7 +586,6 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		InnerChunkSize:  innerChunkSize,
 		Quiet:           true,
 		Traceid:         traceId,
-		SQLNodeHost:     h.Config.BindAddress,
 		//ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
 		//QueryLimitEn:    atomic.LoadInt32(&syscontrol.QueryLimitEn) == 1,
 	}

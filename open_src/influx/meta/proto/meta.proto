@@ -45,7 +45,6 @@ message Data {
 	optional uint64 MaxStreamID = 25;
 	optional uint64 MaxConnId = 26;
 	map<string,uint64> QueryIDInit = 27;
-	optional uint64 NextOffset = 28;
 }
 
 message PtOwner {

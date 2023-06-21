@@ -65,10 +65,10 @@ const (
 	MinRetentionPolicyDuration = time.Hour
 
 	// QueryIDSpan is the default id range span.
-	QueryIDSpan = 1000000
+	QueryIDSpan = 100000
 
-	//QueryIDUpperLimit is the max query id
-	QueryIDUpperLimit = math.MaxUint64
+	//MaxAssignableNum is the maximum number of offsets that ts-meta can distribute to ts-sql.
+	MaxAssignableNum = math.MaxUint64 / QueryIDSpan
 )
 
 const (
@@ -104,7 +104,6 @@ type Data struct {
 
 	// Query ID range segment allocated by all sql nodes
 	QueryIDInit map[string]uint64 // {"127.0.0.1:8086": 0, "127.0.0.2:8086": 10w, "127.0.0.3:8086": 20w}, span is QueryIDSpan
-	NextOffset  uint64
 
 	// adminUserExists provides a constant time mechanism for determining
 	// if there is at least one admin GetUser.
@@ -2044,8 +2043,6 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxDownSampleID: proto.Uint64(data.MaxDownSampleID),
 		MaxStreamID:     proto.Uint64(data.MaxStreamID),
 		MaxConnId:       proto.Uint64(data.MaxConnID),
-
-		NextOffset: proto.Uint64(data.NextOffset),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2122,7 +2119,6 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxDownSampleID = pb.GetMaxDownSampleID()
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
-	data.NextOffset = pb.GetNextOffset()
 
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {
@@ -2809,20 +2805,20 @@ func (data *Data) checkDDLConflict(e *proto2.MigrateEventInfo) error {
 	return nil
 }
 
+// RegisterQueryIDOffset register the mapping relationship between its host and query id offset for ts-sql
 func (data *Data) RegisterQueryIDOffset(host string) error {
 	if data.QueryIDInit == nil {
 		data.QueryIDInit = make(map[string]uint64)
-		data.NextOffset = 0
 	}
 
-	offset := data.NextOffset
-	// check overflow
-	if data.NextOffset >= QueryIDUpperLimit-QueryIDSpan {
+	currentAssignedNum := len(data.QueryIDInit)
+	if currentAssignedNum >= MaxAssignableNum {
 		return errno.NewError(errno.QueryIDOverflow)
 	}
-	data.NextOffset += QueryIDSpan
 
-	data.QueryIDInit[host] = offset
+	nextOffset := uint64(currentAssignedNum * QueryIDSpan)
+
+	data.QueryIDInit[host] = nextOffset
 
 	return nil
 }

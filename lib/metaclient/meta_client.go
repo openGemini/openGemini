@@ -3023,6 +3023,7 @@ func (c *Client) Suicide(err error) {
 	}
 }
 
+// RegisterQueryIDOffset send a register rpc to ts-meta，request a query id offset
 func (c *Client) RegisterQueryIDOffset(host string) error {
 	if _, ok := c.cacheData.QueryIDInit[host]; ok {
 		c.logger.Warn("current host has already registered in ts-meta")
@@ -3033,6 +3034,7 @@ func (c *Client) RegisterQueryIDOffset(host string) error {
 	return err
 }
 
+// GetQueryIDOffset return current ts-sql node's query id offset
 func (c *Client) GetQueryIDOffset(host string) (uint64, error) {
 	if offset, ok := c.cacheData.QueryIDInit[host]; !ok {
 		return 0, fmt.Errorf("unregisterd query range offset in meta")

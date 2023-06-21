@@ -330,7 +330,7 @@ func (m mocShardMapperMetaClient) OpenAtStore() {
 	return
 }
 
-func (m mocShardMapperMetaClient) RegisterQueryIDOffset(host string, isReRegister bool) error {
+func (m mocShardMapperMetaClient) RegisterQueryIDOffset(host string) error {
 	return nil
 }
 

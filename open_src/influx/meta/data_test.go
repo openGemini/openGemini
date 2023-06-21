@@ -18,7 +18,6 @@ package meta
 
 import (
 	"fmt"
-	"math"
 	"os"
 	"reflect"
 	"runtime"
@@ -1215,9 +1214,7 @@ func TestUpdateShardInfo(t *testing.T) {
 
 func TestData_RegisterQueryIDOffset(t *testing.T) {
 	type fields struct {
-		QueryIDInit   map[string]uint64
-		FreeIDOffsets []uint64
-		NextOffset    uint64
+		QueryIDInit map[string]uint64
 	}
 	type args struct {
 		host string
@@ -1230,57 +1227,23 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 		want    uint64
 	}{
 		{
-			name: "NoFreeOffsets",
-			fields: fields{
-				QueryIDInit:   map[string]uint64{},
-				FreeIDOffsets: []uint64{},
-				NextOffset:    0,
-			},
-			args: args{host: "123,123,123,133:123"},
+			name:   "Success",
+			fields: fields{QueryIDInit: map[string]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": 100000}},
+			args:   args{host: "127.0.0.1:7890"},
 			wantErr: func(t assert2.TestingT, err error, i ...interface{}) bool {
 				return err == nil
 			},
-			want: 0,
-		},
-		{
-			name: "UseFreeOffsets",
-			fields: fields{
-				QueryIDInit: map[string]uint64{
-					"host1": 0,
-					"host2": 3000000,
-					"host3": 4000000,
-				},
-				FreeIDOffsets: []uint64{1000000, 2000000},
-				NextOffset:    5000000,
-			},
-			args: args{host: "123,123,123,133:123"},
-			wantErr: func(t assert2.TestingT, err error, i ...interface{}) bool {
-				return err == nil
-			},
-			want: 1000000,
-		},
-		{
-			name: "OverFlow",
-			fields: fields{
-				QueryIDInit:   map[string]uint64{},
-				FreeIDOffsets: []uint64{},
-				NextOffset:    math.MaxUint64 - 100,
-			},
-			args: args{host: "123,123,123,133:123"},
-			wantErr: func(t assert2.TestingT, err error, i ...interface{}) bool {
-				return errno.Equal(err, errno.QueryIDOverflow)
-			},
-			want: 0,
+			want: 200000,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data := &Data{
-				QueryIDInit:   tt.fields.QueryIDInit,
-				FreeIDOffsets: tt.fields.FreeIDOffsets,
-				NextOffset:    tt.fields.NextOffset,
+				QueryIDInit: tt.fields.QueryIDInit,
 			}
-			tt.wantErr(t, data.RegisterQueryIDOffset(tt.args.host), fmt.Sprintf("RegisterQueryIDOffset(%v)", tt.args.host))
+			if !tt.wantErr(t, data.RegisterQueryIDOffset(tt.args.host), fmt.Sprintf("RegisterQueryIDOffset(%v)", tt.args.host)) {
+				t.Fatal()
+			}
 			assert(data.QueryIDInit[tt.args.host] == tt.want, "err")
 		})
 	}
