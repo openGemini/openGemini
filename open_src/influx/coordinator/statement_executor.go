@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -817,12 +818,29 @@ func (e *StatementExecutor) executeExplainStatement(q *influxql.ExplainStatement
 	panic("impl me")
 }
 
+type ExplainAnalyzeWriter struct {
+}
+
+func (w *ExplainAnalyzeWriter) RetryWritePointRows(database string, retentionPolicy string, points []influx.Row) error {
+	src := make([]byte, 0)
+	src, err := influx.FastMarshalMultiRows(src, points)
+	if err != nil {
+		return err
+	}
+	_, err = io.Discard.Write(src)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainStatement, ectx *query2.ExecutionContext) (models.Rows, error) {
 	stmt := q.Statement
 	trace, span := tracing.NewTrace("SELECT")
 	stmt.OmitTime = true
 	ctx := tracing.NewContextWithTrace(ectx.Context, trace)
 	ctx = tracing.NewContextWithSpan(ctx, span)
+	ctx = context.WithValue(ctx, executor.WRITER_CONTEXT, &ExplainAnalyzeWriter{})
 	span.AppendNameValue("statement", q.String())
 	span.Finish()
 
