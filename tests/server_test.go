@@ -503,7 +503,7 @@ func TestServer_ContinuousQueryService(t *testing.T) {
 		},
 	}...)
 
-	//time.Sleep(3 * interval) TODO: when you want to test service, uncomment this line.
+	// time.Sleep(3 * interval) // TODO: when you want to test service, uncomment this line.
 	runTest(t, &test2)
 }
 
