@@ -76,7 +76,7 @@ const (
 	//ALL
 	//ALTER
 	//ANALYZE
-	ANY
+	//ANY
 	//AS
 	//ASC
 	//BEGIN //CREATE CONTINUOUS QUERY ON "telegraf" BEGIN
@@ -89,7 +89,7 @@ const (
 	//DEFAULT
 	//DELETE
 	//DESC
-	DESTINATIONS
+	//DESTINATIONS
 
 	//DIAGNOSTICS  // SHOW DIAGNOSTICS
 	DISTINCT //distinct()
