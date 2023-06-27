@@ -84,7 +84,7 @@ type TagSetInfo struct {
 
 	IDs        []uint64
 	Filters    []influxql.Expr
-	RowFilters [][]clv.RowFilter
+	RowFilters [][]clv.RowFilter  // only uesed in full-text index for row filtering
 	SeriesKeys [][]byte           // encoded series key
 	TagsVec    []influx.PointTags // tags of all series
 	key        []byte             // group by tag sets key
@@ -208,10 +208,11 @@ func (p *tagSetInfoPool) GetBySize(size int, emptySpace bool) (set *TagSetInfo) 
 		return
 	default:
 		t := &TagSetInfo{
-			ref:     0,
-			key:     make([]byte, 0, 32),
-			IDs:     make([]uint64, 0, size),
-			Filters: make([]influxql.Expr, 0, size),
+			ref:        0,
+			key:        make([]byte, 0, 32),
+			IDs:        make([]uint64, 0, size),
+			Filters:    make([]influxql.Expr, 0, size),
+			RowFilters: make([][]clv.RowFilter, 0, size),
 		}
 		if !emptySpace {
 			t.SeriesKeys = make([][]byte, 0, size)
@@ -266,6 +267,7 @@ func (gs GroupSeries) Reverse() {
 		for i, j := 0, tt.Len()-1; i < j; i, j = i+1, j-1 {
 			tt.IDs[i], tt.IDs[j] = tt.IDs[j], tt.IDs[i]
 			tt.Filters[i], tt.Filters[j] = tt.Filters[j], tt.Filters[i]
+			tt.RowFilters[i], tt.RowFilters[j] = tt.RowFilters[j], tt.RowFilters[i]
 			tt.SeriesKeys[i], tt.SeriesKeys[j] = tt.SeriesKeys[j], tt.SeriesKeys[i]
 			tt.TagsVec[i], tt.TagsVec[j] = tt.TagsVec[j], tt.TagsVec[i]
 		}

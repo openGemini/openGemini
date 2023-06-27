@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,10 +18,10 @@ package clv
 
 import (
 	"bytes"
-	"fmt"
 	"sort"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 )
 
 const (
@@ -40,7 +40,6 @@ const (
 	idFlag  = 2
 )
 
-// [prefixSid + SID0 + {time0 + pos0} + {time1 + pos1} + {time2 + pos2}...]
 func marshalPosList(dst []byte, invert *InvertIndex) ([]byte, []uint16) {
 	invertStates := make([]*InvertStates, 0, len(invert.invertStates))
 	for _, state := range invert.invertStates {
@@ -52,12 +51,12 @@ func marshalPosList(dst []byte, invert *InvertIndex) ([]byte, []uint16) {
 
 	sidLens := make([]uint16, 0, len(invertStates))
 	for i := 0; i < len(invertStates); i++ {
-		// prefixSid + sid + timestamplist
+		// prefixSid + sid + rowIdlist
 		istate := invertStates[i].invertState
 		dst = append(dst, txPrefixSid)
 		dst = encoding.MarshalUint64(dst, invertStates[i].sid)
 		for i := 0; i < len(istate); i++ {
-			dst = encoding.MarshalInt64(dst, istate[i].timestamp)
+			dst = encoding.MarshalInt64(dst, istate[i].rowId)
 			dst = encoding.MarshalUint16(dst, istate[i].position)
 		}
 
@@ -67,12 +66,13 @@ func marshalPosList(dst []byte, invert *InvertIndex) ([]byte, []uint16) {
 	return dst, sidLens
 }
 
-func unmarshalPosList(tail []byte, sidLens []uint16, invert *InvertIndex) []byte {
+func unmarshalPosList(tail []byte, sidLens []uint16, invert *InvertIndex, offset uint16) []byte {
 	for i := 0; i < len(sidLens); i++ {
 		sidLen := int(sidLens[i])
 		// unmashral prifixSid
 		if tail[0] != txPrefixSid {
-			panic(fmt.Errorf("cannot unmarshal poslist: %s", string(tail)))
+			logger.Errorf("cannot unmarshal poslist: %s", string(tail))
+			return tail
 		}
 		tail = tail[1:]
 		// unmashral sid
@@ -86,11 +86,11 @@ func unmarshalPosList(tail []byte, sidLens []uint16, invert *InvertIndex) []byte
 		}
 
 		for j := 0; j < sidLen; j++ {
-			timestamp := encoding.UnmarshalInt64(tail)
+			rowId := encoding.UnmarshalInt64(tail)
 			tail = tail[8:]
-			position := encoding.UnmarshalUint16(tail)
+			position := encoding.UnmarshalUint16(tail) + offset
 			tail = tail[2:]
-			invertState.invertState = append(invertState.invertState, InvertState{timestamp, position, nil})
+			invertState.invertState = append(invertState.invertState, InvertState{rowId, position, nil})
 		}
 	}
 
@@ -118,7 +118,8 @@ func marshalIdList(dst []byte, invert *InvertIndex) ([]byte, uint16) {
 func unmarshalIdList(tail []byte, idsLen uint16, invert *InvertIndex) []byte {
 	prefixIds := tail[0]
 	if prefixIds != txPrefixId {
-		panic(fmt.Errorf("cannot unmarshal idlist: %s", string(tail)))
+		logger.Errorf("cannot unmarshal idlist: %s", string(tail))
+		return nil
 	}
 	tail = tail[1:]
 
@@ -135,7 +136,7 @@ func unmarshalIdList(tail []byte, idsLen uint16, invert *InvertIndex) []byte {
 	return tail
 }
 
-// [prefixMeta + len(SIDs) + [Len(SID0) + Len(SID1) + Len(SID2) ...] + len(IDS) + flag + metaOffset]
+// prefixMeta + len(SIDs) + [Len(SID0) + Len(SID1) + Len(SID2) ...] + len(IDS) + flag + metaOffset
 func marshalMeta(dst []byte, start int, sidLens []uint16, idsLen uint16) []byte {
 	var flag uint8
 	metaOffset := len(dst) - start
@@ -169,18 +170,18 @@ func unmarshalMeta(item []byte) ([]uint16, uint16) {
 	// unmashral prifixSid
 	tail := item[metaOffset:]
 	if tail[0] != txPrefixMeta {
-		panic(fmt.Errorf("cannot unmarshal meta: %s", string(tail)))
+		logger.Errorf("cannot unmarshal meta: %s", string(tail))
+		return nil, 0
 	}
 	tail = tail[1:]
 
 	// unmashral sidlens
 	sidLens := make([]uint16, 0)
 	if flag&posFlag != 0 {
-		sidLen := encoding.UnmarshalUint16(tail)
+		sidLen := int(encoding.UnmarshalUint16(tail))
 		tail = tail[2:]
 
-		var i uint16
-		for i = 0; i < sidLen; i++ {
+		for i := 0; i < sidLen; i++ {
 			sidLens = append(sidLens, encoding.UnmarshalUint16(tail))
 			tail = tail[2:]
 		}
@@ -198,7 +199,7 @@ func marshal(dst []byte, vtoken string, invert *InvertIndex) []byte {
 	// prefixPos + vtokens + suffix
 	start := len(dst)
 	dst = append(dst, txPrefixPos)
-	dst = append(dst, []byte(vtoken)...)
+	dst = append(dst, vtoken...)
 	dst = append(dst, txSuffix)
 
 	invert.Sort(nil)
@@ -220,13 +221,13 @@ func marshal(dst []byte, vtoken string, invert *InvertIndex) []byte {
 	return dst
 }
 
-func unmarshal(item []byte, invert *InvertIndex) {
+func unmarshal(item []byte, invert *InvertIndex, offset uint16) {
 	sidLens, idsLen := unmarshalMeta(item)
 	prefix := bytes.IndexByte(item, txSuffix)
 	tail := item[prefix+1:]
 
 	if len(sidLens) != 0 {
-		tail = unmarshalPosList(tail, sidLens, invert)
+		tail = unmarshalPosList(tail, sidLens, invert, offset)
 	}
 
 	if idsLen != 0 {
@@ -249,6 +250,6 @@ func unmarshaDiclVersion(item []byte) uint32 {
 
 func marshalTerm(dst []byte, term string) []byte {
 	dst = append(dst, txPrefixTerm)
-	dst = append(dst, []byte(term)...)
+	dst = append(dst, term...)
 	return dst
 }

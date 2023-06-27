@@ -293,6 +293,10 @@ func (ps *partSearch) readIndexBlock(mr *metaindexRow) (*indexBlock, error) {
 }
 
 func (ps *partSearch) getInmemoryBlock(bh *blockHeader) (*inmemoryBlock, error) {
+	if bh.itemsBlockSize == 0 {
+		return ps.readInmemoryBlock(bh)
+	}
+
 	var ibKey inmemoryBlockCacheKey
 	ibKey.Init(bh)
 	ib := ps.ibCache.Get(ibKey)

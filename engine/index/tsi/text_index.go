@@ -57,10 +57,10 @@ func getAllDataInvert(expr influxql.Expr) (*clv.InvertIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	invert := clv.NewInvertIndexPointer()
+	invert := clv.NewInvertIndex()
 	invert.SetFilter(rexpr)
 
-	return invert, nil
+	return &invert, nil
 }
 
 func haveTextFilter(expr influxql.Expr) bool {
@@ -210,16 +210,6 @@ func (idx *TextIndex) SearchByTokenIndex(name string, sids []uint64, n *influxql
 	if !ok {
 		return nil, fmt.Errorf("the field(%s) of measurement(%s) has no text index", key.Val, name)
 	}
-
-	// Like
-	if n.Op == influxql.LIKE {
-		value, ok := n.RHS.(*influxql.VarRef)
-		if !ok {
-			return nil, fmt.Errorf("the type of RHS value is wrong")
-		}
-		return tokenIndex.Search(clv.Fuzzy, value.Val, sids)
-	}
-	// MATCH, MATCH_PHRASE
 	value, ok := n.RHS.(*influxql.StringLiteral)
 	if !ok {
 		return nil, fmt.Errorf("the type of RHS value is wrong")
@@ -229,6 +219,8 @@ func (idx *TextIndex) SearchByTokenIndex(name string, sids []uint64, n *influxql
 		return tokenIndex.Search(clv.Match, value.Val, sids)
 	case influxql.MATCH_PHRASE:
 		return tokenIndex.Search(clv.Match_Phrase, value.Val, sids)
+	case influxql.LIKE:
+		return tokenIndex.Search(clv.Fuzzy, value.Val, sids)
 	default:
 	}
 	return nil, nil
@@ -381,7 +373,11 @@ func (idx *TextIndex) Delete(primaryIndex PrimaryIndex, name []byte, condition i
 }
 
 func (idx *TextIndex) Flush() {
-	// todo
+	for _, tokenIndexMap := range idx.fieldTable {
+		for _, tokenIndex := range tokenIndexMap {
+			tokenIndex.Flush()
+		}
+	}
 }
 
 func TextIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
@@ -436,6 +432,9 @@ func TextClose(index interface{}) error {
 }
 
 func TextFlush(index interface{}) {
-	textIndex := index.(*TextIndex)
+	textIndex, ok := index.(*TextIndex)
+	if !ok {
+		return
+	}
 	textIndex.Flush()
 }

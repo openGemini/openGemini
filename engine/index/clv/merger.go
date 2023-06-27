@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -63,7 +63,7 @@ func (m *merger) keysEqual(item []byte) bool {
 	}
 
 	prefix := bytes.IndexByte(item, txSuffix)
-	return string(m.prefixKey) == string(item[:prefix])
+	return bytes.Equal(m.prefixKey, item[:prefix])
 }
 
 func (m *merger) flushPendingItem(dst []byte, dstItems []mergeset.Item) ([]byte, []mergeset.Item) {
@@ -82,12 +82,12 @@ func (m *merger) flushPendingItem(dst []byte, dstItems []mergeset.Item) ([]byte,
 		return dst, dstItems
 	}
 
-	// umasharl
+	// umarsharl
 	invertIndex := NewInvertIndex()
 	for i := 0; i < len(m.items); i++ {
-		unmarshal(m.items[i], &invertIndex)
+		unmarshal(m.items[i], &invertIndex, 0)
 	}
-	// masharl
+	// marsharl
 	dst = marshal(dst, string(m.prefixKey[1:]), &invertIndex)
 	dstItems = append(dstItems, mergeset.Item{
 		Start: uint32(dataLen),
@@ -123,7 +123,7 @@ func keysEqual(item0 []byte, item1 []byte) bool {
 		return false
 	}
 
-	return string(item0[:prefix]) == string(item1[:prefix])
+	return bytes.Equal(item0[:prefix], item1[:prefix])
 }
 
 var mergerPool MergerPool

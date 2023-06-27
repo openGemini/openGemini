@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,14 +25,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
 const (
-	qmin   = 1
-	maxBuf = 2000 // can not too large, otherwise AddItems may fail because the item size is greater than 64k.
+	qmin    = 1
+	maxItem = 2000
+	maxBuf  = 2048 // can not too large, otherwise AddItems may fail because the item size is greater than 64k.
 )
 
 type QueryType int
@@ -49,9 +51,9 @@ type RowFilter struct {
 }
 
 type InvertState struct {
-	timestamp int64
-	position  uint16
-	filter    influxql.Expr
+	rowId    int64
+	position uint16
+	filter   influxql.Expr // only for search
 }
 
 type InvertStates struct {
@@ -73,7 +75,7 @@ func (iss *InvertStates) Len() int {
 // Swap swaps the elements with indexes i and j.
 func (iss *InvertStates) Swap(i, j int) {
 	ivss := iss.invertState
-	ivss[i].timestamp, ivss[j].timestamp = ivss[j].timestamp, ivss[i].timestamp
+	ivss[i].rowId, ivss[j].rowId = ivss[j].rowId, ivss[i].rowId
 	ivss[i].position, ivss[j].position = ivss[j].position, ivss[i].position
 	ivss[i].filter, ivss[j].filter = ivss[j].filter, ivss[i].filter
 }
@@ -81,10 +83,10 @@ func (iss *InvertStates) Swap(i, j int) {
 // i < j. if Less() return false, should call Swap()
 func (iss *InvertStates) Less(i, j int) bool {
 	ivss := iss.invertState
-	if ivss[i].timestamp < ivss[j].timestamp {
+	if ivss[i].rowId < ivss[j].rowId {
 		return true
 	}
-	if ivss[i].timestamp == ivss[j].timestamp {
+	if ivss[i].rowId == ivss[j].rowId {
 		return ivss[i].position <= ivss[j].position
 	}
 	return false
@@ -94,17 +96,17 @@ func (iss *InvertStates) InvertIsExisted(is InvertState) bool {
 	ivss := iss.invertState
 
 	n := sort.Search(len(ivss), func(i int) bool {
-		if is.timestamp < ivss[i].timestamp {
+		if is.rowId < ivss[i].rowId {
 			return true
 		}
-		if is.timestamp == ivss[i].timestamp {
+		if is.rowId == ivss[i].rowId {
 			return is.position <= ivss[i].position
 		}
 		return false
 	})
 
 	if n == len(ivss) ||
-		ivss[n].timestamp != is.timestamp ||
+		ivss[n].rowId != is.rowId ||
 		ivss[n].position != is.position {
 		return false
 	}
@@ -112,32 +114,47 @@ func (iss *InvertStates) InvertIsExisted(is InvertState) bool {
 	return true
 }
 
-func (iss *InvertStates) InvertTimestampIsExisted(timestamp int64) bool {
+func (iss *InvertStates) InvertRowIdIsExisted(rowId int64) bool {
 	ivss := iss.invertState
 
 	n := sort.Search(len(ivss), func(i int) bool {
-		return timestamp <= ivss[i].timestamp
+		return rowId <= ivss[i].rowId
 	})
 
-	if n == len(ivss) || ivss[n].timestamp != timestamp {
+	if n == len(ivss) || ivss[n].rowId != rowId {
 		return false
 	}
 
 	return true
 }
 
-func (iss *InvertStates) GetInvertStateByTimestamp(timestamp int64) *InvertState {
+func (iss *InvertStates) GetInvertStateByRowId(rowId int64) *InvertState {
 	ivss := iss.invertState
 
 	n := sort.Search(len(ivss), func(i int) bool {
-		return timestamp <= ivss[i].timestamp
+		return rowId <= ivss[i].rowId
 	})
 
-	if n == len(ivss) || ivss[n].timestamp != timestamp {
+	if n == len(ivss) || ivss[n].rowId != rowId {
 		return nil
 	}
 
 	return &ivss[n]
+}
+
+const (
+	offWidth = 6
+)
+
+func assembleId(id uint32, offset uint16) uint32 {
+	assyId := (id << offWidth) + (uint32)(offset)
+	return assyId
+}
+
+func disassembleId(assyId uint32) (uint32, uint16) {
+	offset := uint16(assyId & 0x3F)
+	id := assyId >> offWidth
+	return id, offset
 }
 
 type InvertIndex struct {
@@ -148,14 +165,6 @@ type InvertIndex struct {
 
 func NewInvertIndex() InvertIndex {
 	return InvertIndex{
-		invertStates: make(map[uint64]*InvertStates),
-		ids:          make(map[uint32]struct{}),
-		filter:       nil,
-	}
-}
-
-func NewInvertIndexPointer() *InvertIndex {
-	return &InvertIndex{
 		invertStates: make(map[uint64]*InvertStates),
 		ids:          make(map[uint32]struct{}),
 		filter:       nil,
@@ -227,14 +236,14 @@ func (ii *InvertIndex) GetRowFilterBySid(sid uint64) []RowFilter {
 	if !ok {
 		return nil
 	}
-	var preTime int64
+	var preRowId int64
 	rowFilter := make([]RowFilter, 0, len(iss.invertState))
 	for _, is := range iss.invertState {
-		if preTime == is.timestamp {
+		if preRowId == is.rowId {
 			continue
 		}
-		rowFilter = append(rowFilter, RowFilter{is.timestamp, is.filter})
-		preTime = is.timestamp
+		rowFilter = append(rowFilter, RowFilter{is.rowId, is.filter})
+		preRowId = is.rowId
 	}
 	return rowFilter
 }
@@ -251,6 +260,30 @@ func NewTrieNode() *TrieNode {
 	}
 }
 
+func (node *TrieNode) insertTrieNode(vtoken []string, sid uint64, rowId int64, position uint16) {
+	for _, token := range vtoken {
+		child, ok := node.children[token]
+		if !ok {
+			child = NewTrieNode()
+			node.children[token] = child
+		}
+		node = child
+	}
+	node.invertIndex.AddInvertState(sid, InvertState{rowId, position, nil})
+}
+
+func (node *TrieNode) insertSuffixToTrie(vtoken []string, id uint32) {
+	for _, token := range vtoken {
+		child, ok := node.children[token]
+		if !ok {
+			child = NewTrieNode()
+			node.children[token] = child
+		}
+		node = child
+	}
+	node.invertIndex.AddId(id)
+}
+
 type Options struct {
 	Path        string
 	Measurement string
@@ -258,8 +291,15 @@ type Options struct {
 	Lock        *string
 }
 
+type Logs struct {
+	log   []byte
+	sid   uint64
+	rowId int64
+}
+
 type TokenIndex struct {
 	tb          *mergeset.Table
+	logsBuf     []Logs
 	root        *TrieNode
 	analyzer    *Analyzer
 	trieLock    sync.RWMutex
@@ -276,6 +316,7 @@ type TokenIndex struct {
 
 func NewTokenIndex(opts *Options) (*TokenIndex, error) {
 	idx := &TokenIndex{
+		logsBuf:     make([]Logs, 0, maxBuf),
 		root:        NewTrieNode(),
 		closing:     make(chan struct{}),
 		path:        opts.Path,
@@ -338,44 +379,16 @@ func (idx *TokenIndex) Open() error {
 	return nil
 }
 
-func (idx *TokenIndex) Close() error {
+func (idx *TokenIndex) Close() {
 	if idx.closing != nil {
-		idx.closing <- struct{}{}
 		close(idx.closing)
 	}
 	idx.tb.MustClose()
-	return nil
 }
 
-func (idx *TokenIndex) insertTrieNode(vtoken []string, sid uint64, timestamp int64, position uint16) {
-	idx.trieLock.Lock()
-	idx.docNum++
-	node := idx.root
-	for _, token := range vtoken {
-		child, ok := node.children[token]
-		if !ok {
-			child = NewTrieNode()
-			node.children[token] = child
-		}
-		node = child
-	}
-	node.invertIndex.AddInvertState(sid, InvertState{timestamp, position, nil})
-	idx.trieLock.Unlock()
-}
-
-func (idx *TokenIndex) insertSuffixToTrie(vtoken []string, id uint32) {
-	idx.trieLock.Lock()
-	node := idx.root
-	for _, token := range vtoken {
-		child, ok := node.children[token]
-		if !ok {
-			child = NewTrieNode()
-			node.children[token] = child
-		}
-		node = child
-	}
-	node.invertIndex.AddId(id)
-	idx.trieLock.Unlock()
+func (idx *TokenIndex) Flush() {
+	idx.processDocument()
+	idx.tb.DebugFlush()
 }
 
 var idxItemsPool mergeindex.IndexItemsPool
@@ -434,16 +447,10 @@ func (idx *TokenIndex) createTermIndex(terms []string) error {
 }
 
 func (idx *TokenIndex) processDocument() {
-	// replace the root node
-	idx.trieLock.Lock()
-	if len(idx.root.children) == 0 {
-		idx.trieLock.Unlock()
+	node := idx.Analyse()
+	if node == nil {
 		return
 	}
-	node := idx.root
-	idx.docNum = 0
-	idx.root = NewTrieNode()
-	idx.trieLock.Unlock()
 
 	terms := make([]string, 0, len(node.children))
 	// Deal the first level node of the tree.
@@ -451,7 +458,8 @@ func (idx *TokenIndex) processDocument() {
 		vtokens := token + " "
 		err := idx.writeDocumentIndex(vtokens, child)
 		if err != nil {
-			panic(fmt.Errorf("write document index failed, err: %+v", err))
+			logger.Errorf("write document index failed, err: %+v", err)
+			continue
 		}
 		// update the token set
 		idx.termSetLock.Lock()
@@ -464,7 +472,7 @@ func (idx *TokenIndex) processDocument() {
 
 	err := idx.createTermIndex(terms)
 	if err != nil {
-		panic(fmt.Errorf("write term index failed, err: %+v", err))
+		logger.Errorf("write term index failed, err: %+v", err)
 	}
 }
 
@@ -482,24 +490,48 @@ func (idx *TokenIndex) process() {
 	}
 }
 
-func (idx *TokenIndex) AddDocument(log string, sid uint64, timestamp int64) error {
-	// tokenizer analyze
-	tokens, err := idx.analyzer.Analyze(log)
-	if err != nil {
-		return err
+func (idx *TokenIndex) Analyse() *TrieNode {
+	// replace the logBuf
+	idx.trieLock.Lock()
+	if len(idx.logsBuf) == 0 {
+		idx.trieLock.Unlock()
+		return nil
 	}
-	for _, vtoken := range tokens {
-		idx.insertTrieNode(vtoken.tokens, sid, timestamp, vtoken.pos)
-		if len(vtoken.tokens) <= qmin {
-			continue
-		}
+	logsBuf := idx.logsBuf
+	idx.docNum = 0
+	idx.logsBuf = make([]Logs, 0, maxBuf)
+	idx.trieLock.Unlock()
 
-		for i := 1; i < len(vtoken.tokens); i++ {
-			idx.insertSuffixToTrie(vtoken.tokens[i:], vtoken.id)
+	node := NewTrieNode()
+	for i := 0; i < len(logsBuf); i++ {
+		tokens, _ := idx.analyzer.Analyze(logsBuf[i].log)
+		for _, vtoken := range tokens {
+			node.insertTrieNode(vtoken.tokens, logsBuf[i].sid, logsBuf[i].rowId, vtoken.pos)
+			if len(vtoken.tokens) <= qmin {
+				continue
+			}
+
+			for i := 1; i < len(vtoken.tokens); i++ {
+				// i is the offset of the current sub-vtoken in vtoken
+				id := assembleId(vtoken.id, (uint16)(i))
+				node.insertSuffixToTrie(vtoken.tokens[i:], id)
+			}
 		}
 	}
 
-	if idx.docNum >= maxBuf {
+	return node
+}
+
+func (idx *TokenIndex) AddDocument(log string, sid uint64, rowId int64) error {
+	logDst := make([]byte, len(log))
+	copy(logDst, log)
+
+	idx.trieLock.Lock()
+	idx.logsBuf = append(idx.logsBuf, Logs{logDst, sid, rowId})
+	idx.docNum++
+	idx.trieLock.Unlock()
+
+	if idx.docNum >= maxItem {
 		idx.processDocument()
 	}
 
@@ -514,7 +546,10 @@ func (idx *TokenIndex) getTokenSearch() *tokenSearch {
 		v = &tokenSearch{}
 	}
 
-	ts := v.(*tokenSearch)
+	ts, ok := v.(*tokenSearch)
+	if !ok {
+		return nil
+	}
 	ts.tbs.Init(idx.tb)
 
 	return ts
@@ -533,6 +568,7 @@ func (idx *TokenIndex) searchDicVersion() (uint32, error) {
 	return dicVersion, nil
 }
 
+// Vtoken: only obtain invert-lists that match Vtoken
 func (idx *TokenIndex) searchInvertByVtoken(tokens []string, ts *tokenSearch) *InvertIndex {
 	vtoken := ""
 	for i := 0; i < len(tokens); i++ {
@@ -540,11 +576,12 @@ func (idx *TokenIndex) searchInvertByVtoken(tokens []string, ts *tokenSearch) *I
 	}
 
 	invert := NewInvertIndex()
-	ts.searchInvertIndexByVtoken(vtoken, &invert)
+	ts.searchInvertIndexByVtoken(vtoken, &invert, 0)
 
 	return &invert
 }
 
+// VtokenAndId: obtain all invert-lists with Vtoken as suffix
 func (idx *TokenIndex) searchInvertByVtokenAndId(tokens []string, ts *tokenSearch) *InvertIndex {
 	invert := idx.searchInvertByVtoken(tokens, ts)
 	if invert == nil {
@@ -552,34 +589,33 @@ func (idx *TokenIndex) searchInvertByVtokenAndId(tokens []string, ts *tokenSearc
 	}
 
 	// Obtain the inverted list corresponding to the ID
-	vtokens := make([]string, 0, len(invert.ids))
-	for id := range invert.ids {
+	for assyId := range invert.ids {
+		id, offset := disassembleId(assyId)
 		vtoken := idx.analyzer.FindVtokenByID(id)
 		if len(vtoken) == 0 {
-			panic(fmt.Errorf("cannot find the vtoken by id: %d", id))
+			logger.Errorf("cannot find the vtoken by id: %d, %d", assyId, id)
+			continue
 		}
-		vtokens = append(vtokens, vtoken)
-	}
-
-	// Merge inverted lit
-	for i := 0; i < len(vtokens); i++ {
-		ts.searchInvertIndexByVtoken(vtokens[i], invert)
+		// Merge inverted list
+		ts.searchInvertIndexByVtoken(vtoken, invert, offset)
 	}
 
 	return invert
 }
 
+// PrefixVtoken: obtain all invert-lists with Vtoken as prefix
 func (idx *TokenIndex) searchInvertByPrefixVtoken(tokens []string, ts *tokenSearch) *InvertIndex {
 	vtoken := ""
 	for i := 0; i < len(tokens); i++ {
 		vtoken += tokens[i] + " "
 	}
 	invert := NewInvertIndex()
-	ts.searchInvertIndexByPrefixVtoken(vtoken, &invert)
+	ts.searchInvertIndexByPrefixVtoken(vtoken, &invert, 0)
 
 	return &invert
 }
 
+// PrefixVtokenAndId: obtain all invert-lists with Vtoken as prefix and suffix
 func (idx *TokenIndex) searchInvertByPrefixVtokenAndId(tokens []string, ts *tokenSearch) *InvertIndex {
 	invert := idx.searchInvertByPrefixVtoken(tokens, ts)
 	if invert == nil {
@@ -587,18 +623,15 @@ func (idx *TokenIndex) searchInvertByPrefixVtokenAndId(tokens []string, ts *toke
 	}
 
 	// Obtain the inverted list corresponding to the ID
-	vtokens := make([]string, 0, len(invert.ids))
-	for id := range invert.ids {
+	for assyId := range invert.ids {
+		id, offset := disassembleId(assyId)
 		vtoken := idx.analyzer.FindVtokenByID(id)
 		if len(vtoken) == 0 {
-			panic(fmt.Errorf("cannot find the vtoken by id: %d", id))
+			logger.Errorf("cannot find the vtoken by id: %d, %d", assyId, id)
+			continue
 		}
-		vtokens = append(vtokens, vtoken)
-	}
-
-	// Merge inverted lit
-	for i := 0; i < len(vtokens); i++ {
-		ts.searchInvertIndexByVtoken(vtokens[i], invert)
+		// Merge inverted list
+		ts.searchInvertIndexByVtoken(vtoken, invert, offset)
 	}
 
 	return invert
@@ -608,7 +641,7 @@ func (idx *TokenIndex) Match(queryStr string, sids []uint64) (*InvertIndex, erro
 	ts := idx.getTokenSearch()
 	defer idx.putTokenSearch(ts)
 
-	tokens := Tokenizer(queryStr)
+	tokens := Tokenizer([]byte(queryStr))
 	var pre *InvertIndex
 	for i := 0; i < len(tokens); i++ {
 		cur := idx.searchInvertByPrefixVtokenAndId([]string{tokens[i]}, ts)
@@ -622,7 +655,7 @@ func (idx *TokenIndex) MatchPhrase(queryStr string, sids []uint64) (*InvertIndex
 	ts := idx.getTokenSearch()
 	defer idx.putTokenSearch(ts)
 
-	vtokens, err := idx.analyzer.Analyze(queryStr)
+	vtokens, err := idx.analyzer.Analyze([]byte(queryStr))
 	if err != nil {
 		return nil, err
 	}
@@ -677,7 +710,6 @@ func (idx *TokenIndex) Fuzzy(queryStr string, sids []uint64) (*InvertIndex, erro
 	ts := idx.getTokenSearch()
 	defer idx.putTokenSearch(ts)
 
-	queryStr = strings.ToLower(queryStr)
 	regex, err := regexp.Compile(queryStrToPattern(queryStr))
 	if err != nil {
 		return nil, err
@@ -743,15 +775,15 @@ func (idx *TokenIndex) Search(t QueryType, queryStr string, sids []uint64) (*Inv
 	return invert, err
 }
 
-func removeDuplicateTimestamp(iss []InvertState) []InvertState {
+func removeDuplicateRowId(iss []InvertState) []InvertState {
 	res := iss[:0]
-	var preTime int64
+	var preRowId int64
 	for i := 0; i < len(iss); i++ {
-		if preTime == iss[i].timestamp {
+		if preRowId == iss[i].rowId {
 			continue
 		}
 		res = append(res, iss[i])
-		preTime = iss[i].timestamp
+		preRowId = iss[i].rowId
 	}
 
 	return res
@@ -777,12 +809,12 @@ func IntersectInvertByDistance(pre *InvertIndex, cur *InvertIndex, dis uint16, s
 					continue
 				}
 				position := preIss.invertState[i].position - dis
-				if curIss.InvertIsExisted(InvertState{preIss.invertState[i].timestamp, position, nil}) {
-					res.AddInvertState(sid, InvertState{preIss.invertState[i].timestamp, position, nil})
+				if curIss.InvertIsExisted(InvertState{preIss.invertState[i].rowId, position, nil}) {
+					res.AddInvertState(sid, InvertState{preIss.invertState[i].rowId, position, nil})
 				}
 			} else {
 				position := preIss.invertState[i].position + dis
-				if curIss.InvertIsExisted(InvertState{preIss.invertState[i].timestamp, position, nil}) {
+				if curIss.InvertIsExisted(InvertState{preIss.invertState[i].rowId, position, nil}) {
 					// add the poslist
 					res.AddInvertState(sid, preIss.invertState[i])
 				}
@@ -809,7 +841,7 @@ func UnionInvertIndex(lii *InvertIndex, rii *InvertIndex, sids []uint64) *Invert
 
 	// duplicate removal
 	for _, lIss := range lii.invertStates {
-		lIss.invertState = removeDuplicateTimestamp(lIss.invertState)
+		lIss.invertState = removeDuplicateRowId(lIss.invertState)
 	}
 
 	return lii
@@ -865,49 +897,37 @@ func IntersectInvertIndexBySlip(li, ri *InvertIndex) *InvertIndex {
 
 		var l, r int
 		for l < len(lIss.invertState) && r < len(rIss.invertState) {
-			if lIss.invertState[l].timestamp < rIss.invertState[r].timestamp {
+			if lIss.invertState[l].rowId < rIss.invertState[r].rowId {
 				if ri.filter != nil {
-					res.AddInvertState(sid, InvertState{
-						timestamp: lIss.invertState[l].timestamp,
-						filter:    newIntersectExpr(lIss.invertState[l].filter, ri.filter)})
+					res.AddInvertState(sid, InvertState{rowId: lIss.invertState[l].rowId, filter: newIntersectExpr(lIss.invertState[l].filter, ri.filter)})
 				}
 				l++
 				continue
 			}
-			if lIss.invertState[l].timestamp > rIss.invertState[r].timestamp {
+			if lIss.invertState[l].rowId > rIss.invertState[r].rowId {
 				if li.filter != nil {
-					res.AddInvertState(sid, InvertState{
-						timestamp: rIss.invertState[r].timestamp,
-						filter:    newIntersectExpr(rIss.invertState[r].filter, li.filter)})
+					res.AddInvertState(sid, InvertState{rowId: rIss.invertState[r].rowId, filter: newIntersectExpr(rIss.invertState[r].filter, li.filter)})
 				}
 				r++
 				continue
 			}
-			res.AddInvertState(sid, InvertState{
-				timestamp: lIss.invertState[l].timestamp,
-				filter:    newIntersectExpr(rIss.invertState[r].filter, lIss.invertState[l].filter)})
+			res.AddInvertState(sid, InvertState{rowId: lIss.invertState[l].rowId, filter: newIntersectExpr(rIss.invertState[r].filter, lIss.invertState[l].filter)})
 			l++
 			r++
 		}
 
 		for (ri.filter != nil) && (l < len(lIss.invertState)) {
-			res.AddInvertState(sid, InvertState{
-				timestamp: lIss.invertState[l].timestamp,
-				filter:    newIntersectExpr(lIss.invertState[l].filter, ri.filter)})
+			res.AddInvertState(sid, InvertState{rowId: lIss.invertState[l].rowId, filter: newIntersectExpr(lIss.invertState[l].filter, ri.filter)})
 			l++
 		}
 
 		for (li.filter != nil) && (r < len(rIss.invertState)) {
-			res.AddInvertState(sid, InvertState{
-				timestamp: rIss.invertState[r].timestamp,
-				filter:    newIntersectExpr(rIss.invertState[r].filter, li.filter)})
+			res.AddInvertState(sid, InvertState{rowId: rIss.invertState[r].rowId, filter: newIntersectExpr(rIss.invertState[r].filter, li.filter)})
 			r++
 		}
 
 		// last, delete the sid.
-		if li.filter != nil {
-			delete(ri.invertStates, sid)
-		}
+		delete(ri.invertStates, sid)
 	}
 
 	if li.filter != nil {
@@ -978,6 +998,24 @@ func UnionExprToInvertIndex(ii *InvertIndex, filter influxql.Expr) *InvertIndex 
 	return ii
 }
 
+func newUnionExtendedDataExpr(lexpr, rexpr influxql.Expr) influxql.Expr {
+	if lexpr != nil && rexpr != nil {
+		return newUnionExpr(lexpr, rexpr)
+	}
+
+	if lexpr != nil {
+		return lexpr
+	}
+	return rexpr
+}
+
+func newUnionSingleExtendedDataExpr(rowExpr, extendedDataExpr influxql.Expr) influxql.Expr {
+	if extendedDataExpr != nil {
+		return newUnionExpr(rowExpr, extendedDataExpr)
+	}
+	return rowExpr
+}
+
 func UnionInvertIndexBySlip(li, ri *InvertIndex) *InvertIndex {
 	res := NewInvertIndex()
 	for sid, lIss := range li.invertStates {
@@ -988,43 +1026,42 @@ func UnionInvertIndexBySlip(li, ri *InvertIndex) *InvertIndex {
 		}
 		var l, r int
 		for l < len(lIss.invertState) && r < len(rIss.invertState) {
-			if lIss.invertState[l].timestamp < rIss.invertState[r].timestamp {
-				if ri.filter != nil {
-					lIss.invertState[l].filter = newUnionExpr(lIss.invertState[l].filter, ri.filter)
-				}
+			if lIss.invertState[l].rowId < rIss.invertState[r].rowId {
+				lIss.invertState[l].filter = newUnionSingleExtendedDataExpr(lIss.invertState[l].filter, ri.filter)
 				res.AddInvertState(sid, lIss.invertState[l])
 				l++
 				continue
 			}
-			if lIss.invertState[l].timestamp > rIss.invertState[r].timestamp {
-				if li.filter != nil {
-					rIss.invertState[r].filter = newUnionExpr(rIss.invertState[r].filter, li.filter)
-				}
+			if lIss.invertState[l].rowId > rIss.invertState[r].rowId {
+				rIss.invertState[r].filter = newUnionSingleExtendedDataExpr(rIss.invertState[r].filter, li.filter)
 				res.AddInvertState(sid, rIss.invertState[r])
 				r++
 				continue
 			}
-			res.AddInvertState(sid, InvertState{
-				timestamp: lIss.invertState[l].timestamp,
-				filter:    newUnionExpr(lIss.invertState[l].filter, rIss.invertState[r].filter)})
-
+			res.AddInvertState(sid, InvertState{rowId: lIss.invertState[l].rowId, filter: newUnionExpr(lIss.invertState[l].filter, rIss.invertState[r].filter)})
 			l++
+			r++
+		}
+
+		for l < len(lIss.invertState) {
+			lIss.invertState[l].filter = newUnionSingleExtendedDataExpr(lIss.invertState[l].filter, ri.filter)
+			res.AddInvertState(sid, lIss.invertState[l])
+			l++
+		}
+
+		for r < len(rIss.invertState) {
+			rIss.invertState[r].filter = newUnionSingleExtendedDataExpr(rIss.invertState[r].filter, li.filter)
+			res.AddInvertState(sid, rIss.invertState[r])
 			r++
 		}
 		delete(ri.invertStates, sid)
 	}
+
 	for sid, rIss := range ri.invertStates {
 		res.invertStates[sid] = NewInvertStatesAndUion(sid, rIss.invertState, li.filter)
 	}
 
-	if li.filter != nil && ri.filter != nil {
-		res.filter = newUnionExpr(li.filter, ri.filter)
-	}
-	if li.filter != nil {
-		res.filter = li.filter
-	} else {
-		res.filter = ri.filter
-	}
+	res.filter = newUnionExtendedDataExpr(li.filter, ri.filter)
 
 	return &res
 }

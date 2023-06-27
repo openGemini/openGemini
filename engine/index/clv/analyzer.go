@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,9 +20,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/clipperhouse/uax29/iterators/filter"
-	"github.com/clipperhouse/uax29/words"
 )
 
 const (
@@ -56,10 +53,11 @@ func (node *dicNode) sort() {
 
 	child := node.child
 	sort.SliceStable(child, func(i, j int) bool {
-		return string(child[i].token) <= string(child[j].token)
+		return child[i].token <= child[j].token
 	})
 }
 
+// find a node with an token equal to the input token
 func (node *dicNode) findNodeByToken(token string) *dicNode {
 	if len(node.child) == 0 {
 		return nil
@@ -69,13 +67,14 @@ func (node *dicNode) findNodeByToken(token string) *dicNode {
 		return token <= node.child[i].token
 	})
 
-	if n == len(node.child) || node.child[n].token != token {
-		return nil
+	if n < len(node.child) && node.child[n].token == token {
+		return node.child[n]
 	}
 
-	return node.child[n]
+	return nil
 }
 
+// find a node with an ID greater than or equal to the input ID
 func (node *dicNode) findNodeById(id uint32) *dicNode {
 	if len(node.child) == 0 {
 		return nil
@@ -85,15 +84,27 @@ func (node *dicNode) findNodeById(id uint32) *dicNode {
 		return id <= node.child[i].id
 	})
 
-	if n == len(node.child) {
-		return nil
+	if n < len(node.child) {
+		return node.child[n]
 	}
 
-	return node.child[n]
+	return nil
+}
+
+type dicMapNode struct {
+	child map[string]*dicMapNode
+	id    uint32
+}
+
+func newDicMapNode() *dicMapNode {
+	return &dicMapNode{
+		child: make(map[string]*dicMapNode, 0),
+	}
 }
 
 type Analyzer struct {
 	dictionary  *dicNode
+	dicMap      *dicMapNode
 	collector   Collector
 	path        string
 	measurement string
@@ -110,15 +121,14 @@ func newAnalyzer(path, measurement, field string, version uint32) *Analyzer {
 	}
 }
 
-func Tokenizer(log string) []string {
+func Tokenizer(log []byte) []string {
 	tokens := make([]string, 0, DefaultCap)
-	tmpLog := strings.ToLower(log)
 
-	seg := words.NewSegmenter([]byte(tmpLog))
-	seg.Filter(filter.Wordlike)
+	tokenizer := NewDefaultSimpleTokenzier()
+	tokenizer.SetData(log)
 
-	for seg.Next() {
-		tokens = append(tokens, seg.Text())
+	for tokenizer.Next() {
+		tokens = append(tokens, string(tokenizer.Token()))
 	}
 
 	return tokens
@@ -141,20 +151,21 @@ func (a *Analyzer) insertToDic(tokens []string) {
 	}
 }
 
-func (a *Analyzer) findLongestTokens(tokens []string) (VToken, int) {
+func (a *Analyzer) findLongestTokens(tokens []string) VToken {
 	var vtoken VToken
-	node := a.dictionary
 	// for default analyzer.
-	if node == nil {
+	if a.dicMap == nil {
 		vtoken.tokens = append(vtoken.tokens, tokens[0])
-		return vtoken, 1
+		return vtoken
 	}
 
 	// for learning-type analyzer
 	var i int
+	node := a.dicMap
+	vtoken.tokens = make([]string, 0, len(tokens))
 	for ; i < len(tokens); i++ {
-		child := node.findNodeByToken(tokens[i])
-		if child == nil {
+		child, ok := node.child[tokens[i]]
+		if !ok {
 			break
 		}
 		node = child
@@ -164,15 +175,13 @@ func (a *Analyzer) findLongestTokens(tokens []string) (VToken, int) {
 
 	if i == 0 {
 		vtoken.tokens = append(vtoken.tokens, tokens[0])
-		i++
 	}
 
-	return vtoken, i
+	return vtoken
 }
 
 func (a *Analyzer) InsertToDictionary(tokens string) {
-	ts := strings.Split(tokens, " ")
-	a.insertToDic(ts)
+	a.insertToDic(strings.Split(tokens, " "))
 }
 
 func (a *Analyzer) sort(node *dicNode) {
@@ -186,14 +195,18 @@ func (a *Analyzer) sort(node *dicNode) {
 	node.sort()
 }
 
-func (a *Analyzer) assignId(id uint32, node *dicNode) uint32 {
+func (a *Analyzer) assignId(id uint32, node *dicNode, dicMapNode *dicMapNode) uint32 {
 	if node == nil {
 		return id
 	}
 
 	for _, child := range node.child {
-		id = a.assignId(id, child)
+		dicMapChild := newDicMapNode()
+		id = a.assignId(id, child, dicMapChild)
 		child.id = id
+
+		dicMapChild.id = child.id
+		dicMapNode.child[child.token] = dicMapChild
 		id++
 	}
 	return id
@@ -206,7 +219,9 @@ func (a *Analyzer) AssignId() error {
 
 	// sort the dictionary.
 	a.sort(a.dictionary)
-	a.assignId(1, a.dictionary)
+
+	a.dicMap = newDicMapNode()
+	a.assignId(1, a.dictionary, a.dicMap)
 
 	return nil
 }
@@ -236,19 +251,22 @@ func (a *Analyzer) FindVtokenByID(id uint32) string {
 	return ""
 }
 
-func (a *Analyzer) Analyze(log string) ([]VToken, error) {
+func (a *Analyzer) Analyze(log []byte) ([]VToken, error) {
 	tokens := Tokenizer(log)
 	if a.collector != nil {
 		a.collector.Collect(tokens)
 	}
 
-	var i int
-	vtokens := make([]VToken, 0)
-	for i < len(tokens) {
-		vtoken, j := a.findLongestTokens(tokens[i:])
+	var last int = 0
+	vtokens := make([]VToken, 0, len(tokens))
+	for i := 0; i < len(tokens); i++ {
+		vtoken := a.findLongestTokens(tokens[i:])
+		if i+len(vtoken.tokens) <= last {
+			continue
+		}
 		vtoken.pos = uint16(i)
 		vtokens = append(vtokens, vtoken)
-		i = i + j
+		last = i + len(vtoken.tokens)
 	}
 
 	return vtokens, nil

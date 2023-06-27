@@ -178,7 +178,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
 	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
 	// init clv
-	clv.Init(conf.ClvConfig)
+	clv.InitConfig(conf.ClvConfig)
 	// init chunkReader resource allocator.
 	if e := resourceallocator.InitResAllocator(int64(conf.Data.ChunkReaderThreshold), int64(conf.Data.MinChunkReaderConcurrency), int64(conf.Data.MinShardsConcurrency),
 		resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0); e != nil {

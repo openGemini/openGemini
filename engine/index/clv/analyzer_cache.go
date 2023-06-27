@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -114,8 +114,8 @@ func (c *analyzerCache) saveAnalyzer(a *Analyzer) {
 		c.analyzers[key] = analyzerInfo
 	}
 
-	for _, a := range analyzerInfo.analyzers {
-		if a.Version() == a.version {
+	for _, bufa := range analyzerInfo.analyzers {
+		if bufa.Version() == a.version {
 			return
 		}
 	}

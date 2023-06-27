@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,18 +17,19 @@ limitations under the License.
 package clv
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/config"
 )
 
 var Qmax = 7
 var T = 100
 var N uint32 = 500000
+var MaxRetry int32 = 3
 
-func Init(cfg *config.ClvConfig) {
+func InitConfig(cfg *config.ClvConfig) {
 	if cfg != nil && cfg.Enabled {
 		Qmax = cfg.QMax
 		T = cfg.T
@@ -74,6 +75,7 @@ type collector struct {
 	lock       sync.RWMutex
 	collectNum uint32
 	status     int32
+	retry      int32
 
 	path        string
 	measurement string
@@ -165,7 +167,7 @@ func (d *collector) genItemsFromCollectTree(node *collectNode, tokensCount int, 
 	for token, child := range node.children {
 		var tokens []byte
 		tokens = append(tokens, vtoken...)
-		tokens = append(tokens, []byte(token)...)
+		tokens = append(tokens, token...)
 		tokens = append(tokens, ' ')
 		d.genItemsFromCollectTree(child, tokensCount, tokens, dicItems)
 	}
@@ -192,12 +194,24 @@ func (d *collector) saveDictionary() {
 	defer d.lock.Unlock()
 
 	d.prune(T)
-	err := d.saveDictionaryToMergeset()
-	if err != nil {
-		panic(fmt.Errorf("save the dictionary failed, err: %+v", err))
+
+	var i int32
+	var err error
+	for i = 0; i < MaxRetry; i++ {
+		err = d.saveDictionaryToMergeset()
+		if err == nil {
+			break
+		}
+	}
+	if err == nil || d.retry == MaxRetry {
+		d.StopCollect()
+		d.retry = 0
+	} else {
+		logger.Infof("restart to start collct dictionary, because err: %+v, retry:%d", err, d.retry)
+		d.retry++
+		d.StartCollect()
 	}
 	d.root = nil
-	d.StopCollect()
 }
 
 func (d *collector) IsStopped() bool {
