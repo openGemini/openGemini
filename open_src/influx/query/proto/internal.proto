@@ -135,7 +135,7 @@ message RemoteQuery {
     bool analyze    = 6;
     bytes QueryNode = 7;
     uint64 QueryId  = 8;
-    string SQL      = 9;
+    string QueryStmt= 9;
 }
 
 enum AggType

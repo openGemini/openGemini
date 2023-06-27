@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
@@ -24,7 +25,7 @@ const (
 	// DefaultQueryTimeout is the default timeout for executing a query.
 	// A value of zero will have no query timeout.
 	DefaultQueryTimeout = time.Duration(0)
-	IdSpan              = 100000
+	QueryIdSpan         = 100000
 )
 
 type TaskStatus int
@@ -181,23 +182,19 @@ func (t *TaskManager) queryError(qid uint64, err error) {
 //
 // After a query finishes running, the system is free to reuse a query id.
 func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, interrupt <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics) (*ExecutionContext, func(), error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock() // RLock
+	isShutDown := t.shutdown
+	curQueriesCount := len(t.queries)
+	t.mu.RUnlock() //RUnlock
 
-	if t.shutdown {
+	if isShutDown {
 		return nil, nil, ErrQueryEngineShutdown
 	}
-
-	if t.MaxConcurrentQueries > 0 && len(t.queries) >= t.MaxConcurrentQueries {
+	if t.MaxConcurrentQueries > 0 && curQueriesCount >= t.MaxConcurrentQueries {
 		return nil, nil, ErrMaxConcurrentQueriesLimitExceeded(len(t.queries), t.MaxConcurrentQueries)
 	}
 
-	qid, err := t.AssignQueryID()
-	if err != nil {
-		t.Logger.Error(fmt.Sprintf("assign query id faild, current id range: (%d, %d), all id are using : %s", t.queryIDOffset, t.queryIDUpperLimit, err))
-		return nil, nil, err
-	}
-
+	qid := t.AssignQueryID() // atomic
 	query := &Task{
 		query:     q.String(),
 		database:  opt.Database,
@@ -206,7 +203,10 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 		closing:   make(chan struct{}),
 		monitorCh: make(chan error),
 	}
+
+	t.mu.Lock() // WLock
 	t.queries[qid] = query
+	t.mu.Unlock() // WUnlock
 
 	go t.waitForQuery(qid, query.closing, interrupt, query.monitorCh)
 	if t.LogQueriesAfter != 0 {
@@ -226,7 +226,7 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 
 	qCtx := context.Background()
 	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
-	qCtx = context.WithValue(qCtx, SQLKey, q.String())
+	qCtx = context.WithValue(qCtx, QueryStmt, q.String())
 	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)
 	ctx := &ExecutionContext{
 		Context:          qCtx,
@@ -341,56 +341,14 @@ func (t *TaskManager) Statistics(buffer []byte) ([]byte, error) {
 }
 
 func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
-	t.nextID = offset + 1
+	t.nextID = offset
 	t.queryIDOffset = offset
-	t.queryIDUpperLimit = offset + IdSpan
+	t.queryIDUpperLimit = offset + QueryIdSpan
 }
 
 // AssignQueryID assign a query id for a sql
-func (t *TaskManager) AssignQueryID() (uint64, error) {
-	var qid uint64
-	var err error
-	// Why we can't just use t.nextID, but use for range ?
-	// Think this case:
-	// There is coming a new query: "select xxx", and t.nextID = 2
-	// If the reuseQueryIDFromBeginning() has been executed once.
-	// So it may like this :
-	// t.queries = {
-	//					2     : &Task{"select aaa",...},
-	//					3     : &Task{"select bbb",...},
-	//					999999: &Task{"select ccc",...},
-	//				}
-	// We can't assign 2 to the new query, but find 4.
-	for qid = t.nextID; qid < t.queryIDUpperLimit; qid++ {
-		if _, ok := t.queries[qid]; !ok {
-			t.nextID = qid + 1
-			return qid, nil
-		}
-	}
-	// If we can assign a qid in [t.nextID, t.queryIDUpperLimit], try to reuseQueryIDFromBeginning.
-	// Like this:
-	// t.next = 2
-	// t.queries = {
-	//					2     : &Task{"select aaa",...},
-	//					3     : &Task{"select bbb",...},
-	//					.......
-	//					999999: &Task{"select ccc",...},
-	//				}
-	// We need find 1
-	if qid, err = t.reuseQueryIDFromBeginning(); err != nil {
-		return 0, err
-	}
-	t.nextID = qid + 1
-	return qid, nil
-}
-
-// reuseQueryIDFromBeginning Used to find available qid from the beginning of (queryIDOffset,queryIDUpperLimit)
-func (t *TaskManager) reuseQueryIDFromBeginning() (uint64, error) {
-	// find a free query id from queryIDOffset to queryIDUpperLimit
-	for resID := t.queryIDOffset + 1; resID < t.queryIDUpperLimit; resID++ {
-		if _, ok := t.queries[resID]; !ok {
-			return resID, nil
-		}
-	}
-	return 0, ErrQueryIDExhausted
+func (t *TaskManager) AssignQueryID() uint64 {
+	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
+	qid := atomic.AddUint64(&t.nextID, 1)
+	return qid
 }

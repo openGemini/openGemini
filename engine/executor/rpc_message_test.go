@@ -78,10 +78,10 @@ func makeRemoteQueryMsg(nodeID uint64) *executor.RemoteQuery {
 			EnableBinaryTreeMerge: 0,
 			HintType:              0,
 		},
-		Analyze: false,
-		Node:    []byte{1, 2, 3, 4, 5, 6, 7},
-		QueryId: 100001,
-		SQL:     "SELECT * FROM mst1 limit 10",
+		Analyze:   false,
+		Node:      []byte{1, 2, 3, 4, 5, 6, 7},
+		QueryId:   100001,
+		QueryStmt: "SELECT * FROM mst1 limit 10",
 	}
 }
 

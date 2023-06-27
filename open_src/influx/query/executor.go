@@ -66,7 +66,7 @@ const (
 
 	QueryIDKey = "QueryID"
 
-	SQLKey = "SQL"
+	QueryStmt = "QueryStmt"
 )
 
 // ErrDatabaseNotFound returns a database not found error for the given database name.

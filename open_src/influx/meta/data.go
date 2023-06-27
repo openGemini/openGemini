@@ -873,7 +873,7 @@ func (data *Data) CloneQueryIDInit() map[string]uint64 {
 		return nil
 	}
 	cloneIdInit := make(map[string]uint64, len(data.QueryIDInit))
-	for host, _ := range data.QueryIDInit {
+	for host := range data.QueryIDInit {
 		cloneIdInit[host] = data.QueryIDInit[host]
 	}
 	return cloneIdInit
