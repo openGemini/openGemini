@@ -227,11 +227,7 @@ func (s *Server) Open() error {
 
 	host := s.config.HTTP.BindAddress
 	// Register query id offset in meta node
-	if err := s.MetaClient.RegisterQueryIDOffset(host); err != nil {
-		return err
-	}
-	// save query id offset in TaskManager to assign query id
-	if offset, err := s.MetaClient.GetQueryIDOffset(host); err != nil {
+	if offset, err := s.MetaClient.RegisterQueryIDOffset(host); err != nil {
 		return err
 	} else {
 		s.httpService.Handler.QueryExecutor.TaskManager.InitQueryIDByOffset(offset)

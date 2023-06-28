@@ -709,7 +709,10 @@ func (fsm *storeFSM) applyVerifyDataNodeCommand(cmd *proto2.Command) interface{}
 
 func (fsm *storeFSM) applyRegisterQueryIDOffsetCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command)
-	v := ext.(*proto2.RegisterQueryIDOffsetCommand)
+	v, ok := ext.(*proto2.RegisterQueryIDOffsetCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a RegisterQueryIDOffsetCommand", ext))
+	}
 	err := fsm.data.RegisterQueryIDOffset(v.GetHost())
 	return err
 }

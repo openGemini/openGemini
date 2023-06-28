@@ -883,6 +883,7 @@ func TestClient_RegisterQueryIDOffset(t *testing.T) {
 		fields  fields
 		args    args
 		wantErr bool
+		want    uint64
 	}{
 		{
 			name: "TimeOut",
@@ -916,9 +917,9 @@ func TestClient_RegisterQueryIDOffset(t *testing.T) {
 				cacheData:   tt.fields.cacheData,
 				logger:      tt.fields.logger,
 			}
-			if err := c.RegisterQueryIDOffset(tt.args.host); (err != nil) != tt.wantErr {
+			if _, err := c.RegisterQueryIDOffset(tt.args.host); (err != nil) != tt.wantErr {
 				t.Errorf("RegisterQueryIDOffset() error = %v, wantErr %v", err, tt.wantErr)
-				require.EqualError(t, err, "execute command timeout")
+				require.EqualError(t, err, "register query id offset timeout")
 			}
 		})
 	}

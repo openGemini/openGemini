@@ -242,9 +242,9 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 // from the TaskManager. This method can be used to forcefully terminate a
 // running query.
 func (t *TaskManager) KillQuery(qid uint64) error {
-	t.mu.Lock()
+	t.mu.RLock()
 	query := t.queries[qid]
-	t.mu.Unlock()
+	t.mu.RUnlock()
 
 	if query == nil {
 		return fmt.Errorf("no such query id: %d", qid)

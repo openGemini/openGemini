@@ -204,8 +204,7 @@ type MetaClient interface {
 	ShowStreams(database string, showAll bool) (models.Rows, error)
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	RegisterQueryIDOffset(host string) error
-	GetQueryIDOffset(host string) (uint64, error)
+	RegisterQueryIDOffset(host string) (uint64, error)
 }
 
 type LoadCtx struct {
@@ -3023,24 +3022,66 @@ func (c *Client) Suicide(err error) {
 	}
 }
 
-// RegisterQueryIDOffset send a register rpc to ts-meta，request a query id offset
-func (c *Client) RegisterQueryIDOffset(host string) error {
-	if _, ok := c.cacheData.QueryIDInit[host]; ok {
-		c.logger.Warn("current host has already registered in ts-meta")
-		return nil
-	}
-	cmd := &proto2.RegisterQueryIDOffsetCommand{Host: proto.String(host)}
-	err := c.retryUntilExec(proto2.Command_RegisterQueryIDOffsetCommand, proto2.E_RegisterQueryIDOffsetCommand_Command, cmd)
-	return err
+func (c *Client) RegisterQueryIDOffset(host string) (uint64, error) {
+	return c.RetryRegisterQueryIDOffset(host)
 }
 
-// GetQueryIDOffset return current ts-sql node's query id offset
-func (c *Client) GetQueryIDOffset(host string) (uint64, error) {
-	if offset, ok := c.cacheData.QueryIDInit[host]; !ok {
-		return 0, fmt.Errorf("unregisterd query range offset in meta")
-	} else {
-		return offset, nil
+// RetryRegisterQueryIDOffset send a register rpc to ts-meta，request a query id offset
+func (c *Client) RetryRegisterQueryIDOffset(host string) (uint64, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var offset uint64
+	var ok bool
+	var err error
+
+	for {
+		c.mu.RLock()
+
+		if offset, ok = c.cacheData.QueryIDInit[host]; ok {
+			c.logger.Info("current host has already registered in ts-meta")
+			c.mu.RUnlock()
+			return offset, nil
+		}
+
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return 0, meta2.ErrClientClosed
+		default:
+			// we're still open, continue on
+		}
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+
+		offset, err = c.registerOffset(currentServer, host)
+		if err == nil {
+			return offset, nil
+		}
+
+		if strings.Contains(err.Error(), "node is not the leader") {
+			continue
+		}
+
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			return 0, errors.New("register query id offset timeout")
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
 	}
+}
+
+func (c *Client) registerOffset(currentServer int, host string) (uint64, error) {
+	callback := &RegisterQueryIDOffsetCallback{}
+	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{
+		Host: host})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return 0, err
+	}
+	return callback.Offset, nil
 }
 
 func refreshConnectedServer(currentServer int) {

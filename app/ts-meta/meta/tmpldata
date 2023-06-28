@@ -11,5 +11,6 @@
 	"GetRpMstInfos",
 	"GetUserInfo",
 	"GetStreamInfo",
-	"GetMeasurementInfo"
+	"GetMeasurementInfo",
+ 	"RegisterQueryIDOffset"
 ]

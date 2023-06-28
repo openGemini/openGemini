@@ -379,3 +379,14 @@ func (h *GetMeasurementInfo) Process() (transport.Codec, error) {
 	rsp.Data = b
 	return rsp, nil
 }
+
+func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
+	rsp := &message.RegisterQueryIDOffsetResponse{}
+	offset, err := h.store.registerQueryIDOffset(h.req.Host)
+	if err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.Offset = offset
+	return rsp, nil
+}

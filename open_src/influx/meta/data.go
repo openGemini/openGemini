@@ -30,7 +30,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"math"
 	"net"
 	"net/url"
 	"sort"
@@ -66,9 +65,6 @@ const (
 
 	// QueryIDSpan is the default id range span.
 	QueryIDSpan = 100000
-
-	//MaxAssignableNum is the maximum number of offsets that ts-meta can distribute to ts-sql.
-	MaxAssignableNum = math.MaxUint64 / QueryIDSpan
 )
 
 const (
@@ -2811,14 +2807,14 @@ func (data *Data) RegisterQueryIDOffset(host string) error {
 		data.QueryIDInit = make(map[string]uint64)
 	}
 
-	currentAssignedNum := len(data.QueryIDInit)
-	if currentAssignedNum >= MaxAssignableNum {
-		return errno.NewError(errno.QueryIDOverflow)
+	if _, ok := data.QueryIDInit[host]; ok {
+		return nil
 	}
 
-	nextOffset := uint64(currentAssignedNum * QueryIDSpan)
+	currentAssignedNum := len(data.QueryIDInit)
+	newOffset := uint64(currentAssignedNum * QueryIDSpan)
 
-	data.QueryIDInit[host] = nextOffset
+	data.QueryIDInit[host] = newOffset
 
 	return nil
 }

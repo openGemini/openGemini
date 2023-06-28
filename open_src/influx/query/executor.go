@@ -51,9 +51,6 @@ var (
 
 	// ErrAlreadyKilled is returned when attempting to kill a query that has already been killed.
 	ErrAlreadyKilled = errors.New("already killed")
-
-	// ErrQueryIDExhausted is returned when task manager assign a new query id that overflow range
-	ErrQueryIDExhausted = errors.New("query id exhausted")
 )
 
 // Statistics for the Executor

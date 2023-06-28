@@ -55,6 +55,8 @@ func New(typ uint8) RPCHandler {
 		return &GetStreamInfo{}
 	case message.GetMeasurementInfoRequestMessage:
 		return &GetMeasurementInfo{}
+	case message.RegisterQueryIDOffsetRequestMessage:
+		return &RegisterQueryIDOffset{}
 	default:
 		return nil
 	}
@@ -214,6 +216,7 @@ func (h *GetShardInfo) Instance() RPCHandler {
 
 type GetDownSampleInfo struct {
 	BaseHandler
+
 	req *message.GetDownSampleInfoRequest
 }
 
@@ -232,6 +235,7 @@ func (h *GetDownSampleInfo) Instance() RPCHandler {
 
 type GetRpMstInfos struct {
 	BaseHandler
+
 	req *message.GetRpMstInfosRequest
 }
 
@@ -243,6 +247,7 @@ func (h *GetRpMstInfos) SetRequestMsg(data transport.Codec) error {
 	h.req = msg
 	return nil
 }
+
 func (h *GetRpMstInfos) Instance() RPCHandler {
 	return &GetRpMstInfos{}
 }
@@ -302,4 +307,23 @@ func (h *GetMeasurementInfo) SetRequestMsg(data transport.Codec) error {
 
 func (h *GetMeasurementInfo) Instance() RPCHandler {
 	return &GetMeasurementInfo{}
+}
+
+type RegisterQueryIDOffset struct {
+	BaseHandler
+
+	req *message.RegisterQueryIDOffsetRequest
+}
+
+func (h *RegisterQueryIDOffset) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.RegisterQueryIDOffsetRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.RegisterQueryIDOffsetRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *RegisterQueryIDOffset) Instance() RPCHandler {
+	return &RegisterQueryIDOffset{}
 }

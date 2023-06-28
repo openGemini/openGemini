@@ -209,3 +209,12 @@ type GetMeasurementInfoResponse struct {
 	Data []byte
 	Err  string
 }
+
+type RegisterQueryIDOffsetRequest struct {
+	Host string
+}
+
+type RegisterQueryIDOffsetResponse struct {
+	Offset uint64
+	Err    string
+}
