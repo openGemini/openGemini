@@ -51,6 +51,8 @@ var (
 
 	// ErrAlreadyKilled is returned when attempting to kill a query that has already been killed.
 	ErrAlreadyKilled = errors.New("already killed")
+
+	ErrQueryIDOffsetNotInit = errors.New("query id offset has not been initialized, please try again")
 )
 
 // Statistics for the Executor

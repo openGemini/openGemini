@@ -158,6 +158,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.QueryExecutor.TaskManager.QueryTimeout = time.Duration(c.Coordinator.QueryTimeout)
 	s.QueryExecutor.TaskManager.LogQueriesAfter = time.Duration(c.Coordinator.LogQueriesAfter)
 	s.QueryExecutor.TaskManager.MaxConcurrentQueries = c.Coordinator.MaxConcurrentQueries
+	s.QueryExecutor.TaskManager.Register = s.MetaClient
+	s.QueryExecutor.TaskManager.Host = c.HTTP.BindAddress
 
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
@@ -224,14 +226,6 @@ func (s *Server) Open() error {
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
-
-	host := s.config.HTTP.BindAddress
-	// Register query id offset in meta node
-	if offset, err := s.MetaClient.RegisterQueryIDOffset(host); err != nil {
-		return err
-	} else {
-		s.httpService.Handler.QueryExecutor.TaskManager.InitQueryIDByOffset(offset)
-	}
 
 	if err := s.castorService.Open(); err != nil {
 		return err

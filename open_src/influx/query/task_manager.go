@@ -68,6 +68,10 @@ func (t *TaskStatus) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type QueryIDRegister interface {
+	RegisterQueryIDOffset(host string) (uint64, error)
+}
+
 // TaskManager takes care of all aspects related to managing running queries.
 type TaskManager struct {
 	// Query execution timeout.
@@ -89,6 +93,10 @@ type TaskManager struct {
 	queryIDOffset     uint64
 	queryIDUpperLimit uint64
 	queries           map[uint64]*Task
+	registerOnce      atomic.Bool
+	registered        bool
+	Register          QueryIDRegister
+	Host              string
 
 	mu       sync.RWMutex
 	shutdown bool
@@ -194,7 +202,16 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 		return nil, nil, ErrMaxConcurrentQueriesLimitExceeded(len(t.queries), t.MaxConcurrentQueries)
 	}
 
-	qid := t.AssignQueryID() // atomic
+	// only the first query can try to register query id offset
+	if err := t.tryRegisterQueryIDOffset(); err != nil {
+		return nil, nil, err
+	}
+
+	qid, err := t.AssignQueryID() // atomic
+	if err != nil {
+		return nil, nil, err
+	}
+
 	query := &Task{
 		query:     q.String(),
 		database:  opt.Database,
@@ -265,6 +282,24 @@ func (t *TaskManager) DetachQuery(qid uint64) error {
 
 	query.close()
 	delete(t.queries, qid)
+	return nil
+}
+
+func (t *TaskManager) tryRegisterQueryIDOffset() error {
+	// Ensure that only one goroutine can register.
+	// And if registration is failed，it will restore the initial state for other query goroutines
+	if t.registerOnce.CompareAndSwap(false, true) {
+		offset, err := t.Register.RegisterQueryIDOffset(t.Host)
+		if err != nil {
+			// If register failed，restore the initial state
+			t.registerOnce.Store(false)
+			return err
+		}
+
+		t.InitQueryIDByOffset(offset)
+		// update registered state to allow assign query id
+		t.registered = true
+	}
 	return nil
 }
 
@@ -347,8 +382,12 @@ func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
 }
 
 // AssignQueryID assign a query id for a sql
-func (t *TaskManager) AssignQueryID() uint64 {
+func (t *TaskManager) AssignQueryID() (uint64, error) {
+	// Ensure that if the registration is not completed, cannot assign id to every query.
+	if !t.registered {
+		return 0, ErrQueryIDOffsetNotInit
+	}
 	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
 	qid := atomic.AddUint64(&t.nextID, 1)
-	return qid
+	return qid, nil
 }
