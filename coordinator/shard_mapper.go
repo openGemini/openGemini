@@ -538,7 +538,7 @@ func (csm *ClusterShardMapping) makeRemoteQuery(ctx context.Context, src influxq
 	transport.NewNodeManager().Add(nodeID, node.TCPHost)
 	rq := &executor.RemoteQuery{
 		QueryId:   ctx.Value(query.QueryIDKey).(uint64),
-		QueryStmt: ctx.Value(query.QueryStmt).(string),
+		QueryStmt: ctx.Value(query.QueryStmtKey).(string),
 		Database:  m.Database,
 		PtID:      ptID,
 		NodeID:    nodeID,

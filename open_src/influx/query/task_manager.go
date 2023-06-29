@@ -226,7 +226,7 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 
 	qCtx := context.Background()
 	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
-	qCtx = context.WithValue(qCtx, QueryStmt, q.String())
+	qCtx = context.WithValue(qCtx, QueryStmtKey, q.String())
 	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)
 	ctx := &ExecutionContext{
 		Context:          qCtx,

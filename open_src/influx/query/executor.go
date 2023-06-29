@@ -58,12 +58,16 @@ const (
 	// PanicCrashEnv is the environment variable that, when set, will prevent
 	// the handler from recovering any panics.
 	PanicCrashEnv = "INFLUXDB_PANIC_CRASH"
+)
 
-	QueryDurationKey = "QueryDuration"
+type qCtxKey uint8
 
-	QueryIDKey = "QueryID"
+const (
+	QueryDurationKey qCtxKey = iota
 
-	QueryStmt = "QueryStmt"
+	QueryIDKey
+
+	QueryStmtKey
 )
 
 // ErrDatabaseNotFound returns a database not found error for the given database name.
