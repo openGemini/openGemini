@@ -84,7 +84,7 @@ func (r *mockRegister1) RetryRegisterQueryIDOffset(host string) (uint64, error) 
 
 func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	t := &TaskManager{
-		registerOnce: atomic.Uint32{},
+		registerOnce: 0,
 		Register:     &mockRegister1{},
 		Logger:       zap.NewNop(),
 		registered:   false,
@@ -106,7 +106,7 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	}
 	a.Wait()
 	assert.Equal(t1, count1, int32(99))
-	assert.Equal(t1, t.registerOnce.Load(), uint32(1))
+	assert.Equal(t1, atomic.LoadUint32(&t.registerOnce), uint32(1))
 	assert.Equal(t1, t.registered, true)
 	assert.Equal(t1, t.nextID, uint64(100001))
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
@@ -127,7 +127,7 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	}
 	b.Wait()
 	assert.Equal(t1, count2, int32(0))
-	assert.Equal(t1, t.registerOnce.Load(), uint32(1))
+	assert.Equal(t1, atomic.LoadUint32(&t.registerOnce), uint32(1))
 	assert.Equal(t1, t.registered, true)
 	assert.Equal(t1, t.nextID, t.queryIDOffset+1+100)
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
