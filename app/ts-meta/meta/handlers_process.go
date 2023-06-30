@@ -379,3 +379,13 @@ func (h *GetMeasurementInfo) Process() (transport.Codec, error) {
 	rsp.Data = b
 	return rsp, nil
 }
+
+func (h *Sql2MetaHeartbeat) Process() (transport.Codec, error) {
+	rsp := &message.Sql2MetaHeartbeatResponse{}
+	err := h.store.applySql2MetaHeartbeat(h.req.Host)
+	if err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	return rsp, nil
+}

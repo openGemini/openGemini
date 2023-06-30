@@ -866,3 +866,61 @@ func (o *GetStreamInfoResponse) Size() int {
 func (o *GetStreamInfoResponse) Instance() transport.Codec {
 	return &GetStreamInfoResponse{}
 }
+
+func (o *Sql2MetaHeartbeatRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, o.Host)
+
+	return buf, err
+}
+
+func (o *Sql2MetaHeartbeatRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Host = dec.String()
+
+	return err
+}
+
+func (o *Sql2MetaHeartbeatRequest) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.Host)
+
+	return size
+}
+
+func (o *Sql2MetaHeartbeatRequest) Instance() transport.Codec {
+	return &Sql2MetaHeartbeatRequest{}
+}
+
+func (o *Sql2MetaHeartbeatResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *Sql2MetaHeartbeatResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *Sql2MetaHeartbeatResponse) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *Sql2MetaHeartbeatResponse) Instance() transport.Codec {
+	return &Sql2MetaHeartbeatResponse{}
+}

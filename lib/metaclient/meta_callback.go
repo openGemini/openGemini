@@ -319,3 +319,22 @@ func (c *GetMeasurementInfoCallback) Handle(data interface{}) error {
 	c.Data = msg.Data
 	return nil
 }
+
+type Sql2MetaHeartbeatCallback struct {
+	BaseCallback
+}
+
+func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.Sql2MetaHeartbeatResponse)
+	if !ok {
+		return fmt.Errorf("data is not a Sql2MetaHeartbeatResponse, type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	return nil
+}

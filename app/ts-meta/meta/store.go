@@ -1374,6 +1374,13 @@ func (s *Store) getMeasurementInfo(dbName, rpName, mstName string) ([]byte, erro
 	return mst.MarshalBinary()
 }
 
+func (s *Store) applySql2MetaHeartbeat(host string) error {
+	if !s.IsLeader() {
+		return raft.ErrNotLeader
+	}
+	return nil
+}
+
 func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
 	ext, _ := proto.GetExtension(cmd, mproto.E_TimeRangeCommand_Command)
 	v := ext.(*mproto.TimeRangeCommand)
