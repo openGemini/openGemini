@@ -67,6 +67,8 @@ const (
 
 	// HeartbeatToleranceDuration represents ts-sql heartbeat tolerance duration for crash
 	HeartbeatToleranceDuration = 5 * time.Second
+
+	detectTSSqlCrashInterval = time.Second
 )
 
 // Raft configuration.
@@ -508,9 +510,10 @@ func (s *Store) Open(raftln net.Listener) error {
 		return err
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.serveSnapshot()
 	go s.checkLeaderChanged()
+	go s.detectSqlNodeCrash()
 
 	return nil
 }
@@ -1416,6 +1419,48 @@ func (s *Store) updateSqlNode(host string, ts time.Time) error {
 	s.SqlNodes[host] = &SqlNodeInfo{
 		LastHeartbeat: element,
 		Cqs:           nil,
+	}
+	return nil
+}
+
+func (s *Store) detectSqlNodeCrash() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(detectTSSqlCrashInterval)
+	for {
+		select {
+		case <-s.closing:
+			return
+		case <-ticker.C:
+			if err := s.detectCrash(); err != nil {
+				s.Logger.Error("detect ts-sql whether crashed or not, error", zap.Error(err))
+			}
+		}
+	}
+}
+
+// Detect all ts-sql whether crashed or not.
+func (s *Store) detectCrash() error {
+	s.sqlMu.RLock()
+	defer s.sqlMu.RUnlock()
+
+	var hbi *list.Element
+	if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
+		return nil
+	}
+
+	for {
+		if time.Since(hbi.Value.(*HeartbeatInfo).LastHeartbeatTime) >= HeartbeatToleranceDuration {
+			// delete SqlNodeInfo.
+			delete(s.SqlNodes, hbi.Value.(*HeartbeatInfo).Host)
+			// delete HeartbeatInfo.
+			s.HeartbeatInfoList.Remove(hbi)
+
+			if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
+				return nil
+			}
+			continue
+		}
+		break
 	}
 	return nil
 }
