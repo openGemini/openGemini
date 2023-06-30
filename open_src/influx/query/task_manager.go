@@ -96,10 +96,13 @@ type TaskManager struct {
 	queryIDOffset     uint64
 	queryIDUpperLimit uint64
 	queries           map[uint64]*Task
-	registerOnce      atomic.Uint32
-	registered        bool
-	Register          QueryIDRegister
-	Host              string
+
+	// It is used to ensure that the registration of current sql node will only be successfully executed once.
+	registerOnce atomic.Uint32
+	// It is used to indicate whether the current registration of current sql node has been completed.
+	registered bool
+	Register   QueryIDRegister
+	Host       string
 
 	mu       sync.RWMutex
 	shutdown bool
