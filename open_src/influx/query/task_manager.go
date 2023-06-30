@@ -98,7 +98,7 @@ type TaskManager struct {
 	queries           map[uint64]*Task
 
 	// It is used to ensure that the registration of current sql node will only be successfully executed once.
-	registerOnce atomic.Uint32
+	registerOnce uint32
 	// It is used to indicate whether the current registration of current sql node has been completed.
 	registered bool
 	Register   QueryIDRegister
@@ -289,11 +289,11 @@ func (t *TaskManager) DetachQuery(qid uint64) error {
 func (t *TaskManager) tryRegisterQueryIDOffset() {
 	// Ensure that only one goroutine can register.
 	// And if registration is failed，it will restore the initial state for other query goroutines
-	if t.registerOnce.CompareAndSwap(0, 1) {
+	if atomic.CompareAndSwapUint32(&t.registerOnce, 0, 1) {
 		offset, err := t.Register.RetryRegisterQueryIDOffset(t.Host)
 		if err != nil {
 			// If register failed，restore the initial state
-			t.registerOnce.Store(0)
+			atomic.StoreUint32(&t.registerOnce, 0)
 			t.Logger.Error(fmt.Sprintf("register query id offset to meta filed : %s", err))
 			return
 		}
