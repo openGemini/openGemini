@@ -81,7 +81,6 @@ const (
 	IndexGroupDeletedExpiration = -2 * 7 * 24 * time.Hour
 
 	RPCReqTimeout       = 10 * time.Second
-	HttpReqTimeout      = 10 * time.Second
 	HttpSnapshotTimeout = 4 * time.Second
 
 	//for lock user
@@ -110,6 +109,7 @@ var (
 	RetryGetUserInfoTimeout = 5 * time.Second
 	RetryExecTimeout        = 60 * time.Second
 	RetryReportTimeout      = 60 * time.Second
+	HttpReqTimeout          = 10 * time.Second
 )
 
 var DefaultTypeMapper = influxql.MultiTypeMapper(

@@ -1220,20 +1220,22 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 		host SQLHost
 	}
 	tests := []struct {
-		name    string
-		fields  fields
-		args    args
-		wantErr assert2.ErrorAssertionFunc
-		want    uint64
+		name   string
+		fields fields
+		args   args
+		want   uint64
 	}{
 		{
 			name:   "Success",
 			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": 100000}},
 			args:   args{host: "127.0.0.1:7890"},
-			wantErr: func(t assert2.TestingT, err error, i ...interface{}) bool {
-				return err == nil
-			},
-			want: 200000,
+			want:   200000,
+		},
+		{
+			name:   "DuplicateRegister",
+			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0}},
+			args:   args{host: "127.0.0.1:1234"},
+			want:   0,
 		},
 	}
 	for _, tt := range tests {
@@ -1241,10 +1243,9 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 			data := &Data{
 				QueryIDInit: tt.fields.QueryIDInit,
 			}
-			if !tt.wantErr(t, data.RegisterQueryIDOffset(tt.args.host), fmt.Sprintf("RetryRegisterQueryIDOffset(%v)", tt.args.host)) {
-				t.Fatal()
-			}
-			assert(data.QueryIDInit[tt.args.host] == tt.want, "err")
+			err := data.RegisterQueryIDOffset(tt.args.host)
+			assert2.NoError(t, err)
+			assert(data.QueryIDInit[tt.args.host] == tt.want, "register failed")
 		})
 	}
 }

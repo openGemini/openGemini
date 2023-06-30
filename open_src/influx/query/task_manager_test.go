@@ -74,11 +74,10 @@ func TestTaskManager_AssignQueryID(t1 *testing.T) {
 	}
 }
 
-type mockRegister1 struct {
-}
+type mockRegister1 struct{}
 
 func (r *mockRegister1) RetryRegisterQueryIDOffset(host string) (uint64, error) {
-	time.Sleep(2 * time.Second)
+	time.Sleep(200 * time.Millisecond)
 	return 100000, nil
 }
 
@@ -91,6 +90,8 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	}
 
 	// Concurrent registration
+	// only 1 can call RetryRegisterQueryIDOffset()
+	// other 99 will get the initQueryID
 	var count1 int32
 	a := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {
@@ -111,7 +112,9 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	assert.Equal(t1, t.nextID, uint64(100001))
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
 
-	// Registration completed, simulate concurrent assign id
+	// Now, registration is completed，simulate concurrent assign id
+	// all 100 goroutines can not call RetryRegisterQueryIDOffset(),
+	// but they can normally assign id
 	var count2 int32
 	b := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {
@@ -131,15 +134,4 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	assert.Equal(t1, t.registered, true)
 	assert.Equal(t1, t.nextID, t.queryIDOffset+1+100)
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
-
-	c := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
-		c.Add(1)
-		go func() {
-			defer c.Done()
-			t.AssignQueryID()
-		}()
-	}
-	c.Wait()
-	assert.Equal(t1, t.nextID, t.queryIDOffset+1+100+100)
 }

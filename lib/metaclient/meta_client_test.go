@@ -33,6 +33,7 @@ func init() {
 	RetryGetUserInfoTimeout = 1 * time.Second
 	RetryExecTimeout = 1 * time.Second
 	RetryReportTimeout = 1 * time.Second
+	HttpReqTimeout = 1 * time.Second
 }
 
 type RPCServer struct {
@@ -896,18 +897,20 @@ func TestClient_RetryRegisterQueryIDOffset(t *testing.T) {
 			},
 			args:    args{host: "127.0.0.1:8086"},
 			wantErr: true,
+			want:    0,
 		},
 		{
 			name: "DuplicateRegistration",
 			fields: fields{
 				metaServers: []string{"127.0.0.1:8092"},
 				cacheData: &meta2.Data{
-					QueryIDInit: map[meta2.SQLHost]uint64{"127.0.0.1:8086": 0},
+					QueryIDInit: map[meta2.SQLHost]uint64{"127.0.0.1:8086": 100000},
 				},
 				logger: logger.NewLogger(errno.ModuleMetaClient),
 			},
 			args:    args{"127.0.0.1:8086"},
 			wantErr: false,
+			want:    100000,
 		},
 	}
 	for _, tt := range tests {
@@ -917,10 +920,12 @@ func TestClient_RetryRegisterQueryIDOffset(t *testing.T) {
 				cacheData:   tt.fields.cacheData,
 				logger:      tt.fields.logger,
 			}
-			if _, err := c.RetryRegisterQueryIDOffset(tt.args.host); (err != nil) != tt.wantErr {
-				t.Errorf("RetryRegisterQueryIDOffset() error = %v, wantErr %v", err, tt.wantErr)
+
+			offset, err := c.RetryRegisterQueryIDOffset(tt.args.host)
+			if tt.wantErr {
 				require.EqualError(t, err, "register query id offset timeout")
 			}
+			require.Equal(t, offset, tt.want)
 		})
 	}
 }

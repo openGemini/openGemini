@@ -386,7 +386,6 @@ func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
 func (t *TaskManager) AssignQueryID() uint64 {
 	// Ensure that if the registration is not completed, cannot assign id to every query.
 	if !t.registered {
-		t.Logger.Info(fmt.Sprintf("Assign 'InitID=%d' because query id offset is unregistered", initQueryID))
 		return initQueryID
 	}
 	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
