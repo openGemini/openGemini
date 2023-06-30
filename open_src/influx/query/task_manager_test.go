@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"go.uber.org/zap"
 )
 
 func TestTaskManager_AssignQueryID(t1 *testing.T) {
@@ -65,7 +66,7 @@ func TestTaskManager_AssignQueryID(t1 *testing.T) {
 				nextID:            tt.fields.nextID,
 				registered:        true,
 			}
-			got, _ := t.AssignQueryID()
+			got := t.AssignQueryID()
 			if got != tt.want {
 				t1.Errorf("AssignQueryID() got = %v, want %v", got, tt.want)
 			}
@@ -73,18 +74,20 @@ func TestTaskManager_AssignQueryID(t1 *testing.T) {
 	}
 }
 
-type mockRegister struct {
+type mockRegister1 struct {
 }
 
-func (r *mockRegister) RegisterQueryIDOffset(host string) (uint64, error) {
+func (r *mockRegister1) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	time.Sleep(2 * time.Second)
 	return 100000, nil
 }
 
 func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	t := &TaskManager{
-		registerOnce: atomic.Bool{},
-		Register:     &mockRegister{},
+		registerOnce: atomic.Uint32{},
+		Register:     &mockRegister1{},
+		Logger:       zap.NewNop(),
+		registered:   false,
 	}
 
 	// Concurrent registration
@@ -94,37 +97,37 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 		a.Add(1)
 		go func() {
 			defer a.Done()
-			_ = t.tryRegisterQueryIDOffset()
-			_, err := t.AssignQueryID()
-			if err != nil {
+			t.tryRegisterQueryIDOffset()
+			id := t.AssignQueryID()
+			if id == initQueryID {
 				atomic.AddInt32(&count1, 1)
 			}
 		}()
 	}
 	a.Wait()
-	assert.Equal(t1, int32(99), count1)
-	assert.Equal(t1, t.registerOnce.Load(), true)
+	assert.Equal(t1, count1, int32(99))
+	assert.Equal(t1, t.registerOnce.Load(), uint32(1))
 	assert.Equal(t1, t.registered, true)
 	assert.Equal(t1, t.nextID, uint64(100001))
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
 
 	// Registration completed, simulate concurrent assign id
-	var errCount2 int32
+	var count2 int32
 	b := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {
 		b.Add(1)
 		go func() {
 			defer b.Done()
-			_ = t.tryRegisterQueryIDOffset()
-			_, err := t.AssignQueryID()
-			if err != nil {
-				atomic.AddInt32(&errCount2, 1)
+			t.tryRegisterQueryIDOffset()
+			id := t.AssignQueryID()
+			if id == initQueryID {
+				atomic.AddInt32(&count2, 1)
 			}
 		}()
 	}
 	b.Wait()
-	assert.Equal(t1, int32(0), errCount2)
-	assert.Equal(t1, t.registerOnce.Load(), true)
+	assert.Equal(t1, count2, int32(0))
+	assert.Equal(t1, t.registerOnce.Load(), uint32(1))
 	assert.Equal(t1, t.registered, true)
 	assert.Equal(t1, t.nextID, t.queryIDOffset+1+100)
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
@@ -134,8 +137,7 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 		c.Add(1)
 		go func() {
 			defer c.Done()
-			_, err := t.AssignQueryID()
-			assert.NoError(t1, err)
+			t.AssignQueryID()
 		}()
 	}
 	c.Wait()

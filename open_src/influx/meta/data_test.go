@@ -1214,10 +1214,10 @@ func TestUpdateShardInfo(t *testing.T) {
 
 func TestData_RegisterQueryIDOffset(t *testing.T) {
 	type fields struct {
-		QueryIDInit map[string]uint64
+		QueryIDInit map[SQLHost]uint64
 	}
 	type args struct {
-		host string
+		host SQLHost
 	}
 	tests := []struct {
 		name    string
@@ -1228,7 +1228,7 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 	}{
 		{
 			name:   "Success",
-			fields: fields{QueryIDInit: map[string]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": 100000}},
+			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": 100000}},
 			args:   args{host: "127.0.0.1:7890"},
 			wantErr: func(t assert2.TestingT, err error, i ...interface{}) bool {
 				return err == nil
@@ -1241,7 +1241,7 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 			data := &Data{
 				QueryIDInit: tt.fields.QueryIDInit,
 			}
-			if !tt.wantErr(t, data.RegisterQueryIDOffset(tt.args.host), fmt.Sprintf("RegisterQueryIDOffset(%v)", tt.args.host)) {
+			if !tt.wantErr(t, data.RegisterQueryIDOffset(tt.args.host), fmt.Sprintf("RetryRegisterQueryIDOffset(%v)", tt.args.host)) {
 				t.Fatal()
 			}
 			assert(data.QueryIDInit[tt.args.host] == tt.want, "err")

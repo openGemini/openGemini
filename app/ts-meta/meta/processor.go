@@ -50,7 +50,7 @@ type MetaStoreInterface interface {
 	GetUserInfo() ([]byte, error)
 	getStreamInfo() ([]byte, error)
 	getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error)
-	registerQueryIDOffset(host string) (uint64, error)
+	registerQueryIDOffset(host meta.SQLHost) (uint64, error)
 }
 
 type RPCHandler interface {

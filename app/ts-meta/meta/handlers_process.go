@@ -382,7 +382,7 @@ func (h *GetMeasurementInfo) Process() (transport.Codec, error) {
 
 func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
 	rsp := &message.RegisterQueryIDOffsetResponse{}
-	offset, err := h.store.registerQueryIDOffset(h.req.Host)
+	offset, err := h.store.registerQueryIDOffset(meta.SQLHost(h.req.Host))
 	if err != nil {
 		rsp.Err = err.Error()
 		return rsp, nil

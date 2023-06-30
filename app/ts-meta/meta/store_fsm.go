@@ -713,6 +713,6 @@ func (fsm *storeFSM) applyRegisterQueryIDOffsetCommand(cmd *proto2.Command) inte
 	if !ok {
 		panic(fmt.Errorf("%s is not a RegisterQueryIDOffsetCommand", ext))
 	}
-	err := fsm.data.RegisterQueryIDOffset(v.GetHost())
+	err := fsm.data.RegisterQueryIDOffset(meta2.SQLHost(v.GetHost()))
 	return err
 }

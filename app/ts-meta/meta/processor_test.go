@@ -148,7 +148,7 @@ func (s *MockRPCStore) GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, 
 	return nil, nil
 }
 
-func (s *MockRPCStore) registerQueryIDOffset(host string) (uint64, error) {
+func (s *MockRPCStore) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 	return 0, nil
 }
 

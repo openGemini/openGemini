@@ -1670,9 +1670,9 @@ func (s *Store) getDbPtsByNodeId(nodeId uint64) map[string][]uint32 {
 	return dbPtIds
 }
 
-func (s *Store) registerQueryIDOffset(host string) (uint64, error) {
+func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 	val := &mproto.RegisterQueryIDOffsetCommand{
-		Host: proto.String(host),
+		Host: proto.String(string(host)),
 	}
 	t := mproto.Command_RegisterQueryIDOffsetCommand
 	cmd := &mproto.Command{Type: &t}
@@ -1689,7 +1689,7 @@ func (s *Store) registerQueryIDOffset(host string) (uint64, error) {
 	defer s.mu.RUnlock()
 
 	if offset, ok := s.data.QueryIDInit[host]; !ok {
-		return 0, errors.New("register query id failed")
+		return 0, fmt.Errorf("register query id failed, host: %s", host)
 	} else {
 		return offset, nil
 	}

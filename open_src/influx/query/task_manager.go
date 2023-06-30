@@ -25,7 +25,10 @@ const (
 	// DefaultQueryTimeout is the default timeout for executing a query.
 	// A value of zero will have no query timeout.
 	DefaultQueryTimeout = time.Duration(0)
-	QueryIdSpan         = 100000
+	//The query id span of the current SQL node.
+	queryIdSpan = 100000
+	// This id will be assigned when query id offset is unregistered.
+	initQueryID = 0
 )
 
 type TaskStatus int
@@ -69,7 +72,7 @@ func (t *TaskStatus) UnmarshalJSON(data []byte) error {
 }
 
 type QueryIDRegister interface {
-	RegisterQueryIDOffset(host string) (uint64, error)
+	RetryRegisterQueryIDOffset(host string) (uint64, error)
 }
 
 // TaskManager takes care of all aspects related to managing running queries.
@@ -93,7 +96,7 @@ type TaskManager struct {
 	queryIDOffset     uint64
 	queryIDUpperLimit uint64
 	queries           map[uint64]*Task
-	registerOnce      atomic.Bool
+	registerOnce      atomic.Uint32
 	registered        bool
 	Register          QueryIDRegister
 	Host              string
@@ -190,10 +193,10 @@ func (t *TaskManager) queryError(qid uint64, err error) {
 //
 // After a query finishes running, the system is free to reuse a query id.
 func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, interrupt <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics) (*ExecutionContext, func(), error) {
-	t.mu.RLock() // RLock
+	t.mu.RLock()
 	isShutDown := t.shutdown
 	curQueriesCount := len(t.queries)
-	t.mu.RUnlock() //RUnlock
+	t.mu.RUnlock()
 
 	if isShutDown {
 		return nil, nil, ErrQueryEngineShutdown
@@ -203,14 +206,9 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 	}
 
 	// only the first query can try to register query id offset
-	if err := t.tryRegisterQueryIDOffset(); err != nil {
-		return nil, nil, err
-	}
+	t.tryRegisterQueryIDOffset()
 
-	qid, err := t.AssignQueryID() // atomic
-	if err != nil {
-		return nil, nil, err
-	}
+	qid := t.AssignQueryID() // atomic
 
 	query := &Task{
 		query:     q.String(),
@@ -221,9 +219,9 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 		monitorCh: make(chan error),
 	}
 
-	t.mu.Lock() // WLock
+	t.mu.Lock()
 	t.queries[qid] = query
-	t.mu.Unlock() // WUnlock
+	t.mu.Unlock()
 
 	go t.waitForQuery(qid, query.closing, interrupt, query.monitorCh)
 	if t.LogQueriesAfter != 0 {
@@ -285,22 +283,22 @@ func (t *TaskManager) DetachQuery(qid uint64) error {
 	return nil
 }
 
-func (t *TaskManager) tryRegisterQueryIDOffset() error {
+func (t *TaskManager) tryRegisterQueryIDOffset() {
 	// Ensure that only one goroutine can register.
 	// And if registration is failed，it will restore the initial state for other query goroutines
-	if t.registerOnce.CompareAndSwap(false, true) {
-		offset, err := t.Register.RegisterQueryIDOffset(t.Host)
+	if t.registerOnce.CompareAndSwap(0, 1) {
+		offset, err := t.Register.RetryRegisterQueryIDOffset(t.Host)
 		if err != nil {
 			// If register failed，restore the initial state
-			t.registerOnce.Store(false)
-			return err
+			t.registerOnce.Store(0)
+			t.Logger.Error(fmt.Sprintf("register query id offset to meta filed : %s", err))
+			return
 		}
 
 		t.InitQueryIDByOffset(offset)
 		// update registered state to allow assign query id
 		t.registered = true
 	}
-	return nil
 }
 
 // QueryInfo represents the information for a query.
@@ -378,16 +376,17 @@ func (t *TaskManager) Statistics(buffer []byte) ([]byte, error) {
 func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
 	t.nextID = offset
 	t.queryIDOffset = offset
-	t.queryIDUpperLimit = offset + QueryIdSpan
+	t.queryIDUpperLimit = offset + queryIdSpan
 }
 
 // AssignQueryID assign a query id for a sql
-func (t *TaskManager) AssignQueryID() (uint64, error) {
+func (t *TaskManager) AssignQueryID() uint64 {
 	// Ensure that if the registration is not completed, cannot assign id to every query.
 	if !t.registered {
-		return 0, ErrQueryIDOffsetNotInit
+		t.Logger.Info(fmt.Sprintf("Assign 'InitID=%d' because query id offset is unregistered", initQueryID))
+		return initQueryID
 	}
 	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
 	qid := atomic.AddUint64(&t.nextID, 1)
-	return qid, nil
+	return qid
 }

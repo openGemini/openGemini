@@ -196,7 +196,6 @@ const (
 	RpIsBeingDelete                    = 4041
 	ShardIsBeingDelete                 = 4042
 	MstIsBeingDelete                   = 4043
-	QueryIDOverflow                    = 4044
 )
 
 // meta-client process

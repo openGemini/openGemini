@@ -204,7 +204,7 @@ type MetaClient interface {
 	ShowStreams(database string, showAll bool) (models.Rows, error)
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	RegisterQueryIDOffset(host string) (uint64, error)
+	RetryRegisterQueryIDOffset(host string) (uint64, error)
 }
 
 type LoadCtx struct {
@@ -3022,10 +3022,6 @@ func (c *Client) Suicide(err error) {
 	}
 }
 
-func (c *Client) RegisterQueryIDOffset(host string) (uint64, error) {
-	return c.RetryRegisterQueryIDOffset(host)
-}
-
 // RetryRegisterQueryIDOffset send a register rpc to ts-meta，request a query id offset
 func (c *Client) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	startTime := time.Now()
@@ -3037,7 +3033,7 @@ func (c *Client) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	for {
 		c.mu.RLock()
 
-		if offset, ok = c.cacheData.QueryIDInit[host]; ok {
+		if offset, ok = c.cacheData.QueryIDInit[meta2.SQLHost(host)]; ok {
 			c.logger.Info("current host has already registered in ts-meta")
 			c.mu.RUnlock()
 			return offset, nil

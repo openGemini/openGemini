@@ -867,7 +867,7 @@ func TestDBPTCtx_String(t *testing.T) {
 	require.Equal(t, "", ctx.String())
 }
 
-func TestClient_RegisterQueryIDOffset(t *testing.T) {
+func TestClient_RetryRegisterQueryIDOffset(t *testing.T) {
 	type fields struct {
 		metaServers []string
 		cacheData   *meta2.Data
@@ -890,7 +890,7 @@ func TestClient_RegisterQueryIDOffset(t *testing.T) {
 			fields: fields{
 				metaServers: []string{"127.0.0.1:8092"},
 				cacheData: &meta2.Data{
-					QueryIDInit: map[string]uint64{},
+					QueryIDInit: map[meta2.SQLHost]uint64{},
 				},
 				logger: logger.NewLogger(errno.ModuleMetaClient),
 			},
@@ -902,7 +902,7 @@ func TestClient_RegisterQueryIDOffset(t *testing.T) {
 			fields: fields{
 				metaServers: []string{"127.0.0.1:8092"},
 				cacheData: &meta2.Data{
-					QueryIDInit: map[string]uint64{"127.0.0.1:8086": 0},
+					QueryIDInit: map[meta2.SQLHost]uint64{"127.0.0.1:8086": 0},
 				},
 				logger: logger.NewLogger(errno.ModuleMetaClient),
 			},
@@ -917,8 +917,8 @@ func TestClient_RegisterQueryIDOffset(t *testing.T) {
 				cacheData:   tt.fields.cacheData,
 				logger:      tt.fields.logger,
 			}
-			if _, err := c.RegisterQueryIDOffset(tt.args.host); (err != nil) != tt.wantErr {
-				t.Errorf("RegisterQueryIDOffset() error = %v, wantErr %v", err, tt.wantErr)
+			if _, err := c.RetryRegisterQueryIDOffset(tt.args.host); (err != nil) != tt.wantErr {
+				t.Errorf("RetryRegisterQueryIDOffset() error = %v, wantErr %v", err, tt.wantErr)
 				require.EqualError(t, err, "register query id offset timeout")
 			}
 		})
