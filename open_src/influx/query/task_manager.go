@@ -16,6 +16,8 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/query"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
@@ -89,7 +91,7 @@ type TaskManager struct {
 
 	// Logger to use for all logging.
 	// Defaults to discarding all log output.
-	Logger *zap.Logger
+	Logger *logger.Logger
 
 	// Used for managing and tracking running queries.
 	nextID            uint64
@@ -112,7 +114,7 @@ type TaskManager struct {
 func NewTaskManager() *TaskManager {
 	return &TaskManager{
 		QueryTimeout: DefaultQueryTimeout,
-		Logger:       zap.NewNop(),
+		Logger:       logger.NewLogger(errno.ModuleHTTP),
 		queries:      make(map[uint64]*Task),
 	}
 }
@@ -234,8 +236,9 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 
 			select {
 			case <-timer.C:
-				t.Logger.Warn(fmt.Sprintf("Detected slow query: %s (qid: %d, database: %s, threshold: %s)",
-					query.query, qid, query.database, t.LogQueriesAfter))
+				t.Logger.Warn("Detected slow query", zap.String("query", query.query),
+					zap.Uint64("qid", qid), zap.String("db", query.database),
+					zap.Duration("threshold", t.LogQueriesAfter))
 			case <-closing:
 			}
 			return nil
@@ -294,7 +297,7 @@ func (t *TaskManager) tryRegisterQueryIDOffset() {
 		if err != nil {
 			// If register failed，restore the initial state
 			atomic.StoreUint32(&t.registerOnce, 0)
-			t.Logger.Error(fmt.Sprintf("register query id offset to meta filed : %s", err))
+			t.Logger.Error("register query id offset to meta failed", zap.Error(err))
 			return
 		}
 

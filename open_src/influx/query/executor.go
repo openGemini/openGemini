@@ -22,6 +22,7 @@ import (
 	query2 "github.com/influxdata/influxdb/query"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -241,14 +242,14 @@ type Executor struct {
 
 	// Logger to use for all logging.
 	// Defaults to discarding all log output.
-	Logger *zap.Logger
+	Logger *logger.Logger
 }
 
 // NewExecutor returns a new instance of Executor.
 func NewExecutor() *Executor {
 	return &Executor{
 		TaskManager: NewTaskManager(),
-		Logger:      zap.NewNop().With(zap.String("service", "executor")),
+		Logger:      logger.NewLogger(errno.ModuleHTTP).With(zap.String("service", "executor")),
 	}
 }
 
@@ -259,9 +260,8 @@ func (e *Executor) Close() error {
 
 // SetLogOutput sets the writer to which all logs are written. It must not be
 // called after Open is called.
-func (e *Executor) WithLogger(log *zap.Logger) {
+func (e *Executor) WithLogger(log *logger.Logger) {
 	e.Logger = log.With(zap.String("service", "query"))
-	e.TaskManager.Logger = e.Logger
 }
 
 // ExecuteQuery executes each statement within a query.

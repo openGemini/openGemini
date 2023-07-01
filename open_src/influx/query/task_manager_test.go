@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
-	"go.uber.org/zap"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 func TestTaskManager_AssignQueryID(t1 *testing.T) {
@@ -85,7 +86,7 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	t := &TaskManager{
 		registerOnce: 0,
 		Register:     &mockRegister1{},
-		Logger:       zap.NewNop(),
+		Logger:       logger.NewLogger(errno.ModuleUnknown),
 		registered:   false,
 	}
 
@@ -93,11 +94,11 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	// only 1 can call RetryRegisterQueryIDOffset()
 	// other 99 will get the initQueryID
 	var count1 int32
-	a := sync.WaitGroup{}
+	wg1 := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {
-		a.Add(1)
+		wg1.Add(1)
 		go func() {
-			defer a.Done()
+			defer wg1.Done()
 			t.tryRegisterQueryIDOffset()
 			id := t.AssignQueryID()
 			if id == initQueryID {
@@ -105,7 +106,7 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 			}
 		}()
 	}
-	a.Wait()
+	wg1.Wait()
 	assert.Equal(t1, count1, int32(99))
 	assert.Equal(t1, atomic.LoadUint32(&t.registerOnce), uint32(1))
 	assert.Equal(t1, t.registered, true)
@@ -116,11 +117,11 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 	// all 100 goroutines can not call RetryRegisterQueryIDOffset(),
 	// but they can normally assign id
 	var count2 int32
-	b := sync.WaitGroup{}
+	wg2 := sync.WaitGroup{}
 	for i := 0; i < 100; i++ {
-		b.Add(1)
+		wg2.Add(1)
 		go func() {
-			defer b.Done()
+			defer wg2.Done()
 			t.tryRegisterQueryIDOffset()
 			id := t.AssignQueryID()
 			if id == initQueryID {
@@ -128,7 +129,7 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 			}
 		}()
 	}
-	b.Wait()
+	wg2.Wait()
 	assert.Equal(t1, count2, int32(0))
 	assert.Equal(t1, atomic.LoadUint32(&t.registerOnce), uint32(1))
 	assert.Equal(t1, t.registered, true)
