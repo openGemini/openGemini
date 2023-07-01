@@ -343,7 +343,6 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	case *influxql.ShowShardGroupsStatement:
 		rows, err = e.executeShowShardGroupsStatement(stmt)
 	case *influxql.ShowSubscriptionsStatement:
-		return meta2.ErrUnsupportCommand
 		rows, err = e.executeShowSubscriptionsStatement(stmt)
 	case *influxql.ShowFieldKeysStatement:
 		_, err = e.retryExecuteStatement(stmt, ctx)
