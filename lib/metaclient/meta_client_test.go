@@ -10,6 +10,8 @@ package metaclient
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1269,4 +1271,32 @@ func TestClient_RetryRegisterQueryIDOffset(t *testing.T) {
 			require.Equal(t, offset, tt.want)
 		})
 	}
+}
+
+func TestClient_CreateSubscription(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	server1 := httptest.NewServer(mux)
+	defer server1.Close()
+	server2 := httptest.NewServer(mux)
+	defer server2.Close()
+
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	destinations := []string{server1.URL, server2.URL}
+	err := c.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)
+	require.EqualError(t, err, "execute command timeout")
 }

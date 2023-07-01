@@ -239,6 +239,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
 		err = e.executeCreateRetentionPolicyStatement(stmt)
+	case *influxql.CreateSubscriptionStatement:
+		err = e.executeCreateSubscriptionStatement(stmt)
 	case *influxql.CreateUserStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
