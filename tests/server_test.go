@@ -11285,3 +11285,85 @@ func TestServer_TagArray(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_SubscriptionCommands(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	// create two mock subscriber
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	server1 := httptest.NewServer(mux)
+	defer server1.Close()
+	server2 := httptest.NewServer(mux)
+	defer server2.Close()
+
+	test := Test{
+		queries: []*Query{
+			&Query{
+				name:    `CREATE SUBSCRIPTION`,
+				command: fmt.Sprintf("create subscription subs0 on db0.rp0 destinations all \"%s\", \"%s\"", server1.URL, server2.URL),
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `SHOW SUBSCRIPTIONS`,
+				command: "SHOW SUBSCRIPTIONS",
+				exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["retention_policy","name","mode","destinations"],"values":[["rp0","subs0","ALL",["%s","%s"]]]}]}]}`, server1.URL, server2.URL),
+			},
+			&Query{
+				name:    `DROP SUBSCRIPTION subs0`,
+				command: "drop subscription subs0 on db0.rp0",
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `SHOW SUBSCRIPTIONS AFTER DROP`,
+				command: "SHOW SUBSCRIPTIONS",
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `RECREATE SUBSCRIPTION AFTER DROP`,
+				command: fmt.Sprintf("create subscription subs0 on db0.rp0 destinations all \"%s\", \"%s\"", server1.URL, server2.URL),
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `SHOW SUBSCRIPTIONS`,
+				command: "SHOW SUBSCRIPTIONS",
+				exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["retention_policy","name","mode","destinations"],"values":[["rp0","subs0","ALL",["%s","%s"]]]}]}]}`, server1.URL, server2.URL),
+			},
+			&Query{
+				name:    `DROP ALL SUBSCRIPTIONS ON db0`,
+				command: "DROP ALL SUBSCRIPTIONS ON db0",
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `SHOW SUBSCRIPTIONS AFTER DROP`,
+				command: "SHOW SUBSCRIPTIONS",
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `CREATE SUBSCRIPTION WITH INVALID URL`,
+				command: "create subscription subs0 on db0.rp0 destinations all \"127.0.0.3:8086\"",
+				exp:     `{"results":[{"statement_id":0,"error":"invalid url 127.0.0.3:8086"}]}`,
+			},
+		},
+	}
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Errorf("command: %s - err: %s", query.command, query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}

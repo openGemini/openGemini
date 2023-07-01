@@ -2212,8 +2212,24 @@ func (c *Client) DeleteMetaNode(id uint64) error {
 	return c.retryUntilExec(proto2.Command_DeleteMetaNodeCommand, proto2.E_DeleteMetaNodeCommand_Command, cmd)
 }
 
+func pingServer(server string) error {
+	pingUrl := server + "/ping"
+	client := http.Client{Timeout: time.Second}
+	req, _ := http.NewRequest("GET", pingUrl, nil)
+	_, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // CreateSubscription creates a subscription against the given database and retention policy.
 func (c *Client) CreateSubscription(database, rp, name, mode string, destinations []string) error {
+	for _, destination := range destinations {
+		if err := pingServer(destination); err != nil {
+			return fmt.Errorf("fail to ping %s", destination)
+		}
+	}
 	return c.retryUntilExec(proto2.Command_CreateSubscriptionCommand, proto2.E_CreateSubscriptionCommand_Command,
 		&proto2.CreateSubscriptionCommand{
 			Database:        proto.String(database),

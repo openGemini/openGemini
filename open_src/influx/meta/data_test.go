@@ -1255,3 +1255,31 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 		})
 	}
 }
+
+func TestData_Create_Subscription(t *testing.T) {
+	data := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"db0": {
+				Name: "db0",
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp0": {},
+				},
+			},
+		},
+	}
+	destinations := []string{"http://192.168.35.1:8080", "http://10.123.65.4:9172"}
+	err := data.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)
+	assert2.Equal(t, err == nil, true)
+	err = data.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)
+	assert2.Equal(t, err == ErrSubscriptionExists, true)
+	err = data.CreateSubscription("db2", "rp0", "subs1", "ALL", destinations)
+	assert2.Equal(t, err != nil, true)
+	rpi, err := data.RetentionPolicy("db0", "rp0")
+	assert2.Equal(t, err == nil, true)
+	assert2.Equal(t, len(rpi.Subscriptions), 1)
+	assert2.Equal(t, rpi.Subscriptions[0].Name, "subs1")
+	assert2.Equal(t, rpi.Subscriptions[0].Mode, "ALL")
+	for i := range destinations {
+		assert2.Equal(t, rpi.Subscriptions[0].Destinations[i], destinations[i])
+	}
+}
