@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -11214,4 +11215,46 @@ func TestServer_FieldIndex_Query(t *testing.T) {
 	}
 
 	ReleaseHaTestEnv(t)
+}
+
+func TestServer_SubscriptionCommands(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	// create two mock subscriber
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	server1 := httptest.NewServer(mux)
+	defer server1.Close()
+	server2 := httptest.NewServer(mux)
+	defer server2.Close()
+
+	test := Test{
+		queries: []*Query{
+			&Query{
+				name:    `CREATE SUBSCRIPTION`,
+				command: fmt.Sprintf("create subscription subs0 on db0.rp0 destinations all \"%s\", \"%s\"", server1.URL, server2.URL),
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+		},
+	}
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Errorf("command: %s - err: %s", query.command, query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
 }

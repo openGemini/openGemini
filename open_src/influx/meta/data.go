@@ -1760,14 +1760,14 @@ func (data *Data) pruneShardGroups(id uint64) error {
 	return nil
 }
 
-// validateURL returns an error if the URL does not have a port or uses a scheme other than UDP or HTTP.
+// validateURL returns an error if the URL does not have a port or uses a scheme other than HTTP.
 func validateURL(input string) error {
 	u, err := url.Parse(input)
 	if err != nil {
 		return ErrInvalidSubscriptionURL(input)
 	}
 
-	if u.Scheme != "udp" && u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != "http" && u.Scheme != "https" {
 		return ErrInvalidSubscriptionURL(input)
 	}
 
