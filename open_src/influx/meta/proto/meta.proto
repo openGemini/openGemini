@@ -294,7 +294,7 @@ message Command {
 		ExpandGroupsCommand                        = 81;
 		UpdatePtVersionCommand                     = 82;
 		CreateContinuousQueryCommand               = 83;
-		Sql2MetaHeartbeatCommand				   = 84;
+		Sql2MetaHeartbeatCommand                   = 84;
 	}
 
 	required Type type = 1;

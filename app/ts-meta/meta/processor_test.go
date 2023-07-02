@@ -283,3 +283,18 @@ func TestGetRpMstInfoMessage(t *testing.T) {
 		t.Errorf("send msg error: %s", err)
 	}
 }
+
+func TestSql2MetaHeartbeatMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	// case 1. normal
+	callback := &metaclient.Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+		Host: "localhost:8086",
+	})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}

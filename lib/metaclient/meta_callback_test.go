@@ -73,3 +73,11 @@ func TestGetMeasurementInfoCallbackResponse(t *testing.T) {
 	msg := message.NewMetaMessage(message.GetMeasurementInfoResponseMessage, &message.GetMeasurementInfoResponse{})
 	callback.Handle(msg)
 }
+
+func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
+	callback := &metaclient.Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatResponse{})
+	if err := callback.Handle(msg); err != nil {
+		t.Fail()
+	}
+}

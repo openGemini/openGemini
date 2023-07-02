@@ -1432,7 +1432,7 @@ func (s *Store) detectSqlNodeCrash() {
 			return
 		case <-ticker.C:
 			if err := s.detectCrash(); err != nil {
-				s.Logger.Error("detect ts-sql whether crashed or not, error", zap.Error(err))
+				s.Logger.Error("Detected that ts-sql has crashed", zap.Error(err))
 			}
 		}
 	}
