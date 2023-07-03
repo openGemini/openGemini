@@ -79,6 +79,8 @@ type Server struct {
 	sherlockService *sherlock.Service
 
 	cqService *continuousquery.Service
+
+	heartbeatClosing chan bool
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -115,9 +117,10 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 		cqService:   continuousquery.NewService(c.ContinuousQuery.RunInterval),
 		MetaClient:  meta.NewClient(c.HTTP.WeakPwdPath, false, metaMaxConcurrentWriteLimit),
 
-		metaJoinPeers: c.Common.MetaJoin,
-		metaUseTLS:    false,
-		config:        c,
+		metaJoinPeers:    c.Common.MetaJoin,
+		metaUseTLS:       false,
+		config:           c,
+		heartbeatClosing: make(chan bool),
 	}
 	s.initMetaClientFn = s.initializeMetaClient
 
@@ -227,6 +230,8 @@ func (s *Server) Open() error {
 		return err
 	}
 
+	go s.SendHeartbeat2Meta()
+
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
 	s.cqService.QueryExecutor.PointsWriter = s.PointsWriter
@@ -273,6 +278,10 @@ func (s *Server) Close() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Stop()
 	}
+
+	if s.heartbeatClosing != nil {
+		close(s.heartbeatClosing)
+	}
 	return nil
 }
 
@@ -292,6 +301,23 @@ func (s *Server) initializeMetaClient() error {
 			return err
 		}
 		return nil
+	}
+}
+
+func (s *Server) SendHeartbeat2Meta() {
+	ticker := time.NewTicker(time.Second)
+	host := s.config.HTTP.BindAddress
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.heartbeatClosing:
+			return
+		case <-ticker.C:
+			if err := s.MetaClient.SendSql2MetaHeartbeat(host); err != nil {
+				s.Logger.Error("TSSQL send heartbeart to TSMeta failed.")
+			}
+		}
 	}
 }
 

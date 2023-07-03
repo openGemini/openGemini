@@ -206,6 +206,7 @@ type MetaClient interface {
 	ShowStreams(database string, showAll bool) (models.Rows, error)
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	SendSql2MetaHeartbeat(host string) error
 }
 
 type LoadCtx struct {
@@ -681,6 +682,62 @@ func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName s
 		return nil, err
 	}
 	return mst, nil
+}
+
+func (c *Client) RetrySql2MetaHeartbeat(host string) error {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return errors.New("Sql2MetaHeartbeat fail")
+		default:
+
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		err = c.sendSql2MetaHeartbeat(currentServer, host)
+		if err == nil {
+			break
+		}
+
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+	return nil
+}
+
+func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
+	callback := &Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		c.logger.Error("Sql2MetaHeartbeat SendRPCMsg fail", zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (c *Client) SendSql2MetaHeartbeat(host string) error {
+	val := &proto2.Sql2MetaHeartbeatCommand{
+		Host: &host,
+	}
+	t := proto2.Command_Sql2MetaHeartbeatCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_Sql2MetaHeartbeatCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return c.RetrySql2MetaHeartbeat(host)
 }
 
 // Database returns info for the requested database.

@@ -131,6 +131,10 @@ func (s *MockRPCStore) getMeasurementInfo(dbName, rpName, mstName string) ([]byt
 	return []byte{}, nil
 }
 
+func (s *MockRPCStore) applySql2MetaHeartbeat(host string) error {
+	return nil
+}
+
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,
@@ -273,6 +277,21 @@ func TestGetRpMstInfoMessage(t *testing.T) {
 		DbName:    "test",
 		RpName:    "rp0",
 		DataTypes: []int64{1},
+	})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}
+
+func TestSql2MetaHeartbeatMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	// case 1. normal
+	callback := &metaclient.Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+		Host: "localhost:8086",
 	})
 	err := sendTestMsg(msg, callback)
 	if err != nil {

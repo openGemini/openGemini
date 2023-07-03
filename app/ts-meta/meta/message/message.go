@@ -209,3 +209,11 @@ type GetMeasurementInfoResponse struct {
 	Data []byte
 	Err  string
 }
+
+type Sql2MetaHeartbeatRequest struct {
+	Host string
+}
+
+type Sql2MetaHeartbeatResponse struct {
+	Err string
+}

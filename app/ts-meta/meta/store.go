@@ -17,6 +17,7 @@ limitations under the License.
 package meta
 
 import (
+	"container/list"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,6 +64,11 @@ const (
 	updateCacheInterval = 100 * time.Millisecond
 
 	pushInterval = 10 * time.Second
+
+	// HeartbeatToleranceDuration represents ts-sql heartbeat tolerance duration for crash
+	HeartbeatToleranceDuration = 5 * time.Second
+
+	detectTSSqlCrashInterval = time.Second
 )
 
 // Raft configuration.
@@ -390,6 +396,10 @@ type Store struct {
 	cacheData        *meta.Data
 	cacheDataBytes   []byte
 	cacheDataChanged chan struct{}
+
+	sqlMu             sync.RWMutex            // concurrency for heartbeat processing and crash detection
+	SqlNodes          map[string]*SqlNodeInfo // all alive ts-sql host; no need for persistence
+	HeartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
 }
 
 // NewStore will create a new metaStore with the passed in config
@@ -401,17 +411,19 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 			TakeOverEnabled: true,
 			BalancerEnabled: true,
 		},
-		cacheData:        &meta.Data{},
-		closing:          make(chan struct{}),
-		dataChanged:      make(chan struct{}),
-		cacheDataChanged: make(chan struct{}),
-		path:             c.Dir,
-		config:           c,
-		httpAddr:         httpAddr,
-		rpcAddr:          rpcAddr,
-		raftAddr:         raftAddr,
-		dbStatistics:     make(map[string]*dbInfo),
-		notifyCh:         make(chan bool, 1),
+		cacheData:         &meta.Data{},
+		closing:           make(chan struct{}),
+		dataChanged:       make(chan struct{}),
+		cacheDataChanged:  make(chan struct{}),
+		path:              c.Dir,
+		config:            c,
+		httpAddr:          httpAddr,
+		rpcAddr:           rpcAddr,
+		raftAddr:          raftAddr,
+		dbStatistics:      make(map[string]*dbInfo),
+		notifyCh:          make(chan bool, 1),
+		HeartbeatInfoList: list.New(),
+		SqlNodes:          make(map[string]*SqlNodeInfo),
 	}
 
 	return &s
@@ -498,9 +510,10 @@ func (s *Store) Open(raftln net.Listener) error {
 		return err
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.serveSnapshot()
 	go s.checkLeaderChanged()
+	go s.detectSqlNodeCrash()
 
 	return nil
 }
@@ -1372,6 +1385,84 @@ func (s *Store) getMeasurementInfo(dbName, rpName, mstName string) ([]byte, erro
 		return nil, err
 	}
 	return mst.MarshalBinary()
+}
+
+func (s *Store) applySql2MetaHeartbeat(host string) error {
+	if !s.IsLeader() {
+		return raft.ErrNotLeader
+	}
+	s.sqlMu.RLock()
+	defer s.sqlMu.RUnlock()
+
+	ts := time.Now()
+	if err := s.updateSqlNode(host, ts); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) updateSqlNode(host string, ts time.Time) error {
+	// update HeartbeatInfoList.
+	if s.SqlNodes[host] != nil {
+		s.HeartbeatInfoList.Remove(s.SqlNodes[host].LastHeartbeat)
+	}
+	element := s.HeartbeatInfoList.PushBack(NewHeartbeatInfo(host, ts))
+
+	// update SqlNodes.
+	// existing ts-sql.
+	if s.SqlNodes[host] != nil {
+		s.SqlNodes[host].LastHeartbeat = element
+		return nil
+	}
+	// new ts-sql.
+	s.SqlNodes[host] = &SqlNodeInfo{
+		LastHeartbeat: element,
+		Cqs:           nil,
+	}
+	return nil
+}
+
+func (s *Store) detectSqlNodeCrash() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(detectTSSqlCrashInterval)
+	for {
+		select {
+		case <-s.closing:
+			return
+		case <-ticker.C:
+			if err := s.detectCrash(); err != nil {
+				s.Logger.Error("Detected that ts-sql has crashed", zap.Error(err))
+			}
+		}
+	}
+}
+
+// Detect all ts-sql whether crashed or not.
+func (s *Store) detectCrash() error {
+	s.sqlMu.RLock()
+	defer s.sqlMu.RUnlock()
+
+	var hbi *list.Element
+	if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
+		return nil
+	}
+
+	for {
+		if time.Since(hbi.Value.(*HeartbeatInfo).LastHeartbeatTime) >= HeartbeatToleranceDuration {
+			// delete SqlNodeInfo.
+			delete(s.SqlNodes, hbi.Value.(*HeartbeatInfo).Host)
+			// delete HeartbeatInfo.
+			s.HeartbeatInfoList.Remove(hbi)
+
+			if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
+				return nil
+			}
+			continue
+		}
+		break
+	}
+	return nil
 }
 
 func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {

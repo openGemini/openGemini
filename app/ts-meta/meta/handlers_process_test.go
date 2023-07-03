@@ -256,3 +256,21 @@ func TestGetMeasurementInfoProcess(t *testing.T) {
 		t.Fatal("TestGetMeasurementInfoProcess fail", err)
 	}
 }
+
+func TestSql2MetaHeartbeatProcess(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+		Host: "localhost:8086",
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.Process()
+	if err != nil {
+		t.Fatal("TestSql2MetaHeartbeatProcess fail", err)
+	}
+}

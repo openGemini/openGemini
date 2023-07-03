@@ -99,6 +99,10 @@ func (m mocShardMapperMetaClient) CreateContinuousQuery(database string, spec *m
 	return nil, nil
 }
 
+func (m mocShardMapperMetaClient) SendSql2MetaHeartbeat(host string) error {
+	return nil
+}
+
 func (m mocShardMapperMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }
