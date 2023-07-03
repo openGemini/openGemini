@@ -1211,3 +1211,41 @@ func TestUpdateShardInfo(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestData_RegisterQueryIDOffset(t *testing.T) {
+	type fields struct {
+		QueryIDInit map[SQLHost]uint64
+	}
+	type args struct {
+		host SQLHost
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   uint64
+	}{
+		{
+			name:   "Success",
+			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": 100000}},
+			args:   args{host: "127.0.0.1:7890"},
+			want:   200000,
+		},
+		{
+			name:   "DuplicateRegister",
+			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0}},
+			args:   args{host: "127.0.0.1:1234"},
+			want:   0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := &Data{
+				QueryIDInit: tt.fields.QueryIDInit,
+			}
+			err := data.RegisterQueryIDOffset(tt.args.host)
+			assert2.NoError(t, err)
+			assert(data.QueryIDInit[tt.args.host] == tt.want, "register failed")
+		})
+	}
+}

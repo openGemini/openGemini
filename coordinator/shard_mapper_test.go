@@ -330,6 +330,10 @@ func (m mocShardMapperMetaClient) OpenAtStore() {
 	return
 }
 
+func (m mocShardMapperMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
+	return 0, nil
+}
+
 func TestMapMstShards(t *testing.T) {
 	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
 	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)

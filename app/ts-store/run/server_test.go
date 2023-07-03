@@ -438,10 +438,14 @@ func (client *MockMetaClient) GetMstInfoWithInRp(dbName, rpName string, dataType
 	return nil, nil
 }
 
-func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
+func (client *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 	return nil
 }
 
-func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
+func (client *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
+}
+
+func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
+	return 0, nil
 }

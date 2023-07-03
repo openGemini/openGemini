@@ -65,6 +65,9 @@ const (
 
 	GetMeasurementInfoRequestMessage
 	GetMeasurementInfoResponseMessage
+
+	RegisterQueryIDOffsetRequestMessage
+	RegisterQueryIDOffsetResponseMessage
 )
 
 func NewMessage(typ uint8) transport.Codec {
@@ -121,6 +124,10 @@ func NewMessage(typ uint8) transport.Codec {
 		return &GetMeasurementInfoRequest{}
 	case GetMeasurementInfoResponseMessage:
 		return &GetMeasurementInfoResponse{}
+	case RegisterQueryIDOffsetRequestMessage:
+		return &RegisterQueryIDOffsetRequest{}
+	case RegisterQueryIDOffsetResponseMessage:
+		return &RegisterQueryIDOffsetResponse{}
 	default:
 		return nil
 	}
@@ -154,6 +161,8 @@ func GetResponseMessageType(typ uint8) uint8 {
 		return GetStreamInfoResponseMessage
 	case GetMeasurementInfoRequestMessage:
 		return GetMeasurementInfoResponseMessage
+	case RegisterQueryIDOffsetRequestMessage:
+		return RegisterQueryIDOffsetResponseMessage
 	default:
 		return UnknownMessage
 	}

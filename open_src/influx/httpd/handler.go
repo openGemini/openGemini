@@ -584,10 +584,10 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		ReadOnly:        r.Method == "GET",
 		NodeID:          nodeID,
 		InnerChunkSize:  innerChunkSize,
+		Quiet:           true,
+		Traceid:         traceId,
 		//ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
 		//QueryLimitEn:    atomic.LoadInt32(&syscontrol.QueryLimitEn) == 1,
-		Quiet:   true,
-		Traceid: traceId,
 	}
 
 	if h.Config.AuthEnabled {

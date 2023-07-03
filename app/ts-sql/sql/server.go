@@ -158,6 +158,9 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.QueryExecutor.TaskManager.QueryTimeout = time.Duration(c.Coordinator.QueryTimeout)
 	s.QueryExecutor.TaskManager.LogQueriesAfter = time.Duration(c.Coordinator.LogQueriesAfter)
 	s.QueryExecutor.TaskManager.MaxConcurrentQueries = c.Coordinator.MaxConcurrentQueries
+	s.QueryExecutor.TaskManager.Register = s.MetaClient
+	s.QueryExecutor.TaskManager.Host = c.HTTP.BindAddress
+
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
 

@@ -62,6 +62,9 @@ const (
 
 	// MinRetentionPolicyDuration represents the minimum duration for a policy.
 	MinRetentionPolicyDuration = time.Hour
+
+	// QueryIDSpan is the default id range span.
+	QueryIDSpan = 100000
 )
 
 const (
@@ -71,6 +74,8 @@ const (
 )
 
 var dropStreamFirstError = errors.New("stream task exists, drop it first")
+
+type SQLHost string
 
 func assert(condition bool, msg string, v ...interface{}) {
 	if !condition {
@@ -94,6 +99,9 @@ type Data struct {
 	Streams       map[string]*StreamInfo
 	Users         []UserInfo
 	MigrateEvents map[string]*MigrateEventInfo
+
+	// Query ID range segment allocated by all sql nodes
+	QueryIDInit map[SQLHost]uint64 // {"127.0.0.1:8086": 0, "127.0.0.2:8086": 10w, "127.0.0.3:8086": 20w}, span is QueryIDSpan
 
 	// adminUserExists provides a constant time mechanism for determining
 	// if there is at least one admin GetUser.
@@ -856,6 +864,17 @@ func (data *Data) CloneMetaNodes() []NodeInfo {
 		mns[i] = data.MetaNodes[i].clone()
 	}
 	return mns
+}
+
+func (data *Data) CloneQueryIDInit() map[SQLHost]uint64 {
+	if data.QueryIDInit == nil {
+		return nil
+	}
+	cloneIdInit := make(map[SQLHost]uint64, len(data.QueryIDInit))
+	for host := range data.QueryIDInit {
+		cloneIdInit[host] = data.QueryIDInit[host]
+	}
+	return cloneIdInit
 }
 
 // assign db to all data nodes that have been joined.
@@ -1949,7 +1968,7 @@ func (data *Data) SetAdminPrivilege(name string, admin bool) error {
 }
 
 // AdminUserExist returns true if an admin GetUser exists.
-func (data Data) AdminUserExist() bool {
+func (data *Data) AdminUserExist() bool {
 	return data.AdminUserExists
 }
 
@@ -1992,6 +2011,9 @@ func (data *Data) Clone() *Data {
 	other.Users = data.CloneUsers()
 	other.PtView = data.CloneDBPtView()
 	other.MigrateEvents = data.CloneMigrateEvents()
+
+	other.QueryIDInit = data.CloneQueryIDInit()
+
 	return &other
 }
 
@@ -2067,6 +2089,12 @@ func (data *Data) Marshal() *proto2.Data {
 		pb.MigrateEvents[i] = data.MigrateEvents[eventStr].marshal()
 		i++
 	}
+
+	pb.QueryIDInit = make(map[string]uint64, len(data.QueryIDInit))
+	for host := range data.QueryIDInit {
+		pb.QueryIDInit[string(host)] = data.QueryIDInit[host]
+	}
+
 	return pb
 }
 
@@ -2083,7 +2111,6 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.PtNumPerNode = pb.GetPtNumPerNode()
 	data.MaxIndexGroupID = pb.GetMaxIndexGroupID()
 	data.MaxIndexID = pb.GetMaxIndexID()
-	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	data.MaxEventOpId = pb.GetMaxEventOpId()
 	data.TakeOverEnabled = pb.GetTakeOverEnabled()
 	data.BalancerEnabled = pb.GetBalancerEnabled()
@@ -2091,6 +2118,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
 
+	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {
 		data.DataNodes[i].unmarshal(x)
 	}
@@ -2139,6 +2167,12 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	// Exhaustively determine if there is an admin GetUser. The marshalled cache
 	// value may not be correct.
 	data.AdminUserExists = data.HasAdminUser()
+
+	data.QueryIDInit = make(map[SQLHost]uint64, len(pb.GetQueryIDInit()))
+	for host := range pb.QueryIDInit {
+		data.QueryIDInit[SQLHost(host)] = pb.QueryIDInit[host]
+	}
+
 }
 
 // MarshalBinary encodes the metadata to a binary format.
@@ -2766,6 +2800,24 @@ func (data *Data) checkDDLConflict(e *proto2.MigrateEventInfo) error {
 			}
 		}
 	}
+	return nil
+}
+
+// RegisterQueryIDOffset register the mapping relationship between its host and query id offset for ts-sql
+func (data *Data) RegisterQueryIDOffset(host SQLHost) error {
+	if data.QueryIDInit == nil {
+		data.QueryIDInit = make(map[SQLHost]uint64)
+	}
+
+	if _, ok := data.QueryIDInit[host]; ok {
+		return nil
+	}
+
+	currentAssignedNum := len(data.QueryIDInit)
+	newOffset := uint64(currentAssignedNum * QueryIDSpan)
+
+	data.QueryIDInit[host] = newOffset
+
 	return nil
 }
 

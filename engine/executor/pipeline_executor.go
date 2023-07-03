@@ -272,6 +272,7 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 		go work(p)
 	}
 
+	// TODO listen task.closing，to kill remote query
 	monitoring := func() {
 		if _, ok := <-errSignals; ok {
 			statistics.ExecutorStat.ExecFailed.Increase()
