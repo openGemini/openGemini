@@ -122,6 +122,7 @@ message ContinuousQueryInfo {
 	required string Name = 1;
 	required string Query = 2;
 	optional bool MarkDeleted = 3;
+	optional int64 LastRunTime = 4;
 }
 
 message ShardGroupInfo {
@@ -295,6 +296,7 @@ message Command {
 		UpdatePtVersionCommand                     = 82;
 		CreateContinuousQueryCommand               = 83;
 		Sql2MetaHeartbeatCommand                   = 84;
+		ContinuousQueryReportCommand               = 85;
 	}
 
 	required Type type = 1;
@@ -978,4 +980,10 @@ message CreateContinuousQueryCommand {
 message Sql2MetaHeartbeatCommand {
 	extend Command { optional Sql2MetaHeartbeatCommand command = 184; }
 	required string Host = 1;
+}
+
+message ContinuousQueryReportCommand {
+	extend Command { optional ContinuousQueryReportCommand command = 185; }
+	required string Name = 1;
+	required int64 LastRunTime = 2;
 }

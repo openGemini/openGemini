@@ -1202,6 +1202,18 @@ func (data *Data) CreateContinuousQuery(dbName string, cqi *ContinuousQueryInfo)
 	return nil
 }
 
+func (data *Data) CQStatusReport(cqName string, lastRunTime time.Time) error {
+	for _, dbi := range data.Databases {
+		for name, cqi := range dbi.ContinuousQueries {
+			if name == cqName {
+				cqi.LastRunTime = lastRunTime
+				return nil
+			}
+		}
+	}
+	return ErrContinuousQueryNotFound
+}
+
 func (data *Data) MarkMeasurementDelete(database, policy, measurement string) error {
 	mst, err := data.Measurement(database, policy, measurement)
 	if err != nil {

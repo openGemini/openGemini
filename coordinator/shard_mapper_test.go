@@ -103,6 +103,10 @@ func (m mocShardMapperMetaClient) SendSql2MetaHeartbeat(host string) error {
 	return nil
 }
 
+func (m mocShardMapperMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
+	return nil
+}
+
 func (m mocShardMapperMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }

@@ -207,6 +207,7 @@ type MetaClient interface {
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	SendSql2MetaHeartbeat(host string) error
+	CQStatusReport(name string, lastRunTime time.Time) error
 }
 
 type LoadCtx struct {
@@ -783,6 +784,18 @@ func (c *Client) ShowContinuousQueries() (models.Rows, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.ShowContinuousQueries()
+}
+
+func (c *Client) CQStatusReport(name string, lastRunTime time.Time) error {
+	cmd := &proto2.ContinuousQueryReportCommand{
+		Name:        proto.String(name),
+		LastRunTime: proto.Int64(lastRunTime.UnixNano()),
+	}
+
+	if _, err := c.retryExec(proto2.Command_ContinuousQueryReportCommand, proto2.E_ContinuousQueryReportCommand_Command, cmd); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,
