@@ -17,10 +17,15 @@ limitations under the License.
 package handler
 
 import (
+	"fmt"
 	"path"
+	"sort"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/app/ts-store/transport/query"
+	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -124,4 +129,125 @@ func TestCreateDataBase_Process(t *testing.T) {
 		t.Fatal("response type is invalid")
 	}
 	assert.Nil(t, response.Error())
+}
+
+var clientIDs = []uint64{1000, 2000, 3000}
+var mockQueriesNum = 10
+
+type mockQuery struct {
+	id   int
+	info *netstorage.QueryExeInfo
+}
+
+func (m *mockQuery) Abort() {}
+
+func (m *mockQuery) GetQueryExeInfo() *netstorage.QueryExeInfo {
+	return m.info
+}
+
+func generateMockQueryExeInfos(clientID uint64, n int) []mockQuery {
+	res := make([]mockQuery, mockQueriesNum)
+	for i := 0; i < n; i++ {
+		q := mockQuery{id: i, info: &netstorage.QueryExeInfo{
+			QueryID:   clientID + uint64(i),
+			Stmt:      fmt.Sprintf("select * from mst%d\n", i),
+			Database:  fmt.Sprintf("db%d", i),
+			BeginTime: int64(i * 10000000),
+			RunState:  netstorage.Running,
+		}}
+		res[i] = q
+	}
+	return res
+}
+
+func TestShowQueries_Process(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+
+	except := make([]*netstorage.QueryExeInfo, 0)
+
+	for _, cid := range clientIDs {
+		// generate mock infos for all clients
+		queries := generateMockQueryExeInfos(cid, mockQueriesNum)
+		for i, mQuery := range queries {
+			qm := query.NewManager(cid)
+
+			qid := mQuery.GetQueryExeInfo().QueryID
+
+			qm.Add(qid, &queries[i])
+			except = append(except, mQuery.GetQueryExeInfo())
+		}
+	}
+
+	// Simulate show queries, get the queryInfos
+	h := newHandler(netstorage.ShowQueriesRequestMessage)
+	if err := h.SetMessage(&netstorage.ShowQueriesRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	h.SetStore(&storage.Storage{})
+
+	rsp, err := h.Process()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, ok := rsp.(*netstorage.ShowQueriesResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+
+	res := response.QueryExeInfos
+	// sort res and except to assert
+	sort.Slice(res, func(i, j int) bool {
+		return res[i].QueryID > res[j].QueryID
+	})
+	sort.Slice(except, func(i, j int) bool {
+		return except[i].QueryID > except[j].QueryID
+	})
+
+	for i := range except {
+		assert.Equal(t, except[i].QueryID, res[i].QueryID)
+		assert.Equal(t, except[i].Stmt, res[i].Stmt)
+		assert.Equal(t, except[i].Database, res[i].Database)
+	}
+
+	assert.Equal(t, len(clientIDs)*mockQueriesNum, len(res))
+}
+
+func TestKillQuery_Process(t *testing.T) {
+	abortedQID := clientIDs[0] + 1
+
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+
+	h := newHandler(netstorage.KillQueryRequestMessage)
+	req := netstorage.KillQueryRequest{}
+	req.QueryID = proto.Uint64(abortedQID)
+	if err := h.SetMessage(&req); err != nil {
+		t.Fatal(err)
+	}
+	h.SetStore(&storage.Storage{})
+
+	for _, cid := range clientIDs {
+		// generate mock infos for all clients
+		queries := generateMockQueryExeInfos(cid, mockQueriesNum)
+		for i, mQuery := range queries {
+			qm := query.NewManager(cid)
+
+			qid := mQuery.GetQueryExeInfo().QueryID
+
+			qm.Add(qid, &queries[i])
+		}
+	}
+
+	rsp, err := h.Process()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ok := rsp.(*netstorage.KillQueryResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	assert.NoError(t, response.Error())
+	assert.Equal(t, true, query.NewManager(clientIDs[0]).Aborted(abortedQID))
 }

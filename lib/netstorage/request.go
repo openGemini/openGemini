@@ -39,6 +39,14 @@ const (
 	MeasurementDelete
 )
 
+type RunStateType int32
+
+const (
+	Unknown RunStateType = iota
+	Running
+	Killed
+)
+
 type DeleteRequest struct {
 	Database    string
 	Rp          string
@@ -383,4 +391,88 @@ func (r *CreateDataBaseResponse) Error() error {
 		return nil
 	}
 	return fmt.Errorf("%s", *r.Err)
+}
+
+type ShowQueriesRequest struct {
+}
+
+func (r *ShowQueriesRequest) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (r *ShowQueriesRequest) UnmarshalBinary(buf []byte) error {
+	return nil
+}
+
+type QueryExeInfo struct {
+	QueryID   uint64
+	Stmt      string
+	Database  string
+	BeginTime int64
+	RunState  RunStateType
+}
+
+type ShowQueriesResponse struct {
+	QueryExeInfos []*QueryExeInfo
+}
+
+func (r *ShowQueriesResponse) MarshalBinary() ([]byte, error) {
+	var pb internal2.ShowQueriesResponse
+	pb.QueryExeInfos = make([]*internal2.QueryExeInfo, 0, len(r.QueryExeInfos))
+	for _, info := range r.QueryExeInfos {
+		pb.QueryExeInfos = append(pb.QueryExeInfos, &internal2.QueryExeInfo{
+			QueryID:   proto.Uint64(info.QueryID),
+			Stmt:      proto.String(info.Stmt),
+			Database:  proto.String(info.Database),
+			BeginTime: proto.Int64(info.BeginTime),
+			RunState:  proto.Int32(int32(info.RunState)),
+		})
+	}
+	return proto.Marshal(&pb)
+}
+
+func (r *ShowQueriesResponse) UnmarshalBinary(buf []byte) error {
+	var pb internal2.ShowQueriesResponse
+	if err := proto.Unmarshal(buf, &pb); err != nil {
+		return err
+	}
+	r.QueryExeInfos = make([]*QueryExeInfo, 0, len(pb.GetQueryExeInfos()))
+	for _, pbInfo := range pb.QueryExeInfos {
+		r.QueryExeInfos = append(r.QueryExeInfos, &QueryExeInfo{
+			QueryID:   pbInfo.GetQueryID(),
+			Stmt:      pbInfo.GetStmt(),
+			Database:  pbInfo.GetDatabase(),
+			BeginTime: pbInfo.GetBeginTime(),
+			RunState:  RunStateType(pbInfo.GetRunState()),
+		})
+	}
+	return nil
+}
+
+type KillQueryRequest struct {
+	internal2.KillQueryRequest
+}
+
+func (r *KillQueryRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.KillQueryRequest)
+}
+
+func (r *KillQueryRequest) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.KillQueryRequest)
+}
+
+type KillQueryResponse struct {
+	internal2.KillQueryResponse
+}
+
+func (r *KillQueryResponse) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.KillQueryResponse)
+}
+
+func (r *KillQueryResponse) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.KillQueryResponse)
+}
+
+func (r *KillQueryResponse) Error() error {
+	return NormalizeError(r.Err)
 }

@@ -56,14 +56,14 @@ func TestWriteRows(t *testing.T) {
 		StreamShards: nil,
 	}
 	store := netstorage.NewNetStorage(&MockMetaClient{})
-	err := store.WriteRows(ctx, 1, 1, "db0", "default", time.Second)
+	err := store.WriteRows(ctx, notExitNodeID, 1, "db0", "default", time.Second)
 	require.NoError(t, err)
 
 	ctx.Rows = rows
-	err = store.WriteRows(ctx, 1, 1, "db1", "default", time.Second)
+	err = store.WriteRows(ctx, notExitNodeID, 1, "db1", "default", time.Second)
 	require.NotEmpty(t, err)
 
-	err = store.WriteRows(ctx, 1, 1, "db0", "default", time.Second)
+	err = store.WriteRows(ctx, notExitNodeID, 1, "db0", "default", time.Second)
 	require.EqualError(t, err, "no data node")
 
 	rows[0].Fields[0].Type = influx.Field_Type_Unknown
@@ -79,6 +79,38 @@ func (c *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sg
 	return "db0", "default", &meta.ShardGroupInfo{}
 }
 
+var exitNodeID uint64 = 1
+var notExitNodeID uint64 = 2
+
 func (c *MockMetaClient) DataNode(id uint64) (*meta.DataNode, error) {
-	return nil, fmt.Errorf("no data node")
+	if id == exitNodeID {
+		return &meta.DataNode{
+			NodeInfo: meta.NodeInfo{
+				ID:   1,
+				Host: "192.168.0.1:8400",
+			},
+		}, nil
+	} else {
+		return nil, fmt.Errorf("no data node")
+	}
+}
+
+func TestNetStorage_GetQueriesOnNode(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+
+	_, err := store.GetQueriesOnNode(exitNodeID)
+	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
+
+	_, err = store.GetQueriesOnNode(notExitNodeID)
+	require.EqualError(t, err, "no data node")
+}
+
+func TestNetStorage_KillQueryOnNode(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+
+	err := store.KillQueryOnNode(exitNodeID, uint64(100001))
+	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
+
+	err = store.KillQueryOnNode(notExitNodeID, uint64(100001))
+	require.EqualError(t, err, "no data node")
 }

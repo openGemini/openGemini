@@ -21,6 +21,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
+	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -114,6 +115,33 @@ func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
 		return err
 	})
 
+	return h.rsp, nil
+}
+
+func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
+	var queries []*netstorage.QueryExeInfo
+
+	// get all query exe info from all query managers
+	getAllQueries := func(manager *query.Manager) {
+		queries = append(queries, manager.GetAll()...)
+	}
+	query.VisitManagers(getAllQueries)
+	rsp := &netstorage.ShowQueriesResponse{}
+	rsp.QueryExeInfos = queries
+
+	return rsp, nil
+
+}
+
+func (h *KillQuery) Process() (codec.BinaryCodec, error) {
+	killQueryByID := func(manager *query.Manager) {
+		qid := h.req.GetQueryID()
+		manager.Abort(qid)
+		if manager.Get(qid) != nil && !manager.Aborted(qid) {
+			h.rsp.Err = netstorage.MarshalError(errors.New("abort fail"))
+		}
+	}
+	query.VisitManagers(killQueryByID)
 	return h.rsp, nil
 }
 

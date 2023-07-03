@@ -53,6 +53,7 @@ type MetaStoreInterface interface {
 	getMeasurementsInfo(dbName, rpName string) ([]byte, error)
 	getDBBriefInfo(dbName string) ([]byte, error)
 	getDataNodeAliveConnId(nodeId uint64) (uint64, error)
+	registerQueryIDOffset(host meta.SQLHost) (uint64, error)
 }
 
 type RPCHandler interface {
