@@ -1170,6 +1170,37 @@ func TestData_CreateMigrateEvent(t *testing.T) {
 	assert2.Equal(t, uint64(1), data.MigrateEvents[dbPt1.String()].opId)
 }
 
+func TestData_CqReport(t *testing.T) {
+	data := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"db0": {
+				Name: "db0",
+				ContinuousQueries: map[string]*ContinuousQueryInfo{
+					"cq0": {
+						Name:        "cq0",
+						Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
+						MarkDeleted: false,
+						LastRunTime: time.Time{},
+					},
+				},
+			},
+		},
+	}
+	ts := time.Now()
+	if err := data.CQStatusReport("cq0", ts); err != nil {
+		t.Fatal()
+	}
+
+	lastRunTime := data.Databases["db0"].ContinuousQueries["cq0"].LastRunTime
+	if !ts.Equal(lastRunTime) {
+		t.Fatal()
+	}
+
+	if err := data.CQStatusReport("cq1", ts); err != ErrContinuousQueryNotFound {
+		t.Fatal()
+	}
+}
+
 func PrintMemUsage() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)

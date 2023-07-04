@@ -28,10 +28,3 @@ type HeartbeatInfo struct {
 	Host              string
 	LastHeartbeatTime time.Time
 }
-
-func NewHeartbeatInfo(host string, ts time.Time) *HeartbeatInfo {
-	return &HeartbeatInfo{
-		Host:              host,
-		LastHeartbeatTime: ts,
-	}
-}

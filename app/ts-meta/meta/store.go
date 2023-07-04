@@ -1407,7 +1407,10 @@ func (s *Store) updateSqlNode(host string, ts time.Time) error {
 	if s.SqlNodes[host] != nil {
 		s.HeartbeatInfoList.Remove(s.SqlNodes[host].LastHeartbeat)
 	}
-	element := s.HeartbeatInfoList.PushBack(NewHeartbeatInfo(host, ts))
+	element := s.HeartbeatInfoList.PushBack(&HeartbeatInfo{
+		Host:              host,
+		LastHeartbeatTime: ts,
+	})
 
 	// update SqlNodes.
 	// existing ts-sql.

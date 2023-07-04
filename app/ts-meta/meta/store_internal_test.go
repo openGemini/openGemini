@@ -17,15 +17,18 @@ limitations under the License.
 package meta
 
 import (
+	"container/list"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,4 +281,103 @@ func Test_GetRpMstInfos(t *testing.T) {
 	if rsp2.(*message.GetRpMstInfosResponse).Err != "server closed" {
 		t.Fatal("unexpected error")
 	}
+}
+
+func Test_ApplyHeartbeat(t *testing.T) {
+	raft := &MockRaft{isLeader: true}
+	s := &Store{
+		HeartbeatInfoList: list.New(),
+		SqlNodes:          make(map[string]*SqlNodeInfo),
+		raft:              raft,
+	}
+	host1 := "127.0.0.1:8086"
+	host2 := "127.0.0.2:8086"
+
+	err := s.applySql2MetaHeartbeat(host1)
+	require.Nil(t, err)
+	require.Equal(t, s.SqlNodes[host1].LastHeartbeat, s.HeartbeatInfoList.Front())
+	require.Equal(t, s.HeartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
+
+	err = s.applySql2MetaHeartbeat(host2)
+	require.Nil(t, err)
+	require.Equal(t, s.SqlNodes[host2].LastHeartbeat, s.HeartbeatInfoList.Front().Next())
+
+	err = s.applySql2MetaHeartbeat(host1)
+	require.Nil(t, err)
+	require.Equal(t, s.SqlNodes[host1].LastHeartbeat, s.HeartbeatInfoList.Front().Next())
+}
+
+func Test_DetectCrash(t *testing.T) {
+	raft := &MockRaft{isLeader: true}
+	s := &Store{
+		HeartbeatInfoList: list.New(),
+		SqlNodes:          make(map[string]*SqlNodeInfo),
+		closing:           make(chan struct{}),
+		raft:              raft,
+	}
+	host1 := "127.0.0.1:8086"
+	host2 := "127.0.0.2:8086"
+
+	err := s.applySql2MetaHeartbeat(host1)
+	require.Nil(t, err)
+	require.Equal(t, s.SqlNodes[host1].LastHeartbeat, s.HeartbeatInfoList.Front())
+	require.Equal(t, s.HeartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
+
+	s.wg.Add(2)
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		for {
+			select {
+			case <-s.closing:
+				return
+			case <-ticker.C:
+				err := s.applySql2MetaHeartbeat(host2)
+				require.Nil(t, err)
+			}
+		}
+	}()
+
+	go s.detectSqlNodeCrash()
+
+	time.Sleep(6 * time.Second)
+	close(s.closing)
+
+	require.Nil(t, s.SqlNodes[host1])
+	require.NotNil(t, s.SqlNodes[host2])
+}
+
+func Test_ApplyContinuousQueryReportCommand(t *testing.T) {
+	raft := &MockRaft{isLeader: true}
+	s := &Store{
+		raft: raft,
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {
+							Name:        "cq0",
+							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
+							MarkDeleted: false,
+							LastRunTime: time.Time{},
+						},
+					},
+				},
+			},
+		},
+	}
+	fsm := (*storeFSM)(s)
+	ts := time.Now()
+	value := &proto2.ContinuousQueryReportCommand{
+		Name:        proto.String("cq0"),
+		LastRunTime: proto.Int64(ts.UnixNano()),
+	}
+	typ := proto2.Command_ContinuousQueryReportCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command, value)
+	require.Nil(t, err)
+
+	err, _ = fsm.applyContinuousQueryReportCommand(cmd).(error)
+	require.Nil(t, err)
+	require.True(t, ts.Equal(fsm.data.Databases["db0"].ContinuousQueries["cq0"].LastRunTime))
 }
