@@ -50,7 +50,18 @@ func TestQueryMetric(t *testing.T) {
 		QueryInterval: toml.Duration(10 * time.Second), // 10s
 	}
 	q := NewQueryMetric(log, &conf)
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "", false, time.Hour, false, false, log, "errLogHistory")
+
+	rjConfig := config.NewTSMonitor()
+	rjConfig.ReportConfig.Address = "127.0.0.1/write"
+	rjConfig.ReportConfig.Database = "db0"
+	rjConfig.ReportConfig.Rp = "rp0"
+	rjConfig.ReportConfig.RpDuration = toml.Duration(time.Hour)
+	rj := NewReportJob(log,
+		rjConfig,
+		false,
+		"errLogHistory",
+	)
+
 	q.Reporter = rj
 
 	showFn := func(r *http.Request) (*http.Response, error) {
@@ -113,7 +124,18 @@ func TestQueryMetric_Manual(t *testing.T) {
 	}
 	nc := NewQueryMetric(logger, &conf)
 	defer nc.Close()
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "", false, time.Hour, false, false, logger, "errLogHistory")
+
+	rjConfig := config.NewTSMonitor()
+	rjConfig.ReportConfig.Address = "127.0.0.1/write"
+	rjConfig.ReportConfig.Database = "db0"
+	rjConfig.ReportConfig.Rp = "rp0"
+	rjConfig.ReportConfig.RpDuration = toml.Duration(time.Hour)
+	rj := NewReportJob(logger,
+		rjConfig,
+		false,
+		"errLogHistory",
+	)
+
 	nc.Reporter = rj
 
 	type TestCase struct {
@@ -121,7 +143,7 @@ func TestQueryMetric_Manual(t *testing.T) {
 		DoFunc func(req *http.Request) (*http.Response, error)
 	}
 
-	var testCases = []TestCase{
+	testCases := []TestCase{
 		{
 			Name: "manual collect and report ok",
 			DoFunc: func(r *http.Request) (*http.Response, error) {

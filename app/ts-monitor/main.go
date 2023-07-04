@@ -42,8 +42,10 @@ var (
 
 const TsMonitor = "ts-monitor"
 
-var monitorUsage = fmt.Sprintf(app.MainUsage, TsMonitor, TsMonitor)
-var runUsage = fmt.Sprintf(app.RunUsage, TsMonitor, TsMonitor)
+var (
+	monitorUsage = fmt.Sprintf(app.MainUsage, TsMonitor, TsMonitor)
+	runUsage     = fmt.Sprintf(app.RunUsage, TsMonitor, TsMonitor)
+)
 
 func main() {
 	app.InitParse()
