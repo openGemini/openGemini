@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -45,8 +46,18 @@ func TestNodeCollector(t *testing.T) {
 	fname := filepath.Join(dname, "file1")
 	_ = os.WriteFile(fname, make([]byte, 10240000), 0600)
 	nc := NewNodeCollector(log, &conf)
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "",
-		false, time.Hour, false, false, log, "errLogHistory")
+
+	rjConfig := config.NewTSMonitor()
+	rjConfig.ReportConfig.Address = "127.0.0.1/write"
+	rjConfig.ReportConfig.Database = "db0"
+	rjConfig.ReportConfig.Rp = "rp0"
+	rjConfig.ReportConfig.RpDuration = toml.Duration(time.Hour)
+	rj := NewReportJob(log,
+		rjConfig,
+		false,
+		"errLogHistory",
+	)
+
 	nc.Reporter = rj
 
 	doFn := func(r *http.Request) (*http.Response, error) {
@@ -76,8 +87,18 @@ func TestNodeCollector_Manual(t *testing.T) {
 	}
 	nc := NewNodeCollector(logger, &conf)
 	defer nc.Close()
-	rj := NewReportJob("127.0.0.1/write", "db0", "rp0", "", "",
-		false, time.Hour, false, false, logger, "errLogHistory")
+
+	rjConfig := config.NewTSMonitor()
+	rjConfig.ReportConfig.Address = "127.0.0.1/write"
+	rjConfig.ReportConfig.Database = "db0"
+	rjConfig.ReportConfig.Rp = "rp0"
+	rjConfig.ReportConfig.RpDuration = toml.Duration(time.Hour)
+	rj := NewReportJob(logger,
+		rjConfig,
+		false,
+		"errLogHistory",
+	)
+
 	nc.Reporter = rj
 
 	type TestCase struct {
@@ -85,7 +106,7 @@ func TestNodeCollector_Manual(t *testing.T) {
 		DoFunc func(req *http.Request) (*http.Response, error)
 	}
 
-	var testCases = []TestCase{
+	testCases := []TestCase{
 		{
 			Name: "manual collect and report ok",
 			DoFunc: func(r *http.Request) (*http.Response, error) {

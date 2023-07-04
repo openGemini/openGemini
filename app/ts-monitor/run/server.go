@@ -55,9 +55,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *logger.Logger) (a
 	}
 
 	errLogHistory := filepath.Join(c.MonitorConfig.ErrLogPath, c.MonitorConfig.History)
-	reporterJob := collector.NewReportJob(c.ReportConfig.Address, c.ReportConfig.Database, c.ReportConfig.Rp,
-		c.ReportConfig.Username, c.ReportConfig.Password, c.ReportConfig.HTTPSEnabled, time.Duration(c.ReportConfig.RpDuration),
-		false, c.MonitorConfig.Compress, logger, errLogHistory)
+	reporterJob := collector.NewReportJob(logger, c, false, errLogHistory)
 
 	s.collector.Reporter = reporterJob
 	s.nodeMonitor.Reporter = reporterJob
@@ -90,7 +88,7 @@ func (s *Server) Open() error {
 		zap.String("branch", s.cmd.ValidArgs[0]),
 		zap.String("commit", s.cmd.ValidArgs[1]),
 		zap.String("buildTime", s.cmd.ValidArgs[2]))
-	//Mark start-up in extra log
+	// Mark start-up in extra log
 	_, _ = fmt.Fprintf(os.Stdout, "%v ts-monitor starting\n", time.Now())
 
 	go s.collect()
