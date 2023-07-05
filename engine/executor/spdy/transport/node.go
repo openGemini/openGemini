@@ -19,8 +19,8 @@ package transport
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -60,7 +60,7 @@ func (n *Node) GetPool() *spdy.MultiplexedSessionPool {
 }
 
 func (n *Node) dial(idx uint64) error {
-	start := time.Now()
+	start := fasttime.UnixTimestamp()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -69,7 +69,7 @@ func (n *Node) dial(idx uint64) error {
 		return nil
 	}
 
-	if time.Since(start).Nanoseconds() > spdy.TCPDialTimeout().Nanoseconds() {
+	if (fasttime.UnixTimestamp() - start) >= uint64(spdy.TCPDialTimeout().Seconds()) {
 		statistics.NewSpdyStatistics().Add(n.failedJob)
 		return errno.NewError(errno.NoConnectionAvailable, n.nodeID, n.address)
 	}

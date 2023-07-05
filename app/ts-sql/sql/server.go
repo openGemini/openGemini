@@ -89,11 +89,11 @@ func updateTLSConfig(into **tls.Config, with *tls.Config) {
 func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (app.Server, error) {
 	// First grab the base tls config we will use for all clients and servers
 	c := conf.(*config.TSSql)
+	c.Corrector(c.Common.CPUNum)
 	tlsConfig, err := c.TLS.Parse()
 	if err != nil {
 		return nil, fmt.Errorf("tls configuration: %v", err)
 	}
-	config.EnableTagArray = c.Common.EnableTagArray
 
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", c.HTTP.BindAddress)))
 	// Update the TLS values on each of the configs to be the parsed one if
@@ -118,6 +118,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.httpService.Handler.Version = cmd.Version
 	s.httpService.Handler.BuildType = "OSS"
 	s.initMetaClientFn = s.initializeMetaClient
+	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
 	go openServer(c, logger)
 
@@ -131,6 +132,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	s.PointsWriter = coordinator.NewPointsWriter(time.Duration(c.Coordinator.ShardWriterTimeout))
 	s.PointsWriter.TSDBStore = s.TSDBStore
 	go s.PointsWriter.ApplyTimeRangeLimit(c.Coordinator.TimeRangeLimit)
+	coordinator.SetTagLimit(c.Coordinator.TagLimit)
 
 	syscontrol.SysCtrl.MetaClient = s.MetaClient
 	syscontrol.SysCtrl.NetStore = store
@@ -272,7 +274,7 @@ func (s *Server) initializeMetaClient() error {
 		// start up a new single node cluster
 		return fmt.Errorf("server not set to join existing cluster must run also as a meta node")
 	} else {
-		_, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil)
+		_, _, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil)
 		if err != nil {
 			return err
 		}
@@ -306,12 +308,13 @@ func (s *Server) initStatisticsPusher() {
 		return
 	}
 
+	hostname := config.CombineDomain(s.config.HTTP.Domain, s.config.HTTP.BindAddress)
 	globalTags := map[string]string{
-		"hostname": s.config.HTTP.BindAddress,
+		"hostname": strings.ReplaceAll(hostname, ",", "_"),
 		"app":      appName,
 	}
+
 	stat.InitHandlerStatistics(globalTags)
-	stat.InitDatabaseStatistics(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	transport.InitStatistics(transport.AppSql)
 	stat.InitSlowQueryStatistics(globalTags)

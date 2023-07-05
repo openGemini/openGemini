@@ -22,7 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/rand"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
@@ -73,7 +73,7 @@ func (p *StringPoint) Set(index int, time int64, value string) {
 	p.index = index
 	p.time = time
 	p.isNil = false
-	valueByte := record.Str2bytes(value)
+	valueByte := util.Str2bytes(value)
 	if cap(p.value) >= len(valueByte) {
 		p.value = p.value[:len(valueByte)]
 		copy(p.value, valueByte)
@@ -1905,7 +1905,8 @@ func (r *{{.Name}}Col{{.Name}}DistinctIterator) processFirstWindow(
     {{- if ne .Name "String"}}
     r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).{{.Name}}Values()[start:end])
     {{- else}}
-    r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end))
+   	r.stringBuff = inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end)
+    r.buf.appendItem(inChunk.Time()[start:end], r.stringBuff)
     {{- end}}
 	if hasMultiInterval || !sameInterval {
 		sort.Sort(r.buf)
@@ -1927,7 +1928,8 @@ func (r *{{.Name}}Col{{.Name}}DistinctIterator) processLastWindow(
     {{- if ne .Name "String"}}
     r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).{{.Name}}Values()[start:end])
     {{- else}}
-    r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end))
+    r.stringBuff = inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end)
+    r.buf.appendItem(inChunk.Time()[start:end], r.stringBuff)
     {{- end}}
 }
 
@@ -1937,7 +1939,8 @@ func (r *{{.Name}}Col{{.Name}}DistinctIterator) processMiddleWindow(
     {{- if ne .Name "String"}}
     r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).{{.Name}}Values()[start:end])
     {{- else}}
-    r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end))
+   	r.stringBuff = inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end)
+    r.buf.appendItem(inChunk.Time()[start:end], r.stringBuff)
     {{- end}}
 	sort.Sort(r.buf)
 	if r.buf.Len() > 0 {

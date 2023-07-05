@@ -201,14 +201,20 @@ func createDatabase(cmd *proto2.Command) error {
 	}
 
 	// 2.assign db pt
-	dbPts, err := globalService.store.getDbPtsByDbname(v.GetName())
+	dbPts, err := globalService.store.getDbPtsByDbname(v.GetName(), v.GetEnableTagArray())
 	if err != nil {
 		return err
 	}
 	errChan := make(chan error, len(dbPts))
 	for _, dbPt := range dbPts {
 		go func(pt *meta.DbPtInfo) {
-			errChan <- globalService.balanceManager.assignDbPt(pt, pt.Pti.Owner.NodeID, true)
+			nodeId := pt.Pti.Owner.NodeID
+			aliveConnId, err := globalService.store.getDataNodeAliveConnId(nodeId)
+			if err != nil {
+				errChan <- err
+			} else {
+				errChan <- globalService.balanceManager.assignDbPt(pt, nodeId, aliveConnId, true)
+			}
 		}(dbPt)
 	}
 
@@ -375,6 +381,31 @@ func (h *GetMeasurementInfo) Process() (transport.Codec, error) {
 	if err != nil {
 		rsp.Err = err.Error()
 		return rsp, nil
+	}
+	rsp.Data = b
+	return rsp, nil
+}
+
+func (h *GetMeasurementsInfo) Process() (transport.Codec, error) {
+	rsp := &message.GetMeasurementsInfoResponse{}
+	b, err := h.store.getMeasurementsInfo(h.req.DbName, h.req.RpName)
+	if err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.Data = b
+	return rsp, nil
+}
+
+func (h *GetDBBriefInfo) Process() (transport.Codec, error) {
+	rsp := &message.GetDBBriefInfoResponse{}
+	if h.isClosed() {
+		rsp.Err = "server closed"
+		return rsp, nil
+	}
+	b, err := h.store.getDBBriefInfo(h.req.DbName)
+	if err != nil {
+		rsp.Err = err.Error()
 	}
 	rsp.Data = b
 	return rsp, nil

@@ -26,8 +26,8 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
@@ -136,6 +136,7 @@ func buildDag() hybridqp.QueryNode {
 
 func TestLogicalPlanCodec(t *testing.T) {
 	schema := createQuerySchema()
+	schema.SetFill(influxql.NoFill)
 
 	logicSeries1 := executor.NewLogicalSeries(schema)
 	logicSeries2 := executor.NewLogicalSeries(schema)
@@ -195,6 +196,7 @@ func TestLogicalPlanCodec(t *testing.T) {
 
 func TestQueryNodeCodec(t *testing.T) {
 	schema := createQuerySchema()
+	schema.SetFill(influxql.NoFill)
 
 	logicSeries1 := executor.NewLogicalSeries(schema)
 	logicSeries2 := executor.NewLogicalSeries(schema)
@@ -223,18 +225,33 @@ func TestQueryNodeCodec(t *testing.T) {
 	}
 
 	assert.NoError(t, ComparePlan(exg, other))
+
+	inputs := []hybridqp.QueryNode{nil, logicSeries1}
+	for _, input := range inputs {
+		colStoreReader := executor.NewLogicalColumnStoreReader(input, schema)
+		exg = executor.NewLogicalExchange(colStoreReader, executor.NODE_EXCHANGE, []hybridqp.Trait{1, 2, 3}, schema)
+		node, err = executor.MarshalQueryNode(exg)
+		if !assert.NoError(t, err) {
+			return
+		}
+		other, err = executor.UnmarshalQueryNode(node)
+		if !assert.NoError(t, err) {
+			return
+		}
+		assert.NoError(t, ComparePlan(exg, other))
+	}
 }
 
 func TestUnmarshalQueryNode(t *testing.T) {
 	buf := []byte{0}
 	_, err := executor.UnmarshalQueryNode(buf)
-	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, record.Uint64SizeBytes, len(buf)).Error())
+	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, util.Uint64SizeBytes, len(buf)).Error())
 
 	buf = make([]byte, 10)
 	size := uint64(100)
-	binary.BigEndian.PutUint64(buf[:record.Uint64SizeBytes], size)
+	binary.BigEndian.PutUint64(buf[:util.Uint64SizeBytes], size)
 	_, err = executor.UnmarshalQueryNode(buf)
-	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, size, len(buf)-record.Uint64SizeBytes).Error())
+	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, size, len(buf)-util.Uint64SizeBytes).Error())
 }
 
 func CompareRowDataType(a, b hybridqp.RowDataType) error {

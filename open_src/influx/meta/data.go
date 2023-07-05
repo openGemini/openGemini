@@ -157,6 +157,7 @@ func (data *Data) GetDurationInfos(dbPtIds map[string][]uint32) map[uint64]*Shar
 							durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
 							durationInfo.Ident.DownSampleID = sh.DownSampleID
 							durationInfo.Ident.ReadOnly = sh.ReadOnly
+							durationInfo.Ident.EngineType = uint32(sg.EngineType)
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
 							durationInfo.DurationInfo.Tier = sh.Tier
@@ -193,6 +194,7 @@ func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationRespo
 							durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
 							durationInfo.Ident.DownSampleID = sh.DownSampleID
 							durationInfo.Ident.ReadOnly = sh.ReadOnly
+							durationInfo.Ident.EngineType = uint32(sg.EngineType)
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
 							durationInfo.DurationInfo.Tier = sh.Tier
@@ -249,6 +251,26 @@ func (data *Data) Measurement(database, retentionPolicy, mst string) (*Measureme
 	return msti, nil
 }
 
+func (data *Data) Measurements(database, retentionPolicy string) (*MeasurementsInfo, error) {
+	rp, err := data.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return nil, err
+	}
+
+	m := &MeasurementsInfo{}
+	mstsSlice := make([]*MeasurementInfo, 0, len(rp.Measurements))
+	rp.EachMeasurements(func(mst *MeasurementInfo) {
+		mstsSlice = append(mstsSlice, mst)
+	})
+
+	if len(mstsSlice) == 0 {
+		return nil, ErrMeasurementsNotFound
+	}
+
+	m.MstsInfo = mstsSlice
+	return m, nil
+}
+
 func (data *Data) UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
 	msti, err := data.Measurement(database, retentionPolicy, mst)
 	if err != nil {
@@ -293,7 +315,7 @@ func (data *Data) ReSharding(info *ReShardingInfo) error {
 	startTime := time.Unix(0, info.SplitTime+1)
 	data.createIndexGroup(rp, startTime)
 	DataLogger.Info("reSharding info", zap.Time("splitTime", time.Unix(0, info.SplitTime+1)), zap.Any("bounds", info.Bounds))
-	err = data.CreateShardGroupWithBounds(rp, startTime, info.Bounds)
+	err = data.CreateShardGroupWithBounds(rp, startTime, info.Bounds, rp.ShardGroups[length-1].EngineType) // shard group id start from 1...
 	return err
 }
 
@@ -323,7 +345,7 @@ func (data *Data) createIndexGroup(rp *RetentionPolicyInfo, startTime time.Time)
 	sort.Sort(IndexGroupInfos(rp.IndexGroups))
 }
 
-func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime time.Time, bounds []string) error {
+func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime time.Time, bounds []string, engineType config.EngineType) error {
 	// Create the shard group.
 	data.MaxShardGroupID++
 	sgi := ShardGroupInfo{}
@@ -331,6 +353,7 @@ func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime 
 	sgi.StartTime = startTime.UTC()
 	lastSg := &rp.ShardGroups[len(rp.ShardGroups)-1]
 	sgi.EndTime = lastSg.EndTime.UTC()
+	sgi.EngineType = engineType
 
 	igi := rp.IndexGroups[len(rp.IndexGroups)-1]
 	shardN := len(bounds) + 1
@@ -366,7 +389,7 @@ func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime 
 
 // createVersionMeasurement create new measurement
 func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo,
-	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32) {
+	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32, engineType config.EngineType, colStoreInfo *ColStoreInfo) {
 	sgLen := len(rp.ShardGroups)
 	if sgLen == 0 {
 		ski.ShardGroup = data.MaxShardGroupID + 1
@@ -375,7 +398,10 @@ func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *pr
 	}
 	nameWithVer := influx.GetNameWithVersion(mst, version)
 
-	msti := &MeasurementInfo{Name: nameWithVer, originName: mst}
+	msti := &MeasurementInfo{Name: nameWithVer, originName: mst, EngineType: engineType}
+	if colStoreInfo != nil {
+		msti.ColStoreInfo = colStoreInfo
+	}
 	if shardKey != nil {
 		msti.ShardKeys = []ShardKeyInfo{*ski}
 	}
@@ -404,7 +430,7 @@ func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *pr
 	rp.Measurements[nameWithVer] = msti
 }
 
-func (data *Data) CreateMeasurement(database string, rpName string, mst string, shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation) error {
+func (data *Data) CreateMeasurement(database string, rpName string, mst string, shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation, engineType config.EngineType, colStoreInfo *proto2.ColStoreInfo) error {
 	rp, err := data.RetentionPolicy(database, rpName)
 	if err != nil {
 		return err
@@ -418,6 +444,12 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string, 
 		}
 	}
 
+	var hInfo *ColStoreInfo
+	if colStoreInfo != nil {
+		hInfo = &ColStoreInfo{}
+		hInfo.Unmarshal(colStoreInfo)
+	}
+
 	msti := rp.Measurement(mst)
 	if msti == nil || msti.MarkDeleted {
 		version, ok := rp.MstVersions[mst]
@@ -428,7 +460,7 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string, 
 			rp.MstVersions = make(map[string]uint32)
 		}
 		rp.MstVersions[mst] = version
-		data.createVersionMeasurement(rp, shardKey, indexR, ski, mst, version)
+		data.createVersionMeasurement(rp, shardKey, indexR, ski, mst, version, engineType, hInfo)
 		return nil
 	}
 
@@ -953,7 +985,7 @@ func (data *Data) CheckCanCreateDatabase(name string) error {
 
 // CreateDatabase creates a new database.
 // It returns an error if name is blank or if a database with the same name already exists.
-func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo) error {
+func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo, enableTagArray bool) error {
 	err := data.CheckCanCreateDatabase(dbName)
 	if err != nil {
 		if err == ErrDatabaseExists {
@@ -976,6 +1008,7 @@ func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardK
 		dbi.ShardKey = *ski
 	}
 
+	dbi.EnableTagArray = enableTagArray
 	err = data.SetDatabase(dbi)
 	return err
 }
@@ -1435,13 +1468,13 @@ func (data *Data) ShardGroupsByTimeRange(database, policy string, tmin, tmax tim
 	return groups, nil
 }
 
-func (data *Data) GetTierOfShardGroup(database, policy string, timestamp time.Time, defaultTier uint64) (*ShardGroupInfo, uint64, error) {
+func (data *Data) GetTierOfShardGroup(database, policy string, timestamp time.Time, defaultTier uint64, engineType config.EngineType) (*ShardGroupInfo, uint64, error) {
 	rpi, err := data.RetentionPolicy(database, policy)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	sgi := rpi.ShardGroupByTimestamp(timestamp)
+	sgi := rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType)
 	if sgi != nil {
 		return sgi, 0, nil
 	}
@@ -1469,8 +1502,8 @@ func (data *Data) GetTierOfShardGroup(database, policy string, timestamp time.Ti
 	return nil, tier, nil
 }
 
-// ShardGroupByTimestamp returns the shard group on a database and policy for a given timestamp.
-func (data *Data) ShardGroupByTimestamp(database, policy string, timestamp time.Time) (*ShardGroupInfo, error) {
+// ShardGroupByTimestampAndEngineType returns the shard group on a database and policy for a given timestamp and engine type.
+func (data *Data) ShardGroupByTimestampAndEngineType(database, policy string, timestamp time.Time, engineType config.EngineType) (*ShardGroupInfo, error) {
 	// Find retention policy.
 	rpi, err := data.RetentionPolicy(database, policy)
 	if err != nil {
@@ -1479,11 +1512,11 @@ func (data *Data) ShardGroupByTimestamp(database, policy string, timestamp time.
 		return nil, ErrRetentionPolicyNotFound(policy)
 	}
 
-	return rpi.ShardGroupByTimestamp(timestamp), nil
+	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
 }
 
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
-func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64) error {
+func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64, engineType config.EngineType) error {
 	if err := data.checkStoreReady(); err != nil {
 		return err
 	}
@@ -1494,7 +1527,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	}
 
 	// Verify that shard group doesn't already exist for this timestamp.
-	if rpi.ShardGroupByTimestamp(timestamp) != nil {
+	if rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType) != nil {
 		return nil
 	}
 
@@ -1527,6 +1560,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	sgi.ID = data.MaxShardGroupID
 	sgi.StartTime = timestamp.Truncate(rpi.ShardGroupDuration).UTC()
 	sgi.EndTime = sgi.StartTime.Add(rpi.ShardGroupDuration).UTC()
+	sgi.EngineType = engineType
 	if sgi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
 		// Shard group range is [start, end) so add one to the max time.
 		sgi.EndTime = time.Unix(0, models.MaxNanoTime+1)
@@ -1545,7 +1579,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 		sgi.Shards = make([]ShardInfo, shardN)
 	}
 
-	// check index group contain this shard group
+	//check index group contain this shard group
 	igi := data.createIndexGroupIfNeeded(rpi, timestamp)
 
 	for i := range sgi.Shards {
@@ -2277,7 +2311,7 @@ func (data *Data) importOneDB(other Data, backupDBName, restoreDBName, backupRPN
 		return "", errors.New("database already exists")
 	}
 	// change the names if we want/need to
-	err := data.CreateDatabase(restoreDBName, nil, nil)
+	err := data.CreateDatabase(restoreDBName, nil, nil, false)
 	if err != nil {
 		return "", err
 	}
@@ -2391,9 +2425,10 @@ func (data *Data) updatePtViewStatus(nid uint64, status PtStatus) {
 }
 
 type DbPtInfo struct {
-	Db     string
-	Pti    *PtInfo
-	Shards map[uint64]*ShardDurationInfo
+	Db          string
+	Pti         *PtInfo
+	Shards      map[uint64]*ShardDurationInfo
+	DBBriefInfo *DatabaseBriefInfo
 }
 
 func (pt *DbPtInfo) String() string {
@@ -2412,6 +2447,11 @@ func (pt *DbPtInfo) Marshal() *proto2.DbPt {
 	for sid := range pt.Shards {
 		pb.Shards[sid] = pt.Shards[sid].marshal()
 	}
+
+	pb.DBBriefInfo = &proto2.DatabaseBriefInfo{
+		Name:           proto.String(pt.Db),
+		EnableTagArray: proto.Bool(pt.DBBriefInfo.EnableTagArray),
+	}
 	return pb
 }
 
@@ -2428,6 +2468,9 @@ func (pt *DbPtInfo) Unmarshal(pb *proto2.DbPt) {
 		pt.Shards[sid] = &ShardDurationInfo{}
 		pt.Shards[sid].unmarshal(pb.Shards[sid])
 	}
+	pt.DBBriefInfo = &DatabaseBriefInfo{}
+	pt.DBBriefInfo.Name = pb.DBBriefInfo.GetName()
+	pt.DBBriefInfo.EnableTagArray = pb.DBBriefInfo.GetEnableTagArray()
 }
 
 func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*ShardDurationInfo {
@@ -2455,6 +2498,7 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 				durationInfo.Ident.DownSampleID = sh.DownSampleID
 				durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
 				durationInfo.Ident.ReadOnly = sh.ReadOnly
+				durationInfo.Ident.EngineType = uint32(sg.EngineType)
 				durationInfo.DurationInfo = DurationDescriptor{}
 				durationInfo.DurationInfo.Duration = rp.Duration
 				durationInfo.DurationInfo.Tier = sh.Tier
@@ -2473,27 +2517,33 @@ func (data *Data) GetFailedPtInfos(id uint64, status PtStatus) []*DbPtInfo {
 		if data.Databases[db] == nil || data.Database(db).MarkDeleted {
 			continue
 		}
+
+		dbInfo := data.GetDBBriefInfo(db)
 		for i := range data.PtView[db] {
 			if data.PtView[db][i].Owner.NodeID == id && data.PtView[db][i].Status == status {
 				shards := data.GetShardDurationsByDbPt(db, data.PtView[db][i].PtId)
 				pt := data.PtView[db][i]
-				resPtInfos = append(resPtInfos, &DbPtInfo{Db: db, Pti: &pt, Shards: shards})
+				resPtInfos = append(resPtInfos, &DbPtInfo{Db: db, Pti: &pt, Shards: shards, DBBriefInfo: dbInfo})
 			}
 		}
 	}
 	return resPtInfos
 }
 
-func (data *Data) GetPtInfosByDbname(name string) ([]*DbPtInfo, error) {
+func (data *Data) GetPtInfosByDbname(name string, enableTagArray bool) ([]*DbPtInfo, error) {
 	resPtInfos := make([]*DbPtInfo, len(data.PtView[name]))
 	if data.Database(name) != nil && data.Database(name).MarkDeleted {
 		return nil, errno.NewError(errno.DatabaseIsBeingDelete)
+	}
+	dbBriefInfo := &DatabaseBriefInfo{
+		Name:           name,
+		EnableTagArray: enableTagArray,
 	}
 	idx := 0
 	for i := range data.PtView[name] {
 		if data.PtView[name][i].Status == Offline {
 			pt := data.PtView[name][i]
-			resPtInfos[idx] = &DbPtInfo{Db: name, Pti: &pt}
+			resPtInfos[idx] = &DbPtInfo{Db: name, Pti: &pt, DBBriefInfo: dbBriefInfo}
 			idx++
 		}
 	}
@@ -2657,7 +2707,10 @@ func (data *Data) UpdateShardDownSampleInfo(ident *ShardIdentifier) error {
 	shardGroups := rp.ShardGroups
 	for i := range shardGroups {
 		if inShardGroup(&shardGroups[i], ident.ShardID) {
-			shardGroups[i].Shard(ident.ShardID).DownSampleLevel = int64(ident.DownSampleLevel)
+			if int64(ident.DownSampleLevel) > shardGroups[i].Shard(ident.ShardID).DownSampleLevel {
+				shardGroups[i].Shard(ident.ShardID).DownSampleLevel = int64(ident.DownSampleLevel)
+			}
+			shardGroups[i].Shard(ident.ShardID).ReadOnly = ident.ReadOnly
 			shardGroups[i].Shard(ident.ShardID).DownSampleID = ident.DownSampleID
 		}
 	}
@@ -2767,6 +2820,25 @@ func (data *Data) checkDDLConflict(e *proto2.MigrateEventInfo) error {
 		}
 	}
 	return nil
+}
+
+func (data *Data) GetAllDatabases() map[string]*DatabaseBriefInfo {
+	r := make(map[string]*DatabaseBriefInfo)
+	for dbName, dbInfo := range data.Databases {
+		r[dbName] = &DatabaseBriefInfo{
+			Name:           dbName,
+			EnableTagArray: dbInfo.EnableTagArray,
+		}
+	}
+	return r
+}
+
+func (data *Data) GetDBBriefInfo(name string) *DatabaseBriefInfo {
+	dbBriefInfo := &DatabaseBriefInfo{
+		Name: name,
+	}
+	dbBriefInfo.EnableTagArray = data.Databases[name].EnableTagArray
+	return dbBriefInfo
 }
 
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.

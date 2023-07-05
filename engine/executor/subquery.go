@@ -95,7 +95,7 @@ func (b *SubQueryBuilder) Build(ctx context.Context, opt query.ProcessorOptions)
 	if err != nil {
 		return nil, err
 	}
-	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource)
+	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource, nil)
 
 	return buildQueryPlan(ctx, b.stmt, b.qc, schema)
 }

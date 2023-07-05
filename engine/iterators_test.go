@@ -109,7 +109,7 @@ func CheckRecordResultAscending(records []*record.Record, tags [][]byte, schema 
 	querySchema := executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{
 		ChunkSize: 100,
 		Ascending: true,
-	})
+	}, nil)
 	itr := engine.NewTagSetCursorForTest(querySchema, 3)
 	itr.SetSchema(nil)
 	itr.SetCursors([]comm.KeyCursor{cursor1, cursor2, cursor3})
@@ -205,7 +205,7 @@ func CheckRecordResultDescending(records []*record.Record, tags [][]byte, schema
 	querySchema := executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{
 		ChunkSize: 100,
 		Ascending: false,
-	})
+	}, nil)
 	itr := engine.NewTagSetCursorForTest(querySchema, 3)
 	itr.SetCursors([]comm.KeyCursor{cursor1, cursor2, cursor3})
 	itr.SetHelper(engine.RecordCutNormal)
@@ -268,7 +268,7 @@ func CheckRecordResultForLimitSingleRow(records []*record.Record, tags [][]byte,
 		Limit:     5,
 		Offset:    3,
 	}
-	querySchema := executor.NewQuerySchema(createFields(), []string{"id", "value", "good", "name"}, opt)
+	querySchema := executor.NewQuerySchema(createFields(), []string{"id", "value", "good", "name"}, opt, nil)
 	expectedRec := genRowRec(schema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1}, []int64{12, 13, 0, 14, 15, 16, 17, 22},
 		[]int{1, 0, 1, 0, 1, 1, 0, 1}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 2.3},
@@ -338,7 +338,7 @@ func CheckRecordResultForLimitMultipleRows(records []*record.Record, tags [][]by
 		Limit:     5,
 		Offset:    3,
 	}
-	querySchema := executor.NewQuerySchema(createFieldsWithMultipleRows(), []string{"id", "value", "good", "name"}, opt)
+	querySchema := executor.NewQuerySchema(createFieldsWithMultipleRows(), []string{"id", "value", "good", "name"}, opt, nil)
 	expectedRec := genRowRec(schema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1}, []int64{12, 13, 0, 14, 15, 16, 17, 22, 23, 0, 24, 25, 26, 27, 32, 33, 0, 34},
 		[]int{1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0, 2.3, 0, 3.3, 0},
@@ -365,8 +365,9 @@ func CheckRecordResultForLimitMultipleRows(records []*record.Record, tags [][]by
 }
 
 func AddRecordToResult(dstRecord, srcRecord *record.Record) {
+	rowNum := srcRecord.RowNums()
 	for i := range srcRecord.ColVals {
-		dstRecord.ColVals[i].AppendColVal(&srcRecord.ColVals[i], dstRecord.Schema[i].Type, 0, srcRecord.RowNums())
+		dstRecord.ColVals[i].AppendColVal(&srcRecord.ColVals[i], dstRecord.Schema[i].Type, 0, rowNum)
 	}
 }
 
@@ -797,7 +798,7 @@ func TestAggregateCursor_Multi_Count(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2.  select count(*) from mst : the number of rows in one input record is 0.
@@ -847,7 +848,7 @@ func TestAggregateCursor_Multi_Count(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -916,7 +917,7 @@ func TestAggregateCursor_Single_Count(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select count(int) from mst group by time(2)
@@ -927,7 +928,7 @@ func TestAggregateCursor_Single_Count(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -999,7 +1000,7 @@ func TestAggregateCursor_Multi_Sum(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select sum(*) from mst group by time(2)
@@ -1010,7 +1011,7 @@ func TestAggregateCursor_Multi_Sum(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1074,7 +1075,7 @@ func TestAggregateCursor_Single_Sum(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select sum(int) from mst group by time(2)
@@ -1085,7 +1086,7 @@ func TestAggregateCursor_Single_Sum(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1157,7 +1158,7 @@ func TestAggregateCursor_Multi_Min(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select min(*) from mst group by time(2)
@@ -1168,7 +1169,7 @@ func TestAggregateCursor_Multi_Min(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1266,7 +1267,7 @@ func TestAggregateCursor_Single_Min(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select min(int) from mst group by time(2)
@@ -1277,7 +1278,7 @@ func TestAggregateCursor_Single_Min(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1323,7 +1324,7 @@ func TestAggregateCursor_Single_Min(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	srcRecords = make([]*record.Record, 0)
 	src1 = record.NewRecordBuilder(outSchema)
@@ -1412,7 +1413,7 @@ func TestAggregateCursor_Multi_Max(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select max(*) from mst group by time(2)
@@ -1423,7 +1424,7 @@ func TestAggregateCursor_Multi_Max(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1487,7 +1488,7 @@ func TestAggregateCursor_Single_Max(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select max(int) from mst group by time(2)
@@ -1498,7 +1499,7 @@ func TestAggregateCursor_Single_Max(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
 	dst1.RecMeta = &record.RecMeta{}
@@ -1543,7 +1544,7 @@ func TestAggregateCursor_Single_Max(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	srcRecords = make([]*record.Record, 0)
 	src1 = record.NewRecordBuilder(outSchema)
@@ -1634,7 +1635,7 @@ func TestAggregateCursor_Multi_First(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select first(*) from mst group by time(2)
@@ -1645,7 +1646,7 @@ func TestAggregateCursor_Multi_First(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1716,7 +1717,7 @@ func TestAggregateCursor_Single_First(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select first(int) from mst group by time(2)
@@ -1727,7 +1728,7 @@ func TestAggregateCursor_Single_First(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1773,7 +1774,7 @@ func TestAggregateCursor_Single_First(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	srcRecords = make([]*record.Record, 0)
 	src1 = record.NewRecordBuilder(outSchema)
@@ -1863,7 +1864,7 @@ func TestAggregateCursor_Multi_Last(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select last(*) from mst group by time(2)
@@ -1874,7 +1875,7 @@ func TestAggregateCursor_Multi_Last(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -1947,7 +1948,7 @@ func TestAggregateCursor_Single_Last(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select last(int) from mst group by time(2)
@@ -1958,7 +1959,7 @@ func TestAggregateCursor_Single_Last(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -2004,7 +2005,7 @@ func TestAggregateCursor_Single_Last(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	srcRecords = make([]*record.Record, 0)
 	src1 = record.NewRecordBuilder(outSchema)
@@ -2082,7 +2083,7 @@ func TestAggregateCursor_Single_Distinct(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select distinct(int) from mst group by time(2)
@@ -2093,7 +2094,7 @@ func TestAggregateCursor_Single_Distinct(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	dstRecords = make([]*record.Record, 0)
 	dst1 = record.NewRecordBuilder(outSchema)
@@ -2156,7 +2157,7 @@ func TestAggregateCursor_Single_Top(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select top(float,2) from mst
@@ -2183,7 +2184,7 @@ func TestAggregateCursor_Single_Top(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	//3. select top(int,2),float from mst group by time(4)
@@ -2220,7 +2221,7 @@ func TestAggregateCursor_Single_Top(t *testing.T) {
 	dst1.AppendTime(1, 2, 4, 5, 8, 9)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
@@ -2258,7 +2259,7 @@ func TestAggregateCursor_Single_Top(t *testing.T) {
 	dst1.IntervalIndex = append(dst1.IntervalIndex, 0, 2, 4)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 }
@@ -2312,7 +2313,7 @@ func TestAggregateCursor_Single_Top_WithNULL(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select top(float,2) from mst
@@ -2339,7 +2340,7 @@ func TestAggregateCursor_Single_Top_WithNULL(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	//3. select top(int,2),float from mst group by time(4)
@@ -2377,7 +2378,7 @@ func TestAggregateCursor_Single_Top_WithNULL(t *testing.T) {
 	dst1.AppendTime(1, 3, 4, 5)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
@@ -2417,7 +2418,7 @@ func TestAggregateCursor_Single_Top_WithNULL(t *testing.T) {
 	dst1.IntervalIndex = append(dst1.IntervalIndex, 0, 2, 3)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 }
@@ -2468,7 +2469,7 @@ func TestAggregateCursor_Single_Bottom(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select bottom(float,2) from mst
@@ -2495,7 +2496,7 @@ func TestAggregateCursor_Single_Bottom(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	//3. select bottom(int,2),float from mst group by time(4)
@@ -2532,7 +2533,7 @@ func TestAggregateCursor_Single_Bottom(t *testing.T) {
 	dst1.AppendTime(2, 3, 6, 7, 8, 9)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
@@ -2570,7 +2571,7 @@ func TestAggregateCursor_Single_Bottom(t *testing.T) {
 	dst1.IntervalIndex = append(dst1.IntervalIndex, 0, 2, 4)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 }
@@ -2624,7 +2625,7 @@ func TestAggregateCursor_Single_Bottom_WithNULL(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	// 2. select bottom(float,2) from mst
@@ -2651,7 +2652,7 @@ func TestAggregateCursor_Single_Bottom_WithNULL(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 3,
 	}
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
 	//3. select bottom(int,2),float from mst group by time(4)
@@ -2689,7 +2690,7 @@ func TestAggregateCursor_Single_Bottom_WithNULL(t *testing.T) {
 	dst1.AppendTime(1, 3, 5, 6)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 
@@ -2728,7 +2729,7 @@ func TestAggregateCursor_Single_Bottom_WithNULL(t *testing.T) {
 	dst1.IntervalIndex = append(dst1.IntervalIndex, 0, 2, 3)
 	dstRecords = append(dstRecords, dst1)
 
-	querySchema = executor.NewQuerySchema(nil, nil, opt)
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
 
 	testAggregateCursor(t, inSchema, outSchema, srcRecords, dstRecords, exprOpt, querySchema)
 }
@@ -2827,7 +2828,7 @@ func BenchmarkAggregateCursor_Min_Float_Record_SingleTS(b *testing.B) {
 		Ascending: true,
 		ChunkSize: recordSize,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
 }
 
@@ -2850,7 +2851,7 @@ func BenchmarkAggregateCursor_Max_Float_Record_SingleTS(b *testing.B) {
 		Ascending: true,
 		ChunkSize: recordSize,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
 }
 
@@ -2874,7 +2875,7 @@ func BenchmarkAggregateCursor_Count_Float_Record_SingleTS(b *testing.B) {
 		Ascending: true,
 		ChunkSize: recordSize,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
 }
 
@@ -2898,7 +2899,7 @@ func BenchmarkAggregateCursor_Sum_Float_Record_SingleTS(b *testing.B) {
 		Ascending: true,
 		ChunkSize: recordSize,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
 }
 
@@ -2922,7 +2923,7 @@ func BenchmarkAggregateCursor_First_Float_Record_SingleTS(b *testing.B) {
 		Ascending: true,
 		ChunkSize: recordSize,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
 }
 
@@ -2946,7 +2947,7 @@ func BenchmarkAggregateCursor_Last_Float_Record_SingleTS(b *testing.B) {
 		Ascending: true,
 		ChunkSize: recordSize,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, opt)
+	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkAggregateCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
 }
 
@@ -3071,7 +3072,7 @@ func TestAggTagSetCursorNext_SingleSeries(t *testing.T) {
 	opt := query.ProcessorOptions{
 		Ascending: true,
 	}
-	querySchema := executor.NewQuerySchema(nil, nil, &opt)
+	querySchema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	rec := genRowRec(schema,
 		[]int{1, 1, 1}, []int64{0, 1, 2},
 		[]int{0, 1, 1}, []float64{0, 2.2, 5.3},

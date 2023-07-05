@@ -20,7 +20,13 @@ import (
 	"fmt"
 
 	"github.com/openGemini/openGemini/lib/numberenc"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
+)
+
+const (
+	IndexOfTimeStoreFlag = 0
+
+	TimeStoreFlag = 1
 )
 
 type Trailer struct {
@@ -51,6 +57,21 @@ func (t *Trailer) reset() {
 
 	t.data = t.data[:0]
 	t.name = t.name[:0]
+}
+
+func (t *Trailer) SetData(idx int, v byte) {
+	if cap(t.data) < (idx + 1) {
+		t.data = append(t.data[:cap(t.data)], make([]byte, idx+1-cap(t.data))...)
+	}
+	t.data = t.data[:idx+1]
+	t.data[idx] = v
+}
+
+func (t *Trailer) EqualData(idx int, v byte) bool {
+	if len(t.data) < idx+1 {
+		return false
+	}
+	return t.data[idx] == v
 }
 
 func (t *Trailer) marshal(dst []byte) []byte {
@@ -85,7 +106,7 @@ func (t *Trailer) ContainsId(id uint64) bool {
 	return false
 }
 
-func (t *Trailer) ContainsTime(tm record.TimeRange) bool {
+func (t *Trailer) ContainsTime(tm util.TimeRange) bool {
 	return tm.Overlaps(t.minTime, t.maxTime)
 }
 

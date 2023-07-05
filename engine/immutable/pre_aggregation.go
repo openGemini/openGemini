@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,7 +24,17 @@ import (
 
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+)
+
+const (
+	minIndex = iota
+	maxIndex
+	minTIndex
+	maxTIndex
+	sumIndex
+	countIndex
 )
 
 type PreAggBuilder interface {
@@ -51,11 +61,8 @@ var (
 	stringPreAggPool  = sync.Pool{}
 	timePreAggPool    = sync.Pool{}
 
-	MinMaxTimeLen = int(unsafe.Sizeof(SegmentRange{}))
-	SegmentLen    = (Segment{
-		offset: 0,
-		size:   0,
-	}).bytes()
+	MinMaxTimeLen    = int(unsafe.Sizeof(SegmentRange{}))
+	SegmentLen       = (Segment{}).bytes()
 	ColumnMetaLenMin = (ColumnMeta{}).bytes(1)
 	ChunkMetaLen     = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
 	ChunkMetaMinLen  = ChunkMetaLen + ColumnMetaLenMin*2
@@ -184,7 +191,7 @@ func NewIntegerPreAgg() *IntegerPreAgg {
 }
 
 func (m *IntegerPreAgg) size() int {
-	return (countIndex + 1) * record.Int64SizeBytes
+	return (countIndex + 1) * util.Int64SizeBytes
 }
 
 func (m *IntegerPreAgg) marshal(dst []byte) []byte {
@@ -295,14 +302,7 @@ type FloatPreAgg struct {
 }
 
 func NewFloatPreAgg() *FloatPreAgg {
-	m := &FloatPreAgg{
-		minV:    0,
-		maxV:    0,
-		minTime: 0,
-		maxTime: 0,
-		sumV:    0,
-		countV:  0,
-	}
+	m := &FloatPreAgg{}
 	m.reset()
 	return m
 }

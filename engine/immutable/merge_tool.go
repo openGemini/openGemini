@@ -127,14 +127,13 @@ func (mt *mergeTool) merge(ctx *mergeContext, force bool) {
 		return
 	}
 
-	orderWg, inorderWg := mt.mts.refMmsTable(ctx.mst, false)
+	orderWg, inorderWg := mt.mts.refMmsTable(ctx.mst, true)
 	var unordered, order *TSSPFiles
 	var err error
 	success := false
 
 	defer func() {
 		mt.mts.unrefMmsTable(orderWg, inorderWg)
-		UnrefAll(unordered, order)
 		mt.mts.CompactDone(ctx.order.path)
 		if !success {
 			statistics.NewMergeStatistics().AddErrors(1)
@@ -162,12 +161,6 @@ func (mt *mergeTool) merge(ctx *mergeContext, force bool) {
 		}
 
 		mt.stat.StatMergedFile(SumFilesSize(mergedFiles.Files()), mergedFiles.Len())
-
-		defer func() {
-			unordered, order = nil, nil
-		}()
-		UnrefAll(unordered, order)
-
 		if err := mt.mts.replaceMergedFiles(ctx.mst, mt.zlg, order.Files(), mergedFiles.Files()); err != nil {
 			mt.zlg.Error("failed to replace merged files", zap.Error(err))
 			return
@@ -179,6 +172,7 @@ func (mt *mergeTool) merge(ctx *mergeContext, force bool) {
 }
 
 func (mt *mergeTool) getTSSPFiles(ctx *mergeContext) (*TSSPFiles, *TSSPFiles, error) {
+	ctx.Sort()
 	order, err := mt.mts.getFilesByPath(ctx.mst, ctx.order.path, true)
 	if err != nil {
 		return nil, nil, err
@@ -186,7 +180,6 @@ func (mt *mergeTool) getTSSPFiles(ctx *mergeContext) (*TSSPFiles, *TSSPFiles, er
 
 	unordered, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, false)
 	if err != nil {
-		UnrefAll(order)
 		return nil, nil, err
 	}
 
@@ -253,10 +246,6 @@ func (mt *mergeTool) mergeSelf(ctx *mergeContext, files *TSSPFiles) {
 		return
 	}
 
-	defer func() {
-		files.files = nil
-	}()
-	UnrefAll(files)
 	err = mt.mts.ReplaceFiles(ctx.mst, files.Files(), []TSSPFile{mergedFile}, false)
 	if err != nil {
 		mt.zlg.Error("failed to replace files", zap.Error(err))
@@ -296,12 +285,8 @@ func (mt *mergeTool) readUnorderedRecords(files *TSSPFiles) (map[uint64]*record.
 func (mt *mergeTool) saveRecords(ctx *mergeContext, fileName TSSPFileName,
 	data map[uint64]*record.Record, ids []uint64) (TSSPFile, error) {
 
-	sh := &record.SortHelper{}
-	aux := &record.SortAux{
-		RowIds:  nil,
-		Times:   nil,
-		SortRec: nil,
-	}
+	sh := record.NewSortHelper()
+	defer sh.Release()
 
 	fileName.merge++
 	fileName.lock = mt.mts.lock
@@ -325,12 +310,8 @@ func (mt *mergeTool) saveRecords(ctx *mergeContext, fileName TSSPFileName,
 			continue
 		}
 
-		aux.InitRecord(rec.Schemas())
-		sh.Sort(rec, aux)
-
-		aux.SortRec, rec = rec, aux.SortRec
-
-		builder, err = builder.WriteRecord(sid, rec, nil)
+		rec = sh.Sort(rec)
+		builder, err = builder.WriteRecord(sid, rec, nil, nil)
 		if err != nil {
 			return nil, err
 		}

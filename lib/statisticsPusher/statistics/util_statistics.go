@@ -24,7 +24,7 @@ import (
 )
 
 const (
-	maxTimeDiff = 30 * time.Second
+	maxTimeDiff = 60 * time.Second
 )
 
 func addTagFieldToBuffer(statisticsName string, tagMap map[string]string, fieldMap map[string]interface{}, buffer []byte) []byte {
@@ -94,7 +94,8 @@ func formatString(s string, quote bool) string {
 	}
 
 	for i := 0; i < len(s); i++ {
-		if s[i] == ' ' || s[i] == 0 || s[i] == '\n' || s[i] == '\r' || s[i] == '\t' || s[i] == '"' {
+		if s[i] == ' ' || s[i] == 0 || s[i] == '\n' || s[i] == '\r' || s[i] == '\t' ||
+			s[i] == '"' || s[i] == '=' || s[i] == ',' {
 			continue
 		}
 		buf = append(buf, s[i])

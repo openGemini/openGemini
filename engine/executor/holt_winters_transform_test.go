@@ -159,7 +159,7 @@ func buildHoltWintersSchema1() *executor.QuerySchema {
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
 	opt.Interval.Duration = 3000000000 // 3s
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	var meanArgs []influxql.Expr
 	var meanArg influxql.Expr = &influxql.VarRef{
 		Val:   "f2",
@@ -226,7 +226,7 @@ func buildHoltWintersSchema2() *executor.QuerySchema {
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
 	opt.Interval.Duration = 1200000000000 // 20min
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	var firstArgs []influxql.Expr
 	var firstArg influxql.Expr = &influxql.VarRef{
 		Val:   "value",
@@ -355,7 +355,7 @@ func buildHoltWintersSchema4() *executor.QuerySchema {
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
 	opt.Interval.Duration = 3000000000 // 3s
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	var meanArgs []influxql.Expr
 	var meanArg influxql.Expr = &influxql.VarRef{
 		Val:   "f2",
@@ -418,6 +418,131 @@ func TestHoltWintersDemo4(t *testing.T) {
 	outRowDataType := buildHwRowDataType1()
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1, chunk2, chunk3})
 	schema := buildHoltWintersSchema4()
+	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
+	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
+		return nil
+	})
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+func BuildHwInChunk7(tagVal string) executor.Chunk {
+	rowDataType := buildHwRowDataType1()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("mem")
+	chunk.AppendTime([]int64{1671782640000000000, 1671782643000000000, 1671782646000000000}...)
+	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + tagVal), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1}...)
+	chunk.Column(0).AppendManyNotNil(1)
+	chunk.Column(0).AppendNil()
+	chunk.Column(0).AppendFloatValues([]float64{2}...)
+	chunk.Column(0).AppendManyNotNil(1)
+
+	chunk.Column(1).AppendFloatValues([]float64{1}...)
+	chunk.Column(1).AppendManyNotNil(1)
+	chunk.Column(1).AppendNil()
+	chunk.Column(1).AppendFloatValues([]float64{2}...)
+	chunk.Column(1).AppendManyNotNil(1)
+
+	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendManyNotNil(1)
+	chunk.Column(2).AppendNil()
+	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendManyNotNil(1)
+
+	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendManyNotNil(1)
+	chunk.Column(3).AppendNil()
+	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendManyNotNil(1)
+
+	return chunk
+}
+
+func buildHoltWintersSchema5() *executor.QuerySchema {
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		ChunkSize:   1024,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Dimensions:  make([]string, 0),
+		StartTime:   1671782640000000000,
+		EndTime:     1671782646000000000,
+	}
+	opt.Dimensions = append(opt.Dimensions, "tag1")
+	opt.Interval.Duration = 3000000000 // 3s
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	var meanArgs []influxql.Expr
+	var meanArg influxql.Expr = &influxql.VarRef{
+		Val:   "f2",
+		Type:  influxql.Float,
+		Alias: "",
+	}
+	meanArgs = append(meanArgs, meanArg)
+	var hwArgs []influxql.Expr
+	var hwArg0 influxql.Expr = &influxql.Call{
+		Name: "mean",
+		Args: meanArgs,
+	}
+	var hwArg1 influxql.Expr = &influxql.IntegerLiteral{
+		Val: 2000, // test out of chunksize
+	}
+	var hwArg2 influxql.Expr = &influxql.IntegerLiteral{
+		Val: 1,
+	}
+	hwArgs = append(hwArgs, hwArg0, hwArg1, hwArg2)
+	var hw influxql.Call = influxql.Call{
+		Name: "holt_winters",
+		Args: hwArgs,
+	}
+
+	var countArgs []influxql.Expr
+	var countArg influxql.Expr = &influxql.VarRef{
+		Val:   "f2",
+		Type:  influxql.Float,
+		Alias: "",
+	}
+	countArgs = append(countArgs, countArg)
+	var hwwfArgs []influxql.Expr
+	var hwwfArg0 influxql.Expr = &influxql.Call{
+		Name: "count",
+		Args: countArgs,
+	}
+	var hwwfArg1 influxql.Expr = &influxql.IntegerLiteral{
+		Val: 12,
+	}
+	var hwwfArg2 influxql.Expr = &influxql.IntegerLiteral{
+		Val: 1,
+	}
+	hwwfArgs = append(hwwfArgs, hwwfArg0, hwwfArg1, hwwfArg2)
+	var hwwf influxql.Call = influxql.Call{
+		Name: "holt_winters_with_fit",
+		Args: hwwfArgs,
+	}
+	var hws []*influxql.Call
+	hws = append(hws, &hw)
+	hws = append(hws, &hwwf)
+	schema.SetHoltWinters(hws)
+	return schema
+}
+
+func TestHoltWintersDemo5(t *testing.T) {
+	chunk1 := BuildHwInChunk7("1")
+	chunk2 := BuildHwInChunk7("2")
+	chunk3 := BuildHwInChunk7("3")
+	chunk4 := BuildHwInChunk7("4")
+	inRowDataType := buildHwRowDataType1()
+	outRowDataType := buildHwRowDataType1()
+	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1, chunk2, chunk3, chunk4})
+	schema := buildHoltWintersSchema5()
 	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
 	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
 		return nil

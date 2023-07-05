@@ -23,6 +23,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/tcp"
@@ -31,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/iodetector"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
@@ -58,6 +60,7 @@ type Server struct {
 	reportEnable bool
 
 	sherlockService *sherlock.Service
+	iodetector      *iodetector.IODetector
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -169,6 +172,8 @@ func (s *Server) Open() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Open()
 	}
+
+	s.iodetector = iodetector.OpenIODetection(s.config.IODetector)
 	return nil
 }
 
@@ -201,6 +206,9 @@ func (s *Server) Close() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Stop()
 	}
+	if s.iodetector != nil {
+		s.iodetector.Close()
+	}
 	return err
 }
 
@@ -228,7 +236,11 @@ func (s *Server) initStatisticsPusher() {
 		return
 	}
 
-	globalTags := map[string]string{"hostname": s.BindAddress, "app": appName}
+	hostname := config.CombineDomain(s.config.Meta.Domain, s.BindAddress)
+	globalTags := map[string]string{
+		"hostname": strings.ReplaceAll(hostname, ",", "_"),
+		"app":      appName,
+	}
 	stat.NewMetaStatistics().Init(globalTags)
 	stat.NewMetaRaftStatistics().Init(globalTags)
 	stat.NewErrnoStat().Init(globalTags)

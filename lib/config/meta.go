@@ -23,6 +23,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/iodetector"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 )
 
@@ -43,11 +44,11 @@ const (
 	DefaultVersion              = 0
 	DefaultSplitRowThreshold    = 10000
 	DefaultImbalanceFactor      = 0.3
-	DefaultRaftStore            = "boltdb"
 	DefaultHostname             = "localhost"
 	DefaultSuspicionMult        = 4
 	DefaultProbInterval         = toml.Duration(time.Second)
 	DefaultPtNumPerNode         = 1
+	DefaultHashAlgo             = "ver03"
 )
 
 var DefaultMetaJoin = []string{"127.0.0.1:8092"}
@@ -65,19 +66,21 @@ type TSMeta struct {
 	// TLS provides configuration options for all https endpoints.
 	TLS *tls.Config `toml:"-"`
 
-	Sherlock *SherlockConfig `toml:"sherlock"`
+	Sherlock   *SherlockConfig    `toml:"sherlock"`
+	IODetector *iodetector.Config `toml:"io-detector"`
 }
 
 // NewTSMeta returns an instance of TSMeta with reasonable defaults.
-func NewTSMeta() *TSMeta {
+func NewTSMeta(enableGossip bool) *TSMeta {
 	c := &TSMeta{}
 	c.Common = NewCommon()
 	c.Data = NewStore()
 	c.Meta = NewMeta()
 	c.Logging = NewLogger(AppMeta)
 	c.Monitor = NewMonitor(AppMeta)
-	c.Gossip = NewGossip()
+	c.Gossip = NewGossip(enableGossip)
 	c.Sherlock = NewSherlockConfig()
+	c.IODetector = iodetector.NewIODetector()
 	return c
 }
 
@@ -92,6 +95,7 @@ func (c *TSMeta) Validate() error {
 		c.Gossip,
 		c.Spdy,
 		c.Sherlock,
+		c.IODetector,
 	}
 
 	for _, item := range items {
@@ -146,7 +150,6 @@ type Meta struct {
 	Hostname                string  `toml:"hostname"`
 	SplitRowThreshold       uint64  `toml:"split-row-threshold"`
 	ImbalanceFactor         float64 `toml:"imbalance-factor"`
-	RaftStore               string  `toml:"raft-store"`
 	RemoteHostname          string
 
 	JoinPeers          []string
@@ -182,7 +185,6 @@ func NewMeta() *Meta {
 		BatchApplyCh:            true,
 		TakeOverEnable:          false,
 		ExpandShardsEnable:      false,
-		RaftStore:               DefaultRaftStore,
 		RemoteHostname:          DefaultHostname,
 		ClusterTracing:          true,
 		PtNumPerNode:            DefaultPtNumPerNode,
@@ -288,9 +290,9 @@ func (c *Gossip) BuildSerf(lg Logger, app App, name string, event chan<- serf.Ev
 	return serfConf
 }
 
-func NewGossip() *Gossip {
+func NewGossip(enableGossip bool) *Gossip {
 	return &Gossip{
-		Enabled:       false,
+		Enabled:       enableGossip,
 		LogEnabled:    true,
 		ProbInterval:  DefaultProbInterval,
 		SuspicionMult: DefaultSuspicionMult,

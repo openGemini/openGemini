@@ -50,6 +50,7 @@ type QueryNode interface {
 
 	SetInputs([]QueryNode)
 	SetSchema(Catalog)
+	New(inputs []QueryNode, schema Catalog, eTrait []Trait) QueryNode
 }
 
 type QueryNodeVisitor interface {

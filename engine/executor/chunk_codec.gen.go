@@ -89,6 +89,19 @@ func (c *ChunkImpl) Marshal(buf []byte) ([]byte, error) {
 		}
 	}
 
+	buf = codec.AppendUint32(buf, uint32(len(c.dims)))
+	for _, item := range c.dims {
+		if item == nil {
+			buf = codec.AppendUint32(buf, 0)
+			continue
+		}
+		buf = codec.AppendUint32(buf, uint32(item.Size()))
+		buf, err = item.Marshal(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return buf, err
 }
 
@@ -131,6 +144,23 @@ func (c *ChunkImpl) Unmarshal(buf []byte) error {
 		}
 	}
 
+	dimsLen := int(dec.Uint32())
+	if dimsLen == 0 {
+		return nil
+	}
+	c.dims = make([]Column, dimsLen)
+	for i := 0; i < dimsLen; i++ {
+		subBuf := dec.BytesNoCopy()
+		if len(subBuf) == 0 {
+			continue
+		}
+
+		c.dims[i] = &ColumnImpl{}
+		if err := c.dims[i].Unmarshal(subBuf); err != nil {
+			return err
+		}
+	}
+
 	return err
 }
 
@@ -149,6 +179,15 @@ func (c *ChunkImpl) Size() int {
 
 	size += codec.MaxSliceSize
 	for _, item := range c.columns {
+		size += codec.SizeOfUint32()
+		if item == nil {
+			continue
+		}
+		size += item.Size()
+	}
+
+	size += codec.MaxSliceSize
+	for _, item := range c.dims {
 		size += codec.SizeOfUint32()
 		if item == nil {
 			continue

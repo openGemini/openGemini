@@ -28,14 +28,17 @@ import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -92,7 +95,7 @@ func init() {
 }
 
 func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error) {
-	result, num, err := s.indexBuilder.Scan(span, record.Str2bytes(schema.Options().OptionsName()), schema.Options().(*query.ProcessorOptions), callBack)
+	result, num, err := s.indexBuilder.Scan(span, util.Str2bytes(schema.Options().OptionsName()), schema.Options().(*query.ProcessorOptions), callBack)
 	if err != nil {
 		return nil, num, err
 	}
@@ -144,7 +147,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		return nil, err
 	}
 	if result == nil {
-		s.log.Info("get index result empty")
+		s.log.Debug("get index result empty")
 		return nil, nil
 	}
 
@@ -160,7 +163,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	}
 
 	hasTimeFilter := false
-	tr := record.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
+	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	startTime := schema.Options().GetStartTime()
 	endTime := schema.Options().GetEndTime()
 	shardStartTime := s.startTime.UnixNano()
@@ -195,7 +198,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	return s.createGroupCursors(span, schema, lazyInit, result, readers, &memTables)
 }
 
-func (s *shard) cloneMeasurementReaders(mm string, hasTimeFilter bool, tr record.TimeRange) *immutable.MmsReaders {
+func (s *shard) cloneMeasurementReaders(mm string, hasTimeFilter bool, tr util.TimeRange) *immutable.MmsReaders {
 	var readers immutable.MmsReaders
 	orders, unOrder := s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr)
 	readers.Orders = append(readers.Orders, orders...)
@@ -214,6 +217,7 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 	var filterFieldsIdx []int
 	var filterTags []string
 	var auxTags []string
+	var condFunctions binaryfilterfunc.CondFunctions
 	var queryMin, queryMax int64
 	var e error
 
@@ -252,6 +256,7 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 			filterTags = c.ctx.filterTags
 			auxTags = c.ctx.auxTags
 			schema = c.ctx.schema
+			condFunctions = c.ctx.condFunctions
 
 			if c.ctx.schema.Len() <= 1 {
 				return nil, errno.NewError(errno.NoFieldSelected, "initGroupCursors")
@@ -261,6 +266,7 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 			c.ctx.filterFieldsIdx = filterFieldsIdx
 			c.ctx.filterTags = filterTags
 			c.ctx.auxTags = auxTags
+			c.ctx.condFunctions = condFunctions
 		}
 
 		// init map
@@ -331,22 +337,7 @@ func getQueryTimeRange(readers *immutable.MmsReaders, querySchema *executor.Quer
 func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySchema, lazyInit bool, tagSets []*tsi.TagSetInfo,
 	readers *immutable.MmsReaders, memTables *mutable.MemTables) ([]comm.KeyCursor, error) {
 
-	parallelism := schema.Options().GetMaxParallel()
-	if parallelism <= 0 {
-		parallelism = cpu.GetCpuNum()
-	}
-
-	var totalSid int
-	for _, ts := range tagSets {
-		totalSid += ts.Len()
-	}
-	if parallelism > totalSid {
-		parallelism = totalSid
-	}
-
-	// get parallelism num from resource allocator.
-	num, _, _ := resourceallocator.AllocRes(resourceallocator.ChunkReaderRes, int64(parallelism))
-	parallelism = int(num)
+	parallelism, totalSid := getParallelismNumAndSidNum(schema, tagSets)
 
 	var groupSpan *tracing.Span
 	if span != nil {
@@ -530,11 +521,12 @@ func (s *seriesInfo) GetSid() uint64 {
 type idKeyCursorContext struct {
 	decs            *immutable.ReadContext
 	maxRowCnt       int
-	tr              record.TimeRange
-	queryTr         record.TimeRange
+	tr              util.TimeRange
+	queryTr         util.TimeRange
 	filterFieldsIdx []int
 	filterTags      []string
 	auxTags         []string
+	condFunctions   binaryfilterfunc.CondFunctions
 	m               map[string]interface{}
 	schema          record.Schemas
 	readers         *immutable.MmsReaders
@@ -672,27 +664,29 @@ func (s *shard) newTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, sch
 }
 
 func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
-	tagSet *tsi.TagSetInfo, start, step int) (map[uint64]*SeriesIter, int64, int64) {
+	tagSet *tsi.TagSetInfo, start, step int) (map[uint64][]*SeriesIter, int64, int64) {
 	minTime := int64(math.MaxInt64)
 	maxTime := int64(math.MinInt64)
 	tagSetNum := len(tagSet.IDs)
-	memItrs := make(map[uint64]*SeriesIter, memtableInitMapSize)
+	memItrs := make(map[uint64][]*SeriesIter, memtableInitMapSize)
+
 	for i := start; i < tagSetNum; i += step {
 		sid := tagSet.IDs[i]
 		ptTags := &(tagSet.TagsVec[i])
 		filter := tagSet.Filters[i]
+		rowFilter := tagSet.GetRowFilter(i)
 
 		nameWithVer := schema.Options().OptionsName()
 		memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
-		memTableRecord = immutable.FilterByField(memTableRecord, ctx.m, filter, ctx.filterFieldsIdx, ctx.filterTags, ptTags)
+		memTableRecord = immutable.FilterByField(memTableRecord, nil, ctx.m, filter, rowFilter, ctx.filterFieldsIdx, ctx.filterTags, ptTags, ctx.condFunctions, nil)
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
 			continue
 		}
-		midItr := getRecordIterator()
 		memTableRecord = memTableRecord.KickNilRow()
 		if memTableRecord.RowNums() == 0 {
 			continue
 		}
+		midItr := getRecordIterator()
 		midItr.init(memTableRecord)
 		if ctx.decs.MatchPreAgg() {
 			midItr.readMemTableMetaRecord(ctx.decs.GetOps())
@@ -702,7 +696,8 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, span *tracin
 			immutable.ResetAggregateData(midItr.record, ctx.decs.GetOps())
 			midItr.init(midItr.record)
 		}
-		memItrs[sid] = &SeriesIter{midItr, i}
+
+		memItrs[sid] = append(memItrs[sid], &SeriesIter{midItr, i})
 		minTime = GetMinTime(minTime, midItr.record, schema.Options().IsAscending())
 		maxTime = GetMaxTime(maxTime, midItr.record, schema.Options().IsAscending())
 	}
@@ -860,9 +855,10 @@ func newSeriesCursorLazyInit(ctx *idKeyCursorContext, span *tracing.Span, schema
 	sid := tagSet.IDs[idx]
 	filter := tagSet.Filters[idx]
 	ptTags := &(tagSet.TagsVec[idx])
+	rowFilters := tagSet.GetRowFilter(idx)
 
 	var tsmCursor *tsmMergeCursor
-	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, ptTags, lazyInit, span)
+	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, rowFilters, ptTags, lazyInit, span)
 
 	if err != nil {
 		return nil, err
@@ -892,7 +888,8 @@ func newSeriesCursorLazyInit(ctx *idKeyCursorContext, span *tracing.Span, schema
 	return nil, nil
 }
 
-func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema, sid uint64, filter influxql.Expr, ptTags *influx.PointTags) *record.Record {
+func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema, sid uint64, filter influxql.Expr, rowFilters *[]clv.RowFilter,
+	ptTags *influx.PointTags) *record.Record {
 	var tm time.Time
 	if span != nil {
 		tm = time.Now()
@@ -902,7 +899,7 @@ func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 	nameWithVer := schema.Options().OptionsName()
 	memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
 
-	memTableRecord = immutable.FilterByField(memTableRecord, ctx.m, filter, ctx.filterFieldsIdx, ctx.filterTags, ptTags)
+	memTableRecord = immutable.FilterByField(memTableRecord, nil, ctx.m, filter, rowFilters, ctx.filterFieldsIdx, ctx.filterTags, ptTags, ctx.condFunctions, nil)
 
 	if span != nil {
 		span.Count(memTableDuration, int64(time.Since(tm)))
@@ -918,13 +915,14 @@ func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *execut
 	var err error
 	sid := tagSet.IDs[idx]
 	filter := tagSet.Filters[idx]
+	rowFilters := tagSet.GetRowFilter(idx)
 	ptTags := &(tagSet.TagsVec[idx])
 
-	memTableRecord := getMemTableRecord(ctx, span, schema, sid, filter, ptTags)
+	memTableRecord := getMemTableRecord(ctx, span, schema, sid, filter, rowFilters, ptTags)
 
 	// create tsm cursor
 	var tsmCursor *tsmMergeCursor
-	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, ptTags, lazyInit, span)
+	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, rowFilters, ptTags, lazyInit, span)
 
 	if err != nil {
 		return nil, err
@@ -956,4 +954,24 @@ func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *execut
 
 func RecordCutNormal(start, end int, src, dst *record.Record) {
 	dst.SliceFromRecord(src, start, end)
+}
+
+func getParallelismNumAndSidNum(schema *executor.QuerySchema, tagSets []*tsi.TagSetInfo) (int, int) {
+	parallelism := schema.Options().GetMaxParallel()
+	if parallelism <= 0 {
+		parallelism = cpu.GetCpuNum()
+	}
+
+	var totalSid int
+	for _, ts := range tagSets {
+		totalSid += ts.Len()
+	}
+	if parallelism > totalSid {
+		parallelism = totalSid
+	}
+	// get parallelism num from resource allocator.
+	num, _, _ := resourceallocator.AllocRes(resourceallocator.ChunkReaderRes, int64(parallelism))
+	parallelism = int(num)
+
+	return parallelism, totalSid
 }

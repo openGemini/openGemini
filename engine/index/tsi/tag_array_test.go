@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -36,14 +35,14 @@ import (
 )
 
 func init() {
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0)
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0, 0)
 }
 
 func unmarshalTag(tag *influx.Tag, s string, noEscapeChars bool) error {
 	tag.Reset()
-	n := nextUnescapedChar(s, '=', noEscapeChars, false)
+	n := nextUnescapedChar(s, '=', noEscapeChars, true, false)
 	if n < 0 {
 		return errno.NewError(errno.WriteMissTagValue, s)
 	}
@@ -91,7 +90,7 @@ func unmarshalTags(dst []influx.Tag, s string, noEscapeChars bool) ([]influx.Tag
 			dst = append(dst, influx.Tag{})
 		}
 		tag := &dst[len(dst)-1]
-		n := nextUnescapedChar(s, ',', noEscapeChars, true)
+		n := nextUnescapedChar(s, ',', noEscapeChars, true, true)
 		if n < 0 {
 			if err := unmarshalTag(tag, s, noEscapeChars); err != nil {
 				return dst[:len(dst)-1], err
@@ -113,10 +112,10 @@ func unmarshalTags(dst []influx.Tag, s string, noEscapeChars bool) ([]influx.Tag
 	}
 }
 
-func nextUnescapedChar(s string, ch byte, noEscapeChars, tagParse bool) int {
+func nextUnescapedChar(s string, ch byte, noEscapeChars, enableTagArray, tagParse bool) int {
 	if noEscapeChars {
 		// eg,tk1=value1,tk2=[value2,value22],tk3=value3
-		if config.EnableTagArray && tagParse {
+		if enableTagArray && tagParse {
 			return nextUnescapedCharForTagArray(s, ch)
 		}
 		return strings.IndexByte(s, ch)
@@ -126,7 +125,7 @@ func nextUnescapedChar(s string, ch byte, noEscapeChars, tagParse bool) int {
 again:
 	// eg,tk1=value1,tk2=[value2,value22],tk3=value3
 	var n int
-	if config.EnableTagArray && tagParse {
+	if enableTagArray && tagParse {
 		n = nextUnescapedCharForTagArray(s, ch)
 	} else {
 		n = strings.IndexByte(s, ch)
@@ -253,7 +252,6 @@ func CreateIndexByPts_TagArray(iBuilder *IndexBuilder, idx Index, genKeys func()
 			pt.Tags[i].IsArray = false
 			if strings.HasPrefix(pt.Tags[i].Value, "[") && strings.HasSuffix(pt.Tags[i].Value, "]") {
 				pt.Tags[i].IsArray = true
-				pt.HasTagArray = true
 			}
 		}
 		sort.Sort(&pt.Tags)
@@ -306,7 +304,6 @@ func CreateIndexByPts_TagArray_Error(iBuilder *IndexBuilder, idx Index, genKeys 
 			pt.Tags[i].Value = tag.Value
 			if strings.HasPrefix(pt.Tags[i].Value, "[") && strings.HasSuffix(pt.Tags[i].Value, "]") {
 				pt.Tags[i].IsArray = true
-				pt.HasTagArray = true
 			}
 		}
 		sort.Sort(&pt.Tags)
@@ -329,35 +326,26 @@ func CreateIndexByPts_TagArray_Error(iBuilder *IndexBuilder, idx Index, genKeys 
 }
 
 func TestWriteTagArray_Success(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 }
 
 func TestWriteTagArray_Fail1(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray_Error(idxBuilder, idx, generateKeyWithTagArray3)
 }
 
 func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
@@ -459,6 +447,7 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 func TestSearchSeriesWithOpts_NoTagArray(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray2)
 
@@ -552,13 +541,10 @@ func TestUnmarshalCombineIndexKeysFail(t *testing.T) {
 }
 
 func TestSearchSeriesWithTagArrayFail(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	mergeIndex, _ := idx.(*MergeSetIndex)
 
 	src := []byte{1, 2}
@@ -578,13 +564,10 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 }
 
 func TestSeriesByExprIterator_TagArray(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		idxBuilder.Close()
-		config.EnableTagArray = false
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	opt := &query.ProcessorOptions{
@@ -767,13 +750,10 @@ func TestSeriesByExprIterator_TagArray(t *testing.T) {
 }
 
 func TestSearchSeries_With_TagArray(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		idxBuilder.Close()
-		config.EnableTagArray = false
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
@@ -866,13 +846,10 @@ func TestSearchSeries_With_TagArray(t *testing.T) {
 }
 
 func TestSearchTagValues_With_TagArray(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		idxBuilder.Close()
-		config.EnableTagArray = false
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, tagKeys [][]byte, condition influxql.Expr, expectedTagValues [][]string) {
@@ -952,13 +929,10 @@ func TestSearchTagValues_With_TagArray(t *testing.T) {
 }
 
 func TestSeriesCardinality_With_TagArray(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		idxBuilder.Close()
-		config.EnableTagArray = false
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, condition influxql.Expr, expectCardinality uint64) {
@@ -970,7 +944,7 @@ func TestSeriesCardinality_With_TagArray(t *testing.T) {
 	}
 
 	t.Run("cardinality from measurement", func(t *testing.T) {
-		f([]byte("mn-1"), nil, 5)
+		f([]byte("mn-1"), nil, 3)
 	})
 
 	t.Run("cardinality with condition", func(t *testing.T) {
@@ -979,13 +953,10 @@ func TestSeriesCardinality_With_TagArray(t *testing.T) {
 }
 
 func TestSearchSeries_With_Multi_TagArray(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		idxBuilder.Close()
-		config.EnableTagArray = false
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray4)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
@@ -1080,13 +1051,10 @@ func TestSearchSeries_With_Multi_TagArray(t *testing.T) {
 }
 
 func TestSearchSeriesWithOrOpts(t *testing.T) {
-	config.EnableTagArray = true
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		idxBuilder.Close()
-		config.EnableTagArray = false
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray5)
 
 	f := func(name []byte, opt *query.ProcessorOptions, tr TimeRange, expectedSeriesKeys []string, filtersIndex []int) {
@@ -1178,13 +1146,10 @@ func TestSearchSeriesWithOrOpts(t *testing.T) {
 }
 
 func BenchmarkWrite_With_TagArray(b *testing.B) {
-	config.EnableTagArray = true
 	path := b.TempDir()
 	_, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 
 	keys := []string{
 		"mn-1,tk1=value1,tk2=value2,tk3=[a,b,c,d,e,f,g]",
@@ -1205,7 +1170,6 @@ func BenchmarkWrite_With_TagArray(b *testing.B) {
 			pt.Tags[i].Value = tag.Value
 			if strings.HasPrefix(pt.Tags[i].Value, "[") && strings.HasSuffix(pt.Tags[i].Value, "]") {
 				pt.Tags[i].IsArray = true
-				pt.HasTagArray = true
 			}
 		}
 		sort.Sort(&pt.Tags)
@@ -1257,7 +1221,6 @@ func BenchmarkWrite_With_NoTagArray(b *testing.B) {
 			pt.Tags[i].Value = tag.Value
 			if strings.HasPrefix(pt.Tags[i].Value, "[") && strings.HasSuffix(pt.Tags[i].Value, "]") {
 				pt.Tags[i].IsArray = true
-				pt.HasTagArray = true
 			}
 		}
 		sort.Sort(&pt.Tags)
@@ -1278,13 +1241,10 @@ func BenchmarkWrite_With_NoTagArray(b *testing.B) {
 }
 
 func BenchmarkQuery_With_TagArray(b *testing.B) {
-	config.EnableTagArray = true
 	path := b.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
@@ -1308,11 +1268,9 @@ func BenchmarkQuery_With_TagArray(b *testing.B) {
 }
 
 func BenchmarkQuery_With_NoTagArray(b *testing.B) {
-	config.EnableTagArray = true
 	path := b.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
 	defer func() {
-		config.EnableTagArray = false
 		idxBuilder.Close()
 	}()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray2)
@@ -1378,13 +1336,10 @@ func searchSeriesWithTagArray1(idx *MergeSetIndex, series [][]byte, name []byte,
 }
 
 func BenchmarkShowSeries_With_TagArray1(b *testing.B) {
-	config.EnableTagArray = true
 	path := b.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	series := make([][]byte, 1)
@@ -1422,13 +1377,10 @@ func searchSeriesWithTagArray2(idx *MergeSetIndex, series [][]byte, name []byte,
 }
 
 func BenchmarkShowSeries_With_TagArray2(b *testing.B) {
-	config.EnableTagArray = true
 	path := b.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)
-	defer func() {
-		config.EnableTagArray = false
-		idxBuilder.Close()
-	}()
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
 
 	series := make([][]byte, 1)

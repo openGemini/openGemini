@@ -32,7 +32,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"go.uber.org/zap"
 )
@@ -322,7 +322,7 @@ func (idx *ShardKeyIndex) isSplitKey(rowCount, pos int64, shardKey []byte, f fun
 				continue
 			}
 
-			count, err = f(record.Bytes2str(mp.Name), tsid)
+			count, err = f(util.Bytes2str(mp.Name), tsid)
 			if err != nil {
 				return false, rowCount, err
 			}

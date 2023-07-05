@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 const (
@@ -251,10 +252,10 @@ type SeriesRecord struct {
 	err  error
 	rec  *record.Record
 	file immutable.TSSPFile
-	tr   *record.TimeRange
+	tr   *util.TimeRange
 }
 
-func NewSeriesRecord(rec *record.Record, sid uint64, file immutable.TSSPFile, seq uint64, tr *record.TimeRange, err error) *SeriesRecord {
+func NewSeriesRecord(rec *record.Record, sid uint64, file immutable.TSSPFile, seq uint64, tr *util.TimeRange, err error) *SeriesRecord {
 	return &SeriesRecord{sid, seq, err, rec, file, tr}
 }
 
@@ -278,7 +279,7 @@ func (r *SeriesRecord) GetSeq() uint64 {
 	return r.seq
 }
 
-func (r *SeriesRecord) GetTr() *record.TimeRange {
+func (r *SeriesRecord) GetTr() *util.TimeRange {
 	return r.tr
 }
 

@@ -16,17 +16,33 @@ limitations under the License.
 
 package immutable
 
-import "github.com/openGemini/openGemini/lib/record"
+import (
+	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
+)
 
 type Location struct {
-	ctx    *ReadContext
-	r      TSSPFile
-	meta   *ChunkMeta
-	segPos int
+	ctx     *ReadContext
+	r       TSSPFile
+	meta    *ChunkMeta
+	segPos  int
+	fragPos int // Indicates the sequence number of a fragment range.
+	fragRgs []*fragment.FragmentRange
 }
 
 func NewLocation(r TSSPFile, ctx *ReadContext) *Location {
-	return &Location{r: r, ctx: ctx}
+	return &Location{
+		r:       r,
+		ctx:     ctx,
+		meta:    nil,
+		segPos:  0,
+		fragPos: 0,
+		fragRgs: nil,
+	}
 }
 
 func NewLocationCursor(n int) *LocationCursor {
@@ -36,7 +52,17 @@ func NewLocationCursor(n int) *LocationCursor {
 	}
 }
 
-func (l *Location) readChunkMeta(id uint64, tr record.TimeRange, buffer *[]byte) error {
+func (l *Location) SetFragmentRanges(frs []*fragment.FragmentRange) {
+	if len(frs) == 0 {
+		return
+	}
+	// suppose frs is ascending
+	l.segPos = int(frs[0].Start)
+	l.fragPos = 0
+	l.fragRgs = frs
+}
+
+func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buffer *[]byte) error {
 	idx, m, err := l.r.MetaIndex(id, tr)
 	if err != nil {
 		return err
@@ -60,8 +86,19 @@ func (l *Location) readChunkMeta(id uint64, tr record.TimeRange, buffer *[]byte)
 	}
 
 	l.meta = meta
+	// init a new FragmentRange as [0, meta.segCount) if not SetFragmentRanges.
+	if len(l.fragRgs) == 0 {
+		if cap(l.fragRgs) <= 0 {
+			l.fragRgs = []*fragment.FragmentRange{{Start: 0, End: meta.segCount}}
+		} else {
+			l.fragRgs = l.fragRgs[:1]
+			l.fragRgs[0].Start, l.fragRgs[0].End = 0, meta.segCount
+		}
+		l.fragPos = 0
+	}
 	if !l.ctx.Ascending {
-		l.segPos = int(meta.segCount) - 1
+		l.fragPos = len(l.fragRgs) - 1
+		l.segPos = int(l.fragRgs[l.fragPos].End - 1)
 	}
 
 	return nil
@@ -77,20 +114,21 @@ func (l *Location) hasNext() bool {
 	}
 
 	if l.ctx.Ascending {
-		return l.segPos < int(l.meta.segCount)
+		return l.segPos < int(l.fragRgs[len(l.fragRgs)-1].End)
 	}
-	return l.segPos >= 0
+	return l.segPos >= int(l.fragRgs[0].Start)
+
 }
 
-func (l *Location) ReadDone() {
-	if l.ctx.Ascending {
-		l.segPos = -1
-	} else {
-		l.segPos = int(l.meta.segCount)
-	}
+func (l *Location) AscendingDone() {
+	l.segPos = int(l.fragRgs[len(l.fragRgs)-1].End)
 }
 
-func (l *Location) Contains(sid uint64, tr record.TimeRange, buffer *[]byte) (bool, error) {
+func (l *Location) DescendingDone() {
+	l.segPos = int(l.fragRgs[0].Start - 1)
+}
+
+func (l *Location) Contains(sid uint64, tr util.TimeRange, buffer *[]byte) (bool, error) {
 	// use bloom filter and file time range to filter generally
 	contains, err := l.r.ContainsValue(sid, tr)
 	if err != nil {
@@ -111,10 +149,10 @@ func (l *Location) Contains(sid uint64, tr record.TimeRange, buffer *[]byte) (bo
 	}
 
 	if l.ctx.Ascending {
-		return l.segPos < int(l.meta.segCount), nil
+		return l.segPos < int(l.fragRgs[len(l.fragRgs)-1].End), nil
 	}
+	return l.segPos >= int(l.fragRgs[0].Start), nil
 
-	return l.segPos >= 0, nil
 }
 
 func (l *Location) isPreAggRead() bool {
@@ -124,68 +162,112 @@ func (l *Location) isPreAggRead() bool {
 func (l *Location) nextSegment() {
 	if l.ctx.Ascending {
 		if l.isPreAggRead() {
-			l.segPos = int(l.meta.segCount)
+			l.AscendingDone()
 		} else {
-			l.segPos++
+			if int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End) {
+				l.segPos++
+			} else {
+				l.fragPos++
+				l.segPos = int(l.fragRgs[l.fragPos].Start)
+			}
 		}
 	} else {
 		if l.isPreAggRead() {
-			l.segPos = -1
+			l.DescendingDone()
 		} else {
-			l.segPos--
+			if int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End) {
+				l.segPos--
+			} else {
+				l.fragPos--
+				l.segPos = int(l.fragRgs[l.fragPos].End - 1)
+			}
 		}
 	}
 }
 
-func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	return l.readData(filterOpts, dst)
+func (l *Location) getCurSegMinMax() (int64, int64) {
+	minMaxSeg := l.meta.timeRange[l.segPos]
+	min, max := minMaxSeg.minTime(), minMaxSeg.maxTime()
+	return min, max
 }
 
-func (l *Location) readData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
+func (l *Location) overlapsForRowFilter(rowFilters *[]clv.RowFilter) bool {
+	if rowFilters == nil || len(*rowFilters) == 0 {
+		return true
+	}
+
+	min, max := l.getCurSegMinMax()
+	if (max < (*rowFilters)[0].RowId) ||
+		(min > (*rowFilters)[len(*rowFilters)-1].RowId) {
+		return false
+	}
+
+	return true
+}
+
+func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
+	rec, _, err := l.readData(filterOpts, dst, nil, nil)
+	return rec, err
+}
+
+func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Record, filterBitmap *bitmap.FilterBitmap) (*record.Record, int, error) {
 	var rec *record.Record
 	var err error
+	var oriRowCount int
 	for rec == nil && l.hasNext() {
-		if !l.ctx.tr.Overlaps(l.meta.MinMaxTime()) {
+		if (!l.ctx.tr.Overlaps(l.meta.MinMaxTime())) ||
+			(!l.overlapsForRowFilter(filterOpts.rowFilters)) {
 			l.nextSegment()
 			continue
 		}
 
+		tracing.StartPP(l.ctx.readSpan)
 		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.ctx)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		l.nextSegment()
 
 		if l.isPreAggRead() {
-			return rec, nil
+			return rec, 0, nil
 		}
+		tracing.EndPP(l.ctx.readSpan)
 
-		if rec != nil {
-			if l.ctx.Ascending {
-				rec = FilterByTime(rec, l.ctx.tr)
-			} else {
-				rec = FilterByTimeDescend(rec, l.ctx.tr)
+		tracing.SpanElapsed(l.ctx.filterSpan, func() {
+			if rec != nil {
+				oriRowCount += rec.RowNums()
+				if l.ctx.Ascending {
+					rec = FilterByTime(rec, l.ctx.tr)
+				} else {
+					rec = FilterByTimeDescend(rec, l.ctx.tr)
+				}
 			}
-		}
-		// filter by field
-		if rec != nil {
-			rec = FilterByField(rec, filterOpts.filtersMap, filterOpts.cond, filterOpts.fieldsIdx,
-				filterOpts.filterTags, filterOpts.pointTags)
-		}
+
+			// filter by field
+			if rec != nil {
+				rec = FilterByField(rec, filterRec, filterOpts.filtersMap, filterOpts.cond, filterOpts.rowFilters, filterOpts.fieldsIdx,
+					filterOpts.filterTags, filterOpts.pointTags, filterOpts.condFunctions, filterBitmap)
+			}
+		})
 	}
 
-	return rec, nil
+	return rec, oriRowCount, nil
 }
 
-func (l *Location) readMeta(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
+func (l *Location) readMeta(filterOpts *FilterOptions, dst *record.Record, filterBitmap *bitmap.FilterBitmap) (*record.Record, error) {
 	if l.ctx.preAggBuilders == nil {
 		l.ctx.preAggBuilders = newPreAggBuilders()
 	}
 
-	return l.readData(filterOpts, dst)
+	rec, _, err := l.readData(filterOpts, dst, nil, filterBitmap)
+	return rec, err
 }
 
 func (l *Location) ResetMeta() {
 	l.segPos = 0
 	l.meta = nil
+	l.fragPos = 0
+	if len(l.fragRgs) > 0 {
+		l.fragRgs = l.fragRgs[:0]
+	}
 }

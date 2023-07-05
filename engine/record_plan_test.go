@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -28,8 +30,10 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -40,6 +44,55 @@ func init() {
 	initMaxDownSampleParallelism(4)
 }
 
+func TestWriteIntoStorageTransformErr(t *testing.T) {
+	w := &WriteIntoStorageTransform{}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	opt := &query.ProcessorOptions{
+		ChunkSize: 100,
+		Interval: hybridqp.Interval{
+			Duration: 1,
+		},
+		Ascending: true,
+	}
+	fields := make(influxql.Fields, 0, 3)
+
+	fields = append(fields,
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "sum",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "int",
+						Type: influxql.Integer,
+					},
+				},
+			},
+			Alias: "",
+		},
+	)
+	querySchema := executor.NewQuerySchema(fields, []string{"id", "name"}, opt, nil)
+	w.schema = querySchema
+	srcRec := record.NewRecord(schema, true)
+	srcRec.ColVals[0].AppendIntegers([]int64{1, 2, 3, 4, 5}...)
+	srcRec.RecMeta.Times = make([][]int64, 1)
+	srcRec.RecMeta.Times[0] = []int64{1, 2, 3, 4, 5}
+	srcRec.AppendTime([]int64{6, 11, 17, 32}...)
+	w.currRecord = srcRec
+	f := MocTsspFile{}
+	lock := ""
+	tier := uint64(0)
+	m := immutable.NewTableStore("/tmp", &lock, &tier, false, nil)
+	m.SetImmTableType(config.TSSTORE)
+	w.m = m
+	w.currStreamWriteFile, _ = immutable.NewWriteScanFile("mst", m, f, schema)
+	defer m.Close()
+	w.InitFile(executor.NewSeriesRecord(srcRec, 0, f, 0, nil, nil))
+	w.InitFile(executor.NewSeriesRecord(srcRec, 0, f, 0, nil, nil))
+}
+
 func TestFileSequenceAggregator(t *testing.T) {
 	opt := &query.ProcessorOptions{
 		ChunkSize: 100,
@@ -48,7 +101,7 @@ func TestFileSequenceAggregator(t *testing.T) {
 		},
 		Ascending: true,
 	}
-	querySchema := executor.NewQuerySchema(createFields(), []string{"id", "value", "alive", "name"}, opt)
+	querySchema := executor.NewQuerySchema(createFields(), []string{"id", "value", "alive", "name"}, opt, nil)
 	fa := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 
 	schema1 := record.Schemas{
@@ -101,7 +154,8 @@ func TestFileSequenceAggregator(t *testing.T) {
 					return
 				}
 				times := r.GetRec().Times()
-				for i := 1; i < r.GetRec().RowNums(); i++ {
+				rowNum := r.GetRec().RowNums()
+				for i := 1; i < rowNum; i++ {
 					if times[i]-times[i-1] != int64(opt.GetInterval()) {
 						t.Errorf("unexpected time to fill")
 					}
@@ -124,7 +178,7 @@ func TestFileSequenceAggregator_Empty(t *testing.T) {
 		},
 		Ascending: true,
 	}
-	querySchema := executor.NewQuerySchema(createAllFields(), []string{"field1", "field2", "field3", "field4", "field5", "field6", "field7", "field8", "field9", "field10", "field11", "field12", "field13"}, opt)
+	querySchema := executor.NewQuerySchema(createAllFields(), []string{"field1", "field2", "field3", "field4", "field5", "field6", "field7", "field8", "field9", "field10", "field11", "field12", "field13"}, opt, nil)
 	fa := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 
 	schema1 := record.Schemas{
@@ -177,7 +231,8 @@ func TestFileSequenceAggregator_Empty(t *testing.T) {
 					return
 				}
 				times := r.GetRec().Times()
-				for i := 1; i < r.GetRec().RowNums(); i++ {
+				rowNum := r.GetRec().RowNums()
+				for i := 1; i < rowNum; i++ {
 					if times[i]-times[i-1] != int64(opt.GetInterval()) {
 						t.Errorf("unexpected time to fill")
 					}
@@ -434,10 +489,38 @@ func NewMocDataSender(records []*record.Record, files []immutable.TSSPFile, sids
 
 func (m *MocDataSender) Work() {
 	for i := range m.records {
-		sRec := executor.NewSeriesRecord(m.records[i], m.sids[i], m.files[i], m.newSeqs[i], &record.TimeRange{Max: 100}, nil)
+		sRec := executor.NewSeriesRecord(m.records[i], m.sids[i], m.files[i], m.newSeqs[i], &util.TimeRange{Max: 100}, nil)
 		m.output.State <- sRec
 	}
 	close(m.output.State)
+}
+
+func Test_DownSampleRecovery(t *testing.T) {
+	testDir := t.TempDir()
+	executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
+
+	// **** start write data to the shard.
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+	m := mockMetaClient()
+	downSampleLog := filepath.Join(sh.dataPath, immutable.DownSampleLogDir)
+	err := os.Mkdir(downSampleLog, 0755)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	file, err := os.Create(filepath.Join(downSampleLog, "1"))
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	defer file.Close()
+	sh.DownSampleRecover(m)
+	err = sh.removeFile(filepath.Join(downSampleLog, "2"))
+	if err == nil {
+		t.Fail()
+	}
 }
 
 func Test_BuildRecordDag(t *testing.T) {
@@ -455,7 +538,7 @@ func Test_BuildRecordDag(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -481,7 +564,7 @@ func Test_BuildRecordDag(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -494,7 +577,7 @@ func Test_BuildRecordDag(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -544,7 +627,7 @@ func Test_BuildRecordDag(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt)
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			node := executor.NewLogicalTSSPScan(querySchema)
 			executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
 			executor.RegistryTransformCreator(&executor.LogicalWriteIntoStorage{}, &WriteIntoStorageTransform{})
@@ -553,10 +636,10 @@ func Test_BuildRecordDag(t *testing.T) {
 			node.SetNewSeqs(newSeqs)
 			node.SetFiles(readers)
 			node2 := executor.NewLogicalWriteIntoStorage(node, querySchema)
-			node2.SetMmsTables(sh.TableStore().(*immutable.MmsTables))
+			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.TableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -601,7 +684,7 @@ func Test_BuildRecordDag(t *testing.T) {
 
 func TestShardDownSamplePolicy(t *testing.T) {
 	testDir := t.TempDir()
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	policy1 := &meta.DownSamplePolicyInfo{
@@ -736,7 +819,7 @@ func Test_ShardDownSampleTaskNotExist(t *testing.T) {
 	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -801,7 +884,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -875,7 +958,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -888,7 +971,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -938,7 +1021,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchemaWithSources(stmt.Fields, source, stmt.ColumnNames(), &opt)
+			querySchema := executor.NewQuerySchemaWithSources(stmt.Fields, source, stmt.ColumnNames(), &opt, nil)
 			var c []hybridqp.Catalog
 			c = append(c, querySchema)
 			e.StartDownSampleTask(downSampleInfo, c, logger.GetLogger(), &mocMeta{})
@@ -978,7 +1061,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -991,7 +1074,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT sum(field2_int),count(field2_int) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -1040,8 +1123,8 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
 
 				// **** start write data to the shard.
-				sh, _ := createShard("db0", "rp0", 1, testDir)
-				sh2, _ := createShard("db0", "rp0", 2, testDir)
+				sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+				sh2, _ := createShard("db0", "rp0", 2, testDir, config.TSSTORE)
 				defer sh2.Close()
 				defer sh2.indexBuilder.Close()
 				defer sh.Close()
@@ -1114,7 +1197,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				opt.Sources = source
 				opt.StartTime = tt.tr.Min
 				opt.EndTime = tt.tr.Max
-				querySchema := executor.NewQuerySchemaWithSources(stmt.Fields, source, stmt.ColumnNames(), &opt)
+				querySchema := executor.NewQuerySchemaWithSources(stmt.Fields, source, stmt.ColumnNames(), &opt, nil)
 				var c []hybridqp.Catalog
 				c = append(c, querySchema)
 				err := e.StartDownSampleTask(downSampleInfo, c, logger.GetLogger(), &mocMeta{})
@@ -1141,11 +1224,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				}
 				sInfo := &executor.IndexScanExtraInfo{
 					ShardID: uint64(10),
-					UnRefDbPt: executor.UnRefDbPt{
-						Db: "db0",
-						Pt: uint32(1),
-					},
-					Req: req,
+					Req:     req,
 				}
 				a := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, sInfo, make(chan struct{}, 2))
 				_, _, err = a.BuildPlan(1)
@@ -1224,7 +1303,7 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -1241,7 +1320,7 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -1254,7 +1333,7 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -1304,7 +1383,7 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt)
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			node := executor.NewLogicalTSSPScan(querySchema)
 			executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
 			executor.RegistryTransformCreator(&executor.LogicalWriteIntoStorage{}, &WriteIntoStorageTransform{})
@@ -1313,10 +1392,10 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 			newSeqs := sh.GetNewFilesSeqs(readers.Files())
 			node.SetNewSeqs(newSeqs)
 			node2 := executor.NewLogicalWriteIntoStorage(node, querySchema)
-			node2.SetMmsTables(sh.TableStore().(*immutable.MmsTables))
+			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.TableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -1358,7 +1437,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -1375,7 +1454,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -1388,7 +1467,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -1438,7 +1517,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt)
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2))
 			p, _ := trans.BuildDownSamplePlan(querySchema)
 			newTrans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, nil, make(chan struct{}, 2))
@@ -1453,7 +1532,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			stmt = MustParseSelectStatement(fmt.Sprintf(`SELECT percentile(field2_int) from cpu group by time(5s)`))
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
-			querySchema2 := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt)
+			querySchema2 := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			p, _ = trans.BuildDownSamplePlan(querySchema2)
 			newTrans = executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema2, p, nil, make(chan struct{}, 2))
 			check = newTrans.CanDownSampleRewrite(1)
@@ -1479,7 +1558,7 @@ func Test_DownSampleCancel1(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -1505,7 +1584,7 @@ func Test_DownSampleCancel1(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -1518,7 +1597,7 @@ func Test_DownSampleCancel1(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -1568,7 +1647,7 @@ func Test_DownSampleCancel1(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt)
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			node := executor.NewLogicalTSSPScan(querySchema)
 			executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
 			executor.RegistryTransformCreator(&executor.LogicalWriteIntoStorage{}, &WriteIntoStorageTransform{})
@@ -1577,10 +1656,10 @@ func Test_DownSampleCancel1(t *testing.T) {
 			node.SetNewSeqs(newSeqs)
 			node.SetFiles(readers)
 			node2 := executor.NewLogicalWriteIntoStorage(node, querySchema)
-			node2.SetMmsTables(sh.TableStore().(*immutable.MmsTables))
+			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.TableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -1610,7 +1689,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -1636,7 +1715,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -1649,7 +1728,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -1699,7 +1778,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchema(influxql.Fields{}, []string{}, &opt)
+			querySchema := executor.NewQuerySchema(influxql.Fields{}, []string{}, &opt, nil)
 			node := executor.NewLogicalTSSPScan(querySchema)
 			executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
 			executor.RegistryTransformCreator(&executor.LogicalWriteIntoStorage{}, &WriteIntoStorageTransform{})
@@ -1708,10 +1787,10 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 			node.SetNewSeqs(newSeqs)
 			node.SetFiles(readers)
 			node2 := executor.NewLogicalWriteIntoStorage(node, querySchema)
-			node2.SetMmsTables(sh.TableStore().(*immutable.MmsTables))
+			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.TableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -1822,7 +1901,7 @@ func (m MocTsspFile) MetaIndexAt(idx int) (*immutable.MetaIndex, error) {
 	return nil, nil
 }
 
-func (m MocTsspFile) MetaIndex(id uint64, tr record.TimeRange) (int, *immutable.MetaIndex, error) {
+func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.MetaIndex, error) {
 	return 0, nil, nil
 }
 
@@ -1830,7 +1909,7 @@ func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, 
 	return nil, nil
 }
 
-func (m MocTsspFile) Read(id uint64, tr record.TimeRange, dst *record.Record) (*record.Record, error) {
+func (m MocTsspFile) Read(id uint64, tr util.TimeRange, dst *record.Record) (*record.Record, error) {
 	return nil, nil
 }
 
@@ -1838,7 +1917,7 @@ func (m MocTsspFile) ReadAt(cm *immutable.ChunkMeta, segment int, dst *record.Re
 	return nil, nil
 }
 
-func (m MocTsspFile) ChunkMetaAt(index int) (*immutable.ChunkMeta, error) {
+func (m MocTsspFile) ChunkAt(index int) (*immutable.ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -1855,7 +1934,7 @@ func (m MocTsspFile) CreateTime() int64 {
 }
 
 func (m MocTsspFile) FileStat() *immutable.Trailer {
-	return nil
+	return &immutable.Trailer{}
 }
 
 func (m MocTsspFile) FileSize() int64 {
@@ -1870,11 +1949,11 @@ func (m MocTsspFile) Contains(id uint64) (bool, error) {
 	return false, nil
 }
 
-func (m MocTsspFile) ContainsTime(tr record.TimeRange) (bool, error) {
+func (m MocTsspFile) ContainsByTime(tr util.TimeRange) (bool, error) {
 	return false, nil
 }
 
-func (m MocTsspFile) ContainsValue(id uint64, tr record.TimeRange) (bool, error) {
+func (m MocTsspFile) ContainsValue(id uint64, tr util.TimeRange) (bool, error) {
 	return false, nil
 }
 
@@ -1926,7 +2005,7 @@ func (m MocTsspFile) Remove() error {
 	return nil
 }
 
-func (m MocTsspFile) Free(evictLock bool) int64 {
+func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
 	return 0
 }
 
@@ -1952,26 +2031,6 @@ func (m MocTsspFile) AddToEvictList(level uint16) {
 
 func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 	return
-}
-
-func (m MocTsspFile) FreeMemory() int64 {
-	return 0
-}
-
-func (m MocTsspFile) BlockHeader(meta *immutable.ChunkMeta, dst []record.Field) ([]record.Field, error) {
-	return nil, nil
-}
-
-func (m MocTsspFile) MinMaxSeriesID() (min, max uint64, err error) {
-	return 0, 0, nil
-}
-
-func (m MocTsspFile) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (m MocTsspFile) ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return nil, nil
 }
 
 func TestCanDoDownSample(t *testing.T) {
@@ -2048,13 +2107,13 @@ func TestDownSampleZeroMst(t *testing.T) {
 
 func TestDownSampleNoneMstTask(t *testing.T) {
 	testDir := t.TempDir()
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	filesMap := make(map[int]*immutable.TSSPFiles, 0)
 	allDownSampleFiles := make(map[int][]immutable.TSSPFile, 0)
 	schema := make([]hybridqp.Catalog, 0)
-	schema = append(schema, executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Name: "test"}))
+	schema = append(schema, executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Name: "test"}, nil))
 	e := sh.StartDownSampleTaskBySchema(0, filesMap, allDownSampleFiles, schema, nil, logger.GetLogger())
 	if e != nil {
 		t.Fatal()
@@ -2083,7 +2142,7 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 	}
 
 	// **** start write data to the shard.
-	sh, _ := createShard("db0", "rp0", 1, testDir)
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -2109,7 +2168,7 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 	for _, tt := range []struct {
 		name              string
 		q                 string
-		tr                record.TimeRange
+		tr                util.TimeRange
 		fields            map[string]influxql.DataType
 		skip              bool
 		outputRowDataType *hybridqp.RowDataTypeImpl
@@ -2122,7 +2181,7 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 		{
 			name:   "select min[int],min[float]",
 			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
-			tr:     record.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			fields: fields,
 			outputRowDataType: hybridqp.NewRowDataTypeImpl(
 				influxql.VarRef{Val: "val2", Type: influxql.Integer},
@@ -2172,7 +2231,7 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt)
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			node := executor.NewLogicalTSSPScan(querySchema)
 			executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
 			executor.RegistryTransformCreator(&executor.LogicalWriteIntoStorage{}, &WriteIntoStorageTransform{})
@@ -2181,10 +2240,10 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 			node.SetNewSeqs(newSeqs)
 			node.SetFiles(readers)
 			node2 := executor.NewLogicalWriteIntoStorage(node, querySchema)
-			node2.SetMmsTables(sh.TableStore().(*immutable.MmsTables))
+			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.TableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])

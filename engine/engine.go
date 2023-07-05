@@ -40,7 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
@@ -84,6 +84,7 @@ type Engine struct {
 
 	mgtLock       sync.RWMutex // lock for migration
 	migratingDbPT map[string]map[uint32]struct{}
+	metaClient    meta.MetaClient
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -129,13 +130,13 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	replayWalLimit = limiter.NewFixed(options.OpenShardLimit)
 
 	SetFullCompColdDuration(options.FullCompactColdDuration)
+	fileops.EnableMmapRead(options.EnableMmapRead)
+	fileops.EnableReadCache(options.ReadCacheLimit)
 	immutable.SetMaxCompactor(options.MaxConcurrentCompactions)
 	immutable.SetMaxFullCompactor(options.MaxFullCompactions)
 	immutable.SetImmTableMaxMemoryPercentage(sysTotalMemory(), options.ImmTableMaxMemoryPercentage)
 	immutable.SetCacheDataBlock(options.CacheDataBlock)
 	immutable.SetCacheMetaData(options.CacheMetaBlock)
-	immutable.EnableMmapRead(options.EnableMmapRead)
-	immutable.EnableReadCache(options.ReadCacheLimit)
 	immutable.SetCompactLimit(options.CompactThroughput, options.CompactThroughputBurst)
 	immutable.SetSnapshotLimit(options.SnapshotThroughput, options.SnapshotThroughputBurst)
 	immutable.SegMergeFlag(int32(options.CompactionMethod))
@@ -148,7 +149,7 @@ func (e *Engine) GetLockFile() string {
 	return ""
 }
 
-func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, m meta.MetaClient) error {
+func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfos map[string]*meta2.DatabaseBriefInfo, m meta.MetaClient) error {
 	e.log.Info("start open engine...")
 	start := time.Now()
 	defer func(tm time.Time) {
@@ -165,7 +166,8 @@ func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, m meta.
 		return err
 	}
 
-	err := e.loadShards(durationInfos, immutable.LOAD, m)
+	e.setMetaClient(m)
+	err := e.loadShards(durationInfos, dbBriefInfos, immutable.LOAD, m)
 	if err != nil {
 		atomic.AddInt64(&stat.EngineStat.OpenErrors, 1)
 		return err
@@ -174,7 +176,13 @@ func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, m meta.
 	return nil
 }
 
-func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, loadStat int, client meta.MetaClient) error {
+func (e *Engine) setMetaClient(m meta.MetaClient) {
+	e.mu.Lock()
+	e.metaClient = m
+	e.mu.Unlock()
+}
+
+func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfos map[string]*meta2.DatabaseBriefInfo, loadStat int, client meta.MetaClient) error {
 	e.log.Info("start loadShards...", zap.Int("loadStat", loadStat))
 	dataPath := path.Join(e.dataPath, config.DataDirectory)
 	_, err := fileops.Stat(dataPath)
@@ -196,7 +204,17 @@ func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, l
 		dbRpLock[dbRpPath] = ""
 		n++
 		go func(db string, pt uint32, rp string) {
-			e.createDBPTIfNotExist(db, pt)
+			enableTagArray := false
+			if len(dbBriefInfos) != 0 {
+				if _, ok := dbBriefInfos[db]; !ok {
+					e.log.Error("fail to get dbBriefInfos", zap.String("db", db), zap.Uint32("pt", pt),
+						zap.String("rp", rp))
+					errChan <- errno.NewError(errno.DatabaseNotFound)
+					return
+				}
+				enableTagArray = dbBriefInfos[db].EnableTagArray
+			}
+			e.createDBPTIfNotExist(db, pt, enableTagArray)
 			e.mu.RLock()
 			dbPTInfo := e.DBPartitions[db][pt]
 			e.mu.RUnlock()
@@ -311,17 +329,17 @@ func (e *Engine) UpdateShardDurationInfo(info *meta2.ShardDurationInfo) error {
 	dbPT.mu.RLock()
 	defer dbPT.mu.RUnlock()
 	shard := dbPT.shards[info.Ident.ShardID]
-	if shard == nil || shard.GetIndexBuild() == nil {
+	if shard == nil || shard.GetIndexBuilder() == nil {
 		return nil
 	}
 	log.Info("duration info", zap.Uint64("shardId", info.Ident.ShardID),
 		zap.Uint64("shard group id", info.Ident.ShardGroupID),
 		zap.Duration("duration", info.DurationInfo.Duration))
-	shard.Ident().ShardGroupID = info.Ident.ShardGroupID
-	shard.Duration().Duration = info.DurationInfo.Duration
-	shard.Duration().Tier = info.DurationInfo.Tier
-	shard.Duration().TierDuration = info.DurationInfo.TierDuration
-	shard.GetIndexBuild().SetDuration(info.DurationInfo.Duration)
+	shard.GetIdent().ShardGroupID = info.Ident.ShardGroupID
+	shard.GetDuration().Duration = info.DurationInfo.Duration
+	shard.GetDuration().Tier = info.DurationInfo.Tier
+	shard.GetDuration().TierDuration = info.DurationInfo.TierDuration
+	shard.GetIndexBuilder().SetDuration(info.DurationInfo.Duration)
 	return nil
 }
 
@@ -334,8 +352,8 @@ func (e *Engine) ExpiredShards() []*meta2.ShardIdentifier {
 		for _, pti := range e.DBPartitions[db] {
 			pti.mu.RLock()
 			for sid := range pti.shards {
-				if pti.shards[sid].Expired() {
-					res = append(res, pti.shards[sid].Ident())
+				if pti.shards[sid].IsExpired() {
+					res = append(res, pti.shards[sid].GetIdent())
 				}
 			}
 			pti.mu.RUnlock()
@@ -421,11 +439,11 @@ func (e *Engine) DeleteShard(db string, ptId uint32, shardID uint64) error {
 
 	lock := fileops.FileLockOption(*dbPtInfo.lockPath)
 	// remove shard's wal&data on-disk, index data will not delete right now
-	if err := fileops.RemoveAll(sh.DataPath(), lock); err != nil {
+	if err := fileops.RemoveAll(sh.GetDataPath(), lock); err != nil {
 		atomic.AddInt64(&stat.EngineStat.DelShardErr, 1)
 		return err
 	}
-	if err := fileops.RemoveAll(sh.WalPath(), lock); err != nil {
+	if err := fileops.RemoveAll(sh.GetWalPath(), lock); err != nil {
 		atomic.AddInt64(&stat.EngineStat.DelShardErr, 1)
 		return err
 	}
@@ -501,14 +519,15 @@ func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*met
 	for db := range e.DBPartitions {
 		for pt := range e.DBPartitions[db] {
 			for _, shard := range e.DBPartitions[db][pt].shards {
-				tier, expired := shard.TierDurationExpired()
+				tier := shard.GetTier()
+				expired := shard.IsTierExpired()
 				if !expired {
 					continue
 				}
 				if tier == util.Hot {
-					shardsToWarm = append(shardsToWarm, shard.Ident())
+					shardsToWarm = append(shardsToWarm, shard.GetIdent())
 				} else {
-					shardsToCold = append(shardsToCold, shard.Ident())
+					shardsToCold = append(shardsToCold, shard.GetIdent())
 				}
 			}
 		}
@@ -586,7 +605,7 @@ func (e *Engine) checkReadonly() error {
 	return nil
 }
 
-func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta2.ShardTimeRangeInfo) error {
+func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta2.ShardTimeRangeInfo, mstInfo *meta2.MeasurementInfo) error {
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
@@ -601,10 +620,11 @@ func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRan
 	defer dbPTInfo.mu.Unlock()
 	_, ok := dbPTInfo.shards[shardID]
 	if !ok {
-		sh, err := dbPTInfo.NewShard(rp, shardID, timeRangeInfo, nil)
+		sh, err := dbPTInfo.NewShard(rp, shardID, timeRangeInfo, e.metaClient, mstInfo.EngineType)
 		if err != nil {
 			return err
 		}
+		sh.SetMstInfo(mstInfo.Name, mstInfo)
 		dbPTInfo.shards[shardID] = sh
 		newestShardID, ok := dbPTInfo.newestRpShard[rp]
 		if !ok || newestShardID < shardID {
@@ -662,7 +682,7 @@ func (e *Engine) dropDBPTInfo(database string, ptID uint32) {
 	}
 }
 
-func (e *Engine) CreateDBPT(db string, pt uint32) {
+func (e *Engine) CreateDBPT(db string, pt uint32, enableTagArray bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(pt)))
@@ -673,16 +693,17 @@ func (e *Engine) CreateDBPT(db string, pt uint32) {
 	e.addDBPTInfo(dbPTInfo)
 	dbPTInfo.SetOption(e.engOpt)
 	dbPTInfo.enableReportShardLoad()
+	dbPTInfo.enableTagArray = enableTagArray
 }
 
-func (e *Engine) createDBPTIfNotExist(db string, pt uint32) {
+func (e *Engine) createDBPTIfNotExist(db string, pt uint32, enableTagArray bool) {
 	e.mu.RLock()
 	if e.isDBPtExist(db, pt) {
 		e.mu.RUnlock()
 		return
 	}
 	e.mu.RUnlock()
-	e.CreateDBPT(db, pt)
+	e.CreateDBPT(db, pt, enableTagArray)
 }
 
 func (e *Engine) startDrop(name string, droppingMap map[string]string) error {
@@ -784,10 +805,10 @@ func (e *Engine) deleteIndexes(db string, pt uint32, rp string, fn func(dbPTInfo
 	dbPTInfo := e.getDBPTInfo(db, pt)
 	var n int
 	for shardId := range dbPTInfo.shards {
-		if dbPTInfo.shards[shardId].RPName() != rp {
+		if dbPTInfo.shards[shardId].GetRPName() != rp {
 			continue
 		}
-		indexID := dbPTInfo.shards[shardId].GetIndexBuild().GetIndexID()
+		indexID := dbPTInfo.shards[shardId].GetIndexBuilder().GetIndexID()
 		if _, ok := dbPTInfo.indexBuilder[indexID]; ok {
 			indexes[indexID] = struct{}{}
 		}
@@ -853,7 +874,7 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 	// Count all measurement series cardinality
 	result := make(map[string]uint64, len(measurements))
 	for _, nameBytesWithVer := range measurements {
-		name := influx.GetOriginMstName(record.Bytes2str(nameBytesWithVer))
+		name := influx.GetOriginMstName(util.Bytes2str(nameBytesWithVer))
 		result[name] = uint64(len(keysMap[name]))
 	}
 	return result, nil
@@ -875,7 +896,7 @@ func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, 
 
 	keysMap := make(map[string]map[string]struct{}, 64)
 	for _, nameWithVer := range measurements {
-		name := influx.GetOriginMstName(record.Bytes2str(nameWithVer))
+		name := influx.GetOriginMstName(util.Bytes2str(nameWithVer))
 		keysMap[name] = make(map[string]struct{}, 64)
 	}
 	series := make([][]byte, 1)
@@ -896,7 +917,7 @@ func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, 
 		pt.mu.RLock()
 		for _, iBuild := range pt.indexBuilder {
 			for _, nameWithVer := range measurements {
-				mstName := influx.GetOriginMstName(record.Bytes2str(nameWithVer))
+				mstName := influx.GetOriginMstName(util.Bytes2str(nameWithVer))
 				stime := time.Now()
 				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
 				series, err = idx.SearchSeriesKeys(series[:0], nameWithVer, condition)
@@ -962,6 +983,19 @@ func (e *Engine) CreateLogicalPlan(ctx context.Context, db string, ptId uint32, 
 
 	// FIXME:context cancel func
 	return sh.CreateLogicalPlan(ctx, sources, schema)
+}
+
+func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error) {
+	shardFrags := executor.NewShardsFragments()
+	for _, shardId := range shardIDs {
+		s := e.GetShard(db, ptId, shardId)
+		fileFrags, err := s.ScanWithSparseIndex(ctx, schema, resourceallocator.DefaultSeriesAllocateFunc)
+		if err != nil {
+			return nil, err
+		}
+		shardFrags[shardId] = fileFrags
+	}
+	return shardFrags, nil
 }
 
 func (e *Engine) LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error) {
@@ -1077,7 +1111,7 @@ func (e *Engine) Statistics(buffer []byte) ([]byte, error) {
 			dbPTInfo := e.DBPartitions[db][id]
 			dbPTInfo.mu.RLock()
 			for _, sh := range dbPTInfo.shards {
-				buffer, _ = sh.Statistics(buffer)
+				buffer, _ = sh.GetStatistics(buffer)
 			}
 			dbPTInfo.mu.RUnlock()
 		}

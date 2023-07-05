@@ -30,7 +30,6 @@ import (
 )
 
 func TestCreateDatabase(t *testing.T) {
-	t.Skip()
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, "127.0.0.10")
 	if err != nil {
@@ -50,6 +49,7 @@ func TestCreateDatabase(t *testing.T) {
 	db := "test"
 	command := GenerateCreateDatabaseCmd(db)
 	config.SetHaEnable(true)
+	defer config.SetHaEnable(false)
 	globalService.store.data.TakeOverEnabled = true
 	globalService.store.NetStore = NewMockNetStorage()
 	body, err := proto.Marshal(command)
@@ -254,5 +254,40 @@ func TestGetMeasurementInfoProcess(t *testing.T) {
 	_, err = h.Process()
 	if err != nil {
 		t.Fatal("TestGetMeasurementInfoProcess fail", err)
+	}
+}
+
+func TestGetMeasurementsInfoProcess(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.GetMeasurementsInfoRequestMessage, &message.GetMeasurementsInfoRequest{
+		DbName: "db",
+		RpName: "rp",
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.Process()
+	if err != nil {
+		t.Fatal("TestGetMeasurementsInfoProcess fail", err)
+	}
+}
+
+func TestGetDBBriefInfo(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.GetDBBriefInfoRequestMessage, &message.GetDBBriefInfoRequest{DbName: "db0"})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.Process()
+	if err != nil {
+		t.Fatal("TestGetDBBriefInfo fail")
 	}
 }

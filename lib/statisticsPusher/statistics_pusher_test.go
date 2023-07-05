@@ -35,6 +35,7 @@ func TestPusher(t *testing.T) {
 		StoreDatabase: "_internal",
 		StoreInterval: toml.Duration(config.DefaultStoreInterval),
 		Pushers:       config.FilePusher + config.PusherSep + config.HttpPusher,
+		StoreEnabled:  true,
 		StorePath:     t.TempDir() + "/stat_metric.data",
 	}
 

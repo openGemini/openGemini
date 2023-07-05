@@ -38,12 +38,9 @@ type Service struct {
 	}
 
 	Engine interface {
-		ResetDownSampleFlag()
-		RemoveDeadDownSamplePolicy()
 		StartDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {
 			UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 		}) error
-		UpdateStoreDownSamplePolicies(info *meta.DownSamplePolicyInfo, ident string)
 		GetShardDownSamplePolicyInfos(meta interface {
 			UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 		}) ([]*meta.ShardDownSamplePolicyInfo, error)

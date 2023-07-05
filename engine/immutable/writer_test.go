@@ -108,6 +108,7 @@ func TestIndexWriterWithoutCacheMeta(t *testing.T) {
 	_ = fileops.MkdirAll(testDir, 0750)
 	fn := filepath.Join(testDir, "index.data")
 	lockPath := ""
+	InitWriterPool(8)
 	wr := NewIndexWriter(fn, false, false, &lockPath)
 	cm := getChunkMeta()
 
@@ -179,6 +180,7 @@ func TestIndexWriterWithCacheMeta(t *testing.T) {
 	_ = fileops.MkdirAll(testDir, 0750)
 	fn := filepath.Join(testDir, "index.data")
 	lockPath := ""
+	InitWriterPool(8)
 	wr := NewIndexWriter(fn, true, true, &lockPath)
 	cm := getChunkMeta()
 
@@ -256,8 +258,41 @@ func TestChunkMeta_validation(t *testing.T) {
 		preAgg:  nil,
 		entries: nil,
 	})
-	require.Equal(t, "length of m.colMeta[0].entries is not equal to m.segCount", validation(cm))
+	require.Equal(t, "length of m.colMeta[0].entries(0) is not equal to m.segCount(1)", validation(cm))
 
 	cm.colMeta[0].entries = []Segment{{0, 10}}
 	require.Equal(t, "", validation(cm))
+}
+
+func TestDelEmptyColMeta(t *testing.T) {
+	cm := &ChunkMeta{}
+	cm.DelEmptyColMeta()
+	require.Equal(t, 0, len(cm.colMeta))
+
+	cm.colMeta = append(cm.colMeta, ColumnMeta{}, ColumnMeta{}, ColumnMeta{})
+	cm.DelEmptyColMeta()
+	require.Equal(t, 0, len(cm.colMeta))
+
+	cm.colMeta = append(cm.colMeta, ColumnMeta{}, ColumnMeta{}, ColumnMeta{entries: []Segment{{}, {}}})
+	cm.DelEmptyColMeta()
+	require.Equal(t, 1, len(cm.colMeta))
+	require.Equal(t, 2, len(cm.colMeta[0].entries))
+
+	cm.colMeta = append(cm.colMeta, ColumnMeta{
+		entries: []Segment{{}, {}, {}},
+	}, ColumnMeta{}, ColumnMeta{})
+
+	cm.DelEmptyColMeta()
+	require.Equal(t, 2, len(cm.colMeta))
+	require.Equal(t, 2, len(cm.colMeta[0].entries))
+	require.Equal(t, 3, len(cm.colMeta[1].entries))
+
+	cm.colMeta = append(cm.colMeta, ColumnMeta{}, ColumnMeta{
+		entries: []Segment{{}, {}, {}, {}},
+	})
+	cm.DelEmptyColMeta()
+	require.Equal(t, 3, len(cm.colMeta))
+	require.Equal(t, 2, len(cm.colMeta[0].entries))
+	require.Equal(t, 3, len(cm.colMeta[1].entries))
+	require.Equal(t, 4, len(cm.colMeta[2].entries))
 }

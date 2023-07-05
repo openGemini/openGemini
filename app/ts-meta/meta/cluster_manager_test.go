@@ -339,3 +339,48 @@ waitEventProcess:
 	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
 	assert.Equal(t, uint64(2), globalService.store.data.PtView[db][0].Owner.NodeID)
 }
+
+func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	if err := globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &ClusterManager{
+		reOpen:    make(chan struct{}),
+		closing:   make(chan struct{}),
+		eventCh:   make(chan serf.Event, 1024),
+		eventMap:  make(map[string]*serf.MemberEvent),
+		memberIds: make(map[uint64]struct{}),
+		takeover:  make(chan bool)}
+
+	store := &Store{
+		data: &meta.Data{
+			ClusterPtNum:    6,
+			BalancerEnabled: true,
+		},
+	}
+	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")
+	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402")
+	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402")
+	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	store.data.CreateDatabase("db0", nil, nil, false)
+	c.store = store
+
+	dbPt := &meta.DbPtInfo{
+		Db: "db0",
+		Pti: &meta.PtInfo{
+			PtId: 1,
+		},
+	}
+
+	c.processFailedDbPt(dbPt, nil, true)
+}

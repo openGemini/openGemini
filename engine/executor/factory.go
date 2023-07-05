@@ -23,6 +23,7 @@ import (
 
 type ChunkBuilder struct {
 	rowDataType hybridqp.RowDataType
+	dimDataType hybridqp.RowDataType
 }
 
 func NewChunkBuilder(rowDataType hybridqp.RowDataType) *ChunkBuilder {
@@ -31,10 +32,20 @@ func NewChunkBuilder(rowDataType hybridqp.RowDataType) *ChunkBuilder {
 	}
 }
 
+func (b *ChunkBuilder) SetDim(dimDataType hybridqp.RowDataType) {
+	b.dimDataType = dimDataType
+}
+
 func (b *ChunkBuilder) NewChunk(name string) Chunk {
 	chunk := NewChunkImpl(b.rowDataType, name)
 	for i := range b.rowDataType.Fields() {
 		chunk.AddColumn(NewColumnImpl(b.rowDataType.Field(i).Expr.(*influxql.VarRef).Type))
+	}
+	if b.dimDataType == nil || b.dimDataType.NumColumn() == 0 {
+		return chunk
+	}
+	for i := range b.dimDataType.Fields() {
+		chunk.AddDim(NewColumnImpl(b.dimDataType.Field(i).Expr.(*influxql.VarRef).Type))
 	}
 	return chunk
 }

@@ -23,14 +23,14 @@ import (
 	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/rand"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
 
 func codecFloatBlock(t *testing.T, values []float64) {
 	size := len(values)
 	float := compress.NewFloat()
-	in := record.Float64Slice2byte(values)
+	in := util.Float64Slice2byte(values)
 	var encOut, decOut []byte
 	var err error
 
@@ -38,7 +38,7 @@ func codecFloatBlock(t *testing.T, values []float64) {
 	require.NoError(t, err)
 
 	decOut, err = float.AdaptiveDecoding(encOut, decOut)
-	other := record.Bytes2Float64Slice(decOut)
+	other := util.Bytes2Float64Slice(decOut)
 	require.NoError(t, err)
 	require.Equal(t, size, len(other))
 	for i := 0; i < size; i++ {

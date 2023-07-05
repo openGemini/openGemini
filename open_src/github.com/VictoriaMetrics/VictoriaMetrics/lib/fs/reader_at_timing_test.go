@@ -16,10 +16,10 @@ func BenchmarkReaderAtMustReadAt(b *testing.B) {
 }
 
 func benchmarkReaderAtMustReadAt(b *testing.B, isMmap bool) {
-	prevDisableMmap := disableMmap
-	disableMmap = !isMmap
+	prevEnableMmap := enableMmap
+	enableMmap = isMmap
 	defer func() {
-		disableMmap = prevDisableMmap
+		enableMmap = prevEnableMmap
 	}()
 
 	path := "BenchmarkReaderAtMustReadAt"

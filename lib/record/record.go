@@ -25,6 +25,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -413,7 +414,7 @@ func (rec *Record) ColumnAppendNull(colIdx int) {
 	}
 }
 
-func (rec *Record) CopyWithCondition(ascending bool, tr TimeRange, schema Schemas) *Record {
+func (rec *Record) CopyWithCondition(ascending bool, tr util.TimeRange, schema Schemas) *Record {
 	times := rec.Times()
 	startIndex := GetTimeRangeStartIndex(times, 0, tr.Min)
 	endIndex := GetTimeRangeEndIndex(times, 0, tr.Max)
@@ -558,7 +559,13 @@ func (rec *Record) RowNums() int {
 	if rec == nil || len(rec.ColVals) == 0 {
 		return 0
 	}
-	return rec.ColVals[len(rec.ColVals)-1].Len
+	last := len(rec.ColVals) - 1
+	if rec.Schema.Field(last).IsString() {
+		// for pk index of colstore, the last column may be string type(NOT time)
+		return len(rec.ColVals[last].Offset)
+	}
+
+	return rec.ColVals[last].Len
 }
 
 func (rec *Record) ColNums() int {
@@ -1056,7 +1063,7 @@ func (rec *Record) MergeRecordLimitRowsDescend(newRec, oldRec *Record, newPos, o
 	return newEnd, oldEnd
 }
 
-func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, oldPos, limitRows int, ascending bool) (*Record, int, int) {
+func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, oldPos, limitRows int, ascending bool) (int, int) {
 	newTimeVals := newRec.ColVals[len(newRec.ColVals)-1].IntegerValues()
 	oldTimeVals := oldRec.ColVals[len(oldRec.ColVals)-1].IntegerValues()
 
@@ -1066,7 +1073,7 @@ func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, 
 			rec.Schema = append(rec.Schema, oldRec.Schema...)
 			rec.ColVals = make([]ColVal, len(rec.Schema))
 			rec.AppendRec(oldRec, oldPos, len(oldTimeVals))
-			return nil, newPos, len(oldTimeVals)
+			return newPos, len(oldTimeVals)
 		} else if newTimeVals[len(newTimeVals)-1] < oldTimeVals[oldPos] {
 			oldEnd, newEnd = rec.mergeRecordNonOverlap(oldRec, newRec, oldPos, newPos, len(oldTimeVals), len(newTimeVals), limitRows)
 		} else {
@@ -1081,7 +1088,7 @@ func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, 
 			rec.Schema = append(rec.Schema, oldRec.Schema...)
 			rec.ColVals = make([]ColVal, len(rec.Schema))
 			rec.AppendRec(oldRec, oldPos, len(oldTimeVals))
-			return nil, newPos, len(oldTimeVals)
+			return newPos, len(oldTimeVals)
 		} else {
 			newEndIndex := GetTimeRangeEndIndexDescend(newTimeVals, newPos, oldTimeVals[len(oldTimeVals)-1])
 			newTimeVals = newTimeVals[:newEndIndex+1]
@@ -1089,7 +1096,7 @@ func (rec *Record) MergeRecordByMaxTimeOfOldRec(newRec, oldRec *Record, newPos, 
 		}
 	}
 
-	return nil, newEnd, oldEnd
+	return newEnd, oldEnd
 }
 
 func NewRecordBuilder(schema []Field) *Record {
@@ -1322,7 +1329,8 @@ func (rec *Record) ResetWithSchema(schema Schemas) {
 func (rec *Record) addColumn(f *Field) {
 	newField := Field{Name: f.Name, Type: f.Type}
 	newCol := &ColVal{}
-	for i := 0; i < rec.RowNums(); i++ {
+	rowNum := rec.RowNums()
+	for i := 0; i < rowNum; i++ {
 		switch f.Type {
 		case influx.Field_Type_Int:
 			newCol.AppendIntegerNull()
@@ -1626,6 +1634,7 @@ const (
 	TsspSequencePool
 	SequenceAggPool
 	SeriesPool
+	ColumnReaderPool
 	UnknownPool
 )
 
@@ -1814,11 +1823,6 @@ func (p *CircularRecordPool) PutRecordInCircularPool() {
 }
 
 func (rec *Record) Split(dst []Record, maxRows int) []Record {
-	if rec.RowNums() <= maxRows {
-		dst = append(dst[:0], *rec)
-		return dst
-	}
-
 	rows := rec.RowNums()
 	segs := (rows + maxRows - 1) / maxRows
 	if cap(dst) < segs {

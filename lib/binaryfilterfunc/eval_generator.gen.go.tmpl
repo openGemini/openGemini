@@ -1,0 +1,235 @@
+/*
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package binaryfilterfunc
+
+import (
+	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/record"
+)
+
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
+func Get{{.Name}}LTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var values []{{.Type}}
+	{{- if or (eq .Name "String")}}
+	values = col.StringValues(values)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	values = col.{{.Name}}Values()
+	{{- end}}
+	var idx int
+	var index int
+	cmpData, _ := compare.({{.Type}})
+
+	for i := 0; i < col.Len; i++ {
+        idx = offset + i
+        if bitmap.IsNil(pos, idx) {
+        index++
+        continue
+        }
+
+        if bitmap.IsNil(bitMap, idx) {
+            bitmap.SetBitMap(pos, index)
+            continue
+        }
+
+        if values[index] >= cmpData {
+            bitmap.SetBitMap(pos, index)
+        }
+        index++
+        }
+	return pos
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
+func Get{{.Name}}LTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var values []{{.Type}}
+	{{- if or (eq .Name "String")}}
+	values = col.StringValues(values)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	values = col.{{.Name}}Values()
+	{{- end}}
+	var idx int
+	var index int
+	cmpData, _ := compare.({{.Type}})
+
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+            index++
+            continue
+        }
+
+		if bitmap.IsNil(bitMap, idx) {
+		    bitmap.SetBitMap(pos, index)
+			continue
+		}
+
+		if values[index] > cmpData {
+			bitmap.SetBitMap(pos, index)
+		}
+		index++
+	}
+	return pos
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
+func Get{{.Name}}GTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var values []{{.Type}}
+	{{- if or (eq .Name "String")}}
+	values = col.StringValues(values)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	values = col.{{.Name}}Values()
+	{{- end}}
+	var idx int
+	var index int
+	cmpData, _ := compare.({{.Type}})
+
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+            index++
+            continue
+        }
+
+		if bitmap.IsNil(bitMap, idx) {
+		    bitmap.SetBitMap(pos, index)
+			continue
+		}
+
+		if values[index] <= cmpData {
+			bitmap.SetBitMap(pos, index)
+		}
+		index++
+	}
+	return pos
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
+func Get{{.Name}}GTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var values []{{.Type}}
+	{{- if or (eq .Name "String")}}
+	values = col.StringValues(values)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	values = col.{{.Name}}Values()
+	{{- end}}
+	var idx int
+	var index int
+	cmpData, _ := compare.({{.Type}})
+
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+            index++
+            continue
+        }
+
+		if bitmap.IsNil(bitMap, idx) {
+		    bitmap.SetBitMap(pos, index)
+			continue
+		}
+
+		if values[index] < cmpData {
+			bitmap.SetBitMap(pos, index)
+		}
+		index++
+	}
+	return pos
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+func Get{{.Name}}EQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var values []{{.Type}}
+	{{- if or (eq .Name "String")}}
+	values = col.StringValues(values)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	values = col.{{.Name}}Values()
+	{{- end}}
+	var idx int
+	var index int
+	cmpData, _ := compare.({{.Type}})
+
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+            index++
+            continue
+        }
+
+		if bitmap.IsNil(bitMap, idx) {
+		    bitmap.SetBitMap(pos, index)
+			continue
+		}
+
+		if values[index] != cmpData {
+			bitmap.SetBitMap(pos, index)
+		}
+		index++
+	}
+	return pos
+}
+{{end}}
+
+{{range .}}
+func Get{{.Name}}NEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var values []{{.Type}}
+	{{- if or (eq .Name "String")}}
+	values = col.StringValues(values)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	values = col.{{.Name}}Values()
+	{{- end}}
+	var idx int
+	var index int
+	cmpData, _ := compare.({{.Type}})
+
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+            index++
+            continue
+        }
+
+		if bitmap.IsNil(bitMap, idx) {
+		    bitmap.SetBitMap(pos, index)
+			continue
+		}
+
+		if values[index] == cmpData {
+			bitmap.SetBitMap(pos, index)
+		}
+		index++
+	}
+	return pos
+}
+{{end}}

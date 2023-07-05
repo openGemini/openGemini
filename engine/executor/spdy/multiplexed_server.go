@@ -26,7 +26,6 @@ import (
 
 type MultiplexedServer struct {
 	cfg  config.Spdy
-	id   int64
 	conn *MultiplexedConnection
 
 	reactors  map[uint64]*Reactor
@@ -38,10 +37,9 @@ type MultiplexedServer struct {
 	err        error
 }
 
-func newMultiplexedServer(cfg config.Spdy, id int64, conn *MultiplexedConnection, factories []EventHandlerFactory) *MultiplexedServer {
+func newMultiplexedServer(cfg config.Spdy, conn *MultiplexedConnection, factories []EventHandlerFactory) *MultiplexedServer {
 	s := &MultiplexedServer{
 		cfg:        cfg,
-		id:         id,
 		conn:       conn,
 		reactors:   make(map[uint64]*Reactor),
 		factories:  factories,
@@ -76,18 +74,19 @@ func (s *MultiplexedServer) run() {
 	}
 }
 
-func (s *MultiplexedServer) Start() error {
+func (s *MultiplexedServer) Start() {
 	go s.run()
-	return nil
 }
 
 func (s *MultiplexedServer) Stop() {
 	s.stopGuard.Lock()
+	defer s.stopGuard.Unlock()
+
 	if s.stopped {
 		return
 	}
 	s.stopped = true
-	s.stopGuard.Unlock()
+
 	util.MustClose(s.conn)
 	close(s.stopSignal)
 }

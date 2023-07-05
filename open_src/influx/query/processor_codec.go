@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
 	"google.golang.org/protobuf/proto"
@@ -103,6 +104,9 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 	if opt.Condition != nil {
 		pb.Condition = opt.Condition.String()
 	}
+	if opt.SourceCondition != nil {
+		pb.SourceCondition = opt.SourceCondition.String()
+	}
 
 	return pb
 }
@@ -178,6 +182,13 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 		}
 		opt.Condition = expr
 	}
+	if pb.SourceCondition != "" {
+		expr, err := influxql.ParseExpr(pb.GetSourceCondition())
+		if err != nil {
+			return nil, err
+		}
+		opt.SourceCondition = expr
+	}
 
 	return opt, nil
 }
@@ -189,6 +200,7 @@ func encodeMeasurement(mm *influxql.Measurement) *internal.Measurement {
 		Name:            mm.Name,
 		SystemIterator:  mm.SystemIterator,
 		IsTarget:        mm.IsTarget,
+		EngineType:      uint32(mm.EngineType),
 	}
 	if mm.Regex != nil {
 		pb.Regex = mm.Regex.Val.String()
@@ -203,6 +215,7 @@ func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) 
 		Name:            pb.GetName(),
 		SystemIterator:  pb.GetSystemIterator(),
 		IsTarget:        pb.GetIsTarget(),
+		EngineType:      config.EngineType(pb.GetEngineType()),
 	}
 
 	if pb.Regex != "" {

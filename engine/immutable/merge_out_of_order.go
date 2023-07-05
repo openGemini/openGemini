@@ -100,7 +100,7 @@ func (m *MmsTables) replaceMergedFiles(name string, lg *zap.Logger, old []TSSPFi
 			_, s1 := of.LevelAndSequence()
 			_, s2 := nf.LevelAndSequence()
 
-			if s1 == s2 {
+			if s1 == s2 && of.FileNameExtend() == nf.FileNameExtend() {
 				needReplaced[of.Path()] = of
 			}
 		}
@@ -127,12 +127,10 @@ func (m *MmsTables) getFilesByPath(mst string, path []string, order bool) (*TSSP
 
 	for _, fn := range path {
 		if m.isClosed() {
-			UnrefAll(files)
 			return nil, ErrCompStopped
 		}
 		f := m.File(mst, fn, order)
 		if f == nil {
-			UnrefAll(files)
 			return nil, fmt.Errorf("table %v, %v, %t not find", mst, fn, order)
 		}
 
@@ -163,7 +161,7 @@ func (m *MmsTables) createMergeContext(limit int) []*mergeContext {
 	}
 
 	for k, v := range m.OutOfOrder {
-		if v.Len() == 0 {
+		if v.Len() == 0 || v.closing > 0 {
 			continue
 		}
 		if create(k, v) {
@@ -189,7 +187,7 @@ func (m *MmsTables) GetOutOfOrderFileNum() int {
 	return total
 }
 
-//lint:ignore U1000 test used only
+// lint:ignore U1000 test used only
 func (m *MmsTables) tableFiles(name string, order bool) *TSSPFiles {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -274,7 +272,7 @@ func (m *MmsTables) matchOrderFiles(ctx *mergeContext) {
 		}
 	}
 
-	if ctx.order.Len() == 0 && recentFile != nil {
+	if recentFile != nil {
 		ctx.order.add(recentFile)
 	}
 

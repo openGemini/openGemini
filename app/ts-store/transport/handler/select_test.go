@@ -18,20 +18,24 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	qry "github.com/openGemini/openGemini/open_src/influx/query"
@@ -40,6 +44,7 @@ import (
 
 type MockStoreEngine struct {
 	readerCount int
+	node        *metaclient.Node
 }
 
 func NewMockStoreEngine(readerCount int) *MockStoreEngine {
@@ -118,6 +123,10 @@ func (s *MockStoreEngine) Assign(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
+func (s *MockStoreEngine) GetConnId() uint64 {
+	return 0
+}
+
 type DummySeriesTransform struct {
 	executor.BaseProcessor
 }
@@ -179,17 +188,14 @@ func hookLogicPlan() {
 	executor.RegistryTransformCreator(&executor.LogicalSeries{}, &DummySeriesTransformCreator{})
 }
 
-/*func TestCreateSerfInstance(t *testing.T) {
+func TestCreateSerfInstance(t *testing.T) {
 	const shardCount = 10
-	const readCount = 10
 	hookLogicPlan()
 
-	schema := executor.NewQuerySchema(nil, nil, &qry.ProcessorOptions{})
+	schema := executor.NewQuerySchema(nil, nil, &qry.ProcessorOptions{}, nil)
 	plan := executor.NewLogicalSeries(schema)
 	node, err := executor.MarshalQueryNode(plan)
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 
 	shardIDs := make([]uint64, shardCount)
 	for i := 0; i < shardCount; i++ {
@@ -197,20 +203,51 @@ func hookLogicPlan() {
 	}
 
 	req := &executor.RemoteQuery{
+		Database: "db0",
+		PtID:     2,
+		NodeID:   1,
 		ShardIDs: shardIDs,
 		Node:     node,
 	}
 
-	h := NewSelect(NewMockStoreEngine(readCount), nil, req)
+	store := mockStorage(t.TempDir())
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+	h := NewSelect(store, resp, req)
 
-	if err := h.Process(); err != nil {
-		t.Error(err)
-	}
-}*/
+	config.SetHaEnable(false)
+	require.NoError(t, h.Process())
+
+	config.SetHaEnable(true)
+	require.EqualError(t, h.Process(), "pt not found")
+
+	req.PtID = 1
+	req.Analyze = true
+	resp.err = errors.New("some error")
+	h = NewSelect(store, resp, req)
+	require.NoError(t, h.Process())
+
+	resp.err = nil
+	h = NewSelect(store, resp, req)
+	h.SetAbortHook(func() {})
+	h.Abort()
+	require.NoError(t, h.Process())
+
+	h = NewSelect(store, resp, req)
+	require.NotEmpty(t, h.execute(context.Background(), nil))
+	h.Abort()
+	require.NoError(t, h.execute(context.Background(), &executor.PipelineExecutor{}))
+
+	req.Node = []byte{1}
+	h = NewSelect(store, resp, req)
+	require.EqualError(t, h.Process(), errno.NewError(errno.ShortBufferSize, util.Uint64SizeBytes, 1).Error())
+}
 
 type EmptyResponser struct {
 	transport.Responser
 	session *spdy.MultiplexedSession
+
+	err error
 }
 
 func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
@@ -219,7 +256,7 @@ func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
 
 func (r *EmptyResponser) Response(response interface{}, full bool) error {
 
-	return nil
+	return r.err
 }
 
 func (r *EmptyResponser) Callback(data interface{}) error {
@@ -249,42 +286,45 @@ func TestSelectProcessor(t *testing.T) {
 	msg2 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1, 2}})
 	msg2.SetClientID(100)
 
-	msg3 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1}})
+	msg3 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1}, Analyze: true})
 	msg3.SetClientID(100)
 
-	e := resourceallocator.InitResAllocator(2, 0, 2, 0, resourceallocator.ShardsParallelismRes, time.Second)
+	e := resourceallocator.InitResAllocator(2, 0, 2, 0, resourceallocator.ShardsParallelismRes, time.Second, 0)
 	if e != nil {
 		t.Fatal(e)
 	}
 	defer func() {
-		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 	}()
 	p := NewSelectProcessor(nil)
 	require.NoError(t, p.Handle(resp, msg1))
 	require.NoError(t, p.Handle(resp, msg2))
 	require.NoError(t, p.Handle(resp, msg3))
+
+	query.NewManager(100).Abort(resp.Sequence())
+	require.NoError(t, p.Handle(resp, msg3))
 }
 
-var storageDataPath = "/tmp/data/"
-var metaPath = "/tmp/meta"
-
-func mockStorage() *storage.Storage {
-	node := metaclient.NewNode(metaPath)
+func mockStorage(dir string) *storage.Storage {
+	node := metaclient.NewNode(dir + "/meta")
 	storeConfig := config.NewStore()
 	monitorConfig := config.Monitor{
-		Pushers: "http",
+		Pushers:      "http",
+		StoreEnabled: true,
 	}
 	config.SetHaEnable(true)
 	config := &config.TSStore{
 		Data:    storeConfig,
 		Monitor: monitorConfig,
 		Common:  config.NewCommon(),
+		Meta:    config.NewMeta(),
 	}
 
-	storage, err := storage.OpenStorage(storageDataPath, node, nil, config)
+	storage, err := storage.OpenStorage(dir+"/data", node, nil, config)
 	if err != nil {
 		return nil
 	}
+	storage.GetEngine().CreateDBPT("db0", 1, false)
 	return storage
 }
 
@@ -293,22 +333,10 @@ func TestNewShardTraits(t *testing.T) {
 	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
 	msg := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Database: "db0", PtID: 0, Node: []byte{10}, ShardIDs: []uint64{1, 2, 3}})
 	req, _ := msg.Data().(*executor.RemoteQuery)
-	store := mockStorage()
+	store := mockStorage(t.TempDir())
 	p := NewSelectProcessor(store)
 	s := NewSelect(p.store, resp, req)
 	config.SetHaEnable(false)
-	_, _, err := s.NewShardTraits(s.req, s.w)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.SetHaEnable(true)
-	_, _, err = s.NewShardTraits(s.req, s.w)
-	if err == nil {
-		t.Fatal(err)
-	}
-	s.store.GetEngine().CreateDBPT("db0", 0)
-	_, _, err = s.NewShardTraits(s.req, s.w)
-	if err != nil {
-		t.Fatal(err)
-	}
+	traits := s.NewShardTraits(s.req, s.w)
+	require.NotEmpty(t, traits)
 }

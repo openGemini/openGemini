@@ -17,6 +17,7 @@ limitations under the License.
 package collector
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -67,15 +68,21 @@ type queryMetrics struct {
 
 func NewQueryMetric(logger *logger.Logger, conf *config.MonitorQuery) *QueryMetric {
 	protocol := "http"
+	var defaultClient = http.DefaultClient
 	if conf.HTTPSEnabled {
 		protocol = "https"
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		defaultClient = &http.Client{
+			Transport: tr,
+		}
 	}
-
 	return &QueryMetric{
 		done:   make(chan struct{}),
 		url:    fmt.Sprintf("%s://%s/query", protocol, conf.HttpEndpoint),
 		conf:   conf,
-		Client: http.DefaultClient,
+		Client: defaultClient,
 		logger: logger,
 		queryMetrics: &queryMetrics{
 			SeriesMap: make(map[string]map[string]int64),
@@ -110,6 +117,7 @@ func (q *QueryMetric) collect() {
 			return
 		}
 	}
+
 }
 
 func (q *QueryMetric) queryExecute(db, cmd string) ([]byte, error) {
@@ -122,8 +130,8 @@ func (q *QueryMetric) queryExecute(db, cmd string) ([]byte, error) {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s?%s", q.url, params.Encode()), nil)
 		headers := http.Header{}
 		headers.Add("Content-Type", "application/json")
-		req.Header = headers
 		req.SetBasicAuth(q.conf.Username, crypto.Decrypt(q.conf.Password))
+		req.Header = headers
 		resp, err := q.Client.Do(req)
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {

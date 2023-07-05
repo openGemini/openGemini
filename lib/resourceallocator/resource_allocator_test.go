@@ -41,11 +41,15 @@ func TestResourceAllocator(t *testing.T) {
 	if r.allocator.aliveCount != 0 {
 		t.Fatal(fmt.Sprintf("unexpected alive pipeline number,expected: 0,got:%d", r.allocator.aliveCount))
 	}
+	if n, _ := r.AllocParallelism(0); n != 0 {
+		t.Fatal("chunkreaderResAlloctor alloc parallelism fail")
+	}
+	r.FreeParallelism(1, 1)
 }
 
 func TestShardPipelineManager(t *testing.T) {
-	NewShardsParallelismAllocator(0, 0, 0)
-	a1, _ := NewShardsParallelismAllocator(time.Second, 10, 1)
+	NewShardsParallelismAllocator(0, 0, 0, 0)
+	a1, _ := NewShardsParallelismAllocator(time.Second, 10, 1, 0)
 	NewSeriesParallelismAllocator(0, 0)
 	a2 := NewSeriesParallelismAllocator(time.Second, 20)
 	if num, _, _ := a1.Alloc(10); num != 1 {
@@ -65,13 +69,13 @@ func TestShardPipelineManager(t *testing.T) {
 }
 
 func TestResourceAllocatorImpl(t *testing.T) {
-	if e := InitResAllocator(0, 0, 1, -1, ChunkReaderRes, 0); e == nil {
+	if e := InitResAllocator(0, 0, 1, -1, ChunkReaderRes, 0, 0); e == nil {
 		t.Fatal()
 	}
-	if e := InitResAllocator(0, 0, 1, -1, 5, 0); e == nil {
+	if e := InitResAllocator(0, 0, 1, -1, 5, 0, 0); e == nil {
 		t.Fatal()
 	}
-	if e := InitResAllocator(0, 0, 1, GradientDesc, ChunkReaderRes, 0); e != nil {
+	if e := InitResAllocator(0, 0, 1, GradientDesc, ChunkReaderRes, 0, 0); e != nil {
 		t.Fatal(e)
 	}
 	if _, _, e := AllocRes(ChunkReaderRes, 1); e != nil {
@@ -86,10 +90,30 @@ func TestResourceAllocatorImpl(t *testing.T) {
 	if e := FreeRes(ChunkReaderRes, 1, 1); e != nil {
 		t.Fatal(e)
 	}
-	if e := InitResAllocator(0, 0, 1, -1, ShardsParallelismRes, 0); e != nil {
+	if e := InitResAllocator(0, 0, 1, -1, ShardsParallelismRes, 0, 0); e != nil {
 		t.Fatal(e)
 	}
-	if e := InitResAllocator(0, 0, 1, -1, SeriesParallelismRes, 0); e != nil {
+	if e := InitResAllocator(0, 0, 1, -1, SeriesParallelismRes, 0, 0); e != nil {
 		t.Fatal(e)
 	}
+	if n, _ := AllocParallelismRes(ShardsParallelismRes, 1); n == 0 {
+		t.Fatal("shardParallelismRes alloc parallelism error")
+	}
+	if err := FreeParallelismRes(ShardsParallelismRes, 1, 1); err != nil {
+		t.Fatal("shardParallelismRes free parallelism error")
+	}
+	if _, err := AllocParallelismRes(10, 1); err == nil {
+		t.Fatal("alloc parallelism error")
+	}
+	if err := FreeParallelismRes(10, 1, 1); err == nil {
+		t.Fatal("free parallelism error")
+	}
+}
+
+func TestSeriesResAllocator(t *testing.T) {
+	series := NewSeriesParallelismAllocator(time.Second, 100)
+	if n, _ := series.AllocParallelism(0); n != 0 {
+		t.Error("seriesResAlloc alloc parallelism error")
+	}
+	series.FreeParallelism(1, 1)
 }

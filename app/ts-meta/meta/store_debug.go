@@ -86,7 +86,12 @@ func (s *Store) genMoveEvent(db string, pt uint32, to uint64) (MigrateEvent, err
 
 	shardDurations := s.data.GetShardDurationsByDbPt(db, pt)
 	ptiClone := *pti
-	moveEvent := NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: &ptiClone, Shards: shardDurations},
-		pti.Owner.NodeID, to, true)
+	dbInfo := s.data.GetDBBriefInfo(db)
+	dn := s.data.DataNode(to)
+	if dn == nil {
+		return nil, errno.NewError(errno.DataNodeNotFound)
+	}
+	moveEvent := NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: &ptiClone, Shards: shardDurations, DBBriefInfo: dbInfo},
+		pti.Owner.NodeID, to, dn.AliveConnID, true)
 	return moveEvent, nil
 }

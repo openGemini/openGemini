@@ -16,11 +16,34 @@ limitations under the License.
 
 package immutable
 
-import "github.com/openGemini/openGemini/lib/record"
+import (
+	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/record"
+)
 
 type LocationCursor struct {
-	pos int
-	lcs []*Location
+	rowCount      int
+	pos           int
+	lcs           []*Location
+	filterRecPool *record.CircularRecordPool
+}
+
+func (l *LocationCursor) AddFilterRecPool(pool *record.CircularRecordPool) {
+	l.filterRecPool = pool
+}
+
+func (l *LocationCursor) FragmentCount() int {
+	var count int
+	for i := range l.lcs {
+		for _, rg := range l.lcs[i].fragRgs {
+			count += int(rg.End - rg.Start)
+		}
+	}
+	return count
+}
+
+func (l *LocationCursor) RowCount() int {
+	return l.rowCount
 }
 
 func (l *LocationCursor) AddLocation(loc *Location) {
@@ -56,6 +79,15 @@ func (l *LocationCursor) Reverse() {
 	}
 }
 
+func (l *LocationCursor) Close() {
+	l.rowCount = 0
+	l.pos = 0
+	l.lcs = l.lcs[:0]
+	if l.filterRecPool != nil {
+		l.filterRecPool.Put()
+	}
+}
+
 func (l *LocationCursor) AddRef() {
 	for i := range l.lcs {
 		l.lcs[i].r.Ref()
@@ -69,7 +101,7 @@ func (l *LocationCursor) Unref() {
 	}
 }
 
-func (l *LocationCursor) ReadMeta(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
+func (l *LocationCursor) ReadMeta(filterOpts *FilterOptions, dst *record.Record, filterBitmap *bitmap.FilterBitmap) (*record.Record, error) {
 	var err error
 	var rec *record.Record
 	var readCxt = l.lcs[0].ctx
@@ -85,7 +117,7 @@ func (l *LocationCursor) ReadMeta(filterOpts *FilterOptions, dst *record.Record)
 
 			for loc.hasNext() {
 				var tmpRec *record.Record
-				tmpRec, err = loc.readMeta(filterOpts, dst)
+				tmpRec, err = loc.readMeta(filterOpts, dst, filterBitmap)
 				if err != nil {
 					return nil, err
 				}
@@ -113,7 +145,7 @@ func (l *LocationCursor) ReadMeta(filterOpts *FilterOptions, dst *record.Record)
 			l.pos++
 			continue
 		}
-		rec, err = loc.readMeta(filterOpts, dst)
+		rec, err = loc.readMeta(filterOpts, dst, filterBitmap)
 		if err != nil {
 			return nil, err
 		}
@@ -140,7 +172,7 @@ func (l *LocationCursor) ReadOutOfOrderMeta(filterOpts *FilterOptions, dst *reco
 			l.pos++
 			continue
 		}
-		midRec, err = loc.readMeta(filterOpts, dst)
+		midRec, err = loc.readMeta(filterOpts, dst, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -157,17 +189,18 @@ func (l *LocationCursor) ReadOutOfOrderMeta(filterOpts *FilterOptions, dst *reco
 	return rec, nil
 }
 
-func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
+func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record, filterBitmap *bitmap.FilterBitmap) (*record.Record, error) {
 	if len(l.lcs) == 0 {
 		return nil, nil
 	}
 
 	var err error
+	var rowCount int
 	var rec *record.Record
 	var readCxt = l.lcs[0].ctx
 
 	if len(readCxt.ops) > 0 {
-		return l.ReadMeta(filterOpts, dst)
+		return l.ReadMeta(filterOpts, dst, filterBitmap)
 	}
 
 	for {
@@ -179,10 +212,15 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record)
 			l.pos++
 			continue
 		}
-		rec, err = loc.readData(filterOpts, dst)
+		var filterRec *record.Record
+		if l.filterRecPool != nil {
+			filterRec = l.filterRecPool.Get()
+		}
+		rec, rowCount, err = loc.readData(filterOpts, dst, filterRec, filterBitmap)
 		if err != nil {
 			return nil, err
 		}
+		l.rowCount += rowCount
 
 		if rec != nil {
 			return rec, nil

@@ -21,9 +21,10 @@ import (
 	"sort"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
+	"go.uber.org/zap"
 )
 
 type ItemParser interface {
@@ -118,7 +119,7 @@ func (brp *BasicRowParser) ParseTSIDs() {
 	_ = tsids[n-1]
 	for i := 0; i < n; i++ {
 		if len(tail) < 8 {
-			logger.Panicf("BUG: tail cannot be smaller than 8 bytes; got %d bytes; tail=%X", len(tail), tail)
+			logger.GetLogger().Error("BUG: tail cannot be smaller than 8 bytes", zap.Int("got bytes len", len(tail)), zap.Any("tail", tail))
 			return
 		}
 		tsid := encoding.UnmarshalUint64(tail)
@@ -134,7 +135,7 @@ func (brp *BasicRowParser) TSIDsLen() int {
 func (brp *BasicRowParser) FirstAndLastTSIDs() (uint64, uint64) {
 	tail := brp.tail
 	if len(tail) < 8 {
-		logger.Panicf("BUG: cannot unmarshal tsid from %d bytes; need 8 bytes", len(tail))
+		logger.GetLogger().Error("BUG: cannot unmarshal tsid; need 8 bytes", zap.Int("got bytes len", len(tail)))
 		return 0, 0
 	}
 	firstTSIDs := encoding.UnmarshalUint64(tail)

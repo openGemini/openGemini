@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,10 +34,10 @@ func TestCheckRecord(t *testing.T) {
 
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: record.Bytes2str(nameFloat)},
+		record.Field{Type: influx.Field_Type_Float, Name: util.Bytes2str(nameFloat)},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: record.Bytes2str(nameTime)},
+		record.Field{Type: influx.Field_Type_Int, Name: util.Bytes2str(nameTime)},
 	}
 	rec := genRowRec(schema,
 		[]int{1, 1, 1}, []int64{700, 2, 600},
@@ -59,33 +60,37 @@ func TestCheckCol(t *testing.T) {
 	col := &record.ColVal{}
 	col.AppendIntegers(1, 2, 3, 4, 5)
 
-	require.NoError(t, checkCol(col))
-	require.NoError(t, checkCol(nil))
+	require.NoError(t, checkCol(col, influx.Field_Type_Int))
+	require.NoError(t, checkCol(nil, influx.Field_Type_Int))
 
 	col.NilCount = -1
-	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "NilCount is less than 0")
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col, influx.Field_Type_Int)), "NilCount is less than 0")
+
+	col.NilCount = 0
+	col.Val = append(col.Val, 1)
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col, influx.Field_Type_Int)), "invalid val size")
 
 	col.Init()
 	col.AppendStrings("a", "b", "c", "d")
 	col.NilCount++
-	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "NilCount is invalid")
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col, influx.Field_Type_Int)), "NilCount is invalid")
 
 	col.NilCount--
 	col.Bitmap = append(col.Bitmap, 1)
-	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "Bitmap is invalid")
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col, influx.Field_Type_String)), "Bitmap is invalid")
 
 	col.Bitmap = col.Bitmap[:len(col.Bitmap)-1]
 	col.Offset = append(col.Offset, 100)
-	require.Contains(t, fmt.Sprintf("%v", checkCol(col)), "Offset is invalid")
+	require.Contains(t, fmt.Sprintf("%v", checkCol(col, influx.Field_Type_String)), "Offset is invalid")
 }
 
-func checkCol(col *record.ColVal) (err error) {
+func checkCol(col *record.ColVal, typ int) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = fmt.Errorf("%v", e)
 		}
 	}()
-	record.CheckCol(col)
+	record.CheckCol(col, typ)
 	return
 }
 

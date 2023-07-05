@@ -32,13 +32,15 @@ import (
 
 func TestAddPointToBuffer(t *testing.T) {
 	mst := "mst"
-	tags := map[string]string{"tid": "t01", "cid": "c01"}
+	tags := map[string]string{"tid": "t01=, \n\t", "cid": "c01"}
 	fields := map[string]interface{}{
 		"age":  int64(1),
 		"name": "sandy",
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf := bytes.TrimSpace(statistics.AddPointToBuffer(mst, tags, fields, nil))
+
+	tags["tid"] = "t01"
 	err := compareBuffer(mst, tags, fields, buf)
 	if err != nil {
 		t.Fatalf("%v", err)

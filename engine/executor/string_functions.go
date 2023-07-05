@@ -19,7 +19,7 @@ package executor
 import (
 	"strings"
 
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -103,7 +103,7 @@ func SubStrTwoParaFunc(srcStr string, start int64) string {
 	oriStr := srcStr[start:]
 	newStr := make([]byte, len(oriStr))
 	copy(newStr, oriStr)
-	return record.Bytes2str(newStr)
+	return util.Bytes2str(newStr)
 }
 
 func SubStrThreeParaFunc(srcStr string, start, subStrLen int64) string {
@@ -118,5 +118,5 @@ func SubStrThreeParaFunc(srcStr string, start, subStrLen int64) string {
 	}
 	newStr := make([]byte, len(oriStr))
 	copy(newStr, oriStr)
-	return record.Bytes2str(newStr)
+	return util.Bytes2str(newStr)
 }

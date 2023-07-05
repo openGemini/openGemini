@@ -3,7 +3,7 @@
 
 package fs
 
-// SetDisableMmap set disableMmap
-func SetDisableMmap(off bool) {
-	disableMmap = off
+// EnableMmap set enableMmap
+func EnableMmap(off bool) {
+	enableMmap = off
 }

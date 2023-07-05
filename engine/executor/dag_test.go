@@ -93,7 +93,7 @@ func TestFulljoinDagBuilder(t *testing.T) {
 	var joinCases []*influxql.Join
 	joinCases = append(joinCases, joinCase)
 	schema := buildFullJoinSchema()
-	schema = executor.NewQuerySchemaWithJoinCase(schema.Fields(), schema.Sources(), schema.GetColumnNames(), schema.Options(), joinCases)
+	schema = executor.NewQuerySchemaWithJoinCase(schema.Fields(), schema.Sources(), schema.GetColumnNames(), schema.Options(), joinCases, nil)
 	schema.Options().(*query.ProcessorOptions).Sources = influxql.Sources{createMeasurement()}
 	logicMst1 := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))
 	logicMst2 := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))

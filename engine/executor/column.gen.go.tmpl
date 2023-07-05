@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 )
@@ -66,6 +66,7 @@ type Column interface {
     {{- else }}
 		StringValuesV2(dst []string) []string
 		StringValuesRange(dst []string, start, end int) []string
+		StringValuesWithOffset(start, end int, offsets []uint32) ([]byte, []uint32)
 		AppendStringValues(...string)
 		AppendStringBytes([]byte, []uint32)
 		SetStringValues([]byte, []uint32)
@@ -88,6 +89,12 @@ type Column interface {
 
 type floatTuple struct {
 	values []float64
+}
+
+func NewfloatTuple(tuple []float64) *floatTuple {
+	a := new(floatTuple)
+	a.values = tuple
+	return a
 }
 
 type ColumnImpl struct {
@@ -265,11 +272,11 @@ func (c *ColumnImpl) Set{{.Name}}Values(values []{{.Type}}) {
 func (c *ColumnImpl) StringValue(idx int) string {
 	if idx == len(c.offset)-1 {
 		off := c.offset[idx]
-		return record.Bytes2str(c.stringBytes[off:])
+		return util.Bytes2str(c.stringBytes[off:])
 	} else {
 		start := c.offset[idx]
 		end := c.offset[idx+1]
-		return record.Bytes2str(c.stringBytes[start:end])
+		return util.Bytes2str(c.stringBytes[start:end])
 	}
 }
 
@@ -283,41 +290,65 @@ func (c *ColumnImpl) StringValuesV2(dst []string) []string {
 	for i := 0; i < len(offs); i++ {
 		off := offs[i]
 		if i == len(offs)-1 {
-			dst = append(dst, record.Bytes2str(c.stringBytes[off:]))
+			dst = append(dst, util.Bytes2str(c.stringBytes[off:]))
 		} else {
-			dst = append(dst, record.Bytes2str(c.stringBytes[off:offs[i+1]]))
+			dst = append(dst, util.Bytes2str(c.stringBytes[off:offs[i+1]]))
 		}
 	}
 	return dst
 }
 
 func (c *ColumnImpl) StringValuesRange(dst []string, start, end int) []string {
+	rows := end - start
+	if rows > cap(dst) {
+		dst = make([]string, 0, rows)
+	}
 	offs := c.offset
 	for i := start; i < end; i++ {
 		off := offs[i]
 		if i == len(offs)-1 {
-			dst = append(dst, record.Bytes2str(c.stringBytes[off:]))
+			dst = append(dst, util.Bytes2str(c.stringBytes[off:]))
 		} else {
-			dst = append(dst, record.Bytes2str(c.stringBytes[off:offs[i+1]]))
+			dst = append(dst, util.Bytes2str(c.stringBytes[off:offs[i+1]]))
 		}
 	}
 
 	return dst
 }
 
+func (c *ColumnImpl) StringValuesWithOffset(start, end int, offsets []uint32) ([]byte, []uint32) {
+	rows := end - start
+    if rows == 0 {
+        return nil, offsets
+    }
+	if rows > cap(offsets) {
+		offsets = make([]uint32, 0, rows)
+	}
+
+	startOff, endOff := c.offset[start], uint32(0)
+	for i := start; i < end; i++ {
+		offsets = append(offsets, c.offset[i] - startOff)
+	}
+
+	if end == len(c.offset) {
+		endOff = uint32(len(c.stringBytes))
+	} else {
+		endOff = c.offset[end]
+	}
+
+	return c.stringBytes[startOff:endOff], offsets
+}
+
+
 // Deprecated: please do not use. recommend to use AppendStringBytes
 func (c *ColumnImpl) AppendStringValues(values ...string) {
-	for _, value := range values {
-		b := record.Str2bytes(value)
+	for i := range values {
 		c.offset = append(c.offset, uint32(len(c.stringBytes)))
-		c.stringBytes = append(c.stringBytes, b...)
+		c.stringBytes = append(c.stringBytes, values[i]...)
 	}
 }
 
 func (c *ColumnImpl) AppendStringBytes(val []byte, offset []uint32) {
-	if len(val) == 0 {
-		return
-	}
 	sbLen := uint32(len(c.stringBytes))
 	for _, off := range offset {
 		c.offset = append(c.offset, off+sbLen)
@@ -358,7 +389,7 @@ func (c *ColumnImpl) GetStringValueBytes(valueBits []byte, value []string, start
         ve := vs + len(oriStr)
         newStr := valueBits[vs:ve]
         copy(newStr, oriStr)
-        value = append(value, record.Bytes2str(newStr))
+        value = append(value, util.Bytes2str(newStr))
     }
     return valueBits, value
 }

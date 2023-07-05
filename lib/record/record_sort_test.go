@@ -184,15 +184,13 @@ func TestSortHelper_SortSameTime(t *testing.T) {
 }
 
 func doSort(t *testing.T, data []recordSortData) {
-	sh := &record.SortHelper{}
+	sh := record.NewSortHelper()
 
 	for i := 0; i < len(data); i++ {
 		rec := buildRecord(data[i].unordered)
-		aux := newAux(rec.Times(), schema)
-		sh.Sort(rec, aux)
+		sr := sh.Sort(rec)
 
 		exp := data[i].exp
-		sr := aux.SortRec
 
 		if !assert.Equal(t, exp.times, sr.Times()) {
 			return

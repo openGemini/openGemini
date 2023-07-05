@@ -104,6 +104,15 @@ func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, a *ClusterS
 		return nil // meta.ErrMeasurementNotFound(s.Name)
 	}
 
+	var engineTypes [config.ENGINETYPEEND]bool
+	for _, m := range measurements {
+		if !engineTypes[m.EngineType] {
+			engineTypes[m.EngineType] = true
+			// Set engine type for measurement.
+			s.EngineType = m.EngineType
+		}
+	}
+
 	// Retrieve the list of shards for this database. This list of
 	// shards is always the same regardless of which measurement we are
 	// using.
@@ -120,6 +129,11 @@ func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, a *ClusterS
 
 		shardIDsByPtID := make(map[uint32][]uint64)
 		for i, g := range groups {
+			// ShardGroupsByTimeRange would get all shards with different engine type in the TimeRange,
+			// we only need to process shards with engine type in engineTypes or equals to engineType.
+			if !engineTypes[g.EngineType] {
+				continue
+			}
 			gTimeRange := influxql.TimeRange{Min: g.StartTime, Max: g.EndTime}
 			if i == 0 {
 				a.ShardsTimeRage = gTimeRange
@@ -376,23 +390,9 @@ func (csm *ClusterShardMapping) MapTypeBatch(m *influxql.Measurement, fields map
 	return nil
 }
 
-func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
-	ctxValue := ctx.Value(query.QueryDurationKey)
-	if ctxValue != nil {
-		qDuration := ctxValue.(*statistics.SQLSlowQueryStatistics)
-		if qDuration != nil {
-			schema.Options().(*query.ProcessorOptions).Query = qDuration.Query
-			start := time.Now()
-			defer func() {
-				qDuration.AddDuration("LocalIteratorDuration", time.Since(start).Nanoseconds())
-			}()
-		}
-	}
+func (csm *ClusterShardMapping) GetShardAndSourcesMap(sources influxql.Sources) (map[uint64]map[uint32][]uint64, map[uint32]influxql.Sources, error) {
 	shardsMapByNode := make(map[uint64]map[uint32][]uint64) // {"nodeId": {"ptId": []shardId } }
 	sourcesMapByPtId := make(map[uint32]influxql.Sources)   // {"ptId": influxql.Sources }
-
-	opts := schema.Options().(*query.ProcessorOptions)
-
 	for _, src := range sources {
 		switch src := src.(type) {
 		case *influxql.Measurement:
@@ -407,7 +407,7 @@ func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources i
 
 			ptView, err := csm.MetaClient.DBPtView(source.Database)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for pId, sIds := range shardIDsByDBPT {
 				nodeID := ptView[pId].Owner.NodeID
@@ -428,20 +428,16 @@ func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources i
 			panic("unknown measurement.")
 		}
 	}
+	return shardsMapByNode, sourcesMapByPtId, nil
+}
 
-	// Override the time constraints if they don't match each other.
-	if !csm.MinTime.IsZero() && opts.StartTime < csm.MinTime.UnixNano() {
-		opts.StartTime = csm.MinTime.UnixNano()
-	}
-	if !csm.MaxTime.IsZero() && opts.EndTime > csm.MaxTime.UnixNano() {
-		opts.EndTime = csm.MaxTime.UnixNano()
-	}
-
-	wg := sync.WaitGroup{}
+func (csm *ClusterShardMapping) RemoteQueryETraitsAndSrc(ctx context.Context, opts *query.ProcessorOptions, schema hybridqp.Catalog,
+	shardsMapByNode map[uint64]map[uint32][]uint64, sourcesMapByPtId map[uint32]influxql.Sources) ([]hybridqp.Trait, error) {
 	eTraits := make([]hybridqp.Trait, 0, len(shardsMapByNode))
 	var muList = sync.Mutex{}
-	errs := make([]error, 0, len(shardsMapByNode))
-
+	var errs error
+	once := sync.Once{}
+	wg := sync.WaitGroup{}
 	for nodeID, shardsByPtId := range shardsMapByNode {
 		for pId, sIds := range shardsByPtId {
 			wg.Add(1)
@@ -450,9 +446,12 @@ func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources i
 				src := sourcesMapByPtId[ptID]
 				rq, err := csm.makeRemoteQuery(ctx, src, *opts, nodeID, ptID, shardIDs)
 				if err != nil {
-					muList.Lock()
-					errs = append(errs, err)
-					muList.Unlock()
+					csm.Logger.Error("failed to createLogicalPlan", zap.Error(err), zap.String("shardMapping", "cluster"))
+					if !errno.Equal(err, errno.PtNotFound) {
+						once.Do(func() {
+							errs = err
+						})
+					}
 					return
 				}
 
@@ -463,28 +462,56 @@ func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources i
 			}(nodeID, pId, sIds)
 		}
 	}
-
 	wg.Wait()
-	for _, err := range errs {
-		if err == nil {
-			continue
-		}
-
-		csm.Logger.Error("failed to createLogicalPlan", zap.Error(err), zap.String("shardMapping", "cluster"))
-		if !errno.Equal(err, errno.PtNotFound) {
-			err = nil
-			continue
-		}
-		return nil, err
+	if errs != nil {
+		return nil, errs
 	}
 	if schema.Options().(*query.ProcessorOptions).Sources == nil {
 		return nil, nil
 	}
+	return eTraits, nil
+}
 
+func (csm *ClusterShardMapping) GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error) {
+	ctxValue := ctx.Value(query.QueryDurationKey)
+	if ctxValue != nil {
+		qDuration, ok := ctxValue.(*statistics.SQLSlowQueryStatistics)
+		if ok && qDuration != nil {
+			schema.Options().(*query.ProcessorOptions).Query = qDuration.Query
+			start := time.Now()
+			defer func() {
+				qDuration.AddDuration("LocalIteratorDuration", time.Since(start).Nanoseconds())
+			}()
+		}
+	}
+	opts, _ := schema.Options().(*query.ProcessorOptions)
+	shardsMapByNode, sourcesMapByPtId, err := csm.GetShardAndSourcesMap(sources)
+	if err != nil {
+		return nil, err
+	}
+	// Override the time constraints if they don't match each other.
+	if !csm.MinTime.IsZero() && opts.StartTime < csm.MinTime.UnixNano() {
+		opts.StartTime = csm.MinTime.UnixNano()
+	}
+	if !csm.MaxTime.IsZero() && opts.EndTime > csm.MaxTime.UnixNano() {
+		opts.EndTime = csm.MaxTime.UnixNano()
+	}
+	return csm.RemoteQueryETraitsAndSrc(ctx, opts, schema, shardsMapByNode, sourcesMapByPtId)
+}
+
+func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	eTraits, err := csm.GetETraits(ctx, sources, schema)
+	if eTraits == nil || err != nil {
+		return nil, err
+	}
 	var plan hybridqp.QueryNode
 	var pErr error
 
 	builder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	if sources != nil && sources.HaveOnlyCSStore() {
+		return CreateColumnStorePlan(schema, eTraits, builder)
+	}
 
 	// push down to chunk reader.
 	plan, pErr = builder.CreateSeriesPlan()
@@ -599,4 +626,22 @@ func shardMapperExprRewriter(ftOk, hasMstInfo bool, fields map[string]*influxql.
 	} else {
 		fields[k].DataType = influxql.Tag
 	}
+}
+
+func CreateColumnStorePlan(schema hybridqp.Catalog, eTraits []hybridqp.Trait, builder *executor.LogicalPlanBuilderImpl) (hybridqp.QueryNode, error) {
+	plan, pErr := builder.CreateSegmentPlan(schema)
+	if pErr != nil {
+		return nil, pErr
+	}
+
+	plan, pErr = builder.CreateSparseIndexScanPlan(plan)
+	if pErr != nil {
+		return nil, pErr
+	}
+
+	plan, pErr = builder.CreateNodePlan(plan, eTraits)
+	if pErr != nil {
+		return nil, pErr
+	}
+	return plan.(executor.LogicalPlan), pErr
 }

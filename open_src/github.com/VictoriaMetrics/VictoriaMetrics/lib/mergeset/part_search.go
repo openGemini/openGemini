@@ -293,6 +293,12 @@ func (ps *partSearch) readIndexBlock(mr *metaindexRow) (*indexBlock, error) {
 }
 
 func (ps *partSearch) getInmemoryBlock(bh *blockHeader) (*inmemoryBlock, error) {
+	// ItemsBlockOffset is the key of the cache map. If itemsBlockSize is 0, multiple itemsBlocks will have the same
+	// itemsBlockOffset, so itemsBlockSize is 0 and cannot put in the cache
+	if bh.itemsBlockSize == 0 {
+		return ps.readInmemoryBlock(bh)
+	}
+
 	var ibKey inmemoryBlockCacheKey
 	ibKey.Init(bh)
 	ib := ps.ibCache.Get(ibKey)

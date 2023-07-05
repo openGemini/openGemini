@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -229,12 +230,15 @@ func (rpi *RetentionPolicyInfo) TierDuration(tier uint64) time.Duration {
 	return 0
 }
 
-// ShardGroupByTimestamp returns the shard group in the policy that contains the timestamp,
+// ShardGroupByTimestampAndEngineType returns the shard group in the policy that contains the timestamp,
 // or nil if no shard group matches.
-func (rpi *RetentionPolicyInfo) ShardGroupByTimestamp(timestamp time.Time) *ShardGroupInfo {
+func (rpi *RetentionPolicyInfo) ShardGroupByTimestampAndEngineType(timestamp time.Time, engineType config.EngineType) *ShardGroupInfo {
 	for i := len(rpi.ShardGroups) - 1; i >= 0; i-- {
 		sgi := &rpi.ShardGroups[i]
-		if sgi.Contains(timestamp) && !sgi.Deleted() && (!sgi.Truncated() || timestamp.Before(sgi.TruncatedAt)) {
+		if sgi.EngineType == engineType &&
+			sgi.Contains(timestamp) &&
+			!sgi.Deleted() &&
+			(!sgi.Truncated() || timestamp.Before(sgi.TruncatedAt)) {
 			return &rpi.ShardGroups[i]
 		}
 	}

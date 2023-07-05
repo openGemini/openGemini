@@ -27,10 +27,12 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/memory"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -55,7 +57,7 @@ func init() {
 			Ascending:  true,
 			ChunkSize:  100,
 		}
-		schema := executor.NewQuerySchema(nil, nil, &opt)
+		schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 
 		source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1})
 		source2 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk2})
@@ -134,7 +136,7 @@ func TestChunkTag(t *testing.T) {
 	s := [][]string{{"name", "martino"}, {"sex", ""}, {"country", "china"}, {"region"}}
 	tag := ParseChunkTagsNew(s)
 	subset := tag.Subset(nil)
-	assert.Equal(t, record.Str2bytes("name"+split+"martino"+split+"sex"+split+split+"country"+split+"china"+split+split+split), subset)
+	assert.Equal(t, util.Str2bytes("name"+split+"martino"+split+"sex"+split+split+"country"+split+"china"+split+split+split), subset)
 	assert.Equal(t, []uint16{8, 5, 13, 17, 18, 26, 32, 33, 34}, tag.GetOffsets())
 
 	for i := range s {
@@ -160,7 +162,7 @@ func TestChunkTag(t *testing.T) {
 
 	newTag := tag.KeepKeys([]string{"name", "country"})
 	newSubset := newTag.Subset(nil)
-	assert.Equal(t, record.Str2bytes("name"+split+"martino"+split+"country"+split+"china"+split), newSubset)
+	assert.Equal(t, util.Str2bytes("name"+split+"martino"+split+"country"+split+"china"+split), newSubset)
 	assert.Equal(t, []uint16{4, 5, 13, 21, 27}, newTag.GetOffsets())
 }
 
@@ -325,6 +327,10 @@ func NewLogicalSink(rt hybridqp.RowDataType, schema *executor.QuerySchema) *Logi
 	return Sink
 }
 
+func (p *LogicalSink) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalSink) Clone() hybridqp.QueryNode {
 	schema, _ := p.Schema().(*executor.QuerySchema)
 	clone := NewLogicalSink(p.RowDataType(), schema)
@@ -375,6 +381,10 @@ func NewLogicalMocSource(rt hybridqp.RowDataType) *LogicalMocSource {
 	return MocSource
 }
 
+func (p *LogicalMocSource) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalMocSource) Clone() hybridqp.QueryNode {
 	clone := NewLogicalMocSource(p.RowDataType())
 	return clone
@@ -421,7 +431,7 @@ func TestLogicalIndexScan(t *testing.T) {
 		Ascending:  true,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	seriesNode := executor.NewLogicalSeries(schema)
 
 	s := executor.NewLogicalIndexScan(seriesNode, schema)
@@ -463,7 +473,7 @@ func TestNewStoreExecutorBuilder(t *testing.T) {
 		panic("nil StoreExecutorBuilder")
 	}
 
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	logicSeries := executor.NewLogicalSeries(schema)
 	if logicSeries == nil {
 		panic("unexpected logicSeries vertex")
@@ -492,36 +502,22 @@ func TestNewScannerStoreExecutorBuilder(t *testing.T) {
 		Opt:      opt,
 		ShardIDs: []uint64{1, 2},
 	}
-	unrefs := []executor.UnRefDbPt{
-		{
-			Db: "db0",
-			Pt: uint32(1),
-		},
-		{
-			Db: "db1",
-			Pt: uint32(2),
-		},
-	}
 	info := &executor.IndexScanExtraInfo{
 		ShardID: uint64(10),
-		UnRefDbPt: executor.UnRefDbPt{
-			Db: "db0",
-			Pt: uint32(1),
-		},
-		Req: req,
+		Req:     req,
 	}
 	info_clone := info.Clone()
 	if !reflect.DeepEqual(info, info_clone) {
 		panic("unexpected clone result")
 	}
 
-	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, &unrefs, 1)
-	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, &unrefs, 2)
+	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 1)
+	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
 	if b == nil {
 		panic("nil StoreExecutorBuilder")
 	}
 	b.SetInfo(info_clone)
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	logicSeries1 := executor.NewLogicalSeries(schema)
 	node := executor.NewLogicalIndexScan(logicSeries1, schema)
 	if node == nil {
@@ -551,13 +547,9 @@ func TestNewIndexScanTransform(t *testing.T) {
 	}
 	info := &executor.IndexScanExtraInfo{
 		ShardID: uint64(10),
-		UnRefDbPt: executor.UnRefDbPt{
-			Db: "db0",
-			Pt: uint32(1),
-		},
-		Req: req,
+		Req:     req,
 	}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	indexScan := executor.NewIndexScanTransform(buildRowDataType(), nil, schema, nil, info, make(chan struct{}, 2))
 	assert.Equal(t, "IndexScanTransform", indexScan.Name())
 	assert.Equal(t, 1, len(indexScan.GetOutputs()))
@@ -573,4 +565,105 @@ func TestGetInnerDimensions(t *testing.T) {
 	in := []string{"B", "C", "A"}
 	result := executor.GetInnerDimensions(out, in)
 	assert.Equal(t, []string{"A", "B", "D", "C"}, result)
+}
+
+type MockNewResponser struct {
+}
+
+func (m MockNewResponser) Encode(bytes []byte, i interface{}) ([]byte, error) {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Decode(bytes []byte) (interface{}, error) {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Response(i interface{}, b bool) error {
+	return nil
+}
+
+func (m MockNewResponser) Callback(i interface{}) error {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Apply() error {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Type() uint8 {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Session() *spdy.MultiplexedSession {
+	panic("implement me")
+}
+
+func (m MockNewResponser) Sequence() uint64 {
+	panic("implement me")
+}
+
+func (m MockNewResponser) StartAnalyze(span *tracing.Span) {
+	panic("implement me")
+}
+
+func (m MockNewResponser) FinishAnalyze() {
+	panic("implement me")
+}
+
+func TestNewSparseIndexScanExecutorBuilder(t *testing.T) {
+	m := make(map[uint64][][]interface{})
+	m[1] = nil
+	m[2] = nil
+	traits := executor.NewStoreExchangeTraits(&MockNewResponser{}, m)
+	opt := query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions:            []string{"host"},
+		Ascending:             true,
+		ChunkSize:             100,
+		EnableBinaryTreeMerge: 1,
+	}
+	req := &executor.RemoteQuery{
+		Opt:      opt,
+		ShardIDs: []uint64{1, 2},
+	}
+	info := &executor.IndexScanExtraInfo{
+		ShardID: uint64(10),
+		Req:     req,
+	}
+	info_clone := info.Clone()
+	if !reflect.DeepEqual(info, info_clone) {
+		panic("unexpected clone result")
+	}
+
+	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 1)
+	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
+	if b == nil {
+		panic("nil StoreExecutorBuilder")
+	}
+	b.SetInfo(info_clone)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	logicSeries1 := executor.NewLogicalSeries(schema)
+	node := executor.NewLogicalSparseIndexScan(logicSeries1, schema)
+	if node == nil {
+		panic("unexpected indexScan vertex")
+	}
+	if _, err := b.Build(node); err != nil {
+		t.Fatal(err)
+	}
+
+	traits = executor.NewStoreExchangeTraits(&MockNewResponser{}, nil)
+	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
+	b.SetInfo(info_clone)
+	if _, err := b.Build(node); err != nil {
+		assert.Equal(t, err, errno.NewError(errno.LogicalPlanBuildFail, "no shard for reader exchange"))
+	}
+
+	traits = executor.NewStoreExchangeTraits(nil, m)
+	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
+	b.SetInfo(info_clone)
+	if _, err := b.Build(node); err != nil {
+		assert.Equal(t, err, errno.NewError(errno.LogicalPlanBuildFail, "missing  spdy.Responser in node exchange produce"))
+	}
 }

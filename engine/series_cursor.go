@@ -179,7 +179,7 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 			s.span.CreateCounter(memTableDuration, "ns")
 			s.span.CreateCounter(memTableRowCount, "")
 		}
-		memTableRecord := getMemTableRecord(s.ctx, s.span, s.querySchema, s.sInfo.sid, s.filter, &s.sInfo.tags)
+		memTableRecord := getMemTableRecord(s.ctx, s.span, s.querySchema, s.sInfo.sid, s.filter, nil, &s.sInfo.tags)
 		s.memRecIter.init(memTableRecord)
 		s.init = true
 	}

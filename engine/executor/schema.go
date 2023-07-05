@@ -153,7 +153,7 @@ type QuerySchemaCreator struct {
 }
 
 func (c *QuerySchemaCreator) Create(fields influxql.Fields, columnNames []string, opt hybridqp.Options) hybridqp.Catalog {
-	s := NewQuerySchema(fields, columnNames, opt)
+	s := NewQuerySchema(fields, columnNames, opt, nil)
 	return s
 }
 
@@ -164,7 +164,6 @@ type QuerySchema struct {
 	queryFields   influxql.Fields
 	columnNames   []string
 	fields        influxql.Fields
-	fieldsMap     map[string]*influxql.Field
 	fieldsRef     influxql.VarRefs
 	mapDeriveType map[influxql.Expr]influxql.DataType
 	mapping       map[influxql.Expr]influxql.VarRef
@@ -187,15 +186,15 @@ type QuerySchema struct {
 
 	joinCases         []*influxql.Join
 	hasFieldCondition bool
+	sortFields        influxql.SortFields
 }
 
-func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options) *QuerySchema {
+func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
 	schema := &QuerySchema{
 		tables:        make(map[string]*QueryTable),
 		queryFields:   fields,
 		columnNames:   columnNames,
 		fields:        make(influxql.Fields, 0, len(fields)),
-		fieldsMap:     make(map[string]*influxql.Field),
 		fieldsRef:     make(influxql.VarRefs, 0, len(fields)),
 		mapDeriveType: make(map[influxql.Expr]influxql.DataType),
 		mapping:       make(map[influxql.Expr]influxql.VarRef),
@@ -213,6 +212,7 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 		notIncI:       false,
 		opt:           opt,
 		sources:       nil,
+		sortFields:    sortFields,
 	}
 
 	schema.init()
@@ -224,14 +224,14 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 	return schema
 }
 
-func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, joinCases []*influxql.Join) *QuerySchema {
-	q := NewQuerySchemaWithSources(fields, sources, columnNames, opt)
+func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, joinCases []*influxql.Join, sortFields influxql.SortFields) *QuerySchema {
+	q := NewQuerySchemaWithSources(fields, sources, columnNames, opt, sortFields)
 	q.joinCases = joinCases
 	return q
 }
 
-func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options) *QuerySchema {
-	schema := NewQuerySchema(fields, columnNames, opt)
+func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
+	schema := NewQuerySchema(fields, columnNames, opt, sortFields)
 	schema.sources = sources
 	if !schema.Options().IsAscending() && schema.MatchPreAgg() && len(schema.opt.GetGroupBy()) == 0 {
 		schema.Options().SetAscending(true)
@@ -244,7 +244,6 @@ func (qs *QuerySchema) reset(fields influxql.Fields, column []string) {
 	qs.queryFields = fields
 	qs.columnNames = column
 	qs.fields = make(influxql.Fields, 0, len(fields))
-	qs.fieldsMap = make(map[string]*influxql.Field)
 	qs.fieldsRef = make(influxql.VarRefs, 0, len(fields))
 	qs.mapDeriveType = make(map[influxql.Expr]influxql.DataType)
 	qs.mapping = make(map[influxql.Expr]influxql.VarRef)
@@ -277,7 +276,6 @@ func (qs *QuerySchema) init() {
 		influxql.Walk(qs, clone.Expr)
 		clone.Expr = influxql.RewriteExpr(clone.Expr, qs.rewriteExpr)
 		qs.fields = append(qs.fields, clone)
-		qs.fieldsMap[clone.String()] = clone
 	}
 
 	for i, f := range qs.fields {
@@ -370,6 +368,10 @@ func (qs *QuerySchema) HasOptimizeAgg() bool {
 	if len(qs.Calls()) <= 0 {
 		return false
 	}
+	return qs.HasOptimizeCall()
+}
+
+func (qs *QuerySchema) HasOptimizeCall() bool {
 	for _, call := range qs.calls {
 		if !OptimizeAgg[call.Name] {
 			return false
@@ -679,12 +681,17 @@ func (qs *QuerySchema) Fields() influxql.Fields {
 	return qs.fields
 }
 
-func (qs *QuerySchema) FieldsMap() map[string]*influxql.Field {
-	return qs.fieldsMap
-}
-
 func (qs *QuerySchema) FieldsRef() influxql.VarRefs {
 	return qs.fieldsRef
+}
+
+func (qs *QuerySchema) IsHoltWinters(val string) bool {
+	for _, hw := range qs.HoltWinters() {
+		if hw.Alias == val {
+			return true
+		}
+	}
+	return false
 }
 
 func (qs *QuerySchema) isCountDistinct(call *influxql.Call) bool {
@@ -1130,4 +1137,16 @@ func (qs *QuerySchema) GetJoinCaseCount() int {
 
 func (qs *QuerySchema) GetJoinCases() []*influxql.Join {
 	return qs.joinCases
+}
+
+func (qs *QuerySchema) HasSort() bool {
+	return qs.sortFields != nil && len(qs.sortFields) > 0
+}
+
+func (qs *QuerySchema) GetSortFields() influxql.SortFields {
+	return qs.sortFields
+}
+
+func (qs *QuerySchema) SetFill(fill influxql.FillOption) {
+	qs.opt.SetFill(fill)
 }

@@ -21,7 +21,7 @@ import (
 	"github.com/influxdata/influxdb/tsdb/engine/tsm1"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 const (
@@ -40,7 +40,7 @@ func NewRLE(step int) *RLE {
 }
 
 func (rle *RLE) SameValueEncoding(in []byte, out []byte) ([]byte, error) {
-	values := record.Bytes2Float64Slice(in)
+	values := util.Bytes2Float64Slice(in)
 	size := uint16(len(values))
 	out = append(out, uint8(size>>8), uint8(size&0xff))
 
@@ -70,7 +70,7 @@ func (rle *RLE) SameValueDecoding(in, out []byte) ([]byte, error) {
 }
 
 func (rle *RLE) Encoding(in []byte, out []byte) ([]byte, error) {
-	values := record.Bytes2Uint64Slice(in)
+	values := util.Bytes2Uint64Slice(in)
 	var n uint16 = 1
 	size := len(values)
 
@@ -148,7 +148,7 @@ func SnappyDecoding(in, out []byte) ([]byte, error) {
 }
 
 func GorillaEncoding(in []byte, out []byte) ([]byte, error) {
-	values := record.Bytes2Float64Slice(in)
+	values := util.Bytes2Float64Slice(in)
 
 	var err error
 	out, err = tsm1.FloatArrayEncodeAll(values, out)
@@ -160,7 +160,7 @@ func GorillaEncoding(in []byte, out []byte) ([]byte, error) {
 }
 
 func GorillaDecoding(in []byte, out []byte) ([]byte, error) {
-	values := record.Bytes2Float64Slice(out)
+	values := util.Bytes2Float64Slice(out)
 	var err error
 
 	values, err = tsm1.FloatArrayDecodeAll(in, values)
@@ -168,7 +168,7 @@ func GorillaDecoding(in []byte, out []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	out = record.Float64Slice2byte(values)
+	out = util.Float64Slice2byte(values)
 	return out, nil
 }
 

@@ -53,9 +53,11 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 	if ptInfo.Pti == nil {
 		return errno.NewError(errno.ErrMigrationRequestPt)
 	}
-
+	connId := mp.store.GetConnId()
+	aliveConnId := req.GetAliveConnId()
 	mp.log.Info("Start MigrationProcessor", zap.Int32("type", req.GetMigrateType()),
-		zap.String("db", ptInfo.Db), zap.Uint32("pt", ptInfo.Pti.PtId), zap.Uint64("ver", ptInfo.Pti.Ver))
+		zap.String("db", ptInfo.Db), zap.Uint32("pt", ptInfo.Pti.PtId), zap.Uint64("ver", ptInfo.Pti.Ver),
+		zap.Uint64("connId", connId), zap.Uint64("aliveConnId", aliveConnId))
 	var err error
 	rsp := netstorage.NewPtResponse()
 	switch meta.MoveState(req.GetMigrateType()) {
@@ -64,11 +66,17 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 	case meta.MoveRollbackPreOffload:
 		err = mp.store.RollbackPreOffload(ptInfo)
 	case meta.MovePreAssign:
-		err = mp.store.PreAssign(req.GetOpId(), ptInfo)
+		err = errno.NewError(errno.DataNoAlive)
+		if connId == aliveConnId {
+			err = mp.store.PreAssign(req.GetOpId(), ptInfo)
+		}
 	case meta.MoveOffload:
 		err = mp.store.Offload(ptInfo)
 	case meta.MoveAssign:
-		err = mp.store.Assign(req.GetOpId(), ptInfo)
+		err = errno.NewError(errno.DataNoAlive)
+		if connId == aliveConnId {
+			err = mp.store.Assign(req.GetOpId(), ptInfo)
+		}
 	default:
 		mp.log.Error("error migrate type", zap.Int32("type", req.GetMigrateType()))
 		err = errno.NewError(errno.ErrMigrationRequestPt)

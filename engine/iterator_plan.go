@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -88,7 +89,7 @@ func (s *shard) CreateLogicalPlan(ctx context.Context, sources influxql.Sources,
 	}
 
 	if len(srcCursors) == 0 {
-		log.Info("no data in shard", zap.Uint64("id", s.ident.ShardID))
+		log.Debug("no data in shard", zap.Uint64("id", s.ident.ShardID))
 		return buildEmptyPlan(schema)
 	}
 
@@ -397,8 +398,11 @@ func initTransColAuxFun() {
 	}
 
 	transColAuxFun[influxql.String] = func(recColumn *record.ColVal, column executor.Column) {
+		if recColumn.NilCount == recColumn.Length() {
+			return
+		}
 		if recColumn.NilCount > 0 {
-			recColumn.Offset = record.RemoveDuplicationInt(recColumn.Offset)
+			recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
 		}
 		column.AppendStringBytes(recColumn.Val, recColumn.Offset)
 	}
@@ -424,7 +428,7 @@ func initTransColumnFun() {
 	transColumnFun[influxql.String] = func(recColumn *record.ColVal, column executor.Column) {
 		if recColumn.Length() > recColumn.NilCount {
 			if recColumn.NilCount > 0 {
-				recColumn.Offset = record.RemoveDuplicationInt(recColumn.Offset)
+				recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
 			}
 			column.SetStringValues(recColumn.Val, recColumn.Offset)
 		}
@@ -433,7 +437,7 @@ func initTransColumnFun() {
 	transColumnFun[influxql.Tag] = func(recColumn *record.ColVal, column executor.Column) {
 		if recColumn.Length() > recColumn.NilCount {
 			if recColumn.NilCount > 0 {
-				recColumn.Offset = record.RemoveDuplicationInt(recColumn.Offset)
+				recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
 			}
 			column.SetStringValues(recColumn.Val, recColumn.Offset)
 		}
@@ -531,7 +535,10 @@ func (r *ChunkReader) selectNoPreAgg(rec *record.Record, column executor.Column,
 		if rec.RecMeta != nil && len(rec.RecMeta.Times) > 0 {
 			columnTimes = rec.RecMeta.Times[recIndex]
 		}
-		transFun := transColAuxFun[column.DataType()]
+		transFun, exists := transColAuxFun[column.DataType()]
+		if !exists {
+			panic(fmt.Errorf("not find column data type :%v", column.DataType().String()))
+		}
 		transFun(recColumn, column)
 		if recColumn.NilCount == recColumn.Length() {
 			column.AppendManyNil(len(times))
@@ -547,7 +554,7 @@ func (r *ChunkReader) selectNoPreAgg(rec *record.Record, column executor.Column,
 		if tag == nil {
 			column.AppendManyNil(len(times))
 		} else {
-			tagBytes := record.Str2bytes(tag.Value)
+			tagBytes := util.Str2bytes(tag.Value)
 			for j := 0; j < len(times); j++ {
 				column.AppendStringBytes(tagBytes, []uint32{0})
 			}

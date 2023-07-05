@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
@@ -63,7 +64,7 @@ func NewAggregateCursor(input comm.KeyCursor, schema *executor.QuerySchema, glob
 	c.auxTag = hasAuxTags
 	limitSize := schema.Options().GetLimit() + schema.Options().GetOffset()
 	if limitSize > 0 {
-		c.maxRecordSize = record.Min(schema.Options().ChunkSizeNum(), limitSize)
+		c.maxRecordSize = util.Min(schema.Options().ChunkSizeNum(), limitSize)
 	} else {
 		c.maxRecordSize = schema.Options().ChunkSizeNum()
 	}
@@ -88,7 +89,7 @@ func (c *aggregateCursor) NextAggData() (*record.Record, *comm.FileInfo, error) 
 
 	if !c.init {
 		c.recordPool = record.NewCircularRecordPool(c.globalPool, aggCursorRecordNum, c.outSchema, c.initColMeta)
-		c.intervalIndex = record.Bytes2Uint16Slice(bufferpool.Get())
+		c.intervalIndex = util.Bytes2Uint16Slice(bufferpool.Get())
 		c.intervalIndex = c.intervalIndex[:0]
 		c.init = true
 	}
@@ -197,6 +198,7 @@ func (c *aggregateCursor) SinkPlan(plan hybridqp.QueryNode) {
 	var outSchema record.Schemas
 	outRowDataType := plan.RowDataType()
 	ops := plan.RowExprOptions()
+
 	opsCopy := make([]hybridqp.ExprOptions, len(ops))
 	copy(opsCopy, ops)
 
@@ -261,7 +263,7 @@ func (c *aggregateCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 
 	if !c.init {
 		c.recordPool = record.NewCircularRecordPool(c.globalPool, aggCursorRecordNum, c.outSchema, c.initColMeta)
-		c.intervalIndex = record.Bytes2Uint16Slice(bufferpool.Get())
+		c.intervalIndex = util.Bytes2Uint16Slice(bufferpool.Get())
 		c.init = true
 	}
 
@@ -378,7 +380,7 @@ func (c *aggregateCursor) Close() error {
 	if c.recordPool != nil {
 		c.clear()
 		c.recordPool.Put()
-		bufferpool.Put(record.Uint16Slice2byte(c.intervalIndex))
+		bufferpool.Put(util.Uint16Slice2byte(c.intervalIndex))
 	}
 	return c.input.Close()
 }

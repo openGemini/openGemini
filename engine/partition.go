@@ -26,7 +26,10 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -84,6 +87,8 @@ type DBPTInfo struct {
 	logicClock          uint64
 	sequenceID          uint64
 	lockPath            *string
+	openShardsLimit     limiter.Fixed
+	enableTagArray      bool
 }
 
 func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx) *DBPTInfo {
@@ -154,7 +159,7 @@ func (dbPT *DBPTInfo) reportLoad() {
 					continue
 				}
 
-				seriesCount := dbPT.shards[shardID].SeriesCount()
+				seriesCount := dbPT.shards[shardID].GetSeriesCount()
 
 				if cap(rpStats) > len(rpStats) {
 					rpStats = rpStats[:len(rpStats)+1]
@@ -171,8 +176,8 @@ func (dbPT *DBPTInfo) reportLoad() {
 				}
 				rpStats[len(rpStats)-1].ShardStats.SeriesCount = proto.Int(seriesCount)
 				rpStats[len(rpStats)-1].ShardStats.ShardID = proto.Uint64(shardID)
-				rpStats[len(rpStats)-1].ShardStats.ShardSize = proto.Uint64(dbPT.shards[shardID].Count())
-				rpStats[len(rpStats)-1].ShardStats.MaxTime = proto.Int64(dbPT.shards[shardID].MaxTime())
+				rpStats[len(rpStats)-1].ShardStats.ShardSize = proto.Uint64(dbPT.shards[shardID].GetRowCount())
+				rpStats[len(rpStats)-1].ShardStats.MaxTime = proto.Int64(dbPT.shards[shardID].GetMaxTime())
 			}
 			dbPT.mu.RUnlock()
 			dbPTStat := reportCtx.GetDBPTStat()
@@ -349,6 +354,7 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string) error {
 			dbPT.mu.Lock()
 			// init indexBuilder and default indexRelation
 			indexBuilder := tsi.NewIndexBuilder(opts)
+			indexBuilder.EnableTagArray = dbPT.enableTagArray
 			// init primary Index
 			primaryIndex, err := tsi.NewIndex(opts)
 			if err != nil {
@@ -512,10 +518,15 @@ func sendShardResult(sh *shard, err error, resC chan *res) {
 
 func (dbPT *DBPTInfo) preloadProcess(opId uint64, shardPath, shardWalPath string, shardId uint64, durationInfos map[uint64]*meta.ShardDurationInfo,
 	tr *meta.TimeRangeInfo, client metaclient.MetaClient) (*shard, error) {
-	sh := NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt)
+
+	engineType := config.EngineType(durationInfos[shardId].Ident.EngineType)
+
+	sh := NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType)
 	sh.opId = opId
+	sh.storage.SetClient(client)
+
 	start := time.Now()
-	statistics.ShardTaskInit(sh.opId, sh.Ident().OwnerDb, sh.Ident().OwnerPt, sh.RPName(), sh.GetID())
+	statistics.ShardTaskInit(sh.opId, sh.GetIdent().OwnerDb, sh.GetIdent().OwnerPt, sh.GetRPName(), sh.GetID())
 	if err := sh.Open(client); err != nil {
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "ShardOpenErr", time.Since(start).Nanoseconds(), true)
 		_ = sh.Close()
@@ -529,19 +540,22 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, shardPath, shardWalPath string, i
 	durationInfos map[uint64]*meta.ShardDurationInfo, tr *meta.TimeRangeInfo, client metaclient.MetaClient) (*shard, error) {
 	i, err := dbPT.getShardIndex(indexID, durationInfos[shardId].DurationInfo.Duration)
 	if err != nil {
-		return nil, err
+		logger.GetLogger().Warn("failed to get shard index", zap.Error(err))
+		return nil, nil
 	}
 	dbPT.mu.RLock()
 	sh, ok := dbPT.shards[shardId].(*shard)
 	dbPT.mu.RUnlock()
 	if !ok {
-		sh = NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt)
+		engineType := config.EngineType(durationInfos[shardId].Ident.EngineType)
+		sh = NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType)
 		sh.opId = opId
+		sh.storage.SetClient(client)
 	}
 	if sh.indexBuilder != nil && sh.downSampleEnabled() {
 		return sh, nil
 	}
-	statistics.ShardTaskInit(sh.opId, sh.Ident().OwnerDb, sh.Ident().OwnerPt, sh.RPName(), sh.GetID())
+	statistics.ShardTaskInit(sh.opId, sh.GetIdent().OwnerDb, sh.GetIdent().OwnerPt, sh.GetRPName(), sh.GetID())
 	defer func() {
 		if err != nil {
 			_ = sh.Close()
@@ -559,6 +573,19 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, shardPath, shardWalPath string, i
 		return nil, err
 	}
 	statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardOpenAndEnableDone", 0, true)
+
+	// column store load mstsInfo
+	if sh.engineType == config.COLUMNSTORE {
+		mstsInfo, err := client.GetMeasurementsInfoStore(sh.ident.OwnerDb, sh.ident.Policy)
+		if err != nil {
+			return nil, err
+		}
+		for _, mstInfo := range mstsInfo.MstsInfo {
+			sh.SetMstInfo(mstInfo.Name, mstInfo)
+		}
+		sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	}
+
 	return sh, nil
 }
 
@@ -581,7 +608,7 @@ func (dbPT *DBPTInfo) ptReceiveShard(resC chan *res, n int, rp string) error {
 			err = r.err
 			continue
 		}
-		if r.s == nil {
+		if immutable.IsInterfaceNil(r.s) {
 			continue
 		}
 		dbPT.mu.Lock()
@@ -598,7 +625,7 @@ func (dbPT *DBPTInfo) SetOption(opt netstorage.EngineOptions) {
 	dbPT.opt = opt
 }
 
-func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient) (Shard, error) {
+func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient, engineType config.EngineType) (Shard, error) {
 	var err error
 	rpPath := path.Join(dbPT.path, rp)
 	walPath := path.Join(dbPT.walPath, rp)
@@ -631,6 +658,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 
 		// init indexBuilder and default indexRelation
 		indexBuilder = tsi.NewIndexBuilder(opts)
+		indexBuilder.EnableTagArray = dbPT.enableTagArray
 		indexid := timeRangeInfo.OwnerIndex.IndexID
 		dbPT.indexBuilder[indexid] = indexBuilder
 		primaryIndex, _ := tsi.NewIndex(opts)
@@ -653,8 +681,11 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		return nil, err
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: shardID, Policy: rp, OwnerDb: dbPT.database, OwnerPt: dbPT.id}
-	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt)
+	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt, engineType)
+	sh.storage.SetClient(client)
+
 	sh.indexBuilder = indexBuilder
+
 	err = sh.NewShardKeyIdx(timeRangeInfo.ShardType, dataPath, dbPT.lockPath)
 	if err != nil {
 		return nil, err
@@ -667,6 +698,9 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 	if err != nil {
 		_ = sh.Close()
 		return nil, err
+	}
+	if sh.engineType == config.COLUMNSTORE {
+		sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 	}
 	return sh, err
 }

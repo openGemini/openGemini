@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -46,12 +47,13 @@ type fileLoopCursorFunctions struct {
 }
 
 type fileLoopCursor struct {
-	start   int
-	step    int
-	index   int
-	minTime int64
-	maxTime int64
-	currSid uint64
+	start     int
+	step      int
+	index     int
+	minTime   int64
+	maxTime   int64
+	currSid   uint64
+	currIndex int
 
 	isCutSchema  bool
 	newCursor    bool
@@ -60,7 +62,7 @@ type fileLoopCursor struct {
 	preAgg       bool
 
 	ridIdx        map[int]struct{}
-	mergeRecIters map[uint64]*SeriesIter
+	mergeRecIters map[uint64][]*SeriesIter
 
 	ctx          *idKeyCursorContext
 	span         *tracing.Span
@@ -169,30 +171,7 @@ func (s *fileLoopCursor) GetSid() uint64 {
 	return sid
 }
 
-func (s *fileLoopCursor) ReadPreAggDataOnlyInMemTable() (*record.Record, *comm.FileInfo, error) {
-	defer func() {
-		delete(s.mergeRecIters, s.currSid)
-		s.currSid = s.GetSid()
-	}()
-
-	for len(s.mergeRecIters) > 0 {
-		iter := s.mergeRecIters[s.currSid].iter
-
-		ptTags := &(s.tagSetInfo.TagsVec[s.mergeRecIters[s.currSid].index])
-		key := &seriesInfo{tags: *ptTags, key: s.tagSetInfo.SeriesKeys[s.mergeRecIters[s.currSid].index]}
-		if iter.record == nil {
-			continue
-		}
-		return iter.record, &comm.FileInfo{
-			MinTime:    s.minTime,
-			MaxTime:    s.maxTime,
-			SeriesInfo: key,
-		}, nil
-	}
-	return nil, nil, nil
-}
-
-func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, seriesKey *seriesInfo) (*record.Record, *comm.FileInfo) {
+func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, cond influxql.Expr, seriesKey *seriesInfo, rowFilters *[]clv.RowFilter) (*record.Record, *comm.FileInfo) {
 	if re != nil {
 		if s.schema.Options().IsAscending() {
 			re = immutable.FilterByTime(re, s.ctx.tr)
@@ -203,8 +182,7 @@ func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, seriesKey *serie
 	// filter by field
 	var filterOpts *immutable.FilterOptions
 	if re != nil {
-		index := s.mergeRecIters[s.currSid].index
-		filterOpts = immutable.NewFilterOpts(s.tagSetInfo.Filters[index], s.ctx.m, s.ctx.filterFieldsIdx, s.ctx.filterTags, &seriesKey.tags)
+		filterOpts = immutable.NewFilterOpts(cond, s.ctx.m, s.ctx.filterFieldsIdx, s.ctx.filterTags, &seriesKey.tags, rowFilters)
 		re = immutable.FilterByOpts(re, filterOpts)
 	}
 	if re == nil {
@@ -231,32 +209,46 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 	if !s.memTableInit {
 		s.memTableInit = true
 		s.currSid = s.GetSid()
+		s.currIndex = 0
 		if len(s.ctx.decs.GetOps()) > 0 {
 			s.preAgg = true
 		}
 	}
-	if s.preAgg {
-		return s.ReadPreAggDataOnlyInMemTable()
+	nextIndex := func() {
+		s.currIndex++
+		if s.currIndex >= len(s.mergeRecIters[s.currSid]) {
+			delete(s.mergeRecIters, s.currSid)
+			s.currSid = s.GetSid()
+			s.currIndex = 0
+		}
 	}
 	for len(s.mergeRecIters) > 0 {
-		iter := s.mergeRecIters[s.currSid].iter
-		ptTags := &(s.tagSetInfo.TagsVec[s.mergeRecIters[s.currSid].index])
-		seriesKey := &seriesInfo{tags: *ptTags, key: s.tagSetInfo.SeriesKeys[s.mergeRecIters[s.currSid].index]}
-		if iter.hasRemainData() {
-			re := iter.cutRecord(s.schema.Options().ChunkSizeNum())
+		sid := s.currSid
+		i := s.currIndex
+		if i >= len(s.mergeRecIters[sid]) || s.mergeRecIters[sid][i] == nil || s.mergeRecIters[sid][i].iter.record == nil {
+			nextIndex()
+			continue
+		}
+		idx := s.mergeRecIters[sid][i].index
+		ptTags := &(s.tagSetInfo.TagsVec[idx])
+		seriesKey := &seriesInfo{sid: sid, tags: *ptTags, key: s.tagSetInfo.SeriesKeys[idx]}
+		if s.preAgg {
+			r := s.mergeRecIters[sid][i].iter.record
+			nextIndex()
+			return r, &comm.FileInfo{MinTime: s.minTime, MaxTime: s.maxTime, SeriesInfo: seriesKey}, nil
+		}
+		if s.mergeRecIters[sid][i].iter.hasRemainData() {
+			re := s.mergeRecIters[sid][i].iter.cutRecord(s.schema.Options().ChunkSizeNum())
 			if s.recordSchema == nil {
 				s.recordSchema = re.Schema
 			}
-			rec, info := s.FilterRecInMemTable(re, seriesKey)
+			rec, info := s.FilterRecInMemTable(re, s.tagSetInfo.Filters[idx], seriesKey, s.tagSetInfo.GetRowFilter(idx))
 			if rec == nil {
 				continue
 			}
 			return rec, info, nil
-		} else {
-			delete(s.mergeRecIters, s.currSid)
-			s.currSid = s.GetSid()
-			continue
 		}
+		nextIndex()
 	}
 	return nil, nil, nil
 }
@@ -467,42 +459,49 @@ func (s *fileLoopCursor) initOutOfOrderItersByFile(curCursor *fileCursor, i int)
 		if err != nil {
 			return err
 		}
-
 		if data == nil {
 			break
 		}
 		midSid := data.sid
-		if _, ok := s.mergeRecIters[midSid]; !ok {
+		idx := data.index
+		if idx >= len(s.mergeRecIters[midSid]) {
+			if idx >= cap(s.mergeRecIters[midSid]) {
+				s.mergeRecIters[midSid] = append(make([]*SeriesIter, 0, idx+1), s.mergeRecIters[midSid]...)
+			}
+			s.mergeRecIters[midSid] = s.mergeRecIters[midSid][:idx+1]
+		}
+		if s.mergeRecIters[midSid][idx] == nil {
 			itr := getRecordIterator()
-			s.mergeRecIters[midSid] = &SeriesIter{itr, i}
+			itr.reset()
+			s.mergeRecIters[midSid][idx] = &SeriesIter{itr, data.tagSetIndex}
 		}
 		if s.span != nil {
 			s.span.Count(unorderRowCount, int64(data.record.RowNums()))
 		}
 		if s.ctx.decs.MatchPreAgg() {
-			s.initOutOfOrderItersByRecordWhenPreAgg(data, midSid)
+			s.initOutOfOrderItersByRecordWhenPreAgg(data, midSid, idx)
 			continue
 		}
-		limitRows := data.record.RowNums() + s.mergeRecIters[midSid].iter.record.RowNums()
-		s.initOutOfOrderItersByRecord(data, limitRows, midSid)
+		limitRows := data.record.RowNums() + s.mergeRecIters[midSid][idx].iter.record.RowNums()
+		s.initOutOfOrderItersByRecord(data, limitRows, midSid, idx)
 	}
 	curCursor.reset()
 	return nil
 }
 
-func (s *fileLoopCursor) initOutOfOrderItersByRecordWhenPreAgg(data *DataBlockInfo, midSid uint64) {
-	if s.mergeRecIters[midSid].iter.record == nil {
-		s.mergeRecIters[midSid].iter.init(data.record.Copy())
+func (s *fileLoopCursor) initOutOfOrderItersByRecordWhenPreAgg(data *DataBlockInfo, midSid uint64, i int) {
+	if s.mergeRecIters[midSid][i].iter.record == nil {
+		s.mergeRecIters[midSid][i].iter.init(data.record.Copy())
 		return
 	}
-	immutable.AggregateData(s.mergeRecIters[midSid].iter.record, data.record, s.ctx.decs.GetOps())
-	immutable.ResetAggregateData(s.mergeRecIters[midSid].iter.record, s.ctx.decs.GetOps())
-	s.mergeRecIters[midSid].iter.init(s.mergeRecIters[midSid].iter.record)
+	immutable.AggregateData(s.mergeRecIters[midSid][i].iter.record, data.record, s.ctx.decs.GetOps())
+	immutable.ResetAggregateData(s.mergeRecIters[midSid][i].iter.record, s.ctx.decs.GetOps())
+	s.mergeRecIters[midSid][i].iter.init(s.mergeRecIters[midSid][i].iter.record)
 }
 
-func (s *fileLoopCursor) initOutOfOrderItersByRecord(data *DataBlockInfo, limitRows int, midSid uint64) {
+func (s *fileLoopCursor) initOutOfOrderItersByRecord(data *DataBlockInfo, limitRows int, midSid uint64, i int) {
 	mergeRecord := record.NewRecord(data.record.Schema, false)
-	if s.mergeRecIters[midSid].iter.record == nil || !s.mergeRecIters[midSid].iter.hasRemainData() {
+	if s.mergeRecIters[midSid][i].iter.record == nil || !s.mergeRecIters[midSid][i].iter.hasRemainData() {
 		if data.record.RowNums() > limitRows {
 			mergeRecord.SliceFromRecord(data.record, 0, limitRows)
 		} else {
@@ -510,16 +509,16 @@ func (s *fileLoopCursor) initOutOfOrderItersByRecord(data *DataBlockInfo, limitR
 		}
 	} else if s.ctx.decs.Ascending {
 		mergeRecord.Schema = nil
-		mergeRecord.MergeRecordLimitRows(data.record, s.mergeRecIters[midSid].iter.record, 0, 0, limitRows)
+		mergeRecord.MergeRecordLimitRows(data.record, s.mergeRecIters[midSid][i].iter.record, 0, 0, limitRows)
 	} else {
 		mergeRecord.Schema = nil
-		mergeRecord.MergeRecordLimitRowsDescend(data.record, s.mergeRecIters[midSid].iter.record, 0, 0, limitRows)
+		mergeRecord.MergeRecordLimitRowsDescend(data.record, s.mergeRecIters[midSid][i].iter.record, 0, 0, limitRows)
 	}
 	if mergeRecord.RowNums() != 0 {
 		s.minTime = GetMinTime(s.minTime, mergeRecord, s.schema.Options().IsAscending())
 		s.maxTime = GetMaxTime(s.maxTime, mergeRecord, s.schema.Options().IsAscending())
 	}
-	s.mergeRecIters[midSid].iter.init(mergeRecord)
+	s.mergeRecIters[midSid][i].iter.init(mergeRecord)
 }
 
 type baseAggCursorInfo struct {

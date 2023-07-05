@@ -40,7 +40,7 @@ func TestCreateSerfInstance(t *testing.T) {
 		return
 	}
 
-	conf = config.NewGossip()
+	conf = config.NewGossip(true)
 	conf.LogEnabled = true
 	conf.BindAddr = "127.0.0.1"
 	conf.MetaBindPort = 8888

@@ -27,7 +27,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/rand"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
@@ -130,7 +130,7 @@ func (p *StringPoint) Set(index int, time int64, value string) {
 	p.index = index
 	p.time = time
 	p.isNil = false
-	valueByte := record.Str2bytes(value)
+	valueByte := util.Str2bytes(value)
 	if cap(p.value) >= len(valueByte) {
 		p.value = p.value[:len(valueByte)]
 		copy(p.value, valueByte)
@@ -4098,7 +4098,8 @@ func NewStringColStringDistinctIterator(
 func (r *StringColStringDistinctIterator) processFirstWindow(
 	inChunk, outChunk Chunk, sameInterval, hasMultiInterval bool, start, end int,
 ) {
-	r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end))
+	r.stringBuff = inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end)
+	r.buf.appendItem(inChunk.Time()[start:end], r.stringBuff)
 	if hasMultiInterval || !sameInterval {
 		sort.Sort(r.buf)
 		if r.buf.Len() > 0 {
@@ -4116,13 +4117,15 @@ func (r *StringColStringDistinctIterator) processFirstWindow(
 func (r *StringColStringDistinctIterator) processLastWindow(
 	inChunk Chunk, start, end int,
 ) {
-	r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end))
+	r.stringBuff = inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end)
+	r.buf.appendItem(inChunk.Time()[start:end], r.stringBuff)
 }
 
 func (r *StringColStringDistinctIterator) processMiddleWindow(
 	inChunk, outChunk Chunk, start, end int,
 ) {
-	r.buf.appendItem(inChunk.Time()[start:end], inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end))
+	r.stringBuff = inChunk.Column(r.inOrdinal).StringValuesRange(r.stringBuff[:0], start, end)
+	r.buf.appendItem(inChunk.Time()[start:end], r.stringBuff)
 	sort.Sort(r.buf)
 	if r.buf.Len() > 0 {
 		for j := range r.buf.time {

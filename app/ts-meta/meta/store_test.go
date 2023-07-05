@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -238,9 +239,9 @@ func generateData(ms *meta.MetaService, db, rp, mst string, shardKeyN int, value
 					return
 				}
 				// create shard group
-				sg, err := ms.GetStore().GetData().ShardGroupByTimestamp(db, rp, timestamp)
+				sg, err := ms.GetStore().GetData().ShardGroupByTimestampAndEngineType(db, rp, timestamp, config.TSSTORE)
 				if sg == nil {
-					cmd := meta.GenerateCreateShardGroupCmd(db, rp, timestamp)
+					cmd := meta.GenerateCreateShardGroupCmd(db, rp, timestamp, config.TSSTORE)
 					err := ms.GetStore().ApplyCmd(cmd)
 					if err != nil {
 						logger2.GetLogger().Error("create shard group failed", zap.Error(err))
@@ -248,7 +249,7 @@ func generateData(ms *meta.MetaService, db, rp, mst string, shardKeyN int, value
 						return
 					}
 				}
-				sg, err = ms.GetStore().GetData().ShardGroupByTimestamp(db, rp, timestamp)
+				sg, err = ms.GetStore().GetData().ShardGroupByTimestampAndEngineType(db, rp, timestamp, config.TSSTORE)
 				if err != nil {
 					logger2.GetLogger().Error("get shard group failed", zap.Error(err))
 					errChan <- err
@@ -411,7 +412,7 @@ func BatchApplyCmd(mms *meta.MockMetaService, goroutineNum int, dbNumPerRoutine 
 				if err != nil {
 					errChan <- err
 				}
-				err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(dbName, rp, time.Now()))
+				err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(dbName, rp, time.Now(), config.TSSTORE))
 				if err != nil {
 					errChan <- err
 				}
@@ -493,7 +494,7 @@ func TestGetShardInfo_Process(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now()))
+	err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now(), config.TSSTORE))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +646,7 @@ func TestStoreDeleteMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now())); err != nil {
+	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now(), config.TSSTORE)); err != nil {
 		t.Fatal(err)
 	}
 	netStore := meta.NewMockNetStorage()

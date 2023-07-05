@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -70,6 +71,11 @@ func (p *LogicalPlanBase) ForwardInit(input hybridqp.QueryNode) {
 	}
 
 	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
+}
+
+func (p *LogicalPlanBase) InitRef(input hybridqp.QueryNode) {
+	p.ops = input.RowExprOptions()
+	p.rt = input.RowDataType()
 }
 
 func (p *LogicalPlanBase) Trait() hybridqp.Trait {
@@ -215,6 +221,26 @@ func (p *LogicalPlanSingle) ReplaceChild(ordinal int, child hybridqp.QueryNode) 
 	}
 	p.inputs[0] = child
 	p.digest = false
+}
+
+func (p *LogicalPlanSingle) SetHoltWintersType(setOps bool, fields influxql.Fields) {
+	for i, ref := range fields {
+		rVal, ok := ref.Expr.(*influxql.VarRef)
+		if !ok {
+			continue
+		}
+		v := rVal.Val
+		if strings.HasPrefix(v, "holt_winters") || p.schema.IsHoltWinters(v) {
+			p.rt.SetDataType(i, influxql.Float)
+			if val, ok := p.ops[i].Expr.(*influxql.VarRef); ok {
+				val.SetDataType(influxql.Float)
+				if setOps {
+					val.SetVal(v)
+				}
+			}
+			p.ops[i].Ref.SetDataType(influxql.Float)
+		}
+	}
 }
 
 type LogicalPlanMulti struct {

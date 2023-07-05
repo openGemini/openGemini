@@ -42,6 +42,7 @@ func startServer() *MetaServer {
 	}
 
 	// Client
+	transport.NewNodeManager().Clear()
 	transport.NewNodeManager().Add(currentServer, address)
 	return metaServer
 }
@@ -131,6 +132,10 @@ func (s *MockRPCStore) getMeasurementInfo(dbName, rpName, mstName string) ([]byt
 	return []byte{}, nil
 }
 
+func (s *MockRPCStore) getMeasurementsInfo(dbName, rpName string) ([]byte, error) {
+	return []byte{}, nil
+}
+
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,
@@ -155,6 +160,14 @@ func (s *MockRPCStore) GetUserInfo() ([]byte, error) {
 		return nil, fmt.Errorf("GetUserInfo Fail")
 	}
 	return nil, nil
+}
+
+func (s *MockRPCStore) getDBBriefInfo(dbName string) ([]byte, error) {
+	return nil, nil
+}
+
+func (s *MockRPCStore) getDataNodeAliveConnId(nodeId uint64) (uint64, error) {
+	return 0, nil
 }
 
 func TestPing(t *testing.T) {

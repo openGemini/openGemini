@@ -18,6 +18,8 @@ package meta
 
 import (
 	"math"
+	"math/rand"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -278,37 +280,47 @@ func (cm *ClusterManager) removeClusterMember(id uint64) {
 	cm.mu.Unlock()
 }
 
-func (cm *ClusterManager) getTakeOverNode(oid uint64, nodePtNumMap *map[uint64]uint32) (uint64, error) {
+func (cm *ClusterManager) getTakeOverNode(oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error) {
 	cm.mu.RLock()
 	_, ok := cm.memberIds[oid]
 	cm.mu.RUnlock()
-	if ok {
+	if ok && !isRetry {
 		return oid, nil // if db pt owner node is alive assign to the owner id
 	}
+	nodeIds := make([]int, 0, len(*nodePtNumMap))
+	for id := range *nodePtNumMap {
+		nodeIds = append(nodeIds, int(id))
+	}
+	sort.Ints(nodeIds)
 	for {
 		if cm.isStopped() || cm.isClosed() {
 			break
 		}
-		nodeId, err := cm.chooseNodeByPtNum(nodePtNumMap)
-		if err == nil {
-			return nodeId, nil
+		nodeId := uint64(math.MaxUint64)
+		if len(*nodePtNumMap) > 0 {
+			if !isRetry {
+				nodeId = cm.chooseNodeByPtNum(nodePtNumMap)
+			} else {
+				nodeId = cm.chooseNodeRandom(nodeIds)
+			}
 		}
 		cm.mu.RLock()
+		if _, ok = cm.memberIds[nodeId]; ok {
+			cm.mu.RUnlock()
+			return nodeId, nil
+		}
 		for id := range cm.memberIds {
 			cm.mu.RUnlock()
 			return id, nil
 		}
 		cm.mu.RUnlock()
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(time.Second)
 		logger.GetSuppressLogger().Warn("can not get take over node id, because no store alive")
 	}
 	return 0, errno.NewError(errno.ClusterManagerIsNotRunning)
 }
 
-func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) (uint64, error) {
-	if len(*nodePtNumMap) == 0 {
-		return 0, errno.NewError(errno.NoNodeAvailable)
-	}
+func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) uint64 {
 	var nodeId uint64
 	minPtNum := uint32(math.MaxUint32)
 	for id, ptNum := range *nodePtNumMap {
@@ -318,26 +330,38 @@ func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) (ui
 		}
 	}
 	cm.mu.RLock()
-	_, ok := cm.memberIds[nodeId]
-	cm.mu.RUnlock()
-	if ok {
+	if _, ok := cm.memberIds[nodeId]; ok {
 		(*nodePtNumMap)[nodeId]++
-		return nodeId, nil
 	}
-	return 0, errno.NewError(errno.NoNodeAvailable)
+	cm.mu.RUnlock()
+	return nodeId
 }
 
-func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32) error {
-	status := globalService.store.getPtStatus(dbPt.Db, dbPt.Pti.PtId)
+func (cm *ClusterManager) chooseNodeRandom(nodeIds []int) uint64 {
+	rand.Seed(time.Now().UnixNano())
+	i := rand.Intn(len(nodeIds))
+	return uint64(nodeIds[i])
+}
+
+func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool) error {
+	status, err := globalService.store.getPtStatus(dbPt.Db, dbPt.Pti.PtId)
+	if err != nil {
+		logger.GetLogger().Error("processFailedDbPt failed", zap.Error(err))
+		return err
+	}
 	if status == meta.Online {
 		logger.GetLogger().Info("no need to assign online pt", zap.String("db", dbPt.Db), zap.Uint32("pt", dbPt.Pti.PtId))
 		return nil
 	}
-	targetId, err := cm.getTakeOverNode(dbPt.Pti.Owner.NodeID, nodePtNumMap)
+	targetId, err := cm.getTakeOverNode(dbPt.Pti.Owner.NodeID, nodePtNumMap, isRetry)
 	if err != nil {
 		return err
 	}
-	return globalService.balanceManager.assignDbPt(dbPt, targetId, false)
+	aliveConnId, err := globalService.store.getDataNodeAliveConnId(targetId)
+	if err != nil {
+		return err
+	}
+	return globalService.balanceManager.assignDbPt(dbPt, targetId, aliveConnId, false)
 }
 
 func (cm *ClusterManager) enableTakeover(enable bool) {

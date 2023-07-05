@@ -17,17 +17,15 @@ limitations under the License.
 package immutable
 
 import (
-	"context"
-	"io"
 	"sync/atomic"
-	"time"
 
+	"github.com/openGemini/openGemini/lib/fileops"
 	"golang.org/x/time/rate"
 )
 
 var (
-	compWriteLimiter           = NewLimiter(48*1024*1024, 64*1024*1024)
-	snapshotWriteLimiter       = NewLimiter(48*1024*1024, 64*1024*1024)
+	compWriteLimiter           = fileops.NewLimiter(48*1024*1024, 64*1024*1024)
+	snapshotWriteLimiter       = fileops.NewLimiter(48*1024*1024, 64*1024*1024)
 	snapshotNoLimit      int32 = 0
 )
 
@@ -53,78 +51,4 @@ func SetSnapshotLimit(bytesPerSec int64, burstLimit int64) {
 	}
 	snapshotWriteLimiter.SetLimit(rate.Limit(bytesPerSec))
 	snapshotWriteLimiter.SetBurst(int(burstLimit))
-}
-
-type Limiter interface {
-	SetBurst(newBurst int)
-	SetLimit(newLimit rate.Limit)
-	WaitN(ctx context.Context, n int) (err error)
-	Limit() rate.Limit
-	Burst() int
-}
-
-type NameReadWriterCloser interface {
-	Name() string
-	io.ReadWriteCloser
-}
-
-func NewLimiter(bytesPerSec, burstLimit int) Limiter {
-	l := rate.NewLimiter(rate.Limit(bytesPerSec), burstLimit)
-	l.AllowN(time.Now(), burstLimit)
-	return l
-}
-
-type LimitWriter struct {
-	w       NameReadWriterCloser
-	limiter Limiter
-	ctx     context.Context
-}
-
-func NewLimitWriter(w NameReadWriterCloser, l Limiter) NameReadWriterCloser {
-	return &LimitWriter{
-		w:       w,
-		limiter: l,
-		ctx:     context.Background(),
-	}
-}
-
-func (w *LimitWriter) Write(p []byte) (int, error) {
-	if w.limiter == nil {
-		return w.w.Write(p)
-	}
-
-	buf := p
-	var n int
-	for len(buf) > 0 {
-		writeN := len(buf)
-		if writeN > w.limiter.Burst() {
-			writeN = w.limiter.Burst()
-		}
-
-		wn, err := w.w.Write(buf[:writeN])
-		if err != nil {
-			return n, err
-		}
-
-		n += wn
-		buf = buf[wn:]
-
-		if err = w.limiter.WaitN(w.ctx, wn); err != nil {
-			return n, err
-		}
-	}
-
-	return n, nil
-}
-
-func (w *LimitWriter) Close() error {
-	return w.w.Close()
-}
-
-func (w *LimitWriter) Name() string {
-	return w.w.Name()
-}
-
-func (w *LimitWriter) Read(b []byte) (int, error) {
-	return w.w.Read(b)
 }

@@ -60,7 +60,7 @@ type PipelineExecutor struct {
 
 	peLogger *logger.Logger
 
-	info *PipelineExecutorInfo
+	info PipelineExecutorInfo
 
 	RunTimeStats  *statistics.StatisticTimer
 	WaitTimeStats *statistics.StatisticTimer
@@ -198,8 +198,6 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 	exec.RunTimeStats.Begin()
 	defer exec.RunTimeStats.End()
 
-	var wg sync.WaitGroup
-
 	initContext := func() error {
 		exec.contextMutex.Lock()
 		defer exec.contextMutex.Unlock()
@@ -216,24 +214,20 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 		return err
 	}
 
-	destoryContext := func() {
+	destroyContext := func() {
 		exec.contextMutex.Lock()
 		defer exec.contextMutex.Unlock()
 
 		exec.context, exec.cancelFunc = nil, nil
 	}
 
-	defer destoryContext()
+	defer destroyContext()
 
+	var once sync.Once
+	var processorErr error
+
+	var wg sync.WaitGroup
 	wg.Add(len(exec.processors))
-
-	errs := make(chan error, len(exec.processors)+1)
-	errSignals := make(chan struct{}, len(exec.processors)+1)
-
-	closeErrs := func() {
-		close(errs)
-		close(errSignals)
-	}
 
 	for _, p := range exec.processors {
 		work := func(processor Processor) {
@@ -250,8 +244,11 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 				}
 
 				if err != nil {
-					errs <- err
-					errSignals <- struct{}{}
+					once.Do(func() {
+						processorErr = err
+						statistics.ExecutorStat.ExecFailed.Increase()
+						exec.Crash()
+					})
 					msg := fmt.Sprintf("%s in pipeline executor failed", processor.Name())
 					exec.peLogger.Error(msg,
 						zap.Error(err),
@@ -271,32 +268,15 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 
 		go work(p)
 	}
-
-	monitoring := func() {
-		if _, ok := <-errSignals; ok {
-			statistics.ExecutorStat.ExecFailed.Increase()
-			exec.Crash()
-		}
-	}
-	go monitoring()
-
 	wg.Wait()
 	exec.Release()
-	closeErrs()
 
-	var err error
-	for e := range errs {
-		if err == nil {
-			err = e
-		}
-	}
-
-	if err != nil {
+	if processorErr != nil {
 		// TODO: return an internel error like errors.New("internal error occurs in executor")
-		if errno.Equal(err, errno.NoFieldSelected) {
+		if errno.Equal(processorErr, errno.NoFieldSelected) {
 			return nil
 		}
-		return err
+		return processorErr
 	}
 
 	return nil
@@ -509,11 +489,12 @@ type ExecutorBuilder struct {
 	dag          *TransformDag
 	root         *TransformVertex
 	traits       *StoreExchangeTraits
+	frags        *ShardsFragmentsGroups
+	fragsIndex   int
 	currConsumer int
 
 	enableBinaryTreeMerge int64
 	info                  *IndexScanExtraInfo
-	unRefDbPt             []UnRefDbPt
 
 	parallelismLimiter chan struct{}
 
@@ -558,7 +539,7 @@ func NewStoreExecutorBuilder(traits *StoreExchangeTraits, enableBinaryTreeMerge 
 }
 
 func NewScannerStoreExecutorBuilder(traits *StoreExchangeTraits, s hybridqp.StoreEngine,
-	req *RemoteQuery, ctx context.Context, unrefs *[]UnRefDbPt, limitSize int) *ExecutorBuilder {
+	req *RemoteQuery, ctx context.Context, limitSize int) *ExecutorBuilder {
 	builder := &ExecutorBuilder{
 		dag:                   NewTransformDag(),
 		root:                  nil,
@@ -570,7 +551,6 @@ func NewScannerStoreExecutorBuilder(traits *StoreExchangeTraits, s hybridqp.Stor
 			Req:   req,
 			ctx:   ctx,
 		},
-		unRefDbPt: *unrefs,
 	}
 	if len(req.ShardIDs) > 1 {
 		builder.parallelismLimiter = make(chan struct{}, limitSize)
@@ -586,6 +566,18 @@ func NewIndexScanExecutorBuilder(traits *StoreExchangeTraits, enableBinaryTreeMe
 		traits:                traits,
 		currConsumer:          0,
 		enableBinaryTreeMerge: enableBinaryTreeMerge,
+	}
+
+	return builder
+}
+
+func NewSparseIndexScanExecutorBuilder(frags *ShardsFragmentsGroups, info *IndexScanExtraInfo) *ExecutorBuilder {
+	builder := &ExecutorBuilder{
+		dag:          NewTransformDag(),
+		root:         nil,
+		currConsumer: 0,
+		frags:        frags,
+		info:         info,
 	}
 
 	return builder
@@ -642,6 +634,11 @@ func (builder *ExecutorBuilder) createMergeTransform(exchange *LogicalExchange, 
 func (builder *ExecutorBuilder) createIndexScanTransform(indexScan *LogicalIndexScan) Processor {
 	info := builder.info.Clone()
 	p := NewIndexScanTransform(indexScan.RowDataType(), indexScan.RowExprOptions(), indexScan.Schema(), indexScan.inputs[0], info, builder.parallelismLimiter)
+	return p
+}
+
+func (builder *ExecutorBuilder) createSparseIndexScanTransform(indexScan *LogicalSparseIndexScan) Processor {
+	p := NewSparseIndexScanTransform(indexScan.RowDataType(), indexScan.Children()[0], indexScan.RowExprOptions(), builder.info.Clone(), indexScan.Schema())
 	return p
 }
 
@@ -807,6 +804,84 @@ func (builder *ExecutorBuilder) addIndexScan(indexScan *LogicalIndexScan) (*Tran
 	return vertex, nil
 }
 
+func (builder *ExecutorBuilder) addSparseIndexScan(indexScan *LogicalSparseIndexScan) (*TransformVertex, error) {
+	if !builder.traits.HasShard() {
+		return nil, errno.NewError(errno.LogicalPlanBuildFail, "no shard for reader exchange")
+	}
+
+	if len(indexScan.Children()) != 1 {
+		return nil, errno.NewError(errno.LogicalPlanBuildFail, "only one child in node producer exchange")
+	}
+
+	if builder.traits.w == nil {
+		return nil, errno.NewError(errno.LogicalPlanBuildFail, "missing  spdy.Responser in node exchange produce")
+	}
+
+	indexScanProcessor := builder.createSparseIndexScanTransform(indexScan)
+	ScanVertex := NewTransformVertex(indexScan, indexScanProcessor)
+	builder.dag.AddVertex(ScanVertex)
+
+	sender := NewRPCSenderTransform(indexScan.RowDataType(), builder.traits.w)
+	vertex := NewTransformVertex(indexScan, sender)
+	builder.dag.AddVertex(vertex)
+	builder.dag.AddEdge(ScanVertex, vertex)
+
+	return vertex, nil
+}
+
+func (builder *ExecutorBuilder) addHashMerge(hashMerge *LogicalHashMerge) (*TransformVertex, error) {
+	if builder.frags != nil && len(builder.frags.Items) > 0 && len(hashMerge.eTraits) == 0 {
+		for i := range builder.frags.Items {
+			hashMerge.AddTrait(builder.frags.Items[i])
+		}
+	}
+	if len(hashMerge.eTraits) > 0 {
+		if len(hashMerge.Children()) != 1 {
+			return nil, errno.NewError(errno.LogicalPlanBuildFail, "only one child in exchange")
+		}
+
+		inRowDataTypes := make([]hybridqp.RowDataType, 0, len(hashMerge.eTraits))
+		readers := make([]*TransformVertex, 0, len(hashMerge.eTraits))
+		for _, trait := range hashMerge.eTraits {
+			switch t := trait.(type) {
+			case *RemoteQuery:
+				reader := NewRPCReaderTransform(hashMerge.RowDataType(), *hashMerge.schema.Options().(*query.ProcessorOptions), t)
+				clone := hashMerge.Clone()
+				reader.Distribute(clone.Children()[0])
+				v := NewTransformVertex(hashMerge, reader)
+				builder.dag.AddVertex(v)
+				readers = append(readers, v)
+				inRowDataTypes = append(inRowDataTypes, hashMerge.RowDataType())
+			case *ShardsFragmentsGroup:
+				var err error
+				var reader Processor
+				if creator, ok := GetReaderFactoryInstance().Find(hashMerge.inputs[0].String()); ok {
+					reader, err = creator.CreateReader(hashMerge.inputs[0].RowDataType(), hashMerge.inputs[0].RowExprOptions(), hashMerge.schema, t.frags, builder.info.Req.Database, builder.info.Req.PtID)
+					if err != nil {
+						return nil, err
+					}
+				}
+				v := NewTransformVertex(hashMerge, reader)
+				builder.dag.AddVertex(v)
+				readers = append(readers, v)
+				inRowDataTypes = append(inRowDataTypes, hashMerge.inputs[0].RowDataType())
+			default:
+				return nil, errno.NewError(errno.LogicalPlanBuildFail, "only *executor.RemoteQuery support in node exchange consumer")
+			}
+
+		}
+		merge, _ := NewHashMergeTransform(inRowDataTypes, []hybridqp.RowDataType{hashMerge.RowDataType()}, hashMerge.schema.(*QuerySchema))
+
+		vertex := NewTransformVertex(hashMerge, merge)
+		builder.dag.AddVertex(vertex)
+		for _, reader := range readers {
+			builder.dag.AddEdge(reader, vertex)
+		}
+		return vertex, nil
+	}
+	return builder.addDefaultNode(hashMerge)
+}
+
 func (builder *ExecutorBuilder) addBinaryTreeExchange(exchange *LogicalExchange, nLeaf int) *TransformVertex {
 	if nLeaf < 2 {
 		if exchange.ExchangeType() == NODE_EXCHANGE && exchange.ExchangeRole() == CONSUMER_ROLE {
@@ -860,7 +935,6 @@ func (builder *ExecutorBuilder) addDefaultExchange(exchange *LogicalExchange) (*
 	for i, trait := range exchange.eTraits {
 		if builder.info != nil {
 			builder.info.ShardID = builder.traits.shards[i]
-			builder.info.UnRefDbPt = builder.unRefDbPt[i]
 		}
 		clone := childNode.Clone()
 		clone.ApplyTrait(trait)
@@ -898,7 +972,6 @@ func (builder *ExecutorBuilder) addExchangeToDag(exchange *LogicalExchange) (*Tr
 		return builder.addSeriesExchange(exchange)
 	default:
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "unknown exchange type")
-		//panic(fmt.Sprintf("unknown type(%v) of exchange", exchange.eType))
 	}
 }
 
@@ -957,6 +1030,33 @@ func (builder *ExecutorBuilder) addReaderToDag(reader *LogicalReader) (*Transfor
 	}
 }
 
+func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*TransformVertex, error) {
+	nodeChildren := node.Children()
+	children := make([]*TransformVertex, 0, len(node.Children()))
+	for _, nodeChild := range nodeChildren {
+		n := nodeChild.Clone()
+		n.ApplyTrait(node.Trait())
+		child, err := builder.addNodeToDag(n)
+		if err != nil {
+			return nil, err
+		}
+		if child == nil {
+			continue
+		}
+		children = append(children, child)
+	}
+
+	vertex, err := builder.addDefaultToDag(node)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, child := range children {
+		builder.dag.AddEdge(child, vertex)
+	}
+	return vertex, err
+}
+
 func (builder *ExecutorBuilder) addNodeToDag(node hybridqp.QueryNode) (*TransformVertex, error) {
 	switch n := node.(type) {
 	case *LogicalExchange:
@@ -965,48 +1065,27 @@ func (builder *ExecutorBuilder) addNodeToDag(node hybridqp.QueryNode) (*Transfor
 		return builder.addReaderToDag(n)
 	case *LogicalIndexScan:
 		return builder.addIndexScan(n)
+	case *LogicalSparseIndexScan:
+		return builder.addSparseIndexScan(n)
+	case *LogicalHashMerge:
+		return builder.addHashMerge(n.Clone().(*LogicalHashMerge))
 	default:
-		nodeChildren := node.Children()
-		children := make([]*TransformVertex, 0, len(node.Children()))
-		for _, nodeChild := range nodeChildren {
-			n := nodeChild.Clone()
-			n.ApplyTrait(node.Trait())
-			child, err := builder.addNodeToDag(n)
-			if err != nil {
-				return nil, err
-			}
-			if child == nil {
-				continue
-			}
-			children = append(children, child)
-		}
-
-		vertex, err := builder.addDefaultToDag(node)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, child := range children {
-			builder.dag.AddEdge(child, vertex)
-		}
-		return vertex, err
+		return builder.addDefaultNode(n)
 	}
 }
 
 type IndexScanExtraInfo struct {
-	Store     hybridqp.StoreEngine
-	Req       *RemoteQuery
-	ShardID   uint64
-	ctx       context.Context
-	UnRefDbPt UnRefDbPt
+	ShardID uint64
+	Req     *RemoteQuery
+	Store   hybridqp.StoreEngine
+	ctx     context.Context
 }
 
 func (e *IndexScanExtraInfo) Clone() *IndexScanExtraInfo {
 	r := &IndexScanExtraInfo{}
 	r.ShardID = e.ShardID
-	r.UnRefDbPt = e.UnRefDbPt
 	r.Req = e.Req
-	r.ctx = e.ctx
 	r.Store = e.Store
+	r.ctx = e.ctx
 	return r
 }

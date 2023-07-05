@@ -38,7 +38,6 @@ const (
 
 type PipelineExecutorInfo struct {
 	MemoryOccupation int64
-	CPUOccupation    float64
 	ProcessorNum     int64
 }
 
@@ -119,10 +118,8 @@ func MemoryEstimator(exec *PipelineExecutor) {
 	}
 
 	visit(exec.root)
-	exec.info = &PipelineExecutorInfo{
-		MemoryOccupation: memCost,
-		ProcessorNum:     int64(len(exec.processors)),
-	}
+	exec.info.MemoryOccupation = memCost
+	exec.info.ProcessorNum = int64(len(exec.processors))
 }
 
 func NodeMemEstimator(rt hybridqp.RowDataType, chunkSize int64) int64 {

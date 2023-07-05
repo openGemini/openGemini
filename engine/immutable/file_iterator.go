@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
 )
@@ -59,8 +60,8 @@ func NewFileIterator(r TSSPFile, log *Log.Logger) *FileIterator {
 	v := fileIteratorPool.Get()
 	if v == nil {
 		fi = &FileIterator{}
-		fi.timeReader = NewBufferReader(defaultBufferSize)
-		fi.dataReader = NewBufferReader(defaultBufferSize)
+		fi.timeReader = NewBufferReader(fileops.DefaultBufferSize)
+		fi.dataReader = NewBufferReader(fileops.DefaultBufferSize)
 	} else {
 		fi = v.(*FileIterator)
 	}
@@ -105,8 +106,6 @@ func (itr *FileIterator) readTimeData(offset int64, size uint32) ([]byte, error)
 }
 
 func (itr *FileIterator) Close() {
-	itr.r.UnrefFileReader()
-	itr.r.Unref()
 	itr.reset()
 	fileIteratorPool.Put(itr)
 }
@@ -202,8 +201,6 @@ func (m *MmsTables) NewFileIterators(group *CompactGroup) (FilesInfo, error) {
 		if itr.NextChunkMeta() {
 			fi.compIts = append(fi.compIts, itr)
 		} else {
-			f.UnrefFileReader()
-			f.Unref()
 			continue
 		}
 

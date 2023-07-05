@@ -17,18 +17,22 @@ limitations under the License.
 package executor_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func createQuerySchema() *executor.QuerySchema {
 	opt := query.ProcessorOptions{}
-	schema := executor.NewQuerySchema(createFields(), createColumnNames(), &opt)
+	schema := executor.NewQuerySchema(createFields(), createColumnNames(), &opt, nil)
 	m := createMeasurement()
 	schema.AddTable(m, schema.MakeRefs())
 
@@ -51,7 +55,7 @@ func createQuerySchemaWithCalls() *executor.QuerySchema {
 	})
 	names := createColumnNames()
 	names = append(names, "mean")
-	schema := executor.NewQuerySchema(fields, names, &opt)
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
 	m := createMeasurement()
 	schema.AddTable(m, schema.MakeRefs())
 
@@ -134,7 +138,7 @@ func createColumnNamesFilterBlank() []string {
 
 func createQuerySchemaFilterBlank() *executor.QuerySchema {
 	opt := query.ProcessorOptions{}
-	schema := executor.NewQuerySchema(createFieldsFilterBlank(), createColumnNamesFilterBlank(), &opt)
+	schema := executor.NewQuerySchema(createFieldsFilterBlank(), createColumnNamesFilterBlank(), &opt, nil)
 	m := createMeasurement()
 	schema.AddTable(m, schema.MakeRefs())
 
@@ -234,4 +238,298 @@ func TestNewLogicalFullJoin(t *testing.T) {
 	if fullJoinClone.Type() != fullJoin.Type() {
 		t.Error("wrong result")
 	}
+}
+
+func createHoltWintersQuerySchema() *executor.QuerySchema {
+	opt := query.ProcessorOptions{}
+	var fields influxql.Fields
+	var callArgs []influxql.Expr
+	callArgs = append(callArgs, &influxql.VarRef{
+		Val:  "value",
+		Type: influxql.Float,
+	})
+	var args []influxql.Expr
+	args = append(args, &influxql.Call{
+		Name: "count",
+		Args: callArgs,
+	})
+	args = append(args, &influxql.IntegerLiteral{
+		Val: 30,
+	})
+	args = append(args, &influxql.IntegerLiteral{
+		Val: 4,
+	})
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.Call{
+			Name: "holt_winters_with_fit",
+			Args: args,
+		},
+	})
+	var names []string
+	names = append(names, "holt_winters_with_fit")
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	m := createMeasurement()
+	schema.AddTable(m, schema.MakeRefs())
+
+	return schema
+}
+
+func TestNewHoltWintersQueryTransforms(t *testing.T) {
+	schema := createHoltWintersQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	project := executor.NewLogicalProject(node, schema)
+	holtWinters := executor.NewLogicalHoltWinters(project, schema)
+	limitParas := executor.LimitTransformParameters{}
+	limit := executor.NewLogicalLimit(holtWinters, schema, limitParas)
+	httpsender := executor.NewLogicalHttpSender(limit, schema)
+	httpsenderClone := httpsender.Clone()
+	if httpsender.Type() != httpsenderClone.Type() {
+		t.Error("wrong result")
+	}
+}
+
+func TestSetHoltWintersType(t *testing.T) {
+	var fields influxql.Fields
+	f := &influxql.IntegerLiteral{Val: 1}
+	fields = append(fields, &influxql.Field{Expr: f})
+	p := executor.NewLogicalPlanSingle(nil, nil)
+	p.SetHoltWintersType(true, fields)
+}
+
+func createSortQuerySchema() *executor.QuerySchema {
+	m := createMeasurement()
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}}
+	var fields influxql.Fields
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:   "f1",
+			Type:  influxql.Integer,
+			Alias: "",
+		},
+	})
+	var names []string
+	names = append(names, "f1")
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+	return schema
+}
+
+func TestNewLogicalSort(t *testing.T) {
+	schema := createSortQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	sort := executor.NewLogicalSort(node, schema)
+	newSort := sort.Clone().(*executor.LogicalSort)
+	str := newSort.Digest()
+	tStr := newSort.Type()
+	if newSort == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str)
+	}
+}
+
+func TestNewLogicalHashMerge(t *testing.T) {
+	schema := createSortQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	merge := executor.NewLogicalHashMerge(node, schema, executor.NODE_EXCHANGE, nil)
+	merge.DeriveOperations()
+	newMerge := merge.Clone().(*executor.LogicalHashMerge)
+	str := newMerge.Digest()
+	tStr := newMerge.String()
+	tType := newMerge.Type()
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	newMerge.Explain(planWriter)
+	if newMerge == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str, tType)
+	}
+	marStr, err := executor.MarshalBinary(newMerge)
+	if err != nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(marStr)
+	}
+}
+
+func TestLogicalPlanNilNew(t *testing.T) {
+	logicalNode := []hybridqp.QueryNode{&executor.LogicalSlidingWindow{}, &executor.LogicalFilter{}, &executor.LogicalSortAppend{},
+		&executor.LogicalDedupe{}, &executor.LogicalFilterBlank{}, &executor.LogicalAlign{}, &executor.LogicalMst{}, &executor.LogicalSubQuery{},
+		&executor.LogicalTagSubset{}, &executor.LogicalGroupBy{}, &executor.LogicalOrderBy{}, &executor.LogicalHttpSenderHint{},
+		&executor.LogicalTarget{}, &executor.LogicalDummyShard{}, &executor.LogicalTSSPScan{}, &executor.LogicalWriteIntoStorage{},
+		&executor.LogicalSequenceAggregate{}, &executor.LogicalSplitGroup{}, &executor.LogicalFullJoin{}, &executor.LogicalHoltWinters{},
+		&executor.LogicalSort{}, &executor.LogicalHashMerge{}, &executor.LogicalMerge{}, &executor.LogicalSortMerge{}}
+	newResult := make([]hybridqp.QueryNode, len(logicalNode))
+	for i, node := range logicalNode {
+		if newResult[i] != node.New(nil, nil, nil) {
+			t.Error("nil new fail in logical plan")
+		}
+	}
+}
+
+func TestNewLogicalSparseIndexScan(t *testing.T) {
+	schema := createSortQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	indexScan := executor.NewLogicalSparseIndexScan(node, schema)
+	indexScan.DeriveOperations()
+	newIndexScan := indexScan.Clone().(*executor.LogicalSparseIndexScan)
+	str := newIndexScan.Digest()
+	tStr := newIndexScan.String()
+	tType := newIndexScan.Type()
+	newIndexScan.New(nil, nil, nil)
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	newIndexScan.Explain(planWriter)
+	if newIndexScan == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str, tType)
+	}
+	marStr, err := executor.MarshalBinary(newIndexScan)
+	if err != nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(marStr)
+	}
+}
+
+func TestNewLogicalColumnStoreReader(t *testing.T) {
+	schema := createSortQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	reader := executor.NewLogicalColumnStoreReader(node, schema)
+	reader.DeriveOperations()
+	newReader := reader.Clone().(*executor.LogicalColumnStoreReader)
+	str := newReader.Digest()
+	tStr := newReader.String()
+	tType := newReader.Type()
+	reader.MstName()
+	newReader.New(nil, nil, nil)
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	newReader.Explain(planWriter)
+	if newReader == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str, tType)
+	}
+	marStr, err := executor.MarshalBinary(newReader)
+	if err != nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(marStr)
+	}
+}
+
+func TestRebuildColumnStorePlan(t *testing.T) {
+	schema := createSortQuerySchema()
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	readerExchange := executor.NewLogicalExchange(reader, executor.READER_EXCHANGE, nil, reader.Schema())
+	readerMerge := executor.NewLogicalHashMerge(readerExchange, schema, executor.READER_EXCHANGE, nil)
+	nodeMerge := executor.NewLogicalHashMerge(readerMerge, schema, executor.NODE_EXCHANGE, nil)
+	best := executor.RebuildColumnStorePlan(nodeMerge)[0]
+	executor.RebuildAggNodes(best)
+	if best == nil {
+		t.Fatalf(" wrong result")
+	}
+
+	agg := executor.NewLogicalAggregate(readerMerge, schema)
+	nodeExchange := executor.NewLogicalExchange(agg, executor.NODE_EXCHANGE, nil, agg.Schema())
+	merge := executor.NewLogicalHashMerge(nodeExchange, schema, executor.NODE_EXCHANGE, nil)
+	best = executor.RebuildColumnStorePlan(merge)[0]
+	executor.RebuildAggNodes(best)
+	if best == nil {
+		t.Fatalf(" wrong result")
+	}
+}
+
+func buildColumnStorePlan(t *testing.T, schema *executor.QuerySchema) hybridqp.QueryNode {
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSegmentPlan(schema); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateSparseIndexScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.HashMerge(executor.NODE_EXCHANGE, nil)
+	planBuilder.Sort()
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+	return plan
+}
+func buildColumnStorePlanForSql(t *testing.T, schema *executor.QuerySchema) hybridqp.QueryNode {
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+	plan, _ := coordinator.CreateColumnStorePlan(schema, nil, planBuilder)
+	return plan
+}
+
+func TestHashMergeAndSort(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{Expr: &influxql.VarRef{
+			Val:  "value",
+			Type: influxql.Float},
+		},
+	}
+	columnsName := []string{"columnstore"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = true
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+
+	var plan hybridqp.QueryNode
+	plan = buildColumnStorePlan(t, schema)
+	planner := getPlanner()
+	planner.SetRoot(plan)
+	best := planner.FindBestExp()
+	if best == nil {
+		t.Error("no best plan found")
+	}
+}
+
+func TestColumnStoreForSql(t *testing.T) {
+	fields := influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float}}}
+	columnsName := []string{"columnstore"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = true
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+
+	var plan hybridqp.QueryNode
+	plan = buildColumnStorePlanForSql(t, schema)
+	planner := getPlanner()
+	planner.SetRoot(plan)
+	best := planner.FindBestExp()
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+	res, _ := planBuilder.CreateSparseIndexScanPlan(nil)
+	assert.Equal(t, res, nil)
+
+	fields = influxql.Fields{
+		&influxql.Field{Expr: &influxql.Call{Name: "sum", Args: []influxql.Expr{&influxql.VarRef{Val: "value", Type: influxql.Float}}}},
+	}
+	columnsName = []string{"value"}
+	opt = query.ProcessorOptions{}
+	opt.GroupByAllDims = true
+	schema = executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	res, err := planBuilder.CreateSegmentPlan(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() {
+		if err := recover(); err != nil {
+			err, _ := err.(string)
+			assert.Equal(t, strings.Contains(err, "unsupported engine type"), true)
+		}
+	}()
+	planBuilder.Reader(config.ENGINETYPEEND)
 }

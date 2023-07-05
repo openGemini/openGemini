@@ -73,3 +73,20 @@ func TestGetMeasurementInfoCallbackResponse(t *testing.T) {
 	msg := message.NewMetaMessage(message.GetMeasurementInfoResponseMessage, &message.GetMeasurementInfoResponse{})
 	callback.Handle(msg)
 }
+
+func TestGetMeasurementsInfoCallback(t *testing.T) {
+	callback := &metaclient.GetMeasurementsInfoCallback{}
+	callback.Handle(nil)
+}
+
+func TestGetMeasurementsInfoCallbackRequest(t *testing.T) {
+	callback := &metaclient.GetMeasurementsInfoCallback{}
+	msg := message.NewMetaMessage(message.GetMeasurementsInfoRequestMessage, &message.GetMeasurementsInfoRequest{})
+	callback.Handle(msg)
+}
+
+func TestGetMeasurementsInfoCallbackResponse(t *testing.T) {
+	callback := &metaclient.GetMeasurementsInfoCallback{}
+	msg := message.NewMetaMessage(message.GetMeasurementsInfoResponseMessage, &message.GetMeasurementsInfoResponse{})
+	callback.Handle(msg)
+}

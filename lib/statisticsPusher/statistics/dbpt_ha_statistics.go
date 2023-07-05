@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
@@ -151,9 +150,10 @@ func DBPTStepDuration(opId uint64, step string, d int64, status LoadStatus, errM
 		"Status":    int64(task.status),
 		"Err":       task.err,
 	}
-	buff := bufferpool.Get()
+	buff := statBufPool.Get()
 	point := AddTimeToBuffer(dbptTasks, tagMap, valueMap, task.time, buff)
 	StoreTaskInstance.sendPointToChan(point)
+	statBufPool.Put(point)
 
 	if status != DBPTLoading {
 		task.tries--
@@ -254,9 +254,10 @@ func IndexStepDuration(indexId uint64, opId uint64, step string, cost int64, isO
 		"Step":    task.step,
 	}
 	valueMap := newValueMap(task.db, task.pt, task.rp, task.cost, task.totalCost)
-	buff := bufferpool.Get()
+	buff := statBufPool.Get()
 	point := AddTimeToBuffer(indexTasks, tagMap, valueMap, task.time, buff)
 	StoreTaskInstance.sendPointToChan(point)
+	statBufPool.Put(point)
 
 	if isOver {
 		task.tries--
@@ -369,9 +370,10 @@ func ShardStepDuration(sid uint64, opId uint64, step string, cost int64, isOver 
 		"Step": task.step,
 	}
 	valueMap := newValueMap(task.db, task.pt, task.rp, task.cost, task.totalCost)
-	buff := bufferpool.Get()
+	buff := statBufPool.Get()
 	point := AddTimeToBuffer(shardTasks, tagMap, valueMap, task.time, buff)
 	StoreTaskInstance.sendPointToChan(point)
+	statBufPool.Put(point)
 
 	if isOver {
 		task.tries--
@@ -390,19 +392,15 @@ func ShardStepDuration(sid uint64, opId uint64, step string, cost int64, isOver 
 }
 
 func (s *StoreTaskDuration) sendPointToChan(point []byte) {
-	MetaTaskInstance.pointMu.Lock()
-	StoreTaskInstance.loadPoints = append(StoreTaskInstance.loadPoints, point...)
-	MetaTaskInstance.pointMu.Unlock()
+	s.pointMu.Lock()
+	s.loadPoints = append(s.loadPoints, point...)
+	s.pointMu.Unlock()
 }
 
 func (s *StoreTaskDuration) Collect(buffer []byte) ([]byte, error) {
 	s.pointMu.Lock()
-	points := s.loadPoints
+	buffer = append(buffer, s.loadPoints...)
 	s.loadPoints = s.loadPoints[:0]
 	s.pointMu.Unlock()
-	if len(points) > 0 {
-		buffer = append(buffer, points...)
-		bufferpool.Put(points)
-	}
 	return buffer, nil
 }
