@@ -200,6 +200,8 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 		return fsm.applyUpdatePtVersionCommand(&cmd)
 	case proto2.Command_CreateContinuousQueryCommand:
 		return fsm.applyCreateContinuousQueryCommand(&cmd)
+	case proto2.Command_ContinuousQueryReportCommand:
+		return fsm.applyContinuousQueryReportCommand(&cmd)
 	default:
 		panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
 	}
@@ -370,6 +372,16 @@ func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) inte
 	}
 
 	return fsm.data.CreateContinuousQuery(v.GetDatabase(), cqi)
+}
+
+func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command)
+	v, ok := ext.(*proto2.ContinuousQueryReportCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a ContinuousQueryReportCommand", ext))
+	}
+
+	return fsm.data.CQStatusReport(v.GetName(), time.Unix(0, v.GetLastRunTime()))
 }
 
 func (fsm *storeFSM) applyDropRetentionPolicyCommand(cmd *proto2.Command) interface{} {

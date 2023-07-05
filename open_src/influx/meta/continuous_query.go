@@ -17,6 +17,8 @@ limitations under the License.
 package meta
 
 import (
+	"time"
+
 	"github.com/gogo/protobuf/proto"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
@@ -31,6 +33,9 @@ type ContinuousQueryInfo struct {
 
 	// Mark whether this cq has been deleted
 	MarkDeleted bool
+
+	// Last successful run time
+	LastRunTime time.Time
 }
 
 // NewContinuousQueryInfo returns a new instance of ContinuousQueryInfo
@@ -64,6 +69,7 @@ func (cqi *ContinuousQueryInfo) Marshal() *proto2.ContinuousQueryInfo {
 		Name:        proto.String(cqi.Name),
 		Query:       proto.String(cqi.Query),
 		MarkDeleted: proto.Bool(cqi.MarkDeleted),
+		LastRunTime: proto.Int64(cqi.LastRunTime.UnixNano()),
 	}
 
 	return pb
@@ -74,6 +80,7 @@ func (cqi *ContinuousQueryInfo) unmarshal(pb *proto2.ContinuousQueryInfo) {
 	cqi.Name = pb.GetName()
 	cqi.Query = pb.GetQuery()
 	cqi.MarkDeleted = pb.GetMarkDeleted()
+	cqi.LastRunTime = time.Unix(0, pb.GetLastRunTime())
 }
 
 // Clone returns a deep copy of cqi.

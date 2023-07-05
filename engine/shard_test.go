@@ -3451,6 +3451,9 @@ func (client *MockMetaClient) CreateContinuousQuery(database string, spec *meta2
 func (client *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
 	return nil
 }
+func (client *MockMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
+	return nil
+}
 func (client *MockMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }
