@@ -217,7 +217,7 @@ func (s *IndexReaderImpl) doExclusionSearch(
 	var res fragment.FragmentRanges
 	steps := uint32(0)
 	minMarksForSeek := (s.property.MinRowsForSeek + s.property.RowsNumPerFragment - 1) / s.property.RowsNumPerFragment
-	rangesStack := []*fragment.FragmentRange{{0, fragmentCount}}
+	rangesStack := []*fragment.FragmentRange{{Start: 0, End: fragmentCount}}
 	for len(rangesStack) > 0 {
 		mr := rangesStack[len(rangesStack)-1]
 		rangesStack = rangesStack[:len(rangesStack)-1]

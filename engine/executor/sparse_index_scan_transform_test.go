@@ -310,7 +310,7 @@ func testEqualShardsFragmentsGroups(t *testing.T, expected, actual *executor.Sha
 				assert.Equal(t, shardFrags.FragmentCount, shardFrags1.FragmentCount)
 				for filePath, fileFragment := range shardFrags.FileMarks {
 					if fileFragment1, ok := shardFrags1.FileMarks[filePath]; ok {
-						assert.Equal(t, fileFragment.(executor.FileFragment), fileFragment1.(executor.FileFragment))
+						assert.Equal(t, fileFragment, fileFragment1)
 					} else {
 						t.Fatal("the num of the expected FileFragment is different from actual")
 					}
@@ -441,7 +441,8 @@ func TestSparseIndexScanTransform(t *testing.T) {
 
 	go func() {
 		if err := trans.Work(ctx); err != nil {
-			t.Fatal(err)
+			t.Error(err)
+			return
 		}
 	}()
 

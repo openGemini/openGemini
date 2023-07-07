@@ -281,7 +281,8 @@ func TestMemoryRead(t *testing.T) {
 			fr.Ref()
 			_, err = f.ReadAt(&cms[0], 0, rec, decs)
 			if err != nil {
-				t.Fatal(err)
+				t.Error(err)
+				return
 			}
 			fr.Unref()
 			defer wg.Done()
@@ -301,7 +302,7 @@ func TestLazyInitError(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
-		fileops.RemoveAll(testDir)
+		_ = fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
 	conf := NewConfig()
@@ -476,7 +477,8 @@ func TestMemoryReadReload(t *testing.T) {
 			fr.Ref()
 			_, err = f.ReadAt(&cms[0], 0, rec, decs)
 			if err != nil {
-				t.Fatal(err)
+				t.Error(err)
+				return
 			}
 			fr.Unref()
 			defer wg.Done()
@@ -734,7 +736,8 @@ func TestFileHandlesRef_EnableMmap(t *testing.T) {
 			fr.Ref()
 			_, err = f.ReadData(0, 1, nil)
 			if err != nil {
-				t.Fatal(err)
+				t.Error(err)
+				return
 			}
 			fr.Unref()
 			defer wg.Done()
@@ -751,7 +754,7 @@ func TestCloseFileAndUnref(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
-		fileops.RemoveAll(testDir)
+		_ = fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
 	conf := NewConfig()
@@ -791,7 +794,8 @@ func TestCloseFileAndUnref(t *testing.T) {
 	go func() {
 		err := f.Close()
 		if err != nil {
-			t.Fatal(err)
+			t.Error(err)
+			return
 		}
 	}()
 	go f.UnrefFileReader()
@@ -883,7 +887,7 @@ func TestDropMeasurementForColumnStore(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
-		fileops.RemoveAll(testDir)
+		_ = fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
 	conf := NewConfig()

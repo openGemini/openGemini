@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestResourceAllocator(t *testing.T) {
@@ -48,7 +50,8 @@ func TestResourceAllocator(t *testing.T) {
 }
 
 func TestShardPipelineManager(t *testing.T) {
-	NewShardsParallelismAllocator(0, 0, 0, 0)
+	_, err := NewShardsParallelismAllocator(0, 0, 0, 0)
+	assert.NoError(t, err)
 	a1, _ := NewShardsParallelismAllocator(time.Second, 10, 1, 0)
 	NewSeriesParallelismAllocator(0, 0)
 	a2 := NewSeriesParallelismAllocator(time.Second, 20)

@@ -333,7 +333,7 @@ func (c *GetMeasurementsInfoCallback) Handle(data interface{}) error {
 	}
 	msg, ok := metaMsg.Data().(*message.GetMeasurementsInfoResponse)
 	if !ok {
-		return errors.New(fmt.Sprintf("data is not a GetMeasurementsInfoResponse, type %T", metaMsg.Data()))
+		return fmt.Errorf("data is not a GetMeasurementsInfoResponse, type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)
@@ -354,7 +354,7 @@ func (c *GetDBBriefInfoCallback) Handle(data interface{}) error {
 	}
 	msg, ok := metaMsg.Data().(*message.GetDBBriefInfoResponse)
 	if !ok {
-		return errors.New(fmt.Sprintf("data is not a GetDBBriefInfoResponse, type %T", metaMsg.Data()))
+		return fmt.Errorf("data is not a GetDBBriefInfoResponse, type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)

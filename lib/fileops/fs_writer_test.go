@@ -55,7 +55,9 @@ func TestDiskWriter(t *testing.T) {
 	dir := t.TempDir()
 	name := filepath.Join(dir, "TestDiskWriter")
 	_ = Remove(dir)
-	defer RemoveAll(dir)
+	defer func() {
+		_ = RemoveAll(dir)
+	}()
 	_ = MkdirAll(dir, 0750)
 
 	fd := &mockFile{

@@ -44,7 +44,6 @@ import (
 
 type MockStoreEngine struct {
 	readerCount int
-	node        *metaclient.Node
 }
 
 func NewMockStoreEngine(readerCount int) *MockStoreEngine {

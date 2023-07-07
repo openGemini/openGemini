@@ -395,6 +395,9 @@ func (p *mergePerformer) WriteOriginal(fi *FileIterator) error {
 		offset += int64(limit)
 
 		n, err = p.sw.writer.WriteData(buf)
+		if err != nil {
+			return err
+		}
 		if n != len(buf) {
 			return errno.NewError(errno.ShortWrite, n, len(buf))
 		}

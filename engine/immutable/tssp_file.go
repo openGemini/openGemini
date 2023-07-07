@@ -752,11 +752,7 @@ func (r *tsspFileReader) Contains(id uint64, tm util.TimeRange) bool {
 	bytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(bytes, id)
 
-	if !r.bloom.Contains(bytes) {
-		return false
-	}
-
-	return true
+	return r.bloom.Contains(bytes)
 }
 
 func (r *tsspFileReader) ContainsTime(tm util.TimeRange) bool {

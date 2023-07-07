@@ -1291,7 +1291,7 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 		qDuration = statistics.NewSqlSlowQueryStatistics()
 		qDuration.SetDatabase(db)
 		defer func() {
-			d := time.Now().Sub(startTime)
+			d := time.Since(startTime)
 			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
 				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
 				statistics.AppendSqlQueryDuration(qDuration)

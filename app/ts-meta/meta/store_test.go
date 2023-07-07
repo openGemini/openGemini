@@ -239,7 +239,7 @@ func generateData(ms *meta.MetaService, db, rp, mst string, shardKeyN int, value
 					return
 				}
 				// create shard group
-				sg, err := ms.GetStore().GetData().ShardGroupByTimestampAndEngineType(db, rp, timestamp, config.TSSTORE)
+				sg, _ := ms.GetStore().GetData().ShardGroupByTimestampAndEngineType(db, rp, timestamp, config.TSSTORE)
 				if sg == nil {
 					cmd := meta.GenerateCreateShardGroupCmd(db, rp, timestamp, config.TSSTORE)
 					err := ms.GetStore().ApplyCmd(cmd)

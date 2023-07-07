@@ -318,7 +318,7 @@ func (trans *SortTransform) getChunkFromChild(i int) bool {
 		if trans.inputsCloseNums == len(trans.inputs) {
 			return false
 		}
-		c, _ := <-trans.inputChunk
+		c := <-trans.inputChunk
 		if c != nil {
 			trans.sortWorkerBufChunk[i] = c
 			break

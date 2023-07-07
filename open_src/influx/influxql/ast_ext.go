@@ -95,5 +95,4 @@ func (c *Call) WriteDigest(b *bytes.Buffer) {
 		}
 	}
 	b.WriteString(")")
-	return
 }

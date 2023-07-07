@@ -127,8 +127,7 @@ type Stream struct {
 	cli    MetaClient
 	store  Storage
 
-	conf                   stream.Config
-	putWritePointsWorkFunc func(WritePointsWorkIF)
+	conf stream.Config
 }
 
 type CacheRow struct {

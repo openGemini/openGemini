@@ -69,7 +69,6 @@ func (f *FieldRef) Equals(rhs *FieldRef) bool {
 	default:
 		panic("not support the data type")
 	}
-	return false
 }
 
 func (f *FieldRef) Less(rhs *FieldRef) bool {
@@ -101,7 +100,6 @@ func (f *FieldRef) Less(rhs *FieldRef) bool {
 	default:
 		panic("not support the data type")
 	}
-	return false
 }
 
 func (f *FieldRef) Set(cols []*ColumnRef, column, row int) {
@@ -123,15 +121,9 @@ func (f *FieldRef) SetNegativeInfinity() {
 }
 
 func (f *FieldRef) IsPositiveInfinity() bool {
-	if f.row == math.MaxInt64 {
-		return true
-	}
-	return false
+	return f.row == math.MaxInt64
 }
 
 func (f *FieldRef) IsNegativeInfinity() bool {
-	if f.row == math.MinInt64 {
-		return true
-	}
-	return false
+	return f.row == math.MinInt64
 }

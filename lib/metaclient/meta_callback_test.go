@@ -21,72 +21,73 @@ import (
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestGetUserInfoCallback_Handle(t *testing.T) {
 	callback := &metaclient.GetUserInfoCallback{}
 	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	callback.Handle(msg)
+	assert.Errorf(t, callback.Handle(msg), "data is not a GetUserInfoResponse")
 }
 
 func TestGetUserInfoCallback_Handle1(t *testing.T) {
 	callback := &metaclient.GetUserInfoCallback{}
 	msg := message.NewMetaMessage(message.GetUserInfoResponseMessage, &message.GetUserInfoResponse{})
-	callback.Handle(msg)
+	assert.NoError(t, callback.Handle(msg))
 }
 
 func TestGetUserInfoCallback_Handle2(t *testing.T) {
 	callback := &metaclient.GetUserInfoCallback{}
-	callback.Handle(nil)
+	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
 }
 
 func TestGetStreamInfoCallback(t *testing.T) {
 	callback := &metaclient.GetStreamInfoCallback{}
-	callback.Handle(nil)
+	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
 }
 
 func TestGetStreamInfoCallbackRequest(t *testing.T) {
 	callback := &metaclient.GetStreamInfoCallback{}
 	msg := message.NewMetaMessage(message.GetStreamInfoRequestMessage, &message.GetStreamInfoRequest{})
-	callback.Handle(msg)
+	assert.Errorf(t, callback.Handle(msg), "data is not a GetStreamInfoResponse, type *message.GetStreamInfoRequest")
 }
 
 func TestGetStreamInfoCallbackResponse(t *testing.T) {
 	callback := &metaclient.GetStreamInfoCallback{}
 	msg := message.NewMetaMessage(message.GetStreamInfoResponseMessage, &message.GetStreamInfoResponse{})
-	callback.Handle(msg)
+	assert.NoError(t, callback.Handle(msg))
 }
 
 func TestGetMeasurementInfoCallback(t *testing.T) {
 	callback := &metaclient.GetMeasurementInfoCallback{}
-	callback.Handle(nil)
+	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
 }
 
 func TestGetMeasurementInfoCallbackRequest(t *testing.T) {
 	callback := &metaclient.GetMeasurementInfoCallback{}
 	msg := message.NewMetaMessage(message.GetMeasurementInfoRequestMessage, &message.GetMeasurementInfoRequest{})
-	callback.Handle(msg)
+	assert.Errorf(t, callback.Handle(msg), "data is not a GetMeasurementInfoResponse, type *message.GetMeasurementInfoRequest")
 }
 
 func TestGetMeasurementInfoCallbackResponse(t *testing.T) {
 	callback := &metaclient.GetMeasurementInfoCallback{}
 	msg := message.NewMetaMessage(message.GetMeasurementInfoResponseMessage, &message.GetMeasurementInfoResponse{})
-	callback.Handle(msg)
+	assert.NoError(t, callback.Handle(msg))
 }
 
 func TestGetMeasurementsInfoCallback(t *testing.T) {
 	callback := &metaclient.GetMeasurementsInfoCallback{}
-	callback.Handle(nil)
+	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
 }
 
 func TestGetMeasurementsInfoCallbackRequest(t *testing.T) {
 	callback := &metaclient.GetMeasurementsInfoCallback{}
 	msg := message.NewMetaMessage(message.GetMeasurementsInfoRequestMessage, &message.GetMeasurementsInfoRequest{})
-	callback.Handle(msg)
+	assert.Errorf(t, callback.Handle(msg), "data is not a GetMeasurementsInfoResponse, type *message.GetMeasurementsInfoRequest")
 }
 
 func TestGetMeasurementsInfoCallbackResponse(t *testing.T) {
 	callback := &metaclient.GetMeasurementsInfoCallback{}
 	msg := message.NewMetaMessage(message.GetMeasurementsInfoResponseMessage, &message.GetMeasurementsInfoResponse{})
-	callback.Handle(msg)
+	assert.NoError(t, callback.Handle(msg))
 }

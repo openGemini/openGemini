@@ -35,17 +35,13 @@ type HashMergeTransform struct {
 	inputs          []*ChunkPort
 	inputChunk      chan Chunk
 	bufChunk        Chunk
-	bufGroupKeys    [][]byte
-	bufGroupTags    []*ChunkTags
 	output          *ChunkPort
 	inputsCloseNums int
-	bufBatchSize    int
 
 	schema          *QuerySchema
 	opt             *query.ProcessorOptions
 	hashMergeLogger *logger.Logger
 	span            *tracing.Span
-	computeSpan     *tracing.Span
 
 	isChildDrained bool
 	hasDimension   bool
@@ -163,7 +159,7 @@ func (trans *HashMergeTransform) getChunkFromChild() bool {
 			trans.isChildDrained = true
 			return false
 		}
-		c, _ := <-trans.inputChunk
+		c := <-trans.inputChunk
 		if c != nil {
 			trans.bufChunk = c
 			break

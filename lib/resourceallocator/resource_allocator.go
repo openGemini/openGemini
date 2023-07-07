@@ -125,9 +125,7 @@ func (s *SeriesResAllocator) Free(num, totalNum int64) {
 }
 
 // not use
-func (s *SeriesResAllocator) FreeParallelism(num int64, totalNum int64) {
-	return
-}
+func (s *SeriesResAllocator) FreeParallelism(num int64, totalNum int64) {}
 
 type BaseResAllocator struct {
 	threshold   int64

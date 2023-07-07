@@ -342,7 +342,7 @@ func BenchmarkSqlUnmarshalTags_Enable_TagArray(b *testing.B) {
 	tagStr := "tag1=tv1,tag=tv2,tag3=tv3,tag4=tv4,tag5=tv5,tag6=tv6,tag7=tv7,tag8=tv8,tag9=tv9,tag10=tv10"
 	var tags []Tag
 	for i := 0; i < b.N; i++ {
-		unmarshalTags(tags, tagStr, true, enableTagArray)
+		_, _ = unmarshalTags(tags, tagStr, true, enableTagArray)
 	}
 }
 
@@ -351,7 +351,7 @@ func BenchmarkSqlUnmarshalTags_Disable_TagArray(b *testing.B) {
 	tagStr := "tag1=tv1,tag=tv2,tag3=tv3,tag4=tv4,tag5=tv5,tag6=tv6,tag7=tv7,tag8=tv8,tag9=tv9,tag10=tv10"
 	var tags []Tag
 	for i := 0; i < b.N; i++ {
-		unmarshalTags(tags, tagStr, true, enableTagArray)
+		_, _ = unmarshalTags(tags, tagStr, true, enableTagArray)
 	}
 }
 

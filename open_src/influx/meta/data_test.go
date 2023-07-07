@@ -614,12 +614,14 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	assert(igs[0].EndTime.Equal(mustParseTime(time.RFC3339Nano, "2021-11-27T00:00:00Z")), "index group endTime error")
 	insertTime = mustParseTime(time.RFC3339Nano, "2021-11-25T13:00:00Z")
 	sg, err = data.ShardGroupByTimestampAndEngineType(dbName, rpName, insertTime, config.TSSTORE)
+	require.NoError(t, err)
 	assert(sg == nil, "shard group contain time %v should not exist", insertTime)
 	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sg, err = data.ShardGroupByTimestampAndEngineType(dbName, rpName, insertTime, config.TSSTORE)
+	require.NoError(t, err)
 	assert(sg != nil, "shard group contain time %v should exist", insertTime)
 	index := sg.Shards[0].IndexID
 	igs = data.Database(dbName).RetentionPolicy(rpName).IndexGroups
@@ -808,7 +810,7 @@ func BenchmarkData_CreateDatabase(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		data.CreateDatabase(databases[i%n], nil, nil, false)
+		_ = data.CreateDatabase(databases[i%n], nil, nil, false)
 	}
 	b.StopTimer()
 }
@@ -861,7 +863,7 @@ func BenchmarkData_CreateMeasurement(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil)
+		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil)
 	}
 	b.StopTimer()
 }
@@ -897,7 +899,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot, config.TSSTORE)
+		_ = data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot, config.TSSTORE)
 	}
 	b.StopTimer()
 }

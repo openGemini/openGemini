@@ -121,7 +121,9 @@ func TestFsReader_Read_EnableMmap(t *testing.T) {
 func TestFsReader_Rename_With_FileHandle_Optimize(t *testing.T) {
 	fn := "/tmp/test_diskreader.data"
 	_ = Remove(fn)
-	defer Remove(fn)
+	defer func() {
+		_ = Remove(fn)
+	}()
 	var buf [4096]byte
 
 	fd, err := OpenFile(fn, os.O_CREATE|os.O_RDWR, 0640)

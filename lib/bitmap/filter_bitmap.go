@@ -38,10 +38,7 @@ func (f *FilterBitmap) Reset() {
 }
 
 func IsNil(bitMap []byte, idx int) bool {
-	if (bitMap[idx>>3] & record.BitMask[idx&0x07]) == 0 {
-		return true
-	}
-	return false
+	return (bitMap[idx>>3] & record.BitMask[idx&0x07]) == 0
 }
 
 func SetBitMap(bitMap []byte, idx int) {

@@ -33,7 +33,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
-	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -75,7 +74,7 @@ type MsBuilder struct {
 
 	Files         []TSSPFile
 	FileName      TSSPFileName
-	log           *Log.Logger
+	log           *logger.Logger
 	pkIndexWriter sparseindex.IndexWriter
 	pkRec         []*record.Record
 	pkMark        []fragment.IndexFragment
@@ -96,7 +95,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 		msBuilder.trailer = &Trailer{}
 	}
 
-	msBuilder.log = Log.NewLogger(errno.ModuleCompact).SetZapLogger(log)
+	msBuilder.log = logger.NewLogger(errno.ModuleCompact).SetZapLogger(log)
 	msBuilder.tier = tier
 	msBuilder.Conf = conf
 	msBuilder.lock = lockPath
@@ -153,7 +152,7 @@ func (b *MsBuilder) MaxRowsPerSegment() int {
 	return b.Conf.maxRowsPerSegment
 }
 
-func (b *MsBuilder) WithLog(log *Log.Logger) {
+func (b *MsBuilder) WithLog(log *logger.Logger) {
 	b.log = log
 	if b.chunkBuilder != nil {
 		b.chunkBuilder.log = log

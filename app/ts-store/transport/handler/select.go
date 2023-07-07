@@ -150,13 +150,17 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 		if e != nil {
 			return e
 		}
-		defer resourceallocator.FreeRes(resourceallocator.ShardsParallelismRes, parallelism, totalSource)
+		defer func() {
+			_ = resourceallocator.FreeRes(resourceallocator.ShardsParallelismRes, parallelism, totalSource)
+		}()
 	} else {
 		parallelism, e = resourceallocator.AllocParallelismRes(resourceallocator.ShardsParallelismRes, shardsNum)
 		if e != nil {
 			return e
 		}
-		defer resourceallocator.FreeParallelismRes(resourceallocator.ShardsParallelismRes, parallelism, 0)
+		defer func() {
+			_ = resourceallocator.FreeParallelismRes(resourceallocator.ShardsParallelismRes, parallelism, 0)
+		}()
 	}
 
 	ctx := context.WithValue(context.Background(), QueryDurationKey, qDuration)

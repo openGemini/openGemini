@@ -63,7 +63,7 @@ func StringToRows(c executor.Chunk) string {
 		schema = append(schema, rt.Name()+chunkToRowStringColSep...)
 	}
 	schema = append(schema, "time\n"...)
-	buffer.WriteString(fmt.Sprintf("%s", schema))
+	buffer.Write(schema)
 	tagsLoc := 0
 	startloc := 0
 	endloc := c.Len()

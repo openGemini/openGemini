@@ -454,7 +454,7 @@ func (e *Engine) Databases() []string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	databases := make([]string, 0, len(e.DBPartitions))
-	for dbName, _ := range e.DBPartitions {
+	for dbName := range e.DBPartitions {
 		databases = append(databases, dbName)
 	}
 
@@ -465,7 +465,7 @@ func (e *Engine) getDBPtIds(dbName string) []uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	ids := make([]uint32, 0, len(e.DBPartitions[dbName]))
-	for ptId, _ := range e.DBPartitions[dbName] {
+	for ptId := range e.DBPartitions[dbName] {
 		ids = append(ids, ptId)
 	}
 	return ids

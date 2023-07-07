@@ -106,13 +106,9 @@ func (storage *tsstoreImpl) WriteIndex(s *shard, rows *influx.Rows, mw *mstWrite
 	return err
 }
 
-func (storage *tsstoreImpl) SetClient(client metaclient.MetaClient) {
-	return
-}
+func (storage *tsstoreImpl) SetClient(client metaclient.MetaClient) {}
 
-func (storage *tsstoreImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
-	return
-}
+func (storage *tsstoreImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {}
 
 type columnstoreImpl struct {
 	mu       sync.RWMutex
@@ -1765,7 +1761,6 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 
 func (s *shard) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
 	s.storage.SetMstInfo(name, mstInfo)
-	return
 }
 
 func (s *shard) GetID() uint64 {
@@ -1962,7 +1957,7 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 	var skipFileIdx []int
 	var keyCondition sparseindex.KeyCondition
 	binaryfilterfunc.RewriteTimeCompareVal(schema.Options().GetSourceCondition())
-	tr := util.TimeRange{schema.Options().GetStartTime(), schema.Options().GetEndTime()}
+	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	filesFragments := executor.NewFileFragments()
 	for i, dataFile := range dataFiles {
 		if dataFile == nil {

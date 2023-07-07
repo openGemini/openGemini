@@ -108,7 +108,7 @@ func getDataBlockBuffer(size int) []byte {
 	return v.([]byte)
 }
 
-// nolint
+//lint:file-ignore SA6002 argument should be pointer-like to avoid allocations
 func putDataBlockBuffer(b []byte) {
 	if cap(b) == 0 {
 		return

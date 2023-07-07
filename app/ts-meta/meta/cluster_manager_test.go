@@ -372,7 +372,7 @@ func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	store.data.CreateDatabase("db0", nil, nil, false)
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false))
 	c.store = store
 
 	dbPt := &meta.DbPtInfo{
@@ -382,5 +382,5 @@ func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
 		},
 	}
 
-	c.processFailedDbPt(dbPt, nil, true)
+	assert.EqualError(t, c.processFailedDbPt(dbPt, nil, true), "pt not found")
 }

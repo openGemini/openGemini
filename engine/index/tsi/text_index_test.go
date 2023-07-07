@@ -41,7 +41,7 @@ func buildRow(seriesId uint64, timestamp int64, textFiledValue string) influx.Ro
 	var fields []influx.Field
 	fields = append(fields, influx.Field{
 		Key:      "request",
-		StrValue: fmt.Sprintf("%s", textFiledValue),
+		StrValue: textFiledValue,
 		Type:     influx.Field_Type_String,
 	})
 

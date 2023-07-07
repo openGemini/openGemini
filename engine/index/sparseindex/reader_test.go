@@ -61,14 +61,6 @@ func MustParseExpr(s string) influxql.Expr {
 	return expr
 }
 
-func buildDataRecordComplex() *record.Record {
-	schema := buildPKSchema()
-	rec := record.NewRecord(schema, false)
-	rec.Column(0).AppendStrings("U1", "U2", "U2", "U3", "U3", "U4", "U4", "U4")
-	rec.Column(1).AppendStrings("W1", "W2", "W2", "W1", "W2", "W1", "W1", "W2")
-	return rec
-}
-
 func buildPkRecordComplex() *record.Record {
 	schema := buildPKSchema()
 	rec := record.NewRecord(schema, false)

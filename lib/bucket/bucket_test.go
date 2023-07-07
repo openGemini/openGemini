@@ -22,11 +22,13 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/bucket"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBucketCanOutOflimit(t *testing.T) {
 	bt := bucket.NewInt64Bucket(time.Minute, 1000, true)
-	bt.GetResource(1001)
+	err := bt.GetResource(1001)
+	assert.NoError(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -47,7 +49,8 @@ func TestBucketCanOutOflimit(t *testing.T) {
 
 func TestBucketCannotOutOfLimit(t *testing.T) {
 	bt := bucket.NewInt64Bucket(time.Minute, 1000, false)
-	bt.GetResource(1000)
+	err := bt.GetResource(1000)
+	assert.NoError(t, err)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -74,7 +77,8 @@ func BenchmarkGetV2(b *testing.B) {
 		var wg sync.WaitGroup
 		simpleExample = func() {
 			defer wg.Done()
-			bt.GetResource(2000)
+			err := bt.GetResource(2000)
+			assert.NoError(b, err)
 			bt.ReleaseResource(2000)
 		}
 		for i := 0; i < 100; i++ {
@@ -91,7 +95,8 @@ func BenchmarkGetTimeoutV2(b *testing.B) {
 		var wg sync.WaitGroup
 		simpleExample = func() {
 			defer wg.Done()
-			bt.GetResource(2000)
+			err := bt.GetResource(2000)
+			assert.NoError(b, err)
 			bt.ReleaseResource(2000)
 		}
 		for i := 0; i < 100; i++ {

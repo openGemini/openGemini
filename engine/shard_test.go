@@ -960,7 +960,7 @@ func TestShard_NewColStoreShard(t *testing.T) {
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
 	// require.Equal(t, 4*100, int(sh.count))
-	closeShard(sh)
+	require.NoError(t, closeShard(sh))
 }
 
 func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
@@ -1000,7 +1000,7 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 	}
 	require.Equal(t, 1, len(files))
 	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
-	closeShard(sh)
+	require.NoError(t, closeShard(sh))
 	// reopen shard to load data
 	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
 	if err != nil {
@@ -1029,7 +1029,7 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 		meta2 := pkInfo2.GetRec().RecMeta
 		require.EqualValues(t, meta1, meta2)
 	}
-	closeShard(sh)
+	require.NoError(t, closeShard(sh))
 }
 
 func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
@@ -1076,7 +1076,7 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	conf.SetMaxSegmentLimit(math.MaxUint16)
 	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment)
 	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
-	closeShard(sh)
+	require.NoError(t, closeShard(sh))
 	// reopen shard to load data
 	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
 	if err != nil {
@@ -1105,7 +1105,7 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 		meta2 := pkInfo2.GetRec().RecMeta
 		require.EqualValues(t, meta1, meta2)
 	}
-	closeShard(sh)
+	require.NoError(t, closeShard(sh))
 }
 
 func TestShard_AsyncWalReplay_serial(t *testing.T) {
@@ -1433,7 +1433,7 @@ func TestAggQueryOnlyInMemtable(t *testing.T) {
 		}
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-		rows, minTime, maxTime, _ := GenAggDataRecord([]string{"cpu"}, conf.seriesNum-10, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, false)
+		rows, minTime, _, _ := GenAggDataRecord([]string{"cpu"}, conf.seriesNum-10, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, false)
 		err = writeData(sh, rows, true)
 		if err != nil {
 			t.Fatal(err)
@@ -1606,7 +1606,7 @@ func TestAggQueryOnlyInMemtable_NoEmpty(t *testing.T) {
 		}
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-		rows, minTime, maxTime, _ := GenAggDataRecord([]string{"cpu"}, conf.seriesNum-10, conf.pointNumPerSeries, conf.interval, time.Now(), true, true, false)
+		rows, minTime, _, _ := GenAggDataRecord([]string{"cpu"}, conf.seriesNum-10, conf.pointNumPerSeries, conf.interval, time.Now(), true, true, false)
 		err = writeData(sh, rows, true)
 		if err != nil {
 			t.Fatal(err)
@@ -2774,11 +2774,11 @@ func TestFreeSequencer(t *testing.T) {
 
 	// cannot get lastFlushTime after free
 	seq = sh.immTables.Sequencer()
-	lastFlushTime2, rowCnt2 := seq.Get(msNames[0], id)
+	_, rowCnt2 := seq.Get(msNames[0], id)
 	seq.UnRef()
 	assert2.Equal(t, true, rowCnt2 == 0)
 
-	// sequencer will be reload after write rows
+	// sequencer will be reloaded after write rows
 	err = writeData(sh, rows, true)
 	if err != nil {
 		t.Fatal(err)
@@ -2791,7 +2791,7 @@ func TestFreeSequencer(t *testing.T) {
 		isloading = seq.IsLoading()
 		time.Sleep(time.Second / 10)
 	}
-	lastFlushTime2, rowCnt2 = seq.Get(msNames[0], id)
+	lastFlushTime2, _ := seq.Get(msNames[0], id)
 	seq.UnRef()
 	assert2.Equal(t, true, lastFlushTime == lastFlushTime2)
 }
@@ -3428,6 +3428,7 @@ func TestWriteDataByNewEngine(t *testing.T) {
 
 	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
 	time.Sleep(time.Second * 1)
 	// wait mem table flush
 	sh.ForceFlush()
@@ -3463,14 +3464,10 @@ func TestWriteDataByNewEngine2(t *testing.T) {
 }
 
 type QueryCtx struct {
-	decs            *immutable.ReadContext
 	filterFieldsIdx []int
 	filterTags      []string
 	auxTags         []string
-	m               map[string]interface{}
 	schema          record.Schemas
-	querySchema     *executor.QuerySchema
-	condFunctions   binaryfilterfunc.CondFunctions
 }
 
 type TestAggCase struct {

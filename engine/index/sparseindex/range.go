@@ -55,14 +55,6 @@ func (r *Range) turnOpenRangeIntoClosed() {
 	}
 }
 
-func (r *Range) empty() bool {
-	return r.right.Less(r.left) || ((!r.leftIncluded || !r.rightIncluded) && !r.left.Less(r.right))
-}
-
-func (r *Range) contains(x *FieldRef) bool {
-	return !r.rightGEQ(x) && !r.leftLEQ(x)
-}
-
 // leftLEQ x is to the right for the left point of the range.
 func (r *Range) leftLEQ(x *FieldRef) bool {
 	return r.left.Less(x) || (r.leftIncluded && x.Equals(r.left))

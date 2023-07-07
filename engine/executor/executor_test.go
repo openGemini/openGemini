@@ -511,8 +511,8 @@ func TestNewScannerStoreExecutorBuilder(t *testing.T) {
 		panic("unexpected clone result")
 	}
 
-	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 1)
-	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
+	_ = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 1)
+	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
 	if b == nil {
 		panic("nil StoreExecutorBuilder")
 	}
@@ -529,7 +529,7 @@ func TestNewScannerStoreExecutorBuilder(t *testing.T) {
 		pipelineExecutor.Abort()
 	}()
 
-	pipelineExecutor.Execute(context.Background())
+	assert.NoError(t, pipelineExecutor.Execute(context.Background()))
 }
 
 func TestNewIndexScanTransform(t *testing.T) {
@@ -556,7 +556,7 @@ func TestNewIndexScanTransform(t *testing.T) {
 	assert.Equal(t, 1, len(indexScan.GetInputs()))
 	assert.Equal(t, 0, indexScan.GetInputNumber(nil))
 	assert.Equal(t, 0, indexScan.GetOutputNumber(nil))
-	indexScan.Release()
+	assert.NoError(t, indexScan.Release())
 	indexScan.Close()
 }
 
@@ -637,8 +637,8 @@ func TestNewSparseIndexScanExecutorBuilder(t *testing.T) {
 		panic("unexpected clone result")
 	}
 
-	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 1)
-	b = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
+	_ = executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 1)
+	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
 	if b == nil {
 		panic("nil StoreExecutorBuilder")
 	}

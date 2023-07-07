@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func NewAggIntervalSchema() hybridqp.Catalog {
@@ -299,9 +300,7 @@ func TestPlanTypeSliceByTree(t *testing.T) {
 
 func TestErrorTemplatePlan(t *testing.T) {
 	executor.TemplateSql = append(executor.TemplateSql, "error query")
-	CachedSqlPlan, _ := executor.NewSqlPlanTypePool(executor.PlanType(len(executor.TemplateSql) - 1))
-	if len(CachedSqlPlan) != len(CachedSqlPlan) {
-		t.Error("cache plan error")
-	}
+	_, err := executor.NewSqlPlanTypePool(executor.PlanType(len(executor.TemplateSql) - 1))
+	assert.ErrorContains(t, err, "syntax error")
 	executor.TemplateSql = executor.TemplateSql[:len(executor.TemplateSql)-1]
 }

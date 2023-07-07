@@ -153,14 +153,10 @@ func (kc *KeyConditionImpl) checkInRange(
 ) (*Mark, error) {
 	var err error
 	var singlePoint bool
-	var beContinue bool
 	var rpnStack []*Mark
 	for _, elem := range kc.rpn {
 		if elem.op == InRange || elem.op == NotInRange {
-			rpnStack, beContinue = kc.checkInRangeForRange(rgs, rpnStack, elem, dataTypes, singlePoint)
-			if beContinue {
-				continue
-			}
+			rpnStack = kc.checkInRangeForRange(rgs, rpnStack, elem, dataTypes, singlePoint)
 		} else if elem.op == InSet || elem.op == NotInSet {
 			rpnStack, err = kc.checkInRangeForSet(rgs, rpnStack, elem, dataTypes, singlePoint)
 			if err != nil {
@@ -192,17 +188,15 @@ func (kc *KeyConditionImpl) checkInRangeForRange(
 	elem *RPNElement,
 	dataTypes []int,
 	singlePoint bool,
-) ([]*Mark, bool) {
+) []*Mark {
 	keyRange := rgs[elem.keyColumn]
-	transformedRange := createWholeRangeIncludeBound()
 	if len(elem.monotonicChains) > 0 {
 		newRange := kc.applyChainToRange(keyRange, elem.monotonicChains, dataTypes[elem.keyColumn], singlePoint)
 		if newRange != nil {
 			rpnStack = append(rpnStack, NewMark(true, true))
-			return rpnStack, true
+			return rpnStack
 		}
-		transformedRange = newRange
-		keyRange = transformedRange
+		keyRange = newRange
 	}
 	intersects := elem.rg.intersectsRange(keyRange)
 	contains := elem.rg.containsRange(keyRange)
@@ -210,7 +204,7 @@ func (kc *KeyConditionImpl) checkInRangeForRange(
 	if elem.op == NotInRange {
 		rpnStack[len(rpnStack)-1] = rpnStack[len(rpnStack)-1].Not()
 	}
-	return rpnStack, false
+	return rpnStack
 }
 
 func (kc *KeyConditionImpl) checkInRangeForSet(

@@ -867,7 +867,7 @@ func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
 			failPath: "github.com/openGemini/openGemini/engine/mock-replay-wal-error",
 			inTerms:  fmt.Sprintf(`return("%s")`, sh2WalFile), // only shard2 fail
 			expect: func(err error) error {
-				if err != nil && err.Error() == fmt.Sprintf("%s", sh2WalFile) {
+				if err != nil && err.Error() == sh2WalFile {
 					return nil
 				}
 				return fmt.Errorf("unexpected error:%s", err)
@@ -943,7 +943,8 @@ func TestUpdateShardDurationInfo(t *testing.T) {
 	shardDuration := getShardDurationInfo(1)
 	shardDuration.DurationInfo.Tier = util.Warm
 	shardDuration.Ident.OwnerPt = 0
-	eng.UpdateShardDurationInfo(shardDuration)
+	err = eng.UpdateShardDurationInfo(shardDuration)
+	require.NoError(t, err)
 	require.Equal(t, eng.GetShard(defaultDb, 0, 1).GetDuration().Tier, uint64(util.Warm))
 }
 

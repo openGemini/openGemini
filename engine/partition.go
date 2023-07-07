@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
@@ -87,7 +86,6 @@ type DBPTInfo struct {
 	logicClock          uint64
 	sequenceID          uint64
 	lockPath            *string
-	openShardsLimit     limiter.Fixed
 	enableTagArray      bool
 }
 

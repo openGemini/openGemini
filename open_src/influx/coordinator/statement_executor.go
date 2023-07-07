@@ -1089,7 +1089,7 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 		row.Values = [][]interface{}{{config.EngineType2String[mst.EngineType]}}
 		return []*models.Row{row}, nil
 	default:
-		return nil, errors.New(fmt.Sprintf("%s is not support for this command", stmt.Name))
+		return nil, fmt.Errorf("%s is not support for this command", stmt.Name)
 	}
 }
 

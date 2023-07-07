@@ -95,7 +95,9 @@ func TestChunkBuilder(t *testing.T) {
 	testCompDir := t.TempDir()
 	filePath := filepath.Join(testCompDir, "chunkBuilder.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(filePath)
+	defer func() {
+		_ = fileops.Remove(filePath)
+	}()
 	data := genData(100)
 	lockPath := ""
 	indexBuilder := NewIndexBuilder(&lockPath, filePath)

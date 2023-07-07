@@ -47,7 +47,7 @@ func TestIODetector_flushDiskForDetectIO(t *testing.T) {
 	testFunc := func() {
 		detector := newIODetector([]string{"mock_path1", "mock_path2"}, defaultSuicideTimeout, defaultFlushInterval)
 		ticker := time.NewTicker(100 * time.Millisecond)
-		patch1 := gomonkey.ApplyPrivateMethod(detector, "flush", func(_ *IODetector) { return })
+		patch1 := gomonkey.ApplyPrivateMethod(detector, "flush", func(_ *IODetector) {})
 		patch2 := gomonkey.ApplyFunc(time.NewTicker,
 			func(d time.Duration) *time.Ticker {
 				return ticker
@@ -96,7 +96,7 @@ func TestIODetector_detectIO_2(t *testing.T) {
 		go detector.detectIO()
 		detector.detectCh <- time.Now().Add(-100 * time.Second)
 		for !killed {
-
+			time.Sleep(100 * time.Millisecond)
 		}
 		convey.So(killed, convey.ShouldEqual, true)
 	}

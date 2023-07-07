@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,7 +33,9 @@ func TestReader(t *testing.T) {
 	testCompDir := t.TempDir()
 	filePath := filepath.Join(testCompDir, "fileReader.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(filePath)
+	defer func() {
+		_ = fileops.Remove(filePath)
+	}()
 	data := genData(100)
 	lockPath := ""
 	indexBuilder := NewIndexBuilder(&lockPath, filePath)
@@ -40,12 +43,15 @@ func TestReader(t *testing.T) {
 	if err != nil {
 		t.Fatal("write data error")
 	}
-	indexBuilder.writer.Close() // sync file
+	err = indexBuilder.writer.Close() // sync file
+	assert.NoError(t, err)
 
 	// read primaryKey
 	fileops.EnableMmapRead(false)
 	cfr, err := NewPrimaryKeyReader(filePath, &lockPath)
-	cfr.Open()
+	assert.NoError(t, err)
+	err = cfr.Open()
+	assert.NoError(t, err)
 	if err != nil {
 		t.Fatal("read data error")
 	}
@@ -84,14 +90,18 @@ func TestFileSizeError(t *testing.T) {
 	testCompDir := t.TempDir()
 	filePath := filepath.Join(testCompDir, "FileSizeError.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(filePath)
+	defer func() {
+		_ = fileops.Remove(filePath)
+	}()
 	f, err := os.Create(filePath)
 	if err != nil {
 		t.Fatal("writer data error")
 	}
-	f.Write(data)
-	f.Sync()
-	defer f.Close()
+	_, _ = f.Write(data)
+	_ = f.Sync()
+	defer func() {
+		_ = f.Close()
+	}()
 	lockPath := ""
 	_, err = NewPrimaryKeyReader(filePath, &lockPath)
 	require.ErrorContains(t, err, "invalid file")
@@ -103,14 +113,18 @@ func TestFileMagicError(t *testing.T) {
 	testCompDir := t.TempDir()
 	filePath := filepath.Join(testCompDir, "FileMagicError.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(filePath)
+	defer func() {
+		_ = fileops.Remove(filePath)
+	}()
 	f, err := os.Create(filePath)
 	if err != nil {
 		t.Fatal("writer data error")
 	}
-	f.Write(data)
-	f.Sync()
-	defer f.Close()
+	_, _ = f.Write(data)
+	_ = f.Sync()
+	defer func() {
+		_ = f.Close()
+	}()
 	lockPath := ""
 	_, err = NewPrimaryKeyReader(filePath, &lockPath)
 	require.ErrorContains(t, err, "invalid file")
@@ -122,14 +136,18 @@ func TestFileHeaderError(t *testing.T) {
 	testCompDir := t.TempDir()
 	filePath := filepath.Join(testCompDir, "FileHeaderError.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(filePath)
+	defer func() {
+		_ = fileops.Remove(filePath)
+	}()
 	f, err := os.Create(filePath)
 	if err != nil {
 		t.Fatal("writer data error")
 	}
-	f.Write(data)
-	f.Sync()
-	defer f.Close()
+	_, _ = f.Write(data)
+	_ = f.Sync()
+	defer func() {
+		_ = f.Close()
+	}()
 	lockPath := ""
 	_, err = NewPrimaryKeyReader(filePath, &lockPath)
 	require.ErrorContains(t, err, "invalid file")
@@ -142,7 +160,8 @@ func TestAppendColumnDataPanic(t *testing.T) {
 		err := recover()
 		require.Equal(t, err, "invalid column type 0")
 	}()
-	appendColumnData(dataType, nil, nil, nil)
+	err := appendColumnData(dataType, nil, nil, nil)
+	assert.NoError(t, err)
 }
 
 func TestDecodeColumnDataPanic(t *testing.T) {
@@ -155,5 +174,6 @@ func TestDecodeColumnDataPanic(t *testing.T) {
 		err := recover()
 		require.Equal(t, err, "type(0) in table not eq select type(1)")
 	}()
-	decodeColumnData(&ref, data, nil, nil)
+	err := decodeColumnData(&ref, data, nil, nil)
+	assert.NoError(t, err)
 }

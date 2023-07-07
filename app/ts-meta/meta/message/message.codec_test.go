@@ -206,8 +206,11 @@ func TestUserInfoMessage(t *testing.T) {
 
 	newUserInfoRequest := getUserInfoRequest.Instance()
 
-	newUserInfoRequest.Unmarshal(nil)
-	newUserInfoRequest.Unmarshal(buf)
+	err := newUserInfoRequest.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newUserInfoRequest.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newUserInfoRequest.Size(), getUserInfoRequest.Size())
 
 	getUserInfoResponse := message.GetUserInfoResponse{
@@ -217,8 +220,11 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getUserInfoResponse.Marshal(nil)
 
 	newGetUserInfoResponse := getUserInfoResponse.Instance()
-	newGetUserInfoResponse.Unmarshal(nil)
-	newGetUserInfoResponse.Unmarshal(buf)
+	err = newGetUserInfoResponse.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newGetUserInfoResponse.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetUserInfoResponse.Size(), getUserInfoResponse.Size())
 	assert.Equal(t, newUserInfoRequest.Size(), getUserInfoRequest.Size())
 
@@ -228,8 +234,11 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getStreamInfoRequest.Marshal(nil)
 
 	newGetStreamInfoRequestMessage := getStreamInfoRequest.Instance()
-	newGetStreamInfoRequestMessage.Unmarshal(nil)
-	newGetStreamInfoRequestMessage.Unmarshal(buf)
+	err = newGetStreamInfoRequestMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newGetStreamInfoRequestMessage.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetStreamInfoRequestMessage.Size(), getStreamInfoRequest.Size())
 	assert.Equal(t, newGetStreamInfoRequestMessage.Size(), getStreamInfoRequest.Size())
 
@@ -240,8 +249,11 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getStreamInfoResponse.Marshal(nil)
 
 	newGetStreamInfoResponseMessage := getStreamInfoResponse.Instance()
-	newGetStreamInfoResponseMessage.Unmarshal(nil)
-	newGetStreamInfoResponseMessage.Unmarshal(buf)
+	err = newGetStreamInfoResponseMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newGetStreamInfoResponseMessage.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetStreamInfoResponseMessage.Size(), getStreamInfoResponse.Size())
 	assert.Equal(t, newGetStreamInfoResponseMessage.Size(), getStreamInfoResponse.Size())
 
@@ -253,8 +265,10 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getMeasurementInfoRequest.Marshal(nil)
 
 	newGetMeasurementInfoRequestMessage := getMeasurementInfoRequest.Instance()
-	newGetMeasurementInfoRequestMessage.Unmarshal(nil)
-	newGetMeasurementInfoRequestMessage.Unmarshal(buf)
+	err = newGetMeasurementInfoRequestMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+	err = newGetMeasurementInfoRequestMessage.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetMeasurementInfoRequestMessage.Size(), getMeasurementInfoRequest.Size())
 	assert.Equal(t, newGetMeasurementInfoRequestMessage.Size(), getMeasurementInfoRequest.Size())
 
@@ -265,8 +279,11 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getMeasurementInfoResponse.Marshal(nil)
 
 	newGetMeasurementInfoResponseMessage := getMeasurementInfoResponse.Instance()
-	newGetMeasurementInfoResponseMessage.Unmarshal(nil)
-	newGetMeasurementInfoResponseMessage.Unmarshal(buf)
+	err = newGetMeasurementInfoResponseMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newGetMeasurementInfoResponseMessage.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetMeasurementInfoResponseMessage.Size(), getMeasurementInfoResponse.Size())
 	assert.Equal(t, newGetMeasurementInfoResponseMessage.Size(), getMeasurementInfoResponse.Size())
 
@@ -277,8 +294,11 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getMeasurementsInfoRequest.Marshal(nil)
 
 	newGetMeasurementsInfoRequestMessage := getMeasurementsInfoRequest.Instance()
-	newGetMeasurementsInfoRequestMessage.Unmarshal(nil)
-	newGetMeasurementsInfoRequestMessage.Unmarshal(buf)
+	err = newGetMeasurementsInfoRequestMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newGetMeasurementsInfoRequestMessage.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetMeasurementsInfoRequestMessage.Size(), getMeasurementsInfoRequest.Size())
 	assert.Equal(t, newGetMeasurementsInfoRequestMessage.Size(), getMeasurementsInfoRequest.Size())
 
@@ -289,8 +309,11 @@ func TestUserInfoMessage(t *testing.T) {
 	buf, _ = getMeasurementsInfoResponse.Marshal(nil)
 
 	newGetMeasurementsInfoResponseMessage := getMeasurementsInfoResponse.Instance()
-	newGetMeasurementsInfoResponseMessage.Unmarshal(nil)
-	newGetMeasurementsInfoResponseMessage.Unmarshal(buf)
+	err = newGetMeasurementsInfoResponseMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newGetMeasurementsInfoResponseMessage.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newGetMeasurementsInfoResponseMessage.Size(), getMeasurementsInfoResponse.Size())
 	assert.Equal(t, newGetMeasurementsInfoResponseMessage.Size(), getMeasurementsInfoResponse.Size())
 
@@ -358,8 +381,11 @@ func TestDBBriefInfoMessage(t *testing.T) {
 
 	newDBBriefInfoRequest := getDBBriefInfo.Instance()
 
-	newDBBriefInfoRequest.Unmarshal(nil)
-	newDBBriefInfoRequest.Unmarshal(buf)
+	err := newDBBriefInfoRequest.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newDBBriefInfoRequest.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newDBBriefInfoRequest.Size(), getDBBriefInfo.Size())
 
 	getDBBriefInfoResponse := message.GetDBBriefInfoResponse{
@@ -369,8 +395,11 @@ func TestDBBriefInfoMessage(t *testing.T) {
 	buf, _ = getDBBriefInfoResponse.Marshal(nil)
 
 	newDBBriefInfoResponse := getDBBriefInfoResponse.Instance()
-	newDBBriefInfoResponse.Unmarshal(nil)
-	newDBBriefInfoResponse.Unmarshal(buf)
+	err = newDBBriefInfoResponse.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = newDBBriefInfoResponse.Unmarshal(buf)
+	assert.NoError(t, err)
 	assert.Equal(t, newDBBriefInfoResponse.Size(), getDBBriefInfoResponse.Size())
 	assert.Equal(t, newDBBriefInfoRequest.Size(), newDBBriefInfoRequest.Size())
 }

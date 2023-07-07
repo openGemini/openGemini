@@ -447,9 +447,10 @@ func TestMapMstShards(t *testing.T) {
 	Val, _ := regexp.Compile("")
 	sourceRegex := &influxql.Measurement{
 		Database: "db0", RetentionPolicy: "rp0", Name: "", EngineType: config.COLUMNSTORE,
-		Regex: &influxql.RegexLiteral{Val},
+		Regex: &influxql.RegexLiteral{Val: Val},
 	}
-	csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	err := csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	assert.NoError(t, err)
 }
 
 func TestShardMapperExprRewriter(t *testing.T) {

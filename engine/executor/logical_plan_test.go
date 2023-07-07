@@ -483,8 +483,7 @@ func TestHashMergeAndSort(t *testing.T) {
 	opt.GroupByAllDims = true
 	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 
-	var plan hybridqp.QueryNode
-	plan = buildColumnStorePlan(t, schema)
+	plan := buildColumnStorePlan(t, schema)
 	planner := getPlanner()
 	planner.SetRoot(plan)
 	best := planner.FindBestExp()
@@ -500,8 +499,7 @@ func TestColumnStoreForSql(t *testing.T) {
 	opt.GroupByAllDims = true
 	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 
-	var plan hybridqp.QueryNode
-	plan = buildColumnStorePlanForSql(t, schema)
+	plan := buildColumnStorePlanForSql(t, schema)
 	planner := getPlanner()
 	planner.SetRoot(plan)
 	best := planner.FindBestExp()
@@ -520,7 +518,7 @@ func TestColumnStoreForSql(t *testing.T) {
 	opt = query.ProcessorOptions{}
 	opt.GroupByAllDims = true
 	schema = executor.NewQuerySchema(fields, columnsName, &opt, nil)
-	res, err := planBuilder.CreateSegmentPlan(schema)
+	_, err := planBuilder.CreateSegmentPlan(schema)
 	if err != nil {
 		t.Fatal(err)
 	}

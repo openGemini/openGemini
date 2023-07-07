@@ -490,7 +490,6 @@ type ExecutorBuilder struct {
 	root         *TransformVertex
 	traits       *StoreExchangeTraits
 	frags        *ShardsFragmentsGroups
-	fragsIndex   int
 	currConsumer int
 
 	enableBinaryTreeMerge int64

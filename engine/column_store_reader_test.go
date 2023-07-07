@@ -18,7 +18,6 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -58,9 +57,7 @@ func (sink *NilSink) Explain() []executor.ValuePair {
 	return nil
 }
 
-func (sink *NilSink) Close() {
-	return
-}
+func (sink *NilSink) Close() {}
 
 func (sink *NilSink) Work(ctx context.Context) error {
 	for {
@@ -313,7 +310,7 @@ func TestColStoreReaderTransform(t *testing.T) {
 	}{
 		{
 			name:      "select * from cpu limit 1",
-			q:         fmt.Sprintf(`select field1_string,field2_int,field3_bool,field4_float from cpu limit 1`),
+			q:         `select field1_string,field2_int,field3_bool,field4_float from cpu limit 1`,
 			tr:        util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			out:       buildComRowDataType(),
 			frags:     shardFrags,
@@ -324,8 +321,8 @@ func TestColStoreReaderTransform(t *testing.T) {
 		},
 		{
 			name: "select * from cpu where timeFilter group by field1_string",
-			q: fmt.Sprintf(`select field1_string,field2_int,field3_bool,field4_float from cpu where
-		time >= 1609459200000000000 and time <= 1609459201000000000 group by field1_string`),
+			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where
+		time >= 1609459200000000000 and time <= 1609459201000000000 group by field1_string`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200100000000},
 			out:       buildComRowDataType(),
 			frags:     shardFrags,
@@ -336,8 +333,8 @@ func TestColStoreReaderTransform(t *testing.T) {
 		},
 		{
 			name: "select * from cpu where timeFilter and fieldFilter",
-			q: fmt.Sprintf(`select field1_string,field2_int,field3_bool,field4_float from cpu where 
-time = 1609459200000000000 and field2_int = 1`),
+			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where 
+time = 1609459200000000000 and field2_int = 1`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
 			out:       buildComRowDataType(),
 			frags:     shardFrags,
@@ -567,7 +564,7 @@ func TestColStoreReaderTransformWithPrimaryIndex(t *testing.T) {
 	}{
 		{
 			name:      "select * from cpu limit 1",
-			q:         fmt.Sprintf(`select field1_string,field2_int,field3_bool,field4_float from cpu limit 1`),
+			q:         `select field1_string,field2_int,field3_bool,field4_float from cpu limit 1`,
 			tr:        util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			out:       buildComRowDataType(),
 			readerOps: buildComReaderOps(),
@@ -577,8 +574,8 @@ func TestColStoreReaderTransformWithPrimaryIndex(t *testing.T) {
 		},
 		{
 			name: "select * from cpu where timeFilter group by field1_string",
-			q: fmt.Sprintf(`select field1_string,field2_int,field3_bool,field4_float from cpu where
-				time >= 1609459200000000000 and time <= 1609459201000000000`),
+			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where
+				time >= 1609459200000000000 and time <= 1609459201000000000`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200100000000},
 			out:       buildComRowDataType(),
 			readerOps: buildComReaderOps(),
@@ -588,8 +585,8 @@ func TestColStoreReaderTransformWithPrimaryIndex(t *testing.T) {
 		},
 		{
 			name: "select * from cpu where timeFilter and fieldFilter",
-			q: fmt.Sprintf(`select field1_string,field2_int,field3_bool,field4_float from cpu where
-		time = 1609459200000000000 and field2_int = 1`),
+			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where
+		time = 1609459200000000000 and field2_int = 1`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
 			out:       buildComRowDataType(),
 			readerOps: buildComReaderOps(),

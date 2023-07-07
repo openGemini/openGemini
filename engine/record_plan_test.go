@@ -38,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	assert1 "github.com/stretchr/testify/assert"
 )
 
 func init() {
@@ -89,8 +90,8 @@ func TestWriteIntoStorageTransformErr(t *testing.T) {
 	w.m = m
 	w.currStreamWriteFile, _ = immutable.NewWriteScanFile("mst", m, f, schema)
 	defer m.Close()
-	w.InitFile(executor.NewSeriesRecord(srcRec, 0, f, 0, nil, nil))
-	w.InitFile(executor.NewSeriesRecord(srcRec, 0, f, 0, nil, nil))
+	_ = w.InitFile(executor.NewSeriesRecord(srcRec, 0, f, 0, nil, nil))
+	_ = w.InitFile(executor.NewSeriesRecord(srcRec, 0, f, 0, nil, nil))
 }
 
 func TestFileSequenceAggregator(t *testing.T) {
@@ -516,7 +517,7 @@ func Test_DownSampleRecovery(t *testing.T) {
 		return
 	}
 	defer file.Close()
-	sh.DownSampleRecover(m)
+	assert1.NoError(t, sh.DownSampleRecover(m))
 	err = sh.removeFile(filepath.Join(downSampleLog, "2"))
 	if err == nil {
 		t.Fail()

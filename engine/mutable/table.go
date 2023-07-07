@@ -300,8 +300,8 @@ func (t *tsMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 
 		start = time.Now()
 		var (
-			exist        = false
-			sid   uint64 = 0
+			exist bool
+			sid   uint64
 			chunk *WriteChunk
 		)
 		for index := range rs {

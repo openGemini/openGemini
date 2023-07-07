@@ -18,7 +18,6 @@ package executor_test
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"testing"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/require"
 )
 
 func buildSortRowDataType() hybridqp.RowDataType {
@@ -176,13 +176,11 @@ func getResult(resultChunkOutPut *executor.ChunkPort, resultStr *string, finish 
 		finish <- 1
 	}()
 	for {
-		select {
-		case r, ok := <-resultChunkOutPut.State:
-			if !ok {
-				return
-			}
-			*resultStr = *resultStr + StringToRows(r)
+		r, ok := <-resultChunkOutPut.State
+		if !ok {
+			return
 		}
+		*resultStr = *resultStr + StringToRows(r)
 	}
 }
 
@@ -207,22 +205,22 @@ func TestSortTransfromOrderByTagAndIntField(t *testing.T) {
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], resultChunkOutPut)
+	require.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	require.NoError(t, executor.Connect(trans.GetOutputs()[0], resultChunkOutPut))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
-	executor := executor.NewPipelineExecutor(processors)
+	e1 := executor.NewPipelineExecutor(processors)
 	go getResult(resultChunkOutPut, &resultStr, finish)
-	executor.Execute(context.Background())
+	require.NoError(t, e1.Execute(context.Background()))
 	<-finish
 	if expStr != resultStr {
 		t.Error("result is error")
 	}
-	executor.Release()
+	e1.Release()
 }
 
-func TestSortTransfromOrderByTagAndStringField(t *testing.T) {
+func TestSortTransformOrderByTagAndStringField(t *testing.T) {
 	chunk1 := BuildSortChunk1()
 	chunk2 := BuildSortChunk2()
 	sortFields := make(influxql.SortFields, 0)
@@ -242,22 +240,22 @@ func TestSortTransfromOrderByTagAndStringField(t *testing.T) {
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], resultChunkOutPut)
+	require.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	require.NoError(t, executor.Connect(trans.GetOutputs()[0], resultChunkOutPut))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
-	executor := executor.NewPipelineExecutor(processors)
+	e1 := executor.NewPipelineExecutor(processors)
 	go getResult(resultChunkOutPut, &resultStr, finish)
-	executor.Execute(context.Background())
+	require.NoError(t, e1.Execute(context.Background()))
 	<-finish
 	if expStr != resultStr {
 		t.Error("result is error")
 	}
-	executor.Release()
+	e1.Release()
 }
 
-func TestSortTransfromOrderByTagAndFloatField(t *testing.T) {
+func TestSortTransformOrderByTagAndFloatField(t *testing.T) {
 	chunk1 := BuildSortChunk1()
 	chunk2 := BuildSortChunk2()
 	sortFields := make(influxql.SortFields, 0)
@@ -277,23 +275,22 @@ func TestSortTransfromOrderByTagAndFloatField(t *testing.T) {
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], resultChunkOutPut)
+	require.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	require.NoError(t, executor.Connect(trans.GetOutputs()[0], resultChunkOutPut))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
-	executor := executor.NewPipelineExecutor(processors)
+	e1 := executor.NewPipelineExecutor(processors)
 	go getResult(resultChunkOutPut, &resultStr, finish)
-	executor.Execute(context.Background())
+	require.NoError(t, e1.Execute(context.Background()))
 	<-finish
 	if expStr != resultStr {
 		t.Error("result is error")
 	}
-	fmt.Println(resultStr)
-	executor.Release()
+	e1.Release()
 }
 
-func TestSortTransfromOrderByTagAndBoolField(t *testing.T) {
+func TestSortTransformOrderByTagAndBoolField(t *testing.T) {
 	chunk1 := BuildSortChunk1()
 	chunk2 := BuildSortChunk2()
 
@@ -314,20 +311,19 @@ func TestSortTransfromOrderByTagAndBoolField(t *testing.T) {
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], resultChunkOutPut)
+	require.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	require.NoError(t, executor.Connect(trans.GetOutputs()[0], resultChunkOutPut))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
-	executor := executor.NewPipelineExecutor(processors)
+	e1 := executor.NewPipelineExecutor(processors)
 	go getResult(resultChunkOutPut, &resultStr, finish)
-	executor.Execute(context.Background())
+	require.NoError(t, e1.Execute(context.Background()))
 	<-finish
 	if expStr != resultStr {
 		t.Error("result is error")
 	}
-	fmt.Println(resultStr)
-	executor.Release()
+	e1.Release()
 }
 
 func TestSortTransfromOrderByTagAndTimeField(t *testing.T) {
@@ -347,27 +343,26 @@ func TestSortTransfromOrderByTagAndTimeField(t *testing.T) {
 	rt := buildSortRowDataType()
 	source := NewSourceFromSingleChunk(rt, []executor.Chunk{chunk1, chunk2})
 	trans, _ := executor.NewSortTransform([]hybridqp.RowDataType{rt}, []hybridqp.RowDataType{rt}, schema, schema.GetSortFields())
-	var expStr string = "f1 f2 f3 f4 time\ntag1\x003\x00tag2\x001\x00\n6 f 1 false 6\n5 e 2 true 5\ntag1\x002\x00tag2\x002\x00\n4 d 3 false 4\n3 c 4 true 3\ntag1\x001\x00tag2\x003\x00\n2 b 5 false 2\n1 a 6 true 1\n"
+	var expStr = "f1 f2 f3 f4 time\ntag1\x003\x00tag2\x001\x00\n6 f 1 false 6\n5 e 2 true 5\ntag1\x002\x00tag2\x002\x00\n4 d 3 false 4\n3 c 4 true 3\ntag1\x001\x00tag2\x003\x00\n2 b 5 false 2\n1 a 6 true 1\n"
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], resultChunkOutPut)
+	require.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	require.NoError(t, executor.Connect(trans.GetOutputs()[0], resultChunkOutPut))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
-	executor := executor.NewPipelineExecutor(processors)
+	e1 := executor.NewPipelineExecutor(processors)
 	go getResult(resultChunkOutPut, &resultStr, finish)
-	executor.Execute(context.Background())
+	require.NoError(t, e1.Execute(context.Background()))
 	<-finish
 	if expStr != resultStr {
 		t.Error("result is error")
 	}
-	fmt.Println(resultStr)
-	executor.Release()
+	e1.Release()
 }
 
-func TestSortTransfromOrderByTagAndNilField(t *testing.T) {
+func TestSortTransformOrderByTagAndNilField(t *testing.T) {
 	chunk1 := BuildSortChunk3()
 
 	sortFields := make(influxql.SortFields, 0)
@@ -387,18 +382,17 @@ func TestSortTransfromOrderByTagAndNilField(t *testing.T) {
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], resultChunkOutPut)
+	require.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	require.NoError(t, executor.Connect(trans.GetOutputs()[0], resultChunkOutPut))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
-	executor := executor.NewPipelineExecutor(processors)
+	e1 := executor.NewPipelineExecutor(processors)
 	go getResult(resultChunkOutPut, &resultStr, finish)
-	executor.Execute(context.Background())
+	require.NoError(t, e1.Execute(context.Background()))
 	<-finish
 	if expStr != resultStr {
 		t.Error("result is error")
 	}
-	fmt.Println(resultStr)
-	executor.Release()
+	e1.Release()
 }

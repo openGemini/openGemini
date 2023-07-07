@@ -11233,37 +11233,37 @@ func TestServer_TagArray(t *testing.T) {
 			name:    "field condition exists 1",
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select sum(*) from mst where f1=2`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",16]]}]}]}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",16]]}]}]}`,
 		},
 		&Query{
 			name:    "field condition exist 2",
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select sum(*) from mst where f1=10`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",20]]}]}]}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",20]]}]}]}`,
 		},
 		&Query{
 			name:    "field condition not exist",
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select sum(*) from mst where f2=3`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0}]}`),
+			exp:     `{"results":[{"statement_id":0}]}`,
 		},
 		&Query{
 			name:    "no filed condition of sum",
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select sum(*) from mst`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",45]]}]}]}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",45]]}]}]}`,
 		},
 		&Query{
 			name:    "no filed condition of count",
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select count(*) from mst`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","count_f1"],"values":[["1970-01-01T00:00:00Z",11]]}]}]}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","count_f1"],"values":[["1970-01-01T00:00:00Z",11]]}]}]}`,
 		},
 		&Query{
 			name:    "tag condition",
 			params:  url.Values{"db": []string{"db0"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"1"}},
 			command: `select sum(*) from mst where tk1='tv4'`,
-			exp:     fmt.Sprintf(`{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}`),
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_f1"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}`,
 		},
 	}...)
 

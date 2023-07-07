@@ -35,7 +35,7 @@ COPYRIGHT_HEADER  := "Copyright 2022|2023 Huawei Cloud Computing Technologies Co
 
 
 install-goimports-reviser:
-	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.1.0
+	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.3.1
 
 install-staticcheck:
 	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.3

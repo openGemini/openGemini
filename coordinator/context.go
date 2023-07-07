@@ -30,7 +30,6 @@ import (
 // ShardMapping contains a mapping of shards to points.
 type injestionCtx struct {
 	fieldToCreatePool []*proto.FieldSchema
-	rowsPool          sync.Pool
 	pRowsPool         sync.Pool
 	shardRowMap       ShardRows
 

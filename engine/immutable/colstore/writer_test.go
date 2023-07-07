@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,9 @@ func TestPrimaryKeyWriter(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(fn)
+	defer func() {
+		_ = fileops.Remove(fn)
+	}()
 	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +65,9 @@ func TestPrimaryKeyWriterWriteChunkMeta(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(fn)
+	defer func() {
+		_ = fileops.Remove(fn)
+	}()
 	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		t.Fatal(err)
@@ -73,14 +78,17 @@ func TestPrimaryKeyWriterWriteChunkMeta(t *testing.T) {
 		err := recover()
 		require.Equal(t, err, "WriteChunkMeta not implement for primaryKeyWriter")
 	}()
-	fw.WriteChunkMeta(nil)
+	_, err = fw.WriteChunkMeta(nil)
+	assert.NoError(t, err)
 }
 
 func TestPrimaryKeyWriterChunkMetaSize(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(fn)
+	defer func() {
+		_ = fileops.Remove(fn)
+	}()
 	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +106,9 @@ func TestPrimaryKeyWriterAppendChunkMetaToData(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(fn)
+	defer func() {
+		_ = fileops.Remove(fn)
+	}()
 	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		t.Fatal(err)
@@ -109,14 +119,17 @@ func TestPrimaryKeyWriterAppendChunkMetaToData(t *testing.T) {
 		err := recover()
 		require.Equal(t, err, "AppendChunkMetaToData not implement for primaryKeyWriter")
 	}()
-	fw.AppendChunkMetaToData()
+	err = fw.AppendChunkMetaToData()
+	assert.NoError(t, err)
 }
 
 func TestPrimaryKeyWriterSwitchMetaBuffer(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(fn)
+	defer func() {
+		_ = fileops.Remove(fn)
+	}()
 	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +147,9 @@ func TestPrimaryKeyWriterMetaDataBlocks(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
 	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer fileops.Remove(fn)
+	defer func() {
+		_ = fileops.Remove(fn)
+	}()
 	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
 	if err != nil {
 		t.Fatal(err)

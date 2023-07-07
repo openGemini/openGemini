@@ -288,9 +288,10 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 		}
 		atomic.AddInt64(&statistics.PerfStat.WriteCreateShardNs, time.Since(startT).Nanoseconds())
 		err = s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+		return err
 	default:
 	}
-	return err
+	return err2
 }
 
 func (s *Storage) VerifyNodeId(id uint64) error {

@@ -547,13 +547,13 @@ func TestHoltWintersDemo5(t *testing.T) {
 	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
-	executor.Connect(source.Output, trans.GetInputs()[0])
-	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	assert.NoError(t, executor.Connect(source.Output, trans.GetInputs()[0]))
+	assert.NoError(t, executor.Connect(trans.GetOutputs()[0], sink.Input))
 	var processors executor.Processors
 	processors = append(processors, source)
 	processors = append(processors, trans)
 	processors = append(processors, sink)
 	executors := executor.NewPipelineExecutor(processors)
-	executors.Execute(context.Background())
+	assert.NoError(t, executors.Execute(context.Background()))
 	executors.Release()
 }

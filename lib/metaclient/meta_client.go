@@ -480,7 +480,7 @@ func (c *Client) GetAllMst(dbName string) []string {
 	}
 
 	for _, rp := range c.cacheData.Databases[dbName].RetentionPolicies {
-		for mst, _ := range rp.Measurements {
+		for mst := range rp.Measurements {
 			mstName = append(mstName, mst)
 		}
 	}

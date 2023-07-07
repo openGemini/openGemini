@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -1076,6 +1077,7 @@ func TestTagArrayEnabledFromServer(t *testing.T) {
 	var data []byte
 	_ = data
 	_, err = mc.TagArrayEnabledFromServer("db0")
+	assert.NoError(t, err)
 }
 
 func TestTagArrayEnabled(t *testing.T) {
