@@ -21,7 +21,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 const (
@@ -43,11 +43,11 @@ type Float struct {
 }
 
 func NewFloat() *Float {
-	return &Float{rle: NewRLE(record.Float64SizeBytes)}
+	return &Float{rle: NewRLE(util.Float64SizeBytes)}
 }
 
 func (c *Float) AdaptiveEncoding(in []byte, out []byte) ([]byte, error) {
-	values := record.Bytes2Float64Slice(in)
+	values := util.Bytes2Float64Slice(in)
 	ctx := GenerateContext(values)
 	defer ctx.Release()
 
@@ -168,16 +168,23 @@ func GenerateContext(values []float64) *Context {
 		return ctx
 	}
 
-	for i := 1; i < ctx.valueCount; i++ {
-		if values[i] != values[i-1] {
-			ctx.distinctCount++
+	distinctCount := 1
+	for i := range values {
+		if i > 0 && values[i] != values[i-1] {
+			distinctCount++
 		}
+	}
+	ctx.distinctCount = distinctCount
+
+	if ctx.RLE() {
+		return ctx
 	}
 
 	// sampling non-zero data
 	// In most cases, data features in the same segment are the same.
 	// Therefore, only part of the data needs to be detected.
 	k := 0
+	lessDecimalTotal := 0
 	for i := 0; i < ctx.valueCount && k < ctx.valueCount/10; i++ {
 		if values[i] == 0 {
 			continue
@@ -187,10 +194,13 @@ func GenerateContext(values []float64) *Context {
 			ctx.intOnly = false
 		}
 
-		if ctx.lessDecimal && !lessDecimal(values[i]) {
-			ctx.lessDecimal = false
+		if lessDecimal(values[i]) {
+			lessDecimalTotal++
 		}
 	}
+
+	// more than 90% of the data that meets the conditions
+	ctx.lessDecimal = k > 0 && (100*lessDecimalTotal/k) > 90
 
 	return ctx
 }

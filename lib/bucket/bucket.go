@@ -27,6 +27,7 @@ import (
 type ResourceBucket interface {
 	ReleaseResource(int64)
 	GetResource(int64) error
+	GetResDetected(int64, *time.Timer) error
 	Reset()
 	GetTotalResource() int64
 	GetFreeResource() int64
@@ -46,7 +47,7 @@ type Int64bucket struct {
 	// blockExecutor represents the number of Executors which are waiting reResources free.
 	blockExecutor int64
 
-	lock sync.RWMutex
+	lock sync.Mutex
 
 	outOfLimitOnce bool
 }
@@ -62,35 +63,34 @@ func NewInt64Bucket(timeOut time.Duration, TotalResource int64, outOfLimitOnce b
 }
 
 func (b *Int64bucket) ReleaseResource(freeResource int64) {
-	atomic.AddInt64(&b.freeResource, freeResource)
+	b.lock.Lock()
+	b.freeResource += freeResource
 	if atomic.LoadInt64(&b.blockExecutor) != 0 {
-		b.lock.Lock()
-		defer b.lock.Unlock()
-		closeChan := b.broadcast
+		waitBroadcast := b.broadcast
 		b.broadcast = make(chan struct{})
-		close(closeChan)
+		b.lock.Unlock()
+		close(waitBroadcast)
+	} else {
+		b.lock.Unlock()
 	}
 }
 
-func (b *Int64bucket) GetResource(cost int64) error {
-	// timer used to send time-out signal.
-	timer := time.NewTimer(b.timeout)
+func (b *Int64bucket) getResImpl(cost int64, timer *time.Timer) error {
 	var freeMem int64
-	var currMem int64
-
 	for {
-		currMem = atomic.LoadInt64(&b.freeResource)
-		freeMem = currMem - cost
-		if (currMem >= 0 && b.outOfLimitOnce) || (!b.outOfLimitOnce && freeMem >= 0) {
+		b.lock.Lock()
+		freeMem = b.freeResource - cost
+		if (b.freeResource >= 0 && b.outOfLimitOnce) || (!b.outOfLimitOnce && freeMem >= 0) {
 			// CAS guarantees the atomic operation for the reResource info.
-			if ok := atomic.CompareAndSwapInt64(&b.freeResource, currMem, freeMem); ok {
-				return nil
-			}
-			continue
+			b.freeResource = freeMem
+			b.lock.Unlock()
+			return nil
 		}
 		atomic.AddInt64(&b.blockExecutor, 1)
+		waitBroadcast := b.broadcast
+		b.lock.Unlock()
 		select {
-		case _, ok := <-b.broadcast:
+		case _, ok := <-waitBroadcast:
 			if !ok {
 				atomic.AddInt64(&b.blockExecutor, -1)
 				continue
@@ -100,6 +100,15 @@ func (b *Int64bucket) GetResource(cost int64) error {
 			return errno.NewError(errno.BucketLacks)
 		}
 	}
+}
+
+func (b *Int64bucket) GetResource(cost int64) error {
+	// timer used to send time-out signal.
+	return b.getResImpl(cost, time.NewTimer(b.timeout))
+}
+
+func (b *Int64bucket) GetResDetected(cost int64, timer *time.Timer) error {
+	return b.getResImpl(cost, timer)
 }
 
 func (b *Int64bucket) SetTimeDuration(time time.Duration) {

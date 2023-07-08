@@ -353,7 +353,7 @@ func TestMergeHelper_Ascending(t *testing.T) {
 		Ascending:  true,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1, chunk4})
 	source2 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk2})
@@ -433,7 +433,7 @@ func TestMergeHelper_Descending(t *testing.T) {
 		Ascending:  false,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk4, chunk1})
 	source2 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk2})
@@ -516,7 +516,7 @@ func TestSortedMergeHelper_TimeCompare_Ascending(t *testing.T) {
 		Ascending:  true,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk1, chunk4})
 	source2 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk2})
@@ -597,7 +597,7 @@ func TestSortedMergeHelper_TimeCompare_Descending(t *testing.T) {
 		Ascending:  false,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk4, chunk1})
 	source2 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk2})
@@ -680,7 +680,7 @@ func TestSortedMergeHelper_AuxCompare_Ascending(t *testing.T) {
 		Ascending: true,
 		ChunkSize: 100,
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields1(), []string{"id", "names", "value", "yield"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields1(), []string{"id", "names", "value", "yield"}, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(rowDataType, []executor.Chunk{chunk1})
 	source2 := NewSourceFromSingleChunk(rowDataType, []executor.Chunk{chunk2})
@@ -763,7 +763,7 @@ func TestSortedMergeHelper_AuxCompare_Descending(t *testing.T) {
 		Ascending: false,
 		ChunkSize: 100,
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields1(), []string{"id", "name", "value", "yield"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields1(), []string{"id", "name", "value", "yield"}, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(rowDataType, []executor.Chunk{chunk1})
 	source2 := NewSourceFromSingleChunk(rowDataType, []executor.Chunk{chunk2})
@@ -846,7 +846,7 @@ func TestSortedAppendHelper(t *testing.T) {
 		Ascending:  true,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk1, chunk4})
 	source2 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk2})
@@ -912,7 +912,7 @@ func TestSortedAppendHelper_Empty(t *testing.T) {
 		Ascending:  true,
 		ChunkSize:  100,
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt, nil)
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk1})
 	source2 := NewSourceFromSingleChunk(buildRowDataType1(), []executor.Chunk{chunk2})
@@ -976,7 +976,7 @@ func TestFilterHelper(t *testing.T) {
 			RHS: &influxql.StringLiteral{Val: "jerryA"},
 		},
 	}
-	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt)
+	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt, nil)
 	trans := executor.NewFilterTransform(buildRowDataType(), buildRowDataType(), schema, opt)
 
 	sink := NewSinkFromFunction(buildRowDataType(), func(chunk executor.Chunk) error {
@@ -1761,7 +1761,7 @@ func ParseChunkTags(s string) *executor.ChunkTags {
 	var ss []string
 	for _, kv := range strings.Split(s, ",") {
 		a := strings.Split(kv, "=")
-		m = append(m, influx.Tag{Key: a[0], Value: a[1]})
+		m = append(m, influx.Tag{Key: a[0], Value: a[1], IsArray: false})
 		ss = append(ss, a[0])
 	}
 	return executor.NewChunkTags(m, ss)

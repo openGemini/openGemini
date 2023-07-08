@@ -359,16 +359,16 @@ func newHoltWinters(index int, h int, m int, withFit bool, interval time.Duratio
 	}
 }
 
-func (hw *holtWinters) setColumnRange(inEle *list.Element, start int, end int) {
-	col := inEle.Value.(*holtWintersChunk).chunk.Column(hw.index)
+func (hw *holtWinters) setColumnRange(inEle *holtWintersChunk, start int, end int) {
+	col := inEle.chunk.Column(hw.index)
 	nstart, nend := col.GetRangeValueIndexV2(start, end)
 	var time []int64
 	if col.BitMap().array != nil {
 		for _, index := range col.BitMap().array {
-			time = append(time, inEle.Value.(*holtWintersChunk).chunk.TimeByIndex((int)(index)))
+			time = append(time, inEle.chunk.TimeByIndex((int)(index)))
 		}
 	} else {
-		time = inEle.Value.(*holtWintersChunk).chunk.Time()[start:end]
+		time = inEle.chunk.Time()[start:end]
 	}
 	pointsLen := nend - nstart
 	if col.DataType() == influxql.Integer {
@@ -836,13 +836,13 @@ func (trans *HoltWintersTransform) allHwsRange() (int64, int64) {
 }
 
 func (trans *HoltWintersTransform) computeHoltWinters() {
-	trans.addInputChunk()
-	inEle := trans.inputChunks.Back()
+	inEle := newHoltWintersChunk(trans.bufChunk)
 	if trans.bufChunk.TagLen() == 0 || (trans.bufChunk.TagLen() == 1 && trans.bufChunk.Tags()[0].subset == nil) {
 		for _, hw := range trans.hwsMap {
 			hw.setColumnRange(inEle, 0, trans.bufChunk.NumberOfRows())
-			inEle.Value.(*holtWintersChunk).setEndTagsLoc(0)
 		}
+		inEle.setEndTagsLoc(0)
+		trans.inputChunks.PushBack(inEle)
 		trans.withTags = 2
 	} else {
 		if trans.withTags == 2 {
@@ -862,6 +862,7 @@ func (trans *HoltWintersTransform) computeHoltWinters() {
 				for _, hw := range trans.hwsMap {
 					hw.setColumnRange(inEle, start, end)
 				}
+				trans.inputChunks.PushBack(inEle)
 				continue
 			}
 			if !trans.tagsEqu(tagKeys, tagVals) {
@@ -872,8 +873,9 @@ func (trans *HoltWintersTransform) computeHoltWinters() {
 			}
 			for _, hw := range trans.hwsMap {
 				hw.setColumnRange(inEle, start, end)
-				inEle.Value.(*holtWintersChunk).setEndTagsLoc(i)
 			}
+			inEle.setEndTagsLoc(i)
+			trans.inputChunks.PushBack(inEle)
 			trans.setTags(tagKeys, tagVals)
 		}
 	}

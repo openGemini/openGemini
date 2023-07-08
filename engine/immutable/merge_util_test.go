@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,6 +135,7 @@ type MockPerformer struct {
 	FinishHook        func()
 	ColumnChangedHook func()
 	HandleHook        func()
+	WriteOriginalHook func()
 }
 
 func (p *MockPerformer) Handle(col *record.ColVal, times []int64, lastSeg bool) error {
@@ -143,7 +145,7 @@ func (p *MockPerformer) Handle(col *record.ColVal, times []int64, lastSeg bool) 
 	return p.err
 }
 
-func (p *MockPerformer) ColumnChanged(record.Field) error {
+func (p *MockPerformer) ColumnChanged(*record.Field) error {
 	if p.ColumnChangedHook != nil {
 		p.ColumnChangedHook()
 	}
@@ -158,9 +160,52 @@ func (p *MockPerformer) SeriesChanged(uint64, []int64) error {
 	return p.err
 }
 
+func (p *MockPerformer) HasSeries(sid uint64) bool {
+	return true
+}
+
+func (p *MockPerformer) WriteOriginal(fi *immutable.FileIterator) error {
+	if p.WriteOriginalHook != nil {
+		p.WriteOriginalHook()
+	}
+	return p.err
+}
+
 func (p *MockPerformer) Finish() error {
 	if p.FinishHook != nil {
 		p.FinishHook()
 	}
 	return p.err
+}
+
+func TestMergeTimes(t *testing.T) {
+	a := []int64{1, 2, 8}
+	b := []int64{2, 6, 7}
+
+	require.Equal(t, a, immutable.MergeTimes(a, nil, nil))
+	require.Equal(t, b, immutable.MergeTimes(nil, b, nil))
+	require.Equal(t, []int64{1, 2, 6, 7, 8}, immutable.MergeTimes(a, b, nil))
+}
+
+func TestFillNilCol(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendIntegers(1, 2, 3, 4, 5)
+	ref := &record.Field{
+		Type: influx.Field_Type_String,
+		Name: "foo",
+	}
+
+	immutable.FillNilCol(col, 0, ref)
+	require.Equal(t, 0, col.Len)
+
+	immutable.FillNilCol(col, 10, ref)
+	require.Equal(t, 10, col.Len)
+	require.Equal(t, 10, col.NilCount)
+	require.Equal(t, 10, len(col.Offset))
+
+	ref.Type = influx.Field_Type_Int
+	immutable.FillNilCol(col, 10, ref)
+	require.Equal(t, 10, col.Len)
+	require.Equal(t, 10, col.NilCount)
+	require.Equal(t, 0, len(col.Offset))
 }

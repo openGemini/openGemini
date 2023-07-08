@@ -27,11 +27,11 @@ import (
 
 const (
 	// DefaultWriteTimeout is the default timeout for a complete write to succeed.
-	DefaultWriteTimeout = 120 * time.Second
+	DefaultWriteTimeout = 10 * time.Second
 	DefaultQueryTimeout = 0
 
 	// DefaultShardWriterTimeout is the default timeout set on shard writers.
-	DefaultShardWriterTimeout = 30 * time.Second
+	DefaultShardWriterTimeout = 10 * time.Second
 
 	// DefaultShardMapperTimeout is the default timeout set on shard mappers.
 	DefaultShardMapperTimeout = 10 * time.Second
@@ -51,6 +51,23 @@ const (
 	DefaultForceBroadcastQuery      = false
 	DefaultRetentionPolicyLimit     = 100
 )
+
+/*
+	for every column in httpSpec, it means:
+	0: maxConnectionLimit
+	1: maxConcurrentWriteLimit
+	2: maxConcurrentQueryLimit
+	3: maxEnqueuedWriteLimit
+	4: maxEnqueuedQueryLimit
+
+	{{125, 4, 1, 121, 124},      // 1U
+	{250, 8, 2, 242, 248},       // 2U
+	{500, 16, 4, 484, 496},      // 4U
+	{1000, 32, 8, 968, 992},     // 8U
+	{2000, 64, 16, 1936, 1984},  //16U
+	{4000, 128, 32, 3872, 3968}, // 32U
+	{8000, 256, 64, 7744, 7936},} // 64U
+*/
 
 // TSSql represents the configuration format for the TSSql binary.
 type TSSql struct {
@@ -79,6 +96,28 @@ func NewTSSql() *TSSql {
 	c.Analysis = NewCastor()
 	c.Sherlock = NewSherlockConfig()
 	return c
+}
+
+func (c *TSSql) Corrector(cpuNum int) {
+	if c.HTTP.MaxConnectionLimit == 0 {
+		c.HTTP.MaxConnectionLimit = cpuNum * 125
+	}
+	if c.HTTP.MaxConcurrentWriteLimit == 0 {
+		c.HTTP.MaxConcurrentWriteLimit = cpuNum * 4
+	}
+	if c.HTTP.MaxConcurrentQueryLimit == 0 {
+		c.HTTP.MaxConcurrentQueryLimit = cpuNum
+	}
+	if c.HTTP.MaxEnqueuedWriteLimit == 0 {
+		c.HTTP.MaxEnqueuedWriteLimit = c.HTTP.MaxConnectionLimit - c.HTTP.MaxConcurrentWriteLimit
+	}
+	if c.HTTP.MaxEnqueuedQueryLimit == 0 {
+		c.HTTP.MaxEnqueuedQueryLimit = c.HTTP.MaxConnectionLimit - c.HTTP.MaxConcurrentQueryLimit
+	}
+
+	if c.Coordinator.RetentionPolicyLimit == 0 {
+		c.Coordinator.RetentionPolicyLimit = cpuNum * 10
+	}
 }
 
 // Validate returns an error if the config is invalid.
@@ -138,6 +177,9 @@ type Coordinator struct {
 	ShardTier                string          `toml:"shard-tier"`
 	TimeRangeLimit           []toml.Duration `toml:"time-range-limit"`
 
+	// Maximum number of tag keys in a measurement
+	TagLimit int `toml:"tag-limit"`
+
 	QueryLimitFlag          bool `toml:"query-limit-flag"`
 	QueryTimeCompareEnabled bool `toml:"query-time-compare-enabled"`
 	ForceBroadcastQuery     bool `toml:"force-broadcast-query"`
@@ -173,9 +215,6 @@ func (c Coordinator) Validate() error {
 	}
 	if c.ShardMapperTimeout < 0 {
 		return errors.New("coordinator shard-mapper-timeout can not be negative")
-	}
-	if c.RetentionPolicyLimit <= 0 {
-		return errors.New("coordinator rp-limit can not be negative")
 	}
 	return nil
 }

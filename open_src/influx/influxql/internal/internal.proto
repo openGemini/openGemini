@@ -11,4 +11,5 @@ message Measurement {
     optional string Name            = 3;
     optional string Regex           = 4;
     optional bool   IsTarget        = 5;
+    optional uint32 EngineType      = 6;
 }

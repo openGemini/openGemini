@@ -30,9 +30,12 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/httpserver"
+	"github.com/openGemini/openGemini/lib/iodetector"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -70,6 +73,7 @@ type Server struct {
 	StoreService *Service
 
 	sherlockService *sherlock.Service
+	iodetector      *iodetector.IODetector
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -85,8 +89,12 @@ func NewServer(c config.Config, cmd *cobra.Command, logger *Logger.Logger) (app.
 		return nil, err
 	}
 
+	mutable.SetSizeLimit(int64(conf.Data.ShardMutableSizeLimit))
+	mutable.InitConcurLimiter(cpu.GetCpuNum())
+	mutable.InitMutablePool(cpu.GetCpuNum())
+	immutable.InitWriterPool(3 * cpu.GetCpuNum())
+
 	s.config = conf
-	config.EnableTagArray = conf.Common.EnableTagArray
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
 
 	// set query series limit
@@ -147,7 +155,7 @@ func (s *Server) Open() error {
 	}
 
 	// set index mmap enable or disable before storage start.
-	fs.SetDisableMmap(!s.config.Data.EnableMmapRead)
+	fs.EnableMmap(s.config.Data.EnableMmapRead)
 
 	startTime := time.Now()
 	storageNodeInfo := metaclient.StorageNodeInfo{
@@ -156,12 +164,13 @@ func (s *Server) Open() error {
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")
-	nid, clock, err := commHttpHandler.MetaClient.InitMetaClient(s.metaNodes, false, &storageNodeInfo)
+	nid, clock, connId, err := commHttpHandler.MetaClient.InitMetaClient(s.metaNodes, false, &storageNodeInfo)
 	if err != nil {
 		panic(err)
 	}
 	s.node.ID = nid
 	s.node.Clock = clock
+	s.node.ConnId = connId
 
 	if err = s.node.LoadLogicalClock(); err != nil {
 		panic(err)
@@ -212,6 +221,7 @@ func (s *Server) Open() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Open()
 	}
+	s.iodetector = iodetector.OpenIODetection(s.config.IODetector)
 	return err
 }
 
@@ -244,6 +254,10 @@ func (s *Server) Close() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Stop()
 	}
+
+	if s.iodetector != nil {
+		s.iodetector.Close()
+	}
 	log.Info("the storage has been stopped")
 	return nil
 }
@@ -264,12 +278,12 @@ func (s *Server) initStatisticsPusher() {
 	}
 
 	globalTags := map[string]string{
-		"hostname": s.selectAddr,
+		"hostname": strings.ReplaceAll(config.CombineDomain(s.config.Data.Domain, s.selectAddr), ",", "_"),
 		"app":      appName,
 	}
+
 	stat.InitPerfStatistics(globalTags)
 	stat.InitImmutableStatistics(globalTags)
-	stat.InitMutableStatistics(globalTags)
 	stat.InitStoreQueryStatistics(globalTags)
 	stat.InitRuntimeStatistics(globalTags, int(time.Duration(s.config.Monitor.StoreInterval).Seconds()))
 	stat.InitIOStatistics(globalTags)
@@ -283,11 +297,12 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewStreamStatistics().Init(globalTags)
 	stat.NewStreamWindowStatistics().Init(globalTags)
 	stat.NewRecordStatistics().Init(globalTags)
+	stat.NewHitRatioStatistics().Init(globalTags)
+	stat.InitDatabaseStatistics(globalTags)
 
 	s.statisticsPusher.Register(
 		stat.CollectPerfStatistics,
 		stat.CollectImmutableStatistics,
-		stat.CollectMutableStatistics,
 		stat.CollectStoreSlowQueryStatistics,
 		stat.CollectRuntimeStatistics,
 		stat.CollectIOStatistics,
@@ -302,6 +317,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewStreamStatistics().Collect,
 		stat.NewStreamWindowStatistics().Collect,
 		stat.NewRecordStatistics().Collect,
+		stat.NewHitRatioStatistics().Collect,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
@@ -312,5 +328,6 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
 	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
+	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
 	s.statisticsPusher.Start()
 }

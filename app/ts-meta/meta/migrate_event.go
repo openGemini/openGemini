@@ -56,6 +56,7 @@ type MigrateEvent interface {
 	stateTransition(err error)
 	increaseRetryCnt()
 	exhaustRetries() bool
+	getAliveConnId() uint64
 }
 
 type EventResultInfo struct {
@@ -118,8 +119,9 @@ type BaseEvent struct {
 	eventType EventType
 	eventRes  *EventResultInfo
 
-	src uint64
-	dst uint64
+	src         uint64
+	dst         uint64
+	aliveConnId uint64 // aliveConnId of dst
 }
 
 func (e *BaseEvent) getPtInfo() *meta.DbPtInfo {
@@ -138,7 +140,6 @@ func (e *BaseEvent) increaseRetryCnt() {
 	e.retryNum++
 }
 
-//nolint
 //lint:ignore U1000 keep this
 func (e *BaseEvent) setIsolate(isolate bool) {
 	e.needIsolate = isolate
@@ -212,6 +213,10 @@ func (e *BaseEvent) getSrc() uint64 {
 
 func (e *BaseEvent) getDst() uint64 {
 	return e.dst
+}
+
+func (e *BaseEvent) getAliveConnId() uint64 {
+	return e.aliveConnId
 }
 
 func (e *BaseEvent) updatePtInfo() error {

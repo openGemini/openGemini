@@ -27,8 +27,10 @@ var errClosed = errors.New("column iterator closed")
 
 type ColumnIteratorPerformer interface {
 	Handle(col *record.ColVal, times []int64, lastSeg bool) error
-	ColumnChanged(record.Field) error
+	HasSeries(uint64) bool
+	ColumnChanged(*record.Field) error
 	SeriesChanged(uint64, []int64) error
+	WriteOriginal(fi *FileIterator) error
 	Finish() error
 }
 
@@ -44,6 +46,7 @@ type ColumnIterator struct {
 	mu     sync.RWMutex
 	closed bool
 	signal chan struct{}
+	field  record.Field
 }
 
 func NewColumnIterator(fi *FileIterator) *ColumnIterator {
@@ -83,15 +86,16 @@ func (itr *ColumnIterator) NextColumn(colIdx int) (*record.Field, bool) {
 		return nil, false
 	}
 
-	return &record.Field{
-		Type: int(itr.fi.curtChunkMeta.colMeta[colIdx].ty),
-		Name: itr.fi.curtChunkMeta.colMeta[colIdx].name,
-	}, true
+	itr.field.Name = itr.fi.curtChunkMeta.colMeta[colIdx].name
+	itr.field.Type = int(itr.fi.curtChunkMeta.colMeta[colIdx].ty)
+
+	return &itr.field, true
 }
 
 func (itr *ColumnIterator) Run(p ColumnIteratorPerformer) error {
 	defer itr.Close()
 
+	var sid uint64
 	for {
 		if itr.isClosed() {
 			return errClosed
@@ -106,11 +110,23 @@ func (itr *ColumnIterator) Run(p ColumnIteratorPerformer) error {
 		}
 		itr.IncrChunkUsed()
 
+		sid = itr.fi.curtChunkMeta.sid
+		if !p.HasSeries(sid) {
+			if err := p.SeriesChanged(sid, nil); err != nil {
+				return err
+			}
+
+			if err := p.WriteOriginal(itr.fi); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if err := itr.initTimeColumn(); err != nil {
 			return err
 		}
 
-		if err := p.SeriesChanged(itr.fi.curtChunkMeta.sid, itr.times); err != nil {
+		if err := p.SeriesChanged(sid, itr.times); err != nil {
 			return err
 		}
 
@@ -140,7 +156,7 @@ func (itr *ColumnIterator) walkColumn(p ColumnIteratorPerformer) error {
 			return nil
 		}
 
-		if err := p.ColumnChanged(*ref); err != nil {
+		if err := p.ColumnChanged(ref); err != nil {
 			return err
 		}
 
@@ -154,7 +170,6 @@ func (itr *ColumnIterator) walkColumn(p ColumnIteratorPerformer) error {
 }
 
 func (itr *ColumnIterator) walkSegment(ref *record.Field, colIdx int, handle segWalkHandler) error {
-	itr.sr.ResetContext()
 	segIdx := 0
 
 	for {
@@ -185,9 +200,6 @@ func (itr *ColumnIterator) PutCol(col *record.ColVal) {
 }
 
 func (itr *ColumnIterator) isClosed() bool {
-	itr.mu.RLock()
-	defer itr.mu.RUnlock()
-
 	return itr.closed
 }
 

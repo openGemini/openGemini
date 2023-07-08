@@ -22,7 +22,7 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/rand"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -270,7 +270,7 @@ func TestGetStringValueBytes(t *testing.T) {
 	var strbyte []byte
 	str = []string{"aa", "aa", "dd", "ccc"}
 	for _, s := range str {
-		strbyte = append(strbyte, record.Str2bytes(s)...)
+		strbyte = append(strbyte, util.Str2bytes(s)...)
 	}
 	off := []uint32{0, 2, 4, 6}
 	c1 := executor.NewColumnImpl(influxql.Float)

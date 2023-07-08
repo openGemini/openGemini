@@ -173,7 +173,7 @@ func buildFullJoinSchema() *executor.QuerySchema {
 		Dimensions:  make([]string, 0),
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	var expr1 influxql.Expr = &influxql.VarRef{
 		Val:  "m1.field1",
 		Type: influxql.Float,

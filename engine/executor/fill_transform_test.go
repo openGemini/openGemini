@@ -581,7 +581,7 @@ func TestFillTransform_Null_Fill(t *testing.T) {
 		ChunkSize:  5,
 		Fill:       influxql.NullFill,
 	}
-	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	source := NewSourceFromMultiChunk(buildFillRowDataType(), sourceChunks)
@@ -646,7 +646,7 @@ func TestFillTransform_Number_Fill(t *testing.T) {
 		Fill:       influxql.NumberFill,
 		FillValue:  interface{}(0),
 	}
-	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	source := NewSourceFromMultiChunk(buildFillRowDataType(), sourceChunks)
@@ -709,7 +709,7 @@ func TestFillTransform_Linear_Fill(t *testing.T) {
 		ChunkSize:  5,
 		Fill:       influxql.LinearFill,
 	}
-	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	source := NewSourceFromMultiChunk(buildFillRowDataType(), sourceChunks)
@@ -851,7 +851,7 @@ func TestFillTransform_Previous_Fill_Issue30(t *testing.T) {
 		ChunkSize:  10,
 		Fill:       influxql.PreviousFill,
 	}
-	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	source := NewSourceFromMultiChunk(buildFillRowDataType(), sourceChunks)
@@ -915,7 +915,7 @@ func TestFillTransform_Linear_Fill_Issue30(t *testing.T) {
 		ChunkSize:  10,
 		Fill:       influxql.LinearFill,
 	}
-	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createNullFillFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	source := NewSourceFromMultiChunk(buildFillRowDataType(), sourceChunks)
@@ -1112,7 +1112,7 @@ func prepareOptFillIssue58() (*executor.QuerySchema, []hybridqp.ExprOptions) {
 			Ref:  influxql.VarRef{Val: `last("v4")`, Type: influxql.Boolean},
 		},
 	}
-	schema := executor.NewQuerySchema(createNullFillIssue58Fields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createNullFillIssue58Fields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	schema.SetOpt(&opt)
 	return schema, exprOpt
 }
@@ -1356,7 +1356,7 @@ func TestFillTransformFillNumberBUG2022032201217(t *testing.T) {
 		Fill:       influxql.NumberFill,
 		FillValue:  int64(0),
 	}
-	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	testFillTransformBase(
@@ -1471,7 +1471,7 @@ func TestFillTransformFillNumberSplitMultiGroup(t *testing.T) {
 		Fill:       influxql.NumberFill,
 		FillValue:  int64(0),
 	}
-	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	testFillTransformBase(
@@ -1598,7 +1598,7 @@ func TestFillTransformFillNumberSplitOneGroup(t *testing.T) {
 		Fill:       influxql.NumberFill,
 		FillValue:  int64(0),
 	}
-	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	testFillTransformBase(
@@ -1689,7 +1689,7 @@ func TestFillTransformFillNumberDescendingSplitOneGroup(t *testing.T) {
 		Fill:       influxql.NumberFill,
 		FillValue:  int64(0),
 	}
-	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt)
+	schema := executor.NewQuerySchema(createFillFieldsBug1217(), []string{"age", "height"}, &opt, nil)
 	schema.SetOpt(&opt)
 
 	testFillTransformBase(

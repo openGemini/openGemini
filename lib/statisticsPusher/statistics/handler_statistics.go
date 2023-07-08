@@ -53,6 +53,7 @@ type HandlerStatistics struct {
 	WriteUpdateIndexDuration     int64
 	WriteMapRowsDuration         int64
 	WriteStreamRoutineDuration   int64
+	ConnectionNums               int64
 }
 
 const (
@@ -93,6 +94,7 @@ const (
 	statWriteUpdateIndexDuration     = "WriteUpdateIndexDurationNs"
 	statWriteMapRowsDuration         = "WriteMapRowsDurationNs"
 	statWriteStreamRoutineDuration   = "WriteStreamRoutineDurationNs"
+	statConnectionNums               = "connectionNums" // Number of current connections
 )
 
 var HandlerStat = NewHandlerStatistics()
@@ -154,6 +156,7 @@ func genHandlerValueMap() map[string]interface{} {
 		statWriteUpdateIndexDuration:     atomic.LoadInt64(&HandlerStat.WriteUpdateIndexDuration),
 		statWriteMapRowsDuration:         atomic.LoadInt64(&HandlerStat.WriteMapRowsDuration),
 		statWriteStreamRoutineDuration:   atomic.LoadInt64(&HandlerStat.WriteStreamRoutineDuration),
+		statConnectionNums:               atomic.LoadInt64(&HandlerStat.ConnectionNums),
 	}
 
 	return perfValueMap

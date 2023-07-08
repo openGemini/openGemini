@@ -8,7 +8,6 @@ import (
 
 	"github.com/hashicorp/serf/cmd/serf/command/agent"
 	"github.com/mitchellh/cli"
-	"github.com/ryanuber/columnize"
 )
 
 // MembersCommand is a Command implementation that queries a running
@@ -49,7 +48,7 @@ func (c MemberContainer) String() string {
 		}
 		result = append(result, line)
 	}
-	return columnize.SimpleFormat(result)
+	return strings.Join(result, "\n")
 }
 
 func (c *MembersCommand) Help() string {

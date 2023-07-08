@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"hash/crc32"
 
-	"github.com/openGemini/openGemini/engine/immutable/encoding"
+	"github.com/openGemini/openGemini/lib/encoding"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"

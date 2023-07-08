@@ -225,6 +225,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		return meta2.ErrUnsupportCommand
 	case *influxql.ShowGrantsForUserStatement:
 		rows, err = e.executeShowGrantsForUserStatement(stmt)
+	case *influxql.ShowMeasurementKeysStatement:
+		rows, err = e.executeShowMeasurementKeysStatement(stmt)
 	case *influxql.ShowMeasurementsStatement:
 		if stmt.Condition != nil {
 			return meta2.ErrUnsupportCommand
@@ -490,6 +492,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		return err
 	}
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
+	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property, stmt.Tags, stmt.Fields)
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
 	if len(stmt.IndexList) > 0 {
@@ -511,7 +514,12 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		}
 	}
 	indexR.IndexList = indexLists
-	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR)
+	// TODO: init indexR with stat.IndexOption
+	engineType, ok := config.String2EngineType[stmt.EngineType]
+	if stmt.EngineType != "" && !ok {
+		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
+	}
+	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo)
 	return err
 }
 
@@ -538,7 +546,7 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 	}
 
 	if !stmt.RetentionPolicyCreate {
-		_, err := e.MetaClient.CreateDatabase(stmt.Name)
+		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.EnableTagArray)
 		e.StmtExecLogger.Info("create database finish", zap.String("db", stmt.Name), zap.Error(err))
 		return err
 	}
@@ -566,7 +574,7 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 		IndexGroupDuration: stmt.RetentionPolicyIndexGroupDuration,
 	}
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey}
-	_, err := e.MetaClient.CreateDatabaseWithRetentionPolicy(stmt.Name, &spec, ski)
+	_, err := e.MetaClient.CreateDatabaseWithRetentionPolicy(stmt.Name, &spec, ski, stmt.EnableTagArray)
 	e.StmtExecLogger.Info("create database finish with RP", zap.String("db", stmt.Name), zap.Error(err))
 	return err
 }
@@ -852,7 +860,11 @@ func (e *StatementExecutor) retryCreatePipelineExecutor(ctx context.Context, stm
 				return nil, err
 			}
 		} else {
-			e.StmtExecLogger.Error("retry retryCreatePipelineExecutor err ", zap.Error(err), zap.Any("stmt", stmt))
+			if strings.Contains(err.Error(), "declare empty collection") {
+				return nil, nil
+			} else {
+				e.StmtExecLogger.Error("retry retryCreatePipelineExecutor err ", zap.Error(err), zap.Any("stmt", stmt))
+			}
 			return nil, err
 		}
 	}
@@ -1012,6 +1024,73 @@ func (e *StatementExecutor) executeShowDatabasesStatement(q *influxql.ShowDataba
 		return strings.Compare(row.Values[i][0].(string), row.Values[j][0].(string)) < 0
 	})
 	return []*models.Row{row}, nil
+}
+
+func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.ShowMeasurementKeysStatement) (models.Rows, error) {
+	db, err := e.MetaClient.Database(stmt.Database)
+	if err != nil {
+		return nil, err
+	}
+	if stmt.Rp == "" {
+		stmt.Rp = db.DefaultRetentionPolicy
+	}
+	rp, ok := db.RetentionPolicies[stmt.Rp]
+	if !ok {
+		return nil, errors.New("rp not found")
+	}
+	mstVersion, ok := rp.MstVersions[stmt.Measurement]
+	if !ok {
+		return nil, errors.New("measurement not found")
+	}
+	mst := rp.Measurements[influx.GetNameWithVersion(stmt.Measurement, mstVersion)]
+
+	switch stmt.Name {
+	case "PRIMARYKEY":
+		row := &models.Row{Columns: []string{"primary_key"}}
+		res := make([]interface{}, 0, len(mst.ColStoreInfo.PrimaryKey))
+		for i := range mst.ColStoreInfo.PrimaryKey {
+			res = append(res, mst.ColStoreInfo.PrimaryKey[i])
+		}
+		row.Values = [][]interface{}{{res}}
+		return []*models.Row{row}, nil
+	case "SORTKEY":
+		row := &models.Row{Columns: []string{"sort_key"}}
+		res := make([]interface{}, 0, len(mst.ColStoreInfo.SortKey))
+		for i := range mst.ColStoreInfo.SortKey {
+			res = append(res, mst.ColStoreInfo.SortKey[i])
+		}
+		row.Values = [][]interface{}{{res}}
+		return []*models.Row{row}, nil
+	case "PROPERTY":
+		row := &models.Row{Columns: []string{"property_key", "property_value"}}
+		keys := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyKey))
+		values := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyValue))
+		for i := range mst.ColStoreInfo.PropertyKey {
+			keys = append(keys, mst.ColStoreInfo.PrimaryKey[i])
+			values = append(values, mst.ColStoreInfo.PropertyValue[i])
+		}
+		row.Values = [][]interface{}{{keys, values}}
+		return []*models.Row{row}, nil
+	case "SHARDKEY":
+		row := &models.Row{Columns: []string{"shard_key", "type", "ShardGroup"}}
+		res := make([][]interface{}, len(mst.ShardKeys))
+		for i := range res {
+			res[i] = make([]interface{}, 3)
+		}
+		for i := range mst.ShardKeys {
+			res[i][0] = mst.ShardKeys[i].ShardKey
+			res[i][1] = mst.ShardKeys[i].Type
+			res[i][2] = mst.ShardKeys[i].ShardGroup
+		}
+		row.Values = res
+		return []*models.Row{row}, nil
+	case "ENGINETYPE":
+		row := &models.Row{Columns: []string{"ENGINETYPE"}}
+		row.Values = [][]interface{}{{config.EngineType2String[mst.EngineType]}}
+		return []*models.Row{row}, nil
+	default:
+		return nil, fmt.Errorf("%s is not support for this command", stmt.Name)
+	}
 }
 
 func (e *StatementExecutor) executeShowGrantsForUserStatement(q *influxql.ShowGrantsForUserStatement) (models.Rows, error) {
@@ -1696,6 +1775,10 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 			default:
 				err = e.normalizeMeasurement(node, defaultDatabase, defaultRetentionPolicy)
 			}
+		case *influxql.ShowMeasurementKeysStatement:
+			if node.Database == "" {
+				node.Database = defaultDatabase
+			}
 		}
 	})
 	return
@@ -1774,7 +1857,7 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 						} else {
 							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil)
 						}*/
-			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil)
+			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil)
 
 			if err != nil {
 				return err

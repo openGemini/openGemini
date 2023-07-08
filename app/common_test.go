@@ -90,6 +90,7 @@ func mockStatisticsPusher() *statisticsPusher.StatisticsPusher {
 		HttpEndPoint:  "127.0.0.1:8123",
 		StoreDatabase: "_internal",
 		Pushers:       "http",
+		StoreEnabled:  true,
 		StoreInterval: toml.Duration(1 * time.Second),
 	}
 

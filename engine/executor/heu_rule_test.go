@@ -102,7 +102,7 @@ func TestLimitPushdownRule(t *testing.T) {
 	opt.Limit = 10
 	opt.Offset = 10
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -175,7 +175,7 @@ func TestAggPushdownToExchangeRuleWithPercentile(t *testing.T) {
 	columnsName := []string{"percentile"}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -248,7 +248,7 @@ func TestAggPushdownToExchangeRuleWithCount(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	opt.Interval.Duration = 1000
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -323,7 +323,7 @@ func TestAggPushdownToExchangeRuleWithPreCount(t *testing.T) {
 	columnsName := []string{"count"}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -383,7 +383,7 @@ func TestAggPushDownToSubQueryRuleWithStr(t *testing.T) {
 	columnsName := []string{"str"}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt)
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
 	stringCall := influxql.Call{
 		Name: "str",
 		Args: []influxql.Expr{
@@ -438,7 +438,7 @@ func TestAggPushDownToSubQueryRuleWithStr(t *testing.T) {
 		},
 	}
 
-	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt)
+	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
 	planBuilderOut.Push(plan)
 	planBuilderOut.GroupBy()
@@ -485,7 +485,7 @@ func TestAggPushDownToSubQueryRuleWithAbs(t *testing.T) {
 	columnsName := []string{"abs"}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt)
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
 	mathCall := influxql.Call{
 		Name: "abs",
 		Args: []influxql.Expr{
@@ -537,7 +537,7 @@ func TestAggPushDownToSubQueryRuleWithAbs(t *testing.T) {
 		},
 	}
 
-	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt)
+	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
 	planBuilderOut.Push(plan)
 	planBuilderOut.GroupBy()
@@ -592,7 +592,7 @@ func TestAggPushDownToSubQueryRuleWithAlias(t *testing.T) {
 	columnsName := []string{"a"}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt)
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -633,8 +633,9 @@ func TestAggPushDownToSubQueryRuleWithAlias(t *testing.T) {
 			},
 		},
 	}
-
-	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt)
+	sources := make(influxql.Sources, 0)
+	sources = append(sources, &influxql.SubQuery{})
+	schemaOut := executor.NewQuerySchemaWithSources(fields, sources, columnsName, &opt, nil)
 	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
 	planBuilderOut.Push(plan)
 	planBuilderOut.GroupBy()
@@ -702,7 +703,11 @@ func TestAggPushDownToSubQueryRuleWithAliasAndBinary(t *testing.T) {
 	columnsName := []string{"a", "b"}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt)
+	sources := make(influxql.Sources, 0)
+	sources = append(sources, &influxql.SubQuery{
+		Statement: &influxql.SelectStatement{},
+	})
+	schema := executor.NewQuerySchemaWithSources(fieldsSub, sources, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -768,7 +773,7 @@ func TestAggPushDownToSubQueryRuleWithAliasAndBinary(t *testing.T) {
 	}
 
 	columnsNameOut := []string{"count", "count_count"}
-	schemaOut := executor.NewQuerySchema(fields, columnsNameOut, &opt)
+	schemaOut := executor.NewQuerySchemaWithSources(fields, sources, columnsNameOut, &opt, nil)
 	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
 	planBuilderOut.Push(plan)
 	planBuilderOut.GroupBy()
@@ -840,7 +845,7 @@ func TestSlideWindowPushDownToExchange(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	opt.Interval.Duration = 1000
 	executor.OnSlidingWindowPushUp = 1
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -946,7 +951,7 @@ func TestCastorDetectPushDownGroupByAllSeries(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	opt.GroupByAllDims = true
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 
 	var plan hybridqp.QueryNode
 	plan = buildPlan(t, schema)
@@ -985,7 +990,7 @@ func TestCastorPushDownGroupByNotAllSeries(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	opt.GroupByAllDims = false
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 
 	var plan hybridqp.QueryNode
 	plan = buildPlan(t, schema)
@@ -1024,7 +1029,7 @@ func TestCastorRuleEquale(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	opt.GroupByAllDims = false
 
-	schema := executor.NewQuerySchema(fields, columnsName, &opt)
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 
 	var plan hybridqp.QueryNode
 	plan = buildPlan(t, schema)

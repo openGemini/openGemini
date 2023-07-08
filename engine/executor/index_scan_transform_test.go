@@ -29,7 +29,7 @@ import (
 )
 
 func init() {
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 }
 
 func buildIRowDataType() hybridqp.RowDataType {
@@ -61,7 +61,7 @@ func buildISchema() *executor.QuerySchema {
 		Dimensions:  make([]string, 0),
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	return schema
 }
 

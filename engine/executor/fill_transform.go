@@ -78,6 +78,8 @@ type FillTransform struct {
 
 	span       *tracing.Span
 	ppFillCost *tracing.Span
+
+	errs errno.Errs
 }
 
 func NewFillTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hybridqp.RowDataType,
@@ -233,11 +235,8 @@ func (trans *FillTransform) Work(ctx context.Context) error {
 		tracing.Finish(trans.ppFillCost)
 	}()
 
-	errs := errno.NewErrsPool().Get()
+	errs := &trans.errs
 	errs.Init(len(trans.Inputs)+1, trans.Close)
-	defer func() {
-		errno.NewErrsPool().Put(errs)
-	}()
 
 	runnable := func() {
 		defer func() {

@@ -17,18 +17,22 @@ limitations under the License.
 package coordinator
 
 import (
+	"regexp"
+	"sort"
 	"testing"
 	"time"
 
 	set "github.com/deckarep/golang-set"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -56,7 +60,11 @@ func (m mocShardMapperMetaClient) GetStreamInfosStore() map[string]*meta.StreamI
 
 func (m mocShardMapperMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
 	//TODO implement me
-	panic("implement me")
+	return meta.NewMeasurementInfo("test"), nil
+}
+
+func (m mocShardMapperMetaClient) GetMeasurementsInfoStore(dbName string, rpName string) (*meta.MeasurementsInfo, error) {
+	return nil, nil
 }
 
 func (m mocShardMapperMetaClient) UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error {
@@ -75,7 +83,7 @@ func (m mocShardMapperMetaClient) DropStream(name string) error {
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation) (*meta.MeasurementInfo, error) {
+func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo) (*meta.MeasurementInfo, error) {
 	return nil, nil
 }
 
@@ -83,11 +91,11 @@ func (m mocShardMapperMetaClient) AlterShardKey(database, retentionPolicy, mst s
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabase(name string) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta.DatabaseInfo, error) {
 	return m.databases[name], nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec, shardKey *meta.ShardKeyInfo) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec, shardKey *meta.ShardKeyInfo, enableTagArray bool) (*meta.DatabaseInfo, error) {
 	return nil, nil
 }
 
@@ -239,15 +247,33 @@ func (m mocShardMapperMetaClient) Schema(database string, retentionPolicy string
 }
 
 func (m mocShardMapperMetaClient) GetMeasurements(mst *influxql.Measurement) ([]*meta.MeasurementInfo, error) {
+	var measurements []*meta.MeasurementInfo
 	db := m.databases[mst.Database]
 	if db == nil {
 		return nil, nil
 	}
-	rp := db.RetentionPolicies[mst.RetentionPolicy]
-	if rp == nil {
-		return nil, nil
+	rpi, err := db.GetRetentionPolicy(mst.RetentionPolicy)
+	if err != nil {
+		return nil, err
 	}
-	return []*meta.MeasurementInfo{rp.Measurements[mst.Name]}, nil
+	if mst.Regex != nil {
+		rpi.EachMeasurements(func(msti *meta.MeasurementInfo) {
+			if mst.Regex.Val.Match([]byte(msti.Name)) {
+				measurements = append(measurements, msti)
+			}
+		})
+		sort.Slice(measurements, func(i, j int) bool {
+			return influx.GetOriginMstName(measurements[i].Name) < influx.GetOriginMstName(measurements[j].Name)
+		})
+	} else {
+		rp := db.RetentionPolicies[mst.RetentionPolicy]
+		if rp == nil {
+			return nil, nil
+		}
+		measurements = append(measurements, rp.Measurements[mst.Name])
+	}
+
+	return measurements, nil
 }
 
 func (m mocShardMapperMetaClient) TagKeys(database string) map[string]set.Set {
@@ -330,11 +356,20 @@ func (m mocShardMapperMetaClient) OpenAtStore() {
 	return
 }
 
+func (mmc *mocShardMapperMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
+	return false, nil
+}
+
+func (mmc *mocShardMapperMetaClient) GetAllMst(dbName string) []string {
+	return nil
+}
+
 func TestMapMstShards(t *testing.T) {
 	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
 	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
 	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
 	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards2 := []meta.ShardInfo{{ID: 2, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
 	csm := &ClusterShardMapper{
 		Logger: logger.NewLogger(1),
 	}
@@ -347,8 +382,8 @@ func TestMapMstShards(t *testing.T) {
 					"rp0": {
 						Name: "rp0",
 						Measurements: map[string]*meta.MeasurementInfo{
-							"mst": {
-								Name: "mst",
+							"mst1": {
+								Name: "mst1",
 								ShardKeys: []meta.ShardKeyInfo{
 									{
 										ShardKey:   []string{"1", "2"},
@@ -356,20 +391,34 @@ func TestMapMstShards(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
+								EngineType: config.COLUMNSTORE,
+							},
+							"mst2": {
+								Name: "mst2",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								EngineType: config.TSSTORE,
 							},
 						},
 						ShardGroups: []meta.ShardGroupInfo{
 							{
-								ID:        1,
-								StartTime: timeStart,
-								EndTime:   timeMid,
-								Shards:    shards1,
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.COLUMNSTORE,
 							},
 							{
-								ID:        1,
-								StartTime: timeMid,
-								EndTime:   timeEnd,
-								Shards:    shards1,
+								ID:         2,
+								StartTime:  timeMid,
+								EndTime:    timeEnd,
+								Shards:     shards2,
+								EngineType: config.TSSTORE,
 							},
 						},
 					},
@@ -383,7 +432,9 @@ func TestMapMstShards(t *testing.T) {
 		},
 	}
 	opt := &query.SelectOptions{}
-	source := &influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: "mst"}
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.COLUMNSTORE,
+	}
 	join := &influxql.Join{
 		LSrc:      source,
 		RSrc:      source,
@@ -393,6 +444,13 @@ func TestMapMstShards(t *testing.T) {
 		ShardMap: map[Source]map[uint32][]uint64{},
 	}
 	csm.mapShards(shardMapping, []influxql.Source{join}, timeStart, timeEnd, nil, opt)
+	Val, _ := regexp.Compile("")
+	sourceRegex := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "", EngineType: config.COLUMNSTORE,
+		Regex: &influxql.RegexLiteral{Val: Val},
+	}
+	err := csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	assert.NoError(t, err)
 }
 
 func TestShardMapperExprRewriter(t *testing.T) {

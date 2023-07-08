@@ -161,6 +161,8 @@ type MergeTransform struct {
 	ReflectionTables
 	mergeType MergeType
 	opt       *query.ProcessorOptions
+
+	errs errno.Errs
 }
 
 func NewBaseMergeTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, schema *QuerySchema,
@@ -248,12 +250,8 @@ func (trans *MergeTransform) Work(ctx context.Context) error {
 		trans.Close()
 	}()
 
-	errs := errno.NewErrsPool().Get()
+	errs := &trans.errs
 	errs.Init(len(trans.Inputs)+1, trans.Close)
-
-	defer func() {
-		errno.NewErrsPool().Put(errs)
-	}()
 
 	func() {
 		for i := range trans.Inputs {
@@ -881,9 +879,9 @@ func (f *FloatTupleMergeIterator) Next(endpoint *IteratorEndpoint, params *Itera
 }
 
 type StringMergeIterator struct {
-	input        Column
-	output       Column
-	stringValues []string
+	input         Column
+	output        Column
+	stringOffsets []uint32
 }
 
 func NewStringMergeIterator() *StringMergeIterator {
@@ -899,7 +897,10 @@ func (f *StringMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 		f.output.AppendManyNil(params.end - params.start)
 		return
 	}
-	f.output.AppendStringValues(f.input.StringValuesRange(f.stringValues[:0], startValue, endValue)...)
+
+	var stringBytes []byte
+	stringBytes, f.stringOffsets = f.input.StringValuesWithOffset(startValue, endValue, f.stringOffsets[:0])
+	f.output.AppendStringBytes(stringBytes, f.stringOffsets)
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {
 			if f.input.IsNilV2(i) {
@@ -983,15 +984,4 @@ func FixedColumnsIteratorHelper(rowDataType hybridqp.RowDataType) CoProcessor {
 		}
 	}
 	return tranCoProcessor
-}
-
-func NilInColumn(columnBitmap [][]uint32, colNum, position int, offsets []int) (bool, int) {
-	p := uint32(position)
-	if bitmapLen := len(columnBitmap[colNum]); bitmapLen == 0 || offsets[colNum] >= bitmapLen {
-		return false, -1
-	}
-	if p == columnBitmap[colNum][offsets[colNum]]-1 {
-		return true, offsets[colNum]
-	}
-	return false, -1
 }

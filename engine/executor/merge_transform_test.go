@@ -585,7 +585,7 @@ func BenchmarkMergeHelper(b *testing.B) {
 		Ascending:  true,
 		ChunkSize:  1000,
 	}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 
 	for i := 0; i < b.N; i++ {
 		source1 := NewSourceFromSingleChunk(buildBenchmarkSchema(), []executor.Chunk{chunk1})

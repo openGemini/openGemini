@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -76,6 +77,7 @@ type LogicalPlanCreator interface {
 	LogicalPlanCost(source *influxql.Measurement, opt ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
 	GetSources(sources influxql.Sources) influxql.Sources
+	GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error)
 }
 
 // ShardMapper retrieves and maps shards into an IteratorCreator that can later be
@@ -103,6 +105,7 @@ type ShardGroup interface {
 
 // PreparedStatement is a prepared statement that is ready to be executed.
 type PreparedStatement interface {
+	BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, error)
 	Select(ctx context.Context) (hybridqp.Executor, error)
 
 	ChangeCreator(hybridqp.ExecutorBuilderCreator)
@@ -157,7 +160,8 @@ type ProcessorOptions struct {
 	FillValue interface{}
 
 	// Condition to filter by.
-	Condition influxql.Expr
+	Condition       influxql.Expr
+	SourceCondition influxql.Expr
 
 	// Time range for the iterator.
 	StartTime int64
@@ -217,6 +221,8 @@ type ProcessorOptions struct {
 	SeriesKey []byte
 
 	GroupByAllDims bool
+
+	isTimeFirstKey bool
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
@@ -271,6 +277,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	}
 
 	opt.Condition = condition
+	opt.SourceCondition = stmt.SourceCondition
 	opt.Ascending = stmt.TimeAscending()
 	opt.Dedupe = stmt.Dedupe
 	opt.StripName = stmt.StripName
@@ -587,6 +594,22 @@ func (opt *ProcessorOptions) GetCondition() influxql.Expr {
 	return opt.Condition
 }
 
+func (opt *ProcessorOptions) SetTimeFirstKey() {
+	opt.isTimeFirstKey = true
+}
+
+func (opt *ProcessorOptions) GetTimeFirstKey() bool {
+	return opt.isTimeFirstKey
+}
+
+func (opt *ProcessorOptions) SetSourceCondition(expr influxql.Expr) {
+	opt.SourceCondition = expr
+}
+
+func (opt *ProcessorOptions) GetSourceCondition() influxql.Expr {
+	return opt.SourceCondition
+}
+
 func (opt *ProcessorOptions) GetHintType() hybridqp.HintType {
 	return opt.HintType
 }
@@ -629,6 +652,19 @@ func (opt *ProcessorOptions) GetSourcesNames() []string {
 		names[i] = opt.Sources[i].GetName()
 	}
 	return names
+}
+
+func (opt *ProcessorOptions) HaveOnlyCSStore() bool {
+	for _, source := range opt.Sources {
+		if s, ok := source.(*influxql.Measurement); ok && s.EngineType == config.COLUMNSTORE {
+			return true
+		}
+	}
+	return false
+}
+
+func (opt *ProcessorOptions) SetFill(fill influxql.FillOption) {
+	opt.Fill = fill
 }
 
 func ContainDim(des []string, src string) bool {

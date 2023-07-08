@@ -21,7 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/rand"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -49,7 +49,7 @@ func init() {
 }
 
 func runCodecTest(t *testing.T, enc codecFunc, dec codecFunc, data []float64) {
-	buf := record.Float64Slice2byte(data)
+	buf := util.Float64Slice2byte(data)
 
 	var encOut []byte
 
@@ -62,7 +62,7 @@ func runCodecTest(t *testing.T, enc codecFunc, dec codecFunc, data []float64) {
 }
 
 func TestSameValue(t *testing.T) {
-	rle := compress.NewRLE(record.Float64SizeBytes)
+	rle := compress.NewRLE(util.Float64SizeBytes)
 
 	runCodecTest(t, rle.SameValueEncoding, rle.SameValueDecoding, zeroData)
 	runCodecTest(t, rle.SameValueEncoding, rle.SameValueDecoding, sameData)
@@ -75,7 +75,7 @@ func TestSnappy(t *testing.T) {
 }
 
 func TestRLE(t *testing.T) {
-	rle := compress.NewRLE(record.Float64SizeBytes)
+	rle := compress.NewRLE(util.Float64SizeBytes)
 	runCodecTest(t, rle.Encoding, rle.Decoding, zeroData)
 	runCodecTest(t, rle.Encoding, rle.Decoding, rleData)
 }
@@ -88,7 +88,7 @@ func TestGorilla(t *testing.T) {
 }
 
 func runBenchmark(b *testing.B, name string, enc codecFunc, dec codecFunc, data []float64) {
-	in := record.Float64Slice2byte(data)
+	in := util.Float64Slice2byte(data)
 	var encOut []byte
 	var decOut []byte
 
@@ -102,14 +102,14 @@ func runBenchmark(b *testing.B, name string, enc codecFunc, dec codecFunc, data 
 }
 
 func BenchmarkRLEData(b *testing.B) {
-	rle := compress.NewRLE(record.Float64SizeBytes)
+	rle := compress.NewRLE(util.Float64SizeBytes)
 	runBenchmark(b, "RLE", rle.Encoding, rle.Decoding, rleData)
 	runBenchmark(b, "Gorilla", compress.GorillaEncoding, compress.GorillaDecoding, rleData)
 	runBenchmark(b, "Snappy", compress.SnappyEncoding, compress.SnappyDecoding, rleData)
 }
 
 func BenchmarkSameData(b *testing.B) {
-	rle := compress.NewRLE(record.Float64SizeBytes)
+	rle := compress.NewRLE(util.Float64SizeBytes)
 	runBenchmark(b, "Same", rle.SameValueEncoding, rle.SameValueEncoding, sameData)
 	runBenchmark(b, "RLE", rle.Encoding, rle.Decoding, sameData)
 	runBenchmark(b, "Gorilla", compress.GorillaEncoding, compress.GorillaDecoding, sameData)

@@ -24,6 +24,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/require"
@@ -215,6 +216,49 @@ func Test_MeasurementInfo(t *testing.T) {
 		t.Fatal("db not find")
 	}
 	_, err = s.getMeasurementInfo("db0", "rp0", "cpu-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func Test_MeasurementsInfo(t *testing.T) {
+	raft := &MockRaft{}
+	s := &Store{
+		cacheData: &meta2.Data{
+			Term:         1,
+			Index:        2,
+			ClusterID:    3,
+			ClusterPtNum: 4,
+			PtNumPerNode: 5,
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Measurements: map[string]*meta2.MeasurementInfo{
+								"cpu-1_0000": {
+									Name:       "cpu-1",
+									EngineType: config.COLUMNSTORE,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		cacheDataBytes: []byte{1, 2, 3},
+		raft:           raft,
+	}
+	_, err := s.getMeasurementsInfo("test", "test")
+	if err == nil {
+		t.Fatal("node is not the leader, cannot get info")
+	}
+	raft.isLeader = true
+	_, err = s.getMeasurementsInfo("test", "test")
+	if err == nil {
+		t.Fatal("db not find")
+	}
+	_, err = s.getMeasurementsInfo("db0", "rp0")
 	if err != nil {
 		t.Fatal(err)
 	}

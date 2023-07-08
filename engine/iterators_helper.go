@@ -485,13 +485,10 @@ func mergeData(newRecIter, baseRecIter *recordIter, maxRow int, ascending bool) 
 
 	if baseRecIter.hasRemainData() && newRecIter.hasRemainData() {
 		var mergeRec record.Record
-		rec, newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRecIter.record, baseRecIter.record,
+		newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRecIter.record, baseRecIter.record,
 			newRecIter.pos, baseRecIter.pos, maxRow, ascending)
 		newRecIter.updatePos(newPos)
 		baseRecIter.updatePos(oldPos)
-		if rec != nil {
-			return rec
-		}
 		return &mergeRec
 	} else if baseRecIter.hasRemainData() {
 		// oldIter record's row will not exceed maxRow, so we return record directly

@@ -21,6 +21,7 @@ import (
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -102,9 +103,9 @@ func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffse
 		startOffset, endOffset = valueIndexRange(bitMap, bitOffset, start, end)
 	}
 	if colType == influx.Field_Type_Int {
-		cv.Val = append(cv.Val, value[startOffset*Int64SizeBytes:endOffset*Int64SizeBytes]...)
+		cv.Val = append(cv.Val, value[startOffset*util.Int64SizeBytes:endOffset*util.Int64SizeBytes]...)
 	} else if colType == influx.Field_Type_Float {
-		cv.Val = append(cv.Val, value[startOffset*Float64SizeBytes:endOffset*Float64SizeBytes]...)
+		cv.Val = append(cv.Val, value[startOffset*util.Float64SizeBytes:endOffset*util.Float64SizeBytes]...)
 	} else if colType == influx.Field_Type_String || colType == influx.Field_Type_Tag {
 		offset := uint32(len(cv.Val))
 		for i := start; i < end; i++ {
@@ -119,7 +120,7 @@ func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffse
 			cv.Val = append(cv.Val, value[offsets[start]:offsets[end]]...)
 		}
 	} else if colType == influx.Field_Type_Boolean {
-		cv.Val = append(cv.Val, value[startOffset*BooleanSizeBytes:endOffset*BooleanSizeBytes]...)
+		cv.Val = append(cv.Val, value[startOffset*util.BooleanSizeBytes:endOffset*util.BooleanSizeBytes]...)
 	} else {
 		panic("error type")
 	}
@@ -271,11 +272,11 @@ func (cv *ColVal) sliceValAndOffset(srcCol *ColVal, start, end, colType, valOffs
 	var validCount, endOffset int
 	if colType == influx.Field_Type_Int {
 		validCount = srcCol.ValidCount(start, end)
-		endOffset = valOffset + Int64SizeBytes*validCount
+		endOffset = valOffset + util.Int64SizeBytes*validCount
 		cv.Val = srcCol.Val[valOffset:endOffset]
 	} else if colType == influx.Field_Type_Float {
 		validCount = srcCol.ValidCount(start, end)
-		endOffset = valOffset + Float64SizeBytes*validCount
+		endOffset = valOffset + util.Float64SizeBytes*validCount
 		cv.Val = srcCol.Val[valOffset:endOffset]
 	} else if colType == influx.Field_Type_String {
 		offsetStart := srcCol.Offset[start]
@@ -296,7 +297,7 @@ func (cv *ColVal) sliceValAndOffset(srcCol *ColVal, start, end, colType, valOffs
 		}
 	} else if colType == influx.Field_Type_Boolean {
 		validCount = srcCol.ValidCount(start, end)
-		endOffset = valOffset + BooleanSizeBytes*validCount
+		endOffset = valOffset + util.BooleanSizeBytes*validCount
 		cv.Val = srcCol.Val[valOffset:endOffset]
 	} else {
 		panic("error type")
@@ -360,7 +361,7 @@ func (cv *ColVal) AppendIntegers(values ...int64) {
 
 func (cv *ColVal) AppendInteger(v int64) {
 	index := len(cv.Val)
-	cv.reserveVal(Int64SizeBytes)
+	cv.reserveVal(util.Int64SizeBytes)
 	*(*int64)(unsafe.Pointer(&cv.Val[index])) = v
 	cv.setBitMap(cv.Len)
 	cv.Len++
@@ -374,7 +375,7 @@ func (cv *ColVal) AppendFloats(values ...float64) {
 
 func (cv *ColVal) AppendFloat(v float64) {
 	index := len(cv.Val)
-	cv.reserveVal(Float64SizeBytes)
+	cv.reserveVal(util.Float64SizeBytes)
 	*(*float64)(unsafe.Pointer(&cv.Val[index])) = v
 	cv.setBitMap(cv.Len)
 	cv.Len++
@@ -414,7 +415,7 @@ func (cv *ColVal) AppendBooleans(values ...bool) {
 
 func (cv *ColVal) AppendBoolean(v bool) {
 	index := len(cv.Val)
-	cv.reserveVal(BooleanSizeBytes)
+	cv.reserveVal(util.BooleanSizeBytes)
 	*(*bool)(unsafe.Pointer(&cv.Val[index])) = v
 	cv.setBitMap(cv.Len)
 	cv.Len++
@@ -471,19 +472,19 @@ func (cv *ColVal) AppendBooleanNull() {
 }
 
 func (cv *ColVal) IntegerValues() []int64 {
-	return Bytes2Int64Slice(cv.Val)
+	return util.Bytes2Int64Slice(cv.Val)
 }
 
 func (cv *ColVal) FloatValues() []float64 {
-	return Bytes2Float64Slice(cv.Val)
+	return util.Bytes2Float64Slice(cv.Val)
 }
 
 func (cv *ColVal) BooleanValues() []bool {
-	return Bytes2BooleanSlice(cv.Val)
+	return util.Bytes2BooleanSlice(cv.Val)
 }
 
 func (cv *ColVal) Int8Values() []int8 {
-	return Bytes2Int8Slice(cv.Val)
+	return util.Bytes2Int8Slice(cv.Val)
 }
 
 func (cv *ColVal) StringValues(dst []string) []string {
@@ -498,9 +499,9 @@ func (cv *ColVal) StringValues(dst []string) []string {
 		}
 		off := offs[i]
 		if i == len(offs)-1 {
-			dst = append(dst, Bytes2str(cv.Val[off:]))
+			dst = append(dst, util.Bytes2str(cv.Val[off:]))
 		} else {
-			dst = append(dst, Bytes2str(cv.Val[off:offs[i+1]]))
+			dst = append(dst, util.Bytes2str(cv.Val[off:offs[i+1]]))
 		}
 	}
 
@@ -526,17 +527,17 @@ func (cv *ColVal) calcColumnOffset(ty int, start int) int {
 	var colValOffset int
 	if ty == influx.Field_Type_Int {
 		colValOffset, _ = cv.getValIndexRange(start, start)
-		colValOffset = colValOffset * Int64SizeBytes
+		colValOffset = colValOffset * util.Int64SizeBytes
 	} else if ty == influx.Field_Type_Float {
 		colValOffset, _ = cv.getValIndexRange(start, start)
-		colValOffset = colValOffset * Float64SizeBytes
+		colValOffset = colValOffset * util.Float64SizeBytes
 	} else if ty == influx.Field_Type_String {
 		colValOffset = int(cv.Offset[start])
 	} else if ty == influx.Field_Type_Tag {
 		colValOffset = int(cv.Offset[start])
 	} else if ty == influx.Field_Type_Boolean {
 		colValOffset, _ = cv.getValIndexRange(start, start)
-		colValOffset = colValOffset * BooleanSizeBytes
+		colValOffset = colValOffset * util.BooleanSizeBytes
 	} else {
 		panic("error type")
 	}
@@ -549,29 +550,6 @@ func (cv *ColVal) GetValIndexRange(bmStart, bmEnd int) (valStart, valEnd int) {
 		return bmStart, bmEnd
 	}
 	return valueIndexRange(cv.Bitmap, cv.BitMapOffset, bmStart, bmEnd)
-}
-
-func (cv *ColVal) SplitByIndex(dst []ColVal, index int, refType int) []ColVal {
-	if index <= 0 {
-		panic(fmt.Sprintf("index is %v, must greater than 0", index))
-	}
-	if index > cv.Len {
-		panic(fmt.Sprintf("index is %v, must less than rowNum %v", index, cv.Len))
-	}
-
-	dst = resize(dst, 2)
-	start := 0
-	offset, validCount := dst[0].sliceValAndOffset(cv, start, index, refType, 0)
-	dst[0].sliceBitMap(cv, start, index)
-	dst[0].Len = index - start
-	dst[0].NilCount = dst[0].Len - validCount
-
-	_, validCount = dst[1].sliceValAndOffset(cv, index, cv.Len, refType, offset)
-	dst[1].sliceBitMap(cv, index, cv.Len)
-	dst[1].Len = cv.Len - index
-	dst[1].NilCount = dst[1].Len - validCount
-
-	return dst
 }
 
 func (cv *ColVal) MaxIntegerValue(values []int64, start, end int) (int64, int) {
@@ -1152,11 +1130,11 @@ func (cv *ColVal) StringValueUnsafe(i int) (string, bool) {
 
 	if i == len(cv.Offset)-1 {
 		off := cv.Offset[i]
-		return Bytes2str(cv.Val[off:]), false
+		return util.Bytes2str(cv.Val[off:]), false
 	} else {
 		start := cv.Offset[i]
 		end := cv.Offset[i+1]
-		return Bytes2str(cv.Val[start:end]), false
+		return util.Bytes2str(cv.Val[start:end]), false
 	}
 }
 
@@ -1507,7 +1485,7 @@ func (cv *ColVal) MinBooleanValues(values []bool, start, end int) (bool, []int) 
 
 func (cv *ColVal) AppendFloatNullReserve() {
 	index := len(cv.Val)
-	cv.reserveVal(Float64SizeBytes)
+	cv.reserveVal(util.Float64SizeBytes)
 	*(*float64)(unsafe.Pointer(&cv.Val[index])) = 0
 	cv.resetBitMap(cv.Len)
 	cv.Len++
@@ -1516,7 +1494,7 @@ func (cv *ColVal) AppendFloatNullReserve() {
 
 func (cv *ColVal) AppendIntegerNullReserve() {
 	index := len(cv.Val)
-	cv.reserveVal(Float64SizeBytes)
+	cv.reserveVal(util.Int64SizeBytes)
 	*(*int64)(unsafe.Pointer(&cv.Val[index])) = 0
 	cv.resetBitMap(cv.Len)
 	cv.Len++
@@ -1525,7 +1503,7 @@ func (cv *ColVal) AppendIntegerNullReserve() {
 
 func (cv *ColVal) AppendBooleanNullReserve() {
 	index := len(cv.Val)
-	cv.reserveVal(BooleanSizeBytes)
+	cv.reserveVal(util.BooleanSizeBytes)
 	*(*bool)(unsafe.Pointer(&cv.Val[index])) = false
 	cv.resetBitMap(cv.Len)
 	cv.Len++
@@ -1680,10 +1658,7 @@ func (cv *ColVal) appendBytes(src *ColVal, typ int, start, end int) {
 		return
 	}
 
-	size, ok := typeSize[typ]
-	if !ok {
-		panic("error type")
-	}
+	size := typeSize[typ]
 
 	cv.Val = append(cv.Val, src.Val[start*size:end*size]...)
 }
@@ -1703,7 +1678,7 @@ func (cv *ColVal) AppendTimes(times []int64) {
 		return
 	}
 
-	cv.Val = append(cv.Val, Int64Slice2byte(times)...)
+	cv.Val = append(cv.Val, util.Int64Slice2byte(times)...)
 	cv.Len += len(times)
 
 	cv.FillBitmap(255)

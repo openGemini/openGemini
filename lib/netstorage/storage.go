@@ -25,7 +25,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
-	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -46,10 +45,7 @@ const (
 )
 
 type Storage interface {
-	Open() error
-	Close() error
-
-	WriteRows(nodeID uint64, database string, rp string, pt uint32, shard uint64, streamShardIdList []uint64, rows *[]influx.Row, timeout time.Duration) error
+	WriteRows(ctx *WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error
 	DropShard(nodeID uint64, database, rpName string, dbPts []uint32, shardID uint64) error
 
 	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (TablesTagSets, error)
@@ -74,19 +70,18 @@ type NetStorage struct {
 	log        *logger.Logger
 }
 
+type WriteContext struct {
+	Rows         []influx.Row
+	Shard        *meta2.ShardInfo
+	buf          []byte
+	StreamShards []uint64
+}
+
 func NewNetStorage(mcli meta.MetaClient) Storage {
 	return &NetStorage{
 		metaClient: mcli,
 		log:        logger.NewLogger(errno.ModuleNetwork).With(zap.String("service", "netstorage")),
 	}
-}
-
-func (s *NetStorage) Open() error {
-	return nil
-}
-
-func (s *NetStorage) Close() error {
-	return nil
 }
 
 func (s *NetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
@@ -157,14 +152,14 @@ func (s *NetStorage) DeleteDatabase(node *meta2.DataNode, database string, pt ui
 	return s.HandleDeleteReq(node, deleteReq)
 }
 
-func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt uint32, shard uint64, streamShardIdList []uint64, rows *[]influx.Row, timeout time.Duration) error {
-	if len(*rows) == 0 {
+func (s *NetStorage) WriteRows(ctx *WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error {
+	rows := ctx.Rows
+	if len(rows) == 0 {
 		return nil
 	}
-	var err error
 
 	// Determine the location of this shard and whether it still exists
-	db, rp, sgi := s.metaClient.ShardOwner(shard)
+	db, rp, sgi := s.metaClient.ShardOwner(ctx.Shard.ID)
 	if sgi == nil {
 		return nil
 	}
@@ -173,27 +168,7 @@ func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt
 		return fmt.Errorf("exp db: %v, rp: %v, but got: %v, %v", database, rpName, db, rp)
 	}
 
-	pBuf := bufferpool.GetPoints()
-	defer func() {
-		bufferpool.PutPoints(pBuf)
-	}()
-
-	pBuf = append(pBuf[:0], PackageTypeFast)
-	// db
-	pBuf = append(pBuf, uint8(len(db)))
-	pBuf = append(pBuf, db...)
-	// rp
-	pBuf = append(pBuf, uint8(len(rp)))
-	pBuf = append(pBuf, rp...)
-	// ptid
-	pBuf = numenc.MarshalUint32(pBuf, pt)
-	pBuf = numenc.MarshalUint64(pBuf, shard)
-
-	// streamShardIdList
-	pBuf = numenc.MarshalUint32(pBuf, uint32(len(streamShardIdList)))
-	pBuf = numenc.MarshalVarUint64s(pBuf, streamShardIdList)
-
-	pBuf, err = influx.FastMarshalMultiRows(pBuf, *rows)
+	pBuf, err := MarshalRows(ctx, db, rp, pt)
 	if err != nil {
 		return err
 	}
@@ -206,12 +181,12 @@ func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt
 		return err
 	}
 
-	if len(streamShardIdList) > 0 {
-		streamVars := make([]*StreamVar, len(*rows))
-		for i := range *rows {
+	if len(ctx.StreamShards) > 0 {
+		streamVars := make([]*StreamVar, len(rows))
+		for i := range rows {
 			streamVars[i] = &StreamVar{}
-			streamVars[i].Only = (*rows)[i].StreamOnly
-			streamVars[i].Id = (*rows)[i].StreamId
+			streamVars[i].Only = rows[i].StreamOnly
+			streamVars[i].Id = rows[i].StreamId
 		}
 		cb := &WriteStreamPointsCallback{}
 		err = r.request(spdy.WriteStreamPointsRequest, NewWriteStreamPointsRequest(pBuf, streamVars), cb)
@@ -219,7 +194,6 @@ func (s *NetStorage) WriteRows(nodeID uint64, database string, rpName string, pt
 			return err
 		}
 		return nil
-
 	}
 	cb := &WritePointsCallback{}
 	err = r.request(spdy.WritePointsRequest, NewWritePointsRequest(pBuf), cb)
@@ -409,4 +383,29 @@ func (s *NetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport
 		}
 	}()
 	return nil
+}
+
+func MarshalRows(ctx *WriteContext, db, rp string, pt uint32) ([]byte, error) {
+	pBuf := append(ctx.buf[:0], PackageTypeFast)
+	// db
+	pBuf = append(pBuf, uint8(len(db)))
+	pBuf = append(pBuf, db...)
+	// rp
+	pBuf = append(pBuf, uint8(len(rp)))
+	pBuf = append(pBuf, rp...)
+	// ptid
+	pBuf = numenc.MarshalUint32(pBuf, pt)
+	pBuf = numenc.MarshalUint64(pBuf, ctx.Shard.ID)
+
+	// streamShardIdList
+	pBuf = numenc.MarshalUint32(pBuf, uint32(len(ctx.StreamShards)))
+	pBuf = numenc.MarshalVarUint64s(pBuf, ctx.StreamShards)
+
+	var err error
+	pBuf, err = influx.FastMarshalMultiRows(pBuf, ctx.Rows)
+	if err != nil {
+		return nil, err
+	}
+	ctx.buf = pBuf
+	return pBuf, err
 }

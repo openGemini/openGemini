@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -49,6 +50,10 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	switch msg := metaMsg.Data().(type) {
 	case *message.SnapshotRequest:
 		return c.HandleSnapshot(w, msg)
+	case *message.GetDBBriefInfoRequest:
+		return c.HandleDBBriefInfo(w, msg)
+	case *message.CreateNodeRequest:
+		return c.HandleCreateNode(w, msg)
 	}
 	return nil
 }
@@ -67,6 +72,35 @@ func (c *RPCServer) HandleSnapshot(w spdy.Responser, msg *message.SnapshotReques
 	}
 
 	return w.Response(message.NewMetaMessage(message.SnapshotResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleDBBriefInfo(w spdy.Responser, msg *message.GetDBBriefInfoRequest) error {
+	fmt.Printf("server HandleDBBriefInfo: %+v \n", msg)
+
+	dbInfo := &meta2.DatabaseBriefInfo{
+		Name:           "db0",
+		EnableTagArray: false,
+	}
+
+	buf, _ := dbInfo.Marshal()
+	rsp := &message.GetDBBriefInfoResponse{
+		Data: buf,
+		Err:  "",
+	}
+
+	return w.Response(message.NewMetaMessage(message.GetDBBriefInfoResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleCreateNode(w spdy.Responser, msg *message.CreateNodeRequest) error {
+	fmt.Printf("server HandleCreateNode: %+v \n", msg)
+	nodeStartInfo := meta2.NodeStartInfo{}
+	nodeStartInfo.NodeId = 1
+	buf, _ := nodeStartInfo.MarshalBinary()
+	rsp := &message.CreateNodeResponse{
+		Data: buf,
+		Err:  "",
+	}
+	return w.Response(message.NewMetaMessage(message.CreateNodeResponseMessage, rsp), true)
 }
 
 var server = &RPCServer{}
@@ -103,35 +137,96 @@ func TestSnapshot(t *testing.T) {
 	}
 }
 
-func TestClient_compareHashAndPwdVerTwo(t *testing.T) {
+func TestClient_compareHashAndPwdVerOne(t *testing.T) {
 	metaPath := filepath.Join(t.TempDir(), "meta")
 	c := NewClient(metaPath, false, 20)
-	hashed, err := c.genPbkdf2PwdVal("AsdF_789")
+	c.SetHashAlgo("ver01")
+	hashed, err := c.genHashPwdVal("AsdF_789")
 	if err != nil {
 		t.Error("gen pbkdf2 password failed", zap.Error(err))
 	}
-	err = c.compareHashAndPwdVerTwo(hashed, "AsdF_789")
+	err = c.CompareHashAndPlainPwd(hashed, "AsdF_789")
 	if err != nil {
 		t.Error("compare hash and plaintext failed", zap.Error(err))
+	}
+}
+
+func TestClient_compareHashAndPwdVerTwo(t *testing.T) {
+	metaPath := filepath.Join(t.TempDir(), "meta")
+	c := NewClient(metaPath, false, 20)
+	c.SetHashAlgo("ver02")
+	hashed, err := c.genHashPwdVal("AsdF_789")
+	if err != nil {
+		t.Error("gen pbkdf2 password failed", zap.Error(err))
+	}
+	err = c.CompareHashAndPlainPwd(hashed, "AsdF_789")
+	if err != nil {
+		t.Error("compare hash and plaintext failed", zap.Error(err))
+	}
+}
+
+func TestClient_compareHashAndPwdVerThree(t *testing.T) {
+	metaPath := filepath.Join(t.TempDir(), "meta")
+	c := NewClient(metaPath, false, 20)
+	c.SetHashAlgo("ver03")
+	hashed, err := c.genHashPwdVal("AsdF_789")
+	if err != nil {
+		t.Error("gen pbkdf2 password failed", zap.Error(err))
+	}
+	err = c.CompareHashAndPlainPwd(hashed, "AsdF_789")
+	if err != nil {
+		t.Error("compare hash and plaintext failed", zap.Error(err))
+	}
+}
+
+func TestClient_encryptWithSalt(t *testing.T) {
+	metaPath := filepath.Join(t.TempDir(), "meta")
+	c := NewClient(metaPath, false, 20)
+	c.SetHashAlgo("ver01")
+	hashed := c.encryptWithSalt([]byte("salt"), "AsdF_789")
+	if len(hashed) == 0 {
+		t.Error("encryptWithSalt for version 01 failed")
+	}
+
+	c.optAlgoVer = algoVer02
+	hashed = c.encryptWithSalt([]byte("salt"), "AsdF_789")
+	if len(hashed) == 0 {
+		t.Error("encryptWithSalt for version 02 failed")
+	}
+
+	c.optAlgoVer = algoVer03
+	hashed = c.encryptWithSalt([]byte("salt"), "AsdF_789")
+	if len(hashed) == 0 {
+		t.Error("encryptWithSalt for version 03 failed")
 	}
 }
 
 func TestClient_saltedEncryptByVer(t *testing.T) {
 	metaPath := filepath.Join(t.TempDir(), "meta")
 	c := NewClient(metaPath, false, 20)
-	_, _, err := c.saltedEncryptByVer("AsdF_789", hashAlgoVerOne)
+	c.SetHashAlgo("ver01")
+	_, _, err := c.saltedEncryptByVer("AsdF_789")
 	if err != nil {
-		t.Error("encrypt by version one failed", zap.Error(err))
+		t.Error("encrypt by version1 failed", zap.Error(err))
 	}
-	_, _, err = c.saltedEncryptByVer("AsdF_789", hashAlgoVerTwo)
+
+	c.optAlgoVer = algoVer02
+	_, _, err = c.saltedEncryptByVer("AsdF_789")
 	if err != nil {
-		t.Error("encrypt by version two failed", zap.Error(err))
+		t.Error("encrypt by version2 failed", zap.Error(err))
+	}
+
+	c.optAlgoVer = algoVer03
+	_, _, err = c.saltedEncryptByVer("AsdF_789")
+	if err != nil {
+		t.Error("encrypt by version3 failed", zap.Error(err))
 	}
 }
 
 func TestClient_isValidPwd(t *testing.T) {
 	metaPath := filepath.Join(t.TempDir(), "meta")
 	c := NewClient(metaPath, false, 20)
+	c.SetHashAlgo("ver02")
 	err := c.isValidPwd("1337", "jdoe1")
 	require.EqualError(t, err, "the password needs to be between 8 and 256 characters long")
 
@@ -310,6 +405,52 @@ func TestClient_UserCmd(t *testing.T) {
 	require.EqualError(t, c.UpdateUser("user1", "Suibian@123"), meta2.ErrPwdUsed.Error())
 }
 
+func TestClient_CreateShardGroup(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+					},
+				}},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), config.COLUMNSTORE)
+	require.EqualError(t, err, "execute command timeout")
+}
+
+func TestClient_CreateMeasurement(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+					},
+				}},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil, nil, nil)
+
+	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo)
+	require.EqualError(t, err, "execute command timeout")
+}
 func TestClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	c := &Client{
 		cacheData:   &meta2.Data{},
@@ -318,7 +459,7 @@ func TestClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	}
 	spec := &meta2.RetentionPolicySpec{Name: "testRp"}
 	ski := &meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}}
-	_, err := c.CreateDatabaseWithRetentionPolicy("db0", spec, ski)
+	_, err := c.CreateDatabaseWithRetentionPolicy("db0", spec, ski, false)
 	require.EqualError(t, err, "execute command timeout")
 }
 
@@ -332,7 +473,7 @@ func TestClient_CreateDatabaseWithRetentionPolicy2(t *testing.T) {
 	}
 	spec := &meta2.RetentionPolicySpec{Name: "testRp"}
 	ski := &meta2.ShardKeyInfo{ShardKey: []string{"tag2", "tag3"}}
-	_, err := c.CreateDatabaseWithRetentionPolicy("test", spec, ski)
+	_, err := c.CreateDatabaseWithRetentionPolicy("test", spec, ski, false)
 	require.EqualError(t, err, "shard key conflict")
 }
 
@@ -499,6 +640,40 @@ func TestClient_MeasurementInfo(t *testing.T) {
 	_, err := c.GetMeasurementInfoStore("test", "rp0", "test")
 	if err == nil {
 		t.Fatal("query from store should not return value in ut")
+	}
+}
+
+func TestClient_MeasurementsInfo(t *testing.T) {
+	address := "127.0.0.10:8492"
+	nodeId := 0
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+	_, err = c.GetMeasurementsInfoStore("test", "rp0")
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -835,7 +1010,7 @@ func TestCreateMeasurement(t *testing.T) {
 	invalidMst := []string{"", "/111", ".", "..", "bbb\\aaa", string([]byte{'m', 's', 't', 0, '_', '0', '0'})}
 
 	for _, mst := range invalidMst {
-		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil)
+		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil, config.TSSTORE, nil)
 		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
 	}
 
@@ -865,4 +1040,122 @@ func TestDBPTCtx_String(t *testing.T) {
 	require.Equal(t, exp, ctx.String())
 	ctx.DBPTStat = nil
 	require.Equal(t, "", ctx.String())
+}
+
+func TestTagArrayEnabledFromServer(t *testing.T) {
+	address := "127.0.0.10:8492"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": &meta2.DatabaseInfo{
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		nodeID:      1,
+		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+		closing:     make(chan struct{}),
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	mc.cacheData.Databases["db0"].EnableTagArray = true
+	var data []byte
+	_ = data
+	_, err = mc.TagArrayEnabledFromServer("db0")
+	assert.NoError(t, err)
+}
+
+func TestTagArrayEnabled(t *testing.T) {
+	address := "127.0.0.1:8496"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers: []string{"127.0.0.1:8491"},
+		logger:      logger.NewLogger(errno.ModuleUnknown),
+	}
+
+	mc.cacheData.Databases["test"].EnableTagArray = true
+	var data []byte
+	_ = data
+	enabled := mc.TagArrayEnabled("test")
+	require.True(t, enabled)
+
+	enabled = mc.TagArrayEnabled("test1")
+	require.False(t, enabled)
+}
+
+func TestInitMetaClient(t *testing.T) {
+	address := "127.0.0.15:8496"
+	nodeId := 0
+	transport.NewMetaNodeManager().Clear()
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		logger: logger.NewLogger(errno.ModuleUnknown),
+	}
+
+	_, _, _, err = mc.InitMetaClient(nil, true, nil)
+	if err == nil {
+		t.Fatalf("fail")
+	}
+	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
+	info := &StorageNodeInfo{"127.0.0.5:8081", "127.0.0.5:8082"}
+	_, _, _, err = mc.InitMetaClient(joinPeers, true, info)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 }

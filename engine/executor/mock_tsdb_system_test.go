@@ -28,6 +28,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	qry "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -451,10 +452,13 @@ func (mock *MockShardGroup) CreateLogicalPlan(
 
 	builder.Series()
 	builder.Exchange(executor.SERIES_EXCHANGE, nil)
-	builder.Reader()
+	builder.Reader(config.TSSTORE)
 	builder.Exchange(executor.READER_EXCHANGE, nil)
 	builder.Exchange(executor.SINGLE_SHARD_EXCHANGE, nil)
 	return builder.Build()
+}
+func (mock *MockShardGroup) GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error) {
+	return nil, nil
 }
 
 func (mock *MockShardGroup) Close() error {
@@ -882,6 +886,10 @@ func (s *TSDBSystem) DML(handler func(*Storage) error) error {
 	return handler(s.storage)
 }
 
+func NilGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) executor.PlanType {
+	return executor.UNKNOWN
+}
+
 func (s *TSDBSystem) ExecSQL(sql string,
 	validator func([]executor.Chunk),
 	intoValidator func(database, retentionPolicy string, points []influx.Row)) error {
@@ -973,6 +981,7 @@ func (s *TSDBSystem) ExecSQL(sql string,
 		planner.AddRule(executor.NewSlideWindowSpreadRule(""))
 		return planner
 	})
+	executor.GetPlanType = NilGetPlanType
 	exec, err := preparedStmt.Select(context.Background())
 	if err != nil {
 		return err

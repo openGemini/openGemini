@@ -90,11 +90,11 @@ func (p *InsertProcessor) Handle(w spdy.Responser, data interface{}) error {
 func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netstorage.WritePointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
-	ww := getWritePointsWork()
+	ww := GetWritePointsWork()
 	ww.storage = p.store
 	ww.reqBuf = msg.Points()
 	err := ww.WritePoints()
-	putWritePointsWork(ww)
+	PutWritePointsWork(ww)
 
 	var rsp *netstorage.WritePointsResponse
 	switch stdErr := err.(type) {
@@ -111,13 +111,15 @@ func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netst
 func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg *netstorage.WriteStreamPointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
-	ww := getWritePointsWork()
+	ww := GetWritePointsWork()
 	ww.storage = p.store
 	ww.stream = p.stream
 	ww.reqBuf = msg.Points()
 	ww.streamVars = msg.StreamVars()
-	err := ww.WritePoints()
-	putWritePointsWork(ww)
+	err, inUse := ww.WriteStreamPoints()
+	if !inUse {
+		PutWritePointsWork(ww)
+	}
 
 	var rsp *netstorage.WriteStreamPointsResponse
 	switch stdErr := err.(type) {

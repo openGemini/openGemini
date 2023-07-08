@@ -140,6 +140,8 @@ var (
 	ErrIndexGroupNotFound = errors.New("index group not found")
 
 	ErrMeasurementNotFound = errno.NewError(errno.ErrMeasurementNotFound)
+
+	ErrMeasurementsNotFound = errno.NewError(errno.ErrMeasurementsNotFound)
 )
 
 var (

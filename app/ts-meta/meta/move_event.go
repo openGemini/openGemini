@@ -38,7 +38,7 @@ type MoveEvent struct {
 	rollbackState MoveState
 }
 
-func NewMoveEvent(pt *meta.DbPtInfo, src, dst uint64, isUserCommand bool) *MoveEvent {
+func NewMoveEvent(pt *meta.DbPtInfo, src, dst uint64, aliveConnId uint64, isUserCommand bool) *MoveEvent {
 	e := &MoveEvent{
 		startTime:     time.Now(),
 		curState:      MoveInit,
@@ -55,6 +55,7 @@ func NewMoveEvent(pt *meta.DbPtInfo, src, dst uint64, isUserCommand bool) *MoveE
 		e.userCommand = isUserCommand
 		e.eventRes.ch = make(chan error)
 	}
+	e.aliveConnId = aliveConnId
 	return e
 }
 

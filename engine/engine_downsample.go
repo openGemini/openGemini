@@ -28,16 +28,16 @@ func (e *Engine) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64)
 		return 0
 	}
 
-	return sh.Ident().DownSampleLevel
+	return sh.GetIdent().DownSampleLevel
 }
 
-func (e *Engine) ResetDownSampleFlag() {
+func (e *Engine) resetDownSampleFlag() {
 	for _, policy := range e.DownSamplePolicies {
 		policy.Alive = false
 	}
 }
 
-func (e *Engine) RemoveDeadDownSamplePolicy() {
+func (e *Engine) removeDeadDownSamplePolicy() {
 	for name, policy := range e.DownSamplePolicies {
 		if !policy.Alive {
 			delete(e.DownSamplePolicies, name)
@@ -58,7 +58,7 @@ func (e *Engine) GetShardDownSamplePolicyInfos(meta interface {
 			}
 			ptInfo.mu.RLock()
 			for shardId, shardData := range ptInfo.shards {
-				dsp, ok := e.DownSamplePolicies[dbName+"."+shardData.RPName()]
+				dsp, ok := e.DownSamplePolicies[dbName+"."+shardData.GetRPName()]
 				if !ok {
 					continue
 				}
@@ -73,7 +73,7 @@ func (e *Engine) GetShardDownSamplePolicyInfos(meta interface {
 					if shardData.IsOutOfOrderFilesExist() {
 						continue
 					}
-					p.Ident = shardData.Ident()
+					p.Ident = shardData.GetIdent()
 					p.DbName = dbName
 					p.PtId = ptId
 					p.ShardId = shardId
@@ -106,10 +106,10 @@ func (e *Engine) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, sche
 	if sh == nil {
 		return nil
 	}
-	id := sh.Ident().ShardID
+	id := sh.GetIdent().ShardID
 	sh.NewDownSampleTask(sdsp, schema, log)
 	if sh.CanDoDownSample() {
-		if err := sh.StartDownSample(id, sh.Ident().DownSampleLevel, sdsp, meta); err != nil {
+		if err := sh.StartDownSample(id, sh.GetIdent().DownSampleLevel, sdsp, meta); err != nil {
 			return err
 		}
 	}
@@ -117,9 +117,9 @@ func (e *Engine) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, sche
 }
 
 func (e *Engine) UpdateDownSampleInfo(policies *meta2.DownSamplePoliciesInfoWithDbRp) {
-	e.ResetDownSampleFlag()
+	e.resetDownSampleFlag()
 	defer func() {
-		e.RemoveDeadDownSamplePolicy()
+		e.removeDeadDownSamplePolicy()
 	}()
 	for _, p := range policies.Infos {
 		e.UpdateStoreDownSamplePolicies(p.Info, p.DbName+"."+p.RpName)

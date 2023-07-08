@@ -70,6 +70,17 @@ func TestChunkCodec(t *testing.T) {
 		}
 	}
 
+	if len(chunk.Dims()) != len(newChunk.Dims()) {
+		t.Fatalf("marshal columns failed. diff length")
+	}
+
+	for i, c := range newChunk.Dims() {
+		newColumn := c.(*executor.ColumnImpl)
+		if !reflect.DeepEqual(chunk.Dim(i), newColumn) {
+			t.Fatalf("marshal dims failed. diff column: %d", i)
+		}
+	}
+
 	if !compareTagsSlice(chunk.Tags(), newChunk.Tags()) {
 		t.Fatalf("marshal tags failed.")
 	}
@@ -197,6 +208,10 @@ func makeChunk() executor.Chunk {
 
 	chunk.AddColumn(c3)
 	chunk.AddColumn(c4)
+
+	chunk.AddDim(executor.NewColumnImpl(influxql.String))
+	chunk.Dim(0).AppendStringValues("tv1", "tv2", "tv3")
+	chunk.Dim(0).AppendNilsV2(true, true, false, true)
 
 	return chunk
 }

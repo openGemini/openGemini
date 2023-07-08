@@ -104,7 +104,7 @@ func Test_HttpSenderTransform(t *testing.T) {
 		ChunkedSize: 10000,
 		RowsChan:    outPutRowsChan,
 	}
-	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt)
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
 	schema.SetOpt(&opt)
 	mockInput := NewMockGenDataTransform(inRowDataType)
 	httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)
@@ -176,7 +176,7 @@ func BenchmarkHttpSenderTransform(b *testing.B) {
 			ChunkedSize: 10000,
 			RowsChan:    outPutRowsChan,
 		}
-		schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt)
+		schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
 		schema.SetOpt(&opt)
 		mockInput := NewMockGenDataTransform(inRowDataType)
 		httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)

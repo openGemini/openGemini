@@ -17,5 +17,5 @@ func mustGetFreeSpace(path string) uint64 {
 }
 
 func init() {
-	*disableMmap = true
+	enableMmap = false
 }

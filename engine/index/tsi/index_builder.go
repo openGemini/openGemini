@@ -45,10 +45,13 @@ type IndexBuilder struct {
 	endTime   time.Time
 	duration  time.Duration
 
-	mu           sync.RWMutex
-	logicalClock uint64
-	sequenceID   *uint64
-	lock         *string
+	mu             sync.RWMutex
+	logicalClock   uint64
+	sequenceID     *uint64
+	lock           *string
+	EnableTagArray bool
+
+	seriesLimiter func() error
 }
 
 func NewIndexBuilder(opt *Options) *IndexBuilder {
@@ -96,6 +99,18 @@ func putIndexRows(rows *indexRows) {
 	rows.reset()
 	*rows = (*rows)[:0]
 	indexRowsPool.Put(rows)
+}
+
+func (iBuilder *IndexBuilder) SetSeriesLimiter(limiter func() error) {
+	iBuilder.seriesLimiter = limiter
+}
+
+func (iBuilder *IndexBuilder) SeriesLimited() error {
+	if iBuilder.seriesLimiter == nil {
+		return nil
+	}
+
+	return iBuilder.seriesLimiter()
 }
 
 func (iBuilder *IndexBuilder) GenerateUUID() uint64 {

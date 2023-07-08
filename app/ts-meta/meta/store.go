@@ -1307,6 +1307,9 @@ func (s *Store) createDataNode(writeHost, queryHost string) ([]byte, error) {
 	nodeStartInfo.NodeId = dn.ID
 	nodeStartInfo.LTime = dn.LTime
 	nodeStartInfo.ShardDurationInfos = s.data.GetDurationInfos(dbPtIds)
+	nodeStartInfo.DBBriefInfo = s.data.GetAllDatabases()
+	nodeStartInfo.ConnId = dn.ConnID
+
 	status := dn.Status
 	s.mu.RUnlock()
 	// register the store node to SPDY, support send message from meta to store.
@@ -1372,6 +1375,20 @@ func (s *Store) getMeasurementInfo(dbName, rpName, mstName string) ([]byte, erro
 		return nil, err
 	}
 	return mst.MarshalBinary()
+}
+
+func (s *Store) getMeasurementsInfo(dbName, rpName string) ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	msts, err := s.cacheData.Measurements(dbName, rpName)
+	if err != nil {
+		return nil, err
+	}
+
+	return msts.MarshalBinary()
 }
 
 func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
@@ -1571,16 +1588,15 @@ func (s *Store) getFailedDbPts(ownerNode uint64, status meta.PtStatus) []*meta.D
 
 func (s *Store) getDbPtNumPerAliveNode() *map[uint64]uint32 {
 	nodePtNumMap := make(map[uint64]uint32)
-	aliveNodes := make(map[uint64]struct{})
 	s.mu.RLock()
 	for _, dataNode := range s.data.DataNodes {
-		if dataNode.Status == serf.StatusAlive {
-			aliveNodes[dataNode.ID] = struct{}{}
+		if dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
+			nodePtNumMap[dataNode.ID] = 0
 		}
 	}
 	for db := range s.data.PtView {
 		for _, ptInfo := range s.data.PtView[db] {
-			if _, ok := aliveNodes[ptInfo.Owner.NodeID]; ok {
+			if _, ok := nodePtNumMap[ptInfo.Owner.NodeID]; ok {
 				nodePtNumMap[ptInfo.Owner.NodeID]++
 			}
 		}
@@ -1593,9 +1609,9 @@ func (s *Store) shouldTakeOver() bool {
 	return s.data.TakeOverEnabled
 }
 
-func (s *Store) getDbPtsByDbname(db string) ([]*meta.DbPtInfo, error) {
+func (s *Store) getDbPtsByDbname(db string, enableTagArray bool) ([]*meta.DbPtInfo, error) {
 	s.mu.RLock()
-	ptInfos, err := s.data.GetPtInfosByDbname(db)
+	ptInfos, err := s.data.GetPtInfosByDbname(db, enableTagArray)
 	s.mu.RUnlock()
 	return ptInfos, err
 }
@@ -1646,11 +1662,14 @@ func (s *Store) getPtVersion(db string, ptId uint32) uint64 {
 	return ver
 }
 
-func (s *Store) getPtStatus(db string, ptId uint32) meta.PtStatus {
+func (s *Store) getPtStatus(db string, ptId uint32) (meta.PtStatus, error) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.data.PtView[db]; !ok {
+		return meta.Offline, errno.NewError(errno.PtNotFound)
+	}
 	status := s.data.PtView[db][ptId].Status
-	s.mu.RUnlock()
-	return status
+	return status, nil
 }
 
 // locked by the caller
@@ -1668,4 +1687,31 @@ func (s *Store) getDbPtsByNodeId(nodeId uint64) map[string][]uint32 {
 		}
 	}
 	return dbPtIds
+}
+
+func (s *Store) getDBBriefInfo(dbName string) ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	d := &meta.DatabaseBriefInfo{
+		Name: dbName,
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.data.Databases[dbName]; !ok {
+		return nil, errno.NewError(errno.DatabaseNotFound)
+	}
+
+	d.EnableTagArray = s.data.Databases[dbName].EnableTagArray
+	return d.Marshal()
+}
+
+func (s *Store) getDataNodeAliveConnId(nodeId uint64) (uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	node := s.data.DataNode(nodeId)
+	if node == nil {
+		return 0, errno.NewError(errno.DataNodeNotFound)
+	}
+	return node.AliveConnID, nil
 }

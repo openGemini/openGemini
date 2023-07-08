@@ -48,6 +48,7 @@ type Server interface {
 	Closed() bool
 
 	CreateDatabase(db string) (*meta.DatabaseInfo, error)
+	CreateDatabaseTagArrayEnabledAndRp(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error
 	CreateDatabaseShardKey(db string, shardKey string) error
 	CreateDatabaseAndRetentionPolicy(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error
 	DropDatabase(db string) error
@@ -104,6 +105,22 @@ func (s *RemoteServer) CreateDatabase(db string) (*meta.DatabaseInfo, error) {
 		return nil, err
 	}
 	return &meta.DatabaseInfo{}, nil
+}
+
+func (s *RemoteServer) CreateDatabaseTagArrayEnabledAndRp(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error {
+	stmt := fmt.Sprintf("CREATE+DATABASE+%s+TAG+ATTRIBUTE+ARRAY", db)
+	_, err := s.HTTPPost(s.URL()+"/query?q="+stmt, nil)
+	if err != nil {
+		return err
+	}
+
+	stmt = fmt.Sprintf("CREATE+RETENTION+POLICY+%s+ON+\"%s\"+DURATION+%s+REPLICATION+%v+SHARD+DURATION+%s",
+		rp.Name, db, rp.Duration, *rp.ReplicaN, rp.ShardGroupDuration)
+	if makeDefault {
+		stmt += "+DEFAULT"
+	}
+	_, err = s.HTTPPost(s.URL()+"/query?q="+stmt, nil)
+	return err
 }
 
 func (s *RemoteServer) CreateDatabaseShardKey(db string, shardKey string) error {
@@ -387,6 +404,12 @@ func (s *LocalServer) CreateDatabase(db string) (*meta.DatabaseInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return nil, nil
+}
+
+func (s *LocalServer) CreateDatabaseTagArrayEnabledAndRp(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return nil
 }
 
 func (s *LocalServer) CreateDatabaseShardKey(db string, shardKey string) error {

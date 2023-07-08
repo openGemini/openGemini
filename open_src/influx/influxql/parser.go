@@ -2103,8 +2103,9 @@ func (p *Parser) parseDropRetentionPolicyStatement() (*DropRetentionPolicyStatem
 
 // parseCreateUserStatement parses a string and returns a CreateUserStatement.
 // This function assumes the "CREATE USER" tokens have already been consumed.
-//e.g create user <name> with 'pwd' all PRIVILEGES :create admin user
-//    create user <name> with 'pwd'   :user  must bt granted by admin
+// e.g create user <name> with 'pwd' all PRIVILEGES :create admin user
+//
+//	create user <name> with 'pwd'   :user  must bt granted by admin
 func (p *Parser) parseCreateUserStatement() (*CreateUserStatement, error) {
 	stmt := &CreateUserStatement{}
 

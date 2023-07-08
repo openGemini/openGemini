@@ -20,7 +20,7 @@ import (
 	"sort"
 	"unsafe"
 
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -98,7 +98,7 @@ func (ct *ChunkTags) GetChunkTagAndValues() ([]string, []string) {
 }
 
 func DecodeBytes(bytes []byte) []byte {
-	offsetLen := record.Bytes2Uint16Slice(bytes[:2])[0]
+	offsetLen := util.Bytes2Uint16Slice(bytes[:2])[0]
 	return bytes[2+int(offsetLen)*2:]
 }
 
@@ -184,7 +184,7 @@ func (ct *ChunkTags) encodeTagsByTagKVs(keys []string, vals []string) {
 
 func (ct *ChunkTags) encodeHead() {
 	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)
-	head := record.Uint16Slice2byte(ct.offsets)
+	head := util.Uint16Slice2byte(ct.offsets)
 	ct.subset = append(head, ct.subset...)
 }
 
@@ -212,7 +212,7 @@ func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 	}
 	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)
-	head := record.Uint16Slice2byte(ct.offsets)
+	head := util.Uint16Slice2byte(ct.offsets)
 	ct.subset = append(head, ct.subset...)
 }
 
@@ -220,18 +220,18 @@ func (ct *ChunkTags) decodeTags() [][]string {
 	if len(ct.subset) == 0 {
 		return nil
 	}
-	offsetLen := record.Bytes2Uint16Slice(ct.subset[:2])[0]
-	ct.offsets = record.Bytes2Uint16Slice(ct.subset[2 : 2+int(offsetLen)*2])
+	offsetLen := util.Bytes2Uint16Slice(ct.subset[:2])[0]
+	ct.offsets = util.Bytes2Uint16Slice(ct.subset[2 : 2+int(offsetLen)*2])
 	tags := ct.subset[2+int(offsetLen)*2:]
 	TagValues := make([][]string, 0, offsetLen/2)
 	var index uint16
 	for i := uint16(0); i < offsetLen; i += 2 {
-		k := record.Bytes2str(tags[index:ct.offsets[i]])
+		k := util.Bytes2str(tags[index:ct.offsets[i]])
 		if len(k) == 1 {
 			index = ct.offsets[i+1]
 			continue
 		}
-		v := record.Bytes2str(tags[ct.offsets[i]:ct.offsets[i+1]])
+		v := util.Bytes2str(tags[ct.offsets[i]:ct.offsets[i+1]])
 		TagValues = append(TagValues, []string{k[:len(k)-1], v[:len(v)-1]})
 		index = ct.offsets[i+1]
 	}

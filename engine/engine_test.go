@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,14 +177,16 @@ func initEngine(dir string) (*Engine, error) {
 
 	loadCtx := getLoadCtx()
 	eng.loadCtx = loadCtx
-	eng.CreateDBPT(defaultDb, defaultPtId)
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
 	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	shardTimeRange := getTimeRangeInfo()
 
 	// init instance
 	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
-
-	err := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	err := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo)
 	if err != nil {
 		panic(err)
 	}
@@ -270,7 +273,7 @@ func initEngine1(dir string) (*Engine, error) {
 	shardDuration := &meta.DurationDescriptor{Tier: util.Hot, TierDuration: time.Hour}
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
-	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption)
+	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, config.TSSTORE)
 	shard.indexBuilder = indexBuilder
 	//shard.wal.logger = eng.log
 	//shard.wal.traceLogger = eng.log
@@ -511,10 +514,13 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	}
 
 	// step1: engine create shard, shard will open automatically
-	eng.CreateDBPT(defaultDb, defaultPtId)
-	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 1, getTimeRangeInfoByShard(1)))
-	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, getTimeRangeInfoByShard(2))) // load fail
-	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 3, getTimeRangeInfoByShard(3)))
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 1, getTimeRangeInfoByShard(1), msInfo))
+	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, getTimeRangeInfoByShard(2), msInfo)) // load fail
+	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 3, getTimeRangeInfoByShard(3), msInfo))
 
 	// step2: write data for three shards
 	rows, _, _ := GenDataRecord([]string{"mst"}, 1, 1000, time.Second, time.Now(), true, true, false)
@@ -555,10 +561,16 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 			},
 		},
 	}
+	dbBriefInfos := make(map[string]*meta.DatabaseBriefInfo)
+	dbInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	dbBriefInfos[defaultDb] = dbInfo
 	for _, fp := range failpoints {
 		require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
 
-		err := eng.Open(shardDurationInfo, nil)
+		err := eng.Open(shardDurationInfo, dbBriefInfos, nil)
 		if err = fp.expect(err); err != nil {
 			t.Fatal(err)
 		}
@@ -769,10 +781,196 @@ func TestGetShard(t *testing.T) {
 	var shardID = defaultShardId
 	var tr = getTimeRangeInfo()
 
-	eng.CreateDBPT(db, ptID)
-	require.NoError(t, eng.CreateShard(db, rp, ptID, shardID, tr))
+	eng.CreateDBPT(db, ptID, false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	require.NoError(t, eng.CreateShard(db, rp, ptID, shardID, tr, msInfo))
 
 	require.NotEmpty(t, eng.GetShard(db, ptID, shardID))
 	require.Empty(t, eng.GetShard(db, ptID+1, shardID))
 	require.Equal(t, 0, eng.GetShardDownSampleLevel(db, ptID, shardID+1))
+}
+
+func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, dPath)
+	eng := &Engine{
+		closed:       interruptsignal.NewInterruptSignal(),
+		dataPath:     dataPath + "/data",
+		walPath:      dataPath + "/wal",
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:   make(map[string]string),
+		droppingRP:   make(map[string]string),
+		droppingMst:  make(map[string]string),
+		loadCtx:      getLoadCtx(),
+		engOpt:       DefaultEngineOption,
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+
+	getTimeRangeInfoByShard := func(shId uint64) *meta.ShardTimeRangeInfo {
+		tr := meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
+			EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
+		timeRange := &meta.ShardTimeRangeInfo{
+			TimeRange: tr,
+			OwnerIndex: meta.IndexDescriptor{
+				IndexID:      shId,
+				IndexGroupID: defaultShGroupId,
+				TimeRange:    tr,
+			},
+			ShardDuration: getShardDurationInfo(shId),
+		}
+		return timeRange
+	}
+
+	// step1: engine create shard, shard will open automatically
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 1, getTimeRangeInfoByShard(1), msInfo))
+	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, getTimeRangeInfoByShard(2), msInfo)) // load fail
+	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 3, getTimeRangeInfoByShard(3), msInfo))
+
+	// step2: write data for three shards
+	rows, _, _ := GenDataRecord([]string{"mst"}, 1, 1000, time.Second, time.Now(), true, true, false)
+	sh1 := eng.DBPartitions[defaultDb][defaultPtId].Shard(1).(*shard)
+	require.NoError(t, writeData(sh1, rows, false))
+	sh2 := eng.DBPartitions[defaultDb][defaultPtId].Shard(2).(*shard)
+	require.NoError(t, writeData(sh2, rows, false))
+	sh3 := eng.DBPartitions[defaultDb][defaultPtId].Shard(3).(*shard)
+	require.NoError(t, writeData(sh3, rows, false))
+
+	//sh2IndexLock := filepath.Join(filepath.Dir(sh2.WalPath()), "shard_key_index", "flock.lock")
+	sh2WalFile := "1.wal"
+	//sh3IndexLock := filepath.Join(filepath.Dir(sh3.WalPath()), "shard_key_index", "flock.lock")
+
+	// step2: engine close
+	require.NoError(t, eng.Close())
+
+	// step3: engine reOpen
+	shardDurationInfo := map[uint64]*meta.ShardDurationInfo{
+		1: getShardDurationInfo(1),
+		2: getShardDurationInfo(2),
+		3: getShardDurationInfo(3),
+	}
+
+	failpoints := []struct {
+		failPath string
+		inTerms  string
+		expect   func(err error) error
+	}{
+		{
+			failPath: "github.com/openGemini/openGemini/engine/mock-replay-wal-error",
+			inTerms:  fmt.Sprintf(`return("%s")`, sh2WalFile), // only shard2 fail
+			expect: func(err error) error {
+				if err != nil && err.Error() == sh2WalFile {
+					return nil
+				}
+				return fmt.Errorf("unexpected error:%s", err)
+			},
+		},
+	}
+	dbBriefInfos := make(map[string]*meta.DatabaseBriefInfo)
+	dbInfo := &meta.DatabaseBriefInfo{
+		Name:           "db1",
+		EnableTagArray: false,
+	}
+	dbBriefInfos["db1"] = dbInfo
+	for _, fp := range failpoints {
+		require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
+
+		err := eng.Open(shardDurationInfo, dbBriefInfos, nil)
+		if err = fp.expect(err); err != nil {
+			if !strings.Contains(err.Error(), "database not found") {
+				t.Fatal(err)
+			}
+		}
+		require.NoError(t, eng.Close())
+		require.NoError(t, failpoint.Disable(fp.failPath))
+	}
+}
+
+func TestEngine_StatisticsOps(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames1 := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames1, 10, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	msNames2 := []string{"mem"}
+	rows, _, _ = GenDataRecord(msNames2, 20, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	dbInfo := eng.DBPartitions["db0"][0]
+	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx.DebugFlush()
+
+	stats := eng.StatisticsOps()
+	expectStats := 0
+	require.Equal(t, expectStats, len(stats))
+
+	var expectSeriesNum int64
+	m := mockMetaClient()
+	eng.metaClient = m
+	stats = eng.StatisticsOps()
+	expectSeriesNum = 30
+	require.Equal(t, expectSeriesNum, stats[0].Values["numSeries"])
+
+}
+
+func TestUpdateShardDurationInfo(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	shardDuration := getShardDurationInfo(1)
+	shardDuration.DurationInfo.Tier = util.Warm
+	shardDuration.Ident.OwnerPt = 0
+	err = eng.UpdateShardDurationInfo(shardDuration)
+	require.NoError(t, err)
+	require.Equal(t, eng.GetShard(defaultDb, 0, 1).GetDuration().Tier, uint64(util.Warm))
+}
+
+func TestEngine_SeriesLimited(t *testing.T) {
+	testDir := t.TempDir()
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	require.NoError(t, err)
+
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+
+	sh.initSeriesLimiter(10)
+	rows, _, _ := GenDataRecord([]string{"mst"}, 20, 1, 1, time.Now(), false, true, false)
+	err = writeData(sh, rows, true)
+	require.NoError(t, err)
+
+	rows, _, _ = GenDataRecord([]string{"mst"}, 30, 1, 1, time.Now(), false, true, false)
+	err = writeData(sh, rows, true)
+	require.EqualError(t, err, errno.NewError(errno.SeriesLimited, defaultDb, 10, 20).Error())
+
+	sh.indexBuilder.EnableTagArray = true
+	rows, _, _ = GenDataRecord([]string{"mst"}, 40, 1, 1, time.Now(), false, true, false)
+	rows[0].Tags[0].Value = "[a,b,c]"
+	rows[0].UnmarshalIndexKeys(nil)
+	err = writeData(sh, rows, true)
+	require.EqualError(t, err, errno.NewError(errno.SeriesLimited, defaultDb, 10, 20).Error())
 }

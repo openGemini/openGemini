@@ -62,7 +62,19 @@ func CheckRecord(rec *Record) {
 	}
 }
 
-func CheckCol(col *ColVal) {
+func CheckTimes(times []int64) {
+	if len(times) < 2 {
+		return
+	}
+	for i := 0; i < len(times)-1; i++ {
+		if times[i+1] <= times[i] {
+			fmt.Println(i+1, "=>", times[i+1], "; ", i, "=>", times[i])
+			panic("the time column is not ordered")
+		}
+	}
+}
+
+func CheckCol(col *ColVal, typ int) {
 	if col == nil {
 		return
 	}
@@ -77,6 +89,13 @@ func CheckCol(col *ColVal) {
 
 	if col.ValidCount(0, col.Len) != (col.Len - col.NilCount) {
 		panic("NilCount is invalid")
+	}
+
+	if typ != influx.Field_Type_String {
+		expSize := typeSize[typ] * (col.Len - col.NilCount)
+		if expSize != len(col.Val) {
+			panic("invalid val size")
+		}
 	}
 
 	bitmapLen := (col.Len+col.BitMapOffset)/8 + 1

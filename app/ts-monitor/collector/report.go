@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -37,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hpcloud/tail"
+	"github.com/nxadm/tail"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -109,25 +110,28 @@ type ReportJob struct {
 
 func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errLogHistory string) *ReportJob {
 	r := &c.ReportConfig
-	m := &c.MonitorConfig
 	q := &c.QueryConfig
-	writeProtocol := "http"
+	m := &c.MonitorConfig
+	protocol := "http"
+	var defaultClient = http.DefaultClient
 	if c.ReportConfig.HTTPSEnabled {
-		writeProtocol = "https"
+		protocol = "https"
+		tr := &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+		defaultClient = &http.Client{
+			Transport: tr,
+		}
 	}
 
-	queryProtocol := "http"
-	if c.QueryConfig.HTTPSEnabled {
-		queryProtocol = "https"
-	}
-
-	writeUrl := fmt.Sprintf("%s://%s/write?db=%s&rp=%s", writeProtocol, r.Address, r.Database, r.Rp)
+	writeUrl := fmt.Sprintf("%s://%s/write?db=%s&rp=%s", protocol, r.Address, r.Database, r.Rp)
 	writeHeader := http.Header{}
 	writeHeader.Set("Authorization", "Basic "+basicAuth(r.Username, crypto.Decrypt(r.Password)))
 
-	queryUrl := fmt.Sprintf("%s://%s/query", queryProtocol, r.Address)
+	queryUrl := fmt.Sprintf("%s://%s/query", protocol, r.Address)
 	queryHeader := http.Header{}
 	queryHeader.Set("Authorization", "Basic "+basicAuth(q.Username, crypto.Decrypt(q.Password)))
+	queryHeader.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	mr := &ReportJob{
 		storeDatabase: r.Database,
@@ -145,7 +149,7 @@ func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errL
 		errLogStat:    make(map[string]string),
 		reportStat:    NewReportStat(),
 	}
-	mr.Client = http.DefaultClient
+	mr.Client = defaultClient
 	return mr
 }
 
@@ -154,9 +158,7 @@ func (rb *ReportJob) CreateDatabase() error {
 	cmd := fmt.Sprintf("CREATE DATABASE %s with duration %s replication 1 name %s", rb.storeDatabase, rb.storeDuration, rb.storeRP)
 	data.Set("q", cmd)
 	buf := data.Encode()
-	headers := rb.queryHeader
-	headers.Add("Content-Type", "application/x-www-form-urlencoded")
-	if err := rb.retryEver(rb.queryUrl, headers, buf, HttpTimeout); err != nil {
+	if err := rb.retryEver(rb.queryUrl, rb.queryHeader, buf, HttpTimeout); err != nil {
 		return err
 	}
 	return nil

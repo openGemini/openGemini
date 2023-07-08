@@ -94,7 +94,6 @@ type Common struct {
 	HaEnable       bool     `toml:"ha-enable"`
 	IgnoreEmptyTag bool     `toml:"ignore-empty-tag"`
 	ReportEnable   bool     `toml:"report-enable"`
-	EnableTagArray bool     `toml:"enable-tag-array"`
 	CryptoConfig   string   `toml:"crypto-config"`
 	ClusterID      string   `toml:"cluster-id"`
 	CPUNum         int      `toml:"cpu-num"`
@@ -102,6 +101,7 @@ type Common struct {
 	MemorySize      itoml.Size     `toml:"memory-size"`
 	MemoryLimitSize itoml.Size     `toml:"executor-memory-size-limit"`
 	MemoryWaitTime  itoml.Duration `toml:"executor-memory-wait-time"`
+	OptHashAlgo     string         `toml:"select-hash-algorithm"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -109,6 +109,7 @@ func NewCommon() *Common {
 	return &Common{
 		MetaJoin:     DefaultMetaJoin,
 		ReportEnable: true,
+		OptHashAlgo:  DefaultHashAlgo,
 	}
 }
 
@@ -150,4 +151,27 @@ func (c *Common) Corrector() {
 	}
 }
 
-var EnableTagArray = false
+// storage engine type
+
+type EngineType uint8
+
+const (
+	TSSTORE       EngineType = iota // tsstore, data aware(time series) column store, default value(0 for int) if engineType not set
+	COLUMNSTORE                     // columnstore, traditional column store
+	LOGSTORE                        // logstore, log store
+	ENGINETYPEEND                   // undefined
+)
+
+var String2EngineType map[string]EngineType = map[string]EngineType{
+	"tsstore":     TSSTORE,
+	"columnstore": COLUMNSTORE,
+	"logstore":    LOGSTORE,
+	"undefined":   ENGINETYPEEND,
+}
+
+var EngineType2String map[EngineType]string = map[EngineType]string{
+	TSSTORE:       "tsstore",
+	COLUMNSTORE:   "columnstore",
+	LOGSTORE:      "logstore",
+	ENGINETYPEEND: "undefined",
+}

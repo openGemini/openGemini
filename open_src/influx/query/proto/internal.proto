@@ -35,6 +35,8 @@ message ProcessorOptions {
     uint64      TraceId = 30;
     bytes       SeriesKey = 31;
     bool        GroupByAllDims = 32;
+    uint32      EngineType = 33;
+    string      SourceCondition = 34;
 }
 
 message Measurement {
@@ -44,6 +46,7 @@ message Measurement {
     string Regex = 4;
     bool   IsTarget = 5;
     string SystemIterator = 6;
+    uint32 EngineType = 7;
 }
 
 message Interval {
@@ -74,10 +77,6 @@ message QuerySchema {
     ProcessorOptions Opt = 4;
 }
 
-message QueryTable {
-    Measurement M = 1;
-    RowDataType Rt = 2;
-}
 
 message Chunk {
     string   Name = 1;
@@ -86,12 +85,6 @@ message Chunk {
     repeated int64       Time = 4;
     repeated int64       IntervalIndex = 5;
     repeated Column      Columns = 6;
-}
-
-message RowDataType {
-	repeated int64 Aux = 1;
-	string   Fields    = 2;
-	map<string, int64> indexByName = 3;
 }
 
 message ChunkTags {
@@ -117,7 +110,6 @@ message ExprOptions {
 message QueryNode {
     LogicPlanType   Name      = 1;
     repeated bytes  Inputs    = 3;
-    RowDataType     Rt        = 5;
     repeated ExprOptions Ops  = 6;
     uint32   Exchange         = 7;
     int64           limit     = 8;
@@ -178,4 +170,8 @@ enum LogicPlanType
 	LogicalDummyShard = 29;
 	LogicalTSSPScan = 30;
 	LogicalSortAppend = 31;
+    LogicalSort = 32;
+    LogicalHashMerge = 33;
+    LogicalSparseIndexScan = 34;
+    LogicalColumnStoreReader = 35;
 }

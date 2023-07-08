@@ -31,9 +31,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/pool"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -89,7 +88,7 @@ func (s *Server) setIsStopping() {
 	}
 }
 
-func getWritePointsWork() *WritePointsWork {
+func GetWritePointsWork() *WritePointsWork {
 	v := writePointsWorkPool.Get()
 	if v == nil {
 		return &WritePointsWork{
@@ -99,7 +98,7 @@ func getWritePointsWork() *WritePointsWork {
 	return v.(*WritePointsWork)
 }
 
-func putWritePointsWork(ww *WritePointsWork) {
+func PutWritePointsWork(ww *WritePointsWork) {
 	bufferpool.PutPoints(ww.reqBuf)
 	ww.reset()
 	writePointsWorkPool.Put(ww)
@@ -120,6 +119,18 @@ type WritePointsWork struct {
 	lastResetTime    uint64
 
 	logger *logger.Logger
+}
+
+func (ww *WritePointsWork) GetRows() []influx.Row {
+	return ww.rows
+}
+
+func (ww *WritePointsWork) SetRows(rows []influx.Row) {
+	ww.rows = rows
+}
+
+func (ww *WritePointsWork) PutWritePointsWork() {
+	PutWritePointsWork(ww)
 }
 
 func (ww *WritePointsWork) reset() {
@@ -165,7 +176,7 @@ func (ww *WritePointsWork) decodePoints() (db string, rp string, ptId uint32, sh
 		return
 	}
 	tail = tail[1:]
-	db = record.Bytes2str(tail[:l])
+	db = util.Bytes2str(tail[:l])
 	tail = tail[l:]
 
 	l = int(tail[0])
@@ -175,7 +186,7 @@ func (ww *WritePointsWork) decodePoints() (db string, rp string, ptId uint32, sh
 		return
 	}
 	tail = tail[1:]
-	rp = record.Bytes2str(tail[:l])
+	rp = util.Bytes2str(tail[:l])
 
 	tail = tail[l:]
 
@@ -238,7 +249,7 @@ func (ww *WritePointsWork) decodePoints() (db string, rp string, ptId uint32, sh
 }
 
 func (ww *WritePointsWork) WritePoints() error {
-	db, rp, ptId, shard, streamShardIdList, binaryRows, err := ww.decodePoints()
+	db, rp, ptId, shard, _, binaryRows, err := ww.decodePoints()
 	if err != nil {
 		err = errno.NewError(errno.ErrUnmarshalPoints, err)
 		ww.logger.Error("unmarshal rows failed", zap.String("db", db),
@@ -249,25 +260,39 @@ func (ww *WritePointsWork) WritePoints() error {
 		ww.logger.Error("write rows failed", zap.String("db", db),
 			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
 	}
+	return err
+}
+
+func (ww *WritePointsWork) WriteStreamPoints() (error, bool) {
+	var inUse bool
+	db, rp, ptId, shard, streamShardIdList, binaryRows, err := ww.decodePoints()
+	if err != nil {
+		err = errno.NewError(errno.ErrUnmarshalPoints, err)
+		ww.logger.Error("unmarshal rows failed", zap.String("db", db),
+			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
+		return err, inUse
+	}
+	if err = ww.storage.WriteRows(db, rp, ptId, shard, ww.rows, binaryRows); err != nil {
+		ww.logger.Error("write rows failed", zap.String("db", db),
+			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
+	}
 	if ww.stream == nil || len(streamShardIdList) == 0 {
-		return err
+		return err, inUse
 	}
 
-	// TODO: How is the source Shard associated with the aggregated Shard?
 	streamIdDstShardIdMap := make(map[uint64]uint64)
 	if len(streamShardIdList)%2 != 0 {
 		err = errno.NewError(errno.ErrUnmarshalPoints, err)
-		return err
+		return err, inUse
 	}
 	for i := 0; i < len(streamShardIdList); i += 2 {
 		streamIdDstShardIdMap[streamShardIdList[i]] = streamShardIdList[i+1]
 	}
 	if err == nil && len(streamShardIdList) > 0 {
-		dataBlock := pool.StreamDataBlockGet()
-		dataBlock.Exchange(&ww.reqBuf, &ww.rows, &ww.tagpools, &ww.fieldpools, &ww.indexKeypools, &ww.indexOptionpools, &ww.lastResetTime)
-		ww.stream.WriteRows(db, rp, ptId, shard, streamIdDstShardIdMap, dataBlock)
+		ww.stream.WriteRows(db, rp, ptId, shard, streamIdDstShardIdMap, ww)
+		inUse = true
 	}
-	return err
+	return err, inUse
 }
 
 func (s *Server) MustClose() {

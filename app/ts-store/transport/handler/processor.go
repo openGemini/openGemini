@@ -140,47 +140,39 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return executor.NewInvalidTypeError("*executor.RemoteQuery", msg.Data())
 	}
 
-	logger.GetLogger().Info("SelectProcessor.Handle",
-		zap.Uint64("clientID", msg.ClientID()),
-		zap.Uint64("seq", w.Sequence()),
-		zap.String("database", req.Database),
-		zap.Uint64s("ShardIDs", req.ShardIDs))
+	qm := query.NewManager(msg.ClientID())
 
-	go func() {
-		qm := query.NewManager(msg.ClientID())
-		if qm.Aborted(w.Sequence()) {
-			logger.GetLogger().Info("[SelectProcessor.Handle] aborted")
-			_ = w.Response(executor.NewFinishMessage(), true)
-			return
-		}
+	if qm.Aborted(w.Sequence()) {
+		logger.GetLogger().Info("[SelectProcessor.Handle] aborted")
+		_ = w.Response(executor.NewFinishMessage(), true)
+		return nil
+	}
 
-		s := NewSelect(p.store, w, req)
-		qm.Add(w.Sequence(), s)
+	s := NewSelect(p.store, w, req)
+	qm.Add(w.Sequence(), s)
 
-		w.Session().EnableDataACK()
-		defer func() {
-			w.Session().DisableDataACK()
-			qm.Finish(w.Sequence())
-		}()
-
-		err := s.Process()
-		s.Release()
-		if err != nil {
-			logger.GetLogger().Error("failed to process the query request", zap.Error(err))
-			switch stderr := err.(type) {
-			case *errno.Error:
-				_ = w.Response(executor.NewErrorMessage(stderr.Errno(), stderr.Error()), true)
-			default:
-				_ = w.Response(executor.NewErrorMessage(0, stderr.Error()), true)
-			}
-			return
-		}
-
-		err = w.Response(executor.NewFinishMessage(), true)
-		if err != nil {
-			logger.GetLogger().Error("failed to response finish message", zap.Error(err))
-		}
+	w.Session().EnableDataACK()
+	defer func() {
+		w.Session().DisableDataACK()
+		qm.Finish(w.Sequence())
 	}()
+
+	err := s.Process()
+	if err != nil {
+		logger.GetLogger().Error("failed to process the query request", zap.Error(err))
+		switch stderr := err.(type) {
+		case *errno.Error:
+			_ = w.Response(executor.NewErrorMessage(stderr.Errno(), stderr.Error()), true)
+		default:
+			_ = w.Response(executor.NewErrorMessage(0, stderr.Error()), true)
+		}
+		return nil
+	}
+
+	err = w.Response(executor.NewFinishMessage(), true)
+	if err != nil {
+		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
+	}
 
 	return nil
 }

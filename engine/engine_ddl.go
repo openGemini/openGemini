@@ -28,9 +28,10 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/strings"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -394,7 +395,7 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 		}
 		for i, tk := range tagKeys[name] {
 			for _, v := range tvs[i] {
-				tv.Values = append(tv.Values, netstorage.TagSet{Key: record.Bytes2str(tk), Value: v})
+				tv.Values = append(tv.Values, netstorage.TagSet{Key: util.Bytes2str(tk), Value: v})
 			}
 		}
 		tagValuess = append(tagValuess, tv)
@@ -410,4 +411,76 @@ func appendValuesToMap(results map[string][][]string, name string, values [][]st
 	for i := 0; i < len(values); i++ {
 		results[name][i] = strings.UnionSlice(append(results[name][i], values[i]...))
 	}
+}
+
+func (e *Engine) StatisticsOps() []opsStat.OpsStatistic {
+	databases := e.Databases()
+	statistics := make([]opsStat.OpsStatistic, 0, len(databases))
+	for _, database := range databases {
+		msts := e.getAllMst(database)
+		if len(msts) == 0 {
+			continue
+		}
+		ptIDs := e.getDBPtIds(database)
+		mstCardinality, err := e.SeriesCardinality(database, ptIDs, msts, nil)
+		if err != nil {
+			return nil
+		}
+
+		var ret meta2.CardinalityInfos
+		for i := range mstCardinality {
+			ret = append(ret, mstCardinality[i].CardinalityInfos...)
+		}
+
+		var totalCount uint64
+		for i := range ret {
+			totalCount += ret[i].Cardinality
+		}
+		valueMap := map[string]interface{}{
+			"numSeries": int64(totalCount),
+		}
+
+		statistics = append(statistics, opsStat.OpsStatistic{
+			Name:   stat.DatabaseStatisticsName,
+			Tags:   stat.StatisticTags{"database": database}.Merge(stat.DatabaseTagMap),
+			Values: valueMap,
+		})
+	}
+
+	return statistics
+}
+
+func (e *Engine) Databases() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	databases := make([]string, 0, len(e.DBPartitions))
+	for dbName := range e.DBPartitions {
+		databases = append(databases, dbName)
+	}
+
+	return databases
+}
+
+func (e *Engine) getDBPtIds(dbName string) []uint32 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	ids := make([]uint32, 0, len(e.DBPartitions[dbName]))
+	for ptId := range e.DBPartitions[dbName] {
+		ids = append(ids, ptId)
+	}
+	return ids
+}
+
+func (e *Engine) getAllMst(dbName string) [][]byte {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.metaClient == nil {
+		return nil
+	}
+	msts := e.metaClient.GetAllMst(dbName)
+	mstNames := make([][]byte, len(msts))
+	for i := range msts {
+		mstNames[i] = []byte(msts[i])
+	}
+	return mstNames
 }

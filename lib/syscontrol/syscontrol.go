@@ -61,6 +61,7 @@ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=downsample_in_order&order=t
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=readonly&switchon=true&allnodes=y'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=readonly&switchon=true&host=127.0.0.1'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=verifynode&switchon=false'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=memusagelimit&limit=85'
 
 Sql cmd:
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=chunk_reader_parallel&limit=4'
@@ -87,6 +88,7 @@ const (
 	Readonly             = "readonly"
 	LogRows              = "log_rows"
 	verifyNode           = "verifynode"
+	memUsageLimit        = "memusagelimit"
 	TimeFilterProtection = "time_filter_protection"
 )
 
@@ -158,7 +160,7 @@ func SetLogRowsRuleSwitch(switchon bool, rules string) error {
 
 func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err error) {
 	switch req.Mod() {
-	case DataFlush, compactionEn, compmerge, snapshot, Failpoint, DownSampleInOrder, verifyNode:
+	case DataFlush, compactionEn, compmerge, snapshot, Failpoint, DownSampleInOrder, verifyNode, memUsageLimit:
 		// store SysCtrl cmd
 		dataNodes, err := SysCtrl.MetaClient.DataNodes()
 		if err != nil {

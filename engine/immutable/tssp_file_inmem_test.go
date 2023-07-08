@@ -21,7 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -105,7 +105,7 @@ func getChunkMetaBlocks(mb *MemBlock, n int) {
 	mb.ReserveMetaBlock(n)
 
 	arr := []int64{10, 90, 100, 10, 1110000, 9990000}
-	agg := record.Int64Slice2byte(arr[:])
+	agg := util.Int64Slice2byte(arr[:])
 	sid := uint64(1)
 
 	cm := ChunkMeta{}
@@ -137,7 +137,7 @@ func getChunkMetaBlocks(mb *MemBlock, n int) {
 			mBlock = cm.marshal(mBlock)
 			sid++
 		}
-		ofs := record.Uint32Slice2ByteBigEndian(mOfs)
+		ofs := numberenc.MarshalUint32SliceAppend(nil, mOfs)
 		mBlock = append(mBlock, ofs...)
 		mb.chunkMetas = append(mb.chunkMetas, mBlock)
 	}
@@ -153,7 +153,7 @@ func TestLoadDataBlock(t *testing.T) {
 	_ = fd.Truncate(4*1024*1024 + 1024)
 	fi, _ := fd.Stat()
 	lockPath := ""
-	dr := NewDiskFileReader(fd, &lockPath)
+	dr := fileops.NewFileReader(fd, &lockPath)
 	defer dr.Close()
 
 	tr := &Trailer{dataOffset: 16, dataSize: fi.Size() - 16}

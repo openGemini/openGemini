@@ -34,9 +34,13 @@ func TestCreateEventFromInfo(t *testing.T) {
 		Db:  "test",
 		Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 1}},
 	}
-	mei := meta.NewMigrateEventInfo(pt.String(), int(MoveType), pt, 2)
+	mei := meta.NewMigrateEventInfo(pt.String(), int(MoveType), pt, 2, 1)
 	msm := NewMigrateStateMachine()
 	event := msm.createEventFromInfo(mei)
+	assert.Equal(t, true, event != nil)
+
+	mei = meta.NewMigrateEventInfo(pt.String(), int(AssignType), pt, 2, 1)
+	event = msm.createEventFromInfo(mei)
 	assert.Equal(t, true, event != nil)
 }
 
@@ -69,8 +73,12 @@ func TestInterruptEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}}
-	me := NewAssignEvent(dbPt, 2, false)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           db,
+		EnableTagArray: false,
+	}
+	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}, DBBriefInfo: dbBriefInfo}
+	me := NewAssignEvent(dbPt, 2, dataNode.AliveConnID, false)
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
@@ -91,7 +99,7 @@ waitAssign:
 		}
 		time.Sleep(time.Millisecond)
 	}
-	e := NewAssignEvent(dbPt, 2, false)
+	e := NewAssignEvent(dbPt, 2, dataNode.AliveConnID, false)
 	globalService.clusterManager.removeClusterMember(2)
 	err = globalService.msm.executeEvent(e)
 	assert.Equal(t, true, errno.Equal(err, errno.ConflictWithEvent))

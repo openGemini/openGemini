@@ -80,7 +80,7 @@ func initDownSampleSchema(sinfo *meta.ShardDownSamplePolicyInfo, infos *meta.RpM
 		opt.Interval = hybridqp.Interval{
 			Duration: policy.DownSamplePolicies[downSampleLevel-1].TimeInterval,
 		}
-		schemas[start-1] = append(schemas[start-1], executor.NewQuerySchemaWithSources(fields, sources, columnNames, opt))
+		schemas[start-1] = append(schemas[start-1], executor.NewQuerySchemaWithSources(fields, sources, columnNames, opt, nil))
 	}
 	return schemas
 }
@@ -160,7 +160,7 @@ func genNextLevelSchema(s hybridqp.Catalog, timeInterval time.Duration) hybridqp
 	opt.Interval = hybridqp.Interval{
 		Duration: timeInterval,
 	}
-	return executor.NewQuerySchemaWithSources(renameFields, s.Sources(), columnNames, opt)
+	return executor.NewQuerySchemaWithSources(renameFields, s.Sources(), columnNames, opt, nil)
 }
 
 func rewriteField(expr influxql.Expr, callName string) {

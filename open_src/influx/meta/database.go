@@ -21,6 +21,7 @@ type DatabaseInfo struct {
 	RetentionPolicies      map[string]*RetentionPolicyInfo
 	MarkDeleted            bool
 	ShardKey               ShardKeyInfo
+	EnableTagArray         bool
 }
 
 func NewDatabase(name string) *DatabaseInfo {
@@ -119,6 +120,7 @@ func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 	if di.ShardKey.ShardKey != nil {
 		pb.ShardKey = di.ShardKey.Marshal()
 	}
+	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
 
 	return pb
 }
@@ -141,6 +143,7 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 	if pb.ShardKey != nil {
 		di.ShardKey.unmarshal(pb.GetShardKey())
 	}
+	di.EnableTagArray = pb.GetEnableTagArray()
 }
 
 type PtOwner struct {
@@ -216,4 +219,17 @@ func (di *DatabaseInfo) WalkRetentionPolicy(fn func(rp *RetentionPolicyInfo)) {
 	for rpName := range di.RetentionPolicies {
 		fn(di.RetentionPolicies[rpName])
 	}
+}
+
+type DatabaseBriefInfo struct {
+	Name           string
+	EnableTagArray bool
+}
+
+func (di *DatabaseBriefInfo) Marshal() ([]byte, error) {
+	pb := &proto2.DatabaseBriefInfo{}
+	pb.Name = proto.String(di.Name)
+	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
+
+	return proto.Marshal(pb)
 }

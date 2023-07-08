@@ -33,9 +33,10 @@ const (
 var LogicClock uint64
 
 type Node struct {
-	path  string
-	ID    uint64
-	Clock uint64
+	path   string
+	ID     uint64
+	Clock  uint64
+	ConnId uint64
 }
 
 func NewNode(path string) *Node {

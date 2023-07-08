@@ -29,7 +29,7 @@ import (
 
 const (
 	readTimeOut  = time.Minute * 30
-	writeTimeOut = time.Second * 30
+	writeTimeOut = time.Second * 10
 )
 
 var globalUniqueIDSequence uint64 = 0

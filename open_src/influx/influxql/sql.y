@@ -18,6 +18,7 @@ limitations under the License.
 package influxql
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -89,19 +90,26 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
     durations           *Durations
     hints               Hints
     strSlice            []string
+    strSlices           [][]string
     location            *time.Location
     indexType           *IndexType
     cqsp                *cqSamplePolicyInfo
+    fieldOption         *fieldList
+    fieldOptions        []*fieldList
+    indexOptions        []*IndexOption
+    indexOption         *IndexOption
 }
 
 %token <str>    FROM MEASUREMENT INTO ON SELECT WHERE AS GROUP BY ORDER LIMIT OFFSET SLIMIT SOFFSET SHOW CREATE FULL PRIVILEGES OUTER JOIN
-                TO IN NOT EXISTS REVOKE FILL DELETE WITH ALL PASSWORD NAME REPLICANUM ALTER USER USERS
+                TO IN NOT EXISTS REVOKE FILL DELETE WITH ENGINETYPE ALL PASSWORD NAME REPLICANUM ALTER USER USERS
                 DATABASES DATABASE MEASUREMENTS RETENTION POLICIES POLICY DURATION DEFAULT SHARD INDEX GRANT HOT WARM TYPE SET FOR GRANTS
-                REPLICATION SERIES DROP CASE WHEN THEN ELSE BEGIN END TRUE FALSE TAG FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
-                CONTINUOUS DIAGNOSTICS QUERIES QUERIE SHARDS STATS SUBSCRIPTIONS SUBSCRIPTION GROUPS INDEXTYPE INDEXLIST
+                REPLICATION SERIES DROP CASE WHEN THEN ELSE BEGIN END TRUE FALSE TAG ATTRIBUTE FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
+                PRIMARYKEY SORTKEY PROPERTY 
+                CONTINUOUS DIAGNOSTICS QUERIES QUERIE SHARDS STATS SUBSCRIPTIONS SUBSCRIPTION GROUPS INDEXTYPE INDEXLIST SEGMENT
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
+                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -131,7 +139,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     ALTER_SHARD_KEY_STATEMENT SHOW_SHARD_GROUPS_STATEMENT DROP_MEASUREMENT_STATEMENT
                                     CREATE_CONTINUOUS_QUERY_STATEMENT SHOW_CONTINUOUS_QUERIES_STATEMENT DROP_CONTINUOUS_QUERY_STATEMENT
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
-                                    CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT
+                                    CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
 %type <fields>                      COLUMN_CLAUSES IDENTS
 %type <field>                       COLUMN_CLAUSE
 %type <stmts>                       ALL_QUERIES ALL_QUERY
@@ -139,8 +147,9 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <source>                      JOIN_CLAUSE
 %type <ment>                        TABLE_OPTION  TABLE_NAME_WITH_OPTION TABLE_CASE MEASUREMENT_WITH
 %type <expr>                        WHERE_CLAUSE CONDITION OPERATION_EQUAL COLUMN_VAREF COLUMN CONDITION_COLUMN TAG_KEYS
-				    CASE_WHEN_CASE CASE_WHEN_CASES
+				    CASE_WHEN_CASE CASE_WHEN_CASES  FIELD_FILL_POLICY
 %type <int>                         CONDITION_OPERATOR
+%type <int64>                       SEGMENT_NUM
 %type <dataType>                    COLUMN_VAREF_TYPE
 %type <sortfs>                      SORTFIELDS ORDER_CLAUSES
 %type <sortf>                       SORTFIELD
@@ -149,13 +158,20 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
 %type <durations>                   SHARD_HOT_WARM_INDEX_DURATIONS SHARD_HOT_WARM_INDEX_DURATION CREAT_DATABASE_POLICY  CREAT_DATABASE_POLICYS
-%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CALUSE SHARD_KEY STRING_TYPE
-%type <strSlice>                    SHARDKEYLIST INDEX_LIST
+%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CALUSE SHARD_KEY STRING_TYPE TOKEN_CLAUSE TOKENIZERS_CLAUSE MEASUREMENT_INFO
+%type <strSlice>                    SHARDKEYLIST INDEX_LIST TOKEN_TYPE PRIMARYKEY_LIST SORTKEY_LIST
+%type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST
 %type <location>                    TIME_ZONE
 %type <indexType>                   INDEX_TYPE INDEX_TYPES
 %type <cqsp>                        SAMPLE_POLICY
 %type <tdurs>                       DURATIONVALS
 %type <cqsp>                        SAMPLE_POLICY
+%type <int64>                       INTEGERPARA
+%type <bool>                        ALLOW_TAG_ARRAY
+%type <fieldOption>                 FIELD_OPTION FIELD_COLUMN
+%type <fieldOptions>                FIELD_OPTIONS
+%type <indexOptions>                INDEX_OPTIONS
+%type <indexOption>                 INDEX_OPTION
 %%
 
 ALL_QUERIES:
@@ -365,6 +381,10 @@ STATEMENT:
     |DROP_STREAM_STATEMENT
     {
     	$$ = $1
+    }
+    |SHOW_MEASUREMENT_KEYS_STATEMENT
+    {
+        $$ = $1
     }
 
 SELECT_STATEMENT:
@@ -930,6 +950,22 @@ CONDITION:
     {
     	$$ = &BinaryExpr{}
     }
+    |MATCH LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
+    {
+    	$$ = &BinaryExpr{
+    		LHS:  &VarRef{Val: $3},
+    		RHS:  &StringLiteral{Val: $5},
+    		Op: MATCH,
+    	}
+    }
+    |MATCHPHRASE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
+    {
+    	$$ = &BinaryExpr{
+    		LHS:  &VarRef{Val: $3},
+    		RHS:  &StringLiteral{Val: $5},
+    		Op: MATCHPHRASE,
+    	}
+    }
 
 OPERATION_EQUAL:
     CONDITION_COLUMN CONDITION_OPERATOR CONDITION_COLUMN
@@ -986,6 +1022,10 @@ CONDITION_OPERATOR:
     |NEQREGEX
     {
         $$ = NEQREGEX
+    }
+    |LIKE
+    {
+        $$ = LIKE
     }
 
 REGULAR_EXPRESSION:
@@ -1111,16 +1151,31 @@ OPTION_CLAUSES:
     	$$ = append($1, $2...)
     }
 
+INTEGERPARA:
+    INTEGER
+    {
+        $$ = $1
+    }
+    |
+    BOUNDPARAM
+    {
+        if n,ok := $1.(*IntegerLiteral);ok{
+            $$ = n.Val
+        }else{
+            yylex.Error("unsupported type, expect integer type")
+        }
+    }
+
 LIMIT_OFFSET_OPTION:
-    LIMIT INTEGER OFFSET INTEGER
+    LIMIT INTEGERPARA OFFSET INTEGERPARA
     {
     	$$ = []int{int($2), int($4)}
     }
-    |LIMIT INTEGER
+    |LIMIT INTEGERPARA
     {
     	$$ = []int{int($2), 0}
     }
-    |OFFSET INTEGER
+    |OFFSET INTEGERPARA
     {
     	$$ = []int{0, int($2)}
     }
@@ -1154,19 +1209,38 @@ SHOW_DATABASES_STATEMENT:
     }
 
 CREATE_DATABASE_STATEMENT:
-    CREATE DATABASE IDENT WITH_CLAUSES
+    CREATE DATABASE IDENT WITH_CLAUSES ALLOW_TAG_ARRAY
     {
         sms := $4
 
         sms.(*CreateDatabaseStatement).Name = $3
+        sms.(*CreateDatabaseStatement).EnableTagArray = $5
         $$ = sms
     }
-    |CREATE DATABASE IDENT
+    |CREATE DATABASE IDENT ALLOW_TAG_ARRAY
     {
         stmt := &CreateDatabaseStatement{}
         stmt.RetentionPolicyCreate = false
         stmt.Name = $3
+        stmt.EnableTagArray = $4
         $$ = stmt
+    }
+
+ALLOW_TAG_ARRAY:
+    TAG ATTRIBUTE IDENT
+    {
+        if strings.ToLower($3) != "array"{
+              yylex.Error("unsupport type")
+        }
+        $$ = true
+    }
+    |TAG ATTRIBUTE DEFAULT
+    {
+        $$ = false
+    }
+    |
+    {
+        $$ = false
     }
 
 WITH_CLAUSES:
@@ -1789,6 +1863,73 @@ SHOW_TAG_KEYS_STATEMENT:
       $$ = stmt
   }
 
+MEASUREMENT_INFO:
+    PRIMARYKEY
+    {
+        $$ = "PRIMARYKEY"
+    }
+    |SORTKEY
+    {
+        $$ = "SORTKEY"
+    }
+    |PROPERTY
+    {
+        $$ = "PROPERTY"
+    }
+    |SHARDKEY
+    {
+        $$ = "SHARDKEY"
+    }
+    |ENGINETYPE
+    {
+        $$ = "ENGINETYPE"
+    }
+    |IDENT
+    {
+        $$ = $1
+    }
+
+SHOW_MEASUREMENT_KEYS_STATEMENT:
+    SHOW MEASUREMENT_INFO FROM IDENT
+    {
+        stmt := &ShowMeasurementKeysStatement{}
+        stmt.Name = $2
+        stmt.Measurement = $4
+        $$ = stmt
+    }
+    |SHOW MEASUREMENT_INFO FROM IDENT DOT IDENT DOT IDENT
+    {
+        stmt := &ShowMeasurementKeysStatement{}
+        stmt.Name = $2
+        stmt.Database = $4
+        stmt.Rp = $6
+        stmt.Measurement = $8
+        $$ = stmt
+    }
+    |SHOW MEASUREMENT_INFO FROM IDENT DOT DOT IDENT
+    {
+        stmt := &ShowMeasurementKeysStatement{}
+        stmt.Name = $2
+        stmt.Database = $4
+        stmt.Measurement = $7
+        $$ = stmt
+    }
+    |SHOW MEASUREMENT_INFO FROM DOT IDENT DOT IDENT
+    {
+        stmt := &ShowMeasurementKeysStatement{}
+        stmt.Name = $2
+        stmt.Rp = $5
+        stmt.Measurement = $7
+        $$ = stmt
+    }
+    |SHOW MEASUREMENT_INFO FROM DOT DOT IDENT
+    {
+        stmt := &ShowMeasurementKeysStatement{}
+        stmt.Name = $2
+        stmt.Measurement = $6
+        $$ = stmt
+    }
+
 ON_DATABASE:
   ON IDENT
   {
@@ -2098,53 +2239,246 @@ SHOW_FIELD_KEY_CARDINALITY_STATEMENT:
 
 
 CREATE_MEASUREMENT_STATEMENT:
-    CREATE MEASUREMENT TABLE_CASE WITH INDEXTYPE INDEX_TYPES SHARDKEY SHARDKEYLIST TYPE_CALUSE
+    CREATE MEASUREMENT TABLE_CASE COLUMN_LISTS WITH INDEXTYPE INDEX_TYPES SHARDKEY SHARDKEYLIST TYPE_CALUSE
     {
         stmt := &CreateMeasurementStatement{}
         stmt.Database = $3.Database
         stmt.Name = $3.Name
         stmt.RetentionPolicy = $3.RetentionPolicy
-        if $6 != nil {
-            stmt.IndexType = $6.types
-            stmt.IndexList = $6.lists
+        if $4 != nil{
+            stmt.Fields = $4.(*CreateMeasurementStatement).Fields
+            stmt.Tags = $4.(*CreateMeasurementStatement).Tags
+            stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
         }
-        stmt.ShardKey = $8
+        if $7 != nil {
+            stmt.IndexType = $7.types
+            stmt.IndexList = $7.lists
+        }
+        stmt.ShardKey = $9
         sort.Strings(stmt.ShardKey)
-        stmt.Type = $9
+        stmt.Type = $10
         $$ = stmt
     }
-    |CREATE MEASUREMENT TABLE_CASE WITH SHARDKEY SHARDKEYLIST TYPE_CALUSE
+    |CREATE MEASUREMENT TABLE_CASE COLUMN_LISTS WITH SHARDKEY SHARDKEYLIST TYPE_CALUSE
     {
         stmt := &CreateMeasurementStatement{}
         stmt.Database = $3.Database
         stmt.Name = $3.Name
         stmt.RetentionPolicy = $3.RetentionPolicy
-        stmt.ShardKey = $6
+        if $4 != nil{
+            stmt.Fields = $4.(*CreateMeasurementStatement).Fields
+            stmt.Tags = $4.(*CreateMeasurementStatement).Tags
+            stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
+        }
+        stmt.ShardKey = $7
         sort.Strings(stmt.ShardKey)
-        stmt.Type = $7
+        stmt.Type = $8
         $$ = stmt
     }
-    |CREATE MEASUREMENT TABLE_CASE WITH INDEXTYPE INDEX_TYPES TYPE_CALUSE
+    |CREATE MEASUREMENT TABLE_CASE COLUMN_LISTS WITH INDEXTYPE INDEX_TYPES TYPE_CALUSE
     {
          stmt := &CreateMeasurementStatement{}
          stmt.Database = $3.Database
          stmt.Name = $3.Name
          stmt.RetentionPolicy = $3.RetentionPolicy
-         if $6 != nil {
-               stmt.IndexType = $6.types
-               stmt.IndexList = $6.lists
+        if $4 != nil{
+            stmt.Fields = $4.(*CreateMeasurementStatement).Fields
+            stmt.Tags = $4.(*CreateMeasurementStatement).Tags
+            stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
+        }
+         if $7 != nil {
+               stmt.IndexType = $7.types
+               stmt.IndexList = $7.lists
           }
-          stmt.Type = $7
+          stmt.Type = $8
           $$ = stmt
     }
-    |CREATE MEASUREMENT TABLE_CASE
+    |CREATE MEASUREMENT TABLE_CASE COLUMN_LISTS
     {
         stmt := &CreateMeasurementStatement{}
         stmt.Database = $3.Database
         stmt.Name = $3.Name
         stmt.RetentionPolicy = $3.RetentionPolicy
         stmt.Type = "hash"
+        if $4 != nil{
+            stmt.Fields = $4.(*CreateMeasurementStatement).Fields
+            stmt.Tags = $4.(*CreateMeasurementStatement).Tags
+            stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
+        }
         $$ = stmt
+    }
+    |CREATE MEASUREMENT TABLE_CASE COLUMN_LISTS WITH ENGINETYPE EQ STRING_TYPE SHARDKEY SHARDKEYLIST TYPE_CALUSE PRIMARYKEY_LIST SORTKEY_LIST MEASUREMENT_PROPERTYS_LIST
+    {
+        stmt := &CreateMeasurementStatement{}
+        stmt.Database = $3.Database
+        stmt.Name = $3.Name
+        stmt.RetentionPolicy = $3.RetentionPolicy
+        stmt.Type = "hash"
+        if $4 != nil{
+            stmt.Fields = $4.(*CreateMeasurementStatement).Fields
+            stmt.Tags = $4.(*CreateMeasurementStatement).Tags
+            stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
+        }
+        stmt.EngineType = $8
+        stmt.ShardKey = $10
+        sort.Strings(stmt.ShardKey)
+        stmt.Type = $11
+        stmt.PrimaryKey = $12
+        stmt.SortKey = $13
+        stmt.Property = $14
+        $$ = stmt
+    }
+
+COLUMN_LISTS:
+    LPAREN FIELD_OPTIONS INDEX_OPTIONS RPAREN
+    {
+        stmt := &CreateMeasurementStatement{
+            Tags: make([]string,0,0),
+            Fields : make(map[string]int32),
+        }
+        for i := range $2{
+            fType := $2[i].tagOrField
+            if  fType == "tag"{
+                stmt.Tags = append(stmt.Tags, $2[i].fieldName)
+            }else if fType == "field"{
+                filedType := strings.ToLower($2[i].fieldType)
+                if filedType == "int"{
+                    stmt.Fields[$2[i].fieldName] = 1
+                }else if filedType == "uint"{
+                    stmt.Fields[$2[i].fieldName] = 2
+                }else if filedType == "float"{
+                    stmt.Fields[$2[i].fieldName] = 3
+                }else if filedType == "string"{
+                    stmt.Fields[$2[i].fieldName] = 4
+                }else if filedType == "boolean"{
+                    stmt.Fields[$2[i].fieldName] = 5
+                }
+            }
+        }
+        stmt.IndexOption = $3
+        $$ = stmt
+    }
+    |
+    {
+        $$ = nil
+    }
+
+INDEX_OPTIONS:
+    INDEX_OPTION COMMA INDEX_OPTIONS
+    {
+        info :=  []*IndexOption{$1}
+        $$ = append(info,$3...)
+    }
+    |
+    INDEX_OPTION
+    {
+        $$ = []*IndexOption{$1}
+    }
+    |
+    {
+        $$ = nil
+    }
+
+INDEX_OPTION:
+    INDEX STRING_TYPE STRING_TYPE TYPE STRING_TYPE SEGMENT_NUM TOKEN_TYPE
+    {
+        $$ = &IndexOption{
+            IndexName: $2,
+            FieldName: $3,
+            IndexType: $5,
+            Segment: $6,
+            Tokens: $7[0],
+            Tokenizers: $7[1],
+        }
+    }
+
+SEGMENT_NUM:
+    SEGMENT INTEGER
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = -1
+    }
+
+TOKEN_TYPE:
+    TOKEN_CLAUSE TOKENIZERS_CLAUSE
+    {
+        if (($1 == "") && !($2 == "")) || (!($1 == "") && ($2 == ""))  {
+            yylex.Error("must define token and tokenizers together")
+        }
+        $$ = []string{$1, $2}
+    }
+
+TOKEN_CLAUSE:
+    TOKEN STRING_TYPE
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = ""
+    }
+
+TOKENIZERS_CLAUSE:
+    TOKENIZERS STRING_TYPE
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = ""
+    }
+
+FIELD_OPTIONS:
+    FIELD_OPTION FIELD_OPTIONS
+    {
+        fields := []*fieldList{$1}
+        $$ = append(fields, $2...)
+    }
+    |
+    FIELD_OPTION
+    {
+        $$ = []*fieldList{$1}
+    }
+
+FIELD_OPTION:
+   FIELD_COLUMN  FIELD_FILL_POLICY COMMA
+   {
+       col := $1
+       col.defaultFill = $2
+       $$ = col
+   }
+
+
+FIELD_FILL_POLICY:
+    DEFAULT COLUMN_VAREF
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = nil
+    }
+
+FIELD_COLUMN:
+    STRING_TYPE STRING_TYPE TAG
+    {
+        $$ = &fieldList{
+            fieldName: $1,
+            fieldType: $2,
+            tagOrField: "tag",
+        }
+    }
+    |
+    STRING_TYPE STRING_TYPE FIELD
+    {
+        $$ = &fieldList{
+            fieldName: $1,
+            fieldType: $2,
+            tagOrField: "field",
+        }
     }
 
 INDEX_TYPE:
@@ -2190,6 +2524,62 @@ TYPE_CALUSE:
     |
     {
         $$ = "hash"
+    }
+
+PRIMARYKEY_LIST:
+    PRIMARYKEY INDEX_LIST
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = nil
+    }
+
+SORTKEY_LIST:
+    SORTKEY INDEX_LIST
+    {
+        $$ = $2
+    }
+
+MEASUREMENT_PROPERTYS:
+    MEASUREMENT_PROPERTY COMMA MEASUREMENT_PROPERTYS
+    {
+        m := $1
+        if $3 != nil{
+            m[0] = append(m[0], $3[0]...)
+            m[1] = append(m[1], $3[1]...)
+        }
+        $$ = m
+    }
+    |
+    MEASUREMENT_PROPERTY
+    {
+        $$ = $1
+    }
+
+MEASUREMENT_PROPERTYS_LIST:
+    PROPERTY MEASUREMENT_PROPERTYS
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = nil
+    }
+
+MEASUREMENT_PROPERTY:
+    STRING_TYPE EQ STRING_TYPE
+    {
+        $$ = [][]string{{$1},{$3}}
+    }
+    |STRING_TYPE EQ INTEGER
+    {
+        $$ = [][]string{{$1},{fmt.Sprintf("%d",$3)}}
+    }
+    |
+    {
+        $$ = nil
     }
 
 SHARDKEYLIST:

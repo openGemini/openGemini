@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -173,7 +172,7 @@ func TestWritePointsWork_decodePoints(t *testing.T) {
 	for _, tt := range testCases {
 		t.Run(tt.Name, func(t *testing.T) {
 			var err error
-			ww := getWritePointsWork()
+			ww := GetWritePointsWork()
 			ww.reqBuf = tt.reqBuf
 			_, _, _, _, _, _, err = ww.decodePoints()
 			require.Equal(t, err.Error(), tt.expectMsg)
@@ -189,12 +188,14 @@ func mockStorage() *storage.Storage {
 	storeConfig := config.NewStore()
 	config.SetHaEnable(true)
 	monitorConfig := config.Monitor{
-		Pushers: "http",
+		Pushers:      "http",
+		StoreEnabled: true,
 	}
 	conf := &config.TSStore{
 		Data:    storeConfig,
 		Monitor: monitorConfig,
 		Common:  config.NewCommon(),
+		Meta:    config.NewMeta(),
 	}
 
 	store, err := storage.OpenStorage(storageDataPath, node, nil, conf)
@@ -206,7 +207,7 @@ func mockStorage() *storage.Storage {
 
 type MockStream struct{}
 
-func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, block *pool.DataBlock) {
+func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, ww stream.WritePointsWorkIF) {
 	panic("implement me")
 }
 
@@ -288,14 +289,26 @@ func TestInsertProcessor(t *testing.T) {
 		t.Fatal("WritePointsRequest failed")
 	}
 
-	req2 := netstorage.NewWriteStreamPointsRequest([]byte{1, 2, 3, 4, 5, 6, 7},
+	req2 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, true),
 		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
 	if err := processor.Handle(w, req2); err != nil {
 		t.Fatal("WritePointsRequest failed")
 	}
+
+	req3 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
+		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	if err := processor.Handle(w, req3); err != nil {
+		t.Fatal("WritePointsRequest failed")
+	}
+
+	req4 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(false, false),
+		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	if err := processor.Handle(w, req4); err != nil {
+		t.Fatal("WritePointsRequest failed")
+	}
 }
 
-func mockMarshaledStreamPoint() []byte {
+func mockMarshaledStreamPoint(haveStreamShardList bool, validStreamShardList bool) []byte {
 	pBuf := make([]byte, 0)
 	pBuf = append(pBuf[:0], netstorage.PackageTypeFast)
 	// db
@@ -312,10 +325,18 @@ func mockMarshaledStreamPoint() []byte {
 	// shard
 	shard := uint64(0)
 	pBuf = numenc.MarshalUint64(pBuf, shard)
-	// streamShardIdList
-	streamShardIdList := []uint64{0, 1}
-	pBuf = numenc.MarshalUint32(pBuf, uint32(len(streamShardIdList)))
-	pBuf = numenc.MarshalVarUint64s(pBuf, streamShardIdList)
+	if haveStreamShardList {
+		// streamShardIdList
+		var streamShardIdList []uint64
+		if validStreamShardList {
+			streamShardIdList = []uint64{0}
+		} else {
+			streamShardIdList = []uint64{0, 1}
+		}
+		pBuf = numenc.MarshalUint32(pBuf, uint32(len(streamShardIdList)))
+		pBuf = numenc.MarshalVarUint64s(pBuf, streamShardIdList)
+	}
+
 	// rows
 	rows := mockRows()
 	pBuf, err := influx.FastMarshalMultiRows(pBuf, rows)
@@ -326,8 +347,8 @@ func mockMarshaledStreamPoint() []byte {
 }
 
 func TestDecodePoints(t *testing.T) {
-	ww := getWritePointsWork()
-	ww.reqBuf = mockMarshaledStreamPoint()
+	ww := GetWritePointsWork()
+	ww.reqBuf = mockMarshaledStreamPoint(true, true)
 	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}, {Only: true, Id: []uint64{1}}}
 	_, _, _, _, _, _, err := ww.decodePoints()
 	if err != nil {
@@ -342,4 +363,8 @@ func TestDecodePoints(t *testing.T) {
 	if !strings.Contains(err.Error(), "unmarshal rows failed, the num of the rows is not equal to the stream vars") {
 		t.Fatal("DecodePoints failed")
 	}
+
+	rows := ww.GetRows()
+	ww.SetRows(rows)
+	ww.PutWritePointsWork()
 }

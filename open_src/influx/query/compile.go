@@ -5,6 +5,7 @@ Copyright (c) 2018 InfluxData
 This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/query/compile.go
 
 2022.01.23 It has been modified to compatible files in influx/influxql and influx/query.
+2023.06.01 Cancel subquery sortField request
 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
@@ -37,6 +38,8 @@ type Statement interface {
 type compiledStatement struct {
 	// Condition is the condition used for accessing data.
 	Condition influxql.Expr
+
+	SourceCondition influxql.Expr
 
 	// TimeRange is the TimeRange for selecting data.
 	TimeRange influxql.TimeRange
@@ -128,6 +131,7 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 	}
 	c.stmt.TimeAlias = c.TimeFieldName
 	c.stmt.Condition = c.Condition
+	c.stmt.SourceCondition = c.SourceCondition
 
 	// Convert TOP/BOTTOM into the TOP(max)/BOTTOM(min)
 	c.stmt.RewriteTopBottom()
@@ -155,6 +159,7 @@ func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 	c.HasTarget = stmt.Target != nil
 
 	valuer := influxql.NowValuer{Now: c.Options.Now, Location: stmt.Location}
+	c.SourceCondition = stmt.Condition
 	cond, t, err := influxql.ConditionExpr(stmt.Condition, &valuer)
 	if err != nil {
 		return err
@@ -1370,10 +1375,10 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 
 	// If the ordering is different and the sort field was specified for the subquery,
 	// throw an error.
-	if len(stmt.SortFields) != 0 && subquery.Ascending != c.Ascending {
+	/*if len(stmt.SortFields) != 0 && subquery.Ascending != c.Ascending {
 		return errors.New("subqueries must be ordered in the same direction as the query itself")
 	}
-	subquery.Ascending = c.Ascending
+	subquery.Ascending = c.Ascending*/
 
 	// Find the intersection between this time range and the parent.
 	// If the subquery doesn't have a time range, this causes it to
@@ -1478,6 +1483,15 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	shards, err := shardMapper.MapShards(c.stmt.Sources, timeRange, sopt, c.stmt.Condition)
 	if err != nil {
 		return nil, err
+	}
+
+	if len(c.stmt.Sources) >= 2 && c.stmt.Sources.HaveMultiStore() {
+		return nil, fmt.Errorf("query across multiple storage engines is not supported")
+	}
+
+	// avoid the impact of moving sourceCondition downwards.
+	if len(c.stmt.Sources) > 0 && c.stmt.Sources.HaveOnlyTSStore() {
+		c.stmt.SourceCondition = nil
 	}
 
 	// Rewrite wildcards, if any exist.

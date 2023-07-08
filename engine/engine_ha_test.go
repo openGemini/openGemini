@@ -33,7 +33,7 @@ func Test_Engine_Assign_404PT(t *testing.T) {
 	dir := t.TempDir()
 	e, err := initEngine(dir)
 	defer e.Close()
-	err = e.Assign(0, defaultDb, defaultPtId, 1, nil, nil)
+	err = e.Assign(0, defaultDb, defaultPtId, 1, nil, nil, nil)
 	require.NoError(t, err)
 }
 
@@ -49,7 +49,11 @@ func Test_Engine_Assign_success(t *testing.T) {
 	shardDurationInfo := map[uint64]*meta.ShardDurationInfo{
 		defaultShardId: getShardDurationInfo(defaultShardId),
 	}
-	err = eng.Assign(0, defaultDb, defaultPtId, 1, shardDurationInfo, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.Assign(0, defaultDb, defaultPtId, 1, shardDurationInfo, dbBriefInfo, nil)
 	require.NoError(t, err)
 	eng.Close()
 }
@@ -252,7 +256,11 @@ func TestPrepareLoadPts001(t *testing.T) {
 	checkShard(t, eng, 0, defaultShardId, false, defaultDb, defaultPtId, false)
 
 	durationInfos := getDurationInfo(defaultShardId)
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -269,7 +277,11 @@ func TestPrepareLoadPts002(t *testing.T) {
 
 	err := eng.Offload(defaultDb, defaultPtId)
 	durationInfos := getDurationInfo(defaultShardId)
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -286,7 +298,11 @@ func TestPrepareLoadPts003(t *testing.T) {
 
 	err := eng.Offload(defaultDb, defaultPtId)
 	durationInfos := getDurationInfo(defaultShardId)
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -303,12 +319,19 @@ func TestPrepareLoadPts004(t *testing.T) {
 
 	err := eng.Offload(defaultDb, defaultPtId)
 	durationInfos := getDurationInfo(defaultShardId)
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
 	checkShard(t, eng, 1, defaultShardId, false, defaultDb, defaultPtId, true)
-
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	if err != nil {
+		t.Error("PrepareLoadPts failed", zap.Error(err))
+	}
 	dbPt, _ := eng.getPartition(defaultDb, defaultPtId, false)
 	if err = eng.offloadDbPT(dbPt); err != nil {
 		t.Error("Rollback preload failed", zap.Error(err))
@@ -334,7 +357,11 @@ func TestLoadPts001(t *testing.T) {
 	checkShard(t, eng, 0, defaultShardId, false, defaultDb, defaultPtId, false)
 
 	durationInfos := getDurationInfo(defaultShardId)
-	err = eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -357,12 +384,16 @@ func TestLoadPts002(t *testing.T) {
 	checkShard(t, eng, 0, defaultShardId, false, defaultDb, defaultPtId, false)
 
 	durationInfos := getDurationInfo(defaultShardId)
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
 	checkShard(t, eng, 1, defaultShardId, false, defaultDb, defaultPtId, true)
-	err = eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, nil)
+	err = eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -377,7 +408,11 @@ func TestLoadPts003(t *testing.T) {
 	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, true)
 
 	durationInfos := getDurationInfo(defaultShardId)
-	err := eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, nil)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err := eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, nil)
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}

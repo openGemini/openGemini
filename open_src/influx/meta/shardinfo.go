@@ -36,6 +36,7 @@ type ShardGroupInfo struct {
 	DeletedAt   time.Time
 	Shards      []ShardInfo
 	TruncatedAt time.Time
+	EngineType  config.EngineType
 }
 
 func (sgi *ShardGroupInfo) canDelete() bool {
@@ -358,10 +359,11 @@ func (sgi *ShardGroupInfo) ShardFor(hash uint64, aliveShardIdxes []int) *ShardIn
 // marshal serializes to a protobuf representation.
 func (sgi *ShardGroupInfo) marshal() *proto2.ShardGroupInfo {
 	pb := &proto2.ShardGroupInfo{
-		ID:        proto.Uint64(sgi.ID),
-		StartTime: proto.Int64(MarshalTime(sgi.StartTime)),
-		EndTime:   proto.Int64(MarshalTime(sgi.EndTime)),
-		DeletedAt: proto.Int64(MarshalTime(sgi.DeletedAt)),
+		ID:         proto.Uint64(sgi.ID),
+		StartTime:  proto.Int64(MarshalTime(sgi.StartTime)),
+		EndTime:    proto.Int64(MarshalTime(sgi.EndTime)),
+		DeletedAt:  proto.Int64(MarshalTime(sgi.DeletedAt)),
+		EngineType: proto.Uint32(uint32(sgi.EngineType)),
 	}
 
 	if !sgi.TruncatedAt.IsZero() {
@@ -391,6 +393,7 @@ func (sgi *ShardGroupInfo) unmarshal(pb *proto2.ShardGroupInfo) {
 		sgi.EndTime = UnmarshalTime(i)
 	}
 	sgi.DeletedAt = UnmarshalTime(pb.GetDeletedAt())
+	sgi.EngineType = config.EngineType(pb.GetEngineType())
 
 	if pb != nil && pb.TruncatedAt != nil {
 		sgi.TruncatedAt = UnmarshalTime(pb.GetTruncatedAt())

@@ -66,7 +66,7 @@ func (ctx *memReaderEvictCtx) evictMemReader(evictSize int64) {
 		for e != nil {
 			f := e.Value.(TSSPFile)
 			e = e.Prev()
-			size := f.Free(false)
+			size := f.FreeMemory(false)
 			if size > 0 {
 				evictSize -= size
 			}
@@ -134,36 +134,9 @@ func init() {
 	go nodeTableStoreGC.GC()
 }
 
-func UnrefAll(files ...*TSSPFiles) {
-	if len(files) == 0 {
-		return
-	}
-
-	for _, item := range files {
-		UnrefTSSPFiles(item)
-	}
-}
-
-func UnrefTSSPFiles(files *TSSPFiles) {
-	if files == nil {
-		return
-	}
-
-	for _, f := range files.Files() {
-		f.Unref()
-		f.UnrefFileReader()
-	}
-}
-
 func UnrefFiles(files ...TSSPFile) {
 	for _, f := range files {
 		f.Unref()
-	}
-}
-
-func UnrefFilesReader(files ...TSSPFile) {
-	for _, f := range files {
-		f.UnrefFileReader()
 	}
 }
 
@@ -214,7 +187,7 @@ func (sgc *TableStoreGC) GC() {
 
 		for fn, f := range sgc.freeFiles {
 			if !f.Inuse() {
-				_ = f.Free(true)
+				_ = f.FreeMemory(true)
 				delete(sgc.freeFiles, fn)
 			}
 		}

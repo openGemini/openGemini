@@ -310,7 +310,7 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 		}
 
 		record.CheckRecord(rec)
-		tableBuilder, err = tableBuilder.WriteRecord(id, rec, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
+		tableBuilder, err = tableBuilder.WriteRecord(id, rec, nil, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
 			ext := fn.extent
 			ext++
 			return fn.seq, fn.level, 0, ext
@@ -387,19 +387,17 @@ func (m *MmsTables) FreeSequencer() bool {
 	return m.sequencer.free()
 }
 
-func (m *MmsTables) loadIdTimesInLock() (int64, error) {
+func (m *MmsTables) loadIdTimes() (int64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	return m.loadIdTimes()
-}
-
-func (m *MmsTables) loadIdTimes() (int64, error) {
 	if len(m.Order) == 0 {
 		return 0, nil
 	}
 
-	loader := newIDTimesLoader(m.sequencer)
+	seq := m.Sequencer()
+	defer seq.UnRef()
+	loader := newIDTimesLoader(seq)
 	// m.OutOfOrder used for statistics row count
 	go loader.Load(m.path, m.Order, m.OutOfOrder)
 
@@ -412,10 +410,6 @@ func (m *MmsTables) loadIdTimes() (int64, error) {
 	}
 
 	return loader.ctx.getRowCount(), loader.Error()
-}
-
-func (m *MmsTables) UnRefSequencer() {
-	m.sequencer.unRef()
 }
 
 func (m *MmsTables) mmsFiles(n int64) []*CompactGroup {
@@ -479,38 +473,63 @@ func (m *MmsTables) SetAddFunc(addFunc func(int64)) {
 	m.addFunc = addFunc
 }
 
-func (m *MmsTables) GetLastFlushTimeBySid(measurement string, sid uint64) (int64, error) {
-	seq, err := m.getSequencer()
-	if err != nil {
-		return 0, err
-	}
+func (m *MmsTables) GetLastFlushTimeBySid(measurement string, sid uint64) int64 {
+	seq := m.Sequencer()
+	defer seq.UnRef()
+
 	if seq.isLoading {
-		m.UnRefSequencer()
-		return math.MaxInt64, nil
+		return math.MaxInt64
 	}
+
+	if seq.isFree {
+		m.ReloadSequencer(seq, true)
+		return math.MaxInt64
+	}
+
 	lastFlushTime, _ := seq.Get(measurement, sid)
-	m.UnRefSequencer()
-	return lastFlushTime, nil
+	return lastFlushTime
 }
 
 func (m *MmsTables) GetRowCountsBySid(measurement string, sid uint64) (int64, error) {
-	seq, err := m.getSequencer()
-	if err != nil {
-		return 0, err
-	}
+	seq := m.Sequencer()
+	m.ReloadSequencer(seq, false)
 	_, rowCounts := seq.Get(measurement, sid)
-	m.UnRefSequencer()
-	return rowCounts, err
+	seq.UnRef()
+	return rowCounts, nil
 }
 
-func (m *MmsTables) AddRowCountsBySid(measurement string, sid uint64, rowCounts int64) error {
-	seq, err := m.getSequencer()
-	if err != nil {
-		return err
-	}
+func (m *MmsTables) AddRowCountsBySid(measurement string, sid uint64, rowCounts int64) {
+	seq := m.Sequencer()
 	seq.AddRowCounts(measurement, sid, rowCounts)
-	m.UnRefSequencer()
-	return err
+	seq.UnRef()
+}
+
+func (m *MmsTables) ReloadSequencer(seq *Sequencer, async bool) {
+	if !seq.SetToInLoading() {
+		return
+	}
+
+	if async {
+		go m.reloadSequencer(seq)
+		return
+	}
+
+	m.reloadSequencer(seq)
+}
+
+func (m *MmsTables) reloadSequencer(seq *Sequencer) {
+	count, err := m.loadIdTimes()
+	if err == nil && m.addFunc != nil && !m.isAdded {
+		// add row count to shard
+		m.addFunc(count)
+		m.isAdded = true
+	}
+
+	if err != nil {
+		seq.ResetMmsIdTime()
+		m.logger.Error("failed to load id time", zap.Error(err))
+	}
+	seq.SetStat(err != nil, false)
 }
 
 func (m *MmsTables) FullCompact(shid uint64) error {

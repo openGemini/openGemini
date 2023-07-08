@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/config"
 	internal "github.com/openGemini/openGemini/open_src/influx/influxql/internal"
 )
 
@@ -545,6 +546,40 @@ func (a Sources) Measurements() []*Measurement {
 	return mms
 }
 
+func (a Sources) HaveMultiStore() bool {
+	msts := a.Measurements()
+	if len(msts) <= 1 {
+		return false
+	}
+	initStoreType := msts[0].EngineType
+	for i := 1; i < len(msts); i++ {
+		if msts[i].EngineType != initStoreType {
+			return true
+		}
+	}
+	return false
+}
+
+func (a Sources) HaveOnlyTSStore() bool {
+	msts := a.Measurements()
+	for i := range msts {
+		if msts[i].EngineType != config.TSSTORE {
+			return false
+		}
+	}
+	return true
+}
+
+func (a Sources) HaveOnlyCSStore() bool {
+	msts := a.Measurements()
+	for i := range msts {
+		if msts[i].EngineType != config.COLUMNSTORE {
+			return false
+		}
+	}
+	return true
+}
+
 // MarshalBinary encodes a list of sources to a binary format.
 func (a Sources) MarshalBinary() ([]byte, error) {
 	var pb internal.Measurements
@@ -686,6 +721,8 @@ type CreateDatabaseStatement struct {
 	RetentionPolicyIndexGroupDuration time.Duration
 
 	ShardKey []string
+
+	EnableTagArray bool
 }
 
 // String returns a string representation of the create database statement.
@@ -726,9 +763,25 @@ type CreateMeasurementStatement struct {
 	RetentionPolicy string
 	Name            string
 	ShardKey        []string
+	EngineType      string
+	PrimaryKey      []string
+	SortKey         []string
+	Property        [][]string
 	Type            string
+	Tags            []string
+	Fields          map[string]int32
 	IndexType       []string
 	IndexList       [][]string
+	IndexOption     []*IndexOption
+}
+
+type IndexOption struct {
+	FieldName  string
+	Tokens     string
+	Tokenizers string
+	IndexName  string
+	IndexType  string
+	Segment    int64
 }
 
 func (s *CreateMeasurementStatement) String() string {
@@ -1296,6 +1349,8 @@ type SelectStatement struct {
 	// An expression evaluated on data point.
 	Condition Expr
 
+	SourceCondition Expr
+
 	// Fields to sort results by.
 	SortFields SortFields
 
@@ -1636,6 +1691,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	WalkFunc(other.Fields, getFieldVarRef)
 	WalkFunc(other.Condition, getCondVarRef)
+	WalkFunc(other.SourceCondition, getCondVarRef)
 
 	if len(allVarRef) > 0 {
 		err := EvalTypeBatch(allVarRef, other.Sources, m, &other.Schema, batchEn)
@@ -1643,12 +1699,14 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 			if err == ErrUnsupportBatchMap {
 				WalkFunc(other.Fields, mapType)
 				WalkFunc(other.Condition, mapType)
+				WalkFunc(other.SourceCondition, mapType)
 			} else {
 				return nil, err
 			}
 		} else {
 			WalkFunc(other.Fields, rewrite)
 			WalkFunc(other.Condition, rewrite)
+			WalkFunc(other.SourceCondition, rewrite)
 		}
 	}
 
@@ -2568,6 +2626,7 @@ func encodeMeasurement(mm *Measurement) *internal.Measurement {
 		RetentionPolicy: proto.String(mm.RetentionPolicy),
 		Name:            proto.String(mm.Name),
 		IsTarget:        proto.Bool(mm.IsTarget),
+		EngineType:      proto.Uint32(uint32(mm.EngineType)),
 	}
 	if mm.Regex != nil {
 		pb.Regex = proto.String(mm.Regex.Val.String())
@@ -2581,6 +2640,7 @@ func decodeMeasurement(pb *internal.Measurement) (*Measurement, error) {
 		RetentionPolicy: pb.GetRetentionPolicy(),
 		Name:            pb.GetName(),
 		IsTarget:        pb.GetIsTarget(),
+		EngineType:      config.EngineType(pb.GetEngineType()),
 	}
 
 	if pb.Regex != nil {
@@ -4024,6 +4084,8 @@ type Measurement struct {
 	SystemIterator    string
 	IsSystemStatement bool
 	Alias             string
+
+	EngineType config.EngineType
 }
 
 // Clone returns a deep clone of the Measurement.
@@ -4041,6 +4103,7 @@ func (m *Measurement) Clone() *Measurement {
 		SystemIterator:    m.SystemIterator,
 		IsSystemStatement: m.IsSystemStatement,
 		Alias:             m.Alias,
+		EngineType:        m.EngineType,
 	}
 }
 
@@ -4112,6 +4175,14 @@ type VarRef struct {
 	Val   string
 	Type  DataType
 	Alias string
+}
+
+func (r *VarRef) SetDataType(t DataType) {
+	r.Type = t
+}
+
+func (r *VarRef) SetVal(s string) {
+	r.Val = s
 }
 
 func (r *VarRef) RewriteNameSpace(alias, mst string) {
@@ -4207,27 +4278,6 @@ func (c *Call) String() string {
 
 	// Write function name and args.
 	return fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
-}
-
-// WriteString returns a string representation of the call.
-func (c *Call) WriteString(b *bytes.Buffer) {
-	// format fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
-	b.WriteString(c.Name)
-	b.WriteString("(")
-
-	firstCall := true
-	for _, arg := range c.Args {
-		if firstCall {
-			b.WriteString(arg.String())
-			firstCall = false
-			continue
-		}
-		b.WriteString(",")
-		b.WriteString(arg.String())
-	}
-	b.WriteString(")")
-	// Write function name and args.
-	return
 }
 
 // Distinct represents a DISTINCT expression.
@@ -7031,6 +7081,29 @@ func (s *DropStreamsStatement) RequiredPrivileges() (ExecutionPrivileges, error)
 func (s *DropStreamsStatement) String() string {
 	var buf bytes.Buffer
 	_, _ = buf.WriteString("DROP STREAMS ")
+	_, _ = buf.WriteString(QuoteIdent(s.Name))
+
+	return buf.String()
+}
+
+type ShowMeasurementKeysStatement struct {
+	Name        string
+	Database    string
+	Rp          string
+	Measurement string
+}
+
+func (s *ShowMeasurementKeysStatement) stmt() {}
+
+func (s *ShowMeasurementKeysStatement) node() {}
+
+func (s *ShowMeasurementKeysStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *ShowMeasurementKeysStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("Show Measurement ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 
 	return buf.String()

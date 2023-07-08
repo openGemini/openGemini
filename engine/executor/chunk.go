@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -110,7 +111,7 @@ func initStringColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []inter
 			oriStr := col.StringValue(i)
 			newStr := make([]byte, len(oriStr))
 			copy(newStr, oriStr)
-			dst = append(dst, record.Bytes2str(newStr))
+			dst = append(dst, util.Bytes2str(newStr))
 		}
 		return dst
 	}
@@ -123,7 +124,7 @@ func initStringColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []inter
 			oriStr := col.StringValue(col.GetValueIndexV2(j))
 			newStr := make([]byte, len(oriStr))
 			copy(newStr, oriStr)
-			dst = append(dst, record.Bytes2str(newStr))
+			dst = append(dst, util.Bytes2str(newStr))
 		}
 	}
 	return dst
@@ -175,6 +176,10 @@ type Chunk interface {
 	Column(int) Column
 	SetColumn(Column, int)
 	AddColumn(...Column)
+	Dims() []Column
+	Dim(int) Column
+	SetDim(Column, int)
+	AddDim(...Column)
 	IsNil() bool
 	NumberOfRows() int
 	NumberOfCols() int
@@ -215,6 +220,7 @@ type ChunkImpl struct {
 	time          []int64
 	intervalIndex []int
 	columns       []Column
+	dims          []Column
 	*record.Record
 }
 
@@ -363,6 +369,9 @@ func (c *ChunkImpl) Reset() {
 	for i := range c.columns {
 		c.Column(i).Reset()
 	}
+	for i := range c.dims {
+		c.Column(i).Reset()
+	}
 }
 
 // SlimChunk filter the ridIdx columns to slim chunk
@@ -418,6 +427,14 @@ func (c *ChunkImpl) copy(dst Chunk) Chunk {
 			dst.Column(i).AppendColumnTimes(c.Column(i).ColumnTimes()...)
 		}
 		c.Column(i).NilsV2().CopyTo(dst.Column(i).NilsV2())
+	}
+	if len(c.dims) == 0 {
+		return dst
+	}
+	for i := range c.dims {
+		dst.AddDim(NewColumnImpl(influxql.String))
+		dst.Dim(i).CloneStringValues(c.Dim(i).GetStringBytes())
+		c.Dim(i).NilsV2().CopyTo(dst.Dim(i).NilsV2())
 	}
 	return dst
 }
@@ -521,6 +538,22 @@ func (c *ChunkImpl) String() string {
 
 func (c *ChunkImpl) CreatePointRowIterator(name string, valuer *FieldsValuer) PointRowIterator {
 	return NewChunkIteratorFromValuer(c, name, valuer)
+}
+
+func (c *ChunkImpl) Dims() []Column {
+	return c.dims
+}
+
+func (c *ChunkImpl) Dim(i int) Column {
+	return c.dims[i]
+}
+
+func (c *ChunkImpl) SetDim(col Column, i int) {
+	c.dims[i] = col
+}
+
+func (c *ChunkImpl) AddDim(cols ...Column) {
+	c.dims = append(c.dims, cols...)
 }
 
 type IntegerFieldValuer struct {
@@ -730,8 +763,8 @@ func (tt *TargetTable) initTuples(tuples []*TargetTuple) {
 }
 
 func (tt *TargetTable) Reset() {
-	for _, row := range tt.rows {
-		row.Reset()
+	for i := range tt.rows {
+		tt.rows[i].Reset()
 	}
 
 	for _, tuple := range tt.tuples {

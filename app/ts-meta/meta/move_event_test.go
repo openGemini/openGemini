@@ -73,11 +73,15 @@ func TestMoveEventTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}}
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           db,
+		EnableTagArray: false,
+	}
+	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}, DBBriefInfo: dbBriefInfo}
 	err = globalService.store.updatePtInfo(db, dbPt.Pti, 2, meta.Online)
 	assert.Equal(t, nil, err)
 
-	event := NewMoveEvent(dbPt, dbPt.Pti.Owner.NodeID, 3, false)
+	event := NewMoveEvent(dbPt, dbPt.Pti.Owner.NodeID, 3, dataNode.AliveConnID, false)
 	assert.Equal(t, int(MoveInit), event.getCurrState())
 	action, err := event.getNextAction()
 	if err != nil {

@@ -316,12 +316,13 @@ func GenerateCreateMeasurementCmd(db string, rp string, mst string, shardKey []s
 	return cmd
 }
 
-func GenerateCreateShardGroupCmd(db, rp string, timestamp time.Time) *proto2.Command {
+func GenerateCreateShardGroupCmd(db, rp string, timestamp time.Time, engineType config.EngineType) *proto2.Command {
 	val := &proto2.CreateShardGroupCommand{
-		Database:  proto.String(db),
-		Policy:    proto.String(rp),
-		Timestamp: proto.Int64(timestamp.UnixNano()),
-		ShardTier: proto.Uint64(meta2.StringToTier("HOT")),
+		Database:   proto.String(db),
+		Policy:     proto.String(rp),
+		Timestamp:  proto.Int64(timestamp.UnixNano()),
+		ShardTier:  proto.Uint64(meta2.StringToTier("HOT")),
+		EngineType: proto.Uint32(uint32(engineType)),
 	}
 	t1 := proto2.Command_CreateShardGroupCommand
 	cmd := &proto2.Command{Type: &t1}

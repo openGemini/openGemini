@@ -74,7 +74,7 @@ func newStatisticsPusher(conf *config.Monitor, logger *logger.Logger) *Statistic
 			pushers = append(pushers, p)
 		}
 	}
-	if len(pushers) == 0 {
+	if !conf.StoreEnabled {
 		return nil
 	}
 
@@ -122,10 +122,6 @@ func newFilePusher(mc *config.Monitor, logger *logger.Logger) pusher.Pusher {
 }
 
 func (sp *StatisticsPusher) push() {
-	if len(sp.pushers) == 0 {
-		return
-	}
-
 	buf := bufferPool.Get()
 	var err error
 	for _, collect := range sp.collects {
@@ -136,7 +132,7 @@ func (sp *StatisticsPusher) push() {
 			return
 		}
 
-		if len(buf) == 0 {
+		if len(buf) == 0 || len(sp.pushers) == 0 {
 			continue
 		}
 
@@ -174,7 +170,7 @@ func (sp *StatisticsPusher) start() {
 	sp.wg.Add(1)
 
 	go func() {
-		timestamp := time.NewTicker(24 * time.Hour)
+		timestamp := time.NewTicker(time.Minute)
 		interval := time.NewTicker(sp.pushInterval)
 		defer func() {
 			interval.Stop()
@@ -187,7 +183,6 @@ func (sp *StatisticsPusher) start() {
 				sp.logger.Info("stop statistics pusher")
 				return
 			case <-timestamp.C:
-				// Reset every 24 hours
 				statistics.NewTimestamp().Reset()
 			case <-interval.C:
 				statistics.NewTimestamp().Incr()
@@ -225,17 +220,14 @@ func (sp *StatisticsPusher) Stop() {
 }
 
 func (sp *StatisticsPusher) CollectOpsStatistics() (Statistics, error) {
-	var statistics Statistics
-	if len(sp.pushers) == 0 {
-		return nil, nil
-	}
+	var opsStats Statistics
 
 	var err error
 	for _, collect := range sp.opsCollects {
 		// collect statistics data
 		stats := collect()
 		for _, stat := range stats {
-			statistics = append(statistics, &Statistic{stat})
+			opsStats = append(opsStats, &Statistic{stat})
 		}
 		if err != nil {
 			sp.logger.Error("collect statistics data error", zap.Error(err))
@@ -243,7 +235,7 @@ func (sp *StatisticsPusher) CollectOpsStatistics() (Statistics, error) {
 		}
 	}
 
-	return statistics, nil
+	return opsStats, nil
 }
 
 type Statistic struct {

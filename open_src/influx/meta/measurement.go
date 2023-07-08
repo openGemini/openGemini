@@ -18,6 +18,7 @@ package meta
 
 import (
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -29,13 +30,18 @@ type MeasurementInfo struct {
 	ShardKeys     []ShardKeyInfo
 	Schema        map[string]int32
 	IndexRelation IndexRelation
+	ColStoreInfo  *ColStoreInfo
 	MarkDeleted   bool
+	EngineType    config.EngineType
+
+	tagKeysTotal int
 }
 
 func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
 	return &MeasurementInfo{
 		Name:       nameWithVer,
 		originName: influx.GetOriginMstName(nameWithVer),
+		EngineType: config.TSSTORE,
 	}
 }
 
@@ -62,6 +68,7 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 	pb := &proto2.MeasurementInfo{
 		Name:        proto.String(msti.Name),
 		MarkDeleted: proto.Bool(msti.MarkDeleted),
+		EngineType:  proto.Uint32(uint32(msti.EngineType)),
 	}
 
 	if msti.ShardKeys != nil {
@@ -79,6 +86,9 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 	}
 
 	pb.IndexRelation = msti.IndexRelation.Marshal()
+	if msti.ColStoreInfo != nil {
+		pb.ColStoreInfo = msti.ColStoreInfo.Marshal()
+	}
 	return pb
 }
 
@@ -86,6 +96,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 	msti.Name = pb.GetName()
 	msti.originName = influx.GetOriginMstName(msti.Name)
 	msti.MarkDeleted = pb.GetMarkDeleted()
+	msti.EngineType = config.EngineType(pb.GetEngineType())
 	if pb.GetShardKeys() != nil {
 		msti.ShardKeys = make([]ShardKeyInfo, len(pb.GetShardKeys()))
 		for i := range pb.GetShardKeys() {
@@ -99,9 +110,16 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 
 	for name, t := range pb.GetSchema() {
 		msti.Schema[name] = t
+		if t == influx.Field_Type_Tag {
+			msti.tagKeysTotal++
+		}
 	}
 
 	msti.IndexRelation.unmarshal(pb.GetIndexRelation())
+	if pb.GetColStoreInfo() != nil {
+		msti.ColStoreInfo = &ColStoreInfo{}
+		msti.ColStoreInfo.Unmarshal(pb.GetColStoreInfo())
+	}
 }
 
 func (msti *MeasurementInfo) MarshalBinary() ([]byte, error) {
@@ -127,6 +145,10 @@ func (msti MeasurementInfo) clone() *MeasurementInfo {
 	other.ShardKeys = make([]ShardKeyInfo, len(msti.ShardKeys))
 	for i := range msti.ShardKeys {
 		other.ShardKeys[i] = msti.ShardKeys[i].clone()
+	}
+	if msti.ColStoreInfo != nil {
+		colStoreInfo := *msti.ColStoreInfo
+		other.ColStoreInfo = &colStoreInfo
 	}
 
 	return &other
@@ -166,6 +188,47 @@ func (msti MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map[
 			ret[msti.Name][key] = struct{}{}
 		}
 	}
+}
+
+func (msti *MeasurementInfo) TagKeysTotal() int {
+	return msti.tagKeysTotal
+}
+
+type MeasurementsInfo struct {
+	MstsInfo []*MeasurementInfo
+}
+
+func (mstsi *MeasurementsInfo) marshal() *proto2.MeasurementsInfo {
+	pb := &proto2.MeasurementsInfo{
+		MeasurementsInfo: make([]*proto2.MeasurementInfo, len(mstsi.MstsInfo)),
+	}
+
+	for i := range mstsi.MstsInfo {
+		pb.MeasurementsInfo[i] = mstsi.MstsInfo[i].marshal()
+	}
+	return pb
+}
+
+func (mstsi *MeasurementsInfo) unmarshal(pb *proto2.MeasurementsInfo) {
+	mstsi.MstsInfo = make([]*MeasurementInfo, len(pb.GetMeasurementsInfo()))
+	for i := range pb.MeasurementsInfo {
+		mstsi.MstsInfo[i] = &MeasurementInfo{}
+		mstsi.MstsInfo[i].unmarshal(pb.GetMeasurementsInfo()[i])
+	}
+}
+
+func (mstsi *MeasurementsInfo) MarshalBinary() ([]byte, error) {
+	pb := mstsi.marshal()
+	return proto.Marshal(pb)
+}
+
+func (mstsi *MeasurementsInfo) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.MeasurementsInfo{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+	mstsi.unmarshal(pb)
+	return nil
 }
 
 type ShardKeyInfo struct {
@@ -215,19 +278,18 @@ func (ski ShardKeyInfo) clone() ShardKeyInfo {
 	}
 
 	shardKey := make([]string, len(ski.ShardKey))
-	for i := range ski.ShardKey {
-		shardKey[i] = ski.ShardKey[i]
-	}
+	copy(shardKey, ski.ShardKey)
 
 	ski.ShardKey = shardKey
 	return ski
 }
 
 type IndexRelation struct {
-	Rid        uint32
-	Oids       []uint32
-	IndexNames []string
-	IndexList  []*IndexList
+	Rid          uint32
+	Oids         []uint32
+	IndexNames   []string
+	IndexList    []*IndexList              // indexType to column name (all column indexed with indexType)
+	IndexOptions map[string][]*IndexOption // columnName to index option (all index options for columnName)
 }
 
 type IndexList struct {
@@ -246,6 +308,20 @@ func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
 		}
 		pb.IndexLists[i] = indexList
 	}
+	if indexR.IndexOptions != nil {
+		pb.IndexOptions = make(map[string]*proto2.IndexOptions, len(indexR.IndexOptions))
+		for i, indexOptions := range indexR.IndexOptions {
+			if indexOptions != nil {
+				pb.IndexOptions[i] = &proto2.IndexOptions{
+					Infos: make([]*proto2.IndexOption, len(indexOptions)),
+				}
+				for _, o := range indexOptions {
+					pb.IndexOptions[i].Infos = append(pb.IndexOptions[i].Infos, o.Marshal())
+				}
+			}
+		}
+	}
+
 	return pb
 }
 
@@ -258,6 +334,19 @@ func (indexR *IndexRelation) unmarshal(pb *proto2.IndexRelation) {
 	for i, iList := range indexLists {
 		indexR.IndexList[i] = &IndexList{
 			IList: iList.GetIList(),
+		}
+	}
+	indexOptions := pb.GetIndexOptions()
+	if indexOptions != nil {
+		indexR.IndexOptions = make(map[string][]*IndexOption, len(indexOptions))
+		for i, idxOptions := range indexOptions {
+			infos := idxOptions.GetInfos()
+			if infos != nil {
+				indexR.IndexOptions[i] = make([]*IndexOption, len(infos))
+				for j, o := range infos {
+					indexR.IndexOptions[i][j].Unmarshal(o)
+				}
+			}
 		}
 	}
 }
@@ -311,4 +400,73 @@ func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeF
 		}
 	}
 	return infos
+}
+
+type IndexOption struct {
+	Tokens     string
+	Tokenizers string
+	Segment    int64
+}
+
+func NewIndexOption(tokens string, tokenizers string, segment int64) *IndexOption {
+	indexOption := &IndexOption{
+		Tokens:     tokens,
+		Tokenizers: tokenizers,
+		Segment:    segment,
+	}
+
+	return indexOption
+}
+
+func (o *IndexOption) Marshal() *proto2.IndexOption {
+	pb := &proto2.IndexOption{
+		Tokens:     proto.String(o.Tokens),
+		Tokenizers: proto.String(o.Tokenizers),
+		Segment:    proto.Int64(o.Segment),
+	}
+
+	return pb
+}
+
+func (o *IndexOption) Unmarshal(pb *proto2.IndexOption) {
+	o.Tokens = pb.GetTokens()
+	o.Tokenizers = pb.GetTokenizers()
+	o.Segment = pb.GetSegment()
+}
+
+type ColStoreInfo struct {
+	PrimaryKey    []string
+	SortKey       []string
+	PropertyKey   []string
+	PropertyValue []string
+}
+
+func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string, Tags []string,
+	Fields map[string]int32) *ColStoreInfo {
+	h := &ColStoreInfo{
+		PrimaryKey: PrimaryKey,
+		SortKey:    SortKey,
+	}
+	if Property != nil {
+		h.PropertyKey = Property[0]
+		h.PropertyValue = Property[1]
+	}
+	return h
+}
+
+func (h *ColStoreInfo) Marshal() *proto2.ColStoreInfo {
+	pb := &proto2.ColStoreInfo{
+		PrimaryKey:    h.PrimaryKey,
+		SortKey:       h.SortKey,
+		PropertyKey:   h.PropertyKey,
+		PropertyValue: h.PropertyValue,
+	}
+	return pb
+}
+
+func (h *ColStoreInfo) Unmarshal(pb *proto2.ColStoreInfo) {
+	h.PrimaryKey = pb.GetPrimaryKey()
+	h.SortKey = pb.GetSortKey()
+	h.PropertyKey = pb.GetPropertyKey()
+	h.PropertyValue = pb.GetPropertyValue()
 }

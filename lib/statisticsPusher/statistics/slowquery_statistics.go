@@ -48,10 +48,9 @@ type SQLSlowQueryStatistics struct {
 
 var SlowQueryTagMap map[string]string
 var SqlSlowQueryStatisticsName = "sql_slow_queries"
-var SlowQueries chan *SQLSlowQueryStatistics
+var SlowQueries = make(chan *SQLSlowQueryStatistics, 256)
 
 func NewSqlSlowQueryStatistics() *SQLSlowQueryStatistics {
-	SlowQueries = make(chan *SQLSlowQueryStatistics, 256)
 	return &SQLSlowQueryStatistics{}
 }
 
@@ -178,10 +177,9 @@ type StoreSlowQueryStatistics struct {
 
 var StoreSlowQueryTagMap map[string]string
 var StoreSlowQueryStatisticsName = "store_slow_queries"
-var StoreSlowQueries chan *StoreSlowQueryStatistics
+var StoreSlowQueries = make(chan *StoreSlowQueryStatistics, 256)
 
 func NewStoreSlowQueryStatistics() *StoreSlowQueryStatistics {
-	StoreSlowQueries = make(chan *StoreSlowQueryStatistics, 256)
 	return &StoreSlowQueryStatistics{}
 }
 

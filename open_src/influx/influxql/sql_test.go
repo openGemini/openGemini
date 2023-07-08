@@ -302,6 +302,12 @@ func TestSingleParser(t *testing.T) {
 				"show streams on db1",
 				"drop stream stream1",*/
 		"select * from mst where thingid = $thingIdTag ",
+		"select * from mst where a like b and match(a,b) and matchphrase(c,d)",
+		"create measurement mst0 (tag1name string tag,fieldname int field, index aaa bbb type ccc token cxe tokenizers kkk,index aaa bbb type ccc token cxe tokenizers kkk,index aaa bbb type ccc)",
+		"create measurement mst0 (tag1name string tag default a ,fieldname int field, index aaa bbb type ccc segment 2,index eee ffff type hhh segment 3 ) with ENGINETYPE = columnstore SHARDKEY sky1,sky2 type hash primarykey pk1,pk2 sortkey sky1,sky2 property p1=k1,p2=k2",
+		"show sortkey from mst",
+		"show enginetype from mst",
+		"show primarykey from mst",
 	}
 	for _, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

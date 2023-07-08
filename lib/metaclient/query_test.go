@@ -25,6 +25,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/logger"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -61,7 +62,7 @@ func MockMetaData() (meta.Data, error) {
 	data.DataNodes = dataNodes
 
 	exec.Add(func() {
-		exec.err = data.CreateDatabase("foo", nil, nil)
+		exec.err = data.CreateDatabase("foo", nil, nil, false)
 	})
 
 	exec.Add(func() {
@@ -84,12 +85,12 @@ func MockMetaData() (meta.Data, error) {
 
 	exec.Add(func() {
 		exec.err = data.CreateMeasurement("foo", "bar", "cpu",
-			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil)
+			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil)
 	})
 
 	exec.Add(func() {
 		exec.err = data.CreateMeasurement("foo", "bar", "cpu",
-			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil)
+			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil)
 	})
 
 	exec.Add(func() {

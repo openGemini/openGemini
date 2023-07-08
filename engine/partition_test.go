@@ -19,6 +19,7 @@ package engine
 import (
 	"path"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -76,4 +77,9 @@ func TestOpenShard(t *testing.T) {
 	dbPTInfo.openShard(0, "1_1635724800000000000_1636329600000000000_1", "1", durationInfos, resC, 0, nil)
 	r = <-resC
 	require.NoError(t, r.err)
+
+	durationInfos[10] = &meta.ShardDurationInfo{DurationInfo: meta.DurationDescriptor{Duration: time.Second}}
+	sh, err := dbPTInfo.loadProcess(0, "10_1635724800000000000_1636329600000000000_100", "1", 100, 10, durationInfos, nil, nil)
+	require.Empty(t, sh)
+	require.NoError(t, err)
 }

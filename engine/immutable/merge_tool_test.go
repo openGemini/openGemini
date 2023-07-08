@@ -25,7 +25,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable"
-	"github.com/openGemini/openGemini/engine/immutable/readcache"
+	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -191,6 +191,7 @@ func TestMergeTool_Merge_mod5(t *testing.T) {
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
+	mh.addRecord(80, rg.generate(schemas, segLimit*3))
 	mh.addRecord(100, rg.generate(schemas, segLimit*3))
 	mh.addRecord(200, rg.incrBegin(-5).generate(schemas, segLimit*3))
 	mh.addRecord(300, rg.incrBegin(10).generate(schemas, segLimit*3))
@@ -410,17 +411,41 @@ func TestMergeTool_Merge_mod12(t *testing.T) {
 			}
 		}()
 
-		sh := &record.SortHelper{}
-		aux := &record.SortAux{}
+		sh := record.NewSortHelper()
+
 		for i := range recs {
-			aux.InitRecord(recs[i].Schema)
-			aux.Init(recs[i].Times())
-			sh.Sort(recs[i], aux)
-			recs[i], aux.SortRec = aux.SortRec, recs[i]
+			recs[i] = sh.Sort(recs[i])
 			record.CheckRecord(recs[i])
 		}
 	}()
 	require.NoError(t, err)
+}
+
+func TestMergeTool_recentFile(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(101, rg.setBegin(begin).incrBegin(-10).generate(schema, 100))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.setBegin(begin).incrBegin(-20).generate(schema, 10))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+
+	orderFiles, ok := mh.store.GetTSSPFiles("mst", true)
+	require.True(t, ok)
+	require.Equal(t, 2, orderFiles.Len())
+	require.Equal(t, uint16(1), orderFiles.Files()[0].FileNameMerge())
 }
 
 func TestMergeTool_SkipMerge(t *testing.T) {
@@ -473,7 +498,7 @@ func TestMergeTool_MergeUnorderedSelf(t *testing.T) {
 		mh.addRecord(100, rg.incrBegin(1).generate(schemas, 10))
 		schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float2"})
 		schemas = append(schemas, record.Field{Type: influx.Field_Type_String, Name: "string2"})
-		mh.addRecord(uint64(100+i), rg.incrBegin(1).generate(schemas, 10))
+		mh.addRecord(uint64(100+i+1), rg.incrBegin(1).generate(schemas, 10))
 
 		mh.addRecord(200, rg.incrBegin(1).generate(getDefaultSchemas(), 10))
 		require.NoError(t, mh.saveToUnordered())
@@ -672,4 +697,33 @@ func TestCompactionDiffSchemas(t *testing.T) {
 	mh.store.Wait()
 
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestMergeStopFiles(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 256)()
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	rg.setBegin(begin)
+	mh.addRecord(100, rg.generate(schemas, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.generate(schemas, 100))
+	require.NoError(t, mh.saveToUnordered())
+
+	orderFiles := immutable.NewTSSPFiles()
+	orderFiles.Append(mh.store.Order["mst"].Files()[0])
+
+	files := mh.store.OutOfOrder["mst"]
+	files.StopFiles()
+	require.Empty(t, mh.store.File("mst", files.Files()[0].Path(), false))
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	delete(mh.store.OutOfOrder, "mst")
+	require.NoError(t, mh.store.ReplaceFiles("mst", files.Files(), files.Files(), true))
+	mh.store.Order["mst"] = orderFiles
 }

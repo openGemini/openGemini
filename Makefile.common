@@ -31,11 +31,11 @@ PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
 
 COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go"
 COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
-COPYRIGHT_HEADER  := "Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd."
+COPYRIGHT_HEADER  := "Copyright 2022|2023 Huawei Cloud Computing Technologies Co., Ltd."
 
 
 install-goimports-reviser:
-	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.1.0
+	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.3.1
 
 install-staticcheck:
 	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.3

@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
- http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,6 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
-
 package downsample
 
 import (
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -171,7 +171,7 @@ func TestMocService(t *testing.T) {
 	s.MetaClient.(*mocMetaClient).AddMeasurementInfos(mstInfo, "db0", "rp0")
 	s.Engine = NewMocEngine([]*meta.ShardDownSamplePolicyInfo{
 		{DbName: "db0", RpName: "rp0", ShardId: 1, PtId: 1, TaskID: 2, DownSamplePolicyLevel: 1, Ident: &meta.ShardIdentifier{
-			ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 1, ShardType: "hash", ReadOnly: true}},
+			ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 1, ShardType: "hash", ReadOnly: true, EngineType: uint32(config.TSSTORE)}},
 	})
 	s.Engine.(*mocEngine).DownSamplePolicies["db0"+"."+"rp0"] = &meta.StoreDownSamplePolicy{
 		Info: policy,
@@ -193,14 +193,6 @@ func NewMocEngine(infos []*meta.ShardDownSamplePolicyInfo) *mocEngine {
 		infos:              infos,
 		DownSamplePolicies: make(map[string]*meta.StoreDownSamplePolicy),
 	}
-}
-
-func (m *mocEngine) ResetDownSampleFlag() {
-
-}
-
-func (m *mocEngine) RemoveDeadDownSamplePolicy() {
-
 }
 
 func (m *mocEngine) StartDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {

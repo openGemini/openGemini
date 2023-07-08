@@ -85,12 +85,29 @@ func (g *RuleInstruction) RuleCatagory() OptRuleCatagory {
 	return g.ruleCatatory
 }
 
+func (g *RuleInstruction) SkippingGroup(schema hybridqp.Catalog) bool {
+	if schema == nil || schema.(*QuerySchema) == nil || schema.HasSubQuery() {
+		return false
+	}
+	switch g.ruleCatatory {
+	case RULE_PUSHDOWN_LIMIT:
+		return !schema.HasLimit()
+	case RULE_PUSHDOWN_AGG:
+		return !schema.HasCall()
+	case RULE_SPREAD_AGG:
+		return !schema.HasCall()
+	case RULE_SUBQUERY:
+		return !schema.HasSubQuery()
+	case RULE_HEIMADLL_PUSHDOWN:
+		return !schema.HasCastorCall()
+	}
+	return false
+}
+
 type HeuMatchOrder uint8
 
 const (
 	ARBITRARY HeuMatchOrder = iota
-	BOTTOM_UP
-	TOP_DOWN
 	DEPTH_FIRST
 )
 
@@ -204,6 +221,10 @@ func (v *HeuVertex) Clone() hybridqp.QueryNode {
 	clone := &HeuVertex{}
 	*clone = *v
 	return clone
+}
+
+func (v *HeuVertex) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return v.node.New(inputs, schema, eTrait)
 }
 
 func (v *HeuVertex) ReplaceChildren(children []hybridqp.QueryNode) {
@@ -603,12 +624,12 @@ func (p *HeuPlannerImpl) ExecuteInstruction(instruction HeuInstruction) {
 	}
 }
 
-func (p *HeuPlannerImpl) skippingGroup() bool {
-	return false
+func (p *HeuPlannerImpl) skippingGroup(instruction *RuleInstruction) bool {
+	return instruction.SkippingGroup(p.root.Schema())
 }
 
 func (p *HeuPlannerImpl) executeRuleInstruction(instruction *RuleInstruction) {
-	if p.skippingGroup() {
+	if p.skippingGroup(instruction) {
 		return
 	}
 
@@ -622,14 +643,20 @@ func (p *HeuPlannerImpl) executeRuleInstruction(instruction *RuleInstruction) {
 		}
 	}
 
-	p.applyRules(instruction.ruleSet, true)
+	p.applyRules(instruction.ruleSet)
 }
 
-func (p *HeuPlannerImpl) applyRules(ruleSet RuleSet, forceConversions bool) {
+func (p *HeuPlannerImpl) applyRules(ruleSet RuleSet) {
 	forceRestartAfterTransformation := p.currentProgram.matchOrder != ARBITRARY &&
 		p.currentProgram.matchOrder != DEPTH_FIRST
 	nMatches := 0
 	var fixedPoint bool
+
+	nodes := listPool.Get()
+	defer func() {
+		listPool.Put(nodes)
+	}()
+
 	for {
 		iter := p.dag.GetGraphIterator(p.root, p.currentProgram.matchOrder)
 		fixedPoint = true
@@ -639,7 +666,7 @@ func (p *HeuPlannerImpl) applyRules(ruleSet RuleSet, forceConversions bool) {
 			}
 			vertex := iter.Next()
 			for rule := range ruleSet {
-				newVertex := p.applyRule(rule, vertex, forceConversions)
+				newVertex := p.applyRule(rule, vertex, nodes)
 				if newVertex == nil || newVertex.Equals(vertex) {
 					continue
 				}
@@ -652,7 +679,7 @@ func (p *HeuPlannerImpl) applyRules(ruleSet RuleSet, forceConversions bool) {
 				} else {
 					iter = p.dag.GetGraphIterator(newVertex, p.currentProgram.matchOrder)
 					if p.currentProgram.matchOrder == DEPTH_FIRST {
-						nMatches = p.depthFirstApply(iter, ruleSet, forceConversions, nMatches)
+						nMatches = p.depthFirstApply(iter, ruleSet, nMatches)
 					}
 					if nMatches >= p.currentProgram.matchLimit {
 						return
@@ -676,7 +703,7 @@ func (p *HeuPlannerImpl) nodeListToSlice(nodes *list.List) []hybridqp.QueryNode 
 	return s
 }
 
-func (p *HeuPlannerImpl) applyRule(rule OptRule, vertex *HeuVertex, forceConversions bool) *HeuVertex {
+func (p *HeuPlannerImpl) applyRule(rule OptRule, vertex *HeuVertex, nodes *list.List) *HeuVertex {
 	if !p.dag.Contains(vertex) {
 		return nil
 	}
@@ -686,11 +713,7 @@ func (p *HeuPlannerImpl) applyRule(rule OptRule, vertex *HeuVertex, forceConvers
 		return nil
 	}
 
-	nodes := listPool.Get()
-	defer func() {
-		listPool.Put(nodes)
-	}()
-
+	nodes.Init()
 	match := p.matchOperands(rule.GetOperand(), vertex.node, nodes)
 	if !match {
 		return nil
@@ -770,7 +793,6 @@ func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 				return false
 			}
 		}
-
 		nodes.PushBack(node)
 
 		vertex, ok := p.Vertex(node)
@@ -865,14 +887,18 @@ func (p *HeuPlannerImpl) matchOperands(operand OptRuleOperand,
 	}
 }
 
-func (p *HeuPlannerImpl) depthFirstApply(iter *GraphIterator, ruleSet RuleSet, forceConversions bool, nMatches int) int {
+func (p *HeuPlannerImpl) depthFirstApply(iter *GraphIterator, ruleSet RuleSet, nMatches int) int {
+	nodes := listPool.Get()
+	defer func() {
+		listPool.Put(nodes)
+	}()
 	for {
 		if !iter.HasNext() {
 			break
 		}
 		vertex := iter.Next()
 		for rule := range ruleSet {
-			newVertex := p.applyRule(rule, vertex, forceConversions)
+			newVertex := p.applyRule(rule, vertex, nodes)
 			if newVertex == nil || newVertex.Equals(vertex) {
 				continue
 			}
@@ -881,7 +907,7 @@ func (p *HeuPlannerImpl) depthFirstApply(iter *GraphIterator, ruleSet RuleSet, f
 				return nMatches
 			}
 			depthIter := p.dag.GetGraphIterator(newVertex, p.currentProgram.matchOrder)
-			nMatches = p.depthFirstApply(depthIter, ruleSet, forceConversions, nMatches)
+			nMatches = p.depthFirstApply(depthIter, ruleSet, nMatches)
 			break
 		}
 	}

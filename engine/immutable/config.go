@@ -18,7 +18,6 @@ package immutable
 
 import (
 	"math"
-	"sync/atomic"
 
 	"go.uber.org/zap"
 )
@@ -33,14 +32,16 @@ const (
 	AutoCompact         = 0
 )
 
-var (
-	maxSegmentLimit   int32 = math.MaxUint16
-	maxRowsPerSegment int32 = DefaultMaxRowsPerSegment
-	cacheDataBlock    int32 = 0
-	cacheMetaData     int32 = 0
-	maxTSSPFileSize   int64 = defaultFileSizeLimit
-	streamingCompact  int32 = AutoCompact
-)
+var conf = Config{
+	maxSegmentLimit:       math.MaxUint16,
+	maxRowsPerSegment:     DefaultMaxRowsPerSegment,
+	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
+	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
+	fileSizeLimit:         defaultFileSizeLimit,
+	cacheDataBlock:        false,
+	cacheMetaData:         false,
+	streamingCompact:      AutoCompact,
+}
 
 func SetMaxRowsPerSegment(maxRowsPerSegmentLimit int) {
 	n := maxRowsPerSegmentLimit / 8
@@ -48,7 +49,7 @@ func SetMaxRowsPerSegment(maxRowsPerSegmentLimit int) {
 		n++
 	}
 	n = n * 8
-	atomic.StoreInt32(&maxRowsPerSegment, int32(n))
+	conf.maxRowsPerSegment = n
 	log.Info("Set maxRowsPerSegmentLimit", zap.Int("limit", n))
 }
 
@@ -59,8 +60,8 @@ func SetMaxSegmentLimit(limit int) {
 	if limit > math.MaxUint16 {
 		limit = math.MaxUint16
 	}
-	atomic.StoreInt32(&maxSegmentLimit, int32(limit))
-	log.Info("Set maxSegmentLimit", zap.Int32("limit", maxSegmentLimit))
+	conf.maxSegmentLimit = limit
+	log.Info("Set maxSegmentLimit", zap.Int("limit", limit))
 }
 
 type Config struct {
@@ -72,20 +73,17 @@ type Config struct {
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
-	cacheMetaData bool
+	cacheMetaData    bool
+	streamingCompact int32
+}
+
+func GetConfig() *Config {
+	return &conf
 }
 
 func NewConfig() *Config {
-	c := &Config{
-		maxSegmentLimit:       int(atomic.LoadInt32(&maxSegmentLimit)),
-		maxRowsPerSegment:     MaxRowsPerSegment(),
-		maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
-		maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
-		fileSizeLimit:         atomic.LoadInt64(&maxTSSPFileSize),
-		cacheDataBlock:        atomic.LoadInt32(&cacheDataBlock) > 0,
-		cacheMetaData:         atomic.LoadInt32(&cacheMetaData) > 0,
-	}
-	return c
+	c := conf
+	return &c
 }
 
 func (c *Config) SetMaxRowsPerSegment(maxRowsPerSegmentLimit int) {
@@ -108,44 +106,40 @@ func (c *Config) SetMaxSegmentLimit(n int) {
 	c.maxSegmentLimit = n
 }
 
-func (c *Config) MaxRowsPerSegment() int {
+func (c *Config) GetMaxRowsPerSegment() int {
 	return c.maxRowsPerSegment
 }
 
+func (c *Config) GetMaxSegmentLimit() int {
+	return c.maxSegmentLimit
+}
+
 func SetCacheDataBlock(en bool) {
-	if en {
-		atomic.StoreInt32(&cacheDataBlock, 1)
-	} else {
-		atomic.StoreInt32(&cacheDataBlock, 0)
-	}
+	conf.cacheDataBlock = en
 	log.Info("Set cacheDataBlock", zap.Bool("en", en))
 }
 
 func SetCacheMetaData(en bool) {
-	if en {
-		atomic.StoreInt32(&cacheMetaData, 1)
-	} else {
-		atomic.StoreInt32(&cacheMetaData, 0)
-	}
+	conf.cacheMetaData = en
 	log.Info("Set cacheMetaData", zap.Bool("en", en))
 }
 
 func CacheMetaInMemory() bool {
-	return atomic.LoadInt32(&cacheMetaData) > 0
+	return conf.cacheMetaData
 }
 
 func CacheDataInMemory() bool {
-	return atomic.LoadInt32(&cacheDataBlock) > 0
+	return conf.cacheDataBlock
 }
 
 func MaxRowsPerSegment() int {
-	return int(atomic.LoadInt32(&maxRowsPerSegment))
+	return conf.maxRowsPerSegment
 }
 
 func SegMergeFlag(v int32) {
-	atomic.StoreInt32(&streamingCompact, v)
+	conf.streamingCompact = v
 }
 
 func MergeFlag() int32 {
-	return atomic.LoadInt32(&streamingCompact)
+	return conf.streamingCompact
 }

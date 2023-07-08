@@ -22,8 +22,9 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
-	"github.com/openGemini/openGemini/engine/immutable/encoding"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type idTime struct {
@@ -63,7 +64,7 @@ func TestSingleMeasurement(t *testing.T) {
 		idInfo.Add(idTimes[i].id, idTimes[i].tm)
 	}
 
-	seq.BatchUpdate(idInfo)
+	seq.BatchUpdateCheckTime(idInfo, false)
 
 	checkFun := func(seq *immutable.Sequencer) {
 		for i := range idTimes {
@@ -126,7 +127,7 @@ func TestMultiMeasurement(t *testing.T) {
 		for i := range v {
 			idInfo.Add(v[i].id, v[i].tm)
 		}
-		seq.BatchUpdate(idInfo)
+		seq.BatchUpdateCheckTime(idInfo, false)
 		immutable.PutIDTimePairs(idInfo)
 	}
 
@@ -195,6 +196,24 @@ func TestMarshalIdTime(t *testing.T) {
 	}
 }
 
+func TestMarshalIdTime_error(t *testing.T) {
+	idTimes := immutable.GetIDTimePairs("mst")
+	_, err := idTimes.Unmarshal(true, []byte{0, 0, 0, 0})
+	require.EqualError(t, err, "too small data for id time, 4")
+
+	idTimes.Add(1, 1)
+	idTimes.AddRowCounts(10)
+
+	buf := idTimes.Marshal(true, nil, encoding.NewCoderContext())
+	buf[49] = 20
+	_, err = idTimes.Unmarshal(true, buf)
+	require.EqualError(t, err, "block smaller (20) data (17) for time length")
+
+	buf[15] = 200
+	_, err = idTimes.Unmarshal(true, buf)
+	require.EqualError(t, err, "block smaller (200) data (51) for time length")
+}
+
 func TestBatchUpdateCheckTime(t *testing.T) {
 	seq := immutable.NewSequencer()
 
@@ -211,14 +230,14 @@ func TestBatchUpdateCheckTime(t *testing.T) {
 		Rows: []int64{1, 2},
 	}
 
-	seq.BatchUpdateCheckTime(p1)
+	seq.BatchUpdateCheckTime(p1, true)
 	for i := range p1.Ids {
 		lastTime, rowCount := seq.Get("mst_1", p1.Ids[i])
 		assert.Equal(t, lastTime, p1.Tms[i])
 		assert.Equal(t, rowCount, p1.Rows[i])
 	}
 
-	seq.BatchUpdateCheckTime(p2)
+	seq.BatchUpdateCheckTime(p2, true)
 	for i := range p1.Ids {
 		lastTime, rowCount := seq.Get("mst_1", p1.Ids[i])
 		assert.Equal(t, lastTime, maxInt64(p1.Tms[i], p2.Tms[i]))

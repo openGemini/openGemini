@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -129,7 +130,7 @@ func (trans *IndexScanTransform) BuildDownSampleSchema(schema hybridqp.Catalog) 
 	}
 	o := *(schema.Options().(*query.ProcessorOptions))
 	o.HintType = hybridqp.ExactStatisticQuery
-	s := NewQuerySchema(fields, columnNames, &o)
+	s := NewQuerySchema(fields, columnNames, &o, nil)
 	trans.downSampleValue = make(map[string]string, len(fields))
 	for i := range s.fields {
 		name := s.fields[i].Expr.(*influxql.VarRef).Val
@@ -163,7 +164,7 @@ func (trans *IndexScanTransform) BuildDownSamplePlan(s hybridqp.Catalog) (hybrid
 	currNode.(*LogicalAggregate).DeriveOperations()
 	builder.Push(currNode)
 	builder.Exchange(SERIES_EXCHANGE, nil)
-	builder.Reader()
+	builder.Reader(config.TSSTORE)
 	builder.Exchange(READER_EXCHANGE, nil)
 	builder.Aggregate()
 	currNode = builder.stack.Pop()
@@ -195,7 +196,6 @@ func (trans *IndexScanTransform) indexScan() error {
 	}
 	trans.abortMu.Lock()
 	defer func() {
-		trans.info.Store.UnrefEngineDbPt(trans.info.UnRefDbPt.Db, trans.info.UnRefDbPt.Pt)
 		trans.abortMu.Unlock()
 	}()
 	if trans.aborted {
@@ -270,7 +270,8 @@ func (trans *IndexScanTransform) Abort() {
 		defer trans.abortMu.Unlock()
 		trans.aborted = true
 		if trans.pipelineExecutor != nil {
-			//when be close, should abort child pipelineExecutor, otherwise child pipelineExecutor will
+			// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
+			// Otherwise, which increases the memory usage.
 			trans.pipelineExecutor.Abort()
 		}
 	})
@@ -280,7 +281,8 @@ func (trans *IndexScanTransform) Close() {
 	trans.Once(func() {
 		trans.output.Close()
 		if trans.pipelineExecutor != nil {
-			//when be close, should abort child pipelineExecutor, otherwise child pipelineExecutor will
+			// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
+			// Otherwise, which increases the memory usage.
 			trans.pipelineExecutor.Crash()
 		}
 	})

@@ -104,7 +104,7 @@ func runMeta(args ...string) (*app.Command, error) {
 	}
 	cmdMeta.Logo = app.METALOGO
 	cmdMeta.Usage = runUsage
-	cmdMeta.Config = config.NewTSMeta()
+	cmdMeta.Config = config.NewTSMeta(false)
 	cmdMeta.ServiceName = "meta"
 	cmdMeta.NewServerFunc = meta.NewServer
 
@@ -143,7 +143,7 @@ func runStore(args ...string) (*app.Command, error) {
 	}
 	cmdStore.Logo = app.STORELOGO
 	cmdStore.Usage = runUsage
-	cmdStore.Config = config.NewTSStore()
+	cmdStore.Config = config.NewTSStore(false)
 	cmdStore.ServiceName = "store"
 	cmdStore.NewServerFunc = store.NewServer
 

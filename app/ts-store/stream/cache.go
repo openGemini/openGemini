@@ -51,7 +51,7 @@ func (p *CacheRowPool) Get() *CacheRow {
 func (p *CacheRowPool) Put(r *CacheRow) {
 	p.rowsPool.Put(&r.rows)
 	r.rows = nil
-	r.dataBlock = nil
+	r.ww = nil
 	p.pool.Put(r)
 	atomic.AddInt64(&p.length, 1)
 }

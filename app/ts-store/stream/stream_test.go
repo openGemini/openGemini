@@ -19,11 +19,11 @@ package stream
 import (
 	"fmt"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	stream2 "github.com/openGemini/openGemini/services/stream"
@@ -153,6 +153,41 @@ func (m MockMetaclient) GetStreamInfosStore() map[string]*meta.StreamInfo {
 	return streamInfos
 }
 
+var writePointsWorkPool sync.Pool
+
+type MockWritePointsWork struct {
+	rows []influx.Row
+}
+
+func GetWritePointsWork() *MockWritePointsWork {
+	v := writePointsWorkPool.Get()
+	if v == nil {
+		return &MockWritePointsWork{}
+	}
+	return v.(*MockWritePointsWork)
+}
+
+func PutWritePointsWork(ww *MockWritePointsWork) {
+	ww.reset()
+	writePointsWorkPool.Put(ww)
+}
+
+func (ww *MockWritePointsWork) GetRows() []influx.Row {
+	return ww.rows
+}
+
+func (ww *MockWritePointsWork) SetRows(rows []influx.Row) {
+	ww.rows = rows
+}
+
+func (ww *MockWritePointsWork) PutWritePointsWork() {
+	PutWritePointsWork(ww)
+}
+
+func (ww *MockWritePointsWork) reset() {
+	ww.rows = ww.rows[:0]
+}
+
 func Test_Call(t *testing.T) {
 	m := &MockStorage{}
 	l := &MockLogger{}
@@ -164,7 +199,7 @@ func Test_Call(t *testing.T) {
 		t.Fatal(err)
 	}
 	FlushParallelMinRowNum = 10
-	dataBlock := pool.NewDataBlock()
+	dataBlock := &MockWritePointsWork{}
 	fieldRows := buildRows(30)
 	fieldRows2 := buildRows(1)
 	window := time.Second * 1
@@ -187,7 +222,8 @@ func Test_Call(t *testing.T) {
 		fieldRows[k].Timestamp = start.UnixNano()
 		fieldRows[k].Tags[0].Value = fmt.Sprintf("%vkk%v", k, 1)
 	}
-	dataBlock.Rows = fieldRows
+	dataBlock.SetRows(fieldRows)
+
 	stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock)
 	//for test reuse object
 	stream.Drain()
@@ -195,8 +231,8 @@ func Test_Call(t *testing.T) {
 		fieldRows2[k].Timestamp = start.UnixNano()
 		fieldRows2[k].Tags[0].Value = fmt.Sprintf("%vkk%v", k, 1)
 	}
-	dataBlock2 := pool.NewDataBlock()
-	dataBlock2.Rows = fieldRows2
+	dataBlock2 := &MockWritePointsWork{}
+	dataBlock.SetRows(fieldRows2)
 	stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock2)
 	t.Log("write rows ", start, time.Now())
 	stream.Drain()
@@ -266,8 +302,8 @@ func Test_MaxDelay(t *testing.T) {
 		fieldRows[k].Timestamp = now.UnixNano()
 		fieldRows[k].Tags[0].Value = fmt.Sprintf("%vkk%v", k, 1)
 	}
-	dataBlock := pool.NewDataBlock()
-	dataBlock.Rows = fieldRows
+	dataBlock := &MockWritePointsWork{}
+	dataBlock.SetRows(fieldRows)
 	stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock)
 	t.Log("write rows ", now, time.Now())
 	stream.Drain()
@@ -393,8 +429,8 @@ func Bench_Stream_POINT(t *testing.B, pointNum int) {
 		fmt.Println("build cost ", time.Now().Sub(now))
 
 		for j := 0; j < 20; j++ {
-			dataBlock := pool.NewDataBlock()
-			dataBlock.Rows = rows[j]
+			dataBlock := &MockWritePointsWork{}
+			dataBlock.SetRows(rows[j])
 			stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock)
 		}
 		stream.Drain()

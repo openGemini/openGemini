@@ -48,8 +48,13 @@ func TestAssignEventStateTransition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}}
-	event := NewAssignEvent(dbPt, 1, false)
+
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           db,
+		EnableTagArray: false,
+	}
+	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}, DBBriefInfo: dbBriefInfo}
+	event := NewAssignEvent(dbPt, 1, dataNode.AliveConnID, false)
 	globalService.clusterManager.addClusterMember(1)
 	defer globalService.clusterManager.removeClusterMember(1)
 	assert.Equal(t, dbPt.String(), event.getEventId())

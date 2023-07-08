@@ -17,27 +17,23 @@ limitations under the License.
 package coordinator
 
 import (
-	"errors"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -73,11 +69,11 @@ func putInjestionCtx(s *injestionCtx) {
 type PWMetaClient interface {
 	Database(name string) (di *meta2.DatabaseInfo, err error)
 	RetentionPolicy(database, policy string) (*meta2.RetentionPolicyInfo, error)
-	CreateShardGroup(database, policy string, timestamp time.Time) (*meta2.ShardGroupInfo, error)
+	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	GetStreamInfos() map[string]*meta2.StreamInfo
 	GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool
@@ -86,15 +82,13 @@ type PWMetaClient interface {
 // PointsWriter handles writes across multiple local and remote data nodes.
 type PointsWriter struct {
 	// rows must be within this time range
-	timeRange *record.TimeRange
+	timeRange *util.TimeRange
 	signal    chan struct{}
 
 	timeout    time.Duration
 	MetaClient PWMetaClient
 
-	TSDBStore interface {
-		WriteRows(nodeID uint64, database, rp string, pt uint32, shard uint64, streamShardIdList []uint64, rows *[]influx.Row, timeout time.Duration) error
-	}
+	TSDBStore TSDBStore
 
 	logger *logger.Logger
 }
@@ -108,184 +102,15 @@ func NewPointsWriter(timeout time.Duration) *PointsWriter {
 	}
 }
 
-// ShardMapping contains a mapping of shards to points.
-type injestionCtx struct {
-	fieldToCreatePool []*proto2.FieldSchema
-	rowsPool          sync.Pool
-	pRowsPool         sync.Pool
-	shardRowMap       dictpool.Dict
-	shardMap          dictpool.Dict
-
-	srcStreamDstShardIdMap map[uint64]map[uint64]uint64
-	mstShardIdRowMap       map[string]map[uint64]*[]*influx.Row
-
-	streamInfos           []*meta2.StreamInfo
-	streamDBs             []*meta2.DatabaseInfo
-	streamMSTs            []*meta2.MeasurementInfo
-	streamShardKeyInfos   []*meta2.ShardKeyInfo
-	streamWriteHelpers    []*writeHelper
-	streamAliveShardIdxes [][]int
-
-	minTime         int64
-	db              *meta2.DatabaseInfo
-	rp              *meta2.RetentionPolicyInfo
-	ms              *meta2.MeasurementInfo
-	shardKeyInfo    *meta2.ShardKeyInfo
-	writeHelper     *writeHelper
-	aliveShardIdxes []int
-
-	stream *Stream
+type ShardRow struct {
+	shardInfo *meta2.ShardInfo
+	rows      []*influx.Row
 }
+type ShardRows []ShardRow
 
-func (s *injestionCtx) Reset() {
-	s.fieldToCreatePool = s.fieldToCreatePool[:0]
-	s.shardMap.Reset()
-	s.shardRowMap.Reset()
-
-	if s.srcStreamDstShardIdMap != nil {
-		s.srcStreamDstShardIdMap = map[uint64]map[uint64]uint64{}
-	}
-	if s.mstShardIdRowMap != nil {
-		s.mstShardIdRowMap = map[string]map[uint64]*[]*influx.Row{}
-	}
-	if s.stream != nil {
-		s.stream.tasks = map[string]*streamTask{}
-	}
-
-	s.streamInfos = s.streamInfos[:0]
-	s.streamDBs = s.streamDBs[:0]
-	s.streamMSTs = s.streamMSTs[:0]
-	for i := range s.streamAliveShardIdxes {
-		s.streamAliveShardIdxes[i] = s.streamAliveShardIdxes[i][:0]
-	}
-	s.streamShardKeyInfos = s.streamShardKeyInfos[:0]
-
-	for i := 0; i < len(s.streamWriteHelpers); i++ {
-		s.streamWriteHelpers[i].reset()
-	}
-	if s.writeHelper != nil {
-		s.writeHelper.reset()
-	}
-	s.db = nil
-	s.rp = nil
-	s.ms = nil
-	s.minTime = 0
-	s.aliveShardIdxes = s.aliveShardIdxes[:0]
-	s.shardKeyInfo = nil
-}
-
-func (s *injestionCtx) initStreamDBs(length int) {
-	if cap(s.streamDBs) < length {
-		s.streamDBs = make([]*meta2.DatabaseInfo, length)
-	} else {
-		s.streamDBs = s.streamDBs[:length]
-	}
-}
-
-func (s *injestionCtx) initStreamMSTs(length int) {
-	if cap(s.streamMSTs) < length {
-		s.streamMSTs = make([]*meta2.MeasurementInfo, length)
-	} else {
-		s.streamMSTs = s.streamMSTs[:length]
-	}
-}
-
-// streamWriteHelpers not reset, PointsWriter stateless
-func (s *injestionCtx) initStreamWriteHelpers(length int, w *PointsWriter) {
-	if len(s.streamWriteHelpers) >= length {
-		return
-	}
-	addLen := length - len(s.streamWriteHelpers)
-	for i := 0; i < addLen; i++ {
-		s.streamWriteHelpers = append(s.streamWriteHelpers, newWriteHelper(w))
-	}
-}
-
-func (s *injestionCtx) initStreamAliveShardIdxes(length int) {
-	if cap(s.streamAliveShardIdxes) < length {
-		s.streamAliveShardIdxes = make([][]int, length)
-	} else {
-		s.streamAliveShardIdxes = s.streamAliveShardIdxes[:length]
-	}
-}
-
-func (s *injestionCtx) initStreamShardKeyInfos(length int) {
-	if cap(s.streamShardKeyInfos) < length {
-		s.streamShardKeyInfos = make([]*meta2.ShardKeyInfo, length)
-	} else {
-		s.streamShardKeyInfos = s.streamShardKeyInfos[:length]
-	}
-}
-
-func (s *injestionCtx) checkDBRP(database, retentionPolicy string, w *PointsWriter) (err error) {
-	// check db and rp validation
-	s.db, err = w.MetaClient.Database(database)
-	if err != nil {
-		return err
-	}
-
-	if retentionPolicy == "" {
-		retentionPolicy = s.db.DefaultRetentionPolicy
-	}
-
-	s.rp, err = s.db.GetRetentionPolicy(retentionPolicy)
-	if err != nil {
-		return err
-	}
-
-	if s.rp.Duration > 0 {
-		s.minTime = int64(fasttime.UnixTimestamp()*1e9) - s.rp.Duration.Nanoseconds()
-	}
-	return
-}
-
-// initStreamVar init the var needed by the stream calculation
-func (s *injestionCtx) initStreamVar(w *PointsWriter) (err error) {
-	dstSis := s.getDstSis()
-	streamLen := len(*dstSis)
-	if s.stream == nil {
-		s.stream = NewStream(w.TSDBStore, w.MetaClient, w.logger, w.timeout)
-	}
-
-	s.initStreamDBs(streamLen)
-	s.initStreamMSTs(streamLen)
-	s.initStreamWriteHelpers(streamLen, w)
-	s.initStreamAliveShardIdxes(streamLen)
-	s.initStreamShardKeyInfos(streamLen)
-
-	streamDBS := s.getStreamDBs()
-	streamMSTs := s.getStreamMSTs()
-	streamWHs := s.getWriteHelpers()
-
-	for i := 0; i < streamLen; i++ {
-		(*streamDBS)[i], err = w.MetaClient.Database((*dstSis)[i].DesMst.Database)
-		if err != nil {
-			return
-		}
-
-		(*streamMSTs)[i], err = (*streamWHs)[i].createMeasurement((*dstSis)[i].DesMst.Database, (*dstSis)[i].DesMst.RetentionPolicy, (*dstSis)[i].DesMst.Name)
-		if err != nil {
-			return
-		}
-	}
-	return
-}
-
-func (s *injestionCtx) getShardRowMap() *dictpool.Dict {
-	return &s.shardRowMap
-}
-
-func (s *injestionCtx) getShardMap() *dictpool.Dict {
-	return &s.shardMap
-}
-
-func (s *injestionCtx) getMstShardIdRowMap() map[string]map[uint64]*[]*influx.Row {
-	return s.mstShardIdRowMap
-}
-
-func (s *injestionCtx) getDstSis() *[]*meta2.StreamInfo {
-	return &s.streamInfos
-}
+func (srs ShardRows) Len() int           { return len(srs) }
+func (srs ShardRows) Less(i, j int) bool { return srs[i].shardInfo.ID < srs[j].shardInfo.ID }
+func (srs ShardRows) Swap(i, j int)      { srs[i], srs[j] = srs[j], srs[i] }
 
 func buildColumnToIndex(r *influx.Row) {
 	if r.ColumnToIndex == nil {
@@ -301,63 +126,6 @@ func buildColumnToIndex(r *influx.Row) {
 		index++
 	}
 	r.ReadyBuildColumnToIndex = true
-}
-
-func (s *injestionCtx) getWriteHelpers() *[]*writeHelper {
-	return &s.streamWriteHelpers
-}
-
-func (s *injestionCtx) getWriteHelper(w *PointsWriter) *writeHelper {
-	if s.writeHelper == nil {
-		s.writeHelper = newWriteHelper(w)
-	}
-	return s.writeHelper
-}
-
-func (s *injestionCtx) getStreamDBs() *[]*meta2.DatabaseInfo {
-	return &s.streamDBs
-}
-
-func (s *injestionCtx) getStreamShardKeyInfos() []*meta2.ShardKeyInfo {
-	return s.streamShardKeyInfos
-}
-
-func (s *injestionCtx) getStreamMSTs() *[]*meta2.MeasurementInfo {
-	return &s.streamMSTs
-}
-
-func (s *injestionCtx) getStreamAliveShardIdxes() *[][]int {
-	return &s.streamAliveShardIdxes
-}
-
-func (s *injestionCtx) getSrcStreamDstShardIdMap() map[uint64]map[uint64]uint64 {
-	return s.srcStreamDstShardIdMap
-}
-
-func (s *injestionCtx) getRowsPool() *[]influx.Row {
-	v := s.rowsPool.Get()
-	if v == nil {
-		return &[]influx.Row{}
-	}
-	return v.(*[]influx.Row)
-}
-
-func (s *injestionCtx) putRowsPool(rp *[]influx.Row) {
-	*rp = (*rp)[:0]
-	s.rowsPool.Put(rp)
-}
-
-func (s *injestionCtx) getPRowsPool() *[]*influx.Row {
-	v := s.pRowsPool.Get()
-	if v == nil {
-		return &[]*influx.Row{}
-	}
-	return v.(*[]*influx.Row)
-}
-
-func (s *injestionCtx) putPRowsPool(rp *[]*influx.Row) {
-	*rp = (*rp)[:0]
-	s.pRowsPool.Put(rp)
 }
 
 func reserveField(fieldToCreatePool []*proto2.FieldSchema) []*proto2.FieldSchema {
@@ -405,7 +173,7 @@ func fixFields(fields influx.Fields) (influx.Fields, error) {
 	for i := 0; i < len(fields); i++ {
 		if fields[i].Key == "time" {
 			fields = append(fields[:i], fields[i+1:]...) // remove the i index item for time field
-			i--                                          // fix the i index
+			i--
 			continue
 		}
 		if i > 0 && fields[i-1].Key == fields[i].Key {
@@ -413,11 +181,14 @@ func fixFields(fields influx.Fields) (influx.Fields, error) {
 				// same field key, diffrent field type
 				return nil, errno.NewError(errno.ParseFieldTypeConflict, fields[i].Key)
 			}
-			fields = append(fields[:i-1], fields[i:]...) // remove the i-1 index item
-			i--                                          // fix the i index
+			// remove the i-1 index item
+			fields = append(fields[:i-1], fields[i:]...)
+			// fix the i index
+			i--
 			continue
 		}
 	}
+
 	return fields, nil
 }
 
@@ -493,7 +264,7 @@ func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []i
 	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
 
 	if err != nil {
-		if errno.Equal(err, errno.ErrorTagArrayFormat) || errno.Equal(err, errno.WriteErrorArray) {
+		if errno.Equal(err, errno.ErrorTagArrayFormat, errno.WriteErrorArray, errno.SeriesLimited) {
 			return netstorage.PartialWriteError{Reason: err, Dropped: dropped}
 		}
 		return err
@@ -506,48 +277,41 @@ func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []i
 
 func (w *PointsWriter) writeShardMap(database, retentionPolicy string, ctx *injestionCtx) error {
 	shardRowMap := ctx.getShardRowMap()
-	shardMap := ctx.getShardMap()
 	var err error
+	var mutex sync.Mutex
+	var wg sync.WaitGroup
+	var writeCtx *netstorage.WriteContext
 
-	errC := make(chan error, shardRowMap.Len())
-	for _, mapp := range shardRowMap.D {
-		shardId := mapp.Key
-
-		sh, ok := shardMap.Get(shardId).(*meta2.ShardInfo)
-		if !ok {
-			return errno.NewError(errno.WriteMapMetaShardInfo)
-		}
-
-		shID, err := strconv.ParseUint(shardId, 10, 64)
-		if err != nil {
-			return errno.NewError(errno.WriteMapMetaShardInfo)
-		}
+	wg.Add(shardRowMap.Len())
+	for i := range shardRowMap {
+		writeCtx = ctx.allocWriteContext(shardRowMap[i].shardInfo, shardRowMap[i].rows)
 
 		// get the streamId and dstShardId that is associated with the srcShardId.
-		var streamShardIdList []uint64
-		if streamDstShardIdMap, ok := ctx.getSrcStreamDstShardIdMap()[shID]; ok {
+		if streamDstShardIdMap, ok := ctx.getSrcStreamDstShardIdMap()[shardRowMap[i].shardInfo.ID]; ok {
 			for streamId, dstShardId := range streamDstShardIdMap {
-				streamShardIdList = append(streamShardIdList, streamId, dstShardId)
+				writeCtx.StreamShards = append(writeCtx.StreamShards, streamId, dstShardId)
 			}
 		}
 
-		rows, ok := mapp.Value.(*[]*influx.Row)
-		if !ok {
-			return errno.NewError(errno.WriteMapMetaShardInfo)
-		}
-		go func(shard *meta2.ShardInfo, streamShardIdList []uint64, db, rp string, rs *[]*influx.Row, ctx *injestionCtx) {
-			err := w.writeRowToShard(shard, streamShardIdList, database, retentionPolicy, rs, ctx)
-			errC <- err
-		}(sh, streamShardIdList, database, retentionPolicy, rows, ctx)
+		go func(wCtx *netstorage.WriteContext) {
+			innerErr := w.writeRowToShard(wCtx, database, retentionPolicy)
+			if innerErr != nil {
+				mutex.Lock()
+				err = innerErr
+				mutex.Unlock()
+			}
+			wg.Done()
+		}(writeCtx)
 	}
+	wg.Wait()
 
-	for i := 0; i < shardRowMap.Len(); i++ {
-		errShard := <-errC
-		if errShard != nil {
-			err = errShard
-		}
-	}
 	return err
+}
+
+func (w *PointsWriter) isPartialErr(err error) bool {
+	return strings.Contains(err.Error(), "field type conflict") ||
+		strings.Contains(err.Error(), "duplicate tag") ||
+		errno.Equal(err, errno.TooManyTagKeys)
 }
 
 // routeAndMapOriginRows preprocess rows, verify rows and map to shards,
@@ -562,12 +326,12 @@ func (w *PointsWriter) routeAndMapOriginRows(
 	var isDropRow bool
 	var pErr error // the temporary error
 	var sh *meta2.ShardInfo
+	var r *influx.Row
+	var originName string
 
 	wh := ctx.getWriteHelper(w)
 	for i := range rows {
-		start := time.Now()
-
-		r := &rows[i]
+		r = &rows[i]
 
 		//check point is between rp duration
 		if r.Timestamp < ctx.minTime || !w.inTimeRange(r.Timestamp) {
@@ -586,7 +350,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			continue
 		}
 
-		originName := r.Name
+		originName = r.Name
 		ctx.ms, err = wh.createMeasurement(database, retentionPolicy, r.Name)
 		if err != nil {
 			if errno.Equal(err, errno.InvalidMeasurement) {
@@ -601,7 +365,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		r.Name = ctx.ms.Name
 
 		if ctx.fieldToCreatePool, isDropRow, err = wh.updateSchemaIfNeeded(database, retentionPolicy, r, ctx.ms, originName, ctx.fieldToCreatePool[:0]); err != nil {
-			if strings.Contains(err.Error(), "field type conflict") || strings.Contains(err.Error(), "duplicate tag") {
+			if w.isPartialErr(err) {
 				partialErr = err
 				err = nil
 				if isDropRow {
@@ -612,14 +376,12 @@ func (w *PointsWriter) routeAndMapOriginRows(
 				return nil, dropped, err
 			}
 		}
-		atomic.AddInt64(&statistics.HandlerStat.WriteUpdateSchemaDuration, time.Since(start).Nanoseconds())
 
 		if len(*ctx.getDstSis()) > 0 {
 			buildColumnToIndex(r)
 		}
 		updateIndexOptions(r, ctx.ms.GetIndexRelation())
 
-		start = time.Now()
 		err, sh, pErr = w.updateShardGroupAndShardKey(database, retentionPolicy, r, ctx, false, nil, 0, false)
 		if err != nil {
 			return nil, dropped, err
@@ -629,11 +391,6 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			dropped++
 			continue
 		}
-		atomic.AddInt64(&statistics.HandlerStat.WriteCreateSgDuration, time.Since(start).Nanoseconds())
-
-		start = time.Now()
-		id := strconv.FormatInt(int64(sh.ID), 10)
-		ctx.getShardMap().Set(id, sh)
 
 		if len(*ctx.getDstSis()) > 0 {
 			err = w.MapRowToMeasurement(ctx, sh.ID, originName, r)
@@ -642,11 +399,8 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			}
 		}
 
-		if err = w.MapRowToShard(ctx, id, r); err != nil {
-			return nil, dropped, err
-		}
+		ctx.setShardRow(sh, r)
 		atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(r.Fields.Len()))
-		atomic.AddInt64(&statistics.HandlerStat.WriteMapRowsDuration, time.Since(start).Nanoseconds())
 	}
 	return partialErr, dropped, nil
 }
@@ -679,8 +433,6 @@ func (w *PointsWriter) updateSrcStreamDstShardIdMapWithShardKey(
 			err = pErr
 			return err
 		}
-		id := strconv.FormatInt(int64(sh.ID), 10)
-		ctx.getShardMap().Set(id, sh)
 		r.StreamId = append(r.StreamId, si.ID)
 		m, exist := srcStreamDstShardIdMap[shardId]
 		if !exist {
@@ -810,7 +562,8 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 
 	var sameSg bool
 	var sg *meta2.ShardGroupInfo
-	sg, sameSg, err = wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp))
+	engineType := mi.EngineType
+	sg, sameSg, err = wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp), engineType)
 	if err != nil {
 		return
 	}
@@ -841,6 +594,8 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 				err = nil
 				return
 			}
+		} else if engineType == config.COLUMNSTORE {
+			err = r.UnmarshalShardKeyByField((*si).ShardKey)
 		} else {
 			if r.ReadyBuildColumnToIndex {
 				err = r.UnmarshalShardKeyByTagOp((*si).ShardKey)
@@ -925,57 +680,25 @@ func (w *PointsWriter) MapRowToMeasurement(ctx *injestionCtx, id uint64, mst str
 	return nil
 }
 
-func (w *PointsWriter) MapRowToShard(ctx *injestionCtx, id string, r *influx.Row) error {
-	shardRowMap := ctx.getShardRowMap()
-	if !shardRowMap.Has(id) {
-		rp := ctx.getPRowsPool()
-		shardRowMap.Set(id, rp)
-	}
-	rowsPool := shardRowMap.Get(id)
-	rp, ok := rowsPool.(*[]*influx.Row)
-	if !ok {
-		return errors.New("MapRowToShard error")
-	}
-
-	if cap(*rp) > len(*rp) {
-		*rp = (*rp)[:len(*rp)+1]
-		(*rp)[len(*rp)-1] = r
-	} else {
-		*rp = append(*rp, r)
-	}
-	return nil
-}
-
 // writeRowToShard writes row to a shard.
-func (w *PointsWriter) writeRowToShard(shard *meta2.ShardInfo, streamShardIdList []uint64, database, retentionPolicy string, row *[]*influx.Row, ctx *injestionCtx) error {
+func (w *PointsWriter) writeRowToShard(ctx *netstorage.WriteContext, database, retentionPolicy string) error {
 	start := time.Now()
 	var err error
 	var ptView meta2.DBPtInfos
-
-	rps := ctx.getRowsPool()
-	if cap(*rps) > len(*row) {
-		*rps = (*rps)[:len(*row)]
-	} else {
-		t := make([]influx.Row, len(*row))
-		rps = &t
-	}
-	for i := range *rps {
-		(*rps)[i].Clone((*row)[i])
-	}
 
 RETRY:
 	for {
 		// retry timeout
 		if time.Since(start).Nanoseconds() >= w.timeout.Nanoseconds() {
-			w.logger.Error("[coordinator] write rows timeout", zap.String("db", database), zap.Uint32s("ptIds", shard.Owners), zap.Error(err))
+			w.logger.Error("[coordinator] write rows timeout", zap.String("db", database), zap.Uint32s("ptIds", ctx.Shard.Owners), zap.Error(err))
 			break
 		}
 		ptView, err = w.MetaClient.DBPtView(database)
 		if err != nil {
 			break
 		}
-		for _, ptId := range shard.Owners {
-			err = w.TSDBStore.WriteRows(ptView[ptId].Owner.NodeID, database, retentionPolicy, ptId, shard.ID, streamShardIdList, rps, w.timeout)
+		for _, ptId := range ctx.Shard.Owners {
+			err = w.TSDBStore.WriteRows(ctx, ptView[ptId].Owner.NodeID, ptId, database, retentionPolicy, w.timeout)
 			if err != nil && errno.Equal(err, errno.ShardMetaNotFound) {
 				w.logger.Error("[coordinator] store write failed", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 				break RETRY
@@ -995,8 +718,7 @@ RETRY:
 		}
 		break
 	}
-	ctx.putPRowsPool(row)
-	ctx.putRowsPool(rps)
+
 	return err
 }
 
@@ -1032,7 +754,7 @@ func (w *PointsWriter) ApplyTimeRangeLimit(limit []toml.Duration) {
 		}
 	}
 
-	w.timeRange = &record.TimeRange{Min: math.MinInt64, Max: math.MaxInt64}
+	w.timeRange = &util.TimeRange{Min: math.MinInt64, Max: math.MaxInt64}
 	update()
 
 	for {
@@ -1057,6 +779,7 @@ func IsRetryErrorForPtView(err error) bool {
 		errno.Equal(err, errno.NoNodeAvailable) ||
 		errno.Equal(err, errno.SelectClosedConn) ||
 		errno.Equal(err, errno.SessionSelectTimeout) ||
+		errno.Equal(err, errno.OpenSessionTimeout) ||
 		strings.Contains(err.Error(), "connection reset by peer") ||
 		strings.Contains(err.Error(), "connection refused") ||
 		strings.Contains(err.Error(), "broken pipe") ||
@@ -1074,13 +797,18 @@ func IsRetryErrorForPtView(err error) bool {
 }
 
 func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16, bool) {
-	index := make([]uint16, len(indexList))
-	for i, iCol := range indexList {
+	index := make([]uint16, 0, len(indexList))
+	for _, iCol := range indexList {
 		v, exist := columnToIndex[iCol]
 		if !exist {
-			return nil, false
+			continue
 		}
-		index[i] = uint16(v)
+		index = append(index, uint16(v))
 	}
+
+	if len(index) == 0 {
+		return nil, false
+	}
+
 	return index, true
 }

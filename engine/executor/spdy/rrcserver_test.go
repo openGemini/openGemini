@@ -36,7 +36,7 @@ var (
 	network  string        = "tcp"
 	interval time.Duration = time.Second * 1
 	retryNum int           = 10
-	parallel int           = 10000
+	parallel int           = 2000
 )
 
 type EchoRequester struct {

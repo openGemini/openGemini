@@ -19,11 +19,11 @@ package tsi
 import (
 	"math"
 
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 // TimeRange is time range.
-type TimeRange record.TimeRange
+type TimeRange util.TimeRange
 
 var DefaultTR = TimeRange{Min: 0, Max: math.MaxInt64 - 1}
 

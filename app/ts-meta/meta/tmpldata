@@ -12,4 +12,6 @@
 	"GetUserInfo",
 	"GetStreamInfo",
 	"GetMeasurementInfo",
+	"GetMeasurementsInfo",
+	"GetDBBriefInfo"
 ]

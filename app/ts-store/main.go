@@ -66,7 +66,7 @@ func doRun(args ...string) error {
 			return err
 		}
 		mainCmd := app.NewCommand()
-		err = mainCmd.InitConfig(config.NewTSStore(), options.ConfigPath)
+		err = mainCmd.InitConfig(config.NewTSStore(true), options.ConfigPath)
 		if err != nil {
 			return err
 		}

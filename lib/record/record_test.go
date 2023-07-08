@@ -2486,6 +2486,7 @@ func TestMergeRecordLimitRowsCase7(t *testing.T) {
 }
 
 // fix the BUG of method MergeRecordByMaxTimeOfOldRec #BUG2023021301427
+//
 //	old.time [31, 32, 33, 34, 45, 46, 47] pos: 1->7
 //	new.time [48, 49, 50, 51, 52, 53, 54] pos: 0->0
 func TestMergeRecordByMaxTimeOfOldRecCase1(t *testing.T) {
@@ -2515,14 +2516,14 @@ func TestMergeRecordByMaxTimeOfOldRecCase1(t *testing.T) {
 		[]int{0, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, false},
 		[]int64{32, 33, 34, 45, 46, 47})
 	var mergeRec record.Record
-	_, newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, true)
+	newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, true)
 	if !testRecsEqual(&mergeRec, expectRec) || newPos != 0 || oldPos != 7 {
 		t.Fatal("error result")
 	}
 }
 
-//	old.time [47, 46, 45, 34, 33, 32, 31] pos: 1->7
-//	new.time [30, 29, 28, 27, 26, 25, 24] pos: 0->0
+// old.time [47, 46, 45, 34, 33, 32, 31] pos: 1->7
+// new.time [30, 29, 28, 27, 26, 25, 24] pos: 0->0
 func TestMergeRecordByMaxTimeOfOldRecCase2(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
@@ -2550,7 +2551,7 @@ func TestMergeRecordByMaxTimeOfOldRecCase2(t *testing.T) {
 		[]int{0, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, false},
 		[]int64{46, 45, 34, 33, 32, 31})
 	var mergeRec record.Record
-	_, newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, false)
+	newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, false)
 	if !testRecsEqual(&mergeRec, expectRec) || newPos != 0 || oldPos != 7 {
 		t.Fatal("error result")
 	}
@@ -2837,11 +2838,8 @@ func TestSortRecord1(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sh := &record.SortHelper{}
-	aux := newAux(rec.Times(), rec.Schema)
-	sh.Sort(rec, aux)
-
-	if !testRecsEqual(aux.SortRec, expRec) {
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2869,11 +2867,8 @@ func TestSortRecord2(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sh := &record.SortHelper{}
-	aux := newAux(rec.Times(), rec.Schema)
-	sh.Sort(rec, aux)
-
-	if !testRecsEqual(aux.SortRec, expRec) {
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2894,11 +2889,8 @@ func TestSortRecord3(t *testing.T) {
 		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
 	sort.Sort(rec)
 
-	sh := &record.SortHelper{}
-	aux := newAux(rec.Times(), rec.Schema)
-	sh.Sort(rec, aux)
-
-	if !testRecsEqual(aux.SortRec, rec) {
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), rec) {
 		t.Fatal("error result")
 	}
 }
@@ -2926,11 +2918,8 @@ func TestSortRecord4(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sh := &record.SortHelper{}
-	aux := newAux(rec.Times(), rec.Schema)
-	sh.Sort(rec, aux)
-
-	if !testRecsEqual(aux.SortRec, expRec) {
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2958,11 +2947,8 @@ func TestSortRecord5(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sh := &record.SortHelper{}
-	aux := newAux(rec.Times(), rec.Schema)
-	sh.Sort(rec, aux)
-
-	if !testRecsEqual(aux.SortRec, expRec) {
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
 		t.Fatal("error result")
 	}
 }
@@ -2990,11 +2976,8 @@ func TestSortRecord6(t *testing.T) {
 	sort.Sort(rec)
 	sort.Sort(expRec)
 
-	sh := &record.SortHelper{}
-	aux := newAux(rec.Times(), rec.Schema)
-	sh.Sort(rec, aux)
-
-	if !testRecsEqual(aux.SortRec, expRec) {
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
 		t.Fatal("error result")
 	}
 }

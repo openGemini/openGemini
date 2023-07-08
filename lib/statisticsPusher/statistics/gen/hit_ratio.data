@@ -1,0 +1,14 @@
+{
+    "Name":"HitRatio",
+    "Measurement":"hitRatio",
+    "Items":[
+        "IndexWriterGetTotal",
+        "IndexWriterHitTotal",
+        "MergeColValGetTotal",
+        "MergeColValHitTotal"
+    ],
+    "SetItems":[],
+    "EnablePush":"N",
+    "PushDuration":"N",
+    "PushItems":[]
+}

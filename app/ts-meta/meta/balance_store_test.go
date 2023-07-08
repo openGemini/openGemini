@@ -40,7 +40,7 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	store.data.CreateDatabase("db0", nil, nil)
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
@@ -91,7 +91,8 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	assert.NotEqual(t, uint32(3), events[0].pt.Pti.PtId)
 
 	store.data.PtView = map[string]meta.DBPtInfos{
-		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
+		"db0": []meta.PtInfo{
+			{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
 			{PtId: 1, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
 			{PtId: 2, Owner: meta.PtOwner{NodeID: n3}, Status: meta.Online},
 			{PtId: 3, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},

@@ -204,9 +204,7 @@ func (c *RPCClient) Abort() {
 		return
 	}
 
-	go func() {
-		_ = trans.Wait()
-	}()
+	_ = trans.Wait()
 }
 
 func (c *RPCClient) AddHandler(msgType byte, handle Handler) {

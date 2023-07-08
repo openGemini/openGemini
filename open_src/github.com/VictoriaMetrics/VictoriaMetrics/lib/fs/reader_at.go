@@ -8,7 +8,7 @@ import (
 )
 
 // Disable mmap by default
-var disableMmap = true
+var enableMmap = false
 
 // MustReadAtCloser is rand-access read interface.
 type MustReadAtCloser interface {
@@ -84,7 +84,7 @@ func MustOpenReaderAt(path string) *ReaderAt {
 	}
 	var r ReaderAt
 	r.f = f
-	if !disableMmap {
+	if enableMmap {
 		fi, err := f.Stat()
 		if err != nil {
 			MustClose(f)

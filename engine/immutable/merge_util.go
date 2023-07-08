@@ -26,6 +26,8 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -33,7 +35,7 @@ type mergeContext struct {
 	mst  string
 	shId uint64
 
-	tr        record.TimeRange
+	tr        util.TimeRange
 	order     *mergeFileInfo
 	unordered *mergeFileInfo
 }
@@ -85,7 +87,7 @@ func NewMergeContext(mst string) *mergeContext {
 			mst:       mst,
 			order:     &mergeFileInfo{},
 			unordered: &mergeFileInfo{},
-			tr:        record.TimeRange{Min: math.MaxInt64, Max: math.MinInt64},
+			tr:        util.TimeRange{Min: math.MaxInt64, Max: math.MinInt64},
 		}
 	}
 	ctx.mst = mst
@@ -196,22 +198,99 @@ func MergeRecovery(path string, name string, ctx *mergeContext) {
 	}
 }
 
-func newNilCol(size int, ref *record.Field) *record.ColVal {
+func FillNilCol(col *record.ColVal, size int, ref *record.Field) {
+	col.Init()
 	if size == 0 {
-		return nil
+		return
 	}
 
-	col := &record.ColVal{
-		Val:          nil,
-		Offset:       nil,
-		BitMapOffset: 0,
-		Len:          size,
-		NilCount:     size,
-	}
-
+	col.Len = size
+	col.NilCount = size
 	col.FillBitmap(0)
-	if ref.IsString() {
+	if !ref.IsString() {
+		return
+	}
+
+	if cap(col.Offset) < size {
 		col.Offset = make([]uint32, size)
 	}
+	col.Offset = col.Offset[:size]
+}
+
+func newNilCol(size int, ref *record.Field) *record.ColVal {
+	col := &record.ColVal{}
+	FillNilCol(col, size, ref)
 	return col
+}
+
+func MergeTimes(a []int64, b []int64, dst []int64) []int64 {
+	if len(a) == 0 {
+		dst = append(dst, b...)
+		return dst
+	}
+	if len(b) == 0 {
+		dst = append(dst, a...)
+		return dst
+	}
+
+	i, j := 0, 0
+	la, lb := len(a), len(b)
+
+	for {
+		if i == la {
+			dst = append(dst, b[j:]...)
+			break
+		}
+		if j == lb {
+			dst = append(dst, a[i:]...)
+			break
+		}
+
+		if a[i] == b[j] {
+			dst = append(dst, a[i])
+			i++
+			j++
+			continue
+		}
+
+		if a[i] < b[j] {
+			dst = append(dst, a[i])
+			i++
+			continue
+		}
+
+		// a[i] > b[j]
+		dst = append(dst, b[j])
+		j++
+	}
+
+	return dst
+}
+
+var hitRatioStat = statistics.NewHitRatioStatistics()
+
+type MergeColPool struct {
+	pool []*record.ColVal
+}
+
+func (p *MergeColPool) Get() *record.ColVal {
+	hitRatioStat.AddMergeColValGetTotal(1)
+	size := len(p.pool)
+	if size == 0 {
+		return &record.ColVal{}
+	}
+
+	col := p.pool[size-1]
+	p.pool = p.pool[:size-1]
+	if col == nil {
+		return &record.ColVal{}
+	}
+
+	hitRatioStat.AddMergeColValHitTotal(1)
+	return col
+}
+
+func (p *MergeColPool) Put(col *record.ColVal) {
+	col.Init()
+	p.pool = append(p.pool, col)
 }

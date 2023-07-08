@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -31,28 +33,28 @@ import (
 )
 
 func init() {
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 }
 
 func TestWalReplayParallel(t *testing.T) {
 	testDir := t.TempDir()
-	config := TestConfig{100, 101, time.Second, false}
-	if testing.Short() && config.short {
+	conf := TestConfig{100, 101, time.Second, false}
+	if testing.Short() && conf.short {
 		t.Skip("skipping test in short mode.")
 	}
 	msNames := []string{"cpu", "cpu1", "disk"}
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// not flush data to snapshot
 	sh.SetWriteColdDuration(3 * time.Minute)
-	sh.SetMutableSizeLimit(3e10)
+	mutable.SetSizeLimit(3e10)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-	rows, minTime, maxTime := GenDataRecord(msNames, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now(), false, true, true)
+	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
 	err = writeData(sh, rows, false)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +71,7 @@ func TestWalReplayParallel(t *testing.T) {
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption, config.TSSTORE)
 	newSh.indexBuilder = sh.indexBuilder
 
 	// reopen shard, replay wal files
@@ -85,7 +87,7 @@ func TestWalReplayParallel(t *testing.T) {
 	for nameIdx := range msNames {
 		// query data and judge
 		cases := []TestCase{
-			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false},
+			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false, nil},
 		}
 
 		ascending := true
@@ -124,23 +126,23 @@ func TestWalReplayParallel(t *testing.T) {
 
 func TestWalReplaySerial(t *testing.T) {
 	testDir := t.TempDir()
-	config := TestConfig{100, 101, time.Second, false}
-	if testing.Short() && config.short {
+	conf := TestConfig{100, 101, time.Second, false}
+	if testing.Short() && conf.short {
 		t.Skip("skipping test in short mode.")
 	}
 	msNames := []string{"cpu", "cpu1", "disk"}
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// not flush data to snapshot
 	sh.SetWriteColdDuration(3 * time.Minute)
-	sh.SetMutableSizeLimit(3e10)
+	mutable.SetSizeLimit(3e10)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-	rows, minTime, maxTime := GenDataRecord(msNames, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now(), false, true, true)
+	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
 	err = writeData(sh, rows, false)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +153,7 @@ func TestWalReplaySerial(t *testing.T) {
 	}
 
 	// reopen shard, replay wal files
-	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +161,7 @@ func TestWalReplaySerial(t *testing.T) {
 	for nameIdx := range msNames {
 		// query data and judge
 		cases := []TestCase{
-			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false},
+			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false, nil},
 		}
 
 		ascending := true

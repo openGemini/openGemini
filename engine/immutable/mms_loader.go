@@ -22,8 +22,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
@@ -36,7 +38,6 @@ type fileLoader struct {
 	mu sync.Mutex
 	wg sync.WaitGroup
 
-	itl *idTimesLoader
 	ctx *fileLoadContext
 	lg  *zap.Logger
 
@@ -49,17 +50,11 @@ func newFileLoader(mst *MmsTables, ctx *fileLoadContext) *fileLoader {
 		fileName: TSSPFileName{},
 		ctx:      ctx,
 		lg:       logger.GetLogger(),
-		itl:      newIDTimesLoader(mst.sequencer),
 	}
-}
-
-func (fl *fileLoader) Close() {
-	fl.itl.close()
 }
 
 func (fl *fileLoader) Wait() {
 	fl.wg.Wait()
-	fl.Close()
 }
 
 func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
@@ -81,18 +76,44 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 			fl.Load(filepath.Join(dir, unorderedDir), mst, false)
 			continue
 		}
+		switch filepath.Ext(item.Name()) {
+		case colstore.IndexFileSuffix:
+			fl.loadPKIndexFile(filepath.Join(dir, item.Name()), mst)
+		case tsspFileSuffix:
+			fl.loadTsspFile(filepath.Join(dir, item.Name()), mst, isOrder)
+		default:
+			fl.removeTmpFile(filepath.Join(dir, item.Name())) // skip invalid file, remove if it is a temp file
+		}
 
-		fl.loadFile(filepath.Join(dir, item.Name()), mst, isOrder)
 		fl.total++
 	}
 }
 
-func (fl *fileLoader) loadFile(file, mst string, isOrder bool) {
+func (fl *fileLoader) removeTmpFile(file string) {
 	if IsTempleFile(file) {
 		fl.removeFile(file)
 		return
 	}
+}
 
+func (fl *fileLoader) loadPKIndexFile(file, mst string) {
+	select {
+	case fileLoadLimiter <- struct{}{}:
+		fl.wg.Add(1)
+		go func() {
+			defer func() {
+				fileLoadLimiter.Release()
+				fl.wg.Done()
+			}()
+
+			fl.openPKIndexFile(file, mst)
+		}()
+	case <-fl.mst.closed:
+		return
+	}
+}
+
+func (fl *fileLoader) loadTsspFile(file, mst string, isOrder bool) {
 	if err := fl.fileName.ParseFileName(file); err != nil {
 		fl.lg.Error("failed to parse file name",
 			zap.Error(err), zap.String("file", file))
@@ -113,7 +134,7 @@ func (fl *fileLoader) loadFile(file, mst string, isOrder bool) {
 				fl.wg.Done()
 			}()
 
-			fl.openFile(file, mst, isOrder)
+			fl.openTSSPFile(file, mst, isOrder)
 		}()
 	case <-fl.mst.closed:
 		return
@@ -130,11 +151,10 @@ func (fl *fileLoader) removeFile(file string) {
 	fl.lg.Info("remove file", zap.String("path", file), zap.Error(err))
 }
 
-func (fl *fileLoader) openFile(file, mst string, isOrder bool) {
-	cacheData := fl.mst.cacheFileData()
-	f, err := OpenTSSPFile(file, fl.mst.lock, isOrder, cacheData)
+func (fl *fileLoader) openPKIndexFile(file, mst string) {
+	f, err := colstore.NewPrimaryKeyReader(file, fl.mst.lock)
 	if err != nil || f == nil {
-		fl.lg.Error("open file failed", zap.Error(err), zap.String("file", file))
+		fl.lg.Error("open index file failed", zap.Error(err), zap.String("file", file))
 		fl.ctx.setError(err)
 		return
 	}
@@ -142,13 +162,34 @@ func (fl *fileLoader) openFile(file, mst string, isOrder bool) {
 	func() {
 		fl.mu.Lock()
 		defer fl.mu.Unlock()
-		fl.mst.addTSSPFile(isOrder, f, mst)
+		rec, err := f.ReadData()
+		mark := fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(colstore.RowsNumPerFragment))
+		if err != nil {
+			fl.lg.Error("read index file failed", zap.Error(err), zap.String("file", file))
+			fl.ctx.setError(err)
+		}
+		fl.mst.addPKFile(mst, file, rec, mark)
+	}()
+}
+
+func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
+	cacheData := fl.mst.cacheFileData()
+	f, err := OpenTSSPFile(file, fl.mst.lock, isOrder, cacheData)
+	if err != nil || f == nil {
+		fl.lg.Error("open tssp file failed", zap.Error(err), zap.String("file", file))
+		fl.ctx.setError(err)
+		return
+	}
+
+	func() {
+		fl.mu.Lock()
+		defer fl.mu.Unlock()
+		fl.mst.ImmTable.addTSSPFile(fl.mst, isOrder, f, mst)
 	}()
 
 	fl.ctx.setError(f.LoadComponents())
 	fl.loadIntoMemory(f)
 	fl.ctx.update(f)
-	fl.itl.loadFromTSSPFile(f, mst, true, nil)
 }
 
 func (fl *fileLoader) loadIntoMemory(f TSSPFile) {
@@ -278,7 +319,7 @@ func (tl *idTimesLoader) Load(path string, order, unordered map[string]*TSSPFile
 			return
 		}
 
-		for mst, files := range order {
+		for mst, files := range data {
 			fileNums += files.Len()
 			tl.loadFromTSSPFiles(mst, files)
 		}
@@ -296,8 +337,8 @@ func (tl *idTimesLoader) Load(path string, order, unordered map[string]*TSSPFile
 }
 
 func (tl *idTimesLoader) loadFromTSSPFiles(mst string, files *TSSPFiles) {
-	files.lock.Lock()
-	defer files.lock.Unlock()
+	files.lock.RLock()
+	defer files.lock.RUnlock()
 
 	for _, f := range files.Files() {
 		select {
@@ -308,7 +349,7 @@ func (tl *idTimesLoader) loadFromTSSPFiles(mst string, files *TSSPFiles) {
 					tl.wg.Done()
 					fileLoadLimiter.Release()
 				}()
-				tl.loadFromTSSPFile(file, mst, false, func(p *IdTimePairs) {
+				tl.loadFromTSSPFile(file, mst, func(p *IdTimePairs) {
 					for _, i := range p.Rows {
 						tl.ctx.addRowCount(i)
 					}
@@ -320,13 +361,8 @@ func (tl *idTimesLoader) loadFromTSSPFiles(mst string, files *TSSPFiles) {
 	}
 }
 
-func (tl *idTimesLoader) loadFromTSSPFile(tblFile TSSPFile, name string, lazyOpen bool, hook func(p *IdTimePairs)) {
+func (tl *idTimesLoader) loadFromTSSPFile(tblFile TSSPFile, name string, hook func(p *IdTimePairs)) {
 	if tl.closed {
-		return
-	}
-
-	if lazyOpen {
-		tl.seq.free()
 		return
 	}
 
@@ -343,10 +379,15 @@ func (tl *idTimesLoader) loadFromTSSPFile(tblFile TSSPFile, name string, lazyOpe
 		tl.setError(err)
 		return
 	}
-	tl.seq.isLoading = true
 
 	if hook != nil {
 		hook(p)
 	}
-	go tl.seq.BatchUpdateCheckTime(p)
+
+	start := time.Now()
+	tl.seq.BatchUpdateCheckTime(p, true)
+	PutIDTimePairs(p)
+	log.Info("batch update check time success",
+		zap.String("time used", time.Since(start).String()),
+		zap.Int("series ids", len(p.Ids)))
 }

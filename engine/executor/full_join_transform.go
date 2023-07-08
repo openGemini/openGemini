@@ -32,31 +32,34 @@ import (
 
 type FullJoinTransform struct {
 	BaseProcessor
-	inputs         []*ChunkPort
-	chunks         []*chunkElem
-	leftNewName    string
-	rightNewName   string
-	output         *ChunkPort
-	outputChunk    Chunk
-	chunkPool      *CircularChunkPool
-	joinCondition  influxql.Expr
-	joinTags       []influxql.VarRef
-	filterMap      map[string]interface{}
-	valueFunc      []func(i int, tagsetVal []string) interface{}
-	workTracing    *tracing.Span
-	joinTagids     []int
-	newlTagsetKey  []string
-	newrTagsetKey  []string
-	leftTagNum     int
-	rightTagNum    int
-	lock           []sync.Mutex
-	nextChunks     []chan Semaphore
-	newName        string
-	fieldMap       []bool // 0 at left 1 at right
-	outFiledMap    []int
-	schema         *QuerySchema
-	fulljoinLogger *logger.Logger
-	opt            *query.ProcessorOptions
+	inputs              []*ChunkPort
+	bufChunks           []*chunkElem
+	leftNewName         string
+	rightNewName        string
+	output              *ChunkPort
+	outputChunk         Chunk
+	chunkPool           *CircularChunkPool
+	joinCondition       influxql.Expr
+	joinTags            []influxql.VarRef
+	filterMap           map[string]interface{}
+	valueFunc           []func(i int, tagsetVal []string) interface{}
+	workTracing         *tracing.Span
+	joinTagids          []int
+	newlTagsetKey       []string
+	newrTagsetKey       []string
+	leftTagNum          int
+	rightTagNum         int
+	lock                []sync.Mutex
+	nextChunks          []chan Semaphore
+	inputChunks         []chan Semaphore
+	newName             string
+	fieldMap            []bool // 0 at left 1 at right
+	outFiledMap         []int
+	schema              *QuerySchema
+	fulljoinLogger      *logger.Logger
+	opt                 *query.ProcessorOptions
+	nextChunksCloseOnce []sync.Once
+	errs                errno.Errs
 }
 
 const (
@@ -78,24 +81,16 @@ func (trans *FullJoinTransform) NewChunkElem(chunk Chunk, seriesKeyLoc int, seri
 }
 
 func (trans *FullJoinTransform) addChunk(c Chunk, i int, loc int) {
-	trans.lock[i].Lock()
-	trans.chunks[i] = trans.NewChunkElem(c, loc, loc)
-	trans.lock[i].Unlock()
-}
-
-func (trans *FullJoinTransform) setChunk(i int) {
-	trans.lock[i].Lock()
-	c := trans.chunks[i]
-	trans.chunks[i] = c
-	trans.lock[i].Unlock()
+	trans.bufChunks[i] = trans.NewChunkElem(c, loc, loc)
+	trans.inputChunks[i] <- signal
 }
 
 func (trans *FullJoinTransform) chunkClose(i int) bool {
-	return trans.chunks[i].seriesKeyLoc == -1
+	return trans.bufChunks[i].seriesKeyLoc == -1
 }
 
 func (trans *FullJoinTransform) chunkDown(i int) bool {
-	return trans.chunks[i].seriesValLoc >= trans.chunks[i].chunk.NumberOfRows()
+	return trans.bufChunks[i].seriesValLoc >= trans.bufChunks[i].chunk.NumberOfRows() && trans.bufChunks[i].seriesKeyLoc != -1
 }
 
 type FullJoinTransformCreator struct {
@@ -129,9 +124,12 @@ func NewFullJoinTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType 
 	for i := range inRowDataTypes {
 		trans.inputs = append(trans.inputs, NewChunkPort(inRowDataTypes[i]))
 		trans.nextChunks = append(trans.nextChunks, make(chan Semaphore))
+		trans.inputChunks = append(trans.inputChunks, make(chan Semaphore))
 		trans.lock = append(trans.lock, sync.Mutex{})
-		trans.chunks = append(trans.chunks, trans.NewChunkElem(NewChunkImpl(inRowDataTypes[i], ""), 0, 0))
+		trans.bufChunks = append(trans.bufChunks, trans.NewChunkElem(NewChunkImpl(inRowDataTypes[i], ""), 0, 0))
+		trans.nextChunksCloseOnce = append(trans.nextChunksCloseOnce, sync.Once{})
 	}
+
 	trans.outputChunk = trans.chunkPool.GetChunk()
 	err := trans.initNewName()
 	if err != nil {
@@ -292,6 +290,7 @@ func (trans *FullJoinTransform) Close() {
 
 func (trans *FullJoinTransform) runnable(ctx context.Context, errs *errno.Errs, i int) {
 	defer func() {
+		close(trans.inputChunks[i])
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.fulljoinLogger.Error(err.Error(), zap.String("query", "FullJoinTransform"),
@@ -305,7 +304,7 @@ func (trans *FullJoinTransform) runnable(ctx context.Context, errs *errno.Errs, 
 		select {
 		case c, ok := <-trans.inputs[i].State:
 			if !ok {
-				trans.addChunk(trans.chunks[i].chunk, i, -1)
+				trans.addChunk(trans.bufChunks[i].chunk, i, -1)
 				return
 			}
 			trans.addChunk(c, i, 0)
@@ -314,6 +313,7 @@ func (trans *FullJoinTransform) runnable(ctx context.Context, errs *errno.Errs, 
 				return
 			}
 		case <-ctx.Done():
+			trans.closeNextChunks(i)
 			return
 		}
 	}
@@ -327,11 +327,8 @@ func (trans *FullJoinTransform) Work(ctx context.Context) error {
 		tracing.Finish(span, trans.workTracing)
 	}()
 
-	errs := errno.NewErrsPool().Get()
+	errs := &trans.errs
 	errs.Init(3, trans.Close)
-	defer func() {
-		errno.NewErrsPool().Put(errs)
-	}()
 
 	go trans.runnable(ctx, errs, 0)
 	go trans.runnable(ctx, errs, 1)
@@ -353,7 +350,6 @@ func (trans *FullJoinTransform) SendChunk() {
 
 func (trans *FullJoinTransform) fullJoinLastChunkHelper(ctx context.Context, i int) {
 	for {
-		trans.setChunk(i)
 		if trans.chunkClose(i) {
 			return
 		}
@@ -363,22 +359,31 @@ func (trans *FullJoinTransform) fullJoinLastChunkHelper(ctx context.Context, i i
 		trans.fullJoinLast(i)
 		trans.SendChunk()
 		trans.nextChunks[i] <- signal
+		<-trans.inputChunks[i]
 	}
 }
 
 func (trans *FullJoinTransform) nextChunkHelpr() {
 	if trans.chunkDown(0) {
 		trans.nextChunks[0] <- signal
+		<-trans.inputChunks[0]
 	}
-	if trans.chunkDown(1) && trans.chunks[1].chunk.Len() != 0 {
+	if trans.chunkDown(1) && trans.bufChunks[1].chunk.Len() != 0 {
 		trans.nextChunks[1] <- signal
+		<-trans.inputChunks[1]
 	}
+}
+
+func (trans *FullJoinTransform) closeNextChunks(i int) {
+	trans.nextChunksCloseOnce[i].Do(func() {
+		close(trans.nextChunks[i])
+	})
 }
 
 func (trans *FullJoinTransform) fullJoinHelper(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		close(trans.nextChunks[0])
-		close(trans.nextChunks[1])
+		trans.closeNextChunks(0)
+		trans.closeNextChunks(1)
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.fulljoinLogger.Error(err.Error(), zap.String("query", "FullJoinTransform"),
@@ -388,9 +393,9 @@ func (trans *FullJoinTransform) fullJoinHelper(ctx context.Context, errs *errno.
 			errs.Dispatch(nil)
 		}
 	}()
+	<-trans.inputChunks[0]
+	<-trans.inputChunks[1]
 	for {
-		trans.setChunk(0)
-		trans.setChunk(1)
 		if trans.chunkClose(0) {
 			trans.fullJoinLastChunkHelper(ctx, 1)
 			return
@@ -407,6 +412,7 @@ func (trans *FullJoinTransform) fullJoinHelper(ctx context.Context, errs *errno.
 		trans.nextChunkHelpr()
 	}
 }
+
 func (trans *FullJoinTransform) compareStrings(l []string, r []string) int {
 	var reState int = -1
 	lLoc := 0
@@ -493,10 +499,10 @@ func (trans *FullJoinTransform) findColumnToJoin(colIndex int) (Column, bool) {
 	var column Column
 	var lr bool
 	if colLoc < len(trans.outputChunk.Columns()) {
-		column = trans.chunks[0].chunk.Columns()[colLoc]
+		column = trans.bufChunks[0].chunk.Columns()[colLoc]
 		lr = false
 	} else {
-		column = trans.chunks[1].chunk.Columns()[colLoc-(len(trans.outputChunk.Columns()))]
+		column = trans.bufChunks[1].chunk.Columns()[colLoc-(len(trans.outputChunk.Columns()))]
 		lr = true
 	}
 	return column, lr
@@ -536,7 +542,7 @@ func (trans *FullJoinTransform) joinLastRow(i int, startIndex *int, endIndex int
 		if *startIndex >= endIndex {
 			break
 		}
-		time := trans.chunks[i].chunk.TimeByIndex(*startIndex)
+		time := trans.bufChunks[i].chunk.TimeByIndex(*startIndex)
 		trans.outputChunk.AppendTime(time)
 		var j int = 0
 		for {
@@ -561,7 +567,7 @@ func (trans *FullJoinTransform) joinLastRow(i int, startIndex *int, endIndex int
 		}
 		(*startIndex)++
 	}
-	trans.chunks[i].seriesValLoc = endIndex
+	trans.bufChunks[i].seriesValLoc = endIndex
 }
 
 func (trans *FullJoinTransform) joinSeriesVal(lstartIndex int, lendIndex int, rstartIndex int, rendIndex int) {
@@ -569,8 +575,8 @@ func (trans *FullJoinTransform) joinSeriesVal(lstartIndex int, lendIndex int, rs
 		if lstartIndex >= lendIndex || rstartIndex >= rendIndex {
 			break
 		}
-		ltime := trans.chunks[0].chunk.TimeByIndex(lstartIndex)
-		rtime := trans.chunks[1].chunk.TimeByIndex(rstartIndex)
+		ltime := trans.bufChunks[0].chunk.TimeByIndex(lstartIndex)
+		rtime := trans.bufChunks[1].chunk.TimeByIndex(rstartIndex)
 		if ltime == rtime {
 			trans.outputChunk.AppendTime(ltime)
 			trans.joinRow(0, lstartIndex, rstartIndex, ltime, rtime)
@@ -586,9 +592,9 @@ func (trans *FullJoinTransform) joinSeriesVal(lstartIndex int, lendIndex int, rs
 			rstartIndex++
 		}
 	}
-	if lstartIndex == trans.chunks[0].chunk.NumberOfRows() || rstartIndex == trans.chunks[1].chunk.NumberOfRows() {
-		trans.chunks[0].seriesValLoc = lstartIndex
-		trans.chunks[1].seriesValLoc = rstartIndex
+	if lstartIndex == trans.bufChunks[0].chunk.NumberOfRows() || rstartIndex == trans.bufChunks[1].chunk.NumberOfRows() {
+		trans.bufChunks[0].seriesValLoc = lstartIndex
+		trans.bufChunks[1].seriesValLoc = rstartIndex
 		return
 	}
 	if rstartIndex == -1 {
@@ -599,8 +605,8 @@ func (trans *FullJoinTransform) joinSeriesVal(lstartIndex int, lendIndex int, rs
 		trans.joinLastRow(1, &rstartIndex, rendIndex)
 		return
 	}
-	trans.chunks[0].seriesValLoc = lstartIndex
-	trans.chunks[1].seriesValLoc = rstartIndex
+	trans.bufChunks[0].seriesValLoc = lstartIndex
+	trans.bufChunks[1].seriesValLoc = rstartIndex
 }
 
 func (trans *FullJoinTransform) appendNilSeriesVal(oDataType influxql.DataType, i int, time int64) {
@@ -677,42 +683,39 @@ func (trans *FullJoinTransform) appendSeriesVal(oDataType influxql.DataType, i i
 }
 
 func (trans *FullJoinTransform) fullJoinAlgorithm() {
-	if trans.chunkDown(0) || trans.chunkDown(1) {
-		return
-	}
 	trans.outputChunk.SetName(trans.newName)
-	ltagset := trans.chunks[0].chunk.Tags()
-	rtagset := trans.chunks[1].chunk.Tags()
-	ltagIndex := trans.chunks[0].chunk.TagIndex()
-	rtagIndex := trans.chunks[1].chunk.TagIndex()
-	var ltagLoc *int = &trans.chunks[0].seriesKeyLoc
-	var rtagLoc *int = &trans.chunks[1].seriesKeyLoc
+	ltagset := trans.bufChunks[0].chunk.Tags()
+	rtagset := trans.bufChunks[1].chunk.Tags()
+	ltagIndex := trans.bufChunks[0].chunk.TagIndex()
+	rtagIndex := trans.bufChunks[1].chunk.TagIndex()
+	var ltagLoc *int = &trans.bufChunks[0].seriesKeyLoc
+	var rtagLoc *int = &trans.bufChunks[1].seriesKeyLoc
 	for {
 		if *ltagLoc >= len(ltagset) || *rtagLoc >= len(rtagset) {
 			break
 		}
-		lstartIndex := trans.chunks[0].seriesValLoc
+		lstartIndex := trans.bufChunks[0].seriesValLoc
 		var lendIndex int
-		rstartIndex := trans.chunks[1].seriesValLoc
+		rstartIndex := trans.bufChunks[1].seriesValLoc
 		var rendIndex int
 		if *ltagLoc+1 < len(ltagset) {
 			lendIndex = ltagIndex[*ltagLoc+1]
 		} else {
-			lendIndex = trans.chunks[0].chunk.NumberOfRows()
+			lendIndex = trans.bufChunks[0].chunk.NumberOfRows()
 		}
 		if *rtagLoc+1 < len(rtagset) {
 			rendIndex = rtagIndex[*rtagLoc+1]
 		} else {
-			rendIndex = trans.chunks[1].chunk.NumberOfRows()
+			rendIndex = trans.bufChunks[1].chunk.NumberOfRows()
 		}
 		joinState := trans.joinMatch(ltagset[*ltagLoc], rtagset[*rtagLoc])
 		if joinState == 0 {
 			trans.joinSeriesKey(&(ltagset[*ltagLoc]), &(rtagset[*rtagLoc]))
 			trans.joinSeriesVal(lstartIndex, lendIndex, rstartIndex, rendIndex)
-			if trans.chunks[0].seriesValLoc == lendIndex {
+			if trans.bufChunks[0].seriesValLoc == lendIndex {
 				*ltagLoc++
 			}
-			if trans.chunks[1].seriesValLoc == rendIndex {
+			if trans.bufChunks[1].seriesValLoc == rendIndex {
 				*rtagLoc++
 			}
 		} else if joinState < 0 {
@@ -732,19 +735,19 @@ func (trans *FullJoinTransform) fullJoinLast(i int) {
 		return
 	}
 	trans.outputChunk.SetName(trans.newName)
-	tagset := trans.chunks[i].chunk.Tags()
-	tagIndex := trans.chunks[i].chunk.TagIndex()
-	var tagLoc int = trans.chunks[i].seriesKeyLoc
+	tagset := trans.bufChunks[i].chunk.Tags()
+	tagIndex := trans.bufChunks[i].chunk.TagIndex()
+	var tagLoc int = trans.bufChunks[i].seriesKeyLoc
 	for {
 		if tagLoc >= len(tagset) {
 			break
 		}
-		startIndex := trans.chunks[i].seriesValLoc
+		startIndex := trans.bufChunks[i].seriesValLoc
 		var endIndex int
 		if tagLoc+1 < len(tagset) {
 			endIndex = tagIndex[tagLoc+1]
 		} else {
-			endIndex = trans.chunks[i].chunk.NumberOfRows()
+			endIndex = trans.bufChunks[i].chunk.NumberOfRows()
 		}
 		if i == 1 {
 			trans.joinSeriesKey(nil, &(tagset[tagLoc]))
@@ -755,8 +758,8 @@ func (trans *FullJoinTransform) fullJoinLast(i int) {
 		}
 		tagLoc++
 	}
-	trans.chunks[i].seriesKeyLoc = tagLoc
-	trans.chunks[i].seriesValLoc = trans.chunks[i].chunk.NumberOfRows()
+	trans.bufChunks[i].seriesKeyLoc = tagLoc
+	trans.bufChunks[i].seriesValLoc = trans.bufChunks[i].chunk.NumberOfRows()
 }
 
 func (trans *FullJoinTransform) GetOutputs() Ports {

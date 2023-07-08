@@ -96,3 +96,19 @@ func TestIntLimit(t *testing.T) {
 	assert.Equal(t, 64, util.IntLimit(8, 64, 66))
 	assert.Equal(t, 32, util.IntLimit(8, 64, 32))
 }
+
+func TestIntMin(t *testing.T) {
+	assert.Equal(t, 5, util.Min(5, 7))
+	assert.Equal(t, 5, util.Min(7, 5))
+}
+
+func TestRemoveDuplicationInt(t *testing.T) {
+	ret := util.RemoveDuplicationInt(nil)
+	assert.Equal(t, 0, len(ret))
+
+	ret = util.RemoveDuplicationInt([]uint32{1, 2, 3, 4, 5})
+	assert.Equal(t, ret, []uint32{1, 2, 3, 4, 5})
+
+	ret = util.RemoveDuplicationInt([]uint32{1, 2, 2, 3, 4, 5})
+	assert.Equal(t, ret, []uint32{1, 2, 3, 4, 5})
+}

@@ -214,8 +214,18 @@ var tokens = [...]string{
 	ANY:            "ANY",
 	AS:             "AS",
 	ASC:            "ASC",
+	SEGMENT:        "SEGMENT",
+	TOKEN:          "TOKEN",
+	TOKENIZERS:     "TOKENIZERS",
+	LIKE:           "LIKE",
+	MATCH:          "MATCH",
+	MATCHPHRASE:    "MATCHPHRASE",
+	ENGINETYPE:     "ENGINETYPE",
+	PRIMARYKEY:     "PRIMARYKEY",
+	PROPERTY:       "PROPERTY",
 	BEGIN:          "BEGIN",
 	BY:             "BY",
+	SORTKEY:        "SORTKEY",
 	CARDINALITY:    "CARDINALITY",
 	CREATE:         "CREATE",
 	CONTINUOUS:     "CONTINUOUS",
@@ -315,6 +325,7 @@ var tokens = [...]string{
 	STREAM:         "STREAM",
 	STREAMS:        "STREAMS",
 	DELAY:          "DELAY",
+	ATTRIBUTE:      "ATTRIBUTE",
 }
 
 var keywords map[string]int
@@ -355,6 +366,10 @@ var operatorMap = map[Token]int{
 	MUL:      MUL,
 	DIV:      DIV,
 	MOD:      1, //fixme
+
+	MATCH:       MATCH,
+	MATCHPHRASE: MATCHPHRASE,
+	LIKE:        LIKE,
 }
 
 // Precedence returns the operator precedence of the binary operator token.
@@ -370,6 +385,8 @@ func (tok Token) Precedence() int {
 		return 4
 	case MUL, DIV, MOD, BITWISE_AND:
 		return 5
+	case MATCH, MATCHPHRASE, LIKE:
+		return 6
 	}
 	return 0
 }

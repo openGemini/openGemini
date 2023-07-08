@@ -577,7 +577,7 @@ func TestSlidingWindowTransformWithSum(t *testing.T) {
 		ChunkSize:  9,
 	}
 
-	schema := executor.NewQuerySchema(createSumFields(), []string{"v1", "v2"}, &opt)
+	schema := executor.NewQuerySchema(createSumFields(), []string{"v1", "v2"}, &opt, nil)
 	testSlidingWindowTransformBase(
 		t,
 		inChunks, dstChunks,
@@ -644,7 +644,7 @@ func TestSlidingWindowTransformWithCount(t *testing.T) {
 		ChunkSize:  9,
 	}
 
-	schema := executor.NewQuerySchema(createCountFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createCountFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	testSlidingWindowTransformBase(
 		t,
 		inChunks, dstChunks,
@@ -684,7 +684,7 @@ func TestSlidingWindowTransformWithCountTimeDuplicated(t *testing.T) {
 		ChunkSize:  9,
 	}
 
-	schema := executor.NewQuerySchema(createCountFields(), []string{"v1", "v2", "v3", "v4"}, &opt)
+	schema := executor.NewQuerySchema(createCountFields(), []string{"v1", "v2", "v3", "v4"}, &opt, nil)
 	testSlidingWindowTransformBase(
 		t,
 		inChunks, dstChunks,
@@ -742,7 +742,7 @@ func TestSlidingWindowTransformWithMin(t *testing.T) {
 		ChunkSize:  9,
 	}
 
-	schema := executor.NewQuerySchema(createMinFields(), []string{"v1", "v2", "v3"}, &opt)
+	schema := executor.NewQuerySchema(createMinFields(), []string{"v1", "v2", "v3"}, &opt, nil)
 	testSlidingWindowTransformBase(
 		t,
 		inChunks, dstChunks,
@@ -800,7 +800,7 @@ func TestSlidingWindowTransformWithMax(t *testing.T) {
 		ChunkSize:  9,
 	}
 
-	schema := executor.NewQuerySchema(createMaxFields(), []string{"v1", "v2", "v3"}, &opt)
+	schema := executor.NewQuerySchema(createMaxFields(), []string{"v1", "v2", "v3"}, &opt, nil)
 	testSlidingWindowTransformBase(
 		t,
 		inChunks, dstChunks,

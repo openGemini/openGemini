@@ -50,6 +50,9 @@ type MetaStoreInterface interface {
 	GetUserInfo() ([]byte, error)
 	getStreamInfo() ([]byte, error)
 	getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error)
+	getMeasurementsInfo(dbName, rpName string) ([]byte, error)
+	getDBBriefInfo(dbName string) ([]byte, error)
+	getDataNodeAliveConnId(nodeId uint64) (uint64, error)
 }
 
 type RPCHandler interface {

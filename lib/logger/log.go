@@ -119,6 +119,7 @@ func newHook(conf config.Logger, maxSize int, fileName string) *lumberjack.Logge
 		MaxSize:    maxSize,
 		MaxBackups: conf.MaxNum,
 		Compress:   conf.CompressEnabled,
+		MaxAge:     conf.MaxAge,
 	}
 	return hook
 }

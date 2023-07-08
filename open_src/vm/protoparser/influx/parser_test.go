@@ -13,15 +13,15 @@ import (
 	"testing"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUnmarshalRows(t *testing.T) {
+	enableTagArray := false
 	f := func(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, nExpected int) ([]Row, []Tag, []Field) {
 		t.Helper()
-		dst, tagsPool, fieldsPool, _ = unmarshalRows(dst, s, tagsPool, fieldsPool)
+		dst, tagsPool, fieldsPool, _ = unmarshalRows(dst, s, tagsPool, fieldsPool, enableTagArray)
 		n := len(dst)
 		if n != nExpected {
 			t.Fatalf("unexpected len for unmarshalRows %q; got %d; want %d", s, n, nExpected)
@@ -53,9 +53,10 @@ func TestUnmarshalRows(t *testing.T) {
 }
 
 func TestUnmarshalRows_error(t *testing.T) {
+	enableTagArray := false
 	f := func(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, expectedErr string) {
 		t.Helper()
-		_, _, _, err := unmarshalRows(dst, s, tagsPool, fieldsPool)
+		_, _, _, err := unmarshalRows(dst, s, tagsPool, fieldsPool, enableTagArray)
 		if err != nil {
 			require.EqualError(t, err, expectedErr)
 		} else {
@@ -207,13 +208,10 @@ func TestUnmarshalShardKeyByTagOp(t *testing.T) {
 }
 
 func TestUnmarshalRows_With_TagArray(t *testing.T) {
-	config.EnableTagArray = true
-	defer func() {
-		config.EnableTagArray = false
-	}()
+	enableTagArray := true
 	f := func(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, nExpected int) ([]Row, []Tag, []Field) {
 		t.Helper()
-		dst, tagsPool, fieldsPool, _ = unmarshalRows(dst, s, tagsPool, fieldsPool)
+		dst, tagsPool, fieldsPool, _ = unmarshalRows(dst, s, tagsPool, fieldsPool, enableTagArray)
 		n := len(dst)
 		if n != nExpected {
 			t.Fatalf("unexpected len for unmarshalRows %q; got %d; want %d", s, n, nExpected)
@@ -245,14 +243,11 @@ func TestUnmarshalRows_With_TagArray(t *testing.T) {
 }
 
 func TestUnmarshalRows_With_TagArray_Error(t *testing.T) {
-	config.EnableTagArray = true
-	defer func() {
-		config.EnableTagArray = false
-	}()
+	enableTagArray := true
 	var err error
 	f := func(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, nExpected int) ([]Row, []Tag, []Field, error) {
 		t.Helper()
-		dst, tagsPool, fieldsPool, err = unmarshalRows(dst, s, tagsPool, fieldsPool)
+		dst, tagsPool, fieldsPool, err = unmarshalRows(dst, s, tagsPool, fieldsPool, enableTagArray)
 		return dst, tagsPool, fieldsPool, err
 	}
 
@@ -327,42 +322,36 @@ func TestUnmarshalRows_With_TagArray_Error(t *testing.T) {
 }
 
 func TestSqlUnmarshalTags_Enable_TagArray(t *testing.T) {
-	config.EnableTagArray = true
-	defer func() {
-		config.EnableTagArray = false
-	}()
+	enableTagArray := true
 	tagStr := "tag1=tv1,tag=tv2,tag3=tv3,tag4=tv4,tag5=tv5,tag6=tv6,tag7=tv7,tag8=tv8,tag9=tv9,tag10=tv10"
 	var tags []Tag
-	tags, _ = unmarshalTags(tags, tagStr, true)
+	tags, _ = unmarshalTags(tags, tagStr, true, enableTagArray)
 	assert.Equal(t, len(tags), 10)
 }
 
 func TestSqlUnmarshalTags_Disable_TagArray(t *testing.T) {
-	config.EnableTagArray = false
+	enableTagArray := false
 	tagStr := "tag1=tv1,tag=tv2,tag3=tv3,tag4=tv4,tag5=tv5,tag6=tv6,tag7=tv7,tag8=tv8,tag9=tv9,tag10=tv10"
 	var tags []Tag
-	tags, _ = unmarshalTags(tags, tagStr, true)
+	tags, _ = unmarshalTags(tags, tagStr, true, enableTagArray)
 	assert.Equal(t, len(tags), 10)
 }
 
 func BenchmarkSqlUnmarshalTags_Enable_TagArray(b *testing.B) {
-	config.EnableTagArray = true
-	defer func() {
-		config.EnableTagArray = false
-	}()
+	enableTagArray := true
 	tagStr := "tag1=tv1,tag=tv2,tag3=tv3,tag4=tv4,tag5=tv5,tag6=tv6,tag7=tv7,tag8=tv8,tag9=tv9,tag10=tv10"
 	var tags []Tag
 	for i := 0; i < b.N; i++ {
-		unmarshalTags(tags, tagStr, true)
+		_, _ = unmarshalTags(tags, tagStr, true, enableTagArray)
 	}
 }
 
 func BenchmarkSqlUnmarshalTags_Disable_TagArray(b *testing.B) {
-	config.EnableTagArray = false
+	enableTagArray := false
 	tagStr := "tag1=tv1,tag=tv2,tag3=tv3,tag4=tv4,tag5=tv5,tag6=tv6,tag7=tv7,tag8=tv8,tag9=tv9,tag10=tv10"
 	var tags []Tag
 	for i := 0; i < b.N; i++ {
-		unmarshalTags(tags, tagStr, true)
+		_, _ = unmarshalTags(tags, tagStr, true, enableTagArray)
 	}
 }
 
@@ -380,10 +369,6 @@ func genMarshalTags(dst []byte, tags PointTags) []byte {
 }
 
 func TestStoreUnmarshalTags_Enable_TagArray(t *testing.T) {
-	config.EnableTagArray = true
-	defer func() {
-		config.EnableTagArray = false
-	}()
 	tags := PointTags{Tag{Key: "tag1", Value: "v1"}, Tag{Key: "tag2", Value: "v2"}, Tag{Key: "tag3", Value: "v3"}}
 	var tagStr []byte
 	tagStr = genMarshalTags(tagStr, tags)
@@ -395,7 +380,6 @@ func TestStoreUnmarshalTags_Enable_TagArray(t *testing.T) {
 }
 
 func TestStoreUnmarshalTags_Disable_TagArray(t *testing.T) {
-	config.EnableTagArray = false
 	tags := PointTags{Tag{Key: "tag1", Value: "v1"}, Tag{Key: "tag2", Value: "v2"}, Tag{Key: "tag3", Value: "v3"}}
 	var tagStr []byte
 	tagStr = genMarshalTags(tagStr, tags)
@@ -407,10 +391,6 @@ func TestStoreUnmarshalTags_Disable_TagArray(t *testing.T) {
 }
 
 func BenchmarkStoreUnmarshalTags_Enable_TagArray(b *testing.B) {
-	config.EnableTagArray = true
-	defer func() {
-		config.EnableTagArray = false
-	}()
 	tags := PointTags{Tag{Key: "tag1", Value: "v1"}, Tag{Key: "tag2", Value: "v2"}, Tag{Key: "tag3", Value: "v3"}}
 	var tagStr []byte
 	tagStr = genMarshalTags(tagStr, tags)
@@ -423,7 +403,6 @@ func BenchmarkStoreUnmarshalTags_Enable_TagArray(b *testing.B) {
 }
 
 func BenchmarkStoreUnmarshalTags_Disable_TagArray(b *testing.B) {
-	config.EnableTagArray = false
 	tags := PointTags{Tag{Key: "tag1", Value: "v1"}, Tag{Key: "tag2", Value: "v2"}, Tag{Key: "tag3", Value: "v3"}}
 	var tagStr []byte
 	tagStr = genMarshalTags(tagStr, tags)

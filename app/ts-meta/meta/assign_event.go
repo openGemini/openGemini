@@ -73,7 +73,7 @@ func init() {
 	}
 }
 
-func NewAssignEvent(pt *meta.DbPtInfo, targetId uint64, isUserCommand bool) *AssignEvent {
+func NewAssignEvent(pt *meta.DbPtInfo, targetId uint64, aliveConnId uint64, isUserCommand bool) *AssignEvent {
 	ae := &AssignEvent{
 		startTime:     time.Now(),
 		curState:      Init,
@@ -89,7 +89,7 @@ func NewAssignEvent(pt *meta.DbPtInfo, targetId uint64, isUserCommand bool) *Ass
 		ae.userCommand = isUserCommand
 		ae.eventRes.ch = make(chan error)
 	}
-
+	ae.aliveConnId = aliveConnId
 	return ae
 }
 

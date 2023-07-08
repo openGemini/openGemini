@@ -40,7 +40,7 @@ func TestCompactLimitWriter(t *testing.T) {
 
 		fd := &MockNameWriterCloser{}
 		SetCompactLimit(1*1024*1024, 1*1024*1024+512*1024)
-		lw := NewLimitWriter(fd, compWriteLimiter)
+		lw := fileops.NewLimitWriter(fd, compWriteLimiter)
 
 		b := make([]byte, 1*1024*1024)
 		b[0] = 1
@@ -71,7 +71,7 @@ func TestCompactLimitWriter(t *testing.T) {
 
 		fd := &MockNameWriterCloser{}
 		SetSnapshotLimit(1*1024*1024, 2*1024*1024)
-		lw := NewLimitWriter(fd, snapshotWriteLimiter)
+		lw := fileops.NewLimitWriter(fd, snapshotWriteLimiter)
 
 		b := make([]byte, 2*1024*1024)
 		b[0] = 1
@@ -108,14 +108,14 @@ func (nameWriterCloser) Read(b []byte) (int, error)  { return len(b), nil }
 
 func TestLimitWriter(t *testing.T) {
 	var buf [32]byte
-	lt := NewLimiter(10, 20)
+	lt := fileops.NewLimiter(10, 20)
 
-	l := NewLimitWriter(nameWriterCloser{}, nil)
+	l := fileops.NewLimitWriter(nameWriterCloser{}, nil)
 	if _, err := l.Write(buf[:]); err != nil {
 		t.Fatal(err)
 	}
 
-	l = NewLimitWriter(nameWriterCloser{}, lt)
+	l = fileops.NewLimitWriter(nameWriterCloser{}, lt)
 	_, err := l.Write(buf[:25])
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +145,7 @@ func TestSnapshotLimit(t *testing.T) {
 	}
 	SetSnapshotLimit(64*1024*1024, 70*1024*1024)
 	lockPath := ""
-	lw := newFileWriter(fd, false, false, &lockPath)
+	lw := newTsspFileWriter(fd, false, false, &lockPath)
 	var buf [1024 * 1024]byte
 
 	start := time.Now()
@@ -167,7 +167,7 @@ func TestSnapshotLimit(t *testing.T) {
 
 	// no limit
 	SetSnapshotLimit(0, 0)
-	lw = newFileWriter(fd, false, false, &lockPath)
+	lw = newTsspFileWriter(fd, false, false, &lockPath)
 	start = time.Now()
 	for i := 0; i < 512; i++ {
 		if _, err := lw.WriteData(buf[:]); err != nil {

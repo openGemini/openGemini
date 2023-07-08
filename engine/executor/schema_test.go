@@ -146,7 +146,7 @@ func TestRowDataType(t *testing.T) {
 
 func TestQuerySchema(t *testing.T) {
 	opt := query.ProcessorOptions{}
-	schema := executor.NewQuerySchema(createFields(), createColumnNames(), &opt)
+	schema := executor.NewQuerySchema(createFields(), createColumnNames(), &opt, nil)
 
 	if len(schema.Calls()) != 0 {
 		t.Errorf("length of calls must be 0, but %v", len(schema.Calls()))
@@ -171,9 +171,9 @@ func TestQuerySchema(t *testing.T) {
 
 func TestQuerySchemaHasSeriesAgg(t *testing.T) {
 	opt := query.ProcessorOptions{}
-	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt)
+	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt, nil)
 	assert.Equal(t, schema.HasInSeriesAgg(), false)
-	schema = executor.NewQuerySchema(createPercentileCallFields(), createCallColumnNames(), &opt)
+	schema = executor.NewQuerySchema(createPercentileCallFields(), createCallColumnNames(), &opt, nil)
 	assert.Equal(t, schema.HasInSeriesAgg(), false)
 }
 
@@ -251,14 +251,14 @@ func createCallColumnNames() []string {
 
 func TestHasMathAndString(t *testing.T) {
 	opt := query.ProcessorOptions{}
-	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt)
+	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt, nil)
 	assert.Equal(t, schema.HasMath(), true)
 	assert.Equal(t, schema.HasString(), true)
 }
 
 func TestHasAuxTags(t *testing.T) {
 	opt := query.ProcessorOptions{}
-	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt)
+	schema := executor.NewQuerySchema(createCallFields(), createCallColumnNames(), &opt, nil)
 	schema.Refs()
 	assert.Equal(t, schema.HasMath(), true)
 	assert.Equal(t, schema.HasString(), true)
@@ -271,7 +271,7 @@ func TestGetFieldType(t *testing.T) {
 			Name: "sum",
 			Args: []influxql.Expr{&influxql.VarRef{Val: "age", Type: influxql.Integer}},
 		},
-	}}, []string{"sum_age"}, &opt)
+	}}, []string{"sum_age"}, &opt, nil)
 	if i, err := schema.GetFieldType(0); i != int64(influxql.Integer) || err != nil {
 		t.Fatal()
 	}

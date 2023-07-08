@@ -370,7 +370,7 @@ func TestSearchSeriesWithOpts(t *testing.T) {
 	f := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
 		name = append(name, []byte("_0000")...)
 		_, span := tracing.NewTrace("root")
-		if e := resourceallocator.InitResAllocator(1000, 0, 1, 0, resourceallocator.SeriesParallelismRes, time.Second); e != nil {
+		if e := resourceallocator.InitResAllocator(1000, 0, 1, 0, resourceallocator.SeriesParallelismRes, time.Second, 1); e != nil {
 			t.Fatal(e)
 		}
 		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, resourceallocator.DefaultSeriesAllocateFunc, nil)
@@ -946,12 +946,12 @@ func TestSortTagsets(t *testing.T) {
 	tag2 = append(tag2, "tag2"...)
 	var tag1 []byte
 	tag1 = append(tag1, "tag1"...)
-	tagset.Append(2, tag2, nil, nil)
-	tagset.Append(1, tag1, nil, nil)
+	tagset.Append(2, tag2, nil, nil, nil)
+	tagset.Append(1, tag1, nil, nil, nil)
 	opt := query.ProcessorOptions{
 		Limit:    1,
 		HintType: hybridqp.ExactStatisticQuery,
 	}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	tagset.Sort(schema)
 }

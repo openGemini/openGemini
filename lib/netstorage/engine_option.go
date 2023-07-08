@@ -73,6 +73,8 @@ type EngineOptions struct {
 
 	DownSampleWriteDrop          bool
 	MaxDownSampleTaskConcurrency int
+
+	MaxSeriesPerDatabase int
 }
 
 func NewEngineOptions() EngineOptions {

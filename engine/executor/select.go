@@ -99,7 +99,16 @@ func (p *preparedStatement) Statement() *influxql.SelectStatement {
 	return p.stmt
 }
 
-func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, error) {
+func (p *preparedStatement) buildPlanByCache(ctx context.Context, schema *QuerySchema, plan []hybridqp.QueryNode) (hybridqp.QueryNode, error) {
+	p.stmt.Sources = p.qc.GetSources(p.stmt.Sources)
+	eTraits, err := p.qc.GetETraits(ctx, p.stmt.Sources, schema)
+	if eTraits == nil || err != nil {
+		return nil, err
+	}
+	return NewPlanBySchemaAndSrcPlan(schema, plan, eTraits)
+}
+
+func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, error) {
 	if len(p.stmt.Fields) == 0 {
 		return nil, nil
 	}
@@ -114,8 +123,16 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 
 	rewriteVarfName(p.stmt.Fields)
 
-	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource)
+	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource, p.stmt.SortFields)
 
+	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
+	planType := GetPlanType(schema, p.stmt)
+	if planType != UNKNOWN {
+		templatePlan := SqlPlanTemplate[planType].GetPlan()
+		if p != nil && !HaveOnlyCSStore {
+			return p.buildPlanByCache(ctx, schema, templatePlan)
+		}
+	}
 	plan, err := buildExtendedPlan(ctx, p.stmt, p.qc, schema)
 
 	if err != nil {
@@ -130,25 +147,34 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 		plan.(LogicalPlan).Explain(planWriter)
 		fmt.Println("origin plan\n", planWriter.String())
 	}
-
-	executorBuilder := p.creator()
-
 	planner := p.optimizer()
 
 	planner.SetRoot(plan)
 	best := planner.FindBestExp()
+
+	if HaveOnlyCSStore {
+		best = RebuildColumnStorePlan(best)[0]
+		RebuildAggNodes(best)
+	}
 
 	if GetEnablePrintLogicalPlan() == OnPrintLogicalPlan {
 		planWriter := NewLogicalPlanWriterImpl(&strings.Builder{})
 		best.(LogicalPlan).Explain(planWriter)
 		fmt.Println("optimized plan\n", planWriter.String())
 	}
+	return best, nil
+}
 
+func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, error) {
+	best, err := p.BuildLogicalPlan(ctx)
+	if err != nil {
+		return nil, err
+	}
+	executorBuilder := p.creator()
 	span := tracing.SpanFromContext(ctx)
 	if span != nil {
 		executorBuilder.Analyze(span)
 	}
-
 	return executorBuilder.Build(best)
 }
 
@@ -186,7 +212,7 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 		optSource := influxql.Sources{source.(influxql.Source)}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
-		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource)
+		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource, stmt.SortFields)
 		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
 		if err != nil {
 			return nil, err
@@ -219,7 +245,7 @@ func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 		optSource := influxql.Sources{source.(influxql.Source)}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
-		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt)
+		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
 		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
 		if err != nil {
 			return nil, err
@@ -263,6 +289,8 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	hasDistinct, hasSelector := hasDistinctSelectorCall(s)
 	hasSlidingWindow := schema.HasSlidingWindowCall()
 	hasHoltWinters := schema.HasHoltWintersCall()
+	hasSort := s.HasSort()
+	HaveOnlyCSStore := schema.Options().HaveOnlyCSStore()
 
 	if len(schema.Calls()) > 0 {
 		buildAggNode(builder, schema, hasSlidingWindow)
@@ -287,8 +315,13 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	}
 
 	// not support fill: selector, slidingWindow, holtWinters
-	if !hasSelector && !hasSlidingWindow && !hasHoltWinters && s.opt.HasInterval() && s.opt.(*query.ProcessorOptions).Fill != influxql.NoFill {
+	if !hasSelector && !hasSlidingWindow && !hasHoltWinters && s.opt.HasInterval() &&
+		s.opt.(*query.ProcessorOptions).Fill != influxql.NoFill && !HaveOnlyCSStore {
 		builder.Fill()
+	}
+
+	if hasSort && HaveOnlyCSStore {
+		builder.Sort()
 	}
 
 	// Apply limit & offset.
@@ -409,4 +442,58 @@ func (p *PrepareStmtBuilderCreator) Create(stmt *influxql.SelectStatement, opt h
 	}, columns []string, MaxPointN int, now time.Time) query.PreparedStatement {
 	return NewPreparedStatement(stmt, opt, shards, columns, MaxPointN, now)
 
+}
+
+func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
+	if plan.Children() == nil {
+		return []hybridqp.QueryNode{plan}
+	}
+	var replace bool
+	var nodes []hybridqp.QueryNode
+	for _, child := range plan.Children() {
+		if child == nil {
+			continue
+		}
+		p := RebuildColumnStorePlan(child)
+		switch c := plan.(type) {
+		case *LogicalExchange:
+			var eType ExchangeType
+			var eTraits []hybridqp.Trait
+			if c.eType == NODE_EXCHANGE {
+				eType = NODE_EXCHANGE
+				eTraits = c.eTraits
+			} else if c.eType == READER_EXCHANGE {
+				eType = READER_EXCHANGE
+			}
+			// TODO: to support hash agg
+			if plan.Schema().HasCall() {
+			} else {
+				node := NewLogicalHashMerge(p[0], plan.Schema(), eType, eTraits)
+				nodes = append(nodes, node)
+			}
+		default:
+			nodes = append(nodes, p...)
+			replace = true
+		}
+	}
+	if replace {
+		plan.ReplaceChildren(nodes)
+		return []hybridqp.QueryNode{plan}
+	}
+	return nodes
+}
+
+func RebuildAggNodes(plan hybridqp.QueryNode) {
+	if len(plan.Children()) == 0 {
+		return
+	}
+	if len(plan.Children()) > 1 {
+		for i := range plan.Children() {
+			RebuildAggNodes(plan.Children()[i])
+		}
+	}
+	if _, ok := plan.Children()[0].(*LogicalAggregate); ok {
+		plan.SetInputs(plan.Children()[0].Children())
+	}
+	RebuildAggNodes(plan.Children()[0])
 }

@@ -25,6 +25,7 @@ import (
 )
 
 func TestBufferReader(t *testing.T) {
+	saveDir = t.TempDir()
 	mh := NewMergeTestHelper(immutable.NewConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(1e12, defaultInterval, true)

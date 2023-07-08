@@ -38,6 +38,7 @@ const (
 // Config represents a configuration for a HTTP service.
 type Config struct {
 	BindAddress             string         `toml:"bind-address"`
+	Domain                  string         `toml:"domain"`
 	AuthEnabled             bool           `toml:"auth-enabled"`
 	WeakPwdPath             string         `toml:"weakpwd-path"`
 	LogEnabled              bool           `toml:"log-enabled"`

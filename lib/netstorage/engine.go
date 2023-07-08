@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -59,7 +60,7 @@ func GetNewEngineFunction(entType string) NewEngineFun {
 }
 
 type Engine interface {
-	Open(durationInfos map[uint64]*meta.ShardDurationInfo, client metaclient.MetaClient) error
+	Open(durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfos map[string]*meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 	Close() error
 	ForceFlush()
 	SetReadOnly(readonly bool)
@@ -71,9 +72,9 @@ type Engine interface {
 	FetchShardsNeedChangeStore() ([]*meta.ShardIdentifier, []*meta.ShardIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
 
-	CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo) error
+	CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, mstInfo *meta.MeasurementInfo) error
 	WriteRows(db, rp string, ptId uint32, shardID uint64, points []influx.Row, binaryRows []byte) error
-	CreateDBPT(db string, pt uint32)
+	CreateDBPT(db string, pt uint32, enableTagArray bool)
 
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 
@@ -96,22 +97,21 @@ type Engine interface {
 	DbPTRef(db string, ptId uint32) error
 	DbPTUnref(db string, ptId uint32)
 	CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
+	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error)
 	LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
 	UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
 
 	PreOffload(db string, ptId uint32) error
 	RollbackPreOffload(db string, ptId uint32) error
-	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, client metaclient.MetaClient) error
+	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 	Offload(db string, ptId uint32) error
-	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, client metaclient.MetaClient) error
+	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 
 	SysCtrl(req *SysCtrlRequest) error
 	Statistics(buffer []byte) ([]byte, error)
+	StatisticsOps() []opsStat.OpsStatistic
 
-	UpdateStoreDownSamplePolicies(info *meta.DownSamplePolicyInfo, ident string)
-	ResetDownSampleFlag()
-	RemoveDeadDownSamplePolicy()
 	GetShardDownSamplePolicyInfos(meta interface {
 		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 	}) ([]*meta.ShardDownSamplePolicyInfo, error)

@@ -173,7 +173,7 @@ func (immu *ImmutableStatistics) AddMemSize(path string, memSize, memOrderSize, 
 func CollectImmutableStatistics(buffer []byte) ([]byte, error) {
 	for path, stats := range ImmutableStat.Stats {
 		tagMap := make(map[string]string)
-		AllocTagMap(tagMap, MutableTagMap)
+		AllocTagMap(tagMap, ImmutableTagMap)
 		tagMap[StatImmuLevel] = path
 		valueMap := map[string]interface{}{
 			StatImmuMemSize:        atomic.LoadInt64(&stats.ImmuMemSize),

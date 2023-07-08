@@ -23,6 +23,7 @@ import (
 	"path"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"text/tabwriter"
@@ -35,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
@@ -269,7 +271,17 @@ func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row) (uint64, 
 	vname.B = append(vname.B[:0], []byte(row.Name)...)
 	vkey.B = append(vkey.B[:0], row.IndexKey...)
 
-	if row.HasTagArray {
+	var hasTagArray bool
+	if idx.indexBuilder.EnableTagArray {
+		for i := 0; i < len(row.Tags); i++ {
+			if strings.HasPrefix(row.Tags[i].Value, "[") && strings.HasSuffix(row.Tags[i].Value, "]") {
+				row.Tags[i].IsArray = true
+				hasTagArray = true
+			}
+		}
+	}
+
+	if hasTagArray {
 		sid, err := idx.createIndexesIfNotExistsWithTagArray(vkey.B, vname.B, row.Tags)
 		return sid, err
 	}
@@ -287,6 +299,10 @@ func (idx *MergeSetIndex) createIndexesIfNotExists(vkey, vname []byte, tags []in
 
 	if tsid != 0 {
 		return tsid, nil
+	}
+
+	if err := idx.indexBuilder.SeriesLimited(); err != nil {
+		return 0, err
 	}
 
 	defer func(id *uint64) {
@@ -323,6 +339,10 @@ func (idx *MergeSetIndex) createIndexesIfNotExistsWithTagArray(vkey, vname []byt
 
 	if tsid != 0 {
 		return tsid, nil
+	}
+
+	if err := idx.indexBuilder.SeriesLimited(); err != nil {
+		return 0, err
 	}
 
 	defer func(id *uint64) {
@@ -416,10 +436,6 @@ func (idx *MergeSetIndex) marshalTagToTSIDs(tmpB []byte, dstB []byte, name []byt
 }
 
 func (idx *MergeSetIndex) SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error) {
-	if config.EnableTagArray {
-		return idx.seriesCardinalityEnableTagArray(name, condition, tr)
-	}
-
 	if condition == nil {
 		return idx.seriesCardinality(name)
 	}
@@ -429,34 +445,6 @@ func (idx *MergeSetIndex) SeriesCardinality(name []byte, condition influxql.Expr
 		return 0, err
 	}
 	return uint64(len(tsids)), nil
-}
-
-func (idx *MergeSetIndex) seriesCardinalityEnableTagArray(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error) {
-	tsids, err := idx.searchTSIDs(name, condition, tr)
-	if err != nil {
-		return 0, err
-	}
-
-	seriesMap := make(map[string]struct{}, 1)
-	var combineSeriesKey []byte
-	var combineKeys [][]byte
-	var isExpectSeries []bool
-	for i := range tsids {
-		combineKeys, _, isExpectSeries, err = idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition)
-		if err != nil {
-			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
-			return 0, err
-		}
-
-		for j := range combineKeys {
-			if !isExpectSeries[j] {
-				continue
-			}
-
-			seriesMap[string(combineKeys[j])] = struct{}{}
-		}
-	}
-	return uint64(len(seriesMap)), nil
 }
 
 func (idx *MergeSetIndex) SearchSeries(series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error) {
@@ -591,7 +579,9 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	var combineSeriesKey []byte
 	var isExpectSeries []bool
 	var exprs []*influxql.BinaryExpr
+	var querySeriesUpperBound = syscontrol.GetQuerySeriesLimit()
 
+LOOP:
 	for {
 		se, err := itr.Next()
 		if err != nil {
@@ -647,12 +637,21 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 			}
 
 			if exprs[i] != nil {
-				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf)
+				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
 			} else {
-				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf)
+				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
 			}
 			groupTagKey = groupTagKey[:0]
 			seriesN++
+
+			if querySeriesUpperBound > 0 && seriesN >= querySeriesUpperBound {
+				idx.logger.Error("", zap.Error(errno.NewError(errno.ErrQuerySeriesUpperBound)),
+					zap.Int("querySeriesLimit", querySeriesUpperBound),
+					zap.String("index_path", idx.Path()),
+					zap.ByteString("measurement", name),
+				)
+				break LOOP
+			}
 		}
 	}
 

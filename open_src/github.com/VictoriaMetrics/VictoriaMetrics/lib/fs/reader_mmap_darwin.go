@@ -3,5 +3,5 @@
 
 package fs
 
-// SetDisableMmap disable mmap on darwin always.
-func SetDisableMmap(off bool) {}
+// EnableMmap disable mmap on darwin always.
+func EnableMmap(off bool) {}

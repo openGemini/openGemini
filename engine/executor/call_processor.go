@@ -25,7 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
@@ -1115,7 +1115,7 @@ func StringAuxHelpFunc(input, output Column, rowIdx ...int) {
 			oriStr := input.StringValue(input.GetValueIndexV2(idx))
 			newStr := make([]byte, len(oriStr))
 			copy(newStr, oriStr)
-			output.AppendStringValues(record.Bytes2str(newStr))
+			output.AppendStringValues(util.Bytes2str(newStr))
 			output.AppendNilsV2(true)
 		} else {
 			output.AppendNil()

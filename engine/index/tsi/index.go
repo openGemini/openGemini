@@ -23,11 +23,11 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -59,25 +59,6 @@ var (
 	sequenceID = uint64(time.Now().Unix())
 )
 
-var seriesKeyPool = &sync.Pool{}
-
-//lint:ignore U1000 TODO performance improvement use sync.pool
-func getSeriesKeyBuf() []byte {
-	v := seriesKeyPool.Get()
-	if v != nil {
-		return v.([]byte)
-	}
-	return make([]byte, 0, defaultSeriesKeyLen)
-}
-
-func putSeriesKeyBuf(buf *[]byte) {
-	if buf == nil {
-		return
-	}
-	*buf = (*buf)[:0]
-	seriesKeyPool.Put(buf)
-}
-
 type TagSetInfo struct {
 	ref int64
 
@@ -86,6 +67,7 @@ type TagSetInfo struct {
 	SeriesKeys [][]byte           // encoded series key
 	TagsVec    []influx.PointTags // tags of all series
 	key        []byte             // group by tag sets key
+	RowFilters *clv.RowFilters    // only uesed in full-text index for row filtering
 }
 
 func (t *TagSetInfo) String() string {
@@ -106,6 +88,9 @@ func (t *TagSetInfo) Swap(i, j int) {
 	t.IDs[i], t.IDs[j] = t.IDs[j], t.IDs[i]
 	t.TagsVec[i], t.TagsVec[j] = t.TagsVec[j], t.TagsVec[i]
 	t.Filters[i], t.Filters[j] = t.Filters[j], t.Filters[i]
+	if t.RowFilters != nil {
+		t.RowFilters.Swap(i, j)
+	}
 }
 
 func NewTagSetInfo() *TagSetInfo {
@@ -125,18 +110,20 @@ func (t *TagSetInfo) reset() {
 	t.IDs = t.IDs[:0]
 	t.Filters = t.Filters[:0]
 	t.TagsVec = t.TagsVec[:0]
-
-	for i := range t.SeriesKeys {
-		putSeriesKeyBuf(&t.SeriesKeys[i])
-	}
 	t.SeriesKeys = t.SeriesKeys[:0]
+	if t.RowFilters != nil {
+		t.RowFilters.Reset()
+	}
 }
 
-func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags) {
+func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags, rowFilter []clv.RowFilter) {
 	t.IDs = append(t.IDs, id)
 	t.Filters = append(t.Filters, filter)
 	t.TagsVec = append(t.TagsVec, tags)
 	t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+	if t.RowFilters != nil {
+		t.RowFilters.Append(rowFilter)
+	}
 }
 
 func (t *TagSetInfo) Ref() {
@@ -158,6 +145,13 @@ func (t *TagSetInfo) Sort(schema *executor.QuerySchema) {
 	if schema.HasExcatLimit() {
 		sort.Sort(t)
 	}
+}
+
+func (t *TagSetInfo) GetRowFilter(idx int) *[]clv.RowFilter {
+	if t.RowFilters != nil {
+		return t.RowFilters.GetRowFilter(idx)
+	}
+	return nil
 }
 
 type tagSetInfoPool struct {
@@ -263,6 +257,9 @@ func (gs GroupSeries) Reverse() {
 			tt.Filters[i], tt.Filters[j] = tt.Filters[j], tt.Filters[i]
 			tt.SeriesKeys[i], tt.SeriesKeys[j] = tt.SeriesKeys[j], tt.SeriesKeys[i]
 			tt.TagsVec[i], tt.TagsVec[j] = tt.TagsVec[j], tt.TagsVec[i]
+			if tt.RowFilters != nil {
+				tt.RowFilters.Swap(i, j)
+			}
 		}
 	}
 }

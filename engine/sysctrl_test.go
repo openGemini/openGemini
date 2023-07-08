@@ -17,6 +17,7 @@ limitations under the License.
 package engine
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -168,6 +169,32 @@ func TestEngine_processReq_debugMode(t *testing.T) {
 		"switchon": "true",
 	})
 	require.NoError(t, e.processReq(req))
+
+	req.SetParam(map[string]string{})
+	require.Error(t, e.processReq(req))
+}
+
+func TestEngine_memUsageLimit(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(memUsageLimit)
+	req.SetParam(map[string]string{
+		"limit": "90",
+	})
+	require.NoError(t, e.processReq(req))
+
+	var wg sync.WaitGroup
+	wg.Add(5)
+	for i := 0; i < 5; i++ {
+		go func() {
+			IsMemUsageExceeded()
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 
 	req.SetParam(map[string]string{})
 	require.Error(t, e.processReq(req))

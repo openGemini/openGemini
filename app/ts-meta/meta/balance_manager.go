@@ -71,7 +71,7 @@ func (b *BalanceManager) Stop() {
 	b.wg.Wait()
 }
 
-func (b *BalanceManager) assignDbPt(dbPt *meta.DbPtInfo, target uint64, userCommand bool) error {
-	me := NewAssignEvent(dbPt, target, userCommand)
+func (b *BalanceManager) assignDbPt(dbPt *meta.DbPtInfo, target uint64, aliveConnId uint64, userCommand bool) error {
+	me := NewAssignEvent(dbPt, target, aliveConnId, userCommand)
 	return globalService.msm.executeEvent(me)
 }
