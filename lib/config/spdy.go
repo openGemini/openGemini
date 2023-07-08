@@ -56,14 +56,14 @@ const (
 
 	MinRecvWindowSize          = 2
 	MinConcurrentAcceptSession = 1024
-	MinOpenSessionTimeout      = 60 * Second
+	MinOpenSessionTimeout      = Second
 	MinSessionSelectTimeout    = 60 * Second
 	MinTCPDialTimeout          = Second
 	MinConnPoolSize            = 2
 
 	DefaultRecvWindowSize          = 8
 	DefaultConcurrentAcceptSession = 4096
-	DefaultOpenSessionTimeout      = 10 * Second
+	DefaultOpenSessionTimeout      = 2 * Second
 	DefaultSessionSelectTimeout    = 300 * Second
 	DefaultTCPDialTimeout          = Second
 	DefaultConnPoolSize            = 4

@@ -19,6 +19,8 @@ package numberenc
 import (
 	"encoding/binary"
 	"unsafe"
+
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 func MarshalFloat64(dst []byte, f float64) []byte {
@@ -29,14 +31,6 @@ func MarshalFloat64(dst []byte, f float64) []byte {
 func UnmarshalFloat64(src []byte) float64 {
 	u := binary.BigEndian.Uint64(src)
 	return *(*float64)(unsafe.Pointer(&u))
-}
-
-func Uint64ToFloat64(i uint64) float64 {
-	return *(*float64)(unsafe.Pointer(&i))
-}
-
-func Float64ToUint64(i float64) uint64 {
-	return *(*uint64)(unsafe.Pointer(&i))
 }
 
 func MarshalBool(dst []byte, b bool) []byte {
@@ -55,10 +49,6 @@ func UnmarshalBool(b byte) bool {
 // MarshalUint16Append appends marshaled v to dst and returns the result.
 func MarshalUint16Append(dst []byte, u uint16) []byte {
 	return append(dst, byte(u>>8), byte(u))
-}
-
-func MarshalUint16Copy(dst []byte, u uint16) {
-	dst[0], dst[1] = byte(u>>8), byte(u)
 }
 
 // UnmarshalUint16 returns unmarshaled uint32 from src.
@@ -85,8 +75,78 @@ func MarshalUint64Append(dst []byte, u uint64) []byte {
 	return append(dst, byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32), byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
 
-func MarshalUint64Copy(dst []byte, u uint64) {
-	dst[0], dst[1], dst[2], dst[3], dst[4], dst[5], dst[6], dst[7] = byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32), byte(u>>24), byte(u>>16), byte(u>>8), byte(u)
+// MarshalUint64SliceAppend appends marshaled v to dst and returns the result.
+func MarshalUint64SliceAppend(dst []byte, us []uint64) []byte {
+	usLen := len(us) * util.Uint64SizeBytes
+	preLen := len(dst)
+	if cap(dst) == 0 {
+		dst = make([]byte, 0, usLen)
+	} else if cap(dst)-preLen < usLen {
+		dst = append(dst, make([]byte, usLen)...)
+		dst = dst[:preLen]
+	}
+	for i := range us {
+		dst = MarshalUint64Append(dst, us[i])
+	}
+	return dst
+}
+
+// MarshalInt64SliceAppend appends marshaled v to dst and returns the result.
+func MarshalInt64SliceAppend(dst []byte, us []int64) []byte {
+	usLen := len(us) * util.Int64SizeBytes
+	preLen := len(dst)
+	if cap(dst) == 0 {
+		dst = make([]byte, 0, usLen)
+	} else if cap(dst)-preLen < usLen {
+		dst = append(dst, make([]byte, usLen)...)
+		dst = dst[:preLen]
+	}
+	for i := range us {
+		dst = MarshalInt64Append(dst, us[i])
+	}
+	return dst
+}
+
+// UnmarshalInt64Slice2Bytes returns unmarshaled []byte from src.
+func UnmarshalInt64Slice2Bytes(src []byte, dst []byte) []byte {
+	if cap(dst)-len(dst) < len(src) {
+		dst = append(make([]byte, 0, len(src)+len(dst)), dst...)
+	}
+
+	dstInt64 := util.Bytes2Int64Slice(dst[len(dst) : len(dst)+len(src)])
+	for i := 0; i < len(src)/util.Int64SizeBytes; i++ {
+		dstInt64[i] = UnmarshalInt64(src[i*util.Int64SizeBytes:])
+	}
+	return dst[:len(dst)+len(src)]
+}
+
+// MarshalUint32SliceAppend appends marshaled v to dst and returns the result.
+func MarshalUint32SliceAppend(dst []byte, us []uint32) []byte {
+	usLen := len(us) * util.Uint32SizeBytes
+	preLen := len(dst)
+	if cap(dst) == 0 {
+		dst = make([]byte, 0, usLen)
+	} else if cap(dst)-preLen < usLen {
+		dst = append(dst, make([]byte, usLen)...)
+		dst = dst[:preLen]
+	}
+	for i := range us {
+		dst = MarshalUint32Append(dst, us[i])
+	}
+	return dst
+}
+
+// UnmarshalUint32Slice returns unmarshaled []uint32 from src.
+func UnmarshalUint32Slice(src []byte, dst []uint32) []uint32 {
+	usNum := len(src) / util.Uint32SizeBytes
+	if cap(dst) < usNum {
+		dst = make([]uint32, 0, usNum)
+	}
+	dst = dst[:usNum]
+	for i := 0; i < usNum; i++ {
+		dst[i] = UnmarshalUint32(src[i*util.Uint32SizeBytes:])
+	}
+	return dst
 }
 
 // UnmarshalUint64 returns unmarshaled uint64 from src.
@@ -94,57 +154,11 @@ func UnmarshalUint64(src []byte) uint64 {
 	return binary.BigEndian.Uint64(src)
 }
 
-// MarshalInt16Append appends marshaled v to dst and returns the result.
-func MarshalInt16Append(dst []byte, v int16) []byte {
-	v = (v << 1) ^ (v >> 15) // zig-zag encoding
-	u := uint16(v)
-	return append(dst, byte(u>>8), byte(u))
-}
-
-func MarshalInt16Copy(dst []byte, v int16) {
-	v = (v << 1) ^ (v >> 15) // zig-zag encoding
-	u := uint16(v)
-	dst[0], dst[1] = byte(u>>8), byte(u)
-}
-
-// UnmarshalInt16 returns unmarshaled int16 from src.
-func UnmarshalInt16(src []byte) int16 {
-	u := binary.BigEndian.Uint16(src)
-	v := int16(u>>1) ^ (int16(u<<15) >> 15) // zig-zag decoding
-	return v
-}
-
-// MarshalInt32Append appends marshaled v to dst and returns the result.
-func MarshalInt32Append(dst []byte, v int32) []byte {
-	v = (v << 1) ^ (v >> 31) // zig-zag encoding
-	u := uint32(v)
-	return append(dst, byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
-}
-
-func MarshalInt32Copy(dst []byte, v int32) {
-	v = (v << 1) ^ (v >> 31) // zig-zag encoding
-	u := uint32(v)
-	dst[0], dst[1], dst[2], dst[3] = byte(u>>24), byte(u>>16), byte(u>>8), byte(u)
-}
-
-// UnmarshalInt32 returns unmarshaled int64 from src.
-func UnmarshalInt32(src []byte) int32 {
-	u := binary.BigEndian.Uint32(src)
-	v := int32(u>>1) ^ (int32(u<<31) >> 31) // zig-zag decoding
-	return v
-}
-
 // MarshalInt64Append appends marshaled v to dst and returns the result.
 func MarshalInt64Append(dst []byte, v int64) []byte {
 	v = (v << 1) ^ (v >> 63) // zig-zag encoding
 	u := uint64(v)
 	return append(dst, byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32), byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
-}
-
-func MarshalInt64Copy(dst []byte, v int64) {
-	v = (v << 1) ^ (v >> 63) // zig-zag encoding
-	u := uint64(v)
-	dst[0], dst[1], dst[2], dst[3], dst[4], dst[5], dst[6], dst[7] = byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32), byte(u>>24), byte(u>>16), byte(u>>8), byte(u)
 }
 
 // UnmarshalInt64 returns unmarshaled int64 from src.

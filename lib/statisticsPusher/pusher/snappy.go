@@ -28,7 +28,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 const (
@@ -131,7 +131,7 @@ func (w *SnappyWriter) Close() error {
 type SnappyReader struct {
 	compress bool
 	f        *os.File
-	sizeBuf  [record.Uint32SizeBytes]byte
+	sizeBuf  [util.Uint32SizeBytes]byte
 	location int64
 	eof      bool
 }
@@ -181,7 +181,7 @@ func (r *SnappyReader) readBlock() ([]byte, error) {
 	size := binary.BigEndian.Uint32(r.sizeBuf[:])
 	if size == 0 {
 		r.eof = true
-		r.location += int64(record.Uint32SizeBytes)
+		r.location += int64(util.Uint32SizeBytes)
 		return nil, io.EOF
 	}
 
@@ -197,7 +197,7 @@ func (r *SnappyReader) readBlock() ([]byte, error) {
 		return nil, err
 	}
 
-	r.location += int64(size) + int64(record.Uint32SizeBytes)
+	r.location += int64(size) + int64(util.Uint32SizeBytes)
 	return block, nil
 }
 

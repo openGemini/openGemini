@@ -159,11 +159,12 @@ var streamContextPool sync.Pool
 var streamContextPoolCh = make(chan *streamContext, cgroup.AvailableCPUs())
 
 type unmarshalWork struct {
-	rows         PointRows
-	Callback     func(db string, rows []Row, err error)
-	Db           string
-	TsMultiplier int64
-	ReqBuf       []byte
+	rows           PointRows
+	Callback       func(db string, rows []Row, err error)
+	Db             string
+	TsMultiplier   int64
+	ReqBuf         []byte
+	EnableTagArray bool
 }
 
 func (uw *unmarshalWork) reset() {
@@ -172,12 +173,13 @@ func (uw *unmarshalWork) reset() {
 	uw.Db = ""
 	uw.TsMultiplier = 0
 	uw.ReqBuf = uw.ReqBuf[:0]
+	uw.EnableTagArray = false
 }
 
 // Unmarshal implements common.UnmarshalWork
 func (uw *unmarshalWork) Unmarshal() {
 	start := time.Now()
-	err := uw.rows.Unmarshal(bytesutil.ToUnsafeString(uw.ReqBuf))
+	err := uw.rows.Unmarshal(bytesutil.ToUnsafeString(uw.ReqBuf), uw.EnableTagArray)
 	rows := uw.rows.Rows
 	if err != nil {
 		uw.Callback(uw.Db, rows, err)

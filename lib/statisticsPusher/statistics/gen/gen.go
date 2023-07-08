@@ -33,3 +33,6 @@ package gen
 
 //go:generate tmpl -data=@record.data -o=../record_statistics.gen.go statistics.tmpl
 //go:generate tmpl -data=@record.data -o=../record_statistics.gen_test.go statistics_test.tmpl
+
+//go:generate tmpl -data="@hit_ratio.data" -o="../hit_ratio.gen.go" statistics.tmpl
+//go:generate tmpl -data="@hit_ratio.data" -o="../hit_ratio.gen_test.go" statistics_test.tmpl

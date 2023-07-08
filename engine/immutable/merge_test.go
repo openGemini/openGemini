@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
@@ -63,13 +64,15 @@ type MergeTestHelper struct {
 
 func NewMergeTestHelper(conf *immutable.Config) *MergeTestHelper {
 	lockPath := ""
-	return &MergeTestHelper{
+	mth := &MergeTestHelper{
 		store:     immutable.NewTableStore(saveDir, &lockPath, &defaultTier, false, conf),
 		records:   make(map[uint64]*record.Record),
 		expect:    make(map[uint64]*record.Record),
 		generator: newRecordGenerator(0, defaultInterval, true),
 		compare:   true,
 	}
+	mth.store.SetImmTableType(config.TSSTORE)
+	return mth
 }
 
 func (h *MergeTestHelper) disableCompare() {
@@ -180,11 +183,8 @@ func (h *MergeTestHelper) readMergedRecord() map[uint64]*record.Record {
 
 func (h *MergeTestHelper) readExpectRecord() map[uint64]*record.Record {
 	for sid, item := range h.expect {
-		sh := &record.SortHelper{}
-		aux := newSortAux(item.Times(), item.Schema)
-		sh.Sort(item, aux)
-
-		h.expect[sid] = aux.SortRec
+		sh := record.NewSortHelper()
+		h.expect[sid] = sh.Sort(item)
 	}
 	return h.expect
 }
@@ -393,8 +393,7 @@ func saveRecordToFile(seq uint64, records map[uint64]*record.Record, order bool,
 	}
 	lockPath := ""
 	fileName := immutable.NewTSSPFileName(seq, 0, 0, 0, order, &lockPath)
-	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, conf, 1, fileName,
-		1, nil, 2)
+	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, conf, 0, fileName, 1, nil, 2)
 
 	sort.Slice(sidList, func(i, j int) bool {
 		return sidList[i] < sidList[j]

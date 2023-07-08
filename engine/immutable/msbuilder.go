@@ -17,17 +17,22 @@ limitations under the License.
 package immutable
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
-	Log "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -50,7 +55,7 @@ type MsBuilder struct {
 	trailerOffset     int64
 	fd                fileops.File
 	fileSize          int64
-	diskFileWriter    FileWriter
+	diskFileWriter    fileops.FileWriter
 	cmOffset          []uint32
 	preCmOff          int64
 	encodeChunk       []byte
@@ -67,9 +72,12 @@ type MsBuilder struct {
 	tier              uint64
 	cm                *ChunkMeta
 
-	Files    []TSSPFile
-	FileName TSSPFileName
-	log      *Log.Logger
+	Files         []TSSPFile
+	FileName      TSSPFileName
+	log           *logger.Logger
+	pkIndexWriter sparseindex.IndexWriter
+	pkRec         []*record.Record
+	pkMark        []fragment.IndexFragment
 }
 
 func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
@@ -87,7 +95,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 		msBuilder.trailer = &Trailer{}
 	}
 
-	msBuilder.log = Log.NewLogger(errno.ModuleCompact).SetZapLogger(log)
+	msBuilder.log = logger.NewLogger(errno.ModuleCompact).SetZapLogger(log)
 	msBuilder.tier = tier
 	msBuilder.Conf = conf
 	msBuilder.lock = lockPath
@@ -116,11 +124,11 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 
 	limit := fileName.level > 0
 	if msBuilder.cacheMetaInMemory() {
-		msBuilder.diskFileWriter = newFileWriter(msBuilder.fd, true, limit, lockPath)
+		msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, true, limit, lockPath)
 		n := idCount/DefaultMaxChunkMetaItemCount + 1
 		msBuilder.inMemBlock.ReserveMetaBlock(n)
 	} else {
-		msBuilder.diskFileWriter = newFileWriter(msBuilder.fd, false, limit, lockPath)
+		msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, false, limit, lockPath)
 		if msBuilder.cm == nil {
 			msBuilder.cm = &ChunkMeta{}
 		}
@@ -130,18 +138,21 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	msBuilder.msName = name
 	msBuilder.Files = msBuilder.Files[:0]
 	msBuilder.FileName = fileName
-
 	msBuilder.MaxIds = idCount
 	msBuilder.bf = nil
 
 	return msBuilder
 }
 
+func (b *MsBuilder) StoreTimes() {
+	b.trailer.SetData(IndexOfTimeStoreFlag, TimeStoreFlag)
+}
+
 func (b *MsBuilder) MaxRowsPerSegment() int {
 	return b.Conf.maxRowsPerSegment
 }
 
-func (b *MsBuilder) WithLog(log *Log.Logger) {
+func (b *MsBuilder) WithLog(log *logger.Logger) {
 	b.log = log
 	if b.chunkBuilder != nil {
 		b.chunkBuilder.log = log
@@ -161,12 +172,13 @@ func (b *MsBuilder) Reset() {
 	b.releaseEncoders()
 	b.encodeChunk = b.encodeChunk[:0]
 	b.inited = false
+	if b.diskFileWriter != nil {
+		_ = b.diskFileWriter.Close()
+		b.diskFileWriter = nil
+	}
 	if b.fd != nil {
 		_ = b.fd.Close()
 		b.fd = nil
-	}
-	if b.diskFileWriter != nil {
-		_ = b.diskFileWriter.Close()
 	}
 	b.fileSize = 0
 	b.Files = b.Files[:0]
@@ -195,9 +207,7 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 		b.mIndex.offset = b.diskFileWriter.ChunkMetaSize()
 	}
 
-	if b.FileName.order {
-		b.pair.Add(cm.sid, maxT)
-	}
+	b.pair.Add(cm.sid, maxT)
 	b.pair.AddRowCounts(rowCounts)
 
 	b.encChunkMeta = cm.marshal(b.encChunkMeta[:0])
@@ -224,7 +234,7 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 	}
 
 	if b.mIndex.size >= uint32(b.Conf.maxChunkMetaItemSize) || b.mIndex.count >= uint32(b.Conf.maxChunkMetaItemCount) {
-		offBytes := record.Uint32Slice2ByteBigEndian(b.cmOffset)
+		offBytes := numberenc.MarshalUint32SliceAppend(nil, b.cmOffset)
 		_, err = b.diskFileWriter.WriteChunkMeta(offBytes)
 		if err != nil {
 			err = errWriteFail(b.diskFileWriter.Name(), err)
@@ -241,45 +251,115 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 	return nil
 }
 
-func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
+func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int, fSize int64,
+	nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
+	f, err := msb.NewTSSPFile(true)
+	if err != nil {
+		msb.log.Error("new file fail", zap.String("file", msb.fd.Name()), zap.Error(err))
+		return msb, err
+	}
+
+	msb.log.Info("switch tssp file",
+		zap.String("file", f.Path()),
+		zap.Int("rowsLimit", rowsLimit),
+		zap.Int("rows", rec.RowNums()),
+		zap.Int("totalRows", totalRec.RowNums()),
+		zap.Int64("fileSize", fSize),
+		zap.Int64("sizeLimit", msb.Conf.fileSizeLimit))
+
+	msb.Files = append(msb.Files, f)
+	seq, lv, merge, ext := nextFile(msb.FileName)
+	msb.FileName.SetSeq(seq)
+	msb.FileName.SetMerge(merge)
+	msb.FileName.SetExtend(ext)
+	msb.FileName.SetLevel(lv)
+
+	builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, msb.MaxIds, msb.FileName, msb.tier, msb.sequencer, rec.Len())
+	builder.Files = append(builder.Files, msb.Files...)
+	builder.pkRec = append(builder.pkRec, msb.pkRec...)
+	builder.pkMark = append(builder.pkMark, msb.pkMark...)
+	builder.WithLog(msb.log)
+	return builder, nil
+}
+
+func (b *MsBuilder) NewPKIndexWriter() {
+	b.pkIndexWriter = sparseindex.NewIndexWriter()
+}
+
+func (b *MsBuilder) writeIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string) error {
+	// Generate the primary key record from the sorted chunk based on the primary key.
+	pkRec, pkMark, err := b.pkIndexWriter.CreatePrimaryIndex(writeRec, pkSchema, colstore.RowsNumPerFragment)
+	if err != nil {
+		return err
+	}
+	indexBuilder := colstore.NewIndexBuilder(&lockpath, filepath)
+	err = indexBuilder.WriteData(pkRec)
+	defer indexBuilder.Reset()
+	if err != nil {
+		return err
+	}
+	b.pkRec = append(b.pkRec, pkRec)
+	b.pkMark = append(b.pkMark, pkMark)
+
+	return nil
+}
+
+func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Schemas, nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
 	rowsLimit := b.Conf.maxRowsPerSegment * b.Conf.maxSegmentLimit
-	msb := b
+
+	// fast path, most data does not reach the threshold for splitting files.
+	if data.RowNums() <= rowsLimit {
+		if err := b.WriteData(id, data); err != nil {
+			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
+			return b, err
+		}
+
+		if len(schema) != 0 { // write index, works for colstore
+			dataFilePath := b.FileName.String()
+			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath))
+			if err := b.writeIndex(data, schema, indexFilePath, *b.lock); err != nil {
+				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
+				return b, err
+			}
+		}
+
+		fSize := b.Size()
+		if fSize < b.Conf.fileSizeLimit || nextFile == nil {
+			return b, nil
+		}
+
+		return switchTsspFile(b, data, data, rowsLimit, fSize, nextFile)
+	}
+
+	// slow path
 	recs := data.Split(nil, rowsLimit)
 	for i := range recs {
-		if err := msb.WriteData(id, &recs[i]); err != nil {
-			msb.log.Error("write data record fail", zap.String("file", msb.fd.Name()), zap.Error(err))
-			return msb, err
+		err := b.WriteData(id, &recs[i])
+		if err != nil {
+			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
+			return b, err
+		}
+		if len(schema) != 0 { // write index, works for colstore
+			dataFilePath := b.FileName.String()
+			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath))
+			if err := b.writeIndex(&recs[i], schema, indexFilePath, *b.lock); err != nil {
+				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
+				return b, err
+			}
 		}
 
-		fSize := msb.Size()
+		fSize := b.Size()
 		if (i < len(recs)-1 || fSize >= b.Conf.fileSizeLimit) && nextFile != nil {
-			f, err := msb.NewTSSPFile(true)
+			b, err = switchTsspFile(b, &recs[i], data, rowsLimit, fSize, nextFile)
 			if err != nil {
-				msb.log.Error("new file fail", zap.String("file", msb.fd.Name()), zap.Error(err))
-				return msb, err
+				return b, err
 			}
-
-			msb.log.Info("switch tssp file",
-				zap.String("file", f.Path()),
-				zap.Int("rowsLimit", rowsLimit),
-				zap.Int("rows", data.RowNums()),
-				zap.Int64("fileSize", fSize),
-				zap.Int64("sizeLimit", b.Conf.fileSizeLimit))
-
-			msb.Files = append(msb.Files, f)
-			seq, lv, merge, ext := nextFile(msb.FileName)
-			msb.FileName.SetSeq(seq)
-			msb.FileName.SetMerge(merge)
-			msb.FileName.SetExtend(ext)
-			msb.FileName.SetLevel(lv)
-			n := msb.MaxIds
-			builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, n, msb.FileName, msb.tier, msb.sequencer, recs[i].Len())
-			builder.Files = append(builder.Files, msb.Files...)
-			builder.WithLog(msb.log)
-			msb = builder
+			if len(schema) != 0 { // need to init indexwriter after switch tssp file, i.e. new b
+				b.NewPKIndexWriter()
+			}
 		}
 	}
-	return msb, nil
+	return b, nil
 }
 
 func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
@@ -294,7 +374,7 @@ func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
 
 	dr, err := CreateTSSPFileReader(b.fileSize, b.fd, b.trailer, &b.TableData, b.FileVersion(), tmp, b.lock)
 	if err != nil {
-		b.log.Error("create tssp file reader fail", zap.String("name", dr.Path()), zap.Error(err))
+		b.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
 		return nil, err
 	}
 
@@ -317,7 +397,7 @@ func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
 	}
 
 	///todo for test check, delete after the version is stable
-	validateFileName(b.FileName, dr.Path(), b.lock)
+	validateFileName(b.FileName, dr.FileName(), b.lock)
 	return &tsspFile{
 		name:   b.FileName,
 		reader: dr,
@@ -446,13 +526,15 @@ func (b *MsBuilder) genBloomFilter() {
 		b.bloomFilter = make([]byte, bmBytes)
 	} else {
 		b.bloomFilter = b.bloomFilter[:bmBytes]
-		record.MemorySet(b.bloomFilter)
+		util.MemorySet(b.bloomFilter)
 	}
 	b.trailer.bloomM = bm
 	b.trailer.bloomK = bk
 	b.bf, _ = bloom.NewFilterBuffer(b.bloomFilter, bk)
+	bytes := make([]byte, 8)
 	for id := range b.keys {
-		b.bf.Insert(record.Uint64ToBytes(id))
+		binary.BigEndian.PutUint64(bytes, id)
+		b.bf.Insert(bytes)
 	}
 }
 
@@ -462,7 +544,7 @@ func (b *MsBuilder) Flush() error {
 	}
 
 	if b.mIndex.count > 0 {
-		offBytes := record.Uint32Slice2ByteBigEndian(b.cmOffset)
+		offBytes := numberenc.MarshalUint32SliceAppend(nil, b.cmOffset)
 		_, err := b.diskFileWriter.WriteChunkMeta(offBytes)
 		if err != nil {
 			b.log.Error("write chunk meta fail", zap.String("name", b.fd.Name()), zap.Error(err))
@@ -508,10 +590,10 @@ func (b *MsBuilder) Flush() error {
 	}
 
 	if b.sequencer != nil {
-		b.sequencer.BatchUpdate(&b.pair)
+		b.sequencer.BatchUpdateCheckTime(&b.pair, false)
 	}
 
-	b.encIdTime = b.pair.Marshal(b.FileName.order, b.encIdTime[:0], b.chunkBuilder.colBuilder.coder)
+	b.encIdTime = b.pair.Marshal(b.FileName.order || b.trailer.EqualData(IndexOfTimeStoreFlag, TimeStoreFlag), b.encIdTime[:0], b.chunkBuilder.colBuilder.coder)
 	b.trailer.idTimeSize = int64(len(b.encIdTime))
 	if _, err := b.diskFileWriter.WriteData(b.encIdTime); err != nil {
 		b.log.Error("write id time data fail", zap.String("name", b.fd.Name()), zap.Error(err))
@@ -593,6 +675,18 @@ func (b *MsBuilder) cacheMetaInMemory() bool {
 	}
 
 	return b.Conf.cacheMetaData
+}
+
+func (b *MsBuilder) GetPKInfoNum() int {
+	return len(b.pkRec)
+}
+
+func (b *MsBuilder) GetPKRecord(i int) *record.Record {
+	return b.pkRec[i]
+}
+
+func (b *MsBuilder) GetPKMark(i int) fragment.IndexFragment {
+	return b.pkMark[i]
 }
 
 func ReleaseMsBuilder(msb *MsBuilder) {

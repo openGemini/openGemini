@@ -19,6 +19,7 @@ package codec
 import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 func AppendInt(b []byte, i int) []byte {
@@ -91,7 +92,7 @@ func AppendInt16Slice(b []byte, a []int16) []byte {
 		return b
 	}
 
-	b = append(b, record.Int16Slice2byte(a)...)
+	b = append(b, util.Int16Slice2byte(a)...)
 	return b
 }
 
@@ -101,7 +102,7 @@ func AppendInt32Slice(b []byte, a []int32) []byte {
 		return b
 	}
 
-	b = append(b, record.Int32Slice2byte(a)...)
+	b = append(b, util.Int32Slice2byte(a)...)
 	return b
 }
 
@@ -111,7 +112,7 @@ func AppendInt64Slice(b []byte, a []int64) []byte {
 		return b
 	}
 
-	b = append(b, record.Int64Slice2byte(a)...)
+	b = append(b, util.Int64Slice2byte(a)...)
 	return b
 }
 
@@ -121,7 +122,7 @@ func AppendUint16Slice(b []byte, a []uint16) []byte {
 		return b
 	}
 
-	b = append(b, record.Uint16Slice2byte(a)...)
+	b = append(b, util.Uint16Slice2byte(a)...)
 	return b
 }
 
@@ -131,7 +132,7 @@ func AppendUint32Slice(b []byte, a []uint32) []byte {
 		return b
 	}
 
-	b = append(b, record.Uint32Slice2byte(a)...)
+	b = append(b, util.Uint32Slice2byte(a)...)
 	return b
 }
 
@@ -141,7 +142,7 @@ func AppendUint64Slice(b []byte, a []uint64) []byte {
 		return b
 	}
 
-	b = append(b, record.Uint64Slice2byte(a)...)
+	b = append(b, util.Uint64Slice2byte(a)...)
 	return b
 }
 
@@ -151,7 +152,7 @@ func AppendFloat32Slice(b []byte, a []float32) []byte {
 		return b
 	}
 
-	b = append(b, record.Float32Slice2byte(a)...)
+	b = append(b, util.Float32Slice2byte(a)...)
 	return b
 }
 
@@ -161,7 +162,7 @@ func AppendFloat64Slice(b []byte, a []float64) []byte {
 		return b
 	}
 
-	b = append(b, record.Float64Slice2byte(a)...)
+	b = append(b, util.Float64Slice2byte(a)...)
 	return b
 }
 
@@ -171,7 +172,7 @@ func AppendBoolSlice(b []byte, a []bool) []byte {
 		return b
 	}
 
-	b = append(b, record.BooleanSlice2byte(a)...)
+	b = append(b, util.BooleanSlice2byte(a)...)
 	return b
 }
 

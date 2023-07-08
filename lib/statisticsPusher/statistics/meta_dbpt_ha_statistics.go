@@ -31,6 +31,7 @@ const (
 	metaDbptTasks = "meta_dbpt_tasks"
 )
 
+var statBufPool = bufferpool.NewByteBufferPool(0)
 var MetaTaskInstance *MetaTaskDuration
 
 func init() {
@@ -118,9 +119,10 @@ func MetaDBPTStepDuration(event string, opId uint64, step string, src, dst uint6
 		"Status":    int64(task.status),
 		"Err":       task.err,
 	}
-	buff := bufferpool.Get()
+	buff := statBufPool.Get()
 	point := AddTimeToBuffer(metaDbptTasks, tagMap, valueMap, task.time, buff)
 	MetaTaskInstance.sendPointToChan(point)
+	statBufPool.Put(point)
 
 	if status != DBPTLoading {
 		task.tries--
@@ -137,19 +139,15 @@ func MetaDBPTStepDuration(event string, opId uint64, step string, src, dst uint6
 }
 
 func (s *MetaTaskDuration) sendPointToChan(point []byte) {
-	MetaTaskInstance.pointMu.Lock()
-	MetaTaskInstance.loadPoints = append(MetaTaskInstance.loadPoints, point...)
-	MetaTaskInstance.pointMu.Unlock()
+	s.pointMu.Lock()
+	s.loadPoints = append(s.loadPoints, point...)
+	s.pointMu.Unlock()
 }
 
 func (s *MetaTaskDuration) Collect(buffer []byte) ([]byte, error) {
 	s.pointMu.Lock()
-	points := s.loadPoints
+	buffer = append(buffer, s.loadPoints...)
 	s.loadPoints = s.loadPoints[:0]
 	s.pointMu.Unlock()
-	if len(points) > 0 {
-		buffer = append(buffer, points...)
-		bufferpool.Put(points)
-	}
 	return buffer, nil
 }

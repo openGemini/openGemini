@@ -42,8 +42,11 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
+	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
@@ -63,7 +66,7 @@ func init() {
 	immutable.EnableMergeOutOfOrder = false
 	logger.InitLogger(config.NewLogger(config.AppStore))
 	immutable.Init()
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 }
 
 const defaultDb = "db0"
@@ -197,6 +200,24 @@ func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interva
 	return pts, pts[0].Timestamp, pts[len(pts)-1].Timestamp
 }
 
+func genRecord() *record.Record {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+
+	return rec
+}
+
 // create field aux, if input slice is nil, means create for all default fields
 func createFieldAux(fieldsName []string) []influxql.VarRef {
 	var fieldAux []influxql.VarRef
@@ -218,7 +239,7 @@ func createFieldAux(fieldsName []string) []influxql.VarRef {
 	return fieldAux
 }
 
-func createShard(db, rp string, ptId uint32, pathName string) (*shard, error) {
+func createShard(db, rp string, ptId uint32, pathName string, engineType config.EngineType, duration ...time.Duration) (*shard, error) {
 	dataPath := pathName + "/data"
 	walPath := pathName + "/wal"
 	lockPath := filepath.Join(dataPath, "LOCK")
@@ -241,7 +262,7 @@ func createShard(db, rp string, ptId uint32, pathName string) (*shard, error) {
 		return nil, err
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
-	indexRelation, err := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+	indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
 	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
 	err = indexBuilder.Open()
 	if err != nil {
@@ -251,8 +272,12 @@ func createShard(db, rp string, ptId uint32, pathName string) (*shard, error) {
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1970-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2099-01-01T01:00:00Z")}
 	shardIdent := &meta.ShardIdentifier{ShardID: defaultShardId, ShardGroupID: 1, OwnerDb: db, OwnerPt: ptId, Policy: rp}
-	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption)
+	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
 	sh.indexBuilder = indexBuilder
+	sh.storage.SetClient(&MockMetaClient{})
+	if len(duration) > 0 {
+		sh.SetWriteColdDuration(duration[0])
+	}
 	if err := sh.OpenAndEnable(nil); err != nil {
 		_ = sh.Close()
 		return nil, err
@@ -307,7 +332,7 @@ func genQuerySchema(fieldAux []influxql.VarRef, opt *query.ProcessorOptions) *ex
 		fields = append(fields, f)
 		columnNames = append(columnNames, fieldAux[i].Val)
 	}
-	return executor.NewQuerySchema(fields, columnNames, opt)
+	return executor.NewQuerySchema(fields, columnNames, opt, nil)
 }
 
 func genQueryOpt(tc *TestCase, msName string, ascending bool) *query.ProcessorOptions {
@@ -483,7 +508,7 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 		var emptyKeys []string
 		for k, v := range mm {
 			rec := v.rec
-			filterRec := immutable.FilterByField(rec, valueMap, opt.GetCondition(), idFields, idTags, &v.tags)
+			filterRec := immutable.FilterByField(rec, nil, valueMap, opt.GetCondition(), nil, idFields, idTags, &v.tags, binaryfilterfunc.CondFunctions{}, nil)
 			if filterRec == nil {
 				emptyKeys = append(emptyKeys, k)
 			} else {
@@ -685,7 +710,8 @@ func checkQueryResultForSingleCursorNew(cur comm.KeyCursor, expectRecords *sync.
 					}
 				}
 			}
-			for j := index[len(index)-1]; j < rec.RowNums()-1; j++ {
+			rowNum := rec.RowNums() - 1
+			for j := index[len(index)-1]; j < rowNum; j++ {
 				if v[j] == v[j+1] {
 					continue
 				}
@@ -792,8 +818,9 @@ func checkRecord(query *record.Record, seriesKey string, expectRecords *sync.Map
 		return fmt.Errorf("%v record not equal, exp:%v\nget:%v", name, comp.String(), query.String())
 	}
 	// update map value
-	if rowCnt < r.RowNums() {
-		res.SliceFromRecord(&r, rowCnt, r.RowNums())
+	rowNum := r.RowNums()
+	if rowCnt < rowNum {
+		res.SliceFromRecord(&r, rowCnt, rowNum)
 		expectRecords.Store(seriesKey, res)
 	}
 	return nil
@@ -855,6 +882,7 @@ type TestCase struct {
 	fieldFilter        string            // field filter condition
 	dims               []string          // group by dimensions
 	ascending          bool              // order by time
+	expRecord          *record.Record    // expect record after filter by field
 }
 
 type LimitTestParas struct {
@@ -863,17 +891,17 @@ type LimitTestParas struct {
 }
 
 func TestCreateGroupCursorWithLimiter(t *testing.T) {
-	if e := resourceallocator.InitResAllocator(16, 2, 1, -1, resourceallocator.ChunkReaderRes, 0); e == nil {
+	if e := resourceallocator.InitResAllocator(16, 2, 1, -1, resourceallocator.ChunkReaderRes, 0, 0); e == nil {
 		t.Fatal()
 	}
-	if e := resourceallocator.InitResAllocator(16, 2, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0); e != nil {
+	if e := resourceallocator.InitResAllocator(16, 2, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0); e != nil {
 		t.Fatal(e)
 	}
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -884,7 +912,7 @@ func TestCreateGroupCursorWithLimiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := TestCase{"AllField", startTime, endTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true}
+	c := TestCase{"AllField", startTime, endTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil}
 	opt := genQueryOpt(&c, "mst", true)
 	opt.Limit = 1
 	opt.Offset = 1
@@ -896,7 +924,7 @@ func TestCreateGroupCursorWithLimiter(t *testing.T) {
 	cursors, err := sh.CreateCursor(ctx, querySchema)
 	defer func() {
 		_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum), int64(seriesNum))
-		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
+		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 	}()
 	if len(cursors) != 8 {
 		t.Fatal()
@@ -910,10 +938,180 @@ func TestCreateGroupCursorWithLimiter(t *testing.T) {
 	}
 }
 
+func TestShard_NewColStoreShard(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, false)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	// require.Equal(t, 4*100, int(sh.count))
+	require.NoError(t, closeShard(sh))
+}
+
+func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{"field1_string", "field2_int"}},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 1, len(files))
+	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	require.NoError(t, closeShard(sh))
+	// reopen shard to load data
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkFiles2 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	for _, file := range files {
+		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
+		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		rec1 := pkInfo1.GetRec().ColVals
+		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, len(rec1), len(rec2))
+		for i := range rec1 {
+			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
+		}
+
+		mark1 := pkInfo1.GetMark()
+		mark2 := pkInfo2.GetMark()
+		require.EqualValues(t, mark1, mark2)
+
+		schema1 := pkInfo1.GetRec().Schema
+		schema2 := pkInfo2.GetRec().Schema
+		require.EqualValues(t, schema1, schema2)
+
+		meta1 := pkInfo1.GetRec().RecMeta
+		meta2 := pkInfo2.GetRec().RecMeta
+		require.EqualValues(t, meta1, meta2)
+	}
+	require.NoError(t, closeShard(sh))
+}
+
+func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetConfig()
+	conf.SetMaxSegmentLimit(2)
+	conf.SetMaxRowsPerSegment(5)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{"field1_string", "field2_int"}},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 25, len(files))
+
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(math.MaxUint16)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment)
+	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	require.NoError(t, closeShard(sh))
+	// reopen shard to load data
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkFiles2 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	for _, file := range files {
+		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
+		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		rec1 := pkInfo1.GetRec().ColVals
+		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, len(rec1), len(rec2))
+		for i := range rec1 {
+			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
+		}
+
+		mark1 := pkInfo1.GetMark()
+		mark2 := pkInfo2.GetMark()
+		require.EqualValues(t, mark1, mark2)
+
+		schema1 := pkInfo1.GetRec().Schema
+		schema2 := pkInfo2.GetRec().Schema
+		require.EqualValues(t, schema1, schema2)
+
+		meta1 := pkInfo1.GetRec().RecMeta
+		meta2 := pkInfo2.GetRec().RecMeta
+		require.EqualValues(t, meta1, meta2)
+	}
+	require.NoError(t, closeShard(sh))
+}
+
 func TestShard_AsyncWalReplay_serial(t *testing.T) {
 	testDir := t.TempDir()
 	// step1: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -924,7 +1122,7 @@ func TestShard_AsyncWalReplay_serial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	require.Equal(t, 4*100, int(sh.count))
+	require.Equal(t, 4*100, int(sh.rowCount))
 	err = sh.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -933,7 +1131,7 @@ func TestShard_AsyncWalReplay_serial(t *testing.T) {
 	copyOptions.WalReplayAsync = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.TSSTORE)
 	newSh.indexBuilder = sh.indexBuilder
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
@@ -945,7 +1143,7 @@ func TestShard_AsyncWalReplay_serial(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
-	require.Equal(t, 800, int(newSh.count))
+	require.Equal(t, 800, int(newSh.rowCount))
 
 	if err = closeShard(newSh); err != nil {
 		t.Fatal(err)
@@ -955,7 +1153,7 @@ func TestShard_AsyncWalReplay_serial(t *testing.T) {
 func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	testDir := t.TempDir()
 	// step1: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -966,7 +1164,7 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	require.Equal(t, 4*100, int(sh.count))
+	require.Equal(t, 4*100, int(sh.rowCount))
 	err = sh.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -976,7 +1174,7 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	copyOptions.WalReplayParallel = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.TSSTORE)
 	newSh.indexBuilder = sh.indexBuilder
 	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
@@ -991,7 +1189,7 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(1 * time.Second)
-	require.GreaterOrEqual(t, 800, int(newSh.count))
+	require.GreaterOrEqual(t, 800, int(newSh.rowCount))
 
 	if err = closeShard(newSh); err != nil {
 		t.Fatal(err)
@@ -1011,7 +1209,7 @@ func TestChangeShardTierToWarm(t *testing.T) {
 		_ = os.RemoveAll(testDir)
 
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1027,10 +1225,11 @@ func TestChangeShardTierToWarm(t *testing.T) {
 			t.Fatal("Chang Shard to Warm Faled")
 		}
 		sh.endTime = mustParseTime(time.RFC3339Nano, "2019-01-01T01:00:00Z")
-		sh.durationInfo.Tier = 2
-		tier, exp := sh.TierDurationExpired()
-		if tier != 2 || !exp {
-			t.Fatal("Chang Shard to Warm Faled")
+		sh.durationInfo.Tier = util.Warm
+		tier := sh.GetTier()
+		exp := sh.IsTierExpired()
+		if tier != util.Warm || !exp {
+			t.Fatal("Change Shard to Warm Failed")
 		}
 		err = closeShard(sh)
 		if err != nil {
@@ -1053,7 +1252,7 @@ func TestShardTierToDownSampleShard(t *testing.T) {
 		_ = os.RemoveAll(testDir)
 
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1069,6 +1268,59 @@ func TestShardTierToDownSampleShard(t *testing.T) {
 
 }
 
+func TestWriteExceptionError(t *testing.T) {
+	testDir := t.TempDir()
+
+	// step1: clean env
+	_ = os.RemoveAll(testDir)
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.ident.ReadOnly = true
+
+	setDownSampleWriteDrop(false)
+	defer setDownSampleWriteDrop(true)
+
+	rows, _, _ := GenDataRecord([]string{"cpu"}, 2, 2, time.Second, time.Now(), false, true, false)
+	err = writeData(sh, rows, true)
+	if err == nil {
+		t.Fatal("setDownSampleWriteDrop failed")
+	}
+
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteInterruptError(t *testing.T) {
+	testDir := t.TempDir()
+
+	// step1: clean env
+	_ = os.RemoveAll(testDir)
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, _, _ := GenDataRecord([]string{"cpu"}, 2, 2, time.Second, time.Now(), false, true, false)
+
+	sh.closed.Close()
+	err = writeData(sh, rows, true)
+	require.Equal(t, err.Error(), "shard closed 1")
+
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+}
+
 func TestAggQueryOnlyInImmutable(t *testing.T) {
 	testDir := t.TempDir()
 	configs := []TestConfig{
@@ -1077,23 +1329,23 @@ func TestAggQueryOnlyInImmutable(t *testing.T) {
 		{30, 2, time.Second, false},
 		{50, 3, time.Second, false},
 	}
-	for _, config := range configs {
-		immutable.EnableMmapRead(false)
+	for _, conf := range configs {
+		fileops.EnableMmapRead(false)
 		executor.EnableFileCursor(true)
-		if testing.Short() && config.short {
+		if testing.Short() && conf.short {
 			t.Skip("skipping test in short mode.")
 		}
 		// step1: clean env
 		_ = os.RemoveAll(testDir)
 
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-		rows, minTime, maxTime, result := GenAggDataRecord([]string{"cpu"}, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now(), false, true, false)
+		rows, minTime, maxTime, result := GenAggDataRecord([]string{"cpu"}, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, false)
 		err = writeData(sh, rows, true)
 		if err != nil {
 			t.Fatal(err)
@@ -1121,7 +1373,7 @@ func TestAggQueryOnlyInImmutable(t *testing.T) {
 					ascending := ascending
 					t.Run(c.Name, func(t *testing.T) {
 						for i := range c.aggCall {
-							opt := genAggQueryOpt(&c, "cpu", ascending, size, config.interval)
+							opt := genAggQueryOpt(&c, "cpu", ascending, size, conf.interval)
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
@@ -1163,10 +1415,10 @@ func TestAggQueryOnlyInMemtable(t *testing.T) {
 	configs := []TestConfig{
 		{50, 3, time.Second, true},
 	}
-	for _, config := range configs {
-		immutable.EnableMmapRead(false)
+	for _, conf := range configs {
+		fileops.EnableMmapRead(false)
 		executor.EnableFileCursor(true)
-		if testing.Short() && config.short {
+		if testing.Short() && conf.short {
 			t.Skip("skipping test in short mode.")
 		}
 		// step1: clean env
@@ -1175,18 +1427,18 @@ func TestAggQueryOnlyInMemtable(t *testing.T) {
 			t.Fatal(err)
 		}
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-		rows, minTime, maxTime, _ := GenAggDataRecord([]string{"cpu"}, config.seriesNum-10, config.pointNumPerSeries, config.interval, time.Now(), false, true, false)
+		rows, minTime, _, _ := GenAggDataRecord([]string{"cpu"}, conf.seriesNum-10, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, false)
 		err = writeData(sh, rows, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows2, _, maxTime, result := GenAggDataRecord([]string{"cpu"}, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now().Add(time.Second*1000), false, true, false)
+		rows2, _, maxTime, result := GenAggDataRecord([]string{"cpu"}, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now().Add(time.Second*1000), false, true, false)
 		err = writeData(sh, rows2, false)
 		if err != nil {
 			t.Fatal(err)
@@ -1205,7 +1457,7 @@ func TestAggQueryOnlyInMemtable(t *testing.T) {
 					ascending := ascending
 					t.Run(c.Name, func(t *testing.T) {
 						for i := range c.aggCall {
-							opt := genAggQueryOpt(&c, "cpu", ascending, size, config.interval)
+							opt := genAggQueryOpt(&c, "cpu", ascending, size, conf.interval)
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
@@ -1250,23 +1502,23 @@ func TestAggQueryOnlyInImmutable_NoEmpty(t *testing.T) {
 		{30, 2, time.Second, false},
 		{50, 3, time.Second, false},
 	}
-	for _, config := range configs {
-		immutable.EnableMmapRead(false)
+	for _, conf := range configs {
+		fileops.EnableMmapRead(false)
 		executor.EnableFileCursor(true)
-		if testing.Short() && config.short {
+		if testing.Short() && conf.short {
 			t.Skip("skipping test in short mode.")
 		}
 		// step1: clean env
 		_ = os.RemoveAll(testDir)
 
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-		rows, minTime, maxTime, result := GenAggDataRecord([]string{"cpu"}, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now(), true, true, true)
+		rows, minTime, maxTime, result := GenAggDataRecord([]string{"cpu"}, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), true, true, true)
 		err = writeData(sh, rows, true)
 		if err != nil {
 			t.Fatal(err)
@@ -1294,7 +1546,7 @@ func TestAggQueryOnlyInImmutable_NoEmpty(t *testing.T) {
 					ascending := ascending
 					t.Run(c.Name, func(t *testing.T) {
 						for i := range c.aggCall {
-							opt := genAggQueryOpt(&c, "cpu", ascending, size, config.interval)
+							opt := genAggQueryOpt(&c, "cpu", ascending, size, conf.interval)
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
@@ -1336,10 +1588,10 @@ func TestAggQueryOnlyInMemtable_NoEmpty(t *testing.T) {
 	configs := []TestConfig{
 		{50, 3, time.Second, false},
 	}
-	for _, config := range configs {
-		immutable.EnableMmapRead(false)
+	for _, conf := range configs {
+		fileops.EnableMmapRead(false)
 		executor.EnableFileCursor(true)
-		if testing.Short() && config.short {
+		if testing.Short() && conf.short {
 			t.Skip("skipping test in short mode.")
 		}
 		// step1: clean env
@@ -1348,18 +1600,18 @@ func TestAggQueryOnlyInMemtable_NoEmpty(t *testing.T) {
 			t.Fatal(err)
 		}
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-		rows, minTime, maxTime, _ := GenAggDataRecord([]string{"cpu"}, config.seriesNum-10, config.pointNumPerSeries, config.interval, time.Now(), true, true, false)
+		rows, minTime, _, _ := GenAggDataRecord([]string{"cpu"}, conf.seriesNum-10, conf.pointNumPerSeries, conf.interval, time.Now(), true, true, false)
 		err = writeData(sh, rows, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		rows2, _, maxTime, result := GenAggDataRecord([]string{"cpu"}, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now().Add(time.Second*1000), false, true, false)
+		rows2, _, maxTime, result := GenAggDataRecord([]string{"cpu"}, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now().Add(time.Second*1000), false, true, false)
 		err = writeData(sh, rows2, false)
 		if err != nil {
 			t.Fatal(err)
@@ -1378,7 +1630,7 @@ func TestAggQueryOnlyInMemtable_NoEmpty(t *testing.T) {
 					ascending := ascending
 					t.Run(c.Name, func(t *testing.T) {
 						for i := range c.aggCall {
-							opt := genAggQueryOpt(&c, "cpu", ascending, size, config.interval)
+							opt := genAggQueryOpt(&c, "cpu", ascending, size, conf.interval)
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
@@ -1435,7 +1687,7 @@ func TestQueryOnlyInImmutable(t *testing.T) {
 			_ = os.RemoveAll(testDir)
 
 			// step2: create shard
-			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1449,18 +1701,18 @@ func TestQueryOnlyInImmutable(t *testing.T) {
 			for nameIdx := range msNames {
 				// query data and judge
 				cases := []TestCase{
-					{"AllFieldFilter", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
-					{"PartFieldFilter", minTime, maxTime, createFieldAux([]string{"field1_string", "field3_bool"}), "field2_int < 5 AND field4_float < 10.0", nil, true},
-					{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true},
-					{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true},
-					{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true},
-					{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-					{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-					{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-					{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-					{"OverlapTime2", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-					{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
-					{"TagNotEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
+					{"AllFieldFilter", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+					{"PartFieldFilter", minTime, maxTime, createFieldAux([]string{"field1_string", "field3_bool"}), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+					{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+					{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+					{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+					{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+					{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+					{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+					{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+					{"OverlapTime2", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+					{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
+					{"TagNotEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
 				}
 
 				timeOrder := []bool{true, false}
@@ -1522,7 +1774,7 @@ func TestQueryOnlyInImmutableWithLimit(t *testing.T) {
 			_ = os.RemoveAll(testDir)
 
 			// step2: create shard
-			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1536,17 +1788,17 @@ func TestQueryOnlyInImmutableWithLimit(t *testing.T) {
 			for nameIdx := range msNames {
 				// query data and judge
 				cases := []TestCase{
-					{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
-					{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true},
-					{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true},
-					{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true},
-					{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-					{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-					{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-					{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-					{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-					{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
-					{"TagNotEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
+					{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+					{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+					{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+					{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+					{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+					{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+					{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+					{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+					{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+					{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
+					{"TagNotEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
 				}
 
 				timeOrder := []bool{true, false}
@@ -1610,7 +1862,7 @@ func TestQueryOnlyInImmutableWithLimit_Lazy(t *testing.T) {
 			_ = os.RemoveAll(testDir)
 
 			// step2: create shard
-			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1624,7 +1876,7 @@ func TestQueryOnlyInImmutableWithLimit_Lazy(t *testing.T) {
 			for nameIdx := range msNames {
 				// query data and judge
 				cases := []TestCase{
-					{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
+					{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
 				}
 
 				timeOrder := []bool{true, false}
@@ -1702,7 +1954,7 @@ func TestQueryOnlyInImmutableWithLimitOptimize(t *testing.T) {
 			_ = os.RemoveAll(testDir)
 
 			// step2: create shard
-			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1724,7 +1976,7 @@ func TestQueryOnlyInImmutableWithLimitOptimize(t *testing.T) {
 			for nameIdx := range msNames {
 				// query data and judge
 				cases := []TestCase{
-					{"AllField", minTime, maxTime, createFieldAux(nil), "", nil, true},
+					{"AllField", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
 				}
 
 				timeOrder := []bool{true, false}
@@ -1790,7 +2042,7 @@ func TestQueryOnlyInImmutableWithLimitWithGroupBy(t *testing.T) {
 			os.RemoveAll(testDir)
 
 			// step2: create shard
-			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1804,10 +2056,10 @@ func TestQueryOnlyInImmutableWithLimitWithGroupBy(t *testing.T) {
 			for nameIdx := range msNames {
 				// query data and judge
 				cases := []TestCase{
-					{"AllDims", minTime, maxTime, createFieldAux(nil), "", []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"}, false},
-					{"PartDims1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", []string{"tagkey1", "tagkey2"}, false},
-					{"PartDims2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey3", "tagkey4"}, false},
-					{"PartDims3", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey1"}, false},
+					{"AllDims", minTime, maxTime, createFieldAux(nil), "", []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"}, false, nil},
+					{"PartDims1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", []string{"tagkey1", "tagkey2"}, false, nil},
+					{"PartDims2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey3", "tagkey4"}, false, nil},
+					{"PartDims3", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey1"}, false, nil},
 				}
 
 				for _, c := range cases {
@@ -1872,7 +2124,7 @@ func TestQueryOnlyInImmutableGroupBy(t *testing.T) {
 			_ = os.RemoveAll(testDir)
 
 			// step2: create shard
-			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+			sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1886,10 +2138,10 @@ func TestQueryOnlyInImmutableGroupBy(t *testing.T) {
 			for nameIdx := range msNames {
 				// query data and judge
 				cases := []TestCase{
-					{"AllDims", minTime, maxTime, createFieldAux(nil), "", []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"}, false},
-					{"PartDims1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", []string{"tagkey1", "tagkey2"}, false},
-					{"PartDims2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey3", "tagkey4"}, false},
-					{"PartDims3", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey1"}, false},
+					{"AllDims", minTime, maxTime, createFieldAux(nil), "", []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"}, false, nil},
+					{"PartDims1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", []string{"tagkey1", "tagkey2"}, false, nil},
+					{"PartDims2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey3", "tagkey4"}, false, nil},
+					{"PartDims3", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", []string{"tagkey1"}, false, nil},
 				}
 
 				timeOrder := []bool{true, false}
@@ -1950,14 +2202,12 @@ func TestQueryOnlyInMutableTable(t *testing.T) {
 		_ = os.RemoveAll(testDir)
 
 		// step2: create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE, 1000*time.Second) // not flush data to snapshot
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		// not flush data to snapshot
-		sh.SetWriteColdDuration(1000 * time.Second)
-		sh.SetMutableSizeLimit(10000000000)
+		mutable.SetSizeLimit(10000000000)
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 		rows, minTime, maxTime := GenDataRecord(msNames, configs[index].seriesNum, configs[index].pointNumPerSeries, configs[index].interval, time.Now(), false, true, false)
@@ -1968,17 +2218,17 @@ func TestQueryOnlyInMutableTable(t *testing.T) {
 		for nameIdx := range msNames {
 			// query data and judge
 			cases := []TestCase{
-				{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
-				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
-				{"TagNotEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
+				{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
+				{"TagNotEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
 			}
 
 			timeOrder := []bool{true, false}
@@ -2041,7 +2291,7 @@ func TestQueryImmutableUnorderedNoOverlap(t *testing.T) {
 		}
 		_ = os.RemoveAll(testDir)
 		// create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2069,16 +2319,16 @@ func TestQueryImmutableUnorderedNoOverlap(t *testing.T) {
 
 			// query data and judge
 			cases := []TestCase{
-				{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
-				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"OverlapTime1", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
+				{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"OverlapTime1", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
 			}
 
 			timeOrder := []bool{true, false}
@@ -2139,7 +2389,7 @@ func TestQueryMutableUnorderedNoOverlap(t *testing.T) {
 		}
 		_ = os.RemoveAll(testDir)
 		// create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2166,16 +2416,16 @@ func TestQueryMutableUnorderedNoOverlap(t *testing.T) {
 		for nameIdx := range msNames {
 			// query data and judge
 			cases := []TestCase{
-				{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
-				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true},
+				{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, true, nil},
 			}
 
 			timeOrder := []bool{true, false}
@@ -2235,7 +2485,7 @@ func TestQueryImmutableSequenceWrite(t *testing.T) {
 		}
 		_ = os.RemoveAll(testDir)
 		// create shard
-		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2264,16 +2514,16 @@ func TestQueryImmutableSequenceWrite(t *testing.T) {
 		for nameIdx := range msNames {
 			// query data and judge
 			cases := []TestCase{
-				{"AllField", minTime, maxTime2, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true},
-				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"BeyondMaxTime", maxTime2 + int64(time.Second), maxTime2 + int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"OverlapTime", minTime + 20*int64(time.Second), maxTime2 - 10*int64(time.Second), createFieldAux(nil), "", nil, true},
-				{"partField1", minTime, maxTime2, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"partField2", minTime, maxTime2, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true},
-				{"BeyondMaxTime + partField2", maxTime2 + int64(time.Second), maxTime2 + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"OverlapTime2", minTime + 10*int64(time.Second), maxTime2 - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true},
-				{"TagEqual", minTime, maxTime2, createFieldAux(nil), "", nil, true},
+				{"AllField", minTime, maxTime2, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil},
+				{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"BeyondMaxTime", maxTime2 + int64(time.Second), maxTime2 + int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"OverlapTime", minTime + 20*int64(time.Second), maxTime2 - 10*int64(time.Second), createFieldAux(nil), "", nil, true, nil},
+				{"partField1", minTime, maxTime2, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"partField2", minTime, maxTime2, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, true, nil},
+				{"BeyondMaxTime + partField2", maxTime2 + int64(time.Second), maxTime2 + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"OverlapTime2", minTime + 10*int64(time.Second), maxTime2 - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, true, nil},
+				{"TagEqual", minTime, maxTime2, createFieldAux(nil), "", nil, true, nil},
 			}
 
 			for _, c := range cases {
@@ -2313,8 +2563,8 @@ func TestQueryImmutableSequenceWrite(t *testing.T) {
 
 func TestQueryOnlyInImmutableReload(t *testing.T) {
 	testDir := t.TempDir()
-	config := TestConfig{100, 1001, time.Second, false}
-	if testing.Short() && config.short {
+	conf := TestConfig{100, 1001, time.Second, false}
+	if testing.Short() && conf.short {
 		t.Skip("skipping test in short mode.")
 	}
 	msNames := []string{"cpu", "cpu1", "disk"}
@@ -2322,13 +2572,13 @@ func TestQueryOnlyInImmutableReload(t *testing.T) {
 	_ = os.RemoveAll(testDir)
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
-	rows, minTime, maxTime := GenDataRecord(msNames, config.seriesNum, config.pointNumPerSeries, config.interval, time.Now(), false, true, false)
+	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, false)
 	err = writeData(sh, rows, true)
 	if err != nil {
 		t.Fatal(err)
@@ -2339,7 +2589,8 @@ func TestQueryOnlyInImmutableReload(t *testing.T) {
 	}
 
 	lockPath := ""
-	sh.immTables = immutable.NewTableStore(sh.tsspPath, &lockPath, &sh.tier, true, immutable.NewConfig())
+	sh.immTables = immutable.NewTableStore(sh.filesPath, &lockPath, &sh.tier, true, immutable.NewConfig())
+	sh.immTables.SetImmTableType(config.TSSTORE)
 	if _, err = sh.immTables.Open(); err != nil {
 		t.Fatal(err)
 	}
@@ -2347,16 +2598,16 @@ func TestQueryOnlyInImmutableReload(t *testing.T) {
 	for nameIdx := range msNames {
 		// query data and judge
 		cases := []TestCase{
-			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false},
-			{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, false},
-			{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, false},
-			{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, false},
-			{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false},
-			{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false},
-			{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false},
-			{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false},
-			{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false},
-			{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, false},
+			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false, nil},
+			{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, false, nil},
+			{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, false, nil},
+			{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, false, nil},
+			{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false, nil},
+			{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false, nil},
+			{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false, nil},
+			{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false, nil},
+			{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false, nil},
+			{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, false, nil},
 		}
 
 		ascending := true
@@ -2482,7 +2733,7 @@ func TestFreeSequencer(t *testing.T) {
 	msNames := []string{"cpu", "cpu1"}
 	lockPath := ""
 
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2510,8 +2761,11 @@ func TestFreeSequencer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lastFlushTime, rowCnt := sh.immTables.Sequencer().Get(msNames[0], id)
-	sh.immTables.UnRefSequencer()
+
+	seq := sh.immTables.Sequencer()
+	lastFlushTime, rowCnt := seq.Get(msNames[0], id)
+	seq.UnRef()
+
 	assert2.Equal(t, true, rowCnt != 0)
 	// free sequencer
 	if !sh.immTables.FreeSequencer() {
@@ -2519,24 +2773,27 @@ func TestFreeSequencer(t *testing.T) {
 	}
 
 	// cannot get lastFlushTime after free
-	lastFlushTime2, rowCnt2 := sh.immTables.Sequencer().Get(msNames[0], id)
+	seq = sh.immTables.Sequencer()
+	_, rowCnt2 := seq.Get(msNames[0], id)
+	seq.UnRef()
 	assert2.Equal(t, true, rowCnt2 == 0)
-	sh.immTables.UnRefSequencer()
 
-	// sequencer will be reload after write rows
+	// sequencer will be reloaded after write rows
 	err = writeData(sh, rows, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	isloading := sh.immTables.Sequencer().IsLoading()
+	seq = sh.immTables.Sequencer()
+	isloading := seq.IsLoading()
 	for isloading {
 		// waiting sequencer load success
-		isloading = sh.immTables.Sequencer().IsLoading()
+		isloading = seq.IsLoading()
+		time.Sleep(time.Second / 10)
 	}
-	lastFlushTime2, rowCnt2 = sh.immTables.Sequencer().Get(msNames[0], id)
+	lastFlushTime2, _ := seq.Get(msNames[0], id)
+	seq.UnRef()
 	assert2.Equal(t, true, lastFlushTime == lastFlushTime2)
-	sh.immTables.UnRefSequencer()
 }
 
 func TestShard_GetSplitPoints(t *testing.T) {
@@ -2544,7 +2801,7 @@ func TestShard_GetSplitPoints(t *testing.T) {
 	msNames := []string{"cpu"}
 	lockPath := ""
 
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2575,7 +2832,7 @@ func TestDropMeasurement(t *testing.T) {
 	msNames := []string{"cpu", "cpu1"}
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2595,12 +2852,12 @@ func TestDropMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store := sh.TableStore()
+	store := sh.GetTableStore()
 
 	if store.GetOutOfOrderFileNum() != 2 {
 		t.Fatal("store.GetOutOfOrderFileNum() != 2")
 	}
-	orderFiles, unorderedFiles := store.GetBothFilesRef(msNames[0], false, record.TimeRange{})
+	orderFiles, unorderedFiles := store.GetBothFilesRef(msNames[0], false, util.TimeRange{})
 	if len(unorderedFiles) != 1 {
 		t.Fatalf("len(unorderedFiles) != 1")
 	}
@@ -2614,7 +2871,7 @@ func TestDropMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orderFiles, unorderedFiles = store.GetBothFilesRef(msNames[1], false, record.TimeRange{})
+	orderFiles, unorderedFiles = store.GetBothFilesRef(msNames[1], false, util.TimeRange{})
 	if len(unorderedFiles) != 1 {
 		t.Fatalf("len(unorderedFiles) != 1")
 	}
@@ -2630,6 +2887,73 @@ func TestDropMeasurement(t *testing.T) {
 	if store.GetOutOfOrderFileNum() != 0 {
 		t.Fatal("store.GetOutOfOrderFileNum() != 0")
 	}
+
+	// step4: close shard
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDropMeasurementForColStore(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetConfig()
+	conf.SetMaxSegmentLimit(2)
+	conf.SetMaxRowsPerSegment(5)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{"field1_string", "field2_int"}},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 25, len(files))
+
+	if err := sh.DropMeasurement(context.TODO(), defaultMeasurementName); err != nil {
+		t.Fatal(err)
+	}
+
+	files = files[:0]
+
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 0, len(files))
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(math.MaxUint16)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment)
 
 	// step4: close shard
 	err = closeShard(sh)
@@ -2764,7 +3088,7 @@ func TestEngine_Statistics_Shard(t *testing.T) {
 		}
 
 		// step2: create shard
-		sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir)
+		sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2778,7 +3102,7 @@ func TestEngine_Statistics_Shard(t *testing.T) {
 
 		var bufferPool = bufferpool.NewByteBufferPool(0)
 		buf := bufferPool.Get()
-		buf, err = sh.Statistics(buf)
+		buf, err = sh.GetStatistics(buf)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2803,7 +3127,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 	_ = os.RemoveAll(testDir)
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2832,7 +3156,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, _ := sh.immTables.GetBothFilesRef("mst", false, record.TimeRange{})
+	files, _ := sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{})
 	if len(files) != 2 {
 		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
 	}
@@ -2845,7 +3169,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, files = sh.immTables.GetBothFilesRef("mst", false, record.TimeRange{})
+	_, files = sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{})
 	if len(files) != 2 {
 		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
 	}
@@ -2854,16 +3178,16 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 	for nameIdx := range msNames {
 		// query data and judge
 		cases := []TestCase{
-			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false},
-			{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, false},
-			{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, false},
-			{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, false},
-			{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false},
-			{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false},
-			{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false},
-			{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false},
-			{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false},
-			{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, false},
+			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false, nil},
+			{"BelowMinTime", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux(nil), "", nil, false, nil},
+			{"BeyondMaxTime", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux(nil), "", nil, false, nil},
+			{"OverlapTime", minTime + 20*int64(time.Second), maxTime - 10*int64(time.Second), createFieldAux(nil), "", nil, false, nil},
+			{"partField1", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false, nil},
+			{"partField2", minTime, maxTime, createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false, nil},
+			{"BelowMinTime + partField1", minTime - int64(time.Second), minTime - int64(time.Second), createFieldAux([]string{"field1_string", "field2_int"}), "", nil, false, nil},
+			{"BeyondMaxTime + partField2", maxTime + int64(time.Second), maxTime + int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false, nil},
+			{"OverlapTime", minTime + 10*int64(time.Second), maxTime - 30*int64(time.Second), createFieldAux([]string{"field3_bool", "field4_float"}), "", nil, false, nil},
+			{"TagEqual", minTime, maxTime, createFieldAux(nil), "", nil, false, nil},
 		}
 
 		ascending := true
@@ -2900,6 +3224,252 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 	}
 }
 
+func TestFilterByFiledWithFastPath(t *testing.T) {
+	msNames := []string{"cpu"}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "field1_string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field2_int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "field3_bool"},
+		record.Field{Type: influx.Field_Type_Float, Name: "field4_float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+		[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+		[]int{1, 1, 1, 1}, []string{"ha", "hb", "hc", "hd"},
+		[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+		[]int64{22, 21, 20, 19})
+	minTime, maxTime := int64(0), int64(22)
+
+	for nameIdx := range msNames {
+		cases := []TestCase{
+			{"AllFieldLTCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int < 1100 AND field1_string < 'hb' OR field4_float < 1002.4", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldLTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				" 1000 < field2_int AND 'hb' < field1_string OR 1001.3 < field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{0, 0, 1100},
+					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
+					[]int{1, 1, 1}, []string{"hb", "hc", "hd"},
+					[]int{1, 1, 1}, []bool{true, false, false},
+					[]int64{21, 20, 19})},
+			{"AllFieldLTECondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int <= 1100 AND field1_string <= 'hb' OR field4_float <= 1002.4", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+					[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+					[]int{1, 1, 1, 1}, []string{"ha", "hb", "hc", "hd"},
+					[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+					[]int64{22, 21, 20, 19})},
+			{"AllFieldLTEConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				" 1000 <= field2_int AND 'hb' <= field1_string OR  1002.4 <= field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{0, 0, 1100},
+					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
+					[]int{1, 1, 1}, []string{"hb", "hc", "hd"},
+					[]int{1, 1, 1}, []bool{true, false, false},
+					[]int64{21, 20, 19})},
+			{"AllFieldGTCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int > 1100 AND field1_string > 'hb' OR field4_float > 1002.4", nil, false, nil},
+			{"AllFieldGTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				" 1100 > field2_int AND 'hb' > field1_string OR 1002.4 > field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldGTECondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int >= 1100 AND field1_string >= 'hb' OR field4_float >= 1002.4", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{0, 0, 1100},
+					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
+					[]int{1, 1, 1}, []string{"hb", "hc", "hd"},
+					[]int{1, 1, 1}, []bool{true, false, false},
+					[]int64{21, 20, 19})},
+			{"AllFieldGTEConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"1100 >= field2_int AND 'hb' >= field1_string OR 1002.4 >= field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+					[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+					[]int{1, 1, 1, 1}, []string{"ha", "hb", "hc", "hd"},
+					[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+					[]int64{22, 21, 20, 19})},
+			{"AllFieldEQCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int = 0 AND field1_string = 'hb' OR field4_float = 1002.4 AND field3_bool = true", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{0},
+					[]int{1}, []float64{1002.4},
+					[]int{1}, []string{"hb"},
+					[]int{1}, []bool{true},
+					[]int64{21})},
+			{"AllFieldNEQCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int != 1000 AND field1_string != 'hd' OR field4_float != 1002.4 AND field3_bool != true", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{0, 0, 1100},
+					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
+					[]int{1, 1, 1}, []string{"hb", "hc", "hd"},
+					[]int{1, 1, 1}, []bool{true, false, false},
+					[]int64{21, 20, 19})},
+		}
+
+		ascending := true
+		for _, c := range cases {
+			c := c
+			t.Run(c.Name, func(t *testing.T) {
+				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
+				querySchema := genQuerySchema(c.fieldAux, opt)
+				var filterConditions []*influxql.VarRef
+				var err error
+				filterConditions, err = getFilterFieldsByExpr(querySchema.Options().GetCondition(), filterConditions[:0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				queryCtx := &QueryCtx{}
+				queryCtx.auxTags, queryCtx.schema = NewRecordSchema(querySchema, queryCtx.auxTags[:0], queryCtx.schema[:0], filterConditions)
+				if queryCtx.auxTags == nil && queryCtx.schema.Len() <= 1 {
+					return
+				}
+				queryCtx.filterFieldsIdx = queryCtx.filterFieldsIdx[:0]
+				queryCtx.filterTags = queryCtx.filterTags[:0]
+				for _, f := range filterConditions {
+					idx := queryCtx.schema.FieldIndex(f.Val)
+					if idx >= 0 && f.Type != influxql.Unknown {
+						queryCtx.filterFieldsIdx = append(queryCtx.filterFieldsIdx, idx)
+					} else if f.Type != influxql.Unknown {
+						queryCtx.filterTags = append(queryCtx.filterTags, f.Val)
+					}
+				}
+				conFunctions, err := binaryfilterfunc.InitCondFunctions(querySchema.Options().GetCondition(), &queryCtx.schema)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var newRecord *record.Record
+				newRecord = record.NewRecordBuilder(rec.Schema)
+				filterBitmap := bitmap.NewFilterBitmap(len(conFunctions) + 1)
+
+				if len(conFunctions) > 0 {
+					newRecord = immutable.FilterByFieldFuncs(rec, newRecord, conFunctions, filterBitmap)
+				}
+
+				if newRecord != nil && c.expRecord != nil {
+					if !testRecsEqual(newRecord, c.expRecord) {
+						t.Fatal("error result")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestColumnStoreFlush(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	record := genRecord()
+
+	msInfo := mutable.MsInfo{
+		Name:   defaultMeasurementName,
+		Schema: schema,
+	}
+	writeChunk := &mutable.WriteChunkForColumnStore{}
+	writeChunk.WriteRec.SetWriteRec(record)
+	msInfo.SetWriteChunk(writeChunk)
+	sh.activeTbl.SetMsInfo(defaultMeasurementName, &msInfo)
+
+	time.Sleep(time.Second * 1)
+	// wait mem table flush
+	sh.ForceFlush()
+
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteDataByNewEngine(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+	time.Sleep(time.Second * 1)
+	// wait mem table flush
+	sh.ForceFlush()
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteDataByNewEngine2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	err = sh.WriteRows(rows, nil)
+	if err == nil {
+		t.Fatal("should return error mstInfo")
+	}
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+type QueryCtx struct {
+	filterFieldsIdx []int
+	filterTags      []string
+	auxTags         []string
+	schema          record.Schemas
+}
+
 type TestAggCase struct {
 	Name               string            // testcase name
 	startTime, endTime int64             // query time range
@@ -2929,7 +3499,7 @@ func genAggQuerySchema(fieldAux []influxql.VarRef, callField []influxql.Call, op
 		fields = append(fields, f)
 		columnNames = append(columnNames, fieldAux[i].Val)
 	}
-	return executor.NewQuerySchema(fields, columnNames, opt)
+	return executor.NewQuerySchema(fields, columnNames, opt, nil)
 }
 
 func genAggQueryOpt(tc *TestAggCase, msName string, ascending bool, chunkSize int, interval time.Duration) *query.ProcessorOptions {
@@ -3220,14 +3790,13 @@ func writeOneRow(sh *shard, mst string, ts int64) error {
 
 func swapMemTable(sh *shard, dir string) {
 	sh.snapshotTbl = sh.activeTbl
-	sh.activeTbl = mutable.GetMemTable(dir)
+	sh.activeTbl = mutable.GetMemTable(sh.engineType)
 	sh.activeTbl.SetIdx(sh.skIdx)
-	sh.activeTbl.GetConf().SetShardMutableSizeLimit(sh.mutableSizeLimit)
 }
 
 func TestLastFlushTime(t *testing.T) {
 	dir := t.TempDir()
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 	defer func() {
 		_ = closeShard(sh)
@@ -3238,7 +3807,7 @@ func TestLastFlushTime(t *testing.T) {
 		require.NoError(t, writeOneRow(sh, mst, ts))
 	}
 
-	sidList := sh.activeTbl.GetSids(mst, nil)
+	sidList := sh.activeTbl.GetSids(mst)
 	require.Equal(t, 1, len(sidList))
 	sid := sidList[0]
 	require.NotEqual(t, int64(0), sid)
@@ -3246,8 +3815,7 @@ func TestLastFlushTime(t *testing.T) {
 	swapMemTable(sh, dir)
 
 	var assertLastFlushTime = func(mst string, sid uint64, exp int64) {
-		got, err := sh.getLastFlushTime(mst, sid)
-		require.Nil(t, err)
+		got := sh.getLastFlushTime(mst, sid)
 		require.Equal(t, exp, got)
 	}
 
@@ -3256,7 +3824,11 @@ func TestLastFlushTime(t *testing.T) {
 	assertLastFlushTime(mst, sid+1000, int64(math.MinInt64))
 
 	require.True(t, sh.immTables.FreeSequencer())
-	assertLastFlushTime(mst, sid, 100)
+	assertLastFlushTime(mst, sid, int64(math.MaxInt64))
+
+	rows, err := sh.immTables.GetRowCountsBySid(mst, sid)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), rows)
 
 	sh.activeTbl = sh.snapshotTbl
 	sh.snapshotTbl = nil
@@ -3264,9 +3836,36 @@ func TestLastFlushTime(t *testing.T) {
 	assertLastFlushTime("mst", sid, 100)
 }
 
+func TestFlushMstDeleted(t *testing.T) {
+	dir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+
+	var mst = "mst"
+	for _, ts := range []int64{100, 90} {
+		require.NoError(t, writeOneRow(sh, mst, ts))
+	}
+
+	sidList := sh.activeTbl.GetSids(mst)
+	require.Equal(t, 1, len(sidList))
+	sid := sidList[0]
+	require.NotEqual(t, int64(0), sid)
+
+	swapMemTable(sh, dir)
+
+	sh.setMstDeleting(mst)
+	sh.activeTbl = sh.snapshotTbl
+	sh.snapshotTbl = nil
+	sh.ForceFlush()
+	sh.clearMstDeleting(mst)
+}
+
 func TestGetValuesInMemTables(t *testing.T) {
 	dir := t.TempDir()
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 	defer func() {
 		_ = closeShard(sh)
@@ -3278,7 +3877,7 @@ func TestGetValuesInMemTables(t *testing.T) {
 	memtables := mutable.MemTables{}
 
 	var getValue = func(sid uint64, asc bool) *record.Record {
-		return memtables.Values(mst, sid, record.TimeRange{Min: 0, Max: begin + 10}, record.Schemas{
+		return memtables.Values(mst, sid, util.TimeRange{Min: 0, Max: begin + 10}, record.Schemas{
 			{Name: "value", Type: influx.Field_Type_Float},
 			{Name: record.TimeField, Type: influx.Field_Type_Int},
 		}, asc)
@@ -3298,8 +3897,8 @@ func TestGetValuesInMemTables(t *testing.T) {
 
 	require.NoError(t, writeOneRow(sh, mst, begin))
 
-	require.Nil(t, sh.activeTbl.GetSids("mst_not_exists", nil))
-	sidList := sh.activeTbl.GetSids(mst, nil)
+	require.Nil(t, sh.activeTbl.GetSids("mst_not_exists"))
+	sidList := sh.activeTbl.GetSids(mst)
 	require.Equal(t, 1, len(sidList))
 	sid := sidList[0]
 
@@ -3320,9 +3919,38 @@ func TestGetValuesInMemTables(t *testing.T) {
 	assertValue(0, false, 0)
 }
 
+func TestWriteColsForTsstore(t *testing.T) {
+	dir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+
+	if err := sh.WriteCols(*record, nil); err != nil {
+		require.Equal(t, err, errors.New("not implement yet"))
+	}
+}
+
+func TestWriteColsForColstore(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+
+	if err := sh.WriteCols(*record, nil); err != nil {
+		require.Equal(t, err, errors.New("not implement yet"))
+	}
+}
+
 func TestDownSampleRedo(t *testing.T) {
 	dir := t.TempDir()
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 	defer func() {
 		_ = closeShard(sh)
@@ -3353,7 +3981,7 @@ func TestDownSampleRedo(t *testing.T) {
 	oldFiles := []immutable.TSSPFile{oFiles.Files()[1]}
 	_, err = sh.writeDownSampleInfo(msNames, [][]immutable.TSSPFile{oldFiles}, [][]immutable.TSSPFile{newFiles}, 0, 1)
 	require.NoError(t, err)
-	sh2 := NewShard(sh.dataPath, sh.walPath, sh.lock, sh.ident, sh.durationInfo, &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}, DefaultEngineOption)
+	sh2 := NewShard(sh.dataPath, sh.walPath, sh.lock, sh.ident, sh.durationInfo, &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}, DefaultEngineOption, config.TSSTORE)
 	m := mockMetaClient()
 	err = sh2.OpenAndEnable(m)
 	if err != nil {
@@ -3363,7 +3991,7 @@ func TestDownSampleRedo(t *testing.T) {
 
 func TestDownSampleSharCompact(t *testing.T) {
 	dir := t.TempDir()
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 	defer func() {
 		_ = closeShard(sh)
@@ -3374,7 +4002,7 @@ func TestDownSampleSharCompact(t *testing.T) {
 
 func TestWriteIndexFail(t *testing.T) {
 	dir := t.TempDir()
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 	defer func() {
 		_ = closeShard(sh)
@@ -3405,6 +4033,33 @@ func TestInitDownSampleTaskNum(t *testing.T) {
 	}
 }
 
+func TestGetMstWriteCtx(t *testing.T) {
+	ctx := getMstWriteCtx(time.Millisecond*10, config.TSSTORE)
+	putMstWriteCtx(ctx)
+
+	ctx = getMstWriteCtx(time.Millisecond*10, config.TSSTORE)
+	time.Sleep(time.Millisecond * 20)
+	putMstWriteCtx(ctx)
+}
+
+func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
+	return &meta2.MeasurementInfo{
+		Name: "cpu",
+		Schema: map[string]int32{
+			"field2_int":    influx.Field_Type_Int,
+			"field3_bool":   influx.Field_Type_Boolean,
+			"field4_float":  influx.Field_Type_Float,
+			"field1_string": influx.Field_Type_String,
+			"time":          influx.Field_Type_Int,
+		},
+		ColStoreInfo: &meta2.ColStoreInfo{
+			PrimaryKey: []string{"time"},
+			SortKey:    []string{"time"},
+		},
+		EngineType: config.COLUMNSTORE,
+	}
+}
+
 type MockMetaClient struct {
 }
 
@@ -3414,8 +4069,11 @@ func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo
 }
 
 func (client *MockMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-	//TODO implement me
-	panic("implement me")
+	return nil, nil
+}
+
+func (client *MockMetaClient) GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error) {
+	return nil, nil
 }
 
 func (client *MockMetaClient) OpenAtStore() {
@@ -3430,16 +4088,16 @@ func mockMetaClient() *MockMetaClient {
 	return &MockMetaClient{}
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error) {
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
@@ -3630,4 +4288,15 @@ func (client *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func (client *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
+}
+
+func (mmc *MockMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
+	return false, nil
+}
+
+func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
+	var msts []string
+	msts = append(msts, "cpu")
+	msts = append(msts, "mem")
+	return msts
 }

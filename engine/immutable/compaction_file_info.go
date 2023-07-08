@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
@@ -75,7 +76,7 @@ func (info *CompactedFileInfo) unmarshal(src []byte) error {
 	if len(src) < l+3 {
 		return fmt.Errorf("too small data for name, %v < %v", len(src), l+3)
 	}
-	info.Name, src = record.Bytes2str(src[:l]), src[l:]
+	info.Name, src = util.Bytes2str(src[:l]), src[l:]
 	info.IsOrder, src = numberenc.UnmarshalBool(src[0]), src[1:]
 
 	l, src = int(numberenc.UnmarshalUint16(src)), src[2:]
@@ -92,7 +93,7 @@ func (info *CompactedFileInfo) unmarshal(src []byte) error {
 		if len(src) < l {
 			return fmt.Errorf("too small data for name, %v < %v", len(src), l)
 		}
-		info.OldFile[i], src = record.Bytes2str(src[:l]), src[l:]
+		info.OldFile[i], src = util.Bytes2str(src[:l]), src[l:]
 	}
 
 	if len(src) < 2 {
@@ -113,7 +114,7 @@ func (info *CompactedFileInfo) unmarshal(src []byte) error {
 		if len(src) < l {
 			return fmt.Errorf("too small data for name, %v < %v", len(src), l)
 		}
-		info.NewFile[i], src = record.Bytes2str(src[:l]), src[l:]
+		info.NewFile[i], src = util.Bytes2str(src[:l]), src[l:]
 	}
 
 	return nil
@@ -219,7 +220,7 @@ func readCompactLogFile(name string, info *CompactedFileInfo) error {
 	magic := buf[fSize-int64(len(compLogMagic)):]
 	if !bytes.Equal(magic, compLogMagic) {
 		err = fmt.Errorf("invalid compact log file(%v) magic: exp:%v, read:%v",
-			name, record.Bytes2str(compLogMagic), record.Bytes2str(magic))
+			name, util.Bytes2str(compLogMagic), util.Bytes2str(magic))
 		log.Error(err.Error())
 		return ErrDirtyLog
 	}
@@ -232,14 +233,56 @@ func readCompactLogFile(name string, info *CompactedFileInfo) error {
 	return nil
 }
 
-func processLog(shardDir string, info *CompactedFileInfo, lockPath *string) error {
-	mmDir := filepath.Join(shardDir, TsspDirName, info.Name)
+func processLog(shardDir string, info *CompactedFileInfo, lockPath *string, engineType config.EngineType) error {
+	mmDir := filepath.Join(GetDir(engineType, shardDir), info.Name)
 	dirs, err := fileops.ReadDir(mmDir)
 	if err != nil {
 		log.Error("read dir fail", zap.String("path", mmDir), zap.Error(err))
 		return err
 	}
 
+	newFileExist, oldFileExist, renameFile := getProcessLogFuncs(dirs, mmDir, lockPath)
+	n := 0
+	for i := range info.NewFile {
+		if newFileExist(info.NewFile[i]) {
+			n++
+		}
+	}
+
+	if n != len(info.NewFile) {
+		count := 0
+		for i := range info.OldFile {
+			if oldFileExist(info.OldFile[i]) {
+				count++
+			}
+		}
+
+		// all old file exist
+		if count == len(info.OldFile) {
+			for i := range info.OldFile {
+				oName := info.OldFile[i]
+				if err := renameFile(oName + tmpTsspFileSuffix); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+
+		err = fmt.Errorf("invalid compact log file, name:%v, oldFiles:%v, newFiles:%v, order:%v, dirs:%v",
+			info.Name, info.OldFile, info.NewFile, info.IsOrder, dirs)
+		log.Error(err.Error())
+		return err
+	}
+
+	err = processFiles(info, oldFileExist, renameFile, mmDir, lockPath)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func getProcessLogFuncs(dirs []os.FileInfo, mmDir string, lockPath *string) (func(string) bool, func(string) bool, func(string) error) {
 	newFileExist := func(newFile string) bool {
 		normalName := newFile[:len(newFile)-len(tmpTsspFileSuffix)]
 		for i := range dirs {
@@ -275,42 +318,15 @@ func processLog(shardDir string, info *CompactedFileInfo, lockPath *string) erro
 		}
 		return nil
 	}
+	return newFileExist, oldFileExist, renameFile
+}
 
-	n := 0
-	for i := range info.NewFile {
-		if newFileExist(info.NewFile[i]) {
-			n++
-		}
-	}
-
-	if n != len(info.NewFile) {
-		count := 0
-		for i := range info.OldFile {
-			if oldFileExist(info.OldFile[i]) {
-				count++
-			}
-		}
-
-		// all old file exist
-		if count == len(info.OldFile) {
-			for i := range info.OldFile {
-				oName := info.OldFile[i]
-				if err := renameFile(oName + tmpTsspFileSuffix); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-
-		err = fmt.Errorf("invalid compact log file, name:%v, oldFiles:%v, newFiles:%v, order:%v, dirs:%v",
-			info.Name, info.OldFile, info.NewFile, info.IsOrder, dirs)
-		log.Error(err.Error())
-		return err
-	}
-
+func processFiles(info *CompactedFileInfo, oldFileExist func(oldFile string) bool, renameFile func(nameInLog string) error,
+	mmDir string, lockPath *string) error {
+	var err error
 	// rename all new files
 	for i := range info.NewFile {
-		if err := renameFile(info.NewFile[i]); err != nil {
+		if err = renameFile(info.NewFile[i]); err != nil {
 			log.Error("rename file fail", zap.String("name", info.NewFile[i]), zap.Error(err))
 			return err
 		}
@@ -321,7 +337,7 @@ func processLog(shardDir string, info *CompactedFileInfo, lockPath *string) erro
 		oldName := info.OldFile[i]
 		if oldFileExist(oldName) {
 			fName := filepath.Join(mmDir, oldName)
-			if _, err := fileops.Stat(fName); os.IsNotExist(err) {
+			if _, err = fileops.Stat(fName); os.IsNotExist(err) {
 				continue
 			}
 			lock := fileops.FileLockOption(*lockPath)
@@ -330,11 +346,10 @@ func processLog(shardDir string, info *CompactedFileInfo, lockPath *string) erro
 			}
 		}
 	}
-
-	return nil
+	return err
 }
 
-func procCompactLog(shardDir string, logDir string, lockPath *string) error {
+func procCompactLog(shardDir string, logDir string, lockPath *string, engineType config.EngineType) error {
 	dirs, err := fileops.ReadDir(logDir)
 	if err != nil {
 		log.Error("read compact log dir fail", zap.String("path", logDir), zap.Error(err))
@@ -355,7 +370,7 @@ func procCompactLog(shardDir string, logDir string, lockPath *string) error {
 		}
 
 		// continue to handle the rest compact log
-		if err = processLog(shardDir, logInfo, lockPath); err != nil {
+		if err = processLog(shardDir, logInfo, lockPath, engineType); err != nil {
 			errInfo := errno.NewError(errno.ProcessCompactLogFailed, logInfo.Name, err.Error())
 			log.Error("", zap.Error(errInfo))
 		}
@@ -366,4 +381,15 @@ func procCompactLog(shardDir string, logDir string, lockPath *string) error {
 		}
 	}
 	return nil
+}
+
+func GetDir(engineType config.EngineType, path string) string {
+	var filePath string
+	switch engineType {
+	case config.TSSTORE:
+		filePath = filepath.Join(path, TsspDirName)
+	case config.COLUMNSTORE:
+		filePath = filepath.Join(path, ColumnStoreDirName)
+	}
+	return filePath
 }

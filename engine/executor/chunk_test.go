@@ -17,14 +17,89 @@ limitations under the License.
 package executor_test
 
 import (
+	"bytes"
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
+
+const chunkToRowStringColSep = " "
+
+func appendRowToLine(c executor.Chunk, startloc int) []byte {
+	var line []byte
+	var l int
+	for _, col := range c.Columns() {
+		if col.IsNilV2(startloc) {
+			line = append(line, chunkToRowStringColSep...)
+			continue
+		}
+		l = col.GetValueIndexV2(startloc)
+		switch col.DataType() {
+		case influxql.Integer:
+			line = append(line, strconv.FormatInt(col.IntegerValue(l), 10)...)
+		case influxql.Float:
+			line = append(line, strconv.FormatFloat(col.FloatValue(l), 'f', -1, 64)...)
+		case influxql.Boolean:
+			line = append(line, strconv.FormatBool(col.BooleanValue(l))...)
+		case influxql.String, influxql.Tag:
+			line = append(line, col.StringValue(l)...)
+		}
+		line = append(line, chunkToRowStringColSep...)
+	}
+	line = append(line, strconv.FormatInt(c.Time()[startloc], 10)...)
+	return line
+}
+
+func StringToRows(c executor.Chunk) string {
+	var buffer bytes.Buffer
+	var schema []byte
+	for _, rt := range c.RowDataType().Fields() {
+		schema = append(schema, rt.Name()+chunkToRowStringColSep...)
+	}
+	schema = append(schema, "time\n"...)
+	buffer.Write(schema)
+	tagsLoc := 0
+	startloc := 0
+	endloc := c.Len()
+	tagsLen := 1
+	startTags := ""
+	if c.Tags() != nil && len(c.Tags()) != 0 {
+		tagsLen = len(c.Tags())
+		startTags = string(c.Tags()[0].Subset(nil))
+		if len(c.Tags()) > 1 {
+			endloc = c.TagIndex()[1]
+		}
+	}
+	for {
+		buffer.WriteString(fmt.Sprintf("%s\n", startTags))
+		for {
+			if startloc >= endloc {
+				break
+			}
+			line := appendRowToLine(c, startloc)
+			buffer.WriteString(fmt.Sprintf("%s\n", line))
+			startloc++
+		}
+		tagsLoc++
+		if tagsLoc >= tagsLen {
+			break
+		}
+		startloc = c.TagIndex()[tagsLoc]
+		if tagsLoc == tagsLen-1 {
+			endloc = c.Len()
+		} else {
+			endloc = c.TagIndex()[tagsLoc+1]
+		}
+		startTags = string(c.Tags()[tagsLoc].Subset(nil))
+	}
+	return buffer.String()
+}
 
 func buildChunkForPartialBlankRows() executor.Chunk {
 	rowDataType := buildSourceRowDataType()
@@ -231,7 +306,7 @@ func Test_GetColValsFn(t *testing.T) {
 				var sb []byte
 				var off = []uint32{0}
 				for _, s := range strings {
-					sb = append(sb, record.Str2bytes(s)...)
+					sb = append(sb, util.Str2bytes(s)...)
 					off = append(off, uint32(len(sb)))
 				}
 
@@ -255,7 +330,7 @@ func Test_GetColValsFn(t *testing.T) {
 				var sb []byte
 				var off = []uint32{0}
 				for _, s := range strings {
-					sb = append(sb, record.Str2bytes(s)...)
+					sb = append(sb, util.Str2bytes(s)...)
 					off = append(off, uint32(len(sb)))
 				}
 
@@ -279,7 +354,7 @@ func Test_GetColValsFn(t *testing.T) {
 				var sb []byte
 				var off = []uint32{0}
 				for _, s := range strings {
-					sb = append(sb, record.Str2bytes(s)...)
+					sb = append(sb, util.Str2bytes(s)...)
 					off = append(off, uint32(len(sb)))
 				}
 
@@ -303,7 +378,7 @@ func Test_GetColValsFn(t *testing.T) {
 				var sb []byte
 				var off = []uint32{0}
 				for _, s := range strings {
-					sb = append(sb, record.Str2bytes(s)...)
+					sb = append(sb, util.Str2bytes(s)...)
 					off = append(off, uint32(len(sb)))
 				}
 

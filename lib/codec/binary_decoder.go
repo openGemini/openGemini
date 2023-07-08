@@ -21,6 +21,7 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 type BinaryDecoder struct {
@@ -110,8 +111,8 @@ func (c *BinaryDecoder) Int16Slice() []int16 {
 		return nil
 	}
 
-	size := l * record.Int16SizeBytes
-	a := record.Bytes2Int16Slice(c.copy(size))
+	size := l * util.Int16SizeBytes
+	a := util.Bytes2Int16Slice(c.copy(size))
 	return a
 }
 
@@ -121,8 +122,8 @@ func (c *BinaryDecoder) Int32Slice() []int32 {
 		return nil
 	}
 
-	size := l * record.Int32SizeBytes
-	a := record.Bytes2Int32Slice(c.copy(size))
+	size := l * util.Int32SizeBytes
+	a := util.Bytes2Int32Slice(c.copy(size))
 	return a
 }
 
@@ -132,8 +133,8 @@ func (c *BinaryDecoder) Int64Slice() []int64 {
 		return nil
 	}
 
-	size := l * record.Int64SizeBytes
-	a := record.Bytes2Int64Slice(c.copy(size))
+	size := l * util.Int64SizeBytes
+	a := util.Bytes2Int64Slice(c.copy(size))
 	return a
 }
 
@@ -143,8 +144,8 @@ func (c *BinaryDecoder) Uint16SliceNoCopy() []uint16 {
 		return nil
 	}
 
-	size := int(l) * record.Uint16SizeBytes
-	a := record.Bytes2Uint16Slice(c.buf[c.offset : c.offset+size])
+	size := int(l) * util.Uint16SizeBytes
+	a := util.Bytes2Uint16Slice(c.buf[c.offset : c.offset+size])
 	c.offset += size
 	return a
 }
@@ -155,8 +156,8 @@ func (c *BinaryDecoder) Uint16Slice() []uint16 {
 		return nil
 	}
 
-	size := int(l) * record.Uint16SizeBytes
-	a := record.Bytes2Uint16Slice(c.copy(size))
+	size := int(l) * util.Uint16SizeBytes
+	a := util.Bytes2Uint16Slice(c.copy(size))
 	return a
 }
 
@@ -166,8 +167,8 @@ func (c *BinaryDecoder) Uint32Slice() []uint32 {
 		return nil
 	}
 
-	size := int(l) * record.Uint32SizeBytes
-	a := record.Bytes2Uint32Slice(c.copy(size))
+	size := int(l) * util.Uint32SizeBytes
+	a := util.Bytes2Uint32Slice(c.copy(size))
 	return a
 }
 
@@ -177,8 +178,8 @@ func (c *BinaryDecoder) Uint64Slice() []uint64 {
 		return nil
 	}
 
-	size := int(l) * record.Uint64SizeBytes
-	a := record.Bytes2Uint64Slice(c.copy(size))
+	size := int(l) * util.Uint64SizeBytes
+	a := util.Bytes2Uint64Slice(c.copy(size))
 	return a
 }
 
@@ -188,9 +189,9 @@ func (c *BinaryDecoder) Float32Slice() []float32 {
 		return nil
 	}
 
-	size := int(l) * record.Float32SizeBytes
+	size := int(l) * util.Float32SizeBytes
 
-	a := record.Bytes2Float32Slice(c.copy(size))
+	a := util.Bytes2Float32Slice(c.copy(size))
 	return a
 }
 
@@ -200,9 +201,9 @@ func (c *BinaryDecoder) Float64Slice() []float64 {
 		return nil
 	}
 
-	size := int(l) * record.Float64SizeBytes
+	size := int(l) * util.Float64SizeBytes
 
-	a := record.Bytes2Float64Slice(c.copy(size))
+	a := util.Bytes2Float64Slice(c.copy(size))
 	return a
 }
 
@@ -212,7 +213,7 @@ func (c *BinaryDecoder) BoolSlice() []bool {
 		return nil
 	}
 
-	a := record.Bytes2BooleanSlice(c.copy(l))
+	a := util.Bytes2BooleanSlice(c.copy(l))
 
 	return a
 }
@@ -232,7 +233,7 @@ func (c *BinaryDecoder) StringSlice() []string {
 	ofs := 0
 	for i := 0; i < l; i++ {
 		sl := int(sizeSlice[i])
-		a[i] = record.Bytes2str(buf[ofs : ofs+sl])
+		a[i] = util.Bytes2str(buf[ofs : ofs+sl])
 		ofs += sl
 	}
 	return a

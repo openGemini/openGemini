@@ -58,7 +58,7 @@ type ISSet struct {
 	F_width_range float64
 }
 
-//lint:ignore U1000 test used only
+// lint:ignore U1000 test used only
 func newISSet(a []byte, sz int) *ISSet {
 	low, high := int(0), int(len(a)-sz)
 	lowValue := float64(binary.BigEndian.Uint32(a[0:sz]))
@@ -98,7 +98,7 @@ type TSSet struct {
 	a_0, diff_scale, d_a float64
 }
 
-//lint:ignore U1000 test used only
+// lint:ignore U1000 test used only
 func newTSSet(a []byte, sz int) *TSSet {
 
 	d := len(a) >> 1

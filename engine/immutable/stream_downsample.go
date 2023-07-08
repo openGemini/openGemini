@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,7 @@ import (
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
@@ -59,7 +61,7 @@ type StreamWriteFile struct {
 	colBuilder *ColumnBuilder
 	trailer    Trailer
 	fd         fileops.File
-	writer     FileWriter
+	writer     fileops.FileWriter
 	pair       IdTimePairs
 	dstMeta    ChunkMeta
 	fileName   TSSPFileName
@@ -78,7 +80,8 @@ type StreamWriteFile struct {
 
 	// count the number of rows in each column
 	// used only for data verification
-	rowCount map[string]int
+	rowCount       map[string]int
+	enableValidate bool
 }
 
 func NewWriteScanFile(mst string, m *MmsTables, file TSSPFile, schema record.Schemas) (*StreamWriteFile, error) {
@@ -95,7 +98,7 @@ func getStreamWriteFile() *StreamWriteFile {
 	return &StreamWriteFile{
 		ctx:        NewReadContext(true),
 		colBuilder: NewColumnBuilder(),
-		Conf:       NewConfig(),
+		Conf:       GetConfig(),
 		rowCount:   make(map[string]int),
 	}
 }
@@ -138,7 +141,7 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 		return err
 	}
 
-	c.writer = newFileWriter(c.fd, false, false, c.lock)
+	c.writer = newTsspFileWriter(c.fd, false, false, c.lock)
 
 	var buf [16]byte
 	b := append(buf[:0], tableMagic...)
@@ -166,7 +169,7 @@ func (c *StreamWriteFile) NewTSSPFile(tmp bool) (TSSPFile, error) {
 
 	dr, err := CreateTSSPFileReader(c.fileSize, c.fd, &c.trailer, &c.TableData, c.version, tmp, c.lock)
 	if err != nil {
-		c.log.Error("create tssp file reader fail", zap.String("name", dr.Path()), zap.Error(err))
+		c.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
 		return nil, err
 	}
 
@@ -226,16 +229,14 @@ func (c *StreamWriteFile) ChangeSid(sid uint64) {
 	c.Init(sid, dOff, c.schema)
 }
 
-func (c *StreamWriteFile) AppendColumn(ref record.Field) error {
+func (c *StreamWriteFile) AppendColumn(ref *record.Field) error {
 	c.colBuilder.BuildPreAgg()
 
-	if err := c.colBuilder.initEncoder(ref); err != nil {
+	if err := c.colBuilder.initEncoder(*ref); err != nil {
 		return err
 	}
 
-	c.dstMeta.columnCount++
-	c.dstMeta.colMeta = append(c.dstMeta.colMeta, ColumnMeta{name: ref.Name, ty: uint8(ref.Type)})
-	c.colBuilder.colMeta = &c.dstMeta.colMeta[c.dstMeta.columnCount-1]
+	c.colBuilder.colMeta = c.dstMeta.AllocColMeta(ref)
 	c.colBuilder.cm = &c.dstMeta
 
 	var crc [4]byte
@@ -274,7 +275,15 @@ func (c *StreamWriteFile) WriteCurrentMeta() error {
 	return c.WriteMeta(&c.dstMeta)
 }
 
+func (c *StreamWriteFile) SetValidate(en bool) {
+	c.enableValidate = en
+}
+
 func (c *StreamWriteFile) validation() {
+	if !c.enableValidate {
+		return
+	}
+
 	exp, ok := c.rowCount[record.TimeField]
 	if !ok {
 		panic("missing time column")
@@ -291,13 +300,7 @@ func (c *StreamWriteFile) validation() {
 func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 	c.validation()
 
-	var newColMeta []ColumnMeta
-	for _, v := range cm.colMeta {
-		if v.entries != nil && len(v.entries) > 0 {
-			newColMeta = append(newColMeta, v)
-		}
-	}
-	cm.colMeta = newColMeta
+	cm.DelEmptyColMeta()
 	cm.size = uint32(c.writer.DataSize() - cm.offset)
 	cm.columnCount = uint32(len(cm.colMeta))
 	cm.segCount = uint32(len(cm.timeRange))
@@ -310,10 +313,12 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 		c.mIndex.offset = c.writer.ChunkMetaSize()
 	}
 
-	c.updateChunkStat(cm.sid, maxT)
+	c.updateChunkStat(cm.sid, maxT, int64(cm.Rows(c.colBuilder.timePreAggBuilder)))
 	c.keys[cm.sid] = struct{}{}
 
-	cm.validation()
+	if c.enableValidate {
+		cm.validation()
+	}
 	c.encChunkMeta = cm.marshal(c.encChunkMeta[:0])
 	cmOff := c.writer.ChunkMetaSize()
 	c.cmOffset = append(c.cmOffset, uint32(cmOff-c.preCmOff))
@@ -353,7 +358,7 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 	}
 
 	if c.mIndex.size >= uint32(c.Conf.maxChunkMetaItemSize) || c.mIndex.count >= uint32(c.Conf.maxChunkMetaItemCount) {
-		offBytes := record.Uint32Slice2ByteBigEndian(c.cmOffset)
+		offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
 		_, err = c.writer.WriteChunkMeta(offBytes)
 		if err != nil {
 			err = errWriteFail(c.writer.Name(), err)
@@ -371,9 +376,9 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 }
 
 func (c *StreamWriteFile) WriteData(id uint64, ref record.Field, col record.ColVal, timeCol *record.ColVal) error {
-	record.CheckCol(&col)
-	if col.Len > c.Conf.MaxRowsPerSegment() {
-		err := fmt.Sprintf("col.Len=%d is greater than MaxRowsPerSegment=%d", col.Len, c.Conf.MaxRowsPerSegment())
+	record.CheckCol(&col, ref.Type)
+	if col.Len > c.Conf.GetMaxRowsPerSegment() {
+		err := fmt.Sprintf("col.Len=%d is greater than MaxRowsPerSegment=%d", col.Len, c.Conf.GetMaxRowsPerSegment())
 		panic(err)
 	}
 
@@ -381,7 +386,9 @@ func (c *StreamWriteFile) WriteData(id uint64, ref record.Field, col record.ColV
 		return err
 	}
 
-	c.rowCount[ref.Name] += col.Len
+	if c.enableValidate {
+		c.rowCount[ref.Name] += col.Len
+	}
 
 	var err error
 	c.colSegs[0] = col
@@ -409,8 +416,7 @@ func (c *StreamWriteFile) WriteData(id uint64, ref record.Field, col record.ColV
 	return err
 }
 
-func (c *StreamWriteFile) updateChunkStat(id uint64, maxT int64) {
-	rows := c.colBuilder.timePreAggBuilder.count()
+func (c *StreamWriteFile) updateChunkStat(id uint64, maxT int64, rows int64) {
 	c.pair.Add(id, maxT)
 	c.pair.AddRowCounts(rows)
 	c.chunkRows += rows
@@ -447,7 +453,7 @@ func (c *StreamWriteFile) Flush() error {
 	}
 
 	if c.mIndex.count > 0 {
-		offBytes := record.Uint32Slice2ByteBigEndian(c.cmOffset)
+		offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
 		_, err := c.writer.WriteChunkMeta(offBytes)
 		if err != nil {
 			c.log.Error("write chunk meta fail", zap.String("name", c.fd.Name()), zap.Error(err))
@@ -525,13 +531,15 @@ func (c *StreamWriteFile) genBloomFilter() {
 		c.bloomFilter = make([]byte, bmBytes)
 	} else {
 		c.bloomFilter = c.bloomFilter[:bmBytes]
-		record.MemorySet(c.bloomFilter)
+		util.MemorySet(c.bloomFilter)
 	}
 	c.trailer.bloomM = bm
 	c.trailer.bloomK = bk
 	c.bf, _ = bloom.NewFilterBuffer(c.bloomFilter, bk)
+	bytes := make([]byte, 8)
 	for id := range c.keys {
-		c.bf.Insert(record.Uint64ToBytes(id))
+		binary.BigEndian.PutUint64(bytes, id)
+		c.bf.Insert(bytes)
 	}
 }
 

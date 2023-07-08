@@ -20,8 +20,9 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
-	"github.com/openGemini/openGemini/engine/immutable/encoding"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
@@ -179,7 +180,7 @@ func (m MocTsspFile) MetaIndexAt(idx int) (*MetaIndex, error) {
 	return nil, nil
 }
 
-func (m MocTsspFile) MetaIndex(id uint64, tr record.TimeRange) (int, *MetaIndex, error) {
+func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error) {
 	return 0, nil, nil
 }
 
@@ -187,7 +188,7 @@ func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, 
 	return nil, nil
 }
 
-func (m MocTsspFile) Read(id uint64, tr record.TimeRange, dst *record.Record) (*record.Record, error) {
+func (m MocTsspFile) Read(id uint64, tr util.TimeRange, dst *record.Record) (*record.Record, error) {
 	return nil, nil
 }
 
@@ -195,7 +196,7 @@ func (m MocTsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs
 	return nil, nil
 }
 
-func (m MocTsspFile) ChunkMetaAt(index int) (*ChunkMeta, error) {
+func (m MocTsspFile) ChunkAt(index int) (*ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -227,11 +228,11 @@ func (m MocTsspFile) Contains(id uint64) (bool, error) {
 	return false, nil
 }
 
-func (m MocTsspFile) ContainsTime(tr record.TimeRange) (bool, error) {
+func (m MocTsspFile) ContainsByTime(tr util.TimeRange) (bool, error) {
 	return false, nil
 }
 
-func (m MocTsspFile) ContainsValue(id uint64, tr record.TimeRange) (bool, error) {
+func (m MocTsspFile) ContainsValue(id uint64, tr util.TimeRange) (bool, error) {
 	return false, nil
 }
 
@@ -283,7 +284,7 @@ func (m MocTsspFile) Remove() error {
 	return nil
 }
 
-func (m MocTsspFile) Free(evictLock bool) int64 {
+func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
 	return 0
 }
 
@@ -309,26 +310,6 @@ func (m MocTsspFile) AddToEvictList(level uint16) {
 
 func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 	return
-}
-
-func (m MocTsspFile) FreeMemory() int64 {
-	return 0
-}
-
-func (m MocTsspFile) BlockHeader(meta *ChunkMeta, dst []record.Field) ([]record.Field, error) {
-	return nil, nil
-}
-
-func (m MocTsspFile) MinMaxSeriesID() (min, max uint64, err error) {
-	return 0, 0, nil
-}
-
-func (m MocTsspFile) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (m MocTsspFile) ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return nil, nil
 }
 
 func TestGetTsspFiles(t *testing.T) {

@@ -66,6 +66,8 @@ type TargetTransform struct {
 	chunkPool   *BlockChunkPool
 
 	ppTargetCost *tracing.Span
+
+	errs errno.Errs
 }
 
 func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions, schema *QuerySchema, mst *influxql.Measurement) (*TargetTransform, error) {
@@ -163,11 +165,8 @@ func (trans *TargetTransform) Work(ctx context.Context) error {
 		return fmt.Errorf("no point writer can be worked for into target transform")
 	}
 
-	errs := errno.NewErrsPool().Get()
+	errs := &trans.errs
 	errs.Init(1+trans.writeWorker, nil)
-	defer func() {
-		errno.NewErrsPool().Put(errs)
-	}()
 
 	// produce the data for the input state
 	go trans.produce(ctx, span, errs)

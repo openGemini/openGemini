@@ -18,6 +18,7 @@ package record
 
 import (
 	"sort"
+	"sync"
 
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
@@ -27,14 +28,50 @@ type NilCount struct {
 	total int
 }
 
+func (nc *NilCount) init(total, size int) {
+	nc.total = total
+	if total == 0 {
+		return
+	}
+
+	if cap(nc.value) < size {
+		nc.value = make([]int, size)
+	}
+	nc.value = nc.value[:size]
+	nc.value[0] = 0
+}
+
 type SortHelper struct {
+	aux      *SortAux
+	SortData *SortData //Multi-field sort data
+
 	nilCount []NilCount
 	times    []int64
 }
 
-func (h *SortHelper) Sort(rec *Record, aux *SortAux) {
+var sortHelperPool sync.Pool
+
+func NewSortHelper() *SortHelper {
+	hlp, ok := sortHelperPool.Get().(*SortHelper)
+	if !ok || hlp == nil {
+		hlp = &SortHelper{
+			aux:      &SortAux{},
+			SortData: &SortData{},
+		}
+	}
+	return hlp
+}
+
+func (h *SortHelper) Release() {
+	sortHelperPool.Put(h)
+}
+
+func (h *SortHelper) Sort(rec *Record) *Record {
 	times := rec.Times()
-	aux.init(times)
+	aux := h.aux
+
+	aux.InitRecord(rec.Schema)
+	aux.Init(times)
 	sort.Stable(aux)
 	rows := aux.RowIds
 	h.initNilCount(rec, times)
@@ -51,6 +88,34 @@ func (h *SortHelper) Sort(rec *Record, aux *SortAux) {
 	}
 
 	h.append(rec, aux, start, len(rows)-1)
+	rec, aux.SortRec = aux.SortRec, rec
+	return rec
+}
+
+func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy []PrimaryKey) {
+	times := rec.Times()
+	tmpRec := rec.Copy()
+
+	data.InitRecord(rec.Schema)
+	data.Init(times, pk, orderBy, tmpRec)
+	sort.Stable(data)
+	rows := data.RowIds
+
+	h.initNilCount(rec, times)
+	h.times = h.times[:0]
+
+	start := 0
+
+	// haven't dedupe yet
+	for i := 0; i < len(times)-1; i++ {
+		if (rows[i+1] - rows[i]) != 1 {
+			h.appendForColumnStore(rec, data, start, i)
+			start = i + 1
+			continue
+		}
+	}
+
+	h.appendForColumnStore(rec, data, start, len(rows)-1)
 }
 
 func (h *SortHelper) append(rec *Record, aux *SortAux, start, end int) {
@@ -70,6 +135,19 @@ func (h *SortHelper) append(rec *Record, aux *SortAux, start, end int) {
 
 	rowStart, rowEnd := int(aux.RowIds[start]), int(aux.RowIds[end]+1)
 	h.appendRecord(rec, aux.SortRec, rowStart, rowEnd)
+}
+
+func (h *SortHelper) appendForColumnStore(rec *Record, data *SortData, start, end int) {
+	if start > end {
+		return
+	}
+
+	for i := start; i <= end; i++ {
+		h.times = append(h.times, data.Times[i])
+	}
+
+	rowStart, rowEnd := int(data.RowIds[start]), int(data.RowIds[end]+1)
+	h.appendRecord(rec, data.SortRec, rowStart, rowEnd)
 }
 
 func (h *SortHelper) appendRecord(rec *Record, aux *Record, start, end int) {
@@ -99,19 +177,20 @@ func (h *SortHelper) replaceRecord(rec *Record, aux *Record, idx int) {
 }
 
 func (h *SortHelper) initNilCount(rec *Record, times []int64) {
-	h.nilCount = make([]NilCount, rec.Len())
+	if cap(h.nilCount) < rec.Len() {
+		h.nilCount = make([]NilCount, rec.Len())
+	}
+	h.nilCount = h.nilCount[:rec.Len()]
 
 	tl := len(times)
 
 	for i := 0; i < rec.Len(); i++ {
 		col := &rec.ColVals[i]
+		nc := &h.nilCount[i]
+		nc.init(col.NilCount, tl+1)
 		if col.NilCount == 0 {
 			continue
 		}
-
-		nc := &h.nilCount[i]
-		nc.total = col.NilCount
-		nc.value = make([]int, tl+1)
 
 		for j := 1; j < tl+1; j++ {
 			nc.value[j] = nc.value[j-1]

@@ -468,6 +468,54 @@ func GetTransformFactoryInstance() *TransformCreatorFactory {
 	return instance
 }
 
+type ReaderCreator interface {
+	CreateReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog, frags ShardsFragments, database string, ptID uint32) (Processor, error)
+}
+
+func RegistryReaderCreator(plan LogicalPlan, creator ReaderCreator) bool {
+	factory := GetReaderFactoryInstance()
+	name := plan.String()
+
+	_, ok := factory.Find(name)
+
+	if ok {
+		return ok
+	}
+
+	factory.Add(name, creator)
+	return ok
+}
+
+type ReaderCreatorFactory struct {
+	creators map[string]ReaderCreator
+}
+
+func NewReaderCreatorFactory() *ReaderCreatorFactory {
+	return &ReaderCreatorFactory{
+		creators: make(map[string]ReaderCreator),
+	}
+}
+
+func (r *ReaderCreatorFactory) Add(name string, creator ReaderCreator) {
+	r.creators[name] = creator
+}
+
+func (r *ReaderCreatorFactory) Find(name string) (ReaderCreator, bool) {
+	creator, ok := r.creators[name]
+	return creator, ok
+}
+
+var readerInstance *ReaderCreatorFactory
+var readerOnce sync.Once
+
+func GetReaderFactoryInstance() *ReaderCreatorFactory {
+	readerOnce.Do(func() {
+		readerInstance = NewReaderCreatorFactory()
+	})
+
+	return readerInstance
+}
+
 type DAGBuilder struct {
 	opt        query.ProcessorOptions
 	stack      Processors

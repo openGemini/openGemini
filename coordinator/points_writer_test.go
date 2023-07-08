@@ -27,8 +27,10 @@ import (
 
 	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -50,11 +52,11 @@ var enableFieldIndex = true
 type MockMetaClient struct {
 	DatabaseFn          func(database string) (*meta2.DatabaseInfo, error)
 	RetentionPolicyFn   func(database, rp string) (*meta2.RetentionPolicyInfo, error)
-	CreateShardGroupFn  func(database, policy string, timestamp time.Time) (*meta2.ShardGroupInfo, error)
+	CreateShardGroupFn  func(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 	DBPtViewFn          func(database string) (meta2.DBPtInfos, error)
 	MeasurementFn       func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchemaFn      func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurementFn func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error)
+	CreateMeasurementFn func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
 	GetAliveShardsFn    func(database string, sgi *meta2.ShardGroupInfo) []int
 }
 
@@ -66,8 +68,8 @@ func (mmc *MockMetaClient) RetentionPolicy(database, policy string) (*meta2.Rete
 	return mmc.RetentionPolicyFn(database, policy)
 }
 
-func (mmc *MockMetaClient) CreateShardGroup(database, policy string, timestamp time.Time) (*meta2.ShardGroupInfo, error) {
-	return mmc.CreateShardGroupFn(database, policy, timestamp)
+func (mmc *MockMetaClient) CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
+	return mmc.CreateShardGroupFn(database, policy, timestamp, engineType)
 }
 
 func (mmc *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
@@ -82,8 +84,8 @@ func (mmc *MockMetaClient) UpdateSchema(database string, retentionPolicy string,
 	return mmc.UpdateSchemaFn(database, retentionPolicy, mst, fieldToCreate)
 }
 
-func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error) {
-	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, indexR)
+func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, indexR, engineType, nil)
 }
 
 func (mmc *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
@@ -201,7 +203,7 @@ func NewMockMetaClient() *MockMetaClient {
 		return rpInfo, nil
 	}
 
-	mc.CreateShardGroupFn = func(database, policy string, timestamp time.Time) (*meta2.ShardGroupInfo, error) {
+	mc.CreateShardGroupFn = func(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
 		for i := range rpInfo.ShardGroups {
 			if timestamp.Equal(rpInfo.ShardGroups[i].StartTime) || timestamp.After(rpInfo.ShardGroups[i].StartTime) && timestamp.Before(rpInfo.ShardGroups[i].EndTime) {
 				return &rpInfo.ShardGroups[i], nil
@@ -210,7 +212,7 @@ func NewMockMetaClient() *MockMetaClient {
 		panic("could not find sg")
 	}
 
-	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error) {
+	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
 		return NewMeasurement(mst), nil
 	}
 	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
@@ -289,16 +291,16 @@ func NewMeasurement(mst string) *meta2.MeasurementInfo {
 }
 
 type MockNetStore struct {
-	WriteRowsFn func(nodeID uint64, database, rp string, pt uint32, shard uint64, rows *[]influx.Row, timeout time.Duration) error
+	WriteRowsFn func(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rp string, timeout time.Duration) error
 }
 
-func (mns *MockNetStore) WriteRows(nodeID uint64, database, rp string, pt uint32, shard uint64, _ []uint64, rows *[]influx.Row, timeout time.Duration) error {
-	return mns.WriteRowsFn(nodeID, database, rp, pt, shard, rows, timeout)
+func (mns *MockNetStore) WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rp string, timeout time.Duration) error {
+	return mns.WriteRowsFn(ctx, nodeID, pt, database, rp, timeout)
 }
 
 func NewMockNetStore() *MockNetStore {
 	store := &MockNetStore{}
-	store.WriteRowsFn = func(nodeID uint64, database, rp string, pt uint32, shard uint64, rows *[]influx.Row, timeout time.Duration) error {
+	store.WriteRowsFn = func(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rp string, timeout time.Duration) error {
 		return nil
 	}
 	return store
@@ -483,10 +485,10 @@ func TestCheckFields_Conflict(t *testing.T) {
 			Type: influx.Field_Type_String,
 		},
 	}
-
 	fields, err := fixFields(fields)
 	assert.EqualError(t, err, "conflict field type: foo")
 	assert.Empty(t, nil, fields)
+
 }
 
 func TestCheckFields_Ignore(t *testing.T) {
@@ -506,8 +508,8 @@ func TestCheckFields_Ignore(t *testing.T) {
 			Type: influx.Field_Type_String,
 		},
 	}
-
 	fields, err := fixFields(fields)
+
 	assert.NoError(t, err)
 	assert.Equal(t, influx.Fields{
 		{
@@ -520,6 +522,7 @@ func TestCheckFields_Ignore(t *testing.T) {
 			Type: influx.Field_Type_String,
 		},
 	}, fields)
+
 }
 
 func TestStreamSymbolMarshalUnmarshal(t *testing.T) {
@@ -717,7 +720,7 @@ func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
 				},
 				{
 					Key:      "foo",
-					Type:     influx.Field_Type_Float,
+					Type:     influx.Field_Type_String,
 					NumValue: 2,
 				},
 			},
@@ -735,7 +738,7 @@ func TestPointsWriter_WritePointRows_DuplicateFields2(t *testing.T) {
 		},
 	}
 	err := pw.writePointRows("db0", "rp0", rows)
-	require.NoError(t, err)
+	require.EqualError(t, err, "partial write: conflict field type: foo dropped=1")
 }
 
 func TestColumnToIndexUpdate(t *testing.T) {
@@ -743,11 +746,11 @@ func TestColumnToIndexUpdate(t *testing.T) {
 	b1 := []byte{'a', 'b', 'c'}
 	b2 := []byte{'a', 'b', 'c'}
 	m := make(map[string]int)
-	m[record.Bytes2str(b1)] = 0
+	m[util.Bytes2str(b1)] = 0
 	for k1 := range m {
 		k1Ptr = &k1
 	}
-	m[record.Bytes2str(b2)] = 1
+	m[util.Bytes2str(b2)] = 1
 	for k2 := range m {
 		k2Ptr = &k2
 	}
@@ -892,5 +895,32 @@ func TestPointsWriter_InvalidMst(t *testing.T) {
 	pw.Close()
 
 	exp := "partial write: " + errno.NewError(errno.InvalidMeasurement, "a/a").Error() + " dropped=5"
+	assert.EqualError(t, err, exp)
+}
+
+func TestPointsWriter_TagLimit(t *testing.T) {
+	streamDistribution = noStream
+	pw := NewPointsWriter(time.Second * 10)
+	mc := NewMockMetaClient()
+	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+		mst := NewMeasurement("mst")
+		binary, err := mst.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		err = mst.UnmarshalBinary(binary)
+		return mst, err
+	}
+
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+
+	SetTagLimit(1)
+	rows = generateRows(5, rows)
+	err := pw.writePointRows("db0", "rp0", rows)
+	pw.Close()
+
+	exp := "partial write: " + errno.NewError(errno.TooManyTagKeys).Error() + " dropped=2"
 	assert.EqualError(t, err, exp)
 }

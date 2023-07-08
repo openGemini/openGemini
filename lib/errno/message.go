@@ -78,6 +78,8 @@ var messageMap = map[Errno]*Message{
 	WriteMissTagValue:      newWarnMessage("missing tag value for %q", ModuleWrite),
 	ErrorTagArrayFormat:    newWarnMessage("error tag array format", ModuleWrite),
 	WriteErrorArray:        newWarnMessage("error tag array", ModuleWrite),
+	TooManyTagKeys:         newWarnMessage("too many tag keys", ModuleWrite),
+	SeriesLimited:          newWarnMessage("too many series in database %s. upper limit: %d; current: %d", ModuleWrite),
 
 	// network module error codes
 	NoConnectionAvailable: newFatalMessage("no connections available, node: %v, %v", ModuleNetwork),
@@ -126,6 +128,10 @@ var messageMap = map[Errno]*Message{
 	LogicalPlainBuildFailInShard: newWarnMessage("logical plain build fail in shard: %v", ModuleQueryEngine),
 	SchemaNotAligned:             newWarnMessage("input and output schemas art not aligned: %s", ModuleQueryEngine),
 	NoFieldSelected:              newWarnMessage("no field selected: %s", ModuleQueryEngine),
+	NoDimSelected:                newWarnMessage("no dim selected: %s", ModuleQueryEngine),
+	NoColValToColumnFunc:         newWarnMessage("no func to transform colval into column: %s", ModuleQueryEngine),
+	InvalidQuerySchema:           newWarnMessage("invalid query schema", ModuleQueryEngine),
+	InvalidQueryStat:             newWarnMessage("invalid query stat", ModuleQueryEngine),
 
 	// store engine error codes
 	CreateIndexFailPointRowType:        newFatalMessage("create index failed due to rows are not belong to type PointRow", ModuleIndex),
@@ -157,6 +163,7 @@ var messageMap = map[Errno]*Message{
 	IndexNotFound:                      newWarnMessage("shard index not exist db %s ,pt %v ,index %v", ModuleTssp),
 	FailedToDecodeFloatArray:           newFatalMessage("failed to decode float array. exp length: %d, got: %d", ModuleStorageEngine),
 	InvalidFloatBuffer:                 newFatalMessage("invalid input float encoded data, type = %v", ModuleStorageEngine),
+	MemUsageExceeded:                   newFatalMessage("mem usage exceeded threshold %d", ModuleStorageEngine),
 
 	// wal error codes
 	ReadWalFileFailed:         newWarnMessage("read wal file failed", ModuleWal),
@@ -176,8 +183,11 @@ var messageMap = map[Errno]*Message{
 	UnsupportedConditionInFullJoin: newWarnMessage("unsupported condition in full join", ModuleQueryEngine),
 	UnsupportedHoltWinterInit:      newWarnMessage("unsupported holt_winters init", ModuleQueryEngine),
 	BucketLacks:                    newWarnMessage("get resources out of time: bucket lacks of resources", ModuleQueryEngine),
+	SortTransformRunningErr:        newWarnMessage("SortTransform run error", ModuleQueryEngine),
+	HashMergeTransformRunningErr:   newWarnMessage("HashMergeTransform run error", ModuleQueryEngine),
 
 	// meta error codes
+	InvalidTagKey:          newWarnMessage(`tag key can't be '%s'`, ModuleMeta),
 	FieldTypeConflict:      newWarnMessage(`field type conflict: input field "%s" on measurement "%s" is type %s, already exists as type %s`, ModuleMeta),
 	DatabaseNotFound:       newWarnMessage("database not found: %s", ModuleMeta),
 	DataNodeNotFound:       newWarnMessage("dataNode(id=%d,host=%s) not found", ModuleMeta),
@@ -240,10 +250,19 @@ var messageMap = map[Errno]*Message{
 	InvalidUsernameLen: newNoticeMessage("the username needs to be between %d and %d characters long", ModuleMetaClient),
 
 	// index error codes
-	ConvertToBinaryExprFailed: newWarnMessage("convert to BinaryExpr failed: expr %T is not *influxql.BinaryExpr", ModuleIndex),
-	ErrQuerySeriesUpperBound:  newNoticeMessage("trigger query series upper bound error", ModuleIndex),
-	ErrTooSmallKeyCount:       newNoticeMessage("too small key count error", ModuleIndex),
-	ErrTooSmallIndexKey:       newNoticeMessage("too small index key error", ModuleIndex),
+	ConvertToBinaryExprFailed:  newWarnMessage("convert to BinaryExpr failed: expr %T is not *influxql.BinaryExpr", ModuleIndex),
+	ErrQuerySeriesUpperBound:   newNoticeMessage("trigger query series upper bound error", ModuleIndex),
+	ErrTooSmallKeyCount:        newNoticeMessage("too small key count error", ModuleIndex),
+	ErrTooSmallIndexKey:        newNoticeMessage("too small index key error", ModuleIndex),
+	ErrGetNonExistingMark:      newFatalMessage("trying to get non existing mark %d, while size is %d", ModuleIndex),
+	ErrMarkRangeInserting:      newFatalMessage("Intersecting mark ranges are not allowed", ModuleIndex),
+	ErrUnknownOpInCondition:    newFatalMessage("Unexpected op type in KeyCondition RPNElement", ModuleIndex),
+	ErrInvalidStackInCondition: newFatalMessage("Unexpected stack size in KeyCondition checkInRange", ModuleIndex),
+	ErrRPNSetInNotCreated:      newFatalMessage("Set for IN is not created yet", ModuleIndex),
+	ErrRPNIsNullForNOT:         newFatalMessage("rpn stack should not be null for NOT", ModuleIndex),
+	ErrRPNIsNullForAnd:         newFatalMessage("rpn stack should not be null for AND", ModuleIndex),
+	ErrRPNIsNullForOR:          newFatalMessage("rpn stack should not be null for OR", ModuleIndex),
+	ErrCoarseIndexFragment:     newFatalMessage("property coarse_index_fragment should be greater than 1", ModuleIndex),
 
 	// monitoring and statistics
 	WatchFileTimeout: newWarnMessage("watch file timeout", ModuleStat),

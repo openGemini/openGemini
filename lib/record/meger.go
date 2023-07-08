@@ -31,10 +31,8 @@ type MergeColVal struct {
 	valid int
 }
 
-func NewMergeColVal(col *ColVal, typ int) *MergeColVal {
-	ret := &MergeColVal{}
-	ret.init(col, typ)
-	return ret
+func NewMergeColVal() *MergeColVal {
+	return &MergeColVal{col: &ColVal{}}
 }
 
 func (mcv *MergeColVal) init(col *ColVal, typ int) {
@@ -102,12 +100,15 @@ func (mcv *MergeColVal) Skip(limit int) {
 }
 
 type MergeHelper struct {
-	unordered      []*MergeColVal
-	unorderedTimes []*Times
+	unordered      []*ColVal
+	unorderedTimes [][]int64
+	performer      *ColMergePerformer
 }
 
 func NewMergeHelper() *MergeHelper {
-	return &MergeHelper{}
+	return &MergeHelper{
+		performer: NewColMergePerformer(),
+	}
 }
 
 func (h *MergeHelper) resetUnordered() {
@@ -115,33 +116,27 @@ func (h *MergeHelper) resetUnordered() {
 	h.unorderedTimes = h.unorderedTimes[:0]
 }
 
-func (h *MergeHelper) AddUnorderedCol(col *ColVal, times []int64, typ int) {
-	h.unorderedTimes = append(h.unorderedTimes, NewTimes(times))
-	h.unordered = append(h.unordered, NewMergeColVal(col, typ))
+func (h *MergeHelper) AddUnorderedCol(col *ColVal, times []int64) {
+	h.unorderedTimes = append(h.unorderedTimes, times)
+	h.unordered = append(h.unordered, col)
 }
 
 func (h *MergeHelper) Merge(col *ColVal, times []int64, typ int) (*ColVal, []int64, error) {
 	if len(h.unordered) == 0 {
 		return col, times, nil
 	}
-	defer h.resetUnordered()
+
+	p := h.performer
 
 	for i := 0; i < len(h.unordered); i++ {
-		p := &ColMergePerformer{
-			order:     NewMergeColVal(col, typ),
-			unordered: h.unordered[i],
-			orderTimes: &Times{
-				values: times,
-			},
-			unorderedTimes: h.unorderedTimes[i],
-			merged:         NewMergeColVal(&ColVal{}, typ),
-		}
-		h.merge(p)
+		p.InitTimes(times, h.unorderedTimes[i])
+		p.InitColVal(col, h.unordered[i], typ)
 
-		col = p.merged.col
-		times = p.mergedTimes
+		h.merge(p)
+		col, times = p.MergedResult()
 	}
 
+	h.resetUnordered()
 	return col, times, nil
 }
 
@@ -193,6 +188,17 @@ type MergePerformer interface {
 	Times(bool) *Times
 }
 
+func NewColMergePerformer() *ColMergePerformer {
+	return &ColMergePerformer{
+		order:          NewMergeColVal(),
+		orderTimes:     &Times{},
+		unordered:      NewMergeColVal(),
+		unorderedTimes: &Times{},
+		merged:         NewMergeColVal(),
+		swapCol:        &ColVal{},
+	}
+}
+
 type ColMergePerformer struct {
 	order     *MergeColVal
 	unordered *MergeColVal
@@ -200,8 +206,31 @@ type ColMergePerformer struct {
 	orderTimes     *Times
 	unorderedTimes *Times
 
+	swapCol     *ColVal
 	merged      *MergeColVal
+	swapTimes   []int64
 	mergedTimes []int64
+}
+
+func (p *ColMergePerformer) MergedResult() (*ColVal, []int64) {
+	return p.merged.col, p.mergedTimes
+}
+
+func (p *ColMergePerformer) InitColVal(order, unordered *ColVal, typ int) {
+	p.order.init(order, typ)
+	p.unordered.init(unordered, typ)
+
+	col := p.merged.col
+	p.swapCol.Init()
+	p.merged.init(p.swapCol, typ)
+	p.swapCol = col
+}
+
+func (p *ColMergePerformer) InitTimes(order, unordered []int64) {
+	p.orderTimes.init(order)
+	p.unorderedTimes.init(unordered)
+	p.mergedTimes, p.swapTimes = p.swapTimes, p.mergedTimes
+	p.mergedTimes = p.mergedTimes[:0]
 }
 
 func (p *ColMergePerformer) Times(order bool) *Times {
@@ -256,14 +285,16 @@ func (p *ColMergePerformer) appendSequence(col *MergeColVal, times *Times) {
 	times.incrOffset()
 }
 
-func NewTimes(v []int64) *Times {
-	return &Times{values: v}
-}
-
 type Times struct {
 	values []int64
 	offset int
 	limit  int
+}
+
+func (t *Times) init(v []int64) {
+	t.limit = 0
+	t.offset = 0
+	t.values = v
 }
 
 func (t *Times) len() int {

@@ -20,14 +20,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	raftboltdb "github.com/openGemini/openGemini/open_src/github.com/hashicorp/raft-boltdb"
 	"go.uber.org/zap"
 )
 
@@ -98,26 +96,6 @@ func (r *raftWrapper) raftConfig(c *config.Meta) *raft.Config {
 	return conf
 }
 
-func (r *raftWrapper) raftStore(c *config.Meta) error {
-	var err error
-	r.snapStore, err = raft.NewFileSnapshotStore(c.Dir, raftSnapshotsRetained, nil)
-	if err != nil {
-		return err
-	}
-	switch c.RaftStore {
-	case "boltdb":
-		store, err := raftboltdb.NewBoltStore(filepath.Join(c.Dir, "raft.db"))
-		if err != nil {
-			return fmt.Errorf("new boltdb store: %s", err)
-		}
-		r.logStore = store
-		r.stableStore = store
-	default:
-		return fmt.Errorf("invalid input store %s", c.RaftStore)
-	}
-	return nil
-}
-
 func (r *raftWrapper) Peers() ([]string, error) {
 	future := r.raft.GetConfiguration()
 	if err := future.Error(); err != nil {
@@ -146,35 +124,27 @@ func (r *raftWrapper) Leader() string {
 }
 
 func (r *raftWrapper) UserSnapshot() error {
+	if r == nil || r.raft == nil {
+		return errno.NewError(errno.RaftIsNotOpen)
+	}
 	future := r.raft.Snapshot()
 	return future.Error()
 }
 
 func (r *raftWrapper) State() raft.RaftState {
+	if r == nil || r.raft == nil {
+		return raft.Shutdown
+	}
 	return r.raft.State()
 }
 
 func (r *raftWrapper) Close() error {
-	if r == nil {
-		return nil
-	}
-
-	if r.raft != nil {
+	if r != nil && r.raft != nil {
 		if err := r.raft.Shutdown().Error(); err != nil {
 			return err
 		}
 	}
-
-	if r.logStore != nil {
-		switch logStore := r.logStore.(type) {
-		case *raftboltdb.BoltStore:
-			return logStore.Close()
-		default:
-
-		}
-	}
-
-	return nil
+	return r.CloseStore()
 }
 
 func (r *raftWrapper) Apply(b []byte) error {
@@ -216,8 +186,9 @@ func (r *raftWrapper) ShowDebugInfo(witch string) ([]byte, error) {
 		stat := r.raft.Stats()
 		b, err := json.Marshal(stat)
 		if err != nil {
-			logger.GetLogger().Error(fmt.Sprintf("marshal stat fial: %s", err))
-			return nil, fmt.Errorf("marshal stat fial: %s", err)
+			e := fmt.Sprintf("marshal stat fail: %s", err)
+			logger.GetLogger().Error(e)
+			return nil, fmt.Errorf(e)
 		}
 		return b, nil
 	default:

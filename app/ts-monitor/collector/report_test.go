@@ -35,7 +35,7 @@ func Test_Reporter_CreateDatabase(t *testing.T) {
 		expect func(err error) error
 	}
 
-	testCases := []TestCase{
+	var testCases = []TestCase{
 		{
 			"create database ok",
 			func(r *http.Request) (*http.Response, error) {
@@ -61,10 +61,7 @@ func Test_Reporter_CreateDatabase(t *testing.T) {
 	}
 
 	for _, tt := range testCases {
-		mr := NewReportJob(logger.NewLogger(errno.ModuleUnknown),
-			config.NewTSMonitor(),
-			false,
-			config.DefaultHistoryFile)
+		mr := NewReportJob(logger.NewLogger(errno.ModuleUnknown), config.NewTSMonitor(), false, config.DefaultHistoryFile)
 
 		t.Run(tt.Name, func(t *testing.T) {
 			mr.Client = &mocks.MockClient{DoFunc: tt.DoFunc}

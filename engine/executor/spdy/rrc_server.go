@@ -20,7 +20,6 @@ import (
 	"crypto/tls"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -34,8 +33,6 @@ type RRCServer struct {
 	address string
 
 	listener net.Listener
-
-	servers map[int64]*MultiplexedServer
 
 	factories []EventHandlerFactory
 
@@ -52,7 +49,6 @@ func NewRRCServer(cfg config.Spdy, network string, address string) *RRCServer {
 		cfg:        cfg,
 		network:    network,
 		address:    address,
-		servers:    make(map[int64]*MultiplexedServer),
 		factories:  nil,
 		listener:   nil,
 		stopSignal: make(chan struct{}),
@@ -77,18 +73,21 @@ func (s *RRCServer) run() {
 			s.stopWithErr(err)
 			return
 		}
-		conn := NewMultiplexedConnection(s.cfg, uconn, false)
-		go func() {
+
+		go func(nc net.Conn) {
+			conn := NewMultiplexedConnection(s.cfg, nc, false)
+			ms := newMultiplexedServer(s.cfg, conn, s.factories)
+			ms.Start()
+
 			if err := conn.ListenAndServed(); err != nil {
 				s.logger.Warn(err.Error(),
 					zap.String("remote_addr", conn.RemoteAddr().String()),
 					zap.String("local_addr", conn.LocalAddr().String()),
 					zap.String("SPDY", "RRCServer"))
 			}
-		}()
-		ms := newMultiplexedServer(s.cfg, time.Now().Unix(), conn, s.factories)
-		s.servers[ms.id] = ms
-		HandleError(ms.Start())
+
+			ms.Stop()
+		}(uconn)
 	}
 }
 
@@ -127,15 +126,12 @@ func (s *RRCServer) openListener() error {
 
 func (s *RRCServer) Stop() {
 	s.stopGuard.Lock()
+	defer s.stopGuard.Unlock()
+
 	if s.stopped {
-		s.stopGuard.Unlock()
 		return
 	}
 	s.stopped = true
-	s.stopGuard.Unlock()
-	for _, server := range s.servers {
-		server.Stop()
-	}
 	HandleError(s.listener.Close())
 	close(s.stopSignal)
 }

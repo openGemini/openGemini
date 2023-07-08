@@ -38,6 +38,8 @@ const (
 type ResourceManager interface {
 	Alloc(num int64) (allocNum int64, totalNum int64, err error)
 	Free(num, totalNum int64)
+	AllocParallelism(num int64) (int64, error)
+	FreeParallelism(num int64, totalNum int64)
 }
 
 type ShardParallelismAllocator struct {
@@ -45,21 +47,34 @@ type ShardParallelismAllocator struct {
 	maxParallelismAllocator *BaseResAllocator
 }
 
-func NewShardsParallelismAllocator(maxTime time.Duration, maxShardsParallelism, minShardsAllocNum int64) (*ShardParallelismAllocator, error) {
+func NewShardsParallelismAllocator(maxTime time.Duration, maxShardsParallelism, minShardsAllocNum int64, ptNumPerNode uint32) (*ShardParallelismAllocator, error) {
 	if maxTime <= 0 {
 		maxTime = DefaultWaitTimeOut
 	}
-	if maxShardsParallelism <= 0 {
-		maxShardsParallelism = int64(cpu.GetCpuNum()) * 2
+	if ptNumPerNode == 0 {
+		ptNumPerNode = 1
 	}
-	alloc, err := NewBaseResAllocator(maxShardsParallelism/8, minShardsAllocNum, GradientDesc)
+	if maxShardsParallelism <= 0 {
+		maxShardsParallelism = int64(cpu.GetCpuNum()) * 2 * int64(ptNumPerNode)
+	} else {
+		maxShardsParallelism *= int64(ptNumPerNode)
+	}
+	allocator, err := NewBaseResAllocator(maxShardsParallelism/8, minShardsAllocNum, GradientDesc)
 	if err != nil {
 		return nil, err
 	}
 	return &ShardParallelismAllocator{
 		sharedParallelismPool:   bucket.NewInt64Bucket(maxTime, maxShardsParallelism, true),
-		maxParallelismAllocator: alloc,
+		maxParallelismAllocator: allocator,
 	}, nil
+}
+
+func (s *ShardParallelismAllocator) AllocParallelism(num int64) (int64, error) {
+	n, m, err := s.maxParallelismAllocator.Alloc(num)
+	if n != m || err != nil {
+		return n, nil
+	}
+	return n, nil
 }
 
 func (s *ShardParallelismAllocator) Alloc(num int64) (int64, int64, error) {
@@ -69,6 +84,10 @@ func (s *ShardParallelismAllocator) Alloc(num int64) (int64, int64, error) {
 		return 0, 0, e
 	}
 	return n, num, nil
+}
+
+func (s *ShardParallelismAllocator) FreeParallelism(num int64, totalNum int64) {
+	s.maxParallelismAllocator.Free(num, totalNum)
 }
 
 func (s *ShardParallelismAllocator) Free(num, totalNum int64) {
@@ -96,9 +115,17 @@ func (s *SeriesResAllocator) Alloc(num int64) (int64, int64, error) {
 	return num, num, s.seriesParallelismPool.GetResource(num)
 }
 
+// not use
+func (s *SeriesResAllocator) AllocParallelism(num int64) (int64, error) {
+	return 0, nil
+}
+
 func (s *SeriesResAllocator) Free(num, totalNum int64) {
 	s.seriesParallelismPool.ReleaseResource(num)
 }
+
+// not use
+func (s *SeriesResAllocator) FreeParallelism(num int64, totalNum int64) {}
 
 type BaseResAllocator struct {
 	threshold   int64
@@ -151,7 +178,16 @@ func (p *ChunkReaderResAllocator) Alloc(num int64) (int64, int64, error) {
 	return p.allocator.Alloc(num)
 }
 
+// not use
+func (p *ChunkReaderResAllocator) AllocParallelism(num int64) (int64, error) {
+	return 0, nil
+}
+
 func (p *ChunkReaderResAllocator) Free(num, totalNum int64) {
+	p.allocator.Free(num, totalNum)
+}
+
+func (p *ChunkReaderResAllocator) FreeParallelism(num int64, totalNum int64) {
 	p.allocator.Free(num, totalNum)
 }
 

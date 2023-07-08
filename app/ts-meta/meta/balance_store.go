@@ -35,7 +35,7 @@ func (s *Store) selectDbPtsToMove() []*MoveEvent {
 
 	var aliveNodes []uint64
 	for _, dataNode := range s.data.DataNodes {
-		if dataNode.Status == serf.StatusAlive {
+		if dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
 			aliveNodes = append(aliveNodes, dataNode.ID)
 		}
 	}
@@ -52,6 +52,7 @@ func (s *Store) selectDbPtsToMove() []*MoveEvent {
 			nodePtsMap[ptInfo.Owner.NodeID] = append(nodePtsMap[ptInfo.Owner.NodeID], ptInfo)
 		}
 
+		dbInfo := s.data.GetDBBriefInfo(db)
 		maxPtNum := -1
 		minPtNum := math.MaxInt32
 		var from uint64
@@ -71,15 +72,19 @@ func (s *Store) selectDbPtsToMove() []*MoveEvent {
 		}
 
 		if maxPtNum-minPtNum > 1 {
-			moveEvents = s.balanceByPtNum(db, from, to, nodePtsMap, moveEvents)
+			moveEvents = s.balanceByPtNum(db, from, to, nodePtsMap, moveEvents, dbInfo)
 		} else {
-			moveEvents = s.balanceByOldAndNew(db, aliveNodes, nodePtsMap, moveEvents)
+			moveEvents = s.balanceByOldAndNew(db, aliveNodes, nodePtsMap, moveEvents, dbInfo)
 		}
 	}
 	return moveEvents
 }
 
-func (s *Store) balanceByPtNum(db string, from, to uint64, nodePtsMap map[uint64]meta.DBPtInfos, moveEvents []*MoveEvent) []*MoveEvent {
+func (s *Store) balanceByPtNum(db string, from, to uint64, nodePtsMap map[uint64]meta.DBPtInfos, moveEvents []*MoveEvent, dbBriefInfo *meta.DatabaseBriefInfo) []*MoveEvent {
+	dn := s.data.DataNode(to)
+	if dn == nil {
+		return moveEvents
+	}
 	var finalPt *meta.PtInfo
 	isMoveOld := s.canMigrateOldPt(db, from, to, nodePtsMap)
 	for i := 0; i <= len(nodePtsMap[from])-1; i++ {
@@ -91,16 +96,16 @@ func (s *Store) balanceByPtNum(db string, from, to uint64, nodePtsMap map[uint64
 		finalPt = &pt
 		if (isMoveOld && isOldPt) || (!isMoveOld && !isOldPt) {
 			shardDurations := s.data.GetShardDurationsByDbPt(db, pt.PtId)
-			moveEvents = append(moveEvents, NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: &pt, Shards: shardDurations},
-				from, to, false))
+			moveEvents = append(moveEvents, NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: &pt, Shards: shardDurations, DBBriefInfo: dbBriefInfo},
+				from, to, dn.AliveConnID, false))
 			return moveEvents
 		}
 	}
 	// expect to migrate old pt but all is new, or expect to migrate new pt but all is old
 	if finalPt != nil {
 		shardDurations := s.data.GetShardDurationsByDbPt(db, finalPt.PtId)
-		moveEvents = append(moveEvents, NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: finalPt, Shards: shardDurations},
-			from, to, false))
+		moveEvents = append(moveEvents, NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: finalPt, Shards: shardDurations, DBBriefInfo: dbBriefInfo},
+			from, to, dn.AliveConnID, false))
 	}
 	return moveEvents
 }
@@ -122,7 +127,7 @@ if ptNum < num(nodes)*2
 		ptNum=2, num(nodes)=3, threshold=1,ptDist [0] [1] []
 		ptNum=4, num(nodes)=3, threshold=1, ptDist [0,1] [2] [3]
 */
-func (s *Store) balanceByOldAndNew(db string, aliveNodes []uint64, nodePtsMap map[uint64]meta.DBPtInfos, moveEvents []*MoveEvent) []*MoveEvent {
+func (s *Store) balanceByOldAndNew(db string, aliveNodes []uint64, nodePtsMap map[uint64]meta.DBPtInfos, moveEvents []*MoveEvent, dbBriefInfo *meta.DatabaseBriefInfo) []*MoveEvent {
 	if len(s.data.PtView[db])%2 == 1 {
 		return moveEvents
 	}
@@ -157,12 +162,17 @@ func (s *Store) balanceByOldAndNew(db string, aliveNodes []uint64, nodePtsMap ma
 		}
 
 		if from > 0 && to > 0 {
+			srcDn := s.data.DataNode(from)
+			dstDn := s.data.DataNode(to)
+			if srcDn == nil || dstDn == nil {
+				return moveEvents
+			}
 			shardDurations := s.data.GetShardDurationsByDbPt(db, fromPt.PtId)
 			moveEvents = append(moveEvents, NewMoveEvent(
-				&meta.DbPtInfo{Db: db, Pti: &fromPt, Shards: shardDurations}, from, to, false))
+				&meta.DbPtInfo{Db: db, Pti: &fromPt, Shards: shardDurations, DBBriefInfo: dbBriefInfo}, from, to, dstDn.AliveConnID, false))
 			shardDurations = s.data.GetShardDurationsByDbPt(db, toPt.PtId)
 			moveEvents = append(moveEvents, NewMoveEvent(
-				&meta.DbPtInfo{Db: db, Pti: &toPt, Shards: shardDurations}, to, from, false))
+				&meta.DbPtInfo{Db: db, Pti: &toPt, Shards: shardDurations, DBBriefInfo: dbBriefInfo}, to, from, srcDn.AliveConnID, false))
 			break
 		}
 	}

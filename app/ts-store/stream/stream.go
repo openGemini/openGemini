@@ -19,13 +19,14 @@ package stream
 import (
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/errno"
 	Logger2 "github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
@@ -36,7 +37,7 @@ import (
 )
 
 type Engine interface {
-	WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, block *pool.DataBlock)
+	WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, ww WritePointsWorkIF)
 	RegisterTask(info *meta2.StreamInfo, fieldCalls []FieldCall, fieldsDims map[string]int32) error
 	Drain()
 	DeleteTask(id uint64)
@@ -46,6 +47,11 @@ type Engine interface {
 
 type Storage interface {
 	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
+}
+
+type WritePointsWorkIF interface {
+	GetRows() []influx.Row
+	PutWritePointsWork()
 }
 
 type FieldCall struct {
@@ -79,7 +85,16 @@ func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config)
 		conf:            conf,
 	}
 	for i := 0; i < conf.FilterConcurrency; i++ {
-		go s.filter()
+		go func() {
+			for {
+				select {
+				case <-s.abort:
+					return
+				default:
+					s.runFilter()
+				}
+			}
+		}()
 	}
 	return s, nil
 }
@@ -122,7 +137,7 @@ type CacheRow struct {
 	shardID               uint64
 	refCount              int64
 	streamIdDstShardIdMap map[uint64]uint64
-	dataBlock             *pool.DataBlock
+	ww                    WritePointsWorkIF
 }
 
 func (s *Stream) Run() {
@@ -140,7 +155,6 @@ func (s *Stream) Run() {
 				s.Logger.Info("get stream is nil")
 				continue
 			}
-			s.Logger.Info(fmt.Sprintf("get stream len %v", len(streams)))
 			for _, stream := range streams {
 				_, exist := s.windows.Load(stream.ID)
 				if exist {
@@ -288,9 +302,19 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []FieldCall, fi
 	return nil
 }
 
+func (s *Stream) runFilter() {
+	defer func() {
+		if err := recover(); err != nil {
+			s.Logger.Error("runtime panic", zap.String("stream filter raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, err)))
+		}
+	}()
+	s.filter()
+}
+
 func (s *Stream) filter() {
-	var r *CacheRow
 	for {
+		var r *CacheRow
 		select {
 		case r = <-s.cache:
 		case <-s.abort:
@@ -298,58 +322,27 @@ func (s *Stream) filter() {
 		}
 		s.stats.AddStreamFilter(1)
 
-		ref := false
 		release := func() bool {
 			cur := atomic.AddInt64(&r.refCount, -1)
 			if cur == 0 {
-				pool.StreamDataBlockPut(r.dataBlock)
+				r.ww.PutWritePointsWork()
 				s.rowPool.Put(r)
 				return true
 			}
 			return false
 		}
-		indexs := make(map[uint64][]int)
-		s.windows.Range(func(key, value interface{}) bool {
-			i, _ := key.(uint64)
-			v, _ := value.(*Task)
-			if r.db != v.src.Database || r.rp != v.src.RetentionPolicy {
-				return true
-			}
-			s.stats.AddStreamFilterNum(int64(len(r.rows)))
-			index, exist := indexs[i]
-			if !exist {
-				index = []int{}
-				indexs[i] = index
-			}
-			con := false
-			startIndex := 0
-
-			for j := range r.rows {
-				name := influx.GetOriginMstName(r.rows[j].Name)
-				if (name == v.src.Name || name == v.des.Name) && util.Include(r.rows[j].StreamId, i) {
-					if !con {
-						startIndex = j
-						con = true
-					}
-				} else {
-					if !con {
-						continue
-					}
-					atomic.AddInt64(&r.refCount, 1)
-					ref = true
-					con = false
-					index = append(index, startIndex, j)
-				}
-			}
-			if con {
+		ref, indexes := s.rangeWindow(r)
+		if !ref {
+			r.ww.PutWritePointsWork()
+			s.rowPool.Put(r)
+			continue
+		}
+		for _, vs := range indexes {
+			for j := 0; j < len(vs); j = j + 2 {
 				atomic.AddInt64(&r.refCount, 1)
-				ref = true
-				index = append(index, startIndex, len(r.rows))
 			}
-			indexs[i] = index
-			return true
-		})
-		for i, vs := range indexs {
+		}
+		for i, vs := range indexes {
 			for j := 0; j < len(vs); j = j + 2 {
 				cache := s.windowCachePool.Get()
 				cache.ptId = r.ptId
@@ -363,11 +356,51 @@ func (s *Stream) filter() {
 				}
 			}
 		}
-		if !ref {
-			pool.StreamDataBlockPut(r.dataBlock)
-			s.rowPool.Put(r)
-		}
 	}
+}
+
+func (s *Stream) rangeWindow(r *CacheRow) (bool, map[uint64][]int) {
+	ref := false
+	indexs := make(map[uint64][]int)
+	s.windows.Range(func(key, value interface{}) bool {
+		i, _ := key.(uint64)
+		v, _ := value.(*Task)
+		if r.db != v.src.Database || r.rp != v.src.RetentionPolicy {
+			return true
+		}
+		s.stats.AddStreamFilterNum(int64(len(r.rows)))
+		index, exist := indexs[i]
+		if !exist {
+			index = []int{}
+			indexs[i] = index
+		}
+		con := false
+		startIndex := 0
+
+		for j := range r.rows {
+			name := influx.GetOriginMstName(r.rows[j].Name)
+			if (name == v.src.Name || name == v.des.Name) && util.Include(r.rows[j].StreamId, i) {
+				if !con {
+					startIndex = j
+					con = true
+				}
+			} else {
+				if !con {
+					continue
+				}
+				ref = true
+				con = false
+				index = append(index, startIndex, j)
+			}
+		}
+		if con {
+			ref = true
+			index = append(index, startIndex, len(r.rows))
+		}
+		indexs[i] = index
+		return true
+	})
+	return ref, indexs
 }
 
 // Drain is for test case, to check whether there exist resource leakage
@@ -386,16 +419,17 @@ func (s *Stream) Drain() {
 }
 
 func (s *Stream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64,
-	dataBlock *pool.DataBlock,
+	ww WritePointsWorkIF,
 ) {
 	r := s.rowPool.Get()
-	r.rows = dataBlock.Rows
+	r.rows = ww.GetRows()
 	r.ptId = ptId
 	r.shardID = shardID
 	r.db = db
 	r.rp = rp
 	r.streamIdDstShardIdMap = streamIdDstShardIdMap
-	r.dataBlock = dataBlock
+	r.ww = ww
+	r.refCount = 0
 
 	s.stats.AddStreamIn(1)
 	s.stats.AddStreamInNum(int64(len(r.rows)))

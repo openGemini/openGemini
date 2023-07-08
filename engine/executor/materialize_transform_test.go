@@ -234,7 +234,7 @@ func TestMaterializeTransform(t *testing.T) {
 	expectMaxIntValues := []int64{2, 2, 3, 2}
 	expectMaxFloatValues := []float64{1.1, 3.3, 5.5, 5.5}
 	expectMaxBooleanValues := []bool{true, false, true, true}
-	schema := executor.NewQuerySchema(nil, nil, &opt)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildMaterializeOutRowDataType(), ops, opt, nil, schema)
 
 	source := NewSourceFromSingleChunk(buildMaterializeInRowDataType(), []executor.Chunk{chunk})

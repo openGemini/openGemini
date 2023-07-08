@@ -53,12 +53,14 @@ func mockStorage() *storage.Storage {
 	storeConfig := config.NewStore()
 	config.SetHaEnable(true)
 	monitorConfig := config.Monitor{
-		Pushers: "http",
+		Pushers:      "http",
+		StoreEnabled: true,
 	}
 	config := &config.TSStore{
 		Data:    storeConfig,
 		Monitor: monitorConfig,
 		Common:  config.NewCommon(),
+		Meta:    config.NewMeta(),
 	}
 
 	storage, err := storage.OpenStorage(storageDataPath, node, nil, config)
@@ -102,7 +104,7 @@ func mockStatisticsPusher(server *Server) *statisticsPusher.StatisticsPusher {
 func mockServer() *Server {
 	server := &Server{}
 	server.Logger = logger.NewLogger(errno.ModuleStorageEngine)
-	server.config = config.NewTSStore()
+	server.config = config.NewTSStore(true)
 	server.config.Monitor.HttpEndPoint = "127.0.0.1:8502"
 	server.config.Monitor.StoreDatabase = "_internal"
 	server.config.Monitor.StoreEnabled = true
@@ -201,7 +203,7 @@ func TestDebugVars1(t *testing.T) {
 func TestNilService(t *testing.T) {
 	server := &Server{}
 	server.Logger = logger.NewLogger(errno.ModuleStorageEngine)
-	server.config = config.NewTSStore()
+	server.config = config.NewTSStore(true)
 	server.storage = mockStorage()
 	server.StoreService = NewService(&server.config.Data)
 	if server.StoreService != nil {
@@ -210,9 +212,8 @@ func TestNilService(t *testing.T) {
 }
 
 func TestNewServer(t *testing.T) {
-	config := config.NewTSStore()
+	config := config.NewTSStore(true)
 	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
-	config.Common.EnableTagArray = true
 	cmd := &cobra.Command{}
 
 	NewServer(config, cmd, logger.NewLogger(errno.ModuleUnknown))
@@ -229,6 +230,10 @@ func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo
 func (client *MockMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (client *MockMetaClient) GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error) {
+	return nil, nil
 }
 
 func (client *MockMetaClient) UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error {
@@ -259,16 +264,16 @@ func mockMetaClient() *MockMetaClient {
 	return &MockMetaClient{}
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation) (*meta2.MeasurementInfo, error) {
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
@@ -444,4 +449,15 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
+}
+
+func (mmc *MockMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
+	return false, nil
+}
+
+func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
+	var msts []string
+	msts = append(msts, "cpu")
+	msts = append(msts, "mem")
+	return msts
 }

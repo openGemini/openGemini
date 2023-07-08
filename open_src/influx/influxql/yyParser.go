@@ -128,6 +128,7 @@ func (p *YyParser) Lex(lval *yySymType) int {
 				v := p.Params[k]
 				if v == nil {
 					p.Error(fmt.Sprintf("missing parameter: %s", k))
+					break
 				}
 
 				switch v := v.(type) {
@@ -185,4 +186,11 @@ type IndexType struct {
 type cqSamplePolicyInfo struct {
 	ResampleEvery time.Duration
 	ResampleFor   time.Duration
+}
+
+type fieldList struct {
+	fieldName   string
+	fieldType   string
+	tagOrField  string
+	defaultFill Expr
 }

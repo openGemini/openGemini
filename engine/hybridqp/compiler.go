@@ -45,5 +45,11 @@ type Options interface {
 	GetInterval() time.Duration
 	IsGroupByAllDims() bool
 	GetSourcesNames() []string
+	HaveOnlyCSStore() bool
 	GetDimensions() []string
+	SetFill(influxql.FillOption)
+	GetSourceCondition() influxql.Expr
+	SetSourceCondition(expr influxql.Expr)
+	SetTimeFirstKey()
+	GetTimeFirstKey() bool
 }

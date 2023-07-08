@@ -38,8 +38,8 @@ type Handler struct {
 		User(username string) (meta2.User, error)
 		AdminUserExists() bool
 		DataNodes() ([]meta2.DataNode, error)
-		InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *meta.StorageNodeInfo) (uint64, uint64, error)
-		CreateDataNode(httpAddr, tcpAddr string) (uint64, uint64, error)
+		InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *meta.StorageNodeInfo) (uint64, uint64, uint64, error)
+		CreateDataNode(httpAddr, tcpAddr string) (uint64, uint64, uint64, error)
 	}
 
 	QueryAuthorizer interface {

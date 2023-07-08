@@ -505,9 +505,9 @@ func (f *Float64LimitIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 }
 
 type StringLimitIterator struct {
-	input      Column
-	output     Column
-	stringBuff []string
+	input        Column
+	output       Column
+	stringOffset []uint32
 }
 
 func NewStringLimitIterator() *StringLimitIterator {
@@ -518,7 +518,9 @@ func (f *StringLimitIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 	f.input = endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
-	f.output.AppendStringValues(f.input.StringValuesRange(f.stringBuff[:0], startValue, endValue)...)
+	var strBytes []byte
+	strBytes, f.stringOffset = f.input.StringValuesWithOffset(startValue, endValue, f.stringOffset[:0])
+	f.output.AppendStringBytes(strBytes, f.stringOffset)
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {
 			if f.input.IsNilV2(i) {

@@ -105,18 +105,17 @@ func getDataBlockBuffer(size int) []byte {
 	if v == nil {
 		return make([]byte, 0, size)
 	}
-
-	return *(v.(*[]byte))
+	return v.([]byte)
 }
 
-// nolint
-func putDataBlockBuffer(b *[]byte) {
-	if cap(*b) == 0 {
+//lint:file-ignore SA6002 argument should be pointer-like to avoid allocations
+func putDataBlockBuffer(b []byte) {
+	if cap(b) == 0 {
 		return
 	}
 
-	*b = (*b)[:0]
-	idx := calcBlockIndex(cap(*b))
+	b = b[:0]
+	idx := calcBlockIndex(cap(b))
 	dataBlockPool[idx].Put(b)
 }
 
@@ -124,7 +123,7 @@ func freeDataBlocks(buffers [][]byte) int {
 	n := 0
 	for i := range buffers {
 		n += cap(buffers[i])
-		putDataBlockBuffer(&buffers[i])
+		putDataBlockBuffer(buffers[i])
 		buffers[i] = nil
 	}
 	return n

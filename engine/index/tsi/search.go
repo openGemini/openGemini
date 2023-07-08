@@ -34,7 +34,6 @@ import (
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -264,11 +263,7 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 					if err != nil {
 						return nil, err
 					}
-					if singleSeries {
-						litr = is.genSeriesIDIterator(*tsids, lexpr)
-					} else {
-						litr = index.NewSeriesIDExprIteratorWithSeries(ritr.Ids(), lexpr)
-					}
+					litr = index.NewSeriesIDExprIteratorWithSeries(ritr.Ids(), lexpr)
 				}
 
 				if lerr != ErrFieldExpr && rerr == ErrFieldExpr {
@@ -276,11 +271,7 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 					if err != nil {
 						return nil, err
 					}
-					if singleSeries {
-						ritr = is.genSeriesIDIterator(*tsids, rexpr)
-					} else {
-						ritr = index.NewSeriesIDExprIteratorWithSeries(litr.Ids(), rexpr)
-					}
+					ritr = index.NewSeriesIDExprIteratorWithSeries(litr.Ids(), rexpr)
 				}
 
 				if lerr == ErrFieldExpr && rerr == ErrFieldExpr {
@@ -692,7 +683,6 @@ func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, er
 		return tsids, nil
 	}
 
-	querySeriesLimit := syscontrol.GetQuerySeriesLimit()
 	// Slow path - scan for all the rows with the given prefix.
 	// Pass nil filter to getTSIDsForTagFilterSlow, since it works faster on production workloads
 	// than non-nil filter with many entries.
@@ -702,13 +692,6 @@ func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, er
 		}
 
 		tsids.Add(u)
-		if querySeriesLimit > 0 && tsids.Len() >= querySeriesLimit {
-			logger.NewLogger(errno.ModuleIndex).Error("",
-				zap.Error(errno.NewError(errno.ErrQuerySeriesUpperBound)),
-				zap.Int("querySeriesLimit", querySeriesLimit),
-				zap.String("index_path", is.idx.path))
-			return false
-		}
 		return true
 	})
 	if err != nil {
@@ -1069,8 +1052,10 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 			continue
 		}
 
-		if !is.isExpectTagWithTagArray(tsid, seriesKeys, combineSeriesKey, condition, mp.Tag) {
-			continue
+		if is.TagArrayEnabled() {
+			if !is.isExpectTagWithTagArray(tsid, seriesKeys, combineSeriesKey, condition, mp.Tag) {
+				continue
+			}
 		}
 
 		tagValueMap[string(mp.Tag.Value)] = struct{}{}
@@ -1120,4 +1105,8 @@ func (is *indexSearch) getFieldsByTSID(tsid uint64) ([][]byte, error) {
 		}
 	}
 	return ips, nil
+}
+
+func (is *indexSearch) TagArrayEnabled() bool {
+	return is.idx.indexBuilder.EnableTagArray
 }

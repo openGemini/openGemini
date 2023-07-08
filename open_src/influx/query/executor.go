@@ -58,9 +58,11 @@ const (
 	// PanicCrashEnv is the environment variable that, when set, will prevent
 	// the handler from recovering any panics.
 	PanicCrashEnv = "INFLUXDB_PANIC_CRASH"
-
-	QueryDurationKey = "QueryDuration"
 )
+
+type DurationKeyType int
+
+const QueryDurationKey DurationKeyType = iota
 
 // ErrDatabaseNotFound returns a database not found error for the given database name.
 func ErrDatabaseNotFound(name string) error { return fmt.Errorf("database not found: %s", name) }

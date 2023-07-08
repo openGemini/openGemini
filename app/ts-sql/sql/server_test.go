@@ -108,3 +108,194 @@ func TestInitStatisticsPusher(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	server.Close()
 }
+
+func Test_NewServer_1U(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 1
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_2U8G(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 2
+	conf.Common.MemorySize = 8 * config.GB
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_2U16G(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 2
+	conf.Common.MemorySize = 16 * config.GB
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_4U(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 4
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_8U(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 8
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_16U(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 16
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_32U(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 32
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_64U(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Common.CPUNum = 64
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_Correct_RPLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+	cmd := &cobra.Command{
+		Version: "Version",
+	}
+
+	conf := config.NewTSSql()
+	conf.Coordinator.RetentionPolicyLimit = 0
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+
+	server, err := NewServer(conf, cmd, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+	require.NotNil(t, server.(*Server).TSDBStore)
+	require.NotNil(t, server.(*Server).castorService)
+	require.NotNil(t, server.(*Server).sherlockService)
+}

@@ -21,7 +21,7 @@ import (
 	"hash/crc32"
 
 	"github.com/openGemini/openGemini/lib/numberenc"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 type DownSampleFilesInfo struct {
@@ -97,7 +97,7 @@ func (info *DownSampleFilesInfo) unmarshal(src []byte) ([]byte, error) {
 		if len(src) < l {
 			return src, fmt.Errorf("too small data for name, %v < %v", len(src), l)
 		}
-		info.Names[i], src = record.Bytes2str(src[:l]), src[l:]
+		info.Names[i], src = util.Bytes2str(src[:l]), src[l:]
 	}
 
 	if len(src) < 2 {
@@ -128,7 +128,7 @@ func (info *DownSampleFilesInfo) unmarshal(src []byte) ([]byte, error) {
 			if len(src) < l {
 				return src, fmt.Errorf("too small data for newFiles, %v < %v", len(src), l)
 			}
-			info.OldFiles[i][k], src = record.Bytes2str(src[:l]), src[l:]
+			info.OldFiles[i][k], src = util.Bytes2str(src[:l]), src[l:]
 		}
 	}
 
@@ -160,7 +160,7 @@ func (info *DownSampleFilesInfo) unmarshal(src []byte) ([]byte, error) {
 			if len(src) < l {
 				return src, fmt.Errorf("too small data for newFiles, %v < %v", len(src), l)
 			}
-			info.NewFiles[i][k], src = record.Bytes2str(src[:l]), src[l:]
+			info.NewFiles[i][k], src = util.Bytes2str(src[:l]), src[l:]
 		}
 	}
 	return src, nil

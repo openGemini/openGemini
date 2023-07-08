@@ -18,9 +18,12 @@ package immutable
 
 import (
 	"github.com/openGemini/openGemini/engine/comm"
-	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/encoding"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 type ReadContext struct {
@@ -31,17 +34,20 @@ type ReadContext struct {
 	col            record.ColVal
 
 	ops             []*comm.CallOption
-	tr              record.TimeRange
+	tr              util.TimeRange
 	Ascending       bool
 	onlyFirstOrLast bool
 	origData        []byte
 
 	readBuf []byte
+
+	readSpan   *tracing.Span
+	filterSpan *tracing.Span
 }
 
 func NewReadContext(ascending bool) *ReadContext {
 	var readBuf []byte
-	if !mmapEn {
+	if !fileops.MmapEn {
 		readBuf = bufferpool.Get()
 	}
 	b := bufferpool.Get()
@@ -53,6 +59,11 @@ func NewReadContext(ascending bool) *ReadContext {
 		tr:             record.MinMaxTimeRange,
 		readBuf:        readBuf,
 	}
+}
+
+func (d *ReadContext) SetSpan(readSpan, filterSpan *tracing.Span) {
+	d.readSpan = readSpan
+	d.filterSpan = filterSpan
 }
 
 func (d *ReadContext) GetOps() []*comm.CallOption {
@@ -67,7 +78,7 @@ func (d *ReadContext) MatchPreAgg() bool {
 	return len(d.ops) > 0
 }
 
-func (d *ReadContext) Set(ascending bool, tr record.TimeRange, onlyFirstOrLast bool, ops []*comm.CallOption) {
+func (d *ReadContext) Set(ascending bool, tr util.TimeRange, onlyFirstOrLast bool, ops []*comm.CallOption) {
 	d.Ascending = ascending
 	d.tr = tr
 	d.onlyFirstOrLast = onlyFirstOrLast
@@ -99,10 +110,18 @@ func (d *ReadContext) Release() {
 	}
 }
 
-func (d *ReadContext) SetTr(tr record.TimeRange) {
+func (d *ReadContext) SetTr(tr util.TimeRange) {
 	d.tr = tr
 }
 
 func (d *ReadContext) InitPreAggBuilder() {
 	d.preAggBuilders = newPreAggBuilders()
+}
+
+func (d *ReadContext) GetReadBuff() []byte {
+	return d.readBuf
+}
+
+func (d *ReadContext) GetCoder() *encoding.CoderContext {
+	return d.coderCtx
 }

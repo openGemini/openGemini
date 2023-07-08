@@ -30,6 +30,8 @@ import (
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
@@ -61,9 +63,9 @@ func init() {
 	DefaultEngineOption.WalEnabled = true
 	DefaultEngineOption.WalReplayParallel = false
 	DefaultEngineOption.DownSampleWriteDrop = true
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0)
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0)
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ShardsParallelismRes, 0, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0, 0)
 }
 
 func mustParseTime(layout, value string) time.Time {
@@ -74,7 +76,7 @@ func mustParseTime(layout, value string) time.Time {
 	return tm
 }
 
-func createShard(db, rp string, ptId uint32, pathName string) (engine.Shard, error) {
+func createShard(db, rp string, ptId uint32, pathName string, duration ...time.Duration) (engine.Shard, error) {
 	dataPath := pathName + "/data"
 	walPath := pathName + "/wal"
 	lockPath := filepath.Join(dataPath, "LOCK")
@@ -97,7 +99,7 @@ func createShard(db, rp string, ptId uint32, pathName string) (engine.Shard, err
 		return nil, err
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
-	indexRelation, err := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+	indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
 	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
 	err = indexBuilder.Open()
 	if err != nil {
@@ -107,8 +109,11 @@ func createShard(db, rp string, ptId uint32, pathName string) (engine.Shard, err
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1970-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2099-01-01T01:00:00Z")}
 	shardIdent := &meta.ShardIdentifier{ShardID: defaultShardId, ShardGroupID: 1, OwnerDb: db, OwnerPt: ptId, Policy: rp}
-	sh := engine.NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption)
+	sh := engine.NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, config.TSSTORE)
 	sh.SetIndexBuilder(indexBuilder)
+	if len(duration) > 0 {
+		sh.SetWriteColdDuration(duration[0])
+	}
 	if err := sh.OpenAndEnable(nil); err != nil {
 		_ = sh.Close()
 		return nil, err
@@ -360,11 +365,11 @@ func genQuerySchema(fieldAux []influxql.VarRef, opt *query.ProcessorOptions) *ex
 		fields = append(fields, f)
 		columnNames = append(columnNames, fieldAux[i].Val)
 	}
-	return executor.NewQuerySchema(fields, columnNames, opt)
+	return executor.NewQuerySchema(fields, columnNames, opt, nil)
 }
 
 func closeShard(sh engine.Shard) error {
-	if err := sh.CloseIndexBuilder(); err != nil {
+	if err := sh.GetIndexBuilder().Close(); err != nil {
 		return err
 	}
 	if err := sh.Close(); err != nil {
@@ -381,14 +386,12 @@ func BenchmarkTestIndex(b *testing.B) {
 	_ = os.RemoveAll(testDir)
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, 1000*time.Second) // not flush data to snapshot
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	// not flush data to snapshot
-	sh.SetWriteColdDuration(1000 * time.Second)
-	sh.SetMutableSizeLimit(10000000000)
+	mutable.SetSizeLimit(10000000000)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, startTime, endTime := GenDataRecord(500000, 1, time.Now(), true, true, false, map[string]interface{}{
@@ -467,14 +470,12 @@ func BenchmarkTestQuery(b *testing.B) {
 	_ = os.RemoveAll(testDir)
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, 1000*time.Second) // not flush data to snapshot
 	if err != nil {
 		b.Fatal(err)
 	}
 
-	// not flush data to snapshot
-	sh.SetWriteColdDuration(1000 * time.Second)
-	sh.SetMutableSizeLimit(10000000000)
+	mutable.SetSizeLimit(10000000000)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, startTime, endTime := GenDataRecord(50000, 1, time.Now(), true, true, false, map[string]interface{}{
@@ -526,14 +527,12 @@ func TestQuery(t *testing.T) {
 	_ = os.RemoveAll(testDir)
 
 	// step2: create shard
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, 1000*time.Second) // not flush data to snapshot
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// not flush data to snapshot
-	sh.SetWriteColdDuration(1000 * time.Second)
-	sh.SetMutableSizeLimit(10000000000)
+	mutable.SetSizeLimit(10000000000)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, startTime, endTime := GenDataRecord(50, 10, time.Now(), true, true, false, map[string]interface{}{

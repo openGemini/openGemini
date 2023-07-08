@@ -39,7 +39,7 @@ import (
 )
 
 func init() {
-	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0)
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0, 0)
 }
 
 func getTestIndexAndBuilder(path string) (Index, *IndexBuilder) {

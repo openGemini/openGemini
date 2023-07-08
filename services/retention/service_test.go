@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -68,7 +69,7 @@ func TestTTL(t *testing.T) {
 	pt := uint32(1)
 	rp := "rp0"
 	shardId := uint64(1)
-	eng.CreateDBPT(db, pt)
+	eng.CreateDBPT(db, pt, false)
 	shardTimeInfo := &meta.ShardTimeRangeInfo{}
 	shardTimeInfo.TimeRange = meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "2022-06-14T00:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2022-06-15T00:00:00Z")}
@@ -77,7 +78,10 @@ func TestTTL(t *testing.T) {
 	shardTimeInfo.OwnerIndex.IndexID = 1
 	shardTimeInfo.ShardDuration = &meta.ShardDurationInfo{Ident: meta.ShardIdentifier{ShardID: shardId},
 		DurationInfo: meta.DurationDescriptor{Duration: time.Hour}}
-	err = eng.CreateShard(db, rp, pt, shardId, shardTimeInfo)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	err = eng.CreateShard(db, rp, pt, shardId, shardTimeInfo, msInfo)
 	if err != nil {
 		t.Fatal(err)
 	}

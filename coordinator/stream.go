@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -69,7 +69,7 @@ func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema map[string]int32
 }
 
 type TSDBStore interface {
-	WriteRows(nodeID uint64, database, rp string, pt uint32, shard uint64, streamShardIdList []uint64, rows *[]influx.Row, timeout time.Duration) error
+	WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rp string, timeout time.Duration) error
 }
 
 type Stream struct {
@@ -241,7 +241,7 @@ func (s *Stream) calculate(
 		return err
 	}
 
-	err = s.mapRowsToShard(si, task, pw, ctx, iCtx, idx)
+	err = s.mapRowsToShard(si, task, ctx, iCtx, idx)
 	if err != nil {
 		return err
 	}
@@ -297,7 +297,7 @@ func (s *Stream) calculateWindow(rows []*influx.Row, si *meta2.StreamInfo, task 
 }
 
 func (s *Stream) mapRowsToShard(
-	si *meta2.StreamInfo, task *streamTask, pw *PointsWriter, ctx *streamCtx, iCtx *injestionCtx, idx int,
+	si *meta2.StreamInfo, task *streamTask, ctx *streamCtx, iCtx *injestionCtx, idx int,
 ) error {
 	wRows := iCtx.getPRowsPool()
 
@@ -386,8 +386,6 @@ func (s *Stream) mapRowsToShard(
 			if pErr != nil {
 				continue
 			}
-			id := strconv.FormatInt(int64(sh.ID), 10)
-			iCtx.getShardMap().Set(id, sh)
 			r.StreamId = append(r.StreamId, si.ID)
 			m, exist := srcStreamDstShardIdMap[sh.ID]
 			if !exist {
@@ -395,9 +393,7 @@ func (s *Stream) mapRowsToShard(
 			}
 			m[si.ID] = sh.ID
 			srcStreamDstShardIdMap[sh.ID] = m
-			if err = pw.MapRowToShard(iCtx, id, r); err != nil {
-				return err
-			}
+			iCtx.setShardRow(sh, r)
 		}
 	}
 	*wRows = (*wRows)[:size]
@@ -417,8 +413,8 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 	shardKeyInfo = &ctx.shardKeyInfo
 	mi = ctx.ms
 	aliveShardIdxes = &ctx.aliveShardIdxes
-
-	sg, sameSg, err := wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp))
+	engineType := mi.EngineType
+	sg, sameSg, err := wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp), engineType)
 	if err != nil {
 		return
 	}

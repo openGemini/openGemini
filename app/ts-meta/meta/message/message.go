@@ -209,3 +209,22 @@ type GetMeasurementInfoResponse struct {
 	Data []byte
 	Err  string
 }
+
+type GetMeasurementsInfoRequest struct {
+	DbName string
+	RpName string
+}
+
+type GetMeasurementsInfoResponse struct {
+	Data []byte
+	Err  string
+}
+
+type GetDBBriefInfoRequest struct {
+	DbName string
+}
+
+type GetDBBriefInfoResponse struct {
+	Data []byte
+	Err  string
+}

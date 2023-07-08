@@ -14,39 +14,72 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package bucket
+package bucket_test
 
 import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/openGemini/openGemini/lib/bucket"
+	"github.com/stretchr/testify/assert"
 )
 
-var bucket ResourceBucket
-
-func init() {
-	bucket = NewInt64Bucket(3*time.Second, 100000, false)
+func TestBucketCanOutOflimit(t *testing.T) {
+	bt := bucket.NewInt64Bucket(time.Minute, 1000, true)
+	err := bt.GetResource(1001)
+	assert.NoError(t, err)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := bt.GetResource(1)
+		if err != nil {
+			t.Error("get resource lack")
+		}
+	}()
+	time.Sleep(time.Second)
+	bt.ReleaseResource(1001)
+	wg.Wait()
+	bt.ReleaseResource(1)
+	if bt.GetFreeResource() != 1000 {
+		t.Error("put resource error")
+	}
 }
 
-func ResetBucket(totalRe int64) {
-	b := bucket.(*Int64bucket)
-	b.broadcast = make(chan struct{})
-	b.totalResource = totalRe
-	b.freeResource = totalRe
-	b.blockExecutor = 0
-	bucket = b
+func TestBucketCannotOutOfLimit(t *testing.T) {
+	bt := bucket.NewInt64Bucket(time.Minute, 1000, false)
+	err := bt.GetResource(1000)
+	assert.NoError(t, err)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := bt.GetResource(1)
+		if err != nil {
+			t.Error("get resource lack")
+		}
+	}()
+	time.Sleep(time.Second)
+	bt.ReleaseResource(1000)
+	wg.Wait()
+	bt.ReleaseResource(1)
+	if bt.GetFreeResource() != 1000 {
+		t.Error("put resource error")
+	}
 }
 
 var simpleExample func()
 
 func BenchmarkGetV2(b *testing.B) {
-	ResetBucket(100000)
+	bt := bucket.NewInt64Bucket(3*time.Second, 100000, false)
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		simpleExample = func() {
 			defer wg.Done()
-			bucket.GetResource(2000)
-			bucket.ReleaseResource(2000)
+			err := bt.GetResource(2000)
+			assert.NoError(b, err)
+			bt.ReleaseResource(2000)
 		}
 		for i := 0; i < 100; i++ {
 			wg.Add(1)
@@ -57,13 +90,14 @@ func BenchmarkGetV2(b *testing.B) {
 }
 
 func BenchmarkGetTimeoutV2(b *testing.B) {
-	ResetBucket(1000)
+	bt := bucket.NewInt64Bucket(3*time.Second, 100000, false)
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		simpleExample = func() {
 			defer wg.Done()
-			bucket.GetResource(2000)
-			bucket.ReleaseResource(2000)
+			err := bt.GetResource(2000)
+			assert.NoError(b, err)
+			bt.ReleaseResource(2000)
 		}
 		for i := 0; i < 100; i++ {
 			wg.Add(1)

@@ -25,6 +25,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
@@ -293,7 +294,7 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 		rp.ReplicaN = replicaN
 		rp.Duration = autoCreateRetentionPolicyPeriod
 	}
-	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki())
+	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray())
 	fsm.Logger.Info("apply create database", zap.Error(err))
 	return err
 }
@@ -328,7 +329,7 @@ func (fsm *storeFSM) applyCreateMeasurementCommand(cmd *proto2.Command) interfac
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateMeasurementCommand", ext))
 	}
-	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR())
+	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR(), config.EngineType(v.GetEngineType()), v.GetColStoreInfo())
 }
 
 func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) interface{} {
@@ -391,7 +392,7 @@ func (fsm *storeFSM) applyUpdateRetentionPolicyCommand(cmd *proto2.Command) inte
 func (fsm *storeFSM) applyCreateShardGroupCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateShardGroupCommand_Command)
 	v := ext.(*proto2.CreateShardGroupCommand)
-	return fsm.data.CreateShardGroup(v.GetDatabase(), v.GetPolicy(), time.Unix(0, v.GetTimestamp()), v.GetShardTier())
+	return fsm.data.CreateShardGroup(v.GetDatabase(), v.GetPolicy(), time.Unix(0, v.GetTimestamp()), v.GetShardTier(), config.EngineType(v.GetEngineType()))
 }
 
 func (fsm *storeFSM) applyDeleteShardGroupCommand(cmd *proto2.Command) interface{} {

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/mitchellh/cli"
-	"github.com/ryanuber/columnize"
 )
 
 type KeysCommand struct {
@@ -111,7 +110,7 @@ func (c *KeysCommand) Run(args []string) int {
 				for node, message := range failures {
 					lines = append(lines, fmt.Sprintf("failed: | %s | %s", node, message))
 				}
-				out := columnize.SimpleFormat(lines)
+				out := strings.Join(lines, "\n")
 				c.Ui.Error(out)
 			}
 
@@ -126,7 +125,7 @@ func (c *KeysCommand) Run(args []string) int {
 		for key, num := range keys {
 			lines = append(lines, fmt.Sprintf("%s | [%d/%d]", key, num, total))
 		}
-		out := columnize.SimpleFormat(lines)
+		out := strings.Join(lines, "\n")
 		c.Ui.Output(out)
 
 		return 0
@@ -139,7 +138,7 @@ func (c *KeysCommand) Run(args []string) int {
 				for node, message := range failures {
 					lines = append(lines, fmt.Sprintf("failed: | %s | %s", node, message))
 				}
-				out := columnize.SimpleFormat(lines)
+				out := strings.Join(lines, "\n")
 				c.Ui.Error(out)
 			}
 			c.Ui.Error("")
@@ -157,7 +156,7 @@ func (c *KeysCommand) Run(args []string) int {
 				for node, message := range failures {
 					lines = append(lines, fmt.Sprintf("failed: | %s | %s", node, message))
 				}
-				out := columnize.SimpleFormat(lines)
+				out := strings.Join(lines, "\n")
 				c.Ui.Error(out)
 			}
 			c.Ui.Error("")
@@ -175,7 +174,7 @@ func (c *KeysCommand) Run(args []string) int {
 				for node, message := range failures {
 					lines = append(lines, fmt.Sprintf("failed: | %s | %s", node, message))
 				}
-				out := columnize.SimpleFormat(lines)
+				out := strings.Join(lines, "\n")
 				c.Ui.Error(out)
 			}
 			c.Ui.Error("")

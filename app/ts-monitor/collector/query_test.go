@@ -50,7 +50,6 @@ func TestQueryMetric(t *testing.T) {
 		QueryInterval: toml.Duration(10 * time.Second), // 10s
 	}
 	q := NewQueryMetric(log, &conf)
-
 	rjConfig := config.NewTSMonitor()
 	rjConfig.ReportConfig.Address = "127.0.0.1/write"
 	rjConfig.ReportConfig.Database = "db0"
@@ -61,7 +60,6 @@ func TestQueryMetric(t *testing.T) {
 		false,
 		"errLogHistory",
 	)
-
 	q.Reporter = rj
 
 	showFn := func(r *http.Request) (*http.Response, error) {
@@ -124,7 +122,6 @@ func TestQueryMetric_Manual(t *testing.T) {
 	}
 	nc := NewQueryMetric(logger, &conf)
 	defer nc.Close()
-
 	rjConfig := config.NewTSMonitor()
 	rjConfig.ReportConfig.Address = "127.0.0.1/write"
 	rjConfig.ReportConfig.Database = "db0"
@@ -135,7 +132,6 @@ func TestQueryMetric_Manual(t *testing.T) {
 		false,
 		"errLogHistory",
 	)
-
 	nc.Reporter = rj
 
 	type TestCase struct {

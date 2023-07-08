@@ -56,6 +56,7 @@ type SlidingWindowTransform struct {
 
 	span        *tracing.Span
 	computeSpan *tracing.Span
+	errs        errno.Errs
 }
 
 func NewSlidingWindowTransform(
@@ -136,11 +137,8 @@ func (trans *SlidingWindowTransform) Work(ctx context.Context) error {
 		trans.Close()
 	}()
 
-	errs := errno.NewErrsPool().Get()
+	errs := &trans.errs
 	errs.Init(len(trans.Inputs)+1, trans.Close)
-	defer func() {
-		errno.NewErrsPool().Put(errs)
-	}()
 
 	runnable := func(in int) {
 		defer func() {

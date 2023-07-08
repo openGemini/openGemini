@@ -96,6 +96,10 @@ const (
 	LogicalPlainBuildFailInShard = 1115
 	SchemaNotAligned             = 1116
 	NoFieldSelected              = 1117
+	NoDimSelected                = 1118
+	NoColValToColumnFunc         = 1119
+	InvalidQuerySchema           = 1120
+	InvalidQueryStat             = 1121
 )
 
 // store engine error codes
@@ -133,6 +137,7 @@ const (
 	IndexNotFound                      = 2131
 	FailedToDecodeFloatArray           = 2132
 	InvalidFloatBuffer                 = 2133
+	MemUsageExceeded                   = 2134
 )
 
 // merge out of order
@@ -149,6 +154,8 @@ const (
 	UnsupportedToFillPrevious      = 3002
 	UnsupportedConditionInFullJoin = 3003
 	UnsupportedHoltWinterInit      = 3004
+	SortTransformRunningErr        = 3005
+	HashMergeTransformRunningErr   = 3006
 )
 
 // meta
@@ -196,6 +203,8 @@ const (
 	RpIsBeingDelete                    = 4041
 	ShardIsBeingDelete                 = 4042
 	MstIsBeingDelete                   = 4043
+	ErrMeasurementsNotFound            = 4044
+	InvalidTagKey                      = 4045
 )
 
 // meta-client process
@@ -230,14 +239,25 @@ const (
 	WriteMissTagValue          = 5016
 	ErrorTagArrayFormat        = 5017
 	WriteErrorArray            = 5018
+	TooManyTagKeys             = 5019
+	SeriesLimited              = 5020
 )
 
 // index
 const (
-	ConvertToBinaryExprFailed = 6001
-	ErrQuerySeriesUpperBound  = 6002
-	ErrTooSmallKeyCount       = 6003
-	ErrTooSmallIndexKey       = 6004
+	ConvertToBinaryExprFailed  = 6001
+	ErrQuerySeriesUpperBound   = 6002
+	ErrTooSmallKeyCount        = 6003
+	ErrTooSmallIndexKey        = 6004
+	ErrGetNonExistingMark      = 6005
+	ErrMarkRangeInserting      = 6006
+	ErrUnknownOpInCondition    = 6007
+	ErrInvalidStackInCondition = 6008
+	ErrRPNSetInNotCreated      = 6009
+	ErrRPNIsNullForNOT         = 6010
+	ErrRPNIsNullForAnd         = 6011
+	ErrRPNIsNullForOR          = 6012
+	ErrCoarseIndexFragment     = 6013
 )
 
 const (

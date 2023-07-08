@@ -19,7 +19,7 @@ package memory
 import (
 	"bytes"
 	"os"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/util"
@@ -28,8 +28,8 @@ import (
 const maxMemUse = 64 * 1024 * 1024 * 1024
 
 var lastGetTime time.Time
-var readMemFlag int32
 var sysMemTotal, sysMemFree, totalMemoryMax int64
+var readMemMu sync.Mutex
 
 func init() {
 	sysMemTotal, sysMemFree = ReadSysMemory()
@@ -73,29 +73,21 @@ func ReadSysMemory() (int64, int64) {
 }
 
 func SysMem() (total, free int64) {
-	defer atomic.StoreInt32(&readMemFlag, 0)
-	if !atomic.CompareAndSwapInt32(&readMemFlag, 0, 1) {
-		total, free = atomic.LoadInt64(&sysMemTotal), atomic.LoadInt64(&sysMemFree)
-		return
-	}
-
 	t := time.Now()
-	d := t.Sub(lastGetTime)
-	if d < time.Second*1 {
+	readMemMu.Lock()
+	defer readMemMu.Unlock()
+	if t.Sub(lastGetTime) < 100*time.Millisecond {
 		total, free = sysMemTotal, sysMemFree
 		return
 	}
-
 	total, free = ReadSysMemory()
 	if total <= 0 || free <= 0 {
 		total, free = totalMemoryMax, totalMemoryMax
 		return
 	}
-
 	lastGetTime = t
-	atomic.StoreInt64(&sysMemTotal, total)
-	atomic.StoreInt64(&sysMemFree, free)
-
+	sysMemTotal = total
+	sysMemFree = free
 	return
 }
 

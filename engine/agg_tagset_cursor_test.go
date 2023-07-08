@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -50,7 +51,7 @@ func Test_fileLoopCursor_SinkPlan(t *testing.T) {
 			Alias: "",
 		},
 	}
-	schema := executor.NewQuerySchema(fields, []string{"id", "value", "alive", "name"}, &opt)
+	schema := executor.NewQuerySchema(fields, []string{"id", "value", "alive", "name"}, &opt, nil)
 	series := executor.NewLogicalSeries(schema)
 	plan := executor.NewLogicalReader(series, schema)
 	cursor.SinkPlan(plan)
@@ -138,31 +139,31 @@ func TestFilterRecInMemTable(t *testing.T) {
 		[]int64{57, 56, 55, 37, 3, 2, 1})
 	s := &fileLoopCursor{}
 	s.ctx = &idKeyCursorContext{
-		tr: record.TimeRange{Max: 100},
+		tr: util.TimeRange{Max: 100},
 		m:  map[string]interface{}{},
 	}
-	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true})
-	s.mergeRecIters = make(map[uint64]*SeriesIter)
-	s.mergeRecIters[0] = &SeriesIter{nil, 0}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true}, nil)
+	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
+	s.mergeRecIters[sInfo.sid] = nil
 	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
 	s.ridIdx = map[int]struct{}{}
 	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
 	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
-	re, _ := s.FilterRecInMemTable(rec, sInfo)
+	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
 	for i := range re.Times() {
 		if re.Times()[i] != rec.Times()[i] {
 			t.Fatal()
 		}
 	}
-	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: false})
-	r, _ := s.FilterRecInMemTable(rec, sInfo)
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: false}, nil)
+	r, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
 	for i := range rec.Times() {
 		if rec.Times()[i] != r.Times()[i] {
 			t.Fatal()
 		}
 	}
 	s.isCutSchema = true
-	r2, _ := s.FilterRecInMemTable(rec, sInfo)
+	r2, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
 	for i := range rec.Times() {
 		if rec.Times()[i] != r2.Times()[i] {
 			t.Fatal()
@@ -174,12 +175,12 @@ func TestFilterRecInMemTable(t *testing.T) {
 		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{157, 156, 155, 137, 113, 112, 111})
-	s.FilterRecInMemTable(rec2, sInfo)
+	s.FilterRecInMemTable(rec2, s.tagSetInfo.Filters[0], sInfo, nil)
 	rec3 := genRowRec(schema,
 		[]int{1, 1, 1, 1, 0, 1, 0}, []int64{17, 16, 15, 14, 0, 13, 12},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
 		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{157, 156, 155, 137, 113, 112, 99})
-	s.FilterRecInMemTable(rec3, sInfo)
+	s.FilterRecInMemTable(rec3, s.tagSetInfo.Filters[0], sInfo, nil)
 }

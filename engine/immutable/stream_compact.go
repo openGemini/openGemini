@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"container/heap"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -28,8 +29,8 @@ import (
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
-	"github.com/openGemini/openGemini/engine/immutable/encoding"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
@@ -65,7 +66,7 @@ func NonStreamingCompaction(fi FilesInfo) bool {
 			return false
 		}
 
-		if fi.maxChunkRows > int(maxRowsPerSegment)*streamCompactSegmentThreshold {
+		if fi.maxChunkRows > MaxRowsPerSegment()*streamCompactSegmentThreshold {
 			return false
 		}
 
@@ -123,7 +124,7 @@ func getStreamIterators() *StreamIterators {
 				tmpCol:     &record.ColVal{},
 				timeCol:    &record.ColVal{},
 				tmpTimeCol: &record.ColVal{},
-				Conf:       NewConfig(),
+				Conf:       GetConfig(),
 			}
 		}
 		return v.(*StreamIterators)
@@ -162,9 +163,8 @@ type StreamIterators struct {
 	colBuilder *ColumnBuilder
 	trailer    Trailer
 	fd         fileops.File
-	writer     FileWriter
+	writer     fileops.FileWriter
 	pair       IdTimePairs
-	sequencer  *Sequencer
 	tier       uint64
 	dstMeta    ChunkMeta
 	schemaMap  dictpool.Dict
@@ -444,9 +444,9 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 
 	limit := c.fileName.level > 0
 	if c.cacheMetaInMemory() {
-		c.writer = newFileWriter(c.fd, true, limit, c.lock)
+		c.writer = newTsspFileWriter(c.fd, true, limit, c.lock)
 	} else {
-		c.writer = newFileWriter(c.fd, false, limit, c.lock)
+		c.writer = newTsspFileWriter(c.fd, false, limit, c.lock)
 	}
 
 	var buf [16]byte
@@ -552,7 +552,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 	}
 
 	if c.mIndex.size >= uint32(c.Conf.maxChunkMetaItemSize) || c.mIndex.count >= uint32(c.Conf.maxChunkMetaItemCount) {
-		offBytes := record.Uint32Slice2ByteBigEndian(c.cmOffset)
+		offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
 		_, err = c.writer.WriteChunkMeta(offBytes)
 		if err != nil {
 			err = errWriteFail(c.writer.Name(), err)
@@ -596,7 +596,7 @@ func (c *StreamIterators) NewTSSPFile(tmp bool) (TSSPFile, error) {
 
 	dr, err := CreateTSSPFileReader(c.fileSize, c.fd, &c.trailer, &c.TableData, c.FileVersion(), tmp, c.lock)
 	if err != nil {
-		c.log.Error("create tssp file reader fail", zap.String("name", dr.Path()), zap.Error(err))
+		c.log.Error("create tssp file reader fail", zap.String("name", dr.FileName()), zap.Error(err))
 		return nil, err
 	}
 
@@ -628,13 +628,15 @@ func (c *StreamIterators) genBloomFilter() {
 		c.bloomFilter = make([]byte, bmBytes)
 	} else {
 		c.bloomFilter = c.bloomFilter[:bmBytes]
-		record.MemorySet(c.bloomFilter)
+		util.MemorySet(c.bloomFilter)
 	}
 	c.trailer.bloomM = bm
 	c.trailer.bloomK = bk
 	c.bf, _ = bloom.NewFilterBuffer(c.bloomFilter, bk)
+	bytes := make([]byte, 8)
 	for id := range c.keys {
-		c.bf.Insert(record.Uint64ToBytes(id))
+		binary.BigEndian.PutUint64(bytes, id)
+		c.bf.Insert(bytes)
 	}
 }
 
@@ -644,7 +646,7 @@ func (c *StreamIterators) Flush() error {
 	}
 
 	if c.mIndex.count > 0 {
-		offBytes := record.Uint32Slice2ByteBigEndian(c.cmOffset)
+		offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
 		_, err := c.writer.WriteChunkMeta(offBytes)
 		if err != nil {
 			c.log.Error("write chunk meta fail", zap.String("name", c.fd.Name()), zap.Error(err))
@@ -687,10 +689,6 @@ func (c *StreamIterators) Flush() error {
 	if _, err := c.writer.WriteData(c.bloomFilter); err != nil {
 		c.log.Error("write bloom filter fail", zap.String("name", c.fd.Name()), zap.Error(err))
 		return err
-	}
-
-	if c.sequencer != nil {
-		c.sequencer.BatchUpdate(&c.pair)
 	}
 
 	c.encIdTime = c.pair.Marshal(c.fileName.order, c.encIdTime[:0], c.colBuilder.coder)

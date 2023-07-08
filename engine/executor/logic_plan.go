@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"bytes"
 	"container/list"
 	"errors"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -53,6 +55,10 @@ var (
 	_ LogicalPlan = &LogicalHttpSender{}
 	_ LogicalPlan = &LogicalExchange{}
 	_ LogicalPlan = &LogicalFullJoin{}
+	_ LogicalPlan = &LogicalSort{}
+	_ LogicalPlan = &LogicalHashMerge{}
+	_ LogicalPlan = &LogicalSparseIndexScan{}
+	_ LogicalPlan = &LogicalColumnStoreReader{}
 )
 
 var mergeCall = map[string]bool{"percentile": true, "rate": true, "irate": true,
@@ -85,43 +91,6 @@ func EnableFileCursor(en bool) {
 
 func GetEnableFileCursor() bool {
 	return enableFileCursor
-}
-
-// Names returns a list of field names.
-func WalkRefs(fields influxql.Fields) []influxql.VarRef {
-	refs := make(map[influxql.VarRef]struct{})
-
-	var walk func(exp influxql.Expr)
-	walk = func(exp influxql.Expr) {
-		switch expr := exp.(type) {
-		case *influxql.VarRef:
-			refs[*expr] = struct{}{}
-		case *influxql.Call:
-			for _, expr := range expr.Args {
-				if ref, ok := expr.(*influxql.VarRef); ok {
-					refs[*ref] = struct{}{}
-				}
-			}
-		case *influxql.BinaryExpr:
-			walk(expr.LHS)
-			walk(expr.RHS)
-		case *influxql.ParenExpr:
-			walk(expr.Expr)
-		default:
-			logger.GetLogger().Warn("logic_plan WalkRefs exp type unrecognized")
-		}
-	}
-
-	for _, f := range fields {
-		walk(f.Expr)
-	}
-
-	// Turn the map into a slice.
-	v := make([]influxql.VarRef, 0, len(refs))
-	for ref := range refs {
-		v = append(v, ref)
-	}
-	return v
 }
 
 func ValidateFieldsFromPlans(plans []hybridqp.QueryNode) bool {
@@ -302,13 +271,12 @@ func NewCountDistinctAggregate(input hybridqp.QueryNode, schema hybridqp.Catalog
 func NewLogicalAggregate(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalAggregate {
 	agg := &LogicalAggregate{
 		calls:                make(map[string]*influxql.Call),
-		callsOrder:           nil,
+		callsOrder:           make([]string, 0, len(schema.Calls())),
 		isCountDistinct:      false,
 		isPercentileOGSketch: schema.HasPercentileOGSketch(),
 		LogicalPlanSingle:    *NewLogicalPlanSingle(input, schema),
 	}
 
-	agg.callsOrder = make([]string, 0, len(agg.schema.Calls()))
 	var ok bool
 	for k, c := range agg.schema.Calls() {
 		agg.calls[k], ok = influxql.CloneExpr(c).(*influxql.Call)
@@ -332,6 +300,16 @@ func NewLogicalTagSetAggregate(input hybridqp.QueryNode, schema hybridqp.Catalog
 	}
 	agg.aggType = tagSetAgg
 
+	return agg
+}
+
+func (p *LogicalAggregate) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	agg := NewLogicalAggregate(inputs[0], schema)
+	if p.aggType == tagSetAgg {
+		agg.aggType = tagSetAgg
+	} else if schema.CountDistinct() != nil {
+		agg.isCountDistinct = true
+	}
 	return agg
 }
 
@@ -518,38 +496,11 @@ func (p *LogicalAggregate) Type() string {
 }
 
 func (p *LogicalAggregate) Digest() string {
-	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
 	if !p.digest {
 		p.digest = true
-	} else {
-		return p.digestBuff.String()
+		buildDigest(&p.digestBuff, p.String(), p.aggType, p.inputs[0].ID(),
+			p.schema.Fields(), p.calls, p.callsOrder)
 	}
-	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
-	p.digestBuff.Reset()
-	p.digestBuff.WriteString(p.String())
-	p.digestBuff.WriteString("(")
-	p.digestBuff.WriteString(strconv.Itoa(p.aggType))
-	p.digestBuff.WriteString(")")
-	p.digestBuff.WriteString("[")
-	p.digestBuff.WriteString(strconv.FormatUint(p.inputs[0].ID(), 10))
-	p.digestBuff.WriteString("]")
-	p.digestBuff.WriteString("(")
-	p.digestBuff.WriteString(p.schema.Fields().String())
-	p.digestBuff.WriteString(")")
-	p.digestBuff.WriteString("(")
-
-	firstCall := true
-	for _, order := range p.callsOrder {
-		call := p.calls[order]
-		if firstCall {
-			call.WriteString(&p.digestBuff)
-			firstCall = false
-			continue
-		}
-		p.digestBuff.WriteString(",")
-		call.WriteString(&p.digestBuff)
-	}
-	p.digestBuff.WriteString(")")
 	return p.digestBuff.String()
 }
 
@@ -562,11 +513,10 @@ type LogicalSlidingWindow struct {
 func NewLogicalSlidingWindow(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalSlidingWindow {
 	agg := &LogicalSlidingWindow{
 		calls:             make(map[string]*influxql.Call),
-		callsOrder:        nil,
+		callsOrder:        make([]string, 0, len(schema.Calls())),
 		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
 	}
 
-	agg.callsOrder = make([]string, 0, len(agg.schema.Calls()))
 	var ok bool
 	for k, c := range agg.schema.Calls() {
 		agg.calls[k], ok = influxql.CloneExpr(c).(*influxql.Call)
@@ -580,6 +530,11 @@ func NewLogicalSlidingWindow(input hybridqp.QueryNode, schema hybridqp.Catalog) 
 	agg.init()
 
 	return agg
+}
+
+// impl me
+func (p *LogicalSlidingWindow) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *LogicalSlidingWindow) DeriveOperations() {
@@ -679,35 +634,11 @@ func (p *LogicalSlidingWindow) Type() string {
 }
 
 func (p *LogicalSlidingWindow) Digest() string {
-	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
 	if !p.digest {
 		p.digest = true
-	} else {
-		return p.digestBuff.String()
+		buildDigest(&p.digestBuff, p.String(), 0, p.inputs[0].ID(),
+			p.schema.Fields(), p.calls, p.callsOrder)
 	}
-	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
-	p.digestBuff.Reset()
-	p.digestBuff.WriteString(p.String())
-	p.digestBuff.WriteString("[")
-	p.digestBuff.WriteString(strconv.FormatUint(p.inputs[0].ID(), 10))
-	p.digestBuff.WriteString("]")
-	p.digestBuff.WriteString("(")
-	p.digestBuff.WriteString(p.schema.Fields().String())
-	p.digestBuff.WriteString(")")
-	p.digestBuff.WriteString("(")
-
-	firstCall := true
-	for _, order := range p.callsOrder {
-		call := p.calls[order]
-		if firstCall {
-			call.WriteString(&p.digestBuff)
-			firstCall = false
-			continue
-		}
-		p.digestBuff.WriteString(",")
-		call.WriteString(&p.digestBuff)
-	}
-	p.digestBuff.WriteString(")")
 	return p.digestBuff.String()
 }
 
@@ -725,12 +656,16 @@ func NewLogicalFill(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalF
 	return fill
 }
 
+func (p *LogicalFill) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return NewLogicalFill(inputs[0], schema)
+}
+
 func (p *LogicalFill) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalFill) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalFill) Clone() hybridqp.QueryNode {
@@ -773,7 +708,14 @@ func NewLogicalLimit(input hybridqp.QueryNode, schema hybridqp.Catalog, paramete
 
 	limit.init()
 
+	limit.SetHoltWintersType(true, limit.rt.Fields())
 	return limit
+}
+
+func (p *LogicalLimit) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	limitType := schema.LimitType()
+	limit, offset := schema.LimitAndOffset()
+	return NewLogicalLimit(inputs[0], schema, LimitTransformParameters{Limit: limit, Offset: offset, LimitType: limitType})
 }
 
 func (p *LogicalLimit) DeriveOperations() {
@@ -825,12 +767,17 @@ func NewLogicalFilter(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logica
 	return filter
 }
 
+// impl me
+func (p *LogicalFilter) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalFilter) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalFilter) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalFilter) Clone() hybridqp.QueryNode {
@@ -880,6 +827,11 @@ func NewLogicalMerge(inputs []hybridqp.QueryNode, schema hybridqp.Catalog) *Logi
 	return merge
 }
 
+// impl me
+func (p *LogicalMerge) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalMerge) DeriveOperations() {
 	p.init()
 }
@@ -891,7 +843,7 @@ func (p *LogicalMerge) init() {
 
 	input := p.inputs[0]
 
-	p.ForwardInit(input)
+	p.InitRef(input)
 }
 
 func (p *LogicalMerge) Clone() hybridqp.QueryNode {
@@ -941,6 +893,11 @@ func NewLogicalSortMerge(inputs []hybridqp.QueryNode, schema hybridqp.Catalog) *
 	return merge
 }
 
+// impl me
+func (p *LogicalSortMerge) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalSortMerge) DeriveOperations() {
 	p.init()
 }
@@ -952,7 +909,7 @@ func (p *LogicalSortMerge) init() {
 
 	input := p.inputs[0]
 
-	p.ForwardInit(input)
+	p.InitRef(input)
 }
 
 func (p *LogicalSortMerge) Clone() hybridqp.QueryNode {
@@ -1002,6 +959,11 @@ func NewLogicalSortAppend(inputs []hybridqp.QueryNode, schema hybridqp.Catalog) 
 	return merge
 }
 
+// impl me
+func (p *LogicalSortAppend) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalSortAppend) DeriveOperations() {
 	p.init()
 }
@@ -1013,7 +975,7 @@ func (p *LogicalSortAppend) init() {
 
 	input := p.inputs[0]
 
-	p.ForwardInit(input)
+	p.InitRef(input)
 }
 
 func (p *LogicalSortAppend) Clone() hybridqp.QueryNode {
@@ -1058,8 +1020,13 @@ func NewLogicalDedupe(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logica
 	return dedupe
 }
 
+// impl me
+func (p *LogicalDedupe) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalDedupe) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalDedupe) DeriveOperations() {}
@@ -1105,12 +1072,16 @@ func NewLogicalInterval(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logi
 	return interval
 }
 
+func (p *LogicalInterval) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return NewLogicalInterval(inputs[0], schema)
+}
+
 func (p *LogicalInterval) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalInterval) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalInterval) Clone() hybridqp.QueryNode {
@@ -1152,6 +1123,11 @@ func NewLogicalFilterBlank(input hybridqp.QueryNode, schema hybridqp.Catalog) *L
 	interval.init()
 
 	return interval
+}
+
+// impl me
+func (p *LogicalFilterBlank) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *LogicalFilterBlank) DeriveOperations() {
@@ -1203,12 +1179,17 @@ func NewLogicalAlign(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logical
 	return align
 }
 
+// impl me
+func (p *LogicalAlign) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalAlign) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalAlign) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalAlign) Clone() hybridqp.QueryNode {
@@ -1255,6 +1236,11 @@ func NewLogicalMst(rt hybridqp.RowDataType) *LogicalMst {
 	return mst
 }
 
+// impl me
+func (p *LogicalMst) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalMst) Clone() hybridqp.QueryNode {
 	clone := &LogicalMst{}
 	*clone = *p
@@ -1266,13 +1252,9 @@ func (p *LogicalMst) Children() []hybridqp.QueryNode {
 	return []hybridqp.QueryNode{}
 }
 
-func (p *LogicalMst) ReplaceChildren(children []hybridqp.QueryNode) {
+func (p *LogicalMst) ReplaceChildren(children []hybridqp.QueryNode) {}
 
-}
-
-func (p *LogicalMst) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
-
-}
+func (p *LogicalMst) ReplaceChild(ordinal int, child hybridqp.QueryNode) {}
 
 func (p *LogicalMst) Explain(writer LogicalPlanWriter) {
 	writer.Explain(p)
@@ -1310,6 +1292,10 @@ func NewLogicalSeries(schema hybridqp.Catalog) *LogicalSeries {
 	series.init()
 
 	return series
+}
+
+func (p *LogicalSeries) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return NewLogicalSeries(schema)
 }
 
 func (p *LogicalSeries) DeriveOperations() {
@@ -1404,6 +1390,13 @@ func NewLogicalReader(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logica
 	return reader
 }
 
+func (p *LogicalReader) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	if inputs == nil || len(inputs) == 0 {
+		return NewLogicalReader(nil, schema)
+	}
+	return NewLogicalReader(inputs[0], schema)
+}
+
 func (p *LogicalReader) MstName() string {
 	return p.mstName
 }
@@ -1486,6 +1479,11 @@ func NewLogicalSubQuery(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logi
 	return subQuery
 }
 
+// impl me
+func (p *LogicalSubQuery) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalSubQuery) DeriveOperations() {
 	p.init()
 }
@@ -1538,10 +1536,15 @@ func NewLogicalTagSubset(input hybridqp.QueryNode, schema hybridqp.Catalog) *Log
 	return tagSubset
 }
 
+// impl me
+func (p *LogicalTagSubset) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalTagSubset) DeriveOperations() {}
 
 func (p *LogicalTagSubset) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalTagSubset) Clone() hybridqp.QueryNode {
@@ -1583,6 +1586,10 @@ func NewLogicalProject(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logic
 	project.init()
 
 	return project
+}
+
+func (p *LogicalProject) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return NewLogicalProject(inputs[0], schema)
 }
 
 func (p *LogicalProject) DeriveOperations() {
@@ -1635,6 +1642,7 @@ const (
 	SINGLE_SHARD_EXCHANGE
 	READER_EXCHANGE
 	SERIES_EXCHANGE
+	SEGMENT_EXCHANGE
 )
 
 type ExchangeRole uint8
@@ -1665,6 +1673,17 @@ func NewLogicalExchange(input hybridqp.QueryNode, eType ExchangeType, eTraits []
 	return exchange
 }
 
+func (p *LogicalExchange) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	var exchange *LogicalExchange
+	if p.eType == NODE_EXCHANGE {
+		exchange = NewLogicalExchange(inputs[0], p.eType, eTrait, schema)
+	} else {
+		exchange = NewLogicalExchange(inputs[0], p.eType, []hybridqp.Trait{}, schema)
+	}
+	exchange.eRole = p.eRole
+	return exchange
+}
+
 func (p *LogicalExchange) AddTrait(trait interface{}) {
 	p.eTraits = append(p.eTraits, trait)
 }
@@ -1686,7 +1705,7 @@ func (p *LogicalExchange) DeriveOperations() {
 }
 
 func (p *LogicalExchange) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalExchange) Clone() hybridqp.QueryNode {
@@ -1735,6 +1754,11 @@ func NewLogicalGroupBy(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logic
 	groupby.init()
 
 	return groupby
+}
+
+// impl me
+func (p *LogicalGroupBy) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *LogicalGroupBy) DeriveOperations() {
@@ -1799,12 +1823,17 @@ func NewLogicalOrderBy(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logic
 	return Orderby
 }
 
+// impl me
+func (p *LogicalOrderBy) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalOrderBy) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalOrderBy) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalOrderBy) Clone() hybridqp.QueryNode {
@@ -1859,18 +1888,21 @@ func NewLogicalHttpSender(input hybridqp.QueryNode, schema hybridqp.Catalog) *Lo
 	return HttpSender
 }
 
+func (p *LogicalHttpSender) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return NewLogicalHttpSender(inputs[0], schema)
+}
+
 func (p *LogicalHttpSender) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalHttpSender) init() {
 	p.rt = hybridqp.NewRowDataTypeImpl(p.schema.FieldsRef()...)
-
 	p.ops = make([]hybridqp.ExprOptions, 0, len(p.schema.Fields()))
-
 	for i, f := range p.schema.Fields() {
 		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: influxql.CloneExpr(f.Expr), Ref: p.schema.FieldsRef()[i]})
 	}
+	p.SetHoltWintersType(true, p.rt.Fields())
 }
 
 func (p *LogicalHttpSender) Clone() hybridqp.QueryNode {
@@ -1914,15 +1946,18 @@ func NewLogicalHttpSenderHint(input hybridqp.QueryNode, schema hybridqp.Catalog)
 	return HttpSender
 }
 
+// impl me
+func (p *LogicalHttpSenderHint) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalHttpSenderHint) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalHttpSenderHint) init() {
 	p.rt = hybridqp.NewRowDataTypeImpl(p.schema.FieldsRef()...)
-
 	p.ops = make([]hybridqp.ExprOptions, 0, len(p.schema.Fields()))
-
 	for i, f := range p.schema.Fields() {
 		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: influxql.CloneExpr(f.Expr), Ref: p.schema.FieldsRef()[i]})
 	}
@@ -1972,6 +2007,11 @@ func NewLogicalTarget(input hybridqp.QueryNode, schema hybridqp.Catalog, mst *in
 	return target
 }
 
+// impl me
+func (p *LogicalTarget) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalTarget) TargetMeasurement() *influxql.Measurement {
 	return p.mst
 }
@@ -2013,11 +2053,6 @@ func (p *LogicalTarget) Digest() string {
 
 type QueryNodeStack []hybridqp.QueryNode
 
-func NewQueryNodeStack(capacity int) *QueryNodeStack {
-	stack := make(QueryNodeStack, 0, capacity)
-	return &stack
-}
-
 func (s *QueryNodeStack) Empty() bool {
 	return len(*s) <= 0
 }
@@ -2056,7 +2091,7 @@ type LogicalPlanBuilder interface {
 	IndexScan() LogicalPlanBuilder
 	FilterBlank() LogicalPlanBuilder
 	Fill() LogicalPlanBuilder
-	Reader() LogicalPlanBuilder
+	Reader(config.EngineType) LogicalPlanBuilder
 	GroupBy() LogicalPlanBuilder
 	OrderBy() LogicalPlanBuilder
 	SubQuery() LogicalPlanBuilder
@@ -2066,6 +2101,7 @@ type LogicalPlanBuilder interface {
 	SplitGroup() LogicalPlanBuilder
 	Exchange(eType ExchangeType, eTraits []hybridqp.Trait) LogicalPlanBuilder
 	CreateSeriesPlan() (hybridqp.QueryNode, error)
+	CreateSegmentPlan(schema hybridqp.Catalog) (hybridqp.QueryNode, error)
 	CreateMeasurementPlan(hybridqp.QueryNode) (hybridqp.QueryNode, error)
 	CreateShardPlan(hybridqp.QueryNode) (hybridqp.QueryNode, error)
 	CreateNodePlan(hybridqp.QueryNode, []hybridqp.Trait) (hybridqp.QueryNode, error)
@@ -2136,6 +2172,13 @@ func (b *LogicalPlanBuilderImpl) TagSetAggregate() LogicalPlanBuilder {
 	return b
 }
 
+func (b *LogicalPlanBuilderImpl) Sort() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalSort(last, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) SlidingWindow() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalSlidingWindow(last, b.schema)
@@ -2174,6 +2217,13 @@ func (b *LogicalPlanBuilderImpl) Filter() LogicalPlanBuilder {
 }
 
 func (b *LogicalPlanBuilderImpl) Rewrite() LogicalPlanBuilder {
+	return b
+}
+
+func (b *LogicalPlanBuilderImpl) HashMerge(eType ExchangeType, eTraits []hybridqp.Trait) LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalHashMerge(last, b.schema, eType, eTraits)
+	b.stack.Push(plan)
 	return b
 }
 
@@ -2238,6 +2288,13 @@ func (b *LogicalPlanBuilderImpl) IndexScan() LogicalPlanBuilder {
 	return b
 }
 
+func (b *LogicalPlanBuilderImpl) SparseIndexScan() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalSparseIndexScan(last, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) FilterBlank() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalFilterBlank(last, b.schema)
@@ -2258,12 +2315,20 @@ func (b *LogicalPlanBuilderImpl) Series() LogicalPlanBuilder {
 	return b
 }
 
-func (b *LogicalPlanBuilderImpl) Reader() LogicalPlanBuilder {
+func (b *LogicalPlanBuilderImpl) Reader(engineType config.EngineType) LogicalPlanBuilder {
 	var last hybridqp.QueryNode
 	if !b.stack.Empty() {
 		last = b.stack.Pop()
 	}
-	plan := NewLogicalReader(last, b.schema)
+	var plan LogicalPlan
+	switch engineType {
+	case config.TSSTORE:
+		plan = NewLogicalReader(last, b.schema)
+	case config.COLUMNSTORE:
+		plan = NewLogicalColumnStoreReader(last, b.schema)
+	default:
+		panic("unsupported engine type")
+	}
 	b.stack.Push(plan)
 	return b
 }
@@ -2339,12 +2404,31 @@ func (b *LogicalPlanBuilderImpl) Exchange(eType ExchangeType, eTraits []hybridqp
 	return b
 }
 
+func (b *LogicalPlanBuilderImpl) CreateSparseIndexScanPlan(plan hybridqp.QueryNode) (hybridqp.QueryNode, error) {
+	if plan == nil {
+		return nil, nil
+	}
+	b.Push(plan)
+	b.SparseIndexScan()
+	return b.Build()
+}
+
 func (b *LogicalPlanBuilderImpl) CreateScanPlan(mstPlan hybridqp.QueryNode) (hybridqp.QueryNode, error) {
 	if mstPlan == nil {
 		return nil, nil
 	}
 	b.Push(mstPlan)
 	b.IndexScan()
+	return b.Build()
+}
+
+func (b *LogicalPlanBuilderImpl) CreateSegmentPlan(schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	b.Reader(config.COLUMNSTORE)
+	if schema.HasCall() && schema.CanAggPushDown() {
+		b.Exchange(READER_EXCHANGE, nil)
+	}
+	b.Exchange(SEGMENT_EXCHANGE, nil)
+
 	return b.Build()
 }
 
@@ -2370,7 +2454,7 @@ func (b *LogicalPlanBuilderImpl) CreateMeasurementPlan(seriesPlan hybridqp.Query
 		b.Push(seriesPlan)
 	}
 
-	b.Reader()
+	b.Reader(config.TSSTORE)
 
 	b.Exchange(READER_EXCHANGE, nil)
 
@@ -2509,6 +2593,11 @@ func NewLogicalDummyShard(readers [][]interface{}) *LogicalDummyShard {
 	}
 }
 
+// impl me
+func (p *LogicalDummyShard) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalDummyShard) Readers() [][]interface{} {
 	return p.readers
 }
@@ -2523,17 +2612,13 @@ func (p *LogicalDummyShard) Children() []hybridqp.QueryNode {
 	return nil
 }
 
-func (p *LogicalDummyShard) ReplaceChildren(children []hybridqp.QueryNode) {
-}
+func (p *LogicalDummyShard) ReplaceChildren(children []hybridqp.QueryNode) {}
 
-func (p *LogicalDummyShard) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
-}
+func (p *LogicalDummyShard) ReplaceChild(ordinal int, child hybridqp.QueryNode) {}
 
-func (p *LogicalDummyShard) ExplainIterms(writer LogicalPlanWriter) {
-}
+func (p *LogicalDummyShard) ExplainIterms(writer LogicalPlanWriter) {}
 
-func (p *LogicalDummyShard) Explain(writer LogicalPlanWriter) {
-}
+func (p *LogicalDummyShard) Explain(writer LogicalPlanWriter) {}
 
 func (p *LogicalDummyShard) Type() string {
 	return GetType(p)
@@ -2557,12 +2642,16 @@ func NewLogicalIndexScan(input hybridqp.QueryNode, schema hybridqp.Catalog) *Log
 	return project
 }
 
+func (p *LogicalIndexScan) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return NewLogicalIndexScan(inputs[0], schema)
+}
+
 func (p *LogicalIndexScan) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalIndexScan) init() {
-	p.ForwardInit(p.inputs[0])
+	p.InitRef(p.inputs[0])
 }
 
 func (p *LogicalIndexScan) Clone() hybridqp.QueryNode {
@@ -2615,6 +2704,11 @@ func NewLogicalTSSPScan(schema hybridqp.Catalog) *LogicalTSSPScan {
 	reader.init()
 
 	return reader
+}
+
+// impl me
+func (p *LogicalTSSPScan) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *LogicalTSSPScan) GetFiles() *immutable.TSSPFiles {
@@ -2710,6 +2804,11 @@ func NewLogicalWriteIntoStorage(input hybridqp.QueryNode, schema hybridqp.Catalo
 	return reader
 }
 
+// impl me
+func (p *LogicalWriteIntoStorage) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalWriteIntoStorage) GetMmsTables() *immutable.MmsTables {
 	return p.m
 }
@@ -2799,12 +2898,11 @@ type LogicalSequenceAggregate struct {
 func NewLogicalSequenceAggregate(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalSequenceAggregate {
 	agg := &LogicalSequenceAggregate{
 		calls:             make(map[string]*influxql.Call),
-		callsOrder:        nil,
+		callsOrder:        make([]string, 0, len(schema.Calls())),
 		isCountDistinct:   false,
 		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
 	}
 
-	agg.callsOrder = make([]string, 0, len(agg.schema.Calls()))
 	var ok bool
 	for k, c := range agg.schema.Calls() {
 		agg.calls[k], ok = influxql.CloneExpr(c).(*influxql.Call)
@@ -2819,6 +2917,11 @@ func NewLogicalSequenceAggregate(input hybridqp.QueryNode, schema hybridqp.Catal
 	agg.init()
 
 	return agg
+}
+
+// impl me
+func (p *LogicalSequenceAggregate) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *LogicalSequenceAggregate) DeriveOperations() {
@@ -2902,35 +3005,9 @@ func (p *LogicalSequenceAggregate) Digest() string {
 	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
 	if !p.digest {
 		p.digest = true
-	} else {
-		return p.digestBuff.String()
+		buildDigest(&p.digestBuff, p.String(), p.aggType, p.inputs[0].ID(),
+			p.schema.Fields(), p.calls, p.callsOrder)
 	}
-	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
-	p.digestBuff.Reset()
-	p.digestBuff.WriteString(p.String())
-	p.digestBuff.WriteString("(")
-	p.digestBuff.WriteString(strconv.Itoa(p.aggType))
-	p.digestBuff.WriteString(")")
-	p.digestBuff.WriteString("[")
-	p.digestBuff.WriteString(strconv.FormatUint(p.inputs[0].ID(), 10))
-	p.digestBuff.WriteString("]")
-	p.digestBuff.WriteString("(")
-	p.digestBuff.WriteString(p.schema.Fields().String())
-	p.digestBuff.WriteString(")")
-	p.digestBuff.WriteString("(")
-
-	firstCall := true
-	for _, order := range p.callsOrder {
-		call := p.calls[order]
-		if firstCall {
-			call.WriteString(&p.digestBuff)
-			firstCall = false
-			continue
-		}
-		p.digestBuff.WriteString(",")
-		call.WriteString(&p.digestBuff)
-	}
-	p.digestBuff.WriteString(")")
 	return p.digestBuff.String()
 }
 
@@ -2946,6 +3023,11 @@ func NewLogicalSplitGroup(input hybridqp.QueryNode, schema hybridqp.Catalog) *Lo
 	SplitGroup.init()
 
 	return SplitGroup
+}
+
+// impl me
+func (p *LogicalSplitGroup) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *LogicalSplitGroup) DeriveOperations() {
@@ -3008,13 +3090,18 @@ func NewLogicalFullJoin(left hybridqp.QueryNode, right hybridqp.QueryNode, condi
 	return project
 }
 
+// impl me
+func (p *LogicalFullJoin) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalFullJoin) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalFullJoin) init() {
-	p.ForwardInit(p.right)
-	p.ForwardInit(p.left)
+	p.InitRef(p.right)
+	p.InitRef(p.left)
 }
 
 func (p *LogicalFullJoin) Clone() hybridqp.QueryNode {
@@ -3080,12 +3167,18 @@ func NewLogicalHoltWinters(input hybridqp.QueryNode, schema hybridqp.Catalog) *L
 	return hw
 }
 
+// impl me
+func (p *LogicalHoltWinters) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *LogicalHoltWinters) DeriveOperations() {
 	p.init()
 }
 
 func (p *LogicalHoltWinters) init() {
 	p.ForwardInit(p.inputs[0])
+	p.SetHoltWintersType(false, p.rt.Fields())
 }
 
 func (p *LogicalHoltWinters) Clone() hybridqp.QueryNode {
@@ -3112,5 +3205,297 @@ func (p *LogicalHoltWinters) Digest() string {
 	p.digestName = p.digestName[:0]
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
 	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
+	return string(p.digestName)
+}
+
+// Digest format: printf("%s(%d)[%d](%s)(%s)", name, typ, id, fields, calls)
+func buildDigest(buf *bytes.Buffer, name string, typ int, id uint64, fields influxql.Fields,
+	calls map[string]*influxql.Call, callsOrder []string) {
+
+	buf.Reset()
+	buf.WriteString(name)
+	buf.WriteString("(")
+	buf.WriteString(strconv.Itoa(typ))
+	buf.WriteString(")[")
+	buf.WriteString(strconv.FormatUint(id, 10))
+	buf.WriteString("](")
+	fields.WriteDigest(buf)
+	buf.WriteString(")(")
+
+	for i, order := range callsOrder {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		calls[order].WriteDigest(buf)
+	}
+	buf.WriteString(")")
+}
+
+type LogicalSort struct {
+	LogicalPlanSingle
+	sortFields influxql.SortFields
+}
+
+func NewLogicalSort(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalSort {
+	sort := &LogicalSort{
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+		sortFields:        schema.GetSortFields(),
+	}
+	sort.init()
+	return sort
+}
+
+// impl me
+func (p *LogicalSort) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalSort) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalSort) init() {
+	p.ForwardInit(p.inputs[0])
+}
+
+func (p *LogicalSort) Clone() hybridqp.QueryNode {
+	clone := &LogicalSort{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	clone.digest = false
+	return clone
+}
+
+func (p *LogicalSort) ExplainIterms(writer LogicalPlanWriter) {
+	p.LogicalPlanBase.ExplainIterms(writer)
+}
+
+func (p *LogicalSort) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	p.LogicalPlanBase.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalSort) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalSort) Digest() string {
+	return string(p.digestName)
+}
+
+type LogicalHashMerge struct {
+	LogicalPlanSingle
+	eType   ExchangeType
+	eTraits []hybridqp.Trait
+}
+
+func NewLogicalHashMerge(input hybridqp.QueryNode, schema hybridqp.Catalog, eType ExchangeType, eTraits []hybridqp.Trait) *LogicalHashMerge {
+	merge := &LogicalHashMerge{
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+		eType:             eType,
+		eTraits:           eTraits,
+	}
+	merge.init()
+	return merge
+}
+
+// impl me
+func (p *LogicalHashMerge) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalHashMerge) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalHashMerge) init() {
+	p.ForwardInit(p.inputs[0])
+}
+
+func (p *LogicalHashMerge) Clone() hybridqp.QueryNode {
+	clone := &LogicalHashMerge{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	clone.digest = false
+	return clone
+}
+
+func (p *LogicalHashMerge) ExplainIterms(writer LogicalPlanWriter) {
+	p.LogicalPlanBase.ExplainIterms(writer)
+}
+
+func (p *LogicalHashMerge) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	p.LogicalPlanBase.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalHashMerge) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalHashMerge) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
+	return string(p.digestName)
+}
+
+func (p *LogicalHashMerge) AddTrait(trait interface{}) {
+	p.eTraits = append(p.eTraits, trait)
+}
+
+func NewPlanBySchemaAndSrcPlan(schema hybridqp.Catalog, srcPlan []hybridqp.QueryNode, eTrait []hybridqp.Trait) (hybridqp.QueryNode, error) {
+	var inputs []hybridqp.QueryNode
+	hasScanReader := false
+	for _, srcNode := range srcPlan {
+		newNode := srcNode.New(inputs, schema, eTrait)
+		if newNode == nil {
+			return nil, fmt.Errorf("newPlan error")
+		}
+		if _, ok := newNode.(*LogicalReader); ok {
+			hasScanReader = true
+		}
+		if hasScanReader {
+			if agg, ok := newNode.(*LogicalAggregate); ok {
+				agg.ForwardCallArgs()
+				agg.CountToSum()
+			}
+			newNode.DeriveOperations()
+		}
+		inputs = inputs[:0]
+		inputs = append(inputs, newNode)
+	}
+	return inputs[0], nil
+}
+
+type LogicalSparseIndexScan struct {
+	LogicalPlanSingle
+}
+
+func NewLogicalSparseIndexScan(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalSparseIndexScan {
+	project := &LogicalSparseIndexScan{
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+	}
+
+	project.init()
+
+	return project
+}
+
+// impl me
+func (p *LogicalSparseIndexScan) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalSparseIndexScan) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalSparseIndexScan) init() {
+	p.ForwardInit(p.inputs[0])
+}
+
+func (p *LogicalSparseIndexScan) Clone() hybridqp.QueryNode {
+	clone := &LogicalSparseIndexScan{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalSparseIndexScan) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalSparseIndexScan) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalSparseIndexScan) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
+	return string(p.digestName)
+}
+
+type LogicalColumnStoreReader struct {
+	frags   ShardsFragments
+	mstName string
+	LogicalPlanSingle
+}
+
+func NewLogicalColumnStoreReader(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalColumnStoreReader {
+	reader := &LogicalColumnStoreReader{
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+	}
+
+	if schema.Options().(*query.ProcessorOptions).Sources != nil {
+		reader.mstName = schema.Options().(*query.ProcessorOptions).Sources[0].String()
+	}
+
+	reader.init()
+
+	return reader
+}
+
+// impl me
+func (p *LogicalColumnStoreReader) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalColumnStoreReader) MstName() string {
+	return p.mstName
+}
+
+func (p *LogicalColumnStoreReader) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalColumnStoreReader) init() {
+	p.initForSink()
+}
+
+func (p *LogicalColumnStoreReader) Clone() hybridqp.QueryNode {
+	clone := &LogicalColumnStoreReader{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	clone.digest = false
+	return clone
+}
+
+func (p *LogicalColumnStoreReader) ExplainIterms(writer LogicalPlanWriter) {
+	p.LogicalPlanBase.ExplainIterms(writer)
+	writer.Item("mstName", p.mstName)
+	writer.Item("ID", p.id)
+}
+
+func (p *LogicalColumnStoreReader) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	p.LogicalPlanBase.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalColumnStoreReader) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalColumnStoreReader) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
 	return string(p.digestName)
 }

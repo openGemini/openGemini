@@ -19,7 +19,6 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/valyala/fastjson/fastfloat"
@@ -96,9 +95,9 @@ func (rs *PointRows) Reset() {
 // See https://docs.influxdata.com/influxdb/v1.7/write_protocols/line_protocol_tutorial/
 //
 // s shouldn't be modified when rs is in use.
-func (rs *PointRows) Unmarshal(s string) error {
+func (rs *PointRows) Unmarshal(s string, enableTagArray bool) error {
 	var err error
-	rs.Rows, rs.tagsPool, rs.fieldsPool, err = unmarshalRows(rs.Rows[:0], s, rs.tagsPool[:0], rs.fieldsPool[:0])
+	rs.Rows, rs.tagsPool, rs.fieldsPool, err = unmarshalRows(rs.Rows[:0], s, rs.tagsPool[:0], rs.fieldsPool[:0], enableTagArray)
 	return err
 }
 
@@ -171,7 +170,6 @@ type Row struct {
 	StreamId                []uint64 // it used to indicate that the data is shared by multiple streams
 	IndexOptions            IndexOptions
 	ColumnToIndex           map[string]int // it indicates the sorted tagKey, fieldKey and index mapping relationship
-	HasTagArray             bool           // it used to indicate that the data contains tag array, 0:no; 1:yes, eg. tg1=[tv1,tv2,tv3]
 	ReadyBuildColumnToIndex bool
 }
 
@@ -190,7 +188,6 @@ func (r *Row) Reset() {
 	r.StreamId = r.StreamId[:0]
 	r.StreamOnly = false
 	r.ColumnToIndex = nil
-	r.HasTagArray = false
 	r.ReadyBuildColumnToIndex = false
 }
 
@@ -239,7 +236,6 @@ func (r *Row) Clone(rr *Row) {
 	r.StreamId = rr.StreamId
 	r.StreamOnly = rr.StreamOnly
 	r.ColumnToIndex = rr.ColumnToIndex
-	r.HasTagArray = rr.HasTagArray
 }
 
 func (r *Row) Copy(p *Row) {
@@ -321,6 +317,37 @@ func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 	return nil
 }
 
+func (r *Row) UnmarshalShardKeyByField(shardKeys []string) error {
+	r.ShardKey = append(r.ShardKey[:0], r.Name...)
+	var find bool
+	for i := range shardKeys {
+		find = false
+		for j := range r.Tags {
+			if shardKeys[i] == r.Tags[j].Key {
+				r.appendShardKey(j)
+				find = true
+				break
+			}
+		}
+
+		if !find {
+			for k := range r.Fields {
+				if shardKeys[i] == r.Fields[k].Key {
+					r.appendShardKeyWithField(k)
+					find = true
+					break
+				}
+			}
+		}
+
+		if !find {
+			return ErrPointShouldHaveAllShardKey
+		}
+
+	}
+	return nil
+}
+
 func (r *Row) UnmarshalShardKeyByTagOp(tags []string) error {
 	r.ShardKey = append(r.ShardKey[:0], r.Name...)
 	if len(tags) == 0 {
@@ -365,10 +392,12 @@ func (r *Row) appendShardKeyWithField(idx int) {
 }
 
 func (r *Row) appendShardKey(idx int) {
-	r.ShardKey = append(r.ShardKey, ","...)
-	r.ShardKey = append(r.ShardKey, r.Tags[idx].Key...)
-	r.ShardKey = append(r.ShardKey, "="...)
-	r.ShardKey = append(r.ShardKey, r.Tags[idx].Value...)
+	sk := r.ShardKey
+	sk = append(sk, ',')
+	sk = append(sk, r.Tags[idx].Key...)
+	sk = append(sk, '=')
+	sk = append(sk, r.Tags[idx].Value...)
+	r.ShardKey = sk
 }
 
 func (r *Row) FastMarshalBinary(dst []byte) ([]byte, error) {
@@ -429,7 +458,6 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 			rows = append(rows, Row{})
 		}
 		row := &rows[len(rows)-1]
-		row.HasTagArray = false
 		src, tagPool, fieldPool, indexOptionPool, indexKeyPool, err =
 			row.FastUnmarshalBinary(src, tagPool, fieldPool, indexOptionPool, indexKeyPool)
 		if err != nil {
@@ -494,18 +522,19 @@ func (r *Row) FastUnmarshalBinary(src []byte, tagpool []Tag, fieldpool []Field, 
 }
 
 func (r *Row) marshalTags(dst []byte) ([]byte, error) {
-	if r.Tags == nil {
+	tags := r.Tags
+
+	if len(tags) == 0 {
 		dst = encoding.MarshalUint32(dst, 0)
 		return dst, nil
 	}
-	dst = encoding.MarshalUint32(dst, uint32(len(r.Tags)))
-	for i := range r.Tags {
-		kl := len(r.Tags[i].Key)
-		dst = encoding.MarshalUint16(dst, uint16(kl)) //append(dst, uint8(kl))
-		dst = append(dst, r.Tags[i].Key...)
-		vl := len(r.Tags[i].Value)
-		dst = encoding.MarshalUint16(dst, uint16(vl)) //append(dst, uint8(vl))
-		dst = append(dst, r.Tags[i].Value...)
+
+	dst = encoding.MarshalUint32(dst, uint32(len(tags)))
+	for i := range tags {
+		dst = encoding.MarshalUint16(dst, uint16(len(tags[i].Key)))
+		dst = append(dst, tags[i].Key...)
+		dst = encoding.MarshalUint16(dst, uint16(len(tags[i].Value)))
+		dst = append(dst, tags[i].Value...)
 	}
 	return dst, nil
 }
@@ -539,12 +568,6 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 		src = src[2:]
 		tg.Value = bytesutil.ToUnsafeString(src[:vl])
 		tg.IsArray = false
-		if config.EnableTagArray {
-			if strings.HasPrefix(tg.Value, "[") && strings.HasSuffix(tg.Value, "]") {
-				tg.IsArray = true
-				r.HasTagArray = true
-			}
-		}
 		src = src[vl:]
 	}
 	r.Tags = tagpool[start:]
@@ -552,28 +575,28 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 }
 
 func (r *Row) marshalFields(dst []byte) ([]byte, error) {
-	if len(r.Fields) == 0 {
+	fields := r.Fields
+	if len(fields) == 0 {
 		return nil, ErrPointMustHaveAField
 	}
 
-	dst = encoding.MarshalUint32(dst, uint32(len(r.Fields)))
+	dst = encoding.MarshalUint32(dst, uint32(len(fields)))
 
-	for i := range r.Fields {
-		dst = encoding.MarshalUint16(dst, uint16(len(r.Fields[i].Key)))
-		dst = append(dst, r.Fields[i].Key...)
-		if r.Fields[i].Type == Field_Type_Unknown {
+	for i := range fields {
+		dst = encoding.MarshalUint16(dst, uint16(len(fields[i].Key)))
+		dst = append(dst, fields[i].Key...)
+		if fields[i].Type == Field_Type_Unknown {
 			return nil, ErrInvalidPoint
 		}
 
-		dst = append(dst, uint8(r.Fields[i].Type))
+		dst = append(dst, uint8(fields[i].Type))
 
-		if r.Fields[i].Type == Field_Type_String {
-			dst = encoding.MarshalUint64(dst, uint64(len(r.Fields[i].StrValue)))
-			dst = append(dst, r.Fields[i].StrValue...)
+		if fields[i].Type == Field_Type_String {
+			dst = encoding.MarshalUint64(dst, uint64(len(fields[i].StrValue)))
+			dst = append(dst, fields[i].StrValue...)
 		} else {
-			dst = numberenc.MarshalFloat64(dst, r.Fields[i].NumValue)
+			dst = numberenc.MarshalFloat64(dst, fields[i].NumValue)
 		}
-
 	}
 	return dst, nil
 }
@@ -765,14 +788,6 @@ func (r *Row) UnmarshalIndexKeys(indexkeypool []byte) []byte {
 		4*len(r.Tags) + // length of each tag key and value
 		r.Tags.TagsSize() // size of tag keys/values
 	start := len(indexkeypool)
-
-	// if no tag array, marshal count=1
-	if config.EnableTagArray {
-		if r.HasTagArray {
-			// tag array do not use
-			return nil
-		}
-	}
 
 	// marshal total len
 	indexkeypool = encoding.MarshalUint32(indexkeypool, uint32(indexKl))
@@ -975,11 +990,11 @@ func checkWhitespace(buf string, i int) int {
 	return i
 }
 
-func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeChars bool) ([]Tag, []Field, error) {
+func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeChars, enableTagArray bool) ([]Tag, []Field, error) {
 	r.Reset()
 	start := checkWhitespace(s, 0)
 	s = s[start:]
-	n := nextUnescapedChar(s, ' ', noEscapeChars, false)
+	n := nextUnescapedChar(s, ' ', noEscapeChars, enableTagArray, false)
 	if n < 0 {
 		return tagsPool, fieldsPool, ErrPointMustHaveAField
 	}
@@ -988,10 +1003,10 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 
 	// Parse measurement and tags
 	var err error
-	n = nextUnescapedChar(measurementTags, ',', noEscapeChars, false)
+	n = nextUnescapedChar(measurementTags, ',', noEscapeChars, enableTagArray, false)
 	if n >= 0 {
 		tagsStart := len(tagsPool)
-		tagsPool, err = unmarshalTags(tagsPool, measurementTags[n+1:], noEscapeChars)
+		tagsPool, err = unmarshalTags(tagsPool, measurementTags[n+1:], noEscapeChars, enableTagArray)
 		if err != nil {
 			return tagsPool, fieldsPool, err
 		}
@@ -1005,7 +1020,7 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 
 	// Parse fields
 	fieldsStart := len(fieldsPool)
-	hasQuotedFields := nextUnescapedChar(s, '"', noEscapeChars, false) >= 0
+	hasQuotedFields := nextUnescapedChar(s, '"', noEscapeChars, enableTagArray, false) >= 0
 	n = nextUnquotedChar(s, ' ', noEscapeChars, hasQuotedFields)
 	if n < 0 {
 		// No timestamp.
@@ -1065,9 +1080,9 @@ func (tag *Tag) Reset() {
 	tag.IsArray = false
 }
 
-func (tag *Tag) unmarshal(s string, noEscapeChars bool) error {
+func (tag *Tag) unmarshal(s string, noEscapeChars, enableTagArray bool) error {
 	tag.Reset()
-	n := nextUnescapedChar(s, '=', noEscapeChars, false)
+	n := nextUnescapedChar(s, '=', noEscapeChars, enableTagArray, false)
 	if n < 0 {
 		return errno.NewError(errno.WriteMissTagValue, s)
 	}
@@ -1210,7 +1225,7 @@ func (f *Field) Reset() {
 
 func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	f.Reset()
-	n := nextUnescapedChar(s, '=', noEscapeChars, false)
+	n := nextUnescapedChar(s, '=', noEscapeChars, false, false)
 	if n < 0 {
 		return ErrPointMustHaveAField
 	}
@@ -1218,7 +1233,7 @@ func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	if len(f.Key) == 0 {
 		return fmt.Errorf("field key cannot be empty")
 	}
-	if hasQuotedFields && nextUnescapedChar(s[n:], '"', noEscapeChars, false) >= 0 {
+	if hasQuotedFields && nextUnescapedChar(s[n:], '"', noEscapeChars, false, false) >= 0 {
 		vstr, err := parseFieldStrValue(s[n+1:])
 		if err != nil {
 			return fmt.Errorf("cannot parse field value for %q: %w", f.Key, err)
@@ -1236,22 +1251,22 @@ func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	return nil
 }
 
-func unmarshalRows(dst []Row, s string, tagsPool []Tag, fieldsPool []Field) ([]Row, []Tag, []Field, error) {
+func unmarshalRows(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, enableTagArray bool) ([]Row, []Tag, []Field, error) {
 	var err error
 	noEscapeChars := strings.IndexByte(s, '\\') < 0
 	for len(s) > 0 {
 		n := strings.IndexByte(s, '\n')
 		if n < 0 {
 			// The last line.
-			return unmarshalRow(dst, s, tagsPool, fieldsPool, noEscapeChars)
+			return unmarshalRow(dst, s, tagsPool, fieldsPool, noEscapeChars, enableTagArray)
 		}
-		dst, tagsPool, fieldsPool, err = unmarshalRow(dst, s[:n], tagsPool, fieldsPool, noEscapeChars)
+		dst, tagsPool, fieldsPool, err = unmarshalRow(dst, s[:n], tagsPool, fieldsPool, noEscapeChars, enableTagArray)
 		s = s[n+1:]
 	}
 	return dst, tagsPool, fieldsPool, err
 }
 
-func unmarshalRow(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, noEscapeChars bool) ([]Row, []Tag, []Field, error) {
+func unmarshalRow(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, noEscapeChars, enableTagArray bool) ([]Row, []Tag, []Field, error) {
 	if len(s) > 0 && s[len(s)-1] == '\r' {
 		s = s[:len(s)-1]
 	}
@@ -1271,14 +1286,14 @@ func unmarshalRow(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, noEsc
 	}
 	r := &dst[len(dst)-1]
 	var err error
-	tagsPool, fieldsPool, err = r.unmarshal(s, tagsPool, fieldsPool, noEscapeChars)
+	tagsPool, fieldsPool, err = r.unmarshal(s, tagsPool, fieldsPool, noEscapeChars, enableTagArray)
 	if err != nil {
 		dst = dst[:len(dst)-1]
 	}
 	return dst, tagsPool, fieldsPool, err
 }
 
-func unmarshalTags(dst []Tag, s string, noEscapeChars bool) ([]Tag, error) {
+func unmarshalTags(dst []Tag, s string, noEscapeChars, enableTagArray bool) ([]Tag, error) {
 	for {
 		if cap(dst) > len(dst) {
 			dst = dst[:len(dst)+1]
@@ -1286,9 +1301,9 @@ func unmarshalTags(dst []Tag, s string, noEscapeChars bool) ([]Tag, error) {
 			dst = append(dst, Tag{})
 		}
 		tag := &dst[len(dst)-1]
-		n := nextUnescapedChar(s, ',', noEscapeChars, true)
+		n := nextUnescapedChar(s, ',', noEscapeChars, enableTagArray, true)
 		if n < 0 {
-			if err := tag.unmarshal(s, noEscapeChars); err != nil {
+			if err := tag.unmarshal(s, noEscapeChars, enableTagArray); err != nil {
 				return dst[:len(dst)-1], err
 			}
 			if len(tag.Key) == 0 || len(tag.Value) == 0 {
@@ -1297,7 +1312,7 @@ func unmarshalTags(dst []Tag, s string, noEscapeChars bool) ([]Tag, error) {
 			}
 			return dst, nil
 		}
-		if err := tag.unmarshal(s[:n], noEscapeChars); err != nil {
+		if err := tag.unmarshal(s[:n], noEscapeChars, enableTagArray); err != nil {
 			return dst[:len(dst)-1], err
 		}
 		s = s[n+1:]
@@ -1454,10 +1469,10 @@ func parseFieldStrValue(s string) (string, error) {
 	return "", nil
 }
 
-func nextUnescapedChar(s string, ch byte, noEscapeChars, tagParse bool) int {
+func nextUnescapedChar(s string, ch byte, noEscapeChars, enableTagArray, tagParse bool) int {
 	if noEscapeChars {
 		// eg,tk1=value1,tk2=[value2,value22],tk3=value3
-		if config.EnableTagArray && tagParse {
+		if enableTagArray && tagParse {
 			return nextUnescapedCharForTagArray(s, ch)
 		}
 		return strings.IndexByte(s, ch)
@@ -1467,7 +1482,7 @@ func nextUnescapedChar(s string, ch byte, noEscapeChars, tagParse bool) int {
 again:
 	// eg,tk1=value1,tk2=[value2,value22],tk3=value3
 	var n int
-	if config.EnableTagArray && tagParse {
+	if enableTagArray && tagParse {
 		n = nextUnescapedCharForTagArray(s, ch)
 	} else {
 		n = strings.IndexByte(s, ch)
@@ -1497,11 +1512,11 @@ again:
 
 func nextUnquotedChar(s string, ch byte, noEscapeChars, hasQuotedFields bool) int {
 	if !hasQuotedFields {
-		return nextUnescapedChar(s, ch, noEscapeChars, false)
+		return nextUnescapedChar(s, ch, noEscapeChars, false, false)
 	}
 	sOrig := s
 	for {
-		n := nextUnescapedChar(s, ch, noEscapeChars, false)
+		n := nextUnescapedChar(s, ch, noEscapeChars, false, false)
 		if n < 0 {
 			return -1
 		}
@@ -1509,7 +1524,7 @@ func nextUnquotedChar(s string, ch byte, noEscapeChars, hasQuotedFields bool) in
 			return n + len(sOrig) - len(s)
 		}
 		s = s[n+1:]
-		n = nextUnescapedChar(s, '"', noEscapeChars, false)
+		n = nextUnescapedChar(s, '"', noEscapeChars, false, false)
 		if n < 0 {
 			return -1
 		}
@@ -1535,7 +1550,7 @@ func nextTimestamp(s string) (int64, error) {
 func isInQuote(s string, noEscapeChars bool) bool {
 	isQuote := false
 	for {
-		n := nextUnescapedChar(s, '"', noEscapeChars, false)
+		n := nextUnescapedChar(s, '"', noEscapeChars, false, false)
 		if n < 0 {
 			return isQuote
 		}

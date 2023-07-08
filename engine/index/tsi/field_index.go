@@ -309,11 +309,8 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 			}
 
 			if !groupByField && len(fieldValues) == 0 {
-				tagSet.IDs = append(tagSet.IDs, sid)
-				tagSet.TagsVec = append(tagSet.TagsVec, group.TagsVec[i])
 				tagSet.key = append(tagSet.key, group.key...)
-				tagSet.SeriesKeys = append(tagSet.SeriesKeys, group.SeriesKeys[i])
-				tagSet.Filters = append(tagSet.Filters, group.Filters[i])
+				tagSet.Append(sid, group.SeriesKeys[i], group.Filters[i], group.TagsVec[i], nil)
 			}
 
 			// Generate TagSet for each field value.

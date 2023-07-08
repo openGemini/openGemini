@@ -55,6 +55,8 @@ type StreamAggregateTransform struct {
 
 	span        *tracing.Span
 	computeSpan *tracing.Span
+
+	errs errno.Errs
 }
 
 func NewStreamAggregateTransform(
@@ -175,11 +177,8 @@ func (trans *StreamAggregateTransform) Work(ctx context.Context) error {
 		trans.Close()
 	}()
 
-	errs := errno.NewErrsPool().Get()
+	errs := &trans.errs
 	errs.Init(len(trans.Inputs)+1, trans.Close)
-	defer func() {
-		errno.NewErrsPool().Put(errs)
-	}()
 
 	for i := range trans.Inputs {
 		go trans.runnable(i, ctx, errs)

@@ -1,7 +1,7 @@
 syntax = "proto2";
 package netstorage.data;
 
-import "PyxisDB/open_src/influx/meta/proto/meta.proto";
+import "open_src/influx/meta/proto/meta.proto";
 
 option go_package = ".;netstorage.data";
 
@@ -94,6 +94,7 @@ message PtRequest {
     required proto.DbPt Pt = 1;
     required int32 MigrateType = 2;
     required uint64 OpId = 3;
+    optional uint64 AliveConnId = 4;
 }
 
 message PtResponse {

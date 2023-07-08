@@ -156,13 +156,19 @@ func GetNode() Node {
 	return currentNode
 }
 
-func Equal(err error, errno Errno) bool {
+func Equal(err error, errno ...Errno) bool {
 	e, ok := err.(*Error)
 	if !ok {
 		return false
 	}
 
-	return e.Errno() == errno
+	for i := range errno {
+		if e.Errno() == errno[i] {
+			return true
+		}
+	}
+
+	return false
 }
 
 func NewBuiltIn(err error, module Module) *Error {

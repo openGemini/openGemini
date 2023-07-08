@@ -20,6 +20,7 @@ import (
 	"io"
 	"reflect"
 	"time"
+	"unsafe"
 
 	"github.com/influxdata/influxdb/toml"
 	"go.uber.org/zap"
@@ -31,6 +32,19 @@ const (
 	Warm      = 2
 	Cold      = 3
 	TierEnd   = 4
+)
+
+const (
+	BooleanSizeBytes = int(unsafe.Sizeof(false))
+	Uint32SizeBytes  = int(unsafe.Sizeof(uint32(0)))
+	Uint16SizeBytes  = int(unsafe.Sizeof(uint16(0)))
+	Uint64SizeBytes  = int(unsafe.Sizeof(uint64(0)))
+	Int16SizeBytes   = int(unsafe.Sizeof(int16(0)))
+	Int32SizeBytes   = int(unsafe.Sizeof(int32(0)))
+	Int64SizeBytes   = int(unsafe.Sizeof(int64(0)))
+	Float32SizeBytes = int(unsafe.Sizeof(float32(0)))
+	Float64SizeBytes = int(unsafe.Sizeof(float64(0)))
+	Int8SizeBytes    = int(unsafe.Sizeof(int8(0)))
 )
 
 var logger *zap.Logger
@@ -138,4 +152,274 @@ func IntLimit(min, max int, v int) int {
 		return max
 	}
 	return v
+}
+
+func Bytes2Uint16Slice(b []byte) []uint16 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []uint16
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Uint16SizeBytes
+	s.Cap = h.Cap / Uint16SizeBytes
+	return res
+}
+
+func Uint16Slice2byte(b []uint16) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Uint16SizeBytes
+	s.Cap = h.Cap * Uint16SizeBytes
+	return res
+}
+
+func Bytes2Uint32Slice(b []byte) []uint32 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []uint32
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Uint32SizeBytes
+	s.Cap = h.Cap / Uint32SizeBytes
+	return res
+}
+
+func Uint32Slice2byte(b []uint32) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Uint32SizeBytes
+	s.Cap = h.Cap * Uint32SizeBytes
+	return res
+}
+
+func BooleanSlice2byte(b []bool) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * BooleanSizeBytes
+	s.Cap = h.Cap * BooleanSizeBytes
+	return res
+}
+
+func Bytes2BooleanSlice(b []byte) []bool {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []bool
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / BooleanSizeBytes
+	s.Cap = h.Cap / BooleanSizeBytes
+	return res
+}
+
+func Int64Slice2byte(b []int64) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Int64SizeBytes
+	s.Cap = h.Cap * Int64SizeBytes
+	return res
+}
+
+func Uint64Slice2byte(b []uint64) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Uint64SizeBytes
+	s.Cap = h.Cap * Uint64SizeBytes
+	return res
+}
+
+func Bytes2Int16Slice(b []byte) []int16 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []int16
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Int16SizeBytes
+	s.Cap = h.Cap / Int16SizeBytes
+	return res
+}
+
+func Bytes2Int32Slice(b []byte) []int32 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []int32
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Int32SizeBytes
+	s.Cap = h.Cap / Int32SizeBytes
+	return res
+}
+
+func Bytes2Int64Slice(b []byte) []int64 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []int64
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Int64SizeBytes
+	s.Cap = h.Cap / Int64SizeBytes
+	return res
+}
+
+func Float32Slice2byte(b []float32) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Float32SizeBytes
+	s.Cap = h.Cap * Float32SizeBytes
+	return res
+}
+
+func Bytes2Float32Slice(b []byte) []float32 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []float32
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Float32SizeBytes
+	s.Cap = h.Cap / Float32SizeBytes
+	return res
+}
+
+func Float64Slice2byte(b []float64) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Float64SizeBytes
+	s.Cap = h.Cap * Float64SizeBytes
+	return res
+}
+
+func Bytes2Float64Slice(b []byte) []float64 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []float64
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Float64SizeBytes
+	s.Cap = h.Cap / Float64SizeBytes
+	return res
+}
+
+func Bytes2Int8Slice(b []byte) []int8 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []int8
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Int8SizeBytes
+	s.Cap = h.Cap / Int8SizeBytes
+
+	return res
+}
+
+func Bytes2Uint64Slice(b []byte) []uint64 {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []uint64
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len / Uint64SizeBytes
+	s.Cap = h.Cap / Uint64SizeBytes
+	return res
+}
+
+func Int16Slice2byte(b []int16) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Int16SizeBytes
+	s.Cap = h.Cap * Int16SizeBytes
+	return res
+}
+
+func Int32Slice2byte(b []int32) []byte {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+
+	var res []byte
+	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
+	s.Data = h.Data
+	s.Len = h.Len * Int32SizeBytes
+	s.Cap = h.Cap * Int32SizeBytes
+	return res
+}
+
+type TimeRange struct {
+	Min, Max int64
+}
+
+func (t TimeRange) Overlaps(min, max int64) bool {
+	return t.Min <= max && t.Max >= min
+}
+
+func Str2bytes(s string) []byte {
+	x := (*[2]uintptr)(unsafe.Pointer(&s))
+	h := [3]uintptr{x[0], x[1], x[1]}
+	return *(*[]byte)(unsafe.Pointer(&h))
+}
+
+func Bytes2str(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+func MemorySet(buf []byte) {
+	for i := range buf {
+		buf[i] = 0
+	}
+}
+
+func Min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
+
+func RemoveDuplicationInt(array []uint32) []uint32 {
+	swap := func(list []uint32, a, b int) {
+		list[a], list[b] = list[b], list[a]
+	}
+
+	length := len(array)
+	if length == 0 {
+		return array
+	}
+
+	j := 0
+	for i := 1; i < length; i++ {
+		if array[i] != array[j] {
+			j++
+			if j < i {
+				swap(array, i, j)
+			}
+		}
+	}
+	return array[:j+1]
+}
+
+func MaxUint32(x, y uint32) uint32 {
+	if x < y {
+		return y
+	}
+	return x
 }

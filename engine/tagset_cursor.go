@@ -454,7 +454,8 @@ func (t *tagSetCursor) GetSchema() record.Schemas {
 }
 
 func (t *tagSetCursor) NextWithBreakPoint() {
-	for t.currItem.position < t.currItem.recordBuf.RowNums() {
+	rowNum := t.currItem.recordBuf.RowNums()
+	for t.currItem.position < rowNum {
 		if t.CompareWithBreakPoint() {
 			t.currItem.position++
 			continue

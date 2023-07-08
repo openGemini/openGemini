@@ -120,9 +120,9 @@ func (m *MigrateStateMachine) createEventFromInfo(e *meta.MigrateEventInfo) Migr
 
 	switch EventType(e.GetEventType()) {
 	case AssignType:
-		me = NewAssignEvent(e.GetPtInfo(), e.GetDst(), false)
+		me = NewAssignEvent(e.GetPtInfo(), e.GetDst(), e.GetAliveConnId(), false)
 	case MoveType:
-		me = NewMoveEvent(e.GetPtInfo(), e.GetSrc(), e.GetDst(), false)
+		me = NewMoveEvent(e.GetPtInfo(), e.GetSrc(), e.GetDst(), e.GetAliveConnId(), false)
 	default:
 
 	}
@@ -170,6 +170,7 @@ func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, er
 	ptReq.MigrateType = proto.Int(e.getCurrState()) // use currState to determine the action
 	// todo you should send operation id to store to make sure store response should not delete other events
 	ptReq.OpId = proto.Uint64(e.getOpId())
+	ptReq.AliveConnId = proto.Uint64(e.getAliveConnId())
 
 	// todo if you want async handle response do not set callback
 	cb := &netstorage.MigratePtCallback{}
@@ -210,28 +211,26 @@ func (m *MigrateStateMachine) handleMigrateCommandResponse(err error, e MigrateE
 
 // transit state due to store cmd response and return schedule type(normal or retry)
 func (m *MigrateStateMachine) handleCmdResult(err error, e MigrateEvent) ScheduleType {
-	scheduleType := ScheduleNormal
 	if err != nil && !globalService.clusterManager.isNodeAlive(e.getTarget()) {
 		err = errno.NewError(errno.DataNoAlive)
 	}
 	if err == nil || errno.Equal(err, errno.DataNoAlive) || errno.Equal(err, errno.NeedChangeStore) ||
-		errno.Equal(err, errno.NoConnectionAvailable) {
+		errno.Equal(err, errno.NoConnectionAvailable) || errno.Equal(err, errno.MemUsageExceeded) {
 		e.stateTransition(err)
-		return scheduleType
+		return ScheduleNormal
 	}
 
 	if !errno.Equal(err, errno.SelectClosedConn) && !errno.Equal(err, errno.PtIsAlreadyMigrating) &&
 		!errno.Equal(err, errno.SessionSelectTimeout) {
 		e.increaseRetryCnt()
 	}
-	scheduleType = ScheduleRetry
 	if e.exhaustRetries() {
 		// set isolate db pt and alarm
 		//e.setIsolate(true)
 		m.logger.Error("fail to handle migration", zap.Error(errno.NewError(errno.InternalError, err)), zap.String("event", e.String()))
 	}
 	time.Sleep(100 * time.Millisecond)
-	return scheduleType
+	return ScheduleRetry
 }
 
 func (m *MigrateStateMachine) scheduleExistEvent(e MigrateEvent) {
@@ -362,7 +361,10 @@ func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 		nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
 		m.logger.Error("process failed db pt failed", zap.Error(res.err),
 			zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId), zap.Uint64("opId", e.getOpId()))
-		go globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap)
+		go func() {
+			err := globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap, true)
+			m.logger.Error("process failed db pt error", zap.Error(err))
+		}()
 	}
 }
 

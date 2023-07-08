@@ -17,22 +17,21 @@ limitations under the License.
 package immutable
 
 import (
-	"bytes"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/immutable/readcache"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
+	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -125,6 +124,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	lockPath := ""
 
 	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	store.SetImmTableType(config.TSSTORE)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -142,8 +142,6 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 
 	check := func(name string, fn string, orig *record.Record) {
 		f := store.File(name, fn, true)
-		defer f.Unref()
-		defer UnrefFilesReader(f)
 		contains, err := f.Contains(idMinMax.min)
 		if err != nil || !contains {
 			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -294,6 +292,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	lockPath := ""
 
 	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	store.SetImmTableType(config.TSSTORE)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -311,8 +310,6 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 
 	check := func(name string, fn string, orig *record.Record) {
 		f := store.File(name, fn, true)
-		defer f.Unref()
-		defer f.UnrefFileReader()
 		contains, err := f.Contains(idMinMax.min)
 		if err != nil || !contains {
 			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -453,6 +450,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	lockPath := ""
 
 	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	store.SetImmTableType(config.TSSTORE)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -470,7 +468,6 @@ func TestMmsTables_FullCompact(t *testing.T) {
 
 	check := func(name string, fn string, orig *record.Record) {
 		f := store.File(name, fn, true)
-		defer f.Unref()
 		contains, err := f.Contains(idMinMax.min)
 		if err != nil || !contains {
 			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -615,6 +612,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		recRows := conf.maxRowsPerSegment*9 + 1
 
 		store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+		store.SetImmTableType(config.TSSTORE)
 		defer store.Close()
 
 		store.CompactionEnable()
@@ -631,8 +629,6 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 
 		check := func(name string, fn string, ids []uint64, orig []*record.Record) {
 			f := store.File(name, fn, true)
-			defer f.Unref()
-			defer f.UnrefFileReader()
 			contains, err := f.Contains(idMinMax.min)
 			if err != nil || !contains {
 				t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
@@ -788,7 +784,7 @@ func mustCreateTsspFiles(path string, fileNames []string) []TSSPFile {
 			mustCloseTsspFiles(files)
 			panic(err)
 		}
-		dr := NewDiskFileReader(fd, &lockPath)
+		dr := fileops.NewFileReader(fd, &lockPath)
 		fileName := NewTSSPFileName(1, 0, 0, 0, true, &lockPath)
 		f := &tsspFile{
 			name: fileName,
@@ -909,7 +905,7 @@ func TestCompactLog_AllNewFileExist1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = recoverFile(testCompDir, &lockPath); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
 		t.Fatal(err)
 	}
 
@@ -965,7 +961,7 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 	//remove 1 old file
 	fName = filepath.Join(dir, info.OldFile[1])
 	_ = fileops.Remove(fName)
-	if err = recoverFile(testCompDir, &lockPath); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1022,7 +1018,7 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
-	if err = recoverFile(testCompDir, &lockPath); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1080,7 +1076,7 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
-	if err = recoverFile(testCompDir, &lockPath); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1104,9 +1100,9 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 	confs := []TestConfig{
 		{24, 7, defaultFileSizeLimit, 24, NonStreamingCompact},
 		{24, 7, defaultFileSizeLimit, 24, StreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit, 1500 * 10, NonStreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit, 1500 * 10, StreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit, 1500 * 10, AutoCompact},
+		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, NonStreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, StreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, AutoCompact},
 	}
 	testCompDir := t.TempDir()
 	lockPath := ""
@@ -1131,6 +1127,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 		conf.fileSizeLimit = cf.fileSizeLimit
 		tier := uint64(util.Hot)
 		store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+		store.SetImmTableType(config.TSSTORE)
 
 		store.CompactionEnable()
 
@@ -1230,80 +1227,6 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 	}
 }
 
-func TestDiskWriter(t *testing.T) {
-	dir := t.TempDir()
-	name := filepath.Join(dir, "TestDiskWriter")
-	_ = fileops.Remove(dir)
-	defer fileops.RemoveAll(dir)
-	_ = fileops.MkdirAll(dir, 0750)
-
-	fd := &mockFile{
-		NameFn: func() string {
-			return name
-		},
-		CloseFn: func() error {
-			return nil
-		},
-		WriteFn: func(p []byte) (n int, err error) {
-			return 0, fmt.Errorf("write fail")
-		},
-	}
-
-	var buf [128 * 1024]byte
-	lockPath := ""
-	dr := NewDiskWriter(fd, 1024, &lockPath)
-	if _, err := dr.Write(buf[:32]); err != nil {
-		t.Fatal(err)
-	}
-
-	// write fail
-	if _, err := dr.Write(buf[:]); err == nil {
-		t.Fatalf("diskwrite should be wirte fail")
-	}
-
-	// flush fail
-	to := &bytes.Buffer{}
-	_, err := dr.CopyTo(to)
-	if err == nil {
-		t.Fatalf("diskwrite should be copy fail")
-	}
-
-	// close fail
-	fd.WriteFn = func(p []byte) (n int, err error) { return len(p), nil }
-	fd.CloseFn = func() error { return fmt.Errorf("close fail") }
-	dr.w.Reset(fd)
-	_, _ = dr.Write(buf[:])
-	if _, err = dr.CopyTo(to); err == nil || !strings.Contains(err.Error(), "close fail") {
-		t.Fatalf("diskwriter should be cloase fail")
-	}
-
-	// open fail
-	fd.WriteFn = func(p []byte) (n int, err error) { return len(p), nil }
-	fd.CloseFn = func() error { return nil }
-	dr.w.Reset(fd)
-	_, _ = dr.Write(buf[:])
-	if _, err = dr.CopyTo(to); err == nil {
-		t.Fatalf("diskwriter should be open fail")
-	}
-
-	// copy fail
-	fd1, err := fileops.OpenFile(name, os.O_CREATE|os.O_RDWR, 0640)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = fd1.Write(buf[:])
-	_ = fd1.Close()
-
-	fd.WriteFn = func(p []byte) (n int, err error) { return len(p), nil }
-	fd.CloseFn = func() error { return nil }
-	dr.w.Reset(fd)
-	dr.n = 0
-	_, _ = dr.Write(buf[:])
-	if _, err = dr.CopyTo(to); err != nil {
-		t.Fatalf("diskwriter should be open fail")
-	}
-}
-
 func TestMmsTables_SetMaxCompactor(t *testing.T) {
 	minConcurrentCompactions := 2
 	maxConcurrentCompactions := 32
@@ -1374,6 +1297,7 @@ func TestCompactRecovery(t *testing.T) {
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testCompDir, &lockPath, &tier, false, conf)
+	store.SetImmTableType(config.TSSTORE)
 	defer store.Close()
 
 	store.CompactionEnable()
@@ -1405,6 +1329,7 @@ func TestMergeRecovery(t *testing.T) {
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testCompDir, &lockPath, &tier, false, conf)
+	store.SetImmTableType(config.TSSTORE)
 	defer store.Close()
 
 	store.CompactionEnable()

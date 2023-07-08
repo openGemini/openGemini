@@ -83,6 +83,7 @@ message DatabaseInfo {
 	repeated RetentionPolicyInfo RetentionPolicies = 3;
 	optional bool MarkDeleted  = 5;
 	optional ShardKeyInfo ShardKey = 6;
+	optional bool EnableTagArray = 7;
 }
 
 message RetentionPolicySpec {
@@ -97,7 +98,9 @@ message MeasurementInfo {
     repeated ShardKeyInfo ShardKeys = 2;
     map<string, int32> Schema = 3;
     optional bool MarkDeleted = 4;
-		optional IndexRelation indexRelation = 5;
+    optional IndexRelation indexRelation = 5;
+    optional uint32 EngineType = 6;
+    optional ColStoreInfo ColStoreInfo = 7;
 }
 
 message RetentionPolicyInfo {
@@ -124,6 +127,7 @@ message ShardGroupInfo {
 	required int64 DeletedAt = 4;
 	repeated ShardInfo Shards = 5;
 	optional int64 TruncatedAt = 6;
+	optional uint32 EngineType = 7;
 }
 
 message ShardInfo {
@@ -170,9 +174,10 @@ message UserPrivilege {
 
 message IndexRelation {
     required uint32 Rid = 1;
-		repeated uint32 Oid = 2;
+    repeated uint32 Oid = 2;
     repeated string IndexName = 3;
     repeated IndexList IndexLists = 4;
+    map<string, IndexOptions> IndexOptions = 5;
 }
 
 message IndexList {
@@ -217,6 +222,23 @@ message StreamCall {
     required string Call = 1;
     required string Field = 2;
     required string Alias = 3;
+}
+
+message ColStoreInfo {
+    repeated string PrimaryKey    = 1;
+    repeated string SortKey       = 2;
+    repeated string PropertyKey   = 3;
+    repeated string PropertyValue = 4;
+}
+
+message IndexOption {
+    optional string Tokens     = 1;
+    optional string Tokenizers = 2;
+    optional int64  Segment    = 3;
+}
+
+message IndexOptions {
+	repeated IndexOption Infos = 1;
 }
 
 //========================================================================
@@ -286,6 +308,8 @@ message Command {
 		VerifyDataNodeCommand                      = 80;
 		ExpandGroupsCommand                        = 81;
 		UpdatePtVersionCommand                     = 82;
+		GetDBBriefInfoCommand                      = 83;
+		GetMeasurementsInfoCommand                 = 84;
 	}
 
 	required Type type = 1;
@@ -299,6 +323,7 @@ message CreateDatabaseCommand {
 	optional RetentionPolicyInfo RetentionPolicy = 2;
 	optional uint32 ReplicaNum = 3;
 	optional ShardKeyInfo Ski = 4;
+	optional bool EnableTagArray = 5;
 }
 
 message DropDatabaseCommand {
@@ -357,6 +382,7 @@ message CreateShardGroupCommand {
 	required string Policy = 2;
 	required int64 Timestamp = 3;
 	required uint64 ShardTier = 4;
+	optional uint32 EngineType = 5;
 }
 
 message DeleteShardGroupCommand {
@@ -532,8 +558,10 @@ message CreateMeasurementCommand {
 	required string DBName = 1;
 	required string RpName = 2;
 	required string Name = 3;
-    optional ShardKeyInfo Ski = 4;
-    optional IndexRelation IR = 5;
+	optional ShardKeyInfo Ski = 4;
+	optional IndexRelation IR = 5;
+	optional uint32 EngineType = 6;
+	optional ColStoreInfo ColStoreInfo = 7;
 }
 
 message AlterShardKeyCmd {
@@ -692,6 +720,8 @@ message NodeStartInfo {
     repeated uint32 PtIds  = 3;
     repeated ShardDurationInfo Durations = 4;
     required uint64 LTime = 5;
+    repeated DatabaseBriefInfo DBBriefInfo = 6;
+    optional uint64 connId = 7;
 }
 
 message TimeRangeCommand {
@@ -728,6 +758,7 @@ message ShardIdentifier {
     optional int64  DownSampleLevel = 7;
     optional uint64 DownSampleID  = 8;
     optional bool   ReadOnly      = 9;
+    optional uint32 EngineType = 10;
 }
 
 message TimeRangeInfo {
@@ -744,6 +775,7 @@ message IndexDescriptor {
 message ShardDurationInfo {
 	optional ShardIdentifier Ident = 1;
 	required DurationDescriptor DurationInfo = 2;
+	repeated MeasurementInfo MeasurementInfo = 3;
 }
 
 message ShardTimeRangeInfo {
@@ -806,6 +838,7 @@ message DbPt {
     required string Db = 1;
     required PtInfo Pt = 2;
     map<uint64, ShardDurationInfo> Shards = 3;
+    optional DatabaseBriefInfo DBBriefInfo = 4;
 }
 
 message MigrateEventInfo {
@@ -818,6 +851,7 @@ message MigrateEventInfo {
     optional uint64 src = 7;
     optional uint64 dest = 8;
     optional bool checkConflict = 9;
+    optional uint64 aliveConnId = 10;
 }
 
 message CreateEventCommand {
@@ -954,4 +988,21 @@ message UpdatePtVersionCommand {
 	}
 	required string Db = 1;
 	required uint32 Pt = 2;
+}
+
+message GetMeasurementsInfoCommand {
+	extend Command {
+		optional GetMeasurementsInfoCommand command = 183;
+	}
+	required string DbName   = 1;
+	required string RpName   = 2;
+}
+
+message DatabaseBriefInfo {
+	required string Name = 1;
+	required bool EnableTagArray = 2;
+}
+
+message MeasurementsInfo {
+	repeated MeasurementInfo MeasurementsInfo = 1;
 }

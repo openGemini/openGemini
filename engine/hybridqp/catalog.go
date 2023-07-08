@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
 )
 
 type LimitType int
@@ -50,8 +49,7 @@ type RowDataType interface {
 
 	IndexByName() map[string]int
 	UpdateByDownSampleFields(map[string]string)
-	Marshal() *internal.RowDataType
-	Unmarshal(*internal.RowDataType) error
+	SetDataType(i int, t influxql.DataType)
 }
 
 type RowDataTypeImpl struct {
@@ -62,13 +60,13 @@ type RowDataTypeImpl struct {
 
 func NewRowDataTypeImpl(refs ...influxql.VarRef) *RowDataTypeImpl {
 	rowDataType := &RowDataTypeImpl{
-		fields:      make(influxql.Fields, 0, len(refs)),
+		fields:      make(influxql.Fields, len(refs)),
 		indexByName: make(map[string]int),
 	}
 
-	for _, ref := range refs {
-		r := ref
-		rowDataType.fields = append(rowDataType.fields, &influxql.Field{Expr: &r})
+	for i := range refs {
+		ref := refs[i]
+		rowDataType.fields[i] = &influxql.Field{Expr: &ref}
 	}
 
 	for i, f := range rowDataType.fields {
@@ -76,6 +74,15 @@ func NewRowDataTypeImpl(refs ...influxql.VarRef) *RowDataTypeImpl {
 	}
 
 	return rowDataType
+}
+
+func (s *RowDataTypeImpl) SetDataType(i int, t influxql.DataType) {
+	if i >= len(s.fields) {
+		return
+	}
+	if val, ok := s.fields[i].Expr.(*influxql.VarRef); ok {
+		val.SetDataType(t)
+	}
 }
 
 func (s *RowDataTypeImpl) UpdateByDownSampleFields(m map[string]string) {
@@ -96,7 +103,7 @@ func (s *RowDataTypeImpl) DeepEqual(to *RowDataTypeImpl) bool {
 	}
 
 	for i := range s.fields {
-		if s.fields[i].String() != to.fields[i].String() {
+		if !s.fields[i].Equal(to.fields[i]) {
 			return false
 		}
 	}
@@ -185,44 +192,9 @@ func (s *RowDataTypeImpl) CopyTo(dst *RowDataTypeImpl) {
 	}
 }
 
-func (s *RowDataTypeImpl) Marshal() *internal.RowDataType {
-	mc := MapConvert{}
-
-	ret := &internal.RowDataType{
-		Aux:         make([]int64, len(s.aux)),
-		Fields:      s.fields.String(),
-		IndexByName: mc.IntToInt64(s.indexByName),
-	}
-
-	for _, v := range s.aux {
-		ret.Aux = append(ret.Aux, int64(v))
-	}
-
-	return ret
-}
-
-func (s *RowDataTypeImpl) Unmarshal(rt *internal.RowDataType) error {
-	mc := MapConvert{}
-
-	var err error
-	s.fields, err = ParseFields(rt.Fields)
-	if err != nil {
-		return err
-	}
-
-	for _, v := range rt.Aux {
-		s.aux = append(s.aux, int(v))
-	}
-
-	s.indexByName = mc.Int64ToInt(rt.IndexByName)
-
-	return nil
-}
-
 type Catalog interface {
 	GetColumnNames() []string
 	GetQueryFields() influxql.Fields
-
 	CloneField(f *influxql.Field) *influxql.Field
 	HasCall() bool
 	HasMath() bool
@@ -250,7 +222,6 @@ type Catalog interface {
 	CompositeCall() map[string]*OGSketchCompositeOperator
 	Binarys() map[string]*influxql.BinaryExpr
 	Fields() influxql.Fields
-	FieldsMap() map[string]*influxql.Field
 	FieldsRef() influxql.VarRefs
 	CountDistinct() *influxql.Call
 	OnlyOneCallRef() *influxql.VarRef
@@ -274,10 +245,13 @@ type Catalog interface {
 	Sources() influxql.Sources
 	HasSubQuery() bool
 	HasOptimizeAgg() bool
+	HasOptimizeCall() bool
 	GetSourcesNames() []string
 	GetFieldType(i int) (int64, error)
 	GetJoinCaseCount() int
 	GetJoinCases() []*influxql.Join
+	IsHoltWinters(val string) bool
+	GetSortFields() influxql.SortFields
 }
 
 type CatalogCreator interface {
@@ -324,9 +298,12 @@ func GetCatalogFactoryInstance() *CatalogCreatorFactory {
 type StoreEngine interface {
 	ReportLoad()
 	CreateLogicPlanV2(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
+	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema Catalog) (IShardsFragments, error)
 	UnrefEngineDbPt(db string, ptId uint32)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 }
+
+type IShardsFragments interface{}
 
 type OGSketchCompositeOperator struct {
 	insertOp   *influxql.Call

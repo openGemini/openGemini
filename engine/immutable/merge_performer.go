@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -62,6 +64,8 @@ type mergePerformer struct {
 	// merged time column
 	mergedTimes   []int64
 	mergedTimeCol *record.ColVal
+
+	nilCol record.ColVal
 }
 
 func NewMergePerformer(ur *UnorderedReader, stat *statistics.MergeStatItem) *mergePerformer {
@@ -97,7 +101,7 @@ func (p *mergePerformer) Handle(col *record.ColVal, times []int64, lastSeg bool)
 		return err
 	}
 	if unorderedCol != nil {
-		record.CheckCol(unorderedCol)
+		record.CheckCol(unorderedCol, p.ref.Type)
 	}
 
 	return p.merge(col, unorderedCol, times, unorderedTimes, p.ref, lastSeg)
@@ -108,6 +112,10 @@ func (p *mergePerformer) SeriesChanged(sid uint64, orderTimes []int64) error {
 
 	if err := p.finishSeries(sid); err != nil {
 		return err
+	}
+	if len(orderTimes) == 0 {
+		p.sid = 0
+		return nil
 	}
 
 	maxOrderTime := orderTimes[len(orderTimes)-1]
@@ -127,7 +135,7 @@ func (p *mergePerformer) SeriesChanged(sid uint64, orderTimes []int64) error {
 		p.mergedTimes = append(p.mergedTimes[:0], orderTimes...)
 	} else {
 		p.unorderedSchemas = p.ur.ReadSeriesSchemas(sid, maxOrderTime)
-		p.mergedTimes = mergeTimes(orderTimes, unorderedTimes, p.mergedTimes[:0])
+		p.mergedTimes = MergeTimes(orderTimes, unorderedTimes, p.mergedTimes[:0])
 		p.stat.IntersectSeriesCount++
 	}
 
@@ -141,8 +149,8 @@ func (p *mergePerformer) SeriesChanged(sid uint64, orderTimes []int64) error {
 	return nil
 }
 
-func (p *mergePerformer) ColumnChanged(ref record.Field) error {
-	p.ref = &ref
+func (p *mergePerformer) ColumnChanged(ref *record.Field) error {
+	p.ref = ref
 	p.noUnorderedColumn = true
 
 	sl := len(p.unorderedSchemas)
@@ -257,7 +265,7 @@ func (p *mergePerformer) writeRemain(maxSid uint64) error {
 			lastSid = sid
 		}
 
-		if err := p.sw.AppendColumn(ref); err != nil {
+		if err := p.sw.AppendColumn(&ref); err != nil {
 			return err
 		}
 
@@ -278,7 +286,7 @@ func (p *mergePerformer) merge(orderCol, unorderedCol *record.ColVal,
 		return p.write(ref, orderCol, orderTimes, lastSeg)
 	}
 
-	p.mh.AddUnorderedCol(unorderedCol, unorderedTimes, ref.Type)
+	p.mh.AddUnorderedCol(unorderedCol, unorderedTimes)
 	mergedCol, mergedTimeCol, err := p.mh.Merge(orderCol, orderTimes, ref.Type)
 	if err != nil {
 		return err
@@ -294,7 +302,7 @@ func (p *mergePerformer) readUnordered(max int64) (*record.ColVal, []int64, erro
 
 	if p.noUnorderedColumn {
 		times = p.ur.ReadTimes(p.ref, max)
-		col = newNilCol(len(times), p.ref)
+		col = p.ur.AllocNilCol(len(times), p.ref)
 	} else {
 		col, times, err = p.ur.Read(p.sid, p.ref, max)
 	}
@@ -303,7 +311,7 @@ func (p *mergePerformer) readUnordered(max int64) (*record.ColVal, []int64, erro
 }
 
 func (p *mergePerformer) writeUnorderedCol(ref *record.Field) error {
-	if err := p.sw.AppendColumn(*ref); err != nil {
+	if err := p.sw.AppendColumn(ref); err != nil {
 		return err
 	}
 
@@ -312,7 +320,8 @@ func (p *mergePerformer) writeUnorderedCol(ref *record.Field) error {
 		maxTime = math.MaxInt64
 	}
 
-	orderCol := newNilCol(len(p.mergedTimes), ref)
+	orderCol := &p.nilCol
+	FillNilCol(orderCol, len(p.mergedTimes), ref)
 	unorderedCol, unorderedTimes, err := p.ur.Read(p.sid, ref, maxTime)
 	if err != nil {
 		return err
@@ -325,7 +334,7 @@ func (p *mergePerformer) writeMergedTime() error {
 		return nil
 	}
 
-	if err := p.sw.AppendColumn(timeField); err != nil {
+	if err := p.sw.AppendColumn(&timeField); err != nil {
 		return err
 	}
 
@@ -338,10 +347,63 @@ func (p *mergePerformer) write(ref *record.Field, col *record.ColVal, times []in
 	}
 
 	if lastSeg {
-		return p.cw.flush()
+		return p.cw.flush(p.sid, ref)
 	}
 
 	return nil
+}
+
+func (p *mergePerformer) HasSeries(sid uint64) bool {
+	return p.ur.HasSeries(sid)
+}
+
+func (p *mergePerformer) WriteOriginal(fi *FileIterator) error {
+	meta := fi.GetCurtChunkMeta()
+
+	limit := uint32(fileops.DefaultBufferSize * 2)
+	offset := meta.offset
+	readSize := uint32(0)
+
+	d := p.sw.writer.DataSize() - meta.offset
+	meta.offset = p.sw.writer.DataSize()
+
+	var cm *ColumnMeta
+	for i := range meta.colMeta {
+		cm = &meta.colMeta[i]
+		for j := range cm.entries {
+			cm.entries[j].offset += d
+		}
+	}
+
+	var buf []byte
+	var err error
+	var n int
+
+	for readSize < meta.size {
+		if readSize+limit > meta.size {
+			limit = meta.size - readSize
+		}
+		readSize += limit
+
+		buf, err = fi.readData(offset, limit)
+		if err != nil {
+			return err
+		}
+		if len(buf) != int(limit) {
+			return errno.NewError(errno.ShortRead, len(buf), limit)
+		}
+		offset += int64(limit)
+
+		n, err = p.sw.writer.WriteData(buf)
+		if err != nil {
+			return err
+		}
+		if n != len(buf) {
+			return errno.NewError(errno.ShortWrite, n, len(buf))
+		}
+	}
+
+	return p.sw.WriteMeta(meta)
 }
 
 type columnWriter struct {
@@ -350,8 +412,6 @@ type columnWriter struct {
 	remainTime *record.ColVal
 
 	limit int
-	sid   uint64
-	ref   *record.Field
 }
 
 func newColumnWriter(sw *StreamWriteFile, limit int) *columnWriter {
@@ -364,6 +424,10 @@ func newColumnWriter(sw *StreamWriteFile, limit int) *columnWriter {
 }
 
 func (cw *columnWriter) writeAll(sid uint64, ref *record.Field, col *record.ColVal) error {
+	if col.Len <= cw.limit {
+		return cw.sw.WriteData(sid, *ref, *col, nil)
+	}
+
 	cols := col.Split(nil, cw.limit, ref.Type)
 
 	for i := range cols {
@@ -379,9 +443,6 @@ func (cw *columnWriter) write(sid uint64, ref *record.Field, col *record.ColVal,
 	failpoint.Inject("column-writer-error", func() {
 		failpoint.Return(fmt.Errorf("failed to wirte column data"))
 	})
-
-	cw.sid = sid
-	cw.ref = ref
 
 	cw.remainTime.AppendTimes(times)
 
@@ -432,7 +493,7 @@ func (cw *columnWriter) splitRemain(typ int) ([]record.ColVal, []record.ColVal) 
 	return cols, times
 }
 
-func (cw *columnWriter) flush() error {
+func (cw *columnWriter) flush(sid uint64, ref *record.Field) error {
 	if cw.remain.Len == 0 {
 		return nil
 	}
@@ -441,5 +502,5 @@ func (cw *columnWriter) flush() error {
 		cw.remainTime.Init()
 	}()
 
-	return cw.sw.WriteData(cw.sid, *cw.ref, *cw.remain, cw.remainTime)
+	return cw.sw.WriteData(sid, *ref, *cw.remain, cw.remainTime)
 }

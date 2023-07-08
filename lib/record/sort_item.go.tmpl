@@ -1,0 +1,198 @@
+/*
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package record
+
+import (
+    "errors"
+)
+
+type SortItem interface {
+	Compare(i, j int) int
+	CompareSingleValue(data interface{}, postionX, postionY int) (int, error)
+	Swap(i, j int)
+	Len() int
+}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "String") (eq .Name "Boolean")}}
+type {{.Name}}Slice struct {
+	V   []{{.Type}}
+	CV  ColVal
+}
+
+func (sli *{{.Name}}Slice) Swap(i, j int){
+    if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
+    	return
+    }
+
+    if sli.CV.IsNil(i) {
+    	sli.CV.setBitMap(i)
+    	sli.CV.resetBitMap(j)
+    } else if sli.CV.IsNil(j) {
+    	sli.CV.setBitMap(j)
+    	sli.CV.resetBitMap(i)
+    }
+
+    sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
+}
+
+func (sli *{{.Name}}Slice) Len() int {
+    return len(sli.V)
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "String")}}
+
+func (sli *{{.Name}}Slice) Compare (i, j int) int {
+    if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
+    	return 0
+    }
+
+    if sli.CV.IsNil(i) {
+    	return 1
+    } else if sli.CV.IsNil(j) {
+    	return -1
+    }
+
+    if sli.V[i] > sli.V[j] {
+    	return -1
+    } else if sli.V[i] == sli.V[j] {
+    	return 0
+    }
+    return 1
+}
+
+func (sli *{{.Name}}Slice) CompareSingleValue (data interface{}, postionX, postionY int) (int, error) {
+    cm, ok := data.(*{{.Name}}Slice)
+    if !ok {
+    	return 0, errors.New("complex binary expression unsupported")
+    }
+
+    if sli.CV.IsNil(postionX) && cm.CV.IsNil(postionY) {
+    	return 0, nil
+    }
+
+    if sli.CV.IsNil(postionX) {
+    	return 1, nil
+    }
+
+    if cm.CV.IsNil(postionY) {
+    	return -1, nil
+    }
+
+    if sli.V[postionX] > cm.V[postionY] {
+    	return -1, nil
+    } else if sli.V[postionX] == cm.V[postionY] {
+    	return 0, nil
+    }
+    return 1, nil
+}
+{{- end}}
+{{end}}
+
+func (sli *BooleanSlice) Compare(i, j int) int {
+	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
+		return 0
+	}
+	if sli.CV.IsNil(i) {
+		return 1
+	} else if sli.CV.IsNil(j) {
+		return -1
+	}
+
+	if sli.V[i] == sli.V[j] {
+		return 0
+	} else if sli.V[i] == true {
+		return -1
+	}
+	return 1
+}
+
+func (sli *BooleanSlice) CompareSingleValue(data interface{}, postionX, postionY int) (int, error) {
+	cm, ok := data.(*BooleanSlice)
+	if !ok {
+		return 0, errors.New("complex binary expression unsupported")
+	}
+
+	if sli.CV.IsNil(postionX) && cm.CV.IsNil(postionY) {
+		return 0, nil
+	}
+	if sli.CV.IsNil(postionX) {
+		return 1, nil
+	}
+	if cm.CV.IsNil(postionY) {
+		return -1, nil
+	}
+
+	if sli.V[postionX] == cm.V[postionY] {
+		return 0, nil
+	} else if sli.V[postionX] == true {
+		return -1, nil
+	}
+	return 1, nil
+}
+
+func (sli *BooleanSlice) PadBoolSlice(cv ColVal) {
+	var v bool
+	for i := 0; i < cv.Len; i++ {
+		if cv.IsNil(i) {
+			sli.V = append(sli.V, false)
+			continue
+		}
+		v, _ = cv.BooleanValue(i)
+		sli.V = append(sli.V, v)
+	}
+}
+
+func (sli *StringSlice) PadStringSlice(cv ColVal) {
+	var v string
+	for i := 0; i < cv.Len; i++ {
+		if cv.IsNil(i) {
+			sli.V = append(sli.V, " ")
+			continue
+		}
+		v, _ = cv.StringValueSafe(i)
+		sli.V = append(sli.V, v)
+	}
+}
+
+func (sli *FloatSlice) PadFloatSlice(cv ColVal) {
+	var v float64
+	for i := 0; i < cv.Len; i++ {
+		if cv.IsNil(i) {
+			sli.V = append(sli.V, 0)
+			continue
+		}
+		v, _ = cv.FloatValue(i)
+		sli.V = append(sli.V, v)
+	}
+}
+
+func (sli *IntegerSlice) PadIntSlice(cv ColVal) {
+	var v int64
+	for i := 0; i < cv.Len; i++ {
+		if cv.IsNil(i) {
+			sli.V = append(sli.V, 0)
+			continue
+		}
+		v, _ = cv.IntegerValue(i)
+		sli.V = append(sli.V, v)
+	}
+}
+

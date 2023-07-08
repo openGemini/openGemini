@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -85,16 +84,17 @@ func (pool *TagSetsPool) Put(tags *tagSets) {
 }
 
 /*
-		eg, inputTags:{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
-						{Key: "tk2", Value: "[tv2,tv22]", IsArray: 0},
-						{Key: "tk3", Value: "[tv3,tv33]", IsArray: 0}}
+eg, inputTags:{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
+               {Key: "tk2", Value: "[tv2,tv22]", IsArray: 0},
+	       {Key: "tk3", Value: "[tv3,tv33]", IsArray: 0}}
 
-		tagArray:[[{Key: "tk1", Value: "tv1", IsArray: 0},
-	             {Key: "tk2", Value: "tv2", IsArray: 0},
-		         {Key: "tk3", Value: "tv3", IsArray: 0},]
-				 [{Key: "tk1", Value: "tv11", IsArray: 0},
-	             {Key: "tk2", Value: "tv22", IsArray: 0},
-		         {Key: "tk3", Value: "tv33", IsArray: 0},]]
+tagArray:[[{Key: "tk1", Value: "tv1", IsArray: 0},
+           {Key: "tk2", Value: "tv2", IsArray: 0},
+           {Key: "tk3", Value: "tv3", IsArray: 0},]
+	 [{Key: "tk1", Value: "tv11", IsArray: 0},
+          {Key: "tk2", Value: "tv22", IsArray: 0},
+          {Key: "tk3", Value: "tv33", IsArray: 0},]]
+
 */
 func analyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
 	var arrayLen int
@@ -530,7 +530,7 @@ func (idx *MergeSetIndex) searchSeriesWithTagArray(tsid uint64, seriesKeys [][]b
 }
 
 func (is *indexSearch) subTSIDSWithTagArray(mstTSIDS, filterTSIDS *uint64set.Set) (*uint64set.Set, error) {
-	if config.EnableTagArray {
+	if is.TagArrayEnabled() {
 		subIDs, err := is.getTSIDSWithOneKey(filterTSIDS)
 		if err != nil {
 			return nil, err
@@ -564,7 +564,7 @@ func (is *indexSearch) getTSIDSWithOneKey(tsids *uint64set.Set) (*uint64set.Set,
 
 func (is *indexSearch) isExpectTagWithTagArray(tsid uint64, seriesKeys [][]byte, combineKey []byte,
 	condition influxql.Expr, tag Tag) bool {
-	if !config.EnableTagArray {
+	if condition == nil {
 		return true
 	}
 	combineKey = combineKey[:0]
@@ -585,10 +585,6 @@ func (is *indexSearch) isExpectTagWithTagArray(tsid uint64, seriesKeys [][]byte,
 func isMatchedTag(series [][]byte, condition influxql.Expr, tag Tag) bool {
 	// no need to analyze one series
 	if len(series) == 1 {
-		return true
-	}
-
-	if condition == nil {
 		return true
 	}
 

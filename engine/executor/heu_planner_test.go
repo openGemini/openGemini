@@ -129,6 +129,10 @@ func NewMockLogicalPlanA(inputs []hybridqp.QueryNode, schema *executor.QuerySche
 	return plan
 }
 
+func (p *MockLogicalPlanA) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
 func (p *MockLogicalPlanA) DeriveOperations() {
 }
 
@@ -212,6 +216,10 @@ func NewMockLogicalPlanB(inputs []hybridqp.QueryNode, schema *executor.QuerySche
 	}
 
 	return plan
+}
+
+func (p *MockLogicalPlanB) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
 }
 
 func (p *MockLogicalPlanB) DeriveOperations() {

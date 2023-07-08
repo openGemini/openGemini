@@ -44,7 +44,7 @@ func Test_NewServer(t *testing.T) {
 	require.EqualError(t, err, "invalid meta config")
 
 	// case 2: normal config
-	conf := config.NewTSMeta()
+	conf := config.NewTSMeta(true)
 	conf.Data.DataDir = path.Join(tmpDir, "data")
 	conf.Data.MetaDir = path.Join(tmpDir, "meta")
 	conf.Data.WALDir = path.Join(tmpDir, "wal")
@@ -70,7 +70,7 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	require.EqualError(t, err, "invalid meta config")
 
 	// case 2: normal config
-	conf := config.NewTSMeta()
+	conf := config.NewTSMeta(true)
 	if len(conf.Common.MetaJoin) == 0 {
 		conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9192"}...)
 	}
@@ -99,7 +99,7 @@ func Test_NewServer_Open_Close(t *testing.T) {
 }
 
 func Test_NewServer_Statistics(t *testing.T) {
-	tsMetaconfig := config.NewTSMeta()
+	tsMetaconfig := config.NewTSMeta(true)
 	tsMetaconfig.Monitor.StoreEnabled = true
 	tsMetaconfig.Monitor.Pushers = "http"
 
@@ -113,7 +113,7 @@ func Test_NewServer_Statistics(t *testing.T) {
 }
 
 func TestNewServer1(t *testing.T) {
-	tsMetaconfig := config.NewTSMeta()
+	tsMetaconfig := config.NewTSMeta(true)
 	tsMetaconfig.Meta.Dir = metaPath
 	tsMetaconfig.Monitor.StoreEnabled = false
 	tsMetaconfig.Monitor.Pushers = "http"

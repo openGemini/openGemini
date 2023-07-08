@@ -30,7 +30,7 @@ licence-check:
 	@echo "run licence check"
 	@for file in $(COPYRIGHT_GOFILE); \
 		do \
-  			cat $$file | grep -qs $(COPYRIGHT_HEADER) || { echo $$file "has no licence header" >> licence-check.log; }; \
+  			cat $$file | grep -qsE $(COPYRIGHT_HEADER) || { echo $$file "has no licence header" >> licence-check.log; }; \
 	 	done
 	@if [ -f licence-check.log ]; \
   	then \

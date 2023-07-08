@@ -70,7 +70,7 @@ func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint6
 	dbPtInfos := globalService.store.getFailedDbPts(id, meta.Offline)
 	nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
 	for i := range dbPtInfos {
-		err = bh.cm.processFailedDbPt(dbPtInfos[i], nodePtNumMap)
+		err = bh.cm.processFailedDbPt(dbPtInfos[i], nodePtNumMap, false)
 		if err != nil {
 			logger.NewLogger(errno.ModuleHA).Error("fail to take over db pt",
 				zap.String("db", dbPtInfos[i].Db), zap.Uint32("pt", dbPtInfos[i].Pti.PtId))

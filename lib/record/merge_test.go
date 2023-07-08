@@ -89,7 +89,7 @@ func TestHelper_MergeCol(t *testing.T) {
 		unordered := &record.ColVal{}
 		appendData(unordered, item.unordered)
 
-		hlp.AddUnorderedCol(unordered, item.unorderedTimes, influx.Field_Type_Float)
+		hlp.AddUnorderedCol(unordered, item.unorderedTimes)
 
 		merged, mergedTimes, err := hlp.Merge(order, item.orderTimes, influx.Field_Type_Float)
 		if !assert.NoError(t, err) {

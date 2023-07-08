@@ -100,3 +100,28 @@ func CollectDatabaseStatistics(buffer []byte) ([]byte, error) {
 
 	return buffer, nil
 }
+
+// StatisticTags is a map that can be merged with others without causing
+// mutations to either map.
+type StatisticTags map[string]string
+
+// Merge creates a new map containing the merged contents of tags and t.
+// If both tags and the receiver map contain the same key, the value in tags
+// is used in the resulting map.
+//
+// Merge always returns a usable map.
+func (srcTags StatisticTags) Merge(dstTags map[string]string) map[string]string {
+	// Add everything in tags to the result.
+	mergeTags := make(map[string]string, len(dstTags))
+	for tagName, tagValue := range dstTags {
+		mergeTags[tagName] = tagValue
+	}
+
+	// Only add values from t that don't appear in tags.
+	for tagName, tagValue := range srcTags {
+		if _, ok := dstTags[tagName]; !ok {
+			mergeTags[tagName] = tagValue
+		}
+	}
+	return mergeTags
+}

@@ -90,6 +90,7 @@ type ShardIdentifier struct {
 	DownSampleLevel int
 	DownSampleID    uint64
 	ReadOnly        bool
+	EngineType      uint32
 }
 
 type IndexIdentifier struct {
@@ -214,6 +215,7 @@ func (i *ShardIdentifier) marshal() *proto2.ShardIdentifier {
 	pb.DownSampleLevel = proto.Int64(int64(i.DownSampleLevel))
 	pb.DownSampleID = proto.Uint64(i.DownSampleID)
 	pb.ReadOnly = proto.Bool(i.ReadOnly)
+	pb.EngineType = proto.Uint32(i.EngineType)
 	return pb
 }
 
@@ -235,6 +237,7 @@ func (i *ShardIdentifier) unmarshal(ident *proto2.ShardIdentifier) {
 	i.DownSampleLevel = int(ident.GetDownSampleLevel())
 	i.DownSampleID = ident.GetDownSampleID()
 	i.ReadOnly = ident.GetReadOnly()
+	i.EngineType = ident.GetEngineType()
 }
 
 type NodeStartInfo struct {
@@ -242,7 +245,9 @@ type NodeStartInfo struct {
 	NodeId             uint64
 	PtIds              []uint32
 	ShardDurationInfos map[uint64]*ShardDurationInfo
+	DBBriefInfo        map[string]*DatabaseBriefInfo
 	LTime              uint64
+	ConnId             uint64
 }
 
 func (nsi NodeStartInfo) MarshalBinary() ([]byte, error) {
@@ -250,6 +255,7 @@ func (nsi NodeStartInfo) MarshalBinary() ([]byte, error) {
 	pb.DataIndex = proto.Uint64(nsi.DataIndex)
 	pb.NodeID = proto.Uint64(nsi.NodeId)
 	pb.LTime = proto.Uint64(nsi.LTime)
+	pb.ConnId = proto.Uint64(nsi.ConnId)
 
 	if len(nsi.PtIds) != 0 {
 		pb.PtIds = make([]uint32, len(nsi.PtIds))
@@ -265,6 +271,18 @@ func (nsi NodeStartInfo) MarshalBinary() ([]byte, error) {
 			idx++
 		}
 	}
+
+	if len(nsi.DBBriefInfo) > 0 {
+		pb.DBBriefInfo = make([]*proto2.DatabaseBriefInfo, len(nsi.DBBriefInfo))
+		idx := 0
+		for dbName, dbInfo := range nsi.DBBriefInfo {
+			pb.DBBriefInfo[idx] = &proto2.DatabaseBriefInfo{
+				Name:           proto.String(dbName),
+				EnableTagArray: proto.Bool(dbInfo.EnableTagArray),
+			}
+			idx++
+		}
+	}
 	return proto.Marshal(pb)
 }
 
@@ -277,6 +295,7 @@ func (nsi *NodeStartInfo) UnMarshalBinary(buf []byte) error {
 	nsi.NodeId = pb.GetNodeID()
 	nsi.PtIds = pb.GetPtIds()
 	nsi.LTime = pb.GetLTime()
+	nsi.ConnId = pb.GetConnId()
 	if len(pb.Durations) == 0 {
 		return nil
 	}
@@ -285,6 +304,14 @@ func (nsi *NodeStartInfo) UnMarshalBinary(buf []byte) error {
 		shardDuration := &ShardDurationInfo{}
 		shardDuration.unmarshal(pb.Durations[i])
 		nsi.ShardDurationInfos[shardDuration.Ident.ShardID] = shardDuration
+	}
+	nsi.DBBriefInfo = make(map[string]*DatabaseBriefInfo, len(pb.DBBriefInfo))
+	for i := range pb.DBBriefInfo {
+		dbBriefInfo := &DatabaseBriefInfo{
+			Name:           pb.DBBriefInfo[i].GetName(),
+			EnableTagArray: pb.DBBriefInfo[i].GetEnableTagArray(),
+		}
+		nsi.DBBriefInfo[pb.DBBriefInfo[i].GetName()] = dbBriefInfo
 	}
 	return nil
 }

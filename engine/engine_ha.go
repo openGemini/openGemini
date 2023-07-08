@@ -74,14 +74,18 @@ func (e *Engine) RollbackPreOffload(db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta2.ShardDurationInfo, client metaclient.MetaClient) error {
+func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
-	log.Info("prepare load pt start", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+	if IsMemUsageExceeded() {
+		return errno.NewError(errno.MemUsageExceeded, GetMemUsageLimit())
+	}
+	e.log.Info("prepare load pt start", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
 	_, err := e.getPartition(db, ptId, false)
 	if err == nil {
+		e.log.Info("prepare load pt already success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
 		return nil
 	}
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
@@ -92,6 +96,7 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	dbPt.unload = make(chan struct{})
 	dbPt.preload = true
 	dbPt.lockPath = &lockPath
+	dbPt.enableTagArray = dbBriefInfo.EnableTagArray
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.PRELOAD, client); err != nil {
 		if rbErr := e.offloadDbPT(dbPt); rbErr != nil {
 			e.log.Error("both preload pt and rollback failed", zap.String("db", db), zap.Uint32("pt", ptId))
@@ -130,11 +135,12 @@ func (e *Engine) Offload(db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, client metaclient.MetaClient) error {
+func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
+	e.setMetaClient(client)
 	e.log.Info("engine start to load all shards", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
 	start := time.Now()
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
@@ -147,8 +153,11 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 		}
 		dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
 	} else if !dbPt.preload {
-		e.log.Info("engine already load all shards success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+		e.log.Info("engine already load all shards", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
 		return nil
+	}
+	if !dbPt.preload && IsMemUsageExceeded() {
+		return errno.NewError(errno.MemUsageExceeded, GetMemUsageLimit())
 	}
 	statistics.DBPTTaskInit(opId, db, ptId)
 	// Fence to prevent split-brain.
@@ -164,10 +173,15 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	statistics.DBPTStepDuration(opId, "DBPTFenceDuration", time.Since(start).Nanoseconds(), statistics.DBPTLoading, "")
 	dbPt.logicClock = ver
 	dbPt.lockPath = &lockPath
+	dbPt.enableTagArray = dbBriefInfo.EnableTagArray
 	dbPt.SetOption(e.engOpt)
 
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.LOAD, client); err != nil {
 		e.log.Error("engine load all shards failed", zap.Error(err), zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+		if rbErr := e.offloadDbPT(dbPt); rbErr != nil {
+			e.log.Error("both load pt and rollback failed", zap.String("db", db), zap.Uint32("pt", ptId))
+			panic(rbErr.Error())
+		}
 		if err1 := fc.ReleaseFence(); err1 != nil {
 			e.log.Error("release fence failed", zap.Error(err1))
 		}
@@ -189,7 +203,7 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 func (e *Engine) offloadDbPT(pt *DBPTInfo) error {
 	var err error
 	done := make(chan bool, 1)
-	if ok := pt.markOffload(done); !ok {
+	if offloaded := pt.markOffload(done); !offloaded {
 		select {
 		case <-done:
 			log.Debug("all io back", zap.String("db", pt.database), zap.Uint32("ptId", pt.id))
@@ -218,12 +232,12 @@ func (e *Engine) offloadDbPT(pt *DBPTInfo) error {
 	return nil
 }
 
-func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durationInfos map[uint64]*meta2.ShardDurationInfo, loadStat int, client metaclient.MetaClient) error {
+func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durations map[uint64]*meta2.ShardDurationInfo, loadStat int, client metaclient.MetaClient) error {
 	start := time.Now()
 	errChan := make(chan error)
 	n := 0
 	dbRpLock := make(map[string]string)
-	for _, sdi := range durationInfos {
+	for _, sdi := range durations {
 		dbRpPath := path.Join(sdi.Ident.OwnerDb, strconv.Itoa(int(sdi.Ident.OwnerPt)), sdi.Ident.Policy)
 		if _, ok := dbRpLock[dbRpPath]; ok {
 			continue
@@ -231,7 +245,7 @@ func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durationInfos map[u
 		dbRpLock[dbRpPath] = ""
 		n++
 		go func(db string, pt uint32, rp string) {
-			err := dbPt.loadShards(opId, rp, durationInfos, loadStat, client)
+			err := dbPt.loadShards(opId, rp, durations, loadStat, client)
 			if err != nil {
 				e.log.Error("fail to load db rp", zap.String("db", db), zap.Uint32("pt", pt),
 					zap.String("rp", rp), zap.Error(err))
