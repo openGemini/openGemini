@@ -27,7 +27,7 @@ import (
 )
 
 var (
-	TsVersion = "v1.0.1"
+	TsVersion = "v1.1.0rc0"
 	TsCommit  string
 	TsBranch  string
 )
