@@ -131,7 +131,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     ALTER_SHARD_KEY_STATEMENT SHOW_SHARD_GROUPS_STATEMENT DROP_MEASUREMENT_STATEMENT
                                     CREATE_CONTINUOUS_QUERY_STATEMENT SHOW_CONTINUOUS_QUERIES_STATEMENT DROP_CONTINUOUS_QUERY_STATEMENT
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
-                                    CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT
+                                    CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT SHOW_QUERIES_STATEMENT
 %type <fields>                      COLUMN_CLAUSES IDENTS
 %type <field>                       COLUMN_CLAUSE
 %type <stmts>                       ALL_QUERIES ALL_QUERY
@@ -363,6 +363,10 @@ STATEMENT:
     	$$ = $1
     }
     |DROP_STREAM_STATEMENT
+    {
+    	$$ = $1
+    }
+    |SHOW_QUERIES_STATEMENT
     {
     	$$ = $1
     }
@@ -2578,6 +2582,11 @@ DROP_STREAM_STATEMENT:
     DROP STREAM STRING_TYPE
     {
     	$$ = &DropStreamsStatement{Name: $3}
+    }
+SHOW_QUERIES_STATEMENT:
+    SHOW QUERIES
+    {
+        $$ = &ShowQueriesStatement{}
     }
 
 %%

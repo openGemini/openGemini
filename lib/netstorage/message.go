@@ -510,3 +510,55 @@ func (r *PtResponse) Error() error {
 	}
 	return NormalizeError(r.Err)
 }
+
+type ShowQueriesRequest struct {
+}
+
+func NewShowQueriesRequest() *ShowQueriesRequest {
+	return &ShowQueriesRequest{}
+}
+
+func (s *ShowQueriesRequest) Size() int {
+	return 0
+}
+
+func (s *ShowQueriesRequest) Marshal(bytes []byte) ([]byte, error) {
+	return bytes, nil
+}
+
+func (s *ShowQueriesRequest) Unmarshal(bytes []byte) error {
+	return nil
+}
+
+func (s *ShowQueriesRequest) Instance() transport.Codec {
+	return &ShowQueriesRequest{}
+}
+
+type ShowQueriesResponse struct {
+	netdata.ShowQueriesResponse
+}
+
+func NewShowQueriesResponse() *ShowQueriesResponse {
+	return &ShowQueriesResponse{}
+}
+
+func (s *ShowQueriesResponse) Size() int {
+	return proto.Size(s)
+}
+
+func (s *ShowQueriesResponse) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&s.ShowQueriesResponse)
+	if err != nil {
+		return nil, err
+	}
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (s *ShowQueriesResponse) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &s.ShowQueriesResponse)
+}
+
+func (s *ShowQueriesResponse) Instance() transport.Codec {
+	return &ShowQueriesResponse{}
+}

@@ -211,6 +211,7 @@ func hookLogicPlan() {
 type EmptyResponser struct {
 	transport.Responser
 	session *spdy.MultiplexedSession
+	Data    any
 }
 
 func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
@@ -218,7 +219,7 @@ func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
 }
 
 func (r *EmptyResponser) Response(response interface{}, full bool) error {
-
+	r.Data = response
 	return nil
 }
 
