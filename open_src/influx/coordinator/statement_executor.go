@@ -42,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -272,10 +273,10 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
 		err = e.executeSetPasswordUserStatement(stmt)
-	case *influxql.ShowQueriesStatement, *influxql.KillQueryStatement:
+	case *influxql.ShowQueriesStatement:
+		rows, err = e.executeShowQueriesStatement()
+	case *influxql.KillQueryStatement:
 		return meta2.ErrUnsupportCommand
-		// Send query related statements to the task manager.
-		return e.TaskManager.ExecuteStatement(stmt, ctx)
 	case *influxql.PrepareSnapshotStatement:
 		return meta2.ErrUnsupportCommand
 		err = e.executePrepareSnapshotStatement(stmt, ctx)
@@ -1552,6 +1553,119 @@ func (e *StatementExecutor) executeShowUsersStatement(q *influxql.ShowUsersState
 		row.Values = append(row.Values, []interface{}{ui.Name, ui.Admin, ui.Rwuser})
 	}
 	return []*models.Row{row}, nil
+}
+
+type queryCombinedInfo struct {
+	qid      uint64
+	stmt     string
+	database string
+	duration int64
+	isKilled bool
+	hosts    []string
+}
+
+func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
+	nodes, err := e.MetaClient.DataNodes()
+	if err != nil {
+		return nil, err
+	}
+
+	resMap := make(map[uint64]*queryCombinedInfo)
+	infosOnAllStore := make([][]*netdata.QueryExeInfo, len(nodes))
+
+	// Concurrent access to all store nodes.
+	wg := sync.WaitGroup{}
+	for i, node := range nodes {
+		wg.Add(1)
+		go e.getQueryExeInfoOnNode(node, &infosOnAllStore[i], &wg)
+	}
+	wg.Wait()
+
+	// Combine all results from all store nodes into resMap.
+	for i, infos := range infosOnAllStore {
+		combineQueryExeInfos(resMap, infos, nodes[i].Host)
+	}
+
+	// Sort the map key to beautify the output.
+	keys := make([]uint64, 0)
+	for key := range resMap {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i] < keys[j]
+	})
+
+	row := models.Row{Columns: []string{"qid", "query", "database", "duration", "status", "host"}}
+	values := make([][]interface{}, 0, len(resMap))
+
+	// Generate output row for every query
+	for _, key := range keys {
+		cmbInfo := resMap[key]
+		values = append(values, []interface{}{
+			cmbInfo.qid,
+			cmbInfo.stmt,
+			cmbInfo.database,
+			getDuration(time.Duration(cmbInfo.duration)),
+			getRunState(cmbInfo.isKilled),
+			strings.Join(cmbInfo.hosts, ", "),
+		})
+	}
+	row.Values = values
+	return models.Rows{&row}, nil
+}
+
+func (e *StatementExecutor) getQueryExeInfoOnNode(node meta2.DataNode, dst *[]*netdata.QueryExeInfo, wg *sync.WaitGroup) {
+	defer wg.Done()
+	exeInfos, err := e.NetStorage.GetQueriesOnNode(node.ID)
+	if err != nil {
+		return
+	}
+	*dst = exeInfos
+}
+
+func getRunState(isKilled bool) string {
+	if isKilled {
+		return "killed"
+	}
+	return "running"
+}
+
+func getDuration(d time.Duration) string {
+	switch {
+	case d >= time.Second:
+		d = d - (d % time.Second)
+	case d >= time.Millisecond:
+		d = d - (d % time.Millisecond)
+	case d >= time.Microsecond:
+		d = d - (d % time.Microsecond)
+	}
+	return d.String()
+}
+
+// combineQueryExeInfos combines queryExeInfo from different store nodes by QueryID.
+func combineQueryExeInfos(res map[uint64]*queryCombinedInfo, exeInfosOnStore []*netdata.QueryExeInfo, host string) {
+	for _, info := range exeInfosOnStore {
+		// If a query in res, update its killed,host and duration
+		if cmbInfo, ok := res[info.GetQueryID()]; ok {
+			// If the query of the same qid on any store node is killed, we consider that the query is killed.
+			cmbInfo.isKilled = cmbInfo.isKilled || info.GetIsKilled()
+			cmbInfo.hosts = append(cmbInfo.hosts, host)
+			// Choose the longest duration in all store nodes
+			if info.GetDuration() > cmbInfo.duration {
+				cmbInfo.duration = info.GetDuration()
+			}
+			continue
+		}
+		// Create a new cmbInfo
+		res[info.GetQueryID()] = &queryCombinedInfo{
+			qid:      info.GetQueryID(),
+			stmt:     info.GetStmt(),
+			database: info.GetDatabase(),
+			duration: info.GetDuration(),
+			isKilled: info.GetIsKilled(),
+			hosts:    []string{host},
+		}
+	}
 }
 
 func (e *StatementExecutor) Statistics(buffer []byte) ([]byte, error) {

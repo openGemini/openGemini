@@ -97,6 +97,14 @@ func (r *Requester) sysCtrl(req *SysCtrlRequest) (interface{}, error) {
 	return cb.GetResponse(), nil
 }
 
+func (r *Requester) getQueryExeInfos(req *ShowQueriesRequest) (interface{}, error) {
+	cb := &ShowQueriesCallback{}
+	if err := r.request(spdy.ShowQueriesRequest, req, cb); err != nil {
+		return nil, err
+	}
+	return cb.GetResponse(), nil
+}
+
 func (r *Requester) request(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
 	var trans *transport.Transport
 	var err error

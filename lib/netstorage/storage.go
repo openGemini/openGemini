@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -67,6 +68,8 @@ type Storage interface {
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, pt uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp string, name string, shardIds []uint64) error
 	MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
+
+	GetQueriesOnNode(nodeID uint64) ([]*netdata.QueryExeInfo, error)
 }
 
 type NetStorage struct {
@@ -409,4 +412,20 @@ func (s *NetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport
 		}
 	}()
 	return nil
+}
+
+func (s *NetStorage) GetQueriesOnNode(nodeID uint64) ([]*netdata.QueryExeInfo, error) {
+	r := NewRequester(0, nil, s.metaClient)
+	if err := r.initWithNodeID(nodeID); err != nil {
+		return nil, err
+	}
+	v, err := r.getQueryExeInfos(&ShowQueriesRequest{})
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := v.(*ShowQueriesResponse)
+	if !ok {
+		return nil, executor.NewInvalidTypeError("*netstorage.ShowQueriesResponse", v)
+	}
+	return resp.QueryExeInfos, nil
 }

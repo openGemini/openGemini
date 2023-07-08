@@ -2,15 +2,20 @@ package coordinator
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/netstorage"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -119,4 +124,72 @@ func TestExcuteStatementErr(t *testing.T) {
 	err = MockExcuteStatementErr("wrongRp", "mst", 5)
 	assert.True(t, strings.Contains(err.Error(), "retention policy not found"))
 
+}
+
+func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*netdata.QueryExeInfo {
+	res := make([]*netdata.QueryExeInfo, num)
+	for i := 0; i < num; i++ {
+		info := &netdata.QueryExeInfo{
+			QueryID:  proto.Uint64(uint64(i + idOffset)),
+			Stmt:     proto.String(fmt.Sprintf("select * from mst%d", i)),
+			Database: proto.String(fmt.Sprintf("db%d", i)),
+			Duration: proto.Int64(duration),
+			IsKilled: proto.Bool(false),
+		}
+		if i == killOne {
+			info.IsKilled = proto.Bool(true)
+		}
+		res[i] = info
+	}
+	return res
+}
+
+var idOffset = 100000
+var mockInfosNum = 20
+var killOne = 8
+var unitDuration = 10000000
+var dataNodesNum = 3
+
+func Test_combineQueryExeInfos(t *testing.T) {
+	killedQid := killOne + idOffset
+	res := make(map[uint64]*queryCombinedInfo)
+	for i := 1; i <= dataNodesNum; i++ {
+		infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(i*unitDuration))
+		combineQueryExeInfos(res, infos, fmt.Sprintf("192,168.0.%d", i))
+	}
+	for _, cmbInfo := range res {
+		assert.Equal(t, int64(30000000), cmbInfo.duration)
+		assert.Equal(t, 3, len(cmbInfo.hosts))
+		if cmbInfo.qid == uint64(killedQid) {
+			assert.Equal(t, true, cmbInfo.isKilled)
+		} else {
+			assert.Equal(t, false, cmbInfo.isKilled)
+		}
+	}
+}
+
+func (m *MockMetaClient) DataNodes() ([]meta2.DataNode, error) {
+	res := make([]meta2.DataNode, dataNodesNum)
+	for i := 0; i < dataNodesNum; i++ {
+		res[i] = meta2.DataNode{
+			NodeInfo: meta2.NodeInfo{ID: uint64(i + 1), Host: fmt.Sprintf("192.168.1.808%d", i)},
+		}
+	}
+	return res, nil
+}
+
+type mockNS struct {
+	netstorage.NetStorage
+}
+
+func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netdata.QueryExeInfo, error) {
+	infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(unitDuration))
+	return infos, nil
+}
+
+func TestStatementExecutor_executeShowQueriesStatement(t *testing.T) {
+	e := StatementExecutor{MetaClient: &MockMetaClient{}, NetStorage: &mockNS{}}
+	rows, err := e.executeShowQueriesStatement()
+	assert.NoError(t, err)
+	assert.Equal(t, mockInfosNum, len(rows[0].Values))
 }

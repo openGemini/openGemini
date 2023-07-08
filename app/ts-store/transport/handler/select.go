@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -29,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -339,4 +341,14 @@ func (s *Select) finishDuration(qd *statistics.StoreSlowQueryStatistics, start t
 		qd.AddDuration("TotalDuration", d)
 		statistics.AppendStoreQueryDuration(qd)
 	}
+}
+
+// GetQueryExeInfo return the unchanging information in a query
+func (s *Select) GetQueryExeInfo() *netdata.QueryExeInfo {
+	info := &netdata.QueryExeInfo{
+		QueryID:  proto.Uint64(s.req.QueryId),
+		Stmt:     proto.String(s.req.QueryStmt),
+		Database: proto.String(s.req.Database),
+	}
+	return info
 }

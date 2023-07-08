@@ -19,6 +19,9 @@ package query
 import (
 	"sync"
 	"time"
+
+	"github.com/gogo/protobuf/proto"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 )
 
 const (
@@ -27,6 +30,7 @@ const (
 
 type IQuery interface {
 	Abort()
+	GetQueryExeInfo() *netdata.QueryExeInfo
 }
 
 type Manager struct {
@@ -45,15 +49,29 @@ type Item struct {
 }
 
 var managers map[uint64]*Manager
-var mu sync.Mutex
+var managersMu sync.RWMutex
+
+// clients keep a mapping with qid and client id.
+var clients map[uint64]uint64
+var clientsMu sync.RWMutex
 
 func init() {
 	managers = make(map[uint64]*Manager)
+	clients = make(map[uint64]uint64)
+}
+
+// VisitManagers can do something foreach every manager. Like get all queries.
+func VisitManagers(fn func(*Manager)) {
+	managersMu.RLock()
+	defer managersMu.RUnlock()
+	for _, manager := range managers {
+		fn(manager)
+	}
 }
 
 func NewManager(client uint64) *Manager {
-	mu.Lock()
-	defer mu.Unlock()
+	managersMu.Lock()
+	defer managersMu.Unlock()
 
 	m, ok := managers[client]
 	if !ok || m == nil {
@@ -69,59 +87,59 @@ func NewManager(client uint64) *Manager {
 	return m
 }
 
-func (qm *Manager) Get(seq uint64) IQuery {
+func (qm *Manager) Get(qid uint64) IQuery {
 	qm.mu.RLock()
 	defer qm.mu.RUnlock()
 
-	h, ok := qm.items[seq]
+	h, ok := qm.items[qid]
 	if !ok {
 		return nil
 	}
 	return h.val
 }
 
-func (qm *Manager) Add(seq uint64, v IQuery) {
+func (qm *Manager) Add(qid uint64, v IQuery) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 
-	_, ok := qm.items[seq]
+	_, ok := qm.items[qid]
 	if ok {
 		return
 	}
-	qm.items[seq] = &Item{
+	qm.items[qid] = &Item{
 		begin: time.Now(),
 		val:   v,
 	}
 }
 
-func (qm *Manager) Aborted(seq uint64) bool {
+func (qm *Manager) Aborted(qid uint64) bool {
 	qm.abortedMu.RLock()
 	defer qm.abortedMu.RUnlock()
 
-	_, ok := qm.aborted[seq]
+	_, ok := qm.aborted[qid]
 	return ok
 }
 
-func (qm *Manager) Abort(seq uint64) {
+func (qm *Manager) Abort(qid uint64) {
 	qm.abortedMu.Lock()
-	qm.aborted[seq] = time.Now()
+	qm.aborted[qid] = time.Now()
 	qm.abortedMu.Unlock()
 
-	h := qm.Get(seq)
+	h := qm.Get(qid)
 	if h != nil {
 		h.Abort()
 	}
 }
 
-func (qm *Manager) Finish(seq uint64) {
+func (qm *Manager) Finish(qid uint64) {
 	qm.mu.Lock()
 	defer qm.mu.Unlock()
 
-	_, ok := qm.items[seq]
+	_, ok := qm.items[qid]
 	if !ok {
 		return
 	}
-	delete(qm.items, seq)
+	delete(qm.items, qid)
 }
 
 func (qm *Manager) SetAbortedExpire(d time.Duration) {
@@ -152,4 +170,35 @@ func (qm *Manager) cleanAbort() {
 		delete(qm.aborted, k)
 	}
 	qm.abortedMu.Unlock()
+}
+
+// GetAll return the all query exe infos keeping by a manager
+func (qm *Manager) GetAll() []*netdata.QueryExeInfo {
+	qm.mu.RLock()
+	defer qm.mu.RUnlock()
+
+	exeInfos := make([]*netdata.QueryExeInfo, len(qm.items))
+
+	i := 0
+	for qid, item := range qm.items {
+		duration := time.Since(item.begin)
+		info := item.val.GetQueryExeInfo()
+
+		// write the changeable information in a query
+		info.Duration = proto.Int64(duration.Nanoseconds())
+		info.IsKilled = proto.Bool(qm.Aborted(qid))
+		exeInfos[i] = info
+		i++
+	}
+
+	return exeInfos
+}
+
+// MapQueryToClint make a mapping with qid and clientID for kill query by qid
+func MapQueryToClint(qid, clientID uint64) {
+	clientsMu.Lock()
+	defer clientsMu.Unlock()
+
+	// qid -> client id -> get qm -> kill the query
+	clients[qid] = clientID
 }

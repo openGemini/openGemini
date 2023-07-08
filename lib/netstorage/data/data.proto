@@ -99,3 +99,15 @@ message PtRequest {
 message PtResponse {
     optional string Err = 1;
 }
+
+message QueryExeInfo{
+    required uint64 QueryID = 1;
+    required string Stmt = 2;
+    required string Database = 3;
+    required int64  Duration = 4;
+    required bool   IsKilled = 5;
+}
+
+message ShowQueriesResponse{
+    repeated QueryExeInfo QueryExeInfos = 1;
+}
