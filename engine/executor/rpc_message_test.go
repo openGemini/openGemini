@@ -196,7 +196,7 @@ func TestTransport(t *testing.T) {
 }
 
 func TestTransportAbort(t *testing.T) {
-	address := "127.0.0.12:18292"
+	address := "127.0.0.1:18292"
 	var nodeID uint64 = 2
 	rpcServer := &RPCServer{}
 
