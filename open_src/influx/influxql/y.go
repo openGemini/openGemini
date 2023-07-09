@@ -4049,7 +4049,7 @@ yydefault:
 		yyDollar = yyS[yypt-8 : yypt+1]
 //line sql.y:2622
 		{
-			yyVAL.stmt = &CreateSubscriptionStatement{Name: yyDollar[3].str, Database: yyDollar[5].str, RetentionPolicy: "autogen", Destinations: yyDollar[8].strSlice, Mode: yyDollar[7].str}
+			yyVAL.stmt = &CreateSubscriptionStatement{Name: yyDollar[3].str, Database: yyDollar[5].str, RetentionPolicy: "", Destinations: yyDollar[8].strSlice, Mode: yyDollar[7].str}
 		}
 	case 326:
 		yyDollar = yyS[yypt-2 : yypt+1]
@@ -4079,7 +4079,7 @@ yydefault:
 		yyDollar = yyS[yypt-5 : yypt+1]
 //line sql.y:2646
 		{
-			yyVAL.stmt = &DropSubscriptionStatement{Name: yyDollar[3].str, Database: yyDollar[5].str, RetentionPolicy: "autogen"}
+			yyVAL.stmt = &DropSubscriptionStatement{Name: yyDollar[3].str, Database: yyDollar[5].str, RetentionPolicy: ""}
 		}
 	}
 	goto yystack /* stack new state and value */
