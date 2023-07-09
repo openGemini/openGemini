@@ -18,7 +18,6 @@ package handler
 
 import (
 	"context"
-	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
 	"time"
@@ -323,7 +322,7 @@ func TestSelect_GetQueryExeInfo(t *testing.T) {
 	}
 	s := NewSelect(nil, nil, &rq)
 	info := s.GetQueryExeInfo()
-	assert.Equal(t, rq.QueryId, info.GetQueryID())
-	assert.Equal(t, rq.QueryStmt, info.GetStmt())
-	assert.Equal(t, rq.Database, info.GetDatabase())
+	require.Equal(t, rq.QueryId, info.GetQueryID())
+	require.Equal(t, rq.QueryStmt, info.GetStmt())
+	require.Equal(t, rq.Database, info.GetDatabase())
 }
