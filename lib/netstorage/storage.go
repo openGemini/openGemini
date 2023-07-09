@@ -415,11 +415,11 @@ func (s *NetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport
 }
 
 func (s *NetStorage) GetQueriesOnNode(nodeID uint64) ([]*netdata.QueryExeInfo, error) {
-	r := NewRequester(0, nil, s.metaClient)
+	r := NewRequester(UnknownMessage, nil, s.metaClient)
 	if err := r.initWithNodeID(nodeID); err != nil {
 		return nil, err
 	}
-	v, err := r.getQueryExeInfos(&ShowQueriesRequest{})
+	v, err := r.getQueryExeInfos(NewShowQueriesRequest())
 	if err != nil {
 		return nil, err
 	}

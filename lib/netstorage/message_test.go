@@ -379,3 +379,34 @@ func Test_PtResponse_Marshal_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, resp.String(), resp2.String())
 }
+
+func TestShowQueriesRequest_Marshal_Unmarshal(t *testing.T) {
+	req := netstorage.NewShowQueriesRequest()
+	buf, err := req.Marshal(nil)
+	require.NoError(t, err)
+
+	req2 := req.Instance()
+	err = req2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.Size(), req2.Size())
+}
+
+func TestShowQueriesResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := netstorage.ShowQueriesResponse{ShowQueriesResponse: netdata.ShowQueriesResponse{
+		QueryExeInfos: []*netdata.QueryExeInfo{{
+			QueryID:  proto.Uint64(1),
+			Stmt:     proto.String("SELECT * FROM mst1"),
+			Database: proto.String("db1"),
+			Duration: proto.Int64(1),
+			IsKilled: proto.Bool(false),
+		}},
+	}}
+	buf, err := resp.Marshal(nil)
+	require.NoError(t, err)
+
+	resp2 := resp.Instance()
+	err = resp2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, resp.String(), resp.String())
+	require.Equal(t, resp.Size(), resp2.Size())
+}

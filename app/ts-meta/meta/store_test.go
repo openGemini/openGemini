@@ -839,3 +839,24 @@ func TestCreateDataNodeRepeat(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStore_registerQueryIDOffset(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	cmd := meta.GenerateRegisterQueryIDOffsetCmd("127.0.0.1:8086")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateRegisterQueryIDOffsetCmd("127.0.0.1:8087")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateRegisterQueryIDOffsetCmd("127.0.0.1:8088")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -18,6 +18,7 @@ package handler
 
 import (
 	"context"
+	"github.com/stretchr/testify/assert"
 	"math"
 	"testing"
 	"time"
@@ -312,4 +313,17 @@ func TestNewShardTraits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSelect_GetQueryExeInfo(t *testing.T) {
+	rq := executor.RemoteQuery{
+		QueryId:   1,
+		QueryStmt: "SELECT * FROM mst1",
+		Database:  "db1",
+	}
+	s := NewSelect(nil, nil, &rq)
+	info := s.GetQueryExeInfo()
+	assert.Equal(t, rq.QueryId, info.GetQueryID())
+	assert.Equal(t, rq.QueryStmt, info.GetStmt())
+	assert.Equal(t, rq.Database, info.GetDatabase())
 }
