@@ -222,8 +222,8 @@ func TestRequesterError(t *testing.T) {
 }
 
 func TestRequester_getQueryExeInfos(t *testing.T) {
-	address := "127.0.0.9:12345"
-	nodeID := uint64(1)
+	address := "127.0.0.10:18494"
+	nodeID := uint64(4)
 	node := newDataNode(nodeID, address)
 	mc := &MockMetaClient{}
 	mc.addDataNode(node)
@@ -234,5 +234,5 @@ func TestRequester_getQueryExeInfos(t *testing.T) {
 	assert.NoError(t, requester.initWithNodeID(nodeID))
 	assert.Equal(t, requester.node.ID, node.ID)
 	err := requester.request(spdy.ShowQueriesRequest, req, nil)
-	assert.EqualError(t, fmt.Errorf("no connections available, node: 1, 127.0.0.9:12345"), err.Error())
+	assert.EqualError(t, fmt.Errorf("no connections available, node: 4, 127.0.0.10:18494"), err.Error())
 }
