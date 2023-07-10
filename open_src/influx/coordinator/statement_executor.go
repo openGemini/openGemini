@@ -277,7 +277,6 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		err = e.executeDropShardStatement(stmt, ctx)
 	case *influxql.DropSubscriptionStatement:
-		return meta2.ErrUnsupportCommand
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}

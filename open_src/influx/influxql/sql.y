@@ -3080,7 +3080,7 @@ CREATE_SUBSCRIPTION_STATEMENT:
     }
     |CREATE SUBSCRIPTION STRING_TYPE ON STRING_TYPE DESTINATIONS SUBSCRIPTION_TYPE ALL_DESTINATION
     {
-        $$ = &CreateSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : "autogen", Destinations : $8, Mode : $7}
+        $$ = &CreateSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : "", Destinations : $8, Mode : $7}
     }
 
 SHOW_SUBSCRIPTION_STATEMENT:
@@ -3104,6 +3104,6 @@ DROP_SUBSCRIPTION_STATEMENT:
     }
     |DROP SUBSCRIPTION STRING_TYPE ON STRING_TYPE
     {
-        $$ = &DropSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : "autogen"}
+        $$ = &DropSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : ""}
     }
 %%
