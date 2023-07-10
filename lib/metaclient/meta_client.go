@@ -22,6 +22,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"sort"
 	"strconv"
@@ -2212,6 +2213,25 @@ func (c *Client) DeleteMetaNode(id uint64) error {
 	return c.retryUntilExec(proto2.Command_DeleteMetaNodeCommand, proto2.E_DeleteMetaNodeCommand_Command, cmd)
 }
 
+// validateURL returns an error if the URL does not have a port or uses a scheme other than HTTP.
+func validateURL(input string) error {
+	u, err := url.Parse(input)
+	if err != nil {
+		return errors.New("invalid url")
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("invalid url")
+	}
+
+	_, port, err := net.SplitHostPort(u.Host)
+	if err != nil || port == "" {
+		return errors.New("invalid url")
+	}
+
+	return nil
+}
+
 func pingServer(server string) error {
 	pingUrl := server + "/ping"
 	client := http.Client{Timeout: time.Second}
@@ -2226,6 +2246,9 @@ func pingServer(server string) error {
 // CreateSubscription creates a subscription against the given database and retention policy.
 func (c *Client) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	for _, destination := range destinations {
+		if err := validateURL(destination); err != nil {
+			return fmt.Errorf("invalid url %s", destination)
+		}
 		if err := pingServer(destination); err != nil {
 			return fmt.Errorf("fail to ping %s", destination)
 		}
