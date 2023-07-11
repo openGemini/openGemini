@@ -355,6 +355,7 @@ return:
 
 	| length of strings | string_1 | ... | string_n | length of offset | offset_1 | ... | ... | offset_n |
 */
+//lint:ignore U1000 test used
 func packStringV1(in []byte, offset []uint32, ctx *CoderContext) []byte {
 	ctx.buf = numberenc.MarshalUint32Append(ctx.buf[:0], uint32(len(in)))
 	ctx.buf = append(ctx.buf, in...)

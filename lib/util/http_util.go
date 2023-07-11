@@ -40,7 +40,7 @@ func HttpError(w http.ResponseWriter, errmsg string, code int) {
 	response := httpd.Response{Err: errors.New(errmsg)}
 	if rw, ok := w.(httpd.ResponseWriter); ok {
 		w.WriteHeader(code)
-		rw.WriteResponse(response)
+		_, _ = rw.WriteResponse(response)
 		return
 	}
 

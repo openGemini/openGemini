@@ -41,7 +41,7 @@ install-staticcheck:
 	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.3
 
 install-golangci-lint:
-	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.47.3
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$($(GO) env GOPATH)/bin v1.53.3
 
 install-failpoint:
 	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl

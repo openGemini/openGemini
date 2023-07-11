@@ -892,7 +892,7 @@ func (t *Test) initMultipleFiles(s Server) error {
 		if err := writeTestData(s, t); err != nil {
 			return err
 		}
-		http.Post(s.URL()+"/debug/ctrl?mod=flush", "", nil)
+		_, _ = http.Post(s.URL()+"/debug/ctrl?mod=flush", "", nil)
 	}
 	t.initialized = true
 

@@ -357,7 +357,6 @@ func (w *PointsWriter) routeAndMapOriginRows(
 				w.logger.Error("invalid measurement", zap.Error(err))
 				partialErr = err
 				dropped++
-				err = nil
 				continue
 			}
 			return nil, dropped, err
@@ -367,7 +366,6 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		if ctx.fieldToCreatePool, isDropRow, err = wh.updateSchemaIfNeeded(database, retentionPolicy, r, ctx.ms, originName, ctx.fieldToCreatePool[:0]); err != nil {
 			if w.isPartialErr(err) {
 				partialErr = err
-				err = nil
 				if isDropRow {
 					dropped++
 					continue

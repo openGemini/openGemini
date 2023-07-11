@@ -1391,7 +1391,7 @@ func NewLogicalReader(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logica
 }
 
 func (p *LogicalReader) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
-	if inputs == nil || len(inputs) == 0 {
+	if len(inputs) == 0 {
 		return NewLogicalReader(nil, schema)
 	}
 	return NewLogicalReader(inputs[0], schema)
@@ -3429,7 +3429,6 @@ func (p *LogicalSparseIndexScan) Digest() string {
 }
 
 type LogicalColumnStoreReader struct {
-	frags   ShardsFragments
 	mstName string
 	LogicalPlanSingle
 }

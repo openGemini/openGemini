@@ -606,11 +606,6 @@ func (trans *HoltWintersTransform) initSubHwsMap() error {
 	return nil
 }
 
-func (trans *HoltWintersTransform) addInputChunk() {
-	hwChunk := newHoltWintersChunk(trans.bufChunk)
-	trans.inputChunks.PushBack(hwChunk)
-}
-
 func (trans *HoltWintersTransform) setTags(keys []string, vals []string) {
 	trans.tagKeys = keys
 	trans.tagVals = vals
