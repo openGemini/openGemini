@@ -18,6 +18,7 @@ package tsi
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -47,7 +48,7 @@ var (
 )
 
 func GetIndexIdByName(name string) (uint32, error) {
-	id, ok := IndexNameToID[name]
+	id, ok := IndexNameToID[strings.ToLower(name)]
 	if !ok {
 		return 0, fmt.Errorf("invalid index type %s", name)
 	}

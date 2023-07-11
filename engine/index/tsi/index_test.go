@@ -955,3 +955,14 @@ func TestSortTagsets(t *testing.T) {
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	tagset.Sort(schema)
 }
+
+func TestGetIndexOidByName(t *testing.T) {
+	_, err := GetIndexIdByName("field")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = GetIndexIdByName("FIELD")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
