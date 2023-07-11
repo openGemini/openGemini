@@ -189,8 +189,7 @@ func (c *RPCClient) Abort() {
 
 	c.logger.Info("send abort message", zap.Uint64("nodeID", c.query.NodeID))
 
-	req := c.trans.Requester()
-	abort := NewAbort(req.Sequence(), machine.GetMachineID())
+	abort := NewAbort(c.query.QueryId, machine.GetMachineID())
 	trans, err := transport.NewTransport(c.query.NodeID, spdy.AbortRequest, nil)
 	if err != nil {
 		c.logger.Error("failed to new transport", zap.Error(err),

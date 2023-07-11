@@ -104,23 +104,23 @@ func (e *Finish) Instance() transport.Codec {
 
 type Abort struct {
 	ClientID uint64
-	Seq      uint64
+	QueryID  uint64
 }
 
-func NewAbort(seq uint64, clientID uint64) *Abort {
-	return &Abort{ClientID: clientID, Seq: seq}
+func NewAbort(queryID uint64, clientID uint64) *Abort {
+	return &Abort{ClientID: clientID, QueryID: queryID}
 }
 
 func (e *Abort) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendUint64(buf, e.ClientID)
-	buf = codec.AppendUint64(buf, e.Seq)
+	buf = codec.AppendUint64(buf, e.QueryID)
 	return buf, nil
 }
 
 func (e *Abort) Unmarshal(buf []byte) error {
 	dec := codec.NewBinaryDecoder(buf)
 	e.ClientID = dec.Uint64()
-	e.Seq = dec.Uint64()
+	e.QueryID = dec.Uint64()
 	return nil
 }
 

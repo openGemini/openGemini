@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -378,4 +379,47 @@ func Test_PtResponse_Marshal_Unmarshal(t *testing.T) {
 	err = resp2.Unmarshal(buf)
 	require.NoError(t, err)
 	require.EqualValues(t, resp.String(), resp2.String())
+}
+
+func TestShowQueriesRequest_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.ShowQueriesRequest{}
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+
+	req2 := &netstorage.ShowQueriesRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+}
+
+func TestShowQueriesResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := &netstorage.ShowQueriesResponse{
+		QueryExeInfos: []*netstorage.QueryExeInfo{{
+			QueryID:   1,
+			Stmt:      "SELECT * FROM mst1",
+			Database:  "db1",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Running,
+		}, {
+			QueryID:   2,
+			Stmt:      "SELECT * FROM mst2",
+			Database:  "db2",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Running,
+		}, {
+			QueryID:   3,
+			Stmt:      "SELECT * FROM mst3",
+			Database:  "db3",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Killed,
+		}},
+	}
+	buf, err := resp.MarshalBinary()
+	require.NoError(t, err)
+
+	resp2 := &netstorage.ShowQueriesResponse{}
+	err = resp2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	for i := range resp.QueryExeInfos {
+		assert.Equal(t, resp.QueryExeInfos[i], resp2.QueryExeInfos[i])
+	}
 }

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,9 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -119,4 +122,122 @@ func TestExcuteStatementErr(t *testing.T) {
 	err = MockExcuteStatementErr("wrongRp", "mst", 5)
 	assert.True(t, strings.Contains(err.Error(), "retention policy not found"))
 
+}
+
+func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*netstorage.QueryExeInfo {
+	res := make([]*netstorage.QueryExeInfo, 0, num)
+	for i := 0; i < num; i++ {
+		info := &netstorage.QueryExeInfo{
+			QueryID:   uint64(i + idOffset),
+			Stmt:      fmt.Sprintf("select * from mst%d", i),
+			Database:  fmt.Sprintf("db%d", i),
+			BeginTime: duration,
+			RunState:  netstorage.Running,
+		}
+		if i == killOne {
+			info.RunState = netstorage.Killed
+		}
+		res = append(res, info)
+	}
+	return res
+}
+
+var idOffset = 100000
+var mockInfosNum = 20
+var killOne = 8
+var minBeginTime int64 = 10000000
+var dataNodesNum = 3
+
+func Test_combineQueryExeInfos(t *testing.T) {
+	killedQid := killOne + idOffset
+	res := make(map[uint64]*combinedQueryExeInfo)
+	for i := 1; i <= dataNodesNum; i++ {
+		infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(i)*minBeginTime)
+		combineQueryExeInfos(res, infos, fmt.Sprintf("192,168.0.%d", i))
+	}
+	for _, cmbInfo := range res {
+		assert.Equal(t, minBeginTime, cmbInfo.beginTime)
+		if cmbInfo.qid == uint64(killedQid) {
+			assert.Equal(t, 0, len(cmbInfo.runningHosts))
+			assert.Equal(t, dataNodesNum, len(cmbInfo.killedHosts))
+			assert.Equal(t, allKilled, cmbInfo.getCombinedRunState())
+		} else {
+			assert.Equal(t, dataNodesNum, len(cmbInfo.runningHosts))
+			assert.Equal(t, 0, len(cmbInfo.killedHosts))
+			assert.Equal(t, allRunning, cmbInfo.getCombinedRunState())
+		}
+	}
+}
+
+func (m *MockMetaClient) DataNodes() ([]meta2.DataNode, error) {
+	res := make([]meta2.DataNode, dataNodesNum)
+	for i := 0; i < dataNodesNum; i++ {
+		res[i] = meta2.DataNode{
+			NodeInfo: meta2.NodeInfo{ID: uint64(i + 1), Host: fmt.Sprintf("192.168.1.808%d", i)},
+		}
+	}
+	return res, nil
+}
+
+type mockNS struct {
+	netstorage.NetStorage
+}
+
+func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netstorage.QueryExeInfo, error) {
+	infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(minBeginTime))
+	return infos, nil
+}
+
+func TestStatementExecutor_executeShowQueriesStatement(t *testing.T) {
+	e := StatementExecutor{MetaClient: &MockMetaClient{}, NetStorage: &mockNS{}}
+	rows, err := e.executeShowQueriesStatement()
+	assert.NoError(t, err)
+	// there is a one has been killed in all hosts
+	assert.Equal(t, mockInfosNum-1, len(rows[0].Values))
+}
+
+func Test_combinedQueryExeInfo_getCombinedRunState(t *testing.T) {
+	type fields struct {
+		runningHosts []string
+		killedHosts  []string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   combinedRunState
+	}{
+		{
+			name: "AllRunning",
+			fields: fields{
+				runningHosts: []string{"127.0.0.1:8400", "127.0.0.1:8401", "127.0.0.1:8402"},
+				killedHosts:  nil,
+			},
+			want: allRunning,
+		},
+		{
+			name: "AllKilled",
+			fields: fields{
+				runningHosts: nil,
+				killedHosts:  []string{"127.0.0.1:8400", "127.0.0.1:8401", "127.0.0.1:8402"},
+			},
+			want: allKilled,
+		},
+		{
+			name: "PartiallyKilled",
+			fields: fields{
+				runningHosts: []string{"127.0.0.1:8400"},
+				killedHosts:  []string{"127.0.0.1:8401", "127.0.0.1:8402"},
+			},
+			want: partiallyKilled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &combinedQueryExeInfo{
+				runningHosts: tt.fields.runningHosts,
+				killedHosts:  tt.fields.killedHosts,
+			}
+			assert.Equal(t, tt.want, q.getCombinedRunState())
+		})
+	}
 }

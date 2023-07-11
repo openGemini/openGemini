@@ -218,7 +218,6 @@ func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
 }
 
 func (r *EmptyResponser) Response(response interface{}, full bool) error {
-
 	return nil
 }
 
@@ -311,4 +310,17 @@ func TestNewShardTraits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSelect_GetQueryExeInfo(t *testing.T) {
+	rq := executor.RemoteQuery{
+		QueryId:   1,
+		QueryStmt: "SELECT * FROM mst1",
+		Database:  "db1",
+	}
+	s := NewSelect(nil, nil, &rq)
+	info := s.GetQueryExeInfo()
+	require.Equal(t, rq.QueryId, info.QueryID)
+	require.Equal(t, rq.QueryStmt, info.Stmt)
+	require.Equal(t, rq.Database, info.Database)
 }
