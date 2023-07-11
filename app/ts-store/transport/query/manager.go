@@ -20,8 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/netstorage"
 )
 
 const (
@@ -30,7 +29,7 @@ const (
 
 type IQuery interface {
 	Abort()
-	GetQueryExeInfo() *netdata.QueryExeInfo
+	GetQueryExeInfo() *netstorage.QueryExeInfo
 }
 
 type Manager struct {
@@ -51,13 +50,8 @@ type Item struct {
 var managers map[uint64]*Manager
 var managersMu sync.RWMutex
 
-// clients keep a mapping with qid and client id.
-var clients map[uint64]uint64
-var clientsMu sync.RWMutex
-
 func init() {
 	managers = make(map[uint64]*Manager)
-	clients = make(map[uint64]uint64)
 }
 
 // VisitManagers can do something foreach every manager. Like get all queries.
@@ -173,28 +167,23 @@ func (qm *Manager) cleanAbort() {
 }
 
 // GetAll return the all query exe infos keeping by a manager
-func (qm *Manager) GetAll() []*netdata.QueryExeInfo {
+func (qm *Manager) GetAll() []*netstorage.QueryExeInfo {
 	qm.mu.RLock()
 	defer qm.mu.RUnlock()
 
-	exeInfos := make([]*netdata.QueryExeInfo, 0, len(qm.items))
+	exeInfos := make([]*netstorage.QueryExeInfo, 0, len(qm.items))
 	for qid, item := range qm.items {
 		// unchangeable information
 		info := item.val.GetQueryExeInfo()
 		// changeable information
-		info.IsKilled = proto.Bool(qm.Aborted(qid))
-		info.BeginTime = proto.Int64(item.begin.UnixNano())
+		if qm.Aborted(qid) {
+			info.RunState = netstorage.Killed
+		} else {
+			info.RunState = netstorage.Running
+		}
+		info.BeginTime = item.begin.UnixNano()
 		exeInfos = append(exeInfos, info)
 	}
 
 	return exeInfos
-}
-
-// MapQueryToClint make a mapping with qid and clientID for kill query by qid
-func MapQueryToClint(qid, clientID uint64) {
-	clientsMu.Lock()
-	defer clientsMu.Unlock()
-
-	// qid -> client id -> get qm -> kill the query
-	clients[qid] = clientID
 }

@@ -22,8 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -69,26 +68,26 @@ func TestManager_Query(t *testing.T) {
 
 type mockQuery struct {
 	id   int
-	info *netdata.QueryExeInfo
+	info *netstorage.QueryExeInfo
 }
 
 func (m *mockQuery) Abort() {
 
 }
 
-func (m *mockQuery) GetQueryExeInfo() *netdata.QueryExeInfo {
+func (m *mockQuery) GetQueryExeInfo() *netstorage.QueryExeInfo {
 	return m.info
 }
 
 func generateMockQueries(clientID uint64, n int) []mockQuery {
 	res := make([]mockQuery, mockQueriesNum)
 	for i := 0; i < n; i++ {
-		q := mockQuery{id: i, info: &netdata.QueryExeInfo{
-			QueryID:   proto.Uint64(clientID + uint64(i)),
-			Stmt:      proto.String(fmt.Sprintf("select * from mst%d\n", i)),
-			Database:  proto.String(fmt.Sprintf("db%d", i)),
-			BeginTime: proto.Int64(int64(i * 10000000)),
-			IsKilled:  proto.Bool(true),
+		q := mockQuery{id: i, info: &netstorage.QueryExeInfo{
+			QueryID:   clientID + uint64(i),
+			Stmt:      fmt.Sprintf("select * from mst%d\n", i),
+			Database:  fmt.Sprintf("db%d", i),
+			BeginTime: int64(i * 10000000),
+			RunState:  netstorage.Killed,
 		}}
 		res[i] = q
 	}
@@ -98,7 +97,7 @@ func generateMockQueries(clientID uint64, n int) []mockQuery {
 func TestManager_GetAll(t *testing.T) {
 	// generate mock infos for one client
 	queries := generateMockQueries(clientIDs[0], mockQueriesNum)
-	except := make([]*netdata.QueryExeInfo, 0)
+	except := make([]*netstorage.QueryExeInfo, 0)
 
 	for i := range queries {
 		NewManager(clientIDs[0]).Add(uint64(i), &queries[i])
@@ -109,16 +108,16 @@ func TestManager_GetAll(t *testing.T) {
 
 	// sort res and except to assert
 	sort.Slice(res, func(i, j int) bool {
-		return res[i].GetQueryID() > res[j].GetQueryID()
+		return res[i].QueryID > res[j].QueryID
 	})
 	sort.Slice(except, func(i, j int) bool {
-		return except[i].GetQueryID() > except[j].GetQueryID()
+		return except[i].QueryID > except[j].QueryID
 	})
 
 	for i := range except {
-		assert.Equal(t, except[i].GetQueryID(), res[i].GetQueryID())
-		assert.Equal(t, except[i].GetStmt(), res[i].GetStmt())
-		assert.Equal(t, except[i].GetDatabase(), res[i].GetDatabase())
+		assert.Equal(t, except[i].QueryID, res[i].QueryID)
+		assert.Equal(t, except[i].Stmt, res[i].Stmt)
+		assert.Equal(t, except[i].Database, res[i].Database)
 	}
 	assert.Equal(t, mockQueriesNum, len(res))
 }

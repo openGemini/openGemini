@@ -29,7 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
@@ -110,7 +110,7 @@ type RPCServer struct {
 	seq uint64
 }
 
-func (c *RPCServer) GetQueryExeInfo() *netdata.QueryExeInfo {
+func (c *RPCServer) GetQueryExeInfo() *netstorage.QueryExeInfo {
 	return nil
 }
 

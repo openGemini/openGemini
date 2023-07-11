@@ -7,13 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -126,20 +124,20 @@ func TestExcuteStatementErr(t *testing.T) {
 
 }
 
-func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*netdata.QueryExeInfo {
-	res := make([]*netdata.QueryExeInfo, num)
+func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*netstorage.QueryExeInfo {
+	res := make([]*netstorage.QueryExeInfo, 0, num)
 	for i := 0; i < num; i++ {
-		info := &netdata.QueryExeInfo{
-			QueryID:   proto.Uint64(uint64(i + idOffset)),
-			Stmt:      proto.String(fmt.Sprintf("select * from mst%d", i)),
-			Database:  proto.String(fmt.Sprintf("db%d", i)),
-			BeginTime: proto.Int64(duration),
-			IsKilled:  proto.Bool(false),
+		info := &netstorage.QueryExeInfo{
+			QueryID:   uint64(i + idOffset),
+			Stmt:      fmt.Sprintf("select * from mst%d", i),
+			Database:  fmt.Sprintf("db%d", i),
+			BeginTime: duration,
+			RunState:  netstorage.Running,
 		}
 		if i == killOne {
-			info.IsKilled = proto.Bool(true)
+			info.RunState = netstorage.Killed
 		}
-		res[i] = info
+		res = append(res, info)
 	}
 	return res
 }
@@ -162,13 +160,11 @@ func Test_combineQueryExeInfos(t *testing.T) {
 		if cmbInfo.qid == uint64(killedQid) {
 			assert.Equal(t, 0, len(cmbInfo.runningHosts))
 			assert.Equal(t, dataNodesNum, len(cmbInfo.killedHosts))
-			assert.Equal(t, true, cmbInfo.hasKilled)
-			assert.Equal(t, killedTotally, getRunState(cmbInfo))
+			assert.Equal(t, killedTotally, cmbInfo.totalRunState)
 		} else {
 			assert.Equal(t, dataNodesNum, len(cmbInfo.runningHosts))
 			assert.Equal(t, 0, len(cmbInfo.killedHosts))
-			assert.Equal(t, false, cmbInfo.hasKilled)
-			assert.Equal(t, running, getRunState(cmbInfo))
+			assert.Equal(t, running, cmbInfo.totalRunState)
 		}
 	}
 }
@@ -187,7 +183,7 @@ type mockNS struct {
 	netstorage.NetStorage
 }
 
-func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netdata.QueryExeInfo, error) {
+func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netstorage.QueryExeInfo, error) {
 	infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(minBeginTime))
 	return infos, nil
 }

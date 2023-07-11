@@ -26,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
 )
@@ -120,7 +119,7 @@ func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
-	var queries []*netdata.QueryExeInfo
+	var queries []*netstorage.QueryExeInfo
 
 	// get all query exe info from all query managers
 	getAllQueries := func(manager *query.Manager) {

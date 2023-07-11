@@ -22,7 +22,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -135,25 +134,25 @@ var clientIDs = []uint64{1000, 2000, 3000}
 var mockQueriesNum = 10
 
 type mockQuery struct {
-	id     int
-	status *internal.QueryExeInfo
+	id   int
+	info *netstorage.QueryExeInfo
 }
 
 func (m *mockQuery) Abort() {}
 
-func (m *mockQuery) GetQueryExeInfo() *internal.QueryExeInfo {
-	return m.status
+func (m *mockQuery) GetQueryExeInfo() *netstorage.QueryExeInfo {
+	return m.info
 }
 
 func generateMockQueryExeInfos(clientID uint64, n int) []mockQuery {
 	res := make([]mockQuery, mockQueriesNum)
 	for i := 0; i < n; i++ {
-		q := mockQuery{id: i, status: &internal.QueryExeInfo{
-			QueryID:   proto.Uint64(clientID + uint64(i)),
-			Stmt:      proto.String(fmt.Sprintf("select * from mst%d\n", i)),
-			Database:  proto.String(fmt.Sprintf("db%d", i)),
-			BeginTime: proto.Int64(int64(i * 10000000)),
-			IsKilled:  proto.Bool(true),
+		q := mockQuery{id: i, info: &netstorage.QueryExeInfo{
+			QueryID:   clientID + uint64(i),
+			Stmt:      fmt.Sprintf("select * from mst%d\n", i),
+			Database:  fmt.Sprintf("db%d", i),
+			BeginTime: int64(i * 10000000),
+			RunState:  netstorage.Running,
 		}}
 		res[i] = q
 	}
@@ -164,7 +163,7 @@ func TestShowQueries_Process(t *testing.T) {
 	resp := &EmptyResponser{}
 	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
 
-	except := make([]*internal.QueryExeInfo, 0)
+	except := make([]*netstorage.QueryExeInfo, 0)
 
 	for _, cid := range clientIDs {
 		// generate mock infos for all clients
@@ -172,7 +171,7 @@ func TestShowQueries_Process(t *testing.T) {
 		for i, mQuery := range queries {
 			qm := query.NewManager(cid)
 
-			qid := mQuery.GetQueryExeInfo().GetQueryID()
+			qid := mQuery.GetQueryExeInfo().QueryID
 
 			qm.Add(qid, &queries[i])
 			except = append(except, mQuery.GetQueryExeInfo())
@@ -199,16 +198,16 @@ func TestShowQueries_Process(t *testing.T) {
 	res := response.QueryExeInfos
 	// sort res and except to assert
 	sort.Slice(res, func(i, j int) bool {
-		return res[i].GetQueryID() > res[j].GetQueryID()
+		return res[i].QueryID > res[j].QueryID
 	})
 	sort.Slice(except, func(i, j int) bool {
-		return except[i].GetQueryID() > except[j].GetQueryID()
+		return except[i].QueryID > except[j].QueryID
 	})
 
 	for i := range except {
-		assert.Equal(t, except[i].GetQueryID(), res[i].GetQueryID())
-		assert.Equal(t, except[i].GetStmt(), res[i].GetStmt())
-		assert.Equal(t, except[i].GetDatabase(), res[i].GetDatabase())
+		assert.Equal(t, except[i].QueryID, res[i].QueryID)
+		assert.Equal(t, except[i].Stmt, res[i].Stmt)
+		assert.Equal(t, except[i].Database, res[i].Database)
 	}
 
 	assert.Equal(t, len(clientIDs)*mockQueriesNum, len(res))

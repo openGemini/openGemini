@@ -157,9 +157,6 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		s := NewSelect(p.store, w, req)
 		qm.Add(req.QueryId, s)
 
-		// build the mapping with qid and clientID for killing a query by qid
-		query.MapQueryToClint(req.QueryId, msg.ClientID())
-
 		w.Session().EnableDataACK()
 		defer func() {
 			w.Session().DisableDataACK()

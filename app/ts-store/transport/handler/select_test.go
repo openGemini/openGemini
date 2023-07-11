@@ -320,7 +320,7 @@ func TestSelect_GetQueryExeInfo(t *testing.T) {
 	}
 	s := NewSelect(nil, nil, &rq)
 	info := s.GetQueryExeInfo()
-	require.Equal(t, rq.QueryId, info.GetQueryID())
-	require.Equal(t, rq.QueryStmt, info.GetStmt())
-	require.Equal(t, rq.Database, info.GetDatabase())
+	require.Equal(t, rq.QueryId, info.QueryID)
+	require.Equal(t, rq.QueryStmt, info.Stmt)
+	require.Equal(t, rq.Database, info.Database)
 }

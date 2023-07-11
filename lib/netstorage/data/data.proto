@@ -105,7 +105,7 @@ message QueryExeInfo {
     required string Stmt = 2;
     required string Database = 3;
     required int64  BeginTime = 4;
-    required bool   IsKilled = 5;
+    required int32  RunState = 5;
 }
 
 message ShowQueriesResponse {

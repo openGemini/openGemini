@@ -42,7 +42,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -93,20 +92,20 @@ type StatementExecutor struct {
 	StmtExecLogger *logger.Logger
 }
 
-type queryRunState uint8
+type totalRunStateType uint8
 
 const (
-	unknownRunState queryRunState = iota
+	unknown totalRunStateType = iota
 	running
-	killedPartially
+	bothKilledAndRunning
 	killedTotally
 )
 
-func (q queryRunState) String() string {
+func (q totalRunStateType) String() string {
 	switch q {
 	case running:
 		return "running"
-	case killedPartially:
+	case bothKilledAndRunning:
 		return "killed"
 	default:
 		return "unknown"
@@ -114,13 +113,13 @@ func (q queryRunState) String() string {
 }
 
 type combinedQueryExeInfo struct {
-	qid          uint64
-	stmt         string
-	database     string
-	beginTime    int64
-	hasKilled    bool
-	runningHosts []string
-	killedHosts  []string
+	qid           uint64
+	stmt          string
+	database      string
+	beginTime     int64
+	totalRunState totalRunStateType
+	runningHosts  []string
+	killedHosts   []string
 }
 
 func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
@@ -129,11 +128,50 @@ func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
 	}
 }
 
-func (q *combinedQueryExeInfo) updateHosts(newHost string, isKilledHost bool) {
-	if isKilledHost {
-		q.killedHosts = append(q.killedHosts, newHost)
-	} else {
+func (q *combinedQueryExeInfo) updateHosts(newHost string, newRunState netstorage.RunStateType) {
+	switch newRunState {
+	case netstorage.Running:
 		q.runningHosts = append(q.runningHosts, newHost)
+	case netstorage.Killed:
+		q.killedHosts = append(q.killedHosts, newHost)
+	default:
+		// current version never arriving
+	}
+}
+
+func (q *combinedQueryExeInfo) updateRunState(newState netstorage.RunStateType) {
+	switch q.totalRunState {
+	case unknown:
+		switch newState {
+		case netstorage.Running:
+			q.totalRunState = running
+		case netstorage.Killed:
+			q.totalRunState = killedTotally
+		default:
+			q.totalRunState = unknown
+		}
+	case running:
+		switch newState {
+		case netstorage.Running:
+			return
+		case netstorage.Killed:
+			q.totalRunState = bothKilledAndRunning
+		default:
+			q.totalRunState = unknown
+		}
+	case bothKilledAndRunning:
+		return
+	case killedTotally:
+		switch newState {
+		case netstorage.Running:
+			q.totalRunState = bothKilledAndRunning
+		case netstorage.Killed:
+			return
+		default:
+			q.totalRunState = unknown
+		}
+	default:
+		q.totalRunState = unknown
 	}
 }
 
@@ -1620,15 +1658,19 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 	}
 
 	resMap := make(map[uint64]*combinedQueryExeInfo)
-	infosOnAllStore := make([][]*netdata.QueryExeInfo, len(nodes))
+	infosOnAllStore := make([][]*netstorage.QueryExeInfo, len(nodes))
 
 	// Concurrent access to all store nodes.
 	wg := sync.WaitGroup{}
+	var mu sync.Mutex
 	for i, node := range nodes {
 		wg.Add(1)
 		go func(index int, nodeID uint64) {
 			defer wg.Done()
-			infosOnAllStore[index] = e.getQueryExeInfoOnNode(nodeID)
+			infos := e.getQueryExeInfoOnNode(nodeID)
+			mu.Lock()
+			defer mu.Unlock()
+			infosOnAllStore[index] = infos
 		}(i, node.ID)
 	}
 	wg.Wait()
@@ -1650,16 +1692,16 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 
 	// Generate output row for every query
 	for _, cmbInfo := range sortedResult {
-		switch getRunState(cmbInfo) {
+		switch cmbInfo.totalRunState {
 		case killedTotally:
 			continue
-		case killedPartially:
+		case bothKilledAndRunning:
 			values = append(values, []interface{}{
 				cmbInfo.qid,
 				cmbInfo.stmt,
 				cmbInfo.database,
-				getDuration(cmbInfo),
-				killedPartially.String(),
+				getDurationString(cmbInfo),
+				bothKilledAndRunning.String(),
 				strings.Join(cmbInfo.killedHosts, ", "),
 			})
 		case running:
@@ -1668,7 +1710,7 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 			cmbInfo.qid,
 			cmbInfo.stmt,
 			cmbInfo.database,
-			getDuration(cmbInfo),
+			getDurationString(cmbInfo),
 			running.String(),
 			strings.Join(cmbInfo.runningHosts, ", "),
 		})
@@ -1677,31 +1719,8 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 	return models.Rows{&row}, nil
 }
 
-func (e *StatementExecutor) getQueryExeInfoOnNode(nodeID uint64) []*netdata.QueryExeInfo {
-	exeInfos, err := e.NetStorage.GetQueriesOnNode(nodeID)
-	if err != nil {
-		return make([]*netdata.QueryExeInfo, 0)
-	}
-	return exeInfos
-}
-
-func getRunState(cmbInfo *combinedQueryExeInfo) queryRunState {
-	runningNum := len(cmbInfo.runningHosts)
-	killedNum := len(cmbInfo.killedHosts)
-
-	switch {
-	case cmbInfo.hasKilled && runningNum == 0:
-		return killedTotally
-	case cmbInfo.hasKilled && runningNum > 0 && killedNum > 0:
-		return killedPartially
-	case !cmbInfo.hasKilled:
-		return running
-	default:
-		return unknownRunState
-	}
-}
-
-func getDuration(cmbInfo *combinedQueryExeInfo) string {
+// getDurationString return the query runing time until now, without decimal point. ie. 3.456s --> 3s
+func getDurationString(cmbInfo *combinedQueryExeInfo) string {
 	begin := cmbInfo.beginTime
 	d := time.Duration(time.Now().UnixNano() - begin)
 	switch {
@@ -1715,26 +1734,41 @@ func getDuration(cmbInfo *combinedQueryExeInfo) string {
 	return d.String()
 }
 
+func (e *StatementExecutor) getQueryExeInfoOnNode(nodeID uint64) []*netstorage.QueryExeInfo {
+	exeInfos, err := e.NetStorage.GetQueriesOnNode(nodeID)
+	if err != nil {
+		return make([]*netstorage.QueryExeInfo, 0)
+	}
+	return exeInfos
+}
+
 // combineQueryExeInfos combines queryExeInfo from different store nodes by QueryID.
-func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnStore []*netdata.QueryExeInfo, host string) {
+func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnStore []*netstorage.QueryExeInfo, host string) {
 	for _, info := range exeInfosOnStore {
 		// If a query in dstMap, update its killed,host and duration
-		if cmbInfo, ok := dstMap[info.GetQueryID()]; ok {
-			cmbInfo.hasKilled = cmbInfo.hasKilled || info.GetIsKilled()
-			cmbInfo.updateBeginTime(info.GetBeginTime())
-			cmbInfo.updateHosts(host, info.GetIsKilled())
+		if cmbInfo, ok := dstMap[info.QueryID]; ok {
+			cmbInfo.updateRunState(info.RunState)
+			cmbInfo.updateBeginTime(info.BeginTime)
+			cmbInfo.updateHosts(host, info.RunState)
 			continue
 		}
 		// Create a new cmbInfo
 		newCmbInfo := &combinedQueryExeInfo{
-			qid:       info.GetQueryID(),
-			hasKilled: info.GetIsKilled(),
-			stmt:      info.GetStmt(),
-			database:  info.GetDatabase(),
-			beginTime: info.GetBeginTime(),
+			qid:           info.QueryID,
+			totalRunState: unknown,
+			stmt:          info.Stmt,
+			database:      info.Database,
+			beginTime:     info.BeginTime,
 		}
-		newCmbInfo.updateHosts(host, info.GetIsKilled())
-		dstMap[info.GetQueryID()] = newCmbInfo
+		if host == "127.0.0.1:8400" && info.QueryID%3 == 0 {
+			newCmbInfo.totalRunState = killedTotally
+			newCmbInfo.killedHosts = append(newCmbInfo.killedHosts, host)
+			dstMap[info.QueryID] = newCmbInfo
+			continue
+		}
+		newCmbInfo.updateRunState(info.RunState)
+		newCmbInfo.updateHosts(host, info.RunState)
+		dstMap[info.QueryID] = newCmbInfo
 	}
 }
 

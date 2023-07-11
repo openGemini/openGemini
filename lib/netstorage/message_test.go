@@ -392,20 +392,34 @@ func TestShowQueriesRequest_Marshal_Unmarshal(t *testing.T) {
 }
 
 func TestShowQueriesResponse_Marshal_Unmarshal(t *testing.T) {
-	resp := netstorage.ShowQueriesResponse{ShowQueriesResponse: netdata.ShowQueriesResponse{
-		QueryExeInfos: []*netdata.QueryExeInfo{{
-			QueryID:   proto.Uint64(1),
-			Stmt:      proto.String("SELECT * FROM mst1"),
-			Database:  proto.String("db1"),
-			BeginTime: proto.Int64(time.Now().UnixNano()),
-			IsKilled:  proto.Bool(false),
+	resp := &netstorage.ShowQueriesResponse{
+		QueryExeInfos: []*netstorage.QueryExeInfo{{
+			QueryID:   1,
+			Stmt:      "SELECT * FROM mst1",
+			Database:  "db1",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Running,
+		}, {
+			QueryID:   2,
+			Stmt:      "SELECT * FROM mst2",
+			Database:  "db2",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Running,
+		}, {
+			QueryID:   3,
+			Stmt:      "SELECT * FROM mst3",
+			Database:  "db3",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Killed,
 		}},
-	}}
+	}
 	buf, err := resp.MarshalBinary()
 	require.NoError(t, err)
 
 	resp2 := &netstorage.ShowQueriesResponse{}
 	err = resp2.UnmarshalBinary(buf)
 	require.NoError(t, err)
-	require.EqualValues(t, resp.String(), resp.String())
+	for i := range resp.QueryExeInfos {
+		assert.Equal(t, resp.QueryExeInfos[i], resp2.QueryExeInfos[i])
+	}
 }
