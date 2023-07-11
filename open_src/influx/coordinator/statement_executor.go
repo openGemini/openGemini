@@ -92,34 +92,22 @@ type StatementExecutor struct {
 	StmtExecLogger *logger.Logger
 }
 
-type totalRunStateType uint8
+type combinedRunState uint8
 
 const (
-	unknown totalRunStateType = iota
-	running
-	bothKilledAndRunning
-	killedTotally
+	unknown combinedRunState = iota
+	allRunning
+	partiallyKilled
+	allKilled
 )
 
-func (q totalRunStateType) String() string {
-	switch q {
-	case running:
-		return "running"
-	case bothKilledAndRunning:
-		return "killed"
-	default:
-		return "unknown"
-	}
-}
-
 type combinedQueryExeInfo struct {
-	qid           uint64
-	stmt          string
-	database      string
-	beginTime     int64
-	totalRunState totalRunStateType
-	runningHosts  []string
-	killedHosts   []string
+	qid          uint64
+	stmt         string
+	database     string
+	beginTime    int64
+	runningHosts []string
+	killedHosts  []string
 }
 
 func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
@@ -139,40 +127,42 @@ func (q *combinedQueryExeInfo) updateHosts(newHost string, newRunState netstorag
 	}
 }
 
-func (q *combinedQueryExeInfo) updateRunState(newState netstorage.RunStateType) {
-	switch q.totalRunState {
-	case unknown:
-		switch newState {
-		case netstorage.Running:
-			q.totalRunState = running
-		case netstorage.Killed:
-			q.totalRunState = killedTotally
-		default:
-			q.totalRunState = unknown
-		}
-	case running:
-		switch newState {
-		case netstorage.Running:
-			return
-		case netstorage.Killed:
-			q.totalRunState = bothKilledAndRunning
-		default:
-			q.totalRunState = unknown
-		}
-	case bothKilledAndRunning:
-		return
-	case killedTotally:
-		switch newState {
-		case netstorage.Running:
-			q.totalRunState = bothKilledAndRunning
-		case netstorage.Killed:
-			return
-		default:
-			q.totalRunState = unknown
-		}
-	default:
-		q.totalRunState = unknown
+func (q *combinedQueryExeInfo) getCombinedRunState() combinedRunState {
+	if len(q.runningHosts) == 0 {
+		return allKilled
+	} else if len(q.killedHosts) > 0 {
+		return partiallyKilled
+	} else {
+		return allRunning
 	}
+}
+
+// getDurationString return the query running time until now, without decimal point. ie. 3.456s --> 3s
+func (q *combinedQueryExeInfo) getDurationString() string {
+	begin := q.beginTime
+	d := time.Duration(time.Now().UnixNano() - begin)
+	switch {
+	case d >= time.Second:
+		d = d - (d % time.Second)
+	case d >= time.Millisecond:
+		d = d - (d % time.Millisecond)
+	case d >= time.Microsecond:
+		d = d - (d % time.Microsecond)
+	}
+	return d.String()
+}
+
+func (q *combinedQueryExeInfo) toOutputRow(colNum int, isKilledPart bool) []interface{} {
+	res := make([]interface{}, 0, colNum)
+
+	res = append(res, q.qid, q.stmt, q.database, q.getDurationString())
+	if isKilledPart {
+		res = append(res, "killed", strings.Join(q.killedHosts, ", "))
+	} else {
+		res = append(res, "running", strings.Join(q.runningHosts, ", "))
+	}
+
+	return res
 }
 
 type combinedInfos []*combinedQueryExeInfo
@@ -1692,46 +1682,18 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 
 	// Generate output row for every query
 	for _, cmbInfo := range sortedResult {
-		switch cmbInfo.totalRunState {
-		case killedTotally:
+		switch cmbInfo.getCombinedRunState() {
+		case allKilled:
 			continue
-		case bothKilledAndRunning:
-			values = append(values, []interface{}{
-				cmbInfo.qid,
-				cmbInfo.stmt,
-				cmbInfo.database,
-				getDurationString(cmbInfo),
-				bothKilledAndRunning.String(),
-				strings.Join(cmbInfo.killedHosts, ", "),
-			})
-		case running:
+		case partiallyKilled:
+			// If this query was killed on a part of store nodes, split hosts to 2 part of "killed" and "running"
+			values = append(values, cmbInfo.toOutputRow(len(row.Columns), true))
+		case allRunning:
 		}
-		values = append(values, []interface{}{
-			cmbInfo.qid,
-			cmbInfo.stmt,
-			cmbInfo.database,
-			getDurationString(cmbInfo),
-			running.String(),
-			strings.Join(cmbInfo.runningHosts, ", "),
-		})
+		values = append(values, cmbInfo.toOutputRow(len(row.Columns), false))
 	}
 	row.Values = values
 	return models.Rows{&row}, nil
-}
-
-// getDurationString return the query runing time until now, without decimal point. ie. 3.456s --> 3s
-func getDurationString(cmbInfo *combinedQueryExeInfo) string {
-	begin := cmbInfo.beginTime
-	d := time.Duration(time.Now().UnixNano() - begin)
-	switch {
-	case d >= time.Second:
-		d = d - (d % time.Second)
-	case d >= time.Millisecond:
-		d = d - (d % time.Millisecond)
-	case d >= time.Microsecond:
-		d = d - (d % time.Microsecond)
-	}
-	return d.String()
 }
 
 func (e *StatementExecutor) getQueryExeInfoOnNode(nodeID uint64) []*netstorage.QueryExeInfo {
@@ -1747,26 +1709,17 @@ func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnSto
 	for _, info := range exeInfosOnStore {
 		// If a query in dstMap, update its killed,host and duration
 		if cmbInfo, ok := dstMap[info.QueryID]; ok {
-			cmbInfo.updateRunState(info.RunState)
 			cmbInfo.updateBeginTime(info.BeginTime)
 			cmbInfo.updateHosts(host, info.RunState)
 			continue
 		}
 		// Create a new cmbInfo
 		newCmbInfo := &combinedQueryExeInfo{
-			qid:           info.QueryID,
-			totalRunState: unknown,
-			stmt:          info.Stmt,
-			database:      info.Database,
-			beginTime:     info.BeginTime,
+			qid:       info.QueryID,
+			stmt:      info.Stmt,
+			database:  info.Database,
+			beginTime: info.BeginTime,
 		}
-		if host == "127.0.0.1:8400" && info.QueryID%3 == 0 {
-			newCmbInfo.totalRunState = killedTotally
-			newCmbInfo.killedHosts = append(newCmbInfo.killedHosts, host)
-			dstMap[info.QueryID] = newCmbInfo
-			continue
-		}
-		newCmbInfo.updateRunState(info.RunState)
 		newCmbInfo.updateHosts(host, info.RunState)
 		dstMap[info.QueryID] = newCmbInfo
 	}

@@ -160,11 +160,11 @@ func Test_combineQueryExeInfos(t *testing.T) {
 		if cmbInfo.qid == uint64(killedQid) {
 			assert.Equal(t, 0, len(cmbInfo.runningHosts))
 			assert.Equal(t, dataNodesNum, len(cmbInfo.killedHosts))
-			assert.Equal(t, killedTotally, cmbInfo.totalRunState)
+			assert.Equal(t, allKilled, cmbInfo.getCombinedRunState())
 		} else {
 			assert.Equal(t, dataNodesNum, len(cmbInfo.runningHosts))
 			assert.Equal(t, 0, len(cmbInfo.killedHosts))
-			assert.Equal(t, running, cmbInfo.totalRunState)
+			assert.Equal(t, allRunning, cmbInfo.getCombinedRunState())
 		}
 	}
 }
@@ -194,4 +194,50 @@ func TestStatementExecutor_executeShowQueriesStatement(t *testing.T) {
 	assert.NoError(t, err)
 	// there is a one has been killed in all hosts
 	assert.Equal(t, mockInfosNum-1, len(rows[0].Values))
+}
+
+func Test_combinedQueryExeInfo_getCombinedRunState(t *testing.T) {
+	type fields struct {
+		runningHosts []string
+		killedHosts  []string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   combinedRunState
+	}{
+		{
+			name: "AllRunning",
+			fields: fields{
+				runningHosts: []string{"127.0.0.1:8400", "127.0.0.1:8401", "127.0.0.1:8402"},
+				killedHosts:  nil,
+			},
+			want: allRunning,
+		},
+		{
+			name: "AllKilled",
+			fields: fields{
+				runningHosts: nil,
+				killedHosts:  []string{"127.0.0.1:8400", "127.0.0.1:8401", "127.0.0.1:8402"},
+			},
+			want: allKilled,
+		},
+		{
+			name: "PartiallyKilled",
+			fields: fields{
+				runningHosts: []string{"127.0.0.1:8400"},
+				killedHosts:  []string{"127.0.0.1:8401", "127.0.0.1:8402"},
+			},
+			want: partiallyKilled,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &combinedQueryExeInfo{
+				runningHosts: tt.fields.runningHosts,
+				killedHosts:  tt.fields.killedHosts,
+			}
+			assert.Equal(t, tt.want, q.getCombinedRunState())
+		})
+	}
 }
