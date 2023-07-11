@@ -93,6 +93,64 @@ type StatementExecutor struct {
 	StmtExecLogger *logger.Logger
 }
 
+type queryRunState uint8
+
+const (
+	unknownRunState queryRunState = iota
+	running
+	killedPartially
+	killedTotally
+)
+
+func (q queryRunState) String() string {
+	switch q {
+	case running:
+		return "running"
+	case killedPartially:
+		return "killed"
+	default:
+		return "unknown"
+	}
+}
+
+type combinedQueryExeInfo struct {
+	qid          uint64
+	stmt         string
+	database     string
+	beginTime    int64
+	hasKilled    bool
+	runningHosts []string
+	killedHosts  []string
+}
+
+func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
+	if newBegin < q.beginTime {
+		q.beginTime = newBegin
+	}
+}
+
+func (q *combinedQueryExeInfo) updateHosts(newHost string, isKilledHost bool) {
+	if isKilledHost {
+		q.killedHosts = append(q.killedHosts, newHost)
+	} else {
+		q.runningHosts = append(q.runningHosts, newHost)
+	}
+}
+
+type combinedInfos []*combinedQueryExeInfo
+
+func (c combinedInfos) Len() int {
+	return len(c)
+}
+
+func (c combinedInfos) Less(i, j int) bool {
+	return c[i].beginTime < c[j].beginTime
+}
+
+func (c combinedInfos) Swap(i, j int) {
+	c[i], c[j] = c[j], c[i]
+}
+
 func (e *StatementExecutor) Close() error {
 	return e.ShardMapper.Close()
 }
@@ -1555,29 +1613,23 @@ func (e *StatementExecutor) executeShowUsersStatement(q *influxql.ShowUsersState
 	return []*models.Row{row}, nil
 }
 
-type queryCombinedInfo struct {
-	qid      uint64
-	stmt     string
-	database string
-	duration int64
-	isKilled bool
-	hosts    []string
-}
-
 func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 	nodes, err := e.MetaClient.DataNodes()
 	if err != nil {
 		return nil, err
 	}
 
-	resMap := make(map[uint64]*queryCombinedInfo)
+	resMap := make(map[uint64]*combinedQueryExeInfo)
 	infosOnAllStore := make([][]*netdata.QueryExeInfo, len(nodes))
 
 	// Concurrent access to all store nodes.
 	wg := sync.WaitGroup{}
 	for i, node := range nodes {
 		wg.Add(1)
-		go e.getQueryExeInfoOnNode(node, &infosOnAllStore[i], &wg)
+		go func(index int, nodeID uint64) {
+			defer wg.Done()
+			infosOnAllStore[index] = e.getQueryExeInfoOnNode(nodeID)
+		}(i, node.ID)
 	}
 	wg.Wait()
 
@@ -1586,51 +1638,72 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 		combineQueryExeInfos(resMap, infos, nodes[i].Host)
 	}
 
-	// Sort the map key to beautify the output.
-	keys := make([]uint64, 0)
-	for key := range resMap {
-		keys = append(keys, key)
+	// Sort the res by duration to beautify the output.
+	sortedResult := make(combinedInfos, 0, len(resMap))
+	for _, val := range resMap {
+		sortedResult = append(sortedResult, val)
 	}
-	sort.Slice(keys, func(i, j int) bool {
-		return keys[i] < keys[j]
-	})
+	sort.Sort(sortedResult)
 
 	row := models.Row{Columns: []string{"qid", "query", "database", "duration", "status", "host"}}
 	values := make([][]interface{}, 0, len(resMap))
 
 	// Generate output row for every query
-	for _, key := range keys {
-		cmbInfo := resMap[key]
+	for _, cmbInfo := range sortedResult {
+		switch getRunState(cmbInfo) {
+		case killedTotally:
+			continue
+		case killedPartially:
+			values = append(values, []interface{}{
+				cmbInfo.qid,
+				cmbInfo.stmt,
+				cmbInfo.database,
+				getDuration(cmbInfo),
+				killedPartially.String(),
+				strings.Join(cmbInfo.killedHosts, ", "),
+			})
+		case running:
+		}
 		values = append(values, []interface{}{
 			cmbInfo.qid,
 			cmbInfo.stmt,
 			cmbInfo.database,
-			getDuration(time.Duration(cmbInfo.duration)),
-			getRunState(cmbInfo.isKilled),
-			strings.Join(cmbInfo.hosts, ", "),
+			getDuration(cmbInfo),
+			running.String(),
+			strings.Join(cmbInfo.runningHosts, ", "),
 		})
 	}
 	row.Values = values
 	return models.Rows{&row}, nil
 }
 
-func (e *StatementExecutor) getQueryExeInfoOnNode(node meta2.DataNode, dst *[]*netdata.QueryExeInfo, wg *sync.WaitGroup) {
-	defer wg.Done()
-	exeInfos, err := e.NetStorage.GetQueriesOnNode(node.ID)
+func (e *StatementExecutor) getQueryExeInfoOnNode(nodeID uint64) []*netdata.QueryExeInfo {
+	exeInfos, err := e.NetStorage.GetQueriesOnNode(nodeID)
 	if err != nil {
-		return
+		return make([]*netdata.QueryExeInfo, 0)
 	}
-	*dst = exeInfos
+	return exeInfos
 }
 
-func getRunState(isKilled bool) string {
-	if isKilled {
-		return "killed"
+func getRunState(cmbInfo *combinedQueryExeInfo) queryRunState {
+	runningNum := len(cmbInfo.runningHosts)
+	killedNum := len(cmbInfo.killedHosts)
+
+	switch {
+	case cmbInfo.hasKilled && runningNum == 0:
+		return killedTotally
+	case cmbInfo.hasKilled && runningNum > 0 && killedNum > 0:
+		return killedPartially
+	case !cmbInfo.hasKilled:
+		return running
+	default:
+		return unknownRunState
 	}
-	return "running"
 }
 
-func getDuration(d time.Duration) string {
+func getDuration(cmbInfo *combinedQueryExeInfo) string {
+	begin := cmbInfo.beginTime
+	d := time.Duration(time.Now().UnixNano() - begin)
 	switch {
 	case d >= time.Second:
 		d = d - (d % time.Second)
@@ -1643,28 +1716,25 @@ func getDuration(d time.Duration) string {
 }
 
 // combineQueryExeInfos combines queryExeInfo from different store nodes by QueryID.
-func combineQueryExeInfos(res map[uint64]*queryCombinedInfo, exeInfosOnStore []*netdata.QueryExeInfo, host string) {
+func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnStore []*netdata.QueryExeInfo, host string) {
 	for _, info := range exeInfosOnStore {
-		// If a query in res, update its killed,host and duration
-		if cmbInfo, ok := res[info.GetQueryID()]; ok {
-			// If the query of the same qid on any store node is killed, we consider that the query is killed.
-			cmbInfo.isKilled = cmbInfo.isKilled || info.GetIsKilled()
-			cmbInfo.hosts = append(cmbInfo.hosts, host)
-			// Choose the longest duration in all store nodes
-			if info.GetDuration() > cmbInfo.duration {
-				cmbInfo.duration = info.GetDuration()
-			}
+		// If a query in dstMap, update its killed,host and duration
+		if cmbInfo, ok := dstMap[info.GetQueryID()]; ok {
+			cmbInfo.hasKilled = cmbInfo.hasKilled || info.GetIsKilled()
+			cmbInfo.updateBeginTime(info.GetBeginTime())
+			cmbInfo.updateHosts(host, info.GetIsKilled())
 			continue
 		}
 		// Create a new cmbInfo
-		res[info.GetQueryID()] = &queryCombinedInfo{
-			qid:      info.GetQueryID(),
-			stmt:     info.GetStmt(),
-			database: info.GetDatabase(),
-			duration: info.GetDuration(),
-			isKilled: info.GetIsKilled(),
-			hosts:    []string{host},
+		newCmbInfo := &combinedQueryExeInfo{
+			qid:       info.GetQueryID(),
+			hasKilled: info.GetIsKilled(),
+			stmt:      info.GetStmt(),
+			database:  info.GetDatabase(),
+			beginTime: info.GetBeginTime(),
 		}
+		newCmbInfo.updateHosts(host, info.GetIsKilled())
+		dstMap[info.GetQueryID()] = newCmbInfo
 	}
 }
 

@@ -44,6 +44,8 @@ func newHandler(typ uint8) RPCHandler {
 		return &Delete{}
 	case netstorage.CreateDataBaseRequestMessage:
 		return &CreateDataBase{}
+	case netstorage.ShowQueriesRequestMessage:
+		return &ShowQueries{}
 	default:
 		return nil
 	}
@@ -180,6 +182,23 @@ func (h *CreateDataBase) SetMessage(msg codec.BinaryCodec) error {
 	req, ok := msg.(*netstorage.CreateDataBaseRequest)
 	if !ok {
 		return executor.NewInvalidTypeError("*netstorage.CreateDataBaseRequest", msg)
+	}
+	h.req = req
+	return nil
+}
+
+type ShowQueries struct {
+	BaseHandler
+
+	req *netstorage.ShowQueriesRequest
+	rsp *netstorage.ShowQueriesResponse
+}
+
+func (h *ShowQueries) SetMessage(msg codec.BinaryCodec) error {
+	h.rsp = &netstorage.ShowQueriesResponse{}
+	req, ok := msg.(*netstorage.ShowQueriesRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.ShowQueriesRequest", msg)
 	}
 	h.req = req
 	return nil

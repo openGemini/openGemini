@@ -80,15 +80,15 @@ func (m *mockQuery) GetQueryExeInfo() *netdata.QueryExeInfo {
 	return m.info
 }
 
-func GenerateMockQueries(clientID uint64, n int) []mockQuery {
+func generateMockQueries(clientID uint64, n int) []mockQuery {
 	res := make([]mockQuery, mockQueriesNum)
 	for i := 0; i < n; i++ {
 		q := mockQuery{id: i, info: &netdata.QueryExeInfo{
-			QueryID:  proto.Uint64(clientID + uint64(i)),
-			Stmt:     proto.String(fmt.Sprintf("select * from mst%d\n", i)),
-			Database: proto.String(fmt.Sprintf("db%d", i)),
-			Duration: proto.Int64(int64(i * 10000000)),
-			IsKilled: proto.Bool(true),
+			QueryID:   proto.Uint64(clientID + uint64(i)),
+			Stmt:      proto.String(fmt.Sprintf("select * from mst%d\n", i)),
+			Database:  proto.String(fmt.Sprintf("db%d", i)),
+			BeginTime: proto.Int64(int64(i * 10000000)),
+			IsKilled:  proto.Bool(true),
 		}}
 		res[i] = q
 	}
@@ -97,7 +97,7 @@ func GenerateMockQueries(clientID uint64, n int) []mockQuery {
 
 func TestManager_GetAll(t *testing.T) {
 	// generate mock infos for one client
-	queries := GenerateMockQueries(clientIDs[0], mockQueriesNum)
+	queries := generateMockQueries(clientIDs[0], mockQueriesNum)
 	except := make([]*netdata.QueryExeInfo, 0)
 
 	for i := range queries {
@@ -133,7 +133,7 @@ func TestVisitManagers(t *testing.T) {
 	}
 	// generate len(clientIDs) * mockQueriesNum queryInfos
 	for _, cID := range clientIDs {
-		queries := GenerateMockQueries(cID, mockQueriesNum)
+		queries := generateMockQueries(cID, mockQueriesNum)
 		for i := range queries {
 			NewManager(cID).Add(uint64(i), &queries[i])
 		}

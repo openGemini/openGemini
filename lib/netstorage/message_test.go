@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -381,32 +382,30 @@ func Test_PtResponse_Marshal_Unmarshal(t *testing.T) {
 }
 
 func TestShowQueriesRequest_Marshal_Unmarshal(t *testing.T) {
-	req := netstorage.NewShowQueriesRequest()
-	buf, err := req.Marshal(nil)
+	req := &netstorage.ShowQueriesRequest{}
+	buf, err := req.MarshalBinary()
 	require.NoError(t, err)
 
-	req2 := req.Instance()
-	err = req2.Unmarshal(buf)
+	req2 := &netstorage.ShowQueriesRequest{}
+	err = req2.UnmarshalBinary(buf)
 	require.NoError(t, err)
-	require.EqualValues(t, req.Size(), req2.Size())
 }
 
 func TestShowQueriesResponse_Marshal_Unmarshal(t *testing.T) {
 	resp := netstorage.ShowQueriesResponse{ShowQueriesResponse: netdata.ShowQueriesResponse{
 		QueryExeInfos: []*netdata.QueryExeInfo{{
-			QueryID:  proto.Uint64(1),
-			Stmt:     proto.String("SELECT * FROM mst1"),
-			Database: proto.String("db1"),
-			Duration: proto.Int64(1),
-			IsKilled: proto.Bool(false),
+			QueryID:   proto.Uint64(1),
+			Stmt:      proto.String("SELECT * FROM mst1"),
+			Database:  proto.String("db1"),
+			BeginTime: proto.Int64(time.Now().UnixNano()),
+			IsKilled:  proto.Bool(false),
 		}},
 	}}
-	buf, err := resp.Marshal(nil)
+	buf, err := resp.MarshalBinary()
 	require.NoError(t, err)
 
-	resp2 := resp.Instance()
-	err = resp2.Unmarshal(buf)
+	resp2 := &netstorage.ShowQueriesResponse{}
+	err = resp2.UnmarshalBinary(buf)
 	require.NoError(t, err)
 	require.EqualValues(t, resp.String(), resp.String())
-	require.Equal(t, resp.Size(), resp2.Size())
 }

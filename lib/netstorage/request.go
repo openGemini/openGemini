@@ -384,3 +384,26 @@ func (r *CreateDataBaseResponse) Error() error {
 	}
 	return fmt.Errorf("%s", *r.Err)
 }
+
+type ShowQueriesRequest struct {
+}
+
+func (r *ShowQueriesRequest) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (r *ShowQueriesRequest) UnmarshalBinary(buf []byte) error {
+	return nil
+}
+
+type ShowQueriesResponse struct {
+	internal2.ShowQueriesResponse
+}
+
+func (r *ShowQueriesResponse) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.ShowQueriesResponse)
+}
+
+func (r *ShowQueriesResponse) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.ShowQueriesResponse)
+}

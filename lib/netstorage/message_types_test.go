@@ -39,6 +39,7 @@ func TestMessageTypes(t *testing.T) {
 		store.ShowTagValuesCardinalityRequestMessage: {&store.ShowTagValuesCardinalityRequest{}, &store.ShowTagValuesCardinalityResponse{}},
 		store.GetShardSplitPointsRequestMessage:      {&store.GetShardSplitPointsRequest{}, &store.GetShardSplitPointsResponse{}},
 		store.DeleteRequestMessage:                   {&store.DeleteRequest{}, &store.DeleteResponse{}},
+		store.ShowQueriesRequestMessage:              {&store.ShowQueriesRequest{}, &store.ShowQueriesResponse{}},
 	}
 
 	for typ, items := range data {

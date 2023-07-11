@@ -21,10 +21,12 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
+	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
 )
@@ -115,6 +117,21 @@ func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
 	})
 
 	return h.rsp, nil
+}
+
+func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
+	var queries []*netdata.QueryExeInfo
+
+	// get all query exe info from all query managers
+	getAllQueries := func(manager *query.Manager) {
+		queries = append(queries, manager.GetAll()...)
+	}
+	query.VisitManagers(getAllQueries)
+	rsp := &netstorage.ShowQueriesResponse{}
+	rsp.QueryExeInfos = queries
+
+	return rsp, nil
+
 }
 
 func processDDL(cond *string, processor func(expr influxql.Expr) error) *string {

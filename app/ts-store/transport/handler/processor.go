@@ -29,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"go.uber.org/zap"
 )
 
@@ -158,6 +157,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		s := NewSelect(p.store, w, req)
 		qm.Add(req.QueryId, s)
 
+		// build the mapping with qid and clientID for killing a query by qid
 		query.MapQueryToClint(req.QueryId, msg.ClientID())
 
 		w.Session().EnableDataACK()
@@ -209,31 +209,6 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 	err := w.Response(executor.NewFinishMessage(), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
-	}
-	return nil
-}
-
-type ShowQueriesProcessor struct {
-}
-
-func NewShowQueriesProcessor() *ShowQueriesProcessor {
-	return &ShowQueriesProcessor{}
-}
-
-func (s *ShowQueriesProcessor) Handle(w spdy.Responser, _ interface{}) error {
-	var queries []*netdata.QueryExeInfo
-
-	// get all query exe info from all query managers
-	getAllQueries := func(manager *query.Manager) {
-		queries = append(queries, manager.GetAll()...)
-	}
-	query.VisitManagers(getAllQueries)
-
-	rsp := netstorage.NewShowQueriesResponse()
-	rsp.QueryExeInfos = queries
-	err := w.Response(rsp, true)
-	if err != nil {
-		logger.GetLogger().Error("failed to response show queries", zap.Error(err))
 	}
 	return nil
 }

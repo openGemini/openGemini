@@ -177,18 +177,14 @@ func (qm *Manager) GetAll() []*netdata.QueryExeInfo {
 	qm.mu.RLock()
 	defer qm.mu.RUnlock()
 
-	exeInfos := make([]*netdata.QueryExeInfo, len(qm.items))
-
-	i := 0
+	exeInfos := make([]*netdata.QueryExeInfo, 0, len(qm.items))
 	for qid, item := range qm.items {
-		duration := time.Since(item.begin)
+		// unchangeable information
 		info := item.val.GetQueryExeInfo()
-
-		// write the changeable information in a query
-		info.Duration = proto.Int64(duration.Nanoseconds())
+		// changeable information
 		info.IsKilled = proto.Bool(qm.Aborted(qid))
-		exeInfos[i] = info
-		i++
+		info.BeginTime = proto.Int64(item.begin.UnixNano())
+		exeInfos = append(exeInfos, info)
 	}
 
 	return exeInfos

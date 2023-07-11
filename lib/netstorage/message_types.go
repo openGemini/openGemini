@@ -50,6 +50,9 @@ const (
 
 	CreateDataBaseRequestMessage
 	CreateDatabaseResponseMessage
+
+	ShowQueriesRequestMessage
+	ShowQueriesResponseMessage
 )
 
 func NewMessage(typ uint8) codec.BinaryCodec {
@@ -86,6 +89,10 @@ func NewMessage(typ uint8) codec.BinaryCodec {
 		return &CreateDataBaseRequest{}
 	case CreateDatabaseResponseMessage:
 		return &CreateDataBaseResponse{}
+	case ShowQueriesRequestMessage:
+		return &ShowQueriesRequest{}
+	case ShowQueriesResponseMessage:
+		return &ShowQueriesResponse{}
 	default:
 		return nil
 	}
@@ -107,6 +114,8 @@ func GetResponseMessageType(typ uint8) uint8 {
 		return GetShardSplitPointsResponseMessage
 	case DeleteRequestMessage:
 		return DeleteResponseMessage
+	case ShowQueriesRequestMessage:
+		return ShowQueriesResponseMessage
 	default:
 		return UnknownMessage
 	}

@@ -24,9 +24,9 @@ import (
 
 func TestNetStorage_GetQueriesOnNode(t *testing.T) {
 	mc := MockMetaClient{}
-	mc.addDataNode(newDataNode(5, "127.0.0.10:18495"))
+	mc.addDataNode(newDataNode(5, "127.0.0.1:18495"))
 	ns := NewNetStorage(&mc)
 
 	_, err := ns.GetQueriesOnNode(5)
-	assert.EqualError(t, fmt.Errorf("no connections available, node: 5, 127.0.0.10:18495"), err.Error())
+	assert.EqualError(t, fmt.Errorf("no connections available, node: 5, 127.0.0.1:18495"), err.Error())
 }

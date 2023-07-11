@@ -130,11 +130,11 @@ func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*net
 	res := make([]*netdata.QueryExeInfo, num)
 	for i := 0; i < num; i++ {
 		info := &netdata.QueryExeInfo{
-			QueryID:  proto.Uint64(uint64(i + idOffset)),
-			Stmt:     proto.String(fmt.Sprintf("select * from mst%d", i)),
-			Database: proto.String(fmt.Sprintf("db%d", i)),
-			Duration: proto.Int64(duration),
-			IsKilled: proto.Bool(false),
+			QueryID:   proto.Uint64(uint64(i + idOffset)),
+			Stmt:      proto.String(fmt.Sprintf("select * from mst%d", i)),
+			Database:  proto.String(fmt.Sprintf("db%d", i)),
+			BeginTime: proto.Int64(duration),
+			IsKilled:  proto.Bool(false),
 		}
 		if i == killOne {
 			info.IsKilled = proto.Bool(true)
@@ -147,23 +147,28 @@ func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*net
 var idOffset = 100000
 var mockInfosNum = 20
 var killOne = 8
-var unitDuration = 10000000
+var minBeginTime int64 = 10000000
 var dataNodesNum = 3
 
 func Test_combineQueryExeInfos(t *testing.T) {
 	killedQid := killOne + idOffset
-	res := make(map[uint64]*queryCombinedInfo)
+	res := make(map[uint64]*combinedQueryExeInfo)
 	for i := 1; i <= dataNodesNum; i++ {
-		infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(i*unitDuration))
+		infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(i)*minBeginTime)
 		combineQueryExeInfos(res, infos, fmt.Sprintf("192,168.0.%d", i))
 	}
 	for _, cmbInfo := range res {
-		assert.Equal(t, int64(30000000), cmbInfo.duration)
-		assert.Equal(t, 3, len(cmbInfo.hosts))
+		assert.Equal(t, minBeginTime, cmbInfo.beginTime)
 		if cmbInfo.qid == uint64(killedQid) {
-			assert.Equal(t, true, cmbInfo.isKilled)
+			assert.Equal(t, 0, len(cmbInfo.runningHosts))
+			assert.Equal(t, dataNodesNum, len(cmbInfo.killedHosts))
+			assert.Equal(t, true, cmbInfo.hasKilled)
+			assert.Equal(t, killedTotally, getRunState(cmbInfo))
 		} else {
-			assert.Equal(t, false, cmbInfo.isKilled)
+			assert.Equal(t, dataNodesNum, len(cmbInfo.runningHosts))
+			assert.Equal(t, 0, len(cmbInfo.killedHosts))
+			assert.Equal(t, false, cmbInfo.hasKilled)
+			assert.Equal(t, running, getRunState(cmbInfo))
 		}
 	}
 }
@@ -183,7 +188,7 @@ type mockNS struct {
 }
 
 func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netdata.QueryExeInfo, error) {
-	infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(unitDuration))
+	infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(minBeginTime))
 	return infos, nil
 }
 
@@ -191,5 +196,6 @@ func TestStatementExecutor_executeShowQueriesStatement(t *testing.T) {
 	e := StatementExecutor{MetaClient: &MockMetaClient{}, NetStorage: &mockNS{}}
 	rows, err := e.executeShowQueriesStatement()
 	assert.NoError(t, err)
-	assert.Equal(t, mockInfosNum, len(rows[0].Values))
+	// there is a one has been killed in all hosts
+	assert.Equal(t, mockInfosNum-1, len(rows[0].Values))
 }

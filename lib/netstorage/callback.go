@@ -143,24 +143,3 @@ func (c *MigratePtCallback) GetCodec() transport.Codec {
 func (c *MigratePtCallback) GetResponse() interface{} {
 	return c.data
 }
-
-type ShowQueriesCallback struct {
-	data any
-}
-
-func (c *ShowQueriesCallback) Handle(data interface{}) error {
-	msg, ok := data.(*ShowQueriesResponse)
-	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.ShowQueriesResopnse", data)
-	}
-	c.data = msg
-	return nil
-}
-
-func (c *ShowQueriesCallback) GetCodec() transport.Codec {
-	return &ShowQueriesResponse{}
-}
-
-func (c *ShowQueriesCallback) GetResponse() interface{} {
-	return c.data
-}
