@@ -95,8 +95,7 @@ type StatementExecutor struct {
 type combinedRunState uint8
 
 const (
-	unknown combinedRunState = iota
-	allRunning
+	allRunning combinedRunState = iota
 	partiallyKilled
 	allKilled
 )
