@@ -615,7 +615,7 @@ func (fsm *storeFSM) applyUpdatePtVersionCommand(cmd *proto2.Command) interface{
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdatePtVersionCommand", ext))
 	}
-	fsm.data.UpdatePtVersion(v.GetDb(), v.GetPt())
+	_ = fsm.data.UpdatePtVersion(v.GetDb(), v.GetPt())
 	return nil
 }
 

@@ -249,7 +249,8 @@ func (s *Service) runReportServer() {
 	cli := usage_client.NewClient()
 	cli.WithLogger(s.Logger.GetZapLogger())
 	s.Logger.Info("sending usage statistics to openGemini")
-	go cli.Send(usage)
+	go func() { _, _ = cli.Send(usage) }()
+
 }
 
 type httpServer struct {

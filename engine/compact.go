@@ -157,7 +157,7 @@ func (c *Compactor) compact() {
 	c.mu.RUnlock()
 
 	for _, sh := range c.compactShards {
-		sh.Compact()
+		_ = sh.Compact()
 	}
 }
 

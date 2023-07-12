@@ -1345,6 +1345,5 @@ func (r *CastorAggCutRule) OnMatch(call *OptRuleCall) {
 	}
 
 	call.planner.(*HeuPlannerImpl).dag.RemoveEdge(agg.Children()[0].(*HeuVertex), aggVertex)
-	aggVertex = nil
 	call.TransformTo(aggSonChild)
 }

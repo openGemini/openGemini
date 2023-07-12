@@ -634,6 +634,7 @@ func (mw *mstWriteCtx) putRowsPool(rp []influx.Row) {
 		rp[i].Reset()
 	}
 	rp = rp[:0]
+	//lint:ignore SA6002 argument should be pointer-like to avoid allocations
 	mw.rowsPool.Put(rp)
 }
 
@@ -1753,9 +1754,9 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 	port.ConnectStateReserve(writeIntoStorage.GetOutputs()[0])
 	writeIntoStorage.(*WriteIntoStorageTransform).SetTaskId(taskID)
 	ctx := context.Background()
-	go sidSequenceReader.Work(ctx)
-	go fileSequenceAgg.Work(ctx)
-	go writeIntoStorage.Work(ctx)
+	go func() { _ = sidSequenceReader.Work(ctx) }()
+	go func() { _ = fileSequenceAgg.Work(ctx) }()
+	go func() { _ = writeIntoStorage.Work(ctx) }()
 	return nil
 }
 
@@ -1923,7 +1924,7 @@ func (s *shard) checkMstDeleting(mst string) bool {
 
 func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QuerySchema, callBack func(num int64) error) (*executor.FileFragments, error) {
 	if len(schema.Options().GetSourcesNames()) != 1 {
-		return nil, fmt.Errorf("Currently, Only a single table is supported.")
+		return nil, fmt.Errorf("currently, Only a single table is supported")
 	}
 
 	// get the source measurement.
