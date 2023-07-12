@@ -3,9 +3,6 @@ name: UT and Upload Coverage
 on:
   workflow_dispatch:
   push:
-    branches:
-      - full-text-index
-      - main
     paths-ignore:
       - 'config/**'
       - 'docker/**'
