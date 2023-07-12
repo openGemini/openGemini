@@ -1733,8 +1733,8 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 		return err
 	}
 
-	failedNodes := make([]string, 0, len(nodes))
-
+	failedHosts := make([]string, 0, len(nodes))
+	failedErrs := make([]string, 0, len(nodes))
 	wg := sync.WaitGroup{}
 	mu := sync.Mutex{}
 	for _, n := range nodes {
@@ -1745,18 +1745,22 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 			err := e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID)
 			if err != nil {
 				mu.Lock()
-				failedNodes = append(failedNodes, dataNode.Host+":"+err.Error())
+				failedHosts = append(failedHosts, dataNode.Host)
+				failedErrs = append(failedErrs, err.Error())
 				mu.Unlock()
 			}
 		}(n)
 	}
 	wg.Wait()
 
-	if len(failedNodes) != 0 {
-		e.StmtExecLogger.Error("failed to kill query", zap.Uint64("qid", stmt.QueryID), zap.String("msg", strings.Join(failedNodes, ",")))
-		return meta2.ErrKillQueryFail
+	if len(failedHosts) != 0 {
+		var builder strings.Builder
+		for i := range failedHosts {
+			builder.WriteString(fmt.Sprintf("%s: %s", failedHosts[i], failedErrs[i]))
+		}
+		e.StmtExecLogger.Error("failed to kill query", zap.Uint64("qid", stmt.QueryID), zap.String("detail", builder.String()))
+		return fmt.Errorf(meta2.ErrKillQueryFail.Error(), strings.Join(failedHosts, ", "))
 	}
-
 	return nil
 }
 

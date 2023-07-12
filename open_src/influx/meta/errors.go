@@ -65,7 +65,7 @@ var (
 	ErrDataViewBootStrap = errors.New("cluster is bootstrapping for initial data view")
 	ErrDuplicateShardKey = errors.New("duplicate shard key")
 	ErrInvalidShardKey   = errors.New("invalid shard key")
-	ErrKillQueryFail     = errors.New("failed to kill query on some nodes")
+	ErrKillQueryFail     = errors.New("failed to kill query on %s")
 )
 
 var (
