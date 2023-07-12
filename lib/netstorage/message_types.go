@@ -53,6 +53,9 @@ const (
 
 	ShowQueriesRequestMessage
 	ShowQueriesResponseMessage
+
+	KillQueryRequestMessage
+	KillQueryResponseMessage
 )
 
 func NewMessage(typ uint8) codec.BinaryCodec {
@@ -93,6 +96,10 @@ func NewMessage(typ uint8) codec.BinaryCodec {
 		return &ShowQueriesRequest{}
 	case ShowQueriesResponseMessage:
 		return &ShowQueriesResponse{}
+	case KillQueryRequestMessage:
+		return &KillQueryRequest{}
+	case KillQueryResponseMessage:
+		return &KillQueryResponse{}
 	default:
 		return nil
 	}
@@ -116,6 +123,8 @@ func GetResponseMessageType(typ uint8) uint8 {
 		return DeleteResponseMessage
 	case ShowQueriesRequestMessage:
 		return ShowQueriesResponseMessage
+	case KillQueryRequestMessage:
+		return KillQueryResponseMessage
 	default:
 		return UnknownMessage
 	}

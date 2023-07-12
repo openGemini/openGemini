@@ -30,3 +30,12 @@ func TestNetStorage_GetQueriesOnNode(t *testing.T) {
 	_, err := ns.GetQueriesOnNode(5)
 	assert.EqualError(t, fmt.Errorf("no connections available, node: 5, 127.0.0.1:18495"), err.Error())
 }
+
+func TestNetStorage_KillQueryOnNode(t *testing.T) {
+	mc := MockMetaClient{}
+	mc.addDataNode(newDataNode(6, "127.0.0.1:18496"))
+	ns := NewNetStorage(&mc)
+
+	err := ns.KillQueryOnNode(6, 1)
+	assert.EqualError(t, fmt.Errorf("no connections available, node: 6, 127.0.0.1:18496"), err.Error())
+}

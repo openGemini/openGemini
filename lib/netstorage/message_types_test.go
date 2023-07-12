@@ -40,6 +40,7 @@ func TestMessageTypes(t *testing.T) {
 		store.GetShardSplitPointsRequestMessage:      {&store.GetShardSplitPointsRequest{}, &store.GetShardSplitPointsResponse{}},
 		store.DeleteRequestMessage:                   {&store.DeleteRequest{}, &store.DeleteResponse{}},
 		store.ShowQueriesRequestMessage:              {&store.ShowQueriesRequest{}, &store.ShowQueriesResponse{}},
+		store.KillQueryRequestMessage:                {&store.KillQueryRequest{}, &store.KillQueryResponse{}},
 	}
 
 	for typ, items := range data {

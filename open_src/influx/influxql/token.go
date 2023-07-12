@@ -112,7 +112,7 @@ const (
 	//INTO
 	//KEY
 	//KEYS
-	KILL
+	//KILL
 	//LIMIT
 	//MEASUREMENT
 	//MEASUREMENTS

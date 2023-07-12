@@ -448,3 +448,31 @@ func (r *ShowQueriesResponse) UnmarshalBinary(buf []byte) error {
 	}
 	return nil
 }
+
+type KillQueryRequest struct {
+	internal2.KillQueryRequest
+}
+
+func (r *KillQueryRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.KillQueryRequest)
+}
+
+func (r *KillQueryRequest) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.KillQueryRequest)
+}
+
+type KillQueryResponse struct {
+	internal2.KillQueryResponse
+}
+
+func (r *KillQueryResponse) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.KillQueryResponse)
+}
+
+func (r *KillQueryResponse) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.KillQueryResponse)
+}
+
+func (r *KillQueryResponse) Error() error {
+	return NormalizeError(r.Err)
+}

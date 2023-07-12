@@ -188,6 +188,10 @@ func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netstorage.QueryExeInfo, er
 	return infos, nil
 }
 
+func (s *mockNS) KillQueryOnNode(nodeID, queryID uint64) error {
+	return errors.New("err")
+}
+
 func TestStatementExecutor_executeShowQueriesStatement(t *testing.T) {
 	e := StatementExecutor{MetaClient: &MockMetaClient{}, NetStorage: &mockNS{}}
 	rows, err := e.executeShowQueriesStatement()
@@ -240,4 +244,13 @@ func Test_combinedQueryExeInfo_getCombinedRunState(t *testing.T) {
 			assert.Equal(t, tt.want, q.getCombinedRunState())
 		})
 	}
+}
+
+func TestStatementExecutor_executeKillQuery(t *testing.T) {
+	e := StatementExecutor{MetaClient: &MockMetaClient{}, NetStorage: &mockNS{}, StmtExecLogger: Logger.NewLogger(errno.ModuleUnknown)}
+	err1 := e.executeKillQuery(&influxql.KillQueryStatement{QueryID: uint64(1), Host: "127.0.0.1:8400"})
+	assert.EqualError(t, meta2.ErrUnsupportCommand, err1.Error())
+
+	err2 := e.executeKillQuery(&influxql.KillQueryStatement{QueryID: uint64(1)})
+	assert.EqualError(t, meta2.ErrKillQueryFail, err2.Error())
 }

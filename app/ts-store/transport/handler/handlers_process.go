@@ -133,6 +133,18 @@ func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
 
 }
 
+func (h *KillQuery) Process() (codec.BinaryCodec, error) {
+	killQueryByID := func(manager *query.Manager) {
+		qid := h.req.GetQueryID()
+		manager.Abort(qid)
+		if manager.Get(qid) != nil && !manager.Aborted(qid) {
+			h.rsp.Err = netstorage.MarshalError(errors.New("abort fail"))
+		}
+	}
+	query.VisitManagers(killQueryByID)
+	return h.rsp, nil
+}
+
 func processDDL(cond *string, processor func(expr influxql.Expr) error) *string {
 	var err error
 	var expr influxql.Expr
