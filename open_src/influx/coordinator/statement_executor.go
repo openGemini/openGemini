@@ -361,7 +361,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	case *influxql.ShowQueriesStatement:
 		rows, err = e.executeShowQueriesStatement()
 	case *influxql.KillQueryStatement:
-		return meta2.ErrUnsupportCommand
+		err = e.executeKillQuery(stmt)
 	case *influxql.PrepareSnapshotStatement:
 		return meta2.ErrUnsupportCommand
 		err = e.executePrepareSnapshotStatement(stmt, ctx)
@@ -1722,6 +1722,46 @@ func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnSto
 		newCmbInfo.updateHosts(host, info.RunState)
 		dstMap[info.QueryID] = newCmbInfo
 	}
+}
+
+func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) error {
+	if stmt.Host != "" {
+		return meta2.ErrUnsupportCommand
+	}
+	nodes, err := e.MetaClient.DataNodes()
+	if err != nil {
+		return err
+	}
+
+	failedHosts := make([]string, 0, len(nodes))
+	failedErrs := make([]string, 0, len(nodes))
+	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
+	for _, n := range nodes {
+		wg.Add(1)
+		go func(dataNode meta2.DataNode) {
+			defer wg.Done()
+
+			err := e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID)
+			if err != nil {
+				mu.Lock()
+				failedHosts = append(failedHosts, dataNode.Host)
+				failedErrs = append(failedErrs, err.Error())
+				mu.Unlock()
+			}
+		}(n)
+	}
+	wg.Wait()
+
+	if len(failedHosts) != 0 {
+		var builder strings.Builder
+		for i := range failedHosts {
+			builder.WriteString(fmt.Sprintf("%s: %s", failedHosts[i], failedErrs[i]))
+		}
+		e.StmtExecLogger.Error("failed to kill query", zap.Uint64("qid", stmt.QueryID), zap.String("detail", builder.String()))
+		return fmt.Errorf(meta2.ErrKillQueryFail.Error(), strings.Join(failedHosts, ", "))
+	}
+	return nil
 }
 
 func (e *StatementExecutor) Statistics(buffer []byte) ([]byte, error) {

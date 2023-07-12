@@ -7,5 +7,6 @@
 	"GetShardSplitPoints",
 	"Delete",
 	"CreateDatabase",
-	"ShowQueries"
+	"ShowQueries",
+	"KillQuery"
 ]

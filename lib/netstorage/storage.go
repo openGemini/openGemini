@@ -69,6 +69,7 @@ type Storage interface {
 	MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
 
 	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
+	KillQueryOnNode(nodeID, queryID uint64) error
 }
 
 type NetStorage struct {
@@ -424,4 +425,18 @@ func (s *NetStorage) GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error) {
 		return nil, executor.NewInvalidTypeError("*netstorage.ShowQueriesResponse", v)
 	}
 	return resp.QueryExeInfos, nil
+}
+
+func (s *NetStorage) KillQueryOnNode(nodeID, queryID uint64) error {
+	req := &KillQueryRequest{}
+	req.QueryID = proto.Uint64(queryID)
+	v, err := s.ddlRequestWithNodeId(nodeID, KillQueryRequestMessage, req)
+	if err != nil {
+		return err
+	}
+	resp, ok := v.(*KillQueryResponse)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.KillQueryResponse", v)
+	}
+	return resp.Error()
 }

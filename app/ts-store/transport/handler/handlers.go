@@ -46,6 +46,8 @@ func newHandler(typ uint8) RPCHandler {
 		return &CreateDataBase{}
 	case netstorage.ShowQueriesRequestMessage:
 		return &ShowQueries{}
+	case netstorage.KillQueryRequestMessage:
+		return &KillQuery{}
 	default:
 		return nil
 	}
@@ -199,6 +201,23 @@ func (h *ShowQueries) SetMessage(msg codec.BinaryCodec) error {
 	req, ok := msg.(*netstorage.ShowQueriesRequest)
 	if !ok {
 		return executor.NewInvalidTypeError("*netstorage.ShowQueriesRequest", msg)
+	}
+	h.req = req
+	return nil
+}
+
+type KillQuery struct {
+	BaseHandler
+
+	req *netstorage.KillQueryRequest
+	rsp *netstorage.KillQueryResponse
+}
+
+func (h *KillQuery) SetMessage(msg codec.BinaryCodec) error {
+	h.rsp = &netstorage.KillQueryResponse{}
+	req, ok := msg.(*netstorage.KillQueryRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.KillQueryRequest", msg)
 	}
 	h.req = req
 	return nil

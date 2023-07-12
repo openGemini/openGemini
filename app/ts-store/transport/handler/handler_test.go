@@ -22,6 +22,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -211,4 +212,42 @@ func TestShowQueries_Process(t *testing.T) {
 	}
 
 	assert.Equal(t, len(clientIDs)*mockQueriesNum, len(res))
+}
+
+func TestKillQuery_Process(t *testing.T) {
+	abortedQID := clientIDs[0] + 1
+
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+
+	h := newHandler(netstorage.KillQueryRequestMessage)
+	req := netstorage.KillQueryRequest{}
+	req.QueryID = proto.Uint64(abortedQID)
+	if err := h.SetMessage(&req); err != nil {
+		t.Fatal(err)
+	}
+	h.SetStore(&storage.Storage{})
+
+	for _, cid := range clientIDs {
+		// generate mock infos for all clients
+		queries := generateMockQueryExeInfos(cid, mockQueriesNum)
+		for i, mQuery := range queries {
+			qm := query.NewManager(cid)
+
+			qid := mQuery.GetQueryExeInfo().QueryID
+
+			qm.Add(qid, &queries[i])
+		}
+	}
+
+	rsp, err := h.Process()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ok := rsp.(*netstorage.KillQueryResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	assert.NoError(t, response.Error())
+	assert.Equal(t, true, query.NewManager(clientIDs[0]).Aborted(abortedQID))
 }

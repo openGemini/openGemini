@@ -423,3 +423,25 @@ func TestShowQueriesResponse_Marshal_Unmarshal(t *testing.T) {
 		assert.Equal(t, resp.QueryExeInfos[i], resp2.QueryExeInfos[i])
 	}
 }
+
+func TestKillQueryRequest_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.KillQueryRequest{}
+	req.QueryID = proto.Uint64(1)
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+	req2 := &netstorage.KillQueryRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
+}
+
+func TestKillQueryResponse_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.KillQueryResponse{}
+	req.Err = proto.String("Error1")
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+	req2 := &netstorage.KillQueryResponse{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
+}

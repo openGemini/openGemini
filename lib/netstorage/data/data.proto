@@ -111,3 +111,11 @@ message QueryExeInfo {
 message ShowQueriesResponse {
     repeated QueryExeInfo QueryExeInfos = 1;
 }
+
+message KillQueryRequest {
+    required uint64 QueryID = 1;
+}
+
+message KillQueryResponse {
+    optional string Err = 1;
+}
