@@ -115,12 +115,12 @@ func (qm *Manager) Aborted(qid uint64) bool {
 }
 
 func (qm *Manager) Abort(qid uint64) {
+	qm.abortedMu.Lock()
+	qm.aborted[qid] = time.Now()
+	qm.abortedMu.Unlock()
+
 	h := qm.Get(qid)
 	if h != nil {
-		qm.abortedMu.Lock()
-		qm.aborted[qid] = time.Now()
-		qm.abortedMu.Unlock()
-
 		h.Abort()
 	}
 }
