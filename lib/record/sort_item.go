@@ -280,7 +280,7 @@ func (sli *BooleanSlice) Compare(i, j int) int {
 
 	if sli.V[i] == sli.V[j] {
 		return 0
-	} else if sli.V[i] == true {
+	} else if sli.V[i] {
 		return -1
 	}
 	return 1
@@ -304,7 +304,7 @@ func (sli *BooleanSlice) CompareSingleValue(data interface{}, postionX, postionY
 
 	if sli.V[postionX] == cm.V[postionY] {
 		return 0, nil
-	} else if sli.V[postionX] == true {
+	} else if sli.V[postionX] {
 		return -1, nil
 	}
 	return 1, nil

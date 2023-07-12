@@ -136,7 +136,7 @@ func MockCastorService(port int) (*Service, *observer.ObservedLogs, error) {
 		config_filename = ['detect_base']
 	`, port)
 	conf := mockCastorConf{config.Castor{}}
-	toml.Decode(confStr, &conf)
+	_, _ = toml.Decode(confStr, &conf)
 	srv := NewService(conf.Analysis)
 	observedZapCore, observedLogs := observer.New(zap.DebugLevel)
 	observedLogger := zap.New(observedZapCore)

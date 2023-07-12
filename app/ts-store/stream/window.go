@@ -565,7 +565,7 @@ func (s *Task) flush() error {
 			end = validNum
 		}
 		s.flushWG.Add(1)
-		s.goPool.Submit(func() {
+		_ = s.goPool.Submit(func() {
 			err = s.WriteRowsToShard(start, end)
 			if err != nil {
 				s.Logger.Error("stream flush fail", zap.Error(err))

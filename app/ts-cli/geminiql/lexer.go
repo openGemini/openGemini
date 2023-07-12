@@ -139,7 +139,7 @@ func (t *Tokenizer) scanIdentifier() (int, string) {
 			ch = t.read()
 			buf.WriteRune(ch)
 		} else if isSplitChar(ch) {
-			t.unRead()
+			_ = t.unRead()
 			break
 		} else {
 			buf.WriteRune(ch)
@@ -242,14 +242,14 @@ func (t *Tokenizer) scanDigit() (int, string) {
 		} else if ch == '.' {
 			nch := t.Lookahead()
 			if !unicode.IsDigit(nch) {
-				t.unRead()
+				_ = t.unRead()
 				break
 			} else {
 				buf.WriteRune(ch)
 				typ = DECIMAL
 			}
 		} else if !unicode.IsDigit(ch) {
-			t.unRead()
+			_ = t.unRead()
 			break
 		} else {
 			buf.WriteRune(ch)
@@ -266,7 +266,7 @@ func (t *Tokenizer) scanWhiteSpace() (int, string) {
 		if ch == EOF {
 			break
 		} else if !unicode.IsSpace(ch) {
-			t.unRead()
+			_ = t.unRead()
 			break
 		} else {
 			buf.WriteRune(ch)
@@ -277,7 +277,7 @@ func (t *Tokenizer) scanWhiteSpace() (int, string) {
 
 func (t *Tokenizer) Lookahead() rune {
 	ch, _, err := t.r.ReadRune()
-	defer t.unRead()
+	defer func() { _ = t.unRead() }()
 
 	if err != nil {
 		ch = EOF

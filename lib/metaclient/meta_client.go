@@ -1757,6 +1757,7 @@ func (c *Client) dealOnceAuthRecord(r *authRcd) {
 		case rcd := <-c.arChan:
 			rcdLst = append(rcdLst, rcd)
 		default:
+			//lint:ignore SA4011 ineffective break statement. Did you mean to break out of the outer loop?
 			break
 		}
 	}

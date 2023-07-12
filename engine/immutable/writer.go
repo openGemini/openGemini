@@ -183,6 +183,7 @@ func getMetaBlockBuffer(size int) []byte {
 
 // nolint
 func freeMetaBlockBuffer(b []byte) {
+	//lint:ignore SA6002 argument should be pointer-like to avoid allocations
 	metaBlkPool.Put(b[:0])
 }
 

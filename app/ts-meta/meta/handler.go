@@ -379,7 +379,7 @@ func (h *httpHandler) handleResponse(w http.ResponseWriter, err error) {
 
 	// Send response to client.
 	w.Header().Add("Content-Type", "application/octet-stream")
-	w.Write(b)
+	_, _ = w.Write(b)
 }
 
 // curl -i -XPOST 'http://127.0.0.1:8091/expandGroups'

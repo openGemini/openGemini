@@ -28,8 +28,7 @@ import (
 )
 
 func GetFloatLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -55,8 +54,7 @@ func GetFloatLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, 
 }
 
 func GetIntegerLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
@@ -109,8 +107,7 @@ func GetStringLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetFloatLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -136,8 +133,7 @@ func GetFloatLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetIntegerLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
@@ -190,8 +186,7 @@ func GetStringLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetFloatGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -217,8 +212,7 @@ func GetFloatGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, 
 }
 
 func GetIntegerGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
@@ -271,8 +265,7 @@ func GetStringGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetFloatGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -298,8 +291,7 @@ func GetFloatGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetIntegerGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
@@ -352,8 +344,7 @@ func GetStringGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetFloatEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -379,8 +370,7 @@ func GetFloatEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, 
 }
 
 func GetIntegerEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
@@ -433,8 +423,7 @@ func GetStringEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetBooleanEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []bool
-	values = col.BooleanValues()
+	values := col.BooleanValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(bool)
@@ -460,8 +449,7 @@ func GetBooleanEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetFloatNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -487,8 +475,7 @@ func GetFloatNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetIntegerNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
@@ -541,8 +528,7 @@ func GetStringNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetBooleanNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []bool
-	values = col.BooleanValues()
+	values := col.BooleanValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(bool)

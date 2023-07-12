@@ -99,7 +99,7 @@ func (w *IndexWriterImpl) createPrimaryIndexData(
 				return nil, errors.New("unsupported data type")
 			}
 		} else {
-			return nil, fmt.Errorf("The table does not have a primary key field, %s", pkSchema.Field(i).Name)
+			return nil, fmt.Errorf("the table does not have a primary key field, %s", pkSchema.Field(i).Name)
 		}
 	}
 	return dstRec, nil

@@ -51,8 +51,6 @@ const (
 	Text
 	Field
 	IndexTypeAll
-
-	defaultSeriesKeyLen = 64
 )
 
 var (

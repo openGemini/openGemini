@@ -49,7 +49,7 @@ func updateIntegerFirstLastImp(iRec, rec *Record, recColumn, iRecColumn, recRow,
 	if isFast {
 		v = rec.ColVals[recColumn].IntegerValues()[recRow]
 	} else {
-		isNil := true
+		var isNil bool
 		v, isNil = rec.ColVals[recColumn].IntegerValue(recRow)
 		if isNil {
 			return
@@ -101,7 +101,7 @@ func updateFloatFirstLastImp(iRec, rec *Record, recColumn, iRecColumn, recRow, i
 	if isFast {
 		v = rec.ColVals[recColumn].FloatValues()[recRow]
 	} else {
-		isNil := true
+		var isNil bool
 		v, isNil = rec.ColVals[recColumn].FloatValue(recRow)
 		if isNil {
 			return
@@ -152,7 +152,7 @@ func updateBooleanFirstLastImp(iRec, rec *Record, recColumn, iRecColumn, recRow,
 	if isFast {
 		v = rec.ColVals[recColumn].BooleanValues()[recRow]
 	} else {
-		isNil := true
+		var isNil bool
 		v, isNil = rec.ColVals[recColumn].BooleanValue(recRow)
 		if isNil {
 			return
@@ -236,7 +236,7 @@ func updateIntegerColumnFirstLastImp(iRec, rec *Record, recColumn, iRecColumn, r
 	if isFast {
 		v = rec.ColVals[recColumn].IntegerValues()[recRow]
 	} else {
-		isNil := true
+		var isNil bool
 		v, isNil = rec.ColVals[recColumn].IntegerValue(recRow)
 		if isNil {
 			return
@@ -287,7 +287,7 @@ func updateFloatColumnFirstLastImp(iRec, rec *Record, recColumn, iRecColumn, rec
 	if isFast {
 		v = rec.ColVals[recColumn].FloatValues()[recRow]
 	} else {
-		isNil := true
+		var isNil bool
 		v, isNil = rec.ColVals[recColumn].FloatValue(recRow)
 		if isNil {
 			return
@@ -339,7 +339,7 @@ func updateBooleanColumnFirstLastImp(iRec, rec *Record, recColumn, iRecColumn, r
 	if isFast {
 		v = rec.ColVals[recColumn].BooleanValues()[recRow]
 	} else {
-		isNil := true
+		var isNil bool
 		v, isNil = rec.ColVals[recColumn].BooleanValue(recRow)
 		if isNil {
 			return

@@ -187,7 +187,7 @@ func (m *MmsTables) GetOutOfOrderFileNum() int {
 	return total
 }
 
-// lint:ignore U1000 test used only
+//lint:ignore U1000 test used only
 func (m *MmsTables) tableFiles(name string, order bool) *TSSPFiles {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

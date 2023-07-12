@@ -251,7 +251,7 @@ func (s *Stream) DeleteTask(id uint64) {
 	v, exist := s.windows.Load(id)
 	if exist {
 		w, _ := v.(*Task)
-		w.stop()
+		_ = w.stop()
 		s.windows.Delete(id)
 	}
 }
@@ -298,7 +298,7 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []FieldCall, fi
 		cli:                s.cli,
 	}
 	s.windows.Store(info.ID, w)
-	go w.run()
+	go func() { _ = w.run() }()
 	return nil
 }
 

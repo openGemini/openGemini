@@ -414,7 +414,7 @@ func (trans *FullJoinTransform) fullJoinHelper(ctx context.Context, errs *errno.
 }
 
 func (trans *FullJoinTransform) compareStrings(l []string, r []string) int {
-	var reState int = -1
+	var reState int
 	lLoc := 0
 	rLoc := 0
 	for {
@@ -430,7 +430,6 @@ func (trans *FullJoinTransform) compareStrings(l []string, r []string) int {
 		} else {
 			lLoc++
 			rLoc++
-			reState = 0
 		}
 	}
 	if lLoc < len(l) {

@@ -20,8 +20,6 @@ import (
 	"math"
 	"sort"
 	"sync"
-
-	"github.com/openGemini/openGemini/lib/cpu"
 )
 
 const (
@@ -62,13 +60,6 @@ type ClusterPool struct {
 }
 
 func NewClusterPool() *ClusterPool {
-	n := cpu.GetCpuNum() * 2
-	if n < 4 {
-		n = 4
-	}
-	if n > 256 {
-		n = 256
-	}
 	return &ClusterPool{
 		cache: make(chan *Cluster),
 	}
