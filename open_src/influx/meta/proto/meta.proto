@@ -44,6 +44,7 @@ message Data {
 	repeated StreamInfo Streams  = 24;
 	optional uint64 MaxStreamID = 25;
 	optional uint64 MaxConnId = 26;
+	map<string,uint64> QueryIDInit = 27;
 }
 
 message PtOwner {
@@ -310,6 +311,7 @@ message Command {
 		UpdatePtVersionCommand                     = 82;
 		GetDBBriefInfoCommand                      = 83;
 		GetMeasurementsInfoCommand                 = 84;
+		RegisterQueryIDOffsetCommand               = 85;
 	}
 
 	required Type type = 1;
@@ -1005,4 +1007,11 @@ message DatabaseBriefInfo {
 
 message MeasurementsInfo {
 	repeated MeasurementInfo MeasurementsInfo = 1;
+}
+
+message RegisterQueryIDOffsetCommand {
+	extend Command {
+		optional  RegisterQueryIDOffsetCommand command = 184;
+	}
+	required string Host = 1;
 }

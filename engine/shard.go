@@ -791,7 +791,7 @@ func (s *shard) writeIndex(rows influx.Rows, mw *mstWriteCtx, mmPoints *dictpool
 
 	s.setMaxTime(tm)
 
-	failpoint.Inject("SlowDownCreateIndex", nil)
+	failpoint.Eval(_curpkg_("SlowDownCreateIndex"))
 	if writeIndexRequired {
 		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
 			return err
@@ -847,7 +847,7 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	// 3. write data to mem table
 	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
 	start = time.Now()
-	failpoint.Inject("SlowDownActiveTblWrite", nil)
+	failpoint.Eval(_curpkg_("SlowDownActiveTblWrite"))
 	err = s.storage.WriteRows(s, &rows, mw)
 	if err != nil {
 		s.activeTbl.AddMemSize(curSize)
@@ -860,7 +860,7 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 
 	// 4. write wal
 	start = time.Now()
-	failpoint.Inject("SlowDownWalWrite", nil)
+	failpoint.Eval(_curpkg_("SlowDownWalWrite"))
 	if err = s.wal.Write(binaryRows); err != nil {
 		s.snapshotLock.RUnlock()
 		log.Error("write rows to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
@@ -965,9 +965,9 @@ func (s *shard) writeSnapshot() {
 	}
 
 	//This fail point is used in scenarios where "s.snapshotTbl" is not recycled
-	failpoint.Inject("snapshot-table-reset-delay", func() {
+	if _, _err_ := failpoint.Eval(_curpkg_("snapshot-table-reset-delay")); _err_ == nil {
 		time.Sleep(2 * time.Second)
-	})
+	}
 
 	s.snapshotLock.Lock()
 	s.snapshotTbl.PutMemTable()

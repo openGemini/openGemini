@@ -11,10 +11,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/query"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
@@ -24,6 +27,10 @@ const (
 	// DefaultQueryTimeout is the default timeout for executing a query.
 	// A value of zero will have no query timeout.
 	DefaultQueryTimeout = time.Duration(0)
+	//The query id span of the current SQL node.
+	queryIdSpan = 100000
+	// This id will be assigned when query id offset is unregistered.
+	initQueryID = 0
 )
 
 type TaskStatus int
@@ -66,6 +73,10 @@ func (t *TaskStatus) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type QueryIDRegister interface {
+	RetryRegisterQueryIDOffset(host string) (uint64, error)
+}
+
 // TaskManager takes care of all aspects related to managing running queries.
 type TaskManager struct {
 	// Query execution timeout.
@@ -80,11 +91,21 @@ type TaskManager struct {
 
 	// Logger to use for all logging.
 	// Defaults to discarding all log output.
-	Logger *zap.Logger
+	Logger *logger.Logger
 
 	// Used for managing and tracking running queries.
-	queries  map[uint64]*Task
-	nextID   uint64
+	nextID            uint64
+	queryIDOffset     uint64
+	queryIDUpperLimit uint64
+	queries           map[uint64]*Task
+
+	// It is used to ensure that the registration of current sql node will only be successfully executed once.
+	registerOnce uint32
+	// It is used to indicate whether the current registration of current sql node has been completed.
+	registered bool
+	Register   QueryIDRegister
+	Host       string
+
 	mu       sync.RWMutex
 	shutdown bool
 }
@@ -93,9 +114,8 @@ type TaskManager struct {
 func NewTaskManager() *TaskManager {
 	return &TaskManager{
 		QueryTimeout: DefaultQueryTimeout,
-		Logger:       zap.NewNop(),
+		Logger:       logger.NewLogger(errno.ModuleHTTP),
 		queries:      make(map[uint64]*Task),
-		nextID:       1,
 	}
 }
 
@@ -178,18 +198,23 @@ func (t *TaskManager) queryError(qid uint64, err error) {
 //
 // After a query finishes running, the system is free to reuse a query id.
 func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, interrupt <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics) (*ExecutionContext, func(), error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.mu.RLock()
+	isShutDown := t.shutdown
+	curQueriesCount := len(t.queries)
+	t.mu.RUnlock()
 
-	if t.shutdown {
+	if isShutDown {
 		return nil, nil, ErrQueryEngineShutdown
 	}
-
-	if t.MaxConcurrentQueries > 0 && len(t.queries) >= t.MaxConcurrentQueries {
+	if t.MaxConcurrentQueries > 0 && curQueriesCount >= t.MaxConcurrentQueries {
 		return nil, nil, ErrMaxConcurrentQueriesLimitExceeded(len(t.queries), t.MaxConcurrentQueries)
 	}
 
-	qid := t.nextID
+	// only the first query can try to register query id offset
+	t.tryRegisterQueryIDOffset()
+
+	qid := t.AssignQueryID() // atomic
+
 	query := &Task{
 		query:     q.String(),
 		database:  opt.Database,
@@ -198,7 +223,10 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 		closing:   make(chan struct{}),
 		monitorCh: make(chan error),
 	}
+
+	t.mu.Lock()
 	t.queries[qid] = query
+	t.mu.Unlock()
 
 	go t.waitForQuery(qid, query.closing, interrupt, query.monitorCh)
 	if t.LogQueriesAfter != 0 {
@@ -208,18 +236,21 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 
 			select {
 			case <-timer.C:
-				t.Logger.Warn(fmt.Sprintf("Detected slow query: %s (qid: %d, database: %s, threshold: %s)",
-					query.query, qid, query.database, t.LogQueriesAfter))
+				t.Logger.Warn("Detected slow query", zap.String("query", query.query),
+					zap.Uint64("qid", qid), zap.String("db", query.database),
+					zap.Duration("threshold", t.LogQueriesAfter))
 			case <-closing:
 			}
 			return nil
 		})
 	}
-	t.nextID++
 
 	qCtx := context.Background()
+	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
+	qCtx = context.WithValue(qCtx, QueryStmtKey, q.String())
+	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)
 	ctx := &ExecutionContext{
-		Context:          context.WithValue(qCtx, QueryDurationKey, qStat),
+		Context:          qCtx,
 		QueryID:          qid,
 		task:             query,
 		ExecutionOptions: opt,
@@ -232,9 +263,9 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 // from the TaskManager. This method can be used to forcefully terminate a
 // running query.
 func (t *TaskManager) KillQuery(qid uint64) error {
-	t.mu.Lock()
+	t.mu.RLock()
 	query := t.queries[qid]
-	t.mu.Unlock()
+	t.mu.RUnlock()
 
 	if query == nil {
 		return fmt.Errorf("no such query id: %d", qid)
@@ -256,6 +287,24 @@ func (t *TaskManager) DetachQuery(qid uint64) error {
 	query.close()
 	delete(t.queries, qid)
 	return nil
+}
+
+func (t *TaskManager) tryRegisterQueryIDOffset() {
+	// Ensure that only one goroutine can register.
+	// And if registration is failed，it will restore the initial state for other query goroutines
+	if atomic.CompareAndSwapUint32(&t.registerOnce, 0, 1) {
+		offset, err := t.Register.RetryRegisterQueryIDOffset(t.Host)
+		if err != nil {
+			// If register failed，restore the initial state
+			atomic.StoreUint32(&t.registerOnce, 0)
+			t.Logger.Error("register query id offset to meta failed", zap.Error(err))
+			return
+		}
+
+		t.InitQueryIDByOffset(offset)
+		// update registered state to allow assign query id
+		t.registered = true
+	}
 }
 
 // QueryInfo represents the information for a query.
@@ -328,4 +377,21 @@ func (t *TaskManager) Close() error {
 
 func (t *TaskManager) Statistics(buffer []byte) ([]byte, error) {
 	return nil, nil
+}
+
+func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
+	t.nextID = offset
+	t.queryIDOffset = offset
+	t.queryIDUpperLimit = offset + queryIdSpan
+}
+
+// AssignQueryID assign a query id for a sql
+func (t *TaskManager) AssignQueryID() uint64 {
+	// Ensure that if the registration is not completed, cannot assign id to every query.
+	if !t.registered {
+		return initQueryID
+	}
+	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
+	qid := atomic.AddUint64(&t.nextID, 1)
+	return qid
 }

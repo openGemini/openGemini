@@ -84,7 +84,6 @@ const (
 	IndexGroupDeletedExpiration = -2 * 7 * 24 * time.Hour
 
 	RPCReqTimeout       = 10 * time.Second
-	HttpReqTimeout      = 10 * time.Second
 	HttpSnapshotTimeout = 4 * time.Second
 
 	//for lock user
@@ -117,6 +116,7 @@ var (
 	RetryGetUserInfoTimeout = 5 * time.Second
 	RetryExecTimeout        = 60 * time.Second
 	RetryReportTimeout      = 60 * time.Second
+	HttpReqTimeout          = 10 * time.Second
 )
 
 var DefaultTypeMapper = influxql.MultiTypeMapper(
@@ -214,6 +214,7 @@ type MetaClient interface {
 	GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error)
 	TagArrayEnabledFromServer(dbName string) (bool, error)
 	GetAllMst(dbName string) []string
+	RetryRegisterQueryIDOffset(host string) (uint64, error)
 }
 
 type LoadCtx struct {
@@ -3247,6 +3248,64 @@ func (c *Client) TagArrayEnabled(db string) bool {
 	}
 
 	return c.cacheData.Databases[db].EnableTagArray
+}
+
+// RetryRegisterQueryIDOffset send a register rpc to ts-meta，request a query id offset
+func (c *Client) RetryRegisterQueryIDOffset(host string) (uint64, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var offset uint64
+	var ok bool
+	var err error
+
+	for {
+		c.mu.RLock()
+
+		if offset, ok = c.cacheData.QueryIDInit[meta2.SQLHost(host)]; ok {
+			c.logger.Info("current host has already registered in ts-meta")
+			c.mu.RUnlock()
+			return offset, nil
+		}
+
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return 0, meta2.ErrClientClosed
+		default:
+			// we're still open, continue on
+		}
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+
+		offset, err = c.registerOffset(currentServer, host)
+		if err == nil {
+			return offset, nil
+		}
+
+		if strings.Contains(err.Error(), "node is not the leader") {
+			continue
+		}
+
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			return 0, errors.New("register query id offset timeout")
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+}
+
+func (c *Client) registerOffset(currentServer int, host string) (uint64, error) {
+	callback := &RegisterQueryIDOffsetCallback{}
+	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{
+		Host: host})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return 0, err
+	}
+	return callback.Offset, nil
 }
 
 func refreshConnectedServer(currentServer int) {

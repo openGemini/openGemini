@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -253,4 +254,14 @@ func (s *Select) finishDuration(qd *statistics.StoreSlowQueryStatistics, start t
 		qd.AddDuration("TotalDuration", d)
 		statistics.AppendStoreQueryDuration(qd)
 	}
+}
+
+// GetQueryExeInfo return the unchanging information in a query
+func (s *Select) GetQueryExeInfo() *netstorage.QueryExeInfo {
+	info := &netstorage.QueryExeInfo{
+		QueryID:  s.req.QueryId,
+		Stmt:     s.req.QueryStmt,
+		Database: s.req.Database,
+	}
+	return info
 }

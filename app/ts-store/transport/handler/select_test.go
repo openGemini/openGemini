@@ -202,11 +202,13 @@ func TestCreateSerfInstance(t *testing.T) {
 	}
 
 	req := &executor.RemoteQuery{
-		Database: "db0",
-		PtID:     2,
-		NodeID:   1,
-		ShardIDs: shardIDs,
-		Node:     node,
+		Database:  "db0",
+		PtID:      2,
+		NodeID:    1,
+		ShardIDs:  shardIDs,
+		Node:      node,
+		QueryId:   uint64(100001),
+		QueryStmt: "SELECT * FROM mst1",
 	}
 
 	store := mockStorage(t.TempDir())
@@ -338,4 +340,17 @@ func TestNewShardTraits(t *testing.T) {
 	config.SetHaEnable(false)
 	traits := s.NewShardTraits(s.req, s.w)
 	require.NotEmpty(t, traits)
+}
+
+func TestSelect_GetQueryExeInfo(t *testing.T) {
+	rq := executor.RemoteQuery{
+		QueryId:   1,
+		QueryStmt: "SELECT * FROM mst1",
+		Database:  "db1",
+	}
+	s := NewSelect(nil, nil, &rq)
+	info := s.GetQueryExeInfo()
+	require.Equal(t, rq.QueryId, info.QueryID)
+	require.Equal(t, rq.QueryStmt, info.Stmt)
+	require.Equal(t, rq.Database, info.Database)
 }

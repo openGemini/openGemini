@@ -937,3 +937,64 @@ func (o *GetStreamInfoResponse) Size() int {
 func (o *GetStreamInfoResponse) Instance() transport.Codec {
 	return &GetStreamInfoResponse{}
 }
+
+func (o *RegisterQueryIDOffsetRequest) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, o.Host)
+
+	return buf, err
+}
+
+func (o *RegisterQueryIDOffsetRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Host = dec.String()
+
+	return err
+}
+
+func (o *RegisterQueryIDOffsetRequest) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.Host)
+
+	return size
+}
+
+func (o *RegisterQueryIDOffsetRequest) Instance() transport.Codec {
+	return &RegisterQueryIDOffsetRequest{}
+}
+
+func (o *RegisterQueryIDOffsetResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendUint64(buf, o.Offset)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, err
+}
+
+func (o *RegisterQueryIDOffsetResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	o.Offset = dec.Uint64()
+	o.Err = dec.String()
+
+	return err
+}
+
+func (o *RegisterQueryIDOffsetResponse) Size() int {
+	size := 0
+	size += codec.SizeOfUint64()
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *RegisterQueryIDOffsetResponse) Instance() transport.Codec {
+	return &RegisterQueryIDOffsetResponse{}
+}
