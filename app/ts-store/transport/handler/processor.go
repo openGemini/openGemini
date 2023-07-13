@@ -149,12 +149,12 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 	}
 
 	s := NewSelect(p.store, w, req)
-		qm.Add(req.QueryId, s)
+	qm.Add(req.QueryId, s)
 
 	w.Session().EnableDataACK()
 	defer func() {
 		w.Session().DisableDataACK()
-			qm.Finish(req.QueryId)
+		qm.Finish(req.QueryId)
 	}()
 
 	err := s.Process()

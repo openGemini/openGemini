@@ -163,7 +163,6 @@ func __TestMetaMessage(t *testing.T) {
 	}
 	objs = append(objs, getDbInfoRequest, getDbInfoResponse)
 
-
 	getUserinfoRequest := message.GetUserInfoRequest{}
 	getUserInfoResponse := message.GetUserInfoResponse{
 		Data: []byte{1, 2, 3},
