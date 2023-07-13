@@ -91,3 +91,15 @@ func TestGetMeasurementsInfoCallbackResponse(t *testing.T) {
 	msg := message.NewMetaMessage(message.GetMeasurementsInfoResponseMessage, &message.GetMeasurementsInfoResponse{})
 	assert.NoError(t, callback.Handle(msg))
 }
+
+func TestRegisterQueryIDOffsetCallbackRequest(t *testing.T) {
+	callback := &metaclient.RegisterQueryIDOffsetCallback{}
+	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{})
+	assert.Errorf(t, callback.Handle(msg), "data is not a RegisterQueryIDOffsetResponse, type *message.GetMeasurementsInfoRequest")
+}
+
+func TestRegisterQueryIDOffsetCallbackResponse(t *testing.T) {
+	callback := &metaclient.RegisterQueryIDOffsetCallback{}
+	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetResponseMessage, &message.RegisterQueryIDOffsetResponse{})
+	assert.NoError(t, callback.Handle(msg))
+}

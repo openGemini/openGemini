@@ -138,6 +138,11 @@ func (m *Measurement) GetEngineType() uint32 {
 }
 
 func init() {
+	proto.RegisterType((*Measurements)(nil), "influxql.Measurements")
+	proto.RegisterType((*Measurement)(nil), "influxql.Measurement")
+}
+
+func init() {
 	proto.RegisterFile("open_src/influx/influxql/internal/internal.proto", fileDescriptor_534f4b8c8aead7f7)
 }
 
