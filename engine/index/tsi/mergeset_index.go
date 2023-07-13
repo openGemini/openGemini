@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"path"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -123,7 +123,7 @@ func NewMergeSetIndex(opts *Options) (*MergeSetIndex, error) {
 }
 
 func (idx *MergeSetIndex) Open() error {
-	tablePath := path.Join(idx.path, MergeSetDirName)
+	tablePath := filepath.Join(idx.path, MergeSetDirName)
 	tb, err := mergeset.OpenTable(tablePath, invalidateTagCache, mergeIndexRows, idx.lock)
 	if err != nil {
 		return fmt.Errorf("cannot open index:%s, err: %+v", tablePath, err)
@@ -259,8 +259,8 @@ func (idx *MergeSetIndex) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
 }
 
 /*
-	for row with no tags, eg: insert foo foo.bar.baz=1
-	use old path
+for row with no tags, eg: insert foo foo.bar.baz=1
+use old path
 */
 func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row) (uint64, error) {
 	vkey := kbPool.Get()

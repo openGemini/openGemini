@@ -20,17 +20,17 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"path/filepath"
 
 	"github.com/influxdata/influxdb/toml"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"gopkg.in/natefinch/lumberjack.v2"
+	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
-	// DefaultPath is default path for storing logs
-	DefaultPath = "/tmp/openGemini/logs/"
-
+	// DefaultSubPath is default subpath for storing logs
+	DefaultSubPath = "logs"
 	// DefaultLevel is the level of logs will be emitted
 	DefaultLevel = zap.InfoLevel
 
@@ -75,7 +75,7 @@ func NewLogger(app App) Logger {
 		MaxNum:          DefaultMaxNum,
 		MaxAge:          DefaultMaxAge,
 		CompressEnabled: DefaultCompressEnabled,
-		Path:            DefaultPath,
+		Path:            filepath.Join(openGeminiDir(), DefaultSubPath),
 	}
 	globalLogger = &logger
 	return logger

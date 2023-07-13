@@ -19,6 +19,7 @@ package config
 import (
 	"crypto/tls"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -28,7 +29,7 @@ import (
 )
 
 const (
-	DefaultDir                  = "/tmp/openGemini/meta"
+	DefaultDir                  = "meta"
 	DefaultLoggingEnabled       = true
 	DefaultRaftFileName         = "raft"
 	DefaultGossipFileName       = "gossip"
@@ -166,7 +167,7 @@ type Meta struct {
 // NewMeta builds a new configuration with default values.
 func NewMeta() *Meta {
 	return &Meta{
-		Dir:                     DefaultDir,
+		Dir:                     filepath.Join(openGeminiDir(), DefaultDir),
 		HTTPBindAddress:         DefaultHTTPBindAddress,
 		RPCBindAddress:          DefaultRPCBindAddress,
 		BindAddress:             DefaultRaftBindAddress,

@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"math"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -60,12 +61,11 @@ const (
 
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
-	DefaultDataDir         = "/tmp/openGemini/data"
-	DefaultWalDir          = "/tmp/openGemini/wal"
-	DefaultMetaDir         = "/tmp/openGemini/meta"
-	IndexFileDirectory     = "index"
-	DataDirectory          = "data"
-	WalDirectory           = "wal"
+
+	IndexFileDirectory = "index"
+	DataDirectory      = "data"
+	WalDirectory       = "wal"
+	MetaDirectory      = "meta"
 )
 
 // TSStore represents the configuration format for the influxd binary.
@@ -236,9 +236,9 @@ func NewStore() Store {
 	return Store{
 		IngesterAddress:              DefaultIngesterAddress,
 		SelectAddress:                DefaultSelectAddress,
-		DataDir:                      DefaultDataDir,
-		WALDir:                       DefaultWalDir,
-		MetaDir:                      DefaultMetaDir,
+		DataDir:                      filepath.Join(openGeminiDir(), DataDirectory),
+		WALDir:                       filepath.Join(openGeminiDir(), WalDirectory),
+		MetaDir:                      filepath.Join(openGeminiDir(), MetaDirectory),
 		Engine:                       DefaultEngine,
 		ImmTableMaxMemoryPercentage:  DefaultImmutableMaxMemoryPercent,
 		CompactFullWriteColdDuration: toml.Duration(DefaultCompactFullWriteColdDuration),
