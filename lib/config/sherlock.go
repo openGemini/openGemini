@@ -26,7 +26,6 @@ import (
 
 const (
 	DefaultCollectInterval = time.Minute
-	DefaultDumpPath        = "/tmp"
 
 	defaultCPUTriggerMin  = 10 // 10%
 	defaultCPUTriggerDiff = 25 // 25% diff
@@ -67,7 +66,7 @@ func NewSherlockConfig() *SherlockConfig {
 		SherlockEnable:  false,
 		CollectInterval: toml.Duration(DefaultCollectInterval),
 		CPUMaxPercent:   0,
-		DumpPath:        DefaultDumpPath,
+		DumpPath:        openGeminiDir(),
 		CPUConfig: typeConfig{
 			Enable:   false,
 			Min:      defaultCPUTriggerMin,

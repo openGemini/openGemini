@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"path"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,7 +61,7 @@ func NewShardKeyIndex(dataPath string, lockPath *string) (*ShardKeyIndex, error)
 		return nil, err
 	}
 	mem := memory.Allowed()
-	cachePath := path.Join(dataPath, ShardKeyCache)
+	cachePath := filepath.Join(dataPath, ShardKeyCache)
 	index.cache = workingsetcache.Load(cachePath, mem/32, time.Hour)
 	var cs fastcache.Stats
 	index.cache.UpdateStats(&cs)
@@ -75,7 +76,7 @@ func mergeIndexRows(data []byte, items []mergeset.Item) ([]byte, []mergeset.Item
 }
 
 func (idx *ShardKeyIndex) Open() error {
-	shardKeyPath := path.Join(idx.path, ShardKeyDirectory)
+	shardKeyPath := filepath.Join(idx.path, ShardKeyDirectory)
 	if err := fileops.MkdirAll(shardKeyPath, 0750); err != nil {
 		panic(err)
 	}

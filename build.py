@@ -2,6 +2,7 @@
 
 import sys
 import os
+import platform
 import subprocess
 from datetime import datetime
 import shutil
@@ -32,6 +33,7 @@ targets = {
 supported_builds = {
     'linux': [ "amd64","arm64"],
     'darwin': [ "amd64","arm64"],
+    'windows': [ "amd64","arm64"],
 }
 
 ################
@@ -127,7 +129,7 @@ def run_tests(race, parallel, timeout, no_vet, junit=False):
         logging.info("Running tests...")
         output = run(test_command)
         if "FAIL" in output:
-                    write_to_gobuild(output)
+            write_to_gobuild(output)
         logging.debug("Test output:\n%s", out.encode('ascii', 'ignore'))
     return True
 
@@ -135,14 +137,26 @@ def run_tests(race, parallel, timeout, no_vet, junit=False):
 #### All OpenGemini-specific content above this line
 ################
 
-def run(command, allow_failure=False, shell=False):
+def run(command, allow_failure=False, shell=False, platform=None, arch=None):
     """Run shell command (convenience wrapper around subprocess).
     """
     out = None
+
     logging.debug(command)
     try:
         if shell:
-            out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=shell)
+            if get_system_platform() != "windows":
+                out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=shell)
+            else:
+                envs = os.environ.copy()
+                env_extra = {env.split("=")[0]:env.split("=")[1] for env in command.split()[:2]}
+                envs.update(env_extra)
+                command_new = None
+                if "arm" in arch:
+                    command_new = ' '.join(command.split()[3:])
+                else:
+                    command_new = ' '.join(command.split()[2:])
+                out = subprocess.check_output(command_new, stderr=subprocess.STDOUT, shell=shell, env=envs)
         else:
             out = subprocess.check_output(command.split(), stderr=subprocess.STDOUT)
         out = out.decode('utf-8').strip()
@@ -228,7 +242,10 @@ def local_changes():
 def get_system_arch():
     """Retrieve current system architecture.
     """
-    arch = os.uname()[4]
+    try:
+        arch = os.uname()[4]
+    except:
+        arch = platform.uname()[4].lower()#windows->amd64
     if arch == "x86_64":
         arch = "amd64"
     elif arch == "386":
@@ -245,6 +262,8 @@ def get_system_platform():
     """
     if sys.platform.startswith("linux"):
         return "linux"
+    elif sys.platform.startswith("win"):
+        return "windows"
     else:
         return sys.platform
 
@@ -265,6 +284,8 @@ def check_path_for(b):
 
     for path in os.environ["PATH"].split(os.pathsep):
         path = path.strip('"')
+        if b.upper() in path.upper():
+            return path#windows
         full_path = os.path.join(path, b)
         if os.path.isfile(full_path) and os.access(full_path, os.X_OK):
             return full_path
@@ -326,6 +347,9 @@ def build(version=None,
     logging.info("Using version '%s' for build.", version)
 
     for target, path in targets.items():
+        if platform == "windows":
+            target += ".exe"
+
         logging.info("Building target: %s", target)
         build_command = ""
 
@@ -364,18 +388,19 @@ def build(version=None,
 
         if static:
             build_command += "-ldflags=\"-s -X main.TsVersion={} -X main.TsBranch={} -X main.TsCommit={}\" ".format(version,
-                                                                                                              get_current_branch(),
-                                                                                                              get_current_commit())
+                                                                                                                    get_current_branch(),
+                                                                                                                    get_current_commit())
         else:
             build_command += "-ldflags=\"-X main.TsVersion={} -X main.TsBranch={} -X main.TsCommit={}\" ".format(version,
-                                                                                                               get_current_branch(),
-                                                                                                               get_current_commit())
+                                                                                                                 get_current_branch(),
+                                                                                                                 get_current_commit())
         if static:
             build_command += "-a -installsuffix cgo "
+
         build_command += path
         start_time = datetime.utcnow()
         logging.info(build_command)
-        run(build_command, shell=True)
+        run(build_command, shell=True, platform=platform, arch= arch)
         end_time = datetime.utcnow()
         logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
     return True
@@ -388,8 +413,10 @@ def write_to_gobuild(content):
     modes = stat.S_IWUSR | stat.S_IRUSR
     with os.fdopen(os.open(gobuild_out, flags, modes), 'w', encoding="utf-8") as f:
         f.write("error\n")
-        f.write(content)
-
+        try:
+            f.write(content)
+        except:
+            f.write(content.decode("utf-8"))
 
 def main(args):
     global PACKAGE_NAME

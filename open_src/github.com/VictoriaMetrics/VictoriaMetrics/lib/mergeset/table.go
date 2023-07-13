@@ -513,7 +513,7 @@ const convertToV1280FileName = "converted-to-v1.28.0"
 
 func (tb *Table) convertToV1280() {
 	// Convert tag->metricID rows into tag->metricIDs rows when upgrading to v1.28.0+.
-	flagFilePath := tb.path + "/" + convertToV1280FileName
+	flagFilePath := filepath.Join(tb.path, convertToV1280FileName)
 	if fs.IsPathExist(flagFilePath) {
 		// The conversion has been already performed.
 		return
@@ -1062,13 +1062,13 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 		return nil, fmt.Errorf("cannot run transactions: %w", err)
 	}
 
-	txnDir := path + "/txn"
+	txnDir := filepath.Join(path, "txn")
 	fs.MustRemoveAll(txnDir, lock)
 	if err := fs.MkdirAllFailIfExist(txnDir, lock); err != nil {
 		return nil, fmt.Errorf("cannot create %q: %w", txnDir, err)
 	}
 
-	tmpDir := path + "/tmp"
+	tmpDir := filepath.Join(path, "tmp")
 	fs.MustRemoveAll(tmpDir, lock)
 	if err := fs.MkdirAllFailIfExist(tmpDir, lock); err != nil {
 		return nil, fmt.Errorf("cannot create %q: %w", tmpDir, err)
@@ -1092,7 +1092,7 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 			// Skip special dirs.
 			continue
 		}
-		partPath := path + "/" + fn
+		partPath := filepath.Join(path, fn)
 		if fs.IsEmptyDir(partPath) {
 			// Remove empty directory, which can be left after unclean shutdown on NFS.
 			// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1142
@@ -1142,7 +1142,7 @@ func (tb *Table) CreateSnapshotAt(dstDir string, lock *string) error {
 	if err != nil {
 		return fmt.Errorf("cannot obtain absolute dir for %q: %w", dstDir, err)
 	}
-	if strings.HasPrefix(dstDir, srcDir+"/") {
+	if strings.HasPrefix(dstDir, srcDir+string(os.PathSeparator)) {
 		return fmt.Errorf("cannot create snapshot %q inside the data dir %q", dstDir, srcDir)
 	}
 
@@ -1167,8 +1167,8 @@ func (tb *Table) CreateSnapshotAt(dstDir string, lock *string) error {
 		if !fs.IsDirOrSymlink(fi) {
 			switch fn {
 			case convertToV1280FileName:
-				srcPath := srcDir + "/" + fn
-				dstPath := dstDir + "/" + fn
+				srcPath := filepath.Join(srcDir, fn)
+				dstPath := filepath.Join(dstDir, fn)
 				if err := os.Link(srcPath, dstPath); err != nil {
 					return fmt.Errorf("cannot hard link from %q to %q: %w", srcPath, dstPath, err)
 				}
@@ -1181,8 +1181,8 @@ func (tb *Table) CreateSnapshotAt(dstDir string, lock *string) error {
 			// Skip special dirs.
 			continue
 		}
-		srcPartPath := srcDir + "/" + fn
-		dstPartPath := dstDir + "/" + fn
+		srcPartPath := filepath.Join(srcDir, fn)
+		dstPartPath := filepath.Join(dstDir, fn)
 		if err := fs.HardLinkFiles(srcPartPath, dstPartPath); err != nil {
 			return fmt.Errorf("cannot create hard links from %q to %q: %w", srcPartPath, dstPartPath, err)
 		}
@@ -1224,7 +1224,7 @@ func runTransactions(txnLock *sync.RWMutex, path string, lockPath *string) error
 			// Skip temporary files, which could be left after unclean shutdown.
 			continue
 		}
-		txnPath := txnDir + "/" + fn
+		txnPath := filepath.Join(txnDir, fn)
 		if err := runTransaction(txnLock, path, txnPath, lockPath, nil); err != nil {
 			return fmt.Errorf("cannot run transaction from %q: %w", txnPath, err)
 		}
@@ -1328,8 +1328,8 @@ func validatePath(pathPrefix, path string) (string, error) {
 	if err != nil {
 		return path, fmt.Errorf("cannot determine absolute path for %q: %w", path, err)
 	}
-	if !strings.HasPrefix(path, pathPrefix+"/") {
-		return path, fmt.Errorf("invalid path %q; must start with %q", path, pathPrefix+"/")
+	if !strings.HasPrefix(path, pathPrefix+string(os.PathSeparator)) {
+		return path, fmt.Errorf("invalid path %q; must start with %q", path, pathPrefix)
 	}
 	return path, nil
 }
