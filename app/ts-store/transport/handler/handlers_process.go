@@ -18,6 +18,7 @@ package handler
 
 import (
 	"fmt"
+	"github.com/openGemini/openGemini/lib/errno"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
@@ -134,14 +135,31 @@ func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *KillQuery) Process() (codec.BinaryCodec, error) {
-	killQueryByID := func(manager *query.Manager) {
-		qid := h.req.GetQueryID()
-		manager.Abort(qid)
-		if manager.Get(qid) != nil && !manager.Aborted(qid) {
-			h.rsp.Err = netstorage.MarshalError(errors.New("abort fail"))
+	qid := h.req.GetQueryID()
+	isExist := false
+	isAborted := false
+
+	killQueryByIDFn := func(manager *query.Manager) {
+		// qid is not in current manager, or it has been aborted successfully
+		if manager.Get(qid) == nil || isAborted {
+			return
+		} else {
+			isExist = true
+			manager.Abort(qid)
+			isAborted = manager.Aborted(qid)
 		}
 	}
-	query.VisitManagers(killQueryByID)
+	query.VisitManagers(killQueryByIDFn)
+	err := &errno.Error{}
+	if !isExist {
+		err = err.SetErrno(errno.ErrQueryNotFound)
+		err.SetMessage("the query %d is not running on this store node")
+		h.rsp.Err = netstorage.MarshalError(err)
+	} else if !isAborted {
+		err = err.SetErrno(errno.ErrKillQueryFail)
+		err.SetMessage("try to abort %d fail on this store node")
+		h.rsp.Err = netstorage.MarshalError(err)
+	}
 	return h.rsp, nil
 }
 

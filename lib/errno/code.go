@@ -100,6 +100,8 @@ const (
 	NoColValToColumnFunc         = 1119
 	InvalidQuerySchema           = 1120
 	InvalidQueryStat             = 1121
+	ErrQueryNotFound             = 1122
+	ErrKillQueryFail             = 1123
 )
 
 // store engine error codes

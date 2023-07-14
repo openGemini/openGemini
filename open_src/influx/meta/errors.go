@@ -61,11 +61,12 @@ var (
 	// node in the cluster
 	ErrNodeUnableToDropFinalNode = errors.New("unable to drop the final node in a cluster")
 
-	ErrInvalidPtView     = errors.New("invalid ptView number")
-	ErrDataViewBootStrap = errors.New("cluster is bootstrapping for initial data view")
-	ErrDuplicateShardKey = errors.New("duplicate shard key")
-	ErrInvalidShardKey   = errors.New("invalid shard key")
-	ErrKillQueryFail     = errors.New("failed to kill query on %s")
+	ErrInvalidPtView        = errors.New("invalid ptView number")
+	ErrDataViewBootStrap    = errors.New("cluster is bootstrapping for initial data view")
+	ErrDuplicateShardKey    = errors.New("duplicate shard key")
+	ErrInvalidShardKey      = errors.New("invalid shard key")
+	ErrKillQueryFail        = errors.New("failed to kill query on %s")
+	ErrKillNotExistentQuery = errors.New("the query %d is not running on any store node")
 )
 
 var (

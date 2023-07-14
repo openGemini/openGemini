@@ -1812,33 +1812,48 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 		return err
 	}
 
-	failedHosts := make([]string, 0, len(nodes))
-	failedErrs := make([]string, 0, len(nodes))
+	errHosts := make([]string, 0, len(nodes))
+	errMsgs := make([]string, 0, len(nodes))
+	notFoundCount := 0
+
 	wg := sync.WaitGroup{}
 	mu := sync.Mutex{}
 	for _, n := range nodes {
 		wg.Add(1)
 		go func(dataNode meta2.DataNode) {
 			defer wg.Done()
-
-			err := e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID)
-			if err != nil {
+			if err := e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID); err != nil {
 				mu.Lock()
-				failedHosts = append(failedHosts, dataNode.Host)
-				failedErrs = append(failedErrs, err.Error())
+				var msg string
+				if wrapErr, ok := err.(*errno.Error); ok {
+					if wrapErr.Errno() == errno.ErrQueryNotFound {
+						notFoundCount++
+						mu.Unlock()
+						return
+					} else {
+						msg = wrapErr.Error()
+					}
+				}
+				msg = err.Error()
+				errMsgs = append(errMsgs, msg)
+				errHosts = append(errHosts, dataNode.Host)
 				mu.Unlock()
 			}
 		}(n)
 	}
 	wg.Wait()
 
-	if len(failedHosts) != 0 {
+	if notFoundCount == len(nodes) {
+		return fmt.Errorf(meta2.ErrKillNotExistentQuery.Error(), stmt.QueryID)
+	}
+
+	if len(errHosts) != 0 {
 		var builder strings.Builder
-		for i := range failedHosts {
-			builder.WriteString(fmt.Sprintf("%s: %s", failedHosts[i], failedErrs[i]))
+		for i := range errHosts {
+			builder.WriteString(fmt.Sprintf("%s: %s", errHosts[i], errMsgs[i]))
 		}
-		e.StmtExecLogger.Error("failed to kill query", zap.Uint64("qid", stmt.QueryID), zap.String("detail", builder.String()))
-		return fmt.Errorf(meta2.ErrKillQueryFail.Error(), strings.Join(failedHosts, ", "))
+		e.StmtExecLogger.Error("failed to kill query", zap.Uint64("qid", stmt.QueryID), zap.String("details", builder.String()))
+		return fmt.Errorf(meta2.ErrKillQueryFail.Error(), strings.Join(errHosts, ", "))
 	}
 	return nil
 }
