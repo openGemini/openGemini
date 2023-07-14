@@ -136,9 +136,8 @@ func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
 
 func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 	qid := h.req.GetQueryID()
-	isExist := false
-	isAborted := false
-
+	var isExist bool
+	var isAborted bool
 	killQueryByIDFn := func(manager *query.Manager) {
 		// qid is not in current manager, or it has been aborted successfully
 		if manager.Get(qid) == nil || isAborted {
@@ -150,14 +149,11 @@ func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 		}
 	}
 	query.VisitManagers(killQueryByIDFn)
-	err := &errno.Error{}
 	if !isExist {
-		err = err.SetErrno(errno.ErrQueryNotFound)
-		err.SetMessage(fmt.Sprintf("the query %d is not running on this store node", qid))
+		err := errno.NewError(errno.ErrQueryNotFound, qid)
 		h.rsp.Err = netstorage.MarshalError(err)
 	} else if !isAborted {
-		err = err.SetErrno(errno.ErrKillQueryFail)
-		err.SetMessage(fmt.Sprintf("try to abort %d fail on this store node", qid))
+		err := errno.NewError(errno.ErrKillQueryFail, qid)
 		h.rsp.Err = netstorage.MarshalError(err)
 	}
 	return h.rsp, nil

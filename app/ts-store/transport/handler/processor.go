@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"go.uber.org/zap"
 )
 
@@ -166,6 +167,12 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		default:
 			_ = w.Response(executor.NewErrorMessage(0, stderr.Error()), true)
 		}
+		return nil
+	}
+
+	if s.aborted {
+		logger.GetLogger().Error(query2.ErrQueryInterrupted.Error())
+		_ = w.Response(executor.NewErrorMessage(0, query2.ErrQueryInterrupted.Error()), true)
 		return nil
 	}
 

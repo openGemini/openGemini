@@ -66,7 +66,7 @@ var (
 	ErrDuplicateShardKey    = errors.New("duplicate shard key")
 	ErrInvalidShardKey      = errors.New("invalid shard key")
 	ErrKillQueryFail        = errors.New("failed to kill query on %s")
-	ErrKillNotExistentQuery = errors.New("the query %d is not running on any store node")
+	ErrKillNotExistentQuery = errors.New("no such query id: %d")
 )
 
 var (
