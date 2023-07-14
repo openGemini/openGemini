@@ -1824,18 +1824,14 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 			defer wg.Done()
 			if err := e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID); err != nil {
 				mu.Lock()
-				var msg string
 				if wrapErr, ok := err.(*errno.Error); ok {
 					if wrapErr.Errno() == errno.ErrQueryNotFound {
 						notFoundCount++
 						mu.Unlock()
 						return
-					} else {
-						msg = wrapErr.Error()
 					}
 				}
-				msg = err.Error()
-				errMsgs = append(errMsgs, msg)
+				errMsgs = append(errMsgs, err.Error())
 				errHosts = append(errHosts, dataNode.Host)
 				mu.Unlock()
 			}
