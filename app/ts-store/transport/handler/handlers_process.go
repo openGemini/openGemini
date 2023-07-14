@@ -18,12 +18,12 @@ package handler
 
 import (
 	"fmt"
-	"github.com/openGemini/openGemini/lib/errno"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -153,11 +153,11 @@ func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 	err := &errno.Error{}
 	if !isExist {
 		err = err.SetErrno(errno.ErrQueryNotFound)
-		err.SetMessage("the query %d is not running on this store node")
+		err.SetMessage(fmt.Sprintf("the query %d is not running on this store node", qid))
 		h.rsp.Err = netstorage.MarshalError(err)
 	} else if !isAborted {
 		err = err.SetErrno(errno.ErrKillQueryFail)
-		err.SetMessage("try to abort %d fail on this store node")
+		err.SetMessage(fmt.Sprintf("try to abort %d fail on this store node", qid))
 		h.rsp.Err = netstorage.MarshalError(err)
 	}
 	return h.rsp, nil
