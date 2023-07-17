@@ -21,12 +21,17 @@
 - [x] Time series data prediction.
 - [x] Time series data anomaly detection.
 
-**v1.1.0 （2023.07）**
+**v1.1.0rc0 (2023.07)**
+- [x] Full-text indexing
+- [x] High series cardinality engine (kernel)
 
-- [ ] Full-text indexing
+**v1.1.0rc1 (2023.08)**
+- [ ] High series cardinality engine (aggregate)
+- [ ] openGemini operator
+
+**v1.1.0 （2023.09）**
 - [ ] Reliability(data replication)
-- [ ] Non-partitioning key filter
-
-**v1.2.0 （2023.11）**
-- [ ] High cardinality
+- [ ] High series cardinality engine (full)
 - [ ] Continuous query
+- [ ] Export Data
+- [ ] Python SDK
