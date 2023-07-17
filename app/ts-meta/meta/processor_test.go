@@ -153,6 +153,10 @@ func (s *MockRPCStore) GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, 
 	return nil, nil
 }
 
+func (s *MockRPCStore) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
+	return 0, nil
+}
+
 var mockGetUserInfoFail bool = false
 
 func (s *MockRPCStore) GetUserInfo() ([]byte, error) {
@@ -287,6 +291,18 @@ func TestGetRpMstInfoMessage(t *testing.T) {
 		RpName:    "rp0",
 		DataTypes: []int64{1},
 	})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}
+
+func TestRegisterQueryIDOffset(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	callback := &metaclient.RegisterQueryIDOffsetCallback{}
+	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{Host: "192.168.1.9999"})
 	err := sendTestMsg(msg, callback)
 	if err != nil {
 		t.Errorf("send msg error: %s", err)

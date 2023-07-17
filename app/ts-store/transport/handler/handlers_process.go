@@ -18,10 +18,13 @@ package handler
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
+	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -114,6 +117,45 @@ func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
 		return err
 	})
 
+	return h.rsp, nil
+}
+
+func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
+	var queries []*netstorage.QueryExeInfo
+
+	// get all query exe info from all query managers
+	getAllQueries := func(manager *query.Manager) {
+		queries = append(queries, manager.GetAll()...)
+	}
+	query.VisitManagers(getAllQueries)
+	rsp := &netstorage.ShowQueriesResponse{}
+	rsp.QueryExeInfos = queries
+
+	return rsp, nil
+
+}
+
+func (h *KillQuery) Process() (codec.BinaryCodec, error) {
+	qid := h.req.GetQueryID()
+	var isExist bool
+	var abortSuccess bool
+	killQueryByIDFn := func(manager *query.Manager) {
+		// qid is not in current manager, or it has been aborted successfully
+		if manager.Get(qid) == nil || abortSuccess {
+			return
+		} else {
+			isExist = true
+			manager.Abort(qid)
+			abortSuccess = true
+		}
+	}
+	query.VisitManagers(killQueryByIDFn)
+	if !isExist {
+		var errCode uint32 = errno.ErrQueryNotFound
+		var errMsg = strconv.FormatUint(qid, 10)
+		h.rsp.ErrCode = &errCode
+		h.rsp.ErrMsg = &errMsg
+	}
 	return h.rsp, nil
 }
 

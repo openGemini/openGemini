@@ -461,3 +461,7 @@ func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 	msts = append(msts, "mem")
 	return msts
 }
+
+func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
+	return 0, nil
+}

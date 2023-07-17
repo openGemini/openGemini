@@ -291,3 +291,21 @@ func TestGetDBBriefInfo(t *testing.T) {
 		t.Fatal("TestGetDBBriefInfo fail")
 	}
 }
+
+func TestRegisterQueryIDOffset_Process(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{
+		Host: "127.0.0.9999:8888",
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.Process()
+	if err != nil {
+		t.Fatal("TestRegisterQueryIDOffsetProcess fail", err)
+	}
+}

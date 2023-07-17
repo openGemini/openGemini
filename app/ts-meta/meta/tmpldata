@@ -13,5 +13,6 @@
 	"GetStreamInfo",
 	"GetMeasurementInfo",
 	"GetMeasurementsInfo",
-	"GetDBBriefInfo"
+	"GetDBBriefInfo",
+ 	"RegisterQueryIDOffset"
 ]

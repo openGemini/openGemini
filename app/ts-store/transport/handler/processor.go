@@ -142,19 +142,20 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	qm := query.NewManager(msg.ClientID())
 
-	if qm.Aborted(w.Sequence()) {
+	if qm.Aborted(req.QueryId) {
 		logger.GetLogger().Info("[SelectProcessor.Handle] aborted")
-		_ = w.Response(executor.NewFinishMessage(), true)
+		err := errno.NewError(errno.ErrQueryInterrupted)
+		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryNotFound, err.Error()), true)
 		return nil
 	}
 
 	s := NewSelect(p.store, w, req)
-	qm.Add(w.Sequence(), s)
+	qm.Add(req.QueryId, s)
 
 	w.Session().EnableDataACK()
 	defer func() {
 		w.Session().DisableDataACK()
-		qm.Finish(w.Sequence())
+		qm.Finish(req.QueryId)
 	}()
 
 	err := s.Process()
@@ -166,6 +167,13 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		default:
 			_ = w.Response(executor.NewErrorMessage(0, stderr.Error()), true)
 		}
+		return nil
+	}
+
+	if s.isAborted() {
+		err = errno.NewError(errno.ErrQueryInterrupted)
+		logger.GetLogger().Error(err.Error())
+		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryInterrupted, err.Error()), true)
 		return nil
 	}
 
@@ -191,10 +199,10 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 	}
 
 	logger.GetLogger().Info("AbortProcessor.Handle",
-		zap.Uint64("seq", msg.Seq),
+		zap.Uint64("qid", msg.QueryID),
 		zap.Uint64("clientID", msg.ClientID))
 
-	query.NewManager(msg.ClientID).Abort(msg.Seq)
+	query.NewManager(msg.ClientID).Abort(msg.QueryID)
 	err := w.Response(executor.NewFinishMessage(), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))

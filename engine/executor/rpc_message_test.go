@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
@@ -78,8 +79,10 @@ func makeRemoteQueryMsg(nodeID uint64) *executor.RemoteQuery {
 			EnableBinaryTreeMerge: 0,
 			HintType:              0,
 		},
-		Analyze: false,
-		Node:    []byte{1, 2, 3, 4, 5, 6, 7},
+		Analyze:   false,
+		Node:      []byte{1, 2, 3, 4, 5, 6, 7},
+		QueryId:   100001,
+		QueryStmt: "SELECT * FROM mst1 limit 10",
 	}
 }
 
@@ -107,19 +110,21 @@ type RPCServer struct {
 	seq uint64
 }
 
-func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
-	c.seq = w.Sequence()
+func (c *RPCServer) GetQueryExeInfo() *netstorage.QueryExeInfo {
+	return nil
+}
 
+func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	msg, _ := data.(*rpc.Message).Data().(*executor.RemoteQuery)
 	fmt.Printf("RPCServer Handle: %+v \n", msg)
-
+	qid := msg.QueryId
 	if msg.Analyze {
 		fmt.Println("msg.Analyze")
 		time.Sleep(time.Second)
 	}
 
 	qm := query2.NewManager(clientID)
-	if qm.Aborted(w.Sequence()) {
+	if qm.Aborted(qid) {
 		err := w.Response(executor.NewFinishMessage(), true)
 		if err != nil {
 			return err
@@ -128,8 +133,8 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 		return nil
 	}
 
-	qm.Add(w.Sequence(), c)
-	defer qm.Finish(w.Sequence())
+	qm.Add(qid, c)
+	defer qm.Finish(qid)
 
 	if err := w.Response(executor.NewErrorMessage(0, "some error"), true); err != nil {
 		return err
@@ -152,7 +157,7 @@ func (c *RPCAbort) Handle(_ spdy.Responser, data interface{}) error {
 	}
 	fmt.Printf("RPCAbort Handle: %+v \n", msg)
 
-	query2.NewManager(clientID).Abort(msg.Seq)
+	query2.NewManager(clientID).Abort(msg.QueryID)
 	return nil
 }
 
@@ -216,7 +221,7 @@ func TestTransportAbort(t *testing.T) {
 
 	err := client.Run()
 	assert.NoError(t, err)
-	assert.Equal(t, query2.NewManager(clientID).Aborted(rpcServer.seq), true,
+	assert.Equal(t, query2.NewManager(clientID).Aborted(rq.QueryId), true,
 		"abort failed")
 }
 

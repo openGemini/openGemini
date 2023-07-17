@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -376,6 +377,71 @@ func Test_PtResponse_Marshal_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 	resp2 := &netstorage.PtResponse{}
 	err = resp2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, resp.String(), resp2.String())
+}
+
+func TestShowQueriesRequest_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.ShowQueriesRequest{}
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+
+	req2 := &netstorage.ShowQueriesRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+}
+
+func TestShowQueriesResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := &netstorage.ShowQueriesResponse{
+		QueryExeInfos: []*netstorage.QueryExeInfo{{
+			QueryID:   1,
+			Stmt:      "SELECT * FROM mst1",
+			Database:  "db1",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Running,
+		}, {
+			QueryID:   2,
+			Stmt:      "SELECT * FROM mst2",
+			Database:  "db2",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Running,
+		}, {
+			QueryID:   3,
+			Stmt:      "SELECT * FROM mst3",
+			Database:  "db3",
+			BeginTime: time.Now().UnixNano(),
+			RunState:  netstorage.Killed,
+		}},
+	}
+	buf, err := resp.MarshalBinary()
+	require.NoError(t, err)
+
+	resp2 := &netstorage.ShowQueriesResponse{}
+	err = resp2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	for i := range resp.QueryExeInfos {
+		assert.Equal(t, resp.QueryExeInfos[i], resp2.QueryExeInfos[i])
+	}
+}
+
+func TestKillQueryRequest_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.KillQueryRequest{}
+	req.QueryID = proto.Uint64(1)
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+	req2 := &netstorage.KillQueryRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
+}
+
+func TestKillQueryResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := &netstorage.KillQueryResponse{}
+	resp.ErrCode = proto.Uint32(1234)
+	buf, err := resp.MarshalBinary()
+	require.NoError(t, err)
+	resp2 := &netstorage.KillQueryResponse{}
+	err = resp2.UnmarshalBinary(buf)
 	require.NoError(t, err)
 	require.EqualValues(t, resp.String(), resp2.String())
 }
