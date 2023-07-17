@@ -126,6 +126,8 @@ message RemoteQuery {
     uint64 NodeID   = 5;
     bool analyze    = 6;
     bytes QueryNode = 7;
+    uint64 QueryId  = 8;
+    string QueryStmt= 9;
 }
 
 enum AggType

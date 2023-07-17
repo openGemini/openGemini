@@ -154,7 +154,9 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 		if err == nil {
 			break
 		}
-
+		if errno.Equal(err, errno.ErrQueryInterrupted) {
+			return err
+		}
 		t.rpcLogger.Error("RPC request failed.", zap.Error(err),
 			zap.String("query", "rpc executor"),
 			zap.Uint64("trace_id", t.opt.Traceid))

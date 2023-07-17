@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/influxdata/influxdb/query"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -61,7 +62,7 @@ func (ctx *ExecutionContext) watch() {
 		case <-taskCtx:
 			ctx.err = ctx.task.Error()
 			if ctx.err == nil {
-				ctx.err = ErrQueryInterrupted
+				ctx.err = errno.NewError(errno.ErrQueryInterrupted)
 			}
 		case <-ctx.AbortCh:
 			ctx.err = ErrQueryAborted

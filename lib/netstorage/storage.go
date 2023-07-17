@@ -63,6 +63,9 @@ type Storage interface {
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, pt uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp string, name string, shardIds []uint64) error
 	MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
+
+	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
+	KillQueryOnNode(nodeID, queryID uint64) error
 }
 
 type NetStorage struct {
@@ -408,4 +411,31 @@ func MarshalRows(ctx *WriteContext, db, rp string, pt uint32) ([]byte, error) {
 	}
 	ctx.buf = pBuf
 	return pBuf, err
+}
+
+func (s *NetStorage) GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error) {
+	req := &ShowQueriesRequest{}
+	v, err := s.ddlRequestWithNodeId(nodeID, ShowQueriesRequestMessage, req)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := v.(*ShowQueriesResponse)
+	if !ok {
+		return nil, executor.NewInvalidTypeError("*netstorage.ShowQueriesResponse", v)
+	}
+	return resp.QueryExeInfos, nil
+}
+
+func (s *NetStorage) KillQueryOnNode(nodeID, queryID uint64) error {
+	req := &KillQueryRequest{}
+	req.QueryID = proto.Uint64(queryID)
+	v, err := s.ddlRequestWithNodeId(nodeID, KillQueryRequestMessage, req)
+	if err != nil {
+		return err
+	}
+	resp, ok := v.(*KillQueryResponse)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.KillQueryResponse", v)
+	}
+	return resp.Error()
 }
