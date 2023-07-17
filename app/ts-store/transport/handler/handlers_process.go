@@ -18,6 +18,7 @@ package handler
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
@@ -137,24 +138,23 @@ func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
 func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 	qid := h.req.GetQueryID()
 	var isExist bool
-	var isAborted bool
+	var abortSuccess bool
 	killQueryByIDFn := func(manager *query.Manager) {
 		// qid is not in current manager, or it has been aborted successfully
-		if manager.Get(qid) == nil || isAborted {
+		if manager.Get(qid) == nil || abortSuccess {
 			return
 		} else {
 			isExist = true
 			manager.Abort(qid)
-			isAborted = manager.Aborted(qid)
+			abortSuccess = true
 		}
 	}
 	query.VisitManagers(killQueryByIDFn)
 	if !isExist {
-		err := errno.NewError(errno.ErrQueryNotFound, qid)
-		h.rsp.Err = netstorage.MarshalError(err)
-	} else if !isAborted {
-		err := errno.NewError(errno.ErrKillQueryFail, qid)
-		h.rsp.Err = netstorage.MarshalError(err)
+		var errCode uint32 = errno.ErrQueryNotFound
+		var errMsg = strconv.FormatUint(qid, 10)
+		h.rsp.ErrCode = &errCode
+		h.rsp.ErrMsg = &errMsg
 	}
 	return h.rsp, nil
 }

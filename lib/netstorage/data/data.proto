@@ -118,5 +118,6 @@ message KillQueryRequest {
 }
 
 message KillQueryResponse {
-    optional string Err = 1;
+    optional uint32 ErrCode = 1;
+    optional string ErrMsg = 2;
 }

@@ -37,9 +37,6 @@ var (
 	// This can occur when a previous statement in the same query has errored.
 	ErrNotExecuted = errors.New("not executed")
 
-	// ErrQueryInterrupted is an error returned when the query is interrupted.
-	ErrQueryInterrupted = errors.New("query interrupted")
-
 	// ErrQueryAborted is an error returned when the query is aborted.
 	ErrQueryAborted = errors.New("query aborted")
 
@@ -364,7 +361,7 @@ LOOP:
 
 		// Send any other statements to the underlying statement executor.
 		err = e.StatementExecutor.ExecuteStatement(stmt, ctx)
-		if err == ErrQueryInterrupted {
+		if errno.Equal(err, errno.ErrQueryInterrupted) {
 			// Query was interrupted so retrieve the real interrupt error from
 			// the query task if there is one.
 			if qerr := ctx.Err(); qerr != nil {

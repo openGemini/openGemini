@@ -235,6 +235,10 @@ func (c *RPCClient) errorMessage(data interface{}) error {
 		return errno.NewError(msg.errCode, msg.data)
 	}
 
+	if msg.errCode == errno.ErrQueryInterrupted {
+		return errno.NewError(errno.ErrQueryInterrupted)
+	}
+
 	return errno.NewRemote(msg.data, errno.RemoteError)
 }
 

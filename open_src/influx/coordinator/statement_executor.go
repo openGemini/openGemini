@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1826,7 +1827,7 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 				mu.Lock()
 				var wrapErr *errno.Error
 				if errors.As(err, &wrapErr) {
-					if wrapErr.Errno() == errno.ErrQueryNotFound {
+					if errno.Equal(wrapErr, errno.ErrQueryNotFound) {
 						notFoundCount++
 						mu.Unlock()
 						return
@@ -1841,7 +1842,7 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 	wg.Wait()
 
 	if notFoundCount == len(nodes) {
-		return fmt.Errorf(meta2.ErrKillNotExistentQuery.Error(), stmt.QueryID)
+		return errno.NewError(errno.ErrQueryNotFound, strconv.FormatUint(stmt.QueryID, 10))
 	}
 
 	if len(errHosts) != 0 {

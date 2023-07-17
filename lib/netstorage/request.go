@@ -474,16 +474,8 @@ func (r *KillQueryResponse) UnmarshalBinary(buf []byte) error {
 }
 
 func (r *KillQueryResponse) Error() error {
-	if r.Err == nil {
+	if r.ErrCode == nil {
 		return nil
 	}
-	errBytes := bytesutil.ToUnsafeBytes(*r.Err)
-	errCode := encoding.UnmarshalUint16(errBytes[:2])
-	if errCode != 0 {
-		err := &errno.Error{}
-		err = err.SetErrno(errno.Errno(errCode))
-		err.SetMessage(bytesutil.ToUnsafeString(errBytes[2:]))
-		return err
-	}
-	return fmt.Errorf("%s", bytesutil.ToUnsafeString(errBytes[2:]))
+	return errno.NewError(errno.Errno(r.GetErrCode()), r.GetErrMsg())
 }

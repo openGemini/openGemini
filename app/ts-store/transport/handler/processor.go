@@ -29,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"go.uber.org/zap"
 )
 
@@ -145,7 +144,8 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	if qm.Aborted(req.QueryId) {
 		logger.GetLogger().Info("[SelectProcessor.Handle] aborted")
-		_ = w.Response(executor.NewFinishMessage(), true)
+		err := errno.NewError(errno.ErrQueryInterrupted)
+		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryNotFound, err.Error()), true)
 		return nil
 	}
 
@@ -170,9 +170,10 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return nil
 	}
 
-	if s.aborted {
-		logger.GetLogger().Error(query2.ErrQueryInterrupted.Error())
-		_ = w.Response(executor.NewErrorMessage(0, query2.ErrQueryInterrupted.Error()), true)
+	if s.isAborted() {
+		err = errno.NewError(errno.ErrQueryInterrupted)
+		logger.GetLogger().Error(err.Error())
+		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryInterrupted, err.Error()), true)
 		return nil
 	}
 

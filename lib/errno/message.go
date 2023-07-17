@@ -132,8 +132,8 @@ var messageMap = map[Errno]*Message{
 	NoColValToColumnFunc:         newWarnMessage("no func to transform colval into column: %s", ModuleQueryEngine),
 	InvalidQuerySchema:           newWarnMessage("invalid query schema", ModuleQueryEngine),
 	InvalidQueryStat:             newWarnMessage("invalid query stat", ModuleQueryEngine),
-	ErrQueryNotFound:             newWarnMessage("query %d is not running on this store node", ModuleQueryEngine),
-	ErrKillQueryFail:             newWarnMessage("abort %d fail on this store node", ModuleQueryEngine),
+	ErrQueryNotFound:             newWarnMessage("no such query id: %s", ModuleQueryEngine),
+	ErrQueryInterrupted:          newWarnMessage("query interrupted", ModuleQueryEngine),
 
 	// store engine error codes
 	CreateIndexFailPointRowType:        newFatalMessage("create index failed due to rows are not belong to type PointRow", ModuleIndex),
