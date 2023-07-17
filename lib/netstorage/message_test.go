@@ -436,12 +436,12 @@ func TestKillQueryRequest_Marshal_Unmarshal(t *testing.T) {
 }
 
 func TestKillQueryResponse_Marshal_Unmarshal(t *testing.T) {
-	req := &netstorage.KillQueryResponse{}
-	req.Err = proto.String("Error1")
-	buf, err := req.MarshalBinary()
+	resp := &netstorage.KillQueryResponse{}
+	resp.ErrCode = proto.Uint32(1234)
+	buf, err := resp.MarshalBinary()
 	require.NoError(t, err)
-	req2 := &netstorage.KillQueryResponse{}
-	err = req2.UnmarshalBinary(buf)
+	resp2 := &netstorage.KillQueryResponse{}
+	err = resp2.UnmarshalBinary(buf)
 	require.NoError(t, err)
-	require.EqualValues(t, req.String(), req2.String())
+	require.EqualValues(t, resp.String(), resp2.String())
 }
