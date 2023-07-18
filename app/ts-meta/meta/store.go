@@ -1749,3 +1749,10 @@ func (s *Store) leadershipTransfer() error {
 	}
 	return s.raft.LeadershipTransfer()
 }
+
+func (s *Store) leadershipTransfer() error {
+	if s.raft == nil {
+		return errors.New("raft state not create")
+	}
+	return s.raft.LeadershipTransfer()
+}

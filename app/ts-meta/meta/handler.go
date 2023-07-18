@@ -390,7 +390,7 @@ func (h *httpHandler) handleResponse(w http.ResponseWriter, err error) {
 // curl -i -XPOST 'http://127.0.0.1:8091/expandGroups'
 func (h *httpHandler) serveExpandGroups(w http.ResponseWriter, r *http.Request) {
 	err := h.store.ExpandGroups()
-	if err != nil {
+	if strings.Contains(err.Error(), "node is not the leader") {
 		h.logger.Error("error expand groups", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
