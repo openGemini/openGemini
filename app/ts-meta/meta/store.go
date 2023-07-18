@@ -349,6 +349,7 @@ type RaftInterface interface {
 	AddServer(addr string) error
 	ShowDebugInfo(witch string) ([]byte, error)
 	UserSnapshot() error
+	LeadershipTransfer() error
 }
 
 type Store struct {
@@ -1739,4 +1740,11 @@ func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 	} else {
 		return offset, nil
 	}
+}
+
+func (s *Store) leadershipTransfer() error {
+	if s.raft == nil {
+		return errors.New("raft state not create")
+	}
+	return s.raft.LeadershipTransfer()
 }
