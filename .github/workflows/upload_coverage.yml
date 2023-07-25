@@ -3,15 +3,6 @@ name: UT and Upload Coverage
 on:
   workflow_dispatch:
   push:
-    paths-ignore:
-      - 'config/**'
-      - 'docker/**'
-      - 'docs/**'
-      - 'images/**'
-      - 'scripts/**'
-      - 'tests/**'
-      - '**.md'
-      - '.gitignore'
 
 env:
   GO111MODULE: on

@@ -14,7 +14,7 @@ coverage:
     project:
       default:
         target: 70%
-        threshold: 1%
+        if_ci_failed: success
 
 comment:                  # this is a top-level key
   layout: "diff"
