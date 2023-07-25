@@ -270,7 +270,7 @@ func (trans *MergeTransform) runnable(in int, ctx context.Context, errs *errno.E
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -342,7 +342,7 @@ func (trans *MergeTransform) Merge(ctx context.Context, errs *errno.Errs) {
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -393,7 +393,7 @@ func (trans *MergeTransform) Merge(ctx context.Context, errs *errno.Errs) {
 					defer func() {
 						if e := recover(); e != nil {
 							err := errno.NewError(errno.RecoverPanic, e)
-							trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+							trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 						}
 					}()
 					trans.WaitMerge <- signal

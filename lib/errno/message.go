@@ -132,8 +132,8 @@ var messageMap = map[Errno]*Message{
 	NoColValToColumnFunc:         newWarnMessage("no func to transform colval into column: %s", ModuleQueryEngine),
 	InvalidQuerySchema:           newWarnMessage("invalid query schema", ModuleQueryEngine),
 	InvalidQueryStat:             newWarnMessage("invalid query stat", ModuleQueryEngine),
-	ErrQueryNotFound:             newWarnMessage("no such query id: %s", ModuleQueryEngine),
-	ErrQueryInterrupted:          newWarnMessage("query interrupted", ModuleQueryEngine),
+	ErrQueryNotFound:             newWarnMessage("no such query id: %d", ModuleQueryEngine),
+	ErrQueryKilled:               newWarnMessage("query(%d) killed", ModuleQueryEngine),
 
 	// store engine error codes
 	CreateIndexFailPointRowType:        newFatalMessage("create index failed due to rows are not belong to type PointRow", ModuleIndex),
@@ -253,7 +253,7 @@ var messageMap = map[Errno]*Message{
 
 	// index error codes
 	ConvertToBinaryExprFailed:  newWarnMessage("convert to BinaryExpr failed: expr %T is not *influxql.BinaryExpr", ModuleIndex),
-	ErrQuerySeriesUpperBound:   newNoticeMessage("trigger query series upper bound error", ModuleIndex),
+	ErrQuerySeriesUpperBound:   newNoticeMessage("max-select-series limit exceeded: %d/%d", ModuleIndex),
 	ErrTooSmallKeyCount:        newNoticeMessage("too small key count error", ModuleIndex),
 	ErrTooSmallIndexKey:        newNoticeMessage("too small index key error", ModuleIndex),
 	ErrGetNonExistingMark:      newFatalMessage("trying to get non existing mark %d, while size is %d", ModuleIndex),
@@ -265,6 +265,7 @@ var messageMap = map[Errno]*Message{
 	ErrRPNIsNullForAnd:         newFatalMessage("rpn stack should not be null for AND", ModuleIndex),
 	ErrRPNIsNullForOR:          newFatalMessage("rpn stack should not be null for OR", ModuleIndex),
 	ErrCoarseIndexFragment:     newFatalMessage("property coarse_index_fragment should be greater than 1", ModuleIndex),
+	ErrQuerySchemaUpperBound:   newNoticeMessage("max-select-schema limit exceeded: %d/%d", ModuleQueryEngine),
 
 	// monitoring and statistics
 	WatchFileTimeout: newWarnMessage("watch file timeout", ModuleStat),

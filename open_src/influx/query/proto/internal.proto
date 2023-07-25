@@ -32,7 +32,7 @@ message ProcessorOptions {
     string      Query = 27;
     int64       HintType = 28;
     int64       EnableBinaryTreeMerge = 29;
-    uint64      TraceId = 30;
+    uint64      QueryId = 30;
     bytes       SeriesKey = 31;
     bool        GroupByAllDims = 32;
     uint32      EngineType = 33;
@@ -126,8 +126,6 @@ message RemoteQuery {
     uint64 NodeID   = 5;
     bool analyze    = 6;
     bytes QueryNode = 7;
-    uint64 QueryId  = 8;
-    string QueryStmt= 9;
 }
 
 enum AggType

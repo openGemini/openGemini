@@ -16,6 +16,22 @@ limitations under the License.
 
 package sysinfo
 
+import (
+	"fmt"
+	"os"
+)
+
 func TotalMemory() (uint64, error) {
 	return 8 * 1024 * 1024 * 1024, nil
+}
+
+func Suicide() {
+	pid := os.Getpid()
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		fmt.Printf("cannot find current process: %v\n", err)
+	}
+	if err = p.Kill(); err != nil {
+		fmt.Printf("error process syscall.Kill:%v\n", err)
+	}
 }

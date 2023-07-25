@@ -1522,10 +1522,9 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 		return nil, err
 	}
 
-	seriesKey := shardMapper.GetSeriesKey()
-	if len(seriesKey) != 0 && (isFullSeriesQuery || isSpecificSeriesQuery) {
+	if len(shards.GetSeriesKey()) != 0 && (isFullSeriesQuery || isSpecificSeriesQuery) {
 		opt.SetHintType(hybridqp.FullSeriesQuery)
-		opt.SeriesKey = append(opt.SeriesKey, seriesKey...)
+		opt.SeriesKey = append(opt.SeriesKey, shards.GetSeriesKey()...)
 	}
 
 	opt.StartTime, opt.EndTime = c.TimeRange.MinTimeNano(), c.TimeRange.MaxTimeNano()

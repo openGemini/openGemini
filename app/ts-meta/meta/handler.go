@@ -126,8 +126,8 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "/takeover":
 			h.logger.Info("serverTakeover")
 			h.WrapHandler(h.serveTakeover).ServeHTTP(w, r)
-		case "/balancer":
-			h.logger.Info("serveBalancer")
+		case "/balance":
+			h.logger.Info("serveBalance")
 			h.WrapHandler(h.serveBalancer).ServeHTTP(w, r)
 		case "/movePt":
 			h.logger.Info("serveMovePt")
@@ -322,7 +322,7 @@ func (h *httpHandler) serveTakeover(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("serveTakeover finished", zap.Error(err))
 }
 
-// curl -i -XPOST 'http://127.0.0.1:8091/balancer?open=false'
+// curl -i -XPOST 'http://127.0.0.1:8091/balance?open=false'
 func (h *httpHandler) serveBalancer(w http.ResponseWriter, r *http.Request) {
 	err := h.executeCmdOnStore(w, r, func(store IStore, enable bool) error {
 		return store.markBalancer(enable)

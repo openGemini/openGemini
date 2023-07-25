@@ -207,6 +207,19 @@ func (s *Sequencer) SeriesTotal() uint64 {
 	return s.sc.Get()
 }
 
+func (s *Sequencer) DelMmsIdTime(name string) {
+	s.mu.Lock()
+	mmsIdTime, ok := s.mmsIdTime[name]
+	delete(s.mmsIdTime, name)
+	s.mu.Unlock()
+
+	if !ok {
+		return
+	}
+
+	s.sc.DecrN(uint64(len(mmsIdTime.idTime)))
+}
+
 // IdTimePairs If you change the order of the elements in the structure,
 // remember to modify marshal() and unmarshal() as well.
 var idTimesPool = sync.Pool{}
@@ -426,4 +439,11 @@ func (sc *SeriesCounter) Incr() {
 
 func (sc *SeriesCounter) Reset() {
 	sc.total = 0
+}
+
+func (sc *SeriesCounter) DecrN(n uint64) {
+	if n == 0 {
+		return
+	}
+	atomic.AddUint64(&sc.total, ^(n - 1))
 }

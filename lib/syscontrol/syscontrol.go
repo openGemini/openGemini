@@ -96,11 +96,12 @@ var (
 	QueryParallel int32 = -1
 
 	querySeriesLimit = 0 // query series upper bound in one shard. See also query-series-limit in config
+
+	queryEnabledWhenExceedSeries = true // this determines whether to return value when select series exceed the limit number
 )
 
 func SetQueryParallel(limit int64) {
 	atomic.StoreInt32(&QueryParallel, int32(limit))
-	fmt.Println("SetQueryParallel:", limit)
 }
 
 func SetQuerySeriesLimit(limit int) {
@@ -109,6 +110,18 @@ func SetQuerySeriesLimit(limit int) {
 
 func GetQuerySeriesLimit() int {
 	return querySeriesLimit
+}
+
+func SetQuerySchemaLimit(limit int) {
+	executor.SetQuerySchemaLimit(limit)
+}
+
+func SetQueryEnabledWhenExceedSeries(enabled bool) {
+	queryEnabledWhenExceedSeries = enabled
+}
+
+func GetQueryEnabledWhenExceedSeries() bool {
+	return queryEnabledWhenExceedSeries
 }
 
 func SetTimeFilterProtection(enabled bool) {

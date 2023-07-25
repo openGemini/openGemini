@@ -28,9 +28,6 @@ import (
 	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 )
 
-//go:generate tmpl -data=@message_types.tmpldata message_types.go.tmpl
-//go:generate tmpl -data=@message_types.tmpldata message_types_test.go.tmpl
-
 type BaseMessage struct {
 	Typ  uint8
 	Data codec.BinaryCodec
@@ -72,12 +69,12 @@ func (m *DDLMessage) Unmarshal(buf []byte) error {
 	}
 	m.Typ = buf[0]
 
-	msg := NewMessage(m.Typ)
-	if msg == nil {
+	msgFn, ok := MessageBinaryCodec[m.Typ]
+	if !ok {
 		return fmt.Errorf("unknown message type: %d", m.Typ)
 	}
 
-	m.Data = msg
+	m.Data = msgFn()
 	return m.Data.UnmarshalBinary(buf[1:])
 }
 

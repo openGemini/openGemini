@@ -266,7 +266,7 @@ func (trans *SortTransform) runnable(ctx context.Context, errs *errno.Errs, i in
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.sortLogger.Error(err.Error(), zap.String("query", "SortTransform"),
-				zap.Uint64("trace_id", trans.opt.Traceid))
+				zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -335,7 +335,7 @@ func (trans *SortTransform) singleSortWorkerHelper(ctx context.Context, errs *er
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.sortLogger.Error(err.Error(), zap.String("query", "SortTransform"),
-				zap.Uint64("trace_id", trans.opt.Traceid))
+				zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)

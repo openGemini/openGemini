@@ -65,7 +65,7 @@ func TestTaskManager_AssignQueryID(t1 *testing.T) {
 				queryIDUpperLimit: tt.fields.QueryIDUpperLimit,
 				queries:           tt.fields.queries,
 				nextID:            tt.fields.nextID,
-				registered:        true,
+				registerOnce:      1,
 			}
 			got := t.AssignQueryID()
 			if got != tt.want {
@@ -87,52 +87,45 @@ func TestTaskManager_tryRegisterQueryIDOffset(t1 *testing.T) {
 		registerOnce: 0,
 		Register:     &mockRegister1{},
 		Logger:       logger.NewLogger(errno.ModuleUnknown),
-		registered:   false,
 	}
 
 	// Concurrent registration
 	// only 1 can call RetryRegisterQueryIDOffset()
-	// other 99 will get the initQueryID
+	// other 9 will sync wait and not call RetryRegisterQueryIDOffset
 	var count1 int32
 	wg1 := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		wg1.Add(1)
 		go func() {
 			defer wg1.Done()
-			t.tryRegisterQueryIDOffset()
-			id := t.AssignQueryID()
-			if id == initQueryID {
-				atomic.AddInt32(&count1, 1)
-			}
+			_ = t.tryRegisterQueryIDOffset()
+			_ = t.AssignQueryID()
+			atomic.AddInt32(&count1, 1)
 		}()
 	}
 	wg1.Wait()
-	assert.Equal(t1, count1, int32(99))
+	assert.Equal(t1, count1, int32(10))
 	assert.Equal(t1, atomic.LoadUint32(&t.registerOnce), uint32(1))
-	assert.Equal(t1, t.registered, true)
-	assert.Equal(t1, t.nextID, uint64(100001))
+	assert.Equal(t1, t.nextID, uint64(100010))
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
 
-	// Now, registration is completed，simulate concurrent assign id
-	// all 100 goroutines can not call RetryRegisterQueryIDOffset(),
+	// Now, simulate concurrent assign id
+	// all 10 goroutines can not call RetryRegisterQueryIDOffset(),
 	// but they can normally assign id
 	var count2 int32
 	wg2 := sync.WaitGroup{}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		wg2.Add(1)
 		go func() {
 			defer wg2.Done()
-			t.tryRegisterQueryIDOffset()
-			id := t.AssignQueryID()
-			if id == initQueryID {
-				atomic.AddInt32(&count2, 1)
-			}
+			_ = t.tryRegisterQueryIDOffset()
+			_ = t.AssignQueryID()
+			atomic.AddInt32(&count2, 1)
 		}()
 	}
 	wg2.Wait()
-	assert.Equal(t1, count2, int32(0))
+	assert.Equal(t1, count2, int32(10))
 	assert.Equal(t1, atomic.LoadUint32(&t.registerOnce), uint32(1))
-	assert.Equal(t1, t.registered, true)
-	assert.Equal(t1, t.nextID, t.queryIDOffset+1+100)
+	assert.Equal(t1, t.nextID, t.queryIDOffset+20)
 	assert.Equal(t1, t.queryIDOffset, uint64(100000))
 }

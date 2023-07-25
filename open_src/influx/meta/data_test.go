@@ -1233,9 +1233,9 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 	}{
 		{
 			name:   "Success",
-			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": 100000}},
+			fields: fields{QueryIDInit: map[SQLHost]uint64{"127.0.0.1:1234": 0, "127.0.0.2:1234": QueryIDSpan}},
 			args:   args{host: "127.0.0.1:7890"},
-			want:   200000,
+			want:   QueryIDSpan * 2,
 		},
 		{
 			name:   "DuplicateRegister",

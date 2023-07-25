@@ -74,7 +74,7 @@ func TestProcessorCodec(t *testing.T) {
 		Parallel:    false,
 		ChunkSize:   7,
 		MaxParallel: 0,
-		Traceid:     0,
+		QueryId:     0,
 
 		HintType: hybridqp.ExactStatisticQuery,
 	}

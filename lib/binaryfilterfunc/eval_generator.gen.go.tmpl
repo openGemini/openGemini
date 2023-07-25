@@ -25,12 +25,12 @@ import (
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
 func Get{{.Name}}LTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []{{.Type}}
 	{{- if or (eq .Name "String")}}
+	var values []{{.Type}}
 	values = col.StringValues(values)
 	{{- end}}
 	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
-	values = col.{{.Name}}Values()
+	values := col.{{.Name}}Values()
 	{{- end}}
 	var idx int
 	var index int

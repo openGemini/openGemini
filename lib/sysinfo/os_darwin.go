@@ -18,6 +18,8 @@ package sysinfo
 
 import (
 	"fmt"
+	"os"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,4 +34,10 @@ func TotalMemory() (uint64, error) {
 		return 0, fmt.Errorf("failed to get total memory: %w", err)
 	}
 	return ms, nil
+}
+
+func Suicide() {
+	if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
+		fmt.Printf("error process syscall.Kill:%v\n", err)
+	}
 }

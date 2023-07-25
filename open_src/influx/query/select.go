@@ -61,8 +61,6 @@ type SelectOptions struct {
 
 	QueryTimeCompareEnabled bool
 
-	Traceid uint64
-
 	AbortChan <-chan struct{}
 	RowsChan  chan RowsChan
 
@@ -78,6 +76,7 @@ type LogicalPlanCreator interface {
 
 	GetSources(sources influxql.Sources) influxql.Sources
 	GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error)
+	GetSeriesKey() []byte
 }
 
 // ShardMapper retrieves and maps shards into an IteratorCreator that can later be
@@ -85,7 +84,6 @@ type LogicalPlanCreator interface {
 type ShardMapper interface {
 	MapShards(sources influxql.Sources, t influxql.TimeRange, opt SelectOptions, condition influxql.Expr) (ShardGroup, error)
 	Close() error
-	GetSeriesKey() []byte
 }
 
 // ShardGroup represents a shard or a collection of shards that can be accessed
@@ -212,7 +210,7 @@ type ProcessorOptions struct {
 
 	EnableBinaryTreeMerge int64
 
-	Traceid uint64
+	QueryId uint64
 
 	// hint supported (need to marshal)
 	HintType hybridqp.HintType
@@ -292,8 +290,6 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.Chunked = sopt.Chunked
 
 	opt.ChunkSize = sopt.ChunkSize
-
-	opt.Traceid = sopt.Traceid
 
 	opt.MaxParallel = sopt.MaxQueryParallel
 	opt.AbortChan = sopt.AbortChan

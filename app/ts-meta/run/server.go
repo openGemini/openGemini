@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	Logger "github.com/openGemini/openGemini/lib/logger"
@@ -39,12 +38,11 @@ import (
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/services/sherlock"
-	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	cmd *cobra.Command
+	info app.ServerInfo
 
 	BindAddress string
 	Listener    net.Listener
@@ -64,7 +62,7 @@ type Server struct {
 }
 
 // NewServer returns a new instance of Server built from a config.
-func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (app.Server, error) {
+func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (app.Server, error) {
 	c, ok := conf.(*config.TSMeta)
 	if !ok || c == nil {
 		return nil, fmt.Errorf("invalid meta config")
@@ -84,7 +82,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	bind := c.Meta.BindAddress
 
 	s := &Server{
-		cmd:         cmd,
+		info:        info,
 		BindAddress: bind,
 		Logger:      logger,
 		Node:        node,
@@ -95,7 +93,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 	metaConf := c.Meta
 	metaConf.Logging = c.Logging
 	s.MetaService = meta.NewService(metaConf, c.TLS)
-	s.MetaService.Version = s.cmd.Version
+	s.MetaService.Version = s.info.Version
 	s.MetaService.Node = s.Node
 
 	s.reportEnable = c.Common.ReportEnable
@@ -115,16 +113,7 @@ func (s *Server) Err() <-chan error { return nil }
 // Open opens the meta and data store and all services.
 func (s *Server) Open() error {
 	// Mark start-up in log.
-	s.Logger.Info("TSMeta starting",
-		zap.String("version", s.cmd.Version),
-		zap.String("branch", s.cmd.ValidArgs[0]),
-		zap.String("commit", s.cmd.ValidArgs[1]),
-		zap.String("buildTime", s.cmd.ValidArgs[2]))
-	s.Logger.Info("Go runtime",
-		zap.String("version", runtime.Version()),
-		zap.Int("maxprocs", cpu.GetCpuNum()))
-	//Mark start-up in extra log
-	fmt.Printf("%v TSMeta starting\n", time.Now())
+	app.LogStarting("TSMeta", &s.info)
 
 	// Open shared TCP connection.
 	ln, err := net.Listen("tcp", s.BindAddress)
@@ -225,21 +214,16 @@ func (s *Server) initStatisticsPusher() {
 		return
 	}
 
-	appName := "ts-sql"
-	if app.IsSingle() {
-		appName = "ts-server"
-		s.config.Monitor.SetApp(config.AppSingle)
-	}
-
 	s.statisticsPusher = statisticsPusher.NewStatisticsPusher(&s.config.Monitor, s.Logger)
 	if s.statisticsPusher == nil {
 		return
 	}
 
+	s.config.Monitor.SetApp(s.info.App)
 	hostname := config.CombineDomain(s.config.Meta.Domain, s.BindAddress)
 	globalTags := map[string]string{
 		"hostname": strings.ReplaceAll(hostname, ",", "_"),
-		"app":      appName,
+		"app":      "ts-" + string(s.info.App),
 	}
 	stat.NewMetaStatistics().Init(globalTags)
 	stat.NewMetaRaftStatistics().Init(globalTags)

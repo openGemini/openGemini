@@ -30,7 +30,6 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -432,11 +431,10 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	var qr io.Reader
 	// Attempt to read the form value from the "q" form value.
 	qp := strings.TrimSpace(r.FormValue("q"))
-	traceId := tsi.GenerateUUID()
 	if user != nil {
-		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()), zap.Uint64("trace_id", traceId))
+		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()))
 	} else {
-		h.Logger.Info(app.HideQueryPassword(qp), zap.Uint64("trace_id", traceId))
+		h.Logger.Info(app.HideQueryPassword(qp))
 	}
 	if qp != "" {
 		qr = strings.NewReader(qp)
@@ -588,10 +586,9 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		ReadOnly:        r.Method == "GET",
 		NodeID:          nodeID,
 		InnerChunkSize:  innerChunkSize,
-		Quiet:           true,
-		Traceid:         traceId,
 		//ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
 		//QueryLimitEn:    atomic.LoadInt32(&syscontrol.QueryLimitEn) == 1,
+		Quiet: true,
 	}
 
 	if h.Config.AuthEnabled {

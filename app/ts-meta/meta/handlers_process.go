@@ -61,6 +61,7 @@ func (h *CreateNode) Process() (transport.Codec, error) {
 	tcpAddr := h.req.QueryHost
 	b, err := h.store.createDataNode(httpAddr, tcpAddr)
 	if err != nil {
+		h.logger.Error("createNode fail", zap.Error(err))
 		rsp.Err = err.Error()
 		return rsp, nil
 	}

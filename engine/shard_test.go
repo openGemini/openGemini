@@ -3106,17 +3106,10 @@ func TestEngine_Statistics_Shard(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(buf), "cpu") {
-			t.Fatalf("no cpu stats in buf")
-		}
+		require.Contains(t, string(buf), "level")
+		require.Contains(t, string(buf), "database")
+		require.Contains(t, string(buf), "retentionPolicy")
 
-		if !strings.Contains(string(buf), "cpu1") {
-			t.Fatalf("no cpu1 stats in buf")
-		}
-
-		if !strings.Contains(string(buf), "disk") {
-			t.Fatalf("no disk stats in buf")
-		}
 	}
 }
 
@@ -3998,6 +3991,64 @@ func TestDownSampleSharCompact(t *testing.T) {
 	}()
 	sh.ident.DownSampleLevel = 1
 	require.NoError(t, sh.Compact())
+}
+
+func TestWriteIndexForLabelStore(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = closeShard(sh)
+	}()
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryIndex := sh.indexBuilder.GetPrimaryIndex()
+	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
+	var writeIndexRequired bool
+	var exist bool
+
+	for i := 0; i < len(rows); i++ {
+		if sh.closed.Closed() {
+			t.Fatal("shard closed")
+		}
+
+		if !writeIndexRequired {
+			exist, err = idx.GetTagValuesByTagKeys(rows[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !exist {
+				writeIndexRequired = true
+			}
+		}
+	}
+
+	if writeIndexRequired {
+		for i := 0; i < len(rows); i++ {
+			err = idx.CreateIndexIfNotExistsByRowWithLabelStore(&rows[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	time.Sleep(2 * time.Second)
+
+	for i := 0; i < len(rows); i++ {
+		if sh.closed.Closed() {
+			t.Fatal("shard closed")
+		}
+
+		exist, err = idx.GetTagValuesByTagKeys(rows[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestWriteIndexFail(t *testing.T) {

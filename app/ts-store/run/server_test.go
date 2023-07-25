@@ -40,7 +40,7 @@ import (
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/require"
 )
 
 var storageDataPath = "/tmp/data/"
@@ -114,13 +114,32 @@ func mockServer() *Server {
 	server.storage = mockStorage()
 	server.StoreService = NewService(&server.config.Data)
 
-	app.SwitchToSingle()
 	server.initStatisticsPusher()
 	server.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
 	server.statisticsPusher.Register(mockCollect)
 	server.statisticsPusher.Start()
 
 	return server
+}
+
+func Test_NewServer_Statistics_Single(t *testing.T) {
+	server := &Server{}
+	server.info.App = config.AppSingle
+	server.config = config.NewTSStore(false)
+	server.config.Data.OpsMonitor.HttpAddress = addr1
+	server.storage = mockStorage()
+	server.StoreService = NewService(&server.config.Data)
+	server.initStatisticsPusher()
+}
+
+func Test_NewServer_Statistics_Data(t *testing.T) {
+	server := &Server{}
+	server.info.App = config.AppData
+	server.config = config.NewTSStore(true)
+	server.config.Data.OpsMonitor.HttpAddress = addr1
+	server.storage = mockStorage()
+	server.StoreService = NewService(&server.config.Data)
+	server.initStatisticsPusher()
 }
 
 func TestDebugVars(t *testing.T) {
@@ -214,9 +233,8 @@ func TestNilService(t *testing.T) {
 func TestNewServer(t *testing.T) {
 	config := config.NewTSStore(true)
 	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
-	cmd := &cobra.Command{}
 
-	NewServer(config, cmd, logger.NewLogger(errno.ModuleUnknown))
+	NewServer(config, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
 }
 
 type MockMetaClient struct {
@@ -464,4 +482,10 @@ func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 
 func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	return 0, nil
+}
+
+func TestNewCommand(t *testing.T) {
+	cmd := NewCommand(app.ServerInfo{App: config.AppStore}, true)
+	require.Equal(t, app.STORELOGO, cmd.Logo)
+	require.Equal(t, config.AppStore, cmd.Info.App)
 }

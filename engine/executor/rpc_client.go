@@ -189,7 +189,7 @@ func (c *RPCClient) Abort() {
 
 	c.logger.Info("send abort message", zap.Uint64("nodeID", c.query.NodeID))
 
-	abort := NewAbort(c.query.QueryId, machine.GetMachineID())
+	abort := NewAbort(c.query.Opt.QueryId, machine.GetMachineID())
 	trans, err := transport.NewTransport(c.query.NodeID, spdy.AbortRequest, nil)
 	if err != nil {
 		c.logger.Error("failed to new transport", zap.Error(err),
@@ -230,13 +230,16 @@ func (c *RPCClient) errorMessage(data interface{}) error {
 		return NewInvalidTypeError("*executor.Error", data)
 	}
 
+	// ha or not ha, kill query qid will return error
+	if msg.errCode == errno.ErrQueryKilled {
+		err := errno.NewError(errno.ErrQueryKilled)
+		err.SetMessage(msg.data)
+		return err
+	}
+
 	if config.GetHaEnable() && msg.errCode != 0 {
 		// with error number err
 		return errno.NewError(msg.errCode, msg.data)
-	}
-
-	if msg.errCode == errno.ErrQueryInterrupted {
-		return errno.NewError(errno.ErrQueryInterrupted)
 	}
 
 	return errno.NewRemote(msg.data, errno.RemoteError)

@@ -418,6 +418,8 @@ func (r *ColumnStoreReader) runLimit(rec *record.Record, ch executor.Chunk) (err
 
 func (r *ColumnStoreReader) tranRecToChunk(rec *record.Record) (executor.Chunk, error) {
 	chunk := r.chunkPool.GetChunk()
+	// for multi-table query, each plan is created for each table at the coordinator. Only one table exists in the reader.
+	chunk.SetName(influx.GetOriginMstName(r.schema.GetSourcesNames()[0]))
 	times := rec.Times()
 	for i, column := range chunk.Columns() {
 		if column.DataType() == influxql.Unknown {

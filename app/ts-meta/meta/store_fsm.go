@@ -99,111 +99,264 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 	return err
 }
 
+var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command) interface{}{
+	proto2.Command_CreateDatabaseCommand:            applyCreateDatabase,
+	proto2.Command_DropDatabaseCommand:              applyDropDatabase,
+	proto2.Command_CreateRetentionPolicyCommand:     applyCreateRetentionPolicy,
+	proto2.Command_DropRetentionPolicyCommand:       applyDropRetentionPolicy,
+	proto2.Command_SetDefaultRetentionPolicyCommand: applySetDefaultRetentionPolicy,
+	proto2.Command_UpdateRetentionPolicyCommand:     applyUpdateRetentionPolicy,
+	proto2.Command_CreateShardGroupCommand:          applyCreateShardGroup,
+	proto2.Command_DeleteShardGroupCommand:          applyDeleteShardGroup,
+	proto2.Command_CreateSubscriptionCommand:        applyCreateSubscription,
+	proto2.Command_DropSubscriptionCommand:          applyDropSubscription,
+	proto2.Command_CreateUserCommand:                applyCreateUser,
+	proto2.Command_DropUserCommand:                  applyDropUser,
+	proto2.Command_UpdateUserCommand:                applyUpdateUser,
+	proto2.Command_SetPrivilegeCommand:              applySetPrivilege,
+	proto2.Command_SetAdminPrivilegeCommand:         applySetAdminPrivilege,
+	proto2.Command_SetDataCommand:                   applySetData,
+	proto2.Command_CreateMetaNodeCommand:            applyCreateMetaNode,
+	proto2.Command_DeleteMetaNodeCommand:            applyDeleteMetaNode,
+	proto2.Command_SetMetaNodeCommand:               applySetMetaNode,
+	proto2.Command_CreateDataNodeCommand:            applyCreateDataNode,
+	proto2.Command_DeleteDataNodeCommand:            applyDeleteDataNode,
+	proto2.Command_MarkDatabaseDeleteCommand:        applyMarkDatabaseDelete,
+	proto2.Command_UpdateShardOwnerCommand:          applyUpdateShardOwner,
+	proto2.Command_MarkRetentionPolicyDeleteCommand: applyMarkRetentionPolicyDelete,
+	proto2.Command_CreateMeasurementCommand:         applyCreateMeasurement,
+	proto2.Command_ReShardingCommand:                applyReSharding,
+	proto2.Command_UpdateSchemaCommand:              applyUpdateSchema,
+	proto2.Command_AlterShardKeyCmd:                 applyAlterShardKey,
+	proto2.Command_PruneGroupsCommand:               applyPruneGroups,
+	proto2.Command_MarkMeasurementDeleteCommand:     applyMarkMeasurementDelete,
+	proto2.Command_DropMeasurementCommand:           applyDropMeasurement,
+	proto2.Command_DeleteIndexGroupCommand:          applyDeleteIndexGroup,
+	proto2.Command_UpdateShardInfoTierCommand:       applyUpdateShardInfoTier,
+	proto2.Command_UpdateNodeStatusCommand:          applyUpdateNodeStatus,
+	proto2.Command_CreateEventCommand:               applyCreateEvent,
+	proto2.Command_UpdateEventCommand:               applyUpdateEvent,
+	proto2.Command_UpdatePtInfoCommand:              applyUpdatePtInfo,
+	proto2.Command_RemoveEventCommand:               applyRemoveEvent,
+	proto2.Command_CreateDownSamplePolicyCommand:    applyCreateDownSample,
+	proto2.Command_DropDownSamplePolicyCommand:      applyDropDownSample,
+	proto2.Command_CreateDbPtViewCommand:            applyCreateDbPtView,
+	proto2.Command_UpdateShardDownSampleInfoCommand: applyUpdateShardDownSampleInfo,
+	proto2.Command_MarkTakeoverCommand:              applyMarkTakeover,
+	proto2.Command_MarkBalancerCommand:              applyMarkBalancer,
+	proto2.Command_CreateStreamCommand:              applyCreateStream,
+	proto2.Command_DropStreamCommand:                applyDropStream,
+	proto2.Command_VerifyDataNodeCommand:            applyVerifyDataNode,
+	proto2.Command_ExpandGroupsCommand:              applyExpandGroups,
+	proto2.Command_UpdatePtVersionCommand:           applyUpdatePtVersion,
+	proto2.Command_RegisterQueryIDOffsetCommand:     applyRegisterQueryIDOffset,
+}
+
+func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateDatabaseCommand(cmd)
+}
+
+func applyDropDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropDatabaseCommand(cmd)
+}
+
+func applyCreateRetentionPolicy(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateRetentionPolicyCommand(cmd)
+}
+
+func applyDropRetentionPolicy(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropRetentionPolicyCommand(cmd)
+}
+
+func applySetDefaultRetentionPolicy(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applySetDefaultRetentionPolicyCommand(cmd)
+}
+
+func applyUpdateRetentionPolicy(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateRetentionPolicyCommand(cmd)
+}
+
+func applyCreateShardGroup(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateShardGroupCommand(cmd)
+}
+
+func applyDeleteShardGroup(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDeleteShardGroupCommand(cmd)
+}
+
+func applyCreateSubscription(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateSubscriptionCommand(cmd)
+}
+
+func applyDropSubscription(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropSubscriptionCommand(cmd)
+}
+
+func applyCreateUser(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateUserCommand(cmd)
+}
+
+func applyDropUser(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropUserCommand(cmd)
+}
+
+func applyUpdateUser(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateUserCommand(cmd)
+}
+
+func applySetPrivilege(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applySetPrivilegeCommand(cmd)
+}
+
+func applySetAdminPrivilege(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applySetAdminPrivilegeCommand(cmd)
+}
+
+func applySetData(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applySetDataCommand(cmd)
+}
+
+func applyCreateMetaNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateMetaNodeCommand(cmd)
+}
+
+func applyDeleteMetaNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDeleteMetaNodeCommand(cmd, (*Store)(fsm))
+}
+
+func applySetMetaNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applySetMetaNodeCommand(cmd)
+}
+
+func applyCreateDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateDataNodeCommand(cmd)
+}
+
+func applyDeleteDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDeleteDataNodeCommand(cmd)
+}
+
+func applyMarkDatabaseDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyMarkDatabaseDeleteCommand(cmd)
+}
+
+func applyUpdateShardOwner(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateShardOwnerCommand(cmd)
+}
+
+func applyMarkRetentionPolicyDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyMarkRetentionPolicyDeleteCommand(cmd)
+}
+
+func applyCreateMeasurement(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateMeasurementCommand(cmd)
+}
+
+func applyReSharding(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyReShardingCommand(cmd)
+}
+
+func applyUpdateSchema(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateSchemaCommand(cmd)
+}
+
+func applyAlterShardKey(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyAlterShardKeyCommand(cmd)
+}
+
+func applyPruneGroups(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyPruneGroupsCommand(cmd)
+}
+
+func applyMarkMeasurementDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyMarkMeasurementDeleteCommand(cmd)
+}
+
+func applyDropMeasurement(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropMeasurementCommand(cmd)
+}
+
+func applyDeleteIndexGroup(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDeleteIndexGroupCommand(cmd)
+}
+
+func applyUpdateShardInfoTier(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateShardInfoTierCommand(cmd)
+}
+
+func applyUpdateNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateNodeStatusCommand(cmd)
+}
+
+func applyCreateEvent(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateEventCommand(cmd)
+}
+
+func applyUpdateEvent(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateEventCommand(cmd)
+}
+
+func applyUpdatePtInfo(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdatePtInfoCommand(cmd)
+}
+
+func applyRemoveEvent(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyRemoveEvent(cmd)
+}
+
+func applyCreateDownSample(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateDownSampleCommand(cmd)
+}
+
+func applyDropDownSample(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropDownSampleCommand(cmd)
+}
+
+func applyCreateDbPtView(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateDbPtViewCommand(cmd)
+}
+
+func applyUpdateShardDownSampleInfo(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateShardDownSampleInfoCommand(cmd)
+}
+
+func applyMarkTakeover(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyMarkTakeoverCommand(cmd)
+}
+
+func applyMarkBalancer(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyMarkBalancerCommand(cmd)
+}
+
+func applyCreateStream(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateStream(cmd)
+}
+
+func applyDropStream(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropStream(cmd)
+}
+
+func applyVerifyDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyVerifyDataNodeCommand(cmd)
+}
+
+func applyExpandGroups(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyExpandGroupsCommand(cmd)
+}
+
+func applyUpdatePtVersion(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdatePtVersionCommand(cmd)
+}
+
+func applyRegisterQueryIDOffset(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyRegisterQueryIDOffsetCommand(cmd)
+}
+
 func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
-	switch cmd.GetType() {
-	case proto2.Command_CreateDatabaseCommand:
-		return fsm.applyCreateDatabaseCommand(&cmd)
-	case proto2.Command_DropDatabaseCommand:
-		return fsm.applyDropDatabaseCommand(&cmd)
-	case proto2.Command_CreateRetentionPolicyCommand:
-		return fsm.applyCreateRetentionPolicyCommand(&cmd)
-	case proto2.Command_DropRetentionPolicyCommand:
-		return fsm.applyDropRetentionPolicyCommand(&cmd)
-	case proto2.Command_SetDefaultRetentionPolicyCommand:
-		return fsm.applySetDefaultRetentionPolicyCommand(&cmd)
-	case proto2.Command_UpdateRetentionPolicyCommand:
-		return fsm.applyUpdateRetentionPolicyCommand(&cmd)
-	case proto2.Command_CreateShardGroupCommand:
-		return fsm.applyCreateShardGroupCommand(&cmd)
-	case proto2.Command_DeleteShardGroupCommand:
-		return fsm.applyDeleteShardGroupCommand(&cmd)
-	case proto2.Command_CreateSubscriptionCommand:
-		return fsm.applyCreateSubscriptionCommand(&cmd)
-	case proto2.Command_DropSubscriptionCommand:
-		return fsm.applyDropSubscriptionCommand(&cmd)
-	case proto2.Command_CreateUserCommand:
-		return fsm.applyCreateUserCommand(&cmd)
-	case proto2.Command_DropUserCommand:
-		return fsm.applyDropUserCommand(&cmd)
-	case proto2.Command_UpdateUserCommand:
-		return fsm.applyUpdateUserCommand(&cmd)
-	case proto2.Command_SetPrivilegeCommand:
-		return fsm.applySetPrivilegeCommand(&cmd)
-	case proto2.Command_SetAdminPrivilegeCommand:
-		return fsm.applySetAdminPrivilegeCommand(&cmd)
-	case proto2.Command_SetDataCommand:
-		return fsm.applySetDataCommand(&cmd)
-	case proto2.Command_CreateMetaNodeCommand:
-		return fsm.applyCreateMetaNodeCommand(&cmd)
-	case proto2.Command_DeleteMetaNodeCommand:
-		return fsm.applyDeleteMetaNodeCommand(&cmd, (*Store)(fsm))
-	case proto2.Command_SetMetaNodeCommand:
-		return fsm.applySetMetaNodeCommand(&cmd)
-	case proto2.Command_CreateDataNodeCommand:
-		return fsm.applyCreateDataNodeCommand(&cmd)
-	case proto2.Command_DeleteDataNodeCommand:
-		return fsm.applyDeleteDataNodeCommand(&cmd)
-	case proto2.Command_MarkDatabaseDeleteCommand:
-		return fsm.applyMarkDatabaseDeleteCommand(&cmd)
-	case proto2.Command_UpdateShardOwnerCommand:
-		return fsm.applyUpdateShardOwnerCommand(&cmd)
-	case proto2.Command_MarkRetentionPolicyDeleteCommand:
-		return fsm.applyMarkRetentionPolicyDeleteCommand(&cmd)
-	case proto2.Command_CreateMeasurementCommand:
-		return fsm.applyCreateMeasurementCommand(&cmd)
-	case proto2.Command_ReShardingCommand:
-		return fsm.applyReShardingCommand(&cmd)
-	case proto2.Command_UpdateSchemaCommand:
-		return fsm.applyUpdateSchemaCommand(&cmd)
-	case proto2.Command_AlterShardKeyCmd:
-		return fsm.applyAlterShardKeyCommand(&cmd)
-	case proto2.Command_PruneGroupsCommand:
-		return fsm.applyPruneGroupsCommand(&cmd)
-	case proto2.Command_MarkMeasurementDeleteCommand:
-		return fsm.applyMarkMeasurementDeleteCommand(&cmd)
-	case proto2.Command_DropMeasurementCommand:
-		return fsm.applyDropMeasurementCommand(&cmd)
-	case proto2.Command_DeleteIndexGroupCommand:
-		return fsm.applyDeleteIndexGroupCommand(&cmd)
-	case proto2.Command_UpdateShardInfoTierCommand:
-		return fsm.applyUpdateShardInfoTierCommand(&cmd)
-	case proto2.Command_UpdateNodeStatusCommand:
-		return fsm.applyUpdateNodeStatusCommand(&cmd)
-	case proto2.Command_CreateEventCommand:
-		return fsm.applyCreateEventCommand(&cmd)
-	case proto2.Command_UpdateEventCommand:
-		return fsm.applyUpdateEventCommand(&cmd)
-	case proto2.Command_UpdatePtInfoCommand:
-		return fsm.applyUpdatePtInfoCommand(&cmd)
-	case proto2.Command_RemoveEventCommand:
-		return fsm.applyRemoveEvent(&cmd)
-	case proto2.Command_CreateDownSamplePolicyCommand:
-		return fsm.applyCreateDownSampleCommand(&cmd)
-	case proto2.Command_DropDownSamplePolicyCommand:
-		return fsm.applyDropDownSampleCommand(&cmd)
-	case proto2.Command_CreateDbPtViewCommand:
-		return fsm.applyCreateDbPtViewCommand(&cmd)
-	case proto2.Command_UpdateShardDownSampleInfoCommand:
-		return fsm.applyUpdateShardDownSampleInfoCommand(&cmd)
-	case proto2.Command_MarkTakeoverCommand:
-		return fsm.applyMarkTakeoverCommand(&cmd)
-	case proto2.Command_MarkBalancerCommand:
-		return fsm.applyMarkBalancerCommand(&cmd)
-	case proto2.Command_CreateStreamCommand:
-		return fsm.applyCreateStream(&cmd)
-	case proto2.Command_DropStreamCommand:
-		return fsm.applyDropStream(&cmd)
-	case proto2.Command_VerifyDataNodeCommand:
-		return fsm.applyVerifyDataNodeCommand(&cmd)
-	case proto2.Command_ExpandGroupsCommand:
-		return fsm.applyExpandGroupsCommand(&cmd)
-	case proto2.Command_UpdatePtVersionCommand:
-		return fsm.applyUpdatePtVersionCommand(&cmd)
-	case proto2.Command_RegisterQueryIDOffsetCommand:
-		return fsm.applyRegisterQueryIDOffsetCommand(&cmd)
-	default:
-		panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
+	if handler, ok := applyFunc[cmd.GetType()]; ok {
+		return handler(fsm, &cmd)
 	}
+	panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
 }
 
 func (fsm *storeFSM) applyReShardingCommand(cmd *proto2.Command) interface{} {

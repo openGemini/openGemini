@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -317,6 +318,9 @@ func (trans *IndexScanTransform) WorkHelper(ctx context.Context) error {
 	go func() {
 		defer wgChild.Done()
 		if pipError = trans.pipelineExecutor.ExecuteExecutor(ctx); pipError != nil {
+			if errno.Equal(pipError, errno.BucketLacks) {
+				output[0].Close()
+			}
 			if trans.pipelineExecutor.Aborted() {
 				return
 			}
@@ -326,7 +330,7 @@ func (trans *IndexScanTransform) WorkHelper(ctx context.Context) error {
 	trans.Running(ctx)
 	wgChild.Wait()
 	trans.wg.Wait()
-	return nil
+	return pipError
 }
 
 func (trans *IndexScanTransform) Running(ctx context.Context) {

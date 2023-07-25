@@ -194,7 +194,7 @@ func (trans *StreamAggregateTransform) runnable(in int, ctx context.Context, err
 		tracing.Finish(trans.span)
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -273,7 +273,7 @@ func (trans *StreamAggregateTransform) reduce(
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)

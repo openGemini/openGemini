@@ -101,7 +101,7 @@ const (
 	InvalidQuerySchema           = 1120
 	InvalidQueryStat             = 1121
 	ErrQueryNotFound             = 1122
-	ErrQueryInterrupted          = 1123
+	ErrQueryKilled               = 1123
 )
 
 // store engine error codes
@@ -260,6 +260,7 @@ const (
 	ErrRPNIsNullForAnd         = 6011
 	ErrRPNIsNullForOR          = 6012
 	ErrCoarseIndexFragment     = 6013
+	ErrQuerySchemaUpperBound   = 6014
 )
 
 const (

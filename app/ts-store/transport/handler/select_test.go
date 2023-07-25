@@ -342,13 +342,15 @@ func TestNewShardTraits(t *testing.T) {
 
 func TestSelect_GetQueryExeInfo(t *testing.T) {
 	rq := executor.RemoteQuery{
-		QueryId:   1,
-		QueryStmt: "SELECT * FROM mst1",
-		Database:  "db1",
+		Opt: qry.ProcessorOptions{
+			QueryId: 1,
+			Query:   "SELECT * FROM mst1",
+		},
+		Database: "db1",
 	}
 	s := NewSelect(nil, nil, &rq)
 	info := s.GetQueryExeInfo()
-	require.Equal(t, rq.QueryId, info.QueryID)
-	require.Equal(t, rq.QueryStmt, info.Stmt)
+	require.Equal(t, rq.Opt.QueryId, info.QueryID)
+	require.Equal(t, rq.Opt.Query, info.Stmt)
 	require.Equal(t, rq.Database, info.Database)
 }

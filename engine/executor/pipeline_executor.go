@@ -749,11 +749,24 @@ func (builder *ExecutorBuilder) addShardExchange(exchange *LogicalExchange) (*Tr
 		exchange.AddTrait(shard)
 	}
 
-	if builder.enableBinaryTreeMerge == 1 {
+	if len(exchange.eTraits) == 1 {
+		return builder.addOneShardExchange(exchange)
+	} else if builder.enableBinaryTreeMerge == 1 {
 		return builder.addBinaryTreeExchange(exchange, len(exchange.eTraits)), nil
 	} else {
 		return builder.addDefaultExchange(exchange)
 	}
+
+}
+
+func (builder *ExecutorBuilder) addOneShardExchange(exchange *LogicalExchange) (*TransformVertex, error) {
+	if builder.info != nil {
+		builder.info.ShardID = builder.traits.shards[0]
+	}
+	childNode := exchange.Children()[0]
+	clone := childNode.Clone()
+	clone.ApplyTrait(exchange.eTraits[0])
+	return builder.addNodeToDag(clone)
 }
 
 func (builder *ExecutorBuilder) addSingleShardExchange(exchange *LogicalExchange) (*TransformVertex, error) {
@@ -930,7 +943,6 @@ func (builder *ExecutorBuilder) addDefaultExchange(exchange *LogicalExchange) (*
 
 	inRowDataTypes := make([]hybridqp.RowDataType, 0, len(exchange.eTraits))
 	children := make([]*TransformVertex, 0, len(exchange.eTraits))
-
 	for i, trait := range exchange.eTraits {
 		if builder.info != nil {
 			builder.info.ShardID = builder.traits.shards[i]
@@ -1044,7 +1056,13 @@ func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*Transf
 		}
 		children = append(children, child)
 	}
-
+	if len(node.Children()) == 1 {
+		if exchange, ok := node.Children()[0].(*LogicalExchange); ok {
+			if exchange.eType == SHARD_EXCHANGE && len(builder.traits.shards) == 1 {
+				return children[0], nil
+			}
+		}
+	}
 	vertex, err := builder.addDefaultToDag(node)
 	if err != nil {
 		return nil, err
