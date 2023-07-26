@@ -74,8 +74,14 @@ func (p *LogicalPlanBase) ForwardInit(input hybridqp.QueryNode) {
 }
 
 func (p *LogicalPlanBase) InitRef(input hybridqp.QueryNode) {
-	p.ops = input.RowExprOptions()
 	p.rt = input.RowDataType()
+
+	inrefs := input.RowDataType().MakeRefs()
+	p.ops = make([]hybridqp.ExprOptions, 0, len(inrefs))
+	for _, ref := range inrefs {
+		clone := ref
+		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: &clone, Ref: ref})
+	}
 }
 
 func (p *LogicalPlanBase) Trait() hybridqp.Trait {

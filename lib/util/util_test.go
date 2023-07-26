@@ -83,12 +83,16 @@ func TestZeroToDefault(t *testing.T) {
 }
 
 func TestCeilToPower2(t *testing.T) {
-	assert.Equal(t, uint32(1), util.CeilToPower2(1))
-	assert.Equal(t, uint32(2), util.CeilToPower2(2))
-	assert.Equal(t, uint32(4), util.CeilToPower2(4))
-	assert.Equal(t, uint32(8), util.CeilToPower2(5))
-	assert.Equal(t, uint32(16), util.CeilToPower2(9))
-	assert.Equal(t, uint32(32), util.CeilToPower2(26))
+	assert.Equal(t, uint64(1), util.CeilToPower2(1))
+	assert.Equal(t, uint64(2), util.CeilToPower2(2))
+	assert.Equal(t, uint64(4), util.CeilToPower2(4))
+	assert.Equal(t, uint64(8), util.CeilToPower2(5))
+	assert.Equal(t, uint64(16), util.CeilToPower2(9))
+	assert.Equal(t, uint64(32), util.CeilToPower2(26))
+}
+
+func TestNumberOfTrailingZeros(t *testing.T) {
+	assert.Equal(t, 63, util.NumberOfTrailingZeros(0x8000000000000000))
 }
 
 func TestIntLimit(t *testing.T) {

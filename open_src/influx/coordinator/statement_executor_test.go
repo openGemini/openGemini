@@ -202,8 +202,8 @@ func TestStatementExecutor_executeShowQueriesStatement(t *testing.T) {
 
 func Test_combinedQueryExeInfo_getCombinedRunState(t *testing.T) {
 	type fields struct {
-		runningHosts []string
-		killedHosts  []string
+		runningHosts map[string]struct{}
+		killedHosts  map[string]struct{}
 	}
 	tests := []struct {
 		name   string
@@ -213,8 +213,12 @@ func Test_combinedQueryExeInfo_getCombinedRunState(t *testing.T) {
 		{
 			name: "AllRunning",
 			fields: fields{
-				runningHosts: []string{"127.0.0.1:8400", "127.0.0.1:8401", "127.0.0.1:8402"},
-				killedHosts:  nil,
+				runningHosts: map[string]struct{}{
+					"127.0.0.1:8400": {},
+					"127.0.0.1:8401": {},
+					"127.0.0.1:8402": {},
+				},
+				killedHosts: nil,
 			},
 			want: allRunning,
 		},
@@ -222,15 +226,19 @@ func Test_combinedQueryExeInfo_getCombinedRunState(t *testing.T) {
 			name: "AllKilled",
 			fields: fields{
 				runningHosts: nil,
-				killedHosts:  []string{"127.0.0.1:8400", "127.0.0.1:8401", "127.0.0.1:8402"},
+				killedHosts: map[string]struct{}{
+					"127.0.0.1:8400": {},
+					"127.0.0.1:8401": {},
+					"127.0.0.1:8402": {},
+				},
 			},
 			want: allKilled,
 		},
 		{
 			name: "PartiallyKilled",
 			fields: fields{
-				runningHosts: []string{"127.0.0.1:8400"},
-				killedHosts:  []string{"127.0.0.1:8401", "127.0.0.1:8402"},
+				runningHosts: map[string]struct{}{"127.0.0.1:8400": {}},
+				killedHosts:  map[string]struct{}{"127.0.0.1:8401": {}, "127.0.0.1:8402": {}},
 			},
 			want: partiallyKilled,
 		},
@@ -252,5 +260,5 @@ func TestStatementExecutor_executeKillQuery(t *testing.T) {
 	assert.EqualError(t, err1, meta2.ErrUnsupportCommand.Error())
 
 	err2 := e.executeKillQuery(&influxql.KillQueryStatement{QueryID: uint64(1)})
-	assert.ErrorContains(t, err2, "failed to kill query")
+	assert.NoError(t, err2)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,26 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package metaclient
+package run
 
 import (
 	"fmt"
-	"os"
-	"time"
 
-	"go.uber.org/zap"
+	"github.com/openGemini/openGemini/app"
+	"github.com/openGemini/openGemini/lib/config"
 )
 
-func (c *Client) Suicide(err error) {
-	c.logger.Error("Suicide for fault data node", zap.Error(err))
-	time.Sleep(errSleep)
+func NewCommand(info app.ServerInfo, enableGossip bool) *app.Command {
+	cmd := app.NewCommand()
+	cmd.Info = info
+	cmd.Logo = app.METALOGO
+	cmd.Version = cmd.Info.FullVersion()
+	cmd.Usage = fmt.Sprintf(app.RunUsage, info.App, info.App)
+	cmd.Config = config.NewTSMeta(enableGossip)
+	cmd.NewServerFunc = NewServer
 
-	pid := os.Getpid()
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		panic(fmt.Sprintf("FATAL: cannot find current process: %v", err))
-	}
-	if err := p.Kill(); err != nil {
-		panic(fmt.Sprintf("FATAL: cannot terminate process: %v", err))
-	}
+	return cmd
 }

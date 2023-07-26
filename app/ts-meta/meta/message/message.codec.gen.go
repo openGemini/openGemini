@@ -939,26 +939,23 @@ func (o *GetStreamInfoResponse) Instance() transport.Codec {
 }
 
 func (o *RegisterQueryIDOffsetRequest) Marshal(buf []byte) ([]byte, error) {
-	var err error
 	buf = codec.AppendString(buf, o.Host)
 
-	return buf, err
+	return buf, nil
 }
 
 func (o *RegisterQueryIDOffsetRequest) Unmarshal(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	var err error
 	dec := codec.NewBinaryDecoder(buf)
 	o.Host = dec.String()
 
-	return err
+	return nil
 }
 
 func (o *RegisterQueryIDOffsetRequest) Size() int {
-	size := 0
-	size += codec.SizeOfString(o.Host)
+	size := codec.SizeOfString(o.Host)
 
 	return size
 }
@@ -979,17 +976,16 @@ func (o *RegisterQueryIDOffsetResponse) Unmarshal(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	var err error
+
 	dec := codec.NewBinaryDecoder(buf)
 	o.Offset = dec.Uint64()
 	o.Err = dec.String()
 
-	return err
+	return nil
 }
 
 func (o *RegisterQueryIDOffsetResponse) Size() int {
-	size := 0
-	size += codec.SizeOfUint64()
+	size := codec.SizeOfUint64()
 	size += codec.SizeOfString(o.Err)
 
 	return size

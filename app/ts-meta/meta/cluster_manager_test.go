@@ -255,8 +255,14 @@ func TestClusterManager_ActiveTakeover(t *testing.T) {
 	config.SetHaEnable(true)
 	globalService.store.data.TakeOverEnabled = true
 	globalService.store.NetStore = NewMockNetStorage()
-	e = *generateMemberEvent(serf.EventMemberJoin, "2", 2, serf.StatusAlive)
 
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
+
+	e = *generateMemberEvent(serf.EventMemberJoin, "2", 2, serf.StatusAlive)
 	globalService.clusterManager.eventCh <- e
 	timer := time.NewTimer(30 * time.Second)
 	// wait db pt got to process
@@ -306,6 +312,13 @@ func TestClusterManager_LeaderChanged(t *testing.T) {
 	config.SetHaEnable(true)
 	globalService.store.data.TakeOverEnabled = true
 	globalService.store.NetStore = NewMockNetStorage()
+
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+	dataNode = globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	dataNode.AliveConnID = dataNode.ConnID - 1
+
 	e = *generateMemberEvent(serf.EventMemberJoin, "2", 2, serf.StatusAlive)
 	globalService.clusterManager.eventCh <- e
 	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(2).Status)

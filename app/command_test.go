@@ -30,3 +30,10 @@ func Test_Command_Run_Pidfile(t *testing.T) {
 	err := cmd.Run("-config", "notFoundFile", "-pidfile", filepath.Join(tmpDir, "test.pid"))
 	require.EqualError(t, err, "parse config: parse config: open notFoundFile: no such file or directory")
 }
+
+func TestRunCommands(t *testing.T) {
+	cmd := app.NewCommand()
+	app.Run([]string{"version"})
+	app.Run([]string{"version"}, cmd)
+	app.Run([]string{"invalid arg"}, cmd)
+}

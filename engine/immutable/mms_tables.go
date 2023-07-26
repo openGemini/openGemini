@@ -634,6 +634,7 @@ func (m *MmsTables) DropMeasurement(_ context.Context, name string) error {
 	delete(m.CSFiles, name)
 	delete(m.PKFiles, name)
 
+	m.sequencer.DelMmsIdTime(name)
 	m.mu.Unlock()
 
 	mmsDir := filepath.Join(m.path, name)

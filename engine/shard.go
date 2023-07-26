@@ -401,7 +401,6 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		writeColdDuration:  options.WriteColdDuration,
 		forceChan:          make(chan struct{}, 1),
 		defaultTags: map[string]string{
-			"path":            dataPath,
 			"id":              fmt.Sprintf("%d", ident.ShardID),
 			"database":        db,
 			"retentionPolicy": rp,
@@ -443,7 +442,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 }
 
 func (s *shard) initSeriesLimiter(limit uint64) {
-	if limit == 0 {
+	if limit == 0 || s.indexBuilder == nil {
 		return
 	}
 
@@ -1135,7 +1134,12 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 
 	walFileNames, err := s.wal.Replay(ctx,
 		func(binary []byte) error {
-			return s.writeWalBuffer(binary)
+			err := s.writeWalBuffer(binary)
+			// SeriesLimited error is ignored in the wal playback process
+			if errno.Equal(err, errno.SeriesLimited) {
+				err = nil
+			}
+			return err
 		},
 	)
 	if err != nil {

@@ -40,6 +40,7 @@ const (
 	NodeMeta   = 2
 	NodeStore  = 3
 	NodeServer = 4
+	NodeData   = 5
 )
 
 const (
@@ -157,6 +158,10 @@ func GetNode() Node {
 }
 
 func Equal(err error, errno ...Errno) bool {
+	if err == nil {
+		return false
+	}
+
 	e, ok := err.(*Error)
 	if !ok {
 		return false

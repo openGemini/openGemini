@@ -283,6 +283,9 @@ func TestPlanTypeShard(t *testing.T) {
 	if _, err := init.LogicalPlanCost(nil, query.ProcessorOptions{}); err != nil {
 		t.Error("planTypeShard cost error")
 	}
+	if init.GetSeriesKey() != nil {
+		t.Error("planTypeShard getSeriesKey error")
+	}
 	initMapper := executor.NewPlanTypeInitShardMapper()
 	if initMapper.Close() != nil {
 		t.Error("planTypeShardMapper close error")

@@ -86,8 +86,8 @@ func (p *DDLProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return err
 	}
 
-	rspTyp := netstorage.GetResponseMessageType(msg.Typ)
-	if rspTyp == netstorage.UnknownMessage {
+	rspTyp, ok := netstorage.MessageResponseTyp[msg.Typ]
+	if !ok {
 		return fmt.Errorf("no response message type: %d", msg.Typ)
 	}
 
@@ -142,20 +142,28 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	qm := query.NewManager(msg.ClientID())
 
-	if qm.Aborted(req.QueryId) {
+	// case for：
+	// this query is retried by SQL when store closed and DBPT move to this node.
+	if qm.IsKilled(req.Opt.QueryId) {
+		err := errno.NewError(errno.ErrQueryKilled, req.Opt.QueryId)
+		logger.GetLogger().Error("query already killed", zap.Uint64("qid", req.Opt.QueryId), zap.Error(err))
+		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryKilled, err.Error()), true)
+		return nil
+	}
+
+	if qm.Aborted(req.Opt.QueryId) {
 		logger.GetLogger().Info("[SelectProcessor.Handle] aborted")
-		err := errno.NewError(errno.ErrQueryInterrupted)
-		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryNotFound, err.Error()), true)
+		_ = w.Response(executor.NewFinishMessage(), true)
 		return nil
 	}
 
 	s := NewSelect(p.store, w, req)
-	qm.Add(req.QueryId, s)
+	qm.Add(req.Opt.QueryId, s)
 
 	w.Session().EnableDataACK()
 	defer func() {
 		w.Session().DisableDataACK()
-		qm.Finish(req.QueryId)
+		qm.Finish(req.Opt.QueryId)
 	}()
 
 	err := s.Process()
@@ -170,10 +178,10 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return nil
 	}
 
-	if s.isAborted() {
-		err = errno.NewError(errno.ErrQueryInterrupted)
-		logger.GetLogger().Error(err.Error())
-		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryInterrupted, err.Error()), true)
+	if qm.IsKilled(req.Opt.QueryId) {
+		err = errno.NewError(errno.ErrQueryKilled, req.Opt.QueryId)
+		logger.GetLogger().Error("query killed", zap.Uint64("qid", req.Opt.QueryId), zap.Error(err))
+		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryKilled, err.Error()), true)
 		return nil
 	}
 

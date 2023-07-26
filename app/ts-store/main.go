@@ -17,20 +17,12 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
 	"os"
-	"runtime"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
-	"github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-store/run"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/util"
-	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var (
@@ -40,78 +32,16 @@ var (
 	TsBuildTime string
 )
 
-const TsStore = "ts-store"
-
-var storeUsage = fmt.Sprintf(app.MainUsage, TsStore, TsStore)
-var runUsage = fmt.Sprintf(app.RunUsage, TsStore, TsStore)
-
 func main() {
 	app.InitParse()
-	if err := doRun(os.Args[1:]...); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func doRun(args ...string) error {
 	errno.SetNode(errno.NodeStore)
-	name, args := cmd.ParseCommandName(args)
-
-	switch name {
-	case "", "run":
-		options, err := app.ParseFlags(func() {
-			fmt.Println(runUsage)
-		}, args...)
-		if err != nil {
-			return err
-		}
-		mainCmd := app.NewCommand()
-		err = mainCmd.InitConfig(config.NewTSStore(true), options.ConfigPath)
-		if err != nil {
-			return err
-		}
-
-		mainCmd.Logger = logger.NewLogger(errno.ModuleUnknown)
-		mainCmd.Command = &cobra.Command{
-			Use:                storeUsage,
-			Version:            TsVersion,
-			ValidArgs:          []string{TsBranch, TsCommit, TsBuildTime},
-			DisableFlagParsing: true,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				fmt.Fprint(os.Stdout, app.STORELOGO)
-
-				// Write the PID file.
-				if err := app.WritePIDFile(options.PIDFile); err != nil {
-					return fmt.Errorf("write pid file: %s", err)
-				}
-				mainCmd.Pidfile = options.PIDFile
-
-				s, err := run.NewServer(mainCmd.Config, cmd, mainCmd.Logger)
-				if err != nil {
-					return fmt.Errorf("create server: %s", err)
-				}
-				if err := s.Open(); err != nil {
-					return fmt.Errorf("open server: %s", err)
-				}
-
-				mainCmd.Server = s
-				mainCmd.Logger.Info("Store RunE")
-				return nil
-			},
-		}
-
-		if mainCmd.Command.Execute() != nil {
-			os.Exit(1)
-		}
-
-		signal := procutil.WaitForSigterm()
-		mainCmd.Logger.Info("Store service received shutdown signal", zap.Any("signal", signal))
-		util.MustClose(mainCmd)
-		mainCmd.Logger.Info("Store shutdown successfully!")
-	case "version":
-		fmt.Printf(app.VERSION, TsStore, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
-	default:
-		return fmt.Errorf(storeUsage)
+	info := app.ServerInfo{
+		App:       config.AppStore,
+		Version:   TsVersion,
+		Commit:    TsCommit,
+		Branch:    TsBranch,
+		BuildTime: TsBuildTime,
 	}
-	return nil
+
+	app.Run(os.Args[1:], run.NewCommand(info, true))
 }

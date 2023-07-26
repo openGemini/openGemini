@@ -58,74 +58,43 @@ const (
 	KillQueryResponseMessage
 )
 
-func NewMessage(typ uint8) codec.BinaryCodec {
-	switch typ {
-	case SeriesKeysRequestMessage:
-		return &SeriesKeysRequest{}
-	case SeriesKeysResponseMessage:
-		return &SeriesKeysResponse{}
-	case SeriesExactCardinalityRequestMessage:
-		return &SeriesExactCardinalityRequest{}
-	case SeriesExactCardinalityResponseMessage:
-		return &SeriesExactCardinalityResponse{}
-	case SeriesCardinalityRequestMessage:
-		return &SeriesCardinalityRequest{}
-	case SeriesCardinalityResponseMessage:
-		return &SeriesCardinalityResponse{}
-	case ShowTagValuesRequestMessage:
-		return &ShowTagValuesRequest{}
-	case ShowTagValuesResponseMessage:
-		return &ShowTagValuesResponse{}
-	case ShowTagValuesCardinalityRequestMessage:
-		return &ShowTagValuesCardinalityRequest{}
-	case ShowTagValuesCardinalityResponseMessage:
-		return &ShowTagValuesCardinalityResponse{}
-	case GetShardSplitPointsRequestMessage:
-		return &GetShardSplitPointsRequest{}
-	case GetShardSplitPointsResponseMessage:
-		return &GetShardSplitPointsResponse{}
-	case DeleteRequestMessage:
-		return &DeleteRequest{}
-	case DeleteResponseMessage:
-		return &DeleteResponse{}
-	case CreateDataBaseRequestMessage:
-		return &CreateDataBaseRequest{}
-	case CreateDatabaseResponseMessage:
-		return &CreateDataBaseResponse{}
-	case ShowQueriesRequestMessage:
-		return &ShowQueriesRequest{}
-	case ShowQueriesResponseMessage:
-		return &ShowQueriesResponse{}
-	case KillQueryRequestMessage:
-		return &KillQueryRequest{}
-	case KillQueryResponseMessage:
-		return &KillQueryResponse{}
-	default:
-		return nil
-	}
-}
+var MessageBinaryCodec = make(map[uint8]func() codec.BinaryCodec, 20)
+var MessageResponseTyp = make(map[uint8]uint8, 20)
 
-func GetResponseMessageType(typ uint8) uint8 {
-	switch typ {
-	case SeriesKeysRequestMessage:
-		return SeriesKeysResponseMessage
-	case SeriesExactCardinalityRequestMessage:
-		return SeriesExactCardinalityResponseMessage
-	case SeriesCardinalityRequestMessage:
-		return SeriesCardinalityResponseMessage
-	case ShowTagValuesRequestMessage:
-		return ShowTagValuesResponseMessage
-	case ShowTagValuesCardinalityRequestMessage:
-		return ShowTagValuesCardinalityResponseMessage
-	case GetShardSplitPointsRequestMessage:
-		return GetShardSplitPointsResponseMessage
-	case DeleteRequestMessage:
-		return DeleteResponseMessage
-	case ShowQueriesRequestMessage:
-		return ShowQueriesResponseMessage
-	case KillQueryRequestMessage:
-		return KillQueryResponseMessage
-	default:
-		return UnknownMessage
+func init() {
+	MessageBinaryCodec[UnknownMessage] = func() codec.BinaryCodec { return nil }
+	MessageBinaryCodec[SeriesKeysRequestMessage] = func() codec.BinaryCodec { return &SeriesKeysRequest{} }
+	MessageBinaryCodec[SeriesKeysRequestMessage] = func() codec.BinaryCodec { return &SeriesKeysRequest{} }
+	MessageBinaryCodec[SeriesKeysResponseMessage] = func() codec.BinaryCodec { return &SeriesKeysResponse{} }
+	MessageBinaryCodec[SeriesExactCardinalityRequestMessage] = func() codec.BinaryCodec { return &SeriesExactCardinalityRequest{} }
+	MessageBinaryCodec[SeriesExactCardinalityResponseMessage] = func() codec.BinaryCodec { return &SeriesExactCardinalityResponse{} }
+	MessageBinaryCodec[SeriesCardinalityRequestMessage] = func() codec.BinaryCodec { return &SeriesCardinalityRequest{} }
+	MessageBinaryCodec[SeriesCardinalityResponseMessage] = func() codec.BinaryCodec { return &SeriesCardinalityResponse{} }
+	MessageBinaryCodec[ShowTagValuesRequestMessage] = func() codec.BinaryCodec { return &ShowTagValuesRequest{} }
+	MessageBinaryCodec[ShowTagValuesResponseMessage] = func() codec.BinaryCodec { return &ShowTagValuesResponse{} }
+	MessageBinaryCodec[ShowTagValuesCardinalityRequestMessage] = func() codec.BinaryCodec { return &ShowTagValuesCardinalityRequest{} }
+	MessageBinaryCodec[ShowTagValuesCardinalityResponseMessage] = func() codec.BinaryCodec { return &ShowTagValuesCardinalityResponse{} }
+	MessageBinaryCodec[GetShardSplitPointsRequestMessage] = func() codec.BinaryCodec { return &GetShardSplitPointsRequest{} }
+	MessageBinaryCodec[GetShardSplitPointsResponseMessage] = func() codec.BinaryCodec { return &GetShardSplitPointsResponse{} }
+	MessageBinaryCodec[DeleteRequestMessage] = func() codec.BinaryCodec { return &DeleteRequest{} }
+	MessageBinaryCodec[DeleteResponseMessage] = func() codec.BinaryCodec { return &DeleteResponse{} }
+	MessageBinaryCodec[CreateDataBaseRequestMessage] = func() codec.BinaryCodec { return &CreateDataBaseRequest{} }
+	MessageBinaryCodec[CreateDatabaseResponseMessage] = func() codec.BinaryCodec { return &CreateDataBaseResponse{} }
+	MessageBinaryCodec[ShowQueriesRequestMessage] = func() codec.BinaryCodec { return &ShowQueriesRequest{} }
+	MessageBinaryCodec[ShowQueriesResponseMessage] = func() codec.BinaryCodec { return &ShowQueriesResponse{} }
+	MessageBinaryCodec[KillQueryRequestMessage] = func() codec.BinaryCodec { return &KillQueryRequest{} }
+	MessageBinaryCodec[KillQueryResponseMessage] = func() codec.BinaryCodec { return &KillQueryResponse{} }
+
+	MessageResponseTyp = map[uint8]uint8{
+		SeriesKeysRequestMessage:               SeriesKeysResponseMessage,
+		SeriesExactCardinalityRequestMessage:   SeriesExactCardinalityResponseMessage,
+		SeriesCardinalityRequestMessage:        SeriesCardinalityResponseMessage,
+		ShowTagValuesRequestMessage:            ShowTagValuesResponseMessage,
+		ShowTagValuesCardinalityRequestMessage: ShowTagValuesCardinalityResponseMessage,
+		GetShardSplitPointsRequestMessage:      GetShardSplitPointsResponseMessage,
+		DeleteRequestMessage:                   DeleteResponseMessage,
+		CreateDataBaseRequestMessage:           CreateDatabaseResponseMessage,
+		ShowQueriesRequestMessage:              ShowQueriesResponseMessage,
+		KillQueryRequestMessage:                KillQueryResponseMessage,
 	}
 }

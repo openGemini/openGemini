@@ -17,7 +17,9 @@ limitations under the License.
 package immutable_test
 
 import (
+	"math"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -243,6 +245,50 @@ func TestBatchUpdateCheckTime(t *testing.T) {
 		assert.Equal(t, lastTime, maxInt64(p1.Tms[i], p2.Tms[i]))
 		assert.Equal(t, rowCount, p1.Rows[i]+p2.Rows[i])
 	}
+}
+
+func TestDelMmsIdTime(t *testing.T) {
+	seq := immutable.NewSequencer()
+
+	p := &immutable.IdTimePairs{
+		Name: "mst_1",
+		Ids:  []uint64{1, 2},
+		Tms:  []int64{10, 20},
+		Rows: []int64{1, 2},
+	}
+	seq.BatchUpdateCheckTime(p, true)
+	p.Name = "mst_2"
+	seq.BatchUpdateCheckTime(p, true)
+
+	seq.DelMmsIdTime("mst_1")
+	seq.DelMmsIdTime("mst_not_exists")
+
+	tm, rows := seq.Get("mst_1", 1)
+	require.Equal(t, int64(math.MinInt64), tm)
+	require.Equal(t, int64(0), rows)
+	require.Equal(t, uint64(2), seq.SeriesTotal())
+}
+
+func TestSeriesCounter(t *testing.T) {
+	sc := &immutable.SeriesCounter{}
+
+	n := 1000
+	wg := sync.WaitGroup{}
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			sc.Incr()
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+
+	require.Equal(t, uint64(n), sc.Get())
+	sc.DecrN(0)
+	sc.DecrN(1)
+	require.Equal(t, uint64(n-1), sc.Get())
+	sc.DecrN(999)
+	require.Equal(t, uint64(0), sc.Get())
 }
 
 func maxInt64(a, b int64) int64 {

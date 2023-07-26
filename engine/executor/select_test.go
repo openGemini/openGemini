@@ -1,8 +1,5 @@
-//go:build linux || darwin || freebsd
-// +build linux darwin freebsd
-
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,20 +14,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package metaclient
+package executor
 
 import (
-	"fmt"
-	"syscall"
-	"time"
+	"testing"
 
-	"go.uber.org/zap"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
-func (c *Client) Suicide(err error) {
-	c.logger.Error("Suicide for fault data node", zap.Error(err))
-	time.Sleep(errSleep)
-	if e := syscall.Kill(syscall.Getpid(), syscall.SIGKILL); e != nil {
-		panic(fmt.Sprintf("FATAL: cannot send SIGKILL to itself: %v", e))
+func TestSchemaOverLimit(t *testing.T) {
+	statement := &preparedStatement{}
+	statement.stmt = &influxql.SelectStatement{}
+	ok, err := statement.isSchemaOverLimit(nil)
+	if err != nil {
+		t.Error("isSchemaOverLimit error")
+	}
+	if ok {
+		t.Error("expect ok")
 	}
 }

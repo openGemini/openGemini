@@ -17,6 +17,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -259,4 +260,36 @@ func Test_NewWal_restoreLogs_error(t *testing.T) {
 	wal.restoreLogs()
 
 	require.Equal(t, 0, len(wal.logReplay[0].fileNames))
+}
+
+func TestWalReplay_SeriesLimited(t *testing.T) {
+	testDir := t.TempDir()
+	conf := TestConfig{100, 101, time.Second, false}
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	require.NoError(t, err)
+
+	// not flush data to snapshot
+	sh.SetWriteColdDuration(3 * time.Minute)
+	mutable.SetSizeLimit(3e10)
+
+	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+	for i := 0; i < 10; i++ {
+		names := []string{fmt.Sprintf("cpu%d", i)}
+		rows, _, _ := GenDataRecord(names, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
+		require.NoError(t, writeData(sh, rows, false))
+	}
+
+	require.NoError(t, closeShard(sh))
+
+	DefaultEngineOption.MaxSeriesPerDatabase = 10
+	defer func() {
+		DefaultEngineOption.MaxSeriesPerDatabase = 0
+	}()
+	// reopen shard, replay wal files
+	_ = os.RemoveAll(testDir + "/db0/index/")
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	require.NoError(t, err)
+	require.NoError(t, closeShard(sh))
 }

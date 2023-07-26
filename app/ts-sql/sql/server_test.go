@@ -28,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,15 +36,12 @@ func Test_NewServer(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -57,17 +53,13 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		ValidArgs: []string{"dev", "abcd", "now"},
-		Version:   "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9179"}...)
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).sherlockService)
 
@@ -103,7 +95,7 @@ func TestInitStatisticsPusher(t *testing.T) {
 	server.config.Monitor.Pushers = "http"
 	server.config.Monitor.StoreEnabled = true
 
-	app.SwitchToSingle()
+	server.info.App = config.AppSingle
 	server.initStatisticsPusher()
 	time.Sleep(10 * time.Millisecond)
 	server.Close()
@@ -113,16 +105,13 @@ func Test_NewServer_1U(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 1
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -134,9 +123,6 @@ func Test_NewServer_2U8G(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
@@ -144,7 +130,7 @@ func Test_NewServer_2U8G(t *testing.T) {
 	conf.Common.MemorySize = 8 * config.GB
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -156,9 +142,6 @@ func Test_NewServer_2U16G(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
@@ -166,7 +149,7 @@ func Test_NewServer_2U16G(t *testing.T) {
 	conf.Common.MemorySize = 16 * config.GB
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -178,16 +161,13 @@ func Test_NewServer_4U(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 4
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -199,16 +179,13 @@ func Test_NewServer_8U(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 8
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -220,16 +197,13 @@ func Test_NewServer_16U(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 16
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -241,16 +215,13 @@ func Test_NewServer_32U(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 32
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -262,16 +233,13 @@ func Test_NewServer_64U(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 64
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
@@ -283,19 +251,34 @@ func Test_NewServer_Correct_RPLimit(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
 
 	conf := config.NewTSSql()
 	conf.Coordinator.RetentionPolicyLimit = 0
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err := NewServer(conf, cmd, log)
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaClient)
 	require.NotNil(t, server.(*Server).TSDBStore)
 	require.NotNil(t, server.(*Server).castorService)
 	require.NotNil(t, server.(*Server).sherlockService)
+}
+
+func Test_NewServer_Invalid_BindAddress(t *testing.T) {
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	conf := config.NewTSSql()
+	conf.HTTP.PprofEnabled = true
+	conf.HTTP.BindAddress = "127.0.0.1"
+
+	server, err := NewServer(conf, app.ServerInfo{}, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaClient)
+}
+
+func TestNewCommand(t *testing.T) {
+	cmd := NewCommand(app.ServerInfo{App: config.AppSql})
+	require.Equal(t, app.SQLLOGO, cmd.Logo)
+	require.Equal(t, config.AppSql, cmd.Info.App)
 }

@@ -25,6 +25,7 @@ import (
 	set "github.com/deckarep/golang-set"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -372,8 +373,11 @@ func TestMapMstShards(t *testing.T) {
 	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
 	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
 	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
+	timeMid1 := time.Date(2022, 2, 1, 0, 0, 0, 0, time.UTC)
+	timeEnd1 := time.Date(2022, 2, 16, 0, 0, 0, 0, time.UTC)
 	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
 	shards2 := []meta.ShardInfo{{ID: 2, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards3 := []meta.ShardInfo{{ID: 3, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
 	csm := &ClusterShardMapper{
 		Logger: logger.NewLogger(1),
 	}
@@ -403,7 +407,12 @@ func TestMapMstShards(t *testing.T) {
 									{
 										ShardKey:   []string{"1", "2"},
 										Type:       "hash",
-										ShardGroup: 1,
+										ShardGroup: 2,
+									},
+									{
+										ShardKey:   []string{"3", "4"},
+										Type:       "hash",
+										ShardGroup: 3,
 									},
 								},
 								EngineType: config.TSSTORE,
@@ -424,13 +433,20 @@ func TestMapMstShards(t *testing.T) {
 								Shards:     shards2,
 								EngineType: config.TSSTORE,
 							},
+							{
+								ID:         3,
+								StartTime:  timeMid1,
+								EndTime:    timeEnd1,
+								Shards:     shards3,
+								EngineType: config.TSSTORE,
+							},
 						},
 					},
 				},
 				ShardKey: meta.ShardKeyInfo{
-					ShardKey:   []string{"1", "2"},
+					ShardKey:   []string{"1", "2", "3"},
 					Type:       "hash",
-					ShardGroup: 1,
+					ShardGroup: 3,
 				},
 			},
 		},
@@ -445,16 +461,42 @@ func TestMapMstShards(t *testing.T) {
 		Condition: &influxql.BinaryExpr{},
 	}
 	shardMapping := &ClusterShardMapping{
-		ShardMap: map[Source]map[uint32][]uint64{},
+		ShardMap:  map[Source]map[uint32][]uint64{},
+		seriesKey: make([]byte, 0),
 	}
+	seriesKey := make([]byte, 0)
 	csm.mapShards(shardMapping, []influxql.Source{join}, timeStart, timeEnd, nil, opt)
 	Val, _ := regexp.Compile("")
 	sourceRegex := &influxql.Measurement{
 		Database: "db0", RetentionPolicy: "rp0", Name: "", EngineType: config.COLUMNSTORE,
 		Regex: &influxql.RegexLiteral{Val: Val},
 	}
-	err := csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
-	assert.NoError(t, err)
+	seriesKey = seriesKey[:0]
+	csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	source1 := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst2", EngineType: config.TSSTORE,
+	}
+	shardMapping1 := &ClusterShardMapping{
+		ShardMap:  map[Source]map[uint32][]uint64{},
+		seriesKey: make([]byte, 0),
+	}
+	seriesKey = seriesKey[:0]
+	csm.mapMstShards(source1, shardMapping1, timeStart, timeEnd1, nil, opt)
+
+	shardMapping2 := &ClusterShardMapping{
+		ShardMap:  map[Source]map[uint32][]uint64{},
+		seriesKey: make([]byte, 0),
+	}
+	subquery := &influxql.SubQuery{
+		Statement: &influxql.SelectStatement{
+			Sources: []influxql.Source{source1},
+		},
+	}
+	opt1 := &query.SelectOptions{
+		HintType: hybridqp.FullSeriesQuery,
+	}
+	seriesKey = seriesKey[:0]
+	csm.mapShards(shardMapping2, []influxql.Source{subquery}, timeStart, timeEnd, nil, opt1)
 }
 
 func TestShardMapperExprRewriter(t *testing.T) {
@@ -476,5 +518,16 @@ func TestShardMapperExprRewriter(t *testing.T) {
 	}
 	if fields["f3"].DataType != influxql.Tag {
 		t.Fatal()
+	}
+}
+
+func TestShardMapping(t *testing.T) {
+	tr := influxql.TimeRange{}
+	tmin := time.Unix(0, tr.MinTimeNano())
+	tmax := time.Unix(0, tr.MaxTimeNano())
+	csm := ClusterShardMapper{}
+	csming := NewClusterShardMapping(&csm, tmin, tmax)
+	if len(csming.GetSeriesKey()) != 0 {
+		t.Error("csming getSeriesKey error")
 	}
 }

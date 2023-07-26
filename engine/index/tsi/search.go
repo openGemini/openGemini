@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 	"go.uber.org/zap"
 )
@@ -54,6 +55,34 @@ type indexSearch struct {
 
 func (is *indexSearch) setDeleted(set *uint64set.Set) {
 	is.deleted = set
+}
+
+func (is *indexSearch) getTagValuesByTagKeys(tag influx.Tag, name []byte) ([]byte, error) {
+	ts := &is.ts
+	kb := &is.kb
+	compositeKey := kbPool.Get()
+	defer kbPool.Put(compositeKey)
+	kb.B = is.idx.marshalTagToTagValues(compositeKey.B, kb.B, name, tag)
+
+	var exist, notExist []byte
+	ts.Seek(kb.B)
+	if ts.NextItem() {
+		if !bytes.HasPrefix(ts.Item, kb.B) {
+			// Nothing found.
+			return notExist, io.EOF
+		}
+		exist = []byte{1}
+	}
+
+	if err := ts.Error(); err != nil {
+		return notExist, fmt.Errorf("error when searching TSID by seriesKey; searchPrefix %q: %w", kb.B, err)
+	}
+
+	if len(exist) != 0 {
+		return exist, nil
+	}
+
+	return notExist, io.EOF
 }
 
 func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {

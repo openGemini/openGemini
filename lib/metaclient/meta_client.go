@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
@@ -3174,6 +3175,12 @@ func (c *Client) retryVerifyDataNodeStatus() error {
 	return c.retryUntilExec(proto2.Command_VerifyDataNodeCommand, proto2.E_VerifyDataNodeCommand_Command, cmd)
 }
 
+func (c *Client) Suicide(err error) {
+	c.logger.Error("Suicide for fault data node", zap.Error(err))
+	time.Sleep(errSleep)
+	sysinfo.Suicide()
+}
+
 func (c *Client) RetryDBBriefInfo(dbName string) ([]byte, error) {
 	startTime := time.Now()
 	currentServer := connectedServer
@@ -3275,6 +3282,8 @@ func (c *Client) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 			return offset, nil
 		}
 
+		currentServer++
+
 		if strings.Contains(err.Error(), "node is not the leader") {
 			continue
 		}
@@ -3283,8 +3292,6 @@ func (c *Client) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 			return 0, errors.New("register query id offset timeout")
 		}
 		time.Sleep(errSleep)
-
-		currentServer++
 	}
 }
 

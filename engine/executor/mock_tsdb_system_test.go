@@ -477,6 +477,10 @@ func (mock *MockShardGroup) AddShard(table *Table) {
 	mock.shards[table.Name()] = table
 }
 
+func (mock *MockShardGroup) GetSeriesKey() []byte {
+	return nil
+}
+
 func NewMockShardGroup() *MockShardGroup {
 	return &MockShardGroup{
 		shards: make(map[string]*Table),
@@ -643,10 +647,6 @@ func (mock *MockShardMapper) MapShards(
 }
 
 func (mock *MockShardMapper) Close() error {
-	return nil
-}
-
-func (mock *MockShardMapper) GetSeriesKey() []byte {
 	return nil
 }
 
@@ -911,7 +911,6 @@ func (s *TSDBSystem) ExecSQL(sql string,
 		NodeID:          0,
 		InnerChunkSize:  1024,
 		Quiet:           true,
-		Traceid:         1,
 	}
 
 	stmt := query.Statements[0]
@@ -936,7 +935,6 @@ func (s *TSDBSystem) ExecSQL(sql string,
 		QueryLimitEn:            opts.QueryLimitEn,
 		RowsChan:                opts.RowsChan,
 		ChunkSize:               opts.InnerChunkSize,
-		Traceid:                 opts.Traceid,
 		AbortChan:               opts.AbortCh,
 	}
 

@@ -262,6 +262,146 @@ func TestMergeIndexRows(t *testing.T) {
 	})
 }
 
+func TestMergeItemsForLabelStore(t *testing.T) {
+	f := func(items []string, expectedItems []string) {
+		t.Helper()
+		var data []byte
+		var itemsB []mergeset.Item
+		for _, item := range items {
+			data = append(data, item...)
+			itemsB = append(itemsB, mergeset.Item{
+				Start: uint32(len(data) - len(item)),
+				End:   uint32(len(data)),
+			})
+		}
+		resultData, resultItemsB := mergeIndexRowsForColumnStore(data, itemsB, true)
+		if len(resultItemsB) != len(expectedItems) {
+			t.Fatalf("unexpected len(resultItemsB); got %d; want %d", len(resultItemsB), len(expectedItems))
+		}
+		if !checkItemsSorted(resultData, resultItemsB) {
+			t.Fatalf("result items aren't sorted; items:\n%q", resultItemsB)
+		}
+		buf := resultData
+		for i, it := range resultItemsB {
+			item := it.Bytes(resultData)
+			if !bytes.HasPrefix(buf, item) {
+				t.Fatalf("unexpected prefix for resultData #%d;\ngot\n%X\nwant\n%X", i, buf, item)
+			}
+			buf = buf[len(item):]
+		}
+		if len(buf) != 0 {
+			t.Fatalf("unexpected tail left in resultData: %X", buf)
+		}
+		var resultItems []string
+		for _, it := range resultItemsB {
+			resultItems = append(resultItems, string(it.Bytes(resultData)))
+		}
+		if !reflect.DeepEqual(expectedItems, resultItems) {
+			t.Fatalf("unexpected items;\ngot\n%X\nwant\n%X", resultItems, expectedItems)
+		}
+	}
+
+	xy := func(nsPrefix byte, key string, values []string) string {
+		name := "mn"
+		dst := mergeindex.MarshalCommonPrefix(nil, nsPrefix)
+		compositeKey := kbPool.Get()
+		compositeKey.B = marshalCompositeTagKey(compositeKey.B[:0], []byte(name), []byte(key))
+		dst = marshalTagValue(dst, compositeKey.B)
+		for _, value := range values {
+			dst = marshalTagValue(dst, []byte(value))
+		}
+		kbPool.Put(compositeKey)
+
+		return string(dst)
+	}
+	x := func(key string, values []string) string {
+		return xy(nsPrefixTagKeysToTagValues, key, values)
+	}
+
+	f(nil, nil)
+	f([]string{}, nil)
+	f([]string{"foo"}, []string{"foo"})
+	f([]string{
+		"\x00aa",
+		"dsa",
+	}, []string{
+		"\x00aa",
+		"dsa",
+	})
+	f([]string{
+		"\x00aa",
+		x("a", []string{"a", "b"}),
+		"dsa",
+	}, []string{
+		"\x00aa",
+		x("a", []string{"a", "b"}),
+		"dsa",
+	})
+	f([]string{
+		"\x00aa",
+		x("a", []string{"a"}),
+		x("a", []string{"b"}),
+		x("a", []string{"c"}),
+		x("a", []string{"d"}),
+		"dsa",
+	}, []string{
+		"\x00aa",
+		x("a", []string{"a", "b", "c", "d"}),
+		"dsa",
+	})
+	f([]string{
+		"\x00aa",
+		x("a", []string{"a"}),
+		x("a", []string{"a"}),
+		x("a", []string{"a"}),
+		x("a", []string{"b"}),
+		x("a", []string{"c"}),
+		x("a", []string{"c"}),
+		x("a", []string{"c"}),
+		x("a", []string{"d"}),
+		x("a", []string{"d"}),
+		"dsa",
+	}, []string{
+		"\x00aa",
+		x("a", []string{"a", "b", "c", "d"}),
+		"dsa",
+	})
+	f([]string{
+		"\x00aa",
+		x("a", []string{"a", "b"}),
+		x("a", []string{"c", "d"}),
+		"dsa",
+	}, []string{
+		"\x00aa",
+		x("a", []string{"a", "b", "c", "d"}),
+		"dsa",
+	})
+	f([]string{
+		"\x00aa",
+		x("a", []string{"a", "b"}),
+		x("a", []string{"c", "d"}),
+		"dsa",
+	}, []string{
+		"\x00aa",
+		x("a", []string{"a", "b", "c", "d"}),
+		"dsa",
+	})
+	f([]string{
+		"\x00aa",
+		x("a", []string{"c", "d"}),
+		x("a", []string{"a", "b"}),
+		x("b", []string{"c", "d"}),
+		x("b", []string{"c", "d"}),
+		x("b", []string{"a", "b"}),
+		"dsa",
+	}, []string{
+		"\x00aa",
+		x("a", []string{"a", "b", "c", "d"}),
+		x("b", []string{"a", "b", "c", "d"}),
+		"dsa",
+	})
+}
+
 func checkItemsSorted(data []byte, items []mergeset.Item) bool {
 	if len(items) == 0 {
 		return true

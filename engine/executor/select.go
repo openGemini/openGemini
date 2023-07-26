@@ -26,11 +26,14 @@ import (
 
 	"github.com/mitchellh/copystructure"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"go.uber.org/zap"
 )
 
 type ContextKey string
@@ -170,6 +173,9 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 	if err != nil {
 		return nil, err
 	}
+	if ok, err := p.isSchemaOverLimit(best); ok {
+		return nil, err
+	}
 	executorBuilder := p.creator()
 	span := tracing.SpanFromContext(ctx)
 	if span != nil {
@@ -184,6 +190,20 @@ func rewriteVarfName(fields influxql.Fields) {
 			fields[i].Alias = f.Alias
 		}
 	}
+}
+
+func (p *preparedStatement) isSchemaOverLimit(best hybridqp.QueryNode) (bool, error) {
+	if best == nil {
+		logger.GetLogger().Error("nil plan", zap.Any("stmt", p.stmt))
+		return false, nil
+	}
+	querySchemaLimit := GetQuerySchemaLimit()
+	schemaNum := len(best.Schema().Options().GetDimensions()) + best.Schema().Fields().Len()
+	if querySchemaLimit > 0 && schemaNum > querySchemaLimit {
+		return true, errno.NewError(errno.ErrQuerySchemaUpperBound, schemaNum, querySchemaLimit)
+
+	}
+	return false, nil
 }
 
 func (p *preparedStatement) ChangeCreator(creator hybridqp.ExecutorBuilderCreator) {

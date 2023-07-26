@@ -80,9 +80,10 @@ type TSSql struct {
 	HTTP httpdConfig.Config `toml:"http"`
 
 	// TLS provides configuration options for all https endpoints.
-	TLS      tlsconfig.Config `toml:"tls"`
-	Analysis Castor           `toml:"castor"`
-	Sherlock *SherlockConfig  `toml:"sherlock"`
+	TLS        tlsconfig.Config `toml:"tls"`
+	Analysis   Castor           `toml:"castor"`
+	Sherlock   *SherlockConfig  `toml:"sherlock"`
+	SelectSpec SelectSpecConfig `toml:"spec-limit"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -95,6 +96,7 @@ func NewTSSql() *TSSql {
 	c.HTTP = httpdConfig.NewConfig()
 	c.Analysis = NewCastor()
 	c.Sherlock = NewSherlockConfig()
+	c.SelectSpec = NewSelectSpecConfig()
 	return c
 }
 
@@ -117,6 +119,13 @@ func (c *TSSql) Corrector(cpuNum int) {
 
 	if c.Coordinator.RetentionPolicyLimit == 0 {
 		c.Coordinator.RetentionPolicyLimit = cpuNum * 10
+	}
+
+	if c.SelectSpec.QuerySeriesLimit == 0 {
+		c.SelectSpec.QuerySeriesLimit = cpuNum * 10000
+	}
+	if c.SelectSpec.QuerySchemaLimit == 0 {
+		c.SelectSpec.QuerySchemaLimit = cpuNum * 500
 	}
 }
 

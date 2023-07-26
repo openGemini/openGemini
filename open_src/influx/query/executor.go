@@ -64,8 +64,6 @@ const (
 	QueryDurationKey qCtxKey = iota
 
 	QueryIDKey
-
-	QueryStmtKey
 )
 
 // ErrDatabaseNotFound returns a database not found error for the given database name.
@@ -188,8 +186,6 @@ type ExecutionOptions struct {
 
 	// The ChunkImpl maximum number of points to contain. Developers are advised to change only.
 	InnerChunkSize int
-
-	Traceid uint64
 
 	// The results of the query executor
 	RowsChan chan RowsChan
@@ -361,7 +357,7 @@ LOOP:
 
 		// Send any other statements to the underlying statement executor.
 		err = e.StatementExecutor.ExecuteStatement(stmt, ctx)
-		if errno.Equal(err, errno.ErrQueryInterrupted) {
+		if errno.Equal(err, errno.ErrQueryKilled) {
 			// Query was interrupted so retrieve the real interrupt error from
 			// the query task if there is one.
 			if qerr := ctx.Err(); qerr != nil {

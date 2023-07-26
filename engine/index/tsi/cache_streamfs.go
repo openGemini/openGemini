@@ -30,5 +30,7 @@ func (ic *IndexCache) close() error {
 
 	ic.tagCache.Stop()
 
+	ic.TagKeyValueCache.Stop()
+
 	return nil
 }

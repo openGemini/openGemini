@@ -19,46 +19,38 @@ package app
 import (
 	"fmt"
 	"os"
+	"runtime"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
+	"github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 )
-
-var single = false
-
-func SwitchToSingle() {
-	single = true
-}
-
-func IsSingle() bool {
-	return single
-}
 
 // Command represents the command executed by "ts-xxx run".
 type Command struct {
 	Logo          string
 	Usage         string
-	closing       chan struct{}
 	Pidfile       string
-	Closed        chan struct{}
 	Logger        *logger.Logger
 	Command       *cobra.Command
-	ServiceName   string
+	Info          ServerInfo
+	Version       string
 	Server        Server
 	Config        config.Config
-	NewServerFunc func(config.Config, *cobra.Command, *logger.Logger) (Server, error)
+	NewServerFunc func(config.Config, ServerInfo, *logger.Logger) (Server, error)
 }
 
 func NewCommand() *Command {
 	return &Command{
-		closing: make(chan struct{}),
-		Closed:  make(chan struct{}),
-		Logger:  logger.NewLogger(errno.ModuleUnknown),
+		Logger: logger.NewLogger(errno.ModuleUnknown),
 	}
 }
 
@@ -83,7 +75,7 @@ func (cmd *Command) Run(args ...string) error {
 
 	fmt.Fprint(os.Stdout, cmd.Logo)
 
-	s, err := cmd.NewServerFunc(cmd.Config, cmd.Command, cmd.Logger)
+	s, err := cmd.NewServerFunc(cmd.Config, cmd.Info, cmd.Logger)
 	if err != nil {
 		return fmt.Errorf("create server failed: %s", err)
 	}
@@ -98,9 +90,7 @@ func (cmd *Command) Run(args ...string) error {
 func (cmd *Command) Close() error {
 	crypto.Destruct()
 
-	defer close(cmd.Closed)
 	defer RemovePIDFile(cmd.Pidfile)
-	close(cmd.closing)
 	if cmd.Server != nil {
 		return cmd.Server.Close()
 	}
@@ -117,15 +107,14 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 	}
 
 	if lc := conf.GetLogging(); lc != nil {
-		if single {
-			lc.SetApp(config.AppSingle)
-		}
+		lc.SetApp(cmd.Info.App)
 		logger.InitLogger(*lc)
 	}
 
 	if common := conf.GetCommon(); common != nil {
 		common.Corrector()
 		cpu.SetCpuNum(common.CPUNum)
+		runtime.GOMAXPROCS(common.CPUNum)
 		config.SetHaEnable(common.HaEnable)
 	}
 
@@ -136,4 +125,35 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 
 	cmd.Config = conf
 	return nil
+}
+
+func Run(args []string, commands ...*Command) {
+	if len(commands) == 0 {
+		return
+	}
+
+	name, args := cmd.ParseCommandName(args)
+
+	// Extract name from args.
+	switch name {
+	case "", "run":
+		for _, command := range commands {
+			if err := command.Run(args...); err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+
+		signal := procutil.WaitForSigterm()
+		for _, command := range commands {
+			app := string(command.Info.App)
+			logger.GetLogger().Info(app+" service received shutdown signal", zap.Any("signal", signal))
+			util.MustClose(command)
+			logger.GetLogger().Info(app + " shutdown successfully!")
+		}
+	case "version":
+		fmt.Println(commands[0].Version)
+	default:
+		fmt.Println(commands[0].Usage)
+	}
 }

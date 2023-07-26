@@ -146,7 +146,7 @@ func (trans *SlidingWindowTransform) Work(ctx context.Context) error {
 			if e := recover(); e != nil {
 				err := errno.NewError(errno.RecoverPanic, e)
 				trans.aggLogger.Error(err.Error(),
-					zap.String("query", "SlidingWindowTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+					zap.String("query", "SlidingWindowTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 				errs.Dispatch(err)
 			} else {
 				errs.Dispatch(nil)
@@ -273,7 +273,7 @@ func (trans *SlidingWindowTransform) reduce(
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.aggLogger.Error(err.Error(),
-				zap.String("query", "SlidingWindowTransform"), zap.Uint64("trace_id", trans.opt.Traceid))
+				zap.String("query", "SlidingWindowTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)

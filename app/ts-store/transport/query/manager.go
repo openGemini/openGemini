@@ -36,8 +36,9 @@ type Manager struct {
 	mu    sync.RWMutex
 	items map[uint64]*Item
 
-	abortedMu sync.RWMutex
-	aborted   map[uint64]time.Time
+	abortedMu sync.RWMutex         // lock for both killed and aborted
+	killed    map[uint64]struct{}  // {"qid": struct{}{}} kill query qid
+	aborted   map[uint64]time.Time // {"qid": time} abort time for qid
 
 	abortedExpire time.Duration
 }
@@ -71,6 +72,7 @@ func NewManager(client uint64) *Manager {
 	if !ok || m == nil {
 		m = &Manager{
 			items:         make(map[uint64]*Item),
+			killed:        make(map[uint64]struct{}),
 			aborted:       make(map[uint64]time.Time),
 			abortedExpire: defaultAbortedExpire,
 		}
@@ -112,6 +114,20 @@ func (qm *Manager) Aborted(qid uint64) bool {
 
 	_, ok := qm.aborted[qid]
 	return ok
+}
+
+func (qm *Manager) IsKilled(qid uint64) bool {
+	qm.abortedMu.RLock()
+	defer qm.abortedMu.RUnlock()
+
+	_, ok := qm.killed[qid]
+	return ok
+}
+
+func (qm *Manager) Kill(qid uint64) {
+	qm.abortedMu.Lock()
+	qm.killed[qid] = struct{}{}
+	qm.abortedMu.Unlock()
 }
 
 func (qm *Manager) Abort(qid uint64) {
@@ -162,6 +178,7 @@ func (qm *Manager) cleanAbort() {
 	qm.abortedMu.Lock()
 	for _, k := range wait {
 		delete(qm.aborted, k)
+		delete(qm.killed, k)
 	}
 	qm.abortedMu.Unlock()
 }

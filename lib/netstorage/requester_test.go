@@ -61,7 +61,7 @@ func (c *RPCServer) HandleDDL(w spdy.Responser, msg *DDLMessage) error {
 		responseData = c.rsp
 	}
 
-	if err := w.Response(NewDDLMessage(GetResponseMessageType(msg.Typ), responseData), true); err != nil {
+	if err := w.Response(NewDDLMessage(MessageResponseTyp[msg.Typ], responseData), true); err != nil {
 		return err
 	}
 

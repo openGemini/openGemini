@@ -67,16 +67,18 @@ func (s *FileStatistics) CollectMst(buffer []byte, originTags map[string]string,
 	s.lastReport = time.Now()
 
 	tags := s.merge(originTags, fileTagMap)
-	for mstName, stat := range mstFileStat {
-		valueMap := map[string]interface{}{
-			StatFileSize:  stat.FileSize,
-			StatFileCount: int64(stat.FileCount),
-		}
-		tagMap := tags
-		tagMap["measurement"] = mstName
+	var fileSize, fileCount int64
 
-		buffer = AddPointToBuffer(fileStatisticsName, tagMap, valueMap, buffer)
+	for _, stat := range mstFileStat {
+		fileSize += stat.FileSize
+		fileCount += int64(stat.FileCount)
 	}
+
+	valueMap := map[string]interface{}{
+		StatFileSize:  fileSize,
+		StatFileCount: fileCount,
+	}
+	buffer = AddPointToBuffer(fileStatisticsName, tags, valueMap, buffer)
 
 	return buffer, nil
 }

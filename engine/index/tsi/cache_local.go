@@ -32,9 +32,14 @@ func (ic *IndexCache) close() error {
 	if err := ic.TSIDToSeriesKeyCache.Save(ic.path + "/" + TSIDToSeriesKeyCacheName); err != nil {
 		return err
 	}
+	if err := ic.TagKeyValueCache.Save(ic.path + "/" + TagKeyToTagValueCacheName); err != nil {
+		return err
+	}
 	ic.TSIDToSeriesKeyCache.Stop()
 
 	ic.tagCache.Stop()
+
+	ic.TagKeyValueCache.Stop()
 
 	return nil
 }

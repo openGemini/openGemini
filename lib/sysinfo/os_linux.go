@@ -17,6 +17,8 @@ limitations under the License.
 package sysinfo
 
 import (
+	"fmt"
+	"os"
 	"syscall"
 )
 
@@ -26,4 +28,10 @@ func TotalMemory() (uint64, error) {
 		return 0, err
 	}
 	return uint64(si.Totalram) * uint64(si.Unit), nil
+}
+
+func Suicide() {
+	if err := syscall.Kill(os.Getpid(), syscall.SIGKILL); err != nil {
+		fmt.Printf("error process syscall.Kill:%v\n", err)
+	}
 }

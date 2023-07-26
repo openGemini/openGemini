@@ -146,7 +146,7 @@ func buildDstChunk() []executor.Chunk {
 
 	b := executor.NewChunkBuilder(rowDataType)
 
-	inCk1 := b.NewChunk("")
+	inCk1 := b.NewChunk("cpu")
 	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
 	inCk1.AppendTime([]int64{1609459200000000000}...)
 
@@ -178,7 +178,7 @@ func buildDstChunkTimeFilterGroupBy() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	b.SetDim(buildDimRowDataType())
 
-	inCk1 := b.NewChunk("")
+	inCk1 := b.NewChunk("cpu")
 	inCk1.AppendTime([]int64{1609459200000000000, 1609459200100000000}...)
 
 	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"}...)
@@ -206,7 +206,7 @@ func buildDstChunkTimeFilter() []executor.Chunk {
 
 	b := executor.NewChunkBuilder(rowDataType)
 
-	inCk1 := b.NewChunk("")
+	inCk1 := b.NewChunk("cpu")
 	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
 	inCk1.AppendTime([]int64{1609459200000000000, 1609459200100000000}...)
 
@@ -495,7 +495,7 @@ func buildIndexScanExtraInfo(engine hybridqp.StoreEngine, db string, ptId uint32
 	return info
 }
 
-func TestColStoreReaderTransformWithPrimaryIndex(t *testing.T) {
+func TestColumnStoreReader(t *testing.T) {
 	testDir := t.TempDir()
 	db := "db0"
 	rp := "rp0"

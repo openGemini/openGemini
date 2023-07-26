@@ -136,6 +136,8 @@ func TestConvert(t *testing.T) {
 }
 
 func TestEqual(t *testing.T) {
+	assert.False(t, errno.Equal(nil, errno.InvalidBufferSize))
+
 	err := errno.NewError(errno.InvalidBufferSize, 0, 10)
 	assert.True(t, errno.Equal(err, errno.InvalidBufferSize))
 

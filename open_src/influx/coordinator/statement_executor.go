@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -106,8 +105,8 @@ type combinedQueryExeInfo struct {
 	stmt         string
 	database     string
 	beginTime    int64
-	runningHosts []string
-	killedHosts  []string
+	runningHosts map[string]struct{}
+	killedHosts  map[string]struct{}
 }
 
 func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
@@ -119,9 +118,9 @@ func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
 func (q *combinedQueryExeInfo) updateHosts(newHost string, newRunState netstorage.RunStateType) {
 	switch newRunState {
 	case netstorage.Running:
-		q.runningHosts = append(q.runningHosts, newHost)
+		q.runningHosts[newHost] = struct{}{}
 	case netstorage.Killed:
-		q.killedHosts = append(q.killedHosts, newHost)
+		q.killedHosts[newHost] = struct{}{}
 	default:
 		// current version never arriving
 	}
@@ -155,11 +154,19 @@ func (q *combinedQueryExeInfo) getDurationString() string {
 func (q *combinedQueryExeInfo) toOutputRow(colNum int, isKilledPart bool) []interface{} {
 	res := make([]interface{}, 0, colNum)
 
+	var hostsJoined = func(hostsKV map[string]struct{}) string {
+		hosts := make([]string, 0, len(hostsKV))
+		for host := range hostsKV {
+			hosts = append(hosts, host)
+		}
+		return strings.Join(hosts, ", ")
+	}
+
 	res = append(res, q.qid, q.stmt, q.database, q.getDurationString())
 	if isKilledPart {
-		res = append(res, "killed", strings.Join(q.killedHosts, ", "))
+		res = append(res, "killed", hostsJoined(q.killedHosts))
 	} else {
-		res = append(res, "running", strings.Join(q.runningHosts, ", "))
+		res = append(res, "running", hostsJoined(q.runningHosts))
 	}
 
 	return res
@@ -1065,7 +1072,6 @@ func (e *StatementExecutor) GetOptions(opt query2.ExecutionOptions) query2.Selec
 		QueryLimitEn:            opt.QueryLimitEn,
 		RowsChan:                opt.RowsChan,
 		ChunkSize:               opt.InnerChunkSize,
-		Traceid:                 opt.Traceid,
 		AbortChan:               opt.AbortCh,
 	}
 }
@@ -1081,7 +1087,7 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 			}
 
 			stackInfo := fmt.Errorf("runtime panic: %v\n %s", e, string(debug.Stack())).Error()
-			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Uint64("trace_id", opt.Traceid),
+			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Uint64("query_id", ctx.Value(query2.QueryIDKey).(uint64)),
 				zap.String("query", "pipeline executor"))
 		}
 	}()
@@ -1788,16 +1794,27 @@ func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnSto
 	for _, info := range exeInfosOnStore {
 		// If a query in dstMap, update its killed,host and duration
 		if cmbInfo, ok := dstMap[info.QueryID]; ok {
-			cmbInfo.updateBeginTime(info.BeginTime)
-			cmbInfo.updateHosts(host, info.RunState)
-			continue
+			if cmbInfo.stmt == info.Stmt {
+				cmbInfo.updateBeginTime(info.BeginTime)
+				cmbInfo.updateHosts(host, info.RunState)
+				continue
+			}
+
+			// If a query whose qid is 1 has been sent to the store and is being queried,
+			// the SQL node restarts, and the new query qid starts from 1.
+			// In this case, the old query whose qid is 1 needs to be filtered out.
+			if info.BeginTime <= cmbInfo.beginTime {
+				continue
+			}
 		}
 		// Create a new cmbInfo
 		newCmbInfo := &combinedQueryExeInfo{
-			qid:       info.QueryID,
-			stmt:      info.Stmt,
-			database:  info.Database,
-			beginTime: info.BeginTime,
+			qid:          info.QueryID,
+			stmt:         info.Stmt,
+			database:     info.Database,
+			beginTime:    info.BeginTime,
+			runningHosts: make(map[string]struct{}),
+			killedHosts:  make(map[string]struct{}),
 		}
 		newCmbInfo.updateHosts(host, info.RunState)
 		dstMap[info.QueryID] = newCmbInfo
@@ -1813,45 +1830,26 @@ func (e *StatementExecutor) executeKillQuery(stmt *influxql.KillQueryStatement) 
 		return err
 	}
 
-	errHosts := make([]string, 0, len(nodes))
-	errMsgs := make([]string, 0, len(nodes))
 	notFoundCount := 0
 
-	wg := sync.WaitGroup{}
-	mu := sync.Mutex{}
+	var wg sync.WaitGroup
 	for _, n := range nodes {
 		wg.Add(1)
 		go func(dataNode meta2.DataNode) {
 			defer wg.Done()
-			if err := e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID); err != nil {
-				mu.Lock()
+			if err = e.NetStorage.KillQueryOnNode(dataNode.ID, stmt.QueryID); err != nil {
 				var wrapErr *errno.Error
-				if errors.As(err, &wrapErr) {
-					if errno.Equal(wrapErr, errno.ErrQueryNotFound) {
-						notFoundCount++
-						mu.Unlock()
-						return
-					}
+				if errors.As(err, &wrapErr) && errno.Equal(wrapErr, errno.ErrQueryNotFound) {
+					notFoundCount++
+					return
 				}
-				errMsgs = append(errMsgs, err.Error())
-				errHosts = append(errHosts, dataNode.Host)
-				mu.Unlock()
 			}
 		}(n)
 	}
 	wg.Wait()
 
 	if notFoundCount == len(nodes) {
-		return errno.NewError(errno.ErrQueryNotFound, strconv.FormatUint(stmt.QueryID, 10))
-	}
-
-	if len(errHosts) != 0 {
-		var builder strings.Builder
-		for i := range errHosts {
-			builder.WriteString(fmt.Sprintf("%s: %s", errHosts[i], errMsgs[i]))
-		}
-		e.StmtExecLogger.Error("failed to kill query", zap.Uint64("qid", stmt.QueryID), zap.String("details", builder.String()))
-		return fmt.Errorf(meta2.ErrKillQueryFail.Error(), strings.Join(errHosts, ", "))
+		return errno.NewError(errno.ErrQueryNotFound, stmt.QueryID)
 	}
 	return nil
 }

@@ -90,8 +90,9 @@ type TSStore struct {
 	Sherlock   *SherlockConfig    `toml:"sherlock"`
 	IODetector *iodetector.Config `toml:"io-detector"`
 
-	Meta      *Meta      `toml:"meta"`
-	ClvConfig *ClvConfig `toml:"clv_config"`
+	Meta       *Meta            `toml:"meta"`
+	ClvConfig  *ClvConfig       `toml:"clv_config"`
+	SelectSpec SelectSpecConfig `toml:"spec-limit"`
 }
 
 // NewTSStore returns an instance of Config with reasonable defaults.
@@ -209,7 +210,6 @@ type Store struct {
 	EnableMmapRead    bool          `toml:"enable-mmap-read"`
 	Readonly          bool          `toml:"readonly"`
 	CompactRecovery   bool          `toml:"compact-recovery"`
-	QuerySeriesLimit  int           `toml:"query-series-limit"`
 
 	ReadCacheLimit       toml.Size `toml:"read-cache-limit"`
 	WriteConcurrentLimit int       `toml:"write-concurrent-limit"`
@@ -259,7 +259,6 @@ func NewStore() Store {
 		WalReplayParallel:            false,
 		WalReplayAsync:               false,
 		CompactRecovery:              true,
-		QuerySeriesLimit:             0,
 		CompactionMethod:             0,
 		OpsMonitor:                   NewOpsMonitorConfig(),
 		OpenShardLimit:               0,

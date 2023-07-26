@@ -22,16 +22,17 @@ limitations under the License.
 package netstorage_test
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
 	store "github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMessageTypes(t *testing.T) {
 	data := map[uint8][2]interface{}{
-		store.UnknownMessage:                         {nil, nil},
 		store.SeriesKeysRequestMessage:               {&store.SeriesKeysRequest{}, &store.SeriesKeysResponse{}},
 		store.SeriesExactCardinalityRequestMessage:   {&store.SeriesExactCardinalityRequest{}, &store.SeriesExactCardinalityResponse{}},
 		store.SeriesCardinalityRequestMessage:        {&store.SeriesCardinalityRequest{}, &store.SeriesCardinalityResponse{}},
@@ -39,14 +40,16 @@ func TestMessageTypes(t *testing.T) {
 		store.ShowTagValuesCardinalityRequestMessage: {&store.ShowTagValuesCardinalityRequest{}, &store.ShowTagValuesCardinalityResponse{}},
 		store.GetShardSplitPointsRequestMessage:      {&store.GetShardSplitPointsRequest{}, &store.GetShardSplitPointsResponse{}},
 		store.DeleteRequestMessage:                   {&store.DeleteRequest{}, &store.DeleteResponse{}},
+		store.CreateDataBaseRequestMessage:           {&store.CreateDataBaseRequest{}, &store.CreateDataBaseResponse{}},
 		store.ShowQueriesRequestMessage:              {&store.ShowQueriesRequest{}, &store.ShowQueriesResponse{}},
 		store.KillQueryRequestMessage:                {&store.KillQueryRequest{}, &store.KillQueryResponse{}},
 	}
 
 	for typ, items := range data {
-		req := store.NewMessage(typ)
-		respTyp := store.GetResponseMessageType(typ)
-		resp := store.NewMessage(respTyp)
+		req := store.MessageBinaryCodec[typ]()
+		respTyp, ok := store.MessageResponseTyp[typ]
+		require.Equal(t, true, ok, fmt.Sprintf("type: %d", typ))
+		resp := store.MessageBinaryCodec[respTyp]()
 
 		assert.Equal(t, reflect.TypeOf(req), reflect.TypeOf(items[0]),
 			"incorrect request message, type: %d, epx: %s, got: %s",

@@ -131,9 +131,9 @@ func TimeCost(option string) func() {
 	}
 }
 
-func CeilToPower2(num uint32) uint32 {
-	if num > (1 << 31) {
-		return 1 << 31
+func CeilToPower2(num uint64) uint64 {
+	if num > (1 << 63) {
+		return 1 << 63
 	}
 	num--
 	num |= num >> 1
@@ -141,7 +141,46 @@ func CeilToPower2(num uint32) uint32 {
 	num |= num >> 4
 	num |= num >> 8
 	num |= num >> 16
+	num |= num >> 32
 	return num + 1
+}
+
+func NumberOfTrailingZeros(num uint64) int {
+	if num == 0 {
+		return 64
+	}
+	n := 63
+	num1 := num << 32
+	if num1 != 0 {
+		n -= 32
+		num = num1
+	}
+
+	num1 = num << 16
+	if num1 != 0 {
+		n -= 16
+		num = num1
+	}
+
+	num1 = num << 8
+	if num1 != 0 {
+		n -= 8
+		num = num1
+	}
+
+	num1 = num << 4
+	if num1 != 0 {
+		n -= 4
+		num = num1
+	}
+
+	num1 = num << 2
+	if num1 != 0 {
+		n -= 2
+		num = num1
+	}
+
+	return n - int((num<<1)>>63)
 }
 
 func IntLimit(min, max int, v int) int {

@@ -64,7 +64,7 @@ const (
 	MinRetentionPolicyDuration = time.Hour
 
 	// QueryIDSpan is the default id range span.
-	QueryIDSpan = 100000
+	QueryIDSpan = 100000000 // 100 million
 )
 
 const (

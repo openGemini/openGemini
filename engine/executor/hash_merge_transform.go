@@ -110,7 +110,7 @@ func (trans *HashMergeTransform) runnable(ctx context.Context, errs *errno.Errs,
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.hashMergeLogger.Error(err.Error(), zap.String("query", "HashMergeTransform"),
-				zap.Uint64("trace_id", trans.opt.Traceid))
+				zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -176,7 +176,7 @@ func (trans *HashMergeTransform) streamMergeHelper(ctx context.Context, errs *er
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.hashMergeLogger.Error(err.Error(), zap.String("query", "HashMergeTransform"),
-				zap.Uint64("trace_id", trans.opt.Traceid))
+				zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)

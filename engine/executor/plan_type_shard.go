@@ -49,10 +49,6 @@ func (pts *PlanTypeInitShardMapper) Close() error {
 	return nil
 }
 
-func (pts *PlanTypeInitShardMapper) GetSeriesKey() []byte {
-	return nil
-}
-
 type PlanTypeInitShard struct {
 	fieldMap    map[string]influxql.DataType
 	fields      map[string]influxql.DataType
@@ -82,6 +78,10 @@ func NewPlanTypeInitShardGroup() *PlanTypeInitShard {
 		tags:        tags,
 		fields:      fields,
 	}
+}
+
+func (pts *PlanTypeInitShard) GetSeriesKey() []byte {
+	return nil
 }
 
 func (pts *PlanTypeInitShard) FieldDimensions(

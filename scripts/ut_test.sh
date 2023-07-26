@@ -31,37 +31,57 @@ fi
 
 splittingLine "end: check licence header"
 
+########################### static check ###############################################
+### go 1.19
+splittingLine "start: static check"
+
+[[ -s "$GVM_ROOT/scripts/gvm" ]] && source "$GVM_ROOT/scripts/gvm"
+gvm use go1.19 -y --default
+
 rm -f go.sum
 go mod tidy
 
-PROJECT_DIR=$PWD
+make static-check
+golang_static_status=$?
 
-splittingLine "failpoint enable"
-go install github.com/pingcap/failpoint/failpoint-ctl
+splittingLine "end: static check"
 
-# failpoint just for UT
-# Converting gofail failpoints...
-find $PROJECT_DIR -type d | grep -vE "(\.cid|\.build_config|tests)" | xargs failpoint-ctl enable
+########################### other go lint ###############################################
+### go 1.18
+splittingLine "start: other go lint"
+
+gvm use go1.18 -y --default
+
+rm -f go.sum
+go mod tidy
+
+make go-version-check
+golang_version_status=$?
+
+make style-check
+golang_style_status=$?
+
+make go-vet-check
+golang_vet_status=$?
+
+make golangci-lint-check
+golang_lint_status=$?
+
+splittingLine "end: other go lint"
+
+if [[ $golang_static_status -ne 0 || $golang_version_status -ne 0
+      || $golang_style_status  -ne 0 || $golang_vet_status  -ne 0
+        || $golang_lint_status -ne 0 ]]; then
+    exit 1
+fi
+
+########################### unit test ###############################################
+
+rm -f go.sum
+go mod tidy
 
 rm -rf /tmp/openGemini/*
 mkdir /tmp/openGemini/logs -p
-
-splittingLine "start run UT test "
-
-for s in $(go list ./... | grep -v tests | grep -v github.com/hashicorp)
-do
-  go test -failfast -short -v -count 1 -p 1 -timeout 10m $s | tee -a /tmp/openGemini/logs/gotest.log
-  if [ ${PIPESTATUS[0]} -ne 0 ]
-  then
-     find $PROJECT_DIR -type d | grep -vE "(\.cid|\.build_config|tests)" | xargs failpoint-ctl disable
-     exit 1
-  fi
-done
-
-splittingLine "end run ut test"
-
-splittingLine "failpoint disable"
-find $PROJECT_DIR -type d | grep -vE "(\.cid|\.build_config|tests)" | xargs failpoint-ctl disable
 
 ########################### test build for multi platform ###############################################
 splittingLine "start: test build for multi platform"
@@ -79,6 +99,8 @@ python build.py  --version v1.0.0 --clean --platform linux --arch amd64
 
 splittingLine "end: test build for multi platform"
 
+
+########################### integration test ###############################################
 
 sed -i 's/# time-range-limit = \["72h", "24h"\]/time-range-limit = ["0s", "24h"]/g' config/openGemini.conf
 sed -i "s/# ptnum-pernode = 2/ptnum-pernode = 2/g" config/openGemini.conf

@@ -50,10 +50,9 @@ func TestFileStat(t *testing.T) {
 		"FileSize":  int64(7),
 	}
 	tags := map[string]string{
-		"hostname":    "127.0.0.1",
-		"database":    "db0",
-		"user":        "san",
-		"measurement": "cpu",
+		"hostname": "127.0.0.1",
+		"database": "db0",
+		"user":     "san",
 	}
 	if !assert.NoError(t, compareBuffer("filestat", tags, fields, tmp[0])) {
 		return
