@@ -19,6 +19,7 @@ package meta
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -53,6 +54,8 @@ type IStore interface {
 	markBalancer(enable bool) error
 	movePt(db string, pt uint32, to uint64) error
 	ExpandGroups() error
+	leader() string
+	leadershipTransfer() error
 }
 
 var httpScheme = map[bool]string{
@@ -134,6 +137,8 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.serveMovePt).ServeHTTP(w, r)
 		case "/expandGroups":
 			h.WrapHandler(h.serveExpandGroups).ServeHTTP(w, r)
+		case "/leadershiptransfer":
+			h.WrapHandler(h.leadershipTransfer).ServeHTTP(w, r)
 		}
 		h.logger.Info("serve post")
 	default:
@@ -237,8 +242,8 @@ func (h *httpHandler) httpErr(err error, w http.ResponseWriter, status int) {
 	http.Error(w, err.Error(), status)
 }
 
-//get the status of Data include MetaNodes and DataNodes
-//do this way:curl -i GET 'http://127.0.0.1:8091/getdata?nodeStatus=ok'
+// get the status of Data include MetaNodes and DataNodes
+// do this way:curl -i GET 'http://127.0.0.1:8091/getdata?nodeStatus=ok'
 func (h *httpHandler) serveGetdata(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
@@ -410,4 +415,48 @@ func (h *httpHandler) serveExpandGroups(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		h.logger.Error("write result failed", zap.Error(err))
 	}
+}
+
+// curl -i -XPOST 'http://127.0.0.1:8091/leadershiptransfer'
+func (h *httpHandler) leadershipTransfer(w http.ResponseWriter, r *http.Request) {
+	err := h.store.leadershipTransfer()
+	if err != nil && strings.Contains(err.Error(), "node is not the leader") {
+		l := h.store.leader()
+		if l == "" {
+			h.httpErr(errors.New("no raft leader"), w, http.StatusServiceUnavailable)
+		}
+		scheme := "http"
+		if h.config.HTTPSEnabled {
+			scheme = "https"
+		}
+
+		url := fmt.Sprintf("%s://%s/leadershiptransfer", scheme, l)
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+		return
+	}
+
+	if err != nil {
+		h.logger.Error("store.leadershiptransfer error", zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp := &proto2.Response{
+		OK:    proto.Bool(true),
+		Index: proto.Uint64(h.store.index()),
+	}
+
+	b, err := json.Marshal(resp)
+	if err != nil {
+		h.httpErr(err, w, http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Header().Add("Content-Type", "application/octet-stream")
+	_, err = w.Write(b)
+	if err != nil {
+		h.logger.Error("write result failed", zap.Error(err))
+	}
+	_, _ = w.Write([]byte("\n"))
 }

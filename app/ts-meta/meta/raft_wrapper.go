@@ -248,3 +248,7 @@ func (l *raftLayer) Dial(address raft.ServerAddress, timeout time.Duration) (net
 func (l *raftLayer) Accept() (net.Conn, error) { return l.ln.Accept() }
 
 func (l *raftLayer) Close() error { return l.ln.Close() }
+
+func (r *raftWrapper) LeadershipTransfer() error {
+	return r.raft.LeadershipTransfer().Error()
+}

@@ -143,6 +143,10 @@ func (m MockRaft) UserSnapshot() error {
 	panic("implement me")
 }
 
+func (m MockRaft) LeadershipTransfer() error {
+	panic("implement me")
+}
+
 func Test_GetStreamInfo(t *testing.T) {
 	Streams := map[string]*meta2.StreamInfo{}
 	Streams["test"] = &meta2.StreamInfo{
