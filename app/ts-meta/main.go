@@ -17,20 +17,12 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
 	"os"
-	"runtime"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
-	"github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-meta/run"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/util"
-	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var (
@@ -40,79 +32,16 @@ var (
 	TsBuildTime string
 )
 
-const TsMeta = "ts-meta"
-
-var metaUsage = fmt.Sprintf(app.MainUsage, TsMeta, TsMeta)
-var runUsage = fmt.Sprintf(app.RunUsage, TsMeta, TsMeta)
-
 func main() {
-	app.InitParse()
-	if err := doRun(os.Args[1:]...); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func doRun(args ...string) error {
 	errno.SetNode(errno.NodeMeta)
-
-	name, args := cmd.ParseCommandName(args)
-
-	switch name {
-	case "", "run":
-		options, err := app.ParseFlags(func() {
-			fmt.Println(runUsage)
-		}, args...)
-		if err != nil {
-			return err
-		}
-		mainCmd := app.NewCommand()
-		err = mainCmd.InitConfig(config.NewTSMeta(true), options.ConfigPath)
-		if err != nil {
-			return err
-		}
-
-		mainCmd.Logger = logger.NewLogger(errno.ModuleMeta)
-		mainCmd.Command = &cobra.Command{
-			Use:                metaUsage,
-			Version:            TsVersion,
-			ValidArgs:          []string{TsBranch, TsCommit, TsBuildTime},
-			DisableFlagParsing: true,
-			RunE: func(cmd *cobra.Command, args []string) error {
-				fmt.Fprint(os.Stdout, app.METALOGO)
-
-				// Write the PID file.
-				if err := app.WritePIDFile(options.PIDFile); err != nil {
-					return fmt.Errorf("write pid file: %s", err)
-				}
-				mainCmd.Pidfile = options.PIDFile
-
-				s, err := run.NewServer(mainCmd.Config, cmd, mainCmd.Logger)
-				if err != nil {
-					return fmt.Errorf("create server: %s", err)
-				}
-				if err := s.Open(); err != nil {
-					return fmt.Errorf("open server: %s", err)
-				}
-
-				mainCmd.Server = s
-				mainCmd.Logger.Info("Meta:RunE")
-				return nil
-			},
-		}
-
-		if mainCmd.Command.Execute() != nil {
-			os.Exit(1)
-		}
-
-		signal := procutil.WaitForSigterm()
-		mainCmd.Logger.Info("Meta service received shutdown signal", zap.Any("signal", signal))
-		util.MustClose(mainCmd)
-		mainCmd.Logger.Info("Meta shutdown successfully!")
-	case "version":
-		fmt.Printf(app.VERSION, TsMeta, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
-	default:
-		return fmt.Errorf(metaUsage)
+	app.InitParse()
+	info := app.ServerInfo{
+		App:       config.AppMeta,
+		Version:   TsVersion,
+		Commit:    TsCommit,
+		Branch:    TsBranch,
+		BuildTime: TsBuildTime,
 	}
-	return nil
+
+	app.Run(os.Args[1:], run.NewCommand(info, true))
 }

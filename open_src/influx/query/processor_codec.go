@@ -70,7 +70,7 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 		Query:                 opt.Query,
 		HintType:              int64(opt.HintType),
 		EnableBinaryTreeMerge: opt.EnableBinaryTreeMerge,
-		TraceId:               opt.Traceid,
+		QueryId:               opt.QueryId,
 		SeriesKey:             opt.SeriesKey,
 		GroupByAllDims:        opt.GroupByAllDims,
 	}
@@ -136,7 +136,7 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 		Query:                 pb.GetQuery(),
 		HintType:              hybridqp.HintType(pb.HintType),
 		EnableBinaryTreeMerge: pb.GetEnableBinaryTreeMerge(),
-		Traceid:               pb.GetTraceId(),
+		QueryId:               pb.GetQueryId(),
 		SeriesKey:             pb.GetSeriesKey(),
 		GroupByAllDims:        pb.GetGroupByAllDims(),
 	}

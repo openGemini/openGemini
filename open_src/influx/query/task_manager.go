@@ -28,9 +28,7 @@ const (
 	// A value of zero will have no query timeout.
 	DefaultQueryTimeout = time.Duration(0)
 	//The query id span of the current SQL node.
-	queryIdSpan = 100000
-	// This id will be assigned when query id offset is unregistered.
-	initQueryID = 0
+	queryIdSpan = 100000000 // 100 million
 )
 
 type TaskStatus int
@@ -99,12 +97,10 @@ type TaskManager struct {
 	queryIDUpperLimit uint64
 	queries           map[uint64]*Task
 
-	// It is used to ensure that the registration of current sql node will only be successfully executed once.
-	registerOnce uint32
-	// It is used to indicate whether the current registration of current sql node has been completed.
-	registered bool
-	Register   QueryIDRegister
-	Host       string
+	registerOnce uint32 // ensure the registration of sql node will only be successfully executed once
+
+	Register QueryIDRegister
+	Host     string
 
 	mu       sync.RWMutex
 	shutdown bool
@@ -211,9 +207,11 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 	}
 
 	// only the first query can try to register query id offset
-	t.tryRegisterQueryIDOffset()
+	if err := t.tryRegisterQueryIDOffset(); err != nil {
+		return nil, nil, err
+	}
 
-	qid := t.AssignQueryID() // atomic
+	qid := t.AssignQueryID()
 
 	query := &Task{
 		query:     q.String(),
@@ -247,7 +245,6 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 
 	qCtx := context.Background()
 	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
-	qCtx = context.WithValue(qCtx, QueryStmtKey, q.String())
 	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)
 	ctx := &ExecutionContext{
 		Context:          qCtx,
@@ -289,22 +286,23 @@ func (t *TaskManager) DetachQuery(qid uint64) error {
 	return nil
 }
 
-func (t *TaskManager) tryRegisterQueryIDOffset() {
+func (t *TaskManager) tryRegisterQueryIDOffset() error {
 	// Ensure that only one goroutine can register.
-	// And if registration is failed，it will restore the initial state for other query goroutines
-	if atomic.CompareAndSwapUint32(&t.registerOnce, 0, 1) {
-		offset, err := t.Register.RetryRegisterQueryIDOffset(t.Host)
-		if err != nil {
-			// If register failed，restore the initial state
-			atomic.StoreUint32(&t.registerOnce, 0)
-			t.Logger.Error("register query id offset to meta failed", zap.Error(err))
-			return
+	// And if registration is failed, return the error directly.
+	if atomic.LoadUint32(&t.registerOnce) == 0 {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if atomic.LoadUint32(&t.registerOnce) == 0 {
+			offset, err := t.Register.RetryRegisterQueryIDOffset(t.Host)
+			if err != nil {
+				return err
+			}
+			// update registerOnce state to allow assign query id
+			t.InitQueryIDByOffset(offset)
+			atomic.StoreUint32(&t.registerOnce, 1)
 		}
-
-		t.InitQueryIDByOffset(offset)
-		// update registered state to allow assign query id
-		t.registered = true
 	}
+	return nil
 }
 
 // QueryInfo represents the information for a query.
@@ -345,7 +343,7 @@ func (t *TaskManager) waitForQuery(qid uint64, interrupt <-chan struct{}, closin
 
 	select {
 	case <-closing:
-		t.queryError(qid, errno.NewError(errno.ErrQueryInterrupted))
+		t.queryError(qid, errno.NewError(errno.ErrQueryKilled))
 	case err := <-monitorCh:
 		if err == nil {
 			break
@@ -387,11 +385,6 @@ func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
 
 // AssignQueryID assign a query id for a sql
 func (t *TaskManager) AssignQueryID() uint64 {
-	// Ensure that if the registration is not completed, cannot assign id to every query.
-	if !t.registered {
-		return initQueryID
-	}
 	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
-	qid := atomic.AddUint64(&t.nextID, 1)
-	return qid
+	return atomic.AddUint64(&t.nextID, 1)
 }

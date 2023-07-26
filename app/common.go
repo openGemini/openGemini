@@ -25,9 +25,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/util"
@@ -62,6 +66,16 @@ const STORELOGO = `
    _| |_   | \____) || \____) |   _| |_   \  '-'  /_| |  \ \_  _| |__/ |
   |_____|   \______.' \______.'  |_____|   '.___.'|____| |___||________|
 
+
+`
+
+const TSDATALOGO = `
+ _________   ______   ______        _     _________     _       
+|  _   _  |.' ____ \ |_   _ \.     / \   |  _   _  |   / \
+|_/ | | \_|| (___ \_|  | | \. \   / _ \  |_/ | | \_|  / _ \
+    | |     _.____\.   | |  | |  / ___ \     | |     / ___ \
+   _| |_   | \____) | _| |_.' /_/ /   \ \_  _| |_  _/ /   \ \_
+  |_____|   \______.'|______.'|____| |____||_____||____| |____|
 
 `
 
@@ -114,14 +128,6 @@ git: %s %s
 os: %s
 arch: %s
 `
-
-// BuildInfo represents the build details for the server code.
-type BuildInfo struct {
-	Version string
-	Commit  string
-	Branch  string
-	Time    string
-}
 
 // Options represents the command line options that can be parsed.
 type Options struct {
@@ -264,4 +270,29 @@ func SetStatsResponse(pusher *statisticsPusher.StatisticsPusher, w http.Response
 		}
 	}
 	fmt.Fprintln(w, "\n}")
+}
+
+type ServerInfo struct {
+	App       config.App
+	Version   string
+	Commit    string
+	Branch    string
+	BuildTime string
+}
+
+func (i *ServerInfo) FullVersion() string {
+	return fmt.Sprintf(VERSION, i.App, i.Version, i.Branch, i.Commit, runtime.GOOS, runtime.GOARCH)
+}
+
+func LogStarting(name string, info *ServerInfo) {
+	logger.GetLogger().Info(name+" starting",
+		zap.String("version", info.Version),
+		zap.String("branch", info.Branch),
+		zap.String("commit", info.Commit),
+		zap.String("buildTime", info.BuildTime))
+	logger.GetLogger().Info("Go runtime",
+		zap.String("version", runtime.Version()),
+		zap.Int("maxprocs", cpu.GetCpuNum()))
+	//Mark start-up in extra log
+	fmt.Printf("%v %s starting\n", time.Now(), name)
 }

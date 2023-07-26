@@ -504,6 +504,43 @@ func TestSearchSeriesWithLimit(t *testing.T) {
 	})
 }
 
+func TestSearchSeriesWithoutLimit(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		_, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		if err == nil {
+			t.Error("expect error")
+		}
+	}
+
+	syscontrol.SetQuerySeriesLimit(2)
+	syscontrol.SetQueryEnabledWhenExceedSeries(false)
+	defer func() {
+		syscontrol.SetQuerySeriesLimit(0)
+		syscontrol.SetQueryEnabledWhenExceedSeries(true)
+	}()
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+	}
+	run([]byte("mn-1"), opt, nil)
+}
+
 func TestSearchSeriesKeys(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path)

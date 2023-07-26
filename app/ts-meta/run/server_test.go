@@ -17,30 +17,25 @@ limitations under the License.
 package run
 
 import (
-	"os"
 	"path"
 	"testing"
 
+	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
-	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 )
-
-var metaPath = "/tmp/metadir"
 
 func Test_NewServer(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
+
 	// case 1: nil config
-	server, err := NewServer(nil, cmd, log)
+	server, err := NewServer(nil, app.ServerInfo{}, log)
 	require.EqualError(t, err, "invalid meta config")
 
 	// case 2: normal config
@@ -51,7 +46,7 @@ func Test_NewServer(t *testing.T) {
 	conf.Meta.Dir = path.Join(tmpDir, "meta")
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err = NewServer(conf, cmd, log)
+	server, err = NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaService)
 	require.NotNil(t, server.(*Server).sherlockService)
@@ -61,12 +56,9 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	log := logger.NewLogger(errno.ModuleUnknown)
-	cmd := &cobra.Command{
-		ValidArgs: []string{"dev", "abcd", "now"},
-		Version:   "Version",
-	}
+
 	// case 1: nil config
-	server, err := NewServer(nil, cmd, log)
+	server, err := NewServer(nil, app.ServerInfo{}, log)
 	require.EqualError(t, err, "invalid meta config")
 
 	// case 2: normal config
@@ -86,7 +78,7 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	conf.Data.WALDir = path.Join(tmpDir, "wal")
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
-	server, err = NewServer(conf, cmd, log)
+	server, err = NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaService)
 	require.NotNil(t, server.(*Server).sherlockService)
@@ -112,18 +104,50 @@ func Test_NewServer_Statistics(t *testing.T) {
 	server.MetaService.SetStatisticsPusher(puser)
 }
 
+func Test_NewServer_Statistics_Single(t *testing.T) {
+	tsMetaconfig := config.NewTSMeta(false)
+	tsMetaconfig.Monitor.StoreEnabled = true
+	tsMetaconfig.Monitor.Pushers = "http"
+
+	server := &Server{}
+	conf := config.NewMeta()
+	server.info.App = config.AppSingle
+	server.MetaService = meta.NewService(conf, nil)
+	server.config = tsMetaconfig
+	server.initStatisticsPusher()
+	pusher := &statisticsPusher.StatisticsPusher{}
+	server.MetaService.SetStatisticsPusher(pusher)
+}
+
+func Test_NewServer_Statistics_Data(t *testing.T) {
+	tsMetaconfig := config.NewTSMeta(true)
+	tsMetaconfig.Monitor.StoreEnabled = true
+	tsMetaconfig.Monitor.Pushers = "http"
+
+	server := &Server{}
+	conf := config.NewMeta()
+	server.info.App = config.AppData
+	server.MetaService = meta.NewService(conf, nil)
+	server.config = tsMetaconfig
+	server.initStatisticsPusher()
+	pusher := &statisticsPusher.StatisticsPusher{}
+	server.MetaService.SetStatisticsPusher(pusher)
+}
+
 func TestNewServer1(t *testing.T) {
 	tsMetaconfig := config.NewTSMeta(true)
-	tsMetaconfig.Meta.Dir = metaPath
+	tsMetaconfig.Meta.Dir = t.TempDir()
 	tsMetaconfig.Monitor.StoreEnabled = false
 	tsMetaconfig.Monitor.Pushers = "http"
-	defer os.Remove(metaPath)
 
-	cmd := &cobra.Command{
-		Version: "Version",
-	}
-	_, err := NewServer(tsMetaconfig, cmd, nil)
+	_, err := NewServer(tsMetaconfig, app.ServerInfo{}, nil)
 	if err != nil {
 		t.Fatal("NewServer fail")
 	}
+}
+
+func TestNewCommand(t *testing.T) {
+	cmd := NewCommand(app.ServerInfo{App: config.AppMeta}, true)
+	require.Equal(t, app.METALOGO, cmd.Logo)
+	require.Equal(t, config.AppMeta, cmd.Info.App)
 }

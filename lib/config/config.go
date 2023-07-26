@@ -49,6 +49,8 @@ const (
 	AppMeta    App = "meta"
 	AppSingle  App = "single"
 	AppMonitor App = "monitor"
+	AppData    App = "data"
+	Unknown    App = "unKnown"
 )
 
 var haEnable bool

@@ -28,6 +28,8 @@ var (
 	OnSlidingWindowPushUp     int64 = 0
 	OnPrintLogicalPlan        int64 = 1
 	OnForceBroadcastQuery     int64 = 1
+
+	querySeriesLimit int = 0 // query schema upper bound
 )
 
 func SetEnableBinaryTreeMerge(enabled int64) {
@@ -60,4 +62,12 @@ func SetEnableForceBroadcastQuery(enabled int64) {
 
 func GetEnableForceBroadcastQuery() int64 {
 	return atomic.LoadInt64(&EnableForceBroadcastQuery)
+}
+
+func SetQuerySchemaLimit(limit int) {
+	querySeriesLimit = limit
+}
+
+func GetQuerySchemaLimit() int {
+	return querySeriesLimit
 }

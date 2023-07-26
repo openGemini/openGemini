@@ -122,7 +122,7 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 	}
 	assert.Equal(t, false, mms.GetStore().data.TakeOverEnabled)
 
-	if _, err = http.Post(fmt.Sprintf("http://%s:9091/balancer?open=false", testIp), "", nil); err != nil {
+	if _, err = http.Post(fmt.Sprintf("http://%s:9091/balance?open=false", testIp), "", nil); err != nil {
 		t.Fatal(err)
 	}
 	assert.Equal(t, false, mms.GetStore().data.BalancerEnabled)

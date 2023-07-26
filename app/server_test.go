@@ -98,9 +98,3 @@ func TestCommand_InitConfig(t *testing.T) {
 	assert.Equal(t, uint64(16*config.GB), uint64(conf.Common.MemorySize))
 	assert.Equal(t, 10, cpu.GetCpuNum())
 }
-
-func TestSingle(t *testing.T) {
-	assert.Equal(t, false, app.IsSingle())
-	app.SwitchToSingle()
-	assert.Equal(t, true, app.IsSingle())
-}

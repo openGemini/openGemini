@@ -71,7 +71,7 @@ func NewSelect(store *storage.Storage, w spdy.Responser, req *executor.RemoteQue
 func (s *Select) logger() *logger.Logger {
 	return logger.NewLogger(errno.ModuleQueryEngine).With(
 		zap.String("query", "Select"),
-		zap.Uint64("trace_id", s.req.Opt.Traceid))
+		zap.Uint64("query_id", s.req.Opt.QueryId))
 }
 
 func (s *Select) Abort() {
@@ -97,8 +97,8 @@ func (s *Select) SetAbortHook(hook func()) bool {
 }
 
 func (s *Select) isAborted() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
 	return s.aborted
 }
@@ -259,8 +259,8 @@ func (s *Select) finishDuration(qd *statistics.StoreSlowQueryStatistics, start t
 // GetQueryExeInfo return the unchanging information in a query
 func (s *Select) GetQueryExeInfo() *netstorage.QueryExeInfo {
 	info := &netstorage.QueryExeInfo{
-		QueryID:  s.req.QueryId,
-		Stmt:     s.req.QueryStmt,
+		QueryID:  s.req.Opt.QueryId,
+		Stmt:     s.req.Opt.Query,
 		Database: s.req.Database,
 	}
 	return info

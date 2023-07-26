@@ -75,14 +75,13 @@ func makeRemoteQueryMsg(nodeID uint64) *executor.RemoteQuery {
 			ChunkSize:             0,
 			MaxParallel:           0,
 			RowsChan:              nil,
-			Query:                 "",
+			QueryId:               100001,
+			Query:                 "SELECT * FROM mst1 limit 10",
 			EnableBinaryTreeMerge: 0,
 			HintType:              0,
 		},
-		Analyze:   false,
-		Node:      []byte{1, 2, 3, 4, 5, 6, 7},
-		QueryId:   100001,
-		QueryStmt: "SELECT * FROM mst1 limit 10",
+		Analyze: false,
+		Node:    []byte{1, 2, 3, 4, 5, 6, 7},
 	}
 }
 
@@ -116,8 +115,7 @@ func (c *RPCServer) GetQueryExeInfo() *netstorage.QueryExeInfo {
 
 func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	msg, _ := data.(*rpc.Message).Data().(*executor.RemoteQuery)
-	fmt.Printf("RPCServer Handle: %+v \n", msg)
-	qid := msg.QueryId
+	qid := msg.Opt.QueryId
 	if msg.Analyze {
 		fmt.Println("msg.Analyze")
 		time.Sleep(time.Second)
@@ -221,7 +219,7 @@ func TestTransportAbort(t *testing.T) {
 
 	err := client.Run()
 	assert.NoError(t, err)
-	assert.Equal(t, query2.NewManager(clientID).Aborted(rq.QueryId), true,
+	assert.Equal(t, query2.NewManager(clientID).Aborted(rq.Opt.QueryId), true,
 		"abort failed")
 }
 

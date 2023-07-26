@@ -62,7 +62,7 @@ func (ctx *ExecutionContext) watch() {
 		case <-taskCtx:
 			ctx.err = ctx.task.Error()
 			if ctx.err == nil {
-				ctx.err = errno.NewError(errno.ErrQueryInterrupted)
+				ctx.err = errno.NewError(errno.ErrQueryKilled)
 			}
 		case <-ctx.AbortCh:
 			ctx.err = ErrQueryAborted

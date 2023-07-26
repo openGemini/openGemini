@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/openGemini/openGemini/lib/sysinfo"
 )
 
 const (
@@ -98,6 +100,26 @@ func (d *IODetector) flushDiskForDetectIO() {
 		case <-ticker.C:
 			d.flush()
 			d.detectCh <- time.Now()
+		}
+	}
+}
+
+// detectIO checks the disk flushing time every second.
+// If the time is not updated within 30 seconds, the process kills itself.
+func (d *IODetector) detectIO() {
+	ticker := time.NewTicker(1 * time.Second)
+	beforeTime := time.Now()
+	for {
+		select {
+		case <-d.detectCloseCh:
+			return
+		case beforeTime = <-d.detectCh:
+		case <-ticker.C:
+			if time.Since(beforeTime) > time.Duration(d.timeoutThreshold)*time.Second {
+				// process suicide
+				sysinfo.Suicide()
+				return
+			}
 		}
 	}
 }

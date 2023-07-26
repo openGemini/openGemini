@@ -1296,6 +1296,7 @@ func (s *Store) createDataNode(writeHost, queryHost string) ([]byte, error) {
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
+		logger.GetLogger().Error("create data node fail", zap.Error(err))
 		return nil, err
 	}
 
@@ -1734,9 +1735,9 @@ func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if offset, ok := s.data.QueryIDInit[host]; !ok {
+	offset, ok := s.data.QueryIDInit[host]
+	if !ok {
 		return 0, fmt.Errorf("register query id failed, host: %s", host)
-	} else {
-		return offset, nil
 	}
+	return offset, nil
 }

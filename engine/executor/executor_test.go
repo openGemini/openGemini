@@ -28,6 +28,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/memory"
@@ -665,5 +666,46 @@ func TestNewSparseIndexScanExecutorBuilder(t *testing.T) {
 	b.SetInfo(info_clone)
 	if _, err := b.Build(node); err != nil {
 		assert.Equal(t, err, errno.NewError(errno.LogicalPlanBuildFail, "missing  spdy.Responser in node exchange produce"))
+	}
+}
+
+func TestOneShardExchangeExecutorBuilder(t *testing.T) {
+	m := make(map[uint64][][]interface{})
+	m[1] = nil
+	w := &transport.Responser{}
+	traits := executor.NewStoreExchangeTraits(w, m)
+	opt := query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions:            []string{"host"},
+		Ascending:             true,
+		ChunkSize:             100,
+		EnableBinaryTreeMerge: 0,
+	}
+	req := &executor.RemoteQuery{
+		Opt:      opt,
+		ShardIDs: []uint64{1},
+	}
+	info := &executor.IndexScanExtraInfo{
+		ShardID: uint64(10),
+		Req:     req,
+	}
+	b := executor.NewScannerStoreExecutorBuilder(traits, nil, req, nil, 2)
+	if b == nil {
+		panic("nil StoreExecutorBuilder")
+	}
+	b.SetInfo(info)
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+
+	series := executor.NewLogicalSeries(schema)
+	indexscan := executor.NewLogicalIndexScan(series, schema)
+	shardExchange := executor.NewLogicalExchange(indexscan, executor.SHARD_EXCHANGE, nil, schema)
+	agg := executor.NewLogicalAggregate(shardExchange, schema)
+	nodeExchange := executor.NewLogicalExchange(agg, executor.NODE_EXCHANGE, nil, schema)
+	nodeExchange.ToProducer()
+	p, _ := b.Build(nodeExchange)
+	if len(p.(*executor.PipelineExecutor).GetProcessors()) != 2 {
+		t.Error("OneShardExchangeExecutorBuilder test error")
 	}
 }

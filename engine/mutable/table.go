@@ -377,6 +377,7 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 }
 
 type csMemTableImpl struct {
+	mu         sync.RWMutex
 	primaryKey map[string]record.Schemas // mst -> primary key
 }
 
@@ -441,8 +442,15 @@ func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 }
 
 func (c *csMemTableImpl) updatePrimaryKey(mst string, pk record.Schemas) {
-	if _, ok := c.primaryKey[mst]; !ok {
-		c.primaryKey[mst] = pk
+	c.mu.RLock()
+	_, ok := c.primaryKey[mst]
+	c.mu.RUnlock()
+	if !ok {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if _, ok := c.primaryKey[mst]; !ok {
+			c.primaryKey[mst] = pk
+		}
 	}
 }
 
@@ -480,6 +488,7 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 				} else {
 					primaryKey[i] = record.Field{Name: pk, Type: int(mstsInfo.Schema[pk])}
 				}
+
 				c.updatePrimaryKey(msName, primaryKey)
 			}
 		} else {

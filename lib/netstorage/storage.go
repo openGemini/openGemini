@@ -437,5 +437,5 @@ func (s *NetStorage) KillQueryOnNode(nodeID, queryID uint64) error {
 	if !ok {
 		return executor.NewInvalidTypeError("*netstorage.KillQueryResponse", v)
 	}
-	return resp.Error()
+	return errno.NewError(errno.Errno(resp.GetErrCode()))
 }

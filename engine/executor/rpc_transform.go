@@ -154,12 +154,13 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 		if err == nil {
 			break
 		}
-		if errno.Equal(err, errno.ErrQueryInterrupted) {
+		// kill query, no need to retry
+		if errno.Equal(err, errno.ErrQueryKilled) {
 			return err
 		}
 		t.rpcLogger.Error("RPC request failed.", zap.Error(err),
 			zap.String("query", "rpc executor"),
-			zap.Uint64("trace_id", t.opt.Traceid))
+			zap.Uint64("query_id", t.opt.QueryId))
 		time.Sleep(retryInterval * (1 << i))
 	}
 	if t.span != nil {
