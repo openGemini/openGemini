@@ -1035,6 +1035,30 @@ func (s *Store) leader() string {
 	return s.raft.Leader()
 }
 
+// leaderHTTP returns the http address what the Store thinks is the current leader. An empty
+// string indicates no leader exists.
+func (s *Store) leaderHTTP() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.raft == nil {
+		return ""
+	}
+
+	leader := s.raft.Leader()
+	if leader == "" {
+		return leader
+	}
+
+	var addr string
+	for _, node := range s.data.MetaNodes {
+		if leader == node.TCPHost {
+			addr = node.Host
+			break
+		}
+	}
+	return addr
+}
+
 // otherMetaServersHTTP will return the HTTP bind addresses of the other
 // meta servers in the cluster
 func (s *Store) otherMetaServersHTTP() []string {
@@ -1741,13 +1765,6 @@ func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 		return 0, fmt.Errorf("register query id failed, host: %s", host)
 	}
 	return offset, nil
-}
-
-func (s *Store) leadershipTransfer() error {
-	if s.raft == nil {
-		return errors.New("raft state not create")
-	}
-	return s.raft.LeadershipTransfer()
 }
 
 func (s *Store) leadershipTransfer() error {

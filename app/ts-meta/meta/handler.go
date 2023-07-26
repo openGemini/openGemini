@@ -54,7 +54,7 @@ type IStore interface {
 	markBalancer(enable bool) error
 	movePt(db string, pt uint32, to uint64) error
 	ExpandGroups() error
-	leader() string
+	leaderHTTP() string
 	leadershipTransfer() error
 }
 
@@ -390,7 +390,7 @@ func (h *httpHandler) handleResponse(w http.ResponseWriter, err error) {
 // curl -i -XPOST 'http://127.0.0.1:8091/expandGroups'
 func (h *httpHandler) serveExpandGroups(w http.ResponseWriter, r *http.Request) {
 	err := h.store.ExpandGroups()
-	if strings.Contains(err.Error(), "node is not the leader") {
+	if err != nil {
 		h.logger.Error("error expand groups", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -421,7 +421,7 @@ func (h *httpHandler) serveExpandGroups(w http.ResponseWriter, r *http.Request) 
 func (h *httpHandler) leadershipTransfer(w http.ResponseWriter, r *http.Request) {
 	err := h.store.leadershipTransfer()
 	if err != nil && strings.Contains(err.Error(), "node is not the leader") {
-		l := h.store.leader()
+		l := h.store.leaderHTTP()
 		if l == "" {
 			h.httpErr(errors.New("no raft leader"), w, http.StatusServiceUnavailable)
 		}
