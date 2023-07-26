@@ -15,6 +15,10 @@ coverage:
       default:
         target: 70%
         if_ci_failed: success
+    patch:
+      default:
+        target: 80%
+        if_ci_failed: success
 
 comment:                  # this is a top-level key
   layout: "diff"
