@@ -233,6 +233,7 @@ var tokens = [...]string{
 	DATABASES:      "DATABASES",
 	DEFAULT:        "DEFAULT",
 	DELETE:         "DELETE",
+	CONFIG:         "CONFIG",
 	DESC:           "DESC",
 	DESTINATIONS:   "DESTINATIONS",
 	DIAGNOSTICS:    "DIAGNOSTICS",

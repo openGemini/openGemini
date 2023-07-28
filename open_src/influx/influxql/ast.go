@@ -7197,3 +7197,29 @@ func (s *ShowMeasurementKeysStatement) String() string {
 
 	return buf.String()
 }
+
+type SetConfigStatement struct {
+	Component string
+	Key       string
+	Value     interface{}
+}
+
+func (s *SetConfigStatement) stmt() {}
+
+func (s *SetConfigStatement) node() {}
+
+func (s *SetConfigStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *SetConfigStatement) String() string {
+	var buf bytes.Buffer
+
+	if _, ok := s.Value.(string); ok {
+		_, _ = buf.WriteString(fmt.Sprintf(`SET CONFIG %s "%s" = "%s"`, s.Component, s.Key, s.Value))
+	} else {
+		_, _ = buf.WriteString(fmt.Sprintf(`SET CONFIG %s "%s" = %v`, s.Component, s.Key, s.Value))
+
+	}
+	return buf.String()
+}
