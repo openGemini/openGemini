@@ -91,9 +91,10 @@ type Data struct {
 	ClusterPtNum uint32 // default number is the total cpu number of 16 nodes.
 	PtNumPerNode uint32
 
-	MetaNodes []NodeInfo
-	DataNodes []DataNode           // data nodes
-	PtView    map[string]DBPtInfos // PtView's key is dbname, value is PtInfo's slice.
+	MetaNodes     []NodeInfo
+	DataNodes     []DataNode                // data nodes
+	PtView        map[string]DBPtInfos      // PtView's key is dbname, value is PtInfo's slice.
+	ReplicaGroups map[string][]ReplicaGroup // key is dbname, value is the replication group of the database
 
 	Databases     map[string]*DatabaseInfo
 	Streams       map[string]*StreamInfo
@@ -1599,7 +1600,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	}
 
 	//check index group contain this shard group
-	igi := data.createIndexGroupIfNeeded(rpi, timestamp)
+	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType)
 
 	for i := range sgi.Shards {
 		data.MaxShardID++
@@ -1628,7 +1629,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	return nil
 }
 
-func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time) *IndexGroupInfo {
+func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType) *IndexGroupInfo {
 	data.MaxIndexGroupID++
 	igi := IndexGroupInfo{}
 	igi.ID = data.MaxIndexGroupID
@@ -1637,6 +1638,7 @@ func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time
 	if igi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
 		igi.EndTime = time.Unix(0, models.MaxNanoTime+1)
 	}
+	igi.EngineType = engineType
 	igi.Indexes = make([]IndexInfo, data.ClusterPtNum)
 	for i := range igi.Indexes {
 		data.MaxIndexID++
@@ -1647,21 +1649,21 @@ func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time
 	return &igi
 }
 
-func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time) *IndexGroupInfo {
+func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType) *IndexGroupInfo {
 	if len(rpi.IndexGroups) == 0 {
-		return data.CreateIndexGroup(rpi, timestamp)
+		return data.CreateIndexGroup(rpi, timestamp, engineType)
 	}
 
 	var igIdx int
 	for igIdx = 0; igIdx < len(rpi.IndexGroups); igIdx++ {
-		if rpi.IndexGroups[igIdx].Contains(timestamp) {
+		if rpi.IndexGroups[igIdx].EngineType == engineType && rpi.IndexGroups[igIdx].Contains(timestamp) {
 			break
 		}
 	}
 	if igIdx < len(rpi.IndexGroups) && len(rpi.IndexGroups[igIdx].Indexes) >= int(data.ClusterPtNum) {
 		return &rpi.IndexGroups[igIdx]
 	}
-	return data.CreateIndexGroup(rpi, timestamp)
+	return data.CreateIndexGroup(rpi, timestamp, engineType)
 }
 
 func (data *Data) expendDBPtView(database string, ptNum uint32) {
@@ -1704,7 +1706,7 @@ func (data *Data) ExpandGroups() {
 
 			rp.walkShardGroups(func(sg *ShardGroupInfo) {
 				for i := len(sg.Shards); i < int(data.ClusterPtNum); i++ {
-					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime)
+					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime, sg.EngineType)
 					data.MaxShardID++
 					sg.Shards = append(sg.Shards, ShardInfo{ID: data.MaxShardID, Owners: []uint32{uint32(i)}, IndexID: igi.Indexes[i].ID, Tier: sg.Shards[i-1].Tier})
 				}
@@ -2129,6 +2131,18 @@ func (data *Data) Marshal() *proto2.Data {
 		pb.QueryIDInit[string(host)] = data.QueryIDInit[host]
 	}
 
+	if len(data.ReplicaGroups) > 0 {
+		pb.ReplicaGroups = make(map[string]*proto2.Replications, len(data.ReplicaGroups))
+		for dbname, repls := range data.ReplicaGroups {
+			replication := &proto2.Replications{
+				Groups: make([]*proto2.ReplicaGroup, len(repls)),
+			}
+			for i = range repls {
+				replication.Groups[i] = repls[i].marshal()
+			}
+			pb.ReplicaGroups[dbname] = replication
+		}
+	}
 	return pb
 }
 
@@ -2207,6 +2221,16 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 		data.QueryIDInit[SQLHost(host)] = pb.QueryIDInit[host]
 	}
 
+	if len(pb.ReplicaGroups) == 0 {
+		return
+	}
+	data.ReplicaGroups = make(map[string][]ReplicaGroup, len(pb.ReplicaGroups))
+	for dbname, rgs := range pb.ReplicaGroups {
+		data.ReplicaGroups[dbname] = make([]ReplicaGroup, len(rgs.Groups))
+		for i := range rgs.Groups {
+			data.ReplicaGroups[dbname][i].unmarshal(rgs.Groups[i])
+		}
+	}
 }
 
 // MarshalBinary encodes the metadata to a binary format.

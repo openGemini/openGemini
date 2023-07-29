@@ -42,7 +42,7 @@ func init() {
 	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0, 0)
 }
 
-func getTestIndexAndBuilder(path string) (Index, *IndexBuilder) {
+func getTestIndexAndBuilder(path string, engineType config.EngineType) (Index, *IndexBuilder) {
 	ltime := uint64(time.Now().Unix())
 	lockPath := ""
 	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
@@ -52,6 +52,7 @@ func getTestIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		Path(path).
 		Ident(indexIdent).
 		IndexType(MergeSet).
+		EngineType(engineType).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).
@@ -101,6 +102,7 @@ func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	opt := new(Options).
 		Path(path).
 		IndexType(MergeSet).
+		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).
@@ -142,6 +144,7 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	opt := new(Options).
 		Path(path).
 		IndexType(MergeSet).
+		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		Ident(indexIdent).
@@ -173,7 +176,7 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 
 func TestSearchSeries_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -313,7 +316,7 @@ func TestSearchSeries_Relation(t *testing.T) {
 
 func TestSearchSeriesKeys_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -343,7 +346,7 @@ func TestSearchSeriesKeys_Relation(t *testing.T) {
 
 func TestDropMeasurement_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -397,7 +400,7 @@ func TestDropMeasurement_Relation(t *testing.T) {
 
 func TestDeleteTSIDs_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -467,7 +470,7 @@ func TestDeleteTSIDs_Relation(t *testing.T) {
 
 func TestSearchTagValues_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -547,7 +550,7 @@ func TestSearchTagValues_Relation(t *testing.T) {
 
 func TestSeriesCardinality_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -570,7 +573,7 @@ func TestSeriesCardinality_Relation(t *testing.T) {
 
 func TestSearchTagValuesCardinality_Relation(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByBuild(idxBuilder, idx)
 
@@ -888,7 +891,7 @@ func CreateIndexByBuild(iBuilder *IndexBuilder, idx Index) {
 
 	mmPoints := &dictpool.Dict{}
 	mmPoints.Set("mn-1", &pts)
-	if err := iBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+	if err := iBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 		panic(err)
 	}
 
@@ -911,7 +914,7 @@ func CreateIndexByBuild(iBuilder *IndexBuilder, idx Index) {
 
 func CreateIndexByRows(iBuilder *IndexBuilder, mmPoints *dictpool.Dict) error {
 
-	if err := iBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+	if err := iBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 		return err
 	}
 
@@ -939,7 +942,7 @@ func CreateIndexByRows(iBuilder *IndexBuilder, mmPoints *dictpool.Dict) error {
 
 func BenchmarkCreateIndex1(b *testing.B) {
 	path := b.TempDir()
-	_, idxBuilder := getTestIndexAndBuilder(path)
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 
 	type IndexItem struct {
@@ -993,7 +996,7 @@ func BenchmarkCreateIndex1(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		item := items[i%n]
-		idxBuilder.CreateIndexIfNotExists(item.mmPoints)
+		idxBuilder.CreateIndexIfNotExists(item.mmPoints, true)
 	}
 	b.StopTimer()
 }
@@ -1033,6 +1036,7 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	opt := new(Options).
 		Path(path).
 		IndexType(MergeSet).
+		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		Ident(indexIdent).

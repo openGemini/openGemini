@@ -18,6 +18,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -497,7 +498,8 @@ type ExecutorBuilder struct {
 
 	parallelismLimiter chan struct{}
 
-	span *tracing.Span
+	span           *tracing.Span
+	oneReaderState bool
 }
 
 func NewQueryExecutorBuilder(enableBinaryTreeMerge int64) *ExecutorBuilder {
@@ -791,7 +793,11 @@ func (builder *ExecutorBuilder) addReaderExchange(exchange *LogicalExchange) (*T
 	}
 
 	var vertex *TransformVertex
-	if builder.enableBinaryTreeMerge == 1 {
+	if len(exchange.eTraits) == 1 {
+		builder.oneReaderState = true
+		vertex, err = builder.addOneReaderExchange(exchange)
+		builder.oneReaderState = false
+	} else if builder.enableBinaryTreeMerge == 1 {
 		vertex = builder.addBinaryTreeExchange(exchange, len(exchange.eTraits))
 	} else {
 		vertex, err = builder.addDefaultExchange(exchange)
@@ -800,6 +806,16 @@ func (builder *ExecutorBuilder) addReaderExchange(exchange *LogicalExchange) (*T
 	builder.traits.NextShard()
 
 	return vertex, err
+}
+
+func (builder *ExecutorBuilder) addOneReaderExchange(exchange *LogicalExchange) (*TransformVertex, error) {
+	if builder.info != nil {
+		builder.info.ShardID = builder.traits.shards[0]
+	}
+	childNode := exchange.Children()[0]
+	clone := childNode.Clone()
+	clone.ApplyTrait(exchange.eTraits[0])
+	return builder.addNodeToDag(clone)
 }
 
 func (builder *ExecutorBuilder) addIndexScan(indexScan *LogicalIndexScan) (*TransformVertex, error) {
@@ -892,6 +908,75 @@ func (builder *ExecutorBuilder) addHashMerge(hashMerge *LogicalHashMerge) (*Tran
 		return vertex, nil
 	}
 	return builder.addDefaultNode(hashMerge)
+}
+
+func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformVertex, error) {
+	if builder.frags != nil && len(builder.frags.Items) != 0 && len(hashAgg.eTraits) == 0 {
+		for i := range builder.frags.Items {
+			hashAgg.AddTrait(builder.frags.Items[i])
+		}
+	}
+	if len(hashAgg.eTraits) > 0 {
+		if len(hashAgg.Children()) != 1 {
+			return nil, errno.NewError(errno.LogicalPlanBuildFail, "only one child in exchange")
+		}
+
+		inRowDataTypes := make([]hybridqp.RowDataType, 0, len(hashAgg.eTraits))
+		readers := make([]*TransformVertex, 0, len(hashAgg.eTraits))
+		for _, trait := range hashAgg.eTraits {
+			switch t := trait.(type) {
+			case *RemoteQuery:
+				reader := NewRPCReaderTransform(hashAgg.RowDataType(), *hashAgg.schema.Options().(*query.ProcessorOptions), t)
+				clone := hashAgg.Clone()
+				reader.Distribute(clone.Children()[0])
+				v := NewTransformVertex(hashAgg, reader)
+				builder.dag.AddVertex(v)
+				readers = append(readers, v)
+				inRowDataTypes = append(inRowDataTypes, hashAgg.RowDataType())
+			case *ShardsFragmentsGroup:
+				v, err := builder.addFragsHashAgg(hashAgg.Children()[0], &t.frags)
+				if err != nil {
+					return nil, err
+				}
+				readers = append(readers, v)
+				inRowDataTypes = append(inRowDataTypes, hashAgg.inputs[0].RowDataType())
+			default:
+				return nil, errno.NewError(errno.LogicalPlanBuildFail, "only *executor.RemoteQuery support in node exchange consumer")
+			}
+
+		}
+		hash, _ := NewHashAggTransform(inRowDataTypes, []hybridqp.RowDataType{hashAgg.RowDataType()}, hashAgg.ops, hashAgg.schema.(*QuerySchema), hashAgg.hashAggType)
+
+		vertex := NewTransformVertex(hashAgg, hash)
+		builder.dag.AddVertex(vertex)
+		for _, reader := range readers {
+			builder.dag.AddEdge(reader, vertex)
+		}
+		return vertex, nil
+	}
+	return builder.addDefaultNode(hashAgg)
+}
+
+func (builder *ExecutorBuilder) addFragsHashAgg(node hybridqp.QueryNode, frags *ShardsFragments) (*TransformVertex, error) {
+	hashAgg, ok := node.(*LogicalHashAgg)
+	if !ok {
+		return nil, errors.New("expect LogicalHashAgg")
+	}
+	var reader Processor
+	var err error
+	if creator, ok := GetReaderFactoryInstance().Find(hashAgg.inputs[0].String()); ok {
+		reader, err = creator.CreateReader(hashAgg.inputs[0].RowDataType(), hashAgg.inputs[0].RowExprOptions(), hashAgg.schema, *frags, builder.info.Req.Database, builder.info.Req.PtID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	v := NewTransformVertex(hashAgg, reader)
+	builder.dag.AddVertex(v)
+	hash, _ := NewHashAggTransform([]hybridqp.RowDataType{hashAgg.inputs[0].RowDataType()}, []hybridqp.RowDataType{hashAgg.RowDataType()}, hashAgg.ops, hashAgg.schema.(*QuerySchema), hashAgg.hashAggType)
+	vertex := NewTransformVertex(hashAgg, hash)
+	builder.dag.AddVertex(vertex)
+	builder.dag.AddEdge(v, vertex)
+	return vertex, nil
 }
 
 func (builder *ExecutorBuilder) addBinaryTreeExchange(exchange *LogicalExchange, nLeaf int) *TransformVertex {
@@ -1025,6 +1110,7 @@ func (builder *ExecutorBuilder) addReaderToDag(reader *LogicalReader) (*Transfor
 	reader.SetCursor(builder.traits.NextReader())
 
 	if creator, ok := GetTransformFactoryInstance().Find(reader.String()); ok {
+		reader.SetOneReaderState(builder.oneReaderState)
 		p, err := creator.Create(reader, *reader.schema.Options().(*query.ProcessorOptions))
 
 		if err != nil {
@@ -1060,6 +1146,8 @@ func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*Transf
 		if exchange, ok := node.Children()[0].(*LogicalExchange); ok {
 			if exchange.eType == SHARD_EXCHANGE && len(builder.traits.shards) == 1 {
 				return children[0], nil
+			} else if exchange.eType == READER_EXCHANGE && len(builder.traits.mapShardsToReaders[builder.traits.shards[0]]) == 1 {
+				return children[0], nil
 			}
 		}
 	}
@@ -1086,6 +1174,8 @@ func (builder *ExecutorBuilder) addNodeToDag(node hybridqp.QueryNode) (*Transfor
 		return builder.addSparseIndexScan(n)
 	case *LogicalHashMerge:
 		return builder.addHashMerge(n.Clone().(*LogicalHashMerge))
+	case *LogicalHashAgg:
+		return builder.addHashAgg(n.Clone().(*LogicalHashAgg))
 	default:
 		return builder.addDefaultNode(n)
 	}

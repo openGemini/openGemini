@@ -1834,7 +1834,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -3334,7 +3334,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -4803,7 +4803,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -6370,7 +6370,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -7802,7 +7802,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 			for _, cur := range cursors {
 				keyCursors = append(keyCursors, cur)
 			}
-			chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+			chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 			defer chunkReader.Release()
 
 			// this is the output for this stmt
@@ -8183,7 +8183,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -8382,7 +8382,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -8515,5 +8515,206 @@ func TestMatchPreAgg(t *testing.T) {
 	schema := executor.NewQuerySchema(fields, []string{"a"}, opt, nil)
 	if matchPreAgg(schema, &idKeyCursorContext{}) {
 		t.Fatal()
+	}
+}
+
+func TestRecTransToChunk(t *testing.T) {
+	ck := ChunkReader{
+		transColumnFun: &transColAuxFun,
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	fields := []influxql.VarRef{
+		influxql.VarRef{Val: "int", Type: influxql.Integer},
+		influxql.VarRef{Val: "float", Type: influxql.Float},
+		influxql.VarRef{Val: "boolean", Type: influxql.Boolean},
+		influxql.VarRef{Val: "string", Type: influxql.Tag},
+	}
+	rt := hybridqp.NewRowDataTypeImpl(fields...)
+	oldRec := genRowRec(schema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	chunk := executor.NewChunkBuilder(rt).NewChunk("mst")
+	fieldItemIndex := make([]item, 0)
+	for i := 0; i < 4; i++ {
+		fieldItemIndex = append(fieldItemIndex, item{index: i})
+	}
+	ck.fieldItemIndex = fieldItemIndex
+	if ck.transToChunk(oldRec, chunk) != nil {
+		t.Error("transToChunk error")
+	}
+	if chunk.Len() != 1 {
+		t.Error("transToChunk result error")
+	}
+}
+
+func TestReadLastFromPreAgg(t *testing.T) {
+	testDir := t.TempDir()
+	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
+	msNames := []string{"cpu"}
+	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
+	pts, minT, maxT := GenDataRecord(msNames, 1, 100, time.Second, startTime, true, false, true)
+
+	for i := range pts {
+		pts[i].Fields = append([]influx.Field{}, pts[i].Fields...)
+		for j := range pts[i].Fields {
+			f := &pts[i].Fields[j]
+			switch f.Type {
+			case influx.Field_Type_Int, influx.Field_Type_Float:
+				f.NumValue = float64(i + 1)
+			}
+		}
+	}
+
+	fields := map[string]influxql.DataType{
+		"field2_int":    influxql.Integer,
+		"field3_bool":   influxql.Boolean,
+		"field4_float":  influxql.Float,
+		"field1_string": influxql.String,
+	}
+
+	// **** start write data to the shard.
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+	// end ****
+	enableStates := []bool{true, false}
+	for _, v := range enableStates {
+		executor.EnableFileCursor(v)
+		for _, tt := range []struct {
+			name              string
+			q                 string
+			tr                util.TimeRange
+			fields            map[string]influxql.DataType
+			skip              bool
+			outputRowDataType *hybridqp.RowDataTypeImpl
+			readerOps         []hybridqp.ExprOptions
+			aggOps            []hybridqp.ExprOptions
+			expect            func(chunks []executor.Chunk) bool
+		}{
+			{
+				name:   "read last[int] with aux",
+				q:      fmt.Sprintf(`SELECT last(field2_int),field4_float from cpu `),
+				tr:     util.TimeRange{Min: minT, Max: maxT},
+				fields: fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val2", Type: influxql.Integer},
+					influxql.VarRef{Val: "val4", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "field2_int", Type: influxql.Integer}}},
+						Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+					},
+					{
+						Expr: &influxql.VarRef{Val: "field4_float", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val4", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "last", Args: []influxql.Expr{&influxql.VarRef{Val: "val2", Type: influxql.Integer}}},
+						Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+					},
+					{
+						Expr: &influxql.VarRef{Val: "val4", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val4", Type: influxql.Float},
+					},
+				},
+				expect: func(chunks []executor.Chunk) bool {
+					if len(chunks) != 1 {
+						t.Errorf("The result should be 1 chunk")
+					}
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time()[0], maxT) && success
+					success = ast.Equal(t, len(ck.Columns()), 2) && success
+					success = ast.Equal(t, ck.Column(0).IntegerValue(0), int64(100)) && success
+					success = ast.Equal(t, ck.Column(1).FloatValue(0), float64(100)) && success
+					return success
+				},
+				// skip: true,
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.skip {
+					t.Skipf("SKIP:: %s", tt.name)
+				}
+				ctx := context.Background()
+				// parse stmt and opt
+				stmt := MustParseSelectStatement(tt.q)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
+				stmt.OmitTime = true
+				sopt := query.SelectOptions{ChunkSize: 1024}
+				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+				opt.Name = msNames[0]
+				opt.Sources = source
+				opt.StartTime = tt.tr.Min
+				opt.EndTime = tt.tr.Max
+				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+
+				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				var keyCursors []interface{}
+				for _, cur := range cursors {
+					keyCursors = append(keyCursors, cur)
+				}
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				defer chunkReader.Release()
+
+				// this is the output for this stmt
+				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
+
+				agg, _ := executor.NewStreamAggregateTransform(
+					[]hybridqp.RowDataType{tt.outputRowDataType},
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
+				agg.GetOutputs()[0].Connect(outPutPort)
+
+				chunkReader.GetOutputs()[0].Connect(agg.GetInputs()[0])
+				go func() {
+					chunkReader.Work(ctx)
+				}()
+				go agg.Work(ctx)
+
+				var closed bool
+				chunks := make([]executor.Chunk, 0, 1)
+				for {
+					select {
+					case v, ok := <-outPutPort.State:
+						if !ok {
+							closed = true
+							break
+						}
+						chunks = append(chunks, v)
+					}
+					if closed {
+						break
+					}
+				}
+				if !tt.expect(chunks) {
+					t.Fail()
+				}
+			})
+		}
 	}
 }

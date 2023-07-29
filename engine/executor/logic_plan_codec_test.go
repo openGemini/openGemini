@@ -351,3 +351,12 @@ func CompareFields(fa, fb influxql.Fields, object string) error {
 
 	return CompareNil(fa, fb, fmt.Sprintf("%s.fields", object), fn)
 }
+
+func TestReWriteArgs(t *testing.T) {
+	schema := createQuerySchemaWithCalls()
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	agg := executor.NewLogicalHashAgg(reader, schema, executor.READER_EXCHANGE, nil)
+	aggCp := agg.Clone()
+	executor.ReWriteArgs(agg)
+	assert.Equal(t, agg.Digest(), aggCp.Digest())
+}

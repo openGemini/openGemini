@@ -17,6 +17,7 @@ limitations under the License.
 package colstore
 
 import (
+	"errors"
 	"hash/crc32"
 
 	Log "github.com/openGemini/openGemini/lib/logger"
@@ -51,6 +52,9 @@ func (b *ChunkBuilder) EncodeChunk(rec *record.Record, dst []byte, offset []byte
 	for i := range rec.Schema[:len(rec.Schema)] {
 		ref = &rec.Schema[i]
 		col = rec.Column(i)
+		if col.NilCount != 0 {
+			return nil, errors.New("not support for column with nil value")
+		}
 		pos := len(b.chunk)
 		numberenc.MarshalUint32Copy(offset[i*util.Uint32SizeBytes:(i+1)*util.Uint32SizeBytes], offsetStart+uint32(pos))
 		b.chunk = numberenc.MarshalUint32Append(b.chunk, crc32.ChecksumIEEE(col.Val))

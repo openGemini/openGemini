@@ -17,6 +17,8 @@ limitations under the License.
 package colstore
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/lib/encoding"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -70,6 +72,18 @@ func (b *ColumnBuilder) encStringColumn(col *record.ColVal) error {
 	return nil
 }
 
+func (b *ColumnBuilder) encTagColumn(col *record.ColVal) error {
+	b.data = append(b.data, encoding.BlockTag)
+	var err error
+	b.data, err = encoding.EncodeStringBlock(col.Val, col.Offset, b.data, b.coder)
+	if err != nil {
+		b.log.Error("encode string value fail", zap.Error(err))
+		return err
+	}
+
+	return nil
+}
+
 func (b *ColumnBuilder) encBooleanColumn(col *record.ColVal) error {
 	b.data = append(b.data, encoding.BlockBoolean)
 	var err error
@@ -95,6 +109,10 @@ func (b *ColumnBuilder) EncodeColumn(ref *record.Field, col *record.ColVal) ([]b
 		err = b.encStringColumn(col)
 	case influx.Field_Type_Boolean:
 		err = b.encBooleanColumn(col)
+	case influx.Field_Type_Tag:
+		err = b.encTagColumn(col)
+	default:
+		return nil, fmt.Errorf("invalid column type %v", ref.Type)
 	}
 
 	if err != nil {

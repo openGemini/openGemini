@@ -17,6 +17,9 @@ const (
 	// DefaultBindAddress is the default address to bind to.
 	DefaultBindAddress = ":8086"
 
+	// DefaultFlightAddress is the default address to bind to.
+	DefaultFlightAddress = ":8087"
+
 	// DefaultRealm is the default realm sent back when issuing a basic auth challenge.
 	DefaultRealm = "InfluxDB"
 
@@ -38,6 +41,9 @@ const (
 // Config represents a configuration for a HTTP service.
 type Config struct {
 	BindAddress             string         `toml:"bind-address"`
+	FlightAddress           string         `toml:"flight-address"`
+	FlightEnabled           bool           `toml:"flight-enabled"`
+	FlightChFactor          int            `toml:"flight-ch-factor"`
 	Domain                  string         `toml:"domain"`
 	AuthEnabled             bool           `toml:"auth-enabled"`
 	WeakPwdPath             string         `toml:"weakpwd-path"`
@@ -86,6 +92,9 @@ func NewConfig() Config {
 		FluxEnabled:             false,
 		FluxLogEnabled:          false,
 		BindAddress:             DefaultBindAddress,
+		FlightAddress:           DefaultFlightAddress,
+		FlightEnabled:           false,
+		FlightChFactor:          2,
 		LogEnabled:              true,
 		PprofEnabled:            true,
 		DebugPprofEnabled:       false,
@@ -112,6 +121,9 @@ func NewConfig() Config {
 func (c Config) Validate() error {
 	if c.BindAddress == "" {
 		return errors.New("http bind-address must be specified")
+	}
+	if c.FlightAddress == "" {
+		return errors.New("http arrowflight-address must be specified")
 	}
 	if c.MaxConnectionLimit < 0 {
 		return errors.New("http max-connection-limit can not be negative")

@@ -20,7 +20,6 @@ import (
 	"encoding/binary"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -89,7 +88,7 @@ func (c *BinaryDecoder) Float32() float32 {
 func (c *BinaryDecoder) Float64() float64 {
 	i := encoding.UnmarshalUint64(c.buf[c.offset : c.offset+8])
 	c.offset += 8
-	return record.Uint64ToFloat64(i)
+	return util.Uint64ToFloat64(i)
 }
 
 func (c *BinaryDecoder) IntSlice() []int {

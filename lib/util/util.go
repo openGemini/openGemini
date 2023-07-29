@@ -462,3 +462,11 @@ func MaxUint32(x, y uint32) uint32 {
 	}
 	return x
 }
+
+func Float64ToUint64(v float64) uint64 {
+	return *(*uint64)(unsafe.Pointer(&v))
+}
+
+func Uint64ToFloat64(v uint64) float64 {
+	return *(*float64)(unsafe.Pointer(&v))
+}

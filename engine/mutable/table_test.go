@@ -57,7 +57,7 @@ func TestMemTable_GetMaxTimeBySidNoLock(t *testing.T) {
 		StrValue: "",
 		Type:     influx.Field_Type_Int,
 	})
-	msInfo := tbl.CreateMsInfo("mst", row)
+	msInfo := tbl.CreateMsInfo("mst", row, nil, false)
 	chunk, _ := msInfo.CreateChunk(100)
 	chunk.OrderWriteRec.SetLastAppendTime(100)
 	chunk.UnOrderWriteRec.SetLastAppendTime(200)

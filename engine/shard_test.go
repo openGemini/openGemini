@@ -251,6 +251,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 		Ident(ident).
 		Path(indexPath).
 		IndexType(tsi.MergeSet).
+		EngineType(engineType).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).
@@ -2964,7 +2965,7 @@ func TestDropMeasurementForColStore(t *testing.T) {
 
 func TestEngine_DropMeasurement(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3044,7 +3045,7 @@ func TestEngine_DropMeasurement(t *testing.T) {
 
 func TestEngine_GetShard(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3400,6 +3401,38 @@ func TestColumnStoreFlush(t *testing.T) {
 	}
 }
 
+func TestWriteRecByColumnStore(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = eng.Close()
+	}()
+
+	sh := eng.DBPartitions["db0"][0].Shard(1).(*shard)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+
+	record := genRecord()
+
+	err = eng.WriteRec("db0", defaultMeasurementName, 0, 1, record, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	rec := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
+}
+
 func TestWriteDataByNewEngine(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -3451,6 +3484,91 @@ func TestWriteDataByNewEngine2(t *testing.T) {
 		t.Fatal("should return error mstInfo")
 	}
 	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteDataByNewEngineWithTag(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeRec := msInfo.GetWriteChunk().WriteRec
+	require.Equal(t, 9, writeRec.GetRecord().Len())
+	// wait mem table flush
+	sh.ForceFlush()
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppendTagsFieldsToRecord(t *testing.T) {
+	dir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+
+	begin := time.Now().UnixNano()
+	rows := []influx.Row{{
+		Name: defaultMeasurementName,
+		Tags: influx.PointTags{
+			{Key: "a", Value: "T001"},
+			{Key: "c", Value: "T001"},
+			{Key: "g", Value: "T001"},
+			{Key: "f", Value: "T001"},
+			{Key: "d", Value: "T001"},
+			{Key: "h", Value: "T001"},
+		},
+		Fields: influx.Fields{
+			{Key: "b", Type: influx.Field_Type_Float, NumValue: 1.1},
+			{Key: "d", Type: influx.Field_Type_Float, NumValue: 1.1},
+			{Key: "e", Type: influx.Field_Type_Float, NumValue: 1.1},
+			{Key: "a1", Type: influx.Field_Type_Float, NumValue: 1.1},
+			{Key: "a2", Type: influx.Field_Type_Float, NumValue: 1.1},
+			{Key: "c1", Type: influx.Field_Type_Float, NumValue: 1.1},
+		},
+		ShardKey:     nil,
+		Timestamp:    begin,
+		IndexKey:     nil,
+		SeriesId:     0,
+		IndexOptions: nil,
+	}}
+	err = writeData(sh, rows, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3921,8 +4039,20 @@ func TestWriteColsForTsstore(t *testing.T) {
 	}()
 	record := genRecord()
 
-	if err := sh.WriteCols(*record, nil); err != nil {
+	if err := sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		require.Equal(t, err, errors.New("not implement yet"))
+	}
+}
+
+func TestWriteColsForTsstoreWithShardClosed(t *testing.T) {
+	dir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	record := genRecord()
+
+	_ = closeShard(sh)
+	if err := sh.WriteCols(defaultMeasurementName, record, nil); err == nil {
+		t.Fatal("shard close can not write data")
 	}
 }
 
@@ -3935,10 +4065,33 @@ func TestWriteColsForColstore(t *testing.T) {
 		_ = closeShard(sh)
 	}()
 	record := genRecord()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
 
-	if err := sh.WriteCols(*record, nil); err != nil {
-		require.Equal(t, err, errors.New("not implement yet"))
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+
+	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
+		t.Fatal(err)
 	}
+	err = sh.WriteCols(defaultMeasurementName, nil, nil)
+	if err == nil {
+		t.Fatal("write rec can not be nil")
+	}
+	sh.ident.ReadOnly = true
+	err = sh.WriteCols(defaultMeasurementName, record, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.ident.ReadOnly = true
+	DownSampleWriteDrop = false
+	err = sh.WriteCols(defaultMeasurementName, record, nil)
+	if err == nil {
+		t.Fatal("can not write cols to downSampled shard")
+	}
+	DownSampleWriteDrop = true
 }
 
 func TestDownSampleRedo(t *testing.T) {
@@ -3993,6 +4146,28 @@ func TestDownSampleSharCompact(t *testing.T) {
 	require.NoError(t, sh.Compact())
 }
 
+func TestFindTagIndex(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Tag, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	expRes := []int{3}
+	res := findTagIndex(schema)
+
+	if len(res) != len(expRes) {
+		t.Fatal("find tag index error")
+	}
+	for i := range res {
+		if res[i] != expRes[i] {
+			t.Fatal("unexpected result")
+		}
+	}
+}
+
 func TestWriteIndexForLabelStore(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -4019,7 +4194,7 @@ func TestWriteIndexForLabelStore(t *testing.T) {
 		}
 
 		if !writeIndexRequired {
-			exist, err = idx.GetTagValuesByTagKeys(rows[i])
+			exist, err = idx.IsTagKeyExist(rows[i])
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4028,26 +4203,109 @@ func TestWriteIndexForLabelStore(t *testing.T) {
 			}
 		}
 	}
-
+	csIndexImpl, ok := idx.StorageIndex.(*tsi.CsIndexImpl)
+	if !ok {
+		t.Fatal("wrong index type")
+	}
 	if writeIndexRequired {
 		for i := 0; i < len(rows); i++ {
-			err = idx.CreateIndexIfNotExistsByRowWithLabelStore(&rows[i])
+			err = csIndexImpl.CreateIndexIfNotExistsByRow(idx, &rows[i])
 			if err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	time.Sleep(2 * time.Second)
+	sh.indexBuilder.Flush()
 
 	for i := 0; i < len(rows); i++ {
 		if sh.closed.Closed() {
 			t.Fatal("shard closed")
 		}
 
-		exist, err = idx.GetTagValuesByTagKeys(rows[i])
+		exist, err = idx.IsTagKeyExist(rows[i])
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestWriteIndexForArrowFlight(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = closeShard(sh)
+	}()
+
+	// step2: write data
+	//expRec := genRecord()
+	iRec := tsi.GetIndexRecord()
+	defer tsi.PutIndexRecord(iRec)
+	iRec.TagCol.Mst = []byte(defaultMeasurementName)
+	iRec.TagCol.Key = []byte("string")
+	iRec.TagCol.Val = []byte("hello")
+	primaryIndex := sh.indexBuilder.GetPrimaryIndex()
+	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
+	var writeIndexRequired bool
+	var exist bool
+	if sh.closed.Closed() {
+		t.Fatal("shard closed")
+	}
+
+	if !writeIndexRequired {
+		exist, err = idx.IsTagKeyExistByArrowFlight(iRec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !exist {
+			writeIndexRequired = true
+		}
+	}
+
+	csIndexImpl, ok := idx.StorageIndex.(*tsi.CsIndexImpl)
+	if !ok {
+		t.Fatal("wrong index type")
+	}
+	if writeIndexRequired {
+		err = csIndexImpl.CreateIndexIfNotExistsForArrowFlight(idx, iRec)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sh.indexBuilder.Flush()
+
+	if sh.closed.Closed() {
+		t.Fatal("shard closed")
+	}
+
+	exist, err = idx.IsTagKeyExistByArrowFlight(iRec)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteIndexForArrowFlight2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = closeShard(sh)
+	}()
+
+	rec := genRecord()
+	tagIndex := []int{3}
+	err = sh.indexBuilder.CreateIndexIfNotExistsForColumnStore(rec, tagIndex, defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -4091,6 +4349,15 @@ func TestGetMstWriteCtx(t *testing.T) {
 	ctx = getMstWriteCtx(time.Millisecond*10, config.TSSTORE)
 	time.Sleep(time.Millisecond * 20)
 	putMstWriteCtx(ctx)
+}
+
+func TestGetMstWriteRecordCtx(t *testing.T) {
+	ctx := getMstWriteRecordCtx(time.Millisecond*10, config.COLUMNSTORE)
+	putMstWriteRecordCtx(ctx)
+
+	ctx = getMstWriteRecordCtx(time.Millisecond*10, config.COLUMNSTORE)
+	time.Sleep(time.Millisecond * 20)
+	putMstWriteRecordCtx(ctx)
 }
 
 func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {

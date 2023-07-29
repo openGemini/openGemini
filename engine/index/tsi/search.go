@@ -37,7 +37,6 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 	"go.uber.org/zap"
 )
@@ -49,6 +48,7 @@ type indexSearch struct {
 	ts  mergeset.TableSearch
 	kb  bytesutil.ByteBuffer
 	mp  tagToTSIDsRowParser
+	vrp tagToValuesRowParser
 
 	deleted *uint64set.Set
 }
@@ -57,32 +57,32 @@ func (is *indexSearch) setDeleted(set *uint64set.Set) {
 	is.deleted = set
 }
 
-func (is *indexSearch) getTagValuesByTagKeys(tag influx.Tag, name []byte) ([]byte, error) {
+func (is *indexSearch) isTagKeyExist(tagKey, tagValue, name []byte) (bool, error) {
 	ts := &is.ts
 	kb := &is.kb
 	compositeKey := kbPool.Get()
 	defer kbPool.Put(compositeKey)
-	kb.B = is.idx.marshalTagToTagValues(compositeKey.B, kb.B, name, tag)
+	kb.B = is.idx.marshalTagToTagValues(compositeKey.B, kb.B, name, tagKey, tagValue)
 
-	var exist, notExist []byte
+	var exist bool
 	ts.Seek(kb.B)
 	if ts.NextItem() {
 		if !bytes.HasPrefix(ts.Item, kb.B) {
 			// Nothing found.
-			return notExist, io.EOF
+			return false, io.EOF
 		}
-		exist = []byte{1}
+		exist = true
 	}
 
 	if err := ts.Error(); err != nil {
-		return notExist, fmt.Errorf("error when searching TSID by seriesKey; searchPrefix %q: %w", kb.B, err)
+		return false, fmt.Errorf("error when searching tagKey; searchPrefix %q: %w", kb.B, err)
 	}
 
-	if len(exist) != 0 {
-		return exist, nil
+	if exist {
+		return true, nil
 	}
 
-	return notExist, io.EOF
+	return false, io.EOF
 }
 
 func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {
@@ -1048,6 +1048,23 @@ func (is *indexSearch) searchTagValues(name []byte, tagKeys [][]byte, condition 
 	return result, nil
 }
 
+func (is *indexSearch) searchTagValuesForLabelStore(name []byte, tagKeys [][]byte) ([][]string, error) {
+	result := make([][]string, len(tagKeys))
+
+	for i, tagKey := range tagKeys {
+		tvm, err := is.searchTagValuesBySingleKeyForLabelStore(name, tagKey)
+		if err != nil {
+			return nil, err
+		}
+		tagValues := make([]string, 0, len(tvm))
+		for tv := range tvm {
+			tagValues = append(tagValues, tv)
+		}
+		result[i] = tagValues
+	}
+	return result, nil
+}
+
 func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleTSIDs *uint64set.Set, condition influxql.Expr) (map[string]struct{}, error) {
 	ts := &is.ts
 	kb := &is.kb
@@ -1102,6 +1119,41 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 		kb.B = marshalTagValue(kb.B, mp.Tag.Value)
 		kb.B[len(kb.B)-1]++
 		ts.Seek(kb.B)
+	}
+	if err := ts.Error(); err != nil {
+		return nil, fmt.Errorf("error when searchTagValues for prefix %q: %w", prefix, err)
+	}
+
+	return tagValueMap, nil
+}
+
+func (is *indexSearch) searchTagValuesBySingleKeyForLabelStore(name, tagKey []byte) (map[string]struct{}, error) {
+	ts := &is.ts
+	kb := &is.kb
+	vrp := &is.vrp
+	vrp.Reset()
+	tagValueMap := make(map[string]struct{})
+
+	compositeKey := kbPool.Get()
+	defer kbPool.Put(compositeKey)
+	compositeKey.B = marshalCompositeTagKey(compositeKey.B[:0], name, tagKey)
+
+	kb.B = append(kb.B[:0], nsPrefixTagKeysToTagValues)
+	kb.B = marshalTagValue(kb.B, compositeKey.B)
+	prefix := kb.B
+	ts.Seek(prefix)
+
+	for ts.NextItem() {
+		if !bytes.HasPrefix(ts.Item, prefix) {
+			break
+		}
+		if err := vrp.Init(ts.Item, nsPrefixTagKeysToTagValues); err != nil {
+			return nil, err
+		}
+
+		for i := range vrp.Values {
+			tagValueMap[string(vrp.Values[i])] = struct{}{}
+		}
 	}
 	if err := ts.Error(); err != nil {
 		return nil, fmt.Errorf("error when searchTagValues for prefix %q: %w", prefix, err)

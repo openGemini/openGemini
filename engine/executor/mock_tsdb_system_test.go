@@ -444,12 +444,22 @@ func (mock *MockShardGroup) MapTypeBatch(m *influxql.Measurement, fields map[str
 	return nil
 }
 
+var createPlanErr, inSubQuery bool
+
 func (mock *MockShardGroup) CreateLogicalPlan(
 	ctx context.Context,
 	sources influxql.Sources,
 	schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
-	builder := executor.NewLogicalPlanBuilderImpl(schema)
+	if createPlanErr {
+		if _, ok := schema.Refs()["\"name\""]; ok && inSubQuery {
+			return nil, fmt.Errorf("CreateLogicalPlan failed")
+		}
+		if _, ok := schema.Refs()["id"]; ok {
+			return nil, fmt.Errorf("CreateLogicalPlan failed")
+		}
+	}
 
+	builder := executor.NewLogicalPlanBuilderImpl(schema)
 	builder.Series()
 	builder.Exchange(executor.SERIES_EXCHANGE, nil)
 	builder.Reader(config.TSSTORE)
@@ -457,6 +467,7 @@ func (mock *MockShardGroup) CreateLogicalPlan(
 	builder.Exchange(executor.SINGLE_SHARD_EXCHANGE, nil)
 	return builder.Build()
 }
+
 func (mock *MockShardGroup) GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error) {
 	return nil, nil
 }

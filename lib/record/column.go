@@ -347,6 +347,24 @@ func (cv *ColVal) setBitMap(index int) {
 	cv.Bitmap[index>>3] |= BitMask[index&0x07]
 }
 
+func (cv *ColVal) InitBitMap(len int) {
+	num, remain := len/8, len%8
+	if bitCap := cap(cv.Bitmap); bitCap < num+1 {
+		cv.Bitmap = append(cv.Bitmap[:bitCap], make([]byte, num+1-bitCap)...)
+	}
+	cv.Bitmap = cv.Bitmap[:0]
+	for i := 0; i < num; i++ {
+		cv.Bitmap = append(cv.Bitmap, 255)
+	}
+	lastBit := uint8(0)
+	for i := 0; i < remain; i++ {
+		lastBit += BitMask[i]
+	}
+	if lastBit > 0 {
+		cv.Bitmap = append(cv.Bitmap, lastBit)
+	}
+}
+
 func (cv *ColVal) resetBitMap(index int) {
 	index += cv.BitMapOffset
 	cv.reserveBitMap()
@@ -506,6 +524,22 @@ func (cv *ColVal) StringValues(dst []string) []string {
 	}
 
 	return dst
+}
+
+func (cv *ColVal) StringValue(i int) ([]byte, bool) {
+	isNil := cv.IsNil(i)
+	if isNil {
+		return []byte(""), isNil
+	}
+
+	if i == len(cv.Offset)-1 {
+		off := cv.Offset[i]
+		return cv.Val[off:], false
+	}
+
+	start := cv.Offset[i]
+	end := cv.Offset[i+1]
+	return cv.Val[start:end], false
 }
 
 func (cv *ColVal) NullN() int {

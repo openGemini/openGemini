@@ -27,6 +27,8 @@ import (
 type ResourceBucket interface {
 	ReleaseResource(int64)
 	GetResource(int64) error
+	ReleaseDirectResource(int64)
+	GetResourceDirect(int64) error
 	GetResDetected(int64, *time.Timer) error
 	Reset()
 	GetTotalResource() int64
@@ -62,6 +64,7 @@ func NewInt64Bucket(timeOut time.Duration, TotalResource int64, outOfLimitOnce b
 	return b
 }
 
+// !use getResImpl to get resource must use ReleaseResource to release
 func (b *Int64bucket) ReleaseResource(freeResource int64) {
 	b.lock.Lock()
 	b.freeResource += freeResource
@@ -102,9 +105,33 @@ func (b *Int64bucket) getResImpl(cost int64, timer *time.Timer) error {
 	}
 }
 
+// !use getResImplDirect to get resource must use ReleaseDirectResource to release
+func (b *Int64bucket) ReleaseDirectResource(freeResource int64) {
+	atomic.AddInt64(&b.freeResource, freeResource)
+}
+
+// !don't use getResImplDirect with getResImpl in one Int64bucket
+func (b *Int64bucket) getResImplDirect(cost int64) error {
+	var freeMem int64
+	b.lock.Lock()
+	freeMem = b.freeResource - cost
+	if (b.freeResource >= 0 && b.outOfLimitOnce) || (!b.outOfLimitOnce && freeMem >= 0) {
+		// CAS guarantees the atomic operation for the reResource info.
+		b.freeResource = freeMem
+		b.lock.Unlock()
+		return nil
+	}
+	b.lock.Unlock()
+	return errno.NewError(errno.DirectBucketLacks)
+}
+
 func (b *Int64bucket) GetResource(cost int64) error {
 	// timer used to send time-out signal.
 	return b.getResImpl(cost, time.NewTimer(b.timeout))
+}
+
+func (b *Int64bucket) GetResourceDirect(cost int64) error {
+	return b.getResImplDirect(cost)
 }
 
 func (b *Int64bucket) GetResDetected(cost int64, timer *time.Timer) error {

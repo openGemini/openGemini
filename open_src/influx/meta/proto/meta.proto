@@ -1,6 +1,6 @@
 syntax = "proto2";
 package proto;
-
+option go_package="../proto";
 /*
 Copyright (c) 2013-2016 Errplane Inc.
 This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/internal/meta.proto
@@ -45,6 +45,24 @@ message Data {
 	optional uint64 MaxStreamID = 25;
 	optional uint64 MaxConnId = 26;
 	map<string,uint64> QueryIDInit = 27;
+	map<string, Replications> ReplicaGroups = 28;
+}
+
+message Replications {
+    repeated ReplicaGroup Groups = 1;
+}
+
+message ReplicaGroup {
+    required uint32 ID = 1;
+    required uint32 MasterID = 2;
+    repeated Peer Peers = 3;
+    required uint32 Status = 4;
+    required uint64 Term = 5;
+}
+
+message Peer {
+    required uint32 ID = 1;
+    required uint32 Role = 2;
 }
 
 message PtOwner {
@@ -56,6 +74,7 @@ message PtInfo {
 	required uint32 Status = 2;
 	required uint32 PtId = 3;
 	optional uint64 Ver = 4;
+	optional uint32 RGID = 5;
 }
 
 message DBPtInfo {
@@ -625,6 +644,7 @@ message IndexGroupInfo {
 	required int64 EndTime = 3;
 	required int64 DeletedAt = 4;
 	repeated IndexInfo Indexes = 5;
+	optional uint32 EngineType = 6;
 }
 
 message ShardStatus {

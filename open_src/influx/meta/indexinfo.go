@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/config"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
 
@@ -36,11 +37,12 @@ func normalisedIndexDuration(igd, sgd time.Duration) time.Duration {
 }
 
 type IndexGroupInfo struct {
-	ID        uint64
-	StartTime time.Time
-	EndTime   time.Time
-	Indexes   []IndexInfo
-	DeletedAt time.Time
+	ID         uint64
+	StartTime  time.Time
+	EndTime    time.Time
+	Indexes    []IndexInfo
+	DeletedAt  time.Time
+	EngineType config.EngineType
 }
 
 func (igi *IndexGroupInfo) canDelete() bool {
@@ -79,10 +81,11 @@ func (igi IndexGroupInfo) clone() IndexGroupInfo {
 
 func (igi *IndexGroupInfo) marshal() *proto2.IndexGroupInfo {
 	pb := &proto2.IndexGroupInfo{
-		ID:        proto.Uint64(igi.ID),
-		StartTime: proto.Int64(MarshalTime(igi.StartTime)),
-		EndTime:   proto.Int64(MarshalTime(igi.EndTime)),
-		DeletedAt: proto.Int64(MarshalTime(igi.DeletedAt)),
+		ID:         proto.Uint64(igi.ID),
+		StartTime:  proto.Int64(MarshalTime(igi.StartTime)),
+		EndTime:    proto.Int64(MarshalTime(igi.EndTime)),
+		DeletedAt:  proto.Int64(MarshalTime(igi.DeletedAt)),
+		EngineType: proto.Uint32(uint32(igi.EngineType)),
 	}
 
 	pb.Indexes = make([]*proto2.IndexInfo, len(igi.Indexes))
@@ -106,6 +109,7 @@ func (igi *IndexGroupInfo) unmarshal(pb *proto2.IndexGroupInfo) {
 		igi.EndTime = UnmarshalTime(i)
 	}
 	igi.DeletedAt = UnmarshalTime(pb.GetDeletedAt())
+	igi.EngineType = config.EngineType(pb.GetEngineType())
 
 	if len(pb.GetIndexes()) > 0 {
 		igi.Indexes = make([]IndexInfo, len(pb.GetIndexes()))

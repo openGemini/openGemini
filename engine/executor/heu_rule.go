@@ -91,6 +91,10 @@ func (r *LimitPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
+	if exchange.Schema().Options().HaveOnlyCSStore() {
+		return
+	}
+
 	exchangeType := exchange.ExchangeType()
 	if exchangeType == NODE_EXCHANGE || exchangeType == SERIES_EXCHANGE {
 		return
@@ -408,6 +412,81 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 		} else {
 			node, err = builder.CreateAggregate(vertex)
 		}
+		if err != nil {
+			panic(err.Error())
+		}
+		if _, ok := call.planner.Vertex(node); ok {
+			return
+		}
+		call.TransformTo(node)
+	}
+}
+
+type AggPushDownToColumnStoreReaderRule struct {
+	OptRuleBase
+}
+
+func NewAggPushDownToColumnStoreReaderRule(description string) *AggPushDownToColumnStoreReaderRule {
+	mr := &AggPushDownToColumnStoreReaderRule{}
+	if description == "" {
+		description = GetType(mr)
+	}
+
+	builder := NewOptRuleOperandBuilderBase()
+	builder.AnyInput((&LogicalColumnStoreReader{}).Type())
+
+	mr.Initialize(mr, builder.Operand(), description)
+	return mr
+}
+
+func (r *AggPushDownToColumnStoreReaderRule) Catagory() OptRuleCatagory {
+	return RULE_PUSHDOWN_AGG
+}
+
+func (r *AggPushDownToColumnStoreReaderRule) ToString() string {
+	return GetTypeName(r)
+}
+
+func (r *AggPushDownToColumnStoreReaderRule) Equals(rhs OptRule) bool {
+	rr, ok := rhs.(*AggPushDownToColumnStoreReaderRule)
+
+	if !ok {
+		return false
+	}
+
+	if r == rr {
+		return true
+	}
+
+	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+		return true
+	}
+
+	return false
+}
+
+func (r *AggPushDownToColumnStoreReaderRule) OnMatch(call *OptRuleCall) {
+	series, ok := call.Node(0).(*LogicalColumnStoreReader)
+	if !ok {
+		logger.GetLogger().Warn("AggPushdownToSeriesRule OnMatch failed, OptRuleCall Node 0 isn't *LogicalSeries")
+		return
+	}
+
+	if !series.Schema().HasCall() {
+		return
+	}
+
+	if !series.Schema().CanCallsPushdown() {
+		return
+	}
+
+	if series.Schema().ContainSeriesIgnoreCall() {
+		return
+	}
+
+	if vertex, ok := call.planner.Vertex(series); ok {
+		builder := NewLogicalPlanBuilderImpl(series.Schema())
+		node, err := builder.CreateAggregate(vertex)
 		if err != nil {
 			panic(err.Error())
 		}

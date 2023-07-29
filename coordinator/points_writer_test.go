@@ -18,7 +18,9 @@ package coordinator
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -48,16 +50,18 @@ const (
 
 var streamDistribution = noStream
 var enableFieldIndex = true
+var engineType = config.TSSTORE
 
 type MockMetaClient struct {
-	DatabaseFn          func(database string) (*meta2.DatabaseInfo, error)
-	RetentionPolicyFn   func(database, rp string) (*meta2.RetentionPolicyInfo, error)
-	CreateShardGroupFn  func(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
-	DBPtViewFn          func(database string) (meta2.DBPtInfos, error)
-	MeasurementFn       func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	UpdateSchemaFn      func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurementFn func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
-	GetAliveShardsFn    func(database string, sgi *meta2.ShardGroupInfo) []int
+	DatabaseFn           func(database string) (*meta2.DatabaseInfo, error)
+	RetentionPolicyFn    func(database, rp string) (*meta2.RetentionPolicyInfo, error)
+	CreateShardGroupFn   func(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
+	DBPtViewFn           func(database string) (meta2.DBPtInfos, error)
+	MeasurementFn        func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	UpdateSchemaFn       func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
+	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
+	GetAliveShardsFn     func(database string, sgi *meta2.ShardGroupInfo) []int
+	GetShardInfoByTimeFn func(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error)
 }
 
 func (mmc *MockMetaClient) Database(name string) (di *meta2.DatabaseInfo, err error) {
@@ -90,6 +94,46 @@ func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy st
 
 func (mmc *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
 	return mmc.GetAliveShardsFn(database, sgi)
+}
+func (mmc *MockMetaClient) GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error) {
+	rp, err := mmc.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return nil, err
+	}
+	if rp.MarkDeleted {
+		return nil, errno.NewError(errno.RpNotFound)
+	}
+	shardGroup := rp.ShardGroupByTimestampAndEngineType(t, engineType)
+	if shardGroup == nil {
+		return nil, errno.NewError(errno.ShardNotFound, shardGroup)
+	}
+	if shardGroup.Deleted() {
+		return nil, errno.NewError(errno.ShardNotFound, shardGroup)
+	}
+
+	info, _ := mmc.DBPtView(database)
+	if info == nil {
+		return nil, errors.New(fmt.Sprintf("db %v in PtView not exist", database))
+	}
+	cnt := 0
+	ptId := uint32(math.MaxUint32)
+	for i := range info {
+		if info[i].Owner.NodeID == nodeId {
+			if ptIdx == cnt {
+				ptId = info[i].PtId
+				cnt++
+				break
+			} else {
+				cnt++
+			}
+		}
+	}
+	if cnt == 0 || ptId == math.MaxUint32 {
+		return nil, errors.New("nodeId cannot find pt")
+	}
+
+	shard := shardGroup.Shards[ptId]
+	return &shard, nil
 }
 
 func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
@@ -181,8 +225,8 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func NewMockMetaClient() *MockMetaClient {
 	mc := &MockMetaClient{}
-	rpInfo := NewRetentionPolicy("rp0", time.Hour)
-	rp1Info := NewRetentionPolicy("rp1", time.Hour)
+	rpInfo := NewRetentionPolicy("rp0", time.Hour, engineType)
+	rp1Info := NewRetentionPolicy("rp1", time.Hour, engineType)
 	var dbInfo *meta2.DatabaseInfo
 
 	switch streamDistribution {
@@ -213,16 +257,16 @@ func NewMockMetaClient() *MockMetaClient {
 	}
 
 	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
-		return NewMeasurement(mst), nil
+		return NewMeasurement(mst, engineType), nil
 	}
 	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-		return NewMeasurement(mstName), nil
+		return NewMeasurement(mstName, engineType), nil
 	}
 	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
 		return nil
 	}
 	mc.DBPtViewFn = func(database string) (meta2.DBPtInfos, error) {
-		return []meta2.PtInfo{{PtId: 0, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online}}, nil
+		return []meta2.PtInfo{{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online}}, nil
 	}
 	mc.GetAliveShardsFn = func(database string, sgi *meta2.ShardGroupInfo) []int {
 		ptView, _ := mc.DBPtViewFn(database)
@@ -243,7 +287,7 @@ func nextShardID() uint64 {
 	return atomic.AddUint64(&shardID, 1)
 }
 
-func NewRetentionPolicy(name string, duration time.Duration) *meta2.RetentionPolicyInfo {
+func NewRetentionPolicy(name string, duration time.Duration, engineType config.EngineType) *meta2.RetentionPolicyInfo {
 	shards := []meta2.ShardInfo{}
 	owners := make([]uint32, 1)
 	owners[0] = 0
@@ -256,17 +300,20 @@ func NewRetentionPolicy(name string, duration time.Duration) *meta2.RetentionPol
 		ShardGroupDuration: duration,
 		ShardGroups: []meta2.ShardGroupInfo{
 			{ID: nextShardID(),
-				StartTime: start,
-				EndTime:   start.Add(duration).Add(-1),
-				Shards:    shards,
+				StartTime:  start,
+				EndTime:    start.Add(duration).Add(-1),
+				Shards:     shards,
+				EngineType: engineType,
 			},
 		},
 	}
 	return rp
 }
 
-func NewMeasurement(mst string) *meta2.MeasurementInfo {
+func NewMeasurement(mst string, engineType config.EngineType) *meta2.MeasurementInfo {
 	var msti = meta2.NewMeasurementInfo(mst)
+	msti.EngineType = engineType
+
 	switch streamDistribution {
 	case sameMst:
 		msti.ShardKeys = []meta2.ShardKeyInfo{{ShardKey: []string{"tk1"}, Type: "hash"}}
@@ -903,7 +950,7 @@ func TestPointsWriter_TagLimit(t *testing.T) {
 	pw := NewPointsWriter(time.Second * 10)
 	mc := NewMockMetaClient()
 	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-		mst := NewMeasurement("mst")
+		mst := NewMeasurement("mst", config.TSSTORE)
 		binary, err := mst.MarshalBinary()
 		if err != nil {
 			return nil, err

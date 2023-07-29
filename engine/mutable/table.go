@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -68,6 +69,13 @@ type WriteChunkForColumnStore struct {
 	sortKeys    []record.PrimaryKey
 }
 
+var writeRecPool pool.FixedPool
+
+func InitWriteRecPool(size int) {
+	writeRecPool.Reset(size, func() interface{} {
+		return &record.Record{}
+	}, nil)
+}
 func (writeRec *WriteRec) init(schema []record.Field) {
 	if writeRec.rec == nil {
 		writeRec.rec = record.NewRecordBuilder(schema)
@@ -77,6 +85,17 @@ func (writeRec *WriteRec) init(schema []record.Field) {
 	writeRec.lastAppendTime = math.MinInt64
 	writeRec.timeAsd = true
 	writeRec.schemaCopyed = false
+}
+
+func (writeRec *WriteRec) initForReuse(schema []record.Field) {
+	rec, ok := writeRecPool.Get().(*record.Record)
+	if !ok {
+		rec = &record.Record{}
+	}
+	writeRec.rec = rec
+	writeRec.rec.ResetWithSchema(schema)
+	writeRec.lastAppendTime = math.MinInt64
+	writeRec.timeAsd = true
 }
 
 func (writeRec *WriteRec) GetRecord() *record.Record {
@@ -146,7 +165,7 @@ func (msi *MsInfo) CreateWriteChunkForColumnStore(primaryKeys, sortKeys []string
 		return
 	}
 	msi.writeChunk = &WriteChunkForColumnStore{}
-	msi.writeChunk.WriteRec.init(msi.Schema)
+	msi.writeChunk.WriteRec.initForReuse(msi.Schema)
 	msi.writeChunk.primaryKeys = GetPrimaryKeys(msi.Schema, primaryKeys)
 	msi.writeChunk.sortKeys = GetPrimaryKeys(msi.Schema, sortKeys)
 	msi.mu.Unlock()
@@ -176,11 +195,14 @@ func GetPrimaryKeys(schema []record.Field, primaryKeys []string) []record.Primar
 }
 
 type MTable interface {
+	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
 	ApplyConcurrency(table *MemTable, f func(msName string, ids []uint64))
 	SortAndDedup(table *MemTable, msName string, ids []uint64)
 	sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, pk, sk []record.PrimaryKey)
 	FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore, sids []uint64)
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
+	WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error
+	Reset(table *MemTable)
 }
 
 type tsMemTableImpl struct {
@@ -295,7 +317,7 @@ func (t *tsMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		msName := stringinterner.InternSafe(mapp.Key)
 
 		start := time.Now()
-		msInfo := table.CreateMsInfo(msName, &rs[0])
+		msInfo := table.CreateMsInfo(msName, &rs[0], nil, false)
 		atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 
 		start = time.Now()
@@ -376,9 +398,33 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 	return table.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
+func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error {
+	return nil
+}
+
+func (t *tsMemTableImpl) Reset(table *MemTable) {
+}
+
+func (t *tsMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
+	msInfo.Init(row)
+	return msInfo
+}
+
 type csMemTableImpl struct {
 	mu         sync.RWMutex
 	primaryKey map[string]record.Schemas // mst -> primary key
+}
+
+func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
+	if rec != nil {
+		msInfo.Name = name
+		msInfo.Schema = rec.Schema
+		msInfo.TimeAsd = true
+		return msInfo
+	}
+	msInfo.Name = row.Name
+	genMsSchemaForColumnStore(&msInfo.Schema, row.Fields, row.Tags)
+	return msInfo
 }
 
 func (c *csMemTableImpl) ApplyConcurrency(table *MemTable, f func(msName string, ids []uint64)) {
@@ -476,28 +522,18 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		msName := stringinterner.InternSafe(mapp.Key)
 
 		start := time.Now()
-		msInfo := table.CreateMsInfo(msName, &rs[0])
+		msInfo := table.CreateMsInfo(msName, &rs[0], nil, true)
 		atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 
 		start = time.Now()
-		if mstsInfo, ok := wc.MstsInfo[msName]; ok && mstsInfo != nil {
-			primaryKey := make(record.Schemas, len(mstsInfo.ColStoreInfo.PrimaryKey))
-			for i, pk := range mstsInfo.ColStoreInfo.PrimaryKey {
-				if pk == record.TimeField {
-					primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
-				} else {
-					primaryKey[i] = record.Field{Name: pk, Type: int(mstsInfo.Schema[pk])}
-				}
-
-				c.updatePrimaryKey(msName, primaryKey)
-			}
-		} else {
-			return errors.New("measurements info not found")
+		err = c.UpdatePrimaryKey(msName, wc.MstsInfo)
+		if err != nil {
+			return err
 		}
 		msInfo.CreateWriteChunkForColumnStore(wc.MstsInfo[msName].ColStoreInfo.PrimaryKey, wc.MstsInfo[msName].ColStoreInfo.SortKey)
 
 		for index := range rs {
-			_, err = c.appendFields(table, msInfo.writeChunk, rs[index].Timestamp, rs[index].Fields)
+			_, err = c.appendFields(table, msInfo.writeChunk, rs[index].Timestamp, rs[index].Fields, rs[index].Tags)
 			if err != nil {
 				return err
 			}
@@ -508,15 +544,15 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 	return err
 }
 
-func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColumnStore, time int64, fields []influx.Field) (int64, error) {
+func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColumnStore, time int64, fields []influx.Field, tags []influx.Tag) (int64, error) {
 	chunk.Mu.Lock()
 	defer chunk.Mu.Unlock()
 
-	sameSchema := checkSchemaIsSame(chunk.WriteRec.rec.Schema, fields)
+	sameSchema := checkSchemaIsSameWithTag(chunk.WriteRec.rec.Schema, fields, tags)
 	if !sameSchema && !chunk.WriteRec.schemaCopyed {
 		copySchema := record.Schemas{}
 		if chunk.WriteRec.rec.RowNums() == 0 {
-			genMsSchema(&copySchema, fields)
+			genMsSchemaForColumnStore(&copySchema, fields, tags)
 			sameSchema = true
 		} else {
 			copySchema = append(copySchema, chunk.WriteRec.rec.Schema...)
@@ -528,7 +564,109 @@ func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColum
 		chunk.WriteRec.schemaCopyed = true
 	}
 
-	return table.appendFieldsToRecord(chunk.WriteRec.rec, fields, time, sameSchema)
+	return c.appendTagsFieldsToRecord(table, chunk.WriteRec.rec, fields, tags, time, sameSchema)
+}
+
+func (c *csMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Record, fields []influx.Field, tags []influx.Tag, time int64, sameSchema bool) (int64, error) {
+	// fast path
+	var size int64
+	var err error
+	recSchemaIdx, pointSchemaIdx, tagSchemaIdx := 0, 0, 0
+	filedsSchemaLen, tagSchemaLen := len(fields), len(tags)
+	if sameSchema {
+		for pointSchemaIdx < filedsSchemaLen && tagSchemaIdx < tagSchemaLen {
+			if fields[pointSchemaIdx].Key < tags[tagSchemaIdx].Key {
+				if err = t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
+					return size, err
+				}
+				pointSchemaIdx++
+				recSchemaIdx++
+				continue
+			}
+
+			c.appendTagToCol(&rec.ColVals[recSchemaIdx], &tags[tagSchemaIdx], &size)
+			tagSchemaIdx++
+			recSchemaIdx++
+		}
+
+		for pointSchemaIdx < filedsSchemaLen {
+			if err = t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
+				return size, err
+			}
+			pointSchemaIdx++
+			recSchemaIdx++
+		}
+
+		for tagSchemaIdx < tagSchemaLen {
+			c.appendTagToCol(&rec.ColVals[recSchemaIdx], &tags[tagSchemaIdx], &size)
+			tagSchemaIdx++
+			recSchemaIdx++
+		}
+
+		rec.ColVals[len(fields)+len(tags)].AppendInteger(time)
+		size += int64(util.Int64SizeBytes)
+		return size, nil
+	}
+
+	// slow path
+	// schema less
+
+	return size, errors.New("column store schemaless not support yet")
+}
+
+func (c *csMemTableImpl) appendTagToCol(col *record.ColVal, tag *influx.Tag, size *int64) {
+	col.AppendString(tag.Value)
+	*size += int64(len(tag.Value))
+}
+
+func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error {
+	start := time.Now()
+	msInfo := table.CreateMsInfo(mst, nil, rec, false)
+	atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
+
+	err := c.UpdatePrimaryKey(mst, mstsInfo)
+	if err != nil {
+		return err
+	}
+	msInfo.CreateWriteChunkForColumnStore(mstsInfo[mst].ColStoreInfo.PrimaryKey, mstsInfo[mst].ColStoreInfo.SortKey)
+
+	msInfo.writeChunk.WriteRec.rec.AppendRec(rec, 0, rec.RowNums())
+
+	return err
+}
+
+func (c *csMemTableImpl) UpdatePrimaryKey(msName string, mstsInfo map[string]*meta.MeasurementInfo) error {
+	c.mu.RLock()
+	_, ok := c.primaryKey[msName]
+	c.mu.RUnlock()
+	if ok {
+		return nil
+	}
+
+	if mstInfo, ok := mstsInfo[msName]; ok && mstInfo != nil {
+		primaryKey := make(record.Schemas, len(mstInfo.ColStoreInfo.PrimaryKey))
+		for i, pk := range mstInfo.ColStoreInfo.PrimaryKey {
+			if pk == record.TimeField {
+				primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
+			} else {
+				primaryKey[i] = record.Field{Name: pk, Type: int(mstInfo.Schema[pk])}
+			}
+			c.updatePrimaryKey(msName, primaryKey)
+		}
+	} else {
+		return errors.New("measurements info not found")
+	}
+	return nil
+}
+
+func (c *csMemTableImpl) Reset(t *MemTable) {
+	for _, msInfo := range t.msInfoMap {
+		if msInfo.writeChunk == nil {
+			continue
+		}
+		msInfo.writeChunk.WriteRec.rec.ResetForReuse()
+		writeRecPool.Put(msInfo.writeChunk.WriteRec.rec)
+	}
 }
 
 func WriteIntoFile(msb *immutable.MsBuilder, tmp bool) error {
@@ -795,6 +933,14 @@ func (t *MemTable) SetMsInfo(name string, msInfo *MsInfo) {
 	t.msInfoMap[name] = msInfo
 }
 
+func (t *MemTable) GetMsInfo(name string) (*MsInfo, error) {
+	msInfo, ok := t.msInfoMap[name]
+	if !ok {
+		return nil, errors.New("msInfoMap have not this info")
+	}
+	return msInfo, nil
+}
+
 func genMsSchema(msSchema *record.Schemas, fields []influx.Field) {
 	schemaLen := len(fields) + 1
 	if schemaLen > cap(*msSchema) {
@@ -812,6 +958,45 @@ func genMsSchema(msSchema *record.Schemas, fields []influx.Field) {
 	(*msSchema)[schemaLen-1].Name = record.TimeField
 }
 
+func genMsSchemaForColumnStore(msSchema *record.Schemas, fields []influx.Field, tags []influx.Tag) {
+	schemaLen := len(fields) + len(tags)
+	if schemaLen > cap(*msSchema) {
+		*msSchema = make(record.Schemas, schemaLen)
+	} else {
+		*msSchema = (*msSchema)[:schemaLen]
+	}
+
+	// fast path
+	if len(tags) == 0 {
+		for i := range fields {
+			(*msSchema)[i].Type = int(fields[i].Type)
+			(*msSchema)[i].Name = stringinterner.InternSafe(fields[i].Key)
+		}
+	} else {
+		msSchema = updateMsSchema(msSchema, fields, tags)
+		sort.Sort(msSchema)
+	}
+
+	// append time column
+	timeSchema := record.Field{Type: influx.Field_Type_Int,
+		Name: record.TimeField}
+	*msSchema = append(*msSchema, timeSchema)
+}
+
+func updateMsSchema(msSchema *record.Schemas, fields []influx.Field, tags []influx.Tag) *record.Schemas {
+	for i := range tags {
+		(*msSchema)[i].Type = influx.Field_Type_String
+		(*msSchema)[i].Name = stringinterner.InternSafe(tags[i].Key)
+	}
+
+	for i := range fields {
+		(*msSchema)[i+len(tags)].Type = int(fields[i].Type)
+		(*msSchema)[i+len(tags)].Name = stringinterner.InternSafe(fields[i].Key)
+	}
+
+	return msSchema
+}
+
 func checkSchemaIsSame(msSchema record.Schemas, fields []influx.Field) bool {
 	if len(fields) != len(msSchema)-1 {
 		return false
@@ -819,6 +1004,51 @@ func checkSchemaIsSame(msSchema record.Schemas, fields []influx.Field) bool {
 	for i := range fields {
 		if msSchema[i].Name != fields[i].Key {
 			return false
+		}
+	}
+	return true
+}
+
+func checkSchemaIsSameWithTag(msSchema record.Schemas, fields []influx.Field, tags []influx.Tag) bool {
+	if len(fields)+len(tags) != len(msSchema)-1 {
+		return false
+	}
+
+	// fast path
+	if len(tags) == 0 {
+		for i := range fields {
+			if msSchema[i].Name != fields[i].Key {
+				return false
+			}
+		}
+	} else {
+		idxField, idxTag, idx := 0, 0, 0
+		for idxField < len(fields) && idxTag < len(tags) {
+			if msSchema[idx].Name != fields[idxField].Key && msSchema[idx].Name != tags[idxTag].Key {
+				return false
+			} else if msSchema[idx].Name != fields[idxField].Key {
+				idx++
+				idxTag++
+			} else {
+				idx++
+				idxField++
+			}
+		}
+
+		for idxField < len(fields) {
+			if msSchema[idx].Name != fields[idxField].Key {
+				return false
+			}
+			idx++
+			idxField++
+		}
+
+		for idxTag < len(tags) {
+			if msSchema[idx].Name != tags[idxTag].Key {
+				return false
+			}
+			idx++
+			idxTag++
 		}
 	}
 	return true
@@ -930,7 +1160,7 @@ func (t *MemTable) allocMsInfo() *MsInfo {
 	return &t.msInfos[size]
 }
 
-func (t *MemTable) CreateMsInfo(name string, row *influx.Row) *MsInfo {
+func (t *MemTable) CreateMsInfo(name string, row *influx.Row, rec *record.Record, needTag bool) *MsInfo {
 	t.mu.RLock()
 	msInfo, ok := t.msInfoMap[name]
 	t.mu.RUnlock()
@@ -943,7 +1173,7 @@ func (t *MemTable) CreateMsInfo(name string, row *influx.Row) *MsInfo {
 	msInfo, ok = t.msInfoMap[name]
 	if !ok {
 		msInfo = t.allocMsInfo()
-		msInfo.Init(row)
+		msInfo = t.MTable.initMsInfo(msInfo, row, rec, name)
 		t.msInfoMap[name] = msInfo
 	}
 	t.mu.Unlock()
@@ -952,6 +1182,7 @@ func (t *MemTable) CreateMsInfo(name string, row *influx.Row) *MsInfo {
 }
 
 func (t *MemTable) Reset() {
+	t.MTable.Reset(t)
 	t.memSize = 0
 	t.msInfos = make([]MsInfo, 0, len(t.msInfoMap))
 	t.msInfoMap = make(map[string]*MsInfo, len(t.msInfoMap))

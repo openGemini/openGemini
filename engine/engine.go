@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
@@ -203,7 +204,7 @@ func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, d
 		}
 		dbRpLock[dbRpPath] = ""
 		n++
-		go func(db string, pt uint32, rp string) {
+		go func(db string, pt uint32, rp string, engineType config.EngineType) {
 			enableTagArray := false
 			if len(dbBriefInfos) != 0 {
 				if _, ok := dbBriefInfos[db]; !ok {
@@ -218,13 +219,13 @@ func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, d
 			e.mu.RLock()
 			dbPTInfo := e.DBPartitions[db][pt]
 			e.mu.RUnlock()
-			err := dbPTInfo.loadShards(0, rp, durationInfos, loadStat, client)
+			err := dbPTInfo.loadShards(0, rp, durationInfos, loadStat, client, engineType)
 			if err != nil {
 				e.log.Error("fail to load db rp", zap.String("db", db), zap.Uint32("pt", pt),
 					zap.String("rp", rp), zap.Error(err))
 			}
 			errChan <- err
-		}(sdi.Ident.OwnerDb, sdi.Ident.OwnerPt, sdi.Ident.Policy)
+		}(sdi.Ident.OwnerDb, sdi.Ident.OwnerPt, sdi.Ident.Policy, config.EngineType(sdi.Ident.EngineType))
 	}
 
 	for i := 0; i < n; i++ {
@@ -574,14 +575,14 @@ func (e *Engine) ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) e
 	return nil
 }
 
-func (e *Engine) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+func (e *Engine) getShard(db string, ptId uint32, shardID uint64) (Shard, error) {
 	if err := e.checkReadonly(); err != nil {
-		return err
+		return nil, err
 	}
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
-		return err
+		return nil, err
 	}
 	defer e.unrefDBPT(db, ptId)
 
@@ -590,10 +591,25 @@ func (e *Engine) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []in
 
 	sh := dbPTInfo.Shard(shardID)
 	if sh == nil {
-		return errno.NewError(errno.ShardNotFound, shardID)
+		return nil, errno.NewError(errno.ShardNotFound, shardID)
 	}
+	return sh, nil
+}
 
+func (e *Engine) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+	sh, err := e.getShard(db, ptId, shardID)
+	if err != nil {
+		return err
+	}
 	return sh.WriteRows(rows, binaryRows)
+}
+
+func (e *Engine) WriteRec(db, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
+	sh, err := e.getShard(db, ptId, shardID)
+	if err != nil {
+		return err
+	}
+	return sh.WriteCols(mst, rec, binaryRec)
 }
 
 func (e *Engine) checkReadonly() error {

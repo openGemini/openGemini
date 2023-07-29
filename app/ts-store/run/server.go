@@ -44,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/sherlock"
 	stream2 "github.com/openGemini/openGemini/services/stream"
 	"go.uber.org/zap"
@@ -91,6 +92,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	mutable.SetSizeLimit(int64(conf.Data.ShardMutableSizeLimit))
 	mutable.InitConcurLimiter(cpu.GetCpuNum())
 	mutable.InitMutablePool(cpu.GetCpuNum())
+	mutable.InitWriteRecPool(cpu.GetCpuNum())
 	immutable.InitWriterPool(3 * cpu.GetCpuNum())
 
 	s.config = conf
@@ -213,6 +215,9 @@ func (s *Server) Open() error {
 		s.sherlockService.Open()
 	}
 	s.iodetector = iodetector.OpenIODetection(s.config.IODetector)
+	if role := s.info.App; s.config.HTTPD.FlightEnabled && (role == config.AppSingle || role == config.AppData) {
+		services.SetStorageEngine(s.storage)
+	}
 	return err
 }
 

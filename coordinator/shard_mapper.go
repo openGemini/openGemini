@@ -177,6 +177,11 @@ func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources in
 			}
 		}
 	}
+	if in, ok := condition.(*influxql.InCondition); ok {
+		if err := csm.mapShards(csming, in.Stmt.Sources, tmin, tmax, in.Stmt.Condition, opt); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

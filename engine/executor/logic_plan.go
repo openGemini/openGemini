@@ -59,6 +59,7 @@ var (
 	_ LogicalPlan = &LogicalHashMerge{}
 	_ LogicalPlan = &LogicalSparseIndexScan{}
 	_ LogicalPlan = &LogicalColumnStoreReader{}
+	_ LogicalPlan = &LogicalJoin{}
 )
 
 var mergeCall = map[string]bool{"percentile": true, "rate": true, "irate": true,
@@ -1005,6 +1006,68 @@ func (p *LogicalSortAppend) Digest() string {
 	return string(p.digestName)
 }
 
+type LogicalJoin struct {
+	LogicalPlanMulti
+}
+
+func NewLogicalJoin(inputs []hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalJoin {
+	join := &LogicalJoin{
+		LogicalPlanMulti: LogicalPlanMulti{LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+			inputs: inputs,
+		}},
+	}
+	join.init()
+	return join
+}
+
+// impl me
+func (p *LogicalJoin) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalJoin) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalJoin) init() {
+	if !ValidateFieldsFromPlans(p.inputs) {
+		panic("validate all input of join failed")
+	}
+	input := p.inputs[0]
+	p.InitRef(input)
+}
+
+func (p *LogicalJoin) Clone() hybridqp.QueryNode {
+	clone := &LogicalJoin{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalJoin) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalJoin) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalJoin) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
+	return string(p.digestName)
+}
+
 type LogicalDedupe struct {
 	LogicalPlanSingle
 }
@@ -1364,10 +1427,11 @@ func explainIterms(writer LogicalPlanWriter, id uint64, mstName string, dimensio
 }
 
 type LogicalReader struct {
-	cursor     []interface{}
-	hasPreAgg  bool
-	dimensions []string
-	mstName    string
+	cursor         []interface{}
+	hasPreAgg      bool
+	dimensions     []string
+	mstName        string
+	oneReaderState bool
 	LogicalPlanSingle
 }
 
@@ -1388,6 +1452,14 @@ func NewLogicalReader(input hybridqp.QueryNode, schema hybridqp.Catalog) *Logica
 	reader.init()
 
 	return reader
+}
+
+func (p *LogicalReader) SetOneReaderState(state bool) {
+	p.oneReaderState = state
+}
+
+func (p *LogicalReader) GetOneReaderState() bool {
+	return p.oneReaderState
 }
 
 func (p *LogicalReader) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
@@ -3229,6 +3301,192 @@ func buildDigest(buf *bytes.Buffer, name string, typ int, id uint64, fields infl
 		calls[order].WriteDigest(buf)
 	}
 	buf.WriteString(")")
+}
+
+type LogicalHashAgg struct {
+	aggType     int
+	calls       map[string]*influxql.Call
+	callsOrder  []string
+	eType       ExchangeType
+	eTraits     []hybridqp.Trait
+	hashAggType HashAggType
+	LogicalPlanSingle
+}
+
+func (p *LogicalHashAgg) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	//TODO implement me
+	panic("implement me")
+}
+
+func NewLogicalHashAgg(input hybridqp.QueryNode, schema hybridqp.Catalog, eType ExchangeType, eTraits []hybridqp.Trait) *LogicalHashAgg {
+	agg := &LogicalHashAgg{
+		calls:             make(map[string]*influxql.Call),
+		callsOrder:        nil,
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+		eType:             eType,
+		eTraits:           eTraits,
+	}
+
+	agg.callsOrder = make([]string, 0, len(agg.schema.Calls()))
+	var ok bool
+	for k, c := range agg.schema.Calls() {
+		agg.calls[k], ok = influxql.CloneExpr(c).(*influxql.Call)
+		if !ok {
+			logger.GetLogger().Warn("NewLogicalAggregate call type isn't *influxql.Call")
+			return nil
+		}
+		agg.callsOrder = append(agg.callsOrder, k)
+	}
+	sort.Strings(agg.callsOrder)
+
+	agg.init()
+	agg.setHashAggType()
+	return agg
+}
+
+func (p *LogicalHashAgg) setHashAggType() {
+	if p.eType == NODE_EXCHANGE {
+		p.hashAggType = Fill
+	} else {
+		p.hashAggType = Normal
+	}
+}
+
+func (p *LogicalHashAgg) init() {
+
+	refs := p.inputs[0].RowDataType().MakeRefs()
+
+	m := make(map[string]influxql.VarRef)
+	for _, ref := range refs {
+		m[ref.Val] = ref
+	}
+
+	mc := make(map[string]hybridqp.ExprOptions)
+
+	for k, c := range p.calls {
+		ref := p.schema.Mapping()[p.schema.Calls()[k]]
+		m[ref.Val] = ref
+
+		mc[ref.Val] = hybridqp.ExprOptions{Expr: influxql.CloneExpr(c), Ref: ref}
+
+		for _, arg := range c.Args {
+			switch n := arg.(type) {
+			case *influxql.VarRef:
+				if ref.Val != n.Val {
+					if !p.schema.IsRefInSymbolFields(n) {
+						delete(m, n.Val)
+					}
+				}
+			default:
+			}
+		}
+	}
+
+	refs = make([]influxql.VarRef, 0, len(m))
+	for _, ref := range m {
+		if _, ok := mc[ref.Val]; !ok {
+			clone := ref
+			mc[ref.Val] = hybridqp.ExprOptions{Expr: &clone, Ref: ref}
+		}
+		refs = append(refs, ref)
+	}
+
+	sort.Sort(influxql.VarRefs(refs))
+
+	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
+
+	p.ops = make([]hybridqp.ExprOptions, 0, len(mc))
+
+	for _, r := range refs {
+		p.ops = append(p.ops, mc[r.Val])
+	}
+}
+
+func (p *LogicalHashAgg) Clone() hybridqp.QueryNode {
+	clone := &LogicalHashAgg{}
+	*clone = *p
+	clone.calls = make(map[string]*influxql.Call)
+	var ok bool
+	for k, c := range p.calls {
+		clone.calls[k], ok = influxql.CloneExpr(c).(*influxql.Call)
+		if !ok {
+			logger.GetLogger().Warn("LogicalHashAgg clone: type isn't *influxql.Call")
+		}
+	}
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalHashAgg) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalHashAgg) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalHashAgg) Digest() string {
+	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
+	if !p.digest {
+		p.digest = true
+	} else {
+		return p.digestBuff.String()
+	}
+	// format fmt.Sprintf("%s(%d)[%d](%s)(%s)", GetTypeName(p), p.aggType, p.inputs[0].ID(), p.schema.Fields(), buffer.String())
+	p.digestBuff.Reset()
+	p.digestBuff.WriteString(p.String())
+	p.digestBuff.WriteString("(")
+	p.digestBuff.WriteString(strconv.Itoa(p.aggType))
+	p.digestBuff.WriteString(")")
+	p.digestBuff.WriteString("[")
+	p.digestBuff.WriteString(strconv.FormatUint(p.inputs[0].ID(), 10))
+	p.digestBuff.WriteString("]")
+	p.digestBuff.WriteString("(")
+	p.digestBuff.WriteString(p.schema.Fields().String())
+	p.digestBuff.WriteString(")")
+	p.digestBuff.WriteString("(")
+
+	firstCall := true
+	for _, order := range p.callsOrder {
+		call := p.calls[order]
+		if firstCall {
+			call.WriteString(&p.digestBuff)
+			firstCall = false
+			continue
+		}
+		p.digestBuff.WriteString(",")
+		call.WriteString(&p.digestBuff)
+	}
+	p.digestBuff.WriteString(")")
+	return p.digestBuff.String()
+}
+
+func (p *LogicalHashAgg) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalHashAgg) ForwardCallArgs() {
+	for k, call := range p.calls {
+		if len(call.Args) > 0 {
+			ref := p.schema.Mapping()[p.schema.Calls()[k]]
+			p.digest = false
+			call.Args[0] = &ref
+		}
+	}
+}
+
+func (p *LogicalHashAgg) CountToSum() {
+	for _, call := range p.calls {
+		if call.Name == "count" {
+			call.Name = "sum"
+			p.digest = false
+		}
+	}
+}
+
+func (p *LogicalHashAgg) AddTrait(trait interface{}) {
+	p.eTraits = append(p.eTraits, trait)
 }
 
 type LogicalSort struct {

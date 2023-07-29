@@ -17,6 +17,7 @@ limitations under the License.
 package colstore
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,7 +67,7 @@ func TestReader(t *testing.T) {
 	require.EqualValues(t, data.Schema, retData.Schema)
 	require.EqualValues(t, data.RecMeta, retData.RecMeta)
 	for i := range data.ColVals {
-		require.EqualValues(t, data.ColVals[i].Val, retData.ColVals[i].Val)
+		require.EqualValues(t, data.ColVals[i], retData.ColVals[i])
 
 	}
 	err = cfr.Close()
@@ -170,10 +171,7 @@ func TestDecodeColumnDataPanic(t *testing.T) {
 		Name: "haha",
 		Type: 1,
 	}
-	defer func() {
-		err := recover()
-		require.Equal(t, err, "type(0) in table not eq select type(1)")
-	}()
+
 	err := decodeColumnData(&ref, data, nil, nil)
-	assert.NoError(t, err)
+	require.Equal(t, err, fmt.Errorf("type(0) in table not eq select type(1)"))
 }

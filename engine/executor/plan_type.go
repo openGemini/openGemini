@@ -122,7 +122,7 @@ func NilGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) Pla
 
 func NormalGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) PlanType {
 	// Avoid subquery hint
-	if schema.HasSubQuery() || schema.Options().GetHintType() != hybridqp.DefaultNoHint {
+	if schema.HasSubQuery() || (schema.Options().GetHintType() != hybridqp.DefaultNoHint && schema.Options().GetHintType() != hybridqp.FullSeriesQuery) {
 		return UNKNOWN
 	}
 

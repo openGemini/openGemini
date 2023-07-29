@@ -238,7 +238,7 @@ func getLoadCtx() *metaclient.LoadCtx {
 	return loadCtx
 }
 
-func initEngine1(dir string) (*Engine, error) {
+func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 	dataPath := filepath.Join(dir, dPath)
 	eng := &Engine{
 		closed:       interruptsignal.NewInterruptSignal(),
@@ -266,14 +266,14 @@ func initEngine1(dir string) (*Engine, error) {
 
 	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
 
-	dbPTInfo.OpenIndexes(0, "rp0")
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE)
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
 	shardDuration := &meta.DurationDescriptor{Tier: util.Hot, TierDuration: time.Hour}
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
-	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, config.TSSTORE)
+	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
 	shard.indexBuilder = indexBuilder
 	//shard.wal.logger = eng.log
 	//shard.wal.traceLogger = eng.log
@@ -581,7 +581,7 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 
 func TestEngine_SeriesKeys(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +611,7 @@ func TestEngine_SeriesKeys(t *testing.T) {
 
 func TestEngine_SeriesCardinality(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -655,7 +655,7 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 
 func TestEngine_TagValues(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,7 +699,7 @@ func TestEngine_TagValues(t *testing.T) {
 
 func TestEngine_TagValuesCardinality(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -896,7 +896,7 @@ func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
 
 func TestEngine_StatisticsOps(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -935,7 +935,7 @@ func TestEngine_StatisticsOps(t *testing.T) {
 
 func TestUpdateShardDurationInfo(t *testing.T) {
 	dir := t.TempDir()
-	eng, err := initEngine1(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
 	if err != nil {
 		t.Fatal(err)
 	}

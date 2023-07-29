@@ -466,3 +466,100 @@ func TestTargetTable(t *testing.T) {
 	checkAndAllocate(true)
 	checkAndAllocate(false)
 }
+
+func BuildCopyByRowDataTypeSrcChunk(rt hybridqp.RowDataType) executor.Chunk {
+	b := executor.NewChunkBuilder(rt)
+	chunk := b.NewChunk("mst")
+	chunk.AppendTime([]int64{1, 2, 3}...)
+	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3}...)
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendManyNotNil(3)
+	chunk.Column(1).AppendStringValues([]string{"f1", "f2", "f3"}...)
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(1).AppendManyNotNil(3)
+	chunk.Column(2).AppendBooleanValues([]bool{true, true, true}...)
+	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(2).AppendManyNotNil(3)
+	chunk.Column(3).AppendIntegerValues([]int64{1, 2, 3}...)
+	chunk.Column(3).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(3).AppendManyNotNil(3)
+	chunk.Column(4).AppendStringValues([]string{"f1", "f2", "f3"}...)
+	chunk.Column(4).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(4).AppendManyNotNil(3)
+	chunk.Column(5).AppendFloatTuples(*executor.NewfloatTuple([]float64{1, 1}))
+	chunk.Column(5).AppendFloatTuples(*executor.NewfloatTuple([]float64{2, 2}))
+	chunk.Column(5).AppendFloatTuples(*executor.NewfloatTuple([]float64{3, 3}))
+	chunk.Column(5).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(5).AppendManyNotNil(3)
+	return chunk
+}
+
+func buildCopyByRowDataTypeSrcRt() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val0", Type: influxql.Float},
+		influxql.VarRef{Val: "val1", Type: influxql.String},
+		influxql.VarRef{Val: "val2", Type: influxql.Boolean},
+		influxql.VarRef{Val: "val3", Type: influxql.Integer},
+		influxql.VarRef{Val: "val4", Type: influxql.Tag},
+		influxql.VarRef{Val: "val5", Type: influxql.FloatTuple},
+	)
+	return rowDataType
+}
+
+func BuildCopyByRowDataTypeDstChunk(rt hybridqp.RowDataType) executor.Chunk {
+	b := executor.NewChunkBuilder(rt)
+	chunk := b.NewChunk("mst")
+	chunk.AppendTime([]int64{1, 2, 3}...)
+	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(1).AppendFloatValues([]float64{1, 2, 3}...)
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(1).AppendManyNotNil(3)
+	chunk.Column(0).AppendStringValues([]string{"f1", "f2", "f3"}...)
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendManyNotNil(3)
+	chunk.Column(3).AppendBooleanValues([]bool{true, true, true}...)
+	chunk.Column(3).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(3).AppendManyNotNil(3)
+	chunk.Column(2).AppendIntegerValues([]int64{1, 2, 3}...)
+	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(2).AppendManyNotNil(3)
+	chunk.Column(5).AppendStringValues([]string{"f1", "f2", "f3"}...)
+	chunk.Column(5).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(5).AppendManyNotNil(3)
+	chunk.Column(4).AppendFloatTuples(*executor.NewfloatTuple([]float64{1, 1}))
+	chunk.Column(4).AppendFloatTuples(*executor.NewfloatTuple([]float64{2, 2}))
+	chunk.Column(4).AppendFloatTuples(*executor.NewfloatTuple([]float64{3, 3}))
+	chunk.Column(4).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(4).AppendManyNotNil(3)
+	return chunk
+}
+
+func buildCopyByRowDataTypeDstRt() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val1", Type: influxql.String},
+		influxql.VarRef{Val: "val0", Type: influxql.Float},
+		influxql.VarRef{Val: "val3", Type: influxql.Integer},
+		influxql.VarRef{Val: "val2", Type: influxql.Boolean},
+		influxql.VarRef{Val: "val5", Type: influxql.FloatTuple},
+		influxql.VarRef{Val: "val4", Type: influxql.Tag},
+	)
+	return rowDataType
+}
+
+func TestChunkCopyByRowDataType(t *testing.T) {
+	srcRt := buildCopyByRowDataTypeSrcRt()
+	srcChunk := BuildCopyByRowDataTypeSrcChunk(srcRt)
+	dstRt := buildCopyByRowDataTypeDstRt()
+	dstPreChunk := BuildCopyByRowDataTypeDstChunk(dstRt)
+	b := executor.NewChunkBuilder(dstRt)
+	dstChunk := b.NewChunk("")
+	srcChunk.CopyByRowDataType(dstChunk, srcRt, dstRt)
+	for i, col := range dstChunk.Columns() {
+		if col.DataType() != dstPreChunk.Column(i).DataType() {
+			t.Error("TestChunkCopyByRowDataType error")
+		}
+	}
+}

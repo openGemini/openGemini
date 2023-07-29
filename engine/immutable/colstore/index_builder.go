@@ -63,11 +63,19 @@ func (b *IndexBuilder) WriteData(rec *record.Record) error {
 		b.inited = true
 		b.encodeChunk = append(b.encodeChunk, primaryKeyMagic...)
 		b.encodeChunk = numberenc.MarshalUint32Append(b.encodeChunk, version)
-		b.meta = marshalMeta(&rec.Schema)
+		b.meta = marshalMeta(&rec.Schema, rec.RowNums())
 	}
 	var err error
 	schemaByteSize := len(rec.Schemas()) * util.Uint32SizeBytes
-	offset := b.meta[util.Uint32SizeBytes*2+schemaByteSize*2 : util.Uint32SizeBytes+util.Uint32SizeBytes+schemaByteSize*3]
+	/*
+		offset is encoding after
+		- total length of meta(uint32), length of schema(uint32), row number(uint32),
+		- field name size details(schemaByteSize), field type details(schemaByteSize)
+		and length of offset is schemaByteSize, so the location of offset is:
+		  [util.Uint32SizeBytes*3+schemaByteSize*2 : util.Uint32SizeBytes*3+schemaByteSize*3]
+		see marshalMeta for more detail.
+	*/
+	offset := b.meta[util.Uint32SizeBytes*3+schemaByteSize*2 : util.Uint32SizeBytes*3+schemaByteSize*3]
 	data := make([]byte, 0)
 	data, err = b.chunkBuilder.EncodeChunk(rec, data, offset, uint32(len(b.meta)+headerSize))
 	if err != nil {

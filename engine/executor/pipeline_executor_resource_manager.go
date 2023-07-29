@@ -61,7 +61,7 @@ func (p *PipelineExecutorManager) ManageMemResource(exec *PipelineExecutor) erro
 	defer exec.WaitTimeStats.End()
 
 	MemoryEstimator(exec)
-	if e := p.memBucket.GetResource(exec.info.MemoryOccupation); e != nil {
+	if e := p.memBucket.GetResourceDirect(exec.info.MemoryOccupation); e != nil {
 		return e
 	}
 	defer p.UpdateAccumulator(exec)
@@ -99,7 +99,7 @@ func (p *PipelineExecutorManager) UpdateAccumulator(exec *PipelineExecutor) {
 }
 
 func (p *PipelineExecutorManager) ReleaseMem(exec *PipelineExecutor) {
-	p.memBucket.ReleaseResource(exec.info.MemoryOccupation)
+	p.memBucket.ReleaseDirectResource(exec.info.MemoryOccupation)
 }
 
 func MemoryEstimator(exec *PipelineExecutor) {

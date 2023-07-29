@@ -158,7 +158,7 @@ func (r *PrimaryKeyReader) ReadData() (*record.Record, error) {
 		return nil, err
 	}
 	metaSize := int(numberenc.UnmarshalUint32(data[headerSize : headerSize+util.Uint32SizeBytes]))
-	schema, offset := unmarshalMeta(data[headerSize : headerSize+metaSize])
+	schema, offset, rowNum := unmarshalMeta(data[headerSize : headerSize+metaSize])
 	dst := record.NewRecord(schema, false)
 	coder := encoding.NewCoderContext()
 	for i := range offset {
@@ -169,6 +169,8 @@ func (r *PrimaryKeyReader) ReadData() (*record.Record, error) {
 		} else {
 			err = decodeColumnData(ref, data[offset[i]+4:], colBuilder, coder)
 		}
+		colBuilder.Len = rowNum
+		colBuilder.InitBitMap(rowNum)
 		if err != nil {
 			log.Error("decode column fail", zap.Error(err))
 			return nil, err

@@ -203,8 +203,8 @@ func Test_Data_ReSharding(t *testing.T) {
 	}
 
 	ptinfo := data.PtView["foo"]
-	dbptInfo := []PtInfo{{PtOwner{1}, Offline, 0, 1},
-		{PtOwner{2}, Offline, 1, 1}}
+	dbptInfo := []PtInfo{{PtOwner{1}, Offline, 0, 1, 0},
+		{PtOwner{2}, Offline, 1, 1, 0}}
 	if !reflect.DeepEqual([]PtInfo(ptinfo), dbptInfo) {
 		t.Fatalf("got %v, exp %v", ptinfo, dbptInfo)
 	}
@@ -753,28 +753,28 @@ func TestData_createIndexGroupIfNeeded(t *testing.T) {
 				Indexes:   make([]IndexInfo, 2),
 			},
 		}}
-	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour))
+	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour), config.TSSTORE)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour))
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour), config.TSSTORE)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[1], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour))
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour), config.TSSTORE)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[2], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour))
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour), config.TSSTORE)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[3], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour))
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour), config.TSSTORE)
 	require.Equal(t, 5, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[4], ig)
 
 	rpi.IndexGroups = nil
-	ig = data.createIndexGroupIfNeeded(rpi, now)
+	ig = data.createIndexGroupIfNeeded(rpi, now, config.TSSTORE)
 	require.Equal(t, 1, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 }

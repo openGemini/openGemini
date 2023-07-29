@@ -71,15 +71,18 @@ var messageMap = map[Errno]*Message{
 	WriteMapMetaShardInfo:           newWarnMessage("can't map meta.ShardInfo", ModuleWrite),
 	WritePointOutOfRP:               newWarnMessage("point time is expired, compared with rp duration", ModuleWrite),
 
-	ErrUnmarshalPoints:     newWarnMessage("unmarshal points error, err: %s", ModuleWrite),
-	ErrWriteReadonly:       newWarnMessage("this node is readonly status", ModuleWrite),
-	ParseFieldTypeConflict: newWarnMessage("conflict field type: %s", ModuleWrite),
-	EngineClosed:           newWarnMessage("engine is closed", ModuleWrite),
-	WriteMissTagValue:      newWarnMessage("missing tag value for %q", ModuleWrite),
-	ErrorTagArrayFormat:    newWarnMessage("error tag array format", ModuleWrite),
-	WriteErrorArray:        newWarnMessage("error tag array", ModuleWrite),
-	TooManyTagKeys:         newWarnMessage("too many tag keys", ModuleWrite),
-	SeriesLimited:          newWarnMessage("too many series in database %s. upper limit: %d; current: %d", ModuleWrite),
+	ErrUnmarshalPoints:      newWarnMessage("unmarshal points error, err: %s", ModuleWrite),
+	ErrWriteReadonly:        newWarnMessage("this node is readonly status", ModuleWrite),
+	ParseFieldTypeConflict:  newWarnMessage("conflict field type: %s", ModuleWrite),
+	EngineClosed:            newWarnMessage("engine is closed", ModuleWrite),
+	WriteMissTagValue:       newWarnMessage("missing tag value for %q", ModuleWrite),
+	ErrorTagArrayFormat:     newWarnMessage("error tag array format", ModuleWrite),
+	WriteErrorArray:         newWarnMessage("error tag array", ModuleWrite),
+	TooManyTagKeys:          newWarnMessage("too many tag keys", ModuleWrite),
+	SeriesLimited:           newWarnMessage("too many series in database %s. upper limit: %d; current: %d", ModuleWrite),
+	RecordWriterFatalErr:    newFatalMessage("record writer raise fatal error", ModuleWrite),
+	ArrowRecordTimeFieldErr: newFatalMessage("the time field of arrow record should the last column", ModuleWrite),
+	ArrowFlightGetRoleErr:   newFatalMessage("arrow flight only support the ts-server or ts-data", ModuleWrite),
 
 	// network module error codes
 	NoConnectionAvailable: newFatalMessage("no connections available, node: %v, %v", ModuleNetwork),
@@ -185,8 +188,10 @@ var messageMap = map[Errno]*Message{
 	UnsupportedConditionInFullJoin: newWarnMessage("unsupported condition in full join", ModuleQueryEngine),
 	UnsupportedHoltWinterInit:      newWarnMessage("unsupported holt_winters init", ModuleQueryEngine),
 	BucketLacks:                    newWarnMessage("get resources out of time: bucket lacks of resources", ModuleQueryEngine),
+	DirectBucketLacks:              newWarnMessage("get resources out of time: no wait bucket lacks of resources", ModuleQueryEngine),
 	SortTransformRunningErr:        newWarnMessage("SortTransform run error", ModuleQueryEngine),
 	HashMergeTransformRunningErr:   newWarnMessage("HashMergeTransform run error", ModuleQueryEngine),
+	HashAggTransformRunningErr:     newWarnMessage("HashAggTransform work error", ModuleQueryEngine),
 
 	// meta error codes
 	InvalidTagKey:          newWarnMessage(`tag key can't be '%s'`, ModuleMeta),

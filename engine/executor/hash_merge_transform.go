@@ -22,35 +22,50 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/hashtable"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"go.uber.org/zap"
+)
+
+type HashMergeType uint32
+
+const (
+	Hash HashMergeType = iota
+	Stream
 )
 
 const HashMergeTransfromBufCap = 1024
 
 type HashMergeTransform struct {
 	BaseProcessor
-	inputs          []*ChunkPort
-	inputChunk      chan Chunk
-	bufChunk        Chunk
-	output          *ChunkPort
-	inputsCloseNums int
+
+	groupMap          *hashtable.StringHashMap // <group_key, group_id>
+	groupResultMap    []*mergeResultMsg
+	newResultFuncs    []func() mergeResultCol
+	inputs            []*ChunkPort
+	inputChunk        chan Chunk
+	bufChunk          Chunk
+	bufGroupKeys      [][]byte
+	bufGroupTags      []*ChunkTags
+	bufGroupKeysMPool *GroupKeysMPool
+	output            *ChunkPort
+	inputsCloseNums   int
+	chunkBuilder      *ChunkBuilder
+	bufBatchSize      int
 
 	schema          *QuerySchema
 	opt             *query.ProcessorOptions
 	hashMergeLogger *logger.Logger
 	span            *tracing.Span
 
+	diskChunks     *chunkInDisk
+	isSpill        bool
 	isChildDrained bool
-	hasDimension   bool
-	errs           errno.Errs
+	hashMergeType  HashMergeType
 }
-
-const (
-	hashMergeTransfromName = "HashMergeTransform"
-)
 
 type HashMergeTransformCreator struct {
 }
@@ -71,10 +86,37 @@ func NewHashMergeStreamTypeTransform(inRowDataType, outRowDataType []hybridqp.Ro
 		inputChunk:      make(chan Chunk, 1),
 		schema:          s,
 		opt:             s.opt.(*query.ProcessorOptions),
-		hasDimension:    false,
+		hashMergeType:   Stream,
 	}
 	for _, schema := range inRowDataType {
-		trans.inputs = append(trans.inputs, NewChunkPort(schema))
+		input := NewChunkPort(schema)
+		trans.inputs = append(trans.inputs, input)
+	}
+	return trans, nil
+}
+
+func NewHashMergeHashTypeTransform(inRowDataType, outRowDataType []hybridqp.RowDataType, s *QuerySchema) (*HashMergeTransform, error) {
+	trans := &HashMergeTransform{
+		inputs:            make(ChunkPorts, 0, len(inRowDataType)),
+		output:            NewChunkPort(outRowDataType[0]),
+		hashMergeLogger:   logger.NewLogger(errno.ModuleQueryEngine),
+		inputChunk:        make(chan Chunk, 1),
+		isChildDrained:    false,
+		schema:            s,
+		opt:               s.opt.(*query.ProcessorOptions),
+		groupMap:          hashtable.DefaultStringHashMap(),
+		groupResultMap:    make([]*mergeResultMsg, 0),
+		bufGroupKeysMPool: NewGroupKeysPool(HashMergeTransfromBufCap),
+		isSpill:           false,
+		hashMergeType:     Hash,
+	}
+	for _, schema := range inRowDataType {
+		input := NewChunkPort(schema)
+		trans.inputs = append(trans.inputs, input)
+	}
+	trans.chunkBuilder = NewChunkBuilder(trans.output.RowDataType)
+	if err := trans.initNewResultFuncs(); err != nil {
+		return nil, err
 	}
 	return trans, nil
 }
@@ -83,14 +125,36 @@ func NewHashMergeTransform(inRowDataType, outRowDataType []hybridqp.RowDataType,
 	if len(inRowDataType) == 0 || len(outRowDataType) != 1 {
 		return nil, fmt.Errorf("NewHashMergeTransform raise error: input or output numbers error")
 	}
+	if s.HasInterval() {
+		return nil, fmt.Errorf("group by time must with agg func")
+	}
 	if s.GetOptions().GetDimensions() == nil || len(s.GetOptions().GetDimensions()) == 0 {
 		return NewHashMergeStreamTypeTransform(inRowDataType, outRowDataType, s)
 	}
-	return nil, fmt.Errorf("hash type hashMergeTransform error")
+	return NewHashMergeHashTypeTransform(inRowDataType, outRowDataType, s)
+}
+
+func (trans *HashMergeTransform) initNewResultFuncs() error {
+	for _, f := range trans.output.RowDataType.Fields() {
+		dt := f.Expr.(*influxql.VarRef).Type
+		switch dt {
+		case influxql.Float:
+			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultFloatCol)
+		case influxql.Integer:
+			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultIntegerCol)
+		case influxql.Boolean:
+			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultBooleanCol)
+		case influxql.String:
+			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultStringCol)
+		default:
+			return errno.NewError(errno.HashMergeTransformRunningErr)
+		}
+	}
+	return nil
 }
 
 func (trans *HashMergeTransform) Name() string {
-	return hashMergeTransfromName
+	return hashAggTransfromName
 }
 
 func (trans *HashMergeTransform) Explain() []ValuePair {
@@ -120,7 +184,7 @@ func (trans *HashMergeTransform) runnable(ctx context.Context, errs *errno.Errs,
 		select {
 		case c, ok := <-trans.inputs[i].State:
 			if !ok {
-				trans.addChunk(nil)
+				trans.addChunk(c)
 				return
 			}
 			trans.addChunk(c)
@@ -138,19 +202,31 @@ func (trans *HashMergeTransform) Work(ctx context.Context) error {
 		tracing.Finish(span, trans.span)
 	}()
 
-	errs := &trans.errs
+	errs := errno.NewErrsPool().Get()
 	errs.Init(len(trans.inputs)+1, trans.Close)
+	defer func() {
+		errno.NewErrsPool().Put(errs)
+	}()
 
 	for i := range trans.inputs {
 		go trans.runnable(ctx, errs, i)
 	}
-	if trans.hasDimension {
-		return fmt.Errorf("hashMergeTransform error")
+	if trans.hashMergeType == Hash {
+		go trans.hashMergeHelper(ctx, errs)
 	} else {
 		go trans.streamMergeHelper(ctx, errs)
 	}
 
 	return errs.Err()
+}
+
+func (trans *HashMergeTransform) getChunkFromDisk() bool {
+	c, ok := trans.diskChunks.GetChunk()
+	if !ok {
+		return false
+	}
+	trans.bufChunk = c
+	return true
 }
 
 func (trans *HashMergeTransform) getChunkFromChild() bool {
@@ -192,10 +268,191 @@ func (trans *HashMergeTransform) streamMergeHelper(ctx context.Context, errs *er
 	}
 }
 
+func (trans *HashMergeTransform) getChunk() hashAggGetChunkState {
+	var ret bool
+	if trans.isChildDrained {
+		ret = trans.getChunkFromDisk()
+	} else {
+		ret = trans.getChunkFromChild()
+	}
+	if !ret {
+		trans.generateOutPut()
+		if !trans.initDiskAsInput() {
+			return noChunk
+		}
+		return changeInput
+	}
+	return hasChunk
+}
+
+func (trans *HashMergeTransform) hashMergeHelper(ctx context.Context, errs *errno.Errs) {
+	defer func() {
+		close(trans.inputChunk)
+		if e := recover(); e != nil {
+			err := errno.NewError(errno.RecoverPanic, e)
+			trans.hashMergeLogger.Error(err.Error(), zap.String("query", "HashMergeTransform"),
+				zap.Uint64("query_id", trans.opt.QueryId))
+			errs.Dispatch(err)
+		} else {
+			errs.Dispatch(nil)
+		}
+	}()
+	for {
+		// 1. getChunk to bufChunk
+		state := trans.getChunk()
+		if state == noChunk {
+			break
+		} else if state == changeInput {
+			continue
+		}
+		// 2. compute group keys of bufchunk
+		trans.computeGroupKeys()
+
+		// 3. add bufchunk group keys to level1 map
+		groupIds := trans.mapGroupKeys()
+
+		// 4. update resultMap and groupKeys from two level maps
+		if err := trans.updateResult(groupIds); err != nil {
+			errs.Dispatch(err)
+			return
+		}
+
+		// 5. put bufs back to pools
+		trans.putBufsToPools(groupIds)
+
+		// 6. generate outputChunk from resultMap in trans.generateOutPut()
+	}
+}
+
+func (trans *HashMergeTransform) putBufsToPools(groupIds []uint64) {
+	trans.bufGroupKeysMPool.FreeGroupKeys(trans.bufGroupKeys)
+	trans.bufGroupKeysMPool.FreeGroupTags(trans.bufGroupTags)
+	trans.bufGroupKeysMPool.FreeValues(groupIds)
+}
+
+func (trans *HashMergeTransform) newMergeResult() *mergeResult {
+	result := &mergeResult{}
+	for _, f := range trans.newResultFuncs {
+		result.cols = append(result.cols, f())
+	}
+	return result
+}
+
+func (trans *HashMergeTransform) newMergeResultsMsg(tags ChunkTags) *mergeResultMsg {
+	resultMsg := &mergeResultMsg{
+		tags:   tags,
+		result: trans.newMergeResult(),
+	}
+	return resultMsg
+}
+
+func (trans *HashMergeTransform) updateResult(groupIds []uint64) error {
+	var dimsVals []string
+	for i, groupId := range groupIds {
+		if groupId == uint64(len(trans.groupResultMap)) {
+			if trans.bufGroupTags[i] == nil {
+				dimsVals = dimsVals[:0]
+				for _, col := range trans.bufChunk.Dims() {
+					dimsVals = append(dimsVals, col.StringValue(i))
+				}
+				trans.bufGroupTags[i] = NewChunkTagsByTagKVs(trans.opt.Dimensions, dimsVals)
+			}
+			trans.groupResultMap = append(trans.groupResultMap, trans.newMergeResultsMsg(*trans.bufGroupTags[i]))
+		} else if groupId > uint64(len(trans.groupResultMap)) {
+			return fmt.Errorf("HashMergeTransform running err: groupId not increase one by one")
+		}
+		result := trans.groupResultMap[groupId].result
+		start := 0
+		end := 0
+		if trans.bufChunk.Dims() != nil && len(trans.bufChunk.Dims()) > 0 {
+			start = i
+			end = i + 1
+		} else {
+			start = trans.bufChunk.TagIndex()[i]
+			if i == trans.bufChunk.TagLen()-1 {
+				end = trans.bufChunk.Len()
+			} else {
+				end = trans.bufChunk.TagIndex()[i+1]
+			}
+		}
+		result.AppendResult(trans.bufChunk, start, end)
+	}
+	return nil
+}
+
+func (trans *HashMergeTransform) mapGroupKeys() []uint64 {
+	values := trans.bufGroupKeysMPool.AllocValues(trans.bufBatchSize)
+	for i := 0; i < trans.bufBatchSize; i++ {
+		values[i] = trans.groupMap.Set(trans.bufGroupKeys[i])
+	}
+	return values
+}
+
+func (trans *HashMergeTransform) computeGroupKeysByDims() {
+	trans.bufGroupKeys = trans.bufGroupKeysMPool.AllocGroupKeys(trans.bufChunk.Len())
+	trans.bufGroupTags = trans.bufGroupKeysMPool.AllocGroupTags(trans.bufChunk.Len())
+	trans.bufBatchSize = trans.bufChunk.Len()
+	for rowId := 0; rowId < trans.bufChunk.Len(); rowId++ {
+		for colId, dimKey := range trans.opt.Dimensions {
+			trans.bufGroupKeys[rowId] = append(trans.bufGroupKeys[rowId], dimKey...)
+			trans.bufGroupKeys[rowId] = append(trans.bufGroupKeys[rowId], trans.bufChunk.Dims()[colId].StringValue(rowId)...)
+		}
+		trans.bufGroupTags[rowId] = nil
+	}
+}
+
+func (trans *HashMergeTransform) computeGroupKeys() {
+	if trans.bufChunk.Dims() != nil && len(trans.bufChunk.Dims()) > 0 {
+		trans.computeGroupKeysByDims()
+		return
+	}
+	tags := trans.bufChunk.Tags()
+	trans.bufGroupKeys = trans.bufGroupKeysMPool.AllocGroupKeys(trans.bufChunk.TagLen())
+	trans.bufGroupTags = trans.bufGroupKeysMPool.AllocGroupTags(trans.bufChunk.TagLen())
+	trans.bufBatchSize = trans.bufChunk.TagLen()
+	if trans.opt.Dimensions == nil || trans.bufChunk.TagLen() == 0 || (trans.bufChunk.TagLen() == 1 && trans.bufChunk.Tags()[0].subset == nil) {
+		return
+	}
+	for i := range tags {
+		key := tags[i].subset
+		trans.bufGroupKeys[i] = key
+		trans.bufGroupTags[i] = &tags[i]
+	}
+}
+
+func (trans *HashMergeTransform) generateOutPut() {
+	if trans.bufChunk == nil {
+		return
+	}
+	var chunk Chunk
+	chunk = (trans.chunkBuilder.NewChunk(trans.bufChunk.Name()))
+	for _, group := range trans.groupResultMap {
+		for j, time := range group.result.time {
+			if chunk.Len() == 0 || j == 0 {
+				chunk.AppendTagsAndIndex(group.tags, chunk.Len())
+			}
+			chunk.AppendTime(time)
+			for k, col := range group.result.cols {
+				col.SetOutPut(chunk.Column(k))
+			}
+			if chunk.Len() >= trans.schema.GetOptions().ChunkSizeNum() {
+				trans.sendChunk(chunk)
+				chunk = (trans.chunkBuilder.NewChunk(trans.bufChunk.Name()))
+			}
+		}
+	}
+	trans.sendChunk(chunk)
+}
+
 func (trans *HashMergeTransform) sendChunk(c Chunk) {
 	if c.Len() > 0 {
 		trans.output.State <- c
 	}
+}
+
+func (trans *HashMergeTransform) initDiskAsInput() bool {
+	trans.groupResultMap = trans.groupResultMap[0:0]
+	return false
 }
 
 func (trans *HashMergeTransform) GetOutputs() Ports {

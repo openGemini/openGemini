@@ -55,7 +55,25 @@ var (
 type PtNNLock struct {
 }
 
+//lint:ignore U1000 use for replication feature
+type PeerInfo struct {
+	ptId   uint32
+	nodeId uint64
+}
+
+//lint:ignore U1000 use for replication feature
+type ReplicaInfo struct {
+	replicaRole   meta.Role
+	master        PeerInfo
+	peers         []PeerInfo
+	replicaStatus meta.RGStatus
+	term          uint64
+}
+
 type DBPTInfo struct {
+	//lint:ignore U1000 use for replication feature
+	replicaInfo *ReplicaInfo
+
 	mu       sync.RWMutex
 	database string
 	id       uint32
@@ -282,9 +300,9 @@ func parseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
 	return indexID, &meta.TimeRangeInfo{StartTime: startTime, EndTime: endTime}, nil
 }
 
-func (dbPT *DBPTInfo) loadShards(opId uint64, rp string, durationInfos map[uint64]*meta.ShardDurationInfo, loadStat int, client metaclient.MetaClient) error {
+func (dbPT *DBPTInfo) loadShards(opId uint64, rp string, durationInfos map[uint64]*meta.ShardDurationInfo, loadStat int, client metaclient.MetaClient, engineType config.EngineType) error {
 	if loadStat != immutable.PRELOAD {
-		err := dbPT.OpenIndexes(opId, rp)
+		err := dbPT.OpenIndexes(opId, rp, engineType)
 		if err != nil {
 			return err
 		}
@@ -292,7 +310,7 @@ func (dbPT *DBPTInfo) loadShards(opId uint64, rp string, durationInfos map[uint6
 	return dbPT.OpenShards(opId, rp, durationInfos, loadStat, client)
 }
 
-func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string) error {
+func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.EngineType) error {
 	indexPath := path.Join(dbPT.path, rp, config.IndexFileDirectory)
 	indexDirs, err := fileops.ReadDir(indexPath)
 	if err != nil {
@@ -344,6 +362,7 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string) error {
 				Ident(indexIdent).
 				Path(ipath).
 				IndexType(tsi.MergeSet).
+				EngineType(engineType).
 				EndTime(tr.EndTime).
 				LogicalClock(dbPT.logicClock).
 				SequenceId(&dbPT.sequenceID).
@@ -648,6 +667,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 			Ident(indexIdent).
 			Path(iPath).
 			IndexType(tsi.MergeSet).
+			EngineType(engineType).
 			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
 			Duration(timeRangeInfo.ShardDuration.DurationInfo.Duration).
 			LogicalClock(dbPT.logicClock).

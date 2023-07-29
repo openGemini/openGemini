@@ -19,6 +19,7 @@ package executor_test
 import (
 	"testing"
 
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -1120,4 +1121,52 @@ func (b *HeuProgramBuilder) Build() *executor.HeuProgram {
 	b.Clear()
 
 	return program
+}
+
+func TestAggPushDownToColumnStoreReaderRule(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "sum",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"sum"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = false
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+	plan, err := coordinator.CreateColumnStorePlan(schema, nil, planBuilder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planBuilder.Push(plan)
+	planBuilder.Aggregate()
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+	planner := getPlanner()
+	aggPushDown := executor.NewAggPushDownToColumnStoreReaderRule("")
+	planner.AddRule(aggPushDown)
+	planner.SetRoot(plan)
+	best := planner.FindBestExp()
+	if best == nil {
+		t.Error("no best plan found")
+	}
+	verifier := NewAggPushDownVerifier()
+	hybridqp.WalkQueryNodeInPreOrder(verifier, best)
+	if verifier.AggCount() != 4 {
+		t.Fatalf("4 agg in plan tree, but %d", verifier.AggCount())
+	}
+	aggPushDown1 := executor.NewAggPushDownToColumnStoreReaderRule("")
+	aggPushDown.ToString()
+	if !aggPushDown.Equals(aggPushDown1) {
+		t.Error("agg push down rule not equal")
+	}
 }
