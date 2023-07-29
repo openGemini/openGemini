@@ -250,5 +250,8 @@ func (l *raftLayer) Accept() (net.Conn, error) { return l.ln.Accept() }
 func (l *raftLayer) Close() error { return l.ln.Close() }
 
 func (r *raftWrapper) LeadershipTransfer() error {
+	if r == nil || r.raft == nil {
+		return nil
+	}
 	return r.raft.LeadershipTransfer().Error()
 }
