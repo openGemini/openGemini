@@ -18,7 +18,6 @@ package codec
 
 import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -69,7 +68,7 @@ func AppendFloat32(b []byte, f float32) []byte {
 }
 
 func AppendFloat64(b []byte, f float64) []byte {
-	i := record.Float64ToUint64(f)
+	i := util.Float64ToUint64(f)
 	return AppendUint64(b, i)
 }
 

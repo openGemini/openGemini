@@ -72,6 +72,7 @@ const (
 // TSSql represents the configuration format for the TSSql binary.
 type TSSql struct {
 	Common      *Common     `toml:"common"`
+	Meta        *Meta       `toml:"meta"`
 	Coordinator Coordinator `toml:"coordinator"`
 	Monitor     Monitor     `toml:"monitor"`
 	Logging     Logger      `toml:"logging"`
@@ -93,6 +94,7 @@ func NewTSSql() *TSSql {
 	c.Coordinator = NewCoordinator()
 	c.Monitor = NewMonitor(AppSql)
 	c.Logging = NewLogger(AppSql)
+	c.Meta = NewMeta()
 	c.HTTP = httpdConfig.NewConfig()
 	c.Analysis = NewCastor()
 	c.Sherlock = NewSherlockConfig()

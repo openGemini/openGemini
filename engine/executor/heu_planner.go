@@ -974,6 +974,7 @@ func initSqlHeuInstruction() {
 	AddRule(mapDescToRule, NewAggSpreadToSortAppendRule(""))
 	AddRule(mapDescToRule, NewAggSpreadToExchangeRule(""))
 	AddRule(mapDescToRule, NewAggSpreadToReaderRule(""))
+	AddRule(mapDescToRule, NewAggPushDownToColumnStoreReaderRule(""))
 	AddRule(mapDescToRule, NewSlideWindowSpreadRule(""))
 
 	for _, rule := range mapDescToRule {

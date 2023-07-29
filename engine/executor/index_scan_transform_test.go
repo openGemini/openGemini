@@ -138,7 +138,7 @@ func TestIndexScanTransformLowerDAGResourceLack(t *testing.T) {
 
 	executor.GetPipelineExecutorResourceManager().SetManagerParas(1, 1000000000) // 1s
 	// execute
-	if err := trans.WorkHelper(ctx); !errno.Equal(err, errno.BucketLacks) {
+	if err := trans.WorkHelper(ctx); !errno.Equal(err, errno.DirectBucketLacks) {
 		t.Error("IndexScanTransformLowerDAGResourceLack test error")
 	}
 	executor.GetPipelineExecutorResourceManager().SetManagerParas(beforeTotalResource, beforeTimer)

@@ -154,7 +154,6 @@ enum LogicPlanType
 	LogicalMst = 14;
 	LogicalProject = 15;
 	LogicalSlidingWindow = 16;
-
 	LogicalFilterBlank = 17;
 	LogicalHttpSender = 18;
 	LogicalFullJoin = 19;
@@ -170,8 +169,10 @@ enum LogicPlanType
 	LogicalDummyShard = 29;
 	LogicalTSSPScan = 30;
 	LogicalSortAppend = 31;
-    LogicalSort = 32;
-    LogicalHashMerge = 33;
-    LogicalSparseIndexScan = 34;
-    LogicalColumnStoreReader = 35;
+	LogicalSort = 32;
+	LogicalHashMerge = 33;
+	LogicalSparseIndexScan = 34;
+	LogicalColumnStoreReader = 35;
+	LogicalHashAgg = 36;
+    LogicalJoin = 37;
 }

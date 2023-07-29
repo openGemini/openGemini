@@ -355,13 +355,8 @@ func (rec *Record) RowNums() int {
 	if rec == nil || len(rec.ColVals) == 0 {
 		return 0
 	}
-	last := len(rec.ColVals) - 1
-	if rec.Schema.Field(last).IsString() {
-		// for pk index of colstore, the last column may be string type(NOT time)
-		return len(rec.ColVals[last].Offset)
-	}
 
-	return rec.ColVals[last].Len
+	return rec.ColVals[len(rec.ColVals)-1].Len
 }
 
 func (rec *Record) ColNums() int {

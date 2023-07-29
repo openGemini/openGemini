@@ -83,6 +83,7 @@ func InitDecFunctions() {
 	decFuncs[influx.Field_Type_Float] = appendFloatColumn
 	decFuncs[influx.Field_Type_Boolean] = appendBooleanColumn
 	decFuncs[influx.Field_Type_String] = appendStringColumn
+	decFuncs[influx.Field_Type_Tag] = appendStringColumn
 }
 
 func appendColumnData(dataType int, encData []byte, col *record.ColVal, coder *encoding.CoderContext) error {
@@ -99,7 +100,7 @@ func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, coder 
 	dataType := int(data[0])
 	pos += 1
 	if dataType != ref.Type {
-		panic(fmt.Sprintf("type(%v) in table not eq select type(%v)", dataType, ref.Type))
+		return fmt.Errorf("type(%v) in table not eq select type(%v)", dataType, ref.Type)
 	}
 
 	return appendColumnData(dataType, data[pos:], col, coder)

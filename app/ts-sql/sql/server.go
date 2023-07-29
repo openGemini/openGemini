@@ -41,6 +41,8 @@ import (
 	coordinator2 "github.com/openGemini/openGemini/open_src/influx/coordinator"
 	"github.com/openGemini/openGemini/open_src/influx/httpd"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/services"
+	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"go.uber.org/zap"
@@ -61,6 +63,9 @@ type Server struct {
 	QueryExecutor    *query.Executor
 	PointsWriter     *coordinator.PointsWriter
 	httpService      *httpd.Service
+
+	arrowFlightService *arrowflight.Service
+	RecordWriter       *coordinator.RecordWriter
 
 	// joinPeers are the metaservers specified at run time to join this server to
 	metaJoinPeers []string
@@ -139,6 +144,12 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 
 	machine.InitMachineID(c.HTTP.BindAddress)
 
+	if c.HTTP.FlightEnabled {
+		if err = s.initArrowFlightService(c); err != nil {
+			return nil, err
+		}
+	}
+
 	s.castorService = castor.NewService(c.Analysis)
 	s.sherlockService = sherlock.NewService(c.Sherlock)
 	s.sherlockService.WithLogger(s.Logger)
@@ -155,6 +166,17 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		metaUseTLS:    false,
 		config:        c,
 	}
+}
+
+func (s *Server) initArrowFlightService(c *config.TSSql) error {
+	if role := s.info.App; !(role == config.AppSingle || role == config.AppData) {
+		return errno.NewError(errno.ArrowFlightGetRoleErr)
+	}
+	s.arrowFlightService = arrowflight.NewService(c.HTTP)
+	s.arrowFlightService.StatisticsPusher = s.statisticsPusher
+	s.RecordWriter = coordinator.NewRecordWriter(time.Duration(c.Coordinator.ShardWriterTimeout), int(c.Meta.PtNumPerNode), c.HTTP.FlightChFactor)
+	s.RecordWriter.StorageEngine = services.GetStorageEngine()
+	return nil
 }
 
 func (s *Server) initQueryExecutor(c *config.TSSql) {
@@ -235,6 +257,22 @@ func (s *Server) Open() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Open()
 	}
+
+	if s.config.HTTP.FlightEnabled {
+		if role := s.info.App; !(role == config.AppSingle || role == config.AppData) {
+			return errno.NewError(errno.ArrowFlightGetRoleErr)
+		}
+		s.RecordWriter.MetaClient = s.MetaClient
+		if err := s.RecordWriter.Open(); err != nil {
+			return err
+		}
+
+		s.arrowFlightService.MetaClient = s.MetaClient
+		s.arrowFlightService.RecordWriter = s.RecordWriter
+		if err := s.arrowFlightService.Open(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -250,6 +288,14 @@ func (s *Server) Close() error {
 
 	if s.httpService != nil {
 		util.MustClose(s.httpService)
+	}
+
+	if s.arrowFlightService != nil {
+		util.MustClose(s.arrowFlightService)
+	}
+
+	if s.RecordWriter != nil {
+		util.MustClose(s.RecordWriter)
 	}
 
 	if s.QueryExecutor != nil {

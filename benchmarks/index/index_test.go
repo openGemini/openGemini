@@ -88,6 +88,7 @@ func createShard(db, rp string, ptId uint32, pathName string, duration ...time.D
 		Ident(ident).
 		Path(indexPath).
 		IndexType(tsi.MergeSet).
+		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).

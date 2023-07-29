@@ -37,6 +37,7 @@ func genData(rows int) *record.Record {
 		{Name: "field2_float", Type: influx.Field_Type_Float},
 		{Name: "field3_string", Type: influx.Field_Type_String},
 		{Name: "field4_bool", Type: influx.Field_Type_Boolean},
+		{Name: "field5_tag", Type: influx.Field_Type_Tag},
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 
@@ -47,7 +48,8 @@ func genData(rows int) *record.Record {
 		f2Builder := b.Column(1) // float
 		f3Builder := b.Column(2) // string
 		f4Builder := b.Column(3) // bool
-		tmBuilder := b.Column(4) // timestamp
+		f5Builder := b.Column(4) // tag
+		tmBuilder := b.Column(5) // timestamp
 		for i := 1; i <= rows; i++ {
 			f1 := rand.Int63n(11)
 			f2 := 1.1 * float64(f1)
@@ -62,9 +64,11 @@ func genData(rows int) *record.Record {
 			if i%11 == 0 {
 				f3 := fmt.Sprintf("test_%d", f1/7)
 				f3Builder.AppendString(f3)
+				f5Builder.AppendString(f3)
 			} else {
 				f3 := fmt.Sprintf("test_%d", f1)
 				f3Builder.AppendString(f3)
+				f5Builder.AppendString(f3)
 			}
 
 			if i%3 == 0 || i%5 == 0 {
@@ -86,8 +90,8 @@ func genData(rows int) *record.Record {
 
 func TestMeta(t *testing.T) {
 	data := genData(100)
-	meta := marshalMeta(&data.Schema)
-	haha, _ := unmarshalMeta(meta)
+	meta := marshalMeta(&data.Schema, data.RowNums())
+	haha, _, _ := unmarshalMeta(meta)
 	require.EqualValues(t, data.Schemas(), haha)
 }
 
@@ -103,7 +107,7 @@ func TestChunkBuilder(t *testing.T) {
 	indexBuilder := NewIndexBuilder(&lockPath, filePath)
 	defer indexBuilder.Reset()
 	err := indexBuilder.WriteData(data)
-	haha, _ := unmarshalMeta(indexBuilder.meta)
+	haha, _, _ := unmarshalMeta(indexBuilder.meta)
 	require.EqualValues(t, data.Schemas(), haha)
 	if err != nil {
 		t.Fatal("write data error")

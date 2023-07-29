@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -427,6 +428,53 @@ func TestClient_CreateShardGroup(t *testing.T) {
 
 	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), config.COLUMNSTORE)
 	require.EqualError(t, err, "execute command timeout")
+}
+
+func TestClient_GetShardInfoByTime(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{ID: 1, StartTime: ts, EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{{
+					PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online}},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	_, err := c.GetShardInfoByTime("db0", "rp0", ts, 0, 0, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = c.GetShardInfoByTime("db1", "rp0", ts, 0, 0, config.COLUMNSTORE)
+	assert.Equal(t, errno.Equal(err, errno.DatabaseNotFound), true)
+
+	_, err = c.GetShardInfoByTime("db0", "rp0", time.Unix(0, 0), 0, 0, config.COLUMNSTORE)
+	assert.Equal(t, errno.Equal(err, errno.ShardNotFound), true)
+
+	_, err = c.GetShardInfoByTime("db0", "rp0", ts, 2, 2, config.COLUMNSTORE)
+	assert.Equal(t, strings.Contains(err.Error(), fmt.Sprintf("nodeId cannot find pt")), true)
+
+	c.cacheData.PtView["db0"] = nil
+	_, err = c.GetShardInfoByTime("db0", "rp0", ts, 0, 0, config.COLUMNSTORE)
+	assert.Equal(t, strings.Contains(err.Error(), fmt.Sprintf("db db0 in PtView not exist")), true)
 }
 
 func TestClient_CreateMeasurement(t *testing.T) {

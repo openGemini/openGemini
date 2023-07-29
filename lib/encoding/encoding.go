@@ -40,6 +40,9 @@ const (
 
 	// BlockString designates a block encodes string values.
 	BlockString = byte(influx.Field_Type_String)
+
+	// BlockTag designates a block encodes tag values.
+	BlockTag = byte(influx.Field_Type_Tag)
 )
 
 type DataCoder interface {

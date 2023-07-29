@@ -185,6 +185,7 @@ type ChunkReader struct {
 	cursorPos           int
 	isPreAgg            bool
 	multiCallsWithFirst bool
+	transColumnFun      *map[influxql.DataType]func(recColumn *record.ColVal, column executor.Column)
 
 	closed chan struct{}
 
@@ -195,7 +196,7 @@ type ChunkReader struct {
 }
 
 func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, seriesPlan hybridqp.QueryNode,
-	source influxql.Sources, schema *executor.QuerySchema, cursors []interface{}) executor.Processor {
+	source influxql.Sources, schema *executor.QuerySchema, cursors []interface{}, state bool) executor.Processor {
 	var callOps []*comm.CallOption
 	for _, op := range ops {
 		if call, ok := op.Expr.(*influxql.Call); ok {
@@ -242,7 +243,16 @@ func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprO
 		r.buildFieldIndex(schema, outputRowDataType, ops, seriesPlan)
 	}
 	r.ResultChunkPool = executor.NewCircularChunkPool(executor.CircularChunkNum, executor.NewChunkBuilder(outputRowDataType))
+	r.setTransColumnFun(state)
 	return r
+}
+
+func (r *ChunkReader) setTransColumnFun(state bool) {
+	if state {
+		r.transColumnFun = &transColAuxFun
+	} else {
+		r.transColumnFun = &transColumnFun
+	}
 }
 
 // nolint
@@ -405,6 +415,15 @@ func initTransColAuxFun() {
 			recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
 		}
 		column.AppendStringBytes(recColumn.Val, recColumn.Offset)
+	}
+
+	transColAuxFun[influxql.Tag] = func(recColumn *record.ColVal, column executor.Column) {
+		if recColumn.Length() > recColumn.NilCount {
+			if recColumn.NilCount > 0 {
+				recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
+			}
+			column.AppendStringBytes(recColumn.Val, recColumn.Offset)
+		}
 	}
 }
 
@@ -624,7 +643,7 @@ func (r *ChunkReader) transToChunk(rec *record.Record, chunk executor.Chunk) err
 		if rec.ColMeta != nil {
 			columnTimes = rec.RecMeta.Times[recIndex]
 		}
-		transFun, ok := transColumnFun[column.DataType()]
+		transFun, ok := (*r.transColumnFun)[column.DataType()]
 		if !ok {
 			return fmt.Errorf("no such function")
 		}
@@ -870,7 +889,7 @@ func (r *ChunkReader) Create(plan executor.LogicalPlan, opt query.ProcessorOptio
 		seriesPlan = lr.Children()[0]
 	}
 
-	p := NewChunkReader(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, opt.Sources, plan.Schema().(*executor.QuerySchema), lr.Cursors())
+	p := NewChunkReader(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, opt.Sources, plan.Schema().(*executor.QuerySchema), lr.Cursors(), plan.(*executor.LogicalReader).GetOneReaderState())
 	return p, nil
 }
 

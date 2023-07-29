@@ -54,6 +54,7 @@ type Column interface {
 	AppendManyNil(num int)
 	GetValueIndexV2(start int) int
 	GetRangeValueIndexV2(bmStart, bmEnd int) (s int, e int)
+	StringValuesRangeV2(dst []string, start, end int) []string
 	GetTimeIndex(valIdx int) int
 	Reset()
 
@@ -202,6 +203,19 @@ func (c *ColumnImpl) GetRangeValueIndexV2(bmStart, bmEnd int) (int, int) {
 	rankS := c.nilsV2.rank(bmStart)
 	rankE := c.nilsV2.rank(bmEnd)
 	return rankS, rankE
+}
+
+func (c *ColumnImpl) StringValuesRangeV2(dst []string, start, end int) []string {
+	offs := c.offset
+	for i := start; i < end; i++ {
+		off := offs[i]
+		if i == len(offs)-1 {
+			dst = append(dst, util.Bytes2str(c.stringBytes[off:]))
+		} else {
+			dst = append(dst, util.Bytes2str(c.stringBytes[off:offs[i+1]]))
+		}
+	}
+	return dst
 }
 
 func (c *ColumnImpl) AppendManyNotNil(num int) {

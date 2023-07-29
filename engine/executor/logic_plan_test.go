@@ -17,6 +17,7 @@ limitations under the License.
 package executor_test
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -352,6 +353,30 @@ func TestNewLogicalHashMerge(t *testing.T) {
 	}
 }
 
+func TestNewLogicalHashAgg(t *testing.T) {
+	schema := createSortQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalHashAgg(node, schema, executor.NODE_EXCHANGE, nil)
+	agg.DeriveOperations()
+	newAgg := agg.Clone().(*executor.LogicalHashAgg)
+	str := newAgg.Digest()
+	tStr := newAgg.String()
+	tType := newAgg.Type()
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	newAgg.Explain(planWriter)
+	if newAgg == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str, tType)
+	}
+	marStr, err := executor.MarshalBinary(newAgg)
+	if err != nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(marStr)
+	}
+}
+
 func TestLogicalPlanNilNew(t *testing.T) {
 	logicalNode := []hybridqp.QueryNode{&executor.LogicalSlidingWindow{}, &executor.LogicalFilter{}, &executor.LogicalSortAppend{},
 		&executor.LogicalDedupe{}, &executor.LogicalFilterBlank{}, &executor.LogicalAlign{}, &executor.LogicalMst{}, &executor.LogicalSubQuery{},
@@ -465,7 +490,8 @@ func buildColumnStorePlan(t *testing.T, schema *executor.QuerySchema) hybridqp.Q
 	}
 	return plan
 }
-func buildColumnStorePlanForSql(t *testing.T, schema *executor.QuerySchema) hybridqp.QueryNode {
+
+func buildColumnStorePlanForSql(schema *executor.QuerySchema) hybridqp.QueryNode {
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 	plan, _ := coordinator.CreateColumnStorePlan(schema, nil, planBuilder)
 	return plan
@@ -499,7 +525,7 @@ func TestColumnStoreForSql(t *testing.T) {
 	opt.GroupByAllDims = true
 	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 
-	plan := buildColumnStorePlanForSql(t, schema)
+	plan := buildColumnStorePlanForSql(schema)
 	planner := getPlanner()
 	planner.SetRoot(plan)
 	best := planner.FindBestExp()
@@ -530,4 +556,76 @@ func TestColumnStoreForSql(t *testing.T) {
 		}
 	}()
 	planBuilder.Reader(config.ENGINETYPEEND)
+}
+
+func TestNewLogicalJoin(t *testing.T) {
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	leftSubQuery := executor.NewLogicalSubQuery(node, schema)
+	rightSubQuery := executor.NewLogicalSubQuery(node, schema)
+	join := executor.NewLogicalJoin([]hybridqp.QueryNode{leftSubQuery, rightSubQuery}, schema)
+	newJoin := join.Clone()
+	if newJoin.Type() != join.Type() {
+		t.Error("wrong result")
+	}
+	str := join.Digest()
+	assert.Equal(t, join.Digest(), str)
+	tStr := join.String()
+	tType := join.Type()
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	join.Explain(planWriter)
+	if join == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str, tType)
+	}
+	join.DeriveOperations()
+	assert.Equal(t, join.New(nil, nil, nil), nil)
+	defer func() {
+		if err := recover(); err != nil {
+			assert.Equal(t, err.(string), "validate all input of join failed")
+		}
+	}()
+	_ = executor.NewLogicalJoin(nil, schema)
+}
+
+func TestBuildInConditionPlan(t *testing.T) {
+	sql := "select id from students where \"name\" in (select \"name\" from students where score > 90)"
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	q, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stmt := q.Statements[0]
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		t.Fatal(fmt.Errorf("invalid SelectStatement"))
+	}
+	selectStmt1, selectStmt2 := selectStmt.Clone(), selectStmt.Clone()
+	schema := createQuerySchema()
+
+	creator := NewMockShardGroup()
+	table := NewTable("students")
+	table.AddDataTypes(map[string]influxql.DataType{"id": influxql.Integer, "name": influxql.String, "score": influxql.Float, "good": influxql.Boolean})
+	creator.AddShard(table)
+
+	schema.Options().(*query.ProcessorOptions).Condition = selectStmt.Condition
+	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createPlanErr = true
+	schema.Options().(*query.ProcessorOptions).Condition = selectStmt1.Condition
+	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt1, schema)
+	assert.Equal(t, strings.Contains(err.Error(), "CreateLogicalPlan failed"), true)
+
+	inSubQuery = true
+	schema.Options().(*query.ProcessorOptions).Condition = selectStmt2.Condition
+	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt2, schema)
+	assert.Equal(t, strings.Contains(err.Error(), "CreateLogicalPlan failed"), true)
 }

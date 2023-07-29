@@ -139,11 +139,3 @@ func GetTimeRangeEndIndexDescend(times []int64, startPos int, endTime int64) int
 func Uint64ToBytesUnsafe(id uint64) []byte {
 	return (*(*[8]byte)(unsafe.Pointer(&id)))[:]
 }
-
-func Float64ToUint64(v float64) uint64 {
-	return *(*uint64)(unsafe.Pointer(&v))
-}
-
-func Uint64ToFloat64(v uint64) float64 {
-	return *(*float64)(unsafe.Pointer(&v))
-}

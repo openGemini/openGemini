@@ -249,6 +249,44 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 	return NewLogicalSortAppend(joinNodes, schema), nil
 }
 
+func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, hybridqp.Catalog, error) {
+	c, _ := schema.Options().GetCondition().(*influxql.InCondition)
+	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
+	opt, _ := schema.Options().(*query.ProcessorOptions)
+	sopt := query.SelectOptions{
+		MaxSeriesN:       opt.MaxSeriesN,
+		Authorizer:       opt.Authorizer,
+		ChunkedSize:      opt.ChunkedSize,
+		Chunked:          opt.Chunked,
+		ChunkSize:        opt.ChunkSize,
+		MaxQueryParallel: opt.MaxParallel,
+		AbortChan:        opt.AbortChan,
+		RowsChan:         opt.RowsChan,
+	}
+	c.Stmt.Sources = qc.GetSources(c.Stmt.Sources)
+	stmt.Sources = qc.GetSources(stmt.Sources)
+	rightOpt, _ := query.NewProcessorOptionsStmt(c.Stmt, sopt)
+	sRight := NewQuerySchemaWithJoinCase(c.Stmt.Fields, c.Stmt.Sources, c.Stmt.ColumnNames(), &rightOpt, c.Stmt.JoinSource, c.Stmt.SortFields)
+	right, err := buildSources(ctx, qc, c.Stmt.Sources, sRight)
+	if err != nil {
+		return nil, nil, err
+	}
+	if right != nil {
+		joinNodes = append(joinNodes, right)
+	}
+	leftOpt := opt.Clone()
+	sLeft := NewQuerySchemaWithJoinCase(stmt.Fields, stmt.Sources, stmt.ColumnNames(), leftOpt, stmt.JoinSource, stmt.SortFields)
+	left, err := buildSources(ctx, qc, stmt.Sources, sLeft)
+	if err != nil {
+		return nil, nil, err
+	}
+	if left != nil {
+		joinNodes = append(joinNodes, left)
+	}
+	joinSchema := NewQuerySchemaWithJoinCase(append(c.Stmt.Fields, stmt.Fields...), c.Stmt.Sources, append(c.Stmt.ColumnNames(), stmt.ColumnNames()...), opt, c.Stmt.JoinSource, c.Stmt.SortFields)
+	return NewLogicalJoin(joinNodes, joinSchema), joinSchema, nil
+}
+
 func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	joinCases := schema.GetJoinCases()
 	if len(joinCases) != 1 {
@@ -365,7 +403,9 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	if !ok {
 		return nil, errors.New("buildQueryPlan schema type isn't *QuerySchema")
 	}
-	if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
+	if _, ok = schema.Options().GetCondition().(*influxql.InCondition); ok {
+		sp, schema, err = BuildInConditionPlan(ctx, qc, stmt, s)
+	} else if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
 		sp, err = buildFullJoinQueryPlan(ctx, qc, stmt, s)
 	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
 		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
@@ -485,8 +525,16 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 			} else if c.eType == READER_EXCHANGE {
 				eType = READER_EXCHANGE
 			}
-			// TODO: to support hash agg
 			if plan.Schema().HasCall() {
+				node := NewLogicalHashAgg(p[0], plan.Schema(), eType, eTraits)
+				if node.schema.HasCall() {
+					n := findChildAggNode(plan)
+					if n != nil {
+						node.LogicalPlanBase = n.(*LogicalAggregate).LogicalPlanBase
+						node.inputs = p
+					}
+				}
+				nodes = append(nodes, node)
 			} else {
 				node := NewLogicalHashMerge(p[0], plan.Schema(), eType, eTraits)
 				nodes = append(nodes, node)
@@ -501,6 +549,22 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 		return []hybridqp.QueryNode{plan}
 	}
 	return nodes
+}
+
+func findChildAggNode(plan hybridqp.QueryNode) hybridqp.QueryNode {
+	for plan != nil {
+		switch plan.(type) {
+		case *LogicalAggregate:
+			return plan
+		default:
+			if len(plan.Children()) != 0 {
+				plan = plan.Children()[0]
+			} else {
+				return nil
+			}
+		}
+	}
+	return nil
 }
 
 func RebuildAggNodes(plan hybridqp.QueryNode) {

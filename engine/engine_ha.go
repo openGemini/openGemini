@@ -244,14 +244,14 @@ func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durations map[uint6
 		}
 		dbRpLock[dbRpPath] = ""
 		n++
-		go func(db string, pt uint32, rp string) {
-			err := dbPt.loadShards(opId, rp, durations, loadStat, client)
+		go func(db string, pt uint32, rp string, engineType config.EngineType) {
+			err := dbPt.loadShards(opId, rp, durations, loadStat, client, engineType)
 			if err != nil {
 				e.log.Error("fail to load db rp", zap.String("db", db), zap.Uint32("pt", pt),
 					zap.String("rp", rp), zap.Error(err))
 			}
 			errChan <- err
-		}(sdi.Ident.OwnerDb, sdi.Ident.OwnerPt, sdi.Ident.Policy)
+		}(sdi.Ident.OwnerDb, sdi.Ident.OwnerPt, sdi.Ident.Policy, config.EngineType(sdi.Ident.EngineType))
 	}
 
 	for i := 0; i < n; i++ {

@@ -20,6 +20,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -385,6 +386,15 @@ func (t *TaskManager) InitQueryIDByOffset(offset uint64) {
 
 // AssignQueryID assign a query id for a sql
 func (t *TaskManager) AssignQueryID() uint64 {
+	// set-query-id: The qid can be controlled for easy testing.
+	failpoint.Inject("set-query-id", func(val failpoint.Value) {
+		if n, ok := val.(int); ok {
+			n = n % queryIdSpan
+			n += int(t.queryIDOffset)
+			atomic.StoreUint64(&t.nextID, uint64(n))
+			failpoint.Return(uint64(n))
+		}
+	})
 	atomic.CompareAndSwapUint64(&t.nextID, t.queryIDUpperLimit, t.queryIDOffset)
 	return atomic.AddUint64(&t.nextID, 1)
 }

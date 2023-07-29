@@ -21,32 +21,32 @@ package executor
 const CircularChunkNum = 4
 
 type CircularChunkPool struct {
-	index    int
-	chunkNum int
-	chunks   []Chunk
+	index   int
+	builder *ChunkBuilder
+	chunks  []Chunk
 }
 
 func NewCircularChunkPool(chunkNum int, chunkBuilder *ChunkBuilder) *CircularChunkPool {
 	rcp := &CircularChunkPool{
-		index:    0,
-		chunkNum: chunkNum,
-		chunks:   make([]Chunk, 0, chunkNum),
-	}
-	for i := 0; i < chunkNum; i++ {
-		rcp.chunks = append(rcp.chunks, chunkBuilder.NewChunk(""))
+		index:   0,
+		builder: chunkBuilder,
+		chunks:  make([]Chunk, 0, chunkNum),
 	}
 	return rcp
 }
 
 func (cp *CircularChunkPool) GetChunk() Chunk {
+	if len(cp.chunks) < cap(cp.chunks) {
+		cp.chunks = append(cp.chunks, cp.builder.NewChunk(""))
+	}
 	c := cp.chunks[cp.index]
 	c.Reset()
-	cp.index = (cp.index + 1) % cp.chunkNum
+	cp.index = (cp.index + 1) % cap(cp.chunks)
 	return c
 }
 
 func (cp *CircularChunkPool) Release() {
-	for i := 0; i < cp.chunkNum; i++ {
+	for i := 0; i < len(cp.chunks); i++ {
 		cp.chunks[i].Release()
 	}
 }

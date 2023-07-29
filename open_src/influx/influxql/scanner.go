@@ -701,7 +701,6 @@ func ScanBareIdent(r io.RuneScanner, checkDOT bool) string {
 func IsRegexOp(t Token) bool {
 	return (t == EQREGEX || t == NEQREGEX)
 }
-
 func IsDOT(ch rune) bool {
 	return ch == '.'
 }

@@ -323,3 +323,34 @@ func TestAppendTimes(t *testing.T) {
 	col.FillBitmap(0)
 	require.Equal(t, []byte{0, 0}, col.Bitmap)
 }
+
+func TestStringValueToByteSlice(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	recNoNil := genRowRec(schema,
+		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []int64{700, 700, 650, 650, 600, 600, 800, 800},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []float64{2.2, 2.2, 3.3, 3.3, 5.3, 5.3, 1.1, 1.1},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []string{"test", "test", "hi", "hi", "world", "world", "ok", "ok"},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []bool{true, false, false, false, false, true, false, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 8})
+
+	var res, exp []byte
+	for i := 0; i < recNoNil.ColVals[3].Len; i++ {
+		values1, isNil := recNoNil.ColVals[3].StringValue(i)
+		if isNil {
+			continue
+		}
+		res = append(res, values1...)
+	}
+
+	expString := []string{"test", "test", "hi", "hi", "world", "world", "ok", "ok"}
+	for j := range expString {
+		exp = append(exp, []byte(expString[j])...)
+	}
+	require.Equal(t, exp, res)
+}

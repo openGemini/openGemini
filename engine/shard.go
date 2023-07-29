@@ -81,8 +81,9 @@ var (
 )
 
 type Storage interface {
-	WriteRows(s *shard, rows *influx.Rows, mw *mstWriteCtx) error   // line protocol
-	WriteCols(s *shard, cols *record.Record, mw *mstWriteCtx) error // native protocol
+	WriteRowsToTable(s *shard, rows influx.Rows, mw *mstWriteCtx, binaryRows []byte) error
+	WriteRows(s *shard, mw *mstWriteCtx) error                                    // line protocol
+	WriteCols(s *shard, cols *record.Record, mst string, binaryCols []byte) error // native protocol
 	WriteIndex(s *shard, rows *influx.Rows, mw *mstWriteCtx) error
 	SetClient(client metaclient.MetaClient)
 	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
@@ -91,13 +92,41 @@ type Storage interface {
 type tsstoreImpl struct {
 }
 
-func (storage *tsstoreImpl) WriteRows(s *shard, rows *influx.Rows, mw *mstWriteCtx) error {
+func (storage *tsstoreImpl) WriteRows(s *shard, mw *mstWriteCtx) error {
 	mmPoints := mw.getMstMap()
 	mw.initWriteRowsCtx(s.getLastFlushTime, s.addRowCountsBySid, nil)
 	return s.activeTbl.MTable.WriteRows(s.activeTbl, mmPoints, mw.writeRowsCtx)
 }
 
-func (storage *tsstoreImpl) WriteCols(s *shard, cols *record.Record, mw *mstWriteCtx) error {
+func (storage *tsstoreImpl) WriteRowsToTable(s *shard, rows influx.Rows, mw *mstWriteCtx, binaryRows []byte) error {
+	// alloc token
+	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
+	start := time.Now()
+	curSize := calculateMemSize(rows)
+	err := nodeMutableLimit.allocResource(curSize, mw.timer)
+	atomic.AddInt64(&statistics.PerfStat.WriteGetTokenDurationNs, time.Since(start).Nanoseconds())
+	if err != nil {
+		s.log.Info("Alloc resource failed, need retry", zap.Int64("current mem size", curSize))
+		return err
+	}
+
+	// write index
+	indexErr := storage.WriteIndex(s, &rows, mw)
+	if indexErr != nil && !errno.Equal(indexErr, errno.SeriesLimited) {
+		nodeMutableLimit.freeResource(curSize)
+		return indexErr
+	}
+
+	// write data to mem table and write wal
+	err = s.writeRows(mw, binaryRows, curSize)
+	if err != nil {
+		return err
+	}
+
+	return indexErr
+}
+
+func (storage *tsstoreImpl) WriteCols(s *shard, cols *record.Record, mst string, binaryCols []byte) error {
 	return errors.New("not implement yet")
 }
 
@@ -122,47 +151,93 @@ func newColumnstoreImpl() *columnstoreImpl {
 	}
 }
 
-func (storage *columnstoreImpl) WriteRows(s *shard, rows *influx.Rows, mw *mstWriteCtx) error {
+func (storage *columnstoreImpl) WriteRows(s *shard, mw *mstWriteCtx) error {
 	mmPoints := mw.getMstMap()
-	for i := 0; i < len(*rows); i++ {
-		if s.closed.Closed() {
-			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
-		}
-		//skip StreamOnly data
-		if (*rows)[i].StreamOnly {
-			continue
-		}
-
-		//update mstsInfo
-		storage.mu.RLock()
-		_, ok := storage.mstsInfo[(*rows)[i].Name]
-		storage.mu.RUnlock()
-		if !ok {
-			err := storage.UpdateMstsInfo((*rows)[i], s.ident.OwnerDb, s.ident.Policy)
-			if err != nil {
-				return err
-			}
-		}
-		cloneRowToDict(mmPoints, mw, &(*rows)[i])
-	}
 	mw.initWriteRowsCtx(s.getLastFlushTime, s.addRowCountsBySid, storage.mstsInfo)
 	return s.activeTbl.MTable.WriteRows(s.activeTbl, mmPoints, mw.writeRowsCtx)
 }
 
-func (storage *columnstoreImpl) UpdateMstsInfo(row influx.Row, db, pr string) error {
-	storage.mu.Lock()
-	defer storage.mu.Unlock()
-	if _, ok := storage.mstsInfo[row.Name]; !ok {
-		mstInfo, err := storage.client.GetMeasurementInfoStore(db, pr, influx.GetOriginMstName(row.Name))
-		if err != nil {
-			return err
-		}
-		err = storage.checkMstInfo(mstInfo)
-		if err != nil {
-			return err
-		}
-		storage.SetMstInfo(row.Name, mstInfo)
+func (storage *columnstoreImpl) WriteRowsToTable(s *shard, rows influx.Rows, mw *mstWriteCtx, binaryRows []byte) error {
+	var indexErr error
+	var indexWg sync.WaitGroup
+	indexWg.Add(1)
+	err := storage.updateMstMap(s, rows, mw)
+	if err != nil {
+		return err
 	}
+
+	// alloc token
+	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
+	start := time.Now()
+	curSize := calculateMemSize(rows)
+	err = nodeMutableLimit.allocResource(curSize, mw.timer)
+	atomic.AddInt64(&statistics.PerfStat.WriteGetTokenDurationNs, time.Since(start).Nanoseconds())
+	if err != nil {
+		s.log.Info("Alloc resource failed, need retry", zap.Int64("current mem size", curSize))
+		return err
+	}
+
+	go func() {
+		indexErr = storage.WriteIndex(s, &rows, mw)
+		if indexErr != nil {
+			nodeMutableLimit.freeResource(curSize)
+		}
+		indexWg.Done()
+	}()
+	err = s.writeRows(mw, binaryRows, curSize)
+	indexWg.Wait()
+	if err != nil {
+		return err
+	}
+
+	return indexErr
+}
+
+func (storage *columnstoreImpl) UpdateMstsInfo(mst, db, rp string) error {
+	storage.mu.RLock()
+	_, ok := storage.mstsInfo[mst]
+	storage.mu.RUnlock()
+	if !ok {
+		storage.mu.Lock()
+		defer storage.mu.Unlock()
+		if _, ok := storage.mstsInfo[mst]; !ok {
+			mstInfo, err := storage.client.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
+			if err != nil {
+				return err
+			}
+			err = storage.checkMstInfo(mstInfo)
+			if err != nil {
+				return err
+			}
+			storage.SetMstInfo(mst, mstInfo)
+		}
+	}
+	return nil
+}
+
+func (storage *columnstoreImpl) updateMstMap(s *shard, rows influx.Rows, mw *mstWriteCtx) error {
+	mmPoints := mw.getMstMap()
+	tm := int64(math.MinInt64)
+	for i := 0; i < len(rows); i++ {
+		if s.closed.Closed() {
+			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
+		}
+		//skip StreamOnly data
+		if rows[i].StreamOnly {
+			continue
+		}
+
+		//update mstsInfo
+		err := storage.UpdateMstsInfo(rows[i].Name, s.ident.OwnerDb, s.ident.Policy)
+		if err != nil {
+			return err
+		}
+		ri := cloneRowToDict(mmPoints, mw, &rows[i])
+		if ri.Timestamp > tm {
+			tm = ri.Timestamp
+		}
+	}
+	s.setMaxTime(tm)
 	return nil
 }
 
@@ -172,11 +247,86 @@ func (storage *columnstoreImpl) SetMstInfo(name string, mstInfo *meta.Measuremen
 	}
 }
 
-func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mw *mstWriteCtx) error {
-	return errors.New("not implement yet")
+func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst string, binaryCols []byte) error {
+	if cols == nil {
+		return errors.New("write rec can not be nil")
+	}
+	s.wg.Add(1)
+	s.writeWg.Add(1)
+	defer func() {
+		s.wg.Done()
+		s.writeWg.Done()
+	}()
+
+	if s.ident.ReadOnly {
+		err := errors.New("can not write cols to downSampled shard")
+		log.Error("write into shard failed", zap.Error(err))
+		if !getDownSampleWriteDrop() {
+			return err
+		}
+		return nil
+	}
+
+	mw := getMstWriteRecordCtx(nodeMutableLimit.timeOut, s.engineType)
+	defer putMstWriteRecordCtx(mw)
+
+	// alloc token
+	start := time.Now()
+	curSize := int64(cols.Size())
+	err := nodeMutableLimit.allocResource(curSize, mw.timer)
+	atomic.AddInt64(&statistics.PerfStat.WriteGetTokenDurationNs, time.Since(start).Nanoseconds())
+	if err != nil {
+		s.log.Info("Alloc resource failed, need retry", zap.Int64("current mem size", curSize))
+		return err
+	}
+
+	var indexErr error
+	var indexWg sync.WaitGroup
+	indexWg.Add(1)
+
+	//update mstsInfo
+	err = storage.UpdateMstsInfo(mst, s.ident.OwnerDb, s.ident.Policy)
+	if err != nil {
+		return err
+	}
+
+	//write index
+	go func() {
+		indexErr = storage.WriteIndexForCols(s, cols, mst)
+		indexWg.Done()
+	}()
+
+	// write data and wal
+	err = s.writeCols(cols, binaryCols, mst)
+	indexWg.Wait()
+	if err != nil {
+		return err
+	}
+
+	return indexErr
+}
+
+func (storage *columnstoreImpl) writecols(s *shard, cols *record.Record, mst string) error {
+	return s.activeTbl.MTable.WriteCols(s.activeTbl, cols, storage.mstsInfo, mst)
 }
 
 func (storage *columnstoreImpl) WriteIndex(s *shard, rows *influx.Rows, mw *mstWriteCtx) error {
+	mmPoints := mw.getMstMap()
+	return s.indexBuilder.CreateIndexIfNotExists(mmPoints, false)
+}
+
+func (storage *columnstoreImpl) WriteIndexForCols(s *shard, cols *record.Record, mst string) error {
+	if s.closed.Closed() {
+		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
+	}
+	tagIndex := findTagIndex(cols.Schemas())
+
+	// write index
+	err := s.indexBuilder.CreateIndexIfNotExistsForColumnStore(cols, tagIndex, mst)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -191,10 +341,20 @@ func (storage *columnstoreImpl) checkMstInfo(mstInfo *meta.MeasurementInfo) erro
 	return nil
 }
 
+func findTagIndex(schema record.Schemas) []int {
+	var res []int
+	for i := range schema {
+		if schema[i].Type == influx.Field_Type_Tag {
+			res = append(res, i)
+		}
+	}
+	return res
+}
+
 type Shard interface {
 	// IO interface
-	WriteRows(rows []influx.Row, binaryRows []byte) error  // line protocol
-	WriteCols(cols record.Record, binaryRows []byte) error // native protocol
+	WriteRows(rows []influx.Row, binaryRows []byte) error               // line protocol
+	WriteCols(mst string, cols *record.Record, binaryCols []byte) error // native protocol
 	ForceFlush()
 	WaitWriteFinish()
 	CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
@@ -310,6 +470,8 @@ type shard struct {
 	storage    Storage
 
 	seriesLimit uint64
+	//lint:ignore U1000 use for replication feature
+	summary *summaryInfo
 }
 
 type shardDownSampleTaskInfo struct {
@@ -441,6 +603,31 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 	return s
 }
 
+func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) error {
+	s.snapshotLock.RLock()
+	defer s.snapshotLock.RUnlock()
+	// write data to mem table
+	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
+	start := time.Now()
+	failpoint.Inject("SlowDownActiveTblWrite", nil)
+	err := s.storage.(*columnstoreImpl).writecols(s, cols, mst)
+	if err != nil {
+		log.Error("write cols rec to memory table fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
+		return err
+	}
+	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
+
+	// write wal
+	start = time.Now()
+	failpoint.Inject("SlowDownWalWrite", nil)
+	if err = s.wal.Write(binaryCols); err != nil {
+		log.Error("write cols rec to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
+		return err
+	}
+	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
+	return nil
+}
+
 func (s *shard) initSeriesLimiter(limit uint64) {
 	if limit == 0 || s.indexBuilder == nil {
 		return
@@ -495,9 +682,43 @@ func (s *shard) WriteRows(rows []influx.Row, binaryRows []byte) error {
 	return nil
 }
 
-func (s *shard) WriteCols(cols record.Record, binaryRows []byte) error {
-	mw := getMstWriteCtx(nodeMutableLimit.timeOut, s.engineType)
-	return s.storage.WriteCols(s, &cols, mw)
+// write data to mem table and write wal
+func (s *shard) writeRows(mw *mstWriteCtx, binaryRows []byte, curSize int64) error {
+	s.snapshotLock.RLock()
+	// write data to mem table
+	start := time.Now()
+	failpoint.Inject("SlowDownActiveTblWrite", nil)
+	err := s.storage.WriteRows(s, mw)
+	if err != nil {
+		s.activeTbl.AddMemSize(curSize)
+		s.snapshotLock.RUnlock()
+		log.Error("write rows to memory table fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
+		return err
+	}
+	s.activeTbl.AddMemSize(curSize)
+	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
+
+	// write wal
+	start = time.Now()
+	failpoint.Inject("SlowDownWalWrite", nil)
+	if err = s.wal.Write(binaryRows); err != nil {
+		s.snapshotLock.RUnlock()
+		log.Error("write rows to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
+		return err
+	}
+	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
+
+	s.snapshotLock.RUnlock()
+	return nil
+}
+
+func (s *shard) WriteCols(mst string, cols *record.Record, binaryCols []byte) error {
+	if s.isClosing() {
+		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.storage.WriteCols(s, cols, mst, binaryCols)
 }
 
 func (s *shard) WaitWriteFinish() {
@@ -679,6 +900,40 @@ func putMstWriteCtx(mw *mstWriteCtx) {
 	mstWriteCtxPool.Put(mw)
 }
 
+type mstWriteRecordCtx struct {
+	timer      *time.Timer
+	engineType config.EngineType
+}
+
+var mstWriteRecordCtxPool sync.Pool
+
+func getMstWriteRecordCtx(d time.Duration, engineType config.EngineType) *mstWriteRecordCtx {
+	v := mstWriteRecordCtxPool.Get()
+	if v == nil {
+		return &mstWriteRecordCtx{
+			timer:      time.NewTimer(d),
+			engineType: engineType,
+		}
+	}
+	ctx, ok := v.(*mstWriteRecordCtx)
+	if !ok {
+		log.Error("wrong type switch for mstWriteRecordCtx")
+	}
+	ctx.engineType = engineType
+	ctx.timer.Reset(d)
+	return ctx
+}
+
+func putMstWriteRecordCtx(mw *mstWriteRecordCtx) {
+	if !mw.timer.Stop() {
+		select {
+		case <-mw.timer.C:
+		default:
+		}
+	}
+	mstWriteRecordCtxPool.Put(mw)
+}
+
 func (s *shard) getLastFlushTime(msName string, sid uint64) int64 {
 	tm := s.immTables.GetLastFlushTimeBySid(msName, sid)
 	if tm == math.MaxInt64 || s.snapshotTbl == nil {
@@ -792,7 +1047,7 @@ func (s *shard) writeIndex(rows influx.Rows, mw *mstWriteCtx, mmPoints *dictpool
 
 	failpoint.Inject("SlowDownCreateIndex", nil)
 	if writeIndexRequired {
-		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 			return err
 		}
 	} else {
@@ -810,10 +1065,9 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	defer s.wg.Done()
 	defer s.writeWg.Done()
 	var err error
-	var partialWriteError error
 
 	if s.ident.ReadOnly {
-		err := errors.New("can not write rows to downSampled shard")
+		err = errors.New("can not write rows to downSampled shard")
 		log.Error("write into shard failed", zap.Error(err))
 		if !getDownSampleWriteDrop() {
 			return err
@@ -824,51 +1078,10 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	mw := getMstWriteCtx(nodeMutableLimit.timeOut, s.engineType)
 	defer putMstWriteCtx(mw)
 
-	// 1. alloc token
-	start := time.Now()
-	curSize := calculateMemSize(rows)
-	err = nodeMutableLimit.allocResource(curSize, mw.timer)
-	atomic.AddInt64(&statistics.PerfStat.WriteGetTokenDurationNs, time.Since(start).Nanoseconds())
-	if err != nil {
-		s.log.Info("Alloc resource failed, need retry", zap.Int64("current mem size", curSize))
-		return err
-	}
-
-	// 2. write index
-	err = s.storage.WriteIndex(s, &rows, mw)
-	if err != nil && !errno.Equal(err, errno.SeriesLimited) {
-		nodeMutableLimit.freeResource(curSize)
-		return err
-	}
-	partialWriteError = err
-
-	s.snapshotLock.RLock()
-	// 3. write data to mem table
-	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
-	start = time.Now()
-	failpoint.Inject("SlowDownActiveTblWrite", nil)
-	err = s.storage.WriteRows(s, &rows, mw)
-	if err != nil {
-		s.activeTbl.AddMemSize(curSize)
-		s.snapshotLock.RUnlock()
-		log.Error("write rows to memory table fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
-		return err
-	}
-	s.activeTbl.AddMemSize(curSize)
-	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
-
-	// 4. write wal
-	start = time.Now()
-	failpoint.Inject("SlowDownWalWrite", nil)
-	if err = s.wal.Write(binaryRows); err != nil {
-		s.snapshotLock.RUnlock()
-		log.Error("write rows to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
-		return err
-	}
-	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
-	s.snapshotLock.RUnlock()
+	// write data、wal and index
+	err = s.storage.WriteRowsToTable(s, rows, mw, binaryRows)
 	s.addRowCounts(int64(len(rows)))
-	return partialWriteError
+	return err
 }
 
 func (s *shard) enableForceFlush() {
@@ -1126,7 +1339,6 @@ func (s *shard) replayWal() error {
 		s.wal.unref()
 	}()
 	return nil
-
 }
 
 func (s *shard) syncReplayWal(ctx context.Context) error {

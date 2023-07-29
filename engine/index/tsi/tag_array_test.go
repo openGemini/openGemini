@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -263,7 +264,7 @@ func CreateIndexByPts_TagArray(iBuilder *IndexBuilder, idx Index, genKeys func()
 
 	mmPoints := &dictpool.Dict{}
 	mmPoints.Set("mn-1", &pts)
-	if err := iBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+	if err := iBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 		if !strings.Contains(err.Error(), "error tag array") {
 			panic(err)
 		}
@@ -315,7 +316,7 @@ func CreateIndexByPts_TagArray_Error(iBuilder *IndexBuilder, idx Index, genKeys 
 
 	mmPoints := &dictpool.Dict{}
 	mmPoints.Set("mn-1", &pts)
-	err := iBuilder.CreateIndexIfNotExists(mmPoints)
+	err := iBuilder.CreateIndexIfNotExists(mmPoints, true)
 
 	if err == nil {
 		panic("create index failed")
@@ -327,7 +328,7 @@ func CreateIndexByPts_TagArray_Error(iBuilder *IndexBuilder, idx Index, genKeys 
 
 func TestWriteTagArray_Success(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -335,7 +336,7 @@ func TestWriteTagArray_Success(t *testing.T) {
 
 func TestWriteTagArray_Fail1(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray_Error(idxBuilder, idx, generateKeyWithTagArray3)
@@ -343,7 +344,7 @@ func TestWriteTagArray_Fail1(t *testing.T) {
 
 func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -446,7 +447,7 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 
 func TestSearchSeriesWithOpts_NoTagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray2)
@@ -542,7 +543,7 @@ func TestUnmarshalCombineIndexKeysFail(t *testing.T) {
 
 func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	mergeIndex, _ := idx.(*MergeSetIndex)
@@ -565,7 +566,7 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 
 func TestSeriesByExprIterator_TagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -751,7 +752,7 @@ func TestSeriesByExprIterator_TagArray(t *testing.T) {
 
 func TestSearchSeries_With_TagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -847,7 +848,7 @@ func TestSearchSeries_With_TagArray(t *testing.T) {
 
 func TestSearchTagValues_With_TagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -930,7 +931,7 @@ func TestSearchTagValues_With_TagArray(t *testing.T) {
 
 func TestSeriesCardinality_With_TagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -954,7 +955,7 @@ func TestSeriesCardinality_With_TagArray(t *testing.T) {
 
 func TestSearchSeries_With_Multi_TagArray(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray4)
@@ -1052,7 +1053,7 @@ func TestSearchSeries_With_Multi_TagArray(t *testing.T) {
 
 func TestSearchSeriesWithOrOpts(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray5)
@@ -1147,7 +1148,7 @@ func TestSearchSeriesWithOrOpts(t *testing.T) {
 
 func BenchmarkWrite_With_TagArray(b *testing.B) {
 	path := b.TempDir()
-	_, idxBuilder := getTestIndexAndBuilder(path)
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 
@@ -1183,7 +1184,7 @@ func BenchmarkWrite_With_TagArray(b *testing.B) {
 	mmPoints.Set("mn-1", &pts)
 
 	for i := 0; i < b.N; i++ {
-		if err := idxBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+		if err := idxBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 			panic(err)
 		}
 	}
@@ -1191,7 +1192,7 @@ func BenchmarkWrite_With_TagArray(b *testing.B) {
 
 func BenchmarkWrite_With_NoTagArray(b *testing.B) {
 	path := b.TempDir()
-	_, idxBuilder := getTestIndexAndBuilder(path)
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer func() {
 		idxBuilder.Close()
 	}()
@@ -1234,7 +1235,7 @@ func BenchmarkWrite_With_NoTagArray(b *testing.B) {
 	mmPoints.Set("mn-1", &pts)
 
 	for i := 0; i < b.N; i++ {
-		if err := idxBuilder.CreateIndexIfNotExists(mmPoints); err != nil {
+		if err := idxBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
 			panic(err)
 		}
 	}
@@ -1242,7 +1243,7 @@ func BenchmarkWrite_With_NoTagArray(b *testing.B) {
 
 func BenchmarkQuery_With_TagArray(b *testing.B) {
 	path := b.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -1269,7 +1270,7 @@ func BenchmarkQuery_With_TagArray(b *testing.B) {
 
 func BenchmarkQuery_With_NoTagArray(b *testing.B) {
 	path := b.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer func() {
 		idxBuilder.Close()
 	}()
@@ -1337,7 +1338,7 @@ func searchSeriesWithTagArray1(idx *MergeSetIndex, series [][]byte, name []byte,
 
 func BenchmarkShowSeries_With_TagArray1(b *testing.B) {
 	path := b.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
@@ -1378,7 +1379,7 @@ func searchSeriesWithTagArray2(idx *MergeSetIndex, series [][]byte, name []byte,
 
 func BenchmarkShowSeries_With_TagArray2(b *testing.B) {
 	path := b.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	idxBuilder.EnableTagArray = true
 	defer idxBuilder.Close()
 	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)

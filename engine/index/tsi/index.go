@@ -28,6 +28,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -301,6 +302,7 @@ type Options struct {
 	path         string
 	lock         *string
 	indexType    IndexType
+	engineType   config.EngineType
 	endTime      time.Time
 	duration     time.Duration
 	logicalClock uint64
@@ -339,6 +341,11 @@ func (opts *Options) Lock(lock *string) *Options {
 
 func (opts *Options) IndexType(indexType IndexType) *Options {
 	opts.indexType = indexType
+	return opts
+}
+
+func (opts *Options) EngineType(engineType config.EngineType) *Options {
+	opts.engineType = engineType
 	return opts
 }
 
