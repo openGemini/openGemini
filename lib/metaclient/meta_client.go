@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net"
 	"net/http"
 	"path"
@@ -2008,6 +2009,48 @@ func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, 
 	}
 
 	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
+}
+
+func (c *Client) GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	rp, err := c.cacheData.RetentionPolicy(database, retentionPolicy)
+	if err != nil {
+		return nil, err
+	}
+	if rp.MarkDeleted {
+		return nil, errno.NewError(errno.RpNotFound)
+	}
+	shardGroup := rp.ShardGroupByTimestampAndEngineType(t, engineType)
+	if shardGroup == nil {
+		return nil, errno.NewError(errno.ShardNotFound)
+	}
+	if shardGroup.Deleted() {
+		return nil, errno.NewError(errno.ShardNotFound)
+	}
+
+	info := c.cacheData.PtView[database]
+	if info == nil {
+		return nil, fmt.Errorf("db %v in PtView not exist", database)
+	}
+	cnt, ptId := 0, uint32(math.MaxUint32)
+	for i := range info {
+		if info[i].Owner.NodeID == nodeId {
+			if ptIdx == cnt {
+				ptId = info[i].PtId
+				cnt++
+				break
+			} else {
+				cnt++
+			}
+		}
+	}
+	if cnt == 0 || ptId == math.MaxUint32 {
+		return nil, errors.New("nodeId cannot find pt")
+	}
+
+	shard := shardGroup.Shards[ptId]
+	return &shard, nil
 }
 
 func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {

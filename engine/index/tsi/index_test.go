@@ -27,6 +27,7 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -54,7 +55,7 @@ var (
 
 func TestSearchSeries(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -181,7 +182,7 @@ func TestSearchSeries(t *testing.T) {
 
 func TestSeriesByExprIterator(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -360,7 +361,7 @@ func TestSeriesByExprIterator(t *testing.T) {
 
 func TestSearchSeriesWithOpts(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx, []string{
 		"mn-1,tk1=value1",
@@ -459,7 +460,7 @@ func TestSearchSeriesWithOpts(t *testing.T) {
 
 func TestSearchSeriesWithLimit(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx, []string{
 		"mn-1,tk1=value1,tk2=k2",
@@ -506,7 +507,7 @@ func TestSearchSeriesWithLimit(t *testing.T) {
 
 func TestSearchSeriesWithoutLimit(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx, []string{
 		"mn-1,tk1=value1,tk2=k2",
@@ -543,7 +544,7 @@ func TestSearchSeriesWithoutLimit(t *testing.T) {
 
 func TestSearchSeriesKeys(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -574,7 +575,7 @@ func TestSearchSeriesKeys(t *testing.T) {
 
 func TestDropMeasurement(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -627,7 +628,7 @@ func TestDropMeasurement(t *testing.T) {
 
 func TestDeleteTSIDs(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -697,7 +698,7 @@ func TestDeleteTSIDs(t *testing.T) {
 
 func TestSearchTagValues(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -775,9 +776,143 @@ func TestSearchTagValues(t *testing.T) {
 	})
 }
 
+func TestSearchTagValuesForLabelStore(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.COLUMNSTORE)
+	defer idxBuilder.Close()
+	mergeSetIndex := idx.(*MergeSetIndex)
+	csIndexImpl := mergeSetIndex.StorageIndex.(*CsIndexImpl)
+	mergeSetIndex = generateIndexByPts(csIndexImpl, mergeSetIndex)
+
+	f := func(name []byte, tagKeys [][]byte, condition influxql.Expr, expectedTagValues [][]string) {
+		name = append(name, []byte("_0000")...)
+		tagValues, err := mergeSetIndex.SearchTagValues(name, tagKeys, condition)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		require.Equal(t, len(expectedTagValues), len(tagValues))
+
+		for i := 0; i < len(tagValues); i++ {
+			require.Equal(t, len(expectedTagValues[i]), len(tagValues[i]))
+			sort.Strings(tagValues[i])
+			sort.Strings(expectedTagValues[i])
+			for j := 0; j < len(tagValues[i]); j++ {
+				assert.Equal(t, tagValues[i][j], expectedTagValues[i][j])
+			}
+		}
+	}
+
+	t.Run("SingleKey", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, nil, [][]string{{
+			"value1",
+			"value11",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk2")}, nil, [][]string{{
+			"value2",
+			"value22",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3")}, nil, [][]string{{
+			"value3",
+			"value33",
+		}})
+	})
+
+	t.Run("MultiKeys", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1"), []byte("tk2")}, nil, [][]string{
+			{
+				"value1",
+				"value11",
+			},
+			{
+				"value2",
+				"value22",
+			},
+		})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3"), []byte("tk2")}, nil, [][]string{
+			{
+				"value3",
+				"value33",
+			},
+			{
+				"value2",
+				"value22",
+			},
+		})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3"), []byte("tk2"), []byte("tk1")}, nil, [][]string{
+			{
+				"value3",
+				"value33",
+			},
+			{
+				"value2",
+				"value22",
+			},
+			{
+				"value1",
+				"value11",
+			},
+		})
+	})
+}
+
+func generateIndexByPts(csIndexImpl *CsIndexImpl, idx *MergeSetIndex, keys ...string) *MergeSetIndex {
+	if keys == nil {
+		keys = []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+		}
+	}
+
+	pts := make([]influx.Row, 0, len(keys))
+	for _, key := range keys {
+		pt := influx.Row{}
+		strs := strings.Split(key, ",")
+		pt.Name = strs[0] + "_0000"
+		pt.Tags = make(influx.PointTags, len(strs)-1)
+		for i, str := range strs[1:] {
+			kv := strings.Split(str, "=")
+			pt.Tags[i].Key = kv[0]
+			pt.Tags[i].Value = kv[1]
+		}
+		sort.Sort(&pt.Tags)
+		pt.Timestamp = time.Now().UnixNano()
+		pt.UnmarshalIndexKeys(nil)
+		pt.ShardKey = pt.IndexKey
+		pts = append(pts, pt)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &pts)
+
+	for mmIndex := range mmPoints.D {
+		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
+		if !ok {
+			panic("create index failed due to map mmPoints")
+		}
+
+		for rowIdx := range *rows {
+			err := csIndexImpl.CreateIndexIfNotExistsByRow(idx, &(*rows)[rowIdx])
+			if err != nil {
+				panic("create label store index failed ")
+			}
+		}
+	}
+	idx.Close()
+	idx.Open()
+	return idx
+}
+
 func TestSeriesCardinality(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -801,7 +936,7 @@ func TestSeriesCardinality(t *testing.T) {
 
 func TestSearchTagValuesCardinality(t *testing.T) {
 	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -896,7 +1031,7 @@ func BenchmarkParallelGenerateUUID(b *testing.B) {
 
 func BenchmarkCreateIndexIfNotExists(b *testing.B) {
 	path := b.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path)
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
 	type IndexItem struct {
 		name      []byte

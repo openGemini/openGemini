@@ -345,6 +345,8 @@ func (*EndPrepareSnapshotStatement) node() {}
 func (*GetRuntimeInfoStatement) node()     {}
 func (*Hint) node()                        {}
 func (Hints) node()                        {}
+func (*MatchExpr) node()                   {}
+func (*InCondition) node()                 {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
@@ -463,6 +465,7 @@ type Expr interface {
 	RewriteNameSpace(alias, mst string)
 }
 
+func (*InCondition) expr()     {}
 func (*BinaryExpr) expr()      {}
 func (*BooleanLiteral) expr()  {}
 func (*BoundParameter) expr()  {}
@@ -692,6 +695,14 @@ func (a SortFields) String() string {
 	return strings.Join(fields, ", ")
 }
 
+type DatabasePolicy struct {
+	// Replicas indicates the replica num of the database
+	Replicas uint32
+
+	// EnableTagArray indicates whether to enable the tag array feature
+	EnableTagArray bool
+}
+
 // CreateDatabaseStatement represents a command for creating a new database.
 type CreateDatabaseStatement struct {
 	// Name of the database to be created.
@@ -722,7 +733,7 @@ type CreateDatabaseStatement struct {
 
 	ShardKey []string
 
-	EnableTagArray bool
+	DatabaseAttr DatabasePolicy
 }
 
 // String returns a string representation of the create database statement.
@@ -1602,6 +1613,16 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	if len(sources) == 0 {
 		return nil, ErrDeclareEmptyCollection
 	}
+
+	if in, ok := s.Condition.(*InCondition); ok {
+		stmt, err := in.Stmt.RewriteFields(m, batchEn, hasJoin)
+		if err != nil && err != ErrDeclareEmptyCollection {
+			return nil, err
+		}
+		in.Stmt = stmt
+		other.Condition = in
+	}
+
 	other.Sources = sources
 
 	allVarRef := make(map[string]Expr, len(other.Fields))
@@ -3060,7 +3081,10 @@ func (s *ShowGrantsForUserStatement) RequiredPrivileges() (ExecutionPrivileges, 
 }
 
 // ShowDatabasesStatement represents a command for listing all databases in the cluster.
-type ShowDatabasesStatement struct{}
+type ShowDatabasesStatement struct {
+	// ShowDetail indicates the detail attribute of the database, e.g., TAG ATTRIBUTE, REPLICAS
+	ShowDetail bool
+}
 
 // String returns a string representation of the show databases command.
 func (s *ShowDatabasesStatement) String() string { return "SHOW DATABASES" }
@@ -4170,6 +4194,21 @@ func (j *Join) GetName() string {
 	return ""
 }
 
+type InCondition struct {
+	Stmt   *SelectStatement
+	Column Expr
+}
+
+func (j *InCondition) String() string {
+	return fmt.Sprintf("in condition,select statement: %s, column name: %s", j.Stmt.String(), j.Column.String())
+}
+
+func (j *InCondition) GetName() string {
+	return ""
+}
+
+func (j *InCondition) RewriteNameSpace(alias, mst string) {}
+
 // VarRef represents a reference to a variable.
 type VarRef struct {
 	Val   string
@@ -4278,6 +4317,26 @@ func (c *Call) String() string {
 
 	// Write function name and args.
 	return fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
+}
+
+func (c *Call) WriteString(b *bytes.Buffer) {
+	// format fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
+	b.WriteString(c.Name)
+	b.WriteString("(")
+
+	firstCall := true
+	for _, arg := range c.Args {
+		if firstCall {
+			b.WriteString(arg.String())
+			firstCall = false
+			continue
+		}
+		b.WriteString(",")
+		b.WriteString(arg.String())
+	}
+	b.WriteString(")")
+	// Write function name and args.
+	return
 }
 
 // Distinct represents a DISTINCT expression.
@@ -4512,6 +4571,25 @@ func (v *binaryExprNameVisitor) Visit(n Node) Visitor {
 	return v
 }
 
+type MatchExpr struct {
+	Field Expr
+	Value Expr
+	Op    int
+}
+
+func (m *MatchExpr) String() string {
+	switch m.Op {
+	case MATCH:
+		return m.Field.String() + "match" + m.Value.String()
+	case MATCHPHRASE:
+		return m.Field.String() + "match_phrase" + m.Value.String()
+	}
+	return ""
+}
+
+func (m *MatchExpr) RewriteNameSpace(alias, mst string) {
+}
+
 // ParenExpr represents a parenthesized expression.
 type ParenExpr struct {
 	Expr Expr
@@ -4610,6 +4688,8 @@ func CloneExpr(expr Expr) Expr {
 		return &VarRef{Val: expr.Val, Type: expr.Type}
 	case *Wildcard:
 		return &Wildcard{Type: expr.Type}
+	case *InCondition:
+		return &InCondition{Stmt: expr.Stmt.Clone(), Column: CloneExpr(expr.Column)}
 	}
 	panic("unreachable")
 }
@@ -6736,6 +6816,8 @@ func conditionExpr(cond Expr, valuer Valuer) (Expr, TimeRange, error) {
 		return reduce(&ParenExpr{Expr: expr}, nil), timeRange, nil
 	case *BooleanLiteral:
 		return cond, TimeRange{}, nil
+	case *InCondition:
+		return reduce(cond, nil), TimeRange{}, nil
 	default:
 		return nil, TimeRange{}, fmt.Errorf("invalid condition expression: %s", cond)
 	}

@@ -782,7 +782,24 @@ func CompareBreakPoint(name string, time int64, tag ChunkTags, b *BreakPoint, op
 	return time >= b.TimeStart
 }
 
+type BaseMergeIterator struct {
+	init  bool
+	index int
+}
+
+func (f *BaseMergeIterator) getInputIndex(endpoint *IteratorEndpoint) int {
+	if !f.init {
+		name := endpoint.OutputPoint.Chunk.RowDataType().Field(endpoint.OutputPoint.Ordinal).Name()
+		f.index = endpoint.InputPoint.Chunk.RowDataType().FieldIndex(name)
+		f.init = true
+	}
+
+	return f.index
+}
+
 type Int64MergeIterator struct {
+	BaseMergeIterator
+
 	input  Column
 	output Column
 }
@@ -793,8 +810,7 @@ func NewInt64MergeIterator() *Int64MergeIterator {
 
 func (f *Int64MergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	index := endpoint.InputPoint.Chunk.RowDataType().FieldIndex(endpoint.OutputPoint.Chunk.RowDataType().Field(endpoint.OutputPoint.Ordinal).Name())
-	f.input = endpoint.InputPoint.Chunk.Column(index)
+	f.input = endpoint.InputPoint.Chunk.Column(f.getInputIndex(endpoint))
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	f.output.AppendIntegerValues(f.input.IntegerValues()[startValue:endValue]...)
 	if endValue-startValue != params.end-params.start {
@@ -847,6 +863,8 @@ func (f *Float64MergeIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 }
 
 type FloatTupleMergeIterator struct {
+	BaseMergeIterator
+
 	input  Column
 	output Column
 }
@@ -857,8 +875,7 @@ func NewFloatTupleMergeIterator() *FloatTupleMergeIterator {
 
 func (f *FloatTupleMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	index := endpoint.InputPoint.Chunk.RowDataType().FieldIndex(endpoint.OutputPoint.Chunk.RowDataType().Field(endpoint.OutputPoint.Ordinal).Name())
-	f.input = endpoint.InputPoint.Chunk.Column(index)
+	f.input = endpoint.InputPoint.Chunk.Column(f.getInputIndex(endpoint))
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	f.output.AppendFloatTuples(f.input.FloatTuples()[startValue:endValue]...)
 	if endValue-startValue != params.end-params.start {
@@ -879,6 +896,8 @@ func (f *FloatTupleMergeIterator) Next(endpoint *IteratorEndpoint, params *Itera
 }
 
 type StringMergeIterator struct {
+	BaseMergeIterator
+
 	input         Column
 	output        Column
 	stringOffsets []uint32
@@ -890,8 +909,7 @@ func NewStringMergeIterator() *StringMergeIterator {
 
 func (f *StringMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	index := endpoint.InputPoint.Chunk.RowDataType().FieldIndex(endpoint.OutputPoint.Chunk.RowDataType().Field(endpoint.OutputPoint.Ordinal).Name())
-	f.input = endpoint.InputPoint.Chunk.Column(index)
+	f.input = endpoint.InputPoint.Chunk.Column(f.getInputIndex(endpoint))
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	if startValue == endValue {
 		f.output.AppendManyNil(params.end - params.start)
@@ -919,6 +937,7 @@ func (f *StringMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 }
 
 type BooleanMergeIterator struct {
+	BaseMergeIterator
 	input  Column
 	output Column
 }
@@ -929,8 +948,7 @@ func NewBooleanMergeIterator() *BooleanMergeIterator {
 
 func (f *BooleanMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorParams) {
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	index := endpoint.InputPoint.Chunk.RowDataType().FieldIndex(endpoint.OutputPoint.Chunk.RowDataType().Field(endpoint.OutputPoint.Ordinal).Name())
-	f.input = endpoint.InputPoint.Chunk.Column(index)
+	f.input = endpoint.InputPoint.Chunk.Column(f.getInputIndex(endpoint))
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	f.output.AppendBooleanValues(f.input.BooleanValues()[startValue:endValue]...)
 	if endValue-startValue != params.end-params.start {

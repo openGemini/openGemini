@@ -47,6 +47,17 @@ func TestTaskManager_AssignQueryID(t1 *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "AssignUpperLimit2",
+			fields: fields{
+				QueryIDOffset:     100,
+				QueryIDUpperLimit: 200,
+				queries:           map[uint64]*Task{198: {}, 199: {}},
+				nextID:            199,
+			},
+			want:    200,
+			wantErr: false,
+		},
+		{
 			name: "ReuseFromBeginning_Success",
 			fields: fields{
 				QueryIDOffset:     0,

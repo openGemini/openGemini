@@ -242,21 +242,27 @@ func (m *IntegerPreAgg) sum() interface{} {
 func (m *IntegerPreAgg) addValues(col *record.ColVal, times []int64) {
 	values := col.IntegerValues()
 	valLen := len(values)
-	for i := 0; i < valLen; i++ {
-		v := values[i]
-		if m.values[minIndex] > v {
-			m.values[minIndex] = v
-			m.values[minTIndex] = times[i]
-		}
-		if m.values[maxIndex] < v {
-			m.values[maxIndex] = v
-			m.values[maxTIndex] = times[i]
+	agg := m.values
+	for i, j := 0, 0; i < col.Len; i++ {
+		if col.NilCount > 0 && col.IsNil(i) {
+			continue
 		}
 
-		m.values[sumIndex] += v
+		v := values[j]
+		j++
+		if agg[minIndex] > v {
+			agg[minIndex] = v
+			agg[minTIndex] = times[i]
+		}
+		if agg[maxIndex] < v {
+			agg[maxIndex] = v
+			agg[maxTIndex] = times[i]
+		}
+
+		agg[sumIndex] += v
 	}
 
-	m.values[countIndex] += int64(valLen)
+	agg[countIndex] += int64(valLen)
 }
 
 func (m *IntegerPreAgg) release() {
@@ -363,8 +369,13 @@ func (m *FloatPreAgg) sum() interface{} {
 func (m *FloatPreAgg) addValues(col *record.ColVal, times []int64) {
 	values := col.FloatValues()
 	valLen := len(values)
-	for i := 0; i < valLen; i++ {
-		v := values[i]
+	for i, j := 0, 0; i < col.Len; i++ {
+		if col.NilCount > 0 && col.IsNil(i) {
+			continue
+		}
+
+		v := values[j]
+		j++
 		if m.minV > v {
 			m.minV = v
 			m.minTime = times[i]

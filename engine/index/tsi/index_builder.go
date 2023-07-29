@@ -18,6 +18,7 @@ package tsi
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
@@ -201,7 +203,7 @@ func (iBuilder *IndexBuilder) GetEndTime() time.Time {
 	return iBuilder.endTime
 }
 
-func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) error {
+func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, needSecondaryIndex bool) error {
 	primaryIndex := iBuilder.GetPrimaryIndex()
 	var wg sync.WaitGroup
 	// 1st, create primary index.
@@ -245,6 +247,10 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 	putIndexRows(iRows)
 
 	// 2nd, create secondary index.
+	if !needSecondaryIndex {
+		return nil
+	}
+
 	for mmIdx := range mmRows.D {
 		rows, _ := mmRows.D[mmIdx].Value.(*[]influx.Row)
 		for rowIdx := range *rows {
@@ -255,6 +261,40 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict) erro
 		}
 	}
 
+	return nil
+}
+
+func (iBuilder *IndexBuilder) CreateIndexIfNotExistsForColumnStore(rec *record.Record, tagIndex []int, mst string) error {
+	primaryIndex := iBuilder.GetPrimaryIndex()
+	idx, ok := primaryIndex.(*MergeSetIndex)
+	if !ok {
+		return errors.New("get mergeSetIndex failed")
+	}
+
+	iRec := GetIndexRecord()
+	defer PutIndexRecord(iRec)
+	iRec.TagCol.Mst = []byte(mst)
+	tagsByteSlice := make([][]byte, len(tagIndex))
+	for i := range tagsByteSlice {
+		tagsByteSlice[i] = []byte(rec.Schema[tagIndex[i]].Name)
+	}
+
+	var wg sync.WaitGroup
+	for index := 0; index < rec.RowNums(); index++ {
+		for i := range tagIndex {
+			// hash by single mst,tag key,tag value
+			iRec.TagCol.Key = tagsByteSlice[i]
+			iRec.TagCol.Val, _ = rec.ColVals[tagIndex[i]].StringValue(index)
+			iRec.TagCol.Wg = &wg
+			wg.Add(1)
+			idx.WriteTagCols(iRec)
+		}
+	}
+	wg.Wait()
+
+	if iRec.Err != nil {
+		return iRec.Err
+	}
 	return nil
 }
 

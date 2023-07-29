@@ -80,18 +80,12 @@ func (ic *IndexCache) PutTSIDToTSIDCache(id *uint64, key []byte) {
 	ic.SeriesKeyToTSIDCache.Set(key, buf)
 }
 
-func (ic *IndexCache) GetTagValuesFromTagKeysCache(key []byte) ([]byte, bool) {
+func (ic *IndexCache) isTagKeyExist(key []byte) bool {
 	if ic.TagKeyValueCache == nil {
-		return nil, false
+		return false
 	}
 
-	var buf []byte
-	buf = ic.TagKeyValueCache.Get(buf[:0], key)
-
-	if len(buf) == 1 && buf[0] == 1 {
-		return buf, true
-	}
-	return nil, false
+	return ic.TagKeyValueCache.Has(key)
 }
 
 func (ic *IndexCache) PutTagValuesToTagKeysCache(value []byte, key []byte) {

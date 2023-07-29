@@ -174,9 +174,11 @@ type Chunk interface {
 	ResetIntervalIndex(...int)
 	Columns() []Column
 	Column(int) Column
+	Dims() []Column
+	AddDims([]string)
+	NewDims(size int)
 	SetColumn(Column, int)
 	AddColumn(...Column)
-	Dims() []Column
 	Dim(int) Column
 	SetDim(Column, int)
 	AddDim(...Column)
@@ -204,6 +206,8 @@ type Chunk interface {
 	Size() int
 
 	CreatePointRowIterator(string, *FieldsValuer) PointRowIterator
+
+	CopyByRowDataType(c Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error
 }
 
 type ChunkWriter interface {
@@ -233,6 +237,36 @@ func NewChunkImpl(rowDataType hybridqp.RowDataType, name string) *ChunkImpl {
 	return cb
 }
 
+func (c *ChunkImpl) NewDims(size int) {
+	c.dims = make([]Column, 0, size)
+	for i := 0; i < size; i++ {
+		c.dims = append(c.dims, NewColumnImpl(influxql.String))
+	}
+}
+
+func (c *ChunkImpl) AddDims(dimsVals []string) {
+	for i, dimCol := range c.dims {
+		dimCol.AppendStringValues(dimsVals[i])
+		dimCol.AppendManyNotNil(1)
+	}
+}
+
+func (c *ChunkImpl) Dims() []Column {
+	return c.dims
+}
+
+func (c *ChunkImpl) Dim(i int) Column {
+	return c.dims[i]
+}
+
+func (c *ChunkImpl) SetDim(col Column, i int) {
+	c.dims[i] = col
+}
+
+func (c *ChunkImpl) AddDim(cols ...Column) {
+	c.dims = append(c.dims, cols...)
+}
+
 func (c *ChunkImpl) RowDataType() hybridqp.RowDataType {
 	return c.rowDataType
 }
@@ -259,10 +293,6 @@ func (c *ChunkImpl) TagIndex() []int {
 
 func (c *ChunkImpl) TagLen() int {
 	return len(c.tags)
-}
-
-func (c *ChunkImpl) SetColumn(column Column, i int) {
-	c.columns[i] = column
 }
 
 func (c *ChunkImpl) AppendTagsAndIndex(tag ChunkTags, tagIndex int) {
@@ -326,6 +356,10 @@ func (c *ChunkImpl) Column(i int) Column {
 	return c.columns[i]
 }
 
+func (c *ChunkImpl) SetColumn(col Column, i int) {
+	c.columns[i] = col
+}
+
 func (c *ChunkImpl) AddColumn(cols ...Column) {
 	c.columns = append(c.columns, cols...)
 }
@@ -370,7 +404,7 @@ func (c *ChunkImpl) Reset() {
 		c.Column(i).Reset()
 	}
 	for i := range c.dims {
-		c.Column(i).Reset()
+		c.Dim(i).Reset()
 	}
 }
 
@@ -428,12 +462,19 @@ func (c *ChunkImpl) copy(dst Chunk) Chunk {
 		}
 		c.Column(i).NilsV2().CopyTo(dst.Column(i).NilsV2())
 	}
-	if len(c.dims) == 0 {
-		return dst
-	}
-	for i := range c.dims {
-		dst.AddDim(NewColumnImpl(influxql.String))
-		dst.Dim(i).CloneStringValues(c.Dim(i).GetStringBytes())
+	for i := range dst.Dims() {
+		switch dst.Dim(i).DataType() {
+		case influxql.Integer:
+			dst.Dim(i).AppendIntegerValues(c.Dim(i).IntegerValues()...)
+		case influxql.FloatTuple:
+			dst.Dim(i).AppendFloatTuples(c.Dim(i).FloatTuples()...)
+		case influxql.Float:
+			dst.Dim(i).AppendFloatValues(c.Dim(i).FloatValues()...)
+		case influxql.Boolean:
+			dst.Dim(i).AppendBooleanValues(c.Dim(i).BooleanValues()...)
+		case influxql.String, influxql.Tag:
+			dst.Dim(i).CloneStringValues(c.Dim(i).GetStringBytes())
+		}
 		c.Dim(i).NilsV2().CopyTo(dst.Dim(i).NilsV2())
 	}
 	return dst
@@ -447,6 +488,37 @@ func (c *ChunkImpl) Clone() Chunk {
 func (c *ChunkImpl) CopyTo(dstChunk Chunk) {
 	dstChunk.SetName(c.Name())
 	c.copy(dstChunk)
+}
+
+func (c *ChunkImpl) CopyByRowDataType(dst Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error {
+	dst.SetName(c.Name())
+	dst.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
+	dst.AppendIntervalIndex(c.IntervalIndex()...)
+	dst.AppendTime(c.Time()...)
+	for k1, v1 := range fromRt.IndexByName() {
+		if v2, ok := dstRt.IndexByName()[k1]; !ok {
+			return fmt.Errorf("CopyByRowDataType fromRt and dstRt not match")
+		} else {
+			dataType := dst.Column(v2).DataType()
+			switch dataType {
+			case influxql.Integer:
+				dst.Column(v2).AppendIntegerValues(c.Column(v1).IntegerValues()...)
+			case influxql.FloatTuple:
+				dst.Column(v2).AppendFloatTuples(c.Column(v1).FloatTuples()...)
+			case influxql.Float:
+				dst.Column(v2).AppendFloatValues(c.Column(v1).FloatValues()...)
+			case influxql.Boolean:
+				dst.Column(v2).AppendBooleanValues(c.Column(v1).BooleanValues()...)
+			case influxql.String, influxql.Tag:
+				dst.Column(v2).CloneStringValues(c.Column(v1).GetStringBytes())
+			}
+			if len(c.Column(v1).ColumnTimes()) != 0 {
+				dst.Column(v2).AppendColumnTimes(c.Column(v1).ColumnTimes()...)
+			}
+			c.Column(v1).NilsV2().CopyTo(dst.Column(v2).NilsV2())
+		}
+	}
+	return nil
 }
 
 func (c *ChunkImpl) CheckChunk() {
@@ -484,6 +556,10 @@ func (c *ChunkImpl) CheckChunk() {
 		}
 	}
 	for _, col := range c.columns {
+		col.CheckColumn(c.Len())
+	}
+
+	for _, col := range c.dims {
 		col.CheckColumn(c.Len())
 	}
 }
@@ -538,22 +614,6 @@ func (c *ChunkImpl) String() string {
 
 func (c *ChunkImpl) CreatePointRowIterator(name string, valuer *FieldsValuer) PointRowIterator {
 	return NewChunkIteratorFromValuer(c, name, valuer)
-}
-
-func (c *ChunkImpl) Dims() []Column {
-	return c.dims
-}
-
-func (c *ChunkImpl) Dim(i int) Column {
-	return c.dims[i]
-}
-
-func (c *ChunkImpl) SetDim(col Column, i int) {
-	c.dims[i] = col
-}
-
-func (c *ChunkImpl) AddDim(cols ...Column) {
-	c.dims = append(c.dims, cols...)
 }
 
 type IntegerFieldValuer struct {

@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -243,17 +244,29 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 }
 
 func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+	db = stringinterner.InternSafe(db)
+	rp = stringinterner.InternSafe(rp)
+	return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
+		return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+	})
+}
+
+func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
+	db = stringinterner.InternSafe(db)
+	rp = stringinterner.InternSafe(rp)
+	return s.Write(db, rp, mst, ptId, shardID, func() error {
+		return s.engine.WriteRec(db, rp, ptId, shardID, rec, binaryRec)
+	})
+}
+
+func (s *Storage) Write(db, rp, mst string, ptId uint32, shardID uint64, writeData func() error) error {
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
 		atomic.AddInt64(&statistics.PerfStat.WriteStorageDurationNs, d)
 	}(time.Now())
 
-	var err error
 	var timeRangeInfo *meta.ShardTimeRangeInfo
-
-	db = stringinterner.InternSafe(db)
-	rp = stringinterner.InternSafe(rp)
-	err = s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+	err := writeData()
 	err2, ok := err.(*errno.Error)
 	if !ok {
 		return err
@@ -278,7 +291,7 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 			return err
 		}
 		// all rows belongs to the same shard/engine type, we can get engine type from the first one.
-		mstInfo, err := s.metaClient.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(rows[0].Name))
+		mstInfo, err := s.metaClient.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
 		if err != nil {
 			return err
 		}
@@ -287,7 +300,7 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 			return err
 		}
 		atomic.AddInt64(&statistics.PerfStat.WriteCreateShardNs, time.Since(startT).Nanoseconds())
-		err = s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+		err = writeData()
 		return err
 	default:
 	}

@@ -67,6 +67,11 @@ func init() {
 		"select a,b,c from (select f1 as a from table1), (select sum(f2) as b from table2), table3",      // add multiple subqueries.
 		"select a from table1 where a IN (SELECT * FROM TABLE1) AND B NOT IN (C)",                        // IN AND NOT
 		"select a from table1 where EXISTS (SELECT * FROM TABLE1) AND NOT EXISTS (SELECT * FROM TABLE1)", // exists.
+		"select f1 from mst where f1 in (1)",                                                             // add in for a single int constant
+		"select f1 from mst where f1 in (1, 2)",                                                          // add in for multi int constants
+		"select f1 from mst where f1 in (a)",                                                             // add in for single string constant
+		"select f1 from mst where f1 in (a, b)",                                                          // add in for multi string constant
+		"select f1 from mst where f1 in (select f2 from mst2)",                                           // add in for sub-query
 		//"select a, b+c, sum(c/d), sum(case when F1 > F2 then A when f1 > f3 then C else B end) from table1 full outer join table2 on table1.f1 = table2.f2 full outer join table3 on table1.t1 != table3.t3,(select * from table4)  where a != 1 and b != 2 and a IN (SELECT * FROM TABLE1) AND B NOT IN (C) and EXISTS (SELECT * FROM TABLE1) AND NOT EXISTS (SELECT * FROM TABLE1) group by f1, time(1s) fill(linear) ORDER BY c ASC limit 1 offset 1 slimit 2 soffset 2",
 		"CREATE RETENTION POLICY rp3 ON db0 DURATION 1h REPLICATION 1",                                                             //add create retention policy.
 		"show series from table where a>b limit 1 offset 1",                                                                        //add show series statement.
@@ -216,19 +221,6 @@ func TestYyParser(t *testing.T) {
 		q, err := YyParser.GetQuery()
 		if err != nil {
 			t.Errorf(err.Error(), "with sql: %s", q.Statements[i].String())
-		}
-	}
-}
-
-func TestPreviousParser(t *testing.T) {
-	for _, c := range []string{
-		"select * from (select * from t1)",
-	} {
-		reader := strings.NewReader(c)
-		p := influxql.NewParser(reader)
-		q, err := p.ParseQuery()
-		if err != nil {
-			t.Errorf(err.Error(), "with sql: %s", q.String())
 		}
 	}
 }

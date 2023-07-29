@@ -109,6 +109,7 @@ func (idx *fieldIndex) putIndexSearch(is *indexSearch) {
 	is.kb.Reset()
 	is.ts.MustClose()
 	is.mp.Reset()
+	is.vrp.Reset()
 	is.idx = nil
 	indexSearchPool.Put(is)
 }

@@ -640,7 +640,7 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 	}
 
 	if !stmt.RetentionPolicyCreate {
-		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.EnableTagArray)
+		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.DatabaseAttr.EnableTagArray)
 		e.StmtExecLogger.Info("create database finish", zap.String("db", stmt.Name), zap.Error(err))
 		return err
 	}
@@ -668,7 +668,7 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 		IndexGroupDuration: stmt.RetentionPolicyIndexGroupDuration,
 	}
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey}
-	_, err := e.MetaClient.CreateDatabaseWithRetentionPolicy(stmt.Name, &spec, ski, stmt.EnableTagArray)
+	_, err := e.MetaClient.CreateDatabaseWithRetentionPolicy(stmt.Name, &spec, ski, stmt.DatabaseAttr.EnableTagArray)
 	e.StmtExecLogger.Info("create database finish with RP", zap.String("db", stmt.Name), zap.Error(err))
 	return err
 }

@@ -166,6 +166,45 @@ func buildDstChunk() []executor.Chunk {
 	return dstChunks
 }
 
+func buildAggReaderOps() []hybridqp.ExprOptions {
+	return []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "sum", Args: []influxql.Expr{hybridqp.MustParseExpr("field2_int")}},
+			Ref:  influxql.VarRef{Val: `field2_int`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "sum", Args: []influxql.Expr{hybridqp.MustParseExpr("field4_float")}},
+			Ref:  influxql.VarRef{Val: `field4_float`, Type: influxql.Float},
+		},
+	}
+}
+
+func buildAggRowDataType() hybridqp.RowDataType {
+	return hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "field2_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "field4_float", Type: influxql.Float})
+}
+
+func buildAggChunk() []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 1)
+	rowDataType := buildAggRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("cpu")
+	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
+	inCk1.AppendTime([]int64{1609459200000000000}...)
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1}...)
+	inCk1.Column(0).AppendNilsV2(true)
+
+	inCk1.Column(1).AppendFloatValues([]float64{1.1}...)
+	inCk1.Column(1).AppendNilsV2(true)
+
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
 func buildDimRowDataType() hybridqp.RowDataType {
 	return hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "field1_string", Type: influxql.String})
@@ -250,15 +289,6 @@ func TestColStoreReaderTransform(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-
-	defer func() {
-		if err := sh.Close(); err != nil {
-			t.Fatal(err)
-		}
-		if err := sh.indexBuilder.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}()
 
 	sh.SetMstInfo(mst, NewMockColumnStoreMstInfo())
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -394,6 +424,10 @@ time = 1609459200000000000 and field2_int = 1`,
 			}
 		})
 	}
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func createMeasurement() *influxql.Measurement {
@@ -521,16 +555,16 @@ func TestColumnStoreReader(t *testing.T) {
 	}
 
 	defer func() {
-		if err := sh.Close(); err != nil {
+		if err = sh.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if err := sh.indexBuilder.Close(); err != nil {
+		if err = sh.indexBuilder.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}()
 
 	sh.SetMstInfo(mst, NewMockColumnStoreMstInfo())
-	if err := sh.WriteRows(pts, nil); err != nil {
+	if err = sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second * 1)
@@ -594,6 +628,17 @@ func TestColumnStoreReader(t *testing.T) {
 			expected:  buildDstChunk(),
 			expect:    testEqualChunks,
 		},
+		{
+			name: "select sum(field2_int),sum(field4_float) from cpu where timeFilter and fieldFilter",
+			q: `select sum(field2_int),sum(field4_float) from cpu where
+		time >= 1609459200000000000`,
+			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  buildAggChunk(),
+			expect:    testEqualChunks,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.skip {
@@ -618,8 +663,15 @@ func TestColumnStoreReader(t *testing.T) {
 			// step2: build the store executor
 			info := buildIndexScanExtraInfo(storeEngine, db, ptId, []uint64{sh.GetID()})
 			reader := executor.NewLogicalColumnStoreReader(nil, querySchema)
-			merge := executor.NewLogicalHashMerge(reader, querySchema, executor.READER_EXCHANGE, nil)
-			indexScan := executor.NewLogicalSparseIndexScan(merge, querySchema)
+			var input hybridqp.QueryNode
+			if querySchema.HasCall() {
+				agg := executor.NewLogicalHashAgg(reader, querySchema, executor.READER_EXCHANGE, nil)
+				input = executor.NewLogicalHashAgg(agg, querySchema, executor.SHARD_EXCHANGE, nil)
+			} else {
+				input = executor.NewLogicalHashMerge(reader, querySchema, executor.READER_EXCHANGE, nil)
+			}
+			indexScan := executor.NewLogicalSparseIndexScan(input, querySchema)
+			executor.ReWriteArgs(indexScan)
 			scan := executor.NewSparseIndexScanTransform(tt.out, indexScan.Children()[0], indexScan.RowExprOptions(), info, querySchema)
 			sink := NewNilSink(tt.out)
 			err = executor.Connect(scan.GetOutputs()[0], sink.Input)

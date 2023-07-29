@@ -228,6 +228,10 @@ func (p *LogicalSortAppend) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalSortAppend
 }
 
+func (p *LogicalJoin) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalJoin
+}
+
 func (p *LogicalSubQuery) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalSubQuery
 }
@@ -270,6 +274,14 @@ func (p *LogicalSparseIndexScan) LogicPlanType() internal.LogicPlanType {
 
 func (p *LogicalColumnStoreReader) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalColumnStoreReader
+}
+
+func (p *LogicalHashAgg) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalHashAgg
+}
+
+func (p *LogicalHashAgg) String() string {
+	return "LogicalHashAgg"
 }
 
 func (p *LogicalLimit) String() string {
@@ -370,6 +382,10 @@ func (p *LogicalHoltWinters) String() string {
 
 func (p *LogicalSortAppend) String() string {
 	return "LogicalSortAppend"
+}
+
+func (p *LogicalJoin) String() string {
+	return "LogicalJoin"
 }
 
 func (p *LogicalSubQuery) String() string {
@@ -475,6 +491,10 @@ func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 		return Marshal(p, nil, p.inputs...)
 	case *LogicalColumnStoreReader:
 		return Marshal(p, nil, p.inputs...)
+	case *LogicalHashAgg:
+		return Marshal(p, func(pb *internal.QueryNode) {
+			pb.Exchange = uint32(p.eType) << 8
+		}, p.inputs...)
 	default:
 		panic(fmt.Sprintf("unsupoorted type %t", p))
 	}
@@ -588,6 +608,12 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 		} else if len(nodes) == 0 {
 			return NewLogicalColumnStoreReader(nil, schema), nil
 		}
+	case internal.LogicPlanType_LogicalHashAgg:
+		if len(nodes) == 1 {
+			eType := ExchangeType(pb.Exchange >> 8 & 0xff)
+			node := NewLogicalHashAgg(nodes[0], schema, eType, []hybridqp.Trait{})
+			return node, nil
+		}
 	default:
 		panic(fmt.Sprintf("unsupoorted type %v", pb.Name))
 	}
@@ -636,7 +662,25 @@ func UnmarshalQueryNode(buf []byte) (hybridqp.QueryNode, error) {
 	planner := BuildHeuristicPlannerForStore()
 	planner.SetRoot(node)
 	best := planner.FindBestExp()
+	if schema.Options().HaveOnlyCSStore() {
+		ReWriteArgs(best)
+	}
 	return best, nil
+}
+
+func ReWriteArgs(best hybridqp.QueryNode) {
+	if best == nil || best.Children() == nil {
+		return
+	}
+	ReWriteArgs(best.Children()[0])
+	node, ok := best.(*LogicalHashAgg)
+	if ok {
+		if node.eType != READER_EXCHANGE {
+			node.ForwardCallArgs()
+			node.CountToSum()
+			node.init()
+		}
+	}
 }
 
 type SetSchemaVisitor struct {

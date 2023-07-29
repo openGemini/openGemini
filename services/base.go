@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/record"
 	"go.uber.org/zap"
 )
 
@@ -89,4 +90,18 @@ func (s *Base) run() {
 			}
 		}
 	}
+}
+
+var globalStorageEngine StorageEngine
+
+type StorageEngine interface {
+	WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
+}
+
+func SetStorageEngine(engine StorageEngine) {
+	globalStorageEngine = engine
+}
+
+func GetStorageEngine() StorageEngine {
+	return globalStorageEngine
 }

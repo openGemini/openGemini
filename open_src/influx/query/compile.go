@@ -147,6 +147,14 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 
 	// Convert PERCENTILE_OGSKETCH into the PERCENTILE_APPROX
 	c.stmt.RewritePercentileOGSketch()
+
+	if inCond, ok := c.stmt.Condition.(*influxql.InCondition); ok {
+		st, err := Compile(inCond.Stmt, CompileOptions{})
+		if err != nil {
+			return nil, err
+		}
+		inCond.Stmt = st.(*compiledStatement).stmt
+	}
 	return c, nil
 }
 
