@@ -104,7 +104,7 @@ git clone https://github.com/openGemini/openGemini.git
 ```bash
 > export CGO_LDFLAGS="-Wl,-z,now -Wl,-z,relro -Wl,-z,noexecstack -fPIE -ftrapv"
 > export CGO_CFLAGS="-fstack-protector-strong -D_FORTIFY_SOURCE=2 -O2"
-> python build.py -clean
+> python build.py --clean
 ```
 
 编译好的二进制在build目录中
