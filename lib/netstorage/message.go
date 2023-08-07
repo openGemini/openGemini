@@ -70,7 +70,7 @@ func (m *DDLMessage) Unmarshal(buf []byte) error {
 	m.Typ = buf[0]
 
 	msgFn, ok := MessageBinaryCodec[m.Typ]
-	if !ok {
+	if msgFn == nil || !ok {
 		return fmt.Errorf("unknown message type: %d", m.Typ)
 	}
 
