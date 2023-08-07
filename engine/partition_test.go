@@ -70,16 +70,16 @@ func TestOpenShard(t *testing.T) {
 	durationInfos := make(map[uint64]*meta.ShardDurationInfo)
 	resC := make(chan *res, 1)
 	openShardsLimit <- struct{}{}
-	dbPTInfo.openShard(0, "xxx", "0", durationInfos, resC, 0, nil)
+	dbPTInfo.openShard(0, nil, "xxx", "0", durationInfos, resC, 0, nil)
 	r := <-resC
 	require.NoError(t, r.err)
 	openShardsLimit <- struct{}{}
-	dbPTInfo.openShard(0, "1_1635724800000000000_1636329600000000000_1", "1", durationInfos, resC, 0, nil)
+	dbPTInfo.openShard(0, nil, "1_1635724800000000000_1636329600000000000_1", "1", durationInfos, resC, 0, nil)
 	r = <-resC
 	require.NoError(t, r.err)
 
 	durationInfos[10] = &meta.ShardDurationInfo{DurationInfo: meta.DurationDescriptor{Duration: time.Second}}
-	sh, err := dbPTInfo.loadProcess(0, "10_1635724800000000000_1636329600000000000_100", "1", 100, 10, durationInfos, nil, nil)
+	sh, err := dbPTInfo.loadProcess(0, nil, "10_1635724800000000000_1636329600000000000_100", "1", 100, 10, durationInfos, nil, nil)
 	require.Empty(t, sh)
 	require.NoError(t, err)
 }

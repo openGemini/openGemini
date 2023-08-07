@@ -176,6 +176,9 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.WalReplayAsync = conf.Data.WalReplayAsync
 	opt.CompactionMethod = conf.Data.CompactionMethod
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
+	opt.LazyLoadShardEnable = conf.Data.LazyLoadShardEnable
+	opt.ThermalShardStartDuration = time.Duration(conf.Data.ThermalShardStartDuration)
+	opt.ThermalShardEndDuration = time.Duration(conf.Data.ThermalShardEndDuration)
 	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
 	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
 	opt.MaxSeriesPerDatabase = conf.Data.MaxSeriesPerDatabase
