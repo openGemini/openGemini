@@ -1,8 +1,6 @@
 name: Feature request（特性、功能需求提交）
 description: Suggest an idea for this project
 labels: ["enhancement"]
-assignees:
- - xiangyu5632
 body:
  - type: markdown
    attributes:
