@@ -28,9 +28,6 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
 
-//go:generate protoc --gogo_out=. data/data.proto
-//go:generate protoc --gofast_out=. data/data.proto
-
 type DeleteType int
 
 const (

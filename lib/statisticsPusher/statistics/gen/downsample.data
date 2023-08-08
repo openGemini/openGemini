@@ -17,7 +17,7 @@
     	"DownSampleFileSize"
     ],
     "PushTags":[
-        "ShardID"
+        "ShardID",
         "TaskID"
     ]
 }

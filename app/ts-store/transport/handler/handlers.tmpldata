@@ -6,7 +6,7 @@
     "ShowTagValuesCardinality",
     "GetShardSplitPoints",
     "Delete",
-    "CreateDatabase",
+    "CreateDataBase",
     "ShowQueries",
     "KillQuery"
 ]
