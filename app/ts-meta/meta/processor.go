@@ -31,7 +31,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
 
-//go:generate tmpl -data=@../tmpldata handlers.gen.go.tmpl
+//go:generate tmpl -data=@./tmpldata handlers.gen.go.tmpl
 
 type MetaStoreInterface interface {
 	leader() string

@@ -4,7 +4,7 @@
 // Source: statistics.tmpl
 
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,6 +25,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type StreamStatistics struct {
@@ -69,6 +71,23 @@ func (s *StreamStatistics) Collect(buffer []byte) ([]byte, error) {
 	}
 
 	return buffer, nil
+}
+
+func (s *StreamStatistics) CollectOps() []opsStat.OpsStatistic {
+	data := map[string]interface{}{
+		"StreamIn":        s.itemStreamIn,
+		"StreamInNum":     s.itemStreamInNum,
+		"StreamFilter":    s.itemStreamFilter,
+		"StreamFilterNum": s.itemStreamFilterNum,
+	}
+
+	return []opsStat.OpsStatistic{
+		{
+			Name:   "stream",
+			Tags:   s.tags,
+			Values: data,
+		},
+	}
 }
 
 func (s *StreamStatistics) AddStreamIn(i int64) {
