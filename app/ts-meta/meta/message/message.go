@@ -16,8 +16,6 @@ limitations under the License.
 
 package message
 
-//go:generate tmpl -data=@../tmpldata message_types.gen.go.tmpl
-
 import (
 	"fmt"
 

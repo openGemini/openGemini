@@ -1,6 +1,6 @@
 package dictpool
 
-//go:generate msgp
+////go:generate msgp
 
 // KV struct so it storages key/value data.
 type KV struct {
