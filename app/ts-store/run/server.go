@@ -176,8 +176,11 @@ func (s *Server) Open() error {
 		s.node.Clock = metaclient.LogicClock
 	}
 
+	s.metaClient = metaclient.DefaultMetaClient
+	s.metaClient.OpenAtStore()
+
 	log := Logger.GetLogger()
-	s.storage, err = storage.OpenStorage(s.storageDataPath, s.node, commHttpHandler.MetaClient.(*metaclient.Client), s.config)
+	s.storage, err = storage.OpenStorage(s.storageDataPath, s.node, s.metaClient.(*metaclient.Client), s.config)
 	if err != nil {
 		er := fmt.Errorf("cannot open a storage at %s, %s", s.storageDataPath, err)
 		panic(er)
@@ -201,7 +204,6 @@ func (s *Server) Open() error {
 	}
 	s.initStatisticsPusher()
 
-	s.metaClient = metaclient.DefaultMetaClient
 	if s.StoreService != nil {
 		// Open store service.
 		if err := s.StoreService.Open(); err != nil {
@@ -210,7 +212,7 @@ func (s *Server) Open() error {
 		s.StoreService.handler.SetstatisticsPusher(s.statisticsPusher)
 		s.StoreService.handler.metaClient = s.metaClient
 	}
-	s.metaClient.OpenAtStore()
+
 	if s.sherlockService != nil {
 		s.sherlockService.Open()
 	}

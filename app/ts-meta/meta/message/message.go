@@ -57,11 +57,11 @@ func (m *MetaMessage) Unmarshal(buf []byte) error {
 		return fmt.Errorf("invalid data. the length is 0")
 	}
 	m.typ = buf[0]
-	msg := NewMessage(m.typ)
-	if msg == nil {
+	msgFn, ok := MetaMessageBinaryCodec[m.typ]
+	if msgFn == nil || !ok {
 		return fmt.Errorf("unknown type: %d", m.typ)
 	}
-	m.data = msg.Instance()
+	m.data = msgFn().Instance()
 	return m.data.Unmarshal(buf[1:])
 }
 

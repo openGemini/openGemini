@@ -133,6 +133,6 @@ func (p *Processor) Handle(w spdy.Responser, data interface{}) error {
 	if err != nil {
 		return err
 	}
-	respTyp := message.GetResponseMessageType(msg.Type())
+	respTyp := message.MetaMessageResponseTyp[msg.Type()]
 	return w.Response(message.NewMetaMessage(respTyp, resp), true)
 }

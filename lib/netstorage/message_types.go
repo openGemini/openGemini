@@ -62,7 +62,7 @@ var MessageBinaryCodec = make(map[uint8]func() codec.BinaryCodec, 20)
 var MessageResponseTyp = make(map[uint8]uint8, 20)
 
 func init() {
-	MessageBinaryCodec[UnknownMessage] = func() codec.BinaryCodec { return nil }
+	MessageBinaryCodec[UnknownMessage] = nil
 	MessageBinaryCodec[SeriesKeysRequestMessage] = func() codec.BinaryCodec { return &SeriesKeysRequest{} }
 	MessageBinaryCodec[SeriesKeysRequestMessage] = func() codec.BinaryCodec { return &SeriesKeysRequest{} }
 	MessageBinaryCodec[SeriesKeysResponseMessage] = func() codec.BinaryCodec { return &SeriesKeysResponse{} }
