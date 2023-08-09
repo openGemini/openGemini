@@ -1,8 +1,6 @@
 name: Custom（其他）
 description: Describe others
 labels: ["help wanted"]
-assignees:
- - xiangyu5632
 body:
  - type: textarea
    id: content

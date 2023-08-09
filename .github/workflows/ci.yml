@@ -60,6 +60,8 @@ jobs:
           go-version: "1.18"
       - name: Run go version check
         run: make go-version-check
+      - name: Run go generate check
+        run: make go-generate
       - name: Run style check
         run: make style-check
       - name: Run go vet check

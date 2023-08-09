@@ -58,6 +58,9 @@ go mod tidy
 make go-version-check
 golang_version_status=$?
 
+make go-generate
+golang_generate_status=$?
+
 make style-check
 golang_style_status=$?
 
@@ -70,8 +73,8 @@ golang_lint_status=$?
 splittingLine "end: other go lint"
 
 if [[ $golang_static_status -ne 0 || $golang_version_status -ne 0
-      || $golang_style_status  -ne 0 || $golang_vet_status  -ne 0
-        || $golang_lint_status -ne 0 ]]; then
+      || $golang_generate_status -ne 0 || $golang_style_status  -ne 0
+      || $golang_vet_status  -ne 0 || $golang_lint_status -ne 0 ]]; then
     exit 1
 fi
 

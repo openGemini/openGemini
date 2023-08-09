@@ -50,28 +50,38 @@ install-failpoint:
 	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl
 
 install-tmpl:
-	@$(GO) insatll github.com/benbjohnson/tmpl@v1.1.0
+	@$(GO) install github.com/benbjohnson/tmpl@v1.1.0
 
-install_protoc_linux:
+install-protoc:
+	@VERSION=$$(protoc --version); if [ $$VERSION = "libprotoc 3.14.0" ]; then exit 0; fi; \
+	if [ $$(uname -s) = "Linux" ];  then \
+  		make install-protoc-linux; \
+	elif [ $$(uname -s) = "Darwin" ];  then \
+	  	make install-protoc-darwin; \
+	else \
+	  echo "unknown arch"; \
+  	fi
+
+install-protoc-linux:
 	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/$(PROTOC_ZIP_LINUX)
 	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local bin/protoc
 	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local 'include/*'
 	@sudo chmod +x /usr/local/bin/protoc
 	@rm -f $(PROTOC_ZIP_LINUX)
 
-install_protoc_macos:
+install-protoc-darwin:
 	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/$(PROTOC_ZIP_MACOS)
 	@sudo unzip -X -o $(PROTOC_ZIP_MACOS) -d /usr/local bin/protoc
 	@sudo unzip -o $(PROTOC_ZIP_MACOS) -d /usr/local 'include/*'
-	@sudo chmod -x /usr/local/bin/protoc
+	@sudo chmod +x /usr/local/bin/protoc
 	@rm -f $(PROTOC_ZIP_MACOS)
 
-install_protoc_windows:
+install-protoc-windows:
 	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/$(PROTOC_ZIP_WINDOWS)
 	@powershell.exe Expand-Archive -Path protoc-3.14.0-win64.zip -DestinationPath $(GOPATH)\protobuf  -Force
 	@del $(PROTOC_ZIP_WINDOWS)
 
-install_protoc_gen_gogo:
+install-protoc-gen-gogo:
 	@$(GO) install github.com/gogo/protobuf/protoc-gen-gogo@latest
 
 failpoint-enable:
