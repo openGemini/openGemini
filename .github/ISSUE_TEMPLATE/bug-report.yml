@@ -1,8 +1,6 @@
 name: Bug report（Bug提交）
 description: Create a report to help us improve
 labels: ["bug"]
-assignees:
- - xiangyu5632
 body:
  - type: markdown
    attributes:

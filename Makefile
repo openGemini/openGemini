@@ -68,6 +68,9 @@ go-vet-check:
 static-check: install-staticcheck
 	bash ./scripts/ci/static_check.sh
 
+go-generate: install-tmpl install-protoc install-protoc-gen-gogo
+	bash ./scripts/ci/go_generate.sh
+
 golangci-lint-check: install-golangci-lint
 	bash ./scripts/ci/golangci_lint_check.sh
 
@@ -77,6 +80,8 @@ gotest: install-failpoint failpoint-enable
 	@$(FAILPOINT_DISABLE)
 
 build-check:
+	@$(PYTHON) build.py --clean --platform windows --arch amd64
+	@$(PYTHON) build.py --clean --platform windows --arch arm64
 	@$(PYTHON) build.py --clean --platform darwin --arch amd64
 	@$(PYTHON) build.py --clean --platform darwin --arch arm64
 	@$(PYTHON) build.py --clean --platform linux --arch amd64
