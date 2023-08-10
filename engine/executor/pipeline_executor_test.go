@@ -1842,3 +1842,70 @@ func TestMaxFunction(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func createQuerySchemaWithSum() *executor.QuerySchema {
+	opt := query.ProcessorOptions{}
+	fields := make(influxql.Fields, 0, 1)
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.Call{
+			Name: "sum",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "id",
+					Type: influxql.Unknown,
+				},
+			},
+		},
+	})
+	schema := executor.NewQuerySchema(fields, []string{"id"}, &opt, nil)
+	return schema
+}
+
+func createQuerySchemaWithID() *executor.QuerySchema {
+	opt := query.ProcessorOptions{Dimensions: []string{"name"}}
+	fields := make(influxql.Fields, 0, 1)
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:  "id",
+			Type: influxql.Unknown,
+		},
+	})
+	schema := executor.NewQuerySchema(fields, []string{"id"}, &opt, nil)
+	return schema
+}
+
+func testBuildPipelineExecutor(t *testing.T, querySchema *executor.QuerySchema, rowDataType hybridqp.RowDataType) error {
+	info := buildIndexScanExtraInfo()
+	reader := executor.NewLogicalColumnStoreReader(nil, querySchema)
+	var input hybridqp.QueryNode
+	if querySchema.HasCall() {
+		agg := executor.NewLogicalHashAgg(reader, querySchema, executor.READER_EXCHANGE, nil)
+		input = executor.NewLogicalHashAgg(agg, querySchema, executor.SHARD_EXCHANGE, nil)
+	} else {
+		input = executor.NewLogicalHashMerge(reader, querySchema, executor.READER_EXCHANGE, nil)
+	}
+	indexScan := executor.NewLogicalSparseIndexScan(input, querySchema)
+	executor.ReWriteArgs(indexScan)
+	scan := executor.NewSparseIndexScanTransform(rowDataType, indexScan.Children()[0], indexScan.RowExprOptions(), info, querySchema)
+	sink := NewNilSink(rowDataType)
+	if err := executor.Connect(scan.GetOutputs()[0], sink.Input); err != nil {
+		t.Fatal(err)
+	}
+	var processors executor.Processors
+	processors = append(processors, scan)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	return executors.Execute(context.Background())
+}
+
+func TestBuildPipelineExecutorWithHashAggAndHashMerge(t *testing.T) {
+	// for hash agg
+	rowDataType := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "id", Type: influxql.Unknown})
+	querySchema := createQuerySchemaWithSum()
+	assert.Equal(t, strings.Contains(testBuildPipelineExecutor(t, querySchema, rowDataType).Error(), "unsupported (sum/mean) iterator type: (unknown)"), true)
+
+	// for hash merge
+	rowDataType = hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "id", Type: influxql.Unknown})
+	querySchema = createQuerySchemaWithID()
+	assert.Equal(t, strings.Contains(testBuildPipelineExecutor(t, querySchema, rowDataType).Error(), "HashMergeTransform run error"), true)
+}

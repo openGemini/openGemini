@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -111,44 +112,8 @@ func (h header) encode(typ uint8, flags uint16, connID uint64, length uint32) {
 	binary.BigEndian.PutUint32(h[12:16], length)
 }
 
-type TimerPool struct {
-	sp sync.Pool
-}
-
-func NewTimePool() *TimerPool {
-	p := &TimerPool{
-		sp: sync.Pool{
-			New: func() interface{} {
-				timer := time.NewTimer(time.Hour * 1e6)
-				timer.Stop()
-				return timer
-			},
-		},
-	}
-
-	return p
-}
-
-func (p *TimerPool) GetTimer(timeout time.Duration) *time.Timer {
-	timer, ok := p.sp.Get().(*time.Timer)
-	if !ok {
-		timer = time.NewTimer(timeout)
-	}
-	timer.Reset(timeout)
-	return timer
-}
-
-func (p *TimerPool) PutTimer(timer *time.Timer) {
-	timer.Stop()
-	select {
-	case <-timer.C:
-	default:
-	}
-	p.sp.Put(timer)
-}
-
 var (
-	timerPool = NewTimePool()
+	timerPool = util.NewTimePool()
 )
 
 type handlerFunc func(*MultiplexedConnection, []byte) error

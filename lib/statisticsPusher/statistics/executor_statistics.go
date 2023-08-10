@@ -37,9 +37,6 @@ func (bs *BaseStatistics) Init(derived Statistics) {
 
 type ExecutorStatistics struct {
 	BaseStatistics
-	Memory           Accumulator
-	Goroutine        Accumulator
-	ExecWaitTime     Accumulator
 	ExecRunTime      Accumulator
 	TransWaitTime    Accumulator
 	TransRunTime     Accumulator
@@ -86,12 +83,6 @@ func (es *ExecutorStatistics) AssignName() {
 }
 
 func (es *ExecutorStatistics) BuildAccumulator() {
-	es.Memory = NewNamedInt64Accumulator("memory")
-	es.accumulators = append(es.accumulators, es.Memory.(NamedAccumulator))
-	es.Goroutine = NewNamedInt64Accumulator("goroutine")
-	es.accumulators = append(es.accumulators, es.Goroutine.(NamedAccumulator))
-	es.ExecWaitTime = NewNamedInt64Accumulator("exec_wait_time")
-	es.accumulators = append(es.accumulators, es.ExecWaitTime.(NamedAccumulator))
 	es.ExecRunTime = NewNamedInt64Accumulator("exec_run_time")
 	es.accumulators = append(es.accumulators, es.ExecRunTime.(NamedAccumulator))
 	es.TransWaitTime = NewNamedInt64Accumulator("trans_wait_time")

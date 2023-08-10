@@ -29,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
-	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -50,12 +49,6 @@ func NewMockStoreEngine(readerCount int) *MockStoreEngine {
 	return &MockStoreEngine{
 		readerCount: readerCount,
 	}
-}
-
-func (s *MockStoreEngine) CreateLogicPlan(context.Context, string, uint32, uint64, influxql.Sources, *executor.QuerySchema) (hybridqp.QueryNode, error) {
-	readers := make([][]interface{}, s.readerCount)
-	shard := executor.NewLogicalDummyShard(readers)
-	return shard, nil
 }
 
 func (s *MockStoreEngine) RefEngineDbPt(string, uint32) error {

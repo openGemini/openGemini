@@ -41,9 +41,8 @@ func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, opt query.Proces
 	trans := &RPCReaderTransform{
 		Output:      NewChunkPort(outRowDataType),
 		opt:         opt,
-		query:       rq,
 		abortSignal: make(chan struct{}),
-		rpcLogger:   logger.NewLogger(errno.ModuleQueryEngine),
+		client:      NewRPCClient(rq),
 	}
 	return trans
 }
@@ -51,16 +50,15 @@ func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, opt query.Proces
 type RPCReaderTransform struct {
 	BaseProcessor
 
+	client *RPCClient
 	Output *ChunkPort
 	Table  *QueryTable
 	Chunk  Chunk
 
 	opt         query.ProcessorOptions
-	query       *RemoteQuery
 	distributed hybridqp.QueryNode
 	abortSignal chan struct{}
 	aborted     bool
-	rpcLogger   *logger.Logger
 
 	span       *tracing.Span
 	outputSpan *tracing.Span
@@ -86,6 +84,7 @@ func (t *RPCReaderTransform) Distribute(node hybridqp.QueryNode) {
 func (t *RPCReaderTransform) Abort() {
 	t.aborted = true
 	t.Once(func() {
+		t.client.Abort()
 		close(t.abortSignal)
 	})
 }
@@ -103,6 +102,10 @@ func (t *RPCReaderTransform) Release() error {
 }
 
 func (t *RPCReaderTransform) initSpan() {
+	if t.BaseProcessor.span == nil {
+		return
+	}
+
 	t.span = t.StartSpan("read_chunk", false)
 	if t.span != nil {
 		t.span.CreateCounter("count", "")
@@ -112,34 +115,24 @@ func (t *RPCReaderTransform) initSpan() {
 
 func (t *RPCReaderTransform) Work(ctx context.Context) error {
 	t.initSpan()
+
+	queryNode, err := MarshalQueryNode(t.distributed)
+	if err != nil {
+		return err
+	}
+	client := t.client
+	client.Init(ctx, queryNode)
+	client.StartAnalyze(t.BaseSpan())
+	client.AddHandler(ChunkResponseMessage, t.chunkResponse)
+
 	defer func() {
+		bufferpool.Put(queryNode)
+		client.FinishAnalyze()
 		tracing.Finish(t.span, t.outputSpan)
 		t.Output.Close()
 	}()
 
 	statistics.ExecutorStat.SourceWidth.Push(int64(t.Output.RowDataType.NumColumn()))
-
-	var err error
-	t.query.Node, err = MarshalQueryNode(t.distributed)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		bufferpool.Put(t.query.Node)
-	}()
-
-	client := NewRPCClient(ctx, t.query)
-	defer client.FinishAnalyze()
-
-	go func() {
-		<-t.abortSignal
-		if t.aborted {
-			client.Abort()
-		}
-	}()
-
-	client.StartAnalyze(t.BaseSpan())
-	client.AddHandler(ChunkResponseMessage, t.chunkResponse)
 
 	// 1. case HA
 	// Do not retry request
@@ -158,7 +151,7 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 		if errno.Equal(err, errno.ErrQueryKilled) {
 			return err
 		}
-		t.rpcLogger.Error("RPC request failed.", zap.Error(err),
+		logger.NewLogger(errno.ModuleQueryEngine).Error("RPC request failed.", zap.Error(err),
 			zap.String("query", "rpc executor"),
 			zap.Uint64("query_id", t.opt.QueryId))
 		time.Sleep(retryInterval * (1 << i))

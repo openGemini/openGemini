@@ -29,6 +29,7 @@ type Options interface {
 	GetOffset() int
 	HasInterval() bool
 	GetCondition() influxql.Expr
+	GetLocation() *time.Location
 	GetOptDimension() []string
 	GetHintType() HintType
 	ISChunked() bool

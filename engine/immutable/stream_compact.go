@@ -55,7 +55,7 @@ var (
 )
 
 func NonStreamingCompaction(fi FilesInfo) bool {
-	flag := MergeFlag()
+	flag := GetMergeFlag4TsStore()
 	if flag == NonStreamingCompact {
 		return true
 	} else if flag == StreamingCompact {
@@ -66,7 +66,7 @@ func NonStreamingCompaction(fi FilesInfo) bool {
 			return false
 		}
 
-		if fi.maxChunkRows > MaxRowsPerSegment()*streamCompactSegmentThreshold {
+		if fi.maxChunkRows > GetMaxRowsPerSegment4TsStore()*streamCompactSegmentThreshold {
 			return false
 		}
 
@@ -124,7 +124,7 @@ func getStreamIterators() *StreamIterators {
 				tmpCol:     &record.ColVal{},
 				timeCol:    &record.ColVal{},
 				tmpTimeCol: &record.ColVal{},
-				Conf:       GetConfig(),
+				Conf:       GetTsStoreConfig(),
 			}
 		}
 		return v.(*StreamIterators)
@@ -752,7 +752,7 @@ func (c *StreamIterators) compactColumn(ref record.Field, needCalPreAgg bool) (i
 	}
 
 	var rowCount = 0
-	var maxRows = MaxRowsPerSegment()
+	var maxRows = GetMaxRowsPerSegment4TsStore()
 
 	for itrIndex := c.iteratorStart; itrIndex < len(c.chunkItrs); itrIndex++ {
 		itr := c.chunkItrs[itrIndex]

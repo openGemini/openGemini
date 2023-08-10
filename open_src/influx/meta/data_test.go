@@ -85,21 +85,21 @@ func Test_Data_CreateMeasurement(t *testing.T) {
 
 	mstName := "cpu"
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// try to recreate measurement with same shardKey, should success
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// try to recreate measurement with same shardKey, should fail
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "region"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "region"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
 	if err == nil || err != ErrMeasurementExists {
 		t.Fatalf("unexpected error.  got: %v, exp: %s", err, ErrMeasurementExists)
 	}
@@ -130,7 +130,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 
 	mstName := "cpu"
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func Test_Data_ReSharding(t *testing.T) {
 	rp.ShardGroupDuration = 24 * time.Hour
 	must(data.CreateRetentionPolicy("foo", rp, false))
 	must(data.CreateMeasurement("foo", "bar", "cpu",
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil))
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil))
 	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot, config.TSSTORE))
 
 	sg0, err := data.ShardGroupByTimestampAndEngineType("foo", "bar", time.Unix(0, 0), config.TSSTORE)
@@ -329,7 +329,7 @@ func generateMeasurement(data *Data, dbName, rpName, mstName string) error {
 		return err
 	}
 	return data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
 }
 
 func Test_Data_DeleteCmd(t *testing.T) {
@@ -548,7 +548,7 @@ func TestData_CreateRetentionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +593,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,7 +648,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +863,7 @@ func BenchmarkData_CreateMeasurement(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil)
+		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil, nil)
 	}
 	b.StopTimer()
 }
@@ -888,7 +888,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 
@@ -924,7 +924,7 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 
@@ -1007,7 +1007,7 @@ func BenchmarkData_UpdateSchema(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 		tags := make([]*proto2.FieldSchema, fieldNum)
@@ -1048,7 +1048,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil)
+		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1099,7 +1099,7 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil)
+		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

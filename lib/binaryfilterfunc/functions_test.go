@@ -17,7 +17,9 @@ limitations under the License.
 package binaryfilterfunc
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/stretchr/testify/assert"
@@ -88,7 +90,8 @@ func TestRotateRewriteTimeCompareVal(t *testing.T) {
 			RHS: &influxql.StringLiteral{Val: "2023-06-19T09:00:00Z"},
 		},
 	}
-	RewriteTimeCompareVal(root)
+	valuer := influxql.NowValuer{Now: time.Now(), Location: nil}
+	RewriteTimeCompareVal(root, &valuer)
 	expected := &influxql.BinaryExpr{
 		Op: influxql.AND,
 		RHS: &influxql.BinaryExpr{
@@ -103,4 +106,71 @@ func TestRotateRewriteTimeCompareVal(t *testing.T) {
 		},
 	}
 	assert.Equal(t, root, expected)
+
+	root = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.Call{Name: "now"},
+	}
+	valuer = influxql.NowValuer{Now: time.Now(), Location: nil}
+	now := time.Now()
+	RewriteTimeCompareVal(root, &valuer)
+	expected = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.IntegerLiteral{Val: 1687132800000000000},
+	}
+
+	root = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.TimeLiteral{Val: time.Unix(0, 1687132800000000000)},
+	}
+	valuer = influxql.NowValuer{Now: now, Location: nil}
+	RewriteTimeCompareVal(root, &valuer)
+	expected = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.IntegerLiteral{Val: 1687132800000000000},
+	}
+
+	root = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.DurationLiteral{Val: 1687132800000000000},
+	}
+	valuer = influxql.NowValuer{Now: now, Location: nil}
+	RewriteTimeCompareVal(root, &valuer)
+	expected = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.IntegerLiteral{Val: 1687132800000000000},
+	}
+
+	root = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.NumberLiteral{Val: 1687132800000000000},
+	}
+	valuer = influxql.NowValuer{Now: now, Location: nil}
+	RewriteTimeCompareVal(root, &valuer)
+	expected = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.IntegerLiteral{Val: 1687132800000000000},
+	}
+	assert.Equal(t, root, expected)
+
+	defer func() {
+		if err := recover(); err != nil {
+			assert.Equal(t, strings.Contains(err.(string), "unsupported data type for time filter"), true)
+		}
+	}()
+	root = &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "time"},
+		Op:  influxql.GTE,
+		RHS: &influxql.BooleanLiteral{Val: false},
+	}
+	valuer = influxql.NowValuer{Now: now, Location: nil}
+	RewriteTimeCompareVal(root, &valuer)
 }

@@ -582,7 +582,7 @@ func TestSeriesByExprIterator_TagArray(t *testing.T) {
 		defer index.putIndexSearch(is)
 
 		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, tr, &tsids, false)
+		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
 		if err != nil {
 			t.Fatal(err)
 		}

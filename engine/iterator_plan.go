@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -90,24 +91,17 @@ func (s *shard) CreateLogicalPlan(ctx context.Context, sources influxql.Sources,
 
 	if len(srcCursors) == 0 {
 		log.Debug("no data in shard", zap.Uint64("id", s.ident.ShardID))
-		return buildEmptyPlan(schema)
+		return nil, nil
 	}
 
 	if len(srcCursors) > 1 {
-		return buildMultiSourcePlan(srcCursors, cursorsN, schema)
+		return buildMultiSourcePlan(srcCursors, cursorsN)
 	}
 
-	return buildOneSourcePlan(srcCursors[0], schema)
+	return buildOneSourcePlan(srcCursors[0])
 }
 
-func buildEmptyPlan(schema *executor.QuerySchema) (executor.LogicalPlan, error) {
-	readers := make([][]interface{}, 0, 1)
-	readers = append(readers, nil)
-	plan := executor.NewLogicalDummyShard(readers)
-	return plan, nil
-}
-
-func buildOneSourcePlan(cursors []comm.KeyCursor, schema *executor.QuerySchema) (executor.LogicalPlan, error) {
+func buildOneSourcePlan(cursors []comm.KeyCursor) (executor.LogicalPlan, error) {
 	readers := make([][]interface{}, 0, len(cursors))
 	for _, cur := range cursors {
 		readers = append(readers, []interface{}{cur})
@@ -118,7 +112,7 @@ func buildOneSourcePlan(cursors []comm.KeyCursor, schema *executor.QuerySchema) 
 	return plan, nil
 }
 
-func buildMultiSourcePlan(srcCursors [][]comm.KeyCursor, cursorsN int, schema *executor.QuerySchema) (executor.LogicalPlan, error) {
+func buildMultiSourcePlan(srcCursors [][]comm.KeyCursor, cursorsN int) (executor.LogicalPlan, error) {
 	sort.Slice(srcCursors, func(i, j int) bool {
 		return srcCursors[i][0].Name() < srcCursors[j][0].Name()
 	})
@@ -284,7 +278,7 @@ func (r *ChunkReader) initPreAggCallForAux() {
 // nolint
 func (r *ChunkReader) buildFieldIndex(querySchema *executor.QuerySchema, dtype hybridqp.RowDataType, ops []hybridqp.ExprOptions, seriesPlan hybridqp.QueryNode) {
 	var schema record.Schemas
-	r.auxTag, _ = NewRecordSchema(querySchema, r.auxTag[:0], schema, nil)
+	r.auxTag, _ = NewRecordSchema(querySchema, r.auxTag[:0], schema, nil, config.TSSTORE)
 	r.dimTag = append(r.dimTag, querySchema.Options().(*query.ProcessorOptions).Dimensions...)
 	if len(r.cursor) == 0 {
 		return

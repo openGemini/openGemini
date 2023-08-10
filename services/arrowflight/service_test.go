@@ -31,6 +31,8 @@ import (
 	"github.com/apache/arrow/go/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
@@ -131,10 +133,14 @@ func (w *MockRecordWriter) RetryWriteRecord(database, retentionPolicy, measureme
 var Token = "token"
 
 type clientAuth struct {
-	token string
+	authEnabled bool
+	token       string
 }
 
 func (a *clientAuth) Authenticate(ctx context.Context, c flight.AuthConn) error {
+	if !a.authEnabled {
+		return nil
+	}
 	if err := c.Send(ctx.Value(Token).([]byte)); err != nil {
 		return err
 	}
@@ -161,19 +167,23 @@ func TestStorageEngine(t *testing.T) {
 	assert.Equal(t, se, s)
 }
 
-func TestArrowFlightService(t *testing.T) {
+func testArrowFlightService(t *testing.T, authEnabled bool) {
 	BatchSize, WriteCount := 1, 10
 
 	c := config.Config{
-		FlightAddress: "127.0.0.1:8087",
-		MaxBodySize:   1024 * 1024 * 1024,
+		FlightAddress:     "127.0.0.1:8087",
+		MaxBodySize:       1024 * 1024 * 1024,
+		FlightAuthEnabled: authEnabled,
 	}
 
-	service := arrowflight.NewService(c)
+	service, err := arrowflight.NewService(c)
+	if err != nil {
+		t.Fatal(err)
+	}
 	service.MetaClient = NewMockFlightMetaClient()
 	service.RecordWriter = &MockRecordWriter{}
 
-	err := service.Open()
+	err = service.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +204,7 @@ func TestArrowFlightService(t *testing.T) {
 		}
 	}()
 
-	authClient := &clientAuth{}
+	authClient := &clientAuth{authEnabled: c.FlightAuthEnabled}
 	client, err := flight.NewFlightClient(service.GetServer().Addr().String(), authClient, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
@@ -239,7 +249,11 @@ func TestArrowFlightService(t *testing.T) {
 	if err = doPutClient.CloseSend(); err != nil {
 		t.Fatal("doPutClient CloseSend failed", err)
 	}
+}
 
+func TestArrowFlightServiceWithAuth(t *testing.T) {
+	testArrowFlightService(t, false)
+	testArrowFlightService(t, true)
 }
 
 type MockAuthConn struct {
@@ -292,14 +306,14 @@ func TestArrowFlightServiceErr(t *testing.T) {
 		MaxBodySize:   1024 * 1024 * 1024,
 	}
 
-	if service := arrowflight.NewService(c); service != nil {
+	if service, err := arrowflight.NewService(c); service != nil || err == nil {
 		t.Fatal("NewService should return nil")
 	}
 
 	_, err := arrowflight.HashAuthToken(nil)
 	assert.Equal(t, err, nil)
 
-	auth := arrowflight.NewAuthServer()
+	auth := arrowflight.NewAuthServer(true)
 	err = auth.Authenticate(NewMockAuthConn(io.EOF, true))
 	assert.Equal(t, err, status.Error(codes.Unauthenticated, "no auth info provided"))
 
@@ -317,7 +331,7 @@ func TestArrowFlightServiceErr(t *testing.T) {
 	_, err = auth.IsValid("token")
 	assert.Equal(t, err, status.Error(codes.PermissionDenied, "auth token time out"))
 
-	writer := arrowflight.NewWriteServer()
+	writer := arrowflight.NewWriteServer(logger.NewLogger(errno.ModuleHTTP))
 	err = writer.DoPut(NewDoPutServer())
 	assert.Equal(t, strings.Contains(err.Error(), "arrow/flight: could not create flight reader"), true)
 }

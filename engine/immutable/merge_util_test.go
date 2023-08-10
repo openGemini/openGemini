@@ -46,7 +46,7 @@ func TestMergeContext(t *testing.T) {
 	ctx = immutable.NewMergeContext("mst")
 
 	beforeTest(t, 0)
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 
 	rg := newRecordGenerator(1e15, defaultInterval, true)
@@ -73,7 +73,7 @@ func TestMergeContext(t *testing.T) {
 func TestColumnIterator(t *testing.T) {
 	defer beforeTest(t, 0)
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 
 	rg := newRecordGenerator(1e15, defaultInterval, true)
@@ -94,7 +94,7 @@ func TestColumnIterator(t *testing.T) {
 func TestColumnIterator_Close(t *testing.T) {
 	defer beforeTest(t, 0)
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 
 	rg := newRecordGenerator(1e15, defaultInterval, true)

@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func buildHashAggInputRowDataType1() hybridqp.RowDataType {
@@ -777,6 +778,30 @@ func TestHashAggTransformIntervalFixIntervalNumFill(t *testing.T) {
 	executors := executor.NewPipelineExecutor(processors)
 	executors.Execute(context.Background())
 	executors.Release()
+}
+
+func TestGroupKeysPoolAlloc(t *testing.T) {
+	groupKeysPool := executor.NewGroupKeysPool(10)
+	values := groupKeysPool.AllocValues(1024)
+	assert.Equal(t, 1024, len(values))
+
+	tags := groupKeysPool.AllocGroupTags(1024)
+	assert.Equal(t, 1024, len(tags))
+
+	states := groupKeysPool.AllocStates(1024)
+	assert.Equal(t, 1024, len(states))
+
+	zvalues := groupKeysPool.AllocZValues(1024)
+	assert.Equal(t, 1024, len(zvalues))
+}
+
+func TestIntervalKeysPoolAlloc(t *testing.T) {
+	groupKeysPool := executor.NewIntervalKeysMpool(10)
+	values := groupKeysPool.AllocValues(1024)
+	assert.Equal(t, 1024, len(values))
+
+	keys := groupKeysPool.AllocIntervalKeys(1024)
+	assert.Equal(t, 1024, len(keys))
 }
 
 func buildHashAggTransformSchemaBenchmark(interval int) *executor.QuerySchema {

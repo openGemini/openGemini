@@ -586,7 +586,8 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		return err
 	}
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
-	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property, stmt.Tags, stmt.Fields)
+	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property)
+	schemaInfo := meta2.NewSchemaInfo(stmt.Tags, stmt.Fields)
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
 	if len(stmt.IndexList) > 0 {
@@ -613,7 +614,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
 	}
-	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo)
+	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo)
 	return err
 }
 
@@ -2078,7 +2079,7 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 						} else {
 							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil)
 						}*/
-			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil)
+			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil, nil)
 
 			if err != nil {
 				return err

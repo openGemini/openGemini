@@ -168,7 +168,7 @@ func TestTableStoreOpen(t *testing.T) {
 		fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -226,7 +226,7 @@ func TestMemoryRead(t *testing.T) {
 		fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.cacheDataBlock = true
 	conf.cacheMetaData = true
 	tier := uint64(util.Hot)
@@ -305,7 +305,7 @@ func TestLazyInitError(t *testing.T) {
 		_ = fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -413,7 +413,7 @@ func TestMemoryReadReload(t *testing.T) {
 		fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.cacheDataBlock = true
 	conf.cacheMetaData = true
 	tier := uint64(util.Hot)
@@ -588,7 +588,7 @@ func TestTsspReader(t *testing.T) {
 	lockPath := ""
 	fName := NewTSSPFileName(1, 0, 0, 0, false, &lockPath)
 	msb := &MsBuilder{
-		Conf:     NewConfig(),
+		Conf:     NewTsStoreConfig(),
 		trailer:  &Trailer{},
 		FileName: fName,
 	}
@@ -691,7 +691,7 @@ func TestFileHandlesRef_EnableMmap(t *testing.T) {
 	_ = fileops.RemoveAll(testDir)
 	fileops.EnableMmapRead(true)
 	defer fileops.EnableMmapRead(false)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -757,7 +757,7 @@ func TestCloseFileAndUnref(t *testing.T) {
 		_ = fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -808,7 +808,7 @@ func TestDropMeasurement(t *testing.T) {
 		fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -890,7 +890,7 @@ func TestDropMeasurementForColumnStore(t *testing.T) {
 		_ = fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -967,7 +967,7 @@ func TestClosedTsspFile(t *testing.T) {
 		fileops.RemoveAll(testDir)
 	}()
 	_ = fileops.RemoveAll(testDir)
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
@@ -1061,7 +1061,7 @@ func newMmsTables(t *testing.T) *MmsTables {
 	defer func() {
 		sig.Close()
 	}()
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(t.TempDir(), &lockPath, &tier, false, conf)
@@ -1127,7 +1127,7 @@ func TestClosedLoadIdTimes(t *testing.T) {
 
 func TestReadTimeColumn(t *testing.T) {
 	dir := t.TempDir()
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(dir, &lockPath, &tier, false, conf)
@@ -1195,7 +1195,7 @@ func TestReadTimeColumn(t *testing.T) {
 func TestCompactionPlan(t *testing.T) {
 	tier := uint64(util.Hot)
 	lockPath := ""
-	store := NewTableStore("", &lockPath, &tier, false, NewConfig())
+	store := NewTableStore("", &lockPath, &tier, false, NewTsStoreConfig())
 	store.SetImmTableType(config.TSSTORE)
 
 	type TestCase struct {
@@ -1421,7 +1421,7 @@ func TestCompactionPlan(t *testing.T) {
 func TestAddFilesByColumnTable(t *testing.T) {
 	tier := uint64(util.Hot)
 	lockPath := ""
-	store := NewTableStore("", &lockPath, &tier, false, NewConfig())
+	store := NewTableStore("", &lockPath, &tier, false, NewTsStoreConfig())
 	store.SetImmTableType(config.COLUMNSTORE)
 
 	type TestCase struct {
@@ -1471,7 +1471,7 @@ func TestAddFilesByColumnTable(t *testing.T) {
 func TestCompactionPlanWithAbnormal(t *testing.T) {
 	tier := uint64(util.Hot)
 	lockPath := ""
-	store := NewTableStore("", &lockPath, &tier, false, NewConfig())
+	store := NewTableStore("", &lockPath, &tier, false, NewTsStoreConfig())
 	store.SetImmTableType(config.TSSTORE)
 
 	type TestCase struct {
@@ -1884,7 +1884,7 @@ func TestReadError(t *testing.T) {
 	}()
 
 	dir := t.TempDir()
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(dir, &lockPath, &tier, false, conf)

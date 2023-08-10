@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -495,11 +496,16 @@ func TestClient_CreateMeasurement(t *testing.T) {
 		metaServers: []string{"127.0.0.1"},
 		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
-	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil, nil, nil)
+	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil)
+	schemaInfo := meta2.NewSchemaInfo(map[string]int32{"a": influx.Field_Type_Tag}, map[string]int32{"b": influx.Field_Type_Float})
 
-	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo)
+	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, nil)
+	require.EqualError(t, err, "execute command timeout")
+
+	_, err = c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, schemaInfo)
 	require.EqualError(t, err, "execute command timeout")
 }
+
 func TestClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	c := &Client{
 		cacheData:   &meta2.Data{},
@@ -1059,7 +1065,7 @@ func TestCreateMeasurement(t *testing.T) {
 	invalidMst := []string{"", "/111", ".", "..", "bbb\\aaa", string([]byte{'m', 's', 't', 0, '_', '0', '0'})}
 
 	for _, mst := range invalidMst {
-		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil, config.TSSTORE, nil)
+		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil, config.TSSTORE, nil, nil)
 		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
 	}
 

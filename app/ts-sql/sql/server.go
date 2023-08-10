@@ -139,7 +139,6 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.httpService.Handler.StatisticsPusher = s.statisticsPusher
 	syscontrol.SetQueryParallel(int64(c.HTTP.ChunkReaderParallel))
 	syscontrol.SetTimeFilterProtection(c.HTTP.TimeFilterProtection)
-	executor.SetPipelineExecutorResourceManagerParas(int64(c.Common.MemoryLimitSize), time.Duration(c.Common.MemoryWaitTime))
 	executor.IgnoreEmptyTag = c.Common.IgnoreEmptyTag
 
 	machine.InitMachineID(c.HTTP.BindAddress)
@@ -172,7 +171,11 @@ func (s *Server) initArrowFlightService(c *config.TSSql) error {
 	if role := s.info.App; !(role == config.AppSingle || role == config.AppData) {
 		return errno.NewError(errno.ArrowFlightGetRoleErr)
 	}
-	s.arrowFlightService = arrowflight.NewService(c.HTTP)
+	var err error
+	s.arrowFlightService, err = arrowflight.NewService(c.HTTP)
+	if err != nil {
+		return err
+	}
 	s.arrowFlightService.StatisticsPusher = s.statisticsPusher
 	s.RecordWriter = coordinator.NewRecordWriter(time.Duration(c.Coordinator.ShardWriterTimeout), int(c.Meta.PtNumPerNode), c.HTTP.FlightChFactor)
 	s.RecordWriter.StorageEngine = services.GetStorageEngine()

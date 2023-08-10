@@ -52,6 +52,13 @@ func init() {
 	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.SeriesParallelismRes, 0, 0)
 }
 
+func RemoveTimeCondition(stmt *influxql.SelectStatement) influxql.TimeRange {
+	valuer := &influxql.NowValuer{Location: stmt.Location}
+	condition, timeRange, _ := influxql.ConditionExpr(stmt.Condition, valuer)
+	stmt.Condition = condition
+	return timeRange
+}
+
 func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
@@ -1821,6 +1828,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -3321,6 +3329,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -4790,6 +4799,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -6357,6 +6367,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -7789,6 +7800,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -8170,6 +8182,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -8369,6 +8382,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -8665,6 +8679,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]

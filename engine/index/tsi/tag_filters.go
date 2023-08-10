@@ -23,15 +23,9 @@ import (
 
 // tagFilter represents a filter used for filtering tags.
 type tagFilter struct {
-	key        []byte
-	value      []byte
-	isNegative bool
-	isRegexp   bool
-
-	name []byte
-
-	// matchCost is a cost for matching a filter against a single string.
-	matchCost uint64
+	key   []byte
+	value []byte
+	name  []byte
 
 	// Additionally it contains:
 	//  - value if !isRegexp.
@@ -46,12 +40,18 @@ type tagFilter struct {
 	// Matches regexp suffix.
 	reSuffixMatch func(b []byte) bool
 
-	// Set to true for filters matching empty value.
-	isEmptyMatch bool
-
 	// Contains reverse suffix for Graphite wildcard.
 	// I.e. for `{__name__=~"foo\\.[^.]*\\.bar\\.baz"}` the value will be `zab.rab.`
 	graphiteReverseSuffix []byte
+
+	// matchCost is a cost for matching a filter against a single string.
+	matchCost uint64
+
+	isNegative bool
+	isRegexp   bool
+
+	// Set to true for filters matching empty value.
+	isEmptyMatch bool
 
 	// eg, host =~ /.*/
 	isAllMatch bool
@@ -202,15 +202,15 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 	tf.isNegative = isNegative
 	tf.isRegexp = isRegexp
 	tf.matchCost = 0
+	tf.reSuffixMatch = nil
+	tf.isEmptyValue = false
 	if len(value) == 0 {
 		tf.isEmptyValue = true
 	}
-
 	tf.prefix = tf.prefix[:0]
-
 	tf.orSuffixes = tf.orSuffixes[:0]
-	tf.reSuffixMatch = nil
 	tf.isEmptyMatch = false
+	tf.isAllMatch = false
 	tf.graphiteReverseSuffix = tf.graphiteReverseSuffix[:0]
 
 	compositeKey := kbPool.Get()

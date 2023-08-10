@@ -397,8 +397,9 @@ func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime 
 }
 
 // createVersionMeasurement create new measurement
-func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo,
-	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32, engineType config.EngineType, colStoreInfo *ColStoreInfo) {
+func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo,
+	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32, engineType config.EngineType,
+	colStoreInfo *ColStoreInfo, schemaInfo []*proto2.FieldSchema) error {
 	sgLen := len(rp.ShardGroups)
 	if sgLen == 0 {
 		ski.ShardGroup = data.MaxShardGroupID + 1
@@ -411,6 +412,7 @@ func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *pr
 	if colStoreInfo != nil {
 		msti.ColStoreInfo = colStoreInfo
 	}
+
 	if shardKey != nil {
 		msti.ShardKeys = []ShardKeyInfo{*ski}
 	}
@@ -437,9 +439,16 @@ func (data *Data) createVersionMeasurement(rp *RetentionPolicyInfo, shardKey *pr
 
 	rp.MstVersions[mst] = version
 	rp.Measurements[nameWithVer] = msti
+
+	if len(schemaInfo) > 0 {
+		return data.UpdateSchema(db, rp.Name, mst, schemaInfo)
+	}
+	return nil
 }
 
-func (data *Data) CreateMeasurement(database string, rpName string, mst string, shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation, engineType config.EngineType, colStoreInfo *proto2.ColStoreInfo) error {
+func (data *Data) CreateMeasurement(database string, rpName string, mst string,
+	shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation, engineType config.EngineType,
+	colStoreInfo *proto2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) error {
 	rp, err := data.RetentionPolicy(database, rpName)
 	if err != nil {
 		return err
@@ -469,8 +478,7 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string, 
 			rp.MstVersions = make(map[string]uint32)
 		}
 		rp.MstVersions[mst] = version
-		data.createVersionMeasurement(rp, shardKey, indexR, ski, mst, version, engineType, hInfo)
-		return nil
+		return data.createVersionMeasurement(database, rp, shardKey, indexR, ski, mst, version, engineType, hInfo, schemaInfo)
 	}
 
 	n := len(msti.ShardKeys)

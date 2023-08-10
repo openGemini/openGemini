@@ -297,7 +297,7 @@ func GetCatalogFactoryInstance() *CatalogCreatorFactory {
 
 type StoreEngine interface {
 	ReportLoad()
-	CreateLogicPlanV2(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
+	CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema Catalog) (IShardsFragments, error)
 	UnrefEngineDbPt(db string, ptId uint32)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int

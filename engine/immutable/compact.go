@@ -445,7 +445,7 @@ func (m *MmsTables) mmsFiles(n int64) []*CompactGroup {
 			}
 
 			name := f.Path()
-			if tmpTsspFileSuffix == name[len(name)-len(tmpTsspFileSuffix):] {
+			if tmpFileSuffix == name[len(name)-len(tmpFileSuffix):] {
 				continue
 			}
 
@@ -599,7 +599,7 @@ func (m *MmsTables) deleteFiles(files ...TSSPFile) error {
 	for _, f := range files {
 		fname := f.Path()
 		if f.Inuse() {
-			if err := f.Rename(fname + tmpTsspFileSuffix); err != nil {
+			if err := f.Rename(fname + tmpFileSuffix); err != nil {
 				if err == errFileClosed {
 					continue
 				}

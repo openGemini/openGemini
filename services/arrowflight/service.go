@@ -25,6 +25,7 @@ import (
 	"io"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow/go/arrow/array"
@@ -36,9 +37,11 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -84,22 +87,25 @@ type Service struct {
 	}
 }
 
-func NewService(c config.Config) *Service {
-	writer := NewWriteServer()
-	authHandler := NewAuthServer()
+func NewService(c config.Config) (*Service, error) {
+	sLogger := logger.NewLogger(errno.ModuleHTTP)
+	writer := NewWriteServer(sLogger)
+	authHandler := NewAuthServer(c.FlightAuthEnabled)
 	server := flight.NewServerWithMiddleware(authHandler, nil, grpc.MaxRecvMsgSize(c.MaxBodySize))
 	if err := server.Init(c.FlightAddress); err != nil {
-		return nil
+		sLogger.Error("arrow flight service start failed", zap.Error(err))
+		return nil, err
 	}
 	server.RegisterFlightService(writer.service)
+	sLogger.Info("arrow flight service start successfully")
 	return &Service{
 		server:      server,
 		writer:      writer,
 		authHandler: authHandler,
 		err:         make(chan error),
-		Logger:      logger.NewLogger(errno.ModuleHTTP),
+		Logger:      sLogger,
 		Config:      &c,
-	}
+	}, nil
 }
 
 func (s *Service) Open() error {
@@ -154,13 +160,14 @@ func HashAuthToken(token *AuthToken) (string, error) {
 }
 
 type authServer struct {
-	client FlightMetaClient
-	token  map[string]*AuthToken
-	mu     sync.RWMutex
+	authEnabled bool
+	client      FlightMetaClient
+	token       map[string]*AuthToken
+	mu          sync.RWMutex
 }
 
-func NewAuthServer() *authServer {
-	return &authServer{token: make(map[string]*AuthToken)}
+func NewAuthServer(authEnabled bool) *authServer {
+	return &authServer{authEnabled: authEnabled, token: make(map[string]*AuthToken)}
 }
 
 func (a *authServer) SetMetaClient(client FlightMetaClient) {
@@ -172,6 +179,9 @@ func (a *authServer) SetToken(token map[string]*AuthToken) {
 }
 
 func (a *authServer) Authenticate(c flight.AuthConn) error {
+	if !a.authEnabled {
+		return nil
+	}
 	in, err := c.Read()
 	if errors.Is(err, io.EOF) {
 		return status.Error(codes.Unauthenticated, "no auth info provided")
@@ -210,6 +220,9 @@ func (a *authServer) Authenticate(c flight.AuthConn) error {
 }
 
 func (a *authServer) IsValid(authHashID string) (interface{}, error) {
+	if !a.authEnabled {
+		return WriteAuthSuccess, nil
+	}
 	a.mu.RLock()
 	token, ok := a.token[authHashID]
 	a.mu.RUnlock()
@@ -239,12 +252,14 @@ type MetaData struct {
 type writeServer struct {
 	RecordWriter
 	mem     memory.Allocator
+	logger  *logger.Logger
 	service *flight.FlightServiceService
 }
 
-func NewWriteServer() *writeServer {
+func NewWriteServer(logger *logger.Logger) *writeServer {
 	writer := &writeServer{
 		mem:     memory.NewGoAllocator(),
+		logger:  logger,
 		service: &flight.FlightServiceService{},
 	}
 	writer.service.DoPut = writer.DoPut
@@ -261,13 +276,22 @@ func (w *writeServer) DoPut(server flight.FlightService_DoPutServer) error {
 	if err != nil {
 		return err
 	}
-	defer wr.Release()
+	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
+	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
+	defer func(start time.Time) {
+		d := time.Since(start).Nanoseconds()
+		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
+		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+		wr.Release()
+	}(time.Now())
 
 	err = json2.Unmarshal(util.Str2bytes(wr.LatestFlightDescriptor().Path[0]), metaData)
 	if err != nil {
+		w.logger.Error("arrow flight DoPut get metadata err", zap.Error(err))
 		return err
 	}
 
+	w.logger.Info("arrow flight DoPut starting", zap.String("db", metaData.DataBase), zap.String("rp", metaData.RetentionPolicy), zap.String("mst", metaData.Measurement))
 	for wr.Next() {
 		r := wr.Record()
 		r.Retain() // Memory reserved. The value of reference counting is increased by 1.

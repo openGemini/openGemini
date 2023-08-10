@@ -81,7 +81,7 @@ func NewMergePerformer(ur *UnorderedReader, stat *statistics.MergeStatItem) *mer
 func (p *mergePerformer) Reset(sw *StreamWriteFile, last bool) {
 	p.sid = 0
 	p.sw = sw
-	p.cw = newColumnWriter(sw, MaxRowsPerSegment())
+	p.cw = newColumnWriter(sw, GetMaxRowsPerSegment4TsStore())
 	p.lastFile = last
 }
 

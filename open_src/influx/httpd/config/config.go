@@ -43,6 +43,7 @@ type Config struct {
 	BindAddress             string         `toml:"bind-address"`
 	FlightAddress           string         `toml:"flight-address"`
 	FlightEnabled           bool           `toml:"flight-enabled"`
+	FlightAuthEnabled       bool           `toml:"flight-auth-enabled"`
 	FlightChFactor          int            `toml:"flight-ch-factor"`
 	Domain                  string         `toml:"domain"`
 	AuthEnabled             bool           `toml:"auth-enabled"`
@@ -94,6 +95,7 @@ func NewConfig() Config {
 		BindAddress:             DefaultBindAddress,
 		FlightAddress:           DefaultFlightAddress,
 		FlightEnabled:           false,
+		FlightAuthEnabled:       false,
 		FlightChFactor:          2,
 		LogEnabled:              true,
 		PprofEnabled:            true,

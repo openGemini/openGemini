@@ -36,6 +36,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -56,6 +57,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
@@ -322,6 +324,24 @@ func writeData(sh *shard, rs []influx.Row, forceFlush bool) error {
 	return nil
 }
 
+func writeRec(sh *shard, rec *record.Record, forceFlush bool) error {
+	buff, err := coordinator.MarshalWithMeasurements(nil, defaultMeasurementName, rec)
+	if err != nil {
+		return err
+	}
+
+	err = sh.WriteCols(defaultMeasurementName, rec, buff)
+	if err != nil {
+		return err
+	}
+
+	if forceFlush {
+		// wait mem table flush
+		sh.ForceFlush()
+	}
+	return nil
+}
+
 func genQuerySchema(fieldAux []influxql.VarRef, opt *query.ProcessorOptions) *executor.QuerySchema {
 	var fields influxql.Fields
 	var columnNames []string
@@ -460,7 +480,7 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 	var auxTags []string
 	var recSchema record.Schemas
 	filterFields, _ = getFilterFieldsByExpr(opt.GetCondition(), filterFields[:0])
-	_, recSchema = NewRecordSchema(querySchema, auxTags[:0], recSchema[:0], filterFields)
+	_, recSchema = NewRecordSchema(querySchema, auxTags[:0], recSchema[:0], filterFields, config.TSSTORE)
 
 	mm := make(map[string]*seriesData, 0)
 	limit := opt.GetOffset() + opt.GetLimit()
@@ -960,7 +980,7 @@ func TestShard_NewColStoreShard(t *testing.T) {
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
-	// require.Equal(t, 4*100, int(sh.count))
+	require.Equal(t, 4*100, int(sh.rowCount))
 	require.NoError(t, closeShard(sh))
 }
 
@@ -1040,7 +1060,7 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conf := immutable.GetConfig()
+	conf := immutable.GetColStoreConfig()
 	conf.SetMaxSegmentLimit(2)
 	conf.SetMaxRowsPerSegment(5)
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
@@ -1074,8 +1094,8 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	require.Equal(t, 25, len(files))
 
 	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(math.MaxUint16)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment)
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
 	require.NoError(t, closeShard(sh))
 	// reopen shard to load data
@@ -1191,6 +1211,184 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	}
 	time.Sleep(1 * time.Second)
 	require.GreaterOrEqual(t, 800, int(newSh.rowCount))
+
+	if err = closeShard(newSh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
+	testDir := t.TempDir()
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	rec := genRecord()
+	err = writeRec(sh, rec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	record := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
+	err = sh.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyOptions := DefaultEngineOption
+	copyOptions.WalReplayAsync = true
+	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
+	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
+	newSh.indexBuilder = sh.indexBuilder
+	newSh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	if err = newSh.OpenAndEnable(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = writeRec(newSh, rec, false); err != nil {
+		t.Fatal(err)
+	}
+	rec.AppendRec(rec, 0, rec.RowNums())
+	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
+	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
+	for !newSh.loadWalDone {
+		time.Sleep(10 * time.Millisecond)
+		fmt.Println("wait load wal done")
+	}
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
+
+	if err = closeShard(newSh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	rec := genRecord()
+	err = writeRec(sh, rec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	record := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
+	err = sh.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyOptions := DefaultEngineOption
+	copyOptions.WalReplayAsync = true
+	copyOptions.WalReplayParallel = true
+	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
+	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
+	newSh.indexBuilder = sh.indexBuilder
+	newSh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
+	if err = newSh.OpenAndEnable(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err = writeRec(newSh, rec, false)
+	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
+	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
+	rec.AppendRec(rec, 0, rec.RowNums())
+	for !newSh.loadWalDone {
+		time.Sleep(10 * time.Millisecond)
+		fmt.Println("wait load wal done")
+	}
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
+
+	if err = closeShard(newSh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	rec := genRecord()
+	err = writeRec(sh, rec, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	record := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
+	err = sh.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyOptions := DefaultEngineOption
+	copyOptions.WalReplayAsync = true
+	copyOptions.WalReplayParallel = true
+	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
+	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
+	newSh.indexBuilder = sh.indexBuilder
+	newSh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
+	if err = newSh.OpenAndEnable(nil); err != nil {
+		t.Fatal(err)
+	}
+	// cancel wal replay
+	for newSh.cancelFn != nil {
+		newSh.cancelFn()
+	}
+
+	err = writeRec(newSh, rec, false)
+	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
+	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
+	if !testRecsEqual(rec, record) {
+		t.Fatal("error result")
+	}
 
 	if err = closeShard(newSh); err != nil {
 		t.Fatal(err)
@@ -2590,7 +2788,7 @@ func TestQueryOnlyInImmutableReload(t *testing.T) {
 	}
 
 	lockPath := ""
-	sh.immTables = immutable.NewTableStore(sh.filesPath, &lockPath, &sh.tier, true, immutable.NewConfig())
+	sh.immTables = immutable.NewTableStore(sh.filesPath, &lockPath, &sh.tier, true, immutable.NewTsStoreConfig())
 	sh.immTables.SetImmTableType(config.TSSTORE)
 	if _, err = sh.immTables.Open(); err != nil {
 		t.Fatal(err)
@@ -2903,7 +3101,7 @@ func TestDropMeasurementForColStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conf := immutable.GetConfig()
+	conf := immutable.GetColStoreConfig()
 	conf.SetMaxSegmentLimit(2)
 	conf.SetMaxRowsPerSegment(5)
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
@@ -2953,8 +3151,8 @@ func TestDropMeasurementForColStore(t *testing.T) {
 	}
 	require.Equal(t, 0, len(files))
 	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(math.MaxUint16)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment)
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 
 	// step4: close shard
 	err = closeShard(sh)
@@ -3130,8 +3328,8 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 	var minTime, maxTime int64
 	st := time.Now().Truncate(time.Second)
 
-	immutable.SetMaxRowsPerSegment(16)
-	immutable.SetMaxSegmentLimit(5)
+	immutable.SetMaxRowsPerSegment4TsStore(16)
+	immutable.SetMaxSegmentLimit4TsStore(5)
 	lines := 16*5 - 1
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, minTime, maxTime = GenDataRecord([]string{"mst"}, 4, lines, time.Second, st, true, true, false, 1)
@@ -3326,7 +3524,7 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					t.Fatal(err)
 				}
 				queryCtx := &QueryCtx{}
-				queryCtx.auxTags, queryCtx.schema = NewRecordSchema(querySchema, queryCtx.auxTags[:0], queryCtx.schema[:0], filterConditions)
+				queryCtx.auxTags, queryCtx.schema = NewRecordSchema(querySchema, queryCtx.auxTags[:0], queryCtx.schema[:0], filterConditions, config.TSSTORE)
 				if queryCtx.auxTags == nil && queryCtx.schema.Len() <= 1 {
 					return
 				}
@@ -4044,6 +4242,20 @@ func TestWriteColsForTsstore(t *testing.T) {
 	}
 }
 
+func TestWriteWalForArrowFlightError(t *testing.T) {
+	dir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+
+	err = sh.writeWalForArrowFlight(nil)
+	if err == nil {
+		t.Fatal("too small bytes for record binary")
+	}
+}
+
 func TestWriteColsForTsstoreWithShardClosed(t *testing.T) {
 	dir := t.TempDir()
 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
@@ -4406,7 +4618,7 @@ func mockMetaClient() *MockMetaClient {
 	return &MockMetaClient{}
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, _ []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
