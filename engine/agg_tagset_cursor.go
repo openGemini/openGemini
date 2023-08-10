@@ -34,7 +34,6 @@ import (
 
 const (
 	fileInfoNum                    = 10
-	unAssignedValue                = int64(-1)
 	tagSetCursorRecordNumEqualsUno = 1
 )
 
@@ -393,7 +392,7 @@ func (s *fileLoopCursor) EndSpan() {
 }
 
 func (s *fileLoopCursor) initMemitrs() {
-	s.mergeRecIters, s.minTime, s.maxTime = s.shardP.getAllSeriesMemtableRecord(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step)
+	s.mergeRecIters, s.minTime, s.maxTime = s.shardP.getAllSeriesMemtableRecord(s.ctx, s.schema, s.tagSetInfo, s.start, s.step)
 }
 
 /*

@@ -125,7 +125,7 @@ func (l *Location) AscendingDone() {
 }
 
 func (l *Location) DescendingDone() {
-	l.segPos = int(l.fragRgs[0].Start - 1)
+	l.segPos = int(l.fragRgs[0].Start) - 1
 }
 
 func (l *Location) Contains(sid uint64, tr util.TimeRange, buffer *[]byte) (bool, error) {
@@ -159,9 +159,9 @@ func (l *Location) isPreAggRead() bool {
 	return len(l.ctx.ops) > 0
 }
 
-func (l *Location) nextSegment() {
+func (l *Location) nextSegment(toLast bool) {
 	if l.ctx.Ascending {
-		if l.isPreAggRead() {
+		if toLast {
 			l.AscendingDone()
 		} else {
 			if int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End) {
@@ -172,7 +172,7 @@ func (l *Location) nextSegment() {
 			}
 		}
 	} else {
-		if l.isPreAggRead() {
+		if toLast {
 			l.DescendingDone()
 		} else {
 			if int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End) {
@@ -214,10 +214,16 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 	var rec *record.Record
 	var err error
 	var oriRowCount int
+
+	if !l.ctx.tr.Overlaps(l.meta.MinMaxTime()) {
+		l.nextSegment(true)
+		return nil, 0, nil
+	}
+
 	for rec == nil && l.hasNext() {
-		if (!l.ctx.tr.Overlaps(l.meta.MinMaxTime())) ||
+		if (!l.ctx.tr.Overlaps(l.getCurSegMinMax())) ||
 			(!l.overlapsForRowFilter(filterOpts.rowFilters)) {
-			l.nextSegment()
+			l.nextSegment(false)
 			continue
 		}
 
@@ -226,7 +232,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 		if err != nil {
 			return nil, 0, err
 		}
-		l.nextSegment()
+		l.nextSegment(false)
 
 		if l.isPreAggRead() {
 			return rec, 0, nil

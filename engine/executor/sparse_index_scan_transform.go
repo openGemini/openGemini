@@ -208,10 +208,13 @@ func (trans *SparseIndexScanTransform) Running(ctx context.Context) {
 }
 
 func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, fragments ShardsFragments) error {
-	parallel := cpu.GetCpuNum()
+	parallelism := trans.schema.Options().GetMaxParallel()
+	if parallelism <= 0 {
+		parallelism = cpu.GetCpuNum()
+	}
 
 	tracing.StartPP(trans.allocateSpan)
-	fragmentsGroups, err := DistributeFragments(fragments, parallel)
+	fragmentsGroups, err := DistributeFragments(fragments, parallelism)
 	if err != nil {
 		return err
 	}

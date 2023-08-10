@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
+// only for OptimizeAgg or call PreAggregateCallMapping, some calls like top/bottom/percentile_ogsketch which cancallspushdown but not use template plan
 var TemplateSql []string = []string{
 	"SELECT max(f1) from mst WHERE (tag1 = 'tag1val') and time > 1 and time < 2 group by time(1ns)",
 	"SELECT max(f1) from mst WHERE time < 2 group by time(1ns) limit 1",
@@ -234,4 +235,31 @@ func NewStorePlanTypePool(planType PlanType) []hybridqp.QueryNode {
 		storePlan = append(storePlan, node)
 	}
 	return storePlan
+}
+
+func NewOneShardStorePlanTypePool(planType PlanType) []hybridqp.QueryNode {
+	sqlPlan := SqlPlanTemplate[planType].plan
+	oneShardStorePlan := make([]hybridqp.QueryNode, 0)
+	for i := 0; i < len(sqlPlan); i++ {
+		if exchange, exOk := sqlPlan[i].(*LogicalExchange); exOk {
+			if exchange.ExchangeType() == NODE_EXCHANGE {
+				storeExchange := &LogicalExchange{
+					eType: NODE_EXCHANGE,
+					eRole: PRODUCER_ROLE,
+				}
+				oneShardStorePlan = append(oneShardStorePlan, storeExchange)
+				break
+			} else if exchange.ExchangeType() == SHARD_EXCHANGE {
+				if i+1 < len(sqlPlan) {
+					_, ok := sqlPlan[i+1].(*LogicalAggregate)
+					if ok {
+						i++
+					}
+				}
+				continue
+			}
+		}
+		oneShardStorePlan = append(oneShardStorePlan, sqlPlan[i])
+	}
+	return oneShardStorePlan
 }

@@ -33,20 +33,12 @@ import (
 	"go.uber.org/zap"
 )
 
-var pipelineExecutorResourceManager *PipelineExecutorManager
-
-func init() {
-	pipelineExecutorResourceManager = NewPipelineExecutorManager()
-}
-
-func GetPipelineExecutorResourceManager() *PipelineExecutorManager {
-	return pipelineExecutorResourceManager
-}
-
 type UnRefDbPt struct {
 	Db string
 	Pt uint32
 }
+
+var log = logger.NewLogger(errno.ModuleQueryEngine)
 
 type PipelineExecutor struct {
 	dag          *TransformDag
@@ -59,26 +51,19 @@ type PipelineExecutor struct {
 	aborted bool
 	crashed bool
 
-	peLogger *logger.Logger
-
-	info PipelineExecutorInfo
-
-	RunTimeStats  *statistics.StatisticTimer
-	WaitTimeStats *statistics.StatisticTimer
+	RunTimeStats *statistics.StatisticTimer
 }
 
 func NewPipelineExecutor(processors Processors) *PipelineExecutor {
 	pe := &PipelineExecutor{
-		dag:           nil,
-		root:          nil,
-		processors:    processors,
-		context:       nil,
-		cancelFunc:    nil,
-		aborted:       false,
-		crashed:       false,
-		peLogger:      logger.NewLogger(errno.ModuleQueryEngine),
-		RunTimeStats:  statistics.NewStatisticTimer(statistics.ExecutorStat.ExecRunTime),
-		WaitTimeStats: statistics.NewStatisticTimer(statistics.ExecutorStat.ExecWaitTime),
+		dag:          nil,
+		root:         nil,
+		processors:   processors,
+		context:      nil,
+		cancelFunc:   nil,
+		aborted:      false,
+		crashed:      false,
+		RunTimeStats: statistics.NewStatisticTimer(statistics.ExecutorStat.ExecRunTime),
 	}
 
 	return pe
@@ -86,16 +71,14 @@ func NewPipelineExecutor(processors Processors) *PipelineExecutor {
 
 func NewPipelineExecutorFromDag(dag *TransformDag, root *TransformVertex) *PipelineExecutor {
 	pe := &PipelineExecutor{
-		dag:           dag,
-		root:          root,
-		processors:    nil,
-		context:       nil,
-		cancelFunc:    nil,
-		aborted:       false,
-		crashed:       false,
-		peLogger:      logger.NewLogger(errno.ModuleQueryEngine),
-		RunTimeStats:  statistics.NewStatisticTimer(statistics.ExecutorStat.ExecRunTime),
-		WaitTimeStats: statistics.NewStatisticTimer(statistics.ExecutorStat.ExecWaitTime),
+		dag:          dag,
+		root:         root,
+		processors:   nil,
+		context:      nil,
+		cancelFunc:   nil,
+		aborted:      false,
+		crashed:      false,
+		RunTimeStats: statistics.NewStatisticTimer(statistics.ExecutorStat.ExecRunTime),
 	}
 
 	pe.init()
@@ -179,50 +162,64 @@ func (exec *PipelineExecutor) cancel() {
 func (exec *PipelineExecutor) Release() {
 	for _, p := range exec.processors {
 		if err := p.Release(); err != nil {
-			exec.peLogger.Error("failed to release", zap.Error(err), zap.String("processors", p.Name()),
+			log.Error("failed to release", zap.Error(err), zap.String("processors", p.Name()),
 				zap.Bool("aborted", exec.aborted), zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
 		}
 	}
 }
 
 func (exec *PipelineExecutor) ExecuteExecutor(ctx context.Context) error {
-	if err := pipelineExecutorResourceManager.ManageMemResource(exec); err != nil {
-		statistics.ExecutorStat.ExecTimeout.Increase()
-		return err
-	}
-	defer pipelineExecutorResourceManager.ReleaseMem(exec)
 	statistics.ExecutorStat.ExecScheduled.Increase()
 	return exec.Execute(ctx)
+}
+
+func (exec *PipelineExecutor) initContext(ctx context.Context) error {
+	exec.contextMutex.Lock()
+	if exec.context != nil || exec.cancelFunc != nil {
+		exec.contextMutex.Unlock()
+		return errno.NewError(errno.PipelineExecuting, exec.context, exec.cancelFunc)
+	}
+	exec.context, exec.cancelFunc = context.WithCancel(ctx)
+	exec.contextMutex.Unlock()
+	return nil
+}
+
+func (exec *PipelineExecutor) destroyContext() {
+	exec.contextMutex.Lock()
+	exec.context, exec.cancelFunc = nil, nil
+	exec.contextMutex.Unlock()
+}
+
+func (exec *PipelineExecutor) work(processor Processor) error {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error("runtime panic", zap.String("PipelineExecutor Execute raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.Bool("aborted", exec.aborted),
+				zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
+			exec.Crash()
+		}
+	}()
+
+	err := processor.Work(exec.context)
+	if err != nil {
+		msg := fmt.Sprintf("%s in pipeline executor failed", processor.Name())
+		log.Error(msg,
+			zap.Error(err),
+			zap.Bool("aborted", exec.aborted),
+			zap.Bool("crashed", exec.crashed),
+			zap.String("query", "PipelineExecutor"))
+	}
+	return err
 }
 
 func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 	exec.RunTimeStats.Begin()
 	defer exec.RunTimeStats.End()
 
-	initContext := func() error {
-		exec.contextMutex.Lock()
-		defer exec.contextMutex.Unlock()
-
-		if exec.context != nil || exec.cancelFunc != nil {
-			return errno.NewError(errno.PipelineExecuting, exec.context, exec.cancelFunc)
-		}
-
-		exec.context, exec.cancelFunc = context.WithCancel(ctx)
-		return nil
-	}
-
-	if err := initContext(); err != nil {
+	if err := exec.initContext(ctx); err != nil {
 		return err
 	}
-
-	destroyContext := func() {
-		exec.contextMutex.Lock()
-		defer exec.contextMutex.Unlock()
-
-		exec.context, exec.cancelFunc = nil, nil
-	}
-
-	defer destroyContext()
 
 	var once sync.Once
 	var processorErr error
@@ -231,46 +228,22 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 	wg.Add(len(exec.processors))
 
 	for _, p := range exec.processors {
-		work := func(processor Processor) {
-			var err error
-
-			defer func() {
-				if e := recover(); e != nil {
-					exec.peLogger.Error("runtime panic", zap.String("PipelineExecutor Execute raise stack:", string(debug.Stack())),
-						zap.Error(errno.NewError(errno.RecoverPanic, e)),
-						zap.Bool("aborted", exec.aborted),
-						zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
+		go func(processor Processor) {
+			err := exec.work(processor)
+			if err != nil {
+				once.Do(func() {
+					processorErr = err
+					statistics.ExecutorStat.ExecFailed.Increase()
 					exec.Crash()
-					err = nil
-				}
-
-				if err != nil {
-					once.Do(func() {
-						processorErr = err
-						statistics.ExecutorStat.ExecFailed.Increase()
-						exec.Crash()
-					})
-					msg := fmt.Sprintf("%s in pipeline executor failed", processor.Name())
-					exec.peLogger.Error(msg,
-						zap.Error(err),
-						zap.Bool("aborted", exec.aborted),
-						zap.Bool("crashed", exec.crashed),
-						zap.String("query", "PipelineExecutor"))
-				}
-
-				processor.FinishSpan()
-				wg.Done()
-			}()
-
-			if err = processor.Work(exec.context); err != nil {
-				return
+				})
 			}
-		}
-
-		go work(p)
+			processor.FinishSpan()
+			wg.Done()
+		}(p)
 	}
 	wg.Wait()
 	exec.Release()
+	exec.destroyContext()
 
 	if processorErr != nil {
 		// TODO: return an internel error like errors.New("internal error occurs in executor")
@@ -646,15 +619,15 @@ func (builder *ExecutorBuilder) createSparseIndexScanTransform(indexScan *Logica
 func (builder *ExecutorBuilder) addNodeProducer(exchange *LogicalExchange) (*TransformVertex, error) {
 	if len(exchange.Children()) != 1 {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "only one child in node producer exchange")
-		//panic(fmt.Sprintf("only one child in node producer exchange(%v), but %d", exchange, len(exchange.Children())))
 	}
-
+	if builder.info != nil {
+		builder.info.ShardID = builder.traits.shards[0]
+	}
 	childNode := exchange.Children()[0]
 	child, err := builder.addNodeToDag(childNode)
 
 	if builder.traits.w == nil {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "missing  spdy.Responser in node exchange produce")
-		//panic("missing  spdy.Responser in node exchange produce")
 	}
 
 	sender := NewRPCSenderTransform(exchange.RowDataType(), builder.traits.w)
@@ -681,12 +654,10 @@ func (builder *ExecutorBuilder) addConsumerToDag(exchange *LogicalExchange) *Tra
 func (builder *ExecutorBuilder) addNodeConsumer(exchange *LogicalExchange) (*TransformVertex, error) {
 	if len(exchange.eTraits) == 0 {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "length of traits of exchange is 0, nothing to be exchanged")
-		//panic("length of traits of exchange is 0, nothing to be exchanged")
 	}
 
 	if len(exchange.Children()) != 1 {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "only one child in exchange")
-		//panic(fmt.Sprintf("only one child in exchange(%v), but %d", exchange, len(exchange.Children())))
 	}
 
 	inRowDataTypes := make([]hybridqp.RowDataType, 0, len(exchange.eTraits))
@@ -703,8 +674,6 @@ func (builder *ExecutorBuilder) addNodeConsumer(exchange *LogicalExchange) (*Tra
 			readers = append(readers, v)
 		} else {
 			return nil, errno.NewError(errno.LogicalPlanBuildFail, "only *executor.RemoteQuery support in node exchange consumer")
-			//panic(fmt.Sprintf("only *executor.RemoteQuery support in node exchange consumer, but %v",
-			//reflect.TypeOf(trait).String()))
 		}
 
 		inRowDataTypes = append(inRowDataTypes, exchange.RowDataType())
@@ -742,7 +711,6 @@ func (builder *ExecutorBuilder) addNodeExchange(exchange *LogicalExchange) (*Tra
 		}
 	default:
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "unknown exchange role")
-		//panic(fmt.Sprintf("unknown exchange role in %v", exchange))
 	}
 }
 
@@ -785,7 +753,6 @@ func (builder *ExecutorBuilder) addReaderExchange(exchange *LogicalExchange) (*T
 	var err error
 	if !builder.traits.HasShard() {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "no shard for reader exchange")
-		//panic(fmt.Sprintf("no shard for reader exchange(%v)", exchange))
 	}
 	shard := builder.traits.PeekShard()
 	for _, readers := range builder.traits.Readers(shard) {
@@ -821,7 +788,6 @@ func (builder *ExecutorBuilder) addOneReaderExchange(exchange *LogicalExchange) 
 func (builder *ExecutorBuilder) addIndexScan(indexScan *LogicalIndexScan) (*TransformVertex, error) {
 	if !builder.traits.HasShard() {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "no shard for reader exchange")
-		//panic(fmt.Sprintf("no shard for reader exchange(%v)", indexScan))
 	}
 
 	indexScanProcessor := builder.createIndexScanTransform(indexScan)
@@ -898,7 +864,10 @@ func (builder *ExecutorBuilder) addHashMerge(hashMerge *LogicalHashMerge) (*Tran
 			}
 
 		}
-		merge, _ := NewHashMergeTransform(inRowDataTypes, []hybridqp.RowDataType{hashMerge.RowDataType()}, hashMerge.schema.(*QuerySchema))
+		merge, err := NewHashMergeTransform(inRowDataTypes, []hybridqp.RowDataType{hashMerge.RowDataType()}, hashMerge.schema.(*QuerySchema))
+		if err != nil {
+			return nil, err
+		}
 
 		vertex := NewTransformVertex(hashMerge, merge)
 		builder.dag.AddVertex(vertex)
@@ -945,7 +914,10 @@ func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformV
 			}
 
 		}
-		hash, _ := NewHashAggTransform(inRowDataTypes, []hybridqp.RowDataType{hashAgg.RowDataType()}, hashAgg.ops, hashAgg.schema.(*QuerySchema), hashAgg.hashAggType)
+		hash, err := NewHashAggTransform(inRowDataTypes, []hybridqp.RowDataType{hashAgg.RowDataType()}, hashAgg.ops, hashAgg.schema.(*QuerySchema), hashAgg.hashAggType)
+		if err != nil {
+			return nil, err
+		}
 
 		vertex := NewTransformVertex(hashAgg, hash)
 		builder.dag.AddVertex(vertex)
@@ -972,7 +944,10 @@ func (builder *ExecutorBuilder) addFragsHashAgg(node hybridqp.QueryNode, frags *
 	}
 	v := NewTransformVertex(hashAgg, reader)
 	builder.dag.AddVertex(v)
-	hash, _ := NewHashAggTransform([]hybridqp.RowDataType{hashAgg.inputs[0].RowDataType()}, []hybridqp.RowDataType{hashAgg.RowDataType()}, hashAgg.ops, hashAgg.schema.(*QuerySchema), hashAgg.hashAggType)
+	hash, err := NewHashAggTransform([]hybridqp.RowDataType{hashAgg.inputs[0].RowDataType()}, []hybridqp.RowDataType{hashAgg.RowDataType()}, hashAgg.ops, hashAgg.schema.(*QuerySchema), hashAgg.hashAggType)
+	if err != nil {
+		return nil, err
+	}
 	vertex := NewTransformVertex(hashAgg, hash)
 	builder.dag.AddVertex(vertex)
 	builder.dag.AddEdge(v, vertex)
@@ -1016,12 +991,10 @@ func (builder *ExecutorBuilder) addBinaryTreeExchange(exchange *LogicalExchange,
 func (builder *ExecutorBuilder) addDefaultExchange(exchange *LogicalExchange) (*TransformVertex, error) {
 	if len(exchange.eTraits) == 0 {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "length of traits of exchange is 0, nothing to be exchanged")
-		//panic("length of traits of exchange is 0, nothing to be exchanged")
 	}
 
 	if len(exchange.Children()) != 1 {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "only one child in exchange")
-		//panic(fmt.Sprintf("only one child in exchange(%v), but %d", exchange, len(exchange.Children())))
 	}
 
 	childNode := exchange.Children()[0]
@@ -1079,7 +1052,6 @@ func (builder *ExecutorBuilder) addDefaultToDag(node hybridqp.QueryNode) (*Trans
 	if reader, ok := node.(*LogicalReader); ok {
 		if !builder.traits.HasReader() {
 			return nil, errno.NewError(errno.LogicalPlanBuildFail, "no reader for logical reader")
-			//panic(fmt.Sprintf("no reader for logical reader(%v)", node))
 		}
 		reader.SetCursor(builder.traits.NextReader())
 	}
@@ -1102,7 +1074,6 @@ func (builder *ExecutorBuilder) addDefaultToDag(node hybridqp.QueryNode) (*Trans
 		return vertex, nil
 	} else {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "unsupport logical plan, can't build processor from itr")
-		//panic(fmt.Sprintf("unsupport logical plan %v, can't build processor from it", node.String()))
 	}
 }
 
@@ -1115,7 +1086,6 @@ func (builder *ExecutorBuilder) addReaderToDag(reader *LogicalReader) (*Transfor
 
 		if err != nil {
 			return nil, err
-			//panic(err.Error())
 		}
 
 		vertex := NewTransformVertex(reader, p)
@@ -1123,7 +1093,6 @@ func (builder *ExecutorBuilder) addReaderToDag(reader *LogicalReader) (*Transfor
 		return vertex, nil
 	} else {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "unsupported logical plan, can't build processor from it")
-		//panic(fmt.Sprintf("unsupport logical plan %v, can't build processor from it", reader.String()))
 	}
 }
 

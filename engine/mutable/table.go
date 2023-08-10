@@ -260,13 +260,14 @@ func (t *tsMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 	}
 	if writeRec.RowNums() != 0 {
 		if writeMs == nil {
-			writeMs = createMsBuilder(tbStore, isOrder, lockPath, dataPath, msName, totalChunks, writeRec.Len())
+			conf := immutable.GetTsStoreConfig()
+			writeMs = createMsBuilder(tbStore, isOrder, lockPath, dataPath, msName, totalChunks, writeRec.Len(), conf)
 		}
 		writeMs = WriteRecordForFlush(writeRec, writeMs, tbStore, chunk.Sid, isOrder, chunk.LastFlushTime, nil)
 	}
 	if finish {
 		if writeMs != nil {
-			if err := WriteIntoFile(writeMs, true); err != nil {
+			if err := WriteIntoFile(writeMs, true, false); err != nil {
 				if os.IsNotExist(err) {
 					writeMs = nil
 					logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
@@ -452,8 +453,7 @@ func (c *csMemTableImpl) SortAndDedup(table *MemTable, msName string, ids []uint
 }
 
 func (c *csMemTableImpl) sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, pk, sk []record.PrimaryKey) {
-	hlp.SortForColumnStore(wRec.rec, hlp.SortData, pk, sk)
-	wRec.rec = hlp.SortData.SortRec
+	wRec.rec = hlp.SortForColumnStore(wRec.rec, hlp.SortData, pk, sk)
 }
 
 func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string, tbStore immutable.TablesStore,
@@ -463,7 +463,7 @@ func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
 
 	if writeMs != nil {
-		if err := WriteIntoFile(writeMs, true); err != nil {
+		if err := WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0); err != nil {
 			if os.IsNotExist(err) {
 				writeMs = nil
 				logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
@@ -506,7 +506,8 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 	if rec.RowNums() == 0 {
 		return
 	}
-	writeMs := createMsBuilder(tbStore, true, lock, dataPath, msName, 1, rec.Len())
+	conf := immutable.GetColStoreConfig()
+	writeMs := createMsBuilder(tbStore, true, lock, dataPath, msName, 1, rec.Len(), conf)
 	writeMs.NewPKIndexWriter()
 	c.flushChunkImp(dataPath, msName, lock, tbStore, msInfo.writeChunk, writeMs)
 }
@@ -628,10 +629,10 @@ func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo
 	if err != nil {
 		return err
 	}
+	start = time.Now()
 	msInfo.CreateWriteChunkForColumnStore(mstsInfo[mst].ColStoreInfo.PrimaryKey, mstsInfo[mst].ColStoreInfo.SortKey)
-
 	msInfo.writeChunk.WriteRec.rec.AppendRec(rec, 0, rec.RowNums())
-
+	atomic.AddInt64(&Statistics.PerfStat.WriteMstInfoNs, time.Since(start).Nanoseconds())
 	return err
 }
 
@@ -669,7 +670,7 @@ func (c *csMemTableImpl) Reset(t *MemTable) {
 	}
 }
 
-func WriteIntoFile(msb *immutable.MsBuilder, tmp bool) error {
+func WriteIntoFile(msb *immutable.MsBuilder, tmp bool, withPKIndex bool) error {
 	f, err := msb.NewTSSPFile(tmp)
 	if err != nil {
 		panic(err)
@@ -678,7 +679,12 @@ func WriteIntoFile(msb *immutable.MsBuilder, tmp bool) error {
 		msb.Files = append(msb.Files, f)
 	}
 
-	err = immutable.RenameTmpFiles(msb.Files)
+	if !withPKIndex {
+		err = immutable.RenameTmpFiles(msb.Files)
+	} else {
+		err = immutable.RenameTmpFilesWithPKIndex(msb.Files)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -702,11 +708,10 @@ func WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore i
 	return msb
 }
 
-func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string, dataPath string, msName string, totalChunks int, size int) *immutable.MsBuilder {
+func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string, dataPath string, msName string, totalChunks int, size int, conf *immutable.Config) *immutable.MsBuilder {
 	seq := tbStore.Sequencer()
 	defer seq.UnRef()
 
-	conf := immutable.GetConfig()
 	FileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, order, lockPath)
 	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size)
 	return msb

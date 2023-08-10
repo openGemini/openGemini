@@ -87,8 +87,8 @@ func (w *IndexWriterImpl) createPrimaryIndexData(
 	for i := 0; i < pkSchema.Len(); i++ {
 		if idx := srcRec.Schema.FieldIndex(pkSchema.Field(i).Name); idx >= 0 {
 			switch pkSchema.Field(i).Type {
-			case influx.Field_Type_String:
-				w.generatePrimaryIndexData(srcRec, dstRec, rowsNumPerFragment, numFragment, influx.Field_Type_String, idx, i)
+			case influx.Field_Type_String, influx.Field_Type_Tag:
+				w.generatePrimaryIndexData(srcRec, dstRec, rowsNumPerFragment, numFragment, pkSchema.Field(i).Type, idx, i)
 			case influx.Field_Type_Int:
 				w.generatePrimaryIndexData(srcRec, dstRec, rowsNumPerFragment, numFragment, influx.Field_Type_Int, idx, i)
 			case influx.Field_Type_Float:

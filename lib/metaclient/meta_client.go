@@ -148,7 +148,7 @@ func (a FieldKeys) Less(i, j int) bool { return a[i].Field < a[j].Field }
 
 // MetaClient is an interface for accessing meta data.
 type MetaClient interface {
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
 	CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error)
 	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error)
@@ -863,7 +863,7 @@ func (c *Client) UpdateSchema(database string, retentionPolicy string, mst strin
 	return nil
 }
 
-func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
 	msti, err := c.Measurement(database, retentionPolicy, mst)
 	if msti != nil {
 		// check shardkey equal or not
@@ -903,6 +903,10 @@ func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst 
 
 	if colStoreInfo != nil {
 		cmd.ColStoreInfo = colStoreInfo.Marshal()
+	}
+
+	if len(schemaInfo) > 0 {
+		cmd.SchemaInfo = schemaInfo
 	}
 
 	err = c.retryUntilExec(proto2.Command_CreateMeasurementCommand, proto2.E_CreateMeasurementCommand_Command, cmd)

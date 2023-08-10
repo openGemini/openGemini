@@ -16,7 +16,9 @@ limitations under the License.
 
 package record
 
-import "github.com/openGemini/openGemini/lib/codec"
+import (
+	"github.com/openGemini/openGemini/lib/codec"
+)
 
 func (rec *Record) Marshal(buf []byte) ([]byte, error) {
 	var err error

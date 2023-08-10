@@ -33,7 +33,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -117,10 +116,10 @@ func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, csming *Clu
 }
 
 func (csm *ClusterShardMapper) updateShardIDsByPtID(shs []meta2.ShardInfo, shardIDsByPtID *map[uint32][]uint64) {
+	var ptID uint32
 	for shIdx := range shs {
-		var ptID uint32
 		if len(shs[shIdx].Owners) > 0 {
-			ptID = shs[shIdx].Owners[rand.Intn(len(shs[shIdx].Owners))]
+			ptID = shs[shIdx].Owners[0]
 		} else {
 			csm.Logger.Warn("shard has no owners", zap.Uint64("shardID", shs[shIdx].ID))
 			continue
@@ -584,6 +583,7 @@ func (csm *ClusterShardMapping) Close() error {
 	return nil
 }
 
+// there are multi source return when one source input because measurement regex
 func (csm *ClusterShardMapping) GetSources(sources influxql.Sources) influxql.Sources {
 	var srcs influxql.Sources
 	for _, src := range sources {

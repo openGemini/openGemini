@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
@@ -84,7 +85,7 @@ func (m mocShardMapperMetaClient) DropStream(name string) error {
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo) (*meta.MeasurementInfo, error) {
+func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema) (*meta.MeasurementInfo, error) {
 	return nil, nil
 }
 
@@ -521,7 +522,7 @@ func TestShardMapperExprRewriter(t *testing.T) {
 	}
 }
 
-func TestShardMapping(t *testing.T) {
+func TestShardMappingGetSeriesKey(t *testing.T) {
 	tr := influxql.TimeRange{}
 	tmin := time.Unix(0, tr.MinTimeNano())
 	tmax := time.Unix(0, tr.MaxTimeNano())
@@ -529,5 +530,39 @@ func TestShardMapping(t *testing.T) {
 	csming := NewClusterShardMapping(&csm, tmin, tmax)
 	if len(csming.GetSeriesKey()) != 0 {
 		t.Error("csming getSeriesKey error")
+	}
+}
+
+func TestShardMappingGetSources(t *testing.T) {
+	tr := influxql.TimeRange{}
+	tmin := time.Unix(0, tr.MinTimeNano())
+	tmax := time.Unix(0, tr.MaxTimeNano())
+	csm := ClusterShardMapper{}
+	csm.MetaClient = &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": meta.NewMeasurementInfo("mst1_000"),
+						},
+					},
+				},
+			},
+		},
+	}
+	csming := NewClusterShardMapping(&csm, tmin, tmax)
+	sources := make(influxql.Sources, 0)
+	sources = append(sources, &influxql.Measurement{
+		Database:        "db0",
+		RetentionPolicy: "rp0",
+		Name:            "mst1",
+		EngineType:      config.TSSTORE,
+	})
+	if (csming.GetSources(sources))[0].GetName() != "mst1_000" {
+		t.Error("csming getSources error")
 	}
 }

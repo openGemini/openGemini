@@ -1281,9 +1281,6 @@ func (fs *streamVfs) Open(name string, opts ...FSOption) (File, error) {
 		return nil, err
 	}
 
-	if err := fs.sc.FileExists(name); err != nil {
-		return nil, err
-	}
 	f, err := fs.sc.OpenFileV2(name, os.O_RDONLY, lock, priority)
 	return f, err
 }

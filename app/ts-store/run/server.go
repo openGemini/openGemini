@@ -29,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -123,8 +122,6 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	node := metaclient.NewNode(s.metaPath)
 	s.node = node
-
-	executor.SetPipelineExecutorResourceManagerParas(int64(conf.Common.MemoryLimitSize), time.Duration(conf.Common.MemoryWaitTime))
 
 	s.StoreService = NewService(&conf.Data)
 

@@ -966,9 +966,8 @@ func initSqlHeuInstruction() {
 	AddRule(mapDescToRule, NewLimitPushdownToReaderRule(""))
 	AddRule(mapDescToRule, NewLimitPushdownToSeriesRule(""))
 	AddRule(mapDescToRule, NewAggPushdownToExchangeRule(""))
-	AddRule(mapDescToRule, NewAggPushdownToReaderRule(""))
 	AddRule(mapDescToRule, NewAggPushdownToSeriesRule(""))
-
+	AddRule(mapDescToRule, NewAggPushdownToReaderRule(""))
 	AddRule(mapDescToRule, NewCastorAggCutRule(""))
 
 	AddRule(mapDescToRule, NewAggSpreadToSortAppendRule(""))

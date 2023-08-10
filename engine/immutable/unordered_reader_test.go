@@ -38,7 +38,7 @@ func TestUnorderedColumnReader(t *testing.T) {
 	var readTimes []int64
 	var col *record.ColVal
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(1e15, defaultInterval, false)
 
@@ -93,7 +93,7 @@ func TestUnorderedColumnReader_ReadRemain(t *testing.T) {
 	defer beforeTest(t, 0)
 	var begin int64 = 1e15
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -125,7 +125,7 @@ func TestUnorderedColumnReader_error(t *testing.T) {
 	var sid uint64 = 100
 	var begin int64 = 1e12
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	rg := newRecordGenerator(1e15, defaultInterval, true)
 
 	for i := 0; i < 5; i++ {

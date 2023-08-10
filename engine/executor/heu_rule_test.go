@@ -299,10 +299,10 @@ func TestAggPushdownToExchangeRuleWithCount(t *testing.T) {
 
 	verifier := NewAggPushDownVerifier()
 	hybridqp.WalkQueryNodeInPreOrder(verifier, best)
-	if verifier.AggCount() != 5 && !executor.GetEnableFileCursor() {
+	if verifier.AggCount() != 4 && !executor.GetEnableFileCursor() {
 		t.Errorf("5 agg in plan tree, but %d", verifier.AggCount())
 	}
-	if verifier.AggCount() != 6 && executor.GetEnableFileCursor() {
+	if verifier.AggCount() != 5 && executor.GetEnableFileCursor() {
 		t.Errorf("6 agg in plan tree, but %d", verifier.AggCount())
 	}
 }

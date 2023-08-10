@@ -88,7 +88,7 @@ func (mmc *MockMetaClient) UpdateSchema(database string, retentionPolicy string,
 	return mmc.UpdateSchemaFn(database, retentionPolicy, mst, fieldToCreate)
 }
 
-func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
 	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, indexR, engineType, nil)
 }
 
@@ -321,12 +321,23 @@ func NewMeasurement(mst string, engineType config.EngineType) *meta2.Measurement
 		msti.ShardKeys = []meta2.ShardKeyInfo{{Type: "hash"}}
 	}
 
-	msti.Schema = map[string]int32{
-		"fk1": influx.Field_Type_Float,
-		"fk2": influx.Field_Type_Int,
-		"tk1": influx.Field_Type_Tag,
-		"tk2": influx.Field_Type_Tag,
+	if mst == "rtt" {
+		msti.Schema = map[string]int32{
+			"int":     influx.Field_Type_Int,
+			"float":   influx.Field_Type_Float,
+			"boolean": influx.Field_Type_Boolean,
+			"string":  influx.Field_Type_String,
+		}
+		msti.ColStoreInfo = &meta2.ColStoreInfo{PrimaryKey: []string{"time"}}
+	} else {
+		msti.Schema = map[string]int32{
+			"fk1": influx.Field_Type_Float,
+			"fk2": influx.Field_Type_Int,
+			"tk1": influx.Field_Type_Tag,
+			"tk2": influx.Field_Type_Tag,
+		}
 	}
+
 	if enableFieldIndex {
 		ilist := []string{"tk3", "tk1"}
 		msti.IndexRelation = meta2.IndexRelation{
@@ -424,6 +435,65 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 	buf.WriteString(`mst,tk1=value11,tk2=value22,tk3=value33 value4=99`)
 	buf.WriteByte('\n')
 	buf.WriteString(`far,boo=1,time=2 f1=1,f2=2`)
+	unmarshal(buf.Bytes(), callback)
+}
+
+func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
+	mi := meta2.NewMeasurementInfo("mst_0000")
+	mi.EngineType = config.COLUMNSTORE
+	mi.Schema = map[string]int32{
+		"value1": influx.Field_Type_Float,
+		"value2": influx.Field_Type_Int,
+	}
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		if len(fieldToCreate) > 0 && fieldToCreate[0].GetFieldName() == "value3" {
+			return fmt.Errorf("field type conflict")
+		}
+
+		for _, item := range fieldToCreate {
+			mi.Schema[item.GetFieldName()] = item.GetFieldType()
+		}
+		return nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var errors = []string{
+		"point schema length does not match ddl schema length: 3 != 2",
+		`column store write point has Invalid tag :tk1`,
+		"column store write point has Invalid field :value3",
+	}
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for i, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+
+			if errors[i] == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, errors[i])
+			}
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1=value1 value1=1.1,value2=2`)
+	buf.WriteByte('\n')
+	buf.WriteString(`mst,tk1=value11 value2=22`)
+	buf.WriteByte('\n')
+	buf.WriteString(`mst value2=22,value3=99`)
+	buf.WriteByte('\n')
 	unmarshal(buf.Bytes(), callback)
 }
 

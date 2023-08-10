@@ -746,23 +746,27 @@ func (idx *MergeSetIndex) SearchSeriesIterator(span *tracing.Span, name []byte, 
 		search.StartPP()
 	}
 
-	var tsid uint64
 	var err error
-	tsid, err = idx.GetSeriesIdBySeriesKey(opt.SeriesKey, name)
-	if err != nil {
-		idx.logger.Error("getSeriesIdBySeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
-		return nil, err
+	var tsid uint64
+
+	singleSeries := opt.GetHintType() == hybridqp.FullSeriesQuery
+	if singleSeries {
+		tsid, err = idx.GetSeriesIdBySeriesKey(opt.SeriesKey, name)
+		if err != nil {
+			idx.logger.Error("getSeriesIdBySeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
+			return nil, err
+		}
 	}
 
 	is := idx.getIndexSearch()
-	defer idx.putIndexSearch(is)
 
 	is.setDeleted(idx.getDeletedTSIDs())
-	itr, err := is.measurementSeriesByExprIterator(name, opt.Condition, TimeRange{Min: opt.StartTime, Max: opt.EndTime}, opt.GetHintType() == hybridqp.FullSeriesQuery, tsid)
+	itr, err := is.measurementSeriesByExprIterator(name, opt.Condition, singleSeries, tsid)
 	if search != nil {
 		search.Finish()
 	}
 
+	idx.putIndexSearch(is)
 	if err != nil {
 		idx.logger.Error("measurementSeriesByExprIterator fail", zap.Error(err), zap.String("index", "mergeset"))
 		return nil, err
@@ -809,7 +813,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	var tagSetMap map[string]*TagSetInfo
 	var sortedTagSets []*TagSetInfo
 	if opt.GroupByAllDims {
-		sortedTagSets = make([]*TagSetInfo, 0, itr.Ids().Len())
+		sortedTagSets = make([]*TagSetInfo, 0, seriesNum)
 	} else {
 		tagSetMap = make(map[string]*TagSetInfo)
 	}
@@ -823,7 +827,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	var ok bool
 	var groupTagKey []byte // reused
 	var totalSeriesKeyLen int64
-	var tagSet *TagSetInfo
+	var tagSetInfo *TagSetInfo
 	var tagsBuf influx.PointTags
 	var seriesKeys [][]byte
 	var combineSeriesKey []byte
@@ -873,22 +877,22 @@ LOOP:
 			}
 
 			if opt.GroupByAllDims {
-				tagSet = NewSingleTagSetInfo()
-				tagSet.key = append(tagSet.key, groupTagKey...)
-				sortedTagSets = append(sortedTagSets, tagSet)
+				tagSetInfo = NewSingleTagSetInfo()
+				tagSetInfo.key = append(tagSetInfo.key, groupTagKey...)
+				sortedTagSets = append(sortedTagSets, tagSetInfo)
 			} else {
-				tagSet, ok = tagSetMap[bytesutil.ToUnsafeString(groupTagKey)]
+				tagSetInfo, ok = tagSetMap[bytesutil.ToUnsafeString(groupTagKey)]
 				if !ok {
-					tagSet = NewTagSetInfo()
-					tagSet.key = append(tagSet.key, groupTagKey...)
+					tagSetInfo = NewTagSetInfo()
+					tagSetInfo.key = append(tagSetInfo.key, groupTagKey...)
 				}
-				tagSetMap[string(groupTagKey)] = tagSet
+				tagSetMap[string(groupTagKey)] = tagSetInfo
 			}
 
 			if exprs[i] != nil {
-				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
+				tagSetInfo.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
 			} else {
-				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
+				tagSetInfo.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
 			}
 			groupTagKey = groupTagKey[:0]
 			seriesN++
@@ -928,8 +932,11 @@ LOOP:
 			sortedTagSets = append(sortedTagSets, v)
 		}
 	}
-	sgs := NewSortGroupSeries(sortedTagSets, opt.Ascending)
-	sort.Sort(sgs)
+
+	if len(sortedTagSets) > 1 {
+		sgs := NewSortGroupSeries(sortedTagSets, opt.Ascending)
+		sort.Sort(sgs)
+	}
 
 	if sortTs != nil {
 		sortTs.Finish()

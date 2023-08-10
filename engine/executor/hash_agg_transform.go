@@ -87,35 +87,35 @@ func (gkp *GroupKeysMPool) AllocGroupKeys(size int) [][]byte {
 }
 
 func (gkp *GroupKeysMPool) AllocGroupTags(size int) []*ChunkTags {
-	if size > len(gkp.groupTags) {
-		gkp.groupTags = append(make([]*ChunkTags, size-len(gkp.groupTags)), gkp.groupTags...)
+	n := size - cap(gkp.groupTags)
+	if n > 0 {
+		gkp.groupTags = append(gkp.groupTags[:cap(gkp.groupTags)], make([]*ChunkTags, n)...)
 	}
-	return gkp.groupTags
+	return gkp.groupTags[:size]
 }
 
 func (gkp *GroupKeysMPool) AllocStates(size int) [][hashStateSize]uint64 {
-	if size > len(gkp.states) {
-		gkp.states = append(make([][hashStateSize]uint64, size-len(gkp.states)), gkp.states...)
+	n := size - cap(gkp.states)
+	if n > 0 {
+		gkp.states = append(gkp.states[:cap(gkp.states)], make([][hashStateSize]uint64, n)...)
 	}
-	return gkp.states
+	return gkp.states[:size]
 }
 
 func (gkp *GroupKeysMPool) AllocValues(size int) []uint64 {
-	if size < len(gkp.values) {
-		gkp.values = gkp.values[:size]
-	} else if size > len(gkp.values) {
-		gkp.values = append(make([]uint64, size-len(gkp.states)), gkp.values...)
+	n := size - cap(gkp.values)
+	if n > 0 {
+		gkp.values = append(gkp.values[:cap(gkp.values)], make([]uint64, n)...)
 	}
-	return gkp.values
+	return gkp.values[:size]
 }
 
 func (gkp *GroupKeysMPool) AllocZValues(size int) []int64 {
-	if size < len(gkp.zValues) {
-		gkp.zValues = gkp.zValues[:size]
-	} else if size > len(gkp.zValues) {
-		gkp.zValues = append(make([]int64, size-len(gkp.zValues)), gkp.zValues...)
+	n := size - cap(gkp.zValues)
+	if n > 0 {
+		gkp.zValues = append(gkp.zValues[:cap(gkp.zValues)], make([]int64, n)...)
 	}
-	return gkp.zValues
+	return gkp.zValues[:size]
 }
 
 func (gkp *GroupKeysMPool) FreeGroupKeys(groupKeys [][]byte) {
@@ -159,19 +159,19 @@ func NewIntervalKeysMpool(size int) *IntervalKeysMPool {
 }
 
 func (gkp *IntervalKeysMPool) AllocIntervalKeys(size int) []int64 {
-	if size > len(gkp.intervalKeys) {
-		gkp.intervalKeys = append(make([]int64, size-len(gkp.intervalKeys)), gkp.intervalKeys...)
+	n := size - cap(gkp.intervalKeys)
+	if n > 0 {
+		gkp.intervalKeys = append(gkp.intervalKeys[:cap(gkp.intervalKeys)], make([]int64, n)...)
 	}
-	return gkp.intervalKeys
+	return gkp.intervalKeys[:size]
 }
 
 func (gkp *IntervalKeysMPool) AllocValues(size int) []uint64 {
-	if size < len(gkp.values) {
-		gkp.values = gkp.values[:size]
-	} else if size > len(gkp.values) {
-		gkp.values = append(make([]uint64, size-len(gkp.values)), gkp.values...)
+	n := size - cap(gkp.values)
+	if n > 0 {
+		gkp.values = append(gkp.values[:cap(gkp.intervalKeys)], make([]uint64, n)...)
 	}
-	return gkp.values
+	return gkp.values[:size]
 }
 
 func (gkp *IntervalKeysMPool) FreeIntervalKeys(intervalKeys []int64) {
@@ -404,6 +404,7 @@ func (trans *HashAggTransform) runnable(ctx context.Context, errs *errno.Errs, i
 			trans.receiveChunk(c)
 			tracing.EndPP(trans.span)
 		case <-ctx.Done():
+			trans.receiveChunk(nil)
 			return
 		}
 	}

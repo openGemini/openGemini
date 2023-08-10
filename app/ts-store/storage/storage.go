@@ -57,7 +57,6 @@ type Service interface {
 }
 
 type StoreEngine interface {
-	CreateLogicPlan(context.Context, string, uint32, uint64, influxql.Sources, *executor.QuerySchema) (hybridqp.QueryNode, error)
 	RefEngineDbPt(string, uint32) error
 	UnrefEngineDbPt(string, uint32)
 	ExecuteDelete(*netstorage.DeleteRequest) error
@@ -252,6 +251,8 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 }
 
 func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
+	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
+	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 	return s.Write(db, rp, mst, ptId, shardID, func() error {
@@ -386,12 +387,7 @@ func (s *Storage) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64
 	return s.engine.GetShardDownSampleLevel(db, ptId, shardID)
 }
 
-func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
-	plan, err := s.engine.CreateLogicalPlan(ctx, db, ptId, shardID, sources, schema)
-	return plan, err
-}
-
-func (s *Storage) CreateLogicPlanV2(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	plan, err := s.engine.CreateLogicalPlan(ctx, db, ptId, shardID, sources, schema.(*executor.QuerySchema))
 	return plan, err
 }

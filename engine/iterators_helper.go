@@ -36,7 +36,7 @@ func newCursorSchema(ctx *idKeyCursorContext, schema *executor.QuerySchema) erro
 		log.Error("get field filter fail", zap.Error(err))
 		return err
 	}
-	ctx.auxTags, ctx.schema = NewRecordSchema(schema, ctx.auxTags[:0], ctx.schema[:0], filterConditions)
+	ctx.auxTags, ctx.schema = NewRecordSchema(schema, ctx.auxTags[:0], ctx.schema[:0], filterConditions, ctx.engineType)
 	if ctx.auxTags == nil && ctx.schema.Len() <= 1 {
 		return nil
 	}

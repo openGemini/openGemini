@@ -779,7 +779,7 @@ type CreateMeasurementStatement struct {
 	SortKey         []string
 	Property        [][]string
 	Type            string
-	Tags            []string
+	Tags            map[string]int32
 	Fields          map[string]int32
 	IndexType       []string
 	IndexList       [][]string

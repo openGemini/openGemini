@@ -23,7 +23,6 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -98,50 +97,6 @@ func TestIndexScanTransformDemo(t *testing.T) {
 	trans.SetPipelineExecutor(childExec)
 	// execute
 	trans.Work(ctx)
-	childExec.Release()
-	exec.Release()
-}
-
-func TestIndexScanTransformLowerDAGResourceLack(t *testing.T) {
-	chunk1 := BuildIChunk("m")
-	ctx := context.Background()
-	outputRowDataType := buildIRowDataType()
-	schema := buildISchema()
-
-	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1))
-	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
-		return nil
-	})
-	executor.Connect(trans.GetOutputs()[0], sink.Input)
-	var process []executor.Processor
-	process = append(process, sink)
-	process = append(process, trans)
-	exec := executor.NewPipelineExecutor(process)
-	// build child pipeline executor
-	childTrans := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
-	var childProcess []executor.Processor
-	childProcess = append(childProcess, childTrans)
-	childExec := executor.NewPipelineExecutor(childProcess)
-	childDag := executor.NewTransformDag()
-	inputQn := executor.NewLogicalSeries(schema)
-	qn := executor.NewLogicalIndexScan(inputQn, schema)
-	root := executor.NewTransformVertex(qn, childTrans)
-	childDag.AddVertex(root)
-	childExec.SetRoot(root)
-	childExec.SetDag(childDag)
-	trans.GetResFromAllocator()
-	trans.FreeResFromAllocator()
-	trans.SetPipelineExecutor(childExec)
-
-	beforeTotalResource := executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource()
-	beforeTimer := executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTimeDuration()
-
-	executor.GetPipelineExecutorResourceManager().SetManagerParas(1, 1000000000) // 1s
-	// execute
-	if err := trans.WorkHelper(ctx); !errno.Equal(err, errno.DirectBucketLacks) {
-		t.Error("IndexScanTransformLowerDAGResourceLack test error")
-	}
-	executor.GetPipelineExecutorResourceManager().SetManagerParas(beforeTotalResource, beforeTimer)
 	childExec.Release()
 	exec.Release()
 }

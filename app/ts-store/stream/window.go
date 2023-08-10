@@ -366,6 +366,7 @@ func (s *Task) calculate(cache *WindowCache) error {
 		if !exist {
 			vs = make([]*float64, s.fieldCallsLen*s.windowNum)
 			s.values.Store(key, vs)
+			s.stats.AddWindowGroupKeyCount(1)
 		} else {
 			vs, _ = vv.([]*float64)
 		}

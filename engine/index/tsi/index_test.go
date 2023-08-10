@@ -199,7 +199,7 @@ func TestSeriesByExprIterator(t *testing.T) {
 		name = append(name, []byte("_0000")...)
 
 		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, tr, &tsids, false)
+		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -187,6 +187,7 @@ type QuerySchema struct {
 	joinCases         []*influxql.Join
 	hasFieldCondition bool
 	sortFields        influxql.SortFields
+	planType          PlanType
 }
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
@@ -213,6 +214,7 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 		opt:           opt,
 		sources:       nil,
 		sortFields:    sortFields,
+		planType:      UNKNOWN,
 	}
 
 	schema.init()
@@ -1149,4 +1151,12 @@ func (qs *QuerySchema) GetSortFields() influxql.SortFields {
 
 func (qs *QuerySchema) SetFill(fill influxql.FillOption) {
 	qs.opt.SetFill(fill)
+}
+
+func (qs *QuerySchema) SetPlanType(planType PlanType) {
+	qs.planType = planType
+}
+
+func (qs *QuerySchema) GetPlanType() PlanType {
+	return qs.planType
 }

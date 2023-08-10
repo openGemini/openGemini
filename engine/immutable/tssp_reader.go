@@ -34,8 +34,8 @@ import (
 const (
 	unorderedDir      = "out-of-order"
 	tsspFileSuffix    = ".tssp"
-	tmpTsspFileSuffix = ".init"
-	tmpSuffixNameLen  = len(tmpTsspFileSuffix)
+	tmpFileSuffix     = ".init"
+	tmpSuffixNameLen  = len(tmpFileSuffix)
 	tsspFileSuffixLen = len(tsspFileSuffix)
 	compactLogDir     = "compact_log"
 	DownSampleLogDir  = "downsample_log"
@@ -842,8 +842,8 @@ type FilesInfo struct {
 	toLevel      uint16
 }
 
-func GetTmpTsspFileSuffix() string {
-	return tmpTsspFileSuffix
+func GetTmpFileSuffix() string {
+	return tmpFileSuffix
 }
 
 func FileOperation(f TSSPFile, op func()) {

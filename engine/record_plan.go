@@ -552,7 +552,7 @@ func (r *WriteIntoStorageTransform) Create(plan executor.LogicalPlan, opt query.
 		seriesPlan = lr.Children()[0]
 	}
 
-	p := NewWriteIntoStorageTransform(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, opt.Sources, plan.Schema().(*executor.QuerySchema), immutable.GetConfig(), lr.GetMmsTables(), true)
+	p := NewWriteIntoStorageTransform(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, opt.Sources, plan.Schema().(*executor.QuerySchema), immutable.GetTsStoreConfig(), lr.GetMmsTables(), true)
 	return p, nil
 }
 

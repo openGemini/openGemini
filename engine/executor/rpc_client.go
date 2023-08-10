@@ -36,11 +36,15 @@ const (
 	UnknownMessage byte = iota
 	ErrorMessage
 	FinishMessage
-
 	ChunkResponseMessage
 	AnalyzeResponseMessage
 	QueryMessage
+	MessageEof
 )
+
+func ValidRpcMessageType(typ byte) bool {
+	return typ > UnknownMessage && typ < MessageEof
+}
 
 type Handler func(interface{}) error
 
@@ -48,7 +52,7 @@ type RPCClient struct {
 	trans *transport.Transport
 	query *RemoteQuery
 
-	handlers map[byte]Handler
+	handlers [MessageEof]Handler
 	aborted  bool
 	mu       sync.RWMutex
 
@@ -56,23 +60,19 @@ type RPCClient struct {
 	span        *tracing.Span
 	runningSpan *tracing.Span
 	requestSpan *tracing.Span
-
-	logger *logger.Logger
 }
 
-func NewRPCClient(ctx context.Context, query *RemoteQuery) *RPCClient {
+func NewRPCClient(query *RemoteQuery) *RPCClient {
 	c := &RPCClient{
-		query:  query,
-		logger: logger.NewLogger(errno.ModuleNetwork),
+		query: query,
 	}
 
-	c.init(ctx)
 	return c
 }
 
-func (c *RPCClient) init(ctx context.Context) {
+func (c *RPCClient) Init(ctx context.Context, queryNode []byte) {
+	c.query.Node = queryNode
 	c.trace = tracing.TraceFromContext(ctx)
-	c.handlers = make(map[byte]Handler)
 
 	c.AddHandler(AnalyzeResponseMessage, c.analyzeResponse)
 	c.AddHandler(ErrorMessage, c.errorMessage)
@@ -109,12 +109,11 @@ func (c *RPCClient) Handle(data interface{}) error {
 		return nil
 	}
 
-	handler, ok := c.handlers[msg.Type()]
-	if !ok {
+	if !ValidRpcMessageType(msg.Type()) {
 		return errno.NewError(errno.UnknownMessageType, msg.Type())
 	}
 
-	return handler(msg.Data())
+	return c.handlers[msg.Type()](msg.Data())
 }
 
 func (c *RPCClient) GetCodec() transport.Codec {
@@ -155,8 +154,8 @@ func (c *RPCClient) sendRequest() error {
 	}
 
 	c.trans = trans
-	trans.StartAnalyze(c.span)
 	if c.span != nil {
+		trans.StartAnalyze(c.span)
 		c.span.AddStringField("remote_addr", trans.Requester().Session().Connection().RemoteAddr().String())
 	}
 	trans.EnableDataACK()
@@ -187,18 +186,19 @@ func (c *RPCClient) Abort() {
 		return
 	}
 
-	c.logger.Info("send abort message", zap.Uint64("nodeID", c.query.NodeID))
+	lg := logger.NewLogger(errno.ModuleNetwork)
+	lg.Info("send abort message", zap.Uint64("nodeID", c.query.NodeID))
 
 	abort := NewAbort(c.query.Opt.QueryId, machine.GetMachineID())
 	trans, err := transport.NewTransport(c.query.NodeID, spdy.AbortRequest, nil)
 	if err != nil {
-		c.logger.Error("failed to new transport", zap.Error(err),
+		lg.Error("failed to new transport", zap.Error(err),
 			zap.Uint64("nodeID", c.query.NodeID))
 		return
 	}
 
 	if err := trans.Send(abort); err != nil {
-		c.logger.Error("failed to send abort message", zap.Error(err),
+		lg.Error("failed to send abort message", zap.Error(err),
 			zap.Uint64("nodeID", c.query.NodeID))
 		return
 	}
@@ -207,7 +207,9 @@ func (c *RPCClient) Abort() {
 }
 
 func (c *RPCClient) AddHandler(msgType byte, handle Handler) {
-	c.handlers[msgType] = handle
+	if ValidRpcMessageType(msgType) {
+		c.handlers[msgType] = handle
+	}
 }
 
 func (c *RPCClient) analyzeResponse(data interface{}) error {

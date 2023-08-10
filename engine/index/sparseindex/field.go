@@ -58,7 +58,7 @@ func (f *FieldRef) Equals(rhs *FieldRef) bool {
 		lhsVal, isNil1 := f.cols[f.column].column.FloatValue(f.row)
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.FloatValue(rhs.row)
 		return (!isNil1 && !isNil2 && lhsVal == rhsVal) || (isNil1 && isNil2)
-	case influx.Field_Type_String:
+	case influx.Field_Type_String, influx.Field_Type_Tag:
 		lhsVal, isNil1 := f.cols[f.column].column.StringValueSafe(f.row)
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.StringValueSafe(rhs.row)
 		return (!isNil1 && !isNil2 && lhsVal == rhsVal) || (isNil1 && isNil2)
@@ -89,7 +89,7 @@ func (f *FieldRef) Less(rhs *FieldRef) bool {
 		lhsVal, isNil1 := f.cols[f.column].column.FloatValue(f.row)
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.FloatValue(rhs.row)
 		return (!isNil1 && !isNil2 && lhsVal < rhsVal) || (isNil1 && !isNil2)
-	case influx.Field_Type_String:
+	case influx.Field_Type_String, influx.Field_Type_Tag:
 		lhsVal, isNil1 := f.cols[f.column].column.StringValueSafe(f.row)
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.StringValueSafe(rhs.row)
 		return (!isNil1 && !isNil2 && lhsVal < rhsVal) || (isNil1 && !isNil2)

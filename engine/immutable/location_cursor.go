@@ -22,7 +22,7 @@ import (
 )
 
 type LocationCursor struct {
-	rowCount      int
+	rowNum        int
 	pos           int
 	lcs           []*Location
 	filterRecPool *record.CircularRecordPool
@@ -43,7 +43,7 @@ func (l *LocationCursor) FragmentCount() int {
 }
 
 func (l *LocationCursor) RowCount() int {
-	return l.rowCount
+	return l.rowNum
 }
 
 func (l *LocationCursor) AddLocation(loc *Location) {
@@ -80,7 +80,7 @@ func (l *LocationCursor) Reverse() {
 }
 
 func (l *LocationCursor) Close() {
-	l.rowCount = 0
+	l.rowNum = 0
 	l.pos = 0
 	l.lcs = l.lcs[:0]
 	if l.filterRecPool != nil {
@@ -195,11 +195,11 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 	}
 
 	var err error
-	var rowCount int
+	var rowNum int
 	var rec *record.Record
-	var readCxt = l.lcs[0].ctx
+	var readCtx = l.lcs[0].ctx
 
-	if len(readCxt.ops) > 0 {
+	if len(readCtx.ops) > 0 {
 		return l.ReadMeta(filterOpts, dst, filterBitmap)
 	}
 
@@ -216,11 +216,11 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 		if l.filterRecPool != nil {
 			filterRec = l.filterRecPool.Get()
 		}
-		rec, rowCount, err = loc.readData(filterOpts, dst, filterRec, filterBitmap)
+		rec, rowNum, err = loc.readData(filterOpts, dst, filterRec, filterBitmap)
 		if err != nil {
 			return nil, err
 		}
-		l.rowCount += rowCount
+		l.rowNum += rowNum
 
 		if rec != nil {
 			return rec, nil

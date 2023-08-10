@@ -34,6 +34,10 @@ func (s *StreamWindowStatItem) AddWindowSkip(i int64) {
 	atomic.AddInt64(&s.WindowSkip, i)
 }
 
+func (s *StreamWindowStatItem) AddWindowGroupKeyCount(i int64) {
+	atomic.AddInt64(&s.WindowGroupKeyCount, i)
+}
+
 func (s *StreamWindowStatItem) StatWindowFlushCost(c int64) {
 	atomic.StoreInt64(&s.WindowFlushCost, c)
 }
@@ -78,6 +82,7 @@ func (s *StreamWindowStatItem) Reset() {
 	atomic.StoreInt64(&s.WindowOutMaxTime, 0)
 	atomic.StoreInt64(&s.WindowStartTime, 0)
 	atomic.StoreInt64(&s.WindowEndTime, 0)
+	atomic.StoreInt64(&s.WindowGroupKeyCount, 0)
 }
 
 func NewStreamWindowStatItem(streamID uint64) *StreamWindowStatItem {

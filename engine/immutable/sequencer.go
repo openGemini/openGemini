@@ -275,7 +275,7 @@ func (p *IdTimePairs) Reset(name string) {
 
 func (p *IdTimePairs) Marshal(encTimes bool, dst []byte, ctx *encoding.CoderContext) []byte {
 	var err error
-	maxBlock := uint32(DefaultMaxRowsPerSegment) * 2
+	maxBlock := uint32(DefaultMaxRowsPerSegment4TsStore) * 2
 	rows := uint32(len(p.Tms))
 	blocks := rows / maxBlock
 	if rows%maxBlock > 0 {

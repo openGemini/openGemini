@@ -203,11 +203,16 @@ func NewFirstAggOperator4Float() aggOperator {
 }
 
 func (s *firstAggOperator4Float) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
 			s.time = c.TimeByIndex(startRowLoc)
 			s.loc = startRowLoc
+			newFirst = true
 		}
+	}
+	if !newFirst {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -258,11 +263,16 @@ func NewFirstAggOperator4Integer() aggOperator {
 }
 
 func (s *firstAggOperator4Integer) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
 			s.time = c.TimeByIndex(startRowLoc)
 			s.loc = startRowLoc
+			newFirst = true
 		}
+	}
+	if !newFirst {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -313,11 +323,16 @@ func NewFirstAggOperator4String() aggOperator {
 }
 
 func (s *firstAggOperator4String) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
 			s.time = c.TimeByIndex(startRowLoc)
 			s.loc = startRowLoc
+			newFirst = true
 		}
+	}
+	if !newFirst {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -368,11 +383,16 @@ func NewFirstAggOperator4Boolean() aggOperator {
 }
 
 func (s *firstAggOperator4Boolean) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
 			s.time = c.TimeByIndex(startRowLoc)
 			s.loc = startRowLoc
+			newFirst = true
 		}
+	}
+	if !newFirst {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -423,11 +443,16 @@ func NewLastAggOperator4Float() aggOperator {
 }
 
 func (s *lastAggOperator4Float) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
 			s.loc = startRowLoc
 			s.time = c.TimeByIndex(startRowLoc)
+			newLast = true
 		}
+	}
+	if !newLast {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -478,11 +503,16 @@ func NewLastAggOperator4Integer() aggOperator {
 }
 
 func (s *lastAggOperator4Integer) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
 			s.loc = startRowLoc
 			s.time = c.TimeByIndex(startRowLoc)
+			newLast = true
 		}
+	}
+	if !newLast {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -533,11 +563,16 @@ func NewLastAggOperator4String() aggOperator {
 }
 
 func (s *lastAggOperator4String) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
 			s.loc = startRowLoc
 			s.time = c.TimeByIndex(startRowLoc)
+			newLast = true
 		}
+	}
+	if !newLast {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -588,11 +623,16 @@ func NewLastAggOperator4Boolean() aggOperator {
 }
 
 func (s *lastAggOperator4Boolean) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
 			s.loc = startRowLoc
 			s.time = c.TimeByIndex(startRowLoc)
+			newLast = true
 		}
+	}
+	if !newLast {
+		return nil
 	}
 	if !c.Column(colLoc).IsNilV2(s.loc) {
 		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
@@ -924,7 +964,7 @@ func NewCountFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybrid
 	}
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
-	case influxql.Integer, influxql.Float, influxql.String, influxql.Boolean:
+	case influxql.Integer, influxql.Float, influxql.String, influxql.Boolean, influxql.Tag:
 		return NewAggFunc(countFunc, NewCountAggOperator, inOrdinal, outOrdinal, 0), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "count/mean", dataType.String())
@@ -960,7 +1000,7 @@ func NewFirstFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybrid
 		return NewAggFunc(firstFunc, NewFirstAggOperator4Integer, inOrdinal, outOrdinal, 0), nil
 	case influxql.Float:
 		return NewAggFunc(firstFunc, NewFirstAggOperator4Float, inOrdinal, outOrdinal, 0), nil
-	case influxql.String:
+	case influxql.String, influxql.Tag:
 		return NewAggFunc(firstFunc, NewFirstAggOperator4String, inOrdinal, outOrdinal, 0), nil
 	case influxql.Boolean:
 		return NewAggFunc(firstFunc, NewFirstAggOperator4Boolean, inOrdinal, outOrdinal, 0), nil
@@ -981,7 +1021,7 @@ func NewLastFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridq
 		return NewAggFunc(lastFunc, NewLastAggOperator4Integer, inOrdinal, outOrdinal, 0), nil
 	case influxql.Float:
 		return NewAggFunc(lastFunc, NewLastAggOperator4Float, inOrdinal, outOrdinal, 0), nil
-	case influxql.String:
+	case influxql.String, influxql.Tag:
 		return NewAggFunc(lastFunc, NewLastAggOperator4String, inOrdinal, outOrdinal, 0), nil
 	case influxql.Boolean:
 		return NewAggFunc(lastFunc, NewLastAggOperator4Boolean, inOrdinal, outOrdinal, 0), nil

@@ -18,6 +18,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -50,7 +51,10 @@ const (
 type WalRecordType byte
 
 const (
-	WriteWALRecord WalRecordType = 0x01
+	WriteWalUnKnownType = iota
+	WriteWalLineProtocol
+	WriteWalArrowFlight
+	WriteWalEnd
 )
 
 var (
@@ -144,10 +148,10 @@ func (l *WAL) restoreLog(writer *LogWriter, replay *LogReplay) {
 	}
 }
 
-func (l *WAL) writeBinary(binaryData []byte) error {
+func (l *WAL) writeBinary(walRecord *walRecord) error {
 	// prepare for compress memory
 	compBuf := walCompBufPool.Get()
-	maxEncodeLen := snappy.MaxEncodedLen(len(binaryData))
+	maxEncodeLen := snappy.MaxEncodedLen(len(walRecord.binary))
 	compBuf = bufferpool.Resize(compBuf, WalRecordHeadSize+maxEncodeLen)
 	defer func() {
 		if len(compBuf) <= WalCompMaxBufSize {
@@ -156,10 +160,11 @@ func (l *WAL) writeBinary(binaryData []byte) error {
 	}()
 
 	// compress data
-	compData := snappy.Encode(compBuf[WalRecordHeadSize:], binaryData)
+	compData := snappy.Encode(compBuf[WalRecordHeadSize:], walRecord.binary)
 
 	// encode record header
-	compBuf[0] = byte(WriteWALRecord)
+	compBuf[0] = byte(walRecord.writeWalType)
+
 	binary.BigEndian.PutUint32(compBuf[1:WalRecordHeadSize], uint32(len(compData)))
 	compBuf = compBuf[:WalRecordHeadSize+len(compData)]
 
@@ -173,14 +178,14 @@ func (l *WAL) writeBinary(binaryData []byte) error {
 	return nil
 }
 
-func (l *WAL) Write(binary []byte) error {
+func (l *WAL) Write(walRecord *walRecord) error {
 	if !l.walEnabled {
 		return nil
 	}
-	if len(binary) == 0 {
+	if len(walRecord.binary) == 0 {
 		return nil
 	}
-	return l.writeBinary(binary)
+	return l.writeBinary(walRecord)
 }
 
 func (l *WAL) Switch() ([]string, error) {
@@ -236,7 +241,7 @@ func (l *WAL) Remove(files []string) error {
 }
 
 func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, recordCompBuff []byte,
-	callBack func(binary []byte) error) (int64, []byte, error) {
+	callBack func(pc *walRecord) error) (int64, []byte, error) {
 	// check file is all replayed
 	if offset >= fileSize {
 		return offset, recordCompBuff, io.EOF
@@ -253,6 +258,11 @@ func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, record
 		l.log.Warn(errno.NewError(errno.WalRecordHeaderCorrupted, fd.Name(), offset).Error())
 		return offset, recordCompBuff, io.EOF
 	}
+
+	writeWalType := WalRecordType(recordHeader[0])
+	if writeWalType <= WriteWalUnKnownType || writeWalType >= WriteWalEnd {
+		return offset, recordCompBuff, errors.New("unKnown write wal type")
+	}
 	offset += int64(len(recordHeader))
 
 	// prepare record memory
@@ -261,6 +271,7 @@ func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, record
 
 	// read record body
 	var recordBuff []byte
+	pc := &walRecord{}
 	n, err = fd.ReadAt(recordCompBuff, offset)
 	if err == nil || err == io.EOF {
 		offset += int64(n)
@@ -270,8 +281,9 @@ func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, record
 			l.log.Warn(errno.NewError(errno.DecompressWalRecordFailed, fd.Name(), offset, innerErr.Error()).Error())
 			return offset, recordCompBuff, io.EOF
 		}
-
-		innerErr = callBack(recordBuff)
+		pc.binary = recordBuff
+		pc.writeWalType = writeWalType
+		innerErr = callBack(pc)
 		if innerErr == nil {
 			return offset, recordCompBuff, err
 		}
@@ -282,7 +294,7 @@ func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, record
 	return offset, recordCompBuff, io.EOF
 }
 
-func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack func(binary []byte) error) error {
+func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack func(pc *walRecord) error) error {
 	failpoint.Inject("mock-replay-wal-error", func(val failpoint.Value) {
 		msg := val.(string)
 		if strings.Contains(walFileName, msg) {
@@ -332,7 +344,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 	}
 }
 
-func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(binary []byte) error) error {
+func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(pc *walRecord) error) error {
 	for _, fileName := range l.logReplay[idx].fileNames {
 		select {
 		case <-ctx.Done():
@@ -348,7 +360,7 @@ func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(bin
 	return nil
 }
 
-func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error, finish chan<- struct{}, callBack func(binary []byte) error) {
+func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{}, callBack func(binary []byte, writeWalType WalRecordType) error) {
 	// consume wal data according to partition order from channel
 	ptFinish := make([]bool, len(ptChs))
 	ptFinishNum := 0
@@ -357,14 +369,14 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan []byt
 			if ptFinish[i] {
 				continue
 			}
-			var binary []byte
+			var pc *walRecord
 			select {
 			case <-ctx.Done():
 				finish <- struct{}{}
 				return
-			case binary = <-ptChs[i]:
+			case pc = <-ptChs[i]:
 			}
-			if len(binary) == 0 {
+			if len(pc.binary) == 0 {
 				ptFinishNum++
 				ptFinish[i] = true
 				if ptFinishNum == len(ptChs) {
@@ -373,7 +385,7 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan []byt
 				}
 				continue
 			}
-			err := callBack(binary)
+			err := callBack(pc.binary, pc.writeWalType)
 			if err != nil {
 				mu.Lock()
 				*errs = append(*errs, err)
@@ -383,7 +395,8 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan []byt
 	}
 }
 
-func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error, finish chan<- struct{}, callBack func(binary []byte) error) {
+func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{},
+	callBack func(binary []byte, writeWalType WalRecordType) error) {
 	var wg sync.WaitGroup
 	wg.Add(len(ptChs))
 	for i := 0; i < len(ptChs); i++ {
@@ -393,11 +406,11 @@ func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []b
 				select {
 				case <-ctx.Done():
 					return
-				case binary := <-ptChs[idx]:
-					if len(binary) == 0 {
+				case pc := <-ptChs[idx]:
+					if len(pc.binary) == 0 {
 						return
 					}
-					err := callBack(binary)
+					err := callBack(pc.binary, pc.writeWalType)
 					if err != nil {
 						mu.Lock()
 						*errs = append(*errs, err)
@@ -412,25 +425,25 @@ func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []b
 }
 
 // sendWal2ptChs sends the wal binary to the idx ptChs
-func (l *WAL) sendWal2ptChs(ctx context.Context, ptChs []chan []byte, idx int, binary []byte) {
+func (l *WAL) sendWal2ptChs(ctx context.Context, ptChs []chan *walRecord, idx int, pc *walRecord) {
 	select {
 	case <-ctx.Done():
 		l.log.Info("cancel replay wal", zap.Int("log writer", idx))
-	case ptChs[idx] <- binary:
+	case ptChs[idx] <- pc:
 	}
 }
 
-func (l *WAL) productRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan []byte, errs *[]error) []string {
+func (l *WAL) productRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error) []string {
 	var wg sync.WaitGroup
 	var walFileNames []string
 	wg.Add(len(l.logReplay))
 	for i := range l.logReplay {
 		go func(idx int) {
-			err := l.replayOnePartition(ctx, idx, func(binary []byte) error {
-				l.sendWal2ptChs(ctx, ptChs, idx, binary)
+			err := l.replayOnePartition(ctx, idx, func(pc *walRecord) error {
+				l.sendWal2ptChs(ctx, ptChs, idx, pc)
 				return nil
 			})
-			l.sendWal2ptChs(ctx, ptChs, idx, nil)
+			l.sendWal2ptChs(ctx, ptChs, idx, &walRecord{})
 			mu.Lock()
 			if err != nil {
 				*errs = append(*errs, err)
@@ -456,7 +469,12 @@ func (l *WAL) wait() {
 	l.replayWG.Wait()
 }
 
-func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte) error) ([]string, error) {
+type walRecord struct {
+	binary       []byte
+	writeWalType WalRecordType
+}
+
+func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte, writeWalType WalRecordType) error) ([]string, error) {
 	if !l.walEnabled {
 		return nil, nil
 	}
@@ -464,10 +482,10 @@ func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte) error) ([
 	// replay wal files
 	var mu = sync.Mutex{}
 	var errs []error
-	var ptChs []chan []byte
+	var ptChs []chan *walRecord
 	consumeFinish := make(chan struct{})
 	for i := 0; i < len(l.logReplay); i++ {
-		ptChs = append(ptChs, make(chan []byte, 4))
+		ptChs = append(ptChs, make(chan *walRecord, 4))
 	}
 
 	if l.replayParallel {

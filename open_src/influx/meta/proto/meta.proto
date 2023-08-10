@@ -583,6 +583,7 @@ message CreateMeasurementCommand {
 	optional IndexRelation IR = 5;
 	optional uint32 EngineType = 6;
 	optional ColStoreInfo ColStoreInfo = 7;
+    repeated FieldSchema SchemaInfo = 8;
 }
 
 message AlterShardKeyCmd {

@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
@@ -110,9 +111,18 @@ func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema, callBack 
 	return tagSets, num, nil
 }
 
+func unRefReaders(immutableReader *immutable.MmsReaders, mutableReader *mutable.MemTables) {
+	for _, file := range immutableReader.Orders {
+		file.Unref()
+	}
+	for _, file := range immutableReader.OutOfOrders {
+		file.Unref()
+	}
+	mutableReader.UnRef()
+}
+
 func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error) {
 	var span, cloneMsSpan *tracing.Span
-	schema.InitFieldCondition()
 	if span = tracing.SpanFromContext(ctx); span != nil {
 		labels := []string{
 			"shard_id", strconv.Itoa(int(s.GetID())),
@@ -132,7 +142,6 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	start := time.Now()
 
 	var lazyInit bool
-	var seriesNum int64
 	//  #sort series for query with:1.limit 2.no aux tag 3.group by * 4.no call functions
 	if !schema.HasCall() && schema.HasLimit() && !schema.HasAuxTag() && schema.Options().IsGroupByAllDims() {
 		lazyInit = true
@@ -153,8 +162,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 
 	qDuration, _ := ctx.Value(query.QueryDurationKey).(*statistics.StoreSlowQueryStatistics)
 	if qDuration != nil {
-		end := time.Now()
-		qDuration.AddDuration("LocalTagSetDuration", end.Sub(start).Nanoseconds())
+		qDuration.AddDuration("LocalTagSetDuration", time.Since(start).Nanoseconds())
 	}
 
 	if span != nil {
@@ -163,48 +171,42 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	}
 
 	hasTimeFilter := false
-	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	startTime := schema.Options().GetStartTime()
 	endTime := schema.Options().GetEndTime()
+	tr := util.TimeRange{Min: startTime, Max: endTime}
 	shardStartTime := s.startTime.UnixNano()
 	shardEndTime := s.endTime.UnixNano()
 	if (startTime >= shardStartTime && startTime <= shardEndTime) || (endTime >= shardStartTime && endTime <= shardEndTime) {
 		hasTimeFilter = true
 	}
 
-	readers := s.cloneMeasurementReaders(schema.Options().OptionsName(), hasTimeFilter, tr)
+	immutableReader, mutableReader := s.cloneReaders(schema.Options().OptionsName(), hasTimeFilter, tr)
 	if cloneMsSpan != nil {
-		cloneMsSpan.SetNameValue(fmt.Sprintf("order=%d,unorder=%d", len(readers.Orders), len(readers.OutOfOrders)))
+		cloneMsSpan.SetNameValue(fmt.Sprintf("order=%d,unorder=%d", len(immutableReader.Orders), len(immutableReader.OutOfOrders)))
 		cloneMsSpan.Finish()
 	}
 
-	s.snapshotLock.RLock()
-	memTables := mutable.MemTables{}
-	memTables.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
-	memTables.Ref()
-	s.snapshotLock.RUnlock()
+	groupCursors, err := s.createGroupCursors(span, schema, lazyInit, result, immutableReader, mutableReader)
 
 	// unref file(no need lock here), series iterator will ref/unref file itself
-	defer func() {
-		for _, file := range readers.Orders {
-			file.Unref()
-		}
-		for _, file := range readers.OutOfOrders {
-			file.Unref()
-		}
-		memTables.UnRef()
-	}()
+	unRefReaders(immutableReader, mutableReader)
 
-	return s.createGroupCursors(span, schema, lazyInit, result, readers, &memTables)
+	return groupCursors, err
 }
 
-func (s *shard) cloneMeasurementReaders(mm string, hasTimeFilter bool, tr util.TimeRange) *immutable.MmsReaders {
-	var readers immutable.MmsReaders
+func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, *mutable.MemTables) {
+	var immutableReader immutable.MmsReaders
 	orders, unOrder := s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr)
-	readers.Orders = append(readers.Orders, orders...)
-	readers.OutOfOrders = append(readers.OutOfOrders, unOrder...)
+	immutableReader.Orders = append(immutableReader.Orders, orders...)
+	immutableReader.OutOfOrders = append(immutableReader.OutOfOrders, unOrder...)
 
-	return &readers
+	s.snapshotLock.RLock()
+	mutableReader := mutable.MemTables{}
+	mutableReader.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
+	mutableReader.Ref()
+	s.snapshotLock.RUnlock()
+
+	return &immutableReader, &mutableReader
 }
 
 func (s *shard) GetTSSPFiles(mm string, isOrder bool) (*immutable.TSSPFiles, bool) {
@@ -417,10 +419,10 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 		startGroupIdx %= parallelism
 
 		//if lazy init series cursor, create tagset in serial not in parallel
-		if !lazyInit {
-			s.CreateTagSetInParallel(work, subTagSetN, tagSet)
-		} else {
+		if lazyInit || subTagSetN == 1 {
 			s.CreateTagSetInSerial(work, subTagSetN, tagSet)
+		} else {
+			s.CreateTagSetInParallel(work, subTagSetN, tagSet)
 		}
 		startGroupIdx += subTagSetN
 
@@ -519,8 +521,8 @@ func (s *seriesInfo) GetSid() uint64 {
 }
 
 type idKeyCursorContext struct {
-	decs            *immutable.ReadContext
 	maxRowCnt       int
+	engineType      config.EngineType
 	tr              util.TimeRange
 	queryTr         util.TimeRange
 	filterFieldsIdx []int
@@ -535,6 +537,7 @@ type idKeyCursorContext struct {
 	seriesPool      *record.RecordPool
 	tmsMergePool    *record.RecordPool
 	querySchema     *executor.QuerySchema
+	decs            *immutable.ReadContext
 }
 
 func (i *idKeyCursorContext) hasAuxTags() bool {
@@ -663,12 +666,16 @@ func (s *shard) newTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, sch
 	return nil, nil
 }
 
-func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
+func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, start, step int) (map[uint64][]*SeriesIter, int64, int64) {
 	minTime := int64(math.MaxInt64)
 	maxTime := int64(math.MinInt64)
 	tagSetNum := len(tagSet.IDs)
-	memItrs := make(map[uint64][]*SeriesIter, memtableInitMapSize)
+	mapSize := tagSetNum / step
+	if mapSize > memtableInitMapSize {
+		mapSize = memtableInitMapSize
+	}
+	memItrs := make(map[uint64][]*SeriesIter, mapSize)
 
 	for i := start; i < tagSetNum; i += step {
 		sid := tagSet.IDs[i]
