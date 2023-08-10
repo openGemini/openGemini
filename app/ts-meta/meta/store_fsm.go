@@ -484,7 +484,7 @@ func (fsm *storeFSM) applyCreateMeasurementCommand(cmd *proto2.Command) interfac
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateMeasurementCommand", ext))
 	}
-	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR(), config.EngineType(v.GetEngineType()), v.GetColStoreInfo())
+	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR(), config.EngineType(v.GetEngineType()), v.GetColStoreInfo(), v.GetSchemaInfo())
 }
 
 func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) interface{} {

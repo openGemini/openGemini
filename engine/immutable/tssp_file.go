@@ -93,7 +93,7 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 
 		lock := fileops.FileLockOption(*lockPath)
 		pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-		name := tmpName[:len(tmpName)-len(tmpTsspFileSuffix)]
+		name := tmpName[:len(tmpName)-len(tmpFileSuffix)]
 		if err = fileops.RenameFile(tmpName, name, lock); err != nil {
 			err = errCreateFail(tmpName, err)
 			log.Error("stat file fail", zap.String("name", tmpName), zap.Error(err))
@@ -272,7 +272,6 @@ func (r *tsspFileReader) FreeFileHandle() error {
 	if !r.r.IsOpen() {
 		return nil
 	}
-	defer util.TimeCost("close file")()
 	if err := r.r.FreeFileHandle(); err != nil {
 		return err
 	}

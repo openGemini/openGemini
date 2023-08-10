@@ -86,7 +86,7 @@ func TestFileIterator(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	var startValue = 1.1
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 100
 	conf.maxSegmentLimit = 65535
 	tier := uint64(util.Hot)
@@ -173,13 +173,13 @@ func TestFileIterator(t *testing.T) {
 		t.Fatalf("maxChunkRows, exp:%v, but:%v", recRows, fi.maxChunkRows)
 	}
 
-	SegMergeFlag(AutoCompact)
-	SegMergeFlag(NonStreamingCompact)
+	SetMergeFlag4TsStore(AutoCompact)
+	SetMergeFlag4TsStore(NonStreamingCompact)
 	if NonStreamingCompaction(fi) != true {
 		t.Fatalf("set NonStreamingCompact fail")
 	}
 
-	SegMergeFlag(StreamingCompact)
+	SetMergeFlag4TsStore(StreamingCompact)
 	NonStreamingCompaction(fi)
 	if NonStreamingCompaction(fi) != false {
 		t.Fatalf("set StreamingCompact fail")
@@ -226,7 +226,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	var startValue = 1.1
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 40
 	conf.maxSegmentLimit = 16
 	conf.fileSizeLimit = defaultFileSizeLimit
@@ -589,7 +589,7 @@ func TestFileSizeExceedLimit(t *testing.T) {
 	}()
 
 	size := 2 * 1024 * 1024
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.SetFilesLimit(int64(size))
 	conf.maxRowsPerSegment = 1000
 	conf.maxSegmentLimit = 65535
@@ -693,7 +693,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.SetFilesLimit(1)
 	tier := uint64(util.Warm)
 	lockPath := ""
@@ -724,7 +724,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 		}
 	}
 
-	SegMergeFlag(StreamingCompact)
+	SetMergeFlag4TsStore(StreamingCompact)
 	if err := store.LevelCompact(0, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -766,7 +766,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 func TestSplitColumn_panic(t *testing.T) {
 	itr := &StreamIterators{
 		col:  &record.ColVal{},
-		Conf: NewConfig(),
+		Conf: NewTsStoreConfig(),
 	}
 	itr.Conf.SetMaxRowsPerSegment(16)
 	for i := 0; i < 40; i++ {
@@ -789,7 +789,7 @@ func TestSplitColumn_panic(t *testing.T) {
 
 func TestStreamWriteFile_WriteData_panic(t *testing.T) {
 	sw := &StreamWriteFile{}
-	sw.Conf = NewConfig()
+	sw.Conf = NewTsStoreConfig()
 	sw.Conf.SetMaxRowsPerSegment(16)
 
 	ref := record.Field{Name: "foo", Type: influx.Field_Type_Float}

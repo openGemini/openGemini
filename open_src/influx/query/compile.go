@@ -122,7 +122,7 @@ func newCompiler(opt CompileOptions) *compiledStatement {
 
 func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, error) {
 	c := newCompiler(opt)
-	c.stmt = stmt.Clone()
+	c.stmt = stmt
 	if err := c.preprocess(c.stmt); err != nil {
 		return nil, err
 	}

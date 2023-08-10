@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/apache/arrow/go/arrow/array"
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -75,6 +76,11 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
 	// update schema if needed
 	schemaMap := mst.Schema
+	if mst.EngineType == config.COLUMNSTORE {
+		if len(schemaMap) != len(r.Tags)+len(r.Fields) {
+			return fieldToCreatePool, true, errno.NewError(errno.WritePointSchemaInvalid, len(r.Tags)+len(r.Fields), len(schemaMap))
+		}
+	}
 
 	// check tag need to add or not
 	for i, tag := range r.Tags {
@@ -86,6 +92,9 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 		}
 
 		if _, ok := schemaMap[tag.Key]; !ok {
+			if mst.EngineType == config.COLUMNSTORE {
+				return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidTag, tag.Key)
+			}
 			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
 		}
 	}
@@ -113,7 +122,9 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 			}
 			continue
 		}
-
+		if mst.EngineType == config.COLUMNSTORE {
+			return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
+		}
 		fieldToCreatePool = appendField(fieldToCreatePool, field.Key, field.Type)
 	}
 
@@ -167,6 +178,7 @@ type recordWriterHelper struct {
 	preSg        *meta2.ShardGroupInfo
 	preShard     *meta2.ShardInfo
 	preMst       *meta2.MeasurementInfo
+	preSchema    *[]record.Field
 	preShardType config.EngineType
 }
 
@@ -229,6 +241,77 @@ func (wh *recordWriterHelper) GetShardByTime(db, rp string, ts time.Time, ptIdx 
 
 func (wh *recordWriterHelper) createMeasurement(database, retentionPolicy, name string) (*meta2.MeasurementInfo, error) {
 	return createMeasurement(database, retentionPolicy, name, wh.metaClient, &wh.preMst, &wh.sameSchema, config.COLUMNSTORE)
+}
+
+func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array.Record) (startTime, endTime int64, r *record.Record, err error) {
+	// check the number of columns
+	if rec.NumCols() <= 1 {
+		err = errno.NewError(errno.ColumnStoreColNumErr, db, rp, mst)
+		return
+	}
+
+	// check the mst info and schema
+	if wh.preMst == nil || wh.preMst.Name != mst || len(wh.preMst.Schema) == 0 {
+		err = errno.NewError(errno.ColumnStoreSchemaNullErr, db, rp, mst)
+		return
+	}
+
+	// check the column store info and primary key
+	if wh.preMst.ColStoreInfo == nil || len(wh.preMst.ColStoreInfo.PrimaryKey) == 0 {
+		err = errno.NewError(errno.ColumnStorePrimaryKeyNullErr, db, rp, mst)
+		return
+	}
+	for _, key := range wh.preMst.ColStoreInfo.PrimaryKey {
+		if !rec.Schema().HasField(key) {
+			err = errno.NewError(errno.ColumnStorePrimaryKeyLackErr, mst, key)
+			return
+		}
+	}
+
+	// check the time field
+	colNum := int(rec.NumCols() - 1)
+	times, ok := rec.Column(colNum).(*array.Int64)
+	if !ok || rec.ColumnName(colNum) != record.TimeField {
+		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
+		return
+	}
+
+	// check the field name and type
+	samePreSchema := wh.sameSchema && wh.preSchema != nil && len(*wh.preSchema) == int(rec.NumCols())
+	if !samePreSchema {
+		schema := make([]record.Field, 0, rec.NumCols())
+		wh.preSchema = &schema
+	}
+	for i := 0; i < colNum; i++ {
+		colType, ok := wh.preMst.Schema[rec.ColumnName(i)]
+		if !ok {
+			err = errno.NewError(errno.ColumnStoreFieldNameErr, mst, rec.ColumnName(i))
+			return
+		}
+		fieldType := record.ArrowTypeToNativeType(rec.Column(i).DataType())
+		if (colType == influx.Field_Type_Tag && fieldType != influx.Field_Type_String) ||
+			(colType != influx.Field_Type_Tag && fieldType != int(colType)) {
+			err = errno.NewError(errno.ColumnStoreFieldTypeErr, mst, rec.ColumnName(i), fieldType, colType)
+			return
+		}
+		if !samePreSchema {
+			*wh.preSchema = append(*wh.preSchema, record.Field{Name: rec.ColumnName(i), Type: int(colType)})
+		}
+	}
+	startTime, endTime = times.Value(0), times.Value(int(rec.NumRows()-1))
+	if !samePreSchema {
+		*wh.preSchema = append(*wh.preSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+	}
+	r = record.NewRecord(*wh.preSchema, false)
+	return
+}
+
+func (wh *recordWriterHelper) reset() {
+	wh.preSg = nil
+	wh.preMst = nil
+	wh.preShard = nil
+	wh.preSchema = nil
+	wh.sameSchema = false
 }
 
 func SearchLowerBoundOfRec(rec *record.Record, sg *meta2.ShardGroupInfo, start int) int {
@@ -294,7 +377,7 @@ func (wc *writeRecCtx) Reset() {
 
 type ComMetaClient interface {
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error)
 	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 }
 
@@ -314,7 +397,7 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 	mst, err := client.Measurement(database, retentionPolicy, name)
 	if err == meta2.ErrMeasurementNotFound {
 		ski := &meta2.ShardKeyInfo{ShardKey: nil, Type: influxql.HASH}
-		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, nil, engineType, nil)
+		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, nil, engineType, nil, nil)
 	}
 
 	if err == nil {

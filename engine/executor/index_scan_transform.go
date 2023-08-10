@@ -212,7 +212,7 @@ func (trans *IndexScanTransform) indexScan() error {
 		return err
 	}
 	trans.GetResFromAllocator()
-	plan, err := trans.info.Store.CreateLogicPlanV2(info.ctx, info.Req.Database, info.Req.PtID, info.ShardID,
+	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, info.ShardID,
 		info.Req.Opt.Sources, subPlanSchema)
 	trans.FreeResFromAllocator()
 	if err != nil {

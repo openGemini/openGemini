@@ -19,22 +19,25 @@ package immutable
 import (
 	"math"
 
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"go.uber.org/zap"
 )
 
 const (
-	DefaultMaxRowsPerSegment     = 1000
-	DefaultMaxChunkMetaItemSize  = 256 * 1024
-	DefaultMaxChunkMetaItemCount = 512
+	DefaultMaxRowsPerSegment4TsStore  = 1000
+	DefaultMaxRowsPerSegment4ColStore = colstore.RowsNumPerFragment // should be the same as RowsNumPerFragment@colstore
+	DefaultMaxSegmentLimit4ColStore   = 256 * 1024
+	DefaultMaxChunkMetaItemSize       = 256 * 1024
+	DefaultMaxChunkMetaItemCount      = 512
 
 	NonStreamingCompact = 2
 	StreamingCompact    = 1
 	AutoCompact         = 0
 )
 
-var conf = Config{
+var tsStoreConf = Config{
 	maxSegmentLimit:       math.MaxUint16,
-	maxRowsPerSegment:     DefaultMaxRowsPerSegment,
+	maxRowsPerSegment:     DefaultMaxRowsPerSegment4TsStore,
 	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
 	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
 	fileSizeLimit:         defaultFileSizeLimit,
@@ -43,24 +46,35 @@ var conf = Config{
 	streamingCompact:      AutoCompact,
 }
 
-func SetMaxRowsPerSegment(maxRowsPerSegmentLimit int) {
+var colStoreConf = Config{
+	maxSegmentLimit:       DefaultMaxSegmentLimit4ColStore,
+	maxRowsPerSegment:     DefaultMaxRowsPerSegment4ColStore,
+	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
+	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
+	fileSizeLimit:         defaultFileSizeLimit,
+	cacheDataBlock:        false,
+	cacheMetaData:         false,
+	streamingCompact:      AutoCompact,
+}
+
+func SetMaxRowsPerSegment4TsStore(maxRowsPerSegmentLimit int) {
 	n := maxRowsPerSegmentLimit / 8
 	if maxRowsPerSegmentLimit%8 > 0 {
 		n++
 	}
 	n = n * 8
-	conf.maxRowsPerSegment = n
+	tsStoreConf.maxRowsPerSegment = n
 	log.Info("Set maxRowsPerSegmentLimit", zap.Int("limit", n))
 }
 
-func SetMaxSegmentLimit(limit int) {
+func SetMaxSegmentLimit4TsStore(limit int) {
 	if limit < 2 {
 		limit = 2
 	}
 	if limit > math.MaxUint16 {
 		limit = math.MaxUint16
 	}
-	conf.maxSegmentLimit = limit
+	tsStoreConf.maxSegmentLimit = limit
 	log.Info("Set maxSegmentLimit", zap.Int("limit", limit))
 }
 
@@ -77,12 +91,16 @@ type Config struct {
 	streamingCompact int32
 }
 
-func GetConfig() *Config {
-	return &conf
+func GetTsStoreConfig() *Config {
+	return &tsStoreConf
 }
 
-func NewConfig() *Config {
-	c := conf
+func GetColStoreConfig() *Config {
+	return &colStoreConf
+}
+
+func NewTsStoreConfig() *Config {
+	c := tsStoreConf
 	return &c
 }
 
@@ -115,31 +133,35 @@ func (c *Config) GetMaxSegmentLimit() int {
 }
 
 func SetCacheDataBlock(en bool) {
-	conf.cacheDataBlock = en
+	tsStoreConf.cacheDataBlock = en
+	colStoreConf.cacheDataBlock = en
 	log.Info("Set cacheDataBlock", zap.Bool("en", en))
 }
 
 func SetCacheMetaData(en bool) {
-	conf.cacheMetaData = en
+	tsStoreConf.cacheMetaData = en
+	colStoreConf.cacheMetaData = en
 	log.Info("Set cacheMetaData", zap.Bool("en", en))
 }
 
 func CacheMetaInMemory() bool {
-	return conf.cacheMetaData
+	// cacheMetaData for tsStoreConf & colStoreConf would be the same.
+	return tsStoreConf.cacheMetaData
 }
 
 func CacheDataInMemory() bool {
-	return conf.cacheDataBlock
+	// cacheDataBlock for tsStoreConf & colStoreConf would be the same.
+	return tsStoreConf.cacheDataBlock
 }
 
-func MaxRowsPerSegment() int {
-	return conf.maxRowsPerSegment
+func GetMaxRowsPerSegment4TsStore() int {
+	return tsStoreConf.maxRowsPerSegment
 }
 
-func SegMergeFlag(v int32) {
-	conf.streamingCompact = v
+func SetMergeFlag4TsStore(v int32) {
+	tsStoreConf.streamingCompact = v
 }
 
-func MergeFlag() int32 {
-	return conf.streamingCompact
+func GetMergeFlag4TsStore() int32 {
+	return tsStoreConf.streamingCompact
 }

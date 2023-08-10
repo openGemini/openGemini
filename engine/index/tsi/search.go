@@ -51,6 +51,7 @@ type indexSearch struct {
 	vrp tagToValuesRowParser
 
 	deleted *uint64set.Set
+	tf      tagFilter
 }
 
 func (is *indexSearch) setDeleted(set *uint64set.Set) {
@@ -222,10 +223,10 @@ type exprItrResult struct {
 	err  error
 }
 
-func (is *indexSearch) seriesByAllIdsIterator(name []byte, tr TimeRange, ei *exprInfo, tsids **uint64set.Set) (index.SeriesIDIterator, index.SeriesIDIterator, error) {
+func (is *indexSearch) seriesByAllIdsIterator(name []byte, ei *exprInfo, tsids **uint64set.Set) (index.SeriesIDIterator, index.SeriesIDIterator, error) {
 	var err error
 	if *tsids == nil {
-		if *tsids, err = is.searchTSIDsByTimeRange(name, tr); err != nil {
+		if *tsids, err = is.searchTSIDsByTimeRange(name); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -252,20 +253,20 @@ func (is *indexSearch) seriesByAllIdsIterator(name []byte, tr TimeRange, ei *exp
 	return ei.li.itr, ei.ri.itr, nil
 }
 
-func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr TimeRange, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
-	newSeriesIDSetIterator := func() (index.SeriesIDIterator, error) {
-		var err error
-		if *tsids == nil {
-			if *tsids, err = is.searchTSIDsByTimeRange(name, tr); err != nil {
-				return nil, err
-			}
+func (is *indexSearch) newSeriesIDSetIterator(name []byte, tsids **uint64set.Set) (index.SeriesIDIterator, error) {
+	var err error
+	if *tsids == nil {
+		if *tsids, err = is.searchTSIDsByTimeRange(name); err != nil {
+			return nil, err
 		}
-
-		return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
 	}
 
+	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
+}
+
+func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
 	if expr == nil {
-		return newSeriesIDSetIterator()
+		return is.newSeriesIDSetIterator(name, tsids)
 	}
 
 	switch expr := expr.(type) {
@@ -274,13 +275,13 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 		case influxql.AND, influxql.OR:
 			var err error
 			// Get the series IDs and filter expressions for the LHS.
-			litr, lerr := is.seriesByExprIterator(name, expr.LHS, tr, tsids, singleSeries)
+			litr, lerr := is.seriesByExprIterator(name, expr.LHS, tsids, singleSeries)
 			if lerr != nil && lerr != ErrFieldExpr {
 				return nil, lerr
 			}
 
 			// Get the series IDs and filter expressions for the RHS.
-			ritr, rerr := is.seriesByExprIterator(name, expr.RHS, tr, tsids, singleSeries)
+			ritr, rerr := is.seriesByExprIterator(name, expr.RHS, tsids, singleSeries)
 			if rerr != nil && rerr != ErrFieldExpr {
 				return nil, rerr
 			}
@@ -316,7 +317,7 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 							err:  rerr,
 						},
 					}
-					if litr, ritr, err = is.seriesByAllIdsIterator(name, tr, ei, tsids); err != nil {
+					if litr, ritr, err = is.seriesByAllIdsIterator(name, ei, tsids); err != nil {
 						return nil, err
 					}
 				}
@@ -337,22 +338,22 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 						err:  rerr,
 					},
 				}
-				if litr, ritr, err = is.seriesByAllIdsIterator(name, tr, ei, tsids); err != nil {
+				if litr, ritr, err = is.seriesByAllIdsIterator(name, ei, tsids); err != nil {
 					return nil, err
 				}
 			}
 			return index.UnionSeriesIDIterators(litr, ritr), nil
 
 		default:
-			return is.seriesByBinaryExpr(name, expr, tr, tsids, singleSeries)
+			return is.seriesByBinaryExpr(name, expr, tsids, singleSeries)
 		}
 
 	case *influxql.ParenExpr:
-		return is.seriesByExprIterator(name, expr.Expr, tr, tsids, singleSeries)
+		return is.seriesByExprIterator(name, expr.Expr, tsids, singleSeries)
 
 	case *influxql.BooleanLiteral:
 		if expr.Val {
-			return newSeriesIDSetIterator()
+			return is.newSeriesIDSetIterator(name, tsids)
 		}
 		return nil, nil
 
@@ -363,7 +364,7 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tr 
 
 func (is *indexSearch) searchTSIDsInternal(name []byte, expr influxql.Expr, tr TimeRange) (*uint64set.Set, error) {
 	if expr == nil {
-		return is.searchTSIDsByTimeRange(name, tr)
+		return is.searchTSIDsByTimeRange(name)
 	}
 
 	switch expr := expr.(type) {
@@ -401,7 +402,7 @@ func (is *indexSearch) searchTSIDsInternal(name []byte, expr influxql.Expr, tr T
 			return ltsids, nil
 
 		default:
-			return is.searchTSIDsByBinaryExpr(name, expr, tr)
+			return is.searchTSIDsByBinaryExpr(name, expr)
 		}
 
 	case *influxql.ParenExpr:
@@ -409,7 +410,7 @@ func (is *indexSearch) searchTSIDsInternal(name []byte, expr influxql.Expr, tr T
 
 	case *influxql.BooleanLiteral:
 		if expr.Val {
-			return is.searchTSIDsByTimeRange(name, tr)
+			return is.searchTSIDsByTimeRange(name)
 		}
 		return nil, nil
 
@@ -418,7 +419,7 @@ func (is *indexSearch) searchTSIDsInternal(name []byte, expr influxql.Expr, tr T
 	}
 }
 
-func (is indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr TimeRange) (*uint64set.Set, error) {
+func (is *indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExpr) (*uint64set.Set, error) {
 	// TODO Don not know which query condition can enter this branch
 	if _, ok := n.LHS.(*influxql.BinaryExpr); ok {
 		logger.GetLogger().Info(n.String())
@@ -436,7 +437,7 @@ func (is indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExp
 		if !ok {
 			// This is an expression we do not know how to evaluate. Let the
 			// query engine take care of this.
-			return is.searchTSIDsByTimeRange(name, tr)
+			return is.searchTSIDsByTimeRange(name)
 		}
 		value = n.LHS
 	}
@@ -444,7 +445,7 @@ func (is indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExp
 	// For fields, return all series from this measurement.
 	if key.Type != influxql.Tag {
 		// Not tag, regard as field
-		return is.searchTSIDsByTimeRange(name, tr)
+		return is.searchTSIDsByTimeRange(name)
 	}
 
 	tf := new(tagFilter)
@@ -469,34 +470,35 @@ func (is indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryExp
 			return nil, err
 		}
 	default:
-		return is.searchTSIDsByTimeRange(name, tr)
+		return is.searchTSIDsByTimeRange(name)
 	}
 
-	return is.searchTSIDsByTagFilterAndDateRange(tf, tr)
+	return is.searchTSIDsByTagFilterAndDateRange(tf)
 }
 
-func (is indexSearch) genSeriesIDIterator(ids *uint64set.Set, n *influxql.BinaryExpr) index.SeriesIDIterator {
+func (is *indexSearch) genSeriesIDIterator(ids *uint64set.Set, n *influxql.BinaryExpr) index.SeriesIDIterator {
 	return index.NewSeriesIDExprIterator(index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*ids).Clone())), n)
 }
 
 var ErrFieldExpr = errors.New("field expr")
 
-func (is indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr TimeRange, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
-	searchAllTSIDsByName := func() (index.SeriesIDIterator, error) {
-		var err error
-		if *tsids == nil {
-			*tsids, err = is.searchTSIDsByTimeRange(name, tr)
-			if err != nil {
-				return nil, err
-			}
+func (is *indexSearch) searchAllTSIDsByName(name []byte, n *influxql.BinaryExpr, tsids **uint64set.Set) (index.SeriesIDIterator, error) {
+	var err error
+	if *tsids == nil {
+		*tsids, err = is.searchTSIDsByTimeRange(name)
+		if err != nil {
+			return nil, err
 		}
-		return is.genSeriesIDIterator(*tsids, n), nil
 	}
+	return is.genSeriesIDIterator(*tsids, n), nil
+}
+
+func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
 
 	if _, ok := n.LHS.(*influxql.BinaryExpr); ok {
-		return searchAllTSIDsByName()
+		return is.searchAllTSIDsByName(name, n, tsids)
 	} else if _, ok := n.RHS.(*influxql.BinaryExpr); ok {
-		return searchAllTSIDsByName()
+		return is.searchAllTSIDsByName(name, n, tsids)
 	}
 
 	// Retrieve the variable reference from the correct side of the expression.
@@ -507,7 +509,7 @@ func (is indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr
 		if !ok {
 			// This is an expression we do not know how to evaluate. Let the
 			// query engine take care of this.
-			return searchAllTSIDsByName()
+			return is.searchAllTSIDsByName(name, n, tsids)
 		}
 		value = n.LHS
 	}
@@ -525,7 +527,7 @@ func (is indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr
 		return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
 	}
 
-	tf := new(tagFilter)
+	tf := &is.tf
 	var err error
 	switch value := value.(type) {
 	case *influxql.StringLiteral:
@@ -539,13 +541,13 @@ func (is indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tr
 	case *influxql.VarRef:
 		return is.seriesByBinaryExprVarRef(name, []byte(key.Val), []byte(value.Val), n.Op == influxql.EQ)
 	default:
-		return searchAllTSIDsByName()
+		return is.searchAllTSIDsByName(name, n, tsids)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	ids, err := is.searchTSIDsByTagFilterAndDateRange(tf, tr)
+	ids, err := is.searchTSIDsByTagFilterAndDateRange(tf)
 	if err != nil {
 		return nil, err
 	}
@@ -563,12 +565,12 @@ func (is *indexSearch) seriesByBinaryExprVarRef(name, key, val []byte, equal boo
 		return nil, err
 	}
 
-	set1, err := is.searchTSIDsByTagFilterAndDateRange(tf1, TimeRange{})
+	set1, err := is.searchTSIDsByTagFilterAndDateRange(tf1)
 	if err != nil {
 		return nil, err
 	}
 
-	set2, err := is.searchTSIDsByTagFilterAndDateRange(tf2, TimeRange{})
+	set2, err := is.searchTSIDsByTagFilterAndDateRange(tf2)
 	if err != nil {
 		return nil, err
 	}
@@ -581,7 +583,7 @@ func (is *indexSearch) seriesByBinaryExprVarRef(name, key, val []byte, equal boo
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(set1)), nil
 }
 
-func (is *indexSearch) searchTSIDsByTagFilterAndDateRange(tf *tagFilter, tr TimeRange) (*uint64set.Set, error) {
+func (is *indexSearch) searchTSIDsByTagFilterAndDateRange(tf *tagFilter) (*uint64set.Set, error) {
 	if tf.isRegexp {
 		return is.getTSIDsByTagFilterWithRegex(tf)
 	}
@@ -729,28 +731,16 @@ func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, er
 	return tsids, nil
 }
 
-func (is *indexSearch) measurementSeriesByExprIterator(name []byte, expr influxql.Expr, tr TimeRange, singleSeries bool, tsid uint64) (index.SeriesIDIterator, error) {
-	if tr.Min < 0 {
-		tr.Min = 0
-	}
-
-	if ok, err := is.containsMeasurement(name); err != nil {
-		return nil, err
-	} else if !ok {
-		// Fast path - the index doesn't contain measurement for the given name.
-		logger.GetLogger().Error("measurement not found")
-		return nil, nil
-	}
-
+func (is *indexSearch) measurementSeriesByExprIterator(name []byte, expr influxql.Expr, singleSeries bool, tsid uint64) (index.SeriesIDIterator, error) {
 	var tsids *uint64set.Set
 	if singleSeries {
 		tsids = new(uint64set.Set)
 		tsids.Add(tsid)
 	}
-	itr, err := is.seriesByExprIterator(name, expr, tr, &tsids, singleSeries)
+	itr, err := is.seriesByExprIterator(name, expr, &tsids, singleSeries)
 	if err == ErrFieldExpr {
 		if tsids == nil {
-			if tsids, err = is.searchTSIDsByTimeRange(name, tr); err != nil {
+			if tsids, err = is.searchTSIDsByTimeRange(name); err != nil {
 				return nil, err
 			}
 		}
@@ -968,7 +958,7 @@ func (is *indexSearch) getSeriesCount(prefix []byte) (uint64, error) {
 
 const maxDaysForSearch = 40
 
-func (is *indexSearch) searchTSIDsByTimeRange(name []byte, tr TimeRange) (*uint64set.Set, error) {
+func (is *indexSearch) searchTSIDsByTimeRange(name []byte) (*uint64set.Set, error) {
 	return is.getTSIDsByMeasurementName(name)
 }
 

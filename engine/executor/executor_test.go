@@ -22,7 +22,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -32,7 +31,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -195,90 +193,6 @@ func BuildChunk() executor.Chunk {
 	return chunk
 }
 
-func TestMultiPipelineExecutors(t *testing.T) {
-	executor.GetPipelineExecutorResourceManager().Reset()
-	var wg sync.WaitGroup
-	SimpleMergeDAG = func() {
-		defer wg.Done()
-		executor := PipelineExecutorGen()
-		if e := executor.ExecuteExecutor(context.Background()); e != nil {
-			t.Errorf(e.Error())
-		}
-	}
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go SimpleMergeDAG()
-	}
-	wg.Wait()
-	if executor.GetPipelineExecutorResourceManager().GetMemBucket().GetFreeResource() != executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource() {
-		t.Errorf("still has occupied memories")
-	}
-}
-
-func TestMultiPipelineExecutors_MemSize(t *testing.T) {
-	defer func() {
-		mem, _ := memory.SysMem()
-		executor.GetPipelineExecutorResourceManager().SetManagerParas(mem, time.Second)
-	}()
-	executor.GetPipelineExecutorResourceManager().Reset()
-	executor.GetPipelineExecutorResourceManager().SetManagerParas(30000*100, time.Second)
-	var wg sync.WaitGroup
-	SimpleMergeDAG = func() {
-		defer wg.Done()
-		executor := PipelineExecutorGen()
-		if e := executor.ExecuteExecutor(context.Background()); e != nil {
-			t.Errorf(e.Error())
-		}
-	}
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go SimpleMergeDAG()
-	}
-	wg.Wait()
-	if executor.GetPipelineExecutorResourceManager().GetMemBucket().GetFreeResource() != executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource() {
-		t.Errorf("still has occupied memories")
-	}
-}
-
-func TestMultiPipelineExecutors_ALLTimeout(t *testing.T) {
-	defer func() {
-		mem, _ := memory.SysMem()
-		executor.GetPipelineExecutorResourceManager().SetManagerParas(mem, time.Second)
-	}()
-	executor.GetPipelineExecutorResourceManager().Reset()
-	executor.GetPipelineExecutorResourceManager().SetManagerParas(2000, time.Second)
-	var wg sync.WaitGroup
-	SimpleMergeDAG = func() {
-		defer wg.Done()
-		executor := PipelineExecutorGen()
-		if e := executor.ExecuteExecutor(context.Background()); e != nil {
-			if !assert.Equal(t, e.Error(), errno.NewError(errno.DirectBucketLacks).Error()) {
-				t.Errorf(e.Error())
-			}
-		}
-	}
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go SimpleMergeDAG()
-	}
-	wg.Wait()
-	if executor.GetPipelineExecutorResourceManager().GetMemBucket().GetFreeResource() != executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource() {
-		t.Errorf("still has occupied memories")
-	}
-
-	mem, _ := memory.SysMem()
-	executor.GetPipelineExecutorResourceManager().SetManagerParas(mem, time.Second)
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go SimpleMergeDAG()
-	}
-
-	wg.Wait()
-	if executor.GetPipelineExecutorResourceManager().GetMemBucket().GetFreeResource() != executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource() {
-		t.Errorf("still has occupied memories")
-	}
-}
-
 func TestInitMstName(t *testing.T) {
 	heap := &executor.AppendHeapItems{}
 	assert.Equal(t, "", executor.InitMstName(heap))
@@ -298,23 +212,6 @@ func TestInitMstName(t *testing.T) {
 func TestSortedAppendInit_Empty(t *testing.T) {
 	h := &executor.AppendHeapItems{}
 	assert.Equal(t, "", executor.InitMstName(h))
-}
-
-func TestSetPipelineExecutorResourceManagerParas(t *testing.T) {
-	defer func() {
-		mem, _ := memory.SysMem()
-		executor.GetPipelineExecutorResourceManager().SetManagerParas(mem, time.Second)
-	}()
-	executor.GetPipelineExecutorResourceManager().SetManagerParas(0, 0)
-	executor.SetPipelineExecutorResourceManagerParas(1000, time.Second)
-	assert.Equal(t, int64(1000), executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource())
-	assert.Equal(t, time.Second, executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTimeDuration())
-	executor.SetPipelineExecutorResourceManagerParas(2000, 2*time.Second)
-	assert.Equal(t, int64(1000), executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource())
-	assert.Equal(t, time.Second, executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTimeDuration())
-	executor.SetPipelineExecutorResourceManagerParas(500, time.Second/10)
-	assert.Equal(t, int64(500), executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTotalResource())
-	assert.Equal(t, time.Second/10, executor.GetPipelineExecutorResourceManager().GetMemBucket().GetTimeDuration())
 }
 
 type LogicalSink struct {

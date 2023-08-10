@@ -18,6 +18,7 @@ package coordinator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"go.uber.org/zap"
@@ -44,7 +46,7 @@ type RWMetaClient interface {
 	DBPtView(database string) (meta.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo) (*meta.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema) (*meta.MeasurementInfo, error)
 	GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta.ShardInfo, error)
 }
 
@@ -165,12 +167,12 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	var writeErr error
 	defer func() {
 		if err := recover(); err != nil {
-			w.logger.Error("processRecord panic",
+			w.logger.Error("processRecord panic", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement),
 				zap.String("record writer raise stack:", string(debug.Stack())),
 				zap.Error(errno.NewError(errno.RecoverPanic, err)))
 			w.errs.Dispatch(errno.NewError(errno.RecoverPanic, err))
 		}
-		if writeErr != nil {
+		if writeErr != nil && !IsKeepWritingErr(writeErr) {
 			w.errs.Dispatch(writeErr)
 		}
 		msg.Rec.Release() // The memory is released. The value of reference counting is decreased by 1.
@@ -179,8 +181,10 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	start := time.Now()
 	writeErr = w.writeRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, msg.Rec, ptIdx)
 	if writeErr != nil {
-		w.logger.Error("writeRecord failed", zap.Error(writeErr))
+		w.recWriterHelpers[ptIdx].reset()
+		return
 	}
+	atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, msg.Rec.NumRows())
 	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
 }
 
@@ -196,6 +200,7 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx i
 	wh := w.recWriterHelpers[ptIdx]
 	err := ctx.checkDBRP(db, rp, wh.metaClient)
 	if err != nil {
+		w.logger.Error("checkDBRP err", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
 	}
 
@@ -205,42 +210,42 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx i
 
 	ctx.ms, err = wh.createMeasurement(db, rp, mst)
 	if err != nil {
-		w.logger.Error("invalid measurement", zap.Error(errno.NewError(errno.InvalidMeasurement)))
+		w.logger.Error("invalid measurement", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(errno.NewError(errno.InvalidMeasurement)))
 		return err
 	}
 	mst = ctx.ms.Name
 
-	times, ok := rec.Column(int(colNum - 1)).(*array.Int64)
-	if !ok {
-		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
-		w.logger.Error("invalid schema", zap.Error(err))
+	startTime, endTime, r, err := wh.checkAndUpdateSchema(db, rp, mst, rec)
+	if err != nil {
+		wh.sameSchema = false
+		w.logger.Error("checkSchema err", zap.String("db", db), zap.String("rp", rp), zap.Error(err))
 		return err
 	}
-	startTime, endTime := times.Value(0), times.Value(int(rowNum-1))
+
+	err = record.ArrowRecordToNativeRecord(rec, r)
+	if err != nil {
+		w.logger.Error("ArrowRecordToNativeRecord failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
+		return err
+	}
 
 	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), ctx.ms.EngineType)
 	if err != nil {
+		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
 	}
-	err = w.splitAndWriteByShard(sgis, db, rp, mst, rec, ptIdx, ctx.ms.EngineType)
-	if err != nil {
-		return err
-	}
-	return nil
+	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, rec.NumRows()*rec.NumCols())
+	return w.splitAndWriteByShard(sgis, db, rp, mst, r, ptIdx, ctx.ms.EngineType)
 }
 
-func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp, mst string, r array.Record, ptIdx int, engineType config.EngineType) error {
-	rec := record.NewRecord(record.ArrowSchemaToNativeSchema(r.Schema()), false)
-	err := record.ArrowRecordToNativeRecord(r, rec)
-	if err != nil {
-		return err
-	}
+func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp, mst string, rec *record.Record, ptIdx int, engineType config.EngineType) error {
 	start := 0
 	var subRec *record.Record
 	for i := range sgis {
 		interval := SearchLowerBoundOfRec(rec, sgis[i], start)
 		if interval == NotInShardDuration {
-			continue
+			err := errno.NewError(errno.ArrowFlightGetShardGroupErr, sgis[i].StartTime, rec.Time(start))
+			w.logger.Error("SearchLowerBoundOfRec failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
+			return err
 		}
 		end := start + interval
 		if start == 0 && end == rec.RowNums() {
@@ -249,14 +254,14 @@ func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp,
 			subRec = record.NewRecord(rec.Schema, false)
 			subRec.SliceFromRecord(rec, start, end)
 		}
-		shard, err := w.recWriterHelpers[i].GetShardByTime(db, rp, time.Unix(0, subRec.Time(0)), ptIdx, engineType)
+		shard, err := w.recWriterHelpers[ptIdx].GetShardByTime(db, rp, time.Unix(0, subRec.Time(0)), ptIdx, engineType)
 		if err != nil {
-			w.logger.Error("GetShardByTime failed", zap.Error(err))
+			w.logger.Error("GetShardByTime failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 			return err
 		}
 		err = w.writeRecordToShard(shard, db, rp, mst, subRec)
 		if err != nil {
-			w.logger.Error("writeRecordToShard failed", zap.Error(err))
+			w.logger.Error("writeRecordToShard failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 			return err
 		}
 		start = end
@@ -274,16 +279,18 @@ func (w *RecordWriter) writeRecordToShard(shard *meta.ShardInfo, database, reten
 		bufferpool.PutPoints(pBuf)
 	}()
 
-	pBuf, err = rec.Marshal(pBuf[:0])
+	pBuf, err = MarshalWithMeasurements(pBuf[:0], measurement, rec)
 	if err != nil {
-		w.logger.Error("record marshal failed", zap.Error(err))
+		w.logger.Error(fmt.Sprintf("record marshal failed. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Error(err))
 		return err
 	}
+	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(pBuf)))
+	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, int64(len(pBuf)))
 
 	for {
 		// retry timeout
 		if time.Since(start).Nanoseconds() >= w.timeout.Nanoseconds() {
-			w.logger.Error("[coordinator] write rows timeout", zap.String("db", database), zap.Uint32s("ptIds", shard.Owners), zap.Error(err))
+			w.logger.Error(fmt.Sprintf("[coordinator] write rows timeout. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Uint32s("ptIds", shard.Owners), zap.Error(err))
 			return err
 		}
 
@@ -301,16 +308,55 @@ func (w *RecordWriter) writeShard(shard *meta.ShardInfo, database, retentionPoli
 		err = w.StorageEngine.WriteRec(database, retentionPolicy, measurement, ptId, shard.ID, rec, pBuf)
 		if err != nil && IsRetryErrorForPtView(err) {
 			// maybe dbPt route to new node, retry get the right nodeID
-			w.logger.Error("[coordinator] retry write rows", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
+			w.logger.Error(fmt.Sprintf("[coordinator] retry write rows. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Uint32("pt", ptId), zap.Error(err))
 
 			// The retry interval is added to avoid excessive error logs
 			time.Sleep(100 * time.Millisecond)
 			return true, err
 		}
 		if err != nil {
-			w.logger.Error("[coordinator] write rows error", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
+			w.logger.Error(fmt.Sprintf("[coordinator] write shard. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Uint32("pt", ptId), zap.Error(err))
 			return false, err
 		}
 	}
 	return false, nil
+}
+
+func MarshalWithMeasurements(buf []byte, mst string, rec *record.Record) ([]byte, error) {
+	name := util.Str2bytes(mst)
+	if len(name) == 0 {
+		return nil, errors.New("record must have a measurement name")
+	}
+	buf = append(buf, uint8(len(name)))
+	buf = append(buf, name...)
+
+	return rec.Marshal(buf)
+}
+
+func UnmarshalWithMeasurements(buf []byte, rec *record.Record) (string, error) {
+	if len(buf) < 1 {
+		return "", errors.New("too small bytes for record binary")
+	}
+
+	mLen := int(buf[0])
+	buf = buf[1:]
+
+	name := util.Bytes2str(buf[:mLen])
+	buf = buf[mLen:]
+	return name, rec.Unmarshal(buf)
+}
+
+func IsKeepWritingErr(err error) bool {
+	return errno.Equal(err, errno.DatabaseNotFound) ||
+		errno.Equal(err, errno.ErrMeasurementNotFound) ||
+		errno.Equal(err, errno.TypeAssertFail) ||
+		errno.Equal(err, errno.ArrowFlightGetShardGroupErr) ||
+		errno.Equal(err, errno.ShardNotFound) ||
+		errno.Equal(err, errno.ColumnStoreColNumErr) ||
+		errno.Equal(err, errno.ColumnStoreSchemaNullErr) ||
+		errno.Equal(err, errno.ColumnStorePrimaryKeyNullErr) ||
+		errno.Equal(err, errno.ColumnStorePrimaryKeyLackErr) ||
+		errno.Equal(err, errno.ArrowRecordTimeFieldErr) ||
+		errno.Equal(err, errno.ColumnStoreFieldNameErr) ||
+		errno.Equal(err, errno.ColumnStoreFieldTypeErr)
 }

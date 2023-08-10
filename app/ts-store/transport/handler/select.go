@@ -112,7 +112,7 @@ func (s *Select) Process() error {
 	var node hybridqp.QueryNode
 	var err error
 	if s.req.Node != nil {
-		node, err = executor.UnmarshalQueryNode(s.req.Node)
+		node, err = executor.UnmarshalQueryNode(s.req.Node, len(s.req.ShardIDs), &s.req.Opt)
 		if err != nil {
 			s.logger().Error("failed to unmarshal QueryNode", zap.Error(err))
 			return err

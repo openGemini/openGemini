@@ -144,7 +144,7 @@ func (trans *HashMergeTransform) initNewResultFuncs() error {
 			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultIntegerCol)
 		case influxql.Boolean:
 			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultBooleanCol)
-		case influxql.String:
+		case influxql.String, influxql.Tag:
 			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultStringCol)
 		default:
 			return errno.NewError(errno.HashMergeTransformRunningErr)
@@ -189,6 +189,7 @@ func (trans *HashMergeTransform) runnable(ctx context.Context, errs *errno.Errs,
 			}
 			trans.addChunk(c)
 		case <-ctx.Done():
+			trans.addChunk(nil)
 			return
 		}
 	}

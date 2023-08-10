@@ -261,7 +261,7 @@ func processLog(shardDir string, info *CompactedFileInfo, lockPath *string, engi
 		if count == len(info.OldFile) {
 			for i := range info.OldFile {
 				oName := info.OldFile[i]
-				if err := renameFile(oName + tmpTsspFileSuffix); err != nil {
+				if err := renameFile(oName + tmpFileSuffix); err != nil {
 					return err
 				}
 			}
@@ -284,7 +284,7 @@ func processLog(shardDir string, info *CompactedFileInfo, lockPath *string, engi
 
 func getProcessLogFuncs(dirs []os.FileInfo, mmDir string, lockPath *string) (func(string) bool, func(string) bool, func(string) error) {
 	newFileExist := func(newFile string) bool {
-		normalName := newFile[:len(newFile)-len(tmpTsspFileSuffix)]
+		normalName := newFile[:len(newFile)-len(tmpFileSuffix)]
 		for i := range dirs {
 			name := dirs[i].Name()
 			if name == normalName || newFile == name {
@@ -297,7 +297,7 @@ func getProcessLogFuncs(dirs []os.FileInfo, mmDir string, lockPath *string) (fun
 	oldFileExist := func(oldFile string) bool {
 		for i := range dirs {
 			name := dirs[i].Name()
-			tmp := oldFile + tmpTsspFileSuffix
+			tmp := oldFile + tmpFileSuffix
 			if name == oldFile || tmp == name {
 				return true
 			}
@@ -310,7 +310,7 @@ func getProcessLogFuncs(dirs []os.FileInfo, mmDir string, lockPath *string) (fun
 			name := dirs[i].Name()
 			if nameInLog == name {
 				lock := fileops.FileLockOption(*lockPath)
-				normalName := nameInLog[:len(nameInLog)-len(tmpTsspFileSuffix)]
+				normalName := nameInLog[:len(nameInLog)-len(tmpFileSuffix)]
 				oldName := filepath.Join(mmDir, nameInLog)
 				newName := filepath.Join(mmDir, normalName)
 				return fileops.RenameFile(oldName, newName, lock)

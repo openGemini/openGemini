@@ -14,7 +14,8 @@
         "WindowOutMinTime",
         "WindowOutMaxTime",
         "WindowStartTime",
-        "WindowEndTime"
+        "WindowEndTime",
+        "WindowGroupKeyCount"
     ],
     "PushTags":[
         "StreamID"

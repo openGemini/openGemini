@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -86,7 +87,9 @@ func NewColumnStoreReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOpt
 		dimVals:     make([]string, len(schema.Options().GetOptDimension())),
 		logger:      logger.NewLogger(errno.ModuleQueryEngine),
 	}
-	r.limit = schema.Options().GetLimit() + schema.Options().GetOffset()
+	if !r.schema.HasCall() {
+		r.limit = schema.Options().GetLimit() + schema.Options().GetOffset()
+	}
 	return r
 }
 
@@ -170,6 +173,7 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 
 	// init the query ctx
 	r.queryCtx = &idKeyCursorContext{
+		engineType:  config.COLUMNSTORE,
 		decs:        immutable.NewReadContext(querySchema.Options().IsAscending()),
 		querySchema: querySchema}
 	err = newCursorSchema(r.queryCtx, querySchema)

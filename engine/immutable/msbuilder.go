@@ -96,6 +96,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	}
 
 	msBuilder.log = logger.NewLogger(errno.ModuleCompact).SetZapLogger(log)
+	msBuilder.WithLog(msBuilder.log)
 	msBuilder.tier = tier
 	msBuilder.Conf = conf
 	msBuilder.lock = lockPath
@@ -316,7 +317,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Sc
 
 		if len(schema) != 0 { // write index, works for colstore
 			dataFilePath := b.FileName.String()
-			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath))
+			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
 			if err := b.writeIndex(data, schema, indexFilePath, *b.lock); err != nil {
 				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
 				return b, err
@@ -341,7 +342,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Sc
 		}
 		if len(schema) != 0 { // write index, works for colstore
 			dataFilePath := b.FileName.String()
-			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath))
+			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
 			if err := b.writeIndex(&recs[i], schema, indexFilePath, *b.lock); err != nil {
 				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
 				return b, err

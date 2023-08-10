@@ -23,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
@@ -109,6 +110,10 @@ func testEqualChunks(t *testing.T, outChunks, dstChunks []executor.Chunk) bool {
 		}
 	}
 	return true
+}
+
+func testEqualChunk1(t *testing.T, outChunks, dstChunks []executor.Chunk) bool {
+	return len(outChunks) == len(dstChunks)
 }
 
 func buildComReaderOps() []hybridqp.ExprOptions {
@@ -388,6 +393,7 @@ time = 1609459200000000000 and field2_int = 1`,
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -488,7 +494,7 @@ func NewMockStoreEngine() *MockStoreEngine {
 func (s *MockStoreEngine) ReportLoad() {
 }
 
-func (s *MockStoreEngine) CreateLogicPlanV2(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
+func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	return nil, nil
 }
 
@@ -500,6 +506,9 @@ func (s *MockStoreEngine) ScanWithSparseIndex(ctx context.Context, _ string, _ u
 	filesFrags, err := s.shard.ScanWithSparseIndex(ctx, schema.(*executor.QuerySchema), func(int64) error { return nil })
 	if err != nil {
 		return nil, err
+	}
+	if filesFrags == nil {
+		return shardFrags, nil
 	}
 	shardFrags[s.shard.GetID()] = filesFrags
 	return shardFrags, nil
@@ -586,6 +595,7 @@ func TestColumnStoreReader(t *testing.T) {
 
 	for _, tt := range []struct {
 		skip      bool
+		exec      bool
 		name      string
 		q         string
 		tr        util.TimeRange
@@ -639,10 +649,35 @@ func TestColumnStoreReader(t *testing.T) {
 			expected:  buildAggChunk(),
 			expect:    testEqualChunks,
 		},
+		{
+			name: "select sum(field2_int),sum(field4_float) from cpu where timeFilter and fieldFilter limit 1",
+			q: `select sum(field2_int),sum(field4_float) from cpu where
+		time >= 1609459200000000000 limit 1`,
+			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  buildAggChunk(),
+			expect:    testEqualChunks,
+		},
+		{
+			name:      "select sum(field2_int) from cpu",
+			q:         `select sum(field2_int) from cpu`,
+			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  nil,
+			expect:    testEqualChunk1,
+			exec:      true,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.skip {
 				t.Skipf("SKIP:: %s", tt.name)
+			}
+			if tt.exec {
+				sh.immTables = immutable.NewTableStore(immutable.GetDir(config.COLUMNSTORE, testDir), sh.lock, &sh.tier, false, immutable.GetColStoreConfig())
 			}
 			// step1: parse stmt and opt
 			ctx := context.Background()
@@ -651,6 +686,7 @@ func TestColumnStoreReader(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]

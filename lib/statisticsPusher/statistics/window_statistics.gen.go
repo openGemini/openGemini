@@ -4,7 +4,7 @@
 // Source: statistics.tmpl
 
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@ package statistics
 import (
 	"sync"
 	"time"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type StreamWindowStatistics struct {
@@ -62,6 +64,18 @@ func (s *StreamWindowStatistics) Collect(buffer []byte) ([]byte, error) {
 	return buffer, nil
 }
 
+func (s *StreamWindowStatistics) CollectOps() []opsStat.OpsStatistic {
+	data := map[string]interface{}{}
+
+	return []opsStat.OpsStatistic{
+		{
+			Name:   "stream_window",
+			Tags:   s.tags,
+			Values: data,
+		},
+	}
+}
+
 func (s *StreamWindowStatistics) Push(item *StreamWindowStatItem) {
 	if !item.Validate() {
 		return
@@ -90,6 +104,7 @@ type StreamWindowStatItem struct {
 	WindowOutMaxTime       int64
 	WindowStartTime        int64
 	WindowEndTime          int64
+	WindowGroupKeyCount    int64
 
 	StreamID string
 
@@ -128,6 +143,7 @@ func (s *StreamWindowStatItem) Values() map[string]interface{} {
 		"WindowOutMaxTime":       s.WindowOutMaxTime,
 		"WindowStartTime":        s.WindowStartTime,
 		"WindowEndTime":          s.WindowEndTime,
+		"WindowGroupKeyCount":    s.WindowGroupKeyCount,
 		"Duration":               s.Duration(),
 	}
 }

@@ -117,7 +117,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	var startValue = 1.1
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 100
 	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*4 + 1
@@ -285,7 +285,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	var startValue = 1.1
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 100
 	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*4 + 1
@@ -443,7 +443,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	var idMinMax, tmMinMax MinMax
 	var startValue = 1.1
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 100
 	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*4 + 1
@@ -604,8 +604,8 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		var idMinMax, tmMinMax MinMax
 		var startValue = 1.1
 
-		SegMergeFlag(flag)
-		conf := NewConfig()
+		SetMergeFlag4TsStore(flag)
+		conf := NewTsStoreConfig()
 		conf.maxRowsPerSegment = 100
 		conf.maxSegmentLimit = 65535
 		tier := uint64(util.Hot)
@@ -957,7 +957,7 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 
 	//rename 1 old file
 	fName := filepath.Join(dir, info.OldFile[0])
-	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
+	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
 	//remove 1 old file
 	fName = filepath.Join(dir, info.OldFile[1])
 	_ = fileops.Remove(fName)
@@ -1017,7 +1017,7 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 	_ = fileops.Remove(fName)
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
-	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
+	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
 	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1075,7 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 	_ = fileops.Remove(fName)
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
-	_ = fileops.RenameFile(fName, fName+tmpTsspFileSuffix)
+	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
 	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
 		t.Fatal(err)
 	}
@@ -1119,9 +1119,9 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 		var idMinMax, tmMinMax MinMax
 		var startValue = 1.1
 
-		SegMergeFlag(cf.mergeFlag)
+		SetMergeFlag4TsStore(cf.mergeFlag)
 		recRows := cf.genRows
-		conf := NewConfig()
+		conf := NewTsStoreConfig()
 		conf.maxRowsPerSegment = cf.rowPerSegment
 		conf.maxSegmentLimit = cf.segmentPerFile
 		conf.fileSizeLimit = cf.fileSizeLimit
@@ -1292,7 +1292,7 @@ func TestCompactRecovery(t *testing.T) {
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 100
 	tier := uint64(util.Hot)
 	lockPath := ""
@@ -1324,7 +1324,7 @@ func TestMergeRecovery(t *testing.T) {
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 
-	conf := NewConfig()
+	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 100
 	tier := uint64(util.Hot)
 	lockPath := ""

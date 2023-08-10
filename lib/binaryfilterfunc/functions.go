@@ -310,28 +310,36 @@ func formatBinaryExpr(expr influxql.Expr) (*influxql.BinaryExpr, bool, error) {
 	return binaryExpr, switchOp, nil
 }
 
-func RewriteTimeCompareVal(expr influxql.Expr) {
+func RewriteTimeCompareVal(expr influxql.Expr, valuer *influxql.NowValuer) {
 	if op, ok := expr.(*influxql.BinaryExpr); ok {
 		if op.Op != influxql.AND && op.Op != influxql.OR {
 			if leftVal, lok := op.LHS.(*influxql.VarRef); lok {
 				if leftVal.Val == record.TimeField {
-					if rightExpr, rok := op.RHS.(*influxql.StringLiteral); rok {
-						t, _ := rightExpr.ToTimeLiteral(nil)
+					op.RHS = influxql.Reduce(op.RHS, valuer)
+					switch timeCol := op.RHS.(type) {
+					case *influxql.StringLiteral:
+						t, _ := timeCol.ToTimeLiteral(valuer.Location)
 						var val int64
 						if t.Val.IsZero() {
 							val = influxql.MinTime
 						} else {
 							val = t.Val.UnixNano()
 						}
-						op.RHS = &influxql.IntegerLiteral{
-							Val: val,
-						}
+						op.RHS = &influxql.IntegerLiteral{Val: val}
+					case *influxql.TimeLiteral:
+						op.RHS = &influxql.IntegerLiteral{Val: timeCol.Val.UnixNano()}
+					case *influxql.DurationLiteral:
+						op.RHS = &influxql.IntegerLiteral{Val: timeCol.Val.Nanoseconds()}
+					case *influxql.NumberLiteral:
+						op.RHS = &influxql.IntegerLiteral{Val: int64(timeCol.Val)}
+					default:
+						panic("unsupported data type for time filter")
 					}
 				}
 			}
 			return
 		}
-		RewriteTimeCompareVal(op.LHS)
-		RewriteTimeCompareVal(op.RHS)
+		RewriteTimeCompareVal(op.LHS, valuer)
+		RewriteTimeCompareVal(op.RHS, valuer)
 	}
 }

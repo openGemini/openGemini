@@ -4,7 +4,7 @@
 // Source: statistics_test.tmpl
 
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestStreamWindow(t *testing.T) {
@@ -58,4 +59,6 @@ func TestStreamWindow(t *testing.T) {
 	if err := compareBuffer("stream_window", tags, fields, buf); err != nil {
 		t.Fatalf("%v", err)
 	}
+	ops := stat.CollectOps()
+	assert.Equal(t, len(ops) == 1, true)
 }

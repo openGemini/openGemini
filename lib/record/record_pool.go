@@ -147,9 +147,9 @@ func (p *RecordPool) Put(rec *Record) {
 
 type CircularRecordPool struct {
 	index       int
-	recordNum   int
 	pool        *RecordPool
 	records     []*Record
+	schema      Schemas
 	initColMeta bool
 }
 
@@ -157,38 +157,10 @@ func NewCircularRecordPool(recordPool *RecordPool, recordNum int, schema Schemas
 	statistics.NewRecordStatistics().AddCircularRecordPool(1)
 	rp := &CircularRecordPool{
 		index:       0,
-		recordNum:   recordNum,
 		pool:        recordPool,
 		initColMeta: initColMeta,
-	}
-
-	schemaLen := schema.Len()
-	for i := 0; i < recordNum; i++ {
-		record := recordPool.Get()
-		recSchemaLen := len(record.Schema)
-		if schemaCap := cap(record.Schema); schemaCap < schemaLen {
-			record.Schema = append(record.Schema[:recSchemaLen], make([]Field, schemaLen-recSchemaLen)...)
-		}
-		record.Schema = record.Schema[:schemaLen]
-
-		if colValCap := cap(record.ColVals); colValCap < schemaLen {
-			record.ColVals = append(record.ColVals[:recSchemaLen], make([]ColVal, schemaLen-recSchemaLen)...)
-		}
-		record.ColVals = record.ColVals[:schemaLen]
-
-		copy(record.Schema, schema)
-		if initColMeta {
-			if record.RecMeta == nil {
-				record.RecMeta = &RecMeta{
-					Times: make([][]int64, schemaLen),
-				}
-			}
-			if timeCap, timeLen := cap(record.RecMeta.Times), len(record.RecMeta.Times); timeCap < schemaLen {
-				record.RecMeta.Times = append(record.RecMeta.Times[:timeLen], make([][]int64, schemaLen-timeLen)...)
-			}
-			record.RecMeta.Times = record.RecMeta.Times[:schemaLen]
-		}
-		rp.records = append(rp.records, record)
+		records:     make([]*Record, 0, recordNum),
+		schema:      schema,
 	}
 	return rp
 }
@@ -197,37 +169,72 @@ func (p *CircularRecordPool) GetIndex() int {
 	return p.index
 }
 
+func (p *CircularRecordPool) allocRecord() {
+	record := p.pool.Get()
+	schemaLen := len(p.schema)
+	recSchemaLen := len(record.Schema)
+	if schemaCap := cap(record.Schema); schemaCap < schemaLen {
+		record.Schema = append(record.Schema[:recSchemaLen], make([]Field, schemaLen-recSchemaLen)...)
+	}
+	record.Schema = record.Schema[:schemaLen]
+
+	if colValCap := cap(record.ColVals); colValCap < schemaLen {
+		record.ColVals = append(record.ColVals[:recSchemaLen], make([]ColVal, schemaLen-recSchemaLen)...)
+	}
+	record.ColVals = record.ColVals[:schemaLen]
+
+	copy(record.Schema, p.schema)
+	if p.initColMeta {
+		if record.RecMeta == nil {
+			record.RecMeta = &RecMeta{
+				Times: make([][]int64, schemaLen),
+			}
+		}
+		if timeCap, timeLen := cap(record.RecMeta.Times), len(record.RecMeta.Times); timeCap < schemaLen {
+			record.RecMeta.Times = append(record.RecMeta.Times[:timeLen], make([][]int64, schemaLen-timeLen)...)
+		}
+		record.RecMeta.Times = record.RecMeta.Times[:schemaLen]
+	}
+	p.records = append(p.records, record)
+}
+
 func (p *CircularRecordPool) Get() *Record {
+	if len(p.records) < cap(p.records) {
+		p.allocRecord()
+	}
 	r := p.records[p.index]
 	r.ResetForReuse()
 	if !p.initColMeta {
 		r.RecMeta = nil
 	}
-	p.index = (p.index + 1) % p.recordNum
+	p.index = (p.index + 1) % cap(p.records)
 	return r
 }
 
 func (p *CircularRecordPool) GetBySchema(s Schemas) *Record {
+	if len(p.records) < cap(p.records) {
+		p.allocRecord()
+	}
 	r := p.records[p.index]
 	r.Schema = s
 	r.ResetForReuse()
 	if !p.initColMeta {
 		r.RecMeta = nil
 	}
-	p.index = (p.index + 1) % p.recordNum
+	p.index = (p.index + 1) % cap(p.records)
 	return r
 }
 
 func (p *CircularRecordPool) Put() {
 	statistics.NewRecordStatistics().AddCircularRecordPool(-1)
-	for i := 0; i < p.recordNum; i++ {
+	for i := 0; i < len(p.records); i++ {
 		p.pool.Put(p.records[i])
 	}
 	p.pool = nil
 	p.records = nil
-	p.recordNum = 0
 }
 
 func (p *CircularRecordPool) PutRecordInCircularPool() {
-	p.index = (p.index - 1 + p.recordNum) % p.recordNum
+	recordNum := cap(p.records)
+	p.index = (p.index - 1 + recordNum) % recordNum
 }

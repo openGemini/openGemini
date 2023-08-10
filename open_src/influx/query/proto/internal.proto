@@ -74,7 +74,6 @@ message QueryParam {
 message QuerySchema {
     string          QueryFields = 2;
     repeated string ColumnNames = 3;
-    ProcessorOptions Opt = 4;
 }
 
 

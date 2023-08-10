@@ -53,7 +53,7 @@ install-tmpl:
 	@$(GO) install github.com/benbjohnson/tmpl@v1.1.0
 
 install-protoc:
-	@VERSION=$$(protoc --version); if [ $$VERSION = "libprotoc 3.14.0" ]; then exit 0; fi; \
+	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc 3.14.0" ]; then exit 0; fi; \
 	if [ $$(uname -s) = "Linux" ];  then \
   		make install-protoc-linux; \
 	elif [ $$(uname -s) = "Darwin" ];  then \

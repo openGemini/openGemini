@@ -857,7 +857,7 @@ func RenameTmpFiles(newFiles []TSSPFile) error {
 		f := newFiles[i]
 		tmpName := f.Path()
 		if IsTempleFile(filepath.Base(tmpName)) {
-			fname := tmpName[:len(tmpName)-len(tmpTsspFileSuffix)]
+			fname := tmpName[:len(tmpName)-len(tmpFileSuffix)]
 			if err := f.FreeFileHandle(); err != nil {
 				return err
 			}
@@ -866,6 +866,39 @@ func RenameTmpFiles(newFiles []TSSPFile) error {
 				if _, e := fileops.Stat(fname); e != nil {
 					return os.ErrNotExist
 				}
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func RenameTmpFilesWithPKIndex(newFiles []TSSPFile) error {
+	lock := fileops.FileLockOption("")
+	for i := range newFiles {
+		f := newFiles[i]
+		tmpName := f.Path()
+		if IsTempleFile(filepath.Base(tmpName)) {
+			// rename tssp file
+			fname := tmpName[:len(tmpName)-len(tmpFileSuffix)]
+			if err := f.FreeFileHandle(); err != nil {
+				return err
+			}
+			if err := f.Rename(fname); err != nil {
+				log.Error("rename file error", zap.String("name", tmpName), zap.Error(err))
+				if _, e := fileops.Stat(fname); e != nil {
+					return os.ErrNotExist
+				}
+				return err
+			}
+
+			// rename pk index file
+			IndexFileName := fname[:len(fname)-tsspFileSuffixLen] + colstore.IndexFileSuffix
+			tmpIndexFileName := IndexFileName + tmpFileSuffix
+			if err := fileops.RenameFile(tmpIndexFileName, IndexFileName, lock); err != nil {
+				err = errno.NewError(errno.RenameFileFailed, zap.String("old", tmpIndexFileName), zap.String("new", IndexFileName), err)
+				log.Error("rename file fail", zap.Error(err))
 				return err
 			}
 		}

@@ -202,7 +202,7 @@ func (m *MmsTables) tableFiles(name string, order bool) *TSSPFiles {
 
 func (m *MmsTables) removeFile(f TSSPFile) {
 	if f.Inuse() {
-		if err := f.Rename(f.Path() + tmpTsspFileSuffix); err != nil {
+		if err := f.Rename(f.Path() + tmpFileSuffix); err != nil {
 			log.Error("failed to rename file", zap.String("path", f.Path()), zap.Error(err))
 			return
 		}

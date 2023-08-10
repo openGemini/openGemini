@@ -585,11 +585,6 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, shardPath, shardWalPath string, i
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "ShardOpenErr", time.Since(start).Nanoseconds(), true)
 		return nil, err
 	}
-	if err = sh.OpenAndEnable(client); err != nil {
-		statistics.ShardStepDuration(sh.GetID(), sh.opId, "ShardOpenErr", time.Since(start).Nanoseconds(), true)
-		return nil, err
-	}
-	statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardOpenAndEnableDone", 0, true)
 
 	// column store load mstsInfo
 	if sh.engineType == config.COLUMNSTORE {
@@ -602,6 +597,12 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, shardPath, shardWalPath string, i
 		}
 		sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 	}
+
+	if err = sh.OpenAndEnable(client); err != nil {
+		statistics.ShardStepDuration(sh.GetID(), sh.opId, "ShardOpenErr", time.Since(start).Nanoseconds(), true)
+		return nil, err
+	}
+	statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardOpenAndEnableDone", 0, true)
 
 	return sh, nil
 }

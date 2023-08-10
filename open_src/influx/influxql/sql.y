@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 const DefaultQueryTimeout = time.Duration(0) 
@@ -2393,25 +2395,25 @@ COLUMN_LISTS:
     LPAREN FIELD_OPTIONS INDEX_OPTIONS RPAREN
     {
         stmt := &CreateMeasurementStatement{
-            Tags: make([]string,0,0),
+            Tags: make(map[string]int32),
             Fields : make(map[string]int32),
         }
         for i := range $2{
             fType := $2[i].tagOrField
             if  fType == "tag"{
-                stmt.Tags = append(stmt.Tags, $2[i].fieldName)
+                stmt.Tags[$2[i].fieldName] = influx.Field_Type_Tag
             }else if fType == "field"{
                 filedType := strings.ToLower($2[i].fieldType)
                 if filedType == "int"{
-                    stmt.Fields[$2[i].fieldName] = 1
+                    stmt.Fields[$2[i].fieldName] = influx.Field_Type_Int
                 }else if filedType == "uint"{
-                    stmt.Fields[$2[i].fieldName] = 2
+                    stmt.Fields[$2[i].fieldName] = influx.Field_Type_UInt
                 }else if filedType == "float"{
-                    stmt.Fields[$2[i].fieldName] = 3
+                    stmt.Fields[$2[i].fieldName] = influx.Field_Type_Float
                 }else if filedType == "string"{
-                    stmt.Fields[$2[i].fieldName] = 4
+                    stmt.Fields[$2[i].fieldName] = influx.Field_Type_String
                 }else if filedType == "boolean"{
-                    stmt.Fields[$2[i].fieldName] = 5
+                    stmt.Fields[$2[i].fieldName] = influx.Field_Type_Boolean
                 }
             }
         }

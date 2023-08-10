@@ -230,7 +230,7 @@ func (trans *SortTransform) initNewResultFuncs() error {
 			trans.newResultFuncs = append(trans.newResultFuncs, NewIntegerSortEle)
 		case influxql.Boolean:
 			trans.newResultFuncs = append(trans.newResultFuncs, NewBoolSortEle)
-		case influxql.String:
+		case influxql.String, influxql.Tag:
 			trans.newResultFuncs = append(trans.newResultFuncs, NewStringSortEle)
 		default:
 			return errno.NewError(errno.SortTransformRunningErr)

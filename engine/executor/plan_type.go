@@ -24,6 +24,7 @@ import (
 
 var SqlPlanTemplate []*PlanTemplate
 var StorePlanTemplate []*PlanTemplate
+var OneShardStorePlanTemplate []*PlanTemplate
 var PlanTypes []PlanType
 var MatchPlanFunc []func(hybridqp.Catalog) bool
 var GetPlanType func(hybridqp.Catalog, *influxql.SelectStatement) PlanType
@@ -34,12 +35,20 @@ func init() {
 	for _, t := range PlanTypes {
 		SqlPlanTemplate = append(SqlPlanTemplate, NewSqlPlanTemplate(t)) // 0 1 2 3
 		StorePlanTemplate = append(StorePlanTemplate, NewStorePlanTemplate(t))
+		OneShardStorePlanTemplate = append(OneShardStorePlanTemplate, NewOneShardStorePlanTemplate(t))
 	}
 	MatchPlanFunc = append(MatchPlanFunc, MatchAggInterval)
 	MatchPlanFunc = append(MatchPlanFunc, MatchAggIntervalLimit)
 	MatchPlanFunc = append(MatchPlanFunc, MatchNoAggNoGroup)
 	MatchPlanFunc = append(MatchPlanFunc, MatchAggGroup)
 	GetPlanType = NormalGetPlanType
+}
+
+func GetStorePlanTemplate(shardNum int, planType PlanType) []hybridqp.QueryNode {
+	if shardNum == 1 {
+		return OneShardStorePlanTemplate[planType].GetPlan()
+	}
+	return StorePlanTemplate[planType].GetPlan()
 }
 
 func MatchAggInterval(schema hybridqp.Catalog) bool {
@@ -109,6 +118,15 @@ func NewStorePlanTemplate(t PlanType) *PlanTemplate {
 		plan:     nil,
 	}
 	pp.plan = NewStorePlanTypePool(t)
+	return pp
+}
+
+func NewOneShardStorePlanTemplate(t PlanType) *PlanTemplate {
+	pp := &PlanTemplate{
+		planType: t,
+		plan:     nil,
+	}
+	pp.plan = NewOneShardStorePlanTypePool(t)
 	return pp
 }
 

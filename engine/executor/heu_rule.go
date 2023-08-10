@@ -391,7 +391,8 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	if !reader.Schema().CanCallsPushdown() {
+	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && GetEnableSlidingWindowPushUp() != OnSlidingWindowPushUp
+	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown) {
 		return
 	}
 
@@ -407,7 +408,7 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 		builder := NewLogicalPlanBuilderImpl(reader.Schema())
 		var node hybridqp.QueryNode
 		var err error
-		if reader.Schema().HasSlidingWindowCall() && GetEnableSlidingWindowPushUp() != OnSlidingWindowPushUp {
+		if canSlidingWindowPushDown {
 			node, err = builder.CreateSlideWindow(vertex)
 		} else {
 			node, err = builder.CreateAggregate(vertex)

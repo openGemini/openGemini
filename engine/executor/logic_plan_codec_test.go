@@ -84,7 +84,7 @@ func BenchmarkMarshalBinary(t *testing.B) {
 			return
 		}
 
-		other, err := executor.UnmarshalQueryNode(node)
+		other, err := executor.UnmarshalQueryNode(node, 2, dag.Schema().Options())
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -181,7 +181,7 @@ func TestLogicalPlanCodec(t *testing.T) {
 		t.Fatalf("failed to marshal logical plan: %v", err)
 	}
 
-	newPlan, err := executor.UnmarshalQueryNode(buf)
+	newPlan, err := executor.UnmarshalQueryNode(buf, 2, exg.Schema().Options())
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -219,7 +219,7 @@ func TestQueryNodeCodec(t *testing.T) {
 		return
 	}
 
-	other, err := executor.UnmarshalQueryNode(node)
+	other, err := executor.UnmarshalQueryNode(node, 2, exg.Schema().Options())
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -234,7 +234,7 @@ func TestQueryNodeCodec(t *testing.T) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		other, err = executor.UnmarshalQueryNode(node)
+		other, err = executor.UnmarshalQueryNode(node, 2, exg.Schema().Options())
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -244,13 +244,13 @@ func TestQueryNodeCodec(t *testing.T) {
 
 func TestUnmarshalQueryNode(t *testing.T) {
 	buf := []byte{0}
-	_, err := executor.UnmarshalQueryNode(buf)
+	_, err := executor.UnmarshalQueryNode(buf, 2, nil)
 	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, util.Uint64SizeBytes, len(buf)).Error())
 
 	buf = make([]byte, 10)
 	size := uint64(100)
 	binary.BigEndian.PutUint64(buf[:util.Uint64SizeBytes], size)
-	_, err = executor.UnmarshalQueryNode(buf)
+	_, err = executor.UnmarshalQueryNode(buf, 2, nil)
 	assert.EqualError(t, err, errno.NewError(errno.ShortBufferSize, size, len(buf)-util.Uint64SizeBytes).Error())
 }
 
@@ -359,4 +359,14 @@ func TestReWriteArgs(t *testing.T) {
 	aggCp := agg.Clone()
 	executor.ReWriteArgs(agg)
 	assert.Equal(t, agg.Digest(), aggCp.Digest())
+}
+
+func TestMarshalQueryNodeOfPlanTemplateMatch(t *testing.T) {
+	schema := NewAggIntervalSchema()
+	logicSeries := executor.NewLogicalSeries(schema)
+	schema.(*executor.QuerySchema).SetPlanType(executor.AGG_INTERVAL)
+	node, err := executor.MarshalQueryNode(logicSeries)
+	if err != nil || len(node) == 0 {
+		t.Error("TestMarshalQueryNodeOfPlanTemplateMatch error")
+	}
 }

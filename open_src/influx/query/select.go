@@ -225,22 +225,13 @@ type ProcessorOptions struct {
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
 func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions) (opt ProcessorOptions, err error) {
-	valuer := &influxql.NowValuer{Location: stmt.Location}
-	condition, timeRange, err := influxql.ConditionExpr(stmt.Condition, valuer)
-	if err != nil {
-		return ProcessorOptions{}, err
-	}
+	// valuer := &influxql.NowValuer{Location: stmt.Location}
+	// make sure call influxql.ConditionExpr before to remove time condition
+	// condition, timeRange, err := influxql.ConditionExpr(stmt.Condition, valuer)
+	opt.Condition = stmt.Condition
+	opt.StartTime = influxql.MinTime
+	opt.EndTime = influxql.MaxTime
 
-	if !timeRange.Min.IsZero() {
-		opt.StartTime = timeRange.Min.UnixNano()
-	} else {
-		opt.StartTime = influxql.MinTime
-	}
-	if !timeRange.Max.IsZero() {
-		opt.EndTime = timeRange.Max.UnixNano()
-	} else {
-		opt.EndTime = influxql.MaxTime
-	}
 	opt.Location = stmt.Location
 
 	// Determine group by interval.
@@ -274,7 +265,6 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 		}
 	}
 
-	opt.Condition = condition
 	opt.SourceCondition = stmt.SourceCondition
 	opt.Ascending = stmt.TimeAscending()
 	opt.Dedupe = stmt.Dedupe
@@ -588,6 +578,10 @@ func (opt *ProcessorOptions) Zone(ns int64) (string, int64) {
 
 func (opt *ProcessorOptions) GetCondition() influxql.Expr {
 	return opt.Condition
+}
+
+func (opt *ProcessorOptions) GetLocation() *time.Location {
+	return opt.Location
 }
 
 func (opt *ProcessorOptions) SetTimeFirstKey() {

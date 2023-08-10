@@ -135,10 +135,9 @@ func (itr seriesIDIntersectIterator) Next() (_ SeriesIDElem, err error) {
 }
 
 func (itr seriesIDIntersectIterator) Ids() *uint64set.Set {
-	ids1 := itr.itrs[0].Ids()
-	ids2 := itr.itrs[1].Ids()
-	ids1.Intersect(ids2)
-	return ids1
+	ids := itr.itrs[0].Ids().Clone()
+	ids.Intersect(itr.itrs[1].Ids())
+	return ids
 }
 
 type SeriesIDSetIterable interface {
@@ -184,7 +183,7 @@ func (itr *seriesIDSetIterator) Next() (SeriesIDElem, error) {
 }
 
 func (itr *seriesIDSetIterator) Ids() *uint64set.Set {
-	return itr.SeriesIDSet().set.Clone()
+	return itr.SeriesIDSet().set
 }
 
 func NewSeriesIDSetIterators(itrs []SeriesIDIterator) []SeriesIDSetIterator {
@@ -295,10 +294,9 @@ func (itr *seriesIDUnionIterator) Next() (_ SeriesIDElem, err error) {
 }
 
 func (itr *seriesIDUnionIterator) Ids() *uint64set.Set {
-	ids1 := itr.itrs[0].Ids()
-	ids2 := itr.itrs[1].Ids()
-	ids1.UnionMayOwn(ids2)
-	return ids1
+	ids := itr.itrs[0].Ids().Clone()
+	ids.Union(itr.itrs[1].Ids())
+	return ids
 }
 
 func UnionSeriesIDIterators(itr0, itr1 SeriesIDIterator) SeriesIDIterator {

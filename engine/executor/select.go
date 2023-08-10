@@ -133,6 +133,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	if planType != UNKNOWN {
 		templatePlan := SqlPlanTemplate[planType].GetPlan()
 		if p != nil && !HaveOnlyCSStore {
+			schema.SetPlanType(planType)
 			return p.buildPlanByCache(ctx, schema, templatePlan)
 		}
 	}

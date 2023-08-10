@@ -441,8 +441,7 @@ type ColStoreInfo struct {
 	PropertyValue []string
 }
 
-func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string, Tags []string,
-	Fields map[string]int32) *ColStoreInfo {
+func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string) *ColStoreInfo {
 	h := &ColStoreInfo{
 		PrimaryKey: PrimaryKey,
 		SortKey:    SortKey,
@@ -469,4 +468,18 @@ func (h *ColStoreInfo) Unmarshal(pb *proto2.ColStoreInfo) {
 	h.SortKey = pb.GetSortKey()
 	h.PropertyKey = pb.GetPropertyKey()
 	h.PropertyValue = pb.GetPropertyValue()
+}
+
+func NewSchemaInfo(tags, fields map[string]int32) []*proto2.FieldSchema {
+	if len(tags)+len(fields) == 0 {
+		return nil
+	}
+	var s []*proto2.FieldSchema
+	for k, v := range tags {
+		s = append(s, &proto2.FieldSchema{FieldName: proto.String(k), FieldType: proto.Int32(v)})
+	}
+	for k, v := range fields {
+		s = append(s, &proto2.FieldSchema{FieldName: proto.String(k), FieldType: proto.Int32(v)})
+	}
+	return s
 }

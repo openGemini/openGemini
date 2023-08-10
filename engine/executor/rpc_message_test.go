@@ -30,9 +30,11 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var clientID uint64 = 101
@@ -187,8 +189,11 @@ func TestTransport(t *testing.T) {
 	time.Sleep(time.Second)
 
 	ctx := context.Background()
-	client := executor.NewRPCClient(ctx, makeRemoteQueryMsg(nodeID))
+	client := executor.NewRPCClient(makeRemoteQueryMsg(nodeID))
 
+	_, span := tracing.NewTrace("root")
+	client.StartAnalyze(span)
+	client.Init(ctx, nil)
 	err := client.Run()
 	assert.EqualError(t, err, fmt.Sprintf("remote error: some error"))
 }
@@ -210,7 +215,8 @@ func TestTransportAbort(t *testing.T) {
 	ctx := context.Background()
 	rq := makeRemoteQueryMsg(nodeID)
 	rq.Analyze = true
-	client := executor.NewRPCClient(ctx, rq)
+	client := executor.NewRPCClient(rq)
+	client.Init(ctx, nil)
 
 	go func() {
 		time.Sleep(time.Second / 2)
@@ -229,6 +235,17 @@ func TestHandlerError(t *testing.T) {
 	err := client.Handle(msg)
 	assert.EqualError(t, err, fmt.Sprintf("invalid data type, exp: *rpc.Message, got: %s", reflect.TypeOf(msg)))
 
-	err = client.Handle(executor.NewErrorMessage(0, "error"))
-	assert.EqualError(t, err, fmt.Sprintf("unknown message type: %d", executor.ErrorMessage))
+	err = client.Handle(rpc.NewMessage(100, nil))
+	assert.EqualError(t, err, fmt.Sprintf("unknown message type: %d", 100))
+}
+
+func TestNewRPCReaderTransform_Abort(t *testing.T) {
+	ctx := context.Background()
+	rt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{})
+	trans := executor.NewRPCReaderTransform(rt, query.ProcessorOptions{}, &executor.RemoteQuery{})
+
+	trans.Distribute(buildDag())
+	trans.Abort()
+	err := trans.Work(ctx)
+	require.NoError(t, err)
 }

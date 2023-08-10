@@ -95,13 +95,13 @@ func (n *TSSPFileName) path(dir string) string {
 }
 
 func (n *TSSPFileName) TmpPath(dir string) string {
-	return n.path(dir) + tmpTsspFileSuffix
+	return n.path(dir) + tmpFileSuffix
 }
 
 func (n *TSSPFileName) Path(dir string, tmp bool) string {
 	p := n.path(dir)
 	if tmp {
-		p += tmpTsspFileSuffix
+		p += tmpFileSuffix
 	}
 	return p
 }
@@ -117,7 +117,7 @@ func (n *TSSPFileName) ParseFileName(name string) error {
 	}
 	nl := len(base)
 	var nameStr string
-	if base[nl-tmpSuffixNameLen:] == tmpTsspFileSuffix {
+	if base[nl-tmpSuffixNameLen:] == tmpFileSuffix {
 		nameStr = base[:nl-(tsspFileSuffixLen+tmpSuffixNameLen)]
 	} else {
 		nameStr = base[:nl-tsspFileSuffixLen]
@@ -165,5 +165,5 @@ func IsTempleFile(name string) bool {
 		return false
 	}
 
-	return name[len(name)-tmpSuffixNameLen:] == tmpTsspFileSuffix
+	return name[len(name)-tmpSuffixNameLen:] == tmpFileSuffix
 }

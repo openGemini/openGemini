@@ -116,6 +116,12 @@ func MarshalQueryNode(node hybridqp.QueryNode) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if node.Schema().(*QuerySchema).GetPlanType() != UNKNOWN {
+		buf = bufferpool.Resize(buf, util.Uint64SizeBytes)
+		binary.BigEndian.PutUint64(buf[:util.Uint64SizeBytes], uint64(len(schema)))
+		buf = append(buf, schema...)
+		return buf, nil
+	}
 	nodeBuf, err := MarshalBinary(node)
 	if err != nil {
 		return nil, err
@@ -620,7 +626,7 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 	panic("UnmarshalBinaryNode fail")
 }
 
-func UnmarshalQueryNode(buf []byte) (hybridqp.QueryNode, error) {
+func UnmarshalQueryNode(buf []byte, shardNum int, opt hybridqp.Options) (hybridqp.QueryNode, error) {
 	if len(buf) < util.Uint64SizeBytes {
 		return nil, errno.NewError(errno.ShortBufferSize, util.Uint64SizeBytes, len(buf))
 	}
@@ -637,14 +643,14 @@ func UnmarshalQueryNode(buf []byte) (hybridqp.QueryNode, error) {
 		return nil, err
 	}
 
-	schema, err := query.DecodeQuerySchema(schemaPb)
+	schema, err := query.DecodeQuerySchema(schemaPb, opt)
 	if err != nil {
 		return nil, err
 	}
 
 	planType := GetPlanType(schema, nil)
 	if planType != UNKNOWN {
-		templatePlan := StorePlanTemplate[planType].GetPlan()
+		templatePlan := GetStorePlanTemplate(shardNum, planType)
 		if templatePlan != nil && !schema.Options().HaveOnlyCSStore() {
 			newPlan, err := NewPlanBySchemaAndSrcPlan(schema, templatePlan, nil)
 			if err != nil {

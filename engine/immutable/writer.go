@@ -53,7 +53,7 @@ func newWriteLimiter(fd fileops.File, limitCompact bool) fileops.NameReadWriterC
 
 func newTsspFileWriter(fd fileops.File, cacheMeta bool, limitCompact bool, lockPath *string) fileops.FileWriter {
 	name := fd.Name()
-	idxName := name[:len(name)-len(tmpTsspFileSuffix)] + ".index.init"
+	idxName := name[:len(name)-len(tmpFileSuffix)] + ".index.init"
 
 	lw := newWriteLimiter(fd, limitCompact)
 	w := &tsspFileWriter{

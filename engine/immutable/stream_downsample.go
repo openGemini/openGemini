@@ -98,7 +98,7 @@ func getStreamWriteFile() *StreamWriteFile {
 	return &StreamWriteFile{
 		ctx:        NewReadContext(true),
 		colBuilder: NewColumnBuilder(),
-		Conf:       GetConfig(),
+		Conf:       GetTsStoreConfig(),
 		rowCount:   make(map[string]int),
 	}
 }

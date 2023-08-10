@@ -92,7 +92,7 @@ func (h *SortHelper) Sort(rec *Record) *Record {
 	return rec
 }
 
-func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy []PrimaryKey) {
+func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy []PrimaryKey) *Record {
 	times := rec.Times()
 	tmpRec := rec.Copy()
 
@@ -116,6 +116,8 @@ func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy
 	}
 
 	h.appendForColumnStore(rec, data, start, len(rows)-1)
+	rec, data.SortRec = data.SortRec, rec
+	return rec
 }
 
 func (h *SortHelper) append(rec *Record, aux *SortAux, start, end int) {

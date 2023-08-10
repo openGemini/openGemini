@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -178,11 +179,13 @@ func (storage *columnstoreImpl) WriteRowsToTable(s *shard, rows influx.Rows, mw 
 	}
 
 	go func() {
+		writeIndexStart := time.Now()
 		indexErr = storage.WriteIndex(s, &rows, mw)
 		if indexErr != nil {
 			nodeMutableLimit.freeResource(curSize)
 		}
 		indexWg.Done()
+		atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(writeIndexStart).Nanoseconds())
 	}()
 	err = s.writeRows(mw, binaryRows, curSize)
 	indexWg.Wait()
@@ -236,6 +239,7 @@ func (storage *columnstoreImpl) updateMstMap(s *shard, rows influx.Rows, mw *mst
 		if ri.Timestamp > tm {
 			tm = ri.Timestamp
 		}
+		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len())+int64(rows[i].Tags.Len()))
 	}
 	s.setMaxTime(tm)
 	return nil
@@ -292,8 +296,10 @@ func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst str
 
 	//write index
 	go func() {
+		writeIndexStart := time.Now()
 		indexErr = storage.WriteIndexForCols(s, cols, mst)
 		indexWg.Done()
+		atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(writeIndexStart).Nanoseconds())
 	}()
 
 	// write data and wal
@@ -302,7 +308,7 @@ func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst str
 	if err != nil {
 		return err
 	}
-
+	s.activeTbl.AddMemSize(curSize)
 	return indexErr
 }
 
@@ -574,11 +580,14 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		engineType:     engineType,
 		seriesLimit:    uint64(options.MaxSeriesPerDatabase),
 	}
+	var conf *immutable.Config
 	switch engineType {
 	case config.TSSTORE:
 		s.storage = &tsstoreImpl{}
+		conf = immutable.GetTsStoreConfig()
 	case config.COLUMNSTORE:
 		s.storage = newColumnstoreImpl()
+		conf = immutable.GetColStoreConfig()
 	default:
 		return nil
 	}
@@ -597,7 +606,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 			s.tier = util.Cold
 		}
 	}
-	s.immTables = immutable.NewTableStore(filePath, s.lock, &s.tier, options.CompactRecovery, immutable.GetConfig())
+	s.immTables = immutable.NewTableStore(filePath, s.lock, &s.tier, options.CompactRecovery, conf)
 	s.immTables.SetAddFunc(s.addRowCounts)
 	s.immTables.SetImmTableType(s.engineType)
 	return s
@@ -620,7 +629,8 @@ func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) er
 	// write wal
 	start = time.Now()
 	failpoint.Inject("SlowDownWalWrite", nil)
-	if err = s.wal.Write(binaryCols); err != nil {
+	wr := &walRecord{binary: binaryCols, writeWalType: WriteWalArrowFlight}
+	if err = s.wal.Write(wr); err != nil {
 		log.Error("write cols rec to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err
 	}
@@ -701,7 +711,8 @@ func (s *shard) writeRows(mw *mstWriteCtx, binaryRows []byte, curSize int64) err
 	// write wal
 	start = time.Now()
 	failpoint.Inject("SlowDownWalWrite", nil)
-	if err = s.wal.Write(binaryRows); err != nil {
+	wr := &walRecord{binary: binaryRows, writeWalType: WriteWalLineProtocol}
+	if err = s.wal.Write(wr); err != nil {
 		s.snapshotLock.RUnlock()
 		log.Error("write rows to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err
@@ -718,7 +729,18 @@ func (s *shard) WriteCols(mst string, cols *record.Record, binaryCols []byte) er
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.storage.WriteCols(s, cols, mst, binaryCols)
+	atomic.StoreUint64(&s.lastWriteTime, fasttime.UnixTimestamp())
+	if err := s.storage.WriteCols(s, cols, mst, binaryCols); err != nil {
+		log.Error("write buffer failed", zap.Error(err))
+		atomic.AddInt64(&statistics.PerfStat.WriteReqErrors, 1)
+		return err
+	}
+
+	s.addRowCounts(int64(cols.RowNums()))
+	atomic.AddInt64(&statistics.PerfStat.WriteRowsBatch, 1)
+	atomic.AddInt64(&statistics.PerfStat.WriteRowsCount, int64(cols.RowNums()))
+	atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(cols.RowNums()*cols.ColNums()))
+	return nil
 }
 
 func (s *shard) WaitWriteFinish() {
@@ -1289,7 +1311,18 @@ func (s *shard) setMaxTime(tm int64) {
 	s.tmLock.Unlock()
 }
 
-func (s *shard) writeWalBuffer(binary []byte) error {
+func (s *shard) writeWalBuffer(binary []byte, writeWalType WalRecordType) error {
+	switch writeWalType {
+	case WriteWalLineProtocol:
+		return s.writeWalForLineProtocol(binary)
+	case WriteWalArrowFlight:
+		return s.writeWalForArrowFlight(binary)
+	default:
+		return errors.New("unKnown write wal type")
+	}
+}
+
+func (s *shard) writeWalForLineProtocol(binary []byte) error {
 	var rows []influx.Row
 	var tagPools []influx.Tag
 	var fieldPools []influx.Field
@@ -1305,6 +1338,16 @@ func (s *shard) writeWalBuffer(binary []byte) error {
 	}
 
 	return s.writeRowsToTable(rows, nil)
+}
+
+func (s *shard) writeWalForArrowFlight(binary []byte) error {
+	newRec := &record.Record{}
+	name, err := coordinator.UnmarshalWithMeasurements(binary, newRec)
+	if err != nil {
+		return err
+	}
+
+	return s.writeCols(newRec, nil, name)
 }
 
 func (s *shard) setCancelWalFunc(cancel context.CancelFunc) {
@@ -1345,8 +1388,8 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 	wStart := time.Now()
 
 	walFileNames, err := s.wal.Replay(ctx,
-		func(binary []byte) error {
-			err := s.writeWalBuffer(binary)
+		func(binary []byte, writeWalType WalRecordType) error {
+			err := s.writeWalBuffer(binary, writeWalType)
 			// SeriesLimited error is ignored in the wal playback process
 			if errno.Equal(err, errno.SeriesLimited) {
 				err = nil
@@ -1483,7 +1526,7 @@ func deleteFiles(mmDir string, files []string, dirs []os.FileInfo, lockPath *str
 	for _, v := range files {
 		for j := range dirs {
 			name := dirs[j].Name()
-			tmp := v + immutable.GetTmpTsspFileSuffix()
+			tmp := v + immutable.GetTmpFileSuffix()
 			if name == v || tmp == name {
 				fName := filepath.Join(mmDir, v)
 				if _, err := fileops.Stat(fName); os.IsNotExist(err) {
@@ -1506,7 +1549,7 @@ func renameFiles(mmDir string, files []string, dirs []os.FileInfo, lockPath *str
 			nameInLog := files[k]
 			if nameInLog == name {
 				lock := fileops.FileLockOption(*lockPath)
-				normalName := nameInLog[:len(nameInLog)-len(immutable.GetTmpTsspFileSuffix())]
+				normalName := nameInLog[:len(nameInLog)-len(immutable.GetTmpFileSuffix())]
 				oldName := filepath.Join(mmDir, nameInLog)
 				newName := filepath.Join(mmDir, normalName)
 				if err := fileops.RenameFile(oldName, newName, lock); err != nil {
@@ -1963,7 +2006,7 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 	node2.SetMmsTables(mmsTables)
 	source := influxql.Sources{&influxql.Measurement{Database: db, RetentionPolicy: rpName, Name: mstName}}
 	sidSequenceReader := NewTsspSequenceReader(nil, nil, nil, source, querySchema, files, newSeqs, s.stopDownSample)
-	writeIntoStorage := NewWriteIntoStorageTransform(nil, nil, nil, source, querySchema, immutable.GetConfig(), mmsTables, s.ident.DownSampleLevel == 0)
+	writeIntoStorage := NewWriteIntoStorageTransform(nil, nil, nil, source, querySchema, immutable.GetTsStoreConfig(), mmsTables, s.ident.DownSampleLevel == 0)
 	fileSequenceAgg := NewFileSequenceAggregator(querySchema, s.ident.DownSampleLevel == 0, s.startTime.UnixNano(), s.endTime.UnixNano())
 	sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 	fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -2149,7 +2192,8 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 	// get the data files by the measurement
 	dataFileRes, ok := s.immTables.GetCSFiles(mst)
 	if !ok {
-		return nil, fmt.Errorf("no data file found")
+		s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have not data file. mst: %s, shardID: %d", mst, s.GetID()))
+		return nil, nil
 	}
 	dataFiles := dataFileRes.Files()
 
@@ -2173,7 +2217,8 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 	var initCondition bool
 	var skipFileIdx []int
 	var keyCondition sparseindex.KeyCondition
-	binaryfilterfunc.RewriteTimeCompareVal(schema.Options().GetSourceCondition())
+	valuer := influxql.NowValuer{Now: time.Now(), Location: schema.Options().GetLocation()}
+	binaryfilterfunc.RewriteTimeCompareVal(schema.Options().GetSourceCondition(), &valuer)
 	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	filesFragments := executor.NewFileFragments()
 	for i, dataFile := range dataFiles {

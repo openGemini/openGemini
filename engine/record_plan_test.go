@@ -622,6 +622,7 @@ func Test_BuildRecordDag(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -640,7 +641,7 @@ func Test_BuildRecordDag(t *testing.T) {
 			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewTsStoreConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -1016,6 +1017,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -1192,6 +1194,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 				stmt.OmitTime = true
 				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
 				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 				opt.Name = msNames[0]
@@ -1378,6 +1381,7 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -1396,7 +1400,7 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewTsStoreConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -1512,6 +1516,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -1642,6 +1647,7 @@ func Test_DownSampleCancel1(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -1660,7 +1666,7 @@ func Test_DownSampleCancel1(t *testing.T) {
 			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewTsStoreConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -1773,6 +1779,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -1791,7 +1798,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewTsStoreConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
@@ -2226,6 +2233,7 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]
@@ -2244,7 +2252,7 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
 
 			sidSequenceReader := NewTsspSequenceReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, readers, newSeqs, make(chan struct{}))
-			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
+			writeIntoStorage := NewWriteIntoStorageTransform(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, immutable.NewTsStoreConfig(), sh.GetTableStore().(*immutable.MmsTables), true)
 			fileSequenceAgg := NewFileSequenceAggregator(querySchema, true, 0, math.MaxInt64)
 			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
 			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])

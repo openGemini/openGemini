@@ -281,23 +281,17 @@ func EncodeQuerySchema(schema hybridqp.Catalog) *internal.QuerySchema {
 	pb := &internal.QuerySchema{
 		ColumnNames: schema.GetColumnNames(),
 		QueryFields: schema.GetQueryFields().String(),
-		Opt:         encodeProcessorOptions(schema.Options().(*ProcessorOptions)),
 	}
 
 	return pb
 }
 
-func DecodeQuerySchema(pb *internal.QuerySchema) (hybridqp.Catalog, error) {
+func DecodeQuerySchema(pb *internal.QuerySchema, opt hybridqp.Options) (hybridqp.Catalog, error) {
 	if pb == nil {
 		return nil, nil
 	}
 
 	queryFields, err := hybridqp.ParseFields(pb.QueryFields)
-	if err != nil {
-		return nil, err
-	}
-
-	opt, err := decodeProcessorOptions(pb.Opt)
 	if err != nil {
 		return nil, err
 	}

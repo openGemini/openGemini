@@ -162,6 +162,7 @@ func (fl *fileLoader) openPKIndexFile(file, mst string) {
 	func() {
 		fl.mu.Lock()
 		defer fl.mu.Unlock()
+		defer f.Close()
 		rec, err := f.ReadData()
 		mark := fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(colstore.RowsNumPerFragment))
 		if err != nil {

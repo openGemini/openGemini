@@ -140,7 +140,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	immutable.SetCacheMetaData(options.CacheMetaBlock)
 	immutable.SetCompactLimit(options.CompactThroughput, options.CompactThroughputBurst)
 	immutable.SetSnapshotLimit(options.SnapshotThroughput, options.SnapshotThroughputBurst)
-	immutable.SegMergeFlag(int32(options.CompactionMethod))
+	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
 	immutable.Init()
 
 	return eng, nil
@@ -1008,6 +1008,9 @@ func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32
 		fileFrags, err := s.ScanWithSparseIndex(ctx, schema, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
 			return nil, err
+		}
+		if fileFrags == nil {
+			continue
 		}
 		shardFrags[shardId] = fileFrags
 	}

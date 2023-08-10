@@ -46,13 +46,13 @@ func beforeTest(t *testing.T, segLimit int) func() {
 	cacheIns.Purge()
 	saveDir = t.TempDir()
 
-	origSegLimit := immutable.MaxRowsPerSegment()
+	origSegLimit := immutable.GetMaxRowsPerSegment4TsStore()
 	if segLimit > 0 {
-		immutable.SetMaxRowsPerSegment(segLimit)
+		immutable.SetMaxRowsPerSegment4TsStore(segLimit)
 	}
 
 	return func() {
-		immutable.SetMaxRowsPerSegment(origSegLimit)
+		immutable.SetMaxRowsPerSegment4TsStore(origSegLimit)
 	}
 }
 
@@ -65,7 +65,7 @@ func TestMergeTool_Merge_mod1(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -91,7 +91,7 @@ func TestMergeTool_Merge_mod2(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -116,7 +116,7 @@ func TestMergeTool_Merge_mod3(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -160,7 +160,7 @@ func TestMergeTool_Merge_mod4(t *testing.T) {
 
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -187,7 +187,7 @@ func TestMergeTool_Merge_mod5(t *testing.T) {
 
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -221,7 +221,7 @@ func TestMergeTool_Merge_mod6(t *testing.T) {
 
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -266,7 +266,7 @@ func TestMergeTool_Merge_mod7(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 	schema := getDefaultSchemas()
@@ -292,7 +292,7 @@ func TestMergeTool_Merge_mod8(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 	schema := record.Schemas{
@@ -317,7 +317,7 @@ func TestMergeTool_Merge_mod9(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 16)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 	schema := record.Schemas{
@@ -345,7 +345,7 @@ func TestMergeTool_Merge_mod10(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 1000)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
@@ -371,7 +371,7 @@ func TestMergeTool_Merge_mod11(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 1000)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
@@ -393,7 +393,7 @@ func TestMergeTool_Merge_mod12(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 1000)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -425,7 +425,7 @@ func TestMergeTool_recentFile(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
@@ -454,7 +454,7 @@ func TestMergeTool_SkipMerge(t *testing.T) {
 
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -480,7 +480,7 @@ func TestMergeTool_MergeUnorderedSelf(t *testing.T) {
 
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -518,7 +518,7 @@ func TestMergeTool_MergeAndCompact(t *testing.T) {
 	defer beforeTest(t, 256)()
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -548,7 +548,7 @@ func TestMergeTool_PreAgg(t *testing.T) {
 	schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float2"})
 	schemas = append(schemas, record.Field{Type: influx.Field_Type_Int, Name: "int2"})
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
@@ -601,7 +601,7 @@ func TestMergeTool_CleanTmpFiles(t *testing.T) {
 	defer beforeTest(t, 16)()
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
 	fp := "github.com/openGemini/openGemini/engine/immutable/column-writer-error"
@@ -643,7 +643,7 @@ func TestMergeTool_WriteCurrentMetaError(t *testing.T) {
 	defer failpoint.Disable(fp)
 
 	func() {
-		mh := NewMergeTestHelper(immutable.NewConfig())
+		mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 		defer mh.store.Close()
 
 		rg := newRecordGenerator(begin, defaultInterval, false)
@@ -658,7 +658,7 @@ func TestMergeTool_WriteCurrentMetaError(t *testing.T) {
 	}()
 
 	func() {
-		mh := NewMergeTestHelper(immutable.NewConfig())
+		mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 		mh.seq += 10
 		defer mh.store.Close()
 
@@ -680,7 +680,7 @@ func TestCompactionDiffSchemas(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 16)()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
@@ -692,7 +692,7 @@ func TestCompactionDiffSchemas(t *testing.T) {
 		require.NoError(t, mh.saveToOrder())
 	}
 
-	immutable.SegMergeFlag(immutable.StreamingCompact)
+	immutable.SetMergeFlag4TsStore(immutable.StreamingCompact)
 	require.NoError(t, mh.store.FullCompact(1))
 	mh.store.Wait()
 
@@ -704,7 +704,7 @@ func TestMergeStopFiles(t *testing.T) {
 	defer beforeTest(t, 256)()
 	schemas := getDefaultSchemas()
 
-	mh := NewMergeTestHelper(immutable.NewConfig())
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 

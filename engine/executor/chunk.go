@@ -957,45 +957,54 @@ func (iter *ChunkIterator) HasMore() bool {
 	return iter.currPos < iter.chunk.Len()
 }
 
-func IntervalIndexGen(chunk Chunk, opt query.ProcessorOptions) {
-	var windowStopTime int64
-	if opt.Ascending {
+func IntervalIndexGen(ck Chunk, opt query.ProcessorOptions) {
+	chunk, ok := ck.(*ChunkImpl)
+	if !ok {
+		return
+	}
+
+	tagIndex := chunk.TagIndex()
+	if opt.Interval.IsZero() {
+		chunk.AppendIntervalIndex(tagIndex...)
+		return
+	}
+
+	windowStopTime := influxql.MinTime
+	ascending := opt.Ascending
+	if ascending {
 		windowStopTime = influxql.MaxTime
-	} else {
-		windowStopTime = influxql.MinTime
 	}
 
 	times := chunk.Time()
 	tagIndexOffset := 0
-	if !opt.Interval.IsZero() {
-		for i := range times {
-			// init first time stop window
-			if windowStopTime == influxql.MaxTime {
-				_, windowStopTime = opt.Window(times[i])
-			} else if windowStopTime == influxql.MinTime {
-				windowStopTime, _ = opt.Window(times[i])
-			}
-			if tagIndexOffset < len(chunk.TagIndex()) && i == chunk.TagIndex()[tagIndexOffset] {
-				chunk.AppendIntervalIndex(i)
-				if opt.Ascending {
-					_, windowStopTime = opt.Window(times[i])
-				} else {
-					windowStopTime, _ = opt.Window(times[i])
-				}
+	stopTime := opt.StopTime()
 
-				tagIndexOffset++
-				continue
-			}
-			if opt.Ascending && times[i] >= windowStopTime && times[i] <= opt.StopTime() {
-				_, windowStopTime = opt.Window(times[i])
-				chunk.AppendIntervalIndex(i)
-			} else if !opt.Ascending && times[i] < windowStopTime && times[i] >= opt.StopTime() {
-				windowStopTime, _ = opt.Window(times[i])
-				chunk.AppendIntervalIndex(i)
-			}
+	for i := range times {
+		// init first time stop window
+		if windowStopTime == influxql.MaxTime {
+			_, windowStopTime = opt.Window(times[i])
+		} else if windowStopTime == influxql.MinTime {
+			windowStopTime, _ = opt.Window(times[i])
 		}
-	} else {
-		chunk.AppendIntervalIndex(chunk.TagIndex()...)
+		if tagIndexOffset < len(tagIndex) && i == tagIndex[tagIndexOffset] {
+			chunk.AppendIntervalIndex(i)
+			if ascending {
+				_, windowStopTime = opt.Window(times[i])
+			} else {
+				windowStopTime, _ = opt.Window(times[i])
+			}
+
+			tagIndexOffset++
+			continue
+		}
+
+		if ascending && times[i] >= windowStopTime && times[i] <= stopTime {
+			_, windowStopTime = opt.Window(times[i])
+			chunk.AppendIntervalIndex(i)
+		} else if !ascending && times[i] < windowStopTime && times[i] >= stopTime {
+			windowStopTime, _ = opt.Window(times[i])
+			chunk.AppendIntervalIndex(i)
+		}
 	}
 }
 

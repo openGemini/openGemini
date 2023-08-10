@@ -22,6 +22,11 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/util"
+)
+
+var (
+	timerPool = util.NewTimePool()
 )
 
 type ResourceBucket interface {
@@ -127,7 +132,9 @@ func (b *Int64bucket) getResImplDirect(cost int64) error {
 
 func (b *Int64bucket) GetResource(cost int64) error {
 	// timer used to send time-out signal.
-	return b.getResImpl(cost, time.NewTimer(b.timeout))
+	timer := timerPool.GetTimer(b.timeout)
+	defer timerPool.PutTimer(timer)
+	return b.getResImpl(cost, timer)
 }
 
 func (b *Int64bucket) GetResourceDirect(cost int64) error {
