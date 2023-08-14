@@ -51,6 +51,11 @@ type mocShardMapperMetaClient struct {
 	databases map[string]*meta.DatabaseInfo
 }
 
+func (m mocShardMapperMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m mocShardMapperMetaClient) GetStreamInfos() map[string]*meta.StreamInfo {
 	return nil
 }

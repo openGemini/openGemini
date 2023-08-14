@@ -174,7 +174,7 @@ func (s *Server) Open() error {
 	}
 
 	s.metaClient = metaclient.DefaultMetaClient
-	s.metaClient.OpenAtStore()
+	s.metaClient.OpenAtStore() // wait for ts-meta to be ready
 
 	log := Logger.GetLogger()
 	s.storage, err = storage.OpenStorage(s.storageDataPath, s.node, s.metaClient.(*metaclient.Client), s.config)

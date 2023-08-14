@@ -216,6 +216,7 @@ type MetaClient interface {
 	TagArrayEnabledFromServer(dbName string) (bool, error)
 	GetAllMst(dbName string) []string
 	RetryRegisterQueryIDOffset(host string) (uint64, error)
+	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
 }
 
 type LoadCtx struct {
@@ -3351,6 +3352,50 @@ func (c *Client) registerOffset(currentServer int, host string) (uint64, error) 
 		return 0, err
 	}
 	return callback.Offset, nil
+}
+
+func (c *Client) ThermalShards(dbName string, start, end time.Duration) map[uint64]struct{} {
+	startTime := time.Now()
+	shards := make(map[uint64]struct{})
+	var lt, rt time.Time
+
+	if start != 0 {
+		lt = time.Now().Add(-start).UTC()
+	}
+	if end != 0 {
+		rt = time.Now().Add(end).UTC()
+	}
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	db, ok := c.cacheData.Databases[dbName]
+	if !ok {
+		return nil
+	}
+
+	for _, rp := range db.RetentionPolicies {
+		if lt.IsZero() {
+			lt = time.Now().Add(-rp.ShardGroupDuration).UTC()
+		}
+		if rt.IsZero() {
+			rt = time.Now().Add(rp.ShardGroupDuration).UTC()
+		}
+		for i := 0; i < len(rp.ShardGroups); i++ {
+			if rp.ShardGroups[i].Deleted() {
+				continue
+			}
+			sg := &rp.ShardGroups[i]
+			if sg.EndTime.Before(lt) || sg.EndTime.After(rt) {
+				continue
+			}
+			for k := 0; k < len(sg.Shards); k++ {
+				shards[sg.Shards[k].ID] = struct{}{}
+			}
+		}
+	}
+	c.logger.Info("thermal shards", zap.String("db", dbName), zap.Duration("start", start), zap.Duration("end", end),
+		zap.Any("shards", shards), zap.Duration("duration", time.Since(startTime)))
+	return shards
 }
 
 func refreshConnectedServer(currentServer int) {

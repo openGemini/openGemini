@@ -69,7 +69,12 @@ type EngineOptions struct {
 	CacheMetaBlock   bool
 	EnableMmapRead   bool
 	CompactionMethod int // 0:auto, 1:stream, 2: non-stream
-	OpenShardLimit   int
+
+	OpenShardLimit int
+	// lazy load shards
+	LazyLoadShardEnable       bool
+	ThermalShardStartDuration time.Duration
+	ThermalShardEndDuration   time.Duration
 
 	DownSampleWriteDrop          bool
 	MaxDownSampleTaskConcurrency int
