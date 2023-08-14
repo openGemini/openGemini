@@ -370,7 +370,8 @@ type Shard interface {
 	NewShardKeyIdx(shardType, dataPath string, lockPath *string) error
 
 	// admin
-	Open(client metaclient.MetaClient) error
+	OpenAndEnable(client metaclient.MetaClient) error
+	IsOpened() bool
 	Close() error
 	ChangeShardTierToWarm()
 	DropMeasurement(ctx context.Context, name string) error
@@ -430,6 +431,8 @@ type shard struct {
 	walPath   string
 	lock      *string
 	ident     *meta.ShardIdentifier
+
+	opened bool // is shard opened
 
 	cacheClosed        int32
 	isAsyncReplayWal   bool               // async replay wal switch
@@ -1422,8 +1425,6 @@ func (s *shard) Open(client metaclient.MetaClient) error {
 		return e
 	}
 	statistics.ShardStepDuration(s.GetID(), s.opId, "RecoverDownSample", time.Since(start).Nanoseconds(), false)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.immTables.SetOpId(s.GetID(), s.opId)
 	maxTime, err := s.immTables.Open()
 	if err != nil {
@@ -1436,6 +1437,10 @@ func (s *shard) Open(client metaclient.MetaClient) error {
 
 	s.initSeriesLimiter(s.seriesLimit)
 	return nil
+}
+
+func (s *shard) IsOpened() bool {
+	return s.opened
 }
 
 func (s *shard) removeFile(logFile string) error {
@@ -1476,9 +1481,7 @@ func (s *shard) DownSampleRecover(client metaclient.MetaClient) error {
 				}
 				continue
 			}
-			s.mu.Lock()
 			err = s.DownSampleRecoverReplaceFiles(logInfo, shardDir)
-			s.mu.Unlock()
 			if err != nil {
 				return err
 			}
@@ -1601,8 +1604,18 @@ func readDownSampleLogFile(name string, info *DownSampleFilesInfo) error {
 }
 
 func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
-	var err error
-	err = s.Open(client)
+	if s.IsOpened() {
+		return nil
+	}
+
+	// shard can open and enable only once.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.IsOpened() {
+		return nil
+	}
+
+	err := s.Open(client)
 	if err != nil {
 		return err
 	}
@@ -1626,6 +1639,7 @@ func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
 	s.EnableDownSample()
 	s.wg.Add(1)
 	go s.Snapshot()
+	s.opened = true
 	return nil
 }
 

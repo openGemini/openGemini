@@ -241,6 +241,11 @@ func TestNewServer(t *testing.T) {
 type MockMetaClient struct {
 }
 
+func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo {
 	//TODO implement me
 	panic("implement me")

@@ -575,6 +575,22 @@ func (e *Engine) ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) e
 	return nil
 }
 
+func (e *Engine) openShardLazy(sh Shard) error {
+	if sh.IsOpened() {
+		return nil
+	}
+
+	start := time.Now()
+	e.log.Info("lazy shard open start", zap.String("path", sh.GetDataPath()), zap.Uint32("pt", sh.GetIdent().OwnerPt))
+	if err := sh.OpenAndEnable(e.metaClient); err != nil {
+		e.log.Error("lazy shard open error", zap.Error(err), zap.Duration("duration", time.Since(start)))
+		return err
+	}
+	e.log.Info("lazy shard open end", zap.Duration("duration", time.Since(start)))
+	return nil
+}
+
+// getShard return Shard for write api
 func (e *Engine) getShard(db string, ptId uint32, shardID uint64) (Shard, error) {
 	if err := e.checkReadonly(); err != nil {
 		return nil, err
@@ -592,6 +608,10 @@ func (e *Engine) getShard(db string, ptId uint32, shardID uint64) (Shard, error)
 	sh := dbPTInfo.Shard(shardID)
 	if sh == nil {
 		return nil, errno.NewError(errno.ShardNotFound, shardID)
+	}
+
+	if err := e.openShardLazy(sh); err != nil {
+		return nil, err
 	}
 	return sh, nil
 }
@@ -659,12 +679,16 @@ func (e *Engine) GetShardSplitPoints(db string, ptId uint32, shardID uint64, idx
 	dbPtInfo := e.DBPartitions[db][ptId]
 	e.mu.RUnlock()
 
-	shard := dbPtInfo.Shard(shardID)
-	if shard == nil {
+	sh := dbPtInfo.Shard(shardID)
+	if sh == nil {
 		return nil, errno.NewError(errno.ShardNotFound, shardID)
 	}
 
-	return shard.GetSplitPoints(idxes)
+	if err := e.openShardLazy(sh); err != nil {
+		return nil, err
+	}
+
+	return sh.GetSplitPoints(idxes)
 }
 
 func (e *Engine) isDBPtExist(db string, ptId uint32) bool {
@@ -974,13 +998,36 @@ func (e *Engine) DbPTUnref(db string, ptId uint32) {
 	e.mu.RUnlock()
 }
 
-func (e *Engine) GetShard(db string, ptId uint32, shardID uint64) Shard {
+func (e *Engine) GetShard(db string, ptId uint32, shardID uint64) (Shard, error) {
 	pt := e.getDBPTInfo(db, ptId)
 	if pt == nil {
-		return nil
+		return nil, nil
 	}
 
-	return pt.Shard(shardID)
+	sh := pt.Shard(shardID)
+	if sh == nil {
+		return nil, nil
+	}
+	if err := e.openShardLazy(sh); err != nil {
+		return nil, err
+	}
+	return sh, nil
+}
+
+// getShardDownSampleLevel returns down sample level.
+// If db pt or shard not found, return 0.
+func (e *Engine) getShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
+	pt := e.getDBPTInfo(db, ptId)
+	if pt == nil {
+		return 0
+	}
+
+	sh := pt.Shard(shardID)
+	if sh == nil {
+		return 0
+	}
+
+	return sh.GetIdent().DownSampleLevel
 }
 
 func (e *Engine) getDBPTInfo(db string, ptId uint32) *DBPTInfo {
@@ -992,7 +1039,10 @@ func (e *Engine) getDBPTInfo(db string, ptId uint32) *DBPTInfo {
 
 func (e *Engine) CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64,
 	sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
-	sh := e.GetShard(db, ptId, shardID)
+	sh, err := e.GetShard(db, ptId, shardID)
+	if err != nil {
+		return nil, err
+	}
 	if sh == nil {
 		return nil, nil
 	}
@@ -1004,7 +1054,13 @@ func (e *Engine) CreateLogicalPlan(ctx context.Context, db string, ptId uint32, 
 func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error) {
 	shardFrags := executor.NewShardsFragments()
 	for _, shardId := range shardIDs {
-		s := e.GetShard(db, ptId, shardId)
+		s, err := e.GetShard(db, ptId, shardId)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			return nil, errno.NewError(errno.ShardNotFound, shardId)
+		}
 		fileFrags, err := s.ScanWithSparseIndex(ctx, schema, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
 			return nil, err

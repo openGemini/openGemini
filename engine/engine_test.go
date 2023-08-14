@@ -786,10 +786,16 @@ func TestGetShard(t *testing.T) {
 		EngineType: config.TSSTORE,
 	}
 	require.NoError(t, eng.CreateShard(db, rp, ptID, shardID, tr, msInfo))
+	sh1, err := eng.GetShard(db, ptID, shardID)
+	require.NoError(t, err)
+	require.NotEmpty(t, sh1)
 
-	require.NotEmpty(t, eng.GetShard(db, ptID, shardID))
-	require.Empty(t, eng.GetShard(db, ptID+1, shardID))
-	require.Equal(t, 0, eng.GetShardDownSampleLevel(db, ptID, shardID+1))
+	sh2, err := eng.GetShard(db, ptID+1, shardID)
+	require.NoError(t, err)
+	require.Empty(t, sh2)
+
+	level := eng.GetShardDownSampleLevel(db, ptID, shardID+1)
+	require.Equal(t, 0, level)
 }
 
 func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
@@ -945,7 +951,9 @@ func TestUpdateShardDurationInfo(t *testing.T) {
 	shardDuration.Ident.OwnerPt = 0
 	err = eng.UpdateShardDurationInfo(shardDuration)
 	require.NoError(t, err)
-	require.Equal(t, eng.GetShard(defaultDb, 0, 1).GetDuration().Tier, uint64(util.Warm))
+	sh, err := eng.GetShard(defaultDb, 0, 1)
+	assert2.NoError(t, err)
+	require.Equal(t, sh.GetDuration().Tier, uint64(util.Warm))
 }
 
 func TestEngine_SeriesLimited(t *testing.T) {
@@ -973,4 +981,41 @@ func TestEngine_SeriesLimited(t *testing.T) {
 	rows[0].UnmarshalIndexKeys(nil)
 	err = writeData(sh, rows, true)
 	require.EqualError(t, err, errno.NewError(errno.SeriesLimited, defaultDb, 10, 20).Error())
+}
+
+type mockShard struct {
+	shard
+}
+
+func (ms *mockShard) IsOpened() bool {
+	return ms.opened
+}
+
+func (ms *mockShard) OpenAndEnable(client metaclient.MetaClient) error {
+	return nil
+}
+
+func Test_openShardLazy(t *testing.T) {
+	eng := &Engine{
+		log: logger.NewLogger(errno.ModuleUnknown),
+	}
+	sh1 := &mockShard{
+		shard: shard{
+			opened: true,
+		},
+	}
+	// case1: opened
+	err := eng.openShardLazy(sh1)
+	require.NoError(t, err)
+
+	// case2: opened
+	sh2 := &mockShard{
+		shard: shard{
+			opened:   false,
+			dataPath: "test_path",
+			ident:    &meta.ShardIdentifier{OwnerPt: 1},
+		},
+	}
+	err = eng.openShardLazy(sh2)
+	require.NoError(t, err)
 }

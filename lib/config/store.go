@@ -226,6 +226,11 @@ type Store struct {
 	MinChunkReaderConcurrency    int           `toml:"min-chunk-reader-concurrency"`
 	MinShardsConcurrency         int           `toml:"min-shards-concurrency"`
 	MaxDownSampleTaskConcurrency int           `toml:"max-downsample-task-concurrency"`
+
+	// config for lazy load shard
+	LazyLoadShardEnable       bool          `toml:"lazy-load-shard-enable"`
+	ThermalShardStartDuration toml.Duration `toml:"thermal-shard-start-duration"`
+	ThermalShardEndDuration   toml.Duration `toml:"thermal-shard-end-duration"`
 }
 
 // NewStore returns the default configuration for tsdb.

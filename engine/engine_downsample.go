@@ -23,12 +23,7 @@ import (
 )
 
 func (e *Engine) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
-	sh := e.GetShard(db, ptId, shardID)
-	if sh == nil {
-		return 0
-	}
-
-	return sh.GetIdent().DownSampleLevel
+	return e.getShardDownSampleLevel(db, ptId, shardID)
 }
 
 func (e *Engine) resetDownSampleFlag() {
@@ -102,14 +97,17 @@ func (e *Engine) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, sche
 	}
 	e.mu.RUnlock()
 	defer e.unrefDBPT(sdsp.DbName, sdsp.PtId)
-	sh := e.GetShard(sdsp.DbName, sdsp.PtId, sdsp.ShardId)
+	sh, err := e.GetShard(sdsp.DbName, sdsp.PtId, sdsp.ShardId)
+	if err != nil {
+		return err
+	}
 	if sh == nil {
 		return nil
 	}
 	id := sh.GetIdent().ShardID
 	sh.NewDownSampleTask(sdsp, schema, log)
 	if sh.CanDoDownSample() {
-		if err := sh.StartDownSample(id, sh.GetIdent().DownSampleLevel, sdsp, meta); err != nil {
+		if err = sh.StartDownSample(id, sh.GetIdent().DownSampleLevel, sdsp, meta); err != nil {
 			return err
 		}
 	}

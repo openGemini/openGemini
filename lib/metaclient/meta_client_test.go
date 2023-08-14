@@ -1276,3 +1276,83 @@ func TestClient_RetryRegisterQueryIDOffset(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_ThermalShards(t *testing.T) {
+	type fields struct {
+		cacheData *meta2.Data
+	}
+
+	tests := []struct {
+		name   string
+		fields fields
+		start  time.Duration
+		end    time.Duration
+		want   map[uint64]struct{}
+	}{
+		{
+			name: "db not exist",
+			fields: fields{
+				cacheData: &meta2.Data{},
+			},
+			start: 0,
+			end:   0,
+			want:  nil,
+		},
+		{
+			name: "start end is zero",
+			fields: fields{
+				cacheData: &meta2.Data{
+					Databases: map[string]*meta2.DatabaseInfo{
+						"db0": {
+							RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+								"rp0": {
+									ShardGroupDuration: time.Hour,
+								},
+							},
+						},
+					},
+				},
+			},
+			start: 0,
+			end:   0,
+			want:  map[uint64]struct{}{},
+		},
+		{
+			name: "start end not zero",
+			fields: fields{
+				cacheData: &meta2.Data{
+					Databases: map[string]*meta2.DatabaseInfo{
+						"db0": {
+							RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+								"rp0": {
+									ShardGroups: []meta2.ShardGroupInfo{
+										{DeletedAt: time.Now()},                                            // deleted
+										{EndTime: time.Now().Add(-24 * time.Hour)},                         // ignore
+										{EndTime: time.Now(), Shards: []meta2.ShardInfo{{ID: 1}, {ID: 2}}}, // thermal shards
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			start: time.Hour,
+			end:   time.Hour,
+			want: map[uint64]struct{}{
+				1: {},
+				2: {},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{
+				cacheData: tt.fields.cacheData,
+				logger:    logger.NewLogger(errno.ModuleMetaClient),
+			}
+
+			result := c.ThermalShards("db0", tt.start, tt.end)
+			assert.Equal(t, result, tt.want)
+		})
+	}
+}

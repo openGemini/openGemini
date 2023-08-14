@@ -3251,14 +3251,13 @@ func TestEngine_GetShard(t *testing.T) {
 		_ = eng.Close()
 	}()
 
-	sh := eng.GetShard("db0", uint32(0), uint64(1))
-	if sh == nil {
-		t.Errorf("get shard failed")
-	}
-	sh2 := eng.GetShard("db0", uint32(0), uint64(10))
-	if sh2 != nil {
-		t.Errorf("get shard failed")
-	}
+	sh, err := eng.GetShard("db0", uint32(0), uint64(1))
+	assert2.NoError(t, err)
+	assert2.NotEmpty(t, sh)
+
+	sh2, err := eng.GetShard("db0", uint32(0), uint64(10))
+	assert2.NoError(t, err)
+	assert2.Nil(t, sh2)
 }
 
 func TestEngine_Statistics_Shard(t *testing.T) {
@@ -4591,6 +4590,11 @@ func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
 }
 
 type MockMetaClient struct {
+}
+
+func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
+	//TODO implement me
+	panic("implement me")
 }
 
 func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo {
