@@ -12,5 +12,6 @@
 	"GetUserInfo",
 	"GetStreamInfo",
 	"GetMeasurementInfo",
-	"Sql2MetaHeartbeat"
+	"Sql2MetaHeartbeat",
+	"GetContinuousQueryLease"
 ]

@@ -21,10 +21,27 @@ import (
 // SqlNodeInfo represents metadata about a ts-sql.
 type SqlNodeInfo struct {
 	LastHeartbeat *list.Element
-	Cqs           []string
+	CqInfo        *CqInfo
 }
 
 type HeartbeatInfo struct {
 	Host              string
 	LastHeartbeatTime time.Time
+}
+
+type CqInfo struct {
+	// All cqs that running on this ts-sql.
+	RunningCqs map[string]string
+
+	// All cqs that assigned to this ts-sql. move to Cqs when ts-sql get these cqs.
+	AssignCqs map[string]string
+
+	// All cqs that should revoke from this ts-sql. Delete corresponding cqs in RunningCqs when ts-sql get these cqs.
+	RevokeCqs map[string]string
+
+	IsNew bool
+}
+
+func (i *CqInfo) GetLoad() int {
+	return len(i.RunningCqs) + len(i.AssignCqs) - len(i.RevokeCqs)
 }

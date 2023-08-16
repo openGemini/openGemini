@@ -338,3 +338,23 @@ func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
 	}
 	return nil
 }
+
+type GetCqLeaseCallback struct {
+	BaseCallback
+	AssignCqs []string
+	RevokeCqs []string
+}
+
+func (c *GetCqLeaseCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetContinuousQueryLeaseResponse)
+	if !ok {
+		return errors.New("data is not a GetContinuousQueryLease")
+	}
+	c.AssignCqs = msg.AssignCqs
+	c.RevokeCqs = msg.RevokeCqs
+	return nil
+}

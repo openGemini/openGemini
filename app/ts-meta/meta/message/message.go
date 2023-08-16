@@ -217,3 +217,15 @@ type Sql2MetaHeartbeatRequest struct {
 type Sql2MetaHeartbeatResponse struct {
 	Err string
 }
+
+type GetContinuousQueryLeaseRequest struct {
+	Host        string
+	Cqs         []string
+	IsFirstTime bool
+}
+
+type GetContinuousQueryLeaseResponse struct {
+	AssignCqs []string
+	RevokeCqs []string
+	Err       string
+}

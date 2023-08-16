@@ -107,6 +107,10 @@ func (m mocShardMapperMetaClient) CQStatusReport(name string, lastRunTime time.T
 	return nil
 }
 
+func (m mocShardMapperMetaClient) GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error) {
+	return nil, nil, nil
+}
+
 func (m mocShardMapperMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }

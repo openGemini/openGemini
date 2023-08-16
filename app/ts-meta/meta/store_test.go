@@ -37,6 +37,7 @@ import (
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -838,4 +839,48 @@ func TestCreateDataNodeRepeat(t *testing.T) {
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestCreateContinuousQueryCommands(t *testing.T) {
+	dir := t.TempDir()
+	ms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ms.Close()
+	}()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	dbName := "db0"
+	cmd = meta.GenerateCreateDatabaseCmd(dbName)
+	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	store := ms.GetStore()
+	store.SqlNodes["127.0.0.1"] = &meta.SqlNodeInfo{
+		CqInfo: &meta.CqInfo{
+			RunningCqs: make(map[string]string),
+			AssignCqs:  make(map[string]string),
+			RevokeCqs:  make(map[string]string),
+		},
+	}
+
+	spec := &meta2.ContinuousQuerySpec{
+		Query: `CREATE CONTINUOUS QUERY cq0 ON db0 BEGIN SELECT mean("passengers") INTO "average_passengers" FROM "bus_data" GROUP BY time(1h) END`,
+		Name:  "cq0",
+	}
+	cmd = meta.GenerateCreateContinuousQueryCommand(spec, dbName)
+
+	if err := ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	require.Equal(t, map[string]string(map[string]string{"cq0": "cq0"}), ms.GetStore().SqlNodes["127.0.0.1"].CqInfo.AssignCqs)
 }

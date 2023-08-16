@@ -81,3 +81,11 @@ func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestGetCqLeaseCallbackResponse(t *testing.T) {
+	callback := &metaclient.GetCqLeaseCallback{}
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseResponse{})
+	if err := callback.Handle(msg); err != nil {
+		t.Fail()
+	}
+}

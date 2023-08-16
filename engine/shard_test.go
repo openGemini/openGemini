@@ -3454,6 +3454,9 @@ func (client *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
 func (client *MockMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
 	return nil
 }
+func (client *MockMetaClient) GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error) {
+	return nil, nil, nil
+}
 func (client *MockMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }
