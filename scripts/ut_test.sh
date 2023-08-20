@@ -154,6 +154,7 @@ do
     sed -i "s/cache-table-meta-block = true/cache-table-meta-block = false/g" config/openGemini.conf
     sed -i "s/enable-mmap-read = true/enable-mmap-read = false/g" config/openGemini.conf
     sed -i "s/read-cache-limit = 0/read-cache-limit = 5368709120/g" config/openGemini.conf
+    sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf
 
     if [[ $t == "HA" ]]; then
         sed -i "s/ha-enable = false/ha-enable = true/g" config/openGemini.conf
@@ -188,3 +189,4 @@ sed -i "s/ptnum-pernode = 2/# ptnum-pernode = 2/g" config/openGemini.conf
 sed -i "s/pushers = \"file\"/# pushers = \"\"/g" config/openGemini.conf
 sed -i "s/store-enabled = true/# store-enabled = false/g" config/openGemini.conf
 sed -i "s~store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~# store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~g" config/openGemini.conf
+sed -i '/\[subscriber\]/{n;s/.*/  # enabled = false/;}' config/openGemini.conf

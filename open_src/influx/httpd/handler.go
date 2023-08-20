@@ -146,6 +146,10 @@ type Handler struct {
 		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
 	}
 
+	SubscriberManager interface {
+		Send(db, rp string, lineProtocal []byte)
+	}
+
 	Config           *config.Config
 	Logger           *logger.Logger
 	CLFLogger        *zap.Logger
@@ -533,6 +537,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		h.Logger.Error("query error! parsing query value", zap.Error(err), zap.String("db", db), zap.Any("r", r))
 		return
 	}
+
 	// Check authorization.
 	if h.Config.AuthEnabled {
 		var userID string
@@ -917,6 +922,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 	var numPtsParse, numPtsInsert int
 
 	readBlockSize := int(h.Config.ReadBlockSize)
+	rp := r.URL.Query().Get("rp")
 	for ctx.Read(readBlockSize) {
 		numPtsParse++
 		uw := influx.GetUnmarshalWork()
@@ -931,13 +937,17 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			if atomic.LoadInt32(&syscontrol.LogRowsRuleSwitch) == 1 {
 				h.logRowsIfNecessary(rows, uw.ReqBuf)
 			}
-			if err = h.PointsWriter.RetryWritePointRows(db, r.URL.Query().Get("rp"), rows); err != nil {
+			if err = h.PointsWriter.RetryWritePointRows(db, rp, rows); err != nil {
 				ctx.ErrLock.Lock()
 				if ctx.CallbackErr == nil {
 					ctx.CallbackErr = err
 				}
 				ctx.ErrLock.Unlock()
 			} else {
+				if h.SubscriberManager != nil {
+					// uw.ReqBuf is the line protocal
+					h.SubscriberManager.Send(db, rp, uw.ReqBuf)
+				}
 				atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, int64(len(rows)))
 			}
 			ctx.Wg.Done()

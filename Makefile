@@ -14,7 +14,7 @@
 
 include Makefile.common
 
-.PHONY: go-build style-check gotest integration-test buildsucc static-check
+.PHONY: go-build style-check gotest integration-test buildsucc static-check start-subscriber stop-subscriber
 
 default: gotest
 
@@ -85,3 +85,9 @@ build-check:
 integration-test:
 	@echo "running integration test begin."
 	@URL=http://127.0.0.1:8086 $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"
+
+start-subscriber:
+	sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf
+
+stop-subscriber:
+	sed -i '/\[subscriber\]/{n;s/.*/  # enabled = false/;}' config/openGemini.conf

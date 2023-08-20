@@ -59,10 +59,11 @@ type Server struct {
 	TSDBStore        netstorage.Storage
 	Logger           *Logger.Logger
 
-	statisticsPusher *statisticsPusher.StatisticsPusher
-	QueryExecutor    *query.Executor
-	PointsWriter     *coordinator.PointsWriter
-	httpService      *httpd.Service
+	statisticsPusher  *statisticsPusher.StatisticsPusher
+	QueryExecutor     *query.Executor
+	PointsWriter      *coordinator.PointsWriter
+	SubscriberManager *coordinator.SubscriberManager
+	httpService       *httpd.Service
 
 	arrowFlightService *arrowflight.Service
 	RecordWriter       *coordinator.RecordWriter
@@ -126,6 +127,11 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.PointsWriter.TSDBStore = s.TSDBStore
 	go s.PointsWriter.ApplyTimeRangeLimit(c.Coordinator.TimeRangeLimit)
 	coordinator.SetTagLimit(c.Coordinator.TagLimit)
+
+	if s.config.Subscriber.Enabled {
+		s.SubscriberManager = coordinator.NewSubscriberManager(s.config.Subscriber, s.MetaClient, s.httpService.Handler.Logger)
+	}
+	config.SetSubscriptionEnable(s.config.Subscriber.Enabled)
 
 	syscontrol.SysCtrl.MetaClient = s.MetaClient
 	syscontrol.SysCtrl.NetStore = store
@@ -250,6 +256,11 @@ func (s *Server) Open() error {
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
+	if s.SubscriberManager != nil {
+		s.httpService.Handler.SubscriberManager = s.SubscriberManager
+		s.SubscriberManager.InitWriters()
+		go s.SubscriberManager.Update()
+	}
 
 	if err := s.castorService.Open(); err != nil {
 		return err
@@ -308,6 +319,10 @@ func (s *Server) Close() error {
 
 	if s.PointsWriter != nil {
 		s.PointsWriter.Close()
+	}
+
+	if s.SubscriberManager != nil {
+		s.SubscriberManager.StopAllWriters()
 	}
 
 	if s.sherlockService != nil {

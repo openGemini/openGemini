@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -11292,6 +11293,8 @@ func TestServer_SubscriptionCommands(t *testing.T) {
 	s := OpenServer(NewParseConfig(testCfgPath))
 	defer s.Close()
 
+	SubscriberNotEnabledError := "{\"results\":[{\"statement_id\":0,\"error\":\"subscription is not enabled\"}]}"
+
 	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
 		t.Fatal(err)
 	}
@@ -11363,8 +11366,134 @@ func TestServer_SubscriptionCommands(t *testing.T) {
 			if err := query.Execute(s); err != nil {
 				t.Errorf("command: %s - err: %s", query.command, query.Error(err))
 			} else if !query.success() {
+				if query.act == SubscriberNotEnabledError {
+					t.Skip("SKIP:: TestServer_SubscriptionCommands: subscription not enabled")
+				}
 				t.Error(query.failureMessage())
 			}
 		})
+	}
+}
+
+func TestServer_SubscriptionForward(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	SubscriberNotEnabledError := "{\"results\":[{\"statement_id\":0,\"error\":\"subscription is not enabled\"}]}"
+
+	type Request struct {
+		db           string
+		rp           string
+		lineProtocal []byte
+	}
+	ch := make(chan Request, 10)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/write", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp")}
+		wr.lineProtocal, _ = ioutil.ReadAll(r.Body)
+		ch <- wr
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server1 := httptest.NewServer(mux)
+	defer server1.Close()
+	server2 := httptest.NewServer(mux)
+	defer server2.Close()
+
+	writes := []string{
+		fmt.Sprintf(`cpu,host=server1 value=1 %d`, mustParseTime(time.RFC3339Nano, "2000-01-03T00:00:01Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server1 value=2 %d`, mustParseTime(time.RFC3339Nano, "2000-01-03T00:00:02Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server1 value=3 %d`, mustParseTime(time.RFC3339Nano, "2000-01-03T00:00:03Z").UnixNano()),
+	}
+	test := &Test{
+		queries: []*Query{
+			&Query{
+				name:    `CREATE ALL MODE SUBSCRIPTION`,
+				command: fmt.Sprintf("create subscription subs0 on db0.rp0 destinations all \"%s\", \"%s\"", server1.URL, server2.URL),
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `DROP SUBSCRIPTION subs0`,
+				command: "drop subscription subs0 on db0.rp0",
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `CREATE ANY MODE SUBSCRIPTION`,
+				command: fmt.Sprintf("create subscription subs0 on db0.rp0 destinations any \"%s\", \"%s\"", server1.URL, server2.URL),
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+		},
+		writes: Writes{
+			&Write{data: strings.Join(writes, "\n")},
+		},
+		db: "db0",
+		rp: "rp0",
+	}
+
+	// if the first query failed, and subscription not enabled, then skip
+	query := test.queries[0]
+	if err := query.Execute(s); err != nil {
+		t.Errorf("command: %s - err: %s", query.command, query.Error(err))
+	} else if !query.success() {
+		if query.act == SubscriberNotEnabledError {
+			t.Skip("SKIP:: TestServer_SubscriptionForward: subscription not enabled")
+		}
+		t.Error(query.failureMessage())
+	}
+
+	for i := 0; i < 5; i++ {
+		err := writeTestData(s, test)
+		if err != nil {
+			t.Error(err.Error())
+		}
+	}
+	for i := 0; i < 10; i++ {
+		wr := <-ch
+		if wr.db != "db0" || wr.rp != "rp0" {
+			t.Errorf("expected write to db0.rp0 but got %s.%s", wr.db, wr.rp)
+		} else if string(wr.lineProtocal) != strings.Join(writes, "\n") {
+			t.Error("write data mismatch")
+		}
+	}
+	time.Sleep(time.Second)
+	select {
+	case <-ch:
+		t.Error("more write request than expected")
+	default:
+	}
+
+	for _, query := range test.queries[1:] {
+		t.Run(query.name, func(t *testing.T) {
+			if err := query.Execute(s); err != nil {
+				t.Errorf("command: %s - err: %s", query.command, query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+	for i := 0; i < 5; i++ {
+		err := writeTestData(s, test)
+		if err != nil {
+			t.Error(err.Error())
+		}
+	}
+	for i := 0; i < 5; i++ {
+		wr := <-ch
+		if wr.db != "db0" || wr.rp != "rp0" {
+			t.Errorf("expected write to db0.rp0 but got %s.%s", wr.db, wr.rp)
+		} else if string(wr.lineProtocal) != strings.Join(writes, "\n") {
+			t.Error("write data mismatch")
+		}
+	}
+	time.Sleep(time.Second)
+	select {
+	case <-ch:
+		t.Error("more write request than expected")
+	default:
 	}
 }
