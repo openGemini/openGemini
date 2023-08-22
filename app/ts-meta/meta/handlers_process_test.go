@@ -278,9 +278,7 @@ func TestSql2MetaHeartbeatProcess(t *testing.T) {
 func TestGetCqLeaseProcess(t *testing.T) {
 	mockStore := NewMockRPCStore()
 	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{
-		Host:        "localhost:8086",
-		Cqs:         []string{},
-		IsFirstTime: true,
+		Host: "localhost:8086",
 	})
 	h := New(msg.Type())
 	h.InitHandler(mockStore, nil, nil)

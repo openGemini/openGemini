@@ -341,8 +341,7 @@ func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
 
 type GetCqLeaseCallback struct {
 	BaseCallback
-	AssignCqs []string
-	RevokeCqs []string
+	CQNames []string
 }
 
 func (c *GetCqLeaseCallback) Handle(data interface{}) error {
@@ -354,7 +353,9 @@ func (c *GetCqLeaseCallback) Handle(data interface{}) error {
 	if !ok {
 		return errors.New("data is not a GetContinuousQueryLease")
 	}
-	c.AssignCqs = msg.AssignCqs
-	c.RevokeCqs = msg.RevokeCqs
+	if msg.Err != "" {
+		return fmt.Errorf("get cq lease callback error %s", msg.Err)
+	}
+	c.CQNames = msg.CQNames
 	return nil
 }

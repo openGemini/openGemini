@@ -34,6 +34,22 @@ type MockMetaClient struct {
 	DatabasesFn func() map[string]*meta.DatabaseInfo
 }
 
+func (mc *MockMetaClient) WaitForDataChanged() chan struct{} {
+	return nil
+}
+
+func (mc *MockMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
+}
+
+func (mc *MockMetaClient) BatchUpdateContinuousQueryStat(cqStats map[string]int64) error {
+	return nil
+}
+
+func (mc *MockMetaClient) GetCqLease(host string) ([]string, error) {
+	return nil, nil
+}
+
 // StatementExecutor is a mock statement executor.
 type StatementExecutor struct {
 	ExecuteStatementFn func(stmt influxql.Statement, ctx *query.ExecutionContext) error
@@ -54,7 +70,7 @@ func (mc *MockMetaClient) Databases() map[string]*meta.DatabaseInfo {
 
 // NewTestService returns a new *Service with default mock object members.
 func NewTestService(t *testing.T) *Service {
-	s := NewService(config.DefaultRunInterval, config.DefaultMaxProcessCQNumber)
+	s := NewService("127.0.0.1:8086", config.DefaultRunInterval, config.DefaultMaxProcessCQNumber)
 	s.MetaClient = &MockMetaClient{}
 
 	return s
@@ -86,38 +102,6 @@ func TestService_handle(t *testing.T) {
 	s.handle()
 }
 
-func TestService_appendContinuousQueries(t *testing.T) {
-	s := NewTestService(t)
-	s.MetaClient = &MockMetaClient{
-		DatabasesFn: func() map[string]*meta.DatabaseInfo {
-			return nil
-		},
-	}
-	// test no databases exist
-	s.appendContinuousQueries()
-	assert.Equal(t, len(s.ContinuousQuery), 0)
-
-	// test when continuous queries exist and valid
-	cqi := &meta.ContinuousQueryInfo{
-		Name:  "cq1",
-		Query: `CREATE CONTINUOUS QUERY cq1 ON db1 BEGIN SELECT count(value) INTO db1.autogen.value FROM db1.autogen.test GROUP BY time(1m) END`,
-	}
-	dbi := &meta.DatabaseInfo{
-		Name:                   "db1",
-		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq1": cqi,
-		},
-	}
-	s.MetaClient = &MockMetaClient{
-		DatabasesFn: func() map[string]*meta.DatabaseInfo {
-			return map[string]*meta.DatabaseInfo{"db1": dbi}
-		},
-	}
-	s.appendContinuousQueries()
-	assert.Equal(t, len(s.ContinuousQuery), 1)
-}
-
 func TestService_shouldRunContinuousQuery(t *testing.T) {
 	interval := time.Minute
 	// test the invalid time range
@@ -134,7 +118,7 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 		},
 	}
 	// create a new CQ with the specified database and CQInfo.
-	cqi := NewContinuousQuery(db1, cq1)
+	cqi := NewContinuousQuery(db1.Name, db1.DefaultRetentionPolicy, cq1.Query)
 	cqi.hasRun = true
 	cqi.lastRun = time.Now()
 	ok, _ := cqi.shouldRunContinuousQuery(time.Now().Add(-2*interval), interval)
@@ -154,7 +138,7 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 		},
 	}
 	// create a new CQ with the specified database and CQInfo.
-	cqi = NewContinuousQuery(db2, cq2)
+	cqi = NewContinuousQuery(db2.Name, db2.DefaultRetentionPolicy, cq2.Query)
 	// test the query has not run before
 	cqi.hasRun = false
 	ok, _ = cqi.shouldRunContinuousQuery(time.Now(), interval)
@@ -182,7 +166,7 @@ func NewContinuousQueryService(t *testing.T) (*Service, *ContinuousQuery) {
 			"cq1": cqi,
 		},
 	}
-	cq := NewContinuousQuery(dbi, cqi)
+	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
 	s := NewTestService(t)
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
@@ -208,11 +192,7 @@ func TestService_ExecuteContinuousQuery_Fail(t *testing.T) {
 	}
 
 	// test the error when invalidating the CQ
-	cq1 := &meta.ContinuousQueryInfo{
-		Name:  "cq1",
-		Query: `THIS IS AN INVALID QUERY`,
-	}
-	cq.info = cq1
+	cq.query = `THIS IS AN INVALID QUERY`
 	ok, err = s.ExecuteContinuousQuery(cq, now)
 	if err == nil || ok {
 		t.Fatal(err)
@@ -241,7 +221,7 @@ func TestService_ExecuteContinuousQuery_WithInterval(t *testing.T) {
 			"cq1": cq1,
 		},
 	}
-	cq := NewContinuousQuery(dbi, cq1)
+	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq1.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -258,7 +238,7 @@ func TestService_ExecuteContinuousQuery_WithInterval(t *testing.T) {
 			"cq2": cq2,
 		},
 	}
-	cq = NewContinuousQuery(dbi, cq2)
+	cq = NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq2.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -275,7 +255,7 @@ func TestService_ExecuteContinuousQuery_WithInterval(t *testing.T) {
 			"cq3": cq3,
 		},
 	}
-	cq = NewContinuousQuery(dbi, cq3)
+	cq = NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq3.Query)
 	if cq == nil {
 		t.Fatal("Expected NewContinuousQuery to succeed")
 	}
@@ -307,7 +287,7 @@ func TestService_ExecuteContinuousQuery_WithOffset(t *testing.T) {
 			"cq1": cq1,
 		},
 	}
-	cq := NewContinuousQuery(dbi, cq1)
+	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq1.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -324,7 +304,7 @@ func TestService_ExecuteContinuousQuery_WithOffset(t *testing.T) {
 			"cq2": cq2,
 		},
 	}
-	cq = NewContinuousQuery(dbi, cq2)
+	cq = NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq2.Query)
 	if cq == nil {
 		t.Fatal("Expected NewContinuousQuery to succeed")
 	}
@@ -370,11 +350,10 @@ func TestService_ExecuteContinuousQuery_Time(t *testing.T) {
 		},
 	}
 
-	s.lastRuns[cq.info.Name] = time.Now()
-	ok, err := s.ExecuteContinuousQuery(cq, time.Now().Add(-time.Hour))
-	if ok || err != nil {
-		t.Fatalf("Expected error, got ok=%t, err=%v", ok, err)
-	}
+	s.lastRuns[cq.query] = time.Now()
+	ok, err := s.ExecuteContinuousQuery(cq, time.Now().Add(-2*time.Hour))
+	assert.False(t, ok)
+	assert.NoError(t, err)
 }
 
 func TestService_ExecuteContinuousQuery_Success(t *testing.T) {
@@ -407,7 +386,7 @@ func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
 			"cq": cqi,
 		},
 	}
-	cq := NewContinuousQuery(dbi, cqi)
+	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
 	if cq == nil {
 		t.Fatal("Expected NewContinuousQuery to succeed")
 	}
@@ -440,7 +419,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 			"test": cq1,
 		},
 	}
-	cq := NewContinuousQuery(db1, cq1)
+	cq := NewContinuousQuery(db1.Name, db1.DefaultRetentionPolicy, cq1.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -457,7 +436,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 			"test": cq2,
 		},
 	}
-	cq = NewContinuousQuery(db2, cq2)
+	cq = NewContinuousQuery(db2.Name, db2.DefaultRetentionPolicy, cq2.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -476,7 +455,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 		},
 	}
 	// create a new CQ with the specified database and CQInfo.
-	cq = NewContinuousQuery(db3, cq3)
+	cq = NewContinuousQuery(db3.Name, db3.DefaultRetentionPolicy, cq3.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -493,7 +472,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 			"test": cq4,
 		},
 	}
-	cq = NewContinuousQuery(db4, cq4)
+	cq = NewContinuousQuery(db4.Name, db4.DefaultRetentionPolicy, cq4.Query)
 	if cq == nil {
 		t.Fatal("Expected NewContinuousQuery to succeed")
 	}

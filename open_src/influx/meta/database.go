@@ -21,7 +21,7 @@ type DatabaseInfo struct {
 	RetentionPolicies      map[string]*RetentionPolicyInfo
 	MarkDeleted            bool
 	ShardKey               ShardKeyInfo
-	ContinuousQueries      map[string]*ContinuousQueryInfo
+	ContinuousQueries      map[string]*ContinuousQueryInfo // {"cqName": *ContinuousQueryInfo}
 }
 
 func NewDatabase(name string) *DatabaseInfo {

@@ -18,10 +18,10 @@ import (
 	"time"
 )
 
-// SqlNodeInfo represents metadata about a ts-sql.
-type SqlNodeInfo struct {
+// cqLeaseInfo represents metadata about a ts-sql.
+type cqLeaseInfo struct {
 	LastHeartbeat *list.Element
-	CqInfo        *CqInfo
+	CQNames       []string
 }
 
 type HeartbeatInfo struct {
@@ -30,7 +30,9 @@ type HeartbeatInfo struct {
 }
 
 type CqInfo struct {
-	// All cqs that running on this ts-sql.
+	// All CQ names that running on this ts-sql.
+	RunningCQNames []string
+
 	RunningCqs map[string]string
 
 	// All cqs that assigned to this ts-sql. move to Cqs when ts-sql get these cqs.

@@ -45,17 +45,19 @@ type mocShardMapperMetaClient struct {
 	databases map[string]*meta.DatabaseInfo
 }
 
+func (m mocShardMapperMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
+}
+
 func (m mocShardMapperMetaClient) GetStreamInfos() map[string]*meta.StreamInfo {
 	return nil
 }
 
 func (m mocShardMapperMetaClient) GetStreamInfosStore() map[string]*meta.StreamInfo {
-	//TODO implement me
 	panic("implement me")
 }
 
 func (m mocShardMapperMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
-	//TODO implement me
 	panic("implement me")
 }
 
@@ -98,6 +100,9 @@ func (m mocShardMapperMetaClient) CreateRetentionPolicy(database string, spec *m
 func (m mocShardMapperMetaClient) CreateContinuousQuery(database string, spec *meta.ContinuousQuerySpec) (*meta.ContinuousQueryInfo, error) {
 	return nil, nil
 }
+func (m *MockMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
+}
 
 func (m mocShardMapperMetaClient) SendSql2MetaHeartbeat(host string) error {
 	return nil
@@ -107,8 +112,8 @@ func (m mocShardMapperMetaClient) CQStatusReport(name string, lastRunTime time.T
 	return nil
 }
 
-func (m mocShardMapperMetaClient) GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error) {
-	return nil, nil, nil
+func (m mocShardMapperMetaClient) GetCqLease(host string) ([]string, error) {
+	return nil, nil
 }
 
 func (m mocShardMapperMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {

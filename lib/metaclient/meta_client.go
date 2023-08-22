@@ -145,7 +145,6 @@ type MetaClient interface {
 	CreateDatabase(name string) (*meta2.DatabaseInfo, error)
 	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo) (*meta2.DatabaseInfo, error)
 	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
-	CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error)
 	CreateSubscription(database, rp, name, mode string, destinations []string) error
 	CreateUser(name, password string, admin, rwuser bool) (meta2.User, error)
 	Databases() map[string]*meta2.DatabaseInfo
@@ -207,8 +206,12 @@ type MetaClient interface {
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	SendSql2MetaHeartbeat(host string) error
-	CQStatusReport(name string, lastRunTime time.Time) error
-	GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error)
+	//BatchUpdateContinuousQueryStat(name string, lastRunTime time.Time) error
+	//GetCqLease(host string) ([]string, error)
+
+	// for continuous queries
+	CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) /**/
+	GetMaxCQChangeID() uint64
 }
 
 type LoadCtx struct {
@@ -676,51 +679,6 @@ func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName s
 	return mst, nil
 }
 
-func (c *Client) sendGetCqLease(currentServer int, firstTime bool, host string, cqs []string) ([]string, []string, error) {
-	callback := &GetCqLeaseCallback{}
-	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{Host: host, Cqs: cqs, IsFirstTime: firstTime})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		c.logger.Error("GetCqLease SendRPCMsg fail", zap.Error(err))
-		return nil, nil, err
-	}
-	return callback.AssignCqs, callback.RevokeCqs, nil
-}
-
-func (c *Client) GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error) {
-	startTime := time.Now()
-	currentServer := connectedServer
-	var err error
-	var assignCqs, revokeCqs []string
-	for {
-		c.mu.RLock()
-		select {
-		case <-c.closing:
-			c.mu.RUnlock()
-			return nil, nil, errors.New("GetCqLease fail")
-		default:
-
-		}
-
-		if currentServer >= len(c.metaServers) {
-			currentServer = 0
-		}
-		c.mu.RUnlock()
-		assignCqs, revokeCqs, err = c.sendGetCqLease(currentServer, firstTime, host, cqs)
-		if err == nil {
-			break
-		}
-
-		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
-			break
-		}
-		time.Sleep(errSleep)
-
-		currentServer++
-	}
-	return assignCqs, revokeCqs, nil
-}
-
 func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
 	callback := &Sql2MetaHeartbeatCallback{}
 	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
@@ -808,18 +766,6 @@ func (c *Client) ShowContinuousQueries() (models.Rows, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.ShowContinuousQueries()
-}
-
-func (c *Client) CQStatusReport(name string, lastRunTime time.Time) error {
-	cmd := &proto2.ContinuousQueryReportCommand{
-		Name:        proto.String(name),
-		LastRunTime: proto.Int64(lastRunTime.UnixNano()),
-	}
-
-	if _, err := c.retryExec(proto2.Command_ContinuousQueryReportCommand, proto2.E_ContinuousQueryReportCommand_Command, cmd); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,
@@ -1088,6 +1034,12 @@ func (c *Client) CreateContinuousQuery(database string, spec *meta2.ContinuousQu
 	}
 
 	return c.ContinuousQuery(database, cqi.Name)
+}
+
+func (c *Client) GetMaxCQChangeID() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.MaxCQChangeID
 }
 
 // RetentionPolicy returns the requested retention policy info.

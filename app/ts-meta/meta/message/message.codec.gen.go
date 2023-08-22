@@ -927,9 +927,6 @@ func (o *Sql2MetaHeartbeatResponse) Instance() transport.Codec {
 
 func (o *GetContinuousQueryLeaseRequest) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendString(buf, o.Host)
-	buf = codec.AppendStringSlice(buf, o.Cqs)
-	buf = codec.AppendBool(buf, o.IsFirstTime)
-
 	return buf, nil
 }
 
@@ -939,19 +936,11 @@ func (o *GetContinuousQueryLeaseRequest) Unmarshal(buf []byte) error {
 	}
 	dec := codec.NewBinaryDecoder(buf)
 	o.Host = dec.String()
-	o.Cqs = dec.StringSlice()
-	o.IsFirstTime = dec.Bool()
-
 	return nil
 }
 
 func (o *GetContinuousQueryLeaseRequest) Size() int {
-	size := 0
-	size += codec.SizeOfString(o.Host)
-	size += codec.SizeOfStringSlice(o.Cqs)
-	size += codec.SizeOfBool()
-
-	return size
+	return codec.SizeOfString(o.Host)
 }
 
 func (o *GetContinuousQueryLeaseRequest) Instance() transport.Codec {
@@ -959,10 +948,8 @@ func (o *GetContinuousQueryLeaseRequest) Instance() transport.Codec {
 }
 
 func (o *GetContinuousQueryLeaseResponse) Marshal(buf []byte) ([]byte, error) {
-	buf = codec.AppendStringSlice(buf, o.AssignCqs)
-	buf = codec.AppendStringSlice(buf, o.RevokeCqs)
+	buf = codec.AppendStringSlice(buf, o.CQNames)
 	buf = codec.AppendString(buf, o.Err)
-
 	return buf, nil
 }
 
@@ -971,19 +958,14 @@ func (o *GetContinuousQueryLeaseResponse) Unmarshal(buf []byte) error {
 		return nil
 	}
 	dec := codec.NewBinaryDecoder(buf)
-	o.AssignCqs = dec.StringSlice()
-	o.RevokeCqs = dec.StringSlice()
+	o.CQNames = dec.StringSlice()
 	o.Err = dec.String()
-
 	return nil
 }
 
 func (o *GetContinuousQueryLeaseResponse) Size() int {
-	size := 0
-	size += codec.SizeOfStringSlice(o.AssignCqs)
-	size += codec.SizeOfStringSlice(o.RevokeCqs)
+	size := codec.SizeOfStringSlice(o.CQNames)
 	size += codec.SizeOfString(o.Err)
-
 	return size
 }
 

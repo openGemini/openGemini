@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math"
+	"sort"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -373,34 +374,36 @@ func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) inte
 	}
 
 	if err := fsm.data.CreateContinuousQuery(v.GetDatabase(), cqi); err != nil {
+		if errors.Is(err, meta2.ErrSameContinuousQueryName) || errors.Is(err, meta2.ErrContinuousQueryExists) {
+			return nil
+		}
 		return err
 	}
-	fsm.sqlMu.Lock()
-	defer fsm.sqlMu.Unlock()
-	fsm.scheduleCq2Sql(cqi.Name, true)
-
+	fsm.handleCQCreated(cqi.Name)
 	return nil
 }
 
-func (fsm *storeFSM) scheduleCq2Sql(cq string, create bool) {
-	if len(fsm.SqlNodes) == 0 {
-		// restart without ts-sql heartbeat arrived
-		return
+// handleCQCreated sorts fsm.cqNames and inserts the new cq to the fsm.cqNames slice.
+// At the same time assign sql node to the new cq.
+func (fsm *storeFSM) handleCQCreated(newCQ string) {
+	fsm.cqLock.Lock()
+	defer fsm.cqLock.Unlock()
+
+	sort.Strings(fsm.cqNames)
+	n := sort.Search(len(fsm.cqNames), func(i int) bool {
+		return newCQ <= fsm.cqNames[i]
+	})
+
+	if n >= len(fsm.cqNames) {
+		fsm.cqNames = append(fsm.cqNames, newCQ)
+	} else {
+		fsm.cqNames = append(fsm.cqNames, "")
+		copy(fsm.cqNames[n+1:], fsm.cqNames[n:])
+		fsm.cqNames[n] = newCQ
 	}
-	if create {
-		var sql string
-		var minLoad = math.MaxInt
-		for s, sni := range fsm.SqlNodes {
-			if sni.CqInfo.GetLoad() < minLoad {
-				minLoad = sni.CqInfo.GetLoad()
-				sql = s
-			}
-		}
-		fsm.SqlNodes[sql].CqInfo.AssignCqs[cq] = cq
-		fsm.SqlNodes[sql].CqInfo.IsNew = false
-		return
-	}
-	// TODO: delete cq
+
+	s := (*Store)(fsm)
+	s.scheduleCQsWithoutLock(cqCreated)
 }
 
 func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) interface{} {
@@ -410,7 +413,7 @@ func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) inte
 		panic(fmt.Errorf("%s is not a ContinuousQueryReportCommand", ext))
 	}
 
-	return fsm.data.CQStatusReport(v.GetName(), time.Unix(0, v.GetLastRunTime()))
+	return fsm.data.BatchUpdateContinuousQueryStat(v.GetCQStates())
 }
 
 func (fsm *storeFSM) applyDropRetentionPolicyCommand(cmd *proto2.Command) interface{} {
@@ -691,8 +694,20 @@ func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	}
 
 	fsm.data = data
+	fsm.refactorCQNames()
 
 	return nil
+}
+
+func (fsm *storeFSM) refactorCQNames() {
+	fsm.cqNames = fsm.cqNames[:0]
+
+	fsm.data.WalkDatabases(func(db *meta2.DatabaseInfo) {
+		for cqName := range db.ContinuousQueries {
+			fsm.cqNames = append(fsm.cqNames, cqName)
+		}
+	})
+	sort.Strings(fsm.cqNames)
 }
 
 func (fsm *storeFSM) applyCreateDownSampleCommand(cmd *proto2.Command) interface{} {

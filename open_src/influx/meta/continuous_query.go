@@ -32,7 +32,7 @@ type ContinuousQueryInfo struct {
 	Query string
 
 	// Mark whether this cq has been deleted
-	MarkDeleted bool
+	MarkDeleted bool // TODO: delete me
 
 	// Last successful run time
 	LastRunTime time.Time
@@ -98,6 +98,10 @@ func (cqi *ContinuousQueryInfo) CheckSpecValid() error {
 // Determine if the actions of two cqs are exactly the same.
 func (cqi *ContinuousQueryInfo) EqualsAnotherCq(other *ContinuousQueryInfo) bool {
 	return cqi.Query == other.Query
+}
+
+func (cqi *ContinuousQueryInfo) UpdateContinuousQueryStat(lastRun int64) {
+	cqi.LastRunTime = time.Unix(0, lastRun)
 }
 
 type ContinuousQuerySpec struct {

@@ -44,6 +44,7 @@ message Data {
 	repeated StreamInfo Streams  = 24;
 	optional uint64 MaxStreamID = 25;
 	optional uint64 MaxConnId = 26;
+	optional uint64 MaxCQChangeID = 27;
 }
 
 message PtOwner {
@@ -985,6 +986,10 @@ message Sql2MetaHeartbeatCommand {
 
 message ContinuousQueryReportCommand {
 	extend Command { optional ContinuousQueryReportCommand command = 185; }
+	repeated CQState CQStates = 1;
+}
+
+message CQState {
 	required string Name = 1;
 	required int64 LastRunTime = 2;
 }
