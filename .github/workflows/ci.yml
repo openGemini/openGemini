@@ -126,7 +126,10 @@ jobs:
         run: |
           make build-check
           make go-build
+          make start-subscriber
           bash scripts/install_cluster.sh
           ps -ef | grep ts- | grep -v grep
       - name: Run integration test
-        run: make integration-test
+        run: |
+          make integration-test
+          make stop-subscriber

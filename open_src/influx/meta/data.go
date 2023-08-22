@@ -110,15 +110,16 @@ type Data struct {
 	BalancerEnabled    bool
 	ExpandShardsEnable bool // set by config (not persistence)
 
-	MaxNodeID       uint64
-	MaxShardGroupID uint64
-	MaxShardID      uint64
-	MaxIndexGroupID uint64
-	MaxIndexID      uint64
-	MaxEventOpId    uint64
-	MaxDownSampleID uint64
-	MaxStreamID     uint64
-	MaxConnID       uint64
+	MaxNodeID         uint64
+	MaxShardGroupID   uint64
+	MaxShardID        uint64
+	MaxIndexGroupID   uint64
+	MaxIndexID        uint64
+	MaxEventOpId      uint64
+	MaxDownSampleID   uint64
+	MaxStreamID       uint64
+	MaxConnID         uint64
+	MaxSubscriptionID uint64 // +1 for any changes to subscriptions
 }
 
 var DataLogger *zap.Logger
@@ -1843,6 +1844,7 @@ func (data *Data) CreateSubscription(database, rp, name, mode string, destinatio
 		Destinations: destinations,
 	})
 
+	data.MaxSubscriptionID++
 	return nil
 }
 
@@ -1855,6 +1857,7 @@ func (data *Data) DropSubscription(database, rp, name string) error {
 				rp.Subscriptions = rp.Subscriptions[:0]
 			}
 		}
+		data.MaxSubscriptionID++
 		return nil
 	}
 
@@ -1867,6 +1870,7 @@ func (data *Data) DropSubscription(database, rp, name string) error {
 		for _, rp := range db.RetentionPolicies {
 			rp.Subscriptions = rp.Subscriptions[:0]
 		}
+		data.MaxSubscriptionID++
 		return nil
 	}
 
@@ -1880,6 +1884,7 @@ func (data *Data) DropSubscription(database, rp, name string) error {
 			for i := range rpi.Subscriptions {
 				if rpi.Subscriptions[i].Name == name {
 					rpi.Subscriptions = append(rpi.Subscriptions[:i], rpi.Subscriptions[i+1:]...)
+					data.MaxSubscriptionID++
 					return nil
 				}
 			}
@@ -1894,6 +1899,7 @@ func (data *Data) DropSubscription(database, rp, name string) error {
 	for i := range rpi.Subscriptions {
 		if rpi.Subscriptions[i].Name == name {
 			rpi.Subscriptions = append(rpi.Subscriptions[:i], rpi.Subscriptions[i+1:]...)
+			data.MaxSubscriptionID++
 			return nil
 		}
 	}
@@ -2094,9 +2100,10 @@ func (data *Data) Marshal() *proto2.Data {
 		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
 		BalancerEnabled: proto.Bool(data.BalancerEnabled),
 
-		MaxDownSampleID: proto.Uint64(data.MaxDownSampleID),
-		MaxStreamID:     proto.Uint64(data.MaxStreamID),
-		MaxConnId:       proto.Uint64(data.MaxConnID),
+		MaxDownSampleID:   proto.Uint64(data.MaxDownSampleID),
+		MaxStreamID:       proto.Uint64(data.MaxStreamID),
+		MaxConnId:         proto.Uint64(data.MaxConnID),
+		MaxSubscriptionID: proto.Uint64(data.MaxSubscriptionID),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2185,6 +2192,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxDownSampleID = pb.GetMaxDownSampleID()
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
+	data.MaxSubscriptionID = pb.GetMaxSubscriptionID()
 
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {

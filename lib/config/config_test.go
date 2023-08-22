@@ -32,6 +32,9 @@ func TestConfig_Parse(t *testing.T) {
 [spdy]
   conn-pool-size = 10
   tls-enable = true
+[subscriber]
+  enabled = true
+  write-buffer-size = 150
 `
 	configFile := t.TempDir() + "/sql.conf"
 	_ = os.WriteFile(configFile, []byte(txt), 0600)
@@ -49,6 +52,8 @@ func TestConfig_Parse(t *testing.T) {
 
 	assert.Equal(t, 10, conf.GetSpdy().ConnPoolSize)
 	assert.Equal(t, true, conf.GetSpdy().TLSEnable)
+	assert.Equal(t, true, conf.Subscriber.Enabled)
+	assert.Equal(t, 150, conf.Subscriber.WriteBufferSize)
 }
 
 func TestLogger(t *testing.T) {

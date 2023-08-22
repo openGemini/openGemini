@@ -2275,6 +2275,10 @@ func (c *Client) DropSubscription(database, rp, name string) error {
 	)
 }
 
+func (c *Client) GetMaxSubscriptionID() uint64 {
+	return c.cacheData.MaxSubscriptionID
+}
+
 // SetData overwrites the underlying data in the meta store.
 func (c *Client) SetData(data *meta2.Data) error {
 	return c.retryUntilExec(proto2.Command_SetDataCommand, proto2.E_SetDataCommand_Command,

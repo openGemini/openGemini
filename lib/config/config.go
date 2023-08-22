@@ -54,6 +54,7 @@ const (
 )
 
 var haEnable bool
+var subscriptionEnable bool
 
 func SetHaEnable(en bool) {
 	haEnable = en
@@ -61,6 +62,14 @@ func SetHaEnable(en bool) {
 
 func GetHaEnable() bool {
 	return haEnable
+}
+
+func SetSubscriptionEnable(en bool) {
+	subscriptionEnable = en
+}
+
+func GetSubscriptionEnable() bool {
+	return subscriptionEnable
 }
 
 func Parse(conf Config, path string) error {

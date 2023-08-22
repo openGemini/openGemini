@@ -704,6 +704,9 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 }
 
 func (e *StatementExecutor) executeCreateSubscriptionStatement(q *influxql.CreateSubscriptionStatement) error {
+	if !config.GetSubscriptionEnable() {
+		return errors.New("subscription is not enabled")
+	}
 	return e.MetaClient.CreateSubscription(q.Database, q.RetentionPolicy, q.Name, q.Mode, q.Destinations)
 }
 
@@ -806,6 +809,9 @@ func (e *StatementExecutor) executeDropRetentionPolicyStatement(stmt *influxql.D
 }
 
 func (e *StatementExecutor) executeDropSubscriptionStatement(q *influxql.DropSubscriptionStatement) error {
+	if !config.GetSubscriptionEnable() {
+		return errors.New("subscription is not enabled")
+	}
 	return e.MetaClient.DropSubscription(q.Database, q.RetentionPolicy, q.Name)
 }
 
@@ -1268,6 +1274,9 @@ func (e *StatementExecutor) executeShowShardGroupsStatement(stmt *influxql.ShowS
 }
 
 func (e *StatementExecutor) executeShowSubscriptionsStatement(stmt *influxql.ShowSubscriptionsStatement) (models.Rows, error) {
+	if !config.GetSubscriptionEnable() {
+		return nil, errors.New("subscription is not enabled")
+	}
 	return e.MetaClient.ShowSubscriptions(), nil
 }
 
