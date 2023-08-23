@@ -282,3 +282,29 @@ func TestNewCommand(t *testing.T) {
 	require.Equal(t, app.SQLLOGO, cmd.Logo)
 	require.Equal(t, config.AppSql, cmd.Info.App)
 }
+
+func Test_NewServer_Subscription_Enabled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	conf := config.NewTSSql()
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	conf.Subscriber.Enabled = true
+
+	server, err := NewServer(conf, app.ServerInfo{}, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).SubscriberManager)
+	server.(*Server).initMetaClientFn = func() error {
+		return nil
+	}
+
+	require.Equal(t, config.GetSubscriptionEnable(), true)
+
+	err = server.Open()
+	require.NoError(t, err)
+
+	err = server.Close()
+	require.NoError(t, err)
+}

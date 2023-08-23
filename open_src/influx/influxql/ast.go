@@ -3501,6 +3501,13 @@ type DropSubscriptionStatement struct {
 
 // String returns a string representation of the DropSubscriptionStatement.
 func (s *DropSubscriptionStatement) String() string {
+	if s.Name == "" {
+		if s.Database == "" {
+			return "DROP ALL SUBSCRIPTIONS"
+		} else {
+			return fmt.Sprintf(`DROP ALL SUBSCRIPTIONS ON %s`, QuoteIdent(s.Database))
+		}
+	}
 	return fmt.Sprintf(`DROP SUBSCRIPTION %s ON %s.%s`, QuoteIdent(s.Name), QuoteIdent(s.Database), QuoteIdent(s.RetentionPolicy))
 }
 

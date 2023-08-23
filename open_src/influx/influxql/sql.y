@@ -104,7 +104,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 }
 
 %token <str>    FROM MEASUREMENT INTO ON SELECT WHERE AS GROUP BY ORDER LIMIT OFFSET SLIMIT SOFFSET SHOW CREATE FULL PRIVILEGES OUTER JOIN
-                TO IN NOT EXISTS REVOKE FILL DELETE WITH ENGINETYPE ALL PASSWORD NAME REPLICANUM ALTER USER USERS
+                TO IN NOT EXISTS REVOKE FILL DELETE WITH ENGINETYPE ALL ANY PASSWORD NAME REPLICANUM ALTER USER USERS
                 DATABASES DATABASE MEASUREMENTS RETENTION POLICIES POLICY DURATION DEFAULT SHARD INDEX GRANT HOT WARM TYPE SET FOR GRANTS
                 REPLICATION SERIES DROP CASE WHEN THEN ELSE BEGIN END TRUE FALSE TAG ATTRIBUTE FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
                 PRIMARYKEY SORTKEY PROPERTY
@@ -113,7 +113,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
                 TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE
-                REPLICAS DETAIL
+                REPLICAS DETAIL DESTINATIONS
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -145,6 +145,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
                                     CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
                                     SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT
+                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT
 %type <fields>                      COLUMN_CLAUSES IDENTS
 %type <field>                       COLUMN_CLAUSE
 %type <stmts>                       ALL_QUERIES ALL_QUERY
@@ -163,8 +164,8 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
 %type <durations>                   SHARD_HOT_WARM_INDEX_DURATIONS SHARD_HOT_WARM_INDEX_DURATION CREAT_DATABASE_POLICY  CREAT_DATABASE_POLICYS
-%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CALUSE SHARD_KEY STRING_TYPE TOKEN_CLAUSE TOKENIZERS_CLAUSE MEASUREMENT_INFO
-%type <strSlice>                    SHARDKEYLIST INDEX_LIST TOKEN_TYPE PRIMARYKEY_LIST SORTKEY_LIST
+%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CALUSE SHARD_KEY STRING_TYPE TOKEN_CLAUSE TOKENIZERS_CLAUSE MEASUREMENT_INFO SUBSCRIPTION_TYPE
+%type <strSlice>                    SHARDKEYLIST INDEX_LIST TOKEN_TYPE PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST
 %type <location>                    TIME_ZONE
 %type <indexType>                   INDEX_TYPE INDEX_TYPES
@@ -397,6 +398,18 @@ STATEMENT:
     	$$ = $1
     }
     |KILL_QUERY_STATEMENT
+    {
+    	$$ = $1
+    }
+    |CREATE_SUBSCRIPTION_STATEMENT
+    {
+    	$$ = $1
+    }
+    |SHOW_SUBSCRIPTION_STATEMENT
+    {
+    	$$ = $1
+    }
+    |DROP_SUBSCRIPTION_STATEMENT
     {
     	$$ = $1
     }
@@ -3040,5 +3053,59 @@ KILL_QUERY_STATEMENT:
     KILL QUERY INTEGER
     {
         $$ = &KillQueryStatement{QueryID: uint64($3)}
+    }
+
+ALL_DESTINATION:
+    STRING_TYPE
+    {
+        $$ = []string{$1}
+    }
+    |STRING_TYPE COMMA ALL_DESTINATION
+    {
+        $$ = append([]string{$1}, $3...)
+    }
+
+SUBSCRIPTION_TYPE:
+    ALL
+    {
+        $$ = "ALL"
+    }
+    |ANY
+    {
+        $$ = "ANY"
+    }
+
+CREATE_SUBSCRIPTION_STATEMENT:
+    CREATE SUBSCRIPTION STRING_TYPE ON STRING_TYPE DOT STRING_TYPE DESTINATIONS SUBSCRIPTION_TYPE ALL_DESTINATION
+    {
+        $$ = &CreateSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : $7, Destinations : $10, Mode : $9}
+    }
+    |CREATE SUBSCRIPTION STRING_TYPE ON STRING_TYPE DESTINATIONS SUBSCRIPTION_TYPE ALL_DESTINATION
+    {
+        $$ = &CreateSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : "", Destinations : $8, Mode : $7}
+    }
+
+SHOW_SUBSCRIPTION_STATEMENT:
+    SHOW SUBSCRIPTIONS
+    {
+        $$ = &ShowSubscriptionsStatement{}
+    }
+
+DROP_SUBSCRIPTION_STATEMENT:
+    DROP ALL SUBSCRIPTIONS
+    {
+        $$ = &DropSubscriptionStatement{Name : "", Database : "", RetentionPolicy : ""}
+    }
+    |DROP ALL SUBSCRIPTIONS ON STRING_TYPE
+    {
+        $$ = &DropSubscriptionStatement{Name : "", Database : $5, RetentionPolicy : ""}
+    }
+    |DROP SUBSCRIPTION STRING_TYPE ON STRING_TYPE DOT STRING_TYPE
+    {
+        $$ = &DropSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : $7}
+    }
+    |DROP SUBSCRIPTION STRING_TYPE ON STRING_TYPE
+    {
+        $$ = &DropSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : ""}
     }
 %%
