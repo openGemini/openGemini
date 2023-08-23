@@ -1255,3 +1255,94 @@ func TestData_RegisterQueryIDOffset(t *testing.T) {
 		})
 	}
 }
+
+func TestData_Create_Subscription(t *testing.T) {
+	data := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"db0": {
+				Name: "db0",
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp0": {},
+				},
+			},
+		},
+	}
+	destinations := []string{"http://192.168.35.1:8080", "http://10.123.65.4:9172"}
+	err := data.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)
+	assert2.NoError(t, err)
+	err = data.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)
+	assert2.Equal(t, err == ErrSubscriptionExists, true)
+	err = data.CreateSubscription("db2", "rp0", "subs1", "ALL", destinations)
+	assert2.Equal(t, err != nil, true)
+	rpi, err := data.RetentionPolicy("db0", "rp0")
+	assert2.NoError(t, err)
+	assert2.Equal(t, len(rpi.Subscriptions), 1)
+	assert2.Equal(t, rpi.Subscriptions[0].Name, "subs1")
+	assert2.Equal(t, rpi.Subscriptions[0].Mode, "ALL")
+	for i := range destinations {
+		assert2.Equal(t, rpi.Subscriptions[0].Destinations[i], destinations[i])
+	}
+}
+
+func TestData_Drop_Subscription(t *testing.T) {
+	Databases := make(map[string]*DatabaseInfo)
+	for i := 0; i < 5; i++ {
+		db := fmt.Sprintf(`db%v`, i)
+		rp := fmt.Sprintf(`rp%v`, i)
+		Databases[db] = &DatabaseInfo{
+			Name: db,
+			RetentionPolicies: map[string]*RetentionPolicyInfo{
+				rp: {},
+			},
+		}
+	}
+	data := &Data{Databases: Databases}
+	for i := 0; i < 5; i++ {
+		db := fmt.Sprintf(`db%v`, i)
+		rp := fmt.Sprintf(`rp%v`, i)
+		for j := 0; j < 3; j++ {
+			subs := fmt.Sprintf(`subs%v`, j)
+			err := data.CreateSubscription(db, rp, subs, "All", []string{"http://192.168.35.1:8080"})
+			assert2.NoError(t, err)
+		}
+	}
+
+	// drop all subscriptions on db0
+	err := data.DropSubscription("db0", "", "")
+	assert2.NoError(t, err)
+	rpi, err := data.RetentionPolicy("db0", "rp0")
+	assert2.NoError(t, err)
+	assert2.Equal(t, len(rpi.Subscriptions), 0)
+
+	// drop subs2 on db2.rp2, but do not specify rp
+	err = data.DropSubscription("db2", "", "subs2")
+	assert2.NoError(t, err)
+
+	// drop subs1 on db3.rp3
+	err = data.DropSubscription("db3", "rp3", "subs1")
+	assert2.NoError(t, err)
+	rpi, err = data.RetentionPolicy("db3", "rp3")
+	assert2.NoError(t, err)
+	assert2.Equal(t, len(rpi.Subscriptions), 2)
+	for i := 0; i < 2; i++ {
+		assert2.NotEqual(t, rpi.Subscriptions[i].Name, "subs1")
+	}
+
+	// try to drop non-exist subscription
+	err = data.DropSubscription("db2", "rp2", "subs10")
+	assert2.Equal(t, err != nil, true)
+
+	// drop all subscriptions
+	rows := data.ShowSubscriptions()
+	assert2.Equal(t, rows.Len(), 4)
+	err = data.DropSubscription("", "", "")
+	assert2.NoError(t, err)
+	rows = data.ShowSubscriptions()
+	assert2.Equal(t, rows.Len(), 0)
+
+	// try drop subscription when there is no subscription
+	err = data.DropSubscription("db0", "rp0", "")
+	assert2.NoError(t, err)
+	err = data.DropSubscription("", "", "")
+	assert2.NoError(t, err)
+}

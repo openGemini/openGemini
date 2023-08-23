@@ -31,7 +31,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,15 +110,16 @@ type Data struct {
 	BalancerEnabled    bool
 	ExpandShardsEnable bool // set by config (not persistence)
 
-	MaxNodeID       uint64
-	MaxShardGroupID uint64
-	MaxShardID      uint64
-	MaxIndexGroupID uint64
-	MaxIndexID      uint64
-	MaxEventOpId    uint64
-	MaxDownSampleID uint64
-	MaxStreamID     uint64
-	MaxConnID       uint64
+	MaxNodeID         uint64
+	MaxShardGroupID   uint64
+	MaxShardID        uint64
+	MaxIndexGroupID   uint64
+	MaxIndexID        uint64
+	MaxEventOpId      uint64
+	MaxDownSampleID   uint64
+	MaxStreamID       uint64
+	MaxConnID         uint64
+	MaxSubscriptionID uint64 // +1 for any changes to subscriptions
 }
 
 var DataLogger *zap.Logger
@@ -1823,33 +1823,8 @@ func (data *Data) pruneShardGroups(id uint64) error {
 	return nil
 }
 
-// validateURL returns an error if the URL does not have a port or uses a scheme other than UDP or HTTP.
-func validateURL(input string) error {
-	u, err := url.Parse(input)
-	if err != nil {
-		return ErrInvalidSubscriptionURL(input)
-	}
-
-	if u.Scheme != "udp" && u.Scheme != "http" && u.Scheme != "https" {
-		return ErrInvalidSubscriptionURL(input)
-	}
-
-	_, port, err := net.SplitHostPort(u.Host)
-	if err != nil || port == "" {
-		return ErrInvalidSubscriptionURL(input)
-	}
-
-	return nil
-}
-
 // CreateSubscription adds a named subscription to a database and retention policy.
 func (data *Data) CreateSubscription(database, rp, name, mode string, destinations []string) error {
-	for _, d := range destinations {
-		if err := validateURL(d); err != nil {
-			return err
-		}
-	}
-
 	rpi, err := data.RetentionPolicy(database, rp)
 	if err != nil {
 		return err
@@ -1869,11 +1844,53 @@ func (data *Data) CreateSubscription(database, rp, name, mode string, destinatio
 		Destinations: destinations,
 	})
 
+	data.MaxSubscriptionID++
 	return nil
 }
 
 // DropSubscription removes a subscription.
 func (data *Data) DropSubscription(database, rp, name string) error {
+	// Drop all subscriptions
+	if database == "" {
+		for _, db := range data.Databases {
+			for _, rp := range db.RetentionPolicies {
+				rp.Subscriptions = rp.Subscriptions[:0]
+			}
+		}
+		data.MaxSubscriptionID++
+		return nil
+	}
+
+	// Drop all subscriptions on the Specified db
+	if name == "" {
+		db, ok := data.Databases[database]
+		if !ok {
+			return ErrDatabaseNotExists
+		}
+		for _, rp := range db.RetentionPolicies {
+			rp.Subscriptions = rp.Subscriptions[:0]
+		}
+		data.MaxSubscriptionID++
+		return nil
+	}
+
+	// if rp is not specified, traverse the rps
+	if rp == "" {
+		db, ok := data.Databases[database]
+		if !ok {
+			return ErrDatabaseNotExists
+		}
+		for _, rpi := range db.RetentionPolicies {
+			for i := range rpi.Subscriptions {
+				if rpi.Subscriptions[i].Name == name {
+					rpi.Subscriptions = append(rpi.Subscriptions[:i], rpi.Subscriptions[i+1:]...)
+					data.MaxSubscriptionID++
+					return nil
+				}
+			}
+		}
+	}
+
 	rpi, err := data.RetentionPolicy(database, rp)
 	if err != nil {
 		return err
@@ -1882,6 +1899,7 @@ func (data *Data) DropSubscription(database, rp, name string) error {
 	for i := range rpi.Subscriptions {
 		if rpi.Subscriptions[i].Name == name {
 			rpi.Subscriptions = append(rpi.Subscriptions[:i], rpi.Subscriptions[i+1:]...)
+			data.MaxSubscriptionID++
 			return nil
 		}
 	}
@@ -2082,9 +2100,10 @@ func (data *Data) Marshal() *proto2.Data {
 		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
 		BalancerEnabled: proto.Bool(data.BalancerEnabled),
 
-		MaxDownSampleID: proto.Uint64(data.MaxDownSampleID),
-		MaxStreamID:     proto.Uint64(data.MaxStreamID),
-		MaxConnId:       proto.Uint64(data.MaxConnID),
+		MaxDownSampleID:   proto.Uint64(data.MaxDownSampleID),
+		MaxStreamID:       proto.Uint64(data.MaxStreamID),
+		MaxConnId:         proto.Uint64(data.MaxConnID),
+		MaxSubscriptionID: proto.Uint64(data.MaxSubscriptionID),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2173,6 +2192,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxDownSampleID = pb.GetMaxDownSampleID()
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
+	data.MaxSubscriptionID = pb.GetMaxSubscriptionID()
 
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {

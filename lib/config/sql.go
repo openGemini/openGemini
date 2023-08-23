@@ -85,6 +85,8 @@ type TSSql struct {
 	Analysis   Castor           `toml:"castor"`
 	Sherlock   *SherlockConfig  `toml:"sherlock"`
 	SelectSpec SelectSpecConfig `toml:"spec-limit"`
+
+	Subscriber Subscriber `toml:"subscriber"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -99,6 +101,7 @@ func NewTSSql() *TSSql {
 	c.Analysis = NewCastor()
 	c.Sherlock = NewSherlockConfig()
 	c.SelectSpec = NewSelectSpecConfig()
+	c.Subscriber = NewSubscriber()
 	return c
 }
 
@@ -143,6 +146,7 @@ func (c *TSSql) Validate() error {
 		c.Spdy,
 		c.Analysis,
 		c.Sherlock,
+		c.Subscriber,
 	}
 
 	for _, item := range items {
