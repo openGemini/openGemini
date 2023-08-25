@@ -405,6 +405,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		rows, err = e.executeShowStreamsStatement(stmt)
 	case *influxql.DropStreamsStatement:
 		err = e.executeDropStream(stmt)
+	case *influxql.SetConfigStatement:
+		err = e.executeSetConfig(stmt)
 	default:
 		return query2.ErrInvalidQuery
 	}
@@ -2114,6 +2116,10 @@ func (e *StatementExecutor) executeShowStreamsStatement(stmt *influxql.ShowStrea
 
 func (e *StatementExecutor) executeDropStream(stmt *influxql.DropStreamsStatement) error {
 	return e.MetaClient.DropStream(stmt.Name)
+}
+
+func (e *StatementExecutor) executeSetConfig(stmt *influxql.SetConfigStatement) error {
+	return fmt.Errorf("impl me")
 }
 
 type ByteStringSlice [][]byte

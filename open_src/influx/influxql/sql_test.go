@@ -159,6 +159,16 @@ func init() {
 		"DROP ALL SUBSCRIPTIONS on db0",
 		"DROP SUBSCRIPTION subs0 on db0.autogen",
 		"DROP SUBSCRIPTION subs0 on db0",
+
+		// set config
+		`SET CONFIG store "data.write-cold-duration" = aa`,
+		`SET CONFIG store 'data.write-cold-duration' = "1s"`,
+		`SET CONFIG store "data.max-concurrent-compactions" = 4`,
+		`SET CONFIG store "data.max-concurrent-compactions" = 4.1`,
+		`SET CONFIG store "retention.check-interval" = "5m"`,
+		`SET CONFIG meta logging.level = info`,
+		`SET CONFIG store "data.compact-recovery" = false`,
+		`SET CONFIG store "data.compact-recovery" = true`,
 	}
 
 	benchCases = []string{
