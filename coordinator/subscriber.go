@@ -18,8 +18,10 @@ package coordinator
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -28,14 +30,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/apache/arrow/go/arrow/array"
+	"github.com/apache/arrow/go/arrow/flight"
+	"github.com/apache/arrow/go/arrow/ipc"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type Client interface {
 	Send(db, rp string, lineProtocol []byte) error
+	SendColumn(db, rp, mst string, record array.Record) error
 	Destination() string
 }
 
@@ -73,6 +82,10 @@ func (c *HTTPClient) Send(db, rp string, lineProtocol []byte) error {
 	return nil
 }
 
+func (c *HTTPClient) SendColumn(db, rp, mst string, record array.Record) error {
+	return errors.New("http client dosen't send column")
+}
+
 func (c *HTTPClient) Destination() string {
 	return c.url.String()
 }
@@ -100,9 +113,71 @@ func NewHTTPSClient(url *url.URL, timeout time.Duration, skipVerify bool, certs 
 	return &HTTPClient{client: c, url: url}, nil
 }
 
+type RPCClient struct {
+	// todo
+	address string
+	client  flight.FlightService_DoPutClient
+}
+
+func (c *RPCClient) Send(db, rp string, lineProtocol []byte) error {
+	return errors.New("rpc client dosen't send line protocol")
+}
+
+func (c *RPCClient) SendColumn(db, rp, mst string, record array.Record) error {
+	wr := flight.NewRecordWriter(c.client, ipc.WithSchema(record.Schema()))
+	// err未处理
+	defer wr.Close()
+	path := fmt.Sprintf("{\"db\": \"%s\", \"rp\": \"%s\", \"mst\": \"%s\"}", db, rp, mst)
+	wr.SetFlightDescriptor(&flight.FlightDescriptor{Path: []string{path}})
+	err := wr.Write(record)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *RPCClient) Destination() string {
+	return c.address
+}
+
+// clientAuth这块需要改
+var Token = "token"
+
+type clientAuth struct {
+	token string
+}
+
+func (a *clientAuth) Authenticate(ctx context.Context, c flight.AuthConn) error {
+	if err := c.Send(ctx.Value(Token).([]byte)); err != nil {
+		return err
+	}
+
+	token, err := c.Read()
+	a.token = util.Bytes2str(token)
+	return err
+}
+
+func (a *clientAuth) GetToken(_ context.Context) (string, error) {
+	return a.token, nil
+}
+
+func NewRPCClient(address string) (*RPCClient, error) {
+	// todo 错误检查, 后续这些client需要关闭
+	authClient := &clientAuth{}
+	client, _ := flight.NewFlightClient(address, authClient, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	doPutClient, _ := client.DoPut(context.Background())
+	return &RPCClient{address: address, client: doPutClient}, nil
+}
+
 type WriteRequest struct {
-	Client       int
+	Client int
+
+	// for line protocol
 	LineProtocol []byte
+
+	// for column protocol
+	Mst    string
+	Record array.Record
 }
 
 type BaseWriter struct {
@@ -129,7 +204,12 @@ func (w *BaseWriter) Send(wr WriteRequest) {
 
 func (w *BaseWriter) Run() {
 	for wr := range w.ch {
-		err := w.clients[wr.Client].Send(w.db, w.rp, wr.LineProtocol)
+		var err error
+		if wr.LineProtocol != nil {
+			err = w.clients[wr.Client].Send(w.db, w.rp, wr.LineProtocol)
+		} else {
+			err = w.clients[wr.Client].SendColumn(w.db, w.rp, wr.Mst, wr.Record)
+		}
 		if err != nil {
 			w.logger.Error("failed to forward write request", zap.String("dest", w.clients[wr.Client].Destination()),
 				zap.String("db", w.db), zap.String("rp", w.rp), zap.Error(err))
@@ -158,6 +238,7 @@ func (w *BaseWriter) Stop() {
 
 type SubscriberWriter interface {
 	Write(lineProtocol []byte)
+	WriteColumn(mst string, record array.Record)
 	Name() string
 	Run()
 	Start(concurrency, buffersize int)
@@ -171,7 +252,14 @@ type AllWriter struct {
 
 func (w *AllWriter) Write(lineProtocol []byte) {
 	for i := 0; i < len(w.clients); i++ {
-		wr := WriteRequest{i, lineProtocol}
+		wr := WriteRequest{Client: i, LineProtocol: lineProtocol}
+		w.Send(wr)
+	}
+}
+
+func (w *AllWriter) WriteColumn(mst string, record array.Record) {
+	for i := 0; i < len(w.clients); i++ {
+		wr := WriteRequest{Client: i, Mst: mst, Record: record}
 		w.Send(wr)
 	}
 }
@@ -188,6 +276,15 @@ func (w *RoundRobinWriter) Write(lineProtocol []byte) {
 	w.i = (w.i + 1) % len(w.clients)
 	w.lock.Unlock()
 	wr := WriteRequest{Client: i, LineProtocol: lineProtocol}
+	w.Send(wr)
+}
+
+func (w *RoundRobinWriter) WriteColumn(mst string, record array.Record) {
+	w.lock.Lock()
+	i := w.i
+	w.i = (w.i + 1) % len(w.clients)
+	w.lock.Unlock()
+	wr := WriteRequest{Client: i, Mst: mst, Record: record}
 	w.Send(wr)
 }
 
@@ -220,6 +317,12 @@ func (s *SubscriberManager) NewSubscriberWriter(db, rp, name, mode string, desti
 			c = NewHTTPClient(u, time.Duration(s.config.HTTPTimeout))
 		case "https":
 			c, err = NewHTTPSClient(u, time.Duration(s.config.HTTPTimeout), s.config.InsecureSkipVerify, s.config.HttpsCertificate)
+			if err != nil {
+				return nil, err
+			}
+		// todo: 加个校验，同一个订阅，要么全是http/https，要么全是rpc，否则报错
+		case "rpc":
+			c, err = NewRPCClient(u.Host)
 			if err != nil {
 				return nil, err
 			}
@@ -348,6 +451,23 @@ func (s *SubscriberManager) Send(db, rp string, lineProtocal []byte) {
 	if writer, ok := s.writers[db][rp]; ok {
 		for _, w := range writer {
 			w.Write(lineProtocal)
+		}
+	}
+}
+
+func (s *SubscriberManager) SendColumn(db, rp, mst string, record array.Record) {
+	if rp == "" {
+		dbi, err := s.client.Database(db)
+		if err != nil {
+			s.Logger.Error("unknown database", zap.String("db", db))
+		} else {
+			rp = dbi.DefaultRetentionPolicy
+		}
+	}
+
+	if writer, ok := s.writers[db][rp]; ok {
+		for _, w := range writer {
+			w.WriteColumn(mst, record)
 		}
 	}
 }

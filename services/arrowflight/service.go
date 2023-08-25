@@ -34,6 +34,7 @@ import (
 	"github.com/apache/arrow/go/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
@@ -85,6 +86,9 @@ type Service struct {
 	RecordWriter interface {
 		RetryWriteRecord(database, retentionPolicy, measurement string, rec array.Record) error
 	}
+
+	// todo: 初始化
+	SubscriberManager *coordinator.SubscriberManager
 }
 
 func NewService(c config.Config) (*Service, error) {
@@ -254,6 +258,8 @@ type writeServer struct {
 	mem     memory.Allocator
 	logger  *logger.Logger
 	service *flight.FlightServiceService
+	// todo: 初始化
+	subscriberManager coordinator.SubscriberManager
 }
 
 func NewWriteServer(logger *logger.Logger) *writeServer {
@@ -300,6 +306,7 @@ func (w *writeServer) DoPut(server flight.FlightService_DoPutServer) error {
 		if err != nil {
 			return err
 		}
+		w.subscriberManager.SendColumn(metaData.DataBase, metaData.RetentionPolicy, metaData.Measurement, r)
 		err = server.Send(&flight.PutResult{})
 		if err != nil {
 			return err

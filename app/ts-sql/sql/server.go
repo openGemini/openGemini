@@ -185,6 +185,11 @@ func (s *Server) initArrowFlightService(c *config.TSSql) error {
 	s.arrowFlightService.StatisticsPusher = s.statisticsPusher
 	s.RecordWriter = coordinator.NewRecordWriter(time.Duration(c.Coordinator.ShardWriterTimeout), int(c.Meta.PtNumPerNode), c.HTTP.FlightChFactor)
 	s.RecordWriter.StorageEngine = services.GetStorageEngine()
+
+	//可以在这里进行s.SubscriberManager和s.arrowFlightService.SubscriberManager的初始化，
+	//但是这样就需要新构建一个SubscriberManager出来，
+	//应该考虑把SubscriberManager搞成单例，
+	//行协议和列协议复用同一个SubscriberManager
 	return nil
 }
 
