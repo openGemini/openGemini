@@ -169,3 +169,28 @@ func TestSetTimeFilterProtection(t *testing.T) {
 	enable := GetTimeFilterProtection()
 	assert.Equal(t, enable, false)
 }
+
+type mockQueryStorage struct {
+	netstorage.Storage
+}
+
+func (mockQueryStorage) SendQueryRequestOnNode(nodeID uint64, req netstorage.SysCtrlRequest) (map[string]string, error) {
+	return map[string]string{
+		"db0-rp0-pt0": `[{}]`,
+	}, nil
+}
+
+func Test_handleQueryShardStatus(t *testing.T) {
+	// case Not support query request
+	res, err := ProcessQueryRequest("test", nil)
+	assert.Equal(t, err.Error(), "not support query mod test")
+
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockQueryStorage{}
+	param := map[string]string{
+		"db": "db0",
+	}
+	res, err = ProcessQueryRequest(QueryShardStatus, param)
+	assert.NoError(t, err)
+	assert.Equal(t, res, `{"db0-rp0-pt0":[{}]}`)
+}

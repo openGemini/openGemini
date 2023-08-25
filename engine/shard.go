@@ -325,7 +325,7 @@ func (storage *columnstoreImpl) WriteIndexForCols(s *shard, cols *record.Record,
 	if s.closed.Closed() {
 		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
 	}
-	tagIndex := findTagIndex(cols.Schemas())
+	tagIndex := findTagIndex(cols.Schemas(), storage.mstsInfo[mst].Schema)
 
 	// write index
 	err := s.indexBuilder.CreateIndexIfNotExistsForColumnStore(cols, tagIndex, mst)
@@ -347,10 +347,10 @@ func (storage *columnstoreImpl) checkMstInfo(mstInfo *meta.MeasurementInfo) erro
 	return nil
 }
 
-func findTagIndex(schema record.Schemas) []int {
+func findTagIndex(schema record.Schemas, metaSchema map[string]int32) []int {
 	var res []int
 	for i := range schema {
-		if schema[i].Type == influx.Field_Type_Tag {
+		if metaSchema[schema[i].Name] == influx.Field_Type_Tag {
 			res = append(res, i)
 		}
 	}
@@ -2256,6 +2256,17 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 
 			initCondition = true
 		}
+		if schema.Options().GetTimeFirstKey() {
+			ok, err := dataFile.ContainsByTime(tr)
+			if err != nil {
+				return nil, nil, fmt.Errorf("data file contain by time error")
+			}
+			if !ok {
+				skipFileIdx = append(skipFileIdx, i)
+				continue
+			}
+		}
+
 		fragmentRanges, err := s.sparseIndexReader.Scan(pkFileName, pkInfo.GetRec(), pkInfo.GetMark(), keyCondition)
 		if err != nil {
 			return nil, nil, err
@@ -2263,15 +2274,6 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 		var fragmentCount uint32
 		for j := range fragmentRanges {
 			fragmentCount += fragmentRanges[j].End - fragmentRanges[j].Start
-		}
-
-		ok, err = dataFile.ContainsByTime(tr)
-		if err != nil {
-			return nil, nil, fmt.Errorf("data file contain by time error")
-		}
-		if !ok {
-			skipFileIdx = append(skipFileIdx, i)
-			continue
 		}
 		filesFragments.AddFileFragment(dataFile.Path(), executor.NewFileFragment(dataFile, fragmentRanges, int64(fragmentCount)), int64(fragmentCount))
 	}

@@ -96,6 +96,14 @@ func MetaDBPTStepDuration(event string, opId uint64, step string, src, dst uint6
 	MetaTaskInstance.mu.Lock()
 	defer MetaTaskInstance.mu.Unlock()
 
+	if _, ok := MetaTaskInstance.dbptTasks[opId]; !ok {
+		MetaTaskInstance.log.Warn("meta task db pt step not found",
+			zap.Uint64("opId", opId),
+			zap.String("step", step),
+		)
+		return
+	}
+
 	MetaTaskInstance.dbptTasks[opId].step = step
 	MetaTaskInstance.dbptTasks[opId].cost = d
 	MetaTaskInstance.dbptTasks[opId].totalCost += d

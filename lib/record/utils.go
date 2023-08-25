@@ -70,6 +70,16 @@ func ToInfluxqlTypes(ty int) influxql.DataType {
 	}
 }
 
+// ToPrimitiveType convert the tag to the primitive data type. Integer is supported later.
+func ToPrimitiveType(ty int32) int {
+	switch ty {
+	case influx.Field_Type_Tag:
+		return influx.Field_Type_String
+	default:
+		return int(ty)
+	}
+}
+
 // GetTimeRangeStartIndex return first time index in times >= startTime
 func GetTimeRangeStartIndex(times []int64, startPos int, startTime int64) int {
 	start := startPos

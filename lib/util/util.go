@@ -22,6 +22,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
 	"go.uber.org/zap"
 )
@@ -469,4 +470,21 @@ func Float64ToUint64(v float64) uint64 {
 
 func Uint64ToFloat64(v uint64) float64 {
 	return *(*float64)(unsafe.Pointer(&v))
+}
+
+type allocItem interface {
+	byte | models.Row | interface{}
+}
+
+func AllocSlice[T allocItem](data []T, size int) ([]T, []T) {
+	start := len(data)
+	end := start + size
+
+	if end > cap(data) {
+		data = make([]T, 0, cap(data)+size)
+		end = size
+		start = 0
+	}
+
+	return data[:end], data[start:end]
 }

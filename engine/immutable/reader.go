@@ -44,19 +44,17 @@ func init() {
 type FileReader interface {
 	Open() error
 	Close() error
-	ReadData(cm *ChunkMeta, segment int, dst *record.Record, ctx *ReadContext) (*record.Record, error)
+	ReadData(cm *ChunkMeta, segment int, dst *record.Record, ctx *ReadContext, ioPriority int) (*record.Record, error)
 	Ref()
 	Unref() int64
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error)
-	ChunkMetaAt(index int) (*ChunkMeta, error)
+	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
 
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
-	ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	Read(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error)
-	BlockHeader(meta *ChunkMeta, dst []record.Field) ([]record.Field, error)
+	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	Read(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
 	LoadIdTimes(isOrder bool, p *IdTimePairs) error
 
 	Stat() *Trailer
@@ -65,7 +63,6 @@ type FileReader interface {
 	Contains(id uint64, tm util.TimeRange) bool
 	ContainsTime(tm util.TimeRange) bool
 	ContainsId(id uint64) bool
-	CreateTime() int64
 	Name() string
 	FileName() string
 	Rename(newName string) error
@@ -78,6 +75,7 @@ type FileReader interface {
 	LoadComponents() error
 	AverageChunkRows() int
 	MaxChunkRows() int
+	GetFileReaderRef() int64
 }
 
 type MmsReaders struct {
@@ -117,22 +115,6 @@ func searchMetaIndexItem(metaIndexItems []MetaIndex, id uint64) int {
 	}
 
 	return -1
-}
-
-func unmarshalBlockHeader(meta *ChunkMeta, dst []record.Field) []record.Field {
-	for i := range meta.colMeta {
-		if cap(dst) > i {
-			dst = dst[:len(dst)+1]
-		} else {
-			dst = append(dst, record.Field{})
-		}
-
-		m := meta.colMeta[i]
-		dst[i].Name = m.name
-		dst[i].Type = int(m.ty)
-	}
-
-	return dst
 }
 
 // return timeCol.Len if t not in timeCol
@@ -709,42 +691,33 @@ func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, ctx *R
 	return appendColumnData(dataType, nilBitmap, bitmapOffset, encData, nilCount, col, ctx)
 }
 
-type FilterOptions struct {
-	filtersMap    map[string]interface{}
-	cond          influxql.Expr
-	fieldsIdx     []int    // field index in schema
-	filterTags    []string // filter tag name
-	pointTags     *influx.PointTags
-	rowFilters    *[]clv.RowFilter // filter for every row.
-	condFunctions binaryfilterfunc.CondFunctions
+type BaseFilterOptions struct {
+	FiltersMap       map[string]interface{}
+	FieldsIdx        []int    // field index in schema
+	FilterTags       []string // filter tag name
+	CondFunctions    binaryfilterfunc.CondFunctions
+	TimeCondFunction binaryfilterfunc.IdxFunctions
 }
 
-func NewFilterOpts(cond influxql.Expr, filterMap map[string]interface{}, fieldsIdx []int, idTags []string,
-	tags *influx.PointTags, rowFilters *[]clv.RowFilter) *FilterOptions {
+type FilterOptions struct {
+	options    *BaseFilterOptions
+	cond       influxql.Expr
+	pointTags  *influx.PointTags
+	rowFilters *[]clv.RowFilter // filter for every row.
+}
+
+func NewFilterOpts(cond influxql.Expr, filterOption *BaseFilterOptions, tags *influx.PointTags, rowFilters *[]clv.RowFilter) *FilterOptions {
 	return &FilterOptions{
+		options:    filterOption,
 		cond:       cond,
-		filtersMap: filterMap,
-		fieldsIdx:  fieldsIdx,
-		filterTags: idTags,
 		pointTags:  tags,
 		rowFilters: rowFilters,
 	}
 }
 
-func NewFilterOptsWithBinaryFunc(cond influxql.Expr, filterMap map[string]interface{}, fieldsIdx []int, idTags []string,
-	tags *influx.PointTags, condFunctions binaryfilterfunc.CondFunctions) *FilterOptions {
-	return &FilterOptions{
-		cond:          cond,
-		filtersMap:    filterMap,
-		fieldsIdx:     fieldsIdx,
-		filterTags:    idTags,
-		pointTags:     tags,
-		condFunctions: condFunctions,
-	}
-}
-
-func (fo *FilterOptions) SetCondFuncs(condFunctions binaryfilterfunc.CondFunctions) {
-	fo.condFunctions = condFunctions
+func (fo *FilterOptions) SetCondFuncs(filterOption *BaseFilterOptions) {
+	fo.options.CondFunctions = filterOption.CondFunctions
+	fo.options.TimeCondFunction = filterOption.TimeCondFunction
 }
 
 func (fo *FilterOptions) GetCond() influxql.Expr {
@@ -789,7 +762,7 @@ func FilterByTimeDescend(rec *record.Record, tr util.TimeRange) *record.Record {
 }
 
 func FilterByOpts(rec *record.Record, opt *FilterOptions) *record.Record {
-	return FilterByField(rec, nil, opt.filtersMap, opt.cond, opt.rowFilters, opt.fieldsIdx, opt.filterTags, opt.pointTags, opt.condFunctions, nil)
+	return FilterByField(rec, nil, opt.options, opt.cond, opt.rowFilters, opt.pointTags, nil)
 }
 
 func findRowFilterByRowId(rowFilters []clv.RowFilter, rowId int64) *clv.RowFilter {
@@ -849,33 +822,34 @@ func getRowCondition(con influxql.Expr, rowFilters *[]clv.RowFilter, rowId int64
 	return con
 }
 
-func FilterByField(rec *record.Record, filterRec *record.Record, filterMap map[string]interface{}, con influxql.Expr, rowFilters *[]clv.RowFilter,
-	idField []int, idTags []string, tags *influx.PointTags, condFunctions binaryfilterfunc.CondFunctions, filterBitmap *bitmap.FilterBitmap) *record.Record {
-	if rec == nil || (con == nil && rowFilters == nil) {
+func FilterByField(rec *record.Record, filterRec *record.Record, filterOption *BaseFilterOptions, con influxql.Expr, rowFilters *[]clv.RowFilter,
+	tags *influx.PointTags, filterBitmap *bitmap.FilterBitmap) *record.Record {
+	numTimeCondFuncs := len(filterOption.TimeCondFunction)
+	if rec == nil || (numTimeCondFuncs == 0 && con == nil && rowFilters == nil) {
 		return rec
 	}
 
-	if len(condFunctions) > 0 {
-		return FilterByFieldFuncs(rec, filterRec, condFunctions, filterBitmap)
+	if len(filterOption.CondFunctions)+numTimeCondFuncs > 0 {
+		return FilterByFieldFuncs(rec, filterRec, filterOption, filterBitmap)
 	}
 
-	if len(idField) == 0 && len(idTags) == 0 {
+	if len(filterOption.FieldsIdx) == 0 && len(filterOption.FilterTags) == 0 {
 		return rec
 	}
 
-	for _, id := range idTags {
+	for _, id := range filterOption.FilterTags {
 		tag := tags.FindPointTag(id)
 		if tag == nil {
-			filterMap[id] = (*string)(nil)
+			filterOption.FiltersMap[id] = (*string)(nil)
 		} else {
-			filterMap[id] = tag.Value
+			filterOption.FiltersMap[id] = tag.Value
 		}
 	}
 
 	valuer := influxql.ValuerEval{
 		Valuer: influxql.MultiValuer(
 			query.MathValuer{},
-			influxql.MapValuer(filterMap),
+			influxql.MapValuer(filterOption.FiltersMap),
 		),
 	}
 
@@ -888,8 +862,8 @@ func FilterByField(rec *record.Record, filterRec *record.Record, filterMap map[s
 		if rowCon == nil {
 			continue
 		}
-		for _, id := range idField {
-			filterMap[rec.Schema[id].Name] = ignoreTypeFun[rec.Schema[id].Type](i, rec.ColVals[id])
+		for _, id := range filterOption.FieldsIdx {
+			filterOption.FiltersMap[rec.Schema[id].Name] = ignoreTypeFun[rec.Schema[id].Type](i, rec.ColVals[id])
 		}
 		if valuer.EvalBool(rowCon) {
 			reserveId = append(reserveId, i)
@@ -905,7 +879,7 @@ func FilterByField(rec *record.Record, filterRec *record.Record, filterMap map[s
 	return genRecByRowNumbers(rec, nil, reserveId)
 }
 
-func FilterByFieldFuncs(rec, filterRec *record.Record, condFunctions binaryfilterfunc.CondFunctions, filterBitmap *bitmap.FilterBitmap) *record.Record {
+func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterOptions, filterBitmap *bitmap.FilterBitmap) *record.Record {
 	if rec == nil {
 		return rec
 	}
@@ -913,13 +887,37 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, condFunctions binaryfilte
 	var reserveId []int
 	bp := filterBitmap.Bitmap
 	resIdx := len(bp) - 1
+	var bpTime []byte
 
-	for i := range condFunctions {
-		bp[i] = append(bp[i], rec.ColVals[condFunctions[i][0].Idx].Bitmap...)
-		for j := range condFunctions[i] {
-			item := condFunctions[i][j]
+	// if time condition EXIST
+	if len(filterOption.TimeCondFunction) > 0 {
+		bpTime = append(bpTime, rec.ColVals[filterOption.TimeCondFunction[0].Idx].Bitmap...)
+		for i := range filterOption.TimeCondFunction {
+			item := filterOption.TimeCondFunction[i]
 			col := rec.ColVals[item.Idx]
-			bp[i] = item.Function(&col, item.Compare, col.Bitmap, bp[i], col.BitMapOffset)
+			bpTime = item.Function(&col, item.Compare, col.Bitmap, bpTime, col.BitMapOffset)
+		}
+	}
+
+	// if there is ONLY condition for time column
+	if len(filterOption.CondFunctions) == 0 {
+		bp[0] = append(bp[0], bpTime...)
+	} else {
+		// loop for OR condition
+		for i := range filterOption.CondFunctions {
+			if len(bpTime) > 0 {
+				// init with time condition if time condition EXIST
+				bp[i] = append(bp[i], bpTime...)
+			} else {
+				// init with the fisrt AND condition (sub-expr) if time condition NOT EXIST
+				bp[i] = append(bp[i], rec.ColVals[filterOption.CondFunctions[i][0].Idx].Bitmap...)
+			}
+			// loop for AND condition (sub-expr)
+			for j := range filterOption.CondFunctions[i] {
+				item := filterOption.CondFunctions[i][j]
+				col := rec.ColVals[item.Idx]
+				bp[i] = item.Function(&col, item.Compare, col.Bitmap, bp[i], col.BitMapOffset)
+			}
 		}
 	}
 
@@ -942,6 +940,7 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, condFunctions binaryfilte
 		return rec
 	}
 	if len(reserveId) == 0 {
+		filterBitmap.Reset()
 		return nil
 	}
 
@@ -1040,13 +1039,13 @@ func reverseStringValues(val []byte, offs []uint32, col *record.ColVal, bmCol *r
 }
 
 type ColumnReader interface {
-	ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
+	ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error)
 }
 
 var timeRef = &record.Field{Name: record.TimeField, Type: influx.Field_Type_Int}
 
-func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool) error {
+func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, ioPriority int) error {
 	for i := range dst.Schema[:len(dst.Schema)-1] {
 		var buf []byte
 
@@ -1072,7 +1071,7 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, c
 		colMeta := cm.colMeta[colIdx]
 		seg := colMeta.entries[segment]
 		offset, size := seg.offsetSize()
-		data, err := cr.ReadDataBlock(offset, size, &buf)
+		data, err := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 		if err != nil {
 			log.Error("read data segment fail", zap.Error(err))
 			return err
@@ -1091,10 +1090,10 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, c
 	return nil
 }
 
-func readTimeColumn(seg Segment, timeCol *record.ColVal, ctx *ReadContext, cr ColumnReader, copied bool) error {
+func readTimeColumn(seg Segment, timeCol *record.ColVal, ctx *ReadContext, cr ColumnReader, copied bool, ioPriority int) error {
 	var buf []byte
 	offset, size := seg.offsetSize()
-	tmData, err := cr.ReadDataBlock(offset, size, &buf)
+	tmData, err := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 	if err != nil {
 		log.Error("read time segment fail", zap.Error(err))
 		return err
@@ -1109,7 +1108,7 @@ func readTimeColumn(seg Segment, timeCol *record.ColVal, ctx *ReadContext, cr Co
 	return nil
 }
 
-func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx int, ctx *ReadContext, cr ColumnReader, copied bool, isMin bool) (rowIndex, segIndex int, err error) {
+func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx int, ctx *ReadContext, cr ColumnReader, copied bool, isMin bool, ioPriority int) (rowIndex, segIndex int, err error) {
 	segIndex = -1
 	rowIndex = -1
 	colMeta := cm.colMeta[colIndex]
@@ -1128,13 +1127,13 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 		if !ctx.tr.Overlaps(minT, maxT) {
 			continue
 		}
-		err = readTimeColumn(tmSeg, timeCol, ctx, cr, copied)
+		err = readTimeColumn(tmSeg, timeCol, ctx, cr, copied, ioPriority)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
 		offset, size := colSeg.offsetSize()
-		data, er := cr.ReadDataBlock(offset, size, &buf)
+		data, er := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 		if er != nil {
 			log.Error("read time segment fail", zap.Error(er))
 			err = er
@@ -1158,7 +1157,7 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 	return
 }
 
-func findRowIndex(cm *ChunkMeta, ctx *ReadContext, cr ColumnReader, timeCol *record.ColVal, tm int64, copied bool) (rowIndex, segIndex int, err error) {
+func findRowIndex(cm *ChunkMeta, ctx *ReadContext, cr ColumnReader, timeCol *record.ColVal, tm int64, copied bool, ioPriority int) (rowIndex, segIndex int, err error) {
 	rowIndex = -1
 	segIndex = -1
 	timeMeta := cm.timeMeta()
@@ -1169,7 +1168,7 @@ func findRowIndex(cm *ChunkMeta, ctx *ReadContext, cr ColumnReader, timeCol *rec
 			continue
 		}
 
-		err = readTimeColumn(seg, timeCol, ctx, cr, copied)
+		err = readTimeColumn(seg, timeCol, ctx, cr, copied, ioPriority)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 			return
@@ -1187,7 +1186,7 @@ func findRowIndex(cm *ChunkMeta, ctx *ReadContext, cr ColumnReader, timeCol *rec
 	return
 }
 
-func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, isMin bool) error {
+func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, isMin bool, ioPriority int) error {
 	colIdx := cm.columnIndex(ref)
 	if colIdx < 0 {
 		return nil
@@ -1223,10 +1222,10 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadC
 			_, tm = meta.Max()
 		}
 		if readAux {
-			rowIndex, segIndex, err = findRowIndex(cm, ctx, cr, timeCol, tm, copied)
+			rowIndex, segIndex, err = findRowIndex(cm, ctx, cr, timeCol, tm, copied, ioPriority)
 		}
 	} else {
-		rowIndex, segIndex, err = readMinMaxFromData(cm, colIdx, dst, dstIdx, ctx, cr, copied, isMin)
+		rowIndex, segIndex, err = readMinMaxFromData(cm, colIdx, dst, dstIdx, ctx, cr, copied, isMin, ioPriority)
 		if isMin {
 			_, tm = dst.ColMeta[dstIdx].Min()
 		} else {
@@ -1240,7 +1239,7 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadC
 	}
 
 	if readAux && rowIndex >= 0 {
-		err = readAuxData(cm, segIndex, rowIndex, dst, ctx, cr, copied)
+		err = readAuxData(cm, segIndex, rowIndex, dst, ctx, cr, copied, ioPriority)
 		if err != nil {
 			log.Error("read aux data fail", zap.Error(err))
 			return err
@@ -1256,7 +1255,7 @@ func readMinMax(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadC
 	return nil
 }
 
-func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callIndex int, ctx *ReadContext, cr ColumnReader, copied bool, isSum bool) error {
+func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callIndex int, ctx *ReadContext, cr ColumnReader, copied, isSum bool, ioPriority int) error {
 	colMeta := cm.colMeta[colIndex]
 	timeCol := dst.TimeColumn()
 	ref := &dst.Schema[callIndex]
@@ -1273,13 +1272,13 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 		if !ctx.tr.Overlaps(trSegs[i].minTime(), trSegs[i].maxTime()) {
 			continue
 		}
-		err := readTimeColumn(tmSeg, timeCol, ctx, cr, copied)
+		err := readTimeColumn(tmSeg, timeCol, ctx, cr, copied, ioPriority)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
 		offset, size := colSeg.offsetSize()
-		data, err := cr.ReadDataBlock(offset, size, &buf)
+		data, err := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 		if err != nil {
 			log.Error("read time segment fail", zap.Error(err))
 			return err
@@ -1314,7 +1313,7 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 	return nil
 }
 
-func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, isSum bool) error {
+func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied, isSum bool, ioPriority int) error {
 	colIdx := cm.columnIndex(ref)
 	if colIdx < 0 {
 		return nil
@@ -1346,9 +1345,9 @@ func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *Rea
 	} else {
 		var err error
 		if !isSum && ref.Name == record.TimeField {
-			err = readTimeCount(cm, ref, dst, ctx, cr)
+			err = readTimeCount(cm, ref, dst, ctx, cr, ioPriority)
 		} else {
-			err = readSumCountFromData(cm, colIdx, dst, dstIdx, ctx, cr, copied, isSum)
+			err = readSumCountFromData(cm, colIdx, dst, dstIdx, ctx, cr, copied, isSum, ioPriority)
 		}
 		if err != nil {
 			log.Error("read data fail", zap.Error(err))
@@ -1362,7 +1361,7 @@ func readSumCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *Rea
 	return nil
 }
 
-func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader) error {
+func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, ioPriority int) error {
 	tmMeta := cm.timeMeta()
 	dstIdx := dst.Schema.FieldIndex(ref.Name)
 	if dstIdx < 0 {
@@ -1378,7 +1377,7 @@ func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *Re
 		if !ctx.tr.Overlaps(trSegs[i].minTime(), trSegs[i].maxTime()) {
 			continue
 		}
-		err := readTimeColumn(seg, col, ctx, cr, false)
+		err := readTimeColumn(seg, col, ctx, cr, false, ioPriority)
 		if err != nil {
 			log.Error("decode time data fail", zap.Error(err))
 		}

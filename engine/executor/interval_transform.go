@@ -33,13 +33,13 @@ type IntervalTransform struct {
 	coProcessor   CoProcessor
 	Inputs        ChunkPorts
 	Outputs       ChunkPorts
-	opt           query.ProcessorOptions
+	opt           *query.ProcessorOptions
 
 	span           *tracing.Span
 	ppIntervalCost *tracing.Span
 }
 
-func NewIntervalTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, opt query.ProcessorOptions) *IntervalTransform {
+func NewIntervalTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, opt *query.ProcessorOptions) *IntervalTransform {
 	if len(inRowDataTypes) != 1 || len(outRowDataTypes) != 1 {
 		panic("NewIntervalTransform raise error: the Inputs and Outputs should be 1")
 	}
@@ -69,7 +69,7 @@ func NewIntervalTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes
 type IntervalTransformCreator struct {
 }
 
-func (c *IntervalTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *IntervalTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewIntervalTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, opt)
 	return p, nil
 }
@@ -134,8 +134,8 @@ func (trans *IntervalTransform) work(c Chunk) {
 	newChunk := trans.chunkPool.GetChunk()
 	newChunk.SetName(c.Name())
 	newChunk.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
-	newChunk.AppendIntervalIndex(c.IntervalIndex()...)
-	newChunk.AppendTime(c.Time()...)
+	newChunk.AppendIntervalIndexes(c.IntervalIndex())
+	newChunk.AppendTimes(c.Time())
 	for i, t := range newChunk.Time() {
 		startTime, _ := trans.opt.Window(t)
 		newChunk.ResetTime(i, startTime)
@@ -213,7 +213,7 @@ func NewIntegerIntervalIterator() *IntegerIntervalIterator {
 func (f *IntegerIntervalIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams) {
 	input := endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	output.AppendIntegerValues(input.IntegerValues()...)
+	output.AppendIntegerValues(input.IntegerValues())
 	input.NilsV2().CopyTo(output.NilsV2())
 }
 
@@ -226,7 +226,7 @@ func NewFloatIntervalIterator() *FloatIntervalIterator {
 func (f *FloatIntervalIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams) {
 	input := endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	output.AppendFloatValues(input.FloatValues()...)
+	output.AppendFloatValues(input.FloatValues())
 	input.NilsV2().CopyTo(output.NilsV2())
 }
 
@@ -252,6 +252,6 @@ func NewBooleanIntervalIterator() *BooleanIntervalIterator {
 func (f *BooleanIntervalIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams) {
 	input := endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	output.AppendBooleanValues(input.BooleanValues()...)
+	output.AppendBooleanValues(input.BooleanValues())
 	input.NilsV2().CopyTo(output.NilsV2())
 }

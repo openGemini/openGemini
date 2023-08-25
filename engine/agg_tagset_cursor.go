@@ -181,7 +181,7 @@ func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, cond influxql.Ex
 	// filter by field
 	var filterOpts *immutable.FilterOptions
 	if re != nil {
-		filterOpts = immutable.NewFilterOpts(cond, s.ctx.m, s.ctx.filterFieldsIdx, s.ctx.filterTags, &seriesKey.tags, rowFilters)
+		filterOpts = immutable.NewFilterOpts(cond, &s.ctx.filterOption, &seriesKey.tags, rowFilters)
 		re = immutable.FilterByOpts(re, filterOpts)
 	}
 	if re == nil {
@@ -436,11 +436,20 @@ func (s *fileLoopCursor) initMergeIters() error {
 }
 
 func (s *fileLoopCursor) updateQueryTime() {
-	if s.minTime > s.ctx.queryTr.Min {
-		s.minTime = s.ctx.queryTr.Min
-	}
-	if s.maxTime < s.ctx.queryTr.Max {
-		s.maxTime = s.ctx.queryTr.Max
+	if len(s.ctx.readers.Orders) > 0 {
+		if s.minTime > s.ctx.queryTr.Min {
+			s.minTime = s.ctx.queryTr.Min
+		}
+		if s.maxTime < s.ctx.queryTr.Max {
+			s.maxTime = s.ctx.queryTr.Max
+		}
+	} else {
+		if s.minTime < s.ctx.queryTr.Min {
+			s.minTime = s.ctx.queryTr.Min
+		}
+		if s.maxTime > s.ctx.queryTr.Max {
+			s.maxTime = s.ctx.queryTr.Max
+		}
 	}
 }
 

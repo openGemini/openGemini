@@ -5,7 +5,9 @@
         "IndexWriterGetTotal",
         "IndexWriterHitTotal",
         "MergeColValGetTotal",
-        "MergeColValHitTotal"
+        "MergeColValHitTotal",
+        "FileOpenTotal",
+        "QueryFileUnHitTotal"
     ],
     "SetItems":[],
     "EnablePush":"N",

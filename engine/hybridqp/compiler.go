@@ -53,4 +53,6 @@ type Options interface {
 	SetSourceCondition(expr influxql.Expr)
 	SetTimeFirstKey()
 	GetTimeFirstKey() bool
+	SetSortFields(influxql.SortFields)
+	GetSortFields() influxql.SortFields
 }

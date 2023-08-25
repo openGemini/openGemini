@@ -135,7 +135,7 @@ func (ele *floatSortEle) AppendToCol(col Column) {
 	if !ele.validVal {
 		col.AppendNilsV2(ele.validVal)
 	} else {
-		col.AppendFloatValues(ele.val)
+		col.AppendFloatValue(ele.val)
 		col.AppendNilsV2(ele.validVal)
 	}
 }
@@ -189,7 +189,7 @@ func (ele *integerSortEle) AppendToCol(col Column) {
 	if !ele.validVal {
 		col.AppendNilsV2(ele.validVal)
 	} else {
-		col.AppendIntegerValues(ele.val)
+		col.AppendIntegerValue(ele.val)
 		col.AppendNilsV2(ele.validVal)
 	}
 }
@@ -243,7 +243,7 @@ func (ele *stringSortEle) AppendToCol(col Column) {
 	if !ele.validVal {
 		col.AppendNilsV2(ele.validVal)
 	} else {
-		col.AppendStringValues(ele.val)
+		col.AppendStringValue(ele.val)
 		col.AppendNilsV2(ele.validVal)
 	}
 }
@@ -297,7 +297,7 @@ func (ele *boolSortEle) AppendToCol(col Column) {
 	if !ele.validVal {
 		col.AppendNilsV2(ele.validVal)
 	} else {
-		col.AppendBooleanValues(ele.val)
+		col.AppendBooleanValue(ele.val)
 		col.AppendNilsV2(ele.validVal)
 	}
 }

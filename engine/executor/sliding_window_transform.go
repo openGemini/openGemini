@@ -51,7 +51,7 @@ type SlidingWindowTransform struct {
 	winIdx        [][2]int
 	Inputs        ChunkPorts
 	Outputs       ChunkPorts
-	opt           query.ProcessorOptions
+	opt           *query.ProcessorOptions
 	aggLogger     *logger.Logger
 
 	span        *tracing.Span
@@ -61,7 +61,7 @@ type SlidingWindowTransform struct {
 
 func NewSlidingWindowTransform(
 	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions,
-	opt query.ProcessorOptions, schema hybridqp.Catalog,
+	opt *query.ProcessorOptions, schema hybridqp.Catalog,
 ) *SlidingWindowTransform {
 	if len(inRowDataType) != 1 || len(outRowDataType) != 1 {
 		panic("NewSlidingWindowTransform raise error: the Inputs and Outputs should be 1")
@@ -99,7 +99,7 @@ func NewSlidingWindowTransform(
 type SlidingWindowTransformCreator struct {
 }
 
-func (c *SlidingWindowTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *SlidingWindowTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewSlidingWindowTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), opt, plan.Schema())
 	return p, nil
 }
@@ -382,7 +382,7 @@ func (trans *SlidingWindowTransform) postProcessSlidingWindow(c Chunk) bool {
 	)
 	addTagLen = len(trans.iteratorParam.winIdx) / trans.slidingNum
 	for i := 0; i < addTagLen; i++ {
-		trans.newChunk.AppendTime(trans.slideWindow...)
+		trans.newChunk.AppendTimes(trans.slideWindow)
 		if trans.newChunk.TagLen() == 0 {
 			index = 0
 		} else {

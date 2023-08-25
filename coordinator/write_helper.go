@@ -168,18 +168,18 @@ func appendField(fields []*proto2.FieldSchema, name string, typ int32) []*proto2
 }
 
 type recordWriterHelper struct {
-	sameSchema   bool
-	db           string
-	rp           string
-	nodeId       uint64
-	groupId      int
-	dur          time.Duration
-	metaClient   RWMetaClient
-	preSg        *meta2.ShardGroupInfo
-	preShard     *meta2.ShardInfo
-	preMst       *meta2.MeasurementInfo
-	preSchema    *[]record.Field
-	preShardType config.EngineType
+	sameSchema     bool
+	nodeId         uint64
+	db             string
+	rp             string
+	preSgStartTime time.Time
+	preSgEndTime   time.Time
+	metaClient     RWMetaClient
+	preSg          *meta2.ShardGroupInfo
+	preShard       *meta2.ShardInfo
+	preMst         *meta2.MeasurementInfo
+	preSchema      *[]record.Field
+	preShardType   config.EngineType
 }
 
 func newRecordWriterHelper(metaClient RWMetaClient, nodeId uint64) *recordWriterHelper {
@@ -216,9 +216,9 @@ func (wh *recordWriterHelper) createShardGroup(database, retentionPolicy string,
 	return createShardGroup(database, retentionPolicy, wh.metaClient, &wh.preSg, ts, engineType)
 }
 
-func (wh *recordWriterHelper) GetShardByTime(db, rp string, ts time.Time, ptIdx int, engineType config.EngineType) (*meta2.ShardInfo, error) {
-	if wh.db == db && wh.rp == rp && wh.dur != 0 && wh.preShard != nil && wh.preShardType == engineType {
-		if curGroupId := int(ts.UnixNano() / wh.dur.Nanoseconds()); curGroupId == wh.groupId {
+func (wh *recordWriterHelper) GetShardByTime(sg *meta2.ShardGroupInfo, db, rp string, ts time.Time, ptIdx int, engineType config.EngineType) (*meta2.ShardInfo, error) {
+	if wh.db == db && wh.rp == rp && wh.preShard != nil && wh.preShardType == engineType {
+		if ts.After(wh.preSgStartTime) && ts.Before(wh.preSgEndTime) {
 			return wh.preShard, nil
 		}
 	}
@@ -226,14 +226,10 @@ func (wh *recordWriterHelper) GetShardByTime(db, rp string, ts time.Time, ptIdx 
 	if err != nil {
 		return nil, err
 	}
-	rpInfo, err := wh.metaClient.RetentionPolicy(db, rp)
-	if err != nil {
-		return nil, err
-	}
-	wh.groupId = int(ts.UnixNano() / rpInfo.ShardGroupDuration.Nanoseconds())
 	wh.db = db
 	wh.rp = rp
-	wh.dur = rpInfo.ShardGroupDuration
+	wh.preSgStartTime = sg.StartTime
+	wh.preSgEndTime = sg.EndTime
 	wh.preShard = shard
 	wh.preShardType = engineType
 	return shard, nil
@@ -295,7 +291,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array
 			return
 		}
 		if !samePreSchema {
-			*wh.preSchema = append(*wh.preSchema, record.Field{Name: rec.ColumnName(i), Type: int(colType)})
+			*wh.preSchema = append(*wh.preSchema, record.Field{Name: rec.ColumnName(i), Type: fieldType})
 		}
 	}
 	startTime, endTime = times.Value(0), times.Value(int(rec.NumRows()-1))
@@ -310,6 +306,8 @@ func (wh *recordWriterHelper) reset() {
 	wh.preSg = nil
 	wh.preMst = nil
 	wh.preShard = nil
+	wh.preSgStartTime = time.Time{}
+	wh.preSgEndTime = time.Time{}
 	wh.preSchema = nil
 	wh.sameSchema = false
 }

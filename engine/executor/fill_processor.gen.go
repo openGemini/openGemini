@@ -40,7 +40,7 @@ func (f *FloatLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, fil
 		(fillItem.inputReadAt < input.Len() && !input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) {
 		inputValueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.inputReadAt)
 		prevValueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).AppendFloatValues(
+		output.Column(f.outOrdinal).AppendFloatValue(
 			hybridqp.LinearInterpolateFloat(
 				fillItem.start,
 				prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval,
@@ -49,7 +49,7 @@ func (f *FloatLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, fil
 				input.Column(f.inOrdinal).FloatValue(inputValueIndex),
 			),
 		)
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if (prev == nil || fillItem.inputReadAt < fillItem.prevReadAt) ||
 		(fillItem.prevReadAt < prev.Len() && prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt)) ||
 		(fillItem.inputReadAt == input.Len()-1 && input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) ||
@@ -61,11 +61,11 @@ func (f *FloatLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, fil
 func (f *FloatLinearFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendFloatValues(input.Column(f.inOrdinal).FloatValue(valueIndex))
+		output.Column(f.outOrdinal).AppendFloatValue(input.Column(f.inOrdinal).FloatValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -89,7 +89,7 @@ func (f *IntegerLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 		(fillItem.inputReadAt < input.Len() && !input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) {
 		inputValueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.inputReadAt)
 		prevValueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).AppendIntegerValues(
+		output.Column(f.outOrdinal).AppendIntegerValue(
 			hybridqp.LinearInterpolateInteger(
 				fillItem.start,
 				prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval,
@@ -98,7 +98,7 @@ func (f *IntegerLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 				input.Column(f.inOrdinal).IntegerValue(inputValueIndex),
 			),
 		)
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if (prev == nil || fillItem.inputReadAt < fillItem.prevReadAt) ||
 		(fillItem.prevReadAt < prev.Len() && prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt)) ||
 		(fillItem.inputReadAt == input.Len()-1 && input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) ||
@@ -110,11 +110,11 @@ func (f *IntegerLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 func (f *IntegerLinearFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendIntegerValues(input.Column(f.inOrdinal).IntegerValue(valueIndex))
+		output.Column(f.outOrdinal).AppendIntegerValue(input.Column(f.inOrdinal).IntegerValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -139,11 +139,11 @@ func (f *StringLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, fi
 func (f *StringLinearFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendStringValues(input.Column(f.inOrdinal).StringValue(valueIndex))
+		output.Column(f.outOrdinal).AppendStringValue(input.Column(f.inOrdinal).StringValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -168,11 +168,11 @@ func (f *BooleanLinearFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 func (f *BooleanLinearFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendBooleanValues(input.Column(f.inOrdinal).BooleanValue(valueIndex))
+		output.Column(f.outOrdinal).AppendBooleanValue(input.Column(f.inOrdinal).BooleanValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -198,11 +198,11 @@ func (f *FloatNullFillProcessor) fillHelperFunc(input, output, prev Chunk, fillI
 func (f *FloatNullFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendFloatValues(input.Column(f.inOrdinal).FloatValue(valueIndex))
+		output.Column(f.outOrdinal).AppendFloatValue(input.Column(f.inOrdinal).FloatValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -228,11 +228,11 @@ func (f *IntegerNullFillProcessor) fillHelperFunc(input, output, prev Chunk, fil
 func (f *IntegerNullFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendIntegerValues(input.Column(f.inOrdinal).IntegerValue(valueIndex))
+		output.Column(f.outOrdinal).AppendIntegerValue(input.Column(f.inOrdinal).IntegerValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -258,11 +258,11 @@ func (f *StringNullFillProcessor) fillHelperFunc(input, output, prev Chunk, fill
 func (f *StringNullFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendStringValues(input.Column(f.inOrdinal).StringValue(valueIndex))
+		output.Column(f.outOrdinal).AppendStringValue(input.Column(f.inOrdinal).StringValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -288,11 +288,11 @@ func (f *BooleanNullFillProcessor) fillHelperFunc(input, output, prev Chunk, fil
 func (f *BooleanNullFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendBooleanValues(input.Column(f.inOrdinal).BooleanValue(valueIndex))
+		output.Column(f.outOrdinal).AppendBooleanValue(input.Column(f.inOrdinal).BooleanValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -312,18 +312,18 @@ func NewFloatNumberFillProcessor(inOrdinal, outOrdinal int) *FloatNumberFillProc
 
 func (f *FloatNumberFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	value, _ := hybridqp.TransToFloat(fillItem.fillValue)
-	output.Column(f.outOrdinal).AppendFloatValues(value)
-	output.Column(f.outOrdinal).AppendNilsV2(true)
+	output.Column(f.outOrdinal).AppendFloatValue(value)
+	output.Column(f.outOrdinal).AppendNotNil()
 }
 
 func (f *FloatNumberFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendFloatValues(input.Column(f.inOrdinal).FloatValue(valueIndex))
+		output.Column(f.outOrdinal).AppendFloatValue(input.Column(f.inOrdinal).FloatValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -343,18 +343,18 @@ func NewIntegerNumberFillProcessor(inOrdinal, outOrdinal int) *IntegerNumberFill
 
 func (f *IntegerNumberFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	value, _ := hybridqp.TransToInteger(fillItem.fillValue)
-	output.Column(f.outOrdinal).AppendIntegerValues(value)
-	output.Column(f.outOrdinal).AppendNilsV2(true)
+	output.Column(f.outOrdinal).AppendIntegerValue(value)
+	output.Column(f.outOrdinal).AppendNotNil()
 }
 
 func (f *IntegerNumberFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendIntegerValues(input.Column(f.inOrdinal).IntegerValue(valueIndex))
+		output.Column(f.outOrdinal).AppendIntegerValue(input.Column(f.inOrdinal).IntegerValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -374,18 +374,18 @@ func NewStringNumberFillProcessor(inOrdinal, outOrdinal int) *StringNumberFillPr
 
 func (f *StringNumberFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	value, _ := hybridqp.TransToString(fillItem.fillValue)
-	output.Column(f.outOrdinal).AppendStringValues(value)
-	output.Column(f.outOrdinal).AppendNilsV2(true)
+	output.Column(f.outOrdinal).AppendStringValue(value)
+	output.Column(f.outOrdinal).AppendNotNil()
 }
 
 func (f *StringNumberFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendStringValues(input.Column(f.inOrdinal).StringValue(valueIndex))
+		output.Column(f.outOrdinal).AppendStringValue(input.Column(f.inOrdinal).StringValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -405,18 +405,18 @@ func NewBooleanNumberFillProcessor(inOrdinal, outOrdinal int) *BooleanNumberFill
 
 func (f *BooleanNumberFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	value, _ := hybridqp.TransToBoolean(fillItem.fillValue)
-	output.Column(f.outOrdinal).AppendBooleanValues(value)
-	output.Column(f.outOrdinal).AppendNilsV2(true)
+	output.Column(f.outOrdinal).AppendBooleanValue(value)
+	output.Column(f.outOrdinal).AppendNotNil()
 }
 
 func (f *BooleanNumberFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendBooleanValues(input.Column(f.inOrdinal).BooleanValue(valueIndex))
+		output.Column(f.outOrdinal).AppendBooleanValue(input.Column(f.inOrdinal).BooleanValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -437,11 +437,11 @@ func NewFloatPreviousFillProcessor(inOrdinal, outOrdinal int) *FloatPreviousFill
 func (f *FloatPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if prev != nil && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt) {
 		valueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).AppendFloatValues(prev.Column(f.inOrdinal).FloatValue(valueIndex))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendFloatValue(prev.Column(f.inOrdinal).FloatValue(valueIndex))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if prevWindow.value != nil && !prevWindow.nil[f.inOrdinal] {
-		output.Column(f.outOrdinal).AppendFloatValues(prevWindow.value[f.inOrdinal].(float64))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendFloatValue(prevWindow.value[f.inOrdinal].(float64))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		// append nil value
 		output.Column(f.outOrdinal).AppendNil()
@@ -451,11 +451,11 @@ func (f *FloatPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 func (f *FloatPreviousFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendFloatValues(input.Column(f.inOrdinal).FloatValue(valueIndex))
+		output.Column(f.outOrdinal).AppendFloatValue(input.Column(f.inOrdinal).FloatValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -476,11 +476,11 @@ func NewIntegerPreviousFillProcessor(inOrdinal, outOrdinal int) *IntegerPrevious
 func (f *IntegerPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if prev != nil && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt) {
 		valueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).AppendIntegerValues(prev.Column(f.inOrdinal).IntegerValue(valueIndex))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendIntegerValue(prev.Column(f.inOrdinal).IntegerValue(valueIndex))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if prevWindow.value != nil && !prevWindow.nil[f.inOrdinal] {
-		output.Column(f.outOrdinal).AppendIntegerValues(prevWindow.value[f.inOrdinal].(int64))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendIntegerValue(prevWindow.value[f.inOrdinal].(int64))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		// append nil value
 		output.Column(f.outOrdinal).AppendNil()
@@ -490,11 +490,11 @@ func (f *IntegerPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk,
 func (f *IntegerPreviousFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendIntegerValues(input.Column(f.inOrdinal).IntegerValue(valueIndex))
+		output.Column(f.outOrdinal).AppendIntegerValue(input.Column(f.inOrdinal).IntegerValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -515,11 +515,11 @@ func NewStringPreviousFillProcessor(inOrdinal, outOrdinal int) *StringPreviousFi
 func (f *StringPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if prev != nil && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt) {
 		valueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).AppendStringValues(prev.Column(f.inOrdinal).StringValue(valueIndex))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendStringValue(prev.Column(f.inOrdinal).StringValue(valueIndex))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if prevWindow.value != nil && !prevWindow.nil[f.inOrdinal] {
-		output.Column(f.outOrdinal).AppendStringValues(prevWindow.value[f.inOrdinal].(string))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendStringValue(prevWindow.value[f.inOrdinal].(string))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		// append nil value
 		output.Column(f.outOrdinal).AppendNil()
@@ -529,11 +529,11 @@ func (f *StringPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, 
 func (f *StringPreviousFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendStringValues(input.Column(f.inOrdinal).StringValue(valueIndex))
+		output.Column(f.outOrdinal).AppendStringValue(input.Column(f.inOrdinal).StringValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -554,11 +554,11 @@ func NewBooleanPreviousFillProcessor(inOrdinal, outOrdinal int) *BooleanPrevious
 func (f *BooleanPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if prev != nil && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt) {
 		valueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).AppendBooleanValues(prev.Column(f.inOrdinal).BooleanValue(valueIndex))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendBooleanValue(prev.Column(f.inOrdinal).BooleanValue(valueIndex))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if prevWindow.value != nil && !prevWindow.nil[f.inOrdinal] {
-		output.Column(f.outOrdinal).AppendBooleanValues(prevWindow.value[f.inOrdinal].(bool))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendBooleanValue(prevWindow.value[f.inOrdinal].(bool))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		// append nil value
 		output.Column(f.outOrdinal).AppendNil()
@@ -568,11 +568,11 @@ func (f *BooleanPreviousFillProcessor) fillHelperFunc(input, output, prev Chunk,
 func (f *BooleanPreviousFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).AppendBooleanValues(input.Column(f.inOrdinal).BooleanValue(valueIndex))
+		output.Column(f.outOrdinal).AppendBooleanValue(input.Column(f.inOrdinal).BooleanValue(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil {
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}

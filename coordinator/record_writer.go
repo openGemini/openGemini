@@ -173,6 +173,7 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 			w.errs.Dispatch(errno.NewError(errno.RecoverPanic, err))
 		}
 		if writeErr != nil && !IsKeepWritingErr(writeErr) {
+			w.logger.Error("processRecord err", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement), zap.Error(writeErr))
 			w.errs.Dispatch(writeErr)
 		}
 		msg.Rec.Release() // The memory is released. The value of reference counting is decreased by 1.
@@ -254,7 +255,7 @@ func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp,
 			subRec = record.NewRecord(rec.Schema, false)
 			subRec.SliceFromRecord(rec, start, end)
 		}
-		shard, err := w.recWriterHelpers[ptIdx].GetShardByTime(db, rp, time.Unix(0, subRec.Time(0)), ptIdx, engineType)
+		shard, err := w.recWriterHelpers[ptIdx].GetShardByTime(sgis[i], db, rp, time.Unix(0, subRec.Time(0)), ptIdx, engineType)
 		if err != nil {
 			w.logger.Error("GetShardByTime failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 			return err
@@ -358,5 +359,6 @@ func IsKeepWritingErr(err error) bool {
 		errno.Equal(err, errno.ColumnStorePrimaryKeyLackErr) ||
 		errno.Equal(err, errno.ArrowRecordTimeFieldErr) ||
 		errno.Equal(err, errno.ColumnStoreFieldNameErr) ||
-		errno.Equal(err, errno.ColumnStoreFieldTypeErr)
+		errno.Equal(err, errno.ColumnStoreFieldTypeErr) ||
+		errno.Equal(err, errno.BucketLacks)
 }

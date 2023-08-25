@@ -21,11 +21,13 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/require"
 )
 
 func mockFieldsAndTags() influxql.Fields {
@@ -251,18 +253,18 @@ func gen10000Chunks(outRowDataType hybridqp.RowDataType) []executor.Chunk {
 		for i := 0; i < 1024; i++ {
 			ck.AppendTime(int64(i))
 
-			ck.Column(0).AppendFloatValues(float64(i))
-			ck.Column(0).AppendNilsV2(true)
-			ck.Column(1).AppendIntegerValues(int64(i))
-			ck.Column(1).AppendNilsV2(true)
-			ck.Column(2).AppendBooleanValues(i%2 == 0)
-			ck.Column(2).AppendNilsV2(true)
-			ck.Column(3).AppendStringValues(strconv.FormatInt(int64(i), 10))
-			ck.Column(3).AppendNilsV2(true)
-			ck.Column(4).AppendStringValues("tv1")
-			ck.Column(4).AppendNilsV2(true)
-			ck.Column(5).AppendStringValues("tv2")
-			ck.Column(5).AppendNilsV2(true)
+			ck.Column(0).AppendFloatValue(float64(i))
+			ck.Column(0).AppendNotNil()
+			ck.Column(1).AppendIntegerValue(int64(i))
+			ck.Column(1).AppendNotNil()
+			ck.Column(2).AppendBooleanValue(i%2 == 0)
+			ck.Column(2).AppendNotNil()
+			ck.Column(3).AppendStringValue(strconv.FormatInt(int64(i), 10))
+			ck.Column(3).AppendNotNil()
+			ck.Column(4).AppendStringValue("tv1")
+			ck.Column(4).AppendNotNil()
+			ck.Column(5).AppendStringValue("tv2")
+			ck.Column(5).AppendNotNil()
 		}
 		chunks = append(chunks, ck)
 	}
@@ -313,4 +315,92 @@ func (trans *MockGenDataTransform) GetOutputNumber(_ executor.Port) int {
 
 func (trans *MockGenDataTransform) GetInputNumber(_ executor.Port) int {
 	return 0
+}
+
+func TestGetRows(t *testing.T) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+
+	sender := executor.NewHttpChunkSender(&query.ProcessorOptions{})
+	rows := sender.GetRows(chunk)
+
+	g := &executor.RowsGenerator{}
+	other := g.Generate(chunk, time.UTC)
+	require.Equal(t, rows.Len(), len(other))
+
+	for i := 0; i < rows.Len(); i++ {
+		exp := rows[i]
+		got := other[i]
+		require.Equal(t, exp.Tags, got.Tags)
+		require.Equal(t, exp.Columns, got.Columns)
+		require.Equal(t, len(exp.Values), len(got.Values))
+
+		for j := 0; j < len(exp.Values); j++ {
+			require.Equal(t, exp.Values[j], got.Values[j])
+		}
+	}
+}
+
+func BenchmarkHttpChunkSender_GetRows(b *testing.B) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+
+	sender := executor.NewHttpChunkSender(&query.ProcessorOptions{})
+	_ = sender
+	g := &executor.RowsGenerator{}
+	_ = g
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		//BenchmarkHttpChunkSender_GetRows-12         3166            339198 ns/op
+		//          245619 B/op       5015 allocs/op
+		g.Reset()
+		g.Generate(chunk, time.UTC)
+		//BenchmarkHttpChunkSender_GetRows-12         2488            451568 ns/op
+		//          236450 B/op       9050 allocs/op
+		//sender.GetRows(chunk)
+	}
+}
+
+func genChunk(outRowDataType hybridqp.RowDataType) executor.Chunk {
+	cb := executor.NewChunkBuilder(outRowDataType)
+	ck := cb.NewChunk("cpu")
+	ck.AppendIntervalIndex(0)
+	for n := 0; n < 10; n++ {
+		ck.AppendTagsAndIndex(*executor.NewChunkTags(nil, nil), n*100)
+		for i := 0; i < 100; i++ {
+			ck.AppendTime(int64(i))
+
+			ck.Column(0).AppendFloatValue(float64(i))
+			ck.Column(0).AppendNotNil()
+
+			if i%2 == 0 {
+				ck.Column(1).AppendIntegerValue(int64(i))
+				ck.Column(1).AppendNotNil()
+			} else {
+				ck.Column(1).AppendNil()
+			}
+
+			if i%3 == 0 {
+				ck.Column(2).AppendNil()
+			} else {
+				ck.Column(2).AppendBooleanValue(i%2 == 0)
+				ck.Column(2).AppendNotNil()
+			}
+
+			ck.Column(3).AppendStringValue(strconv.FormatInt(int64(i), 10))
+			ck.Column(3).AppendNotNil()
+			ck.Column(4).AppendStringValue("tv1")
+			ck.Column(4).AppendNotNil()
+			ck.Column(5).AppendStringValue("tv2")
+			ck.Column(5).AppendNotNil()
+		}
+	}
+
+	return ck
 }

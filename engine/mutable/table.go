@@ -453,7 +453,7 @@ func (c *csMemTableImpl) SortAndDedup(table *MemTable, msName string, ids []uint
 }
 
 func (c *csMemTableImpl) sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, pk, sk []record.PrimaryKey) {
-	wRec.rec = hlp.SortForColumnStore(wRec.rec, hlp.SortData, pk, sk)
+	wRec.rec = hlp.SortForColumnStore(wRec.rec, hlp.SortData, pk, sk, false)
 }
 
 func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string, tbStore immutable.TablesStore,
@@ -631,6 +631,8 @@ func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo
 	}
 	start = time.Now()
 	msInfo.CreateWriteChunkForColumnStore(mstsInfo[mst].ColStoreInfo.PrimaryKey, mstsInfo[mst].ColStoreInfo.SortKey)
+	msInfo.writeChunk.Mu.Lock()
+	defer msInfo.writeChunk.Mu.Unlock()
 	msInfo.writeChunk.WriteRec.rec.AppendRec(rec, 0, rec.RowNums())
 	atomic.AddInt64(&Statistics.PerfStat.WriteMstInfoNs, time.Since(start).Nanoseconds())
 	return err
@@ -650,7 +652,7 @@ func (c *csMemTableImpl) UpdatePrimaryKey(msName string, mstsInfo map[string]*me
 			if pk == record.TimeField {
 				primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
 			} else {
-				primaryKey[i] = record.Field{Name: pk, Type: int(mstInfo.Schema[pk])}
+				primaryKey[i] = record.Field{Name: pk, Type: record.ToPrimitiveType(mstInfo.Schema[pk])}
 			}
 			c.updatePrimaryKey(msName, primaryKey)
 		}

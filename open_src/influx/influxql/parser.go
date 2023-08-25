@@ -111,6 +111,13 @@ func ParseExpr(s string) (Expr, error) {
 	return p.ParseExpr()
 }
 
+// ParseSortFields parses an sort fields string and returns its AST representation.
+func ParseSortFields(s string) (SortFields, error) {
+	p := NewParser(strings.NewReader(s))
+	defer p.Release()
+	return p.parseSortFields()
+}
+
 // MustParseExpr parses an expression string and returns its AST. Panic on error.
 func MustParseExpr(s string) Expr {
 	expr, err := ParseExpr(s)
@@ -2664,10 +2671,6 @@ func (p *Parser) parseSortFields() (SortFields, error) {
 			return nil, err
 		}
 
-		if lit != "time" {
-			return nil, errors.New("only ORDER BY time supported at this time")
-		}
-
 		fields = append(fields, field)
 	// Parse error...
 	default:
@@ -2689,10 +2692,6 @@ func (p *Parser) parseSortFields() (SortFields, error) {
 		}
 
 		fields = append(fields, field)
-	}
-
-	if len(fields) > 1 {
-		return nil, errors.New("only ORDER BY time supported at this time")
 	}
 
 	return fields, nil

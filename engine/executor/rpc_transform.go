@@ -37,31 +37,29 @@ const (
 	retryInterval = time.Millisecond * 100
 )
 
-func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, opt query.ProcessorOptions, rq *RemoteQuery) *RPCReaderTransform {
+func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, queryId uint64, rq *RemoteQuery) *RPCReaderTransform {
 	trans := &RPCReaderTransform{
 		Output:      NewChunkPort(outRowDataType),
-		opt:         opt,
 		abortSignal: make(chan struct{}),
-		client:      NewRPCClient(rq),
+		queryId:     queryId,
 	}
+	trans.client.query = rq
 	return trans
 }
 
 type RPCReaderTransform struct {
 	BaseProcessor
 
-	client *RPCClient
+	client RPCClient
 	Output *ChunkPort
-	Table  *QueryTable
-	Chunk  Chunk
 
-	opt         query.ProcessorOptions
 	distributed hybridqp.QueryNode
 	abortSignal chan struct{}
 	aborted     bool
 
 	span       *tracing.Span
 	outputSpan *tracing.Span
+	queryId    uint64
 }
 
 func (t *RPCReaderTransform) IsSink() bool {
@@ -120,7 +118,7 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client := t.client
+	client := &t.client
 	client.Init(ctx, queryNode)
 	client.StartAnalyze(t.BaseSpan())
 	client.AddHandler(ChunkResponseMessage, t.chunkResponse)
@@ -153,7 +151,7 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 		}
 		logger.NewLogger(errno.ModuleQueryEngine).Error("RPC request failed.", zap.Error(err),
 			zap.String("query", "rpc executor"),
-			zap.Uint64("query_id", t.opt.QueryId))
+			zap.Uint64("query_id", t.queryId))
 		time.Sleep(retryInterval * (1 << i))
 	}
 	if t.span != nil {

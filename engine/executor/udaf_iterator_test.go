@@ -37,11 +37,11 @@ func Test_WideIterator_MultiColumnChunk(t *testing.T) {
 	ch1.AppendTime(0)
 	seriesIdx := []int{0}
 	ch1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, seriesIdx)
-	ch1.AppendIntervalIndex(seriesIdx...)
-	ch1.Column(0).AppendFloatValues(0.0)
-	ch1.Column(0).AppendNilsV2(true)
-	ch1.Column(1).AppendFloatValues(0.0)
-	ch1.Column(1).AppendNilsV2(true)
+	ch1.AppendIntervalIndexes(seriesIdx)
+	ch1.Column(0).AppendFloatValue(0.0)
+	ch1.Column(0).AppendNotNil()
+	ch1.Column(1).AppendFloatValue(0.0)
+	ch1.Column(1).AppendNotNil()
 	ch1.CheckChunk()
 	ie := &executor.IteratorEndpoint{
 		InputPoint:  executor.EndPointPair{Chunk: ch1},
@@ -69,9 +69,9 @@ func Test_WideIterator_ColumnTypeChange(t *testing.T) {
 	ch1.AppendTime(0)
 	seriesIdx := []int{0}
 	ch1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, seriesIdx)
-	ch1.AppendIntervalIndex(seriesIdx...)
-	ch1.Column(0).AppendFloatValues(0.0)
-	ch1.Column(0).AppendNilsV2(true)
+	ch1.AppendIntervalIndexes(seriesIdx)
+	ch1.Column(0).AppendFloatValue(0.0)
+	ch1.Column(0).AppendNotNil()
 	ch1.CheckChunk()
 	ie := &executor.IteratorEndpoint{
 		InputPoint:  executor.EndPointPair{Chunk: ch1},
@@ -86,9 +86,9 @@ func Test_WideIterator_ColumnTypeChange(t *testing.T) {
 	ch2 := cb2.NewChunk("castor")
 	ch2.AppendTime(0)
 	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=2")}, seriesIdx)
-	ch2.AppendIntervalIndex(seriesIdx...)
-	ch2.Column(0).AppendIntegerValues(0)
-	ch2.Column(0).AppendNilsV2(true)
+	ch2.AppendIntervalIndexes(seriesIdx)
+	ch2.Column(0).AppendIntegerValue(0)
+	ch2.Column(0).AppendNotNil()
 	ch2.CheckChunk()
 	ie.InputPoint.Chunk = ch2
 	itr.Next(ie, p)
@@ -106,12 +106,12 @@ func Test_WideIterator_DataSizeTooLarge(t *testing.T) {
 	data := make([]int64, executor.UDAFMaxRow+1)
 	cb := executor.NewChunkBuilder(row)
 	ch1 := cb.NewChunk("castor")
-	ch1.AppendTime(data...)
+	ch1.AppendTimes(data)
 	seriesIdx := []int{0}
 	ch1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, seriesIdx)
-	ch1.AppendIntervalIndex(seriesIdx...)
-	ch1.Column(0).AppendIntegerValues(data...)
-	ch1.Column(0).AppendNilsV2(true)
+	ch1.AppendIntervalIndexes(seriesIdx)
+	ch1.Column(0).AppendIntegerValues(data)
+	ch1.Column(0).AppendNotNil()
 	ch1.CheckChunk()
 	ie := &executor.IteratorEndpoint{
 		InputPoint:  executor.EndPointPair{Chunk: ch1},

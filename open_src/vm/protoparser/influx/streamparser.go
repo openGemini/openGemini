@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
@@ -156,7 +156,7 @@ func PutStreamContext(ctx *streamContext) {
 }
 
 var streamContextPool sync.Pool
-var streamContextPoolCh = make(chan *streamContext, cgroup.AvailableCPUs())
+var streamContextPoolCh = make(chan *streamContext, cpu.GetCpuNum())
 
 type unmarshalWork struct {
 	rows           PointRows
@@ -241,7 +241,7 @@ func StartUnmarshalWorkers() {
 	if unmarshalWorkCh != nil {
 		panic("BUG: it looks like startUnmarshalWorkers() has been alread called without stopUnmarshalWorkers()")
 	}
-	gomaxprocs := cgroup.AvailableCPUs()
+	gomaxprocs := cpu.GetCpuNum()
 	unmarshalWorkCh = make(chan UnmarshalWork, 2*gomaxprocs)
 	unmarshalWorkPool = make(chan *unmarshalWork, 16*gomaxprocs)
 	unmarshalWorkersWG.Add(gomaxprocs)

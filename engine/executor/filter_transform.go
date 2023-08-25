@@ -35,7 +35,7 @@ type FilterTransform struct {
 	builder         *ChunkBuilder
 	ops             []hybridqp.ExprOptions
 	schema          *QuerySchema
-	opt             query.ProcessorOptions
+	opt             *query.ProcessorOptions
 	currChunk       chan Chunk
 	resultChunk     Chunk
 	ResultChunkPool *CircularChunkPool
@@ -46,7 +46,7 @@ type FilterTransform struct {
 	param           *IteratorParams
 }
 
-func NewFilterTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, schema *QuerySchema, opt query.ProcessorOptions) *FilterTransform {
+func NewFilterTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, schema *QuerySchema, opt *query.ProcessorOptions) *FilterTransform {
 	trans := &FilterTransform{
 		Input:           NewChunkPort(inRowDataType),
 		Output:          NewChunkPort(outRowDataType),
@@ -69,7 +69,7 @@ func NewFilterTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybri
 type FilterTransformCreator struct {
 }
 
-func (c *FilterTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *FilterTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewFilterTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), plan.Schema().(*QuerySchema), opt)
 	return p, nil
 }
@@ -147,7 +147,7 @@ func (trans *FilterTransform) transferHelper() {
 			return
 		}
 		trans.filterHelper(chunk)
-		trans.resultChunk.AppendIntervalIndex(trans.resultChunk.TagIndex()...)
+		trans.resultChunk.AppendIntervalIndexes(trans.resultChunk.TagIndex())
 		if trans.resultChunk.Len() > 0 {
 			trans.Output.State <- trans.resultChunk
 			trans.resultChunk = trans.ResultChunkPool.GetChunk()
@@ -190,7 +190,7 @@ func (trans *FilterTransform) filterHelper(c Chunk) {
 				trans.resultChunk.AppendTagsAndIndex(c.Tags()[findIndex(c.TagIndex(), i)], trans.resultChunk.NumberOfRows())
 			}
 			trans.param.chunkLen, trans.param.start, trans.param.end = trans.resultChunk.Len(), i, i+1
-			trans.resultChunk.AppendTime(c.Time()[i : i+1]...)
+			trans.resultChunk.AppendTimes(c.Time()[i : i+1])
 			trans.CoProcessor.WorkOnChunk(c, trans.resultChunk, trans.param)
 		}
 	}

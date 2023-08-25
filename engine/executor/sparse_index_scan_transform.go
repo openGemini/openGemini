@@ -20,15 +20,19 @@ import (
 	"container/heap"
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"go.uber.org/zap"
 )
 
 const (
@@ -49,6 +53,7 @@ type SparseIndexScanTransform struct {
 	executorBuilder  *ExecutorBuilder
 	pipelineExecutor *PipelineExecutor
 	info             *IndexScanExtraInfo
+	indexLogger      *logger.Logger
 	frags            ShardsFragments
 	schema           hybridqp.Catalog
 	node             hybridqp.QueryNode
@@ -67,6 +72,7 @@ func NewSparseIndexScanTransform(inRowDataType hybridqp.RowDataType, node hybrid
 		info:         info,
 		schema:       schema,
 		node:         node,
+		indexLogger:  logger.NewLogger(errno.ModuleIndex),
 	}
 	return trans
 }
@@ -74,7 +80,7 @@ func NewSparseIndexScanTransform(inRowDataType hybridqp.RowDataType, node hybrid
 type SparseIndexScanTransformCreator struct {
 }
 
-func (c *SparseIndexScanTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *SparseIndexScanTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	p := NewSparseIndexScanTransform(plan.Children()[0].RowDataType(), plan, plan.RowExprOptions(), nil, nil)
 	return p, nil
 }
@@ -214,10 +220,17 @@ func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, f
 	}
 
 	tracing.StartPP(trans.allocateSpan)
-	fragmentsGroups, err := DistributeFragments(fragments, parallelism)
+	trans.indexLogger.Debug("SparseIndexScan meta infos", zap.String("db", trans.info.Req.Database),
+		zap.Uint32("pt", trans.info.Req.PtID), zap.Uint64s("shardIds", trans.info.Req.ShardIDs))
+	trans.indexLogger.Debug("SparseIndexScan index results", zap.String("shards fragments", fragments.String()))
+
+	fragmentsGroups, err := DistributeFragmentsV2(fragments, parallelism)
 	if err != nil {
+		trans.indexLogger.Error("SparseIndexScan allocates error", zap.Error(err))
 		return err
 	}
+
+	trans.indexLogger.Debug("SparseIndexScan allocates result", zap.String("groups fragments", fragmentsGroups.String()))
 	tracing.EndPP(trans.allocateSpan)
 
 	tracing.StartPP(trans.buildSpan)
@@ -257,6 +270,19 @@ type ShardsFragments map[uint64]*FileFragments
 
 func NewShardsFragments() ShardsFragments {
 	return make(map[uint64]*FileFragments)
+}
+
+func (sfs *ShardsFragments) String() string {
+	var res string
+	for shardId, shardFrags := range *sfs {
+		res += fmt.Sprintf("shardId: %d\n", shardId)
+		for file, frs := range shardFrags.FileMarks {
+			res += fmt.Sprintf("file: %s\n", file)
+			res += fmt.Sprintf("fragCount: %d\n", frs.FragmentCount())
+			res += fmt.Sprintf("fragRanges: %s\n", frs.GetFragmentRanges().String())
+		}
+	}
+	return res
 }
 
 type FileFragments struct {
@@ -326,19 +352,19 @@ func (f *FileFragmentImpl) CutTo(num int64) FileFragment {
 	if f.FragmentCount() < num {
 		return f
 	}
+
 	m := &FileFragmentImpl{dataFile: f.dataFile, fragmentRanges: make([]*fragment.FragmentRange, 0, len(f.GetFragmentRanges()))}
-	for i := 0; m.FragmentCount() < num && i < len(f.fragmentRanges); i++ {
-		ra := f.GetFragmentRange(i)
-		if int64(ra.End-ra.Start) > num {
-			m.fragmentRanges = append(m.fragmentRanges, fragment.NewFragmentRange(ra.Start, ra.Start+uint32(num)))
-			m.fragmentCount += num
-			ra.Start = ra.Start + uint32(num)
+	for m.FragmentCount() < num && len(f.fragmentRanges) > 0 {
+		ra := f.GetFragmentRange(0)
+		if need := num - m.FragmentCount(); int64(ra.End-ra.Start) > need {
+			m.fragmentRanges = append(m.fragmentRanges, fragment.NewFragmentRange(ra.End-uint32(need), ra.End))
+			m.fragmentCount += need
+			ra.End = ra.End - uint32(need)
 			break
-		} else {
-			m.fragmentRanges = append(m.fragmentRanges, ra)
-			m.fragmentCount += int64(ra.End - ra.Start)
-			f.fragmentRanges = f.fragmentRanges[1:]
 		}
+		m.fragmentRanges = append(m.fragmentRanges, ra)
+		m.fragmentCount += int64(ra.End - ra.Start)
+		f.fragmentRanges = f.fragmentRanges[1:]
 	}
 	f.fragmentCount -= m.fragmentCount
 	return m
@@ -371,6 +397,73 @@ func DistributeFragments(frags ShardsFragments, parallel int) (*ShardsFragmentsG
 	}
 	groups.Balance()
 	return groups, nil
+}
+
+// DistributeFragmentsV2 allocates fragments based on the parallel number so that
+// the difference number of fragments between two groups is less than or equal to 1.
+func DistributeFragmentsV2(frags ShardsFragments, parallel int) (*ShardsFragmentsGroups, error) {
+	var fragTotalCount int
+	var numFragForGroup int
+	var files []*ShardFileFragment
+
+	for shardId, shardFrag := range frags {
+		fragTotalCount += int(shardFrag.FragmentCount)
+		for _, file := range shardFrag.FileMarks {
+			files = append(files, NewShardFileFragment(shardId, file))
+		}
+	}
+
+	if fragTotalCount < parallel {
+		parallel = fragTotalCount
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].item.FragmentCount() < files[j].item.FragmentCount()
+	})
+
+	groups := NewShardsFragmentsGroups(parallel)
+	numFragPerGroup, remainFragForGroup := fragTotalCount/parallel, fragTotalCount%parallel
+
+	for i := 0; i < len(groups.Items); i++ {
+		if remainFragForGroup > 0 && i < remainFragForGroup {
+			numFragForGroup = numFragPerGroup + 1
+		} else {
+			numFragForGroup = numFragPerGroup
+		}
+		groups.Items[i] = NewShardsFragmentsGroup(NewShardsFragments(), 0)
+		for groups.Items[i].GetFragmentCount() < int64(numFragForGroup) {
+			if len(files) == 0 {
+				return nil, fmt.Errorf("the number of files must be greater than 0 for DistributeFragmentsV2")
+			}
+			file := files[len(files)-1]
+			groupFragCount, fileFragCount := groups.Items[i].GetFragmentCount(), file.item.FragmentCount()
+			needFragCount := int64(numFragForGroup) - groupFragCount
+			if groups.Items[i].frags[file.shardId] == nil {
+				groups.Items[i].frags[file.shardId] = NewFileFragments()
+			}
+			if needFragCount >= fileFragCount {
+				groups.Items[i].frags[file.shardId].FileMarks[file.item.GetFile().Path()] = file.item
+				groups.Items[i].frags[file.shardId].FragmentCount += fileFragCount
+				groups.Items[i].fragmentCount += fileFragCount
+				files = files[:len(files)-1]
+			} else {
+				newFile := file.item.CutTo(needFragCount)
+				groups.Items[i].frags[file.shardId].FileMarks[newFile.GetFile().Path()] = newFile
+				groups.Items[i].frags[file.shardId].FragmentCount += needFragCount
+				groups.Items[i].fragmentCount += needFragCount
+			}
+		}
+	}
+	return groups, nil
+}
+
+type ShardFileFragment struct {
+	shardId uint64
+	item    FileFragment
+}
+
+func NewShardFileFragment(shardId uint64, item FileFragment) *ShardFileFragment {
+	return &ShardFileFragment{shardId: shardId, item: item}
 }
 
 type ShardsFragmentsGroups struct {
@@ -429,6 +522,22 @@ func (fgs *ShardsFragmentsGroups) Balance() {
 		to++
 	}
 	fgs.Balance()
+}
+
+func (fgs *ShardsFragmentsGroups) String() string {
+	var res string
+	for i := range fgs.Items {
+		res += fmt.Sprintf("group: %d; fragCount: %d\n", i, fgs.Items[i].GetFragmentCount())
+		for k, v := range fgs.Items[i].frags {
+			res += fmt.Sprintf("shardId: %d\n", k)
+			for f, v1 := range v.FileMarks {
+				res += fmt.Sprintf("file: %s\n", f)
+				res += fmt.Sprintf("fragCount: %d\n", v1.FragmentCount())
+				res += fmt.Sprintf("fragRanges: %s\n", v1.GetFragmentRanges().String())
+			}
+		}
+	}
+	return res
 }
 
 type ShardsFragmentsGroup struct {

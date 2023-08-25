@@ -199,7 +199,6 @@ func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (
 	orders, unOrder := s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr)
 	immutableReader.Orders = append(immutableReader.Orders, orders...)
 	immutableReader.OutOfOrders = append(immutableReader.OutOfOrders, unOrder...)
-
 	s.snapshotLock.RLock()
 	mutableReader := mutable.MemTables{}
 	mutableReader.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
@@ -254,27 +253,27 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 			if err != nil {
 				return nil, err
 			}
-			filterFieldsIdx = c.ctx.filterFieldsIdx
-			filterTags = c.ctx.filterTags
+			filterFieldsIdx = c.ctx.filterOption.FieldsIdx
+			filterTags = c.ctx.filterOption.FilterTags
 			auxTags = c.ctx.auxTags
 			schema = c.ctx.schema
-			condFunctions = c.ctx.condFunctions
+			condFunctions = c.ctx.filterOption.CondFunctions
 
 			if c.ctx.schema.Len() <= 1 {
 				return nil, errno.NewError(errno.NoFieldSelected, "initGroupCursors")
 			}
 		} else {
 			c.ctx.schema = schema.Copy()
-			c.ctx.filterFieldsIdx = filterFieldsIdx
-			c.ctx.filterTags = filterTags
+			c.ctx.filterOption.FieldsIdx = filterFieldsIdx
+			c.ctx.filterOption.FilterTags = filterTags
 			c.ctx.auxTags = auxTags
-			c.ctx.condFunctions = condFunctions
+			c.ctx.filterOption.CondFunctions = condFunctions
 		}
 
 		// init map
-		c.ctx.m = make(map[string]interface{})
-		for _, id := range c.ctx.filterFieldsIdx {
-			if c.ctx.m[schema[id].Name], err = influx.FieldType2Val(schema[id].Type); err != nil {
+		c.ctx.filterOption.FiltersMap = make(map[string]interface{})
+		for _, id := range c.ctx.filterOption.FieldsIdx {
+			if c.ctx.filterOption.FiltersMap[schema[id].Name], err = influx.FieldType2Val(schema[id].Type); err != nil {
 				if executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg() {
 					for _, v := range cursors {
 						v.(*groupCursor).ctx.UnRef()
@@ -283,8 +282,8 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 				return nil, err
 			}
 		}
-		for _, tagName := range c.ctx.filterTags {
-			c.ctx.m[tagName] = (*string)(nil)
+		for _, tagName := range c.ctx.filterOption.FilterTags {
+			c.ctx.filterOption.FiltersMap[tagName] = (*string)(nil)
 		}
 		c.ctx.tr.Min = querySchema.Options().GetStartTime()
 		c.ctx.tr.Max = querySchema.Options().GetEndTime()
@@ -521,23 +520,20 @@ func (s *seriesInfo) GetSid() uint64 {
 }
 
 type idKeyCursorContext struct {
-	maxRowCnt       int
-	engineType      config.EngineType
-	tr              util.TimeRange
-	queryTr         util.TimeRange
-	filterFieldsIdx []int
-	filterTags      []string
-	auxTags         []string
-	condFunctions   binaryfilterfunc.CondFunctions
-	m               map[string]interface{}
-	schema          record.Schemas
-	readers         *immutable.MmsReaders
-	memTables       *mutable.MemTables
-	aggPool         *record.RecordPool
-	seriesPool      *record.RecordPool
-	tmsMergePool    *record.RecordPool
-	querySchema     *executor.QuerySchema
-	decs            *immutable.ReadContext
+	filterOption immutable.BaseFilterOptions
+	maxRowCnt    int
+	engineType   config.EngineType
+	tr           util.TimeRange
+	queryTr      util.TimeRange
+	auxTags      []string
+	schema       record.Schemas
+	readers      *immutable.MmsReaders
+	memTables    *mutable.MemTables
+	aggPool      *record.RecordPool
+	seriesPool   *record.RecordPool
+	tmsMergePool *record.RecordPool
+	querySchema  *executor.QuerySchema
+	decs         *immutable.ReadContext
 }
 
 func (i *idKeyCursorContext) hasAuxTags() bool {
@@ -545,7 +541,7 @@ func (i *idKeyCursorContext) hasAuxTags() bool {
 }
 
 func (i *idKeyCursorContext) hasFieldCondition() bool {
-	return len(i.filterFieldsIdx) > 0
+	return len(i.filterOption.FieldsIdx) > 0
 }
 
 func (i *idKeyCursorContext) RefFiles() {
@@ -574,13 +570,22 @@ func (i *idKeyCursorContext) UnRef() {
 }
 
 func (i *idKeyCursorContext) UnRefFiles() {
-	for _, f := range i.readers.Orders {
-		f.UnrefFileReader()
-		f.Unref()
-	}
-	for _, f := range i.readers.OutOfOrders {
-		f.UnrefFileReader()
-		f.Unref()
+	i.unRefFiles(i.readers.Orders)
+	i.unRefFiles(i.readers.OutOfOrders)
+}
+
+func (i *idKeyCursorContext) unRefFiles(files immutable.TableReaders) {
+	fileCacheManager := immutable.GetQueryfileCache()
+	if fileCacheManager != nil && len(files) <= int(fileCacheManager.GetCap()) {
+		for _, f := range files {
+			fileCacheManager.Put(f)
+			f.Unref()
+		}
+	} else {
+		for _, f := range files {
+			f.UnrefFileReader()
+			f.Unref()
+		}
 	}
 }
 
@@ -685,7 +690,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 
 		nameWithVer := schema.Options().OptionsName()
 		memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
-		memTableRecord = immutable.FilterByField(memTableRecord, nil, ctx.m, filter, rowFilter, ctx.filterFieldsIdx, ctx.filterTags, ptTags, ctx.condFunctions, nil)
+		memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilter, ptTags, nil)
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
 			continue
 		}
@@ -906,7 +911,7 @@ func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 	nameWithVer := schema.Options().OptionsName()
 	memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
 
-	memTableRecord = immutable.FilterByField(memTableRecord, nil, ctx.m, filter, rowFilters, ctx.filterFieldsIdx, ctx.filterTags, ptTags, ctx.condFunctions, nil)
+	memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilters, ptTags, nil)
 
 	if span != nil {
 		span.Count(memTableDuration, int64(time.Since(tm)))

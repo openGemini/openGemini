@@ -153,19 +153,45 @@ func buildDstChunk() []executor.Chunk {
 
 	inCk1 := b.NewChunk("cpu")
 	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
-	inCk1.AppendTime([]int64{1609459200000000000}...)
+	inCk1.AppendTimes([]int64{1609459200000000000})
 
-	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0"}...)
-	inCk1.Column(0).AppendNilsV2(true)
+	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0"})
+	inCk1.Column(0).AppendNotNil()
 
-	inCk1.Column(1).AppendIntegerValues([]int64{1}...)
-	inCk1.Column(1).AppendNilsV2(true)
+	inCk1.Column(1).AppendIntegerValues([]int64{1})
+	inCk1.Column(1).AppendNotNil()
 
-	inCk1.Column(2).AppendBooleanValues([]bool{true}...)
-	inCk1.Column(2).AppendNilsV2(true)
+	inCk1.Column(2).AppendBooleanValues([]bool{true})
+	inCk1.Column(2).AppendNotNil()
 
-	inCk1.Column(3).AppendFloatValues([]float64{1.1}...)
-	inCk1.Column(3).AppendNilsV2(true)
+	inCk1.Column(3).AppendFloatValues([]float64{1.1})
+	inCk1.Column(3).AppendNotNil()
+
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
+func buildDstChunkDesc() []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 1)
+	rowDataType := buildComRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("cpu")
+	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
+	inCk1.AppendTimes([]int64{1609460838300000000})
+
+	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0"})
+	inCk1.Column(0).AppendNotNil()
+
+	inCk1.Column(1).AppendIntegerValues([]int64{1})
+	inCk1.Column(1).AppendNotNil()
+
+	inCk1.Column(2).AppendBooleanValues([]bool{true})
+	inCk1.Column(2).AppendNotNil()
+
+	inCk1.Column(3).AppendFloatValues([]float64{1.1})
+	inCk1.Column(3).AppendNotNil()
 
 	dstChunks = append(dstChunks, inCk1)
 	return dstChunks
@@ -198,13 +224,13 @@ func buildAggChunk() []executor.Chunk {
 
 	inCk1 := b.NewChunk("cpu")
 	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
-	inCk1.AppendTime([]int64{1609459200000000000}...)
+	inCk1.AppendTimes([]int64{1609459200000000000})
 
-	inCk1.Column(0).AppendIntegerValues([]int64{1}...)
-	inCk1.Column(0).AppendNilsV2(true)
+	inCk1.Column(0).AppendIntegerValues([]int64{1})
+	inCk1.Column(0).AppendNotNil()
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1}...)
-	inCk1.Column(1).AppendNilsV2(true)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1})
+	inCk1.Column(1).AppendNotNil()
 
 	dstChunks = append(dstChunks, inCk1)
 	return dstChunks
@@ -223,21 +249,21 @@ func buildDstChunkTimeFilterGroupBy() []executor.Chunk {
 	b.SetDim(buildDimRowDataType())
 
 	inCk1 := b.NewChunk("cpu")
-	inCk1.AppendTime([]int64{1609459200000000000, 1609459200100000000}...)
+	inCk1.AppendTimes([]int64{1609459200000000000, 1609459200100000000})
 
-	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"}...)
+	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"})
 	inCk1.Column(0).AppendNilsV2(true, true)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{1, 1}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 1})
 	inCk1.Column(1).AppendNilsV2(true, true)
 
-	inCk1.Column(2).AppendBooleanValues([]bool{true, true}...)
+	inCk1.Column(2).AppendBooleanValues([]bool{true, true})
 	inCk1.Column(2).AppendNilsV2(true, true)
 
-	inCk1.Column(3).AppendFloatValues([]float64{1.1, 1.1}...)
+	inCk1.Column(3).AppendFloatValues([]float64{1.1, 1.1})
 	inCk1.Column(3).AppendNilsV2(true, true)
 
-	inCk1.Dim(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"}...)
+	inCk1.Dim(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"})
 	inCk1.Dim(0).AppendNilsV2(true, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -252,25 +278,25 @@ func buildDstChunkTimeFilter() []executor.Chunk {
 
 	inCk1 := b.NewChunk("cpu")
 	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
-	inCk1.AppendTime([]int64{1609459200000000000, 1609459200100000000}...)
+	inCk1.AppendTimes([]int64{1609459200000000000, 1609459200100000000})
 
-	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"}...)
+	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"})
 	inCk1.Column(0).AppendNilsV2(true, true)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{1, 1}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 1})
 	inCk1.Column(1).AppendNilsV2(true, true)
 
-	inCk1.Column(2).AppendBooleanValues([]bool{true, true}...)
+	inCk1.Column(2).AppendBooleanValues([]bool{true, true})
 	inCk1.Column(2).AppendNilsV2(true, true)
 
-	inCk1.Column(3).AppendFloatValues([]float64{1.1, 1.1}...)
+	inCk1.Column(3).AppendFloatValues([]float64{1.1, 1.1})
 	inCk1.Column(3).AppendNilsV2(true, true)
 
 	dstChunks = append(dstChunks, inCk1)
 	return dstChunks
 }
 
-func TestColStoreReaderTransform(t *testing.T) {
+func TestColumnStoreReaderV1(t *testing.T) {
 	testDir := t.TempDir()
 	db := "db0"
 	rp := "rp0"
@@ -464,7 +490,7 @@ func TestColStoreReaderFunctions(t *testing.T) {
 	indexScan := executor.NewLogicalColumnStoreReader(node, schema)
 
 	creator := &ColumnStoreReaderCreator{}
-	if _, err := creator.Create(indexScan, query.ProcessorOptions{}); err != nil {
+	if _, err := creator.Create(indexScan, &query.ProcessorOptions{}); err != nil {
 		assert2.Equal(t, err.Error(), "")
 	}
 	executor.RegistryReaderCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
@@ -617,6 +643,17 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunks,
 		},
 		{
+			name:      "select * from cpu limit order by time desc limit 1",
+			q:         `select field1_string,field2_int,field3_bool,field4_float from cpu order by time desc limit 1`,
+			tr:        util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			out:       buildComRowDataType(),
+			readerOps: buildComReaderOps(),
+			fields:    fields,
+			expected:  buildDstChunkDesc(),
+			expect:    testEqualChunks,
+			exec:      false,
+		},
+		{
 			name: "select * from cpu where timeFilter group by field1_string",
 			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where
 				time >= 1609459200000000000 and time <= 1609459201000000000`,
@@ -669,7 +706,7 @@ func TestColumnStoreReader(t *testing.T) {
 			fields:    fields,
 			expected:  nil,
 			expect:    testEqualChunk1,
-			exec:      true,
+			exec:      true, // Initialize an empty table store.
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -694,6 +731,7 @@ func TestColumnStoreReader(t *testing.T) {
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
 			opt.SourceCondition = stmt.Condition
+			opt.MaxParallel = 1
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
 			// step2: build the store executor

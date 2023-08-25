@@ -93,14 +93,11 @@ func (t *TagSetInfo) Swap(i, j int) {
 }
 
 func NewTagSetInfo() *TagSetInfo {
-	return setPool.get()
+	return setPool.getInit(32)
 }
 
 func NewSingleTagSetInfo() *TagSetInfo {
 	return setPool.getInit(1)
-}
-func NewTagSetInfoEmptySpace() *TagSetInfo {
-	return setPool.getEmptySpace()
 }
 
 func (t *TagSetInfo) reset() {
@@ -182,35 +179,23 @@ func (p *tagSetInfoPool) put(set *TagSetInfo) {
 	}
 }
 
-func (p *tagSetInfoPool) get() (set *TagSetInfo) {
-	return p.getInit(64)
-}
-
 func (p *tagSetInfoPool) getInit(initNum int) (set *TagSetInfo) {
-	return p.GetBySize(initNum, false)
+	return p.GetBySize(initNum)
 }
 
-func (p *tagSetInfoPool) GetBySize(size int, emptySpace bool) (set *TagSetInfo) {
+func (p *tagSetInfoPool) GetBySize(size int) (set *TagSetInfo) {
 	select {
 	case set = <-p.cache:
 		return
 	default:
-		t := &TagSetInfo{
-			ref:     0,
-			key:     make([]byte, 0, 32),
-			IDs:     make([]uint64, 0, size),
-			Filters: make([]influxql.Expr, 0, size),
+		return &TagSetInfo{
+			ref:        0,
+			IDs:        make([]uint64, 0, size),
+			Filters:    make([]influxql.Expr, 0, size),
+			SeriesKeys: make([][]byte, 0, size),
+			TagsVec:    make([]influx.PointTags, 0, size),
 		}
-		if !emptySpace {
-			t.SeriesKeys = make([][]byte, 0, size)
-			t.TagsVec = make([]influx.PointTags, 0, size)
-		}
-		return t
 	}
-}
-
-func (p *tagSetInfoPool) getEmptySpace() (set *TagSetInfo) {
-	return p.GetBySize(1, true)
 }
 
 type SortGroupSeries struct {

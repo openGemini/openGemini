@@ -18,6 +18,7 @@ package config
 
 import (
 	"errors"
+	"runtime"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
@@ -106,6 +107,9 @@ func NewTSSql() *TSSql {
 }
 
 func (c *TSSql) Corrector(cpuNum int) {
+	if cpuNum == 0 {
+		cpuNum = runtime.NumCPU()
+	}
 	if c.HTTP.MaxConnectionLimit == 0 {
 		c.HTTP.MaxConnectionLimit = cpuNum * 125
 	}

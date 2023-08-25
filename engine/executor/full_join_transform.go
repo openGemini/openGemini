@@ -96,7 +96,7 @@ func (trans *FullJoinTransform) chunkDown(i int) bool {
 type FullJoinTransformCreator struct {
 }
 
-func (c *FullJoinTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *FullJoinTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	inRowDataTypes := make([]hybridqp.RowDataType, 0, len(plan.Children()))
 	for _, inPlan := range plan.Children() {
 		inRowDataTypes = append(inRowDataTypes, inPlan.RowDataType())
@@ -610,44 +610,44 @@ func (trans *FullJoinTransform) joinSeriesVal(lstartIndex int, lendIndex int, rs
 
 func (trans *FullJoinTransform) appendNilSeriesVal(oDataType influxql.DataType, i int, time int64) {
 	ocolumn := trans.outputChunk.Columns()[i]
-	ocolumn.AppendColumnTimes(time)
+	ocolumn.AppendColumnTime(time)
 	switch oDataType {
 	case influxql.Float:
 		{
 			val := 0.0
-			ocolumn.AppendFloatValues(val)
+			ocolumn.AppendFloatValue(val)
 		}
 	case influxql.Boolean:
 		{
 			val := true
-			ocolumn.AppendBooleanValues(val)
+			ocolumn.AppendBooleanValue(val)
 		}
 	case influxql.Integer:
 		{
 			var val int64 = 0
-			ocolumn.AppendIntegerValues(val)
+			ocolumn.AppendIntegerValue(val)
 		}
 	case influxql.String:
 		{
 			val := ""
-			ocolumn.AppendStringValues(val)
+			ocolumn.AppendStringValue(val)
 		}
 	case influxql.Tag:
 		{
 			val := ""
-			ocolumn.AppendStringValues(val)
+			ocolumn.AppendStringValue(val)
 		}
 	}
-	ocolumn.AppendNilsV2(true)
+	ocolumn.AppendNotNil()
 }
 
 func (trans *FullJoinTransform) appendSeriesVal(oDataType influxql.DataType, i int, column Column, startIndex int,
 	time int64) {
 	ocolumn := trans.outputChunk.Columns()[i]
-	ocolumn.AppendColumnTimes(time)
+	ocolumn.AppendColumnTime(time)
 	empty := column.IsNilV2(startIndex)
 	if empty {
-		ocolumn.AppendNilsV2(false)
+		ocolumn.AppendNil()
 		return
 	}
 	startIndex = column.GetValueIndexV2(startIndex)
@@ -655,30 +655,30 @@ func (trans *FullJoinTransform) appendSeriesVal(oDataType influxql.DataType, i i
 	case influxql.Float:
 		{
 			val := column.FloatValue(startIndex)
-			ocolumn.AppendFloatValues(val)
+			ocolumn.AppendFloatValue(val)
 		}
 	case influxql.Boolean:
 		{
 			val := column.BooleanValue(startIndex)
-			ocolumn.AppendBooleanValues(val)
+			ocolumn.AppendBooleanValue(val)
 		}
 	case influxql.Integer:
 		{
 			val := column.IntegerValue(startIndex)
-			ocolumn.AppendIntegerValues(val)
+			ocolumn.AppendIntegerValue(val)
 		}
 	case influxql.String:
 		{
 			val := column.StringValue(startIndex)
-			ocolumn.AppendStringValues(val)
+			ocolumn.AppendStringValue(val)
 		}
 	case influxql.Tag:
 		{
 			val := column.StringValue(startIndex)
-			ocolumn.AppendStringValues(val)
+			ocolumn.AppendStringValue(val)
 		}
 	}
-	ocolumn.AppendNilsV2(true)
+	ocolumn.AppendNotNil()
 }
 
 func (trans *FullJoinTransform) fullJoinAlgorithm() {

@@ -53,7 +53,7 @@ func TestAllWriter(t *testing.T) {
 	}
 	w := AllWriter{NewBaseWriter("db0", "rp0", "sub0", clients, logger.NewLogger(errno.ModuleCoordinator))}
 
-	ch := make(chan WriteRequest, 3)
+	ch := make(chan *WriteRequest, 3)
 	w.ch = ch
 
 	line := "cpu_load,host=\"server-01\",region=\"west_cn\" value=75.31"
@@ -80,14 +80,14 @@ func TestAnyWriter(t *testing.T) {
 	}
 
 	w := RoundRobinWriter{BaseWriter: NewBaseWriter("db0", "rp0", "sub0", clients, logger.NewLogger(errno.ModuleCoordinator))}
-	ch := make(chan WriteRequest, 1)
+	ch := make(chan *WriteRequest, 1)
 	w.ch = ch
 
 	line := "cpu_load,host=\"server-01\",region=\"west_cn\" value=75.31"
 	for i := 0; i < 6; i++ {
 		w.Write([]byte(line))
 		wr := <-ch
-		assert2.Equal(t, wr.Client, i%3)
+		assert2.Equal(t, wr.Client, (i+1)%3)
 		assert2.Equal(t, string(wr.LineProtocol), line)
 		select {
 		case <-ch:
@@ -301,13 +301,13 @@ func TestSendWriteRequest(t *testing.T) {
 	type Request struct {
 		db           string
 		rp           string
-		lineProtocal []byte
+		lineProtocol []byte
 	}
 	ch := make(chan Request, 10)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/write", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp")}
-		wr.lineProtocal, _ = ioutil.ReadAll(r.Body)
+		wr.lineProtocol, _ = ioutil.ReadAll(r.Body)
 		ch <- wr
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -339,7 +339,7 @@ func TestSendWriteRequest(t *testing.T) {
 		r := <-ch
 		assert2.Equal(t, r.db, "db0")
 		assert2.Equal(t, r.rp, "rp0")
-		assert2.Equal(t, string(r.lineProtocal), line)
+		assert2.Equal(t, string(r.lineProtocol), line)
 	}
 
 	time.Sleep(time.Second)
@@ -363,7 +363,7 @@ func TestSendWriteRequest(t *testing.T) {
 		r := <-ch
 		assert2.Equal(t, r.db, "db1")
 		assert2.Equal(t, r.rp, "rp1")
-		assert2.Equal(t, string(r.lineProtocal), line)
+		assert2.Equal(t, string(r.lineProtocol), line)
 	}
 
 	time.Sleep(time.Second)

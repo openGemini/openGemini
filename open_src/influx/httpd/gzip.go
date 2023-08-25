@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/openGemini/openGemini/lib/cpu"
 )
 
 type lazyGzipResponseWriter struct {
@@ -86,14 +88,48 @@ func (w *lazyGzipResponseWriter) Close() error {
 	return nil
 }
 
-var gzipWriterPool = sync.Pool{
-	New: func() interface{} {
-		return gzip.NewWriter(nil)
-	},
+type GzipWriterPool struct {
+	sp    sync.Pool
+	cache chan *gzip.Writer
 }
 
+func NewGzipWriterPool() *GzipWriterPool {
+	p := &GzipWriterPool{
+		sp: sync.Pool{
+			New: func() interface{} {
+				return gzip.NewWriter(nil)
+			},
+		},
+		cache: make(chan *gzip.Writer, cpu.GetCpuNum()*2),
+	}
+	return p
+}
+
+func (p *GzipWriterPool) Get() *gzip.Writer {
+	select {
+	case gz := <-p.cache:
+		return gz
+	default:
+		gz, ok := p.sp.Get().(*gzip.Writer)
+		if !ok {
+			gz = gzip.NewWriter(nil)
+		}
+		return gz
+	}
+}
+
+func (p *GzipWriterPool) Put(gz *gzip.Writer) {
+	select {
+	case p.cache <- gz:
+	default:
+		p.sp.Put(gz)
+	}
+}
+
+var gzipWriterPool = NewGzipWriterPool()
+
 func getGzipWriter(w io.Writer) *gzip.Writer {
-	gz := gzipWriterPool.Get().(*gzip.Writer)
+	gz := gzipWriterPool.Get()
 	gz.Reset(w)
 	return gz
 }

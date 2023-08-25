@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -113,9 +114,11 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 
 	if common := conf.GetCommon(); common != nil {
 		common.Corrector()
-		cpu.SetCpuNum(common.CPUNum)
-		runtime.GOMAXPROCS(common.CPUNum)
+		cpu.SetCpuNum(common.CPUNum, common.CpuAllocationRatio)
+		runtime.GOMAXPROCS(cpu.GetCpuNum())
 		config.SetHaEnable(common.HaEnable)
+		syscontrol.SetDisableWrite(common.WriterStop)
+		syscontrol.SetDisableRead(common.ReaderStop)
 	}
 
 	crypto.Initialize(conf.GetCommon().CryptoConfig)

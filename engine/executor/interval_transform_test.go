@@ -46,7 +46,7 @@ func TestIntervalTransform(t *testing.T) {
 	}
 
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
-	trans1 := executor.NewIntervalTransform([]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataType()}, opt)
+	trans1 := executor.NewIntervalTransform([]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataType()}, &opt)
 	sink := NewNilSink(buildTargetRowDataType())
 
 	executor.Connect(source.Output, trans1.Inputs[0])

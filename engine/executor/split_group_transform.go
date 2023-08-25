@@ -29,14 +29,14 @@ type SplitTransformTransform struct {
 	input       *ChunkPort
 	output      *ChunkPort
 	ops         []hybridqp.ExprOptions
-	opt         query.ProcessorOptions
+	opt         *query.ProcessorOptions
 	chunkPool   *CircularChunkPool
 	workTracing *tracing.Span
 	CoProcessor CoProcessor
 	NewChunk    Chunk
 }
 
-func NewSplitTransformTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions) *SplitTransformTransform {
+func NewSplitTransformTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions) *SplitTransformTransform {
 	trans := &SplitTransformTransform{
 		input:       NewChunkPort(inRowDataType),
 		output:      NewChunkPort(outRowDataType),
@@ -53,7 +53,7 @@ func NewSplitTransformTransform(inRowDataType hybridqp.RowDataType, outRowDataTy
 type SplitTransformTransformCreator struct {
 }
 
-func (c *SplitTransformTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *SplitTransformTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewSplitTransformTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), plan.RowExprOptions(), opt)
 	return p, nil
 }
@@ -117,7 +117,7 @@ func (trans *SplitTransformTransform) split(chunk Chunk) {
 		} else {
 			end = chunk.TagIndex()[tagIndex+1]
 		}
-		trans.NewChunk.AppendTime(chunk.Time()[chunk.TagIndex()[tagIndex]:end]...)
+		trans.NewChunk.AppendTimes(chunk.Time()[chunk.TagIndex()[tagIndex]:end])
 		trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, &IteratorParams{
 			start:    chunk.TagIndex()[tagIndex],
 			end:      end,

@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -665,12 +666,12 @@ func Test_BuildRecordDag(t *testing.T) {
 			decs := immutable.NewReadContext(true)
 			for _, v := range newFiles {
 				metaIndex, _ := v.MetaIndexAt(0)
-				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil)
+				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil, fileops.IO_PRIORITY_LOW_READ)
 				for _, c := range chunkMeta {
 					for s := 0; s < c.SegmentCount(); s++ {
 						rec := recordPool.Get()
 						rec.Schema = schema
-						rec, _ = v.ReadAt(&c, s, rec, decs)
+						rec, _ = v.ReadAt(&c, s, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 						rowCount += rec.RowNums()
 					}
 				}
@@ -1036,12 +1037,12 @@ func Test_ShardDownSampleTask(t *testing.T) {
 			var rowCount int
 			for _, v := range files.Files() {
 				metaIndex, _ := v.MetaIndexAt(0)
-				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil)
+				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil, fileops.IO_PRIORITY_LOW_READ)
 				for _, c := range chunkMeta {
 					for s := 0; s < c.SegmentCount(); s++ {
 						rec := recordPool.Get()
 						rec.Schema = schema
-						rec, _ = v.ReadAt(&c, s, rec, decs)
+						rec, _ = v.ReadAt(&c, s, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 						rowCount += rec.RowNums()
 					}
 				}
@@ -1254,9 +1255,9 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 					chunkT.SetTime([]int64{0})
 					chunkT.ResetIntervalIndex(0)
 					c1 := executor.NewColumnImpl(influxql.Integer)
-					c1.AppendIntegerValues(1)
+					c1.AppendIntegerValue(1)
 					c2 := executor.NewColumnImpl(influxql.Integer)
-					c2.AppendIntegerValues(2)
+					c2.AppendIntegerValue(2)
 					chunkT.AddColumn(c1, c2)
 					ch.State <- chunkT
 					if cancelState == 0 {
@@ -1822,12 +1823,12 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 			decs := immutable.NewReadContext(true)
 			for _, v := range newFiles {
 				metaIndex, _ := v.MetaIndexAt(0)
-				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil)
+				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil, fileops.IO_PRIORITY_LOW_READ)
 				for _, c := range chunkMeta {
 					for s := 0; s < c.SegmentCount(); s++ {
 						rec := recordPool.Get()
 						rec.Schema = schema
-						rec, _ = v.ReadAt(&c, s, rec, decs)
+						rec, _ = v.ReadAt(&c, s, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 						rowCount += rec.RowNums()
 					}
 				}
@@ -1913,7 +1914,7 @@ func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.Me
 	return 0, nil, nil
 }
 
-func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *immutable.ChunkMeta, buffer *[]byte) (*immutable.ChunkMeta, error) {
+func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *immutable.ChunkMeta, buffer *[]byte, ioPriority int) (*immutable.ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -1921,19 +1922,15 @@ func (m MocTsspFile) Read(id uint64, tr util.TimeRange, dst *record.Record) (*re
 	return nil, nil
 }
 
-func (m MocTsspFile) ReadAt(cm *immutable.ChunkMeta, segment int, dst *record.Record, decs *immutable.ReadContext) (*record.Record, error) {
+func (m MocTsspFile) ReadAt(cm *immutable.ChunkMeta, segment int, dst *record.Record, decs *immutable.ReadContext, ioPriority int) (*record.Record, error) {
 	return nil, nil
 }
 
-func (m MocTsspFile) ChunkAt(index int) (*immutable.ChunkMeta, error) {
+func (m MocTsspFile) ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
 	return nil, nil
 }
 
-func (m MocTsspFile) ReadData(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (m MocTsspFile) ReadChunkMetaData(metaIdx int, me *immutable.MetaIndex, dst []immutable.ChunkMeta) ([]immutable.ChunkMeta, error) {
+func (m MocTsspFile) ReadChunkMetaData(metaIdx int, me *immutable.MetaIndex, dst []immutable.ChunkMeta, ioPriority int) ([]immutable.ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -2039,6 +2036,10 @@ func (m MocTsspFile) AddToEvictList(level uint16) {
 
 func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 	return
+}
+
+func (m MocTsspFile) GetFileReaderRef() int64 {
+	return 0
 }
 
 func TestCanDoDownSample(t *testing.T) {

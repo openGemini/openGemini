@@ -44,7 +44,7 @@ type TargetTransform struct {
 	input  *ChunkPort
 	output *ChunkPort
 	ops    []hybridqp.ExprOptions
-	opt    query.ProcessorOptions
+	opt    *query.ProcessorOptions
 	schema *QuerySchema
 
 	valuer *FieldsValuer
@@ -70,7 +70,7 @@ type TargetTransform struct {
 	errs errno.Errs
 }
 
-func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions, schema *QuerySchema, mst *influxql.Measurement) (*TargetTransform, error) {
+func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions, schema *QuerySchema, mst *influxql.Measurement) (*TargetTransform, error) {
 	trans := &TargetTransform{
 		input:  NewChunkPort(inRowDataType),
 		output: NewChunkPort(outRowDataType),
@@ -108,7 +108,7 @@ func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybri
 type TargetTransformCreator struct {
 }
 
-func (c *TargetTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *TargetTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p, err := NewTargetTransform(plan.Children()[0].RowDataType(),
 		plan.RowDataType(),
 		plan.RowExprOptions(),
@@ -246,7 +246,7 @@ func (trans *TargetTransform) consume(ctx context.Context, errs *errno.Errs) {
 func (trans *TargetTransform) buildResult() Chunk {
 	chunk := trans.builder.NewChunk(RESULT_NAME)
 	chunk.AppendTime(0)
-	chunk.Column(0).AppendIntegerValues(trans.writenRowCount)
+	chunk.Column(0).AppendIntegerValue(trans.writenRowCount)
 	chunk.Column(0).AppendManyNotNil(1)
 	chunk.AppendTagsAndIndex(ChunkTags{}, 0)
 	chunk.AppendIntervalIndex(0)
