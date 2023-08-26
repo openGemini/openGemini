@@ -24,7 +24,7 @@ import (
 )
 
 func TestCpuNum(t *testing.T) {
-	cpu.SetCpuNum(10)
-	cpu.SetCpuNum(-1)
+	cpu.SetCpuNum(10, 1)
+	cpu.SetCpuNum(-1, 1)
 	assert.Equal(t, 10, cpu.GetCpuNum())
 }

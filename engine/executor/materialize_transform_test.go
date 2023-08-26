@@ -75,7 +75,7 @@ func TestForwardMaterializeTransform(t *testing.T) {
 	chunkBuilder := executor.NewChunkBuilder(createRowDataType())
 	expect := chunkBuilder.NewChunk(table.Name())
 
-	materialize := executor.NewMaterializeTransform(createRowDataType(), createRowDataType(), ops, *schema.Options().(*query.ProcessorOptions), NewCmpChunkWriter(expect, t), schema)
+	materialize := executor.NewMaterializeTransform(createRowDataType(), createRowDataType(), ops, schema.Options().(*query.ProcessorOptions), NewCmpChunkWriter(expect, t), schema)
 	httpSender := executor.NewHttpSenderTransform(createRowDataType(), schema)
 
 	executor.Connect(scan.GetOutputs()[0], materialize.GetInputs()[0])
@@ -129,38 +129,38 @@ func buildMaterializeChunk() executor.Chunk {
 	b := executor.NewChunkBuilder(rp)
 
 	chunk := b.NewChunk("materialize chunk")
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
 	chunk.AddIntervalIndex(0)
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, false)
 
-	chunk.Column(1).AppendIntegerValues([]int64{2, 1, 2}...)
+	chunk.Column(1).AppendIntegerValues([]int64{2, 1, 2})
 	chunk.Column(1).AppendNilsV2(true, true, false, true, false)
 
-	chunk.Column(2).AppendStringValues("ada", "jerry", "tom", "ashe")
+	chunk.Column(2).AppendStringValues([]string{"ada", "jerry", "tom", "ashe"})
 	chunk.Column(2).AppendNilsV2(true, true, false, true, true)
 
-	chunk.Column(3).AppendFloatValues([]float64{3.3, 4.4, 5.5}...)
+	chunk.Column(3).AppendFloatValues([]float64{3.3, 4.4, 5.5})
 	chunk.Column(3).AppendNilsV2(false, false, true, true, true)
 
-	chunk.Column(4).AppendFloatValues([]float64{1.1, 5.5, 4.4}...)
+	chunk.Column(4).AppendFloatValues([]float64{1.1, 5.5, 4.4})
 	chunk.Column(4).AppendNilsV2(false, true, false, true, true)
 
-	chunk.Column(5).AppendBooleanValues(true, false, true)
+	chunk.Column(5).AppendBooleanValues([]bool{true, false, true})
 	chunk.Column(5).AppendNilsV2(true, true, false, true, false)
 
-	chunk.Column(6).AppendBooleanValues(false, true, true)
+	chunk.Column(6).AppendBooleanValues([]bool{false, true, true})
 	chunk.Column(6).AppendNilsV2(false, true, false, true, true)
 
-	chunk.Column(7).AppendIntegerValues([]int64{1, 2, 3}...)
+	chunk.Column(7).AppendIntegerValues([]int64{1, 2, 3})
 	chunk.Column(7).AppendNilsV2(true, true, true, false, false)
 
-	chunk.Column(8).AppendFloatValues([]float64{3.3, 4.4, 5.5}...)
+	chunk.Column(8).AppendFloatValues([]float64{3.3, 4.4, 5.5})
 	chunk.Column(8).AppendNilsV2(false, false, true, true, true)
 
-	chunk.Column(9).AppendBooleanValues(false, true, true)
+	chunk.Column(9).AppendBooleanValues([]bool{false, true, true})
 	chunk.Column(9).AppendNilsV2(false, true, false, true, true)
 
 	return chunk
@@ -235,7 +235,7 @@ func TestMaterializeTransform(t *testing.T) {
 	expectMaxFloatValues := []float64{1.1, 3.3, 5.5, 5.5}
 	expectMaxBooleanValues := []bool{true, false, true, true}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
-	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildMaterializeOutRowDataType(), ops, opt, nil, schema)
+	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildMaterializeOutRowDataType(), ops, &opt, nil, schema)
 
 	source := NewSourceFromSingleChunk(buildMaterializeInRowDataType(), []executor.Chunk{chunk})
 	sink := NewSinkFromFunction(buildMaterializeOutRowDataType(), func(chunk executor.Chunk) error {

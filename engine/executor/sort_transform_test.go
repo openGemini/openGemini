@@ -60,18 +60,18 @@ func BuildSortChunk1() executor.Chunk {
 	chunk.AppendTagsAndIndex(*tag1, 0)
 	chunk.AppendTagsAndIndex(*tag2, 2)
 
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
 
-	chunk.Column(1).AppendStringValues([]string{"a", "b", "c", "d"}...)
+	chunk.Column(1).AppendStringValues([]string{"a", "b", "c", "d"})
 	chunk.Column(1).AppendNilsV2(true, true, true, true)
 
-	chunk.Column(2).AppendFloatValues([]float64{6.0, 5.0, 4.0, 3.0}...)
+	chunk.Column(2).AppendFloatValues([]float64{6.0, 5.0, 4.0, 3.0})
 	chunk.Column(2).AppendManyNotNil(4)
 
-	chunk.Column(3).AppendBooleanValues([]bool{true, false, true, false}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, false, true, false})
 	chunk.Column(3).AppendManyNotNil(4)
 	return chunk
 }
@@ -86,18 +86,18 @@ func BuildSortChunk2() executor.Chunk {
 	tag1 := ParseChunkTags("tag1=3,tag2=1")
 	chunk.AppendTagsAndIndex(*tag1, 0)
 
-	chunk.AppendTime([]int64{5, 6}...)
+	chunk.AppendTimes([]int64{5, 6})
 
-	chunk.Column(0).AppendIntegerValues([]int64{5, 6}...)
+	chunk.Column(0).AppendIntegerValues([]int64{5, 6})
 	chunk.Column(0).AppendManyNotNil(2)
 
-	chunk.Column(1).AppendStringValues([]string{"e", "f"}...)
+	chunk.Column(1).AppendStringValues([]string{"e", "f"})
 	chunk.Column(1).AppendNilsV2(true, true)
 
-	chunk.Column(2).AppendFloatValues([]float64{2, 1}...)
+	chunk.Column(2).AppendFloatValues([]float64{2, 1})
 	chunk.Column(2).AppendManyNotNil(2)
 
-	chunk.Column(3).AppendBooleanValues([]bool{true, false}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, false})
 	chunk.Column(3).AppendManyNotNil(2)
 	return chunk
 }
@@ -112,18 +112,18 @@ func BuildSortChunk3() executor.Chunk {
 	tag1 := executor.ChunkTags{}
 	chunk.AppendTagsAndIndex(tag1, 0)
 
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 3}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 3})
 	chunk.Column(0).AppendNilsV2(true, false, true, false)
 
-	chunk.Column(1).AppendStringValues([]string{"a", "b", "c"}...)
+	chunk.Column(1).AppendStringValues([]string{"a", "b", "c"})
 	chunk.Column(1).AppendNilsV2(true, true, true, false)
 
-	chunk.Column(2).AppendFloatValues([]float64{6.0, 5.0, 4.0}...)
+	chunk.Column(2).AppendFloatValues([]float64{6.0, 5.0, 4.0})
 	chunk.Column(2).AppendNilsV2(true, true, true, false)
 
-	chunk.Column(3).AppendBooleanValues([]bool{true, false, true}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, false, true})
 	chunk.Column(3).AppendNilsV2(true, true, true, false)
 	return chunk
 }
@@ -153,7 +153,7 @@ func buildSortSchema(sortFields influxql.SortFields) *executor.QuerySchema {
 func buildSortSchema2(sortFields influxql.SortFields) *executor.QuerySchema {
 	opt := query.ProcessorOptions{
 		Ascending: true,
-		ChunkSize: 1024,
+		ChunkSize: 1,
 	}
 	fields := make(influxql.Fields, 0)
 	columnNames := make([]string, 0)
@@ -378,7 +378,7 @@ func TestSortTransformOrderByTagAndNilField(t *testing.T) {
 	rt := buildSortRowDataType()
 	source := NewSourceFromSingleChunk(rt, []executor.Chunk{chunk1})
 	trans, _ := executor.NewSortTransform([]hybridqp.RowDataType{rt}, []hybridqp.RowDataType{rt}, schema, schema.GetSortFields())
-	var expStr string = "f1 f2 f3 f4 time\n\n3 c 4 true 3\n1 a 6 true 1\n b 5 false 2\n    4\n"
+	var expStr string = "f1 f2 f3 f4 time\n\n3 c 4 true 3\nf1 f2 f3 f4 time\n\n1 a 6 true 1\nf1 f2 f3 f4 time\n\n b 5 false 2\nf1 f2 f3 f4 time\n\n    4\n"
 	var resultStr string
 	finish := make(chan int, 1)
 	resultChunkOutPut := executor.NewChunkPort(rt)

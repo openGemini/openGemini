@@ -37,13 +37,15 @@ type Column interface {
 
 	ColumnTime(int) int64
 	ColumnTimes() []int64
-	AppendColumnTimes(...int64)
+	AppendColumnTime(int64)
+	AppendColumnTimes([]int64)
 	SetColumnTimes([]int64)
 
 	IsNilV2(int) bool
 	NilsV2() *Bitmap
 	SetNilsBitmap(new *Bitmap)
 	AppendNil()
+	AppendNotNil()
 	AppendNilsV2(dat ...bool)
 	AppendManyNotNil(num int)
 	AppendManyNil(num int)
@@ -55,20 +57,23 @@ type Column interface {
 
 	FloatTuple(int) floatTuple
 	FloatTuples() []floatTuple
-	AppendFloatTuples(...floatTuple)
+	AppendFloatTuple(floatTuple)
+	AppendFloatTuples([]floatTuple)
 	SetFloatTuples([]floatTuple)
 
 	{{range .}}
     {{.Name}}Value(int) {{.Type}}
     {{- if ne .Name "String" }}
 		{{.Name}}Values() []{{.Type}}
-		Append{{.Name}}Values(...{{.Type}})
+		Append{{.Name}}Value({{.Type}})
+		Append{{.Name}}Values([]{{.Type}})
 		Set{{.Name}}Values([]{{.Type}})
     {{- else }}
 		StringValuesV2(dst []string) []string
 		StringValuesRange(dst []string, start, end int) []string
 		StringValuesWithOffset(start, end int, offsets []uint32) ([]byte, []uint32)
-		AppendStringValues(...string)
+		AppendStringValue(string)
+		AppendStringValues([]string)
 		AppendStringBytes([]byte, []uint32)
 		SetStringValues([]byte, []uint32)
 		GetStringBytes() ([]byte, []uint32)
@@ -139,24 +144,16 @@ func (c *ColumnImpl) ColumnTimes() []int64 {
 	return c.times
 }
 
-func (c *ColumnImpl) AppendColumnTimes(values ...int64) {
+func (c *ColumnImpl) AppendColumnTime(value int64) {
+	c.times = append(c.times, value)
+}
+
+func (c *ColumnImpl) AppendColumnTimes(values []int64) {
 	c.times = append(c.times, values...)
 }
 
 func (c *ColumnImpl) SetColumnTimes(values []int64) {
 	c.times = values
-}
-
-func (c *ColumnImpl) Time(idx int) int64 {
-	return c.times[idx]
-}
-
-func (c *ColumnImpl) Times() []int64 {
-	return c.times
-}
-
-func (c *ColumnImpl) AppendTimes(times ...int64) {
-	c.times = append(c.times, times...)
 }
 
 func (c *ColumnImpl) IsNilV2(idx int) bool {
@@ -170,6 +167,10 @@ func (c *ColumnImpl) NilsV2() *Bitmap {
 // SetNilsBitmap just for test use now.
 func (c *ColumnImpl) SetNilsBitmap(new *Bitmap) {
 	c.nilsV2= new
+}
+
+func (c *ColumnImpl) AppendNotNil() {
+	c.nilsV2.append(true)
 }
 
 func (c *ColumnImpl) AppendNil() {
@@ -209,7 +210,7 @@ func (c *ColumnImpl) StringValuesRangeV2(dst []string, start, end int) []string 
 
 func (c *ColumnImpl) AppendManyNotNil(num int) {
 	for i := 0; i < num; i++ {
-		c.AppendNilsV2(true)
+		c.AppendNotNil()
 	}
 }
 
@@ -225,7 +226,7 @@ func (c *ColumnImpl) AppendManyNil(num int) {
 		return
 	}
 	for i := 0; i < num; i++ {
-		c.AppendNilsV2(false)
+		c.AppendNil()
 	}
 }
 
@@ -253,7 +254,11 @@ func (c *ColumnImpl) FloatTuples() []floatTuple {
 	return c.floatTuples
 }
 
-func (c *ColumnImpl) AppendFloatTuples(tuples ...floatTuple) {
+func (c *ColumnImpl) AppendFloatTuple(tuple floatTuple) {
+	c.floatTuples = append(c.floatTuples, tuple)
+}
+
+func (c *ColumnImpl) AppendFloatTuples(tuples []floatTuple) {
 	c.floatTuples = append(c.floatTuples, tuples...)
 }
 
@@ -272,7 +277,11 @@ func (c *ColumnImpl) {{.Name}}Values() []{{.Type}} {
 	return c.{{.name}}Values
 }
 
-func (c *ColumnImpl) Append{{.Name}}Values(values ...{{.Type}}) {
+func (c *ColumnImpl) Append{{.Name}}Value(value {{.Type}}) {
+	c.{{.name}}Values = append(c.{{.name}}Values, value)
+}
+
+func (c *ColumnImpl) Append{{.Name}}Values(values []{{.Type}}) {
 	c.{{.name}}Values = append(c.{{.name}}Values, values...)
 }
 
@@ -353,9 +362,14 @@ func (c *ColumnImpl) StringValuesWithOffset(start, end int, offsets []uint32) ([
 	return c.stringBytes[startOff:endOff], offsets
 }
 
+// Deprecated: please do not use. recommend to use AppendStringBytes
+func (c *ColumnImpl) AppendStringValue(value string) {
+    c.offset = append(c.offset, uint32(len(c.stringBytes)))
+    c.stringBytes = append(c.stringBytes, value...)
+}
 
 // Deprecated: please do not use. recommend to use AppendStringBytes
-func (c *ColumnImpl) AppendStringValues(values ...string) {
+func (c *ColumnImpl) AppendStringValues(values []string) {
 	for i := range values {
 		c.offset = append(c.offset, uint32(len(c.stringBytes)))
 		c.stringBytes = append(c.stringBytes, values[i]...)

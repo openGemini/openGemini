@@ -215,12 +215,16 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 	qid := t.AssignQueryID()
 
 	query := &Task{
-		query:     q.String(),
 		database:  opt.Database,
 		status:    RunningTask,
 		startTime: time.Now(),
 		closing:   make(chan struct{}),
 		monitorCh: make(chan error),
+	}
+	if qStat != nil {
+		query.query = qStat.Query
+	} else {
+		query.query = q.String()
 	}
 
 	t.mu.Lock()

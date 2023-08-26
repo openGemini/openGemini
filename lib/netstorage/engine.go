@@ -110,7 +110,7 @@ type Engine interface {
 	Offload(db string, ptId uint32) error
 	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 
-	SysCtrl(req *SysCtrlRequest) error
+	SysCtrl(req *SysCtrlRequest) (map[string]string, error)
 	Statistics(buffer []byte) ([]byte, error)
 	StatisticsOps() []opsStat.OpsStatistic
 

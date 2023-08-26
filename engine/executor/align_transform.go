@@ -34,14 +34,14 @@ type AlignTransform struct {
 	chunkPool     *CircularChunkPool
 	newChunk      Chunk
 	coProcessor   CoProcessor
-	opt           query.ProcessorOptions
+	opt           *query.ProcessorOptions
 	Inputs        ChunkPorts
 	Outputs       ChunkPorts
 
 	ppForAlign *tracing.Span
 }
 
-func NewAlignTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hybridqp.RowDataType, opt query.ProcessorOptions) *AlignTransform {
+func NewAlignTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hybridqp.RowDataType, opt *query.ProcessorOptions) *AlignTransform {
 	if len(inRowDataType) != 1 || len(outRowDataType) != 1 {
 		panic("NewAlignTransform raise error: the Inputs and Outputs should be 1")
 	}
@@ -70,7 +70,7 @@ func NewAlignTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hy
 
 type AlignTransformCreator struct{}
 
-func (c *AlignTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *AlignTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewAlignTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, opt)
 	return p, nil
 }
@@ -211,7 +211,7 @@ func updateNils(input, output Column, intervalIndex []int, inputSize int) {
 		}
 		vs, ve := input.GetRangeValueIndexV2(start, end)
 		if vs < ve {
-			output.AppendNilsV2(true)
+			output.AppendNotNil()
 		}
 	}
 }
@@ -242,9 +242,9 @@ func NewIntegerAlignIterator() *IntegerAlignIterator {
 func (f *IntegerAlignIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams) {
 	input := endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	output.AppendIntegerValues(input.IntegerValues()...)
+	output.AppendIntegerValues(input.IntegerValues())
 	if input.ColumnTimes() != nil {
-		output.AppendColumnTimes(input.ColumnTimes()...)
+		output.AppendColumnTimes(input.ColumnTimes())
 	}
 	updateNils(input, output, endpoint.InputPoint.Chunk.IntervalIndex(), endpoint.InputPoint.Chunk.NumberOfRows())
 }
@@ -258,9 +258,9 @@ func NewFloatAlignIterator() *FloatAlignIterator {
 func (f *FloatAlignIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams) {
 	input := endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	output.AppendFloatValues(input.FloatValues()...)
+	output.AppendFloatValues(input.FloatValues())
 	if input.ColumnTimes() != nil {
-		output.AppendColumnTimes(input.ColumnTimes()...)
+		output.AppendColumnTimes(input.ColumnTimes())
 	}
 	updateNils(input, output, endpoint.InputPoint.Chunk.IntervalIndex(), endpoint.InputPoint.Chunk.NumberOfRows())
 }
@@ -276,7 +276,7 @@ func (f *StringAlignIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	output.AppendStringBytes(input.GetStringBytes())
 	if input.ColumnTimes() != nil {
-		output.AppendColumnTimes(input.ColumnTimes()...)
+		output.AppendColumnTimes(input.ColumnTimes())
 	}
 	updateNils(input, output, endpoint.InputPoint.Chunk.IntervalIndex(), endpoint.InputPoint.Chunk.NumberOfRows())
 }
@@ -290,9 +290,9 @@ func NewBooleanAlignIterator() *BooleanAlignIterator {
 func (f *BooleanAlignIterator) Next(endpoint *IteratorEndpoint, _ *IteratorParams) {
 	input := endpoint.InputPoint.Chunk.Column(endpoint.InputPoint.Ordinal)
 	output := endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
-	output.AppendBooleanValues(input.BooleanValues()...)
+	output.AppendBooleanValues(input.BooleanValues())
 	if input.ColumnTimes() != nil {
-		output.AppendColumnTimes(input.ColumnTimes()...)
+		output.AppendColumnTimes(input.ColumnTimes())
 	}
 	updateNils(input, output, endpoint.InputPoint.Chunk.IntervalIndex(), endpoint.InputPoint.Chunk.NumberOfRows())
 }

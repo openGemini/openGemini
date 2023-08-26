@@ -20,13 +20,18 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/readcache"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
+
+var hitRatioStat = statistics.NewHitRatioStatistics()
 
 var MmapEn = false
 var ReadCacheEn = false
@@ -53,7 +58,7 @@ func EnableReadCache(readCacheLimit uint64) {
 
 type BasicFileReader interface {
 	Name() string
-	ReadAt(off int64, size uint32, dst *[]byte) ([]byte, error)
+	ReadAt(off int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	Rename(newName string) error
 	ReOpen() error
 	IsMmapRead() bool
@@ -101,7 +106,7 @@ func (r *fileReader) IsOpen() bool {
 	return r.fd != nil
 }
 
-func (r *fileReader) ReadAt(off int64, size uint32, dstPtr *[]byte) ([]byte, error) {
+func (r *fileReader) ReadAt(off int64, size uint32, dstPtr *[]byte, ioPriority int) ([]byte, error) {
 	if size < 1 {
 		return nil, nil
 	}
@@ -120,6 +125,7 @@ func (r *fileReader) ReadAt(off int64, size uint32, dstPtr *[]byte) ([]byte, err
 	*dstPtr = bufferpool.Resize(*dstPtr, int(size))
 	dst := *dstPtr
 
+	start := time.Now()
 	n, err := r.fd.ReadAt(dst, off)
 	if err != nil && err != io.EOF {
 		err = errReadFail(r.Name(), err)
@@ -131,6 +137,20 @@ func (r *fileReader) ReadAt(off int64, size uint32, dstPtr *[]byte) ([]byte, err
 		return nil, errno.NewError(errno.ShortRead, n, size).SetModule(errno.ModuleTssp)
 	}
 
+	if ioPriority == IO_PRIORITY_LOW_READ {
+		err = BackGroundReaderWait(int(size))
+		if err != nil {
+			log.Error("read meta block wait error", zap.Error(err))
+			return nil, err
+		}
+		atomic.AddInt64(&statistics.IOStat.IOBackReadDuration, time.Since(start).Nanoseconds())
+		atomic.AddInt64(&statistics.IOStat.IOBackReadOkBytes, int64(size))
+		atomic.AddInt64(&statistics.IOStat.IOBackReadOkCount, 1)
+	} else {
+		atomic.AddInt64(&statistics.IOStat.IOFrontReadDuration, time.Since(start).Nanoseconds())
+		atomic.AddInt64(&statistics.IOStat.IOFrontReadOkBytes, int64(size))
+		atomic.AddInt64(&statistics.IOStat.IOFrontReadOkCount, 1)
+	}
 	return dst[:n], nil
 }
 
@@ -208,7 +228,7 @@ func (r *fileReader) ReOpen() error {
 	lock := FileLockOption("")
 	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
 	r.fd, err = Open(r.name, lock, pri)
-
+	hitRatioStat.AddQueryFileUnHitTotal(1)
 	if err != nil {
 		err = errOpenFail(r.name, err)
 		log.Error("open file fail", zap.Error(err))

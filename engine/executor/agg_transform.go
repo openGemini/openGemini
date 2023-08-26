@@ -49,7 +49,7 @@ type StreamAggregateTransform struct {
 	bufChunk             []Chunk
 	Inputs               ChunkPorts
 	Outputs              ChunkPorts
-	opt                  query.ProcessorOptions
+	opt                  *query.ProcessorOptions
 	aggLogger            *logger.Logger
 	postProcess          func(Chunk)
 
@@ -60,7 +60,7 @@ type StreamAggregateTransform struct {
 }
 
 func NewStreamAggregateTransform(
-	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, isSubQuery bool,
+	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, isSubQuery bool,
 ) (*StreamAggregateTransform, error) {
 	if len(inRowDataType) != 1 || len(outRowDataType) != 1 {
 		panic("NewStreamAggregateTransform raise error: the Inputs and Outputs should be 1")
@@ -127,7 +127,7 @@ func NewStreamAggregateTransform(
 type StreamAggregateTransformCreator struct {
 }
 
-func (c *StreamAggregateTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *StreamAggregateTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	var isSubQuery = false
 	if len(plan.Schema().Sources()) > 0 {
 		switch plan.Schema().Sources()[0].(type) {

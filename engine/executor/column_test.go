@@ -124,8 +124,8 @@ func TestColumnImpl_GetValueIndex(t *testing.T) {
 func TestGetRangeValueIndex(t *testing.T) {
 	// first test
 	c1 := executor.NewColumnImpl(influxql.Float)
-	c1.AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
-	c1.AppendColumnTimes([]int64{1, 2, 3, 4, 5}...)
+	c1.AppendFloatValues([]float64{1, 2, 3, 4, 5})
+	c1.AppendColumnTimes([]int64{1, 2, 3, 4, 5})
 	c1.AppendNilsV2(true, false, true, false, true, false, true, false, false, false, true) // 10101010 00100000
 
 	start, end := c1.GetRangeValueIndexV2(0, 8)
@@ -147,8 +147,8 @@ func TestGetRangeValueIndex(t *testing.T) {
 
 func ColumnImplGetRangeValueIndex() executor.Column {
 	c1 := executor.NewColumnImpl(influxql.Float)
-	c1.AppendFloatValues(make([]float64, 1024)...)
-	c1.AppendColumnTimes(make([]int64, 1024)...)
+	c1.AppendFloatValues(make([]float64, 1024))
+	c1.AppendColumnTimes(make([]int64, 1024))
 	nils := make([]bool, 0, 1024)
 	for i := 0; i < 1024; i++ {
 		notNil := rand.Intn(2) == 1
@@ -179,17 +179,17 @@ func TestColumnImpl_AppendNils(t *testing.T) {
 	assert.Equal(t, c1.NilCount(), 1)
 	c1.Reset()
 
-	c1.AppendFloatValues(0)
-	c1.AppendNilsV2(true)
+	c1.AppendFloatValue(0)
+	c1.AppendNotNil()
 	assert.Equal(t, c1.Length(), 1)
 	assert.Equal(t, c1.NilCount(), 0)
 
-	c1.AppendFloatValues(1, 2)
+	c1.AppendFloatValues([]float64{1, 2})
 	c1.AppendNilsV2(true, false, false, true)
 	assert.Equal(t, c1.Length(), 5)
 	assert.Equal(t, c1.NilCount(), 2)
 
-	c1.AppendFloatValues(3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
+	c1.AppendFloatValues([]float64{3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13})
 	c1.AppendNilsV2(true, false, false, true, true, false, true, true, true, false, true, true, false, true, true, false, true)
 	assert.Equal(t, c1.Length(), 22)
 	assert.Equal(t, c1.NilCount(), 8)
@@ -275,7 +275,7 @@ func TestGetStringValueBytes(t *testing.T) {
 	off := []uint32{0, 2, 4, 6}
 	c1 := executor.NewColumnImpl(influxql.Float)
 	c1.AppendStringBytes(strbyte, off)
-	c1.AppendColumnTimes([]int64{1, 2, 3, 4, 5}...)
+	c1.AppendColumnTimes([]int64{1, 2, 3, 4, 5})
 	c1.AppendNilsV2(false, true, true, true, true)
 
 	var valueBits []byte

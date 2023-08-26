@@ -36,12 +36,16 @@ func TestHitRatio(t *testing.T) {
 	stat.AddIndexWriterHitTotal(2)
 	stat.AddMergeColValGetTotal(2)
 	stat.AddMergeColValHitTotal(2)
+	stat.AddFileOpenTotal(2)
+	stat.AddQueryFileUnHitTotal(2)
 
 	fields := map[string]interface{}{
 		"IndexWriterGetTotal": int64(2),
 		"IndexWriterHitTotal": int64(2),
 		"MergeColValGetTotal": int64(2),
 		"MergeColValHitTotal": int64(2),
+		"FileOpenTotal":       int64(2),
+		"QueryFileUnHitTotal": int64(2),
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf, err := stat.Collect(nil)

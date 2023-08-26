@@ -16,7 +16,9 @@ limitations under the License.
 
 package cpu
 
-import "runtime"
+import (
+	"runtime"
+)
 
 var cpuNum = runtime.NumCPU()
 
@@ -24,10 +26,17 @@ func GetCpuNum() int {
 	return cpuNum
 }
 
-func SetCpuNum(n int) {
-	if n <= 0 {
-		return
+func SetCpuNum(n, ratio int) {
+	if n > 0 {
+		cpuNum = n
 	}
 
-	cpuNum = n
+	if ratio <= 1 {
+		ratio = 1
+	}
+
+	cpuNum = cpuNum * ratio
+	if cpuNum >= 64 {
+		cpuNum = 64
+	}
 }

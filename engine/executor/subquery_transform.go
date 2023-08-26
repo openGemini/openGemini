@@ -32,7 +32,7 @@ type SubQueryTransform struct {
 	input          *ChunkPort
 	output         *ChunkPort
 	ops            []hybridqp.ExprOptions
-	opt            query.ProcessorOptions
+	opt            *query.ProcessorOptions
 	chunkPool      *CircularChunkPool
 	transparents   []func(dst Column, src Column)
 	mapTransToIn   []int
@@ -41,7 +41,7 @@ type SubQueryTransform struct {
 	workTracing *tracing.Span
 }
 
-func NewSubQueryTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions) *SubQueryTransform {
+func NewSubQueryTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions) *SubQueryTransform {
 	trans := &SubQueryTransform{
 		input:        NewChunkPort(inRowDataType),
 		output:       NewChunkPort(outRowDataType),
@@ -62,7 +62,7 @@ func NewSubQueryTransform(inRowDataType hybridqp.RowDataType, outRowDataType hyb
 type SubQueryTransformCreator struct {
 }
 
-func (c *SubQueryTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *SubQueryTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewSubQueryTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), plan.RowExprOptions(), opt)
 	return p, nil
 }
@@ -154,7 +154,7 @@ func (trans *SubQueryTransform) tagValueFromChunk(chunk Chunk, name string) Colu
 			end := chunk.TagIndex()[i+1]
 			value, _ := chunk.Tags()[i].GetChunkTagValue(name)
 			for j := begin; j < end; j++ {
-				column.AppendStringValues(value)
+				column.AppendStringValue(value)
 			}
 		}
 	}
@@ -166,7 +166,7 @@ func (trans *SubQueryTransform) tagValueFromChunk(chunk Chunk, name string) Colu
 		return column
 	}
 	for j := begin; j < end; j++ {
-		column.AppendStringValues(value)
+		column.AppendStringValue(value)
 	}
 	column.AppendManyNotNil(chunk.Len())
 	return column
@@ -175,9 +175,9 @@ func (trans *SubQueryTransform) tagValueFromChunk(chunk Chunk, name string) Colu
 func (trans *SubQueryTransform) transform(chunk Chunk) Chunk {
 	oChunk := trans.chunkPool.GetChunk()
 	oChunk.SetName(chunk.Name())
-	oChunk.AppendTime(chunk.Time()...)
+	oChunk.AppendTimes(chunk.Time())
 	oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
-	oChunk.AppendIntervalIndex(chunk.IntervalIndex()...)
+	oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)

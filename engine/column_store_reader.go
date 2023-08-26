@@ -87,7 +87,7 @@ func NewColumnStoreReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOpt
 		dimVals:     make([]string, len(schema.Options().GetOptDimension())),
 		logger:      logger.NewLogger(errno.ModuleQueryEngine),
 	}
-	if !r.schema.HasCall() {
+	if len(r.schema.GetSortFields()) == 0 && !r.schema.HasCall() {
 		r.limit = schema.Options().GetLimit() + schema.Options().GetOffset()
 	}
 	return r
@@ -96,7 +96,7 @@ func NewColumnStoreReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOpt
 type ColumnStoreReaderCreator struct {
 }
 
-func (c *ColumnStoreReaderCreator) Create(plan executor.LogicalPlan, _ query.ProcessorOptions) (executor.Processor, error) {
+func (c *ColumnStoreReaderCreator) Create(plan executor.LogicalPlan, _ *query.ProcessorOptions) (executor.Processor, error) {
 	p := NewColumnStoreReader(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, "", 0)
 	return p, nil
 }
@@ -152,8 +152,12 @@ func (r *ColumnStoreReader) Abort() {
 }
 
 func (r *ColumnStoreReader) Release() error {
-	r.chunkPool.Release()
-	r.recordPool.PutRecordInCircularPool()
+	if r.chunkPool != nil {
+		r.chunkPool.Release()
+	}
+	if r.recordPool != nil {
+		r.recordPool.PutRecordInCircularPool()
+	}
 	r.rowBitmap = r.rowBitmap[:0]
 	r.dimVals = r.dimVals[:0]
 	return nil
@@ -180,16 +184,13 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 	if err != nil {
 		return
 	}
-	r.queryCtx.m = make(map[string]interface{})
-	for _, id := range r.queryCtx.filterFieldsIdx {
-		r.queryCtx.m[r.queryCtx.schema[id].Name], _ = influx.FieldType2Val(r.queryCtx.schema[id].Type)
+	r.queryCtx.filterOption.FiltersMap = make(map[string]interface{})
+	for _, id := range r.queryCtx.filterOption.FieldsIdx {
+		r.queryCtx.filterOption.FiltersMap[r.queryCtx.schema[id].Name], _ = influx.FieldType2Val(r.queryCtx.schema[id].Type)
 	}
 
 	// init the filter opt
-	r.filterOpt = immutable.NewFilterOptsWithBinaryFunc(
-		r.opt.SourceCondition, r.queryCtx.m, r.queryCtx.filterFieldsIdx,
-		r.queryCtx.auxTags, &influx.PointTags{}, r.queryCtx.condFunctions,
-	)
+	r.filterOpt = immutable.NewFilterOpts(r.opt.Condition, &r.queryCtx.filterOption, &influx.PointTags{}, nil)
 
 	// init the read ctx
 	readCtx = immutable.NewReadContext(r.schema.Options().IsAscending())
@@ -209,6 +210,9 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 	tr, readCtx, err = r.initQueryCtx()
 	if err != nil {
 		return
+	}
+	if !r.schema.Options().GetTimeFirstKey() {
+		tr = util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
 	}
 	var locs []*immutable.Location
 	for _, shardFrags := range r.frags {
@@ -253,21 +257,25 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	r.inSchema = append(r.inSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
 
 	// init the filter functions
-	if r.queryCtx.condFunctions, err = binaryfilterfunc.InitCondFunctions(r.schema.Options().GetSourceCondition(), &r.inSchema); err != nil {
+	if r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.InitCondFunctions(r.schema.Options().GetCondition(), &r.inSchema); err != nil {
 		return
 	}
-	r.filterOpt.SetCondFuncs(r.queryCtx.condFunctions)
 
-	// init the record pool
-	r.recordPool = record.NewCircularRecordPool(
-		record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false,
-	)
-	if r.filterOpt.GetCond() != nil {
+	// if TIME column is the first column of the sort KEY, it would be filter by binary search by FilterByTime
+	startTime, endTime := r.schema.Options().GetStartTime(), r.schema.Options().GetEndTime()
+	if !r.schema.Options().GetTimeFirstKey() {
+		// init the filter function for time column
+		r.queryCtx.filterOption.TimeCondFunction = binaryfilterfunc.InitTimeCondFunctions(startTime, endTime, &r.inSchema)
+	}
+	r.filterOpt.SetCondFuncs(&r.queryCtx.filterOption)
+
+	// init the data record pool
+	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false)
+
+	// init the filter record pool
+	if r.filterOpt.GetCond() != nil || binaryfilterfunc.HaveTimeCond(startTime, endTime) {
 		r.readCursor.AddFilterRecPool(
-			record.NewCircularRecordPool(
-				record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false,
-			),
-		)
+			record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false))
 	}
 
 	// init the chunk pool
@@ -449,7 +457,7 @@ func (r *ColumnStoreReader) tranRecToChunk(rec *record.Record) (executor.Chunk, 
 	if len(times) > cap(chunk.Time()) {
 		chunk.SetTime(make([]int64, 0, len(times)))
 	}
-	chunk.AppendTime(times...)
+	chunk.AppendTimes(times)
 	return chunk, nil
 }
 

@@ -37,7 +37,8 @@ const (
 	Stream
 )
 
-const HashMergeTransfromBufCap = 1024
+const HashMergeTransformBufCap = 1024
+const hashMergeTransformName = "HashMergeTransform"
 
 type HashMergeTransform struct {
 	BaseProcessor
@@ -106,7 +107,7 @@ func NewHashMergeHashTypeTransform(inRowDataType, outRowDataType []hybridqp.RowD
 		opt:               s.opt.(*query.ProcessorOptions),
 		groupMap:          hashtable.DefaultStringHashMap(),
 		groupResultMap:    make([]*mergeResultMsg, 0),
-		bufGroupKeysMPool: NewGroupKeysPool(HashMergeTransfromBufCap),
+		bufGroupKeysMPool: NewGroupKeysPool(HashMergeTransformBufCap),
 		isSpill:           false,
 		hashMergeType:     Hash,
 	}
@@ -154,7 +155,7 @@ func (trans *HashMergeTransform) initNewResultFuncs() error {
 }
 
 func (trans *HashMergeTransform) Name() string {
-	return hashAggTransfromName
+	return hashMergeTransformName
 }
 
 func (trans *HashMergeTransform) Explain() []ValuePair {

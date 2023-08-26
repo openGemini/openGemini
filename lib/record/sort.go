@@ -26,11 +26,12 @@ type PrimaryKey struct {
 }
 
 type SortData struct {
-	idx     int
-	Times   []int64
-	RowIds  []int32
-	Data    []SortItem
-	SortRec *Record
+	idx           int
+	Times         []int64
+	RowIds        []int32
+	DuplicateRows []bool
+	Data          []SortItem
+	SortRec       *Record
 }
 
 func (d *SortData) Less(i, j int) bool {
@@ -40,6 +41,10 @@ func (d *SortData) Less(i, j int) bool {
 		}
 		v := item.Compare(i, j)
 		if v == 0 {
+			if len(d.Data)-1 == idx && len(d.DuplicateRows) > 0 {
+				//mark duplicate rows as true
+				d.DuplicateRows[d.RowIds[j]] = true
+			}
 			continue
 		}
 		d.idx = idx //current swap column idx
@@ -49,7 +54,7 @@ func (d *SortData) Less(i, j int) bool {
 }
 
 func (d *SortData) Swap(i, j int) {
-	for l := d.idx; l < len(d.Data); l++ {
+	for l := 0; l < len(d.Data); l++ {
 		if d.Data[l].Len() == 0 {
 			continue
 		}
@@ -95,6 +100,24 @@ func (d *SortData) Init(times []int64, primaryKey, sortKey []PrimaryKey, record 
 
 	orderByMap := d.setOrderByMap(sortKey, record.Schema)
 	d.genSortData(times, orderByMap, sortKey, record, 0)
+}
+
+func (d *SortData) InitDuplicateRows(size int, record *Record, deduplicate bool) {
+	if !deduplicate {
+		d.DuplicateRows = d.DuplicateRows[:0]
+	} else {
+		if len(record.ColVals) == 0 {
+			return
+		}
+		if cap(d.DuplicateRows) < size {
+			d.DuplicateRows = make([]bool, size)
+		} else {
+			d.DuplicateRows = d.DuplicateRows[:size]
+			for i := 0; i < size; i++ {
+				d.DuplicateRows[i] = false
+			}
+		}
+	}
 }
 
 func (d *SortData) genSortData(times []int64, orderByMap map[int]int, sortFileds []PrimaryKey, record *Record, start int) {

@@ -95,9 +95,16 @@ func (l *LocationCursor) AddRef() {
 }
 
 func (l *LocationCursor) Unref() {
-	for i := range l.lcs {
-		l.lcs[i].r.UnrefFileReader()
-		l.lcs[i].r.Unref()
+	if fileQueryCache != nil && len(l.lcs) <= int(fileQueryCache.GetCap()) {
+		for i := range l.lcs {
+			fileQueryCache.Put(l.lcs[i].r)
+			l.lcs[i].r.Unref()
+		}
+	} else {
+		for i := range l.lcs {
+			l.lcs[i].r.UnrefFileReader()
+			l.lcs[i].r.Unref()
+		}
 	}
 }
 

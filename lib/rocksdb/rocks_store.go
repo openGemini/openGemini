@@ -33,10 +33,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"runtime"
 	"unsafe"
 
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/go-msgpack/codec"
 	"go.uber.org/zap"
 )
@@ -80,7 +80,7 @@ func NewRocksStore(logPath string, maxSize int, maxNum int, path string) (*Rocks
 	var dbOptions *C.rocksdb_options_t
 	dbOptions = C.rocksdb_options_create()
 
-	C.rocksdb_options_increase_parallelism(dbOptions, C.int(runtime.NumCPU()))
+	C.rocksdb_options_increase_parallelism(dbOptions, C.int(cpu.GetCpuNum()))
 	C.rocksdb_options_set_create_if_missing(dbOptions, C.uchar(1))
 	C.rocksdb_options_optimize_level_style_compaction(dbOptions, C.ulong(0))
 	C.rocksdb_options_set_create_missing_column_families(dbOptions, C.uchar(1))

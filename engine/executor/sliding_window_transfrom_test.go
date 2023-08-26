@@ -49,13 +49,13 @@ func buildComInChunkSlidingWindow() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{7, 1, 6, 4, 7, 1}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{7, 1, 6, 4, 7, 1})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
 	// second chunk
@@ -65,13 +65,13 @@ func buildComInChunkSlidingWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 7, 2, 7, 3, 4}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 7, 2, 7, 3, 4})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30}...)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179})
 	inCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -99,13 +99,13 @@ func buildDstChunkSlidingWindow() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada")},
 		[]int{0, 3, 6})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk1.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk1.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 52.7, 35, 35, 95.8}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 52.7, 35, 35, 95.8})
 	dstCk1.Column(0).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 153, 138, 138, 318}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 153, 138, 138, 318})
 	dstCk1.Column(1).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 	dstChunks = append(dstChunks, dstCk1)
 
@@ -116,13 +116,13 @@ func buildDstChunkSlidingWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 3, 6})
-	dstCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk2.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk2.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk2.Column(0).AppendFloatValues([]float64{61.099999999999994, 48.8, 171.8, 3.4, 3.4, 28.3, 30, 30, 30}...)
+	dstCk2.Column(0).AppendFloatValues([]float64{61.099999999999994, 48.8, 171.8, 3.4, 3.4, 28.3, 30, 30, 30})
 	dstCk2.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true, true)
 
-	dstCk2.Column(1).AppendIntegerValues([]int64{219, 149, 352, 90, 90, 300, 300, 300}...)
+	dstCk2.Column(1).AppendIntegerValues([]int64{219, 149, 352, 90, 90, 300, 300, 300})
 	dstCk2.Column(1).AppendNilsV2(true, true, true, true, true, false, true, true, true)
 	dstChunks = append(dstChunks, dstCk2)
 	return dstChunks
@@ -151,19 +151,19 @@ func buildComInChunkSlidingWindowCount() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{7, 1, 6, 4, 7, 1}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{7, 1, 6, 4, 7, 1})
 
-	inCk1.Column(0).AppendFloatValues([]float64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(0).AppendFloatValues([]float64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
-	inCk1.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true}...)
+	inCk1.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true})
 	inCk1.Column(2).AppendManyNotNil(6)
 
-	inCk1.Column(3).AppendStringValues([]string{"x", "y", "z", "a", "b", "c"}...)
+	inCk1.Column(3).AppendStringValues([]string{"x", "y", "z", "a", "b", "c"})
 	inCk1.Column(3).AppendManyNotNil(6)
 	// second chunk
 	inCk2 := b.NewChunk("mst")
@@ -172,19 +172,19 @@ func buildComInChunkSlidingWindowCount() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 7, 2, 7, 3, 4}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 7, 2, 7, 3, 4})
 
-	inCk2.Column(0).AppendFloatValues([]float64{191, 80, 153, 138, 180, 70}...)
+	inCk2.Column(0).AppendFloatValues([]float64{191, 80, 153, 138, 180, 70})
 	inCk2.Column(0).AppendManyNotNil(6)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk2.Column(1).AppendManyNotNil(6)
 
-	inCk2.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true}...)
+	inCk2.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true})
 	inCk2.Column(2).AppendManyNotNil(6)
 
-	inCk2.Column(3).AppendStringValues([]string{"x", "y", "z", "a", "b", "c"}...)
+	inCk2.Column(3).AppendStringValues([]string{"x", "y", "z", "a", "b", "c"})
 	inCk2.Column(3).AppendManyNotNil(6)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -204,19 +204,19 @@ func buildComInChunkSlidingWindowCountTimeDuplicated() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk1.AppendTime([]int64{1, 1, 2, 2, 3, 3}...)
+	inCk1.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk1.AppendTimes([]int64{1, 1, 2, 2, 3, 3})
 
-	inCk1.Column(0).AppendFloatValues([]float64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(0).AppendFloatValues([]float64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
-	inCk1.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true}...)
+	inCk1.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true})
 	inCk1.Column(2).AppendManyNotNil(6)
 
-	inCk1.Column(3).AppendStringValues([]string{"x", "y", "z", "a", "b", "c"}...)
+	inCk1.Column(3).AppendStringValues([]string{"x", "y", "z", "a", "b", "c"})
 	inCk1.Column(3).AppendManyNotNil(6)
 	inChunks = append(inChunks, inCk1)
 	return inChunks
@@ -244,19 +244,19 @@ func buildDstChunkSlidingWindowCount() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada")},
 		[]int{0, 3, 6})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk1.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk1.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2}...)
+	dstCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2})
 	dstCk1.Column(0).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2})
 	dstCk1.Column(1).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(2).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2}...)
+	dstCk1.Column(2).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2})
 	dstCk1.Column(2).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(3).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2}...)
+	dstCk1.Column(3).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1, 2})
 	dstCk1.Column(3).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 	dstChunks = append(dstChunks, dstCk1)
 
@@ -267,19 +267,19 @@ func buildDstChunkSlidingWindowCount() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 3, 6})
-	dstCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk2.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk2.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk2.Column(0).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2}...)
+	dstCk2.Column(0).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2})
 	dstCk2.Column(0).AppendManyNotNil(9)
 
-	dstCk2.Column(1).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2}...)
+	dstCk2.Column(1).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2})
 	dstCk2.Column(1).AppendManyNotNil(9)
 
-	dstCk2.Column(2).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2}...)
+	dstCk2.Column(2).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2})
 	dstCk2.Column(2).AppendManyNotNil(9)
 
-	dstCk2.Column(3).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2}...)
+	dstCk2.Column(3).AppendIntegerValues([]int64{2, 1, 2, 1, 1, 1, 2, 2, 2})
 	dstCk2.Column(3).AppendManyNotNil(9)
 	dstChunks = append(dstChunks, dstCk2)
 	return dstChunks
@@ -296,19 +296,19 @@ func buildDstChunkSlidingWindowCountTimeDuplicated() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=")},
 		[]int{0})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2}...)
-	dstCk1.AppendTime([]int64{1, 2, 3}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2})
+	dstCk1.AppendTimes([]int64{1, 2, 3})
 
-	dstCk1.Column(0).AppendIntegerValues([]int64{6, 4, 2}...)
+	dstCk1.Column(0).AppendIntegerValues([]int64{6, 4, 2})
 	dstCk1.Column(0).AppendManyNotNil(3)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{6, 4, 2}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{6, 4, 2})
 	dstCk1.Column(1).AppendManyNotNil(3)
 
-	dstCk1.Column(2).AppendIntegerValues([]int64{6, 4, 2}...)
+	dstCk1.Column(2).AppendIntegerValues([]int64{6, 4, 2})
 	dstCk1.Column(2).AppendManyNotNil(3)
 
-	dstCk1.Column(3).AppendIntegerValues([]int64{6, 4, 2}...)
+	dstCk1.Column(3).AppendIntegerValues([]int64{6, 4, 2})
 	dstCk1.Column(3).AppendManyNotNil(3)
 	dstChunks = append(dstChunks, dstCk1)
 	return dstChunks
@@ -336,16 +336,16 @@ func buildComInChunkSlidingWindowMinMax() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{7, 1, 6, 4, 7, 1}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{7, 1, 6, 4, 7, 1})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
-	inCk1.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true}...)
+	inCk1.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true})
 	inCk1.Column(2).AppendManyNotNil(6)
 
 	// second chunk
@@ -355,16 +355,16 @@ func buildComInChunkSlidingWindowMinMax() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 7, 2, 7, 3, 4}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 7, 2, 7, 3, 4})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30}...)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179})
 	inCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
-	inCk2.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true}...)
+	inCk2.Column(2).AppendBooleanValues([]bool{false, false, false, true, true, true})
 	inCk2.Column(2).AppendManyNotNil(6)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -393,16 +393,16 @@ func buildDstChunkSlidingWindowMin() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada")},
 		[]int{0, 3, 6})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk1.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk1.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 52.7, 35, 35, 35}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 52.7, 35, 35, 35})
 	dstCk1.Column(0).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 153, 138, 138, 138}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 153, 138, 138, 138})
 	dstCk1.Column(1).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(2).AppendBooleanValues([]bool{false, false, false, false, true, true, true}...)
+	dstCk1.Column(2).AppendBooleanValues([]bool{false, false, false, false, true, true, true})
 	dstCk1.Column(2).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 	dstChunks = append(dstChunks, dstCk1)
 
@@ -413,16 +413,16 @@ func buildDstChunkSlidingWindowMin() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 3, 6})
-	dstCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk2.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk2.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk2.Column(0).AppendFloatValues([]float64{12.3, 48.8, 48.8, 3.4, 3.4, 28.3, 30, 30, 30}...)
+	dstCk2.Column(0).AppendFloatValues([]float64{12.3, 48.8, 48.8, 3.4, 3.4, 28.3, 30, 30, 30})
 	dstCk2.Column(0).AppendManyNotNil(9)
 
-	dstCk2.Column(1).AppendIntegerValues([]int64{70, 149, 149, 90, 90, 121, 121, 121}...)
+	dstCk2.Column(1).AppendIntegerValues([]int64{70, 149, 149, 90, 90, 121, 121, 121})
 	dstCk2.Column(1).AppendNilsV2(true, true, true, true, true, false, true, true, true)
 
-	dstCk2.Column(2).AppendBooleanValues([]bool{false, false, false, false, false, true, true, true, true}...)
+	dstCk2.Column(2).AppendBooleanValues([]bool{false, false, false, false, false, true, true, true, true})
 	dstCk2.Column(2).AppendManyNotNil(9)
 	dstChunks = append(dstChunks, dstCk2)
 	return dstChunks
@@ -449,16 +449,16 @@ func buildDstChunkSlidingWindowMax() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada")},
 		[]int{0, 3, 6})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk1.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk1.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 52.7, 35, 35, 60.8}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 52.7, 35, 35, 60.8})
 	dstCk1.Column(0).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 153, 138, 138, 180}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 153, 138, 138, 180})
 	dstCk1.Column(1).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 
-	dstCk1.Column(2).AppendBooleanValues([]bool{false, false, false, false, true, true, true}...)
+	dstCk1.Column(2).AppendBooleanValues([]bool{false, false, false, false, true, true, true})
 	dstCk1.Column(2).AppendNilsV2(false, false, true, true, true, true, true, true, true)
 	dstChunks = append(dstChunks, dstCk1)
 
@@ -469,16 +469,16 @@ func buildDstChunkSlidingWindowMax() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 3, 6})
-	dstCk2.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6, 7, 8}...)
-	dstCk2.AppendTime([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3}...)
+	dstCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8})
+	dstCk2.AppendTimes([]int64{1, 2, 3, 1, 2, 3, 1, 2, 3})
 
-	dstCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 123, 3.4, 3.4, 28.3, 30, 30, 30}...)
+	dstCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 123, 3.4, 3.4, 28.3, 30, 30, 30})
 	dstCk2.Column(0).AppendManyNotNil(9)
 
-	dstCk2.Column(1).AppendIntegerValues([]int64{149, 149, 203, 90, 90, 179, 179, 179}...)
+	dstCk2.Column(1).AppendIntegerValues([]int64{149, 149, 203, 90, 90, 179, 179, 179})
 	dstCk2.Column(1).AppendNilsV2(true, true, true, true, true, false, true, true, true)
 
-	dstCk2.Column(2).AppendBooleanValues([]bool{true, false, false, false, false, true, true, true, true}...)
+	dstCk2.Column(2).AppendBooleanValues([]bool{true, false, false, false, false, true, true, true, true})
 	dstCk2.Column(2).AppendManyNotNil(9)
 	dstChunks = append(dstChunks, dstCk2)
 	return dstChunks
@@ -488,7 +488,7 @@ func testSlidingWindowTransformBase(
 	t *testing.T,
 	inChunks []executor.Chunk, dstChunks []executor.Chunk,
 	inRowDataType, outRowDataType hybridqp.RowDataType,
-	exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, schema hybridqp.Catalog,
+	exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, schema hybridqp.Catalog,
 ) {
 	// generate each executor node node to build a dag.
 	source := NewSourceFromMultiChunk(inRowDataType, inChunks)
@@ -582,7 +582,7 @@ func TestSlidingWindowTransformWithSum(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataTypeSlidingWindow(), buildDstRowDataTypeSlidingWindow(),
-		exprOpt, opt, schema,
+		exprOpt, &opt, schema,
 	)
 }
 
@@ -649,7 +649,7 @@ func TestSlidingWindowTransformWithCount(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataTypeSlidingWindowCount(), buildDstRowDataTypeSlidingWindowCount(),
-		exprOpt, opt, schema,
+		exprOpt, &opt, schema,
 	)
 }
 
@@ -689,7 +689,7 @@ func TestSlidingWindowTransformWithCountTimeDuplicated(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataTypeSlidingWindowCount(), buildDstRowDataTypeSlidingWindowCount(),
-		exprOpt, opt, schema,
+		exprOpt, &opt, schema,
 	)
 }
 
@@ -747,7 +747,7 @@ func TestSlidingWindowTransformWithMin(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataTypeSlidingWindowMinMax(), buildDstRowDataTypeSlidingWindowMin(),
-		exprOpt, opt, schema,
+		exprOpt, &opt, schema,
 	)
 }
 
@@ -805,6 +805,6 @@ func TestSlidingWindowTransformWithMax(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataTypeSlidingWindowMinMax(), buildDstRowDataTypeSlidingWindowMax(),
-		exprOpt, opt, schema,
+		exprOpt, &opt, schema,
 	)
 }

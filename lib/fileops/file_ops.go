@@ -30,6 +30,7 @@ var (
 	IO_PRIORITY_HIGH       = 1
 	IO_PRIORITY_NORMAL     = 2
 	IO_PRIORITY_LOW        = 3
+	IO_PRIORITY_LOW_READ   = 4
 )
 
 const (

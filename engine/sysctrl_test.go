@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -39,7 +40,8 @@ func TestEngine_processReq_error_point(t *testing.T) {
 		"switchon": "true",
 		"term":     "return",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 }
 
 func TestEngine_processReq_readonly(t *testing.T) {
@@ -53,7 +55,8 @@ func TestEngine_processReq_readonly(t *testing.T) {
 		"switchon": "true",
 		"allnodes": "y",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 }
 
 func TestEngine_processReq_snapshot(t *testing.T) {
@@ -66,13 +69,15 @@ func TestEngine_processReq_snapshot(t *testing.T) {
 	req.SetParam(map[string]string{
 		"duration": "5s",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 
 	// invalid duration param
 	req.SetParam(map[string]string{
 		"duration": "5x",
 	})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
 }
 
 func TestEngine_processReq_compaction(t *testing.T) {
@@ -86,26 +91,30 @@ func TestEngine_processReq_compaction(t *testing.T) {
 		"switchon":  "true",
 		"allshards": "true",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 
 	req.SetParam(map[string]string{
 		"switchon": "true",
 		"shid":     "1",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.NoError(t, err)
 
 	// without param "switchon"
 	req.SetParam(map[string]string{
 		"shid": "1",
 	})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
 
 	// invalid param "allshards"
 	req.SetParam(map[string]string{
 		"switchon":  "true",
 		"allshards": "y",
 	})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
 }
 
 func TestEngine_processReq_merge(t *testing.T) {
@@ -119,26 +128,30 @@ func TestEngine_processReq_merge(t *testing.T) {
 		"switchon":  "true",
 		"allshards": "true",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 
 	req.SetParam(map[string]string{
 		"switchon": "true",
 		"shid":     "1",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.NoError(t, err)
 
 	// without param "switchon"
 	req.SetParam(map[string]string{
 		"shid": "1",
 	})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
 
 	// invalid param "allshards"
 	req.SetParam(map[string]string{
 		"switchon":  "true",
 		"allshards": "y",
 	})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
 }
 
 func TestEngine_downSample_order(t *testing.T) {
@@ -151,11 +164,13 @@ func TestEngine_downSample_order(t *testing.T) {
 	req.SetParam(map[string]string{
 		"order": "true",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 	req.SetParam(map[string]string{
 		"order": "false",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.NoError(t, err)
 }
 
 func TestEngine_processReq_debugMode(t *testing.T) {
@@ -168,10 +183,12 @@ func TestEngine_processReq_debugMode(t *testing.T) {
 	req.SetParam(map[string]string{
 		"switchon": "true",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 
 	req.SetParam(map[string]string{})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
 }
 
 func TestEngine_memUsageLimit(t *testing.T) {
@@ -184,7 +201,8 @@ func TestEngine_memUsageLimit(t *testing.T) {
 	req.SetParam(map[string]string{
 		"limit": "90",
 	})
-	require.NoError(t, e.processReq(req))
+	_, err := e.processReq(req)
+	require.NoError(t, err)
 
 	var wg sync.WaitGroup
 	wg.Add(5)
@@ -197,5 +215,82 @@ func TestEngine_memUsageLimit(t *testing.T) {
 	wg.Wait()
 
 	req.SetParam(map[string]string{})
-	require.Error(t, e.processReq(req))
+	_, err = e.processReq(req)
+	require.Error(t, err)
+}
+
+func TestEngine_getShardStatus(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"db0": {
+				0: &DBPTInfo{
+					shards: map[uint64]Shard{
+						1: &shard{ident: &meta2.ShardIdentifier{ShardID: 1, Policy: "rp0"}},
+						2: &shard{ident: &meta2.ShardIdentifier{ShardID: 2, Policy: "rp0"}},
+					},
+				},
+				1: &DBPTInfo{}, // filter out
+			},
+			"db1": { // filter out
+				2: &DBPTInfo{},
+			},
+		},
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(queryShardStatus)
+	req.SetParam(map[string]string{
+		"db":    "db0",
+		"rp":    "rp0",
+		"pt":    "0",
+		"shard": "1",
+	})
+	result, err := e.processReq(req)
+	require.NoError(t, err)
+	require.Contains(t, result["db: db0, rp: rp0, pt: 1"], `ShardId: 1`)
+	require.Contains(t, result["db: db0, rp: rp0, pt: 1"], `ReadOnly: false`)
+	require.Contains(t, result["db: db0, rp: rp0, pt: 1"], `Opened: false`)
+}
+
+func TestEngine_backgroundReadLimiter(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(BackgroundReadLimiter)
+	req.SetParam(map[string]string{
+		"limit": "100k",
+	})
+	_, err := e.processReq(req)
+	require.NoError(t, err)
+
+	req.SetParam(map[string]string{
+		"limit": "100m",
+	})
+	_, err = e.processReq(req)
+	require.NoError(t, err)
+
+	req.SetParam(map[string]string{
+		"limit": "100g",
+	})
+	_, err = e.processReq(req)
+	require.NoError(t, err)
+
+	req.SetParam(map[string]string{
+		"limit": "",
+	})
+	_, err = e.processReq(req)
+	if err == nil {
+		t.Error("error set BackgroundReadLimiter")
+	}
+
+	req.SetParam(map[string]string{
+		"limit": "100",
+	})
+	_, err = e.processReq(req)
+	if err == nil {
+		t.Error("error set BackgroundReadLimiter")
+	}
 }

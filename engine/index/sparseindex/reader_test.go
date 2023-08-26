@@ -275,14 +275,23 @@ func TestScanWithComplex(t *testing.T) {
 		)
 	})
 
-	// TODO: check
 	t.Run("exclusion search EQ AND EQ", func(t *testing.T) {
 		f(
 			pkFile,
 			buildIndexFragmentVariable(),
 			buildPkRecordComplex(),
-			nil,
+			[]*fragment.FragmentRange{fragment.NewFragmentRange(0, 1)},
 			"UserID='U1' and URL='W3'",
+		)
+	})
+
+	t.Run("exclusion search EQ AND EQ", func(t *testing.T) {
+		f(
+			pkFile,
+			buildIndexFragmentVariable(),
+			buildPkRecordComplex(),
+			[]*fragment.FragmentRange{fragment.NewFragmentRange(3, 4)},
+			"UserID='U4' and URL='W2'",
 		)
 	})
 

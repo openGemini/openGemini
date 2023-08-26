@@ -163,44 +163,44 @@ func makeChunk() executor.Chunk {
 
 	for i := 0; i < 4096; i++ {
 		chunk.AppendTime(time.Now().UnixNano())
-		c0.AppendIntegerValues(int64(i))
-		c1.AppendStringValues(fmt.Sprintf("tid_%04d", i))
-		c2.AppendFloatValues(float64(i) * 78.67)
-		c3.AppendBooleanValues(i%2 == 0)
-		c4.AppendFloatTuples(*executor.NewfloatTuple([]float64{float64(i), float64(i)}))
+		c0.AppendIntegerValue(int64(i))
+		c1.AppendStringValue(fmt.Sprintf("tid_%04d", i))
+		c2.AppendFloatValue(float64(i) * 78.67)
+		c3.AppendBooleanValue(i%2 == 0)
+		c4.AppendFloatTuple(*executor.NewfloatTuple([]float64{float64(i), float64(i)}))
 
-		c0.AppendNilsV2(true)
-		c1.AppendNilsV2(true)
-		c2.AppendNilsV2(true)
-		c3.AppendNilsV2(true)
-		c4.AppendNilsV2(true)
+		c0.AppendNotNil()
+		c1.AppendNotNil()
+		c2.AppendNotNil()
+		c3.AppendNotNil()
+		c4.AppendNotNil()
 	}
 
 	for i := 0; i < 50; i++ {
 		chunk.AppendTime(time.Now().UnixNano())
-		c0.AppendIntegerValues(int64(i))
-		c0.AppendNilsV2(true)
+		c0.AppendIntegerValue(int64(i))
+		c0.AppendNotNil()
 
 		if i%2 == 0 {
-			c1.AppendStringValues(fmt.Sprintf("tid_%04d", i))
-			c1.AppendNilsV2(true)
+			c1.AppendStringValue(fmt.Sprintf("tid_%04d", i))
+			c1.AppendNotNil()
 		} else {
 			c1.AppendNil()
 		}
 
 		if i%3 == 0 {
-			c2.AppendFloatValues(float64(i) * 78.67)
-			c3.AppendBooleanValues(i%2 == 0)
-			c2.AppendNilsV2(true)
-			c3.AppendNilsV2(true)
+			c2.AppendFloatValue(float64(i) * 78.67)
+			c3.AppendBooleanValue(i%2 == 0)
+			c2.AppendNotNil()
+			c3.AppendNotNil()
 		} else {
 			c2.AppendNil()
 			c3.AppendNil()
 		}
 
 		if i%4 == 0 {
-			c4.AppendFloatTuples(*executor.NewfloatTuple([]float64{float64(i), float64(i)}))
-			c4.AppendNilsV2(true)
+			c4.AppendFloatTuple(*executor.NewfloatTuple([]float64{float64(i), float64(i)}))
+			c4.AppendNotNil()
 		} else {
 			c4.AppendNil()
 		}
@@ -210,7 +210,7 @@ func makeChunk() executor.Chunk {
 	chunk.AddColumn(c4)
 
 	chunk.AddDim(executor.NewColumnImpl(influxql.String))
-	chunk.Dim(0).AppendStringValues("tv1", "tv2", "tv3")
+	chunk.Dim(0).AppendStringValues([]string{"tv1", "tv2", "tv3"})
 	chunk.Dim(0).AppendNilsV2(true, true, false, true)
 
 	return chunk

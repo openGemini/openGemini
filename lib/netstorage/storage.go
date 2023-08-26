@@ -55,6 +55,7 @@ type Storage interface {
 	SeriesCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) ([]meta2.MeasurementCardinalityInfo, error)
 	SeriesExactCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) (map[string]uint64, error)
 
+	SendQueryRequestOnNode(nodeID uint64, req SysCtrlRequest) (map[string]string, error)
 	SendSysCtrlOnNode(nodID uint64, req SysCtrlRequest) (map[string]string, error)
 
 	GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
@@ -342,6 +343,25 @@ func (s *NetStorage) ShowSeries(nodeID uint64, db string, ptIDs []uint32, measur
 
 func (s *NetStorage) DropShard(nodeID uint64, database, rpName string, dbPts []uint32, shardID uint64) error {
 	return nil
+}
+
+func (s *NetStorage) SendQueryRequestOnNode(nodeID uint64, req SysCtrlRequest) (map[string]string, error) {
+	r := NewRequester(0, nil, s.metaClient)
+	err := r.initWithNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	v, err := r.sysCtrl(&req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := v.(*SysCtrlResponse)
+	if !ok {
+		return nil, executor.NewInvalidTypeError("*netstorage.SysCtrlResponse", v)
+	}
+	return resp.Result(), nil
 }
 
 func (s *NetStorage) SendSysCtrlOnNode(nodeID uint64, req SysCtrlRequest) (map[string]string, error) {

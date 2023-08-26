@@ -18,11 +18,25 @@ type Scanner struct {
 	r        *reader
 	preToken Token
 	checkDOT bool
+
+	buf [64]bytes.Buffer
+	idx int
 }
 
 // NewScanner returns a new instance of Scanner.
 func NewScanner(r io.Reader) *Scanner {
 	return &Scanner{r: &reader{r: bufio.NewReader(r)}}
+}
+
+func (s *Scanner) allocBuf() *bytes.Buffer {
+	if s.idx >= len(s.buf) {
+		return &bytes.Buffer{}
+	}
+
+	buf := &s.buf[s.idx]
+	buf.Reset()
+	s.idx++
+	return buf
 }
 
 func (s *Scanner) reset(r io.Reader) {
@@ -37,6 +51,7 @@ func (s *Scanner) reset(r io.Reader) {
 		s.r.buf[i].pos.Line = 0
 	}
 	s.r.eof = false
+	s.idx = 0
 }
 
 // Scan returns the next token and position from the underlying reader.
@@ -182,7 +197,8 @@ func (s *Scanner) Scan() (tok Token, pos Pos, lit string) {
 // scanWhitespace consumes the current rune and all contiguous whitespace.
 func (s *Scanner) scanWhitespace() (tok Token, pos Pos, lit string) {
 	// Create a buffer and read the current character into it.
-	var buf bytes.Buffer
+	buf := s.allocBuf()
+
 	ch, pos := s.r.curr()
 	_, _ = buf.WriteRune(ch)
 
@@ -266,7 +282,8 @@ func (s *Scanner) scanIdent(lookup bool) (tok Token, pos Pos, lit string) {
 	_, pos = s.r.read()
 	s.r.unread()
 
-	var buf bytes.Buffer
+	buf := s.allocBuf()
+
 	for {
 		if ch, _ := s.r.read(); ch == eof {
 			break
@@ -278,7 +295,7 @@ func (s *Scanner) scanIdent(lookup bool) (tok Token, pos Pos, lit string) {
 			return IDENT, pos, lit0
 		} else if isIdentChar(ch) {
 			s.r.unread()
-			buf.WriteString(ScanBareIdent(s.r, s.checkDOT))
+			buf.WriteString(s.ScanBareIdent(s.r, s.checkDOT))
 		} else {
 			s.r.unread()
 			break
@@ -302,7 +319,7 @@ func (s *Scanner) scanString() (tok Token, pos Pos, lit string) {
 	_, pos = s.r.curr()
 
 	var err error
-	lit, err = ScanString(s.r)
+	lit, err = s.ScanString(s.r)
 	if err == errBadString {
 		return BADSTRING, pos, lit
 	} else if err == errBadEscape {
@@ -334,7 +351,7 @@ func (s *Scanner) ScanRegex() (tok Token, pos Pos, lit string) {
 
 // scanNumber consumes anything that looks like the start of a number.
 func (s *Scanner) scanNumber() (tok Token, pos Pos, lit string) {
-	var buf bytes.Buffer
+	buf := s.allocBuf()
 
 	// Check if the initial rune is a ".".
 	ch, pos := s.r.curr()
@@ -404,7 +421,8 @@ func (s *Scanner) scanNumber() (tok Token, pos Pos, lit string) {
 
 // scanDigits consumes a contiguous series of digits.
 func (s *Scanner) scanDigits() string {
-	var buf bytes.Buffer
+	buf := s.allocBuf()
+
 	for {
 		ch, _ := s.r.read()
 		if !isDigit(ch) {
@@ -638,13 +656,13 @@ func ScanDelimited(r io.RuneScanner, start, end rune, escapes map[rune]rune, esc
 }
 
 // ScanString reads a quoted string from a rune reader.
-func ScanString(r io.RuneScanner) (string, error) {
+func (s *Scanner) ScanString(r io.RuneScanner) (string, error) {
 	ending, _, err := r.ReadRune()
 	if err != nil {
 		return "", errBadString
 	}
 
-	var buf bytes.Buffer
+	buf := s.allocBuf()
 	for {
 		ch0, _, err := r.ReadRune()
 		if ch0 == ending {
@@ -676,10 +694,10 @@ var errBadString = errors.New("bad string")
 var errBadEscape = errors.New("bad escape")
 
 // ScanBareIdent reads bare identifier from a rune reader.
-func ScanBareIdent(r io.RuneScanner, checkDOT bool) string {
+func (s *Scanner) ScanBareIdent(r io.RuneScanner, checkDOT bool) string {
 	// Read every ident character into the buffer.
 	// Non-ident characters and EOF will cause the loop to exit.
-	var buf bytes.Buffer
+	buf := s.allocBuf()
 	for {
 		ch, _, err := r.ReadRune()
 		if err != nil {

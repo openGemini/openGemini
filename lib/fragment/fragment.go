@@ -17,6 +17,8 @@ limitations under the License.
 package fragment
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -55,7 +57,7 @@ func (frs FragmentRanges) String() string {
 		if len(res) > 0 {
 			res += ", "
 		}
-		res += "(" + string(rune(fr.Start)) + ", " + string(rune(fr.End)) + ")"
+		res += fmt.Sprintf("(%d, %d)", fr.Start, fr.End)
 	}
 	return res
 }

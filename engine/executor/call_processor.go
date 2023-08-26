@@ -43,7 +43,7 @@ const (
 	PercentileOGSketch = "percentile_ogsketch"
 )
 
-func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, isSubQuery bool) (*processorResults, error) {
+func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, isSubQuery bool) (*processorResults, error) {
 	var err error
 	proRes := &processorResults{}
 	coProcessor := NewCoProcessorImpl()
@@ -605,7 +605,7 @@ func NewPercentileRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType
 	}
 }
 
-func NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt hybridqp.ExprOptions, isSingleCall bool, opt query.ProcessorOptions, name string, clusterNum int, percentile float64) (Routine, error) {
+func NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt hybridqp.ExprOptions, isSingleCall bool, opt *query.ProcessorOptions, name string, clusterNum int, percentile float64) (Routine, error) {
 	inOrdinal := inRowDataType.FieldIndex(exprOpt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
 	outOrdinal := outRowDataType.FieldIndex(exprOpt.Ref.Val)
 	if inOrdinal < 0 || outOrdinal < 0 {
@@ -617,39 +617,39 @@ func NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDa
 	case influxql.Float:
 		switch name {
 		case OGSketchInsert:
-			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 				NewFloatOGSketchInsertIem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 				inOrdinal, outOrdinal), nil
 		case PercentileApprox:
-			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 				NewFloatPercentileApproxItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 				inOrdinal, outOrdinal), nil
 		}
 	case influxql.Integer:
 		switch name {
 		case OGSketchInsert:
-			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 				NewIntegerOGSketchInsertIem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 				inOrdinal, outOrdinal), nil
 		case PercentileApprox:
-			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 				NewIntegerPercentileApproxItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 				inOrdinal, outOrdinal), nil
 		}
 	case influxql.FloatTuple:
 		switch name {
 		case OGSketchMerge:
-			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+			return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 				NewOGSketchMergeItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 				inOrdinal, outOrdinal), nil
 		case OGSketchPercentile:
 			switch outDataType {
 			case influxql.Float:
-				return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 					NewFloatOGSketchPercentileItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 					inOrdinal, outOrdinal), nil
 			case influxql.Integer:
-				return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, &opt,
+				return NewRoutineImpl(NewOGSketchIterator(isSingleCall, inOrdinal, outOrdinal, clusterNum, opt,
 					NewIntegerOGSketchPercentileItem(isSingleCall, inOrdinal, outOrdinal, clusterNum, percentile)),
 					inOrdinal, outOrdinal), nil
 			}
@@ -828,7 +828,7 @@ func NewDerivativeRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType
 }
 
 func NewIntegralRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions,
-	opts query.ProcessorOptions, isSingleCall bool,
+	opts *query.ProcessorOptions, isSingleCall bool,
 ) (Routine, error) {
 	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
 	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
@@ -1090,8 +1090,8 @@ type AuxProcessor struct {
 func IntegerAuxHelpFunc(input, output Column, rowIdx ...int) {
 	for _, idx := range rowIdx {
 		if !input.IsNilV2(idx) {
-			output.AppendIntegerValues(input.IntegerValue(input.GetValueIndexV2(idx)))
-			output.AppendNilsV2(true)
+			output.AppendIntegerValue(input.IntegerValue(input.GetValueIndexV2(idx)))
+			output.AppendNotNil()
 		} else {
 			output.AppendNil()
 		}
@@ -1101,8 +1101,8 @@ func IntegerAuxHelpFunc(input, output Column, rowIdx ...int) {
 func FloatAuxHelpFunc(input, output Column, rowIdx ...int) {
 	for _, idx := range rowIdx {
 		if !input.IsNilV2(idx) {
-			output.AppendFloatValues(input.FloatValue(input.GetValueIndexV2(idx)))
-			output.AppendNilsV2(true)
+			output.AppendFloatValue(input.FloatValue(input.GetValueIndexV2(idx)))
+			output.AppendNotNil()
 		} else {
 			output.AppendNil()
 		}
@@ -1115,8 +1115,8 @@ func StringAuxHelpFunc(input, output Column, rowIdx ...int) {
 			oriStr := input.StringValue(input.GetValueIndexV2(idx))
 			newStr := make([]byte, len(oriStr))
 			copy(newStr, oriStr)
-			output.AppendStringValues(util.Bytes2str(newStr))
-			output.AppendNilsV2(true)
+			output.AppendStringValue(util.Bytes2str(newStr))
+			output.AppendNotNil()
 		} else {
 			output.AppendNil()
 		}
@@ -1126,8 +1126,8 @@ func StringAuxHelpFunc(input, output Column, rowIdx ...int) {
 func BooleanAuxHelpFunc(input, output Column, rowIdx ...int) {
 	for _, idx := range rowIdx {
 		if !input.IsNilV2(idx) {
-			output.AppendBooleanValues(input.BooleanValue(input.GetValueIndexV2(idx)))
-			output.AppendNilsV2(true)
+			output.AppendBooleanValue(input.BooleanValue(input.GetValueIndexV2(idx)))
+			output.AppendNotNil()
 		} else {
 			output.AppendNil()
 		}

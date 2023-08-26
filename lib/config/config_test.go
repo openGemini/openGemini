@@ -222,3 +222,47 @@ func TestCombineDomain(t *testing.T) {
 
 	assert.Equal(t, "127.0.0.1", config.CombineDomain("", "127.0.0.1"))
 }
+
+func TestTSStoreThroughput(t *testing.T) {
+	conf := config.NewTSStore(true)
+	conf.Data.IngesterAddress = "127.0.0.1:8800"
+	conf.Data.SelectAddress = "127.0.0.1:8801"
+	conf.Data.DataDir = "/opt/gemini"
+	conf.Data.MetaDir = "/opt/gemini/meta"
+	conf.Spdy.ConnPoolSize = 10
+	conf.Common.CPUNum = 4
+
+	assert.NoError(t, conf.Validate())
+	conf.Data.WALDir = "/opt/gemini/wal"
+
+	conf.Data.Corrector(conf.Common.CPUNum, 0)
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput), uint64(conf.Data.BackGroundReadThroughput))
+
+	conf.Common.CPUNum = 8
+	conf.Data.Corrector(conf.Common.CPUNum, 0)
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*2), uint64(conf.Data.BackGroundReadThroughput))
+
+	conf.Common.CPUNum = 16
+	conf.Data.Corrector(conf.Common.CPUNum, 0)
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*4), uint64(conf.Data.BackGroundReadThroughput))
+
+	conf.Common.CPUNum = 32
+	conf.Data.Corrector(conf.Common.CPUNum, 0)
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*8), uint64(conf.Data.BackGroundReadThroughput))
+}

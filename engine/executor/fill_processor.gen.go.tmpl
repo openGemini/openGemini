@@ -36,7 +36,7 @@ func (f *{{.Name}}LinearFillProcessor) fillHelperFunc(input, output, prev Chunk,
 		(fillItem.inputReadAt < input.Len() && !input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) {
         inputValueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.inputReadAt)
         prevValueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(
+		output.Column(f.outOrdinal).Append{{.Name}}Value(
 			hybridqp.LinearInterpolate{{.Name}}(
 				fillItem.start,
 				prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval,
@@ -45,7 +45,7 @@ func (f *{{.Name}}LinearFillProcessor) fillHelperFunc(input, output, prev Chunk,
 				input.Column(f.inOrdinal).{{.Name}}Value(inputValueIndex),
 			),
 		)
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if (prev == nil || fillItem.inputReadAt < fillItem.prevReadAt) ||
       	(fillItem.prevReadAt < prev.Len() && prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt)) ||
       	(fillItem.inputReadAt == input.Len()-1 && input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) ||
@@ -57,11 +57,11 @@ func (f *{{.Name}}LinearFillProcessor) fillHelperFunc(input, output, prev Chunk,
 func (f *{{.Name}}LinearFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
+		output.Column(f.outOrdinal).Append{{.Name}}Value(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil{
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 	    f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -91,11 +91,11 @@ func (f *{{.Name}}LinearFillProcessor) fillHelperFunc(input, output, prev Chunk,
 func (f *{{.Name}}LinearFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
+		output.Column(f.outOrdinal).Append{{.Name}}Value(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil{
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 	    f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -125,11 +125,11 @@ func (f *{{.Name}}NullFillProcessor) fillHelperFunc(input, output, prev Chunk, f
 func (f *{{.Name}}NullFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
+		output.Column(f.outOrdinal).Append{{.Name}}Value(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil{
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
         f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
     }
@@ -151,18 +151,18 @@ func New{{.Name}}NumberFillProcessor(inOrdinal, outOrdinal int) *{{.Name}}Number
 
 func (f *{{.Name}}NumberFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	value, _ := hybridqp.TransTo{{.Name}}(fillItem.fillValue)
-	output.Column(f.outOrdinal).Append{{.Name}}Values(value)
-	output.Column(f.outOrdinal).AppendNilsV2(true)
+	output.Column(f.outOrdinal).Append{{.Name}}Value(value)
+	output.Column(f.outOrdinal).AppendNotNil()
 }
 
 func (f *{{.Name}}NumberFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
+		output.Column(f.outOrdinal).Append{{.Name}}Value(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil{
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 	    f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}
@@ -185,11 +185,11 @@ func New{{.Name}}PreviousFillProcessor(inOrdinal, outOrdinal int) *{{.Name}}Prev
 func (f *{{.Name}}PreviousFillProcessor) fillHelperFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if prev != nil && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt) {
 	    valueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(prev.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).Append{{.Name}}Value(prev.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else if prevWindow.value != nil && !prevWindow.nil[f.inOrdinal] {
-		output.Column(f.outOrdinal).Append{{.Name}}Values(prevWindow.value[f.inOrdinal].({{.Type}}))
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).Append{{.Name}}Value(prevWindow.value[f.inOrdinal].({{.Type}}))
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 		// append nil value
 		output.Column(f.outOrdinal).AppendNil()
@@ -199,11 +199,11 @@ func (f *{{.Name}}PreviousFillProcessor) fillHelperFunc(input, output, prev Chun
 func (f *{{.Name}}PreviousFillProcessor) fillAppendFunc(input, output, prev Chunk, fillItem *FillItem, prevWindow *prevWindow) {
 	if !input.Column(f.inOrdinal).IsNilV2(fillItem.currIndex) {
 		valueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.currIndex)
-		output.Column(f.outOrdinal).Append{{.Name}}Values(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
+		output.Column(f.outOrdinal).Append{{.Name}}Value(input.Column(f.inOrdinal).{{.Name}}Value(valueIndex))
 		if input.Column(f.inOrdinal).ColumnTimes() != nil{
-			output.Column(f.outOrdinal).AppendColumnTimes(input.Column(f.inOrdinal).ColumnTime(valueIndex))
+			output.Column(f.outOrdinal).AppendColumnTime(input.Column(f.inOrdinal).ColumnTime(valueIndex))
 		}
-		output.Column(f.outOrdinal).AppendNilsV2(true)
+		output.Column(f.outOrdinal).AppendNotNil()
 	} else {
 	    f.fillHelperFunc(input, output, prev, fillItem, prevWindow)
 	}

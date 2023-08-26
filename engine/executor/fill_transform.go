@@ -178,7 +178,7 @@ func (f *FillItem) ReSet() {
 
 type FillTransformCreator struct{}
 
-func (c *FillTransformCreator) Create(plan LogicalPlan, _ query.ProcessorOptions) (Processor, error) {
+func (c *FillTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	p, err := NewFillTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()},
 		[]hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), plan.Schema().(*QuerySchema))
 	if err != nil {
@@ -342,6 +342,7 @@ func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
 	}
 
 	trans.newChunk = trans.chunkPool.GetChunk()
+	idx := 0
 	for {
 		nextStart()
 
@@ -354,6 +355,18 @@ func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
 			}
 			return
 		}
+
+		// fast path, return chunk directly if there is only one trunk and group by time only
+		if idx == 0 && len(trans.bufChunk) == 0 && len(trans.opt.Dimensions) == 0 && trans.opt.Fill == influxql.NullFill {
+			windowStart, _ := trans.opt.Window(trans.opt.StartTime)
+			_, windowEnd := trans.opt.Window(trans.opt.EndTime)
+			if (windowEnd-windowStart)/trans.opt.Interval.Duration.Nanoseconds() == int64(c.Len()) {
+				trans.Outputs[0].State <- c
+				continue
+			}
+		}
+		idx++
+
 		// if the input chunk is from other measurements, return the newChunk.
 		if trans.newChunk.NumberOfRows() > 0 && trans.newChunk.Name() != c.Name() {
 			trans.sendChunk()
@@ -530,7 +543,7 @@ func (trans *FillTransform) computeGroup(c Chunk, tagIdxAt, tagStartIdx, tagEndI
 		} else {
 			start = start + tagStartIdx
 			end = end + tagStartIdx + 1
-			trans.tmpChunk.AppendTime(c.Time()[start:end]...)
+			trans.tmpChunk.AppendTimes(c.Time()[start:end])
 			for n := start; n < end; n++ {
 				trans.tmpChunk.AppendIntervalIndex(n - start)
 			}
@@ -1014,29 +1027,29 @@ func NewPrevWindowFunc(rowDataType hybridqp.RowDataType) ([]func(prev Chunk, win
 
 func appendIntegerPrevWindowFunc(prev Chunk, window *prevWindow, ordinal int) {
 	if !window.nil[ordinal] {
-		prev.Column(ordinal).AppendIntegerValues(window.value[ordinal].(int64))
-		prev.Column(ordinal).AppendNilsV2(true)
+		prev.Column(ordinal).AppendIntegerValue(window.value[ordinal].(int64))
+		prev.Column(ordinal).AppendNotNil()
 	}
 }
 
 func appendFloatPrevWindowFunc(prev Chunk, window *prevWindow, ordinal int) {
 	if !window.nil[ordinal] {
-		prev.Column(ordinal).AppendFloatValues(window.value[ordinal].(float64))
-		prev.Column(ordinal).AppendNilsV2(true)
+		prev.Column(ordinal).AppendFloatValue(window.value[ordinal].(float64))
+		prev.Column(ordinal).AppendNotNil()
 	}
 }
 
 func appendStringPrevWindowFunc(prev Chunk, window *prevWindow, ordinal int) {
 	if !window.nil[ordinal] {
-		prev.Column(ordinal).AppendStringValues(window.value[ordinal].(string))
-		prev.Column(ordinal).AppendNilsV2(true)
+		prev.Column(ordinal).AppendStringValue(window.value[ordinal].(string))
+		prev.Column(ordinal).AppendNotNil()
 	}
 }
 
 func appendBooleanPrevWindowFunc(prev Chunk, window *prevWindow, ordinal int) {
 	if !window.nil[ordinal] {
-		prev.Column(ordinal).AppendBooleanValues(window.value[ordinal].(bool))
-		prev.Column(ordinal).AppendNilsV2(true)
+		prev.Column(ordinal).AppendBooleanValue(window.value[ordinal].(bool))
+		prev.Column(ordinal).AppendNotNil()
 	}
 }
 

@@ -527,9 +527,14 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 
 		// filter field value by cond, if filter rec is nil, remove from the map
 		var emptyKeys []string
+		filterOption := immutable.BaseFilterOptions{}
 		for k, v := range mm {
 			rec := v.rec
-			filterRec := immutable.FilterByField(rec, nil, valueMap, opt.GetCondition(), nil, idFields, idTags, &v.tags, binaryfilterfunc.CondFunctions{}, nil)
+			filterOption.FiltersMap = valueMap
+			filterOption.FieldsIdx = idFields
+			filterOption.FilterTags = idTags
+			filterOption.CondFunctions = binaryfilterfunc.CondFunctions{}
+			filterRec := immutable.FilterByField(rec, nil, &filterOption, opt.GetCondition(), nil, &v.tags, nil)
 			if filterRec == nil {
 				emptyKeys = append(emptyKeys, k)
 			} else {
@@ -3430,12 +3435,52 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 		[]int{1, 1, 1, 1}, []string{"ha", "hb", "hc", "hd"},
 		[]int{1, 1, 1, 1}, []bool{true, true, false, false},
 		[]int64{22, 21, 20, 19})
-	minTime, maxTime := int64(0), int64(22)
+	minTime, maxTime := int64(0), int64(23)
 
 	for nameIdx := range msNames {
 		cases := []TestCase{
+			{"FilterByTime01", 0, 20, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{0, 1100},
+					[]int{1, 1}, []float64{1002.4, 0},
+					[]int{1, 1}, []string{"hc", "hd"},
+					[]int{1, 1}, []bool{false, false},
+					[]int64{20, 19})},
+			{"FilterByTime02", influxql.MinTime, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+					[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+					[]int{1, 1, 1, 1}, []string{"ha", "hb", "hc", "hd"},
+					[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+					[]int64{22, 21, 20, 19})},
+			{"FilterByTime03", 20, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{1000, 0, 0},
+					[]int{1, 1, 1}, []float64{1001.3, 1002.4, 1002.4},
+					[]int{1, 1, 1}, []string{"ha", "hb", "hc"},
+					[]int{1, 1, 1}, []bool{true, true, false},
+					[]int64{22, 21, 20})},
+			{"FilterByTime04", influxql.MinTime, 21, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{0, 0, 1100},
+					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
+					[]int{1, 1, 1}, []string{"hb", "hc", "hd"},
+					[]int{1, 1, 1}, []bool{true, false, false},
+					[]int64{21, 20, 19})},
 			{"AllFieldLTCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
-				"field2_int < 1100 AND field1_string < 'hb' OR field4_float < 1002.4", nil, false,
+				"field2_int < 1100 AND field1_string < 'hb' OR field4_float < 1002", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldLTCondition02", influxql.MinTime, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int < 1100 AND field1_string < 'hb' OR field4_float < 1002", nil, false,
 				genRowRec(schema,
 					[]int{1, 1}, []int64{1000, 1100},
 					[]int{1, 1}, []float64{1001.3, 0},
@@ -3443,7 +3488,7 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					[]int{1, 1}, []bool{true, false},
 					[]int64{22, 19})},
 			{"AllFieldLTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
-				" 1000 < field2_int AND 'hb' < field1_string OR 1001.3 < field4_float", nil, false,
+				" 1000 < field2_int AND 'hb' < field1_string OR 1002 < field4_float", nil, false,
 				genRowRec(schema,
 					[]int{1, 1, 1}, []int64{0, 0, 1100},
 					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
@@ -3542,11 +3587,24 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					t.Fatal(err)
 				}
 				var newRecord *record.Record
+
+				// with time condition
 				newRecord = record.NewRecordBuilder(rec.Schema)
+				filterOption := &immutable.BaseFilterOptions{}
+				filterOption.CondFunctions = conFunctions
+				filterOption.TimeCondFunction = binaryfilterfunc.InitTimeCondFunctions(opt.StartTime, opt.EndTime, &queryCtx.schema)
 				filterBitmap := bitmap.NewFilterBitmap(len(conFunctions) + 1)
 
-				if len(conFunctions) > 0 {
-					newRecord = immutable.FilterByFieldFuncs(rec, newRecord, conFunctions, filterBitmap)
+				if len(conFunctions)+len(filterOption.TimeCondFunction) > 0 {
+					newRecord = immutable.FilterByFieldFuncs(rec, newRecord, filterOption, filterBitmap)
+				} else {
+					newRecord = rec
+				}
+
+				if newRecord != nil && c.expRecord != nil {
+					if !testRecsEqual(newRecord, c.expRecord) {
+						t.Fatal("error result")
+					}
 				}
 
 				if newRecord != nil && c.expRecord != nil {
@@ -4362,12 +4420,21 @@ func TestFindTagIndex(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
 		record.Field{Type: influx.Field_Type_Float, Name: "float"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_Tag, Name: "string"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
 
+	metaSchema := make(map[string]int32)
+	for i := range schema {
+		if schema[i].Name == "string" {
+			metaSchema[schema[i].Name] = int32(influx.Field_Type_Tag)
+			continue
+		}
+		metaSchema[schema[i].Name] = int32(schema[i].Type)
+	}
+
 	expRes := []int{3}
-	res := findTagIndex(schema)
+	res := findTagIndex(schema, metaSchema)
 
 	if len(res) != len(expRes) {
 		t.Fatal("find tag index error")
@@ -4454,11 +4521,10 @@ func TestWriteIndexForArrowFlight(t *testing.T) {
 
 	// step2: write data
 	//expRec := genRecord()
-	iRec := tsi.GetIndexRecord()
-	defer tsi.PutIndexRecord(iRec)
-	iRec.TagCol.Mst = []byte(defaultMeasurementName)
-	iRec.TagCol.Key = []byte("string")
-	iRec.TagCol.Val = []byte("hello")
+	tagCol := tsi.TagCol{}
+	tagCol.Mst = []byte(defaultMeasurementName)
+	tagCol.Key = []byte("string")
+	tagCol.Val = []byte("hello")
 	primaryIndex := sh.indexBuilder.GetPrimaryIndex()
 	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
 	var writeIndexRequired bool
@@ -4468,7 +4534,7 @@ func TestWriteIndexForArrowFlight(t *testing.T) {
 	}
 
 	if !writeIndexRequired {
-		exist, err = idx.IsTagKeyExistByArrowFlight(iRec)
+		exist, err = idx.IsTagKeyExistByArrowFlight(&tagCol)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4482,7 +4548,7 @@ func TestWriteIndexForArrowFlight(t *testing.T) {
 		t.Fatal("wrong index type")
 	}
 	if writeIndexRequired {
-		err = csIndexImpl.CreateIndexIfNotExistsForArrowFlight(idx, iRec)
+		err = csIndexImpl.CreateIndexIfNotExistsForArrowFlight(idx, &tagCol)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4494,7 +4560,7 @@ func TestWriteIndexForArrowFlight(t *testing.T) {
 		t.Fatal("shard closed")
 	}
 
-	exist, err = idx.IsTagKeyExistByArrowFlight(iRec)
+	exist, err = idx.IsTagKeyExistByArrowFlight(&tagCol)
 	if err != nil {
 		t.Fatal(err)
 	}

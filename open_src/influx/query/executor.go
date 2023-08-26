@@ -265,7 +265,10 @@ func (e *Executor) ExecuteQuery(query *influxql.Query, opt ExecutionOptions, clo
 func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, closing <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics, results chan *query2.Result) {
 	defer close(results)
 	defer e.recover(query, results)
-
+	if qStat != nil && len(query.Statements) > 0 {
+		qStat.SetQueryBatch(len(query.Statements))
+		qStat.SetQuery(query.String())
+	}
 	ctx, detach, err := e.TaskManager.AttachQuery(query, opt, closing, qStat)
 	if err != nil {
 		select {
@@ -280,11 +283,6 @@ func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, clo
 	ctx.PointsWriter = e.PointsWriter
 	// Setup the execution context that will be used when executing statements.
 	ctx.Results = results
-
-	if qStat != nil && len(query.Statements) > 0 {
-		qStat.SetQueryBatch(len(query.Statements))
-		qStat.SetQuery(query.Statements[0].String())
-	}
 	atomic.AddInt64(&statistics.HandlerStat.QueryStmtCount, int64(len(query.Statements)))
 
 	var i int

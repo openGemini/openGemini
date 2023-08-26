@@ -49,6 +49,14 @@ type IOStatistics struct {
 
 	IOSnapshotCount int64
 	IOSnapshotBytes int64
+
+	IOFrontReadOkCount  int64
+	IOFrontReadOkBytes  int64
+	IOFrontReadDuration int64
+
+	IOBackReadOkCount  int64
+	IOBackReadOkBytes  int64
+	IOBackReadDuration int64
 }
 
 const (
@@ -75,6 +83,14 @@ const (
 	statIOReadCacheMem     = "readCacheMem"
 	statIOSnapshotCount    = "snapshotCount"
 	statIOSnapshotBytes    = "snapshotBytes"
+
+	statFrontIOReadOkCount  = "frontReadOkCount"
+	statFrontIOReadOkBytes  = "frontReadOkBytes"
+	statFrontIOReadDuration = "frontReadDuration"
+
+	statBackIOReadOkCount  = "backReadOkCount"
+	statBackIOReadOkBytes  = "backReadOkBytes"
+	statBackIOReadDuration = "backReadDuration"
 )
 
 var IOStat = NewIOStatistics()
@@ -121,6 +137,14 @@ func genIOValueMap() map[string]interface{} {
 		statIOReadCacheMem:     atomic.LoadInt64(&IOStat.IOReadCacheMem),
 		statIOSnapshotCount:    atomic.LoadInt64(&IOStat.IOSnapshotCount),
 		statIOSnapshotBytes:    atomic.LoadInt64(&IOStat.IOSnapshotBytes),
+
+		statFrontIOReadOkCount:  atomic.LoadInt64(&IOStat.IOFrontReadOkCount),
+		statFrontIOReadOkBytes:  atomic.LoadInt64(&IOStat.IOFrontReadOkBytes),
+		statFrontIOReadDuration: atomic.LoadInt64(&IOStat.IOFrontReadDuration),
+
+		statBackIOReadOkCount:  atomic.LoadInt64(&IOStat.IOBackReadOkCount),
+		statBackIOReadOkBytes:  atomic.LoadInt64(&IOStat.IOBackReadOkBytes),
+		statBackIOReadDuration: atomic.LoadInt64(&IOStat.IOBackReadDuration),
 	}
 
 	return IOMap

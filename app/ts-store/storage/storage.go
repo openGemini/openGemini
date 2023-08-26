@@ -23,13 +23,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/influxdata/influxdb/pkg/limiter"
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -66,7 +67,7 @@ type StoreEngine interface {
 	SeriesKeys(string, []uint32, []string, influxql.Expr) ([]string, error)
 	TagValues(string, []uint32, map[string][][]byte, influxql.Expr) (netstorage.TablesTagSets, error)
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr) (map[string]uint64, error)
-	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) error
+	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) (map[string]string, error)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 	PreOffload(*meta.DbPtInfo) error
 	RollbackPreOffload(*meta.DbPtInfo) error
@@ -163,6 +164,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.CompactRecovery = conf.Data.CompactRecovery
 	opt.SnapshotThroughput = int64(conf.Data.SnapshotThroughput)
 	opt.SnapshotThroughputBurst = int64(conf.Data.SnapshotThroughputBurst)
+	opt.BackgroundReadThroughput = int(conf.Data.BackGroundReadThroughput)
 	opt.MaxConcurrentCompactions = conf.Data.MaxConcurrentCompactions
 	opt.MaxFullCompactions = conf.Data.MaxFullCompactions
 	opt.FullCompactColdDuration = time.Duration(conf.Data.CompactFullWriteColdDuration)
@@ -201,6 +203,8 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 		return nil, e
 	}
 
+	immutable.InitQueryFileCache(conf.Data.MaxQueryCachedFileHandles, conf.Data.EnableQueryFileHandleCache)
+
 	executor.IgnoreEmptyTag = conf.Common.IgnoreEmptyTag
 
 	eng, err := newEngineFn(conf.Data.DataDir, conf.Data.WALDir, opt, &loadCtx)
@@ -208,7 +212,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 		return nil, err
 	}
 
-	cpuNum := cgroup.AvailableCPUs()
+	cpuNum := cpu.GetCpuNum()
 	minWriteConcurrentLimit, maxWriteConcurrentLimit := cpuNum, 8*cpuNum
 	conf.Data.WriteConcurrentLimit = util.IntLimit(minWriteConcurrentLimit, maxWriteConcurrentLimit, conf.Data.WriteConcurrentLimit)
 
@@ -259,7 +263,7 @@ func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec 
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 	return s.Write(db, rp, mst, ptId, shardID, func() error {
-		return s.engine.WriteRec(db, rp, ptId, shardID, rec, binaryRec)
+		return s.engine.WriteRec(db, mst, ptId, shardID, rec, binaryRec)
 	})
 }
 
@@ -420,7 +424,7 @@ func (s *Storage) SeriesCardinality(db string, ptIDs []uint32, measurements []st
 	return s.engine.SeriesCardinality(db, ptIDs, ms, condition)
 }
 
-func (s *Storage) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) error {
+func (s *Storage) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map[string]string, error) {
 	return s.engine.SysCtrl(req)
 }
 

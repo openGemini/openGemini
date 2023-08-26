@@ -58,31 +58,31 @@ func BuildHwInChunk1() executor.Chunk {
 	rowDataType := buildHwRowDataType1()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("mem")
-	chunk.AppendTime([]int64{1671782640000000000, 1671782643000000000, 1671782646000000000}...)
+	chunk.AppendTimes([]int64{1671782640000000000, 1671782643000000000, 1671782646000000000})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "1"), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1}...)
+	chunk.Column(0).AppendFloatValues([]float64{1})
 	chunk.Column(0).AppendManyNotNil(1)
 	chunk.Column(0).AppendNil()
-	chunk.Column(0).AppendFloatValues([]float64{2}...)
+	chunk.Column(0).AppendFloatValues([]float64{2})
 	chunk.Column(0).AppendManyNotNil(1)
 
-	chunk.Column(1).AppendFloatValues([]float64{1}...)
+	chunk.Column(1).AppendFloatValues([]float64{1})
 	chunk.Column(1).AppendManyNotNil(1)
 	chunk.Column(1).AppendNil()
-	chunk.Column(1).AppendFloatValues([]float64{2}...)
+	chunk.Column(1).AppendFloatValues([]float64{2})
 	chunk.Column(1).AppendManyNotNil(1)
 
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
 	chunk.Column(2).AppendNil()
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
 
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
 	chunk.Column(3).AppendNil()
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
 
 	return chunk
@@ -92,28 +92,28 @@ func BuildHwInChunk2() executor.Chunk {
 	rowDataType := buildHwRowDataType1()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("mem")
-	chunk.AppendTime([]int64{1671782649000000000, 1671782658000000000}...)
+	chunk.AppendTimes([]int64{1671782649000000000, 1671782658000000000})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "1"), 0)
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "2"), 1)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{3}...)
+	chunk.Column(0).AppendFloatValues([]float64{3})
 	chunk.Column(0).AppendManyNotNil(1)
-	chunk.Column(0).AppendFloatValues([]float64{4}...)
+	chunk.Column(0).AppendFloatValues([]float64{4})
 	chunk.Column(0).AppendManyNotNil(1)
 
-	chunk.Column(1).AppendFloatValues([]float64{3}...)
+	chunk.Column(1).AppendFloatValues([]float64{3})
 	chunk.Column(1).AppendManyNotNil(1)
-	chunk.Column(1).AppendFloatValues([]float64{4}...)
+	chunk.Column(1).AppendFloatValues([]float64{4})
 	chunk.Column(1).AppendManyNotNil(1)
 
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
 
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
 	return chunk
 }
@@ -122,27 +122,27 @@ func BuildHwInChunk3() executor.Chunk {
 	rowDataType := buildHwRowDataType1()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("mem")
-	chunk.AppendTime([]int64{1671782661000000000, 1671782664000000000}...)
+	chunk.AppendTimes([]int64{1671782661000000000, 1671782664000000000})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "2"), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{5}...)
+	chunk.Column(0).AppendFloatValues([]float64{5})
 	chunk.Column(0).AppendManyNotNil(1)
-	chunk.Column(0).AppendFloatValues([]float64{6}...)
+	chunk.Column(0).AppendFloatValues([]float64{6})
 	chunk.Column(0).AppendManyNotNil(1)
 
-	chunk.Column(1).AppendFloatValues([]float64{5}...)
+	chunk.Column(1).AppendFloatValues([]float64{5})
 	chunk.Column(1).AppendManyNotNil(1)
-	chunk.Column(1).AppendFloatValues([]float64{6}...)
+	chunk.Column(1).AppendFloatValues([]float64{6})
 	chunk.Column(1).AppendManyNotNil(1)
 
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
 
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
 	return chunk
 }
@@ -264,7 +264,7 @@ func TestHoltWintersDemo1(t *testing.T) {
 	outRowDataType := buildHwRowDataType1()
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1, chunk2, chunk3})
 	schema := buildHoltWintersSchema1()
-	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
+	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, schema.Options().(*query.ProcessorOptions), schema)
 	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
@@ -283,9 +283,9 @@ func BuildHwInChunk4() executor.Chunk {
 	rowDataType := buildHwRowDataType2()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("cpu")
-	chunk.AppendTime([]int64{1597042800000000000, 1597044000000000000}...)
+	chunk.AppendTimes([]int64{1597042800000000000, 1597044000000000000})
 	chunk.AddTagAndIndex(*executor.NewChunkTagsV2(nil), 0)
-	chunk.Column(0).AppendFloatValues([]float64{10, 37}...)
+	chunk.Column(0).AppendFloatValues([]float64{10, 37})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
 }
@@ -294,9 +294,9 @@ func BuildHwInChunk5() executor.Chunk {
 	rowDataType := buildHwRowDataType2()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("cpu")
-	chunk.AppendTime([]int64{1597045200000000000, 1597046400000000000}...)
+	chunk.AppendTimes([]int64{1597045200000000000, 1597046400000000000})
 	chunk.AddTagAndIndex(*executor.NewChunkTagsV2(nil), 0)
-	chunk.Column(0).AppendFloatValues([]float64{48, 80}...)
+	chunk.Column(0).AppendFloatValues([]float64{48, 80})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
 }
@@ -305,9 +305,9 @@ func BuildHwInChunk6() executor.Chunk {
 	rowDataType := buildHwRowDataType2()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("cpu")
-	chunk.AppendTime([]int64{1597047600000000000, 1597048800000000000}...)
+	chunk.AppendTimes([]int64{1597047600000000000, 1597048800000000000})
 	chunk.AddTagAndIndex(*executor.NewChunkTagsV2(nil), 0)
-	chunk.Column(0).AppendFloatValues([]float64{39, 25}...)
+	chunk.Column(0).AppendFloatValues([]float64{39, 25})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
 }
@@ -320,7 +320,7 @@ func TestHoltWintersDemo2(t *testing.T) {
 	outRowDataType := buildHwRowDataType2()
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1, chunk2, chunk3})
 	schema := buildHoltWintersSchema2()
-	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
+	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, schema.Options().(*query.ProcessorOptions), schema)
 	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
@@ -339,7 +339,7 @@ func TestHoltWintersDemo3(t *testing.T) {
 	inRowDataType := buildErrorHwRowDataType()
 	outRowDataType := buildHwRowDataType1()
 	schema := buildHoltWintersSchema1()
-	_, err := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
+	_, err := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, schema.Options().(*query.ProcessorOptions), schema)
 	assert.NotEqual(t, err, nil)
 }
 
@@ -418,7 +418,7 @@ func TestHoltWintersDemo4(t *testing.T) {
 	outRowDataType := buildHwRowDataType1()
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1, chunk2, chunk3})
 	schema := buildHoltWintersSchema4()
-	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
+	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, schema.Options().(*query.ProcessorOptions), schema)
 	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
@@ -437,31 +437,31 @@ func BuildHwInChunk7(tagVal string) executor.Chunk {
 	rowDataType := buildHwRowDataType1()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("mem")
-	chunk.AppendTime([]int64{1671782640000000000, 1671782643000000000, 1671782646000000000}...)
+	chunk.AppendTimes([]int64{1671782640000000000, 1671782643000000000, 1671782646000000000})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + tagVal), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1}...)
+	chunk.Column(0).AppendFloatValues([]float64{1})
 	chunk.Column(0).AppendManyNotNil(1)
 	chunk.Column(0).AppendNil()
-	chunk.Column(0).AppendFloatValues([]float64{2}...)
+	chunk.Column(0).AppendFloatValues([]float64{2})
 	chunk.Column(0).AppendManyNotNil(1)
 
-	chunk.Column(1).AppendFloatValues([]float64{1}...)
+	chunk.Column(1).AppendFloatValues([]float64{1})
 	chunk.Column(1).AppendManyNotNil(1)
 	chunk.Column(1).AppendNil()
-	chunk.Column(1).AppendFloatValues([]float64{2}...)
+	chunk.Column(1).AppendFloatValues([]float64{2})
 	chunk.Column(1).AppendManyNotNil(1)
 
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
 	chunk.Column(2).AppendNil()
-	chunk.Column(2).AppendIntegerValues([]int64{1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1})
 	chunk.Column(2).AppendManyNotNil(1)
 
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
 	chunk.Column(3).AppendNil()
-	chunk.Column(3).AppendIntegerValues([]int64{1}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1})
 	chunk.Column(3).AppendManyNotNil(1)
 
 	return chunk
@@ -543,7 +543,7 @@ func TestHoltWintersDemo5(t *testing.T) {
 	outRowDataType := buildHwRowDataType1()
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1, chunk2, chunk3, chunk4})
 	schema := buildHoltWintersSchema5()
-	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, *schema.Options().(*query.ProcessorOptions), schema)
+	trans, _ := executor.NewHoltWintersTransform(inRowDataType, outRowDataType, schema.Options().(*query.ProcessorOptions), schema)
 	sink := NewSinkFromFunction(outRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})

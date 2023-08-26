@@ -149,6 +149,14 @@ func TestArrowRecordToNativeRecordWithoutNull(t *testing.T) {
 	assert.Equal(t, r.String(), rr.String())
 }
 
+func TestToPrimitiveType(t *testing.T) {
+	ty1 := influx.Field_Type_Tag
+	assert.Equal(t, record.ToPrimitiveType(int32(ty1)), influx.Field_Type_String)
+
+	ty2 := influx.Field_Type_String
+	assert.Equal(t, record.ToPrimitiveType(int32(ty1)), ty2)
+}
+
 var StrValuePad = "aaaaabbbbbcccccdddddeeeeefffffggggghhhhhiiiijjjjj"
 
 func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, now int, withNull bool) array.Record {

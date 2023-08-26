@@ -267,7 +267,7 @@ func TestMemoryRead(t *testing.T) {
 		t.Fatalf("meta index not find")
 	}
 	decs := NewReadContext(true)
-	cms, err := f.ReadChunkMetaData(0, midx, nil)
+	cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func TestMemoryRead(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			fr.Ref()
-			_, err = f.ReadAt(&cms[0], 0, rec, decs)
+			_, err = f.ReadAt(&cms[0], 0, rec, decs, fileops.IO_PRIORITY_ULTRA_HIGH)
 			if err != nil {
 				t.Error(err)
 				return
@@ -368,18 +368,18 @@ func TestLazyInitError(t *testing.T) {
 	}
 	decs := NewReadContext(true)
 	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
-	cms, err := f.ReadChunkMetaData(0, midx, nil)
+	cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err = fp.expect(err); err != nil {
 		t.Fatal(err)
 	}
 	require.NoError(t, failpoint.Disable(fp.failPath))
-	cms, _ = f.ReadChunkMetaData(0, midx, nil)
+	cms, _ = f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	rec := record.NewRecordBuilder(schema)
 	fr := f.(*tsspFile).reader.(*tsspFileReader)
 
 	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
 	fr.Ref()
-	_, err = f.ReadAt(&cms[0], 0, rec, decs)
+	_, err = f.ReadAt(&cms[0], 0, rec, decs, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err = fp.expect(err); err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestLazyInitError(t *testing.T) {
 
 	require.NoError(t, failpoint.Enable(fp.failPath, fp.inTerms))
 	fr.Ref()
-	_, err = f.ReadData(0, 1, nil)
+	_, err = f.ReadData(0, 1, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err = fp.expect(err); err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,7 @@ func TestMemoryReadReload(t *testing.T) {
 		t.Fatalf("meta index not find")
 	}
 	decs := NewReadContext(true)
-	cms, err := f.ReadChunkMetaData(0, midx, nil)
+	cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,7 +475,7 @@ func TestMemoryReadReload(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			fr.Ref()
-			_, err = f.ReadAt(&cms[0], 0, rec, decs)
+			_, err = f.ReadAt(&cms[0], 0, rec, decs, fileops.IO_PRIORITY_ULTRA_HIGH)
 			if err != nil {
 				t.Error(err)
 				return
@@ -734,7 +734,7 @@ func TestFileHandlesRef_EnableMmap(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			fr.Ref()
-			_, err = f.ReadData(0, 1, nil)
+			_, err = f.ReadData(0, 1, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 			if err != nil {
 				t.Error(err)
 				return
@@ -1015,28 +1015,23 @@ func TestClosedTsspFile(t *testing.T) {
 	}
 
 	var cm ChunkMeta
-	_, err = f.ChunkMeta(ids[0], 0, 0, 0, 0, &cm, nil)
+	_, err = f.ChunkMeta(ids[0], 0, 0, 0, 0, &cm, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != errFileClosed {
 		t.Fatal("stop fail fail")
 	}
 
-	_, err = f.ReadData(0, 16, nil)
+	_, err = f.ReadData(0, 16, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != errFileClosed {
 		t.Fatal("stop fail fail")
 	}
 
 	var mi MetaIndex
-	_, err = f.ReadChunkMetaData(0, &mi, nil)
+	_, err = f.ReadChunkMetaData(0, &mi, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != errFileClosed {
 		t.Fatal("stop fail fail")
 	}
 
-	_, err = f.ReadAt(&cm, 0, nil, nil)
-	if err != errFileClosed {
-		t.Fatal("stop fail fail")
-	}
-
-	_, err = f.ChunkAt(0)
+	_, err = f.ReadAt(&cm, 0, nil, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != errFileClosed {
 		t.Fatal("stop fail fail")
 	}
@@ -1171,7 +1166,7 @@ func TestReadTimeColumn(t *testing.T) {
 		return
 	}
 
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
+	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -1185,7 +1180,7 @@ func TestReadTimeColumn(t *testing.T) {
 	}
 	dst.ColVals = make([]record.ColVal, len(dst.Schema))
 
-	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}})
+	_, err = f.ReadAt(cm, 0, dst, &ReadContext{coderCtx: &encoding.CoderContext{}}, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -1728,17 +1723,15 @@ type mockTableReader struct {
 	name          string
 	OpenFn        func() error
 	CloseFn       func() error
-	ReadDataFn    func(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error)
+	ReadDataFn    func(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error)
 	MetaIndexAtFn func(idx int) (*MetaIndex, error)
 	MetaIndexFn   func(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
-	ChunkMetaFn   func(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error)
-	ChunkMetaAtFn func(index int) (*ChunkMeta, error)
+	ChunkMetaFn   func(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
 
-	ReadMetaBlockFn     func(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error)
-	ReadDataBlockFn     func(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	ReadFn              func(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	ReadChunkMetaDataFn func(metaIdx int, m *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error)
-	BlockHeaderFn       func(meta *ChunkMeta, dst []record.Field) ([]record.Field, error)
+	ReadMetaBlockFn     func(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadDataBlockFn     func(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadFn              func(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadChunkMetaDataFn func(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
 	LoadIdTimesFn       func(isOrder bool, p *IdTimePairs) error
 
 	StatFn             func() *Trailer
@@ -1766,32 +1759,28 @@ type mockTableReader struct {
 
 func (r *mockTableReader) Open() error  { return r.OpenFn() }
 func (r *mockTableReader) Close() error { return r.CloseFn() }
-func (r *mockTableReader) ReadData(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error) {
-	return r.ReadDataFn(cm, segment, dst, decs)
+func (r *mockTableReader) ReadData(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error) {
+	return r.ReadDataFn(cm, segment, dst, decs, ioPriority)
 }
 func (r *mockTableReader) MetaIndexAt(idx int) (*MetaIndex, error) { return r.MetaIndexAtFn(idx) }
 func (r *mockTableReader) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error) {
 	return r.MetaIndexFn(id, tr)
 }
-func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error) {
-	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst, buffer)
+func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
+	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst, buffer, ioPriority)
 }
-func (r *mockTableReader) ChunkMetaAt(index int) (*ChunkMeta, error) { return r.ChunkMetaAtFn(index) }
 
-func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte) ([]byte, error) {
-	return r.ReadMetaBlockFn(metaIdx, id, offset, size, count, dst)
+func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error) {
+	return r.ReadMetaBlockFn(metaIdx, id, offset, size, count, dst, ioPriority)
 }
-func (r *mockTableReader) ReadDataBlock(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return r.ReadDataBlockFn(offset, size, dst)
+func (r *mockTableReader) ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
+	return r.ReadDataBlockFn(offset, size, dst, ioPriority)
 }
-func (r *mockTableReader) Read(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return r.ReadFn(offset, size, dst)
+func (r *mockTableReader) Read(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
+	return r.ReadFn(offset, size, dst, ioPriority)
 }
-func (r *mockTableReader) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error) {
-	return r.ReadChunkMetaDataFn(metaIdx, m, dst)
-}
-func (r *mockTableReader) BlockHeader(meta *ChunkMeta, dst []record.Field) ([]record.Field, error) {
-	return r.BlockHeaderFn(meta, dst)
+func (r *mockTableReader) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error) {
+	return r.ReadChunkMetaDataFn(metaIdx, m, dst, ioPriority)
 }
 func (r *mockTableReader) LoadIdTimes(isOrder bool, p *IdTimePairs) error {
 	return r.LoadIdTimesFn(isOrder, p)
@@ -1803,7 +1792,6 @@ func (r *mockTableReader) MinMaxTime() (min, max int64, err error)      { return
 func (r *mockTableReader) Contains(id uint64, tm util.TimeRange) bool   { return r.ContainsFn(id, tm) }
 func (r *mockTableReader) ContainsTime(tm util.TimeRange) bool          { return r.ContainsTimeFn(tm) }
 func (r *mockTableReader) ContainsId(id uint64) bool                    { return r.ContainsIdFn(id) }
-func (r *mockTableReader) CreateTime() int64                            { return r.CreateTimeFn() }
 func (r *mockTableReader) Name() string                                 { return r.NameFn() }
 func (r *mockTableReader) FileName() string                             { return r.FileNameFn() }
 func (r *mockTableReader) Rename(newName string) error                  { return r.RenameFn(newName) }
@@ -1816,13 +1804,14 @@ func (r *mockTableReader) FreeMemory() int64 {
 	}
 	return r.FreeMemoryFn()
 }
-func (r *mockTableReader) LoadIntoMemory() error { return r.LoadIntoMemoryFn() }
-func (r *mockTableReader) LoadComponents() error { return r.LoadComponentsFn() }
-func (r *mockTableReader) AverageChunkRows() int { return r.AverageChunkRowsFn() }
-func (r *mockTableReader) MaxChunkRows() int     { return r.MaxChunkRowsFn() }
-func (r *mockTableReader) FreeFileHandle() error { return r.FreeFileHandleFn() }
-func (r *mockTableReader) Ref()                  {}
-func (r *mockTableReader) Unref() int64          { return 0 }
+func (r *mockTableReader) LoadIntoMemory() error   { return r.LoadIntoMemoryFn() }
+func (r *mockTableReader) LoadComponents() error   { return r.LoadComponentsFn() }
+func (r *mockTableReader) AverageChunkRows() int   { return r.AverageChunkRowsFn() }
+func (r *mockTableReader) MaxChunkRows() int       { return r.MaxChunkRowsFn() }
+func (r *mockTableReader) FreeFileHandle() error   { return r.FreeFileHandleFn() }
+func (r *mockTableReader) Ref()                    {}
+func (r *mockTableReader) Unref() int64            { return 0 }
+func (r *mockTableReader) GetFileReaderRef() int64 { return 0 }
 
 func TestCompareFile(t *testing.T) {
 	var setMinMax = func(f TSSPFile, min, max int64) {
@@ -1919,13 +1908,13 @@ func TestReadError(t *testing.T) {
 
 	var err error
 	buf := make([]byte, 0, 1000)
-	buf, err = f.ReadData(0, 2000, &buf)
+	buf, err = f.ReadData(0, 2000, &buf, fileops.IO_PRIORITY_ULTRA_HIGH)
 	require.NotEmpty(t, err)
 
-	_, err = tf.reader.ReadDataBlock(0, 2000, &buf)
+	_, err = tf.reader.ReadDataBlock(0, 2000, &buf, fileops.IO_PRIORITY_ULTRA_HIGH)
 	require.NotEmpty(t, err)
 
-	_, err = tf.reader.ReadDataBlock(0, 2000, &buf)
+	_, err = tf.reader.ReadDataBlock(0, 2000, &buf, fileops.IO_PRIORITY_ULTRA_HIGH)
 	require.NotEmpty(t, err)
 
 	var recoverErr interface{}
@@ -2004,4 +1993,24 @@ func tableCsFiles(m *MmsTables, name string) *TSSPFiles {
 
 	mmsTbls := m.CSFiles
 	return mmsTbls[name]
+}
+
+func TestQueryFileCache1(t *testing.T) {
+	fileCache := NewQueryfileCache(2)
+	file1 := &tsspFile{}
+	file2 := &tsspFile{}
+	file3 := &tsspFile{}
+	fileCache.Put(file1)
+	fileCache.Put(file2)
+	fileCache.Put(file3)
+	file4 := &tsspFile{
+		reader: &tsspFileReader{
+			ref: 2,
+		},
+	}
+	fileCache.Put(file4)
+	fileCache.Get()
+	fileCache.Get()
+	fileCache.Get()
+	fileCache.GetCap()
 }

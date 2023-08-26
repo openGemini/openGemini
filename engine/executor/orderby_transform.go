@@ -29,7 +29,7 @@ import (
 
 type heapOrderByItems struct {
 	items []*heapOrderByItem
-	opt   query.ProcessorOptions
+	opt   *query.ProcessorOptions
 }
 
 func (h *heapOrderByItems) Len() int {
@@ -78,7 +78,7 @@ type OrderByTransform struct {
 	currTags        []ChunkTags
 	currTagIndex    []int
 	ops             []hybridqp.ExprOptions
-	opt             query.ProcessorOptions
+	opt             *query.ProcessorOptions
 	ResultChunkPool *CircularChunkPool
 	workTracing     *tracing.Span
 	currChunk       chan Chunk
@@ -89,7 +89,7 @@ type OrderByTransform struct {
 	heapItems       *heapOrderByItems
 }
 
-func NewOrderByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions, dimensions []string) *OrderByTransform {
+func NewOrderByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions, dimensions []string) *OrderByTransform {
 	trans := &OrderByTransform{
 		input:        NewChunkPort(inRowDataType),
 		output:       NewChunkPort(outRowDataType),
@@ -117,7 +117,7 @@ func NewOrderByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybr
 type OrderByTransformCreator struct {
 }
 
-func (c *OrderByTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *OrderByTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewOrderByTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), plan.RowExprOptions(), opt, plan.(*LogicalOrderBy).dimensions)
 	return p, nil
 }
@@ -360,7 +360,7 @@ func (trans *OrderByTransform) IntervalIndexReGen() {
 			}
 		}
 	}
-	trans.resultChunk.AppendIntervalIndex(IndexUnion(intervalIndex, trans.resultChunk.TagIndex())...)
+	trans.resultChunk.AppendIntervalIndexes(IndexUnion(intervalIndex, trans.resultChunk.TagIndex()))
 }
 
 func IndexUnion(index1, index2 []int) []int {

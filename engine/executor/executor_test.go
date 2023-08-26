@@ -173,20 +173,20 @@ func BuildChunk() executor.Chunk {
 
 	chunk := b.NewChunk("mst")
 
-	chunk.AppendTime([]int64{11, 12, 13, 14, 15}...)
+	chunk.AppendTimes([]int64{11, 12, 13, 14, 15})
 	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
 	chunk.AddIntervalIndex(0)
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "danteA", "martino"}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 4, 5}...)
+	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "danteA", "martino"})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 4, 5})
 	chunk.Column(1).AppendNilsV2(true, true, false, true, true)
 
-	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4}...)
-	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4})
+	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(2).AppendManyNotNil(4)
 	chunk.Column(2).AppendNil()
 

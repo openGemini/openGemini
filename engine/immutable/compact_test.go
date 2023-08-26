@@ -152,7 +152,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -163,7 +163,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 		rec := record.NewRecordBuilder(schema)
 		rec.ReserveColumnRows(conf.maxRowsPerSegment)
 		for i := range cm.timeMeta().entries {
-			rec, err = f.ReadAt(cm, i, rec, decs)
+			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -320,7 +320,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -331,7 +331,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 		rec := record.NewRecordBuilder(schema)
 		rec.ReserveColumnRows(conf.maxRowsPerSegment)
 		for i := range cm.timeMeta().entries {
-			rec, err = f.ReadAt(cm, i, rec, decs)
+			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -478,7 +478,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -489,7 +489,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 		rec := record.NewRecordBuilder(schema)
 		rec.ReserveColumnRows(conf.maxRowsPerSegment)
 		for i := range cm.timeMeta().entries {
-			rec, err = f.ReadAt(cm, i, rec, decs)
+			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -640,7 +640,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 			}
 
 			decs := NewReadContext(true)
-			cms, err := f.ReadChunkMetaData(0, midx, nil)
+			cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_LOW_READ)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -660,7 +660,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 				rec := record.NewRecordBuilder(schema)
 				rec.ReserveColumnRows(conf.maxRowsPerSegment)
 				for j := range cm.timeMeta().entries {
-					rec, err = f.ReadAt(cm, j, rec, decs)
+					rec, err = f.ReadAt(cm, j, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 					if err != nil {
 						t.Fatal(err)
 					}

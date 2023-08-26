@@ -77,21 +77,21 @@ func TestFsReader_Read_EnableMmap(t *testing.T) {
 	dr := NewFileReader(fd, &lockPath)
 	defer dr.Close()
 
-	rb, err := dr.ReadAt(0, 0, nil)
+	rb, err := dr.ReadAt(0, 0, nil, IO_PRIORITY_ULTRA_HIGH)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(rb), "no data shoul be read, but read some")
 
-	_, err = dr.ReadAt(int64(len(buf)+1), 10, nil)
+	_, err = dr.ReadAt(int64(len(buf)+1), 10, nil, IO_PRIORITY_ULTRA_HIGH)
 	if err == nil || !strings.Contains(err.Error(), "table store read file failed") {
 		t.Fatalf("invalid error: %v", err)
 	}
 
 	dr.fileSize += 100
-	_, err = dr.ReadAt(int64(len(buf)+1), 10, nil)
+	_, err = dr.ReadAt(int64(len(buf)+1), 10, nil, IO_PRIORITY_ULTRA_HIGH)
 	require.NotEmpty(t, err)
 	dr.fileSize -= 100
 
-	rb, _ = dr.ReadAt(10, 20, &([]byte{}))
+	rb, _ = dr.ReadAt(10, 20, &([]byte{}), IO_PRIORITY_ULTRA_HIGH)
 	require.Equal(t, 20, len(rb), "read file fail")
 
 	dst := make([]byte, 64)
@@ -99,7 +99,7 @@ func TestFsReader_Read_EnableMmap(t *testing.T) {
 	dst[32] = 255
 	dst[63] = 255
 
-	rb, _ = dr.ReadAt(0, uint32(len(dst)), &dst)
+	rb, _ = dr.ReadAt(0, uint32(len(dst)), &dst, IO_PRIORITY_ULTRA_HIGH)
 	if bytes.Compare(rb, buf[:64]) != 0 {
 		t.Fatalf("read file fail")
 	}
@@ -109,12 +109,12 @@ func TestFsReader_Read_EnableMmap(t *testing.T) {
 	dst[0] = 255
 	dst[32] = 255
 	dst[63] = 255
-	rb, _ = dr.ReadAt(0, uint32(len(dst)), &dst)
+	rb, _ = dr.ReadAt(0, uint32(len(dst)), &dst, IO_PRIORITY_ULTRA_HIGH)
 	if bytes.Compare(rb, buf[:64]) != 0 {
 		t.Fatalf("read file fail")
 	}
 
-	_, err = dr.ReadAt(4096-64+1, uint32(len(dst))+10, &dst)
+	_, err = dr.ReadAt(4096-64+1, uint32(len(dst))+10, &dst, IO_PRIORITY_ULTRA_HIGH)
 	require.True(t, errno.Equal(err, errno.ShortRead))
 }
 

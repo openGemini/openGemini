@@ -35,17 +35,17 @@ import (
 )
 
 func forwardIntegerColumn(dst executor.Column, src executor.Column) {
-	dst.AppendIntegerValues(src.IntegerValues()...)
+	dst.AppendIntegerValues(src.IntegerValues())
 	executor.AdjustNils(dst, src)
 }
 
 func forwardFloatColumn(dst executor.Column, src executor.Column) {
-	dst.AppendFloatValues(src.FloatValues()...)
+	dst.AppendFloatValues(src.FloatValues())
 	executor.AdjustNils(dst, src)
 }
 
 func forwardBooleanColumn(dst executor.Column, src executor.Column) {
-	dst.AppendBooleanValues(src.BooleanValues()...)
+	dst.AppendBooleanValues(src.BooleanValues())
 	executor.AdjustNils(dst, src)
 }
 
@@ -91,14 +91,14 @@ type MockSeries struct {
 
 	output        *executor.ChunkPort
 	ops           []hybridqp.ExprOptions
-	opt           qry.ProcessorOptions
+	opt           *qry.ProcessorOptions
 	chunkBuilder  *executor.ChunkBuilder
 	segment       *Segment
 	columnBinding []int
 	transforms    []func(dst executor.Column, src executor.Column)
 }
 
-func NewMockSeries(rowDataType hybridqp.RowDataType, segment *Segment, ops []hybridqp.ExprOptions, opt qry.ProcessorOptions, schema *executor.QuerySchema) *MockSeries {
+func NewMockSeries(rowDataType hybridqp.RowDataType, segment *Segment, ops []hybridqp.ExprOptions, opt *qry.ProcessorOptions, schema *executor.QuerySchema) *MockSeries {
 	series := &MockSeries{
 		output:        executor.NewChunkPort(rowDataType),
 		ops:           ops,
@@ -119,7 +119,7 @@ func NewMockSeries(rowDataType hybridqp.RowDataType, segment *Segment, ops []hyb
 type MockSeriesCreator struct {
 }
 
-func (mock *MockSeriesCreator) Create(plan executor.LogicalPlan, opt qry.ProcessorOptions) (executor.Processor, error) {
+func (mock *MockSeriesCreator) Create(plan executor.LogicalPlan, opt *qry.ProcessorOptions) (executor.Processor, error) {
 	segment, ok := plan.Trait().(*Segment)
 	if !ok {
 		return nil, fmt.Errorf("no segment for mock series, trait is %v", plan.Trait())
@@ -147,9 +147,9 @@ func (mock *MockSeries) Work(ctx context.Context) error {
 	executor.IntervalIndexGen(&chunk, mock.opt)
 
 	out := mock.chunkBuilder.NewChunk(chunk.Name())
-	out.AppendTime(chunk.Time()...)
+	out.AppendTimes(chunk.Time())
 	out.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
-	out.AppendIntervalIndex(chunk.IntervalIndex()...)
+	out.AppendIntervalIndexes(chunk.IntervalIndex())
 
 	for i, t := range mock.transforms {
 		dst := out.Column(i)
@@ -205,13 +205,13 @@ type MockScanner struct {
 
 	output       *executor.ChunkPort
 	ops          []hybridqp.ExprOptions
-	opt          qry.ProcessorOptions
+	opt          *qry.ProcessorOptions
 	chunkBuilder *executor.ChunkBuilder
 	exchange     *executor.LogicalExchange
 	path         string
 }
 
-func NewMockScanner(rowDataType hybridqp.RowDataType, innerPlan hybridqp.QueryNode, path string, ops []hybridqp.ExprOptions, opt qry.ProcessorOptions, schema *executor.QuerySchema) *MockScanner {
+func NewMockScanner(rowDataType hybridqp.RowDataType, innerPlan hybridqp.QueryNode, path string, ops []hybridqp.ExprOptions, opt *qry.ProcessorOptions, schema *executor.QuerySchema) *MockScanner {
 	exchange, ok := innerPlan.(*executor.LogicalExchange)
 	if !ok {
 		return nil
@@ -232,7 +232,7 @@ func NewMockScanner(rowDataType hybridqp.RowDataType, innerPlan hybridqp.QueryNo
 type MockScannerCreator struct {
 }
 
-func (mock *MockScannerCreator) Create(plan executor.LogicalPlan, opt qry.ProcessorOptions) (executor.Processor, error) {
+func (mock *MockScannerCreator) Create(plan executor.LogicalPlan, opt *qry.ProcessorOptions) (executor.Processor, error) {
 	p := NewMockScanner(plan.RowDataType(), plan.Children()[0].Clone(), plan.(*executor.LogicalReader).MstName(), plan.RowExprOptions(), opt, plan.Schema().(*executor.QuerySchema))
 	if p == nil {
 		return nil, fmt.Errorf("inner plan is not exchange, it is %v", plan.Children()[0])
@@ -342,7 +342,7 @@ var (
 type MockSenderCreator struct {
 }
 
-func (mock *MockSenderCreator) Create(plan executor.LogicalPlan, opt qry.ProcessorOptions) (executor.Processor, error) {
+func (mock *MockSenderCreator) Create(plan executor.LogicalPlan, _ *qry.ProcessorOptions) (executor.Processor, error) {
 	p := NewMockSender(plan.Children()[0].RowDataType(), plan.Schema().(*executor.QuerySchema))
 	return p, nil
 }

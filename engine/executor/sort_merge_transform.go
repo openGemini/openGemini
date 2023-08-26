@@ -74,7 +74,7 @@ func (t *SortMergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int
 	var start, end int = i - 1, i
 
 	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
-	trans.NewChunk.AppendTime(chunk.Time()[start:end]...)
+	trans.NewChunk.AppendTimes(chunk.Time()[start:end])
 	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
 }
 
@@ -126,7 +126,7 @@ func (t *SortMergeTransf) updateWithBreakPoint(trans *MergeTransform) {
 type SortMergeTransformCreator struct {
 }
 
-func (c *SortMergeTransformCreator) Create(plan LogicalPlan, _ query.ProcessorOptions) (Processor, error) {
+func (c *SortMergeTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	return CreateBaseMergeTransform(plan, &SortMergeTransf{})
 }
 

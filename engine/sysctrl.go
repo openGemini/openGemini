@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -41,15 +42,18 @@ import (
 */
 
 const (
-	dataFlush         = "flush"
-	compactionEn      = "compen"
-	compmerge         = "merge"
-	snapshot          = "snapshot"
-	downSampleInOrder = "downsample_in_order"
-	Failpoint         = "failpoint"
-	Readonly          = "readonly"
-	verifyNode        = "verifynode"
-	memUsageLimit     = "memusagelimit"
+	queryShardStatus = "queryShardStatus"
+
+	dataFlush             = "flush"
+	compactionEn          = "compen"
+	compmerge             = "merge"
+	snapshot              = "snapshot"
+	downSampleInOrder     = "downsample_in_order"
+	Failpoint             = "failpoint"
+	Readonly              = "readonly"
+	verifyNode            = "verifynode"
+	memUsageLimit         = "memusagelimit"
+	BackgroundReadLimiter = "backgroundReadLimiter"
 )
 
 var (
@@ -70,97 +74,111 @@ func getReqParam(req *netstorage.SysCtrlRequest) (int64, bool, error) {
 	return shardId, en, nil
 }
 
-func (e *Engine) processReq(req *netstorage.SysCtrlRequest) error {
+func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, error) {
+	if req.Mod() == queryShardStatus {
+		return e.getShardStatus(req.Param())
+	}
+
 	switch req.Mod() {
 	case dataFlush:
 		e.ForceFlush()
-		return nil
+		return nil, nil
 	case compactionEn:
 		allEn, err := syscontrol.GetBoolValue(req.Param(), "allshards")
 		if err != nil && err != syscontrol.ErrNoSuchParam {
 			log.Error("get compaction switchon from param fail", zap.Error(err))
-			return err
+			return nil, err
 		}
 
 		if err == nil {
 			compWorker.SetAllShardsCompactionSwitch(allEn)
 			log.Info("set all shard compaction switch", zap.Bool("switch", allEn))
-			return nil
+			return nil, nil
 		}
 
 		shardId, en, err := getReqParam(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		compWorker.ShardCompactionSwitch(uint64(shardId), en)
 		log.Info("set shard compaction switch", zap.Bool("switch", allEn), zap.Int64("shardId", shardId))
-		return nil
+		return nil, nil
 	case compmerge:
 		allEn, err := syscontrol.GetBoolValue(req.Param(), "allshards")
 		if err != nil && err != syscontrol.ErrNoSuchParam {
 			log.Error("get merge switchon from param fail", zap.Error(err))
-			return err
+			return nil, err
 
 		}
 		if err == nil {
 			compWorker.SetAllOutOfOrderMergeSwitch(allEn)
 			log.Info("set all shard merge switch", zap.Bool("switch", allEn))
-			return nil
+			return nil, nil
 		}
 
 		shardId, en, err := getReqParam(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		compWorker.ShardOutOfOrderMergeSwitch(uint64(shardId), en)
 		log.Info("set shard merge switch", zap.Bool("switch", allEn), zap.Int64("shid", shardId))
-		return nil
+		return nil, nil
 	case snapshot:
 		d, err := syscontrol.GetDurationValue(req.Param(), "duration")
 		if err != nil {
 			log.Error("get shard snapshot duration from param fail", zap.Error(err))
-			return err
+			return nil, err
 		}
 		compWorker.SetSnapshotColdDuration(d)
 		log.Info("set shard snapshot duration", zap.Duration("duration", d))
-		return nil
+		return nil, nil
 	case Failpoint:
 		err := handleFailpoint(req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		log.Info("failpoint switch ok", zap.String("switchon", req.Param()["switchon"]))
-		return nil
+		return nil, nil
 	case Readonly:
-		return e.handleReadonly(req)
+		return nil, e.handleReadonly(req)
 	case downSampleInOrder:
 		order, err := syscontrol.GetBoolValue(req.Param(), "order")
 		if err != nil {
 			log.Error("get downsample order from param fail", zap.Error(err))
-			return err
+			return nil, err
 		}
 		downSampleInorder = order
-		return nil
+		return nil, nil
 	case verifyNode:
 		en, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 		if err != nil {
 			log.Error("get verify switch from param fail", zap.Error(err))
-			return err
+			return nil, err
 		}
 		metaclient.VerifyNodeEn = en
 		log.Info("set verify switch ok", zap.String("switchon", req.Param()["switchon"]))
-		return nil
+		return nil, nil
 	case memUsageLimit:
 		limit, err := syscontrol.GetIntValue(req.Param(), "limit")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		setMemUsageLimit(int32(limit))
-		return nil
+		return nil, nil
+	case BackgroundReadLimiter:
+		limit, err := syscontrol.GetBytesValue(req.Param(), "limit")
+		if err != nil {
+			return nil, err
+		}
+		if limit <= 0 {
+			log.Error("set background read limiter failed, limit<=0", zap.Int64("limit", limit))
+		}
+		fileops.SetBackgroundReadLimiter(int(limit))
+		return nil, nil
 	default:
-		return fmt.Errorf("unknown sys cmd %v", req.Mod())
+		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}
 }
 

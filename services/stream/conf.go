@@ -16,7 +16,9 @@ limitations under the License.
 
 package stream
 
-import "runtime"
+import (
+	"github.com/openGemini/openGemini/lib/cpu"
+)
 
 type Config struct {
 	WindowConcurrency  int  `toml:"windowConcurrency"`
@@ -27,7 +29,7 @@ type Config struct {
 
 func NewConfig() Config {
 	//default use cpu num
-	concurrency := runtime.NumCPU() / 2
+	concurrency := cpu.GetCpuNum() / 2
 	//FilterConcurrency may block write, so set it bigger
 	return Config{FilterConcurrency: concurrency, WindowConcurrency: concurrency, FilterCache: 4 * concurrency,
 		EnableCompressDict: true}

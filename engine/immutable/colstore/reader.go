@@ -91,7 +91,7 @@ func NewPrimaryKeyReader(name string, lockPath *string) (*PrimaryKeyReader, erro
 	}
 	dr := fileops.NewFileReader(fd, lockPath)
 	hb := header[:]
-	_, err = dr.ReadAt(0, uint32(headerSize), &hb)
+	_, err = dr.ReadAt(0, uint32(headerSize), &hb, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		_ = dr.Close()
 		log.Error("read file header failed", zap.String("file", name), zap.Error(err))
@@ -140,7 +140,7 @@ func (r *PrimaryKeyReader) Version() uint32 {
 }
 
 func (r *PrimaryKeyReader) Read(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	b, err := r.reader.ReadAt(offset, size, dst)
+	b, err := r.reader.ReadAt(offset, size, dst, fileops.IO_PRIORITY_ULTRA_HIGH)
 
 	if err != nil {
 		log.Error("read file failed", zap.String("file", r.reader.Name()), zap.Error(err))

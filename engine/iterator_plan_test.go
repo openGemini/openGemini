@@ -1842,7 +1842,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -1850,7 +1850,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -3343,7 +3343,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -3351,7 +3351,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -4813,7 +4813,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -4821,7 +4821,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -6381,7 +6381,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -6389,7 +6389,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -7814,7 +7814,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 			for _, cur := range cursors {
 				keyCursors = append(keyCursors, cur)
 			}
-			chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+			chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 			defer chunkReader.Release()
 
 			// this is the output for this stmt
@@ -7822,7 +7822,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 
 			agg, _ := executor.NewStreamAggregateTransform(
 				[]hybridqp.RowDataType{tt.outputRowDataType},
-				[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+				[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 			agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 			agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8196,7 +8196,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -8204,7 +8204,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8396,7 +8396,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -8404,7 +8404,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8693,7 +8693,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
 				}
-				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, source, querySchema, keyCursors, false)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
@@ -8701,7 +8701,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 

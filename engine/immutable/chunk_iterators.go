@@ -20,6 +20,7 @@ import (
 	"container/heap"
 	"sync/atomic"
 
+	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"go.uber.org/zap"
@@ -227,7 +228,7 @@ func (c *ChunkIterator) read() error {
 		c.rec.ReserveColumnRows(8)
 		record.CheckRecord(c.rec)
 
-		c.rec, err = c.r.ReadAt(cMeta, i, c.rec, c.ctx)
+		c.rec, err = c.r.ReadAt(cMeta, i, c.rec, c.ctx, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			c.log.Error("read segment error", zap.String("file", c.r.Path()), zap.Error(err))
 			return err

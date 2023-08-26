@@ -32,13 +32,12 @@ type SysCtrlCmd struct {
 
 func (h *SysCtrlCmd) Process() error {
 	rsp := &netstorage.SysCtrlResponse{}
-	ret := make(map[string]string)
 
 	logger.GetLogger().Info("SysCtrlRequestMessage", zap.String("cmd", h.req.Mod()))
-	err := h.store.SendSysCtrlOnNode(h.req)
+	result, err := h.store.SendSysCtrlOnNode(h.req)
 	if err != nil {
 		rsp.SetErr(err.Error())
 	}
-	rsp.SetResult(ret)
+	rsp.SetResult(result)
 	return h.w.Response(rsp, true)
 }

@@ -152,6 +152,38 @@ func InitCondFunctions(expr influxql.Expr, schema *record.Schemas) (CondFunction
 	return funcs, nil
 }
 
+func InitTimeCondFunctions(startTime, endTime int64, schema *record.Schemas) IdxFunctions {
+	var funcs IdxFunctions
+	if startTime == endTime {
+		f := IdxFunction{
+			Idx: len(*schema) - 1,
+		}
+		f.Compare = startTime
+		f.Function = GetIntegerEQConditionBitMap
+		funcs = append(funcs, f)
+		return funcs
+	}
+	if startTime != influxql.MinTime {
+		f := IdxFunction{
+			Idx: len(*schema) - 1,
+		}
+		f.Compare = startTime
+		f.Function = GetIntegerGTEConditionBitMap
+		funcs = append(funcs, f)
+	}
+
+	if endTime != influxql.MaxTime {
+		f := IdxFunction{
+			Idx: len(*schema) - 1,
+		}
+		f.Compare = endTime
+		f.Function = GetIntegerLTEConditionBitMap
+		funcs = append(funcs, f)
+	}
+
+	return funcs
+}
+
 func generateIdxFunctions(expr influxql.Expr, funcs IdxFunctions, schema *record.Schemas) (IdxFunctions, error) {
 	var switchOp bool
 	if expr == nil {
@@ -307,7 +339,26 @@ func formatBinaryExpr(expr influxql.Expr) (*influxql.BinaryExpr, bool, error) {
 		}
 	}
 
+	if !formatRHS(binaryExpr) {
+		return nil, false, errors.New("binary condition not valid")
+	}
+
 	return binaryExpr, switchOp, nil
+}
+
+func formatRHS(binaryExpr *influxql.BinaryExpr) bool {
+	if binaryExpr.LHS.(*influxql.VarRef).Type == influxql.Float {
+		if _, ok := binaryExpr.RHS.(*influxql.NumberLiteral); !ok {
+			rhs, ok := binaryExpr.RHS.(*influxql.IntegerLiteral)
+			// integer is valid for LHS with float
+			if ok {
+				binaryExpr.RHS = &influxql.NumberLiteral{Val: float64(rhs.Val)}
+			} else {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func RewriteTimeCompareVal(expr influxql.Expr, valuer *influxql.NowValuer) {
@@ -332,6 +383,7 @@ func RewriteTimeCompareVal(expr influxql.Expr, valuer *influxql.NowValuer) {
 						op.RHS = &influxql.IntegerLiteral{Val: timeCol.Val.Nanoseconds()}
 					case *influxql.NumberLiteral:
 						op.RHS = &influxql.IntegerLiteral{Val: int64(timeCol.Val)}
+					case *influxql.IntegerLiteral:
 					default:
 						panic("unsupported data type for time filter")
 					}
@@ -342,4 +394,8 @@ func RewriteTimeCompareVal(expr influxql.Expr, valuer *influxql.NowValuer) {
 		RewriteTimeCompareVal(op.LHS, valuer)
 		RewriteTimeCompareVal(op.RHS, valuer)
 	}
+}
+
+func HaveTimeCond(startTime, endTime int64) bool {
+	return startTime == endTime || startTime != influxql.MinTime || endTime != influxql.MaxTime
 }

@@ -424,7 +424,7 @@ func NewPlanFrame(plan hybridqp.QueryNode) *PlanFrame {
 }
 
 type TransformCreator interface {
-	Create(LogicalPlan, query.ProcessorOptions) (Processor, error)
+	Create(LogicalPlan, *query.ProcessorOptions) (Processor, error)
 }
 
 func RegistryTransformCreator(plan LogicalPlan, creator TransformCreator) bool {
@@ -606,7 +606,7 @@ func (b *DAGBuilder) buildProcessor(plan hybridqp.QueryNode) (Processor, error) 
 	}
 
 	if creator, ok := GetTransformFactoryInstance().Find(plan.String()); ok {
-		return creator.Create(plan.(LogicalPlan), b.opt)
+		return creator.Create(plan.(LogicalPlan), &b.opt)
 	}
 	return nil, errno.NewError(errno.UnsupportedLogicalPlan, plan.String())
 }

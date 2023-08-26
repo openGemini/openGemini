@@ -167,10 +167,12 @@ type Chunk interface {
 	TruncateTime(int)
 	SetTime(time []int64)
 	ResetTime(int, int64)
-	AppendTime(...int64)
+	AppendTime(int64)
+	AppendTimes([]int64)
 	TimeByIndex(int) int64
 	IntervalIndex() []int
-	AppendIntervalIndex(...int)
+	AppendIntervalIndexes([]int)
+	AppendIntervalIndex(int)
 	ResetIntervalIndex(...int)
 	Columns() []Column
 	Column(int) Column
@@ -246,7 +248,7 @@ func (c *ChunkImpl) NewDims(size int) {
 
 func (c *ChunkImpl) AddDims(dimsVals []string) {
 	for i, dimCol := range c.dims {
-		dimCol.AppendStringValues(dimsVals[i])
+		dimCol.AppendStringValue(dimsVals[i])
 		dimCol.AppendManyNotNil(1)
 	}
 }
@@ -327,8 +329,12 @@ func (c *ChunkImpl) ResetTime(idx int, time int64) {
 	c.time[idx] = time
 }
 
-func (c *ChunkImpl) AppendTime(t ...int64) {
-	c.time = append(c.time, t...)
+func (c *ChunkImpl) AppendTime(t int64) {
+	c.time = append(c.time, t)
+}
+
+func (c *ChunkImpl) AppendTimes(ts []int64) {
+	c.time = append(c.time, ts...)
 }
 
 func (c *ChunkImpl) TimeByIndex(i int) int64 {
@@ -339,8 +345,12 @@ func (c *ChunkImpl) IntervalIndex() []int {
 	return c.intervalIndex
 }
 
-func (c *ChunkImpl) AppendIntervalIndex(intervalIndex ...int) {
+func (c *ChunkImpl) AppendIntervalIndexes(intervalIndex []int) {
 	c.intervalIndex = append(c.intervalIndex, intervalIndex...)
+}
+
+func (c *ChunkImpl) AppendIntervalIndex(intervalIndex int) {
+	c.intervalIndex = append(c.intervalIndex, intervalIndex)
 }
 
 func (c *ChunkImpl) ResetIntervalIndex(intervalIndex ...int) {
@@ -440,38 +450,38 @@ func (c *ChunkImpl) GetRecord() *record.Record {
 
 func (c *ChunkImpl) copy(dst Chunk) Chunk {
 	dst.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
-	dst.AppendIntervalIndex(c.IntervalIndex()...)
-	dst.AppendTime(c.Time()...)
+	dst.AppendIntervalIndexes(c.IntervalIndex())
+	dst.AppendTimes(c.Time())
 
 	for i := range dst.RowDataType().Fields() {
 		dataType := dst.RowDataType().Field(i).Expr.(*influxql.VarRef).Type
 		switch dataType {
 		case influxql.Integer:
-			dst.Column(i).AppendIntegerValues(c.Column(i).IntegerValues()...)
+			dst.Column(i).AppendIntegerValues(c.Column(i).IntegerValues())
 		case influxql.FloatTuple:
-			dst.Column(i).AppendFloatTuples(c.Column(i).FloatTuples()...)
+			dst.Column(i).AppendFloatTuples(c.Column(i).FloatTuples())
 		case influxql.Float:
-			dst.Column(i).AppendFloatValues(c.Column(i).FloatValues()...)
+			dst.Column(i).AppendFloatValues(c.Column(i).FloatValues())
 		case influxql.Boolean:
-			dst.Column(i).AppendBooleanValues(c.Column(i).BooleanValues()...)
+			dst.Column(i).AppendBooleanValues(c.Column(i).BooleanValues())
 		case influxql.String, influxql.Tag:
 			dst.Column(i).CloneStringValues(c.Column(i).GetStringBytes())
 		}
 		if len(c.Column(i).ColumnTimes()) != 0 {
-			dst.Column(i).AppendColumnTimes(c.Column(i).ColumnTimes()...)
+			dst.Column(i).AppendColumnTimes(c.Column(i).ColumnTimes())
 		}
 		c.Column(i).NilsV2().CopyTo(dst.Column(i).NilsV2())
 	}
 	for i := range dst.Dims() {
 		switch dst.Dim(i).DataType() {
 		case influxql.Integer:
-			dst.Dim(i).AppendIntegerValues(c.Dim(i).IntegerValues()...)
+			dst.Dim(i).AppendIntegerValues(c.Dim(i).IntegerValues())
 		case influxql.FloatTuple:
-			dst.Dim(i).AppendFloatTuples(c.Dim(i).FloatTuples()...)
+			dst.Dim(i).AppendFloatTuples(c.Dim(i).FloatTuples())
 		case influxql.Float:
-			dst.Dim(i).AppendFloatValues(c.Dim(i).FloatValues()...)
+			dst.Dim(i).AppendFloatValues(c.Dim(i).FloatValues())
 		case influxql.Boolean:
-			dst.Dim(i).AppendBooleanValues(c.Dim(i).BooleanValues()...)
+			dst.Dim(i).AppendBooleanValues(c.Dim(i).BooleanValues())
 		case influxql.String, influxql.Tag:
 			dst.Dim(i).CloneStringValues(c.Dim(i).GetStringBytes())
 		}
@@ -493,8 +503,8 @@ func (c *ChunkImpl) CopyTo(dstChunk Chunk) {
 func (c *ChunkImpl) CopyByRowDataType(dst Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error {
 	dst.SetName(c.Name())
 	dst.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
-	dst.AppendIntervalIndex(c.IntervalIndex()...)
-	dst.AppendTime(c.Time()...)
+	dst.AppendIntervalIndexes(c.IntervalIndex())
+	dst.AppendTimes(c.Time())
 	for k1, v1 := range fromRt.IndexByName() {
 		if v2, ok := dstRt.IndexByName()[k1]; !ok {
 			return fmt.Errorf("CopyByRowDataType fromRt and dstRt not match")
@@ -502,18 +512,18 @@ func (c *ChunkImpl) CopyByRowDataType(dst Chunk, fromRt hybridqp.RowDataType, ds
 			dataType := dst.Column(v2).DataType()
 			switch dataType {
 			case influxql.Integer:
-				dst.Column(v2).AppendIntegerValues(c.Column(v1).IntegerValues()...)
+				dst.Column(v2).AppendIntegerValues(c.Column(v1).IntegerValues())
 			case influxql.FloatTuple:
-				dst.Column(v2).AppendFloatTuples(c.Column(v1).FloatTuples()...)
+				dst.Column(v2).AppendFloatTuples(c.Column(v1).FloatTuples())
 			case influxql.Float:
-				dst.Column(v2).AppendFloatValues(c.Column(v1).FloatValues()...)
+				dst.Column(v2).AppendFloatValues(c.Column(v1).FloatValues())
 			case influxql.Boolean:
-				dst.Column(v2).AppendBooleanValues(c.Column(v1).BooleanValues()...)
+				dst.Column(v2).AppendBooleanValues(c.Column(v1).BooleanValues())
 			case influxql.String, influxql.Tag:
 				dst.Column(v2).CloneStringValues(c.Column(v1).GetStringBytes())
 			}
 			if len(c.Column(v1).ColumnTimes()) != 0 {
-				dst.Column(v2).AppendColumnTimes(c.Column(v1).ColumnTimes()...)
+				dst.Column(v2).AppendColumnTimes(c.Column(v1).ColumnTimes())
 			}
 			c.Column(v1).NilsV2().CopyTo(dst.Column(v2).NilsV2())
 		}
@@ -957,7 +967,7 @@ func (iter *ChunkIterator) HasMore() bool {
 	return iter.currPos < iter.chunk.Len()
 }
 
-func IntervalIndexGen(ck Chunk, opt query.ProcessorOptions) {
+func IntervalIndexGen(ck Chunk, opt *query.ProcessorOptions) {
 	chunk, ok := ck.(*ChunkImpl)
 	if !ok {
 		return
@@ -965,7 +975,7 @@ func IntervalIndexGen(ck Chunk, opt query.ProcessorOptions) {
 
 	tagIndex := chunk.TagIndex()
 	if opt.Interval.IsZero() {
-		chunk.AppendIntervalIndex(tagIndex...)
+		chunk.AppendIntervalIndexes(tagIndex)
 		return
 	}
 

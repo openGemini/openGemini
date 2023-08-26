@@ -154,7 +154,7 @@ func (itr *FileIterator) NextChunkMeta() bool {
 			itr.cmIdx = 0
 		}
 
-		itr.cmBuffers[itr.cmIdx], itr.err = itr.r.ReadChunkMetaData(metaIndexAt, itr.metaIndex, itr.cmBuffers[itr.cmIdx][:0])
+		itr.cmBuffers[itr.cmIdx], itr.err = itr.r.ReadChunkMetaData(metaIndexAt, itr.metaIndex, itr.cmBuffers[itr.cmIdx][:0], fileops.IO_PRIORITY_LOW_READ)
 		if itr.err != nil {
 			itr.log.Error("read chunk metas fail", zap.String("file", itr.r.Path()), zap.Any("index", itr.metaIndex), zap.Error(itr.err))
 			return false
@@ -291,7 +291,7 @@ func (br *BufferReader) Reset(r TSSPFile) {
 
 func (br *BufferReader) Read(offset int64, size uint32) ([]byte, error) {
 	if size > br.maxSize {
-		return br.r.ReadData(offset, size, &br.swap)
+		return br.r.ReadData(offset, size, &br.swap, fileops.IO_PRIORITY_LOW_READ)
 	}
 
 	if err := br.preRead(offset, size); err != nil {
@@ -321,7 +321,7 @@ func (br *BufferReader) preRead(offset int64, size uint32) error {
 
 	br.buf = bufferpool.Resize(br.buf, int(br.size+readSize))
 	dst := br.buf[br.size : br.size+readSize]
-	buf, err := br.r.ReadData(readOffset, readSize, &dst)
+	buf, err := br.r.ReadData(readOffset, readSize, &dst, fileops.IO_PRIORITY_LOW_READ)
 
 	br.size += uint32(len(buf))
 	br.buf = br.buf[:br.size]

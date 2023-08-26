@@ -58,7 +58,7 @@ func NewSortAppendTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTyp
 type SortAppendTransformCreator struct {
 }
 
-func (c *SortAppendTransformCreator) Create(plan LogicalPlan, _ query.ProcessorOptions) (Processor, error) {
+func (c *SortAppendTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	inRowDataTypes := make([]hybridqp.RowDataType, 0, len(plan.Children()))
 
 	for _, inPlan := range plan.Children() {
@@ -110,7 +110,7 @@ func (t *SortAppendTransf) appendMergeTimeAndColumns(trans *MergeTransform, i in
 
 	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
 	trans.param.Table = trans.ReflectionTables[trans.currItem.Input]
-	trans.NewChunk.AppendTime(chunk.Time()[start:end]...)
+	trans.NewChunk.AppendTimes(chunk.Time()[start:end])
 	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
 }
 
@@ -290,13 +290,13 @@ func (f *Int64AppendIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	f.input = endpoint.InputPoint.Chunk.Column(params.Table[endpoint.OutputPoint.Ordinal])
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
-	f.output.AppendIntegerValues(f.input.IntegerValues()[startValue:endValue]...)
+	f.output.AppendIntegerValues(f.input.IntegerValues()[startValue:endValue])
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {
 			if f.input.IsNilV2(i) {
 				f.output.AppendNil()
 			} else {
-				f.output.AppendNilsV2(true)
+				f.output.AppendNotNil()
 			}
 		}
 	} else {
@@ -304,7 +304,7 @@ func (f *Int64AppendIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 	}
 
 	if f.input.ColumnTimes() != nil {
-		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue]...)
+		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue])
 	}
 }
 
@@ -321,13 +321,13 @@ func (f *Float64AppendIterator) Next(endpoint *IteratorEndpoint, params *Iterato
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	f.input = endpoint.InputPoint.Chunk.Column(params.Table[endpoint.OutputPoint.Ordinal])
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
-	f.output.AppendFloatValues(f.input.FloatValues()[startValue:endValue]...)
+	f.output.AppendFloatValues(f.input.FloatValues()[startValue:endValue])
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {
 			if f.input.IsNilV2(i) {
 				f.output.AppendNil()
 			} else {
-				f.output.AppendNilsV2(true)
+				f.output.AppendNotNil()
 			}
 		}
 	} else {
@@ -335,7 +335,7 @@ func (f *Float64AppendIterator) Next(endpoint *IteratorEndpoint, params *Iterato
 	}
 
 	if f.input.ColumnTimes() != nil {
-		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue]...)
+		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue])
 	}
 }
 
@@ -367,7 +367,7 @@ func (f *StringAppendIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 			if f.input.IsNilV2(i) {
 				f.output.AppendNil()
 			} else {
-				f.output.AppendNilsV2(true)
+				f.output.AppendNotNil()
 			}
 		}
 	} else {
@@ -375,7 +375,7 @@ func (f *StringAppendIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 	}
 
 	if f.input.ColumnTimes() != nil {
-		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue]...)
+		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue])
 	}
 }
 
@@ -392,13 +392,13 @@ func (f *BooleanAppendIterator) Next(endpoint *IteratorEndpoint, params *Iterato
 	f.output = endpoint.OutputPoint.Chunk.Column(endpoint.OutputPoint.Ordinal)
 	f.input = endpoint.InputPoint.Chunk.Column(params.Table[endpoint.OutputPoint.Ordinal])
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
-	f.output.AppendBooleanValues(f.input.BooleanValues()[startValue:endValue]...)
+	f.output.AppendBooleanValues(f.input.BooleanValues()[startValue:endValue])
 	if endValue-startValue != params.end-params.start {
 		for i := params.start; i < params.end; i++ {
 			if f.input.IsNilV2(i) {
 				f.output.AppendNil()
 			} else {
-				f.output.AppendNilsV2(true)
+				f.output.AppendNotNil()
 			}
 		}
 	} else {
@@ -406,6 +406,6 @@ func (f *BooleanAppendIterator) Next(endpoint *IteratorEndpoint, params *Iterato
 	}
 
 	if f.input.ColumnTimes() != nil {
-		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue]...)
+		f.output.AppendColumnTimes(f.input.ColumnTimes()[startValue:endValue])
 	}
 }

@@ -32,6 +32,8 @@ type HitRatioStatistics struct {
 	itemIndexWriterHitTotal int64
 	itemMergeColValGetTotal int64
 	itemMergeColValHitTotal int64
+	itemFileOpenTotal       int64
+	itemQueryFileUnHitTotal int64
 
 	tags map[string]string
 }
@@ -55,6 +57,8 @@ func (s *HitRatioStatistics) Collect(buffer []byte) ([]byte, error) {
 		"IndexWriterHitTotal": s.itemIndexWriterHitTotal,
 		"MergeColValGetTotal": s.itemMergeColValGetTotal,
 		"MergeColValHitTotal": s.itemMergeColValHitTotal,
+		"FileOpenTotal":       s.itemFileOpenTotal,
+		"QueryFileUnHitTotal": s.itemQueryFileUnHitTotal,
 	}
 
 	buffer = AddPointToBuffer("hitRatio", s.tags, data, buffer)
@@ -68,6 +72,8 @@ func (s *HitRatioStatistics) CollectOps() []opsStat.OpsStatistic {
 		"IndexWriterHitTotal": s.itemIndexWriterHitTotal,
 		"MergeColValGetTotal": s.itemMergeColValGetTotal,
 		"MergeColValHitTotal": s.itemMergeColValHitTotal,
+		"FileOpenTotal":       s.itemFileOpenTotal,
+		"QueryFileUnHitTotal": s.itemQueryFileUnHitTotal,
 	}
 
 	return []opsStat.OpsStatistic{
@@ -93,4 +99,12 @@ func (s *HitRatioStatistics) AddMergeColValGetTotal(i int64) {
 
 func (s *HitRatioStatistics) AddMergeColValHitTotal(i int64) {
 	atomic.AddInt64(&s.itemMergeColValHitTotal, i)
+}
+
+func (s *HitRatioStatistics) AddFileOpenTotal(i int64) {
+	atomic.AddInt64(&s.itemFileOpenTotal, i)
+}
+
+func (s *HitRatioStatistics) AddQueryFileUnHitTotal(i int64) {
+	atomic.AddInt64(&s.itemQueryFileUnHitTotal, i)
 }

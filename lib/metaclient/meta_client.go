@@ -2235,8 +2235,11 @@ func validateURL(input string) error {
 func pingServer(server string) error {
 	pingUrl := server + "/ping"
 	client := http.Client{Timeout: time.Second}
-	req, _ := http.NewRequest("GET", pingUrl, nil)
-	_, err := client.Do(req)
+	req, err := http.NewRequest("GET", pingUrl, nil)
+	if err != nil {
+		return err
+	}
+	_, err = client.Do(req)
 	if err != nil {
 		return err
 	}

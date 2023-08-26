@@ -103,7 +103,7 @@ func BuildHashAggInChunkForDimsIn3() executor.Chunk {
 	rowDataType := buildHashAggInputRowDataType1()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 	chunk.NewDims(1)
 	chunk.AddDims([]string{"tag1val1"})
 	chunk.AddDims([]string{"tag1val2"})
@@ -112,13 +112,13 @@ func BuildHashAggInChunkForDimsIn3() executor.Chunk {
 	for _, col := range chunk.Columns() {
 		switch col.DataType() {
 		case influxql.Integer:
-			col.AppendIntegerValues([]int64{1, 2, 3}...)
+			col.AppendIntegerValues([]int64{1, 2, 3})
 		case influxql.Float:
-			col.AppendFloatValues([]float64{1, 2, 3}...)
+			col.AppendFloatValues([]float64{1, 2, 3})
 		case influxql.Boolean:
-			col.AppendBooleanValues([]bool{true, false, true}...)
+			col.AppendBooleanValues([]bool{true, false, true})
 		case influxql.String:
-			col.AppendStringValues([]string{"1", "2", "3"}...)
+			col.AppendStringValues([]string{"1", "2", "3"})
 		default:
 			panic("datatype error")
 		}
@@ -132,7 +132,7 @@ func BuildHashAggInChunkForDimsIn4() executor.Chunk {
 	rowDataType := buildHashAggInputRowDataType1()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 	chunk.NewDims(1)
 	chunk.AddDims([]string{"tag1val3"})
 	chunk.AddDims([]string{"tag1val3"})
@@ -141,13 +141,13 @@ func BuildHashAggInChunkForDimsIn4() executor.Chunk {
 	for _, col := range chunk.Columns() {
 		switch col.DataType() {
 		case influxql.Integer:
-			col.AppendIntegerValues([]int64{1, 2, 3, 4}...)
+			col.AppendIntegerValues([]int64{1, 2, 3, 4})
 		case influxql.Float:
-			col.AppendFloatValues([]float64{1, 2, 3, 4}...)
+			col.AppendFloatValues([]float64{1, 2, 3, 4})
 		case influxql.Boolean:
-			col.AppendBooleanValues([]bool{true, false, true, false}...)
+			col.AppendBooleanValues([]bool{true, false, true, false})
 		case influxql.String:
-			col.AppendStringValues([]string{"1", "2", "3", "4"}...)
+			col.AppendStringValues([]string{"1", "2", "3", "4"})
 		default:
 			panic("datatype error")
 		}
@@ -439,17 +439,17 @@ func BuildHashAggInChunkForDimsIn1() executor.Chunk {
 	rowDataType := buildHashAggInputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 	chunk.NewDims(1)
 	chunk.AddDims([]string{"tag1val1"})
 	chunk.AddDims([]string{"tag1val2"})
 	chunk.AddDims([]string{"tag1val1"})
 	chunk.AddDims([]string{"tag1val2"})
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
-	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(1).AppendManyNotNil(4)
 	return chunk
 }
@@ -458,17 +458,17 @@ func BuildHashAggInChunkForDimsIn2() executor.Chunk {
 	rowDataType := buildHashAggInputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 	chunk.NewDims(1)
 	chunk.AddDims([]string{"tag1val3"})
 	chunk.AddDims([]string{"tag1val3"})
 	chunk.AddDims([]string{"tag1val4"})
 	chunk.AddDims([]string{"tag1val4"})
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
-	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(1).AppendManyNotNil(4)
 	return chunk
 }
@@ -522,17 +522,17 @@ func BuildHashAggInChunk1() executor.Chunk {
 	rowDataType := buildHashAggInputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val1"), 0)
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val2"), 1)
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val1"), 2)
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val2"), 3)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
-	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(1).AppendManyNotNil(4)
 	return chunk
 }
@@ -541,15 +541,15 @@ func BuildHashAggInChunk2() executor.Chunk {
 	rowDataType := buildHashAggInputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
-	chunk.AppendTime([]int64{1, 2, 3, 4}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val3"), 0)
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val4"), 2)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
-	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4}...)
+	chunk.Column(1).AppendIntegerValues([]int64{1, 2, 3, 4})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(1).AppendManyNotNil(4)
 	return chunk
 }
@@ -788,9 +788,6 @@ func TestGroupKeysPoolAlloc(t *testing.T) {
 	tags := groupKeysPool.AllocGroupTags(1024)
 	assert.Equal(t, 1024, len(tags))
 
-	states := groupKeysPool.AllocStates(1024)
-	assert.Equal(t, 1024, len(states))
-
 	zvalues := groupKeysPool.AllocZValues(1024)
 	assert.Equal(t, 1024, len(zvalues))
 }
@@ -918,7 +915,7 @@ func BenchmarkAggregateTransformForCompare(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkHashAggTransformHcd(b *testing.B) {
@@ -975,7 +972,7 @@ func BenchmarkAggregateTransformForCompareHcd(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func buildHashAggTransformSchemaBenchmark1(interval int) *executor.QuerySchema {
@@ -1065,11 +1062,11 @@ func buildBenchChunks1(chunkCount, chunkSize, tagPerChunk, intervalPerChunk int)
 				count++
 			}
 			times = append(times, int64(i*chunkSize+j))
-			chunk.Column(0).AppendFloatValues(float64(i*chunkSize + j))
-			chunk.Column(0).AppendNilsV2(true)
+			chunk.Column(0).AppendFloatValue(float64(i*chunkSize + j))
+			chunk.Column(0).AppendNotNil()
 		}
-		chunk.AppendIntervalIndex(intervalIndex...)
-		chunk.AppendTime(times...)
+		chunk.AppendIntervalIndexes(intervalIndex)
+		chunk.AppendTimes(times)
 		chunkList = append(chunkList, chunk)
 	}
 	return chunkList
@@ -1115,7 +1112,7 @@ func benchmarkStreamAggregateTransform1(b *testing.B, chunkCount, ChunkSize, tag
 			[]hybridqp.RowDataType{srcRowDataType},
 			[]hybridqp.RowDataType{dstRowDataType},
 			exprOpt,
-			opt, false)
+			&opt, false)
 		sink := NewNilSink(dstRowDataType)
 		err := executor.Connect(source.Output, trans1.Inputs[0])
 		if err != nil {
@@ -1312,12 +1309,12 @@ func buildBenchChunksFixWindow(chunkCount, chunkSize, tagPerChunk, intervalPerCh
 		for j := 0; j < tagPerChunk; j++ {
 			for k := 0; k < chunkSize/tagPerChunk; k++ {
 				times = append(times, int64(k))
-				chunk.Column(0).AppendFloatValues(float64(k))
-				chunk.Column(0).AppendNilsV2(true)
+				chunk.Column(0).AppendFloatValue(float64(k))
+				chunk.Column(0).AppendNotNil()
 			}
 		}
-		chunk.AppendIntervalIndex(intervalIndex...)
-		chunk.AppendTime(times...)
+		chunk.AppendIntervalIndexes(intervalIndex)
+		chunk.AppendTimes(times)
 		chunkList = append(chunkList, chunk)
 	}
 	return chunkList
@@ -1433,16 +1430,16 @@ func buildBenchChunksBatch(chunkCount, chunkSize, tagPerChunk int) []executor.Ch
 			for _, col := range chunk.Columns() {
 				switch col.DataType() {
 				case influxql.Integer:
-					col.AppendIntegerValues(int64(j % seriesPoints))
+					col.AppendIntegerValue(int64(j % seriesPoints))
 					col.AppendManyNotNil(1)
 				case influxql.Float:
-					col.AppendFloatValues(float64(j % seriesPoints))
+					col.AppendFloatValue(float64(j % seriesPoints))
 					col.AppendManyNotNil(1)
 				case influxql.Boolean:
-					col.AppendBooleanValues(true)
+					col.AppendBooleanValue(true)
 					col.AppendManyNotNil(1)
 				case influxql.String:
-					col.AppendStringValues(strconv.Itoa(j % seriesPoints))
+					col.AppendStringValue(strconv.Itoa(j % seriesPoints))
 					col.AppendManyNotNil(1)
 				default:
 					panic("datatype error")

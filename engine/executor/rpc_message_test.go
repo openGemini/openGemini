@@ -242,7 +242,7 @@ func TestHandlerError(t *testing.T) {
 func TestNewRPCReaderTransform_Abort(t *testing.T) {
 	ctx := context.Background()
 	rt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{})
-	trans := executor.NewRPCReaderTransform(rt, query.ProcessorOptions{}, &executor.RemoteQuery{})
+	trans := executor.NewRPCReaderTransform(rt, 0, &executor.RemoteQuery{})
 
 	trans.Distribute(buildDag())
 	trans.Abort()

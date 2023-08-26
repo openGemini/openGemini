@@ -186,7 +186,6 @@ type QuerySchema struct {
 
 	joinCases         []*influxql.Join
 	hasFieldCondition bool
-	sortFields        influxql.SortFields
 	planType          PlanType
 }
 
@@ -213,8 +212,10 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 		notIncI:       false,
 		opt:           opt,
 		sources:       nil,
-		sortFields:    sortFields,
 		planType:      UNKNOWN,
+	}
+	if len(sortFields) > 0 && len(opt.GetSortFields()) == 0 {
+		schema.opt.SetSortFields(sortFields)
 	}
 
 	schema.init()
@@ -233,6 +234,9 @@ func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources
 }
 
 func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
+	if len(sortFields) > 0 && sources.HaveOnlyTSStore() {
+		sortFields = nil
+	}
 	schema := NewQuerySchema(fields, columnNames, opt, sortFields)
 	schema.sources = sources
 	if !schema.Options().IsAscending() && schema.MatchPreAgg() && len(schema.opt.GetGroupBy()) == 0 {
@@ -1142,11 +1146,14 @@ func (qs *QuerySchema) GetJoinCases() []*influxql.Join {
 }
 
 func (qs *QuerySchema) HasSort() bool {
-	return qs.sortFields != nil && len(qs.sortFields) > 0
+	return qs.opt != nil && len(qs.opt.GetSortFields()) > 0
 }
 
 func (qs *QuerySchema) GetSortFields() influxql.SortFields {
-	return qs.sortFields
+	if qs.opt == nil {
+		return nil
+	}
+	return qs.opt.GetSortFields()
 }
 
 func (qs *QuerySchema) SetFill(fill influxql.FillOption) {

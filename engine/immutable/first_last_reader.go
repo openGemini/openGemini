@@ -28,7 +28,7 @@ import (
 
 var firstLastReaderPool sync.Pool
 
-func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied bool, first bool) error {
+func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied, first bool, ioPriority int) error {
 	reader, ok := firstLastReaderPool.Get().(*FirstLastReader)
 	if !ok || reader == nil {
 		reader = &FirstLastReader{}
@@ -36,7 +36,7 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *
 	defer reader.Release()
 
 	reader.Init(cm, cr, ref, dst, first)
-	return reader.Read(ctx, copied)
+	return reader.Read(ctx, copied, ioPriority)
 }
 
 type FirstLastReader struct {
@@ -79,7 +79,7 @@ func (r *FirstLastReader) Init(cm *ChunkMeta, cr ColumnReader, ref *record.Field
 	return r
 }
 
-func (r *FirstLastReader) Read(ctx *ReadContext, copied bool) error {
+func (r *FirstLastReader) Read(ctx *ReadContext, copied bool, ioPriority int) error {
 	idx := r.cm.columnIndex(r.ref)
 	if idx < 0 {
 		return nil
@@ -103,25 +103,41 @@ func (r *FirstLastReader) Read(ctx *ReadContext, copied bool) error {
 			if !r.first {
 				rowIndex = int(numberenc.UnmarshalUint32(r.cm.timeMeta().preAgg)) - 1
 			}
-			err = r.after(val, tm, rowIndex, ctx, copied)
+			err = r.after(val, tm, rowIndex, ctx, copied, ioPriority)
 			break
 		}
 
-		if err := r.readDataColVal(ctx, &colMeta.entries[r.segIndex], copied); err != nil {
-			return err
-		}
-		if err := r.readTimeColVal(ctx, &tmMeta.entries[r.segIndex], copied); err != nil {
+		if err := r.readDataColVal(ctx, &colMeta.entries[r.segIndex], copied, ioPriority); err != nil {
 			return err
 		}
 
-		rowIndex := r.readRowIndex(ctx)
-		if rowIndex >= r.timeCol.Length() {
-			continue
+		var rowIndex int
+		if r.first && r.dataCol.NilCount == 0 && minMaxSeg.minTime() >= ctx.tr.Min {
+			// query time range:   --------------
+			// segment time range:     ---------------
+			// If there is no null value, the first row of data is the result
+			tm = r.cm.minTime()
+			rowIndex = 0
+		} else if !r.first && r.dataCol.NilCount == 0 && minMaxSeg.maxTime() <= ctx.tr.Max {
+			// query time range:        --------------
+			// segment time range: ---------------
+			// If there is no null value, the last row of data is the result
+			tm = r.cm.maxTime()
+			rowIndex = r.dataCol.Len - 1
+		} else {
+			if err := r.readTimeColVal(ctx, &tmMeta.entries[r.segIndex], copied, ioPriority); err != nil {
+				return err
+			}
+
+			rowIndex = r.readRowIndex(ctx)
+			if rowIndex >= r.timeCol.Length() {
+				continue
+			}
+			tm, _ = r.timeCol.IntegerValue(rowIndex)
 		}
 
 		val = getColumnValue(r.ref, r.dataCol, rowIndex)
-		tm, _ = r.timeCol.IntegerValue(rowIndex)
-		err = r.after(val, tm, rowIndex, ctx, copied)
+		err = r.after(val, tm, rowIndex, ctx, copied, ioPriority)
 		break
 	}
 
@@ -139,7 +155,7 @@ func (r *FirstLastReader) Release() {
 	firstLastReaderPool.Put(r)
 }
 
-func (r *FirstLastReader) after(val interface{}, tm int64, rowIndex int, ctx *ReadContext, copied bool) error {
+func (r *FirstLastReader) after(val interface{}, tm int64, rowIndex int, ctx *ReadContext, copied bool, ioPriority int) error {
 	if r.first {
 		r.meta.SetFirst(val, tm)
 	} else {
@@ -151,7 +167,7 @@ func (r *FirstLastReader) after(val interface{}, tm int64, rowIndex int, ctx *Re
 	r.timeCol.AppendInteger(tm)
 
 	if r.dst.Schema.Len() > 2 && len(ctx.ops) == 1 {
-		err := readAuxData(r.cm, r.segIndex, rowIndex, r.dst, ctx, r.cr, copied)
+		err := readAuxData(r.cm, r.segIndex, rowIndex, r.dst, ctx, r.cr, copied, ioPriority)
 		if err != nil {
 			log.Error("read aux data column fail", zap.Error(err))
 			return err
@@ -177,9 +193,9 @@ func (r *FirstLastReader) next() bool {
 	return r.segIndex >= 0
 }
 
-func (r *FirstLastReader) readColVal(seg *Segment, buf *[]byte, hook func(buf []byte) error) error {
+func (r *FirstLastReader) readColVal(seg *Segment, buf *[]byte, hook func(buf []byte) error, ioPriority int) error {
 	offset, size := seg.offsetSize()
-	data, err := r.cr.ReadDataBlock(offset, size, buf)
+	data, err := r.cr.ReadDataBlock(offset, size, buf, ioPriority)
 	if err != nil {
 		return err
 	}
@@ -187,18 +203,18 @@ func (r *FirstLastReader) readColVal(seg *Segment, buf *[]byte, hook func(buf []
 	return hook(data)
 }
 
-func (r *FirstLastReader) readTimeColVal(ctx *ReadContext, seg *Segment, copied bool) error {
+func (r *FirstLastReader) readTimeColVal(ctx *ReadContext, seg *Segment, copied bool, ioPriority int) error {
 	r.timeBuf = r.timeBuf[:0]
 	return r.readColVal(seg, &r.timeBuf, func(buf []byte) error {
 		return appendTimeColumnData(buf, r.timeCol, ctx, copied)
-	})
+	}, ioPriority)
 }
 
-func (r *FirstLastReader) readDataColVal(ctx *ReadContext, seg *Segment, copied bool) error {
+func (r *FirstLastReader) readDataColVal(ctx *ReadContext, seg *Segment, copied bool, ioPriority int) error {
 	r.dataBuf = r.dataBuf[:0]
 	return r.readColVal(seg, &r.dataBuf, func(buf []byte) error {
 		return decodeColumnData(r.ref, buf, r.dataCol, ctx, copied)
-	})
+	}, ioPriority)
 }
 
 func (r *FirstLastReader) readFirstOrLastFromPreAgg(ctx *ReadContext, sr *SegmentRange, colMeta *ColumnMeta) (interface{}, int64, bool) {

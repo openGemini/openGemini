@@ -233,7 +233,7 @@ func (c *tsmMergeCursor) AddLoc() error {
 
 func (c *tsmMergeCursor) readData(orderLoc bool, dst *record.Record) (*record.Record, error) {
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
-	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.rowFilters)
+	filterOpts := immutable.NewFilterOpts(c.filter, &c.ctx.filterOption, c.tags, c.rowFilters)
 	if orderLoc {
 		return c.locations.ReadData(filterOpts, dst, nil)
 	}
@@ -375,7 +375,7 @@ func (c *tsmMergeCursor) FirstTimeOutOfOrderInit() error {
 	//isFirst := true
 	var outRec *record.Record
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
-	filterOpts := immutable.NewFilterOpts(c.filter, c.ctx.m, c.ctx.filterFieldsIdx, c.ctx.filterTags, c.tags, c.rowFilters)
+	filterOpts := immutable.NewFilterOpts(c.filter, &c.ctx.filterOption, c.tags, c.rowFilters)
 	dst := record.NewRecordBuilder(c.ctx.schema)
 	rec, err := c.outOfOrderLocations.ReadOutOfOrderMeta(filterOpts, dst)
 	if err != nil {

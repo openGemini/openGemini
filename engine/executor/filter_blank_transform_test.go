@@ -39,7 +39,7 @@ func testFilterBlankTransformBase(
 	trans := executor.NewFilterBlankTransform(
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
-		opt)
+		&opt)
 	sink := NewNilSink(outRowDataType)
 	err := executor.Connect(source.Output, trans.Inputs[0])
 	if err != nil {
@@ -101,13 +101,13 @@ func buildSrcChunkFilterBlank() []executor.Chunk {
 			*ParseChunkTags("country=b"),
 			*ParseChunkTags("country=c")},
 		[]int{0, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 2, 3, 4, 5, 7}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	inCk1.AppendIntervalIndexes([]int{0, 2, 3, 4, 5, 7})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	inCk1.Column(0).AppendFloatValues([]float64{2, 3, 6, 8, 10}...)
+	inCk1.Column(0).AppendFloatValues([]float64{2, 3, 6, 8, 10})
 	inCk1.Column(0).AppendNilsV2(false, true, true, false, false, true, false, true, false, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{2, 3, 6, 8, 9}...)
+	inCk1.Column(1).AppendFloatValues([]float64{2, 3, 6, 8, 9})
 	inCk1.Column(1).AppendNilsV2(false, true, true, false, false, true, false, true, true, false)
 
 	sCks = append(sCks, inCk1)
@@ -127,13 +127,13 @@ func buildDstChunkFilterBlank() []executor.Chunk {
 			*ParseChunkTags("country=a"),
 			*ParseChunkTags("country=c")},
 		[]int{0, 2})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 3}...)
-	inCk1.AppendTime([]int64{2, 3, 6, 8, 9, 10}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	inCk1.AppendTimes([]int64{2, 3, 6, 8, 9, 10})
 
-	inCk1.Column(0).AppendFloatValues([]float64{2, 3, 6, 8, 10}...)
+	inCk1.Column(0).AppendFloatValues([]float64{2, 3, 6, 8, 10})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, false, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{2, 3, 6, 8, 9}...)
+	inCk1.Column(1).AppendFloatValues([]float64{2, 3, 6, 8, 9})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, true, false)
 
 	dCks = append(dCks, inCk1)

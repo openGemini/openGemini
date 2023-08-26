@@ -48,8 +48,6 @@ const (
 	changeInput
 )
 
-const hashStateSize = 3
-
 type chunkInDisk struct {
 }
 
@@ -60,7 +58,6 @@ func (cid *chunkInDisk) GetChunk() (Chunk, bool) {
 type GroupKeysMPool struct {
 	groupKeys [][]byte
 	groupTags []*ChunkTags
-	states    [][hashStateSize]uint64
 	values    []uint64
 	zValues   []int64
 }
@@ -69,7 +66,6 @@ func NewGroupKeysPool(size int) *GroupKeysMPool {
 	gkm := &GroupKeysMPool{
 		groupKeys: make([][]byte, size),
 		groupTags: make([]*ChunkTags, size),
-		states:    make([][hashStateSize]uint64, size),
 		values:    make([]uint64, size),
 		zValues:   make([]int64, size),
 	}
@@ -92,14 +88,6 @@ func (gkp *GroupKeysMPool) AllocGroupTags(size int) []*ChunkTags {
 		gkp.groupTags = append(gkp.groupTags[:cap(gkp.groupTags)], make([]*ChunkTags, n)...)
 	}
 	return gkp.groupTags[:size]
-}
-
-func (gkp *GroupKeysMPool) AllocStates(size int) [][hashStateSize]uint64 {
-	n := size - cap(gkp.states)
-	if n > 0 {
-		gkp.states = append(gkp.states[:cap(gkp.states)], make([][hashStateSize]uint64, n)...)
-	}
-	return gkp.states[:size]
 }
 
 func (gkp *GroupKeysMPool) AllocValues(size int) []uint64 {
@@ -131,10 +119,6 @@ func (gkp *GroupKeysMPool) FreeZValue(spillState []int64) {
 
 func (gkp *GroupKeysMPool) FreeGroupTags(groupTags []*ChunkTags) {
 	gkp.groupTags = groupTags
-}
-
-func (gkp *GroupKeysMPool) FreeStates(states [][hashStateSize]uint64) {
-	gkp.states = states
 }
 
 func (gkp *GroupKeysMPool) FreeValues(values []uint64) {
@@ -204,6 +188,28 @@ func (b *BatchMPool) FreeBatchEndLocs(batchEndLocs []int) {
 	b.batchEndLocs = batchEndLocs
 }
 
+type AggOperatorMsgs struct {
+	operator []*aggOperatorMsg
+}
+
+func NewAggOperatorMsgs(size int) *AggOperatorMsgs {
+	return &AggOperatorMsgs{
+		operator: make([]*aggOperatorMsg, size),
+	}
+}
+
+func (a *AggOperatorMsgs) Alloc(size int) []*aggOperatorMsg {
+	n := size - cap(a.operator)
+	if n > 0 {
+		a.operator = append(a.operator[:cap(a.operator)], make([]*aggOperatorMsg, n)...)
+	}
+	return a.operator[:size]
+}
+
+func (a *AggOperatorMsgs) Free() {
+	a.operator = a.operator[:0]
+}
+
 type HashAggTransform struct {
 	BaseProcessor
 
@@ -223,6 +229,7 @@ type HashAggTransform struct {
 	bufIntervalKeys      []int64
 	bufGroupKeysMPool    *GroupKeysMPool
 	bufIntervalKeysMPool *IntervalKeysMPool
+	resultMapMPool       *AggOperatorMsgs // <time_interval_id, agg_results>
 	output               *ChunkPort
 	inputsCloseNums      int
 	chunkBuilder         *ChunkBuilder
@@ -260,7 +267,7 @@ const (
 type HashAggTransformCreator struct {
 }
 
-func (c *HashAggTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *HashAggTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	p, err := NewHashAggTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), plan.Schema().(*QuerySchema), plan.(*LogicalHashAgg).hashAggType)
 	if err != nil {
 		return nil, err
@@ -287,6 +294,7 @@ func NewHashAggTransform(
 		resultMap:            make([][]*aggOperatorMsg, 0),
 		bufGroupKeysMPool:    NewGroupKeysPool(HashAggTransformBufCap),
 		bufIntervalKeysMPool: NewIntervalKeysMpool(HashAggTransformBufCap),
+		resultMapMPool:       NewAggOperatorMsgs(0),
 		batchMPool:           NewBatchMPool(HashAggTransformBufCap),
 		groupKeys:            make([]ChunkTags, 0),
 		mapIntervalKeysHash:  make([]uint64, 1),
@@ -693,9 +701,6 @@ func (trans *HashAggTransform) updateResult(groupIds []uint64, intervalIds []uin
 	var intervalId uint64
 	var batchStartLoc = 0
 	for i := range groupIds {
-		if intervalIds[i] != 0 {
-			intervalIds[i] -= 1
-		}
 		groupId = groupIds[i]
 		intervalId = intervalIds[i]
 		if groupId == uint64(len(trans.resultMap)) {
@@ -711,11 +716,13 @@ func (trans *HashAggTransform) updateResult(groupIds []uint64, intervalIds []uin
 		} else if groupId > uint64(len(trans.resultMap)) {
 			return errno.NewError(errno.HashAggTransformRunningErr)
 		}
-		if intervalId == uint64(len(trans.resultMap[groupId])) {
-			trans.resultMap[groupId] = append(trans.resultMap[groupId], trans.newAggResultsMsg(batchStartLoc))
-		} else if intervalId > uint64(len(trans.resultMap[groupId])) {
-			return errno.NewError(errno.HashAggTransformRunningErr)
-		} else if trans.resultMap[groupId][intervalId] == nil {
+		if intervalId >= uint64(len(trans.resultMap[groupId])) {
+			n := intervalId + 1 - uint64(len(trans.resultMap[groupId]))
+			if n > 0 {
+				trans.resultMap[groupId] = append(trans.resultMap[groupId], trans.resultMapMPool.Alloc(int(n))...)
+			}
+		}
+		if trans.resultMap[groupId][intervalId] == nil {
 			trans.resultMap[groupId][intervalId] = trans.newAggResultsMsg(batchStartLoc)
 		}
 		if err := trans.aggCompute(trans.resultMap[groupId][intervalId], batchStartLoc, trans.batchEndLocs[i]); err != nil {
@@ -747,7 +754,7 @@ func (trans *HashAggTransform) mapIntervalKeys(groupIds []uint64) ([]uint64, err
 	if trans.fixSizeInterval {
 		for i, endLoc := range trans.batchEndLocs {
 			intervalStartTime := trans.bufIntervalKeys[endLoc-1]
-			intervalId := uint64((intervalStartTime-trans.intervalStartTime)/int64(trans.opt.GetInterval()) + 1)
+			intervalId := uint64((intervalStartTime - trans.intervalStartTime) / int64(trans.opt.GetInterval()))
 			intervalIds[i] = intervalId
 		}
 	} else {
@@ -775,7 +782,6 @@ func (trans *HashAggTransform) spillMapGroupKeys() []uint64 {
 	if len(trans.opt.Dimensions) == 0 {
 		return values
 	}
-	states := trans.bufGroupKeysMPool.AllocStates(len(trans.bufGroupKeys))
 	for i := 0; i < len(trans.bufGroupKeys); i++ {
 		value := trans.groupMap.Set(trans.bufGroupKeys[i])
 		values[i] = value
@@ -786,7 +792,6 @@ func (trans *HashAggTransform) spillMapGroupKeys() []uint64 {
 			trans.bufSpillState[i] = 1
 		}
 	}
-	trans.bufGroupKeysMPool.FreeStates(states)
 	return values
 }
 
@@ -798,11 +803,9 @@ func (trans *HashAggTransform) mapGroupKeys() []uint64 {
 	if trans.opt.Dimensions == nil || len(trans.opt.Dimensions) == 0 {
 		return values
 	}
-	states := trans.bufGroupKeysMPool.AllocStates(len(trans.batchEndLocs))
 	for i := 0; i < len(trans.batchEndLocs); i++ {
 		values[i] = trans.groupMap.Set(trans.bufGroupKeys[i])
 	}
-	trans.bufGroupKeysMPool.FreeStates(states)
 	return values
 }
 
@@ -814,7 +817,7 @@ func (trans *HashAggTransform) computeGroupKeysByDims() {
 		trans.bufGroupKeys[i] = trans.bufGroupKeys[i][:0]
 		for colId, dimKey := range trans.opt.Dimensions {
 			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], dimKey...)
-			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], trans.bufChunk.Dims()[colId].StringValue(rowId)...)
+			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], trans.bufChunk.Dim(colId).StringValue(rowId)...)
 		}
 		trans.bufGroupTags[i] = nil
 		rowId = endLoc
@@ -990,6 +993,7 @@ func (trans *HashAggTransform) initDiskAsInput() bool {
 	trans.groupKeys = trans.groupKeys[:0]
 
 	trans.resultMap = trans.resultMap[:0]
+	trans.resultMapMPool.Free()
 	return false
 }
 

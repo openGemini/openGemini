@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -35,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -83,7 +83,7 @@ var (
 )
 
 func init() {
-	queueSize = util.CeilToPower2(uint64(runtime.NumCPU() << 1))
+	queueSize = util.CeilToPower2(uint64(cpu.GetCpuNum() << 1))
 	queueSizeMask = queueSize - 1
 }
 
@@ -147,8 +147,8 @@ func (csIdx *CsIndexImpl) run(idx *MergeSetIndex) {
 	for i := 0; i < len(idx.labelStoreQueues); i++ {
 		go func(index int) {
 			for col := range idx.labelStoreQueues[index] {
-				col.TagCol.Err = csIdx.CreateIndexIfNotExistsForArrowFlight(idx, col)
-				col.TagCol.Wg.Done()
+				col.Err = csIdx.CreateIndexIfNotExistsForArrowFlight(idx, col)
+				col.Wg.Done()
 			}
 		}(i)
 	}
@@ -160,9 +160,9 @@ func (csIdx *CsIndexImpl) initQueues(idx *MergeSetIndex) {
 		idx.queues[i] = make(chan *indexRow, 1024)
 	}
 
-	idx.labelStoreQueues = make([]chan *IndexRecord, queueSize)
+	idx.labelStoreQueues = make([]chan *TagCol, queueSize)
 	for i := 0; i < len(idx.labelStoreQueues); i++ {
-		idx.labelStoreQueues[i] = make(chan *IndexRecord, 1024)
+		idx.labelStoreQueues[i] = make(chan *TagCol, 1024)
 	}
 }
 
@@ -209,7 +209,7 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 	return idx.tb.AddItems(ii.Items)
 }
 
-func (csIdx *CsIndexImpl) CreateIndexIfNotExistsForArrowFlight(idx *MergeSetIndex, col *IndexRecord) error {
+func (csIdx *CsIndexImpl) CreateIndexIfNotExistsForArrowFlight(idx *MergeSetIndex, col *TagCol) error {
 	vkey := kbPool.Get()
 	vname := kbPool.Get()
 
@@ -227,21 +227,21 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsForArrowFlight(idx *MergeSetInde
 
 	var exist bool
 	var err error
-	vname.B = append(vname.B[:0], col.TagCol.Mst...)
-	vkey.B = append(vkey.B[:0], col.TagCol.Mst...)
-	vkey.B = append(vkey.B, col.TagCol.Key...)
-	vkey.B = append(vkey.B, col.TagCol.Val...)
+	vname.B = append(vname.B[:0], col.Mst...)
+	vkey.B = append(vkey.B[:0], col.Mst...)
+	vkey.B = append(vkey.B, col.Key...)
+	vkey.B = append(vkey.B, col.Val...)
 	if bytes.Equal(csIdx.prev, vkey.B) {
 		return nil
 	}
 	csIdx.prev = vkey.B
-	exist, err = idx.isTagKeyExist(vkey.B, col.TagCol.Key, col.TagCol.Val, col.TagCol.Mst, is)
+	exist, err = idx.isTagKeyExist(vkey.B, col.Key, col.Val, col.Mst, is)
 	if err != nil {
 		return err
 	}
 
 	if !exist {
-		ii.B = idx.marshalTagToTagValues(compositeKey.B, ii.B, vname.B, col.TagCol.Key, col.TagCol.Val)
+		ii.B = idx.marshalTagToTagValues(compositeKey.B, ii.B, vname.B, col.Key, col.Val)
 		ii.Next()
 		idx.cache.PutTagValuesToTagKeysCache([]byte{1}, vkey.B)
 	}
@@ -255,7 +255,7 @@ type MergeSetIndex struct {
 	path             string
 	lock             *string
 	queues           []chan *indexRow
-	labelStoreQueues []chan *IndexRecord
+	labelStoreQueues []chan *TagCol
 
 	cache *IndexCache
 
@@ -314,11 +314,11 @@ func (idx *MergeSetIndex) WriteRow(row *indexRow) {
 	idx.queues[partId] <- row
 }
 
-func (idx *MergeSetIndex) WriteTagCols(rec *IndexRecord) {
-	key := append(rec.TagCol.Mst, rec.TagCol.Key...)
-	key = append(key, rec.TagCol.Val...)
+func (idx *MergeSetIndex) WriteTagCols(tagCol *TagCol) {
+	key := append(tagCol.Mst, tagCol.Key...)
+	key = append(key, tagCol.Val...)
 	partId := meta.HashID(key) & queueSizeMask
-	idx.labelStoreQueues[partId] <- rec
+	idx.labelStoreQueues[partId] <- tagCol
 }
 
 func (idx *MergeSetIndex) run() {
@@ -394,7 +394,7 @@ func (idx *MergeSetIndex) IsTagKeyExist(row influx.Row) (bool, error) {
 	return true, nil
 }
 
-func (idx *MergeSetIndex) IsTagKeyExistByArrowFlight(col *IndexRecord) (bool, error) {
+func (idx *MergeSetIndex) IsTagKeyExistByArrowFlight(col *TagCol) (bool, error) {
 	vkey := kbPool.Get()
 	vname := kbPool.Get()
 
@@ -410,12 +410,12 @@ func (idx *MergeSetIndex) IsTagKeyExistByArrowFlight(col *IndexRecord) (bool, er
 
 	var exist bool
 	var err error
-	vname.B = append(vname.B[:0], col.TagCol.Mst...)
-	vkey.B = append(vkey.B[:0], col.TagCol.Mst...)
-	vkey.B = append(vkey.B, col.TagCol.Key...)
-	vkey.B = append(vkey.B, col.TagCol.Val...)
+	vname.B = append(vname.B[:0], col.Mst...)
+	vkey.B = append(vkey.B[:0], col.Mst...)
+	vkey.B = append(vkey.B, col.Key...)
+	vkey.B = append(vkey.B, col.Val...)
 
-	exist, err = idx.isTagKeyExist(vkey.B, col.TagCol.Key, col.TagCol.Val, col.TagCol.Mst, is)
+	exist, err = idx.isTagKeyExist(vkey.B, col.Key, col.Val, col.Mst, is)
 	return exist, err
 }
 
@@ -807,13 +807,15 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 
 	dims := make([]string, len(opt.Dimensions))
 	copy(dims, opt.Dimensions)
-	sort.Strings(dims)
+	if len(dims) > 1 {
+		sort.Strings(dims)
+	}
 	dimPos := genDimensionPosition(opt.Dimensions)
 
 	var tagSetMap map[string]*TagSetInfo
-	var sortedTagSets []*TagSetInfo
+	var tagSetSlice []*TagSetInfo
 	if opt.GroupByAllDims {
-		sortedTagSets = make([]*TagSetInfo, 0, seriesNum)
+		tagSetSlice = make([]*TagSetInfo, 0, seriesNum)
 	} else {
 		tagSetMap = make(map[string]*TagSetInfo)
 	}
@@ -827,7 +829,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	var ok bool
 	var groupTagKey []byte // reused
 	var totalSeriesKeyLen int64
-	var tagSetInfo *TagSetInfo
+	var tagSet *TagSetInfo
 	var tagsBuf influx.PointTags
 	var seriesKeys [][]byte
 	var combineSeriesKey []byte
@@ -877,22 +879,22 @@ LOOP:
 			}
 
 			if opt.GroupByAllDims {
-				tagSetInfo = NewSingleTagSetInfo()
-				tagSetInfo.key = append(tagSetInfo.key, groupTagKey...)
-				sortedTagSets = append(sortedTagSets, tagSetInfo)
+				tagSet = NewSingleTagSetInfo()
+				tagSet.key = append(tagSet.key, groupTagKey...)
+				tagSetSlice = append(tagSetSlice, tagSet)
 			} else {
-				tagSetInfo, ok = tagSetMap[bytesutil.ToUnsafeString(groupTagKey)]
+				tagSet, ok = tagSetMap[bytesutil.ToUnsafeString(groupTagKey)]
 				if !ok {
-					tagSetInfo = NewTagSetInfo()
-					tagSetInfo.key = append(tagSetInfo.key, groupTagKey...)
+					tagSet = NewTagSetInfo()
+					tagSet.key = append(tagSet.key, groupTagKey...)
 				}
-				tagSetMap[string(groupTagKey)] = tagSetInfo
+				tagSetMap[string(groupTagKey)] = tagSet
 			}
 
 			if exprs[i] != nil {
-				tagSetInfo.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
+				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
 			} else {
-				tagSetInfo.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
+				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
 			}
 			groupTagKey = groupTagKey[:0]
 			seriesN++
@@ -914,7 +916,7 @@ LOOP:
 				len(tagSetMap), seriesN, totalSeriesKeyLen))
 		} else {
 			tsidIter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
-				len(sortedTagSets), seriesN, totalSeriesKeyLen))
+				len(tagSetSlice), seriesN, totalSeriesKeyLen))
 		}
 		tsidIter.Finish()
 	}
@@ -927,14 +929,14 @@ LOOP:
 	// The TagSets have been created, as a map of TagSets. Just send
 	// the values back as a slice, sorting for consistency.
 	if !opt.GroupByAllDims {
-		sortedTagSets = make([]*TagSetInfo, 0, len(tagSetMap))
+		tagSetSlice = make([]*TagSetInfo, 0, len(tagSetMap))
 		for _, v := range tagSetMap {
-			sortedTagSets = append(sortedTagSets, v)
+			tagSetSlice = append(tagSetSlice, v)
 		}
 	}
 
-	if len(sortedTagSets) > 1 {
-		sgs := NewSortGroupSeries(sortedTagSets, opt.Ascending)
+	if len(tagSetSlice) > 1 {
+		sgs := NewSortGroupSeries(tagSetSlice, opt.Ascending)
 		sort.Sort(sgs)
 	}
 
@@ -942,7 +944,7 @@ LOOP:
 		sortTs.Finish()
 	}
 
-	return sortedTagSets, seriesNum, nil
+	return tagSetSlice, seriesNum, nil
 }
 
 func (idx *MergeSetIndex) SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {

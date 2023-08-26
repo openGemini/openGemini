@@ -110,13 +110,13 @@ func buildChunkForPartialBlankRows() executor.Chunk {
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa")}, []int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 4}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 4})
 	chunk.Column(0).AppendNilsV2(true, false, false, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.2, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.2, 5.5})
 	chunk.Column(1).AppendNilsV2(false, true, false, false, true)
 
 	return chunk
@@ -131,8 +131,8 @@ func buildChunkForAllBlankRows() executor.Chunk {
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa")}, []int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
 	chunk.Column(0).AppendManyNil(5)
 	chunk.Column(1).AppendManyNil(5)
@@ -149,8 +149,8 @@ func buildChunkForOneBlankRow() executor.Chunk {
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa")}, []int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{1}...)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendTimes([]int64{1})
 
 	chunk.Column(0).AppendManyNil(1)
 	chunk.Column(1).AppendManyNil(1)
@@ -206,7 +206,7 @@ func Test_GetColValsFn(t *testing.T) {
 			name: "float64 column full data",
 			typ:  influxql.Float,
 			appendFn: func(c executor.Column) {
-				c.AppendFloatValues(1.0, 2.0, 3.0, 4.0, 5.0)
+				c.AppendFloatValues([]float64{1.0, 2.0, 3.0, 4.0, 5.0})
 				c.AppendManyNotNil(5)
 			},
 			bmStart: 0,
@@ -222,7 +222,7 @@ func Test_GetColValsFn(t *testing.T) {
 			name: "float64 column missing data",
 			typ:  influxql.Float,
 			appendFn: func(c executor.Column) {
-				c.AppendFloatValues(1.0, 3.0, 5.0)
+				c.AppendFloatValues([]float64{1.0, 3.0, 5.0})
 				c.AppendNilsV2(true, false, true, false, true)
 			},
 			bmStart: 0,
@@ -238,7 +238,7 @@ func Test_GetColValsFn(t *testing.T) {
 			name: "int64 column full data",
 			typ:  influxql.Integer,
 			appendFn: func(c executor.Column) {
-				c.AppendIntegerValues(1, 2, 3, 4, 5)
+				c.AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 				c.AppendManyNotNil(5)
 			},
 			bmStart: 0,
@@ -254,7 +254,7 @@ func Test_GetColValsFn(t *testing.T) {
 			name: "int64 column missing data",
 			typ:  influxql.Integer,
 			appendFn: func(c executor.Column) {
-				c.AppendIntegerValues(2, 4)
+				c.AppendIntegerValues([]int64{2, 4})
 				c.AppendNilsV2(false, true, false, true, false)
 			},
 			bmStart: 0,
@@ -270,7 +270,7 @@ func Test_GetColValsFn(t *testing.T) {
 			name: "bool column full data",
 			typ:  influxql.Boolean,
 			appendFn: func(c executor.Column) {
-				c.AppendBooleanValues(true, false, true, false, true)
+				c.AppendBooleanValues([]bool{true, false, true, false, true})
 				c.AppendManyNotNil(5)
 			},
 			bmStart: 0,
@@ -286,7 +286,7 @@ func Test_GetColValsFn(t *testing.T) {
 			name: "bool column missing data",
 			typ:  influxql.Boolean,
 			appendFn: func(c executor.Column) {
-				c.AppendBooleanValues(true, true, true)
+				c.AppendBooleanValues([]bool{true, true, true})
 				c.AppendNilsV2(true, false, true, false, true)
 			},
 			bmStart: 0,
@@ -419,12 +419,12 @@ func Test_SlimChunk(t *testing.T) {
 
 	chunk.AppendTagsAndIndex(*executor.NewChunkTagsV2(nil), 0)
 	chunk.AppendIntervalIndex(0)
-	chunk.AppendTime(1, 2, 3, 4, 5)
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues(1, 3, 5)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 5})
 	chunk.Column(0).AppendNilsV2(true, false, true, false, true)
 
-	chunk.Column(1).AppendFloatValues(1.0, 3.0, 5.0)
+	chunk.Column(1).AppendFloatValues([]float64{1.0, 3.0, 5.0})
 	chunk.Column(1).AppendNilsV2(true, false, true, false, true)
 
 	chunk.Column(2).AppendManyNil(5)
@@ -470,28 +470,28 @@ func TestTargetTable(t *testing.T) {
 func BuildCopyByRowDataTypeSrcChunk(rt hybridqp.RowDataType) executor.Chunk {
 	b := executor.NewChunkBuilder(rt)
 	chunk := b.NewChunk("mst")
-	chunk.AppendTime([]int64{1, 2, 3}...)
+	chunk.AppendTimes([]int64{1, 2, 3})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(0).AppendManyNotNil(3)
-	chunk.Column(1).AppendStringValues([]string{"f1", "f2", "f3"}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(1).AppendStringValues([]string{"f1", "f2", "f3"})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(1).AppendManyNotNil(3)
-	chunk.Column(2).AppendBooleanValues([]bool{true, true, true}...)
-	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(2).AppendBooleanValues([]bool{true, true, true})
+	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(2).AppendManyNotNil(3)
-	chunk.Column(3).AppendIntegerValues([]int64{1, 2, 3}...)
-	chunk.Column(3).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(3).AppendIntegerValues([]int64{1, 2, 3})
+	chunk.Column(3).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(3).AppendManyNotNil(3)
-	chunk.Column(4).AppendStringValues([]string{"f1", "f2", "f3"}...)
-	chunk.Column(4).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(4).AppendStringValues([]string{"f1", "f2", "f3"})
+	chunk.Column(4).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(4).AppendManyNotNil(3)
-	chunk.Column(5).AppendFloatTuples(*executor.NewfloatTuple([]float64{1, 1}))
-	chunk.Column(5).AppendFloatTuples(*executor.NewfloatTuple([]float64{2, 2}))
-	chunk.Column(5).AppendFloatTuples(*executor.NewfloatTuple([]float64{3, 3}))
-	chunk.Column(5).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(5).AppendFloatTuple(*executor.NewfloatTuple([]float64{1, 1}))
+	chunk.Column(5).AppendFloatTuple(*executor.NewfloatTuple([]float64{2, 2}))
+	chunk.Column(5).AppendFloatTuple(*executor.NewfloatTuple([]float64{3, 3}))
+	chunk.Column(5).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(5).AppendManyNotNil(3)
 	return chunk
 }
@@ -511,28 +511,28 @@ func buildCopyByRowDataTypeSrcRt() hybridqp.RowDataType {
 func BuildCopyByRowDataTypeDstChunk(rt hybridqp.RowDataType) executor.Chunk {
 	b := executor.NewChunkBuilder(rt)
 	chunk := b.NewChunk("mst")
-	chunk.AppendTime([]int64{1, 2, 3}...)
+	chunk.AppendTimes([]int64{1, 2, 3})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(1).AppendFloatValues([]float64{1, 2, 3}...)
-	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(1).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(1).AppendManyNotNil(3)
-	chunk.Column(0).AppendStringValues([]string{"f1", "f2", "f3"}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendStringValues([]string{"f1", "f2", "f3"})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(0).AppendManyNotNil(3)
-	chunk.Column(3).AppendBooleanValues([]bool{true, true, true}...)
-	chunk.Column(3).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, true, true})
+	chunk.Column(3).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(3).AppendManyNotNil(3)
-	chunk.Column(2).AppendIntegerValues([]int64{1, 2, 3}...)
-	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1, 2, 3})
+	chunk.Column(2).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(2).AppendManyNotNil(3)
-	chunk.Column(5).AppendStringValues([]string{"f1", "f2", "f3"}...)
-	chunk.Column(5).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(5).AppendStringValues([]string{"f1", "f2", "f3"})
+	chunk.Column(5).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(5).AppendManyNotNil(3)
-	chunk.Column(4).AppendFloatTuples(*executor.NewfloatTuple([]float64{1, 1}))
-	chunk.Column(4).AppendFloatTuples(*executor.NewfloatTuple([]float64{2, 2}))
-	chunk.Column(4).AppendFloatTuples(*executor.NewfloatTuple([]float64{3, 3}))
-	chunk.Column(4).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(4).AppendFloatTuple(*executor.NewfloatTuple([]float64{1, 1}))
+	chunk.Column(4).AppendFloatTuple(*executor.NewfloatTuple([]float64{2, 2}))
+	chunk.Column(4).AppendFloatTuple(*executor.NewfloatTuple([]float64{3, 3}))
+	chunk.Column(4).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(4).AppendManyNotNil(3)
 	return chunk
 }

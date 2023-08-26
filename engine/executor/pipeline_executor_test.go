@@ -80,9 +80,9 @@ func buildChunk() executor.Chunk {
 
 	chunk := b.NewChunk("schema_chunk")
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
-	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "vergilA", "danteA", "martino"}...)
-	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4, 1.5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
+	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "vergilA", "danteA", "martino"})
+	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4, 1.5})
 
 	return chunk
 }
@@ -977,7 +977,7 @@ func TestFilterHelper(t *testing.T) {
 		},
 	}
 	schema := executor.NewQuerySchema(createSortedMergeFields(), []string{"id", "name", "value"}, &opt, nil)
-	trans := executor.NewFilterTransform(buildRowDataType(), buildRowDataType(), schema, opt)
+	trans := executor.NewFilterTransform(buildRowDataType(), buildRowDataType(), schema, &opt)
 
 	sink := NewSinkFromFunction(buildRowDataType(), func(chunk executor.Chunk) error {
 		for i := range chunk.Columns() {
@@ -1042,7 +1042,7 @@ func TestLimitHelper(t *testing.T) {
 	expectColumnTimes3 := []int64{2, 3}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1, chunk3, chunk4})
-	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, query.ProcessorOptions{
+	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1117,7 +1117,7 @@ func TestMultiRowsLimitHelper(t *testing.T) {
 	expectColumnValues3 := []float64{3.2, 3.3, 3.2, 3.3, 3.4, 3.5}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1, chunk3, chunk4})
-	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, query.ProcessorOptions{
+	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1191,7 +1191,7 @@ func TestIgnoreTagLimitHelper(t *testing.T) {
 	expectColumnValues3 := []float64{3.2, 3.3, 3.4}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1, chunk3, chunk4})
-	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, query.ProcessorOptions{
+	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1263,7 +1263,7 @@ func TestMultiRowsIgnoreTagLimitHelper(t *testing.T) {
 	expectColumnValues3 := []float64{3.2, 3.3, 3.4, 3.5, 3.6}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1, chunk3, chunk4})
-	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, query.ProcessorOptions{
+	trans := executor.NewLimitTransform([]hybridqp.RowDataType{buildRowDataType()}, []hybridqp.RowDataType{buildRowDataType()}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1331,7 +1331,7 @@ func TestOrderByHelperWithoutTimeWindow(t *testing.T) {
 	expectColumnValues3 := []float64{2.2, 2.3, 2.4, 2.5, 2.6}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1})
-	trans := executor.NewOrderByTransform(buildRowDataType(), buildRowDataType(), []hybridqp.ExprOptions{}, query.ProcessorOptions{
+	trans := executor.NewOrderByTransform(buildRowDataType(), buildRowDataType(), []hybridqp.ExprOptions{}, &query.ProcessorOptions{
 		Ascending: true,
 		ChunkSize: 100,
 		Limit:     2,
@@ -1390,7 +1390,7 @@ func TestOrderByHelperWithTimeWindow(t *testing.T) {
 	expectColumnValues3 := []float64{2.5, 2.6, 2.2, 2.3, 2.4}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1})
-	trans := executor.NewOrderByTransform(buildRowDataType(), buildRowDataType(), []hybridqp.ExprOptions{}, query.ProcessorOptions{
+	trans := executor.NewOrderByTransform(buildRowDataType(), buildRowDataType(), []hybridqp.ExprOptions{}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1453,7 +1453,7 @@ func TestOrderByHelperWithChunksAndTimeWindow(t *testing.T) {
 	expectColumnValues3 := []float64{2.5, 2.6, 2.2, 2.3, 2.4, 2.2, 2.3, 2.4, 2.5, 2.6}
 
 	source1 := NewSourceFromSingleChunk(buildRowDataType(), []executor.Chunk{chunk1, chunk2})
-	trans := executor.NewOrderByTransform(buildRowDataType(), buildRowDataType(), []hybridqp.ExprOptions{}, query.ProcessorOptions{
+	trans := executor.NewOrderByTransform(buildRowDataType(), buildRowDataType(), []hybridqp.ExprOptions{}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1529,7 +1529,7 @@ func TestSubQueryHelper(t *testing.T) {
 		{
 			Expr: &influxql.VarRef{Val: "host", Type: influxql.Tag},
 		},
-	}, query.ProcessorOptions{
+	}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -1594,7 +1594,7 @@ func TestSplitGroupHelper(t *testing.T) {
 		{
 			Expr: &influxql.VarRef{Val: "val2", Type: influxql.Float},
 		},
-	}, query.ProcessorOptions{
+	}, &query.ProcessorOptions{
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},

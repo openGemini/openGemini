@@ -51,13 +51,14 @@ const (
 
 	DefaultWriteColdDuration = 5 * time.Second
 
-	DefaultSnapshotThroughput      = 48 * MB
-	DefaultSnapshotThroughputBurst = 64 * MB
-	DefaultMaxWriteHangTime        = 15 * time.Second
-	DefaultWALSyncInterval         = 100 * time.Millisecond
-	DefaultReadCachePercent        = 3
-	MinFlavorMemory                = 8 * GB
-	MaxFlavorMemory                = 512 * GB
+	DefaultSnapshotThroughput       = 48 * MB
+	DefaultSnapshotThroughputBurst  = 48 * MB
+	DefaultBackGroundReadThroughput = 64 * MB
+	DefaultMaxWriteHangTime         = 15 * time.Second
+	DefaultWALSyncInterval          = 100 * time.Millisecond
+	DefaultReadCachePercent         = 3
+	MinFlavorMemory                 = 8 * GB
+	MaxFlavorMemory                 = 512 * GB
 
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
@@ -169,6 +170,24 @@ func (c *TSStore) GetCommon() *Common {
 	return c.Common
 }
 
+/*
+	these are limiter specs for difference flavors, unit is MB
+	0: CompactThroughput
+	1: CompactThroughputBurst
+	2: SnapshotThroughput
+	3: SnapshotThroughputBurst
+	4: BackGroundReadThroughput
+	5: BackGroundReadThroughputBurst
+
+	{{48, 48, 48, 48, 64，64},      // 1U
+	{48, 48, 48, 48, 64，64},       // 2U
+	{48, 48, 48, 48, 64，64},       // 4U
+	{96, 96, 96, 96, 128，128},     // 8U
+	{192, 192, 192, 192, 256，256}, //16U
+	{384, 384, 384, 384, 512},      // 32U
+	{384, 384, 384, 384, 512},}     // 64U
+*/
+
 // Store is the configuration for the engine.
 type Store struct {
 	IngesterAddress string      `toml:"store-ingest-addr"`
@@ -192,6 +211,7 @@ type Store struct {
 	CompactThroughputBurst       toml.Size     `toml:"compact-throughput-burst"`
 	SnapshotThroughput           toml.Size     `toml:"snapshot-throughput"`
 	SnapshotThroughputBurst      toml.Size     `toml:"snapshot-throughput-burst"`
+	BackGroundReadThroughput     toml.Size     `toml:"back-ground-read-throughput"`
 	CompactionMethod             int           `toml:"compaction-method"` // 0:auto, 1: streaming, 2: non-streaming
 
 	// Configs for snapshot
@@ -227,6 +247,9 @@ type Store struct {
 	MinShardsConcurrency         int           `toml:"min-shards-concurrency"`
 	MaxDownSampleTaskConcurrency int           `toml:"max-downsample-task-concurrency"`
 
+	// for query
+	EnableQueryFileHandleCache bool   `toml:"enable_query_file_handle_cache"`
+	MaxQueryCachedFileHandles  uint32 `toml:"max_query_cached_file_handles"`
 	// config for lazy load shard
 	LazyLoadShardEnable       bool          `toml:"lazy-load-shard-enable"`
 	ThermalShardStartDuration toml.Duration `toml:"thermal-shard-start-duration"`
@@ -268,6 +291,7 @@ func NewStore() Store {
 		OpsMonitor:                   NewOpsMonitorConfig(),
 		OpenShardLimit:               0,
 		DownSampleWriteDrop:          true,
+		EnableQueryFileHandleCache:   true,
 	}
 }
 
@@ -288,14 +312,10 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	}
 	defaultShardMutableSizeLimit := toml.Size(uint64Limit(8*MB, 1*GB, uint64(memorySize/256)))
 	defaultNodeMutableSizeLimit := toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/16)))
-	defaultCompactThroughput := toml.Size(uint64Limit(32*MB, 256*MB, uint64(cpuNum*12*MB)))
-	defaultCompactThroughputBurst := toml.Size(uint64Limit(32*MB, 384*MB, uint64(cpuNum*15*MB)))
 
 	items := [][2]*toml.Size{
 		{&c.ShardMutableSizeLimit, &defaultShardMutableSizeLimit},
 		{&c.NodeMutableSizeLimit, &defaultNodeMutableSizeLimit},
-		{&c.CompactThroughput, &defaultCompactThroughput},
-		{&c.CompactThroughputBurst, &defaultCompactThroughputBurst},
 	}
 
 	for i := range items {
@@ -303,6 +323,47 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 			*items[i][0] = *items[i][1]
 		}
 	}
+
+	c.CorrectorThroughput(cpuNum)
+}
+
+func (c *Store) CorrectorThroughput(cpuNum int) {
+	var defaultCompactThroughput toml.Size
+	var defaultCompactThroughputBurst toml.Size
+	var defaultSnapshotThroughput toml.Size
+	var defaultSnapshotThroughputBurst toml.Size
+	var defaultBackGroundReadThroughput toml.Size
+
+	if cpuNum <= 4 {
+		defaultCompactThroughput = DefaultSnapshotThroughput
+		defaultCompactThroughputBurst = DefaultSnapshotThroughput
+		defaultSnapshotThroughput = DefaultSnapshotThroughput
+		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput
+		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput
+	} else if cpuNum <= 8 {
+		defaultCompactThroughput = DefaultSnapshotThroughput * 2
+		defaultCompactThroughputBurst = DefaultSnapshotThroughput * 2
+		defaultSnapshotThroughput = DefaultSnapshotThroughput * 2
+		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 2
+		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 2
+	} else if cpuNum <= 16 {
+		defaultCompactThroughput = DefaultSnapshotThroughput * 4
+		defaultCompactThroughputBurst = DefaultSnapshotThroughput * 4
+		defaultSnapshotThroughput = DefaultSnapshotThroughput * 4
+		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 4
+		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 4
+	} else {
+		defaultCompactThroughput = DefaultSnapshotThroughput * 8
+		defaultCompactThroughputBurst = DefaultSnapshotThroughput * 8
+		defaultSnapshotThroughput = DefaultSnapshotThroughput * 8
+		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 8
+		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 8
+	}
+	c.CompactThroughput = defaultCompactThroughput
+	c.CompactThroughputBurst = defaultCompactThroughputBurst
+	c.SnapshotThroughput = defaultSnapshotThroughput
+	c.SnapshotThroughputBurst = defaultSnapshotThroughputBurst
+	c.BackGroundReadThroughput = defaultBackGroundReadThroughput
 }
 
 // Validate validates the configuration hold by c.

@@ -22,8 +22,10 @@ import (
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 type AggPushDownVerifier struct {
@@ -1169,4 +1171,9 @@ func TestAggPushDownToColumnStoreReaderRule(t *testing.T) {
 	if !aggPushDown.Equals(aggPushDown1) {
 		t.Error("agg push down rule not equal")
 	}
+
+	sources := []influxql.Source{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: "mst0", EngineType: config.COLUMNSTORE}}
+	sortFields := influxql.SortFields{{Name: "value"}}
+	s := executor.NewQuerySchemaWithSources(fields, sources, columnsName, &opt, sortFields)
+	assert.Equal(t, s.HasSort(), true)
 }

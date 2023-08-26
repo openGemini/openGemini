@@ -47,7 +47,7 @@ func CheckRecord(rec *Record) {
 		}
 
 		// check string data length
-		if f.Type == influx.Field_Type_String {
+		if f.Type == influx.Field_Type_String || f.Type == influx.Field_Type_Tag {
 			continue
 		}
 

@@ -32,13 +32,13 @@ type FilterBlankTransform struct {
 	coProcessor   CoProcessor
 	Inputs        ChunkPorts
 	Outputs       ChunkPorts
-	opt           query.ProcessorOptions
+	opt           *query.ProcessorOptions
 
 	span         *tracing.Span
 	ppFilterCost *tracing.Span
 }
 
-func NewFilterBlankTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, opt query.ProcessorOptions) *FilterBlankTransform {
+func NewFilterBlankTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, opt *query.ProcessorOptions) *FilterBlankTransform {
 	if len(inRowDataTypes) != 1 || len(outRowDataTypes) != 1 {
 		panic("NewFilterBlankTransform raise error: the Inputs and Outputs should be 1")
 	}
@@ -68,7 +68,7 @@ func NewFilterBlankTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTy
 type FilterBlankTransformCreator struct {
 }
 
-func (c *FilterBlankTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *FilterBlankTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewFilterBlankTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, opt)
 	return p, nil
 }
@@ -153,8 +153,8 @@ func (trans *FilterBlankTransform) work(c Chunk) {
 	// case 1: no blank rows
 	if len(blankRowIdx) == 0 {
 		newChunk.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
-		newChunk.AppendIntervalIndex(c.IntervalIndex()...)
-		newChunk.AppendTime(c.Time()...)
+		newChunk.AppendIntervalIndexes(c.IntervalIndex())
+		newChunk.AppendTimes(c.Time())
 		trans.sendChunk(newChunk)
 		return
 	}
@@ -175,15 +175,15 @@ func (trans *FilterBlankTransform) updateTime(c, newChunk Chunk, blankRowIdx []u
 	first, last := 0, len(blankRowIdx)-1
 	for i, idx := range blankRowIdx {
 		if i == first && i == last {
-			newChunk.AppendTime(c.Time()[:idx]...)
-			newChunk.AppendTime(c.Time()[idx+1:]...)
+			newChunk.AppendTimes(c.Time()[:idx])
+			newChunk.AppendTimes(c.Time()[idx+1:])
 		} else if i == first {
-			newChunk.AppendTime(c.Time()[:idx]...)
+			newChunk.AppendTimes(c.Time()[:idx])
 		} else if i == last {
-			newChunk.AppendTime(c.Time()[blankRowIdx[i-1]+1 : idx]...)
-			newChunk.AppendTime(c.Time()[idx+1:]...)
+			newChunk.AppendTimes(c.Time()[blankRowIdx[i-1]+1 : idx])
+			newChunk.AppendTimes(c.Time()[idx+1:])
 		} else {
-			newChunk.AppendTime(c.Time()[blankRowIdx[i-1]+1 : idx]...)
+			newChunk.AppendTimes(c.Time()[blankRowIdx[i-1]+1 : idx])
 		}
 	}
 }

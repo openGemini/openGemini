@@ -67,6 +67,9 @@ func Test_MetaDBPTStepDuration_enable(t *testing.T) {
 		MetaTaskInstance = nil
 	}()
 
+	MetaDBPTStepDuration("test", 9999, "Step0", 0, 1, 1000, DBPTLoading, "")
+	require.Nil(t, MetaTaskInstance.dbptTasks[9999])
+
 	// task running
 	MetaDBPTTaskInit(1, "db0", 2)
 

@@ -422,7 +422,7 @@ func CopyArrowRecordToChunk(r array.Record, c Chunk, fields map[string]struct{})
 	if err != nil {
 		return err
 	}
-	c.AppendTime(rTime.Int64Values()...)
+	c.AppendTimes(rTime.Int64Values())
 
 	// data type and order of column must strictly match between chunk and record
 	// copy value to chunk
@@ -442,7 +442,7 @@ func appendChunkFloat64(rCol *array.Float64, cCol Column) {
 			continue
 		}
 		valid[j] = true
-		cCol.AppendFloatValues(val)
+		cCol.AppendFloatValue(val)
 	}
 	if isNilExist {
 		cCol.AppendNilsV2(valid...)
@@ -460,7 +460,7 @@ func appendChunkInt64(rCol *array.Int64, cCol Column) {
 			continue
 		}
 		valid[j] = true
-		cCol.AppendIntegerValues(val)
+		cCol.AppendIntegerValue(val)
 	}
 	if isNilExist {
 		cCol.AppendNilsV2(valid...)

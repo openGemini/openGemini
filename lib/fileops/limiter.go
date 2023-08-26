@@ -24,6 +24,11 @@ import (
 	"golang.org/x/time/rate"
 )
 
+var (
+	BackgroundReadLimiter                 = NewLimiter(64*1024*1024, 64*1024*1024)
+	ctx                   context.Context = context.Background()
+)
+
 type Limiter interface {
 	SetBurst(newBurst int)
 	SetLimit(newLimit rate.Limit)
@@ -96,4 +101,16 @@ func (w *LimitWriter) Name() string {
 
 func (w *LimitWriter) Read(b []byte) (int, error) {
 	return w.w.Read(b)
+}
+
+func SetBackgroundReadLimiter(limiter int) {
+	BackgroundReadLimiter.SetLimit(rate.Limit(limiter))
+	BackgroundReadLimiter.SetBurst(limiter)
+}
+
+func BackGroundReaderWait(n int) error {
+	if err := BackgroundReadLimiter.WaitN(ctx, n); err != nil {
+		return err
+	}
+	return nil
 }

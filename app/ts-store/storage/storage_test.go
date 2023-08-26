@@ -26,7 +26,10 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,4 +89,18 @@ func TestReportLoad(t *testing.T) {
 	time.Sleep(time.Second / 10)
 	close(st.stop)
 	wg.Wait()
+}
+
+type MockEngine struct {
+	netstorage.Engine
+}
+
+func (e *MockEngine) WriteRec(_, _ string, _ uint32, _ uint64, _ *record.Record, _ []byte) error {
+	return nil
+}
+
+func TestWriteRec(t *testing.T) {
+	s := &Storage{engine: &MockEngine{}}
+	err := s.WriteRec("db0", "rp0", "mst0", 0, 0, nil, nil)
+	assert.Equal(t, err, nil)
 }

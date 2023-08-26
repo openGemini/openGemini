@@ -53,13 +53,13 @@ func buildIntegralInChunk() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a"),
 	}, []int{0})
-	inCk1.AppendIntervalIndex([]int{0, 3}...)
-	inCk1.AppendTime([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 30 * 60 * 1000000000, 31 * 60 * 1000000000}...)
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 30 * 60 * 1000000000, 31 * 60 * 1000000000})
 
-	inCk1.Column(0).AppendFloatValues([]float64{1.0, 1.0, 1.0, 1.0, 1.0}...)
+	inCk1.Column(0).AppendFloatValues([]float64{1.0, 1.0, 1.0, 1.0, 1.0})
 	inCk1.Column(0).AppendManyNotNil(5)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1})
 	inCk1.Column(1).AppendNilsV2(true, true, true, false, true)
 
 	// second chunk
@@ -68,13 +68,13 @@ func buildIntegralInChunk() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=b"), *ParseChunkTags("name=c"),
 	}, []int{0, 4})
-	inCk2.AppendIntervalIndex([]int{0, 3, 4}...)
-	inCk2.AppendTime([]int64{9 * 60 * 1000000000, 10 * 60 * 1000000000, 11 * 60 * 1000000000, 13 * 60 * 1000000000, 14 * 60 * 1000000000}...)
+	inCk2.AppendIntervalIndexes([]int{0, 3, 4})
+	inCk2.AppendTimes([]int64{9 * 60 * 1000000000, 10 * 60 * 1000000000, 11 * 60 * 1000000000, 13 * 60 * 1000000000, 14 * 60 * 1000000000})
 
-	inCk2.Column(0).AppendFloatValues([]float64{1.0, 1.0, 1.0, 1.0, 3.0}...)
+	inCk2.Column(0).AppendFloatValues([]float64{1.0, 1.0, 1.0, 1.0, 3.0})
 	inCk2.Column(0).AppendManyNotNil(5)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{1, 1}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{1, 1})
 	inCk2.Column(1).AppendNilsV2(false, true, true, false, false)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -102,13 +102,13 @@ func buildDstChunkIntegral() []executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a"), *ParseChunkTags("name=b"),
 		*ParseChunkTags("name=c")}, []int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4}...)
-	chunk.AppendTime([]int64{1 * 60 * 1000000000, 30 * 60 * 1000000000, 9 * 60 * 1000000000, 13 * 60 * 1000000000, 14 * 60 * 1000000000}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4})
+	chunk.AppendTimes([]int64{1 * 60 * 1000000000, 30 * 60 * 1000000000, 9 * 60 * 1000000000, 13 * 60 * 1000000000, 14 * 60 * 1000000000})
 
-	chunk.Column(0).AppendFloatValues([]float64{3.0, 27.0, 3.0, 1.0, 0.0}...)
+	chunk.Column(0).AppendFloatValues([]float64{3.0, 27.0, 3.0, 1.0, 0.0})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{3.0, 27.0, 1.0}...)
+	chunk.Column(1).AppendFloatValues([]float64{3.0, 27.0, 1.0})
 	chunk.Column(1).AppendNilsV2(true, true, true, false, false)
 
 	dstChunks = append(dstChunks, chunk)
@@ -143,7 +143,7 @@ func TestStreamAggregateTransformIntegral(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeIntegral(), buildDstRowDataTypeIntegral(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -170,19 +170,19 @@ func buildElapsedInChunk() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 3})
-	inCk1.AppendIntervalIndex([]int{0, 3}...)
-	inCk1.AppendTime([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 4 * 60 * 1000000000, 5 * 60 * 1000000000}...)
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 4 * 60 * 1000000000, 5 * 60 * 1000000000})
 
-	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 4, 3}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 4, 3})
 	inCk1.Column(0).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1, 1.1, 4.4, 3.3}...)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1, 1.1, 4.4, 3.3})
 	inCk1.Column(1).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(2).AppendStringValues([]string{"aa", "aa", "dd", "ccc"}...)
+	inCk1.Column(2).AppendStringValues([]string{"aa", "aa", "dd", "ccc"})
 	inCk1.Column(2).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(3).AppendBooleanValues([]bool{true, true, true, false}...)
+	inCk1.Column(3).AppendBooleanValues([]bool{true, true, true, false})
 	inCk1.Column(3).AppendNilsV2(false, true, true, true, true)
 
 	// second chunk
@@ -191,19 +191,19 @@ func buildElapsedInChunk() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6 * 60 * 1000000000, 7 * 60 * 1000000000, 8 * 60 * 1000000000, 9 * 60 * 1000000000, 10 * 60 * 1000000000}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6 * 60 * 1000000000, 7 * 60 * 1000000000, 8 * 60 * 1000000000, 9 * 60 * 1000000000, 10 * 60 * 1000000000})
 
-	inCk2.Column(0).AppendIntegerValues([]int64{3, 6, 7, 8}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{3, 6, 7, 8})
 	inCk2.Column(0).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{3.3, 6.6, 7.7, 8.8}...)
+	inCk2.Column(1).AppendFloatValues([]float64{3.3, 6.6, 7.7, 8.8})
 	inCk2.Column(1).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(2).AppendStringValues([]string{"ccc", "fff", "ggg", "hhh"}...)
+	inCk2.Column(2).AppendStringValues([]string{"ccc", "fff", "ggg", "hhh"})
 	inCk2.Column(2).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(3).AppendBooleanValues([]bool{true, false, false, false}...)
+	inCk2.Column(3).AppendBooleanValues([]bool{true, false, false, false})
 	inCk2.Column(3).AppendNilsV2(true, false, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -233,16 +233,16 @@ func buildDstChunkElapsed() []executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 2, 5})
-	chunk.AppendIntervalIndex([]int{0, 2, 5}...)
-	chunk.AppendTime([]int64{2 * 60 * 1000000000, 3 * 60 * 1000000000, 5 * 60 * 1000000000, 6 * 60 * 1000000000, 7 * 60 * 1000000000, 9 * 60 * 1000000000, 10 * 60 * 1000000000}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 5})
+	chunk.AppendTimes([]int64{2 * 60 * 1000000000, 3 * 60 * 1000000000, 5 * 60 * 1000000000, 6 * 60 * 1000000000, 7 * 60 * 1000000000, 9 * 60 * 1000000000, 10 * 60 * 1000000000})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000})
 	chunk.Column(0).AppendNilsV2(false, true, true, true, false, true, true)
-	chunk.Column(1).AppendIntegerValues([]int64{1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000}...)
+	chunk.Column(1).AppendIntegerValues([]int64{1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000, 1 * 60 * 1000000000})
 	chunk.Column(1).AppendNilsV2(false, true, true, true, false, true, true)
-	chunk.Column(2).AppendIntegerValues([]int64{1, 1, 1, 1, 1}...)
+	chunk.Column(2).AppendIntegerValues([]int64{1, 1, 1, 1, 1})
 	chunk.Column(2).AppendNilsV2(false, true, true, true, false, true, true)
-	chunk.Column(3).AppendIntegerValues([]int64{0, 0, 0, 0, 0}...)
+	chunk.Column(3).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
 	chunk.Column(3).AppendNilsV2(false, true, true, true, false, true, true)
 
 	dstChunks = append(dstChunks, chunk)
@@ -285,7 +285,7 @@ func TestStreamAggregateTransformElapsed(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeElapsed(), buildDstRowDataTypeElapsed(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -312,19 +312,19 @@ func buildModeInChunk() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 3})
-	inCk1.AppendIntervalIndex([]int{0, 3}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 4, 3}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 4, 3})
 	inCk1.Column(0).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1, 1.1, 4.4, 3.3}...)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1, 1.1, 4.4, 3.3})
 	inCk1.Column(1).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(2).AppendStringValues([]string{"aa", "aa", "dd", "ccc"}...)
+	inCk1.Column(2).AppendStringValues([]string{"aa", "aa", "dd", "ccc"})
 	inCk1.Column(2).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(3).AppendBooleanValues([]bool{true, true, true, false}...)
+	inCk1.Column(3).AppendBooleanValues([]bool{true, true, true, false})
 	inCk1.Column(3).AppendNilsV2(false, true, true, true, true)
 
 	// second chunk
@@ -333,19 +333,19 @@ func buildModeInChunk() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	inCk2.Column(0).AppendIntegerValues([]int64{3, 6, 7, 8}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{3, 6, 7, 8})
 	inCk2.Column(0).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{3.3, 6.6, 7.7, 8.8}...)
+	inCk2.Column(1).AppendFloatValues([]float64{3.3, 6.6, 7.7, 8.8})
 	inCk2.Column(1).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(2).AppendStringValues([]string{"ccc", "fff", "ggg", "hhh"}...)
+	inCk2.Column(2).AppendStringValues([]string{"ccc", "fff", "ggg", "hhh"})
 	inCk2.Column(2).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(3).AppendBooleanValues([]bool{true, false, false, false}...)
+	inCk2.Column(3).AppendBooleanValues([]bool{true, false, false, false})
 	inCk2.Column(3).AppendNilsV2(true, false, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -375,16 +375,16 @@ func buildDstChunkMode() []executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
-	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
-	chunk.AppendTime([]int64{1, 6, 8}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 6, 8})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 6}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 6})
 	chunk.Column(0).AppendManyNotNil(3)
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 3.3, 6.6}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 3.3, 6.6})
 	chunk.Column(1).AppendManyNotNil(3)
-	chunk.Column(2).AppendStringValues([]string{"aa", "ccc", "fff"}...)
+	chunk.Column(2).AppendStringValues([]string{"aa", "ccc", "fff"})
 	chunk.Column(2).AppendManyNotNil(3)
-	chunk.Column(3).AppendBooleanValues([]bool{true, true, false}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, true, false})
 	chunk.Column(3).AppendManyNotNil(3)
 
 	dstChunks = append(dstChunks, chunk)
@@ -428,7 +428,7 @@ func TestStreamAggregateTransformMode(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeMode(), buildDstRowDataTypeMode(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -444,13 +444,13 @@ func buildMedianInChunk() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 3})
-	inCk1.AppendIntervalIndex([]int{0, 3}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	inCk1.Column(0).AppendIntegerValues([]int64{3, 1, 4, 4}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{3, 1, 4, 4})
 	inCk1.Column(0).AppendNilsV2(false, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{3.3, 1.1, 4.4, 4.4}...)
+	inCk1.Column(1).AppendFloatValues([]float64{3.3, 1.1, 4.4, 4.4})
 	inCk1.Column(1).AppendNilsV2(false, true, true, true, true)
 
 	// second chunk
@@ -459,13 +459,13 @@ func buildMedianInChunk() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	inCk2.Column(0).AppendIntegerValues([]int64{3, 8, 9, 10}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{3, 8, 9, 10})
 	inCk2.Column(0).AppendNilsV2(true, false, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{3.3, 8.8, 9.9, 10.1}...)
+	inCk2.Column(1).AppendFloatValues([]float64{3.3, 8.8, 9.9, 10.1})
 	inCk2.Column(1).AppendNilsV2(true, false, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -493,12 +493,12 @@ func buildDstChunkMedian() []executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
-	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
-	chunk.AppendTime([]int64{1, 6, 8}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 6, 8})
 
-	chunk.Column(0).AppendFloatValues([]float64{2.0, 4.0, 9.0}...)
+	chunk.Column(0).AppendFloatValues([]float64{2.0, 4.0, 9.0})
 	chunk.Column(0).AppendManyNotNil(3)
-	chunk.Column(1).AppendFloatValues([]float64{2.2, 4.4, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.2, 4.4, 9.9})
 	chunk.Column(1).AppendManyNotNil(3)
 
 	dstChunks = append(dstChunks, chunk)
@@ -534,7 +534,7 @@ func TestStreamAggregateTransformMedian(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSourceRowDataType(), buildDstRowDataTypeMedian(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -557,13 +557,13 @@ func buildSourceChunk1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 3, 4}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 3, 4})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -579,13 +579,13 @@ func buildSourceChunk2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"), *ParseChunkTags("name=eee"),
 	}, []int{0, 1, 3})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3}...)
-	chunk.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -611,13 +611,13 @@ func buildTargetChunk() executor.Chunk {
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
 		*ParseChunkTags("name=eee")}, []int{0, 1, 3, 4, 6})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6}...)
-	chunk.AppendTime([]int64{1, 3, 4, 6, 7, 8, 9}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 3, 4, 6, 7, 8, 9})
 
-	chunk.Column(0).AppendIntegerValues([]int64{2, 1, 1, 2, 1, 1, 2}...)
+	chunk.Column(0).AppendIntegerValues([]int64{2, 1, 1, 2, 1, 1, 2})
 	chunk.Column(0).AppendManyNotNil(7)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 3.3, 4.4, 5.5, 7.7, 8.8, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 3.3, 4.4, 5.5, 7.7, 8.8, 9.9})
 	chunk.Column(1).AppendManyNotNil(7)
 
 	return chunk
@@ -633,13 +633,13 @@ func buildTargetChunk1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 3, 4}...)
-	chunk.AppendTime([]int64{0, 0, 0, 4, 4}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 3, 4})
+	chunk.AppendTimes([]int64{0, 0, 0, 4, 4})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -655,13 +655,13 @@ func buildTargetChunk2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
 		*ParseChunkTags("name=eee")}, []int{0, 1, 3})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3}...)
-	chunk.AppendTime([]int64{4, 4, 8, 8, 8}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	chunk.AppendTimes([]int64{4, 4, 8, 8, 8})
 
-	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -686,13 +686,13 @@ func buildSourceChunkPercentile1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	chunk.AppendIntervalIndex([]int{0, 3}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndexes([]int{0, 3})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -708,13 +708,13 @@ func buildSourceChunkPercentile2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	chunk.AppendIntervalIndex([]int{0, 2}...)
-	chunk.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 2})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -738,13 +738,13 @@ func buildTargetChunkPercentile() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
-	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
-	chunk.AppendTime([]int64{2, 5, 9}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{2, 5, 9})
 
-	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 9}...)
+	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 9})
 	chunk.Column(0).AppendManyNotNil(3)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.2, 5.5, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.2, 5.5, 9.9})
 	chunk.Column(1).AppendManyNotNil(3)
 
 	return chunk
@@ -769,13 +769,13 @@ func buildSourceChunkTop1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	chunk.AppendIntervalIndex([]int{0, 3}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndexes([]int{0, 3})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 9, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 9, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 9.9, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 9.9, 5.5})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -791,14 +791,14 @@ func buildSourceChunkTop2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	chunk.AppendIntervalIndex([]int{0, 2}...)
+	chunk.AppendIntervalIndexes([]int{0, 2})
 	// The time must be added at last
-	chunk.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -830,13 +830,13 @@ func buildTargetChunkTop() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 4}...)
-	chunk.AppendTime([]int64{2, 3, 4, 7, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 4})
+	chunk.AppendTimes([]int64{2, 3, 4, 7, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{2, 3, 9, 7, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{2, 3, 9, 7, 9, 10})
 	chunk.Column(0).AppendManyNotNil(6)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.2, 3.3, 9.9, 7.7, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.2, 3.3, 9.9, 7.7, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(6)
 
 	return chunk
@@ -852,13 +852,13 @@ func buildTargetChunkTopInteger() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 4}...)
-	chunk.AppendTime([]int64{2, 3, 4, 7, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 4})
+	chunk.AppendTimes([]int64{2, 3, 4, 7, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{2, 3, 9, 7, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{2, 3, 9, 7, 9, 10})
 	chunk.Column(0).AppendManyNotNil(6)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.2, 3.3, 9.9, 7.7, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.2, 3.3, 9.9, 7.7, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(6)
 
 	return chunk
@@ -883,13 +883,13 @@ func buildSourceChunkBottom1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	chunk.AppendIntervalIndex([]int{0, 3}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndexes([]int{0, 3})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -905,13 +905,13 @@ func buildSourceChunkBottom2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	chunk.AppendIntervalIndex([]int{0, 2}...)
-	chunk.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 2})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{4, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{4, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{4.4, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{4.4, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -943,13 +943,13 @@ func buildTargetChunkBottom() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 4}...)
-	chunk.AppendTime([]int64{1, 2, 4, 6, 8, 9}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 4})
+	chunk.AppendTimes([]int64{1, 2, 4, 6, 8, 9})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 4, 4, 8, 9}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 4, 4, 8, 9})
 	chunk.Column(0).AppendManyNotNil(6)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 4.4, 4.4, 8.8, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 4.4, 4.4, 8.8, 9.9})
 	chunk.Column(1).AppendManyNotNil(6)
 
 	return chunk
@@ -965,13 +965,13 @@ func buildTargetChunkBottomInteger() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 4}...)
-	chunk.AppendTime([]int64{1, 2, 4, 6, 8, 9}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 4})
+	chunk.AppendTimes([]int64{1, 2, 4, 6, 8, 9})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 4, 4, 8, 9}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 4, 4, 8, 9})
 	chunk.Column(0).AppendManyNotNil(6)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 4.4, 4.4, 8.8, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 4.4, 4.4, 8.8, 9.9})
 	chunk.Column(1).AppendManyNotNil(6)
 
 	return chunk
@@ -995,11 +995,11 @@ func buildSourceChunkDistinct1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	chunk.AppendIntervalIndex([]int{0, 3}...)
+	chunk.AppendIntervalIndexes([]int{0, 3})
 	// The time must be added at last
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 1, 2, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 1, 2, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 	return chunk
 }
@@ -1014,10 +1014,10 @@ func buildSourceChunkDistinct2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	chunk.AppendIntervalIndex([]int{0, 2}...)
-	chunk.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 2})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{5, 5, 6, 6, 6}...)
+	chunk.Column(0).AppendIntegerValues([]int64{5, 5, 6, 6, 6})
 	chunk.Column(0).AppendManyNotNil(5)
 
 	return chunk
@@ -1040,10 +1040,10 @@ func buildTargetChunkDistinct() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 4}...)
-	chunk.AppendTime([]int64{1, 2, 4, 5, 8}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 4})
+	chunk.AppendTimes([]int64{1, 2, 4, 5, 8})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 2, 5, 6}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 2, 5, 6})
 	chunk.Column(0).AppendManyNotNil(5)
 
 	return chunk
@@ -1070,13 +1070,13 @@ func buildTargetChunkMinMax() executor.Chunk {
 		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
 		*ParseChunkTags("name=eee")},
 		[]int{0, 1, 3, 4, 6})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6}...)
-	chunk.AppendTime([]int64{1, 3, 4, 6, 7, 8, 9}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 3, 4, 6, 7, 8, 9})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 4, 5, 7, 8, 9}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 4, 5, 7, 8, 9})
 	chunk.Column(0).AppendManyNotNil(7)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.2, 3.3, 4.4, 6.6, 7.7, 8.8, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.2, 3.3, 4.4, 6.6, 7.7, 8.8, 10.1})
 	chunk.Column(1).AppendManyNotNil(7)
 
 	return chunk
@@ -1101,13 +1101,13 @@ func buildSourceChunkAux1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2, 4})
-	chunk.AppendIntervalIndex([]int{0, 2, 3, 4}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	chunk.AppendIntervalIndexes([]int{0, 2, 3, 4})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -1123,13 +1123,13 @@ func buildSourceChunkAux2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"), *ParseChunkTags("name=eee")},
 		[]int{0, 1, 3})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3}...)
-	chunk.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(5)
 
 	return chunk
@@ -1156,13 +1156,13 @@ func buildTargetChunkAux() executor.Chunk {
 		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
 		*ParseChunkTags("name=eee")},
 		[]int{0, 1, 3, 4, 6})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5, 6}...)
-	chunk.AppendTime([]int64{1, 3, 4, 5, 7, 8, 9}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 3, 4, 5, 7, 8, 9})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 4, 5, 7, 8, 9}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 3, 4, 5, 7, 8, 9})
 	chunk.Column(0).AppendManyNotNil(7)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 3.3, 4.4, 5.5, 7.7, 8.8, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 3.3, 4.4, 5.5, 7.7, 8.8, 9.9})
 	chunk.Column(1).AppendManyNotNil(7)
 
 	return chunk
@@ -1190,13 +1190,13 @@ func buildComInChunk() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{10, 1, 6, 4, 9, 0}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{10, 1, 6, 4, 9, 0})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
 	// second chunk
@@ -1206,13 +1206,13 @@ func buildComInChunk() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 11, 2, 7, 3, 8}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 11, 2, 7, 3, 8})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30}...)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179})
 	inCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -1232,25 +1232,25 @@ func buildComInChunkInnerChunkSizeTo1() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0}...)
-	inCk1.AppendTime([]int64{10}...)
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{10})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102}...)
-	inCk1.Column(0).AppendNilsV2(true)
+	inCk1.Column(0).AppendFloatValues([]float64{102})
+	inCk1.Column(0).AppendNotNil()
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191}...)
-	inCk1.Column(1).AppendNilsV2(true)
+	inCk1.Column(1).AppendIntegerValues([]int64{191})
+	inCk1.Column(1).AppendNotNil()
 
 	inCk2 := b.NewChunk("mst")
 	inCk2.AppendTagsAndIndexes(
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk2.AppendIntervalIndex([]int{0}...)
-	inCk2.AppendTime([]int64{1}...)
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{1})
 
-	inCk2.Column(0).AppendFloatValues([]float64{20.5}...)
-	inCk2.Column(0).AppendNilsV2(true)
+	inCk2.Column(0).AppendFloatValues([]float64{20.5})
+	inCk2.Column(0).AppendNotNil()
 
 	inCk2.Column(1).AppendNil()
 
@@ -1259,27 +1259,27 @@ func buildComInChunkInnerChunkSizeTo1() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk3.AppendIntervalIndex([]int{0}...)
-	inCk3.AppendTime([]int64{6}...)
+	inCk3.AppendIntervalIndexes([]int{0})
+	inCk3.AppendTimes([]int64{6})
 
 	inCk3.Column(0).AppendNil()
 
-	inCk3.Column(1).AppendIntegerValues([]int64{153}...)
-	inCk3.Column(1).AppendNilsV2(true)
+	inCk3.Column(1).AppendIntegerValues([]int64{153})
+	inCk3.Column(1).AppendNotNil()
 
 	inCk4 := b.NewChunk("mst")
 	inCk4.AppendTagsAndIndexes(
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk4.AppendIntervalIndex([]int{0}...)
-	inCk4.AppendTime([]int64{4}...)
+	inCk4.AppendIntervalIndexes([]int{0})
+	inCk4.AppendTimes([]int64{4})
 
-	inCk4.Column(0).AppendFloatValues([]float64{35}...)
-	inCk4.Column(0).AppendNilsV2(true)
+	inCk4.Column(0).AppendFloatValues([]float64{35})
+	inCk4.Column(0).AppendNotNil()
 
-	inCk4.Column(1).AppendIntegerValues([]int64{138}...)
-	inCk4.Column(1).AppendNilsV2(true)
+	inCk4.Column(1).AppendIntegerValues([]int64{138})
+	inCk4.Column(1).AppendNotNil()
 
 	inChunks = append(inChunks, inCk1, inCk2, inCk3, inCk4)
 	// second chunk
@@ -1300,13 +1300,13 @@ func buildComInChunkNullWindow() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{10, 1, 6, 4, 9, 0}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{10, 1, 6, 4, 9, 0})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102, 35, 60.8, 12.3}...)
+	inCk1.Column(0).AppendFloatValues([]float64{102, 35, 60.8, 12.3})
 	inCk1.Column(0).AppendNilsV2(true, false, false, true, true, true)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 70})
 	inCk1.Column(1).AppendNilsV2(true, true, true, false, false, true)
 
 	// second chunk
@@ -1316,13 +1316,13 @@ func buildComInChunkNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 11, 2, 7, 3, 8}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 11, 2, 7, 3, 8})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30}...)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179})
 	inCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -1344,13 +1344,13 @@ func buildComInChunkConsecutiveMultiNullWindow() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{0, 1, 2, 3, 4, 5}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{0, 1, 2, 3, 4, 5})
 
-	inCk1.Column(0).AppendFloatValues([]float64{11.1, 4.22}...)
+	inCk1.Column(0).AppendFloatValues([]float64{11.1, 4.22})
 	inCk1.Column(0).AppendNilsV2(true, false, false, false, false, true)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{13, 74, 32, 31, 55}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{13, 74, 32, 31, 55})
 	inCk1.Column(1).AppendNilsV2(false, true, true, true, true, true)
 
 	// second chunk
@@ -1360,13 +1360,13 @@ func buildComInChunkConsecutiveMultiNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10, 11}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10, 11})
 
-	inCk2.Column(0).AppendFloatValues([]float64{13.12, 3.22, 8.11, 31.22, 16.55}...)
+	inCk2.Column(0).AppendFloatValues([]float64{13.12, 3.22, 8.11, 31.22, 16.55})
 	inCk2.Column(0).AppendNilsV2(true, false, true, true, true, true)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{66, 33}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{66, 33})
 	inCk2.Column(1).AppendNilsV2(true, true, false, false, false, false)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -1392,13 +1392,13 @@ func buildSourceChunkStddev1() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 6})
-	chunk.AppendIntervalIndex([]int{0, 6}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 6})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 2, 2, 3, 4, 4, 5, 6, 7}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 2, 2, 3, 4, 4, 5, 6, 7})
 	chunk.Column(0).AppendManyNotNil(10)
 
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 8.8, 11.11, 15.15, 8.11}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 8.8, 11.11, 15.15, 8.11})
 	chunk.Column(1).AppendManyNotNil(10)
 
 	return chunk
@@ -1414,13 +1414,13 @@ func buildSourceChunkStddev2() executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 3})
-	chunk.AppendIntervalIndex([]int{0, 3}...)
-	chunk.AppendTime([]int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20}...)
+	chunk.AppendIntervalIndexes([]int{0, 3})
+	chunk.AppendTimes([]int64{11, 12, 13, 14, 15, 16, 17, 18, 19, 20})
 
-	chunk.Column(0).AppendIntegerValues([]int64{7, 6, 7, 8, 9, 10, 7, 15, 20, 25}...)
+	chunk.Column(0).AppendIntegerValues([]int64{7, 6, 7, 8, 9, 10, 7, 15, 20, 25})
 	chunk.Column(0).AppendManyNotNil(10)
 
-	chunk.Column(1).AppendFloatValues([]float64{6.6, 6.6, 7.7, 8.8, 9.9, 10.1, 15.5, 21.3, 8.8, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{6.6, 6.6, 7.7, 8.8, 9.9, 10.1, 15.5, 21.3, 8.8, 9.9})
 	chunk.Column(1).AppendManyNotNil(10)
 
 	return chunk
@@ -1463,13 +1463,13 @@ func buildDstChunkRate() []executor.Chunk {
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china"),
 			*ParseChunkTags("country=germany"), *ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 3, 4, 5})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
-	chunk.AppendTime([]int64{10, 1, 4, 5, 2, 3}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	chunk.AppendTimes([]int64{10, 1, 4, 5, 2, 3})
 
-	chunk.Column(0).AppendFloatValues([]float64{128.8, 103.19999999999999, 201.27272727272725, 99.60000000000001}...)
+	chunk.Column(0).AppendFloatValues([]float64{128.8, 103.19999999999999, 201.27272727272725, 99.60000000000001})
 	chunk.Column(0).AppendNilsV2(false, true, true, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{292, 168, 241.81818181818178, 232}...)
+	chunk.Column(1).AppendFloatValues([]float64{292, 168, 241.81818181818178, 232})
 	chunk.Column(1).AppendNilsV2(false, true, true, true, false, true)
 
 	dstChunks = append(dstChunks, chunk)
@@ -1498,13 +1498,13 @@ func buildDstChunkIrate() []executor.Chunk {
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china"),
 			*ParseChunkTags("country=germany"), *ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 3, 4, 5})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
-	chunk.AppendTime([]int64{10, 1, 4, 5, 2, 3}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	chunk.AppendTimes([]int64{10, 1, 4, 5, 2, 3})
 
-	chunk.Column(0).AppendFloatValues([]float64{128.8, 103.19999999999999, 247.33333333333334, 99.60000000000001}...)
+	chunk.Column(0).AppendFloatValues([]float64{128.8, 103.19999999999999, 247.33333333333334, 99.60000000000001})
 	chunk.Column(0).AppendNilsV2(false, true, true, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{292, 168, 180, 232}...)
+	chunk.Column(1).AppendFloatValues([]float64{292, 168, 180, 232})
 	chunk.Column(1).AppendNilsV2(false, true, true, true, false, true)
 
 	dstChunks = append(dstChunks, chunk)
@@ -1523,14 +1523,14 @@ func buildDstChunkRateInnerChunkSizeTo1() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{4}...)
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{4})
 
-	chunk.Column(0).AppendFloatValues([]float64{181.11111111111111}...)
-	chunk.Column(0).AppendNilsV2(true)
+	chunk.Column(0).AppendFloatValues([]float64{181.11111111111111})
+	chunk.Column(0).AppendNotNil()
 
-	chunk.Column(1).AppendFloatValues([]float64{176.66666666666669}...)
-	chunk.Column(1).AppendNilsV2(true)
+	chunk.Column(1).AppendFloatValues([]float64{176.66666666666669})
+	chunk.Column(1).AppendNotNil()
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -1548,14 +1548,14 @@ func buildDstChunkIrateInnerChunkSizeTo1() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{4}...)
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{4})
 
-	chunk.Column(0).AppendFloatValues([]float64{223.33333333333334}...)
-	chunk.Column(0).AppendNilsV2(true)
+	chunk.Column(0).AppendFloatValues([]float64{223.33333333333334})
+	chunk.Column(0).AppendNotNil()
 
-	chunk.Column(1).AppendFloatValues([]float64{190}...)
-	chunk.Column(1).AppendNilsV2(true)
+	chunk.Column(1).AppendFloatValues([]float64{190})
+	chunk.Column(1).AppendNotNil()
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -1583,13 +1583,13 @@ func buildDstChunkAbsent() []executor.Chunk {
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china"),
 			*ParseChunkTags("country=germany"), *ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 3, 4, 5})
-	chunk.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
-	chunk.AppendTime([]int64{10, 1, 4, 5, 2, 3}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	chunk.AppendTimes([]int64{10, 1, 4, 5, 2, 3})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1})
 	chunk.Column(0).AppendManyNotNil(6)
 
-	chunk.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1}...)
+	chunk.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1, 1, 1})
 	chunk.Column(1).AppendManyNotNil(6)
 
 	dstChunks = append(dstChunks, chunk)
@@ -1617,13 +1617,13 @@ func buildDstChunkDifference() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	inCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	inCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	inCk1.Column(0).AppendFloatValues([]float64{32.2, 25.799999999999997, 36.5, 74.2, 24.900000000000002}...)
+	inCk1.Column(0).AppendFloatValues([]float64{32.2, 25.799999999999997, 36.5, 74.2, 24.900000000000002})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{73, 42, 79, 54, 58}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{73, 42, 79, 54, 58})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, false, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -1651,13 +1651,13 @@ func buildDstChunkFrontDifference() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	inCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	inCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	inCk1.Column(0).AppendFloatValues([]float64{-32.2, -25.799999999999997, -36.5, -74.2, -24.900000000000002}...)
+	inCk1.Column(0).AppendFloatValues([]float64{-32.2, -25.799999999999997, -36.5, -74.2, -24.900000000000002})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{-73, -42, -79, -54, -58}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{-73, -42, -79, -54, -58})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, false, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -1685,13 +1685,13 @@ func buildDstChunkAbsoluteDifference() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	inCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	inCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	inCk1.Column(0).AppendFloatValues([]float64{32.2, 25.799999999999997, 36.5, 74.2, 24.900000000000002}...)
+	inCk1.Column(0).AppendFloatValues([]float64{32.2, 25.799999999999997, 36.5, 74.2, 24.900000000000002})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{73, 42, 79, 54, 58}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{73, 42, 79, 54, 58})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, false, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -1711,13 +1711,13 @@ func buildDstChunkDifferenceNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	inCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	inCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	inCk1.Column(0).AppendFloatValues([]float64{25.799999999999997, 36.5, 74.2, 24.900000000000002}...)
+	inCk1.Column(0).AppendFloatValues([]float64{25.799999999999997, 36.5, 74.2, 24.900000000000002})
 	inCk1.Column(0).AppendNilsV2(false, true, true, true, true, false)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{73, 79, 54, 58}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{73, 79, 54, 58})
 	inCk1.Column(1).AppendNilsV2(true, false, true, true, false, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -1745,13 +1745,13 @@ func buildDstChunkDerivative() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	inCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	inCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	inCk1.Column(0).AppendFloatValues([]float64{-6440000000, -5159999999.999999, -7300000000, -12366666666.666668, -4980000000}...)
+	inCk1.Column(0).AppendFloatValues([]float64{-6440000000, -5159999999.999999, -7300000000, -12366666666.666668, -4980000000})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk1.Column(1).AppendFloatValues([]float64{-14600000000, -8400000000, -15800000000, -9000000000, -11600000000}...)
+	inCk1.Column(1).AppendFloatValues([]float64{-14600000000, -8400000000, -15800000000, -9000000000, -11600000000})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, false, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -1771,13 +1771,13 @@ func buildDstChunkDerivativeNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	inCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	inCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	inCk1.Column(0).AppendFloatValues([]float64{-5159999999.999999, -7300000000, -12366666666.666668, -4980000000}...)
+	inCk1.Column(0).AppendFloatValues([]float64{-5159999999.999999, -7300000000, -12366666666.666668, -4980000000})
 	inCk1.Column(0).AppendNilsV2(false, true, true, true, true, false)
 
-	inCk1.Column(1).AppendFloatValues([]float64{-14600000000, -15800000000, -9000000000, -11600000000}...)
+	inCk1.Column(1).AppendFloatValues([]float64{-14600000000, -15800000000, -9000000000, -11600000000})
 	inCk1.Column(1).AppendNilsV2(true, false, true, true, false, true)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -1804,13 +1804,13 @@ func buildDstChunkCumulativeSum() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	dstCk1.AppendTime([]int64{10, 1, 6, 4, 9, 0}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	dstCk1.AppendTimes([]int64{10, 1, 6, 4, 9, 0})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 73.2, 35, 95.8, 12.3}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 73.2, 35, 95.8, 12.3})
 	dstCk1.Column(0).AppendManyNotNil(6)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 233, 138, 318, 70}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 233, 138, 318, 70})
 	dstCk1.Column(1).AppendManyNotNil(6)
 
 	//second chunk
@@ -1820,13 +1820,13 @@ func buildDstChunkCumulativeSum() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	dstCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	dstCk2.AppendTime([]int64{5, 11, 2, 7, 3, 8}...)
+	dstCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	dstCk2.AppendTimes([]int64{5, 11, 2, 7, 3, 8})
 
-	dstCk2.Column(0).AppendFloatValues([]float64{61.099999999999994, 184.1, 3.4, 31.7, 30}...)
+	dstCk2.Column(0).AppendFloatValues([]float64{61.099999999999994, 184.1, 3.4, 31.7, 30})
 	dstCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	dstCk2.Column(1).AppendIntegerValues([]int64{219, 422, 90, 121, 300}...)
+	dstCk2.Column(1).AppendIntegerValues([]int64{219, 422, 90, 121, 300})
 	dstCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	dstChunks = append(dstChunks, dstCk1, dstCk2)
@@ -1845,13 +1845,13 @@ func buildDstChunkCumulativeSumNullWindow() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	dstCk1.AppendTime([]int64{10, 1, 6, 4, 9, 0}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	dstCk1.AppendTimes([]int64{10, 1, 6, 4, 9, 0})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{102, 35, 95.8, 12.3}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{102, 35, 95.8, 12.3})
 	dstCk1.Column(0).AppendNilsV2(true, false, false, true, true, true)
 
-	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 233, 70}...)
+	dstCk1.Column(1).AppendIntegerValues([]int64{191, 80, 233, 70})
 	dstCk1.Column(1).AppendNilsV2(true, true, true, false, false, true)
 
 	dstCk2 := b.NewChunk("mst")
@@ -1860,13 +1860,13 @@ func buildDstChunkCumulativeSumNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	dstCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	dstCk2.AppendTime([]int64{5, 11, 2, 7, 3, 8}...)
+	dstCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	dstCk2.AppendTimes([]int64{5, 11, 2, 7, 3, 8})
 
-	dstCk2.Column(0).AppendFloatValues([]float64{61.099999999999994, 184.1, 3.4, 31.7, 30}...)
+	dstCk2.Column(0).AppendFloatValues([]float64{61.099999999999994, 184.1, 3.4, 31.7, 30})
 	dstCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	dstCk2.Column(1).AppendIntegerValues([]int64{219, 422, 90, 121, 300}...)
+	dstCk2.Column(1).AppendIntegerValues([]int64{219, 422, 90, 121, 300})
 	dstCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	dstChunks = append(dstChunks, dstCk1, dstCk2)
@@ -1894,13 +1894,13 @@ func buildDstChunkMovingAverageNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	dstCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	dstCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{47.9, 30.549999999999997, 85.9, 15.85}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{47.9, 30.549999999999997, 85.9, 15.85})
 	dstCk1.Column(0).AppendNilsV2(false, true, true, true, true, false)
 
-	dstCk1.Column(1).AppendFloatValues([]float64{116.5, 109.5, 176, 150}...)
+	dstCk1.Column(1).AppendFloatValues([]float64{116.5, 109.5, 176, 150})
 	dstCk1.Column(1).AppendNilsV2(true, false, true, true, false, true)
 
 	dstChunks = append(dstChunks, dstCk1)
@@ -1920,13 +1920,13 @@ func buildDstChunkMovingAverage() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 4, 5})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2, 4, 5}...)
-	dstCk1.AppendTime([]int64{6, 9, 5, 11, 7, 8}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2, 4, 5})
+	dstCk1.AppendTimes([]int64{6, 9, 5, 11, 7, 8})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{36.6, 47.9, 30.549999999999997, 85.9, 15.85}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{36.6, 47.9, 30.549999999999997, 85.9, 15.85})
 	dstCk1.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	dstCk1.Column(1).AppendFloatValues([]float64{116.5, 159, 109.5, 176, 150}...)
+	dstCk1.Column(1).AppendFloatValues([]float64{116.5, 159, 109.5, 176, 150})
 	dstCk1.Column(1).AppendNilsV2(true, true, true, true, false, true)
 	dstChunks = append(dstChunks, dstCk1)
 	return dstChunks
@@ -1951,13 +1951,13 @@ func buildDstChunkStddev() []executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
-	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
-	chunk.AppendTime([]int64{1, 11, 14}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 11, 14})
 
-	chunk.Column(0).AppendFloatValues([]float64{1.0327955589886437, 1.154700538379253, 6.852180744287249}...)
+	chunk.Column(0).AppendFloatValues([]float64{1.0327955589886437, 1.154700538379253, 6.852180744287249})
 	chunk.Column(0).AppendManyNotNil(3)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.0579115627256663, 3.059224925182373, 4.683964539738083}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.0579115627256663, 3.059224925182373, 4.683964539738083})
 	chunk.Column(1).AppendManyNotNil(3)
 
 	dstChunks = append(dstChunks, chunk)
@@ -1985,13 +1985,13 @@ func buildDstChunkPercentileConsecutiveMultiNullWindow() []executor.Chunk {
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china"),
 			*ParseChunkTags("country=germany"), *ParseChunkTags("country=japan")},
 		[]int{0, 1, 2, 3, 4, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 2, 3, 4, 5}...)
-	inCk1.AppendTime([]int64{0, 1, 3, 6, 8, 10}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{0, 1, 3, 6, 8, 10})
 
-	inCk1.Column(0).AppendFloatValues([]float64{11.1, 13.12, 8.11, 31.22}...)
+	inCk1.Column(0).AppendFloatValues([]float64{11.1, 13.12, 8.11, 31.22})
 	inCk1.Column(0).AppendNilsV2(true, false, false, true, true, true)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{74, 32, 66}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{74, 32, 66})
 	inCk1.Column(1).AppendNilsV2(false, true, true, true, false, false)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -2149,7 +2149,7 @@ func TestStreamAggregateTransform_Multi_Count_Integer_Min_Float(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataType()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataType())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2220,7 +2220,7 @@ func TestStreamAggregateTransformPercentile(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataTypePercentile()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypePercentile())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2285,7 +2285,7 @@ func TestStreamAggregateTransformPercentileConsecutiveMultiNullWindow(t *testing
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypePercentile(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -2313,7 +2313,7 @@ func TestStreamAggregateTransformPercentileSubQuery(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypePercentile(),
-		exprOpt, opt, true,
+		exprOpt, &opt, true,
 	)
 }
 
@@ -2348,7 +2348,7 @@ func TestStreamAggregateTransformTop(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTop(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTop()}, []hybridqp.RowDataType{buildTargetRowDataTypeTop()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeTop())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2420,7 +2420,7 @@ func TestStreamAggregateTransformTopInteger(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTop(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTop()}, []hybridqp.RowDataType{buildTargetRowDataTypeTopInteger()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeTopInteger())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2493,7 +2493,7 @@ func TestStreamAggregateTransformBottomInteger(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeBottom()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeBottomInteger()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeBottomInteger())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2566,7 +2566,7 @@ func TestStreamAggregateTransformBottom(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeBottom()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeBottom()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeBottom())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2634,7 +2634,7 @@ func TestStreamAggregateTransformDistinct(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeDistinct()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeDistinct()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeDistinct())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2706,7 +2706,7 @@ func TestStreamAggregateTransform_Multi_Min_Integer_Max_Float(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeMinMax()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeMinMax())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2778,7 +2778,7 @@ func TestStreamAggregateTransformAux(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeAux()},
-		exprOpt, opt, false)
+		exprOpt, &opt, false)
 	sink := NewNilSink(buildTargetRowDataTypeAux())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2823,7 +2823,7 @@ func testStreamAggregateTransformBase(
 	t *testing.T,
 	inChunks []executor.Chunk, dstChunks []executor.Chunk,
 	inRowDataType, outRowDataType hybridqp.RowDataType,
-	exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions,
+	exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions,
 	isSubQuery bool,
 ) {
 	// generate each executor node node to build a dag.
@@ -2897,7 +2897,7 @@ func TestStreamAggregateTransformRate(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeRate(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -2926,7 +2926,7 @@ func TestStreamAggregateTransformIrate(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeIrate(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -2955,7 +2955,7 @@ func TestStreamAggregateTransformRateInnerChunkSizeTo1(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeRate(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -2984,7 +2984,7 @@ func TestStreamAggregateTransformIrateInnerChunkSizeTo1(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeIrate(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3013,7 +3013,7 @@ func TestStreamAggregateTransformAbsent(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeAbsent(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3045,7 +3045,7 @@ func TestStreamAggregateTransformStddev(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSourceRowDataTypeStddev(), buildDSTRowDataTypeStddev(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3073,7 +3073,7 @@ func TestStreamAggregateTransformDifference(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDifference(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3101,7 +3101,7 @@ func TestStreamAggregateTransformFrontDifference(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeFrontDifference(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3129,7 +3129,7 @@ func TestStreamAggregateTransformAbsoluteDifference(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeAbsoluteDifference(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3157,7 +3157,7 @@ func TestStreamAggregateTransformDifferenceNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDifference(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3174,13 +3174,13 @@ func buildSrcChunkDifferenceForDuplicatedTime() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{10, 1, 1, 4, 4, 0}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{10, 1, 1, 4, 4, 0})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
 	// second chunk
@@ -3190,13 +3190,13 @@ func buildSrcChunkDifferenceForDuplicatedTime() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 11, 2, 7, 3, 3}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 11, 2, 7, 3, 3})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30}...)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179})
 	inCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -3215,13 +3215,13 @@ func buildDstChunkDifferenceForDuplicatedTime() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany")},
 		[]int{0, 2})
-	inCk1.AppendIntervalIndex([]int{0, 2}...)
-	inCk1.AppendTime([]int64{5, 11, 7}...)
+	inCk1.AppendIntervalIndexes([]int{0, 2})
+	inCk1.AppendTimes([]int64{5, 11, 7})
 
-	inCk1.Column(0).AppendFloatValues([]float64{-36.5, -74.2, -24.900000000000002}...)
+	inCk1.Column(0).AppendFloatValues([]float64{-36.5, -74.2, -24.900000000000002})
 	inCk1.Column(0).AppendNilsV2(true, true, true)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{-79, -54}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{-79, -54})
 	inCk1.Column(1).AppendNilsV2(true, true, false)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -3252,7 +3252,7 @@ func TestStreamAggregateTransformDifferenceForDuplicatedTime(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeFrontDifference(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3275,13 +3275,13 @@ func buildSampleInChunk() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 1, 3})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	// second chunk
@@ -3290,13 +3290,13 @@ func buildSampleInChunk() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	inCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	inCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	inCk2.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -3325,12 +3325,12 @@ func buildDstChunkSample() []executor.Chunk {
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 3, 7})
 
-	chunk.AppendIntervalIndex([]int{0, 1, 3, 7}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 3, 7})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 	chunk.Column(0).AppendManyNotNil(10)
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(10)
 
 	dstChunks = append(dstChunks, chunk)
@@ -3366,7 +3366,7 @@ func TestStreamAggregateTransformSample(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample(), buildDstRowDataTypeSample(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3389,13 +3389,13 @@ func buildSampleInChunk_Float() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 1, 3})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	inCk1.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	inCk1.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	// second chunk
@@ -3404,13 +3404,13 @@ func buildSampleInChunk_Float() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	inCk2.Column(0).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	inCk2.Column(0).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	inCk2.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -3439,12 +3439,12 @@ func buildDstChunkSample_Float() []executor.Chunk {
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 3, 7})
 
-	chunk.AppendIntervalIndex([]int{0, 1, 3, 7}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 3, 7})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(0).AppendManyNotNil(10)
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(10)
 
 	dstChunks = append(dstChunks, chunk)
@@ -3480,7 +3480,7 @@ func TestStreamAggregateTransformSample_Float(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample_Float(), buildDstRowDataTypeSample_Float(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3503,12 +3503,12 @@ func buildSampleInChunk_String() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 1, 3})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
-	inCk1.Column(0).AppendStringValues([]string{"aa", "bb", "cc", "dd", "ee"}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+	inCk1.Column(0).AppendStringValues([]string{"aa", "bb", "cc", "dd", "ee"})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	// second chunk
@@ -3517,13 +3517,13 @@ func buildSampleInChunk_String() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	inCk2.Column(0).AppendStringValues([]string{"ff", "gg", "hh", "ii", "jj"}...)
+	inCk2.Column(0).AppendStringValues([]string{"ff", "gg", "hh", "ii", "jj"})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	inCk2.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -3552,12 +3552,12 @@ func buildDstChunkSample_String() []executor.Chunk {
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 3, 7})
 
-	chunk.AppendIntervalIndex([]int{0, 1, 3, 7}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 3, 7})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendStringValues([]string{"aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh", "ii", "jj"}...)
+	chunk.Column(0).AppendStringValues([]string{"aa", "bb", "cc", "dd", "ee", "ff", "gg", "hh", "ii", "jj"})
 	chunk.Column(0).AppendManyNotNil(10)
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(10)
 
 	dstChunks = append(dstChunks, chunk)
@@ -3593,7 +3593,7 @@ func TestStreamAggregateTransformSample_String(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample_String(), buildDstRowDataTypeSample_String(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3616,12 +3616,12 @@ func buildSampleInChunk_Bool() []executor.Chunk {
 	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 	}, []int{0, 1, 3})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
-	inCk1.Column(0).AppendBooleanValues([]bool{true, true, false, true, true}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+	inCk1.Column(0).AppendBooleanValues([]bool{true, true, false, true, true})
 	inCk1.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5}...)
+	inCk1.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	inCk1.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	// second chunk
@@ -3630,13 +3630,13 @@ func buildSampleInChunk_Bool() []executor.Chunk {
 	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
 	}, []int{0, 2})
-	inCk2.AppendIntervalIndex([]int{0, 2}...)
-	inCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	inCk2.Column(0).AppendBooleanValues([]bool{false, false, true, false, false}...)
+	inCk2.Column(0).AppendBooleanValues([]bool{false, false, true, false, false})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true)
 
-	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1}...)
+	inCk2.Column(1).AppendFloatValues([]float64{6.6, 7.7, 8.8, 9.9, 10.1})
 	inCk2.Column(1).AppendNilsV2(true, true, true, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -3665,12 +3665,12 @@ func buildDstChunkSample_Bool() []executor.Chunk {
 		*ParseChunkTags("name=zzz"), *ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 3, 7})
 
-	chunk.AppendIntervalIndex([]int{0, 1, 3, 7}...)
-	chunk.AppendTime([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 3, 7})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
 
-	chunk.Column(0).AppendBooleanValues([]bool{true, true, false, true, true, false, false, true, false, false}...)
+	chunk.Column(0).AppendBooleanValues([]bool{true, true, false, true, true, false, false, true, false, false})
 	chunk.Column(0).AppendManyNotNil(10)
-	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1}...)
+	chunk.Column(1).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5, 6.6, 7.7, 8.8, 9.9, 10.1})
 	chunk.Column(1).AppendManyNotNil(10)
 
 	dstChunks = append(dstChunks, chunk)
@@ -3706,7 +3706,7 @@ func TestStreamAggregateTransformSample_Bool(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildInRowDataTypeSample_Bool(), buildDstRowDataTypeSample_Bool(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3734,7 +3734,7 @@ func TestStreamAggregateTransformDerivative(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3751,13 +3751,13 @@ func buildComInChunkOne() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0}...)
-	inCk1.AppendTime([]int64{0}...)
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{0})
 
-	inCk1.Column(0).AppendFloatValues([]float64{1.1}...)
+	inCk1.Column(0).AppendFloatValues([]float64{1.1})
 	inCk1.Column(0).AppendManyNotNil(1)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{1}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{1})
 	inCk1.Column(1).AppendManyNotNil(1)
 
 	// second chunk
@@ -3766,14 +3766,14 @@ func buildComInChunkOne() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk2.AppendIntervalIndex([]int{0}...)
-	inCk2.AppendTime([]int64{1}...)
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{1})
 
-	inCk2.Column(0).AppendFloatValues([]float64{2.2}...)
-	inCk2.Column(0).AppendNilsV2(true)
+	inCk2.Column(0).AppendFloatValues([]float64{2.2})
+	inCk2.Column(0).AppendNotNil()
 
-	inCk2.Column(1).AppendIntegerValues([]int64{2}...)
-	inCk2.Column(1).AppendNilsV2(true)
+	inCk2.Column(1).AppendIntegerValues([]int64{2})
+	inCk2.Column(1).AppendNotNil()
 
 	inChunks = append(inChunks, inCk1, inCk2)
 
@@ -3791,14 +3791,14 @@ func buildDstChunkDerivativeOne() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0}...)
-	inCk1.AppendTime([]int64{1}...)
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1})
 
-	inCk1.Column(0).AppendFloatValues([]float64{-1100000000}...)
-	inCk1.Column(0).AppendNilsV2(true)
+	inCk1.Column(0).AppendFloatValues([]float64{-1100000000})
+	inCk1.Column(0).AppendNotNil()
 
-	inCk1.Column(1).AppendFloatValues([]float64{-999999999.9999999}...)
-	inCk1.Column(1).AppendNilsV2(true)
+	inCk1.Column(1).AppendFloatValues([]float64{-999999999.9999999})
+	inCk1.Column(1).AppendNotNil()
 
 	dstChunks = append(dstChunks, inCk1)
 	return dstChunks
@@ -3828,7 +3828,7 @@ func TestStreamAggregateTransformDerivativeOne(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3856,7 +3856,7 @@ func TestStreamAggregateTransformDerivativeNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 func buildSrcChunkDerivativeForDuplicatedTime() []executor.Chunk {
@@ -3873,13 +3873,13 @@ func buildSrcChunkDerivativeForDuplicatedTime() []executor.Chunk {
 			*ParseChunkTags("country="), *ParseChunkTags("country=american"),
 			*ParseChunkTags("country=canada"), *ParseChunkTags("country=china")},
 		[]int{0, 1, 3, 5})
-	inCk1.AppendIntervalIndex([]int{0, 1, 3, 5}...)
-	inCk1.AppendTime([]int64{10, 1, 1, 4, 4, 0}...)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{10, 1, 1, 4, 4, 0})
 
-	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	inCk1.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3})
 	inCk1.Column(0).AppendManyNotNil(6)
 
-	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70}...)
+	inCk1.Column(1).AppendIntegerValues([]int64{191, 80, 153, 138, 180, 70})
 	inCk1.Column(1).AppendManyNotNil(6)
 
 	// second chunk
@@ -3889,13 +3889,13 @@ func buildSrcChunkDerivativeForDuplicatedTime() []executor.Chunk {
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany"),
 			*ParseChunkTags("country=japan")},
 		[]int{0, 2, 4})
-	inCk2.AppendIntervalIndex([]int{0, 2, 4}...)
-	inCk2.AppendTime([]int64{5, 11, 2, 7, 3, 3}...)
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 11, 2, 7, 3, 3})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30}...)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 123, 3.4, 28.3, 30})
 	inCk2.Column(0).AppendNilsV2(true, true, true, true, true, false)
 
-	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179}...)
+	inCk2.Column(1).AppendIntegerValues([]int64{149, 203, 90, 121, 179})
 	inCk2.Column(1).AppendNilsV2(true, true, true, false, true, true)
 
 	inChunks = append(inChunks, inCk1, inCk2)
@@ -3914,13 +3914,13 @@ func buildDstChunkDerivativeForDuplicatedTime() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=china"), *ParseChunkTags("country=germany")},
 		[]int{0, 2})
-	inCk1.AppendIntervalIndex([]int{0, 2}...)
-	inCk1.AppendTime([]int64{5, 11, 7}...)
+	inCk1.AppendIntervalIndexes([]int{0, 2})
+	inCk1.AppendTimes([]int64{5, 11, 7})
 
-	inCk1.Column(0).AppendFloatValues([]float64{-7300000000, -12366666666.666668, -4980000000}...)
+	inCk1.Column(0).AppendFloatValues([]float64{-7300000000, -12366666666.666668, -4980000000})
 	inCk1.Column(0).AppendNilsV2(true, true, true)
 
-	inCk1.Column(1).AppendFloatValues([]float64{-15800000000, -9000000000}...)
+	inCk1.Column(1).AppendFloatValues([]float64{-15800000000, -9000000000})
 	inCk1.Column(1).AppendNilsV2(true, true, false)
 
 	dstChunks = append(dstChunks, inCk1)
@@ -3951,7 +3951,7 @@ func TestStreamAggregateTransformDerivativeForDuplicatedTime(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDstRowDataTypeDerivative(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -3979,7 +3979,7 @@ func TestStreamAggregateTransformCumulativeSum(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeCumulativeSum(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4007,7 +4007,7 @@ func TestStreamAggregateTransformCumulativeSumNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeCumulativeSum(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4039,7 +4039,7 @@ func TestStreamAggregateTransformMovingAverage(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeMovingAverage(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4071,7 +4071,7 @@ func TestStreamAggregateTransformMovingAverageNullWindow(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeMovingAverage(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4088,14 +4088,14 @@ func buildComInChunkNullWindowChunkSizeOne() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0}...)
-	inCk1.AppendTime([]int64{0}...)
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{0})
 
-	inCk1.Column(0).AppendFloatValues([]float64{1.1}...)
-	inCk1.Column(0).AppendNilsV2(true)
+	inCk1.Column(0).AppendFloatValues([]float64{1.1})
+	inCk1.Column(0).AppendNotNil()
 
-	inCk1.Column(1).AppendIntegerValues([]int64{}...)
-	inCk1.Column(1).AppendNilsV2(false)
+	inCk1.Column(1).AppendIntegerValues([]int64{})
+	inCk1.Column(1).AppendNil()
 
 	// second chunk
 	inCk2 := b.NewChunk("mst")
@@ -4103,14 +4103,14 @@ func buildComInChunkNullWindowChunkSizeOne() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=china")},
 		[]int{0})
-	inCk2.AppendIntervalIndex([]int{0}...)
-	inCk2.AppendTime([]int64{1}...)
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{1})
 
-	inCk2.Column(0).AppendFloatValues([]float64{}...)
-	inCk2.Column(0).AppendNilsV2(false)
+	inCk2.Column(0).AppendFloatValues([]float64{})
+	inCk2.Column(0).AppendNil()
 
-	inCk2.Column(1).AppendIntegerValues([]int64{2}...)
-	inCk2.Column(1).AppendNilsV2(true)
+	inCk2.Column(1).AppendIntegerValues([]int64{2})
+	inCk2.Column(1).AppendNotNil()
 
 	inChunks = append(inChunks, inCk1, inCk2)
 
@@ -4149,7 +4149,7 @@ func TestStreamAggregateTransformMovingAverageNullWindowChunkSizeOne(t *testing.
 		t,
 		inChunks, dstChunks,
 		buildComRowDataType(), buildDSTRowDataTypeMovingAverage(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4173,19 +4173,19 @@ func buildSrcNullChunks() []executor.Chunk {
 	ck1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("tk=tv"),
 	}, []int{0})
-	ck1.AppendIntervalIndex([]int{0, 1, 2}...)
-	ck1.AppendTime([]int64{1, 2, 3}...)
+	ck1.AppendIntervalIndexes([]int{0, 1, 2})
+	ck1.AppendTimes([]int64{1, 2, 3})
 
-	ck1.Column(0).AppendIntegerValues([]int64{2}...)
+	ck1.Column(0).AppendIntegerValues([]int64{2})
 	ck1.Column(0).AppendNilsV2(false, true, false)
 
-	ck1.Column(1).AppendFloatValues([]float64{1.1, 3.3}...)
+	ck1.Column(1).AppendFloatValues([]float64{1.1, 3.3})
 	ck1.Column(1).AppendNilsV2(true, false, true)
 
-	ck1.Column(2).AppendStringValues([]string{"a"}...)
+	ck1.Column(2).AppendStringValues([]string{"a"})
 	ck1.Column(2).AppendNilsV2(false, true, false)
 
-	ck1.Column(3).AppendBooleanValues([]bool{true, true}...)
+	ck1.Column(3).AppendBooleanValues([]bool{true, true})
 	ck1.Column(3).AppendNilsV2(true, false, true)
 
 	ck2 := b.NewChunk("mst")
@@ -4193,19 +4193,19 @@ func buildSrcNullChunks() []executor.Chunk {
 	ck2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("tk=tv"),
 	}, []int{0})
-	ck2.AppendIntervalIndex([]int{0, 1, 2}...)
-	ck2.AppendTime([]int64{3, 4, 5}...)
+	ck2.AppendIntervalIndexes([]int{0, 1, 2})
+	ck2.AppendTimes([]int64{3, 4, 5})
 
-	ck2.Column(0).AppendIntegerValues([]int64{3, 5}...)
+	ck2.Column(0).AppendIntegerValues([]int64{3, 5})
 	ck2.Column(0).AppendNilsV2(true, false, true)
 
-	ck2.Column(1).AppendFloatValues([]float64{4.4}...)
+	ck2.Column(1).AppendFloatValues([]float64{4.4})
 	ck2.Column(1).AppendNilsV2(false, true, false)
 
-	ck2.Column(2).AppendStringValues([]string{"c", "d"}...)
+	ck2.Column(2).AppendStringValues([]string{"c", "d"})
 	ck2.Column(2).AppendNilsV2(true, false, true)
 
-	ck2.Column(3).AppendBooleanValues([]bool{true}...)
+	ck2.Column(3).AppendBooleanValues([]bool{true})
 	ck2.Column(3).AppendNilsV2(false, true, false)
 
 	cks := make([]executor.Chunk, 0, 2)
@@ -4233,19 +4233,19 @@ func buildDstNullChunksForCount() []executor.Chunk {
 	ck1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("tk=tv"),
 	}, []int{0})
-	ck1.AppendIntervalIndex([]int{0, 1, 2, 3, 4}...)
-	ck1.AppendTime([]int64{1, 2, 3, 4, 5}...)
+	ck1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4})
+	ck1.AppendTimes([]int64{1, 2, 3, 4, 5})
 
-	ck1.Column(0).AppendIntegerValues([]int64{1, 1, 1}...)
+	ck1.Column(0).AppendIntegerValues([]int64{1, 1, 1})
 	ck1.Column(0).AppendNilsV2(false, true, true, false, true)
 
-	ck1.Column(1).AppendIntegerValues([]int64{1, 1, 1}...)
+	ck1.Column(1).AppendIntegerValues([]int64{1, 1, 1})
 	ck1.Column(1).AppendNilsV2(true, false, true, true, false)
 
-	ck1.Column(2).AppendIntegerValues([]int64{1, 1, 1}...)
+	ck1.Column(2).AppendIntegerValues([]int64{1, 1, 1})
 	ck1.Column(2).AppendNilsV2(false, true, true, false, true)
 
-	ck1.Column(3).AppendIntegerValues([]int64{1, 1, 1}...)
+	ck1.Column(3).AppendIntegerValues([]int64{1, 1, 1})
 	ck1.Column(3).AppendNilsV2(true, false, true, true, false)
 
 	cks := make([]executor.Chunk, 0, 1)
@@ -4286,7 +4286,7 @@ func TestStreamAggregateTransformNullForCount(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcNullRowDataType(), buildDstNullRowDataTypeFourCount(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4308,10 +4308,10 @@ func buildSrcLastChunk() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=china")},
 		[]int{0})
-	inCk1.AppendIntervalIndex([]int{0}...)
-	inCk1.AppendTime([]int64{1, 2, 3, 4, 5, 6}...)
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
 
-	inCk1.Column(0).AppendFloatValues([]float64{2, 3, 4, 5, 6}...)
+	inCk1.Column(0).AppendFloatValues([]float64{2, 3, 4, 5, 6})
 	inCk1.Column(0).AppendNilsV2(false, true, true, true, true, true)
 
 	inChunks = append(inChunks, inCk1)
@@ -4338,11 +4338,11 @@ func buildDstLastChunk() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=china")},
 		[]int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{6}...)
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{6})
 
-	chunk.Column(0).AppendFloatValues([]float64{6}...)
-	chunk.Column(0).AppendNilsV2(true)
+	chunk.Column(0).AppendFloatValues([]float64{6})
+	chunk.Column(0).AppendNotNil()
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -4368,7 +4368,7 @@ func TestStreamAggregateTransformPreAggLastFloat(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcLastRowDataType(), buildDstLastRowDataTypeRate(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4420,11 +4420,11 @@ func buildBenchChunks(chunkCount, chunkSize, tagPerChunk, intervalPerChunk int) 
 				count++
 			}
 			times = append(times, int64(i*chunkSize+j))
-			chunk.Column(0).AppendFloatValues(float64(i*chunkSize + j))
-			chunk.Column(0).AppendNilsV2(true)
+			chunk.Column(0).AppendFloatValue(float64(i*chunkSize + j))
+			chunk.Column(0).AppendNotNil()
 		}
-		chunk.AppendIntervalIndex(intervalIndex...)
-		chunk.AppendTime(times...)
+		chunk.AppendIntervalIndexes(intervalIndex)
+		chunk.AppendTimes(times)
 		chunkList = append(chunkList, chunk)
 	}
 	return chunkList
@@ -4447,10 +4447,10 @@ func buildInChunkCastor() executor.Chunk {
 
 	c := b.NewChunk("castor")
 	c.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
-	c.AppendIntervalIndex([]int{0}...)
-	c.AppendTime([]int64{0, 1, 2, 3, 4, 5}...)
+	c.AppendIntervalIndexes([]int{0})
+	c.AppendTimes([]int64{0, 1, 2, 3, 4, 5})
 
-	c.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3}...)
+	c.Column(0).AppendFloatValues([]float64{102, 20.5, 52.7, 35, 60.8, 12.3})
 	c.Column(0).AppendManyNotNil(6)
 
 	return c
@@ -4465,7 +4465,7 @@ func buildDstChunkCastor() executor.Chunk {
 	c.AppendIntervalIndex(0)
 	c.AppendTime(0)
 
-	c.Column(0).AppendFloatValues(0)
+	c.Column(0).AppendFloatValue(0)
 	c.Column(0).AppendManyNotNil(1)
 
 	return c
@@ -4511,7 +4511,7 @@ func TestStreamAggregateTransformCastor(t *testing.T) {
 		t,
 		[]executor.Chunk{inChunk}, []executor.Chunk{dstChunk},
 		buildInRowDataTypeCastor(), buildDstRowDataTypeCastor(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -4540,7 +4540,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 		[]hybridqp.RowDataType{buildBenchRowDataType()},
 		[]hybridqp.RowDataType{buildBenchTargetRowDataType()},
 		exprOpt,
-		opt, false)
+		&opt, false)
 	sink := NewNilSink(buildBenchTargetRowDataType())
 	err := executor.Connect(source.Output, trans1.Inputs[0])
 	if err != nil {
@@ -4589,7 +4589,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 		[]hybridqp.RowDataType{buildBenchRowDataType()},
 		[]hybridqp.RowDataType{buildBenchTargetRowDataType()},
 		exprOpt,
-		opt, false)
+		&opt, false)
 	sink := NewNilSink(buildBenchTargetRowDataType())
 	err := executor.Connect(source.Output, trans1.Inputs[0])
 	if err != nil {
@@ -4614,7 +4614,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 }
 
 func benchmarkStreamAggregateTransform(b *testing.B, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk int,
-	opt query.ProcessorOptions, exprOpt []hybridqp.ExprOptions, srcRowDataType, dstRowDataType hybridqp.RowDataType) {
+	opt *query.ProcessorOptions, exprOpt []hybridqp.ExprOptions, srcRowDataType, dstRowDataType hybridqp.RowDataType) {
 	chunks := buildBenchChunks(chunkCount, ChunkSize, tagPerChunk, intervalPerChunk)
 
 	b.ReportAllocs()
@@ -4678,7 +4678,7 @@ func BenchmarkAggregateTransform_Min_Float_Chunk_SingleTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Min_Float_Chunk_MultiTS(b *testing.B) {
@@ -4708,7 +4708,7 @@ func BenchmarkAggregateTransform_Min_Float_Chunk_MultiTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Max_Float_Chunk_SingleTS(b *testing.B) {
@@ -4738,7 +4738,7 @@ func BenchmarkAggregateTransform_Max_Float_Chunk_SingleTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Max_Float_Chunk_MultiTS(b *testing.B) {
@@ -4768,7 +4768,7 @@ func BenchmarkAggregateTransform_Max_Float_Chunk_MultiTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Count_Float_Chunk_SingleTS(b *testing.B) {
@@ -4798,7 +4798,7 @@ func BenchmarkAggregateTransform_Count_Float_Chunk_SingleTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Count_Float_Chunk_MultiTS(b *testing.B) {
@@ -4828,7 +4828,7 @@ func BenchmarkAggregateTransform_Count_Float_Chunk_MultiTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Sum_Float_Chunk_SingleTS(b *testing.B) {
@@ -4858,7 +4858,7 @@ func BenchmarkAggregateTransform_Sum_Float_Chunk_SingleTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Sum_Float_Chunk_MultiTS(b *testing.B) {
@@ -4888,7 +4888,7 @@ func BenchmarkAggregateTransform_Sum_Float_Chunk_MultiTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_First_Float_Chunk_SingleTS(b *testing.B) {
@@ -4918,7 +4918,7 @@ func BenchmarkAggregateTransform_First_Float_Chunk_SingleTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_First_Float_Chunk_MultiTS(b *testing.B) {
@@ -4948,7 +4948,7 @@ func BenchmarkAggregateTransform_First_Float_Chunk_MultiTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Last_Float_Chunk_SingleTS(b *testing.B) {
@@ -4978,7 +4978,7 @@ func BenchmarkAggregateTransform_Last_Float_Chunk_SingleTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func BenchmarkAggregateTransform_Last_Float_Chunk_MultiTS(b *testing.B) {
@@ -5008,7 +5008,7 @@ func BenchmarkAggregateTransform_Last_Float_Chunk_MultiTS(b *testing.B) {
 		},
 	}
 	benchmarkStreamAggregateTransform(b, chunkCount, ChunkSize, tagPerChunk, intervalPerChunk,
-		opt, exprOpt, srcRowDataType, dstRowDataType)
+		&opt, exprOpt, srcRowDataType, dstRowDataType)
 }
 
 func buildSrcRowDataTypeOGSketchInsert() hybridqp.RowDataType {
@@ -5030,22 +5030,22 @@ func buildSrcChunkOGSketchInsert() []executor.Chunk {
 	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	srcCk1.AppendIntervalIndex([]int{0, 3}...)
-	srcCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
-	srcCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	srcCk1.AppendIntervalIndexes([]int{0, 3})
+	srcCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+	srcCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	srcCk1.Column(0).AppendManyNotNil(5)
-	srcCk1.Column(1).AppendFloatValues([]float64{1, 2, 3, 4, 5}...)
+	srcCk1.Column(1).AppendFloatValues([]float64{1, 2, 3, 4, 5})
 	srcCk1.Column(1).AppendManyNotNil(5)
 
 	srcCk2 := b.NewChunk("mst")
 	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	srcCk2.AppendIntervalIndex([]int{0, 2}...)
-	srcCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
-	srcCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10}...)
+	srcCk2.AppendIntervalIndexes([]int{0, 2})
+	srcCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+	srcCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
 	srcCk2.Column(0).AppendManyNotNil(5)
-	srcCk2.Column(1).AppendFloatValues([]float64{6, 7, 8, 9, 10}...)
+	srcCk2.Column(1).AppendFloatValues([]float64{6, 7, 8, 9, 10})
 	srcCk2.Column(1).AppendManyNotNil(5)
 
 	srcCks = append(srcCks, srcCk1, srcCk2)
@@ -5069,30 +5069,30 @@ func buildDstChunkOGSketchInsert() []executor.Chunk {
 	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 5, 10})
-	dstCk1.AppendIntervalIndex([]int{0, 5, 10}...)
-	dstCk1.AppendTime(1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 8, 8, 8, 8, 8)
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	dstCk1.AppendIntervalIndexes([]int{0, 5, 10})
+	dstCk1.AppendTimes([]int64{1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 8, 8, 8, 8, 8})
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{1., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{2., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{3., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{4., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{5., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{6., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{7., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{8., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{9., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{10., 1.}))
 	dstCk1.Column(0).AppendNilsV2(true, true, true, false, false, true, true, true, true, false, true, true, true, false, false)
 
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
-	dstCk1.Column(1).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{1., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{2., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{3., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{4., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{5., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{6., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{7., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{8., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{9., 1.}))
+	dstCk1.Column(1).AppendFloatTuple(*executor.NewfloatTuple([]float64{10., 1.}))
 	dstCk1.Column(1).AppendNilsV2(true, true, true, false, false, true, true, true, true, false, true, true, true, false, false)
 
 	dstCks = append(dstCks, dstCk1)
@@ -5127,7 +5127,7 @@ func TestStreamAggregateTransformOGSketchInsert(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeOGSketchInsert(), buildDstRowDataTypeOGSketchInsert(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -5148,27 +5148,27 @@ func buildSrcChunkOGSketchMerge() []executor.Chunk {
 	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	srcCk1.AppendIntervalIndex([]int{0, 3}...)
-	srcCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	srcCk1.AppendIntervalIndexes([]int{0, 3})
+	srcCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{1., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{2., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{3., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{4., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{5., 1.}))
 	srcCk1.Column(0).AppendManyNotNil(5)
 
 	srcCk2 := b.NewChunk("mst")
 	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	srcCk2.AppendIntervalIndex([]int{0, 2}...)
-	srcCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
+	srcCk2.AppendIntervalIndexes([]int{0, 2})
+	srcCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
 
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{6., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{7., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{8., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{9., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{10., 1.}))
 	srcCk2.Column(0).AppendManyNotNil(5)
 
 	srcCks = append(srcCks, srcCk1, srcCk2)
@@ -5191,18 +5191,18 @@ func buildDstChunkOGSketchMerge() []executor.Chunk {
 	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 3, 7})
-	dstCk1.AppendIntervalIndex([]int{0, 3, 7}...)
-	dstCk1.AppendTime([]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}...)
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
-	dstCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	dstCk1.AppendIntervalIndexes([]int{0, 3, 7})
+	dstCk1.AppendTimes([]int64{0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{1., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{2., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{3., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{4., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{5., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{6., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{7., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{8., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{9., 1.}))
+	dstCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{10., 1.}))
 	dstCk1.Column(0).AppendManyNotNil(10)
 
 	dstCks = append(dstCks, dstCk1)
@@ -5232,7 +5232,7 @@ func TestStreamAggregateTransformOGSketchMerge(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeOGSketchMerge(), buildDstRowDataTypeOGSketchMerge(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -5252,26 +5252,26 @@ func buildSrcChunkOGSketchPercentile() []executor.Chunk {
 	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb")},
 		[]int{0, 3})
-	srcCk1.AppendIntervalIndex([]int{0, 3}...)
-	srcCk1.AppendTime([]int64{1, 2, 3, 4, 5}...)
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{1., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{2., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{3., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{4., 1.}))
-	srcCk1.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{5., 1.}))
+	srcCk1.AppendIntervalIndexes([]int{0, 3})
+	srcCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{1., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{2., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{3., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{4., 1.}))
+	srcCk1.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{5., 1.}))
 	srcCk1.Column(0).AppendManyNotNil(5)
 
 	srcCk2 := b.NewChunk("mst")
 	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc")},
 		[]int{0, 2})
-	srcCk2.AppendIntervalIndex([]int{0, 2}...)
-	srcCk2.AppendTime([]int64{6, 7, 8, 9, 10}...)
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{6., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{7., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{8., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{9., 1.}))
-	srcCk2.Column(0).AppendFloatTuples(*executor.NewfloatTuple([]float64{10., 1.}))
+	srcCk2.AppendIntervalIndexes([]int{0, 2})
+	srcCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{6., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{7., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{8., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{9., 1.}))
+	srcCk2.Column(0).AppendFloatTuple(*executor.NewfloatTuple([]float64{10., 1.}))
 	srcCk2.Column(0).AppendManyNotNil(5)
 
 	srcCks = append(srcCks, srcCk1, srcCk2)
@@ -5287,10 +5287,10 @@ func buildDstChunkOGSketchPercentile() []executor.Chunk {
 	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
-	dstCk1.AppendIntervalIndex([]int{0, 1, 2}...)
-	dstCk1.AppendTime([]int64{0, 0, 0}...)
+	dstCk1.AppendIntervalIndexes([]int{0, 1, 2})
+	dstCk1.AppendTimes([]int64{0, 0, 0})
 
-	dstCk1.Column(0).AppendFloatValues([]float64{2, 5.5, 9}...)
+	dstCk1.Column(0).AppendFloatValues([]float64{2, 5.5, 9})
 	dstCk1.Column(0).AppendManyNotNil(3)
 
 	dstCks = append(dstCks, dstCk1)
@@ -5328,7 +5328,7 @@ func TestStreamAggregateTransformOGSketchPercentile(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeOGSketchPercentile(), buildDstRowDataTypeOGSketchPercentile(),
-		exprOpt, opt,
+		exprOpt, &opt,
 		false)
 }
 
@@ -5351,13 +5351,13 @@ func buildDstChunkPercentileApprox() []executor.Chunk {
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
 		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
-	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
-	chunk.AppendTime([]int64{1, 11, 14}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 11, 14})
 
-	chunk.Column(0).AppendIntegerValues([]int64{2, 6, 10}...)
+	chunk.Column(0).AppendIntegerValues([]int64{2, 6, 10})
 	chunk.Column(0).AppendManyNotNil(3)
 
-	chunk.Column(1).AppendFloatValues([]float64{3.85, 8.11, 9.9}...)
+	chunk.Column(1).AppendFloatValues([]float64{3.85, 8.11, 9.9})
 	chunk.Column(1).AppendManyNotNil(3)
 
 	dstChunks = append(dstChunks, chunk)
@@ -5392,7 +5392,7 @@ func TestStreamAggregateTransformPercentileApprox(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSourceRowDataTypeStddev(), buildDSTRowDataTypePercentileApprox(),
-		exprOpt, opt, false,
+		exprOpt, &opt, false,
 	)
 }
 
@@ -5432,7 +5432,7 @@ func TestStreamAggregateTransformPercentileApproxSubQuery(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSourceRowDataTypeStddev(), buildDSTRowDataTypePercentileApproxSubQuery(),
-		exprOpt, opt, true,
+		exprOpt, &opt, true,
 	)
 }
 
@@ -5462,7 +5462,7 @@ func TestStreamAggregateTransformPercentileCornerCase(t *testing.T) {
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt, false)
+		&opt, false)
 	assert.EqualError(t, err, fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
 }
 
@@ -5492,7 +5492,7 @@ func TestStreamAggregateTransformPercentileApproxCornerCase(t *testing.T) {
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt, false)
+		&opt, false)
 	assert.EqualError(t, err, fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
 }
 
@@ -5511,25 +5511,25 @@ func buildSrcChunkSingle() []executor.Chunk {
 	srcCk1 := b.NewChunk("mst")
 	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	srcCk1.AppendIntervalIndex([]int{0}...)
-	srcCk1.AppendTime([]int64{1000000000}...)
-	srcCk1.Column(0).AppendFloatValues(1)
+	srcCk1.AppendIntervalIndexes([]int{0})
+	srcCk1.AppendTimes([]int64{1000000000})
+	srcCk1.Column(0).AppendFloatValue(1)
 	srcCk1.Column(0).AppendManyNotNil(1)
 
 	srcCk2 := b.NewChunk("mst")
 	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	srcCk2.AppendIntervalIndex([]int{0}...)
-	srcCk2.AppendTime([]int64{2000000000}...)
-	srcCk2.Column(0).AppendFloatValues(2)
+	srcCk2.AppendIntervalIndexes([]int{0})
+	srcCk2.AppendTimes([]int64{2000000000})
+	srcCk2.Column(0).AppendFloatValue(2)
 	srcCk2.Column(0).AppendManyNotNil(1)
 
 	srcCk3 := b.NewChunk("mst")
 	srcCk3.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	srcCk3.AppendIntervalIndex([]int{0, 2}...)
-	srcCk3.AppendTime([]int64{3000000000, 4000000000, 5000000000, 6000000000, 7000000000, 8000000000}...)
-	srcCk3.Column(0).AppendFloatValues(3, 4, 5, 6, 7, 8)
+	srcCk3.AppendIntervalIndexes([]int{0, 2})
+	srcCk3.AppendTimes([]int64{3000000000, 4000000000, 5000000000, 6000000000, 7000000000, 8000000000})
+	srcCk3.Column(0).AppendFloatValues([]float64{3, 4, 5, 6, 7, 8})
 	srcCk3.Column(0).AppendManyNotNil(6)
 
 	srcCks = append(srcCks, srcCk1, srcCk2, srcCk3)
@@ -5551,9 +5551,9 @@ func buildDstChunkIntegralSingle() []executor.Chunk {
 	dstCk1 := b.NewChunk("mst")
 	dstCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	dstCk1.AppendIntervalIndex([]int{0, 1}...)
-	dstCk1.AppendTime([]int64{0, 5000000000}...)
-	dstCk1.Column(0).AppendFloatValues(12, 19.5)
+	dstCk1.AppendIntervalIndexes([]int{0, 1})
+	dstCk1.AppendTimes([]int64{0, 5000000000})
+	dstCk1.Column(0).AppendFloatValues([]float64{12, 19.5})
 	dstCk1.Column(0).AppendManyNotNil(2)
 
 	dstCks = append(dstCks, dstCk1)
@@ -5585,7 +5585,7 @@ func TestAggTransformIntegralSingle(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeSingle(), buildDstRowDataTypeIntegralSingle(),
-		exprOpt, opt,
+		exprOpt, &opt,
 		false)
 }
 
@@ -5604,25 +5604,25 @@ func buildSrcChunkSingleInt() []executor.Chunk {
 	srcCk1 := b.NewChunk("mst")
 	srcCk1.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	srcCk1.AppendIntervalIndex([]int{0}...)
-	srcCk1.AppendTime([]int64{1000000000}...)
-	srcCk1.Column(0).AppendIntegerValues(1)
+	srcCk1.AppendIntervalIndexes([]int{0})
+	srcCk1.AppendTimes([]int64{1000000000})
+	srcCk1.Column(0).AppendIntegerValue(1)
 	srcCk1.Column(0).AppendManyNotNil(1)
 
 	srcCk2 := b.NewChunk("mst")
 	srcCk2.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	srcCk2.AppendIntervalIndex([]int{0}...)
-	srcCk2.AppendTime([]int64{2000000000}...)
-	srcCk2.Column(0).AppendIntegerValues(2)
+	srcCk2.AppendIntervalIndexes([]int{0})
+	srcCk2.AppendTimes([]int64{2000000000})
+	srcCk2.Column(0).AppendIntegerValue(2)
 	srcCk2.Column(0).AppendManyNotNil(1)
 
 	srcCk3 := b.NewChunk("mst")
 	srcCk3.AppendTagsAndIndexes([]executor.ChunkTags{
 		*ParseChunkTags("name=a")}, []int{0})
-	srcCk3.AppendIntervalIndex([]int{0, 2}...)
-	srcCk3.AppendTime([]int64{3000000000, 4000000000, 5000000000, 6000000000, 7000000000, 8000000000}...)
-	srcCk3.Column(0).AppendIntegerValues(3, 4, 5, 6, 7, 8)
+	srcCk3.AppendIntervalIndexes([]int{0, 2})
+	srcCk3.AppendTimes([]int64{3000000000, 4000000000, 5000000000, 6000000000, 7000000000, 8000000000})
+	srcCk3.Column(0).AppendIntegerValues([]int64{3, 4, 5, 6, 7, 8})
 	srcCk3.Column(0).AppendManyNotNil(6)
 
 	srcCks = append(srcCks, srcCk1, srcCk2, srcCk3)
@@ -5654,6 +5654,6 @@ func TestAggTransformIntegralSingleInt(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeSingleInt(), buildDstRowDataTypeIntegralSingle(),
-		exprOpt, opt,
+		exprOpt, &opt,
 		false)
 }
