@@ -276,3 +276,12 @@ func TestGetFieldType(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestGetSortFields(t *testing.T) {
+	schema := &executor.QuerySchema{}
+	assert.Equal(t, len(schema.GetSortFields()), 0)
+
+	opt := query.ProcessorOptions{}
+	schema = executor.NewQuerySchema(nil, nil, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, len(schema.GetSortFields()), 1)
+}

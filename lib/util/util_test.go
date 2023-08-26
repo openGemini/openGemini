@@ -23,6 +23,7 @@ import (
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type closeObject struct {
@@ -115,4 +116,17 @@ func TestRemoveDuplicationInt(t *testing.T) {
 
 	ret = util.RemoveDuplicationInt([]uint32{1, 2, 2, 3, 4, 5})
 	assert.Equal(t, ret, []uint32{1, 2, 3, 4, 5})
+}
+
+func TestAllocSlice(t *testing.T) {
+	buf := make([]byte, 0, 30)
+	var sub []byte
+
+	buf, sub = util.AllocSlice(buf, 20)
+	require.Equal(t, 20, len(buf))
+	require.Equal(t, 20, len(sub))
+
+	buf, sub = util.AllocSlice(buf, 20)
+	require.Equal(t, 50, cap(buf))
+	require.Equal(t, 20, len(sub))
 }

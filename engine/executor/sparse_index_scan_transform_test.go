@@ -52,11 +52,11 @@ func buildInputChunk(name string) executor.Chunk {
 	rowDataType := buildInputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk(name)
-	chunk.AppendTime([]int64{1, 2, 3}...)
+	chunk.AppendTimes([]int64{1, 2, 3})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(0).AppendManyNotNil(3)
 	return chunk
 }
@@ -156,7 +156,7 @@ func buildShardsFragmentsGroups12() *executor.ShardsFragmentsGroups {
 				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 10}, {Start: 14, End: 20}}, 15)}},
 		2: {FragmentCount: 12,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 14, End: 21}}, 12)}},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 53, End: 60}}, 12)}},
 		3: {FragmentCount: 11,
 			FileMarks: map[string]executor.FileFragment{
 				f3.Path(): executor.NewFileFragment(f3, fragment.FragmentRanges{{Start: 1, End: 4}, {Start: 12, End: 20}}, 11)}},
@@ -166,9 +166,38 @@ func buildShardsFragmentsGroups12() *executor.ShardsFragmentsGroups {
 	frags = map[uint64]*executor.FileFragments{
 		2: {FragmentCount: 39,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 21, End: 60}}, 39)}},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 53}}, 39)}},
 	}
 	group2 := executor.NewShardsFragmentsGroup(frags, 39)
+	groups = append(groups, group1, group2)
+	return &executor.ShardsFragmentsGroups{Items: groups}
+}
+
+func buildShardsFragmentsGroups12V2() *executor.ShardsFragmentsGroups {
+	var groups []*executor.ShardsFragmentsGroup
+	files := getTSSPFiles(3)
+	f1, f2, f3 := files[0], files[1], files[2]
+
+	frags := map[uint64]*executor.FileFragments{
+		2: {FragmentCount: 39,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 26, End: 60}}, 39)}},
+	}
+	group1 := executor.NewShardsFragmentsGroup(frags, 39)
+
+	frags = map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 15,
+			FileMarks: map[string]executor.FileFragment{
+				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 10}, {Start: 14, End: 20}}, 15)}},
+		2: {FragmentCount: 12,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 26}}, 12)}},
+		3: {FragmentCount: 11,
+			FileMarks: map[string]executor.FileFragment{
+				f3.Path(): executor.NewFileFragment(f3, fragment.FragmentRanges{{Start: 1, End: 4}, {Start: 12, End: 20}}, 11)}},
+	}
+	group2 := executor.NewShardsFragmentsGroup(frags, 38)
+
 	groups = append(groups, group1, group2)
 	return &executor.ShardsFragmentsGroups{Items: groups}
 }
@@ -180,7 +209,7 @@ func buildShardsFragmentsGroups14() *executor.ShardsFragmentsGroups {
 	frags := map[uint64]*executor.FileFragments{
 		2: {FragmentCount: 7,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 34, End: 41}}, 7)}},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 33, End: 40}}, 7)}},
 		3: {FragmentCount: 11,
 			FileMarks: map[string]executor.FileFragment{
 				f3.Path(): executor.NewFileFragment(f3, fragment.FragmentRanges{{Start: 1, End: 4}, {Start: 12, End: 20}}, 11)}},
@@ -190,7 +219,7 @@ func buildShardsFragmentsGroups14() *executor.ShardsFragmentsGroups {
 	frags = map[uint64]*executor.FileFragments{
 		2: {FragmentCount: 19,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 41, End: 60}}, 19)}},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 33}}, 19)}},
 	}
 	group2 := executor.NewShardsFragmentsGroup(frags, 19)
 
@@ -207,9 +236,50 @@ func buildShardsFragmentsGroups14() *executor.ShardsFragmentsGroups {
 	frags = map[uint64]*executor.FileFragments{
 		2: {FragmentCount: 20,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 34}}, 20)}},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 40, End: 60}}, 20)}},
 	}
 	group4 := executor.NewShardsFragmentsGroup(frags, 20)
+	groups = append(groups, group1, group2, group3, group4)
+	return &executor.ShardsFragmentsGroups{Items: groups}
+}
+
+func buildShardsFragmentsGroups14V2() *executor.ShardsFragmentsGroups {
+	var groups []*executor.ShardsFragmentsGroup
+	files := getTSSPFiles(3)
+	f1, f2, f3 := files[0], files[1], files[2]
+	frags := map[uint64]*executor.FileFragments{
+		2: {FragmentCount: 20,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 45, End: 60}}, 20)}},
+	}
+	group1 := executor.NewShardsFragmentsGroup(frags, 20)
+
+	frags = map[uint64]*executor.FileFragments{
+		2: {FragmentCount: 19,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 26, End: 45}}, 19)}},
+	}
+	group2 := executor.NewShardsFragmentsGroup(frags, 19)
+
+	frags = map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 7,
+			FileMarks: map[string]executor.FileFragment{
+				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 3, End: 10}}, 7)}},
+		2: {FragmentCount: 12,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 26}}, 12)}},
+	}
+	group3 := executor.NewShardsFragmentsGroup(frags, 19)
+
+	frags = map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 8,
+			FileMarks: map[string]executor.FileFragment{
+				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 3}, {Start: 14, End: 20}}, 8)}},
+		3: {FragmentCount: 11,
+			FileMarks: map[string]executor.FileFragment{
+				f3.Path(): executor.NewFileFragment(f3, fragment.FragmentRanges{{Start: 1, End: 4}, {Start: 12, End: 20}}, 11)}},
+	}
+	group4 := executor.NewShardsFragmentsGroup(frags, 19)
 	groups = append(groups, group1, group2, group3, group4)
 	return &executor.ShardsFragmentsGroups{Items: groups}
 }
@@ -241,14 +311,37 @@ func buildShardsFragmentsGroups22() *executor.ShardsFragmentsGroups {
 		1: {FragmentCount: 33,
 			FileMarks: map[string]executor.FileFragment{
 				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 10}, {Start: 14, End: 20}}, 15),
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 14, End: 27}}, 18)},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 47, End: 60}}, 18)},
 		},
 	}
 	group1 := executor.NewShardsFragmentsGroup(frags, 33)
 
 	frags = executor.NewShardsFragments()
 	fileFrags := executor.NewFileFragments()
-	fileFrags.AddFileFragment(f2.Path(), executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 27, End: 60}}, 33), 33)
+	fileFrags.AddFileFragment(f2.Path(), executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 47}}, 33), 33)
+	frags[1] = fileFrags
+	group2 := executor.NewShardsFragmentsGroup(frags, 33)
+
+	groups = append(groups, group1, group2)
+	return &executor.ShardsFragmentsGroups{Items: groups}
+}
+
+func buildShardsFragmentsGroups22V2() *executor.ShardsFragmentsGroups {
+	var groups []*executor.ShardsFragmentsGroup
+	files := getTSSPFiles(2)
+	f1, f2 := files[0], files[1]
+	frags := map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 33,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 32, End: 60}}, 33)},
+		},
+	}
+	group1 := executor.NewShardsFragmentsGroup(frags, 33)
+
+	frags = executor.NewShardsFragments()
+	fileFrags := executor.NewFileFragments()
+	fileFrags.AddFileFragment(f1.Path(), executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 10}, {Start: 14, End: 20}}, 15), 15)
+	fileFrags.AddFileFragment(f2.Path(), executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 32}}, 18), 18)
 	frags[1] = fileFrags
 	group2 := executor.NewShardsFragmentsGroup(frags, 33)
 
@@ -263,8 +356,8 @@ func buildShardsFragmentsGroups24() *executor.ShardsFragmentsGroups {
 	frags := map[uint64]*executor.FileFragments{
 		1: {FragmentCount: 16,
 			FileMarks: map[string]executor.FileFragment{
-				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 8, End: 10}, {Start: 14, End: 20}}, 8),
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 14, End: 17}}, 8)},
+				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 3, End: 10}}, 7),
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 31, End: 40}}, 9)},
 		},
 	}
 	group1 := executor.NewShardsFragmentsGroup(frags, 16)
@@ -272,8 +365,8 @@ func buildShardsFragmentsGroups24() *executor.ShardsFragmentsGroups {
 	frags = map[uint64]*executor.FileFragments{
 		1: {FragmentCount: 16,
 			FileMarks: map[string]executor.FileFragment{
-				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 8}}, 7),
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 34, End: 43}}, 9)},
+				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 3}, {Start: 14, End: 20}}, 8),
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 57, End: 60}}, 8)},
 		},
 	}
 	group2 := executor.NewShardsFragmentsGroup(frags, 16)
@@ -281,7 +374,7 @@ func buildShardsFragmentsGroups24() *executor.ShardsFragmentsGroups {
 	frags = map[uint64]*executor.FileFragments{
 		1: {FragmentCount: 17,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 43, End: 60}}, 17)},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 40, End: 57}}, 17)},
 		},
 	}
 	group3 := executor.NewShardsFragmentsGroup(frags, 17)
@@ -289,10 +382,51 @@ func buildShardsFragmentsGroups24() *executor.ShardsFragmentsGroups {
 	frags = map[uint64]*executor.FileFragments{
 		1: {FragmentCount: 17,
 			FileMarks: map[string]executor.FileFragment{
-				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 17, End: 34}}, 17)},
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 31}}, 17)},
 		},
 	}
 	group4 := executor.NewShardsFragmentsGroup(frags, 17)
+
+	groups = append(groups, group1, group2, group3, group4)
+	return &executor.ShardsFragmentsGroups{Items: groups}
+}
+
+func buildShardsFragmentsGroups24V2() *executor.ShardsFragmentsGroups {
+	var groups []*executor.ShardsFragmentsGroup
+	files := getTSSPFiles(2)
+	f1, f2 := files[0], files[1]
+	frags := map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 16,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 15, End: 31}}, 16)},
+		},
+	}
+	group3 := executor.NewShardsFragmentsGroup(frags, 16)
+
+	frags = map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 16,
+			FileMarks: map[string]executor.FileFragment{
+				f1.Path(): executor.NewFileFragment(f1, fragment.FragmentRanges{{Start: 1, End: 10}, {Start: 14, End: 20}}, 15),
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 14, End: 15}}, 1)},
+		},
+	}
+	group4 := executor.NewShardsFragmentsGroup(frags, 16)
+
+	frags = map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 17,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 5, End: 10}, {Start: 48, End: 60}}, 17)},
+		},
+	}
+	group1 := executor.NewShardsFragmentsGroup(frags, 17)
+
+	frags = map[uint64]*executor.FileFragments{
+		1: {FragmentCount: 17,
+			FileMarks: map[string]executor.FileFragment{
+				f2.Path(): executor.NewFileFragment(f2, fragment.FragmentRanges{{Start: 31, End: 48}}, 17)},
+		},
+	}
+	group2 := executor.NewShardsFragmentsGroup(frags, 17)
 
 	groups = append(groups, group1, group2, group3, group4)
 	return &executor.ShardsFragmentsGroups{Items: groups}
@@ -330,16 +464,6 @@ func TestDistributeFragments(t *testing.T) {
 		frags := buildShardsFragments1()
 		expected = buildShardsFragmentsGroups11()
 		actual, err = executor.DistributeFragments(frags, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		testEqualShardsFragmentsGroups(t, expected, actual)
-	})
-
-	t.Run("1-2", func(t *testing.T) {
-		frags := buildShardsFragments1()
-		expected = buildShardsFragmentsGroups12()
-		actual, err = executor.DistributeFragments(frags, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -385,6 +509,80 @@ func TestDistributeFragments(t *testing.T) {
 		}
 		testEqualShardsFragmentsGroups(t, expected, actual)
 	})
+}
+
+func TestDistributeFragmentsV2(t *testing.T) {
+	var err error
+	var expected, actual *executor.ShardsFragmentsGroups
+	t.Run("1-1", func(t *testing.T) {
+		frags := buildShardsFragments1()
+		expected = buildShardsFragmentsGroups11()
+		actual, err = executor.DistributeFragmentsV2(frags, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+
+	t.Run("1-2", func(t *testing.T) {
+		frags := buildShardsFragments1()
+		expected = buildShardsFragmentsGroups12V2()
+		actual, err = executor.DistributeFragmentsV2(frags, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+
+	t.Run("1-4", func(t *testing.T) {
+		frags := buildShardsFragments1()
+		expected = buildShardsFragmentsGroups14V2()
+		actual, err = executor.DistributeFragmentsV2(frags, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+
+	t.Run("2-1", func(t *testing.T) {
+		frags := buildShardsFragments2()
+		expected = buildShardsFragmentsGroups21()
+		actual, err = executor.DistributeFragmentsV2(frags, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+
+	t.Run("2-2", func(t *testing.T) {
+		frags := buildShardsFragments2()
+		expected = buildShardsFragmentsGroups22V2()
+		actual, err = executor.DistributeFragmentsV2(frags, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+
+	t.Run("2-4", func(t *testing.T) {
+		frags := buildShardsFragments2()
+		expected = buildShardsFragmentsGroups24V2()
+		actual, err = executor.DistributeFragmentsV2(frags, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+}
+
+func TestFragmentsString(t *testing.T) {
+	frags := buildShardsFragments1()
+	fs := frags.String()
+	assert.Equal(t, len(fs), 287)
+
+	fragGroups := buildShardsFragmentsGroups11()
+	fgs := fragGroups.String()
+	assert.Equal(t, len(fgs), 311)
 }
 
 func TestSparseIndexScanTransform(t *testing.T) {

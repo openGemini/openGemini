@@ -55,9 +55,10 @@ func ArrowColToNativeColWithoutNull(buffer []*memory.Buffer, colVal *ColVal, col
 		colVal.Val = buffer[1].Bytes()[:buffer[1].Len()]
 	case influx.Field_Type_Int:
 		colVal.Val = buffer[1].Bytes()[:buffer[1].Len()]
-	case influx.Field_Type_String:
+	case influx.Field_Type_String, influx.Field_Type_Tag:
 		colVal.Val = buffer[2].Bytes()[:buffer[2].Len()]
 		colVal.Offset = util.Bytes2Uint32Slice(buffer[1].Bytes()[:buffer[1].Len()])
+		colVal.Offset = colVal.Offset[:len(colVal.Offset)-1]
 	case influx.Field_Type_Boolean:
 		ArrowBoolColToNativeBoolCol(buffer[1], colVal)
 	default:
@@ -86,7 +87,7 @@ func ArrowColToNativeColWithNull(colArr array.Interface, colVal *ColVal, colType
 			}
 		}
 		colVal.Val = util.Int64Slice2byte(values)
-	case influx.Field_Type_String:
+	case influx.Field_Type_String, influx.Field_Type_Tag:
 		strCol, _ := colArr.(*array.String)
 		for i := 0; i < colVal.Len; i++ {
 			colVal.Offset = append(colVal.Offset, uint32(len(colVal.Val)))

@@ -293,11 +293,7 @@ func TestRetryWriteRecordErr(t *testing.T) {
 	assert.Equal(t, err, io.EOF)
 
 	wh = newRecordWriterHelper(&MockRWMetaClient{GetShardInfoByTimeErr: io.EOF}, 0)
-	_, err = wh.GetShardByTime(db, rp, time.Now(), 0, config.COLUMNSTORE)
-	assert.Equal(t, err, io.EOF)
-
-	wh = newRecordWriterHelper(&MockRWMetaClient{RetentionPolicyErr: io.EOF}, 0)
-	_, err = wh.GetShardByTime(db, rp, time.Now(), 0, config.COLUMNSTORE)
+	_, err = wh.GetShardByTime(nil, db, rp, time.Now(), 0, config.COLUMNSTORE)
 	assert.Equal(t, err, io.EOF)
 
 	recs := MockArrowRecords(1, 1)
@@ -358,6 +354,10 @@ func TestRetryWriteRecordWriteErr(t *testing.T) {
 	rw.StorageEngine = &MockStorageEngineErr{retry: false}
 	_, err = rw.writeShard(&rpInfo.ShardGroups[0].Shards[0], db, rp, mst, rec, nil)
 	assert.Equal(t, err, io.EOF)
+
+	client1 = &MockRWMetaClient{DatabaseErr: io.EOF}
+	msg := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: recs[0]}
+	rw.processRecord(msg, 0)
 }
 
 func MockArrowRecord1() array.Record {

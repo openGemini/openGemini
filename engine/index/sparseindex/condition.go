@@ -289,7 +289,7 @@ func (kc *KeyConditionImpl) checkInAnyRange(
 
 	// [x1] x [y1 .. +inf)
 	if leftBounded {
-		completed, err = kc.checkRangeLeftBound(keySize, leftKeys, rightKeys, rgs, dataTypes, prefixSize, initMask, res, callBack)
+		res, completed, err = kc.checkRangeLeftBound(keySize, leftKeys, rightKeys, rgs, dataTypes, prefixSize, initMask, res, callBack)
 		if err != nil || completed {
 			return res, err
 		}
@@ -297,7 +297,7 @@ func (kc *KeyConditionImpl) checkInAnyRange(
 
 	// [x2] x (-inf .. y2]
 	if rightBounded {
-		completed, err = kc.checkRangeRightBound(keySize, leftKeys, rightKeys, rgs, dataTypes, prefixSize, initMask, res, callBack)
+		res, completed, err = kc.checkRangeRightBound(keySize, leftKeys, rightKeys, rgs, dataTypes, prefixSize, initMask, res, callBack)
 		if err != nil || completed {
 			return res, err
 		}
@@ -367,17 +367,17 @@ func (kc *KeyConditionImpl) checkRangeLeftBound(
 	initMask *Mark,
 	res *Mark,
 	callBack checkInRangeFunc,
-) (bool, error) {
+) (*Mark, bool, error) {
 	rgs[prefixSize] = NewRange(leftKeys[prefixSize], leftKeys[prefixSize], true, true)
 	mark, err := kc.checkInAnyRange(keySize, leftKeys, rightKeys, true, false, rgs, dataTypes, prefixSize+1, initMask, callBack)
 	if err != nil {
-		return false, err
+		return res, false, err
 	}
 	res = res.Or(mark)
 	if res.isComplete() {
-		return true, nil
+		return res, true, nil
 	}
-	return false, nil
+	return res, false, nil
 }
 
 func (kc *KeyConditionImpl) checkRangeRightBound(
@@ -390,17 +390,17 @@ func (kc *KeyConditionImpl) checkRangeRightBound(
 	initMask *Mark,
 	res *Mark,
 	callBack checkInRangeFunc,
-) (bool, error) {
+) (*Mark, bool, error) {
 	rgs[prefixSize] = NewRange(rightKeys[prefixSize], rightKeys[prefixSize], true, true)
 	mark, err := kc.checkInAnyRange(keySize, leftKeys, rightKeys, false, true, rgs, dataTypes, prefixSize+1, initMask, callBack)
 	if err != nil {
-		return false, err
+		return mark, false, err
 	}
 	res = res.Or(mark)
 	if res.isComplete() {
-		return true, nil
+		return mark, true, nil
 	}
-	return false, nil
+	return mark, false, nil
 }
 
 // MayBeInRange is used to check whether the condition is likely to be in the target range.

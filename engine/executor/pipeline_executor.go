@@ -640,7 +640,7 @@ func (builder *ExecutorBuilder) addNodeProducer(exchange *LogicalExchange) (*Tra
 func (builder *ExecutorBuilder) addConsumerToDag(exchange *LogicalExchange) *TransformVertex {
 	if rq, ok := exchange.eTraits[builder.currConsumer].(*RemoteQuery); ok {
 		builder.currConsumer++
-		reader := NewRPCReaderTransform(exchange.RowDataType(), *exchange.schema.Options().(*query.ProcessorOptions), rq)
+		reader := NewRPCReaderTransform(exchange.RowDataType(), exchange.schema.Options().(*query.ProcessorOptions).QueryId, rq)
 		clone := exchange.Clone()
 		clone.(*LogicalExchange).ToProducer()
 		reader.Distribute(clone)
@@ -665,7 +665,7 @@ func (builder *ExecutorBuilder) addNodeConsumer(exchange *LogicalExchange) (*Tra
 
 	for _, trait := range exchange.eTraits {
 		if rq, ok := trait.(*RemoteQuery); ok {
-			reader := NewRPCReaderTransform(exchange.RowDataType(), *exchange.schema.Options().(*query.ProcessorOptions), rq)
+			reader := NewRPCReaderTransform(exchange.RowDataType(), exchange.schema.Options().(*query.ProcessorOptions).QueryId, rq)
 			clone := exchange.Clone()
 			clone.(*LogicalExchange).ToProducer()
 			reader.Distribute(clone)
@@ -839,7 +839,7 @@ func (builder *ExecutorBuilder) addHashMerge(hashMerge *LogicalHashMerge) (*Tran
 		for _, trait := range hashMerge.eTraits {
 			switch t := trait.(type) {
 			case *RemoteQuery:
-				reader := NewRPCReaderTransform(hashMerge.RowDataType(), *hashMerge.schema.Options().(*query.ProcessorOptions), t)
+				reader := NewRPCReaderTransform(hashMerge.RowDataType(), hashMerge.schema.Options().(*query.ProcessorOptions).QueryId, t)
 				clone := hashMerge.Clone()
 				reader.Distribute(clone.Children()[0])
 				v := NewTransformVertex(hashMerge, reader)
@@ -895,7 +895,7 @@ func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformV
 		for _, trait := range hashAgg.eTraits {
 			switch t := trait.(type) {
 			case *RemoteQuery:
-				reader := NewRPCReaderTransform(hashAgg.RowDataType(), *hashAgg.schema.Options().(*query.ProcessorOptions), t)
+				reader := NewRPCReaderTransform(hashAgg.RowDataType(), hashAgg.schema.Options().(*query.ProcessorOptions).QueryId, t)
 				clone := hashAgg.Clone()
 				reader.Distribute(clone.Children()[0])
 				v := NewTransformVertex(hashAgg, reader)
@@ -1057,7 +1057,7 @@ func (builder *ExecutorBuilder) addDefaultToDag(node hybridqp.QueryNode) (*Trans
 	}
 
 	if creator, ok := GetTransformFactoryInstance().Find(node.String()); ok {
-		p, err := creator.Create(node.(LogicalPlan), *node.Schema().Options().(*query.ProcessorOptions))
+		p, err := creator.Create(node.(LogicalPlan), node.Schema().Options().(*query.ProcessorOptions))
 
 		if err != nil {
 			return nil, err
@@ -1082,7 +1082,7 @@ func (builder *ExecutorBuilder) addReaderToDag(reader *LogicalReader) (*Transfor
 
 	if creator, ok := GetTransformFactoryInstance().Find(reader.String()); ok {
 		reader.SetOneReaderState(builder.oneReaderState)
-		p, err := creator.Create(reader, *reader.schema.Options().(*query.ProcessorOptions))
+		p, err := creator.Create(reader, reader.schema.Options().(*query.ProcessorOptions))
 
 		if err != nil {
 			return nil, err

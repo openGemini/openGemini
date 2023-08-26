@@ -20,12 +20,15 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
@@ -35,15 +38,17 @@ const (
 )
 
 type HttpChunkSender struct {
-	buffRows  models.Rows
-	RowChunk  RowChunk
-	opt       query.ProcessorOptions
-	ResetTime bool
+	buffRows models.Rows
+	RowChunk RowChunk
+	opt      *query.ProcessorOptions
+
+	rowsGenerator *RowsGenerator
 }
 
-func NewHttpChunkSender(opt query.ProcessorOptions, colLength int) *HttpChunkSender {
+func NewHttpChunkSender(opt *query.ProcessorOptions) *HttpChunkSender {
 	h := &HttpChunkSender{
-		opt: opt,
+		opt:           opt,
+		rowsGenerator: NewRowsGenerator(),
 	}
 	h.opt.Location = time.UTC
 
@@ -51,7 +56,7 @@ func NewHttpChunkSender(opt query.ProcessorOptions, colLength int) *HttpChunkSen
 }
 
 func (w *HttpChunkSender) Write(chunk Chunk, lastChunk bool) bool {
-	w.buffRows = w.GetRows(chunk)
+	w.genRows(chunk)
 
 	var chunkedRow models.Rows
 	var partial bool
@@ -105,6 +110,26 @@ func (w *HttpChunkSender) Write(chunk Chunk, lastChunk bool) bool {
 		partial = false
 	}
 	return partial
+}
+
+func (w *HttpChunkSender) genRows(chunk Chunk) {
+	if chunk == nil {
+		return
+	}
+
+	statistics.ExecutorStat.SinkRows.Push(int64(chunk.NumberOfRows()))
+	rows := w.rowsGenerator.Generate(chunk, w.opt.Location)
+
+	// May next Chunk has the same tag as this buffRow
+	if rows.Len() > 0 && w.buffRows.Len() > 0 {
+		firstRow := rows[0]
+		lastRow := w.buffRows[len(w.buffRows)-1]
+		if lastRow.Name == firstRow.Name && hybridqp.EqualMap(lastRow.Tags, firstRow.Tags) {
+			lastRow.Values = append(lastRow.Values, firstRow.Values...)
+			rows = rows[1:]
+		}
+	}
+	w.buffRows = append(w.buffRows, rows...)
 }
 
 // GetRows transfer Chunk to models.Rows
@@ -188,6 +213,13 @@ func (w *HttpChunkSender) sendRows(rows models.Rows, partial bool) {
 	}
 }
 
+func (w *HttpChunkSender) Release() {
+	if w.rowsGenerator != nil {
+		w.rowsGenerator.Release()
+		w.rowsGenerator = nil
+	}
+}
+
 type RowChunk struct {
 	Name string
 	Tags []ChunkTags
@@ -257,6 +289,142 @@ func (r *RowChunk) RowsGen(c Chunk) []*Row {
 	return r.Series
 }
 
+type RowsGenerator struct {
+	name        string
+	columnNames []string
+	values      []interface{}
+	buf         []byte
+	rows        []models.Row
+}
+
+var rowsGeneratorPool sync.Pool
+
+func NewRowsGenerator() *RowsGenerator {
+	rg, ok := rowsGeneratorPool.Get().(*RowsGenerator)
+	if !ok || rg == nil {
+		rg = &RowsGenerator{}
+	}
+	rg.Reset()
+	return rg
+}
+
+func (g *RowsGenerator) Release() {
+	rowsGeneratorPool.Put(g)
+}
+
+func (g *RowsGenerator) Reset() {
+	g.name = ""
+	// pre-allocated memory
+	g.buf = make([]byte, 0, cap(g.buf))
+	g.values = make([]interface{}, 0, cap(g.values))
+	g.rows = make([]models.Row, 0, cap(g.rows))
+}
+
+func (g *RowsGenerator) allocValues(size int) []interface{} {
+	var items []interface{}
+	g.values, items = util.AllocSlice(g.values, size)
+	return items
+}
+
+func (g *RowsGenerator) allocBytes(size int) []byte {
+	var buf []byte
+	g.buf, buf = util.AllocSlice(g.buf, size)
+	return buf
+}
+
+func (g *RowsGenerator) allocRows(size int) []models.Row {
+	var rows []models.Row
+	g.rows, rows = util.AllocSlice(g.rows, size)
+	return rows
+}
+
+func (g *RowsGenerator) buildColumnNames(name string, rdt hybridqp.RowDataType) []string {
+	if g.name == name {
+		return g.columnNames
+	}
+	if g.name != "" {
+		g.columnNames = make([]string, 0, len(rdt.Fields())+1)
+	}
+
+	g.name = name
+	g.columnNames = append(g.columnNames[:0], "time")
+	for _, f := range rdt.Fields() {
+		g.columnNames = append(g.columnNames, f.Name())
+	}
+	return g.columnNames
+}
+
+func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
+	chunkTags := chunk.Tags()
+	tagIndex := chunk.TagIndex()
+	times := chunk.Time()
+	columns := chunk.Columns()
+	name := chunk.Name()
+	columnNames := g.buildColumnNames(name, chunk.RowDataType())
+
+	rows := make(models.Rows, 0, len(tagIndex))
+	tmpRows := g.allocRows(len(tagIndex))
+	var start, end int
+
+	for index := 0; index < len(tagIndex); index++ {
+		start = tagIndex[index]
+		if start == tagIndex[len(tagIndex)-1] {
+			end = len(times)
+		} else {
+			end = tagIndex[index+1]
+		}
+
+		row := &tmpRows[index]
+		row.Name = name
+		row.Tags = chunkTags[index].KeyValues()
+		row.Columns = columnNames
+		row.Values = g.buildValues(end, start, times, loc, columns)
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func (g *RowsGenerator) buildValues(end int, start int, times []int64, loc *time.Location, columns []Column) [][]interface{} {
+	var values = make([][]interface{}, end-start)
+	for i := 0; i < end-start; i++ {
+		values[i] = g.allocValues(len(columns) + 1)
+		values[i][0] = time.Unix(0, times[start+i]).In(loc)
+		for j, col := range columns {
+			values[i][j+1] = g.GetColValue(col, start+i)
+		}
+	}
+	return values
+}
+
+func (g *RowsGenerator) GetColValue(col2 Column, idx int) interface{} {
+	col, ok := col2.(*ColumnImpl)
+	if !ok {
+		return nil
+	}
+
+	if col.NilCount() > 0 {
+		if col.IsNilV2(idx) {
+			return nil
+		}
+		idx = col.GetValueIndexV2(idx)
+	}
+
+	switch col.DataType() {
+	case influxql.Float:
+		return col.FloatValue(idx)
+	case influxql.Integer:
+		return col.IntegerValue(idx)
+	case influxql.Boolean:
+		return col.BooleanValue(idx)
+	case influxql.String, influxql.Tag:
+		oriStr := col.StringValue(idx)
+		newStr := g.allocBytes(len(oriStr))
+		copy(newStr, oriStr)
+		return util.Bytes2str(newStr)
+	}
+	return nil
+}
+
 type Rows struct {
 	Time        []int64
 	Values      [][]interface{}
@@ -320,7 +488,7 @@ func SetTimeZero(schema *QuerySchema) bool {
 type HttpSenderTransformCreator struct {
 }
 
-func (c *HttpSenderTransformCreator) Create(plan LogicalPlan, _ query.ProcessorOptions) (Processor, error) {
+func (c *HttpSenderTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	inRowDataTypes := make([]hybridqp.RowDataType, 0, len(plan.Children()))
 
 	for _, inPlan := range plan.Children() {
@@ -345,7 +513,7 @@ type HttpSenderTransform struct {
 func NewHttpSenderTransform(inRowDataType hybridqp.RowDataType, schema *QuerySchema) *HttpSenderTransform {
 	trans := &HttpSenderTransform{
 		input:  NewChunkPort(inRowDataType),
-		Writer: NewHttpChunkSender(*schema.Options().(*query.ProcessorOptions), len(inRowDataType.Fields())),
+		Writer: NewHttpChunkSender(schema.Options().(*query.ProcessorOptions)),
 		schema: schema,
 	}
 
@@ -362,6 +530,14 @@ func (trans *HttpSenderTransform) Explain() []ValuePair {
 
 func (trans *HttpSenderTransform) Close() {
 
+}
+
+func (trans *HttpSenderTransform) Release() error {
+	if trans.Writer != nil {
+		trans.Writer.Release()
+		trans.Writer = nil
+	}
+	return nil
 }
 
 func (trans *HttpSenderTransform) Work(ctx context.Context) error {
@@ -415,7 +591,7 @@ func (trans *HttpSenderTransform) GetInputNumber(_ Port) int {
 type HttpSenderHintTransformCreator struct {
 }
 
-func (c *HttpSenderHintTransformCreator) Create(plan LogicalPlan, _ query.ProcessorOptions) (Processor, error) {
+func (c *HttpSenderHintTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	inRowDataTypes := make([]hybridqp.RowDataType, 0, len(plan.Children()))
 
 	for _, inPlan := range plan.Children() {
@@ -444,7 +620,7 @@ type HttpSenderHintTransform struct {
 func NewHttpSenderHintTransform(inRowDataType hybridqp.RowDataType, schema *QuerySchema) *HttpSenderHintTransform {
 	trans := &HttpSenderHintTransform{
 		input:  NewChunkPort(inRowDataType),
-		Writer: NewHttpChunkSender(*schema.Options().(*query.ProcessorOptions), len(inRowDataType.Fields())),
+		Writer: NewHttpChunkSender(schema.Options().(*query.ProcessorOptions)),
 		schema: schema,
 	}
 

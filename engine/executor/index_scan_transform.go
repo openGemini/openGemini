@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"go.uber.org/zap"
 )
 
 type IndexScanTransform struct {
@@ -46,11 +47,12 @@ type IndexScanTransform struct {
 	info             *IndexScanExtraInfo
 	wg               sync.WaitGroup
 	aborted          bool
-	abortMu          sync.Mutex
+	mutex            sync.Mutex
 
 	inputPort             *ChunkPort
 	downSampleRowDataType *hybridqp.RowDataTypeImpl
 	chunkPool             *CircularChunkPool
+	indexScanErr          bool
 
 	chunkReaderNum int64
 	limiter        chan struct{}
@@ -69,6 +71,7 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 		info:           info,
 		limiter:        limiter,
 		aborted:        false,
+		indexScanErr:   true,
 	}
 
 	return trans
@@ -77,7 +80,7 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 type IndexScanTransformCreator struct {
 }
 
-func (c *IndexScanTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *IndexScanTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil, nil)
 	return p, nil
 }
@@ -194,10 +197,8 @@ func (trans *IndexScanTransform) indexScan() error {
 	if trans.info == nil {
 		return fmt.Errorf("nil index scan transform extra info")
 	}
-	trans.abortMu.Lock()
-	defer func() {
-		trans.abortMu.Unlock()
-	}()
+	trans.mutex.Lock()
+	defer trans.mutex.Unlock()
 	if trans.aborted {
 		return errors.New("nil plan")
 	}
@@ -215,6 +216,7 @@ func (trans *IndexScanTransform) indexScan() error {
 	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, info.ShardID,
 		info.Req.Opt.Sources, subPlanSchema)
 	trans.FreeResFromAllocator()
+	defer trans.CursorsClose(plan)
 	if err != nil {
 		return err
 	}
@@ -249,7 +251,25 @@ func (trans *IndexScanTransform) indexScan() error {
 	if len(output) > 1 {
 		return errors.New("the output should be 1")
 	}
+	trans.indexScanErr = false
 	return nil
+}
+
+func (trans *IndexScanTransform) CursorsClose(plan hybridqp.QueryNode) {
+	if !trans.indexScanErr || plan == nil {
+		return
+	}
+	keyCursors := plan.(*LogicalDummyShard).Readers()
+	if len(keyCursors) > 0 {
+		for _, keyCursor := range keyCursors {
+			for _, cursor := range keyCursor {
+				if err := cursor.(comm.KeyCursor).Close(); err != nil {
+					// do not return err here, since no receiver will handle this error
+					log.Error("indexscantransform close cursor failed,", zap.Error(err))
+				}
+			}
+		}
+	}
 }
 
 func (trans *IndexScanTransform) Name() string {
@@ -265,27 +285,30 @@ func (trans *IndexScanTransform) Explain() []ValuePair {
 }
 
 func (trans *IndexScanTransform) Abort() {
-	trans.Once(func() {
-		trans.abortMu.Lock()
-		defer trans.abortMu.Unlock()
-		trans.aborted = true
-		if trans.pipelineExecutor != nil {
-			// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
-			// Otherwise, which increases the memory usage.
-			trans.pipelineExecutor.Abort()
-		}
-	})
+	trans.mutex.Lock()
+	defer trans.mutex.Unlock()
+	if trans.aborted {
+		return
+	}
+	trans.aborted = true
+	if trans.pipelineExecutor != nil {
+		// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
+		// Otherwise, which increases the memory usage.
+		trans.pipelineExecutor.Abort()
+	}
 }
 
 func (trans *IndexScanTransform) Close() {
-	trans.Once(func() {
-		trans.output.Close()
-		if trans.pipelineExecutor != nil {
-			// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
-			// Otherwise, which increases the memory usage.
-			trans.pipelineExecutor.Crash()
-		}
-	})
+	trans.output.Close()
+
+	trans.mutex.Lock()
+	defer trans.mutex.Unlock()
+	trans.aborted = true
+	if trans.pipelineExecutor != nil {
+		// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
+		// Otherwise, which increases the memory usage.
+		trans.pipelineExecutor.Crash()
+	}
 }
 
 func (trans *IndexScanTransform) Release() error {
@@ -396,4 +419,8 @@ func (trans *IndexScanTransform) GetInputNumber(_ Port) int {
 
 func (trans *IndexScanTransform) SetPipelineExecutor(exec *PipelineExecutor) {
 	trans.pipelineExecutor = exec
+}
+
+func (trans *IndexScanTransform) SetIndexScanErr(err bool) {
+	trans.indexScanErr = err
 }

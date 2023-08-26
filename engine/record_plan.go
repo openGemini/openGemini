@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -99,7 +100,7 @@ func (r *TsspSequenceReader) init() error {
 	return err
 }
 
-func (r *TsspSequenceReader) Create(plan executor.LogicalPlan, opt query.ProcessorOptions) (executor.Processor, error) {
+func (r *TsspSequenceReader) Create(plan executor.LogicalPlan, opt *query.ProcessorOptions) (executor.Processor, error) {
 	lr, ok := plan.(*executor.LogicalTSSPScan)
 	if !ok {
 		err := fmt.Errorf("%v is not a LogicalSidScan plan", plan.String())
@@ -338,7 +339,7 @@ func (r *ChunkMetaByField) next() (*record.Record, uint64, error) {
 		rec.ResetForReuse()
 
 		rec.Schema = r.fieldIter.GetRecordSchemas()
-		rec, err := r.file.ReadAt(&r.chunkMeta, r.segIndex, rec, r.decs)
+		rec, err := r.file.ReadAt(&r.chunkMeta, r.segIndex, rec, r.decs, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -443,7 +444,7 @@ func (r *MetaIndexIterator) init() error {
 	if err != nil {
 		return err
 	}
-	chunkMeta, err := r.file.ReadChunkMetaData(r.pos, metaIndex, nil)
+	chunkMeta, err := r.file.ReadChunkMetaData(r.pos, metaIndex, nil, fileops.IO_PRIORITY_LOW_READ)
 	if err != nil {
 		return err
 	}
@@ -483,7 +484,7 @@ func (r *MetaIndexIterator) nextChunkMetaByFieldIters() error {
 	if err != nil {
 		return err
 	}
-	chunkMeta, err := r.file.ReadChunkMetaData(r.pos, metaIndex, nil)
+	chunkMeta, err := r.file.ReadChunkMetaData(r.pos, metaIndex, nil, fileops.IO_PRIORITY_LOW_READ)
 	if err != nil {
 		return err
 	}
@@ -540,7 +541,7 @@ func NewWriteIntoStorageTransform(outputRowDataType hybridqp.RowDataType, ops []
 	return r
 }
 
-func (r *WriteIntoStorageTransform) Create(plan executor.LogicalPlan, opt query.ProcessorOptions) (executor.Processor, error) {
+func (r *WriteIntoStorageTransform) Create(plan executor.LogicalPlan, opt *query.ProcessorOptions) (executor.Processor, error) {
 	lr, ok := plan.(*executor.LogicalWriteIntoStorage)
 	if !ok {
 		err := fmt.Errorf("%v is not a LogicalWriteIntoStorage plan", plan.String())
@@ -880,7 +881,7 @@ func NewFileSequenceAggregator(schema hybridqp.Catalog, addPrefix bool, shardSta
 	return r
 }
 
-func (r *FileSequenceAggregator) Create(plan executor.LogicalPlan, opt query.ProcessorOptions) (executor.Processor, error) {
+func (r *FileSequenceAggregator) Create(plan executor.LogicalPlan, _ *query.ProcessorOptions) (executor.Processor, error) {
 	_, ok := plan.(*executor.LogicalSequenceAggregate)
 	if !ok {
 		err := fmt.Errorf("%v is not a fileAggregator plan", plan.String())

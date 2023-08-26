@@ -107,7 +107,7 @@ func (mb *MemBlock) loadDataBlock(dr fileops.BasicFileReader, tr *Trailer) error
 		if s < int64(len(buf)) {
 			buf = buf[:s]
 		}
-		buf, err = dr.ReadAt(pos, uint32(len(buf)), &buf)
+		buf, err = dr.ReadAt(pos, uint32(len(buf)), &buf, fileops.IO_PRIORITY_ULTRA_HIGH)
 		if err != nil {
 			if err != io.EOF {
 				log.Error("read data fail", zap.String("file", dr.Name()),
@@ -145,7 +145,7 @@ func (mb *MemBlock) loadMetaBlock(dr fileops.BasicFileReader, metaIndexItems []M
 		mi := &metaIndexItems[i]
 		buf = getMetaBlockBuffer(int(mi.size))
 		buf = bufferpool.Resize(buf, int(mi.size))
-		buf, err = dr.ReadAt(mi.offset, mi.size, &buf)
+		buf, err = dr.ReadAt(mi.offset, mi.size, &buf, fileops.IO_PRIORITY_ULTRA_HIGH)
 		if err != nil {
 			freeMetaBlockBuffer(buf)
 			log.Error("read chunkmeta fail", zap.String("file", dr.Name()),

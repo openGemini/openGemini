@@ -221,6 +221,8 @@ type ProcessorOptions struct {
 	GroupByAllDims bool
 
 	isTimeFirstKey bool
+
+	SortFields influxql.SortFields
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
@@ -289,82 +291,6 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	return opt, nil
 }
 
-func newProcessorOptionsSubstatement(ctx context.Context, stmt *influxql.SelectStatement, opt ProcessorOptions) (ProcessorOptions, error) {
-	subOpt, err := NewProcessorOptionsStmt(stmt, SelectOptions{
-		Authorizer: opt.Authorizer,
-		MaxSeriesN: opt.MaxSeriesN,
-	})
-	if err != nil {
-		return ProcessorOptions{}, err
-	}
-
-	if subOpt.StartTime < opt.StartTime {
-		subOpt.StartTime = opt.StartTime
-	}
-	if subOpt.EndTime > opt.EndTime {
-		subOpt.EndTime = opt.EndTime
-	}
-	if !subOpt.Interval.IsZero() && subOpt.EndTime == influxql.MaxTime {
-		if now := ctx.Value("now"); now != nil {
-			subOpt.EndTime = now.(time.Time).UnixNano()
-		}
-	}
-	// Propagate the dimensions to the inner subquery.
-	subOpt.Dimensions = opt.Dimensions
-	for d := range opt.GroupBy {
-		subOpt.GroupBy[d] = struct{}{}
-	}
-	subOpt.InterruptCh = opt.InterruptCh
-
-	// Extract the time range and condition from the condition.
-	valuer := &influxql.NowValuer{Location: stmt.Location}
-	cond, t, err := influxql.ConditionExpr(stmt.Condition, valuer)
-	if err != nil {
-		return ProcessorOptions{}, err
-	}
-	subOpt.Condition = cond
-	// If the time range is more constrained, use it instead. A less constrained time
-	// range should be ignored.
-	if !t.Min.IsZero() && t.MinTimeNano() > opt.StartTime {
-		subOpt.StartTime = t.MinTimeNano()
-	}
-	if !t.Max.IsZero() && t.MaxTimeNano() < opt.EndTime {
-		subOpt.EndTime = t.MaxTimeNano()
-	}
-
-	// Propagate the SLIMIT and SOFFSET from the outer query.
-	subOpt.SLimit += opt.SLimit
-	subOpt.SOffset += opt.SOffset
-
-	// Propagate the ordering from the parent query.
-	subOpt.Ascending = opt.Ascending
-
-	// If the inner query uses a null fill option and is not a raw query,
-	// switch it to none so we don't hit an unnecessary penalty from the
-	// fill iterator. Null values will end up getting stripped by an outer
-	// query anyway so there's no point in having them here. We still need
-	// all other types of fill iterators because they can affect the result
-	// of the outer query. We also do not do this for raw queries because
-	// there is no fill iterator for them and fill(none) doesn't work with
-	// raw queries.
-	if !stmt.IsRawQuery && subOpt.Fill == influxql.NullFill {
-		subOpt.Fill = influxql.NoFill
-	}
-
-	// Inherit the ordering method from the outer query.
-	subOpt.Ordered = opt.Ordered
-
-	// If there is no interval for this subquery, but the outer query has an
-	// interval, inherit the parent interval.
-	interval, err := stmt.GroupByInterval()
-	if err != nil {
-		return ProcessorOptions{}, err
-	} else if interval == 0 {
-		subOpt.Interval = opt.Interval
-	}
-	return subOpt, nil
-}
-
 func (opt *ProcessorOptions) UpdateSources(sources influxql.Sources) {
 	opt.Sources = sources
 }
@@ -376,13 +302,13 @@ func (opt *ProcessorOptions) Clone() *ProcessorOptions {
 }
 
 // MergeSorted returns true if the options require a sorted merge.
-func (opt ProcessorOptions) MergeSorted() bool {
+func (opt *ProcessorOptions) MergeSorted() bool {
 	return opt.Ordered
 }
 
 // SeekTime returns the time the iterator should start from.
 // For ascending iterators this is the start time, for descending iterators it's the end time.
-func (opt ProcessorOptions) SeekTime() int64 {
+func (opt *ProcessorOptions) SeekTime() int64 {
 	if opt.Ascending {
 		return opt.StartTime
 	}
@@ -391,7 +317,7 @@ func (opt ProcessorOptions) SeekTime() int64 {
 
 // StopTime returns the time the iterator should end at.
 // For ascending iterators this is the end time, for descending iterators it's the start time.
-func (opt ProcessorOptions) StopTime() int64 {
+func (opt *ProcessorOptions) StopTime() int64 {
 	if opt.Ascending {
 		if !opt.HasInterval() {
 			return opt.EndTime
@@ -406,27 +332,27 @@ func (opt ProcessorOptions) StopTime() int64 {
 	return stopTime
 }
 
-func (opt ProcessorOptions) GetMaxParallel() int {
+func (opt *ProcessorOptions) GetMaxParallel() int {
 	return opt.MaxParallel
 }
 
-func (opt ProcessorOptions) OptionsName() string {
+func (opt *ProcessorOptions) OptionsName() string {
 	return opt.Name
 }
 
-func (opt ProcessorOptions) GetStartTime() int64 {
+func (opt *ProcessorOptions) GetStartTime() int64 {
 	return opt.StartTime
 }
 
-func (opt ProcessorOptions) GetEndTime() int64 {
+func (opt *ProcessorOptions) GetEndTime() int64 {
 	return opt.EndTime
 }
 
-func (opt ProcessorOptions) ChunkSizeNum() int {
+func (opt *ProcessorOptions) ChunkSizeNum() int {
 	return opt.ChunkSize
 }
 
-func (opt ProcessorOptions) IsAscending() bool {
+func (opt *ProcessorOptions) IsAscending() bool {
 	return opt.Ascending
 }
 
@@ -435,7 +361,7 @@ func (opt *ProcessorOptions) SetAscending(a bool) {
 }
 
 // Window returns the time window [start,end) that t falls within.
-func (opt ProcessorOptions) Window(t int64) (start, end int64) {
+func (opt *ProcessorOptions) Window(t int64) (start, end int64) {
 	if opt.Interval.IsZero() {
 		return opt.StartTime, opt.EndTime + 1
 	}
@@ -515,7 +441,7 @@ func (opt ProcessorOptions) Window(t int64) (start, end int64) {
 }
 
 // DerivativeInterval returns the time interval for the derivative function.
-func (opt ProcessorOptions) DerivativeInterval() hybridqp.Interval {
+func (opt *ProcessorOptions) DerivativeInterval() hybridqp.Interval {
 	// Use the interval on the derivative() call, if specified.
 	if expr, ok := opt.Expr.(*influxql.Call); ok && len(expr.Args) == 2 {
 		return hybridqp.Interval{Duration: expr.Args[1].(*influxql.DurationLiteral).Val}
@@ -530,7 +456,7 @@ func (opt ProcessorOptions) DerivativeInterval() hybridqp.Interval {
 }
 
 // ElapsedInterval returns the time interval for the elapsed function.
-func (opt ProcessorOptions) ElapsedInterval() hybridqp.Interval {
+func (opt *ProcessorOptions) ElapsedInterval() hybridqp.Interval {
 	// Use the interval on the elapsed() call, if specified.
 	if expr, ok := opt.Expr.(*influxql.Call); ok && len(expr.Args) == 2 {
 		return hybridqp.Interval{Duration: expr.Args[1].(*influxql.DurationLiteral).Val}
@@ -540,7 +466,7 @@ func (opt ProcessorOptions) ElapsedInterval() hybridqp.Interval {
 }
 
 // IntegralInterval returns the time interval for the integral function.
-func (opt ProcessorOptions) IntegralInterval() hybridqp.Interval {
+func (opt *ProcessorOptions) IntegralInterval() hybridqp.Interval {
 	// Use the interval on the integral() call, if specified.
 	if expr, ok := opt.Expr.(*influxql.Call); ok && len(expr.Args) == 2 {
 		return hybridqp.Interval{Duration: expr.Args[1].(*influxql.DurationLiteral).Val}
@@ -550,7 +476,7 @@ func (opt ProcessorOptions) IntegralInterval() hybridqp.Interval {
 }
 
 // GetDimensions retrieves the dimensions for this query.
-func (opt ProcessorOptions) GetDimensions() []string {
+func (opt *ProcessorOptions) GetDimensions() []string {
 	if len(opt.GroupBy) > 0 {
 		dimensions := make([]string, 0, len(opt.GroupBy))
 		for dim := range opt.GroupBy {
@@ -561,7 +487,7 @@ func (opt ProcessorOptions) GetDimensions() []string {
 	return opt.Dimensions
 }
 
-func (opt ProcessorOptions) GetOptDimension() []string {
+func (opt *ProcessorOptions) GetOptDimension() []string {
 	return opt.Dimensions
 }
 
@@ -590,6 +516,14 @@ func (opt *ProcessorOptions) SetTimeFirstKey() {
 
 func (opt *ProcessorOptions) GetTimeFirstKey() bool {
 	return opt.isTimeFirstKey
+}
+
+func (opt *ProcessorOptions) SetSortFields(sortFields influxql.SortFields) {
+	opt.SortFields = sortFields
+}
+
+func (opt *ProcessorOptions) GetSortFields() influxql.SortFields {
+	return opt.SortFields
 }
 
 func (opt *ProcessorOptions) SetSourceCondition(expr influxql.Expr) {

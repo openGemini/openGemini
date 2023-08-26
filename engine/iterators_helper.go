@@ -40,14 +40,14 @@ func newCursorSchema(ctx *idKeyCursorContext, schema *executor.QuerySchema) erro
 	if ctx.auxTags == nil && ctx.schema.Len() <= 1 {
 		return nil
 	}
-	ctx.filterFieldsIdx = ctx.filterFieldsIdx[:0]
-	ctx.filterTags = ctx.filterTags[:0]
+	ctx.filterOption.FieldsIdx = ctx.filterOption.FieldsIdx[:0]
+	ctx.filterOption.FilterTags = ctx.filterOption.FilterTags[:0]
 	for _, f := range filterConditions {
 		idx := ctx.schema.FieldIndex(f.Val)
 		if idx >= 0 && f.Type != influxql.Unknown {
-			ctx.filterFieldsIdx = append(ctx.filterFieldsIdx, idx)
+			ctx.filterOption.FieldsIdx = append(ctx.filterOption.FieldsIdx, idx)
 		} else if f.Type != influxql.Unknown {
-			ctx.filterTags = append(ctx.filterTags, f.Val)
+			ctx.filterOption.FilterTags = append(ctx.filterOption.FilterTags, f.Val)
 		}
 	}
 

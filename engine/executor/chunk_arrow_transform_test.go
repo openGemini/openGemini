@@ -339,11 +339,11 @@ func buildIntegerChunk() []executor.Chunk {
 	cb2 := executor.NewChunkBuilder(row2)
 	ch2 := cb2.NewChunk("castor")
 	timestamp2 := []int64{1, 2, 3, 4, 5, 6}
-	ch2.AppendTime(timestamp2...)
+	ch2.AppendTimes(timestamp2)
 	seriesIdx2 := []int{0, 3}
 	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1"), *ParseChunkTags("t=2")}, seriesIdx2)
-	ch2.AppendIntervalIndex(seriesIdx2...)
-	ch2.Column(0).AppendIntegerValues(1, 2, 3, 4, 5, 6)
+	ch2.AppendIntervalIndexes(seriesIdx2)
+	ch2.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5, 6})
 	ch2.Column(0).AppendNilsV2(true, true, true, true, true, true)
 	ch2.CheckChunk()
 
@@ -357,8 +357,8 @@ func buildDiffDtypeChunk() []executor.Chunk {
 	ch.AppendTime(0)
 	ch.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
 	ch.AppendIntervalIndex(0)
-	ch.Column(0).AppendFloatValues(0.0)
-	ch.Column(0).AppendNilsV2(true)
+	ch.Column(0).AppendFloatValue(0.0)
+	ch.Column(0).AppendNotNil()
 	ch.CheckChunk()
 
 	row2 := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "f", Type: influxql.Integer})
@@ -367,8 +367,8 @@ func buildDiffDtypeChunk() []executor.Chunk {
 	ch2.AppendTime(0)
 	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
 	ch2.AppendIntervalIndex(0)
-	ch2.Column(0).AppendIntegerValues(0)
-	ch2.Column(0).AppendNilsV2(true)
+	ch2.Column(0).AppendIntegerValue(0)
+	ch2.Column(0).AppendNotNil()
 	ch2.CheckChunk()
 
 	return []executor.Chunk{ch, ch2}
@@ -381,8 +381,8 @@ func buildUnsupportDtypeChunk() []executor.Chunk {
 	ch.AppendTime(0)
 	ch.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, []int{0})
 	ch.AppendIntervalIndex(0)
-	ch.Column(0).AppendStringValues("str")
-	ch.Column(0).AppendNilsV2(true)
+	ch.Column(0).AppendStringValue("str")
+	ch.Column(0).AppendNotNil()
 	ch.CheckChunk()
 
 	return []executor.Chunk{ch}
@@ -393,12 +393,12 @@ func buildMultiFloatChunk() []executor.Chunk {
 	cb1 := executor.NewChunkBuilder(row1)
 	ch1 := cb1.NewChunk("castor")
 	timestamp1 := []int64{0, 1, 2, 3, 4, 5, 6}
-	ch1.AppendTime(timestamp1...)
+	ch1.AppendTimes(timestamp1)
 	seriesIdx := []int{0, 3}
 	interval := []int{0, 1, 3, 4, 6}
 	ch1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1"), *ParseChunkTags("t=2")}, seriesIdx)
-	ch1.AppendIntervalIndex(interval...)
-	ch1.Column(0).AppendFloatValues(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+	ch1.AppendIntervalIndexes(interval)
+	ch1.Column(0).AppendFloatValues([]float64{0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0})
 	ch1.Column(0).AppendNilsV2(true, true, true, true, true, true, true)
 	ch1.CheckChunk()
 
@@ -406,11 +406,11 @@ func buildMultiFloatChunk() []executor.Chunk {
 	cb2 := executor.NewChunkBuilder(row2)
 	ch2 := cb2.NewChunk("castor")
 	timestamp2 := []int64{7, 8, 9}
-	ch2.AppendTime(timestamp2...)
+	ch2.AppendTimes(timestamp2)
 	seriesIdx2 := []int{0}
 	ch2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=1")}, seriesIdx2)
-	ch2.AppendIntervalIndex(seriesIdx2...)
-	ch2.Column(0).AppendFloatValues(7.0, 8.0, 9.0)
+	ch2.AppendIntervalIndexes(seriesIdx2)
+	ch2.Column(0).AppendFloatValues([]float64{7.0, 8.0, 9.0})
 	ch2.Column(0).AppendNilsV2(true, true, true)
 	ch2.CheckChunk()
 
@@ -418,11 +418,11 @@ func buildMultiFloatChunk() []executor.Chunk {
 	cb3 := executor.NewChunkBuilder(row3)
 	ch3 := cb3.NewChunk("castor")
 	timestamp3 := []int64{7, 8, 9}
-	ch3.AppendTime(timestamp3...)
+	ch3.AppendTimes(timestamp3)
 	seriesIdx3 := []int{0}
 	ch3.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("t=2")}, seriesIdx3)
-	ch3.AppendIntervalIndex(seriesIdx3...)
-	ch3.Column(0).AppendFloatValues(7.0, 8.0, 9.0)
+	ch3.AppendIntervalIndexes(seriesIdx3)
+	ch3.Column(0).AppendFloatValues([]float64{7.0, 8.0, 9.0})
 	ch3.Column(0).AppendNilsV2(true, true, true)
 	ch3.CheckChunk()
 

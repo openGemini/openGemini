@@ -29,25 +29,25 @@ var RowSize = 1024
 
 func generateBooleanData(column Column) {
 	for i := 0; i < RowSize; i++ {
-		column.AppendBooleanValues(i%2 == 0)
+		column.AppendBooleanValue(i%2 == 0)
 	}
 }
 
 func generateIntegerData(column Column) {
 	for i := 0; i < RowSize; i++ {
-		column.AppendIntegerValues(int64(i))
+		column.AppendIntegerValue(int64(i))
 	}
 }
 
 func generateFloatData(column Column) {
 	for i := 0; i < RowSize; i++ {
-		column.AppendFloatValues(float64(i))
+		column.AppendFloatValue(float64(i))
 	}
 }
 
 func generateStringData(column Column) {
 	for i := 0; i < RowSize; i++ {
-		column.AppendStringValues(strconv.Itoa(i))
+		column.AppendStringValue(strconv.Itoa(i))
 	}
 }
 

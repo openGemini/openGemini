@@ -270,31 +270,32 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExistsForColumnStore(rec *record.R
 	if !ok {
 		return errors.New("get mergeSetIndex failed")
 	}
-
-	iRec := GetIndexRecord()
-	defer PutIndexRecord(iRec)
-	iRec.TagCol.Mst = []byte(mst)
+	tagCols := GetIndexTagCols()
+	defer PutIndexTagCols(tagCols)
+	mstBinary := []byte(mst)
 	tagsByteSlice := make([][]byte, len(tagIndex))
 	for i := range tagsByteSlice {
 		tagsByteSlice[i] = []byte(rec.Schema[tagIndex[i]].Name)
 	}
-
 	var wg sync.WaitGroup
 	for index := 0; index < rec.RowNums(); index++ {
 		for i := range tagIndex {
 			// hash by single mst,tag key,tag value
-			iRec.TagCol.Key = tagsByteSlice[i]
-			iRec.TagCol.Val, _ = rec.ColVals[tagIndex[i]].StringValue(index)
-			iRec.TagCol.Wg = &wg
+			if cap(*tagCols) > len(*tagCols) {
+				*tagCols = (*tagCols)[:len(*tagCols)+1]
+			} else {
+				*tagCols = append(*tagCols, TagCol{})
+			}
+			tagCol := &(*tagCols)[len(*tagCols)-1]
+			tagCol.Mst = mstBinary
+			tagCol.Key = tagsByteSlice[i]
+			tagCol.Val, _ = rec.ColVals[tagIndex[i]].StringValue(index)
+			tagCol.Wg = &wg
 			wg.Add(1)
-			idx.WriteTagCols(iRec)
+			idx.WriteTagCols(tagCol)
 		}
 	}
 	wg.Wait()
-
-	if iRec.Err != nil {
-		return iRec.Err
-	}
 	return nil
 }
 

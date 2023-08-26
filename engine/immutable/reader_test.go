@@ -184,7 +184,7 @@ func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, e
 	return 0, nil, nil
 }
 
-func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error) {
+func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -192,19 +192,15 @@ func (m MocTsspFile) Read(id uint64, tr util.TimeRange, dst *record.Record) (*re
 	return nil, nil
 }
 
-func (m MocTsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error) {
+func (m MocTsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error) {
 	return nil, nil
 }
 
-func (m MocTsspFile) ChunkAt(index int) (*ChunkMeta, error) {
+func (m MocTsspFile) ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
 	return nil, nil
 }
 
-func (m MocTsspFile) ReadData(offset int64, size uint32, dst *[]byte) ([]byte, error) {
-	return nil, nil
-}
-
-func (m MocTsspFile) ReadChunkMetaData(metaIdx int, me *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error) {
+func (m MocTsspFile) ReadChunkMetaData(metaIdx int, me *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -310,6 +306,10 @@ func (m MocTsspFile) AddToEvictList(level uint16) {
 
 func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 	return
+}
+
+func (m MocTsspFile) GetFileReaderRef() int64 {
+	return 0
 }
 
 func TestGetTsspFiles(t *testing.T) {

@@ -92,30 +92,34 @@ func (h *SortHelper) Sort(rec *Record) *Record {
 	return rec
 }
 
-func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy []PrimaryKey) *Record {
+func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy []PrimaryKey, deduplicate bool) *Record {
 	times := rec.Times()
 	tmpRec := rec.Copy()
 
 	data.InitRecord(rec.Schema)
 	data.Init(times, pk, orderBy, tmpRec)
+	data.InitDuplicateRows(len(times), tmpRec, deduplicate)
 	sort.Stable(data)
 	rows := data.RowIds
 
 	h.initNilCount(rec, times)
 	h.times = h.times[:0]
 
-	start := 0
+	if deduplicate {
+		h.handleDuplication(rec, data)
+	} else {
+		start := 0
 
-	// haven't dedupe yet
-	for i := 0; i < len(times)-1; i++ {
-		if (rows[i+1] - rows[i]) != 1 {
-			h.appendForColumnStore(rec, data, start, i)
-			start = i + 1
-			continue
+		for i := 0; i < len(times)-1; i++ {
+			if (rows[i+1] - rows[i]) != 1 {
+				h.appendForColumnStore(rec, data, start, i)
+				start = i + 1
+				continue
+			}
 		}
-	}
 
-	h.appendForColumnStore(rec, data, start, len(rows)-1)
+		h.appendForColumnStore(rec, data, start, len(rows)-1)
+	}
 	rec, data.SortRec = data.SortRec, rec
 	return rec
 }
@@ -137,6 +141,37 @@ func (h *SortHelper) append(rec *Record, aux *SortAux, start, end int) {
 
 	rowStart, rowEnd := int(aux.RowIds[start]), int(aux.RowIds[end]+1)
 	h.appendRecord(rec, aux.SortRec, rowStart, rowEnd)
+}
+
+// skip duplicate rows before executing appendForColumnStore
+func (h *SortHelper) handleDuplication(rec *Record, data *SortData) {
+	length := len(rec.Times())
+	if length == 0 {
+		return
+	}
+
+loop:
+	for i := 0; i <= length-1; i++ {
+		if !data.DuplicateRows[data.RowIds[i]] {
+			for j := i; j <= length-1; j++ {
+				if data.DuplicateRows[data.RowIds[j]] {
+					h.appendForColumnStore(rec, data, i, j-1)
+					i = j
+					break
+				} else {
+					if j == length-1 {
+						h.appendForColumnStore(rec, data, i, j)
+						break loop
+					}
+					if data.RowIds[j+1]-data.RowIds[j] != 1 {
+						h.appendForColumnStore(rec, data, i, j)
+						i = j
+						break
+					}
+				}
+			}
+		}
+	}
 }
 
 func (h *SortHelper) appendForColumnStore(rec *Record, data *SortData, start, end int) {

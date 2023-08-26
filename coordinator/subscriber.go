@@ -19,16 +19,16 @@ package coordinator
 import (
 	"bytes"
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
@@ -83,14 +83,25 @@ func NewHTTPClient(url *url.URL, timeout time.Duration) *HTTPClient {
 }
 
 func NewHTTPSClient(url *url.URL, timeout time.Duration, skipVerify bool, certs string) (*HTTPClient, error) {
-	tlsConfig := &tls.Config{InsecureSkipVerify: skipVerify}
-	if certs != "" {
-		caCert, err := os.ReadFile(certs)
+	var tlsConfig *tls.Config
+
+	if certs == "" {
+		tlsConfig = &tls.Config{
+			InsecureSkipVerify: true,
+		}
+	} else {
+		cert, err := tls.X509KeyPair(
+			[]byte(crypto.DecryptFromFile(certs)),
+			[]byte(crypto.DecryptFromFile(certs)),
+		)
 		if err != nil {
 			return nil, err
 		}
-		tlsConfig.RootCAs = x509.NewCertPool()
-		tlsConfig.RootCAs.AppendCertsFromPEM(caCert)
+
+		tlsConfig = &tls.Config{
+			InsecureSkipVerify: skipVerify,
+			Certificates:       []tls.Certificate{cert},
+		}
 	}
 
 	transport := &http.Transport{
@@ -106,7 +117,7 @@ type WriteRequest struct {
 }
 
 type BaseWriter struct {
-	ch      chan WriteRequest
+	ch      chan *WriteRequest
 	clients []Client
 	db      string
 	rp      string
@@ -118,7 +129,7 @@ func NewBaseWriter(db, rp, name string, clients []Client, logger *logger.Logger)
 	return BaseWriter{db: db, rp: rp, name: name, clients: clients, logger: logger}
 }
 
-func (w *BaseWriter) Send(wr WriteRequest) {
+func (w *BaseWriter) Send(wr *WriteRequest) {
 	select {
 	case w.ch <- wr:
 	default:
@@ -146,7 +157,7 @@ func (w *BaseWriter) Clients() []Client {
 }
 
 func (w *BaseWriter) Start(concurrency, buffersize int) {
-	w.ch = make(chan WriteRequest, buffersize)
+	w.ch = make(chan *WriteRequest, buffersize)
 	for i := 0; i < concurrency; i++ {
 		go w.Run()
 	}
@@ -171,23 +182,19 @@ type AllWriter struct {
 
 func (w *AllWriter) Write(lineProtocol []byte) {
 	for i := 0; i < len(w.clients); i++ {
-		wr := WriteRequest{i, lineProtocol}
+		wr := &WriteRequest{i, lineProtocol}
 		w.Send(wr)
 	}
 }
 
 type RoundRobinWriter struct {
 	BaseWriter
-	i    int
-	lock sync.Mutex
+	i int32
 }
 
 func (w *RoundRobinWriter) Write(lineProtocol []byte) {
-	w.lock.Lock()
-	i := w.i
-	w.i = (w.i + 1) % len(w.clients)
-	w.lock.Unlock()
-	wr := WriteRequest{Client: i, LineProtocol: lineProtocol}
+	i := atomic.AddInt32(&w.i, 1) % int32(len(w.clients))
+	wr := &WriteRequest{Client: int(i), LineProtocol: lineProtocol}
 	w.Send(wr)
 }
 
@@ -240,6 +247,7 @@ func (s *SubscriberManager) NewSubscriberWriter(db, rp, name, mode string, desti
 func (s *SubscriberManager) InitWriters() {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
 	s.WalkDatabases(func(dbi *meta.DatabaseInfo) {
 		s.writers[dbi.Name] = make(map[string][]SubscriberWriter)
 		dbi.WalkRetentionPolicy(func(rpi *meta.RetentionPolicyInfo) {
@@ -270,15 +278,16 @@ func (s *SubscriberManager) WalkDatabases(fn func(db *meta.DatabaseInfo)) {
 }
 
 func (s *SubscriberManager) UpdateWriters() {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
 	s.WalkDatabases(func(dbi *meta.DatabaseInfo) {
 		if _, ok := s.writers[dbi.Name]; !ok {
 			s.writers[dbi.Name] = make(map[string][]SubscriberWriter)
 		}
 		dbi.WalkRetentionPolicy(func(rpi *meta.RetentionPolicyInfo) {
 			changed := false
-			s.lock.RLock()
 			writers, ok := s.writers[dbi.Name][rpi.Name]
-			s.lock.RUnlock()
 			if !ok {
 				writers = make([]SubscriberWriter, 0, len(rpi.Subscriptions))
 				changed = true
@@ -311,9 +320,7 @@ func (s *SubscriberManager) UpdateWriters() {
 			// just continue
 			if len(originSubs) == 0 {
 				if changed {
-					s.lock.Lock()
 					s.writers[dbi.Name][rpi.Name] = writers
-					s.lock.Unlock()
 				}
 				return
 			}
@@ -328,14 +335,20 @@ func (s *SubscriberManager) UpdateWriters() {
 					s.Logger.Info("remove subscriber writer", zap.String("db", dbi.Name), zap.String("rp", rpi.Name), zap.String("sub", writers[i].Name()))
 				}
 			}
-			s.lock.Lock()
 			s.writers[dbi.Name][rpi.Name] = writers[0:position]
-			s.lock.Unlock()
 		})
 	})
 }
 
-func (s *SubscriberManager) Send(db, rp string, lineProtocal []byte) {
+func (s *SubscriberManager) Send(db, rp string, lineProtocol []byte) {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	// no subscriber writers
+	if len(s.writers) == 0 {
+		return
+	}
+
 	if rp == "" {
 		dbi, err := s.client.Database(db)
 		if err != nil {
@@ -347,12 +360,15 @@ func (s *SubscriberManager) Send(db, rp string, lineProtocal []byte) {
 
 	if writer, ok := s.writers[db][rp]; ok {
 		for _, w := range writer {
-			w.Write(lineProtocal)
+			w.Write(lineProtocol)
 		}
 	}
 }
 
 func (s *SubscriberManager) StopAllWriters() {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
 	for _, db := range s.writers {
 		for _, rp := range db {
 			for _, writer := range rp {

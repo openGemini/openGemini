@@ -91,8 +91,8 @@ func (s *MockStoreEngine) TagValuesCardinality(db string, ptIDs []uint32, tagKey
 	return nil, nil
 }
 
-func (s *MockStoreEngine) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) error {
-	return nil
+func (s *MockStoreEngine) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map[string]string, error) {
+	return nil, nil
 }
 
 func (s *MockStoreEngine) PreOffload(*meta.DbPtInfo) error {
@@ -132,7 +132,7 @@ func NewDummySeriesTransform() *DummySeriesTransform {
 type DummySeriesTransformCreator struct {
 }
 
-func (creator *DummySeriesTransformCreator) Create(plan executor.LogicalPlan, opt qry.ProcessorOptions) (executor.Processor, error) {
+func (creator *DummySeriesTransformCreator) Create(plan executor.LogicalPlan, opt *qry.ProcessorOptions) (executor.Processor, error) {
 	return NewDummySeriesTransform(), nil
 }
 

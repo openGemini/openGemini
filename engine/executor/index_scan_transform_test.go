@@ -18,18 +18,62 @@ package executor_test
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+}
+
+type cursor struct {
+	closeErr bool
+}
+
+func (c *cursor) StartSpan(span *tracing.Span) {
+}
+
+func (c *cursor) EndSpan() {
+}
+
+func (c *cursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
+	return nil, nil, nil
+}
+
+func (c *cursor) SetOps(ops []*comm.CallOption) {
+	return
+}
+
+func (c *cursor) SinkPlan(plan hybridqp.QueryNode) {}
+
+func (c *cursor) GetSchema() record.Schemas {
+	return nil
+}
+
+func (c *cursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	return nil, nil, nil
+}
+
+func (c *cursor) Name() string {
+	return ""
+}
+
+func (c *cursor) Close() error {
+	if !c.closeErr {
+		return nil
+	}
+	return fmt.Errorf("cursor close err")
 }
 
 func buildIRowDataType() hybridqp.RowDataType {
@@ -43,11 +87,11 @@ func BuildIChunk(name string) executor.Chunk {
 	rowDataType := buildInRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk(name)
-	chunk.AppendTime([]int64{1, 2, 3}...)
+	chunk.AppendTimes([]int64{1, 2, 3})
 	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
 	chunk.AddIntervalIndex(0)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3}...)
-	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3}...)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(0).AppendManyNotNil(3)
 	return chunk
 }
@@ -99,4 +143,31 @@ func TestIndexScanTransformDemo(t *testing.T) {
 	trans.Work(ctx)
 	childExec.Release()
 	exec.Release()
+}
+
+func TestIndexScanTransform_Abort(t *testing.T) {
+	outputRowDataType := buildIRowDataType()
+	schema := buildISchema()
+
+	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema,
+		nil, &executor.IndexScanExtraInfo{}, make(chan struct{}, 1))
+
+	trans.Abort()
+	trans.Abort()
+	err := trans.Work(context.Background())
+	require.NoError(t, err)
+}
+
+func TestIndexScanCursorClose(t *testing.T) {
+	cursors := comm.KeyCursors{&cursor{}, &cursor{closeErr: true}}
+	keyCursors := make([][]interface{}, 1)
+	keyCursors[0] = make([]interface{}, 2)
+	keyCursors[0][0] = cursors[0]
+	keyCursors[0][1] = cursors[1]
+	plan := executor.NewLogicalDummyShard(keyCursors)
+	trans1 := &executor.IndexScanTransform{}
+	trans1.CursorsClose(plan)
+	trans1.SetIndexScanErr(true)
+	trans1.CursorsClose(plan)
+	trans1.CursorsClose(nil)
 }

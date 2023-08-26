@@ -11388,7 +11388,7 @@ func TestServer_SubscriptionForward(t *testing.T) {
 	type Request struct {
 		db           string
 		rp           string
-		lineProtocal []byte
+		lineProtocol []byte
 	}
 	ch := make(chan Request, 10)
 	mux := http.NewServeMux()
@@ -11396,7 +11396,7 @@ func TestServer_SubscriptionForward(t *testing.T) {
 	}))
 	mux.HandleFunc("/write", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp")}
-		wr.lineProtocal, _ = ioutil.ReadAll(r.Body)
+		wr.lineProtocol, _ = ioutil.ReadAll(r.Body)
 		ch <- wr
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -11456,7 +11456,7 @@ func TestServer_SubscriptionForward(t *testing.T) {
 		wr := <-ch
 		if wr.db != "db0" || wr.rp != "rp0" {
 			t.Errorf("expected write to db0.rp0 but got %s.%s", wr.db, wr.rp)
-		} else if string(wr.lineProtocal) != strings.Join(writes, "\n") {
+		} else if string(wr.lineProtocol) != strings.Join(writes, "\n") {
 			t.Error("write data mismatch")
 		}
 	}
@@ -11486,7 +11486,7 @@ func TestServer_SubscriptionForward(t *testing.T) {
 		wr := <-ch
 		if wr.db != "db0" || wr.rp != "rp0" {
 			t.Errorf("expected write to db0.rp0 but got %s.%s", wr.db, wr.rp)
-		} else if string(wr.lineProtocal) != strings.Join(writes, "\n") {
+		} else if string(wr.lineProtocol) != strings.Join(writes, "\n") {
 			t.Error("write data mismatch")
 		}
 	}

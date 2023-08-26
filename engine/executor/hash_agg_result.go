@@ -102,8 +102,8 @@ func (s *sumAggOperator4Float) Compute(c Chunk, colLoc int, startRowLoc int, end
 }
 
 func (s *sumAggOperator4Float) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendFloatValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendFloatValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *sumAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -112,8 +112,8 @@ func (s *sumAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *sumAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToFloat(fillVal)
-	oc.Column(colLoc).AppendFloatValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendFloatValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type sumAggOperator4Integer struct {
@@ -138,8 +138,8 @@ func (s *sumAggOperator4Integer) Compute(c Chunk, colLoc int, startRowLoc int, e
 }
 
 func (s *sumAggOperator4Integer) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendIntegerValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendIntegerValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *sumAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -148,8 +148,8 @@ func (s *sumAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *sumAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type countAggOperator struct {
@@ -172,8 +172,8 @@ func (s *countAggOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowL
 }
 
 func (s *countAggOperator) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendIntegerValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendIntegerValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *countAggOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -182,8 +182,8 @@ func (s *countAggOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *countAggOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type firstAggOperator4Float struct {
@@ -225,25 +225,25 @@ func (s *firstAggOperator4Float) Compute(c Chunk, colLoc int, startRowLoc int, e
 }
 
 func (s *firstAggOperator4Float) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendFloatValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendFloatValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *firstAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *firstAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToFloat(fillVal)
-	oc.Column(colLoc).AppendFloatValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendFloatValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type firstAggOperator4Integer struct {
@@ -285,25 +285,25 @@ func (s *firstAggOperator4Integer) Compute(c Chunk, colLoc int, startRowLoc int,
 }
 
 func (s *firstAggOperator4Integer) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendIntegerValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendIntegerValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *firstAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *firstAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type firstAggOperator4String struct {
@@ -345,25 +345,25 @@ func (s *firstAggOperator4String) Compute(c Chunk, colLoc int, startRowLoc int, 
 }
 
 func (s *firstAggOperator4String) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendStringValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendStringValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *firstAggOperator4String) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *firstAggOperator4String) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToString(fillVal)
-	oc.Column(colLoc).AppendStringValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendStringValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type firstAggOperator4Boolean struct {
@@ -405,25 +405,25 @@ func (s *firstAggOperator4Boolean) Compute(c Chunk, colLoc int, startRowLoc int,
 }
 
 func (s *firstAggOperator4Boolean) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendBooleanValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendBooleanValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *firstAggOperator4Boolean) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *firstAggOperator4Boolean) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToBoolean(fillVal)
-	oc.Column(colLoc).AppendBooleanValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendBooleanValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type lastAggOperator4Float struct {
@@ -465,25 +465,25 @@ func (s *lastAggOperator4Float) Compute(c Chunk, colLoc int, startRowLoc int, en
 }
 
 func (s *lastAggOperator4Float) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendFloatValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendFloatValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *lastAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *lastAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToFloat(fillVal)
-	oc.Column(colLoc).AppendFloatValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendFloatValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type lastAggOperator4Integer struct {
@@ -525,25 +525,25 @@ func (s *lastAggOperator4Integer) Compute(c Chunk, colLoc int, startRowLoc int, 
 }
 
 func (s *lastAggOperator4Integer) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendIntegerValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendIntegerValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *lastAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *lastAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type lastAggOperator4String struct {
@@ -585,25 +585,25 @@ func (s *lastAggOperator4String) Compute(c Chunk, colLoc int, startRowLoc int, e
 }
 
 func (s *lastAggOperator4String) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendStringValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendStringValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *lastAggOperator4String) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *lastAggOperator4String) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToString(fillVal)
-	oc.Column(colLoc).AppendStringValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendStringValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type lastAggOperator4Boolean struct {
@@ -645,25 +645,25 @@ func (s *lastAggOperator4Boolean) Compute(c Chunk, colLoc int, startRowLoc int, 
 }
 
 func (s *lastAggOperator4Boolean) SetOutVal(c Chunk, colLoc int, _ any) {
-	c.Column(colLoc).AppendColumnTimes(s.time)
+	c.Column(colLoc).AppendColumnTime(s.time)
 	if !s.nilFlag {
-		c.Column(colLoc).AppendBooleanValues(s.val)
-		c.Column(colLoc).AppendNilsV2(true)
+		c.Column(colLoc).AppendBooleanValue(s.val)
+		c.Column(colLoc).AppendNotNil()
 	} else {
 		c.Column(colLoc).AppendNil()
 	}
 }
 
 func (s *lastAggOperator4Boolean) SetNullFill(oc Chunk, colLoc int, time int64) {
-	oc.Column(colLoc).AppendColumnTimes(s.time)
+	oc.Column(colLoc).AppendColumnTime(s.time)
 	oc.Column(colLoc).AppendNil()
 }
 
 func (s *lastAggOperator4Boolean) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToBoolean(fillVal)
-	oc.Column(colLoc).AppendBooleanValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
-	oc.Column(colLoc).AppendColumnTimes(time)
+	oc.Column(colLoc).AppendBooleanValue(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
 }
 
 type minAggOperator4Float struct {
@@ -697,8 +697,8 @@ func (s *minAggOperator4Float) SetOutVal(c Chunk, colLoc int, _ any) {
 		c.Column(colLoc).AppendManyNil(1)
 		return
 	}
-	c.Column(colLoc).AppendFloatValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendFloatValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *minAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -707,8 +707,8 @@ func (s *minAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *minAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToFloat(fillVal)
-	oc.Column(colLoc).AppendFloatValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendFloatValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type minAggOperator4Integer struct {
@@ -742,8 +742,8 @@ func (s *minAggOperator4Integer) SetOutVal(c Chunk, colLoc int, _ any) {
 		c.Column(colLoc).AppendManyNil(1)
 		return
 	}
-	c.Column(colLoc).AppendIntegerValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendIntegerValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *minAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -752,8 +752,8 @@ func (s *minAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *minAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type maxAggOperator4Float struct {
@@ -787,8 +787,8 @@ func (s *maxAggOperator4Float) SetOutVal(c Chunk, colLoc int, _ any) {
 		c.Column(colLoc).AppendManyNil(1)
 		return
 	}
-	c.Column(colLoc).AppendFloatValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendFloatValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *maxAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -797,8 +797,8 @@ func (s *maxAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *maxAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToFloat(fillVal)
-	oc.Column(colLoc).AppendFloatValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendFloatValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type maxAggOperator4Integer struct {
@@ -832,8 +832,8 @@ func (s *maxAggOperator4Integer) SetOutVal(c Chunk, colLoc int, _ any) {
 		c.Column(colLoc).AppendManyNil(1)
 		return
 	}
-	c.Column(colLoc).AppendIntegerValues(s.val)
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendIntegerValue(s.val)
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *maxAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -842,8 +842,8 @@ func (s *maxAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
 
 func (s *maxAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type percentileAggOperator4Float struct {
@@ -887,8 +887,8 @@ func (s *percentileAggOperator4Float) SetOutVal(c Chunk, colLoc int, percentile 
 		c.Column(colLoc).AppendNil()
 		return
 	}
-	c.Column(colLoc).AppendFloatValues(s.val[i])
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendFloatValue(s.val[i])
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *percentileAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -897,8 +897,8 @@ func (s *percentileAggOperator4Float) SetNullFill(oc Chunk, colLoc int, time int
 
 func (s *percentileAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToFloat(fillVal)
-	oc.Column(colLoc).AppendFloatValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendFloatValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 type percentileAggOperator4Integer struct {
@@ -942,8 +942,8 @@ func (s *percentileAggOperator4Integer) SetOutVal(c Chunk, colLoc int, percentil
 		c.Column(colLoc).AppendNil()
 		return
 	}
-	c.Column(colLoc).AppendIntegerValues(s.val[i])
-	c.Column(colLoc).AppendNilsV2(true)
+	c.Column(colLoc).AppendIntegerValue(s.val[i])
+	c.Column(colLoc).AppendNotNil()
 }
 
 func (s *percentileAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time int64) {
@@ -952,8 +952,8 @@ func (s *percentileAggOperator4Integer) SetNullFill(oc Chunk, colLoc int, time i
 
 func (s *percentileAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
 	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValues(val)
-	oc.Column(colLoc).AppendNilsV2(true)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
 }
 
 func NewCountFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {

@@ -30,26 +30,29 @@ type TagCol struct {
 	Err      error
 }
 
-var IndexRecordPool sync.Pool
+var IndexTagColsPool sync.Pool
 
-func GetIndexRecord() *IndexRecord {
-	rec := IndexRecordPool.Get()
-	if rec == nil {
-		return &IndexRecord{
-			TagCol: &TagCol{},
-		}
+type IndexTagCols []TagCol
+
+func GetIndexTagCols() *IndexTagCols {
+	tagCols := IndexTagColsPool.Get()
+	if tagCols == nil {
+		return &IndexTagCols{}
 	}
-	return rec.(*IndexRecord)
+	return tagCols.(*IndexTagCols)
 }
 
-func PutIndexRecord(rec *IndexRecord) {
-	rec.reset()
-	IndexRecordPool.Put(rec)
+func PutIndexTagCols(tagCols *IndexTagCols) {
+	tagCols.reset()
+	*tagCols = (*tagCols)[:0]
+	IndexTagColsPool.Put(tagCols)
 }
 
-func (rec *IndexRecord) reset() {
-	rec.TagCol.Key = rec.TagCol.Key[:0]
-	rec.TagCol.Mst = rec.TagCol.Mst[:0]
-	rec.TagCol.Val = rec.TagCol.Val[:0]
-	rec.TagCol.Err = nil
+func (itc *IndexTagCols) reset() {
+	for i := range *itc {
+		(*itc)[i].Key = (*itc)[i].Key[:0]
+		(*itc)[i].Mst = (*itc)[i].Mst[:0]
+		(*itc)[i].Val = (*itc)[i].Val[:0]
+		(*itc)[i].Err = nil
+	}
 }

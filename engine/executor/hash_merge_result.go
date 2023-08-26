@@ -84,12 +84,12 @@ func (mrfc *mergeResultFloatCol) AppendValues(col Column, start int, end int) {
 
 func (mrfc *mergeResultFloatCol) SetOutPut(col Column) {
 	if mrfc.nils[mrfc.oLoc] {
-		col.AppendNilsV2(true)
-		col.AppendFloatValues(mrfc.values[mrfc.oValLoc])
+		col.AppendNotNil()
+		col.AppendFloatValue(mrfc.values[mrfc.oValLoc])
 		mrfc.oLoc++
 		mrfc.oValLoc++
 	} else {
-		col.AppendNilsV2(false)
+		col.AppendNil()
 		mrfc.oLoc++
 	}
 }
@@ -134,12 +134,12 @@ func (mrfc *mergeResultIntegerCol) AppendValues(col Column, start int, end int) 
 
 func (mrfc *mergeResultIntegerCol) SetOutPut(col Column) {
 	if mrfc.nils[mrfc.oLoc] {
-		col.AppendNilsV2(true)
-		col.AppendIntegerValues(mrfc.values[mrfc.oValLoc])
+		col.AppendNotNil()
+		col.AppendIntegerValue(mrfc.values[mrfc.oValLoc])
 		mrfc.oLoc++
 		mrfc.oValLoc++
 	} else {
-		col.AppendNilsV2(false)
+		col.AppendNil()
 		mrfc.oLoc++
 	}
 }
@@ -184,12 +184,12 @@ func (mrfc *mergeResultBooleanCol) AppendValues(col Column, start int, end int) 
 
 func (mrfc *mergeResultBooleanCol) SetOutPut(col Column) {
 	if mrfc.nils[mrfc.oLoc] {
-		col.AppendNilsV2(true)
-		col.AppendBooleanValues(mrfc.values[mrfc.oValLoc])
+		col.AppendNotNil()
+		col.AppendBooleanValue(mrfc.values[mrfc.oValLoc])
 		mrfc.oLoc++
 		mrfc.oValLoc++
 	} else {
-		col.AppendNilsV2(false)
+		col.AppendNil()
 		mrfc.oLoc++
 	}
 }
@@ -234,12 +234,12 @@ func (mrfc *mergeResultStringCol) AppendValues(col Column, start int, end int) {
 
 func (mrfc *mergeResultStringCol) SetOutPut(col Column) {
 	if mrfc.nils[mrfc.oLoc] {
-		col.AppendNilsV2(true)
-		col.AppendStringValues(mrfc.values[mrfc.oValLoc])
+		col.AppendNotNil()
+		col.AppendStringValue(mrfc.values[mrfc.oValLoc])
 		mrfc.oLoc++
 		mrfc.oValLoc++
 	} else {
-		col.AppendNilsV2(false)
+		col.AppendNil()
 		mrfc.oLoc++
 	}
 }

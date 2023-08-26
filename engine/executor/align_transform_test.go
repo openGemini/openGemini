@@ -46,19 +46,19 @@ func buildSourceAlignChunk1() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=BBB"), *ParseChunkTags("host=CCC")}, []int{0, 4})
-	chunk.AppendIntervalIndex([]int{0, 3, 4}...)
-	chunk.AppendTime([]int64{24, 25, 26, 32, 33, 35}...)
+	chunk.AppendIntervalIndexes([]int{0, 3, 4})
+	chunk.AppendTimes([]int64{24, 25, 26, 32, 33, 35})
 
-	chunk.Column(0).AppendIntegerValues([]int64{12, 19, 85}...)
+	chunk.Column(0).AppendIntegerValues([]int64{12, 19, 85})
 	chunk.Column(0).AppendNilsV2(true, false, false, true, true)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.7, 3.3, 3.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.7, 3.3, 3.5})
 	chunk.Column(1).AppendNilsV2(true, false, false, true, true)
 
-	chunk.Column(2).AppendIntegerValues([]int64{12, 19, 21}...)
+	chunk.Column(2).AppendIntegerValues([]int64{12, 19, 21})
 	chunk.Column(2).AppendNilsV2(false, true, false, true, true)
 
-	chunk.Column(3).AppendFloatValues([]float64{3.2, 3.3, 3.6}...)
+	chunk.Column(3).AppendFloatValues([]float64{3.2, 3.3, 3.6})
 	chunk.Column(3).AppendNilsV2(false, false, true, true, false, true)
 
 	return chunk
@@ -72,19 +72,19 @@ func buildSourceAlignChunk2() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{41, 42}...)
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{41, 42})
 
-	chunk.Column(0).AppendIntegerValues([]int64{15}...)
-	chunk.Column(0).AppendNilsV2(true)
+	chunk.Column(0).AppendIntegerValues([]int64{15})
+	chunk.Column(0).AppendNotNil()
 
-	chunk.Column(1).AppendFloatValues([]float64{4.25}...)
-	chunk.Column(1).AppendNilsV2(true)
+	chunk.Column(1).AppendFloatValues([]float64{4.25})
+	chunk.Column(1).AppendNotNil()
 
-	chunk.Column(2).AppendIntegerValues([]int64{7}...)
-	chunk.Column(2).AppendNilsV2(true)
+	chunk.Column(2).AppendIntegerValues([]int64{7})
+	chunk.Column(2).AppendNotNil()
 
-	chunk.Column(3).AppendFloatValues([]float64{4.3}...)
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
 	chunk.Column(3).AppendNilsV2(false, true)
 
 	return chunk
@@ -98,19 +98,19 @@ func buildTargetAlignChunk1() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=BBB"), *ParseChunkTags("host=CCC")}, []int{0, 2})
-	chunk.AppendIntervalIndex([]int{0, 1, 2}...)
-	chunk.AppendTime([]int64{24, 32, 33}...)
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{24, 32, 33})
 
-	chunk.Column(0).AppendIntegerValues([]int64{12, 19, 85}...)
+	chunk.Column(0).AppendIntegerValues([]int64{12, 19, 85})
 	chunk.Column(0).AppendManyNotNil(3)
 
-	chunk.Column(1).AppendFloatValues([]float64{2.7, 3.3, 3.5}...)
+	chunk.Column(1).AppendFloatValues([]float64{2.7, 3.3, 3.5})
 	chunk.Column(1).AppendManyNotNil(3)
 
-	chunk.Column(2).AppendIntegerValues([]int64{12, 19, 21}...)
+	chunk.Column(2).AppendIntegerValues([]int64{12, 19, 21})
 	chunk.Column(2).AppendManyNotNil(3)
 
-	chunk.Column(3).AppendFloatValues([]float64{3.2, 3.3, 3.6}...)
+	chunk.Column(3).AppendFloatValues([]float64{3.2, 3.3, 3.6})
 	chunk.Column(3).AppendManyNotNil(3)
 
 	return chunk
@@ -123,20 +123,20 @@ func buildTargetAlignChunk2() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
-	chunk.AppendIntervalIndex([]int{0}...)
-	chunk.AppendTime([]int64{41}...)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendTimes([]int64{41})
 
-	chunk.Column(0).AppendIntegerValues([]int64{15}...)
-	chunk.Column(0).AppendNilsV2(true)
+	chunk.Column(0).AppendIntegerValues([]int64{15})
+	chunk.Column(0).AppendNotNil()
 
-	chunk.Column(1).AppendFloatValues([]float64{4.25}...)
-	chunk.Column(1).AppendNilsV2(true)
+	chunk.Column(1).AppendFloatValues([]float64{4.25})
+	chunk.Column(1).AppendNotNil()
 
-	chunk.Column(2).AppendIntegerValues([]int64{7}...)
-	chunk.Column(2).AppendNilsV2(true)
+	chunk.Column(2).AppendIntegerValues([]int64{7})
+	chunk.Column(2).AppendNotNil()
 
-	chunk.Column(3).AppendFloatValues([]float64{4.3}...)
-	chunk.Column(3).AppendNilsV2(true)
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNotNil()
 
 	return chunk
 }
@@ -164,7 +164,7 @@ func TestAlignTransform(t *testing.T) {
 	}
 
 	source := NewSourceFromMultiChunk(buildAlignRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
-	trans1 := executor.NewAlignTransform([]hybridqp.RowDataType{buildAlignRowDataType()}, []hybridqp.RowDataType{buildAlignRowDataType()}, opt)
+	trans1 := executor.NewAlignTransform([]hybridqp.RowDataType{buildAlignRowDataType()}, []hybridqp.RowDataType{buildAlignRowDataType()}, &opt)
 	sink := NewNilSink(buildAlignRowDataType())
 
 	executor.Connect(source.Output, trans1.Inputs[0])

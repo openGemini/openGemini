@@ -138,7 +138,7 @@ func buildMultiSourcePlan(srcCursors [][]comm.KeyCursor, cursorsN int) (executor
 	return plan, nil
 }
 
-func (s *shard) LogicalPlanCost(source influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error) {
+func (s *shard) LogicalPlanCost(_ influxql.Sources, _ query.ProcessorOptions) (hybridqp.LogicalPlanCost, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -163,7 +163,6 @@ type ChunkReader struct {
 	pa              *preAggCallForAux
 	schema          *executor.QuerySchema
 	Output          *executor.ChunkPort
-	source          influxql.Sources
 	ResultChunkPool *executor.CircularChunkPool
 	cursor          []comm.KeyCursor
 
@@ -171,7 +170,6 @@ type ChunkReader struct {
 	dimTag []string
 
 	oneCallRef          *influxql.VarRef // TODO...
-	callFieldRecIndex   int
 	callFieldChunkIndex int
 	fieldItemIndex      []item
 	tags                *influx.PointTags
@@ -190,7 +188,7 @@ type ChunkReader struct {
 }
 
 func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, seriesPlan hybridqp.QueryNode,
-	source influxql.Sources, schema *executor.QuerySchema, cursors []interface{}, state bool) executor.Processor {
+	schema *executor.QuerySchema, cursors []interface{}, state bool) executor.Processor {
 	var callOps []*comm.CallOption
 	for _, op := range ops {
 		if call, ok := op.Expr.(*influxql.Call); ok {
@@ -221,7 +219,6 @@ func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprO
 	r := &ChunkReader{
 		schema:   schema,
 		Output:   executor.NewChunkPort(outputRowDataType),
-		source:   source,
 		tags:     new(influx.PointTags),
 		ops:      ops,
 		cursor:   keyCursors,
@@ -315,7 +312,6 @@ func (r *ChunkReader) buildFieldIndex(querySchema *executor.QuerySchema, dtype h
 		r.fieldItemIndex[i].index = idx
 		if r.oneCallRef != nil {
 			if ref.Val == r.oneCallRef.Val && ref.Type == r.oneCallRef.Type {
-				r.callFieldRecIndex = idx
 				r.callFieldChunkIndex = i
 			}
 		}
@@ -359,28 +355,28 @@ func initTransColMetaFun() {
 	transColMetaFun = make(map[influxql.DataType]func(value interface{}, column executor.Column), 4)
 
 	transColMetaFun[influxql.Integer] = func(value interface{}, column executor.Column) {
-		column.AppendIntegerValues(value.(int64))
-		column.AppendNilsV2(true)
+		column.AppendIntegerValue(value.(int64))
+		column.AppendNotNil()
 	}
 
 	transColMetaFun[influxql.Float] = func(value interface{}, column executor.Column) {
-		column.AppendFloatValues(value.(float64))
-		column.AppendNilsV2(true)
+		column.AppendFloatValue(value.(float64))
+		column.AppendNotNil()
 	}
 
 	transColMetaFun[influxql.String] = func(value interface{}, column executor.Column) {
-		column.AppendStringValues(value.(string))
-		column.AppendNilsV2(true)
+		column.AppendStringValue(value.(string))
+		column.AppendNotNil()
 	}
 
 	transColMetaFun[influxql.Tag] = func(value interface{}, column executor.Column) {
-		column.AppendStringValues(value.(string))
-		column.AppendNilsV2(true)
+		column.AppendStringValue(value.(string))
+		column.AppendNotNil()
 	}
 
 	transColMetaFun[influxql.Boolean] = func(value interface{}, column executor.Column) {
-		column.AppendBooleanValues(value.(bool))
-		column.AppendNilsV2(true)
+		column.AppendBooleanValue(value.(bool))
+		column.AppendNotNil()
 	}
 }
 
@@ -388,17 +384,17 @@ func initTransColAuxFun() {
 	transColAuxFun = make(map[influxql.DataType]func(recColumn *record.ColVal, column executor.Column), 4)
 	transColAuxFun[influxql.Integer] = func(recColumn *record.ColVal, column executor.Column) {
 		values := recColumn.IntegerValues()
-		column.AppendIntegerValues(values...)
+		column.AppendIntegerValues(values)
 	}
 
 	transColAuxFun[influxql.Float] = func(recColumn *record.ColVal, column executor.Column) {
 		values := recColumn.FloatValues()
-		column.AppendFloatValues(values...)
+		column.AppendFloatValues(values)
 	}
 
 	transColAuxFun[influxql.Boolean] = func(recColumn *record.ColVal, column executor.Column) {
 		values := recColumn.BooleanValues()
-		column.AppendBooleanValues(values...)
+		column.AppendBooleanValues(values)
 	}
 
 	transColAuxFun[influxql.String] = func(recColumn *record.ColVal, column executor.Column) {
@@ -492,14 +488,14 @@ func (r *ChunkReader) selectPreAgg(
 		if countV := recColMeta.Count(); !immutable.IsInterfaceNil(countV) {
 			transMetaFun(countV, column)
 		} else {
-			column.AppendNilsV2(false)
+			column.AppendNil()
 		}
 	case "sum":
 		recColMeta := rec.ColMeta[r.fieldItemIndex[i].index]
 		if sumV := recColMeta.Sum(); !immutable.IsInterfaceNil(sumV) {
 			transMetaFun(sumV, column)
 		} else {
-			column.AppendNilsV2(false)
+			column.AppendNil()
 		}
 	case "min":
 		recColMeta := rec.ColMeta[r.fieldItemIndex[i].index]
@@ -507,7 +503,7 @@ func (r *ChunkReader) selectPreAgg(
 			transMetaFun(value, column)
 			times = []int64{t}
 		} else {
-			column.AppendNilsV2(false)
+			column.AppendNil()
 		}
 	case "max":
 		recColMeta := rec.ColMeta[r.fieldItemIndex[i].index]
@@ -515,23 +511,23 @@ func (r *ChunkReader) selectPreAgg(
 			transMetaFun(value, column)
 			times = []int64{t}
 		} else {
-			column.AppendNilsV2(false)
+			column.AppendNil()
 		}
 	case "first":
 		recColMeta := rec.ColMeta[r.fieldItemIndex[i].index]
 		if value, t := recColMeta.First(); !immutable.IsInterfaceNil(value) {
 			transMetaFun(value, column)
-			column.AppendColumnTimes(t)
+			column.AppendColumnTime(t)
 		} else {
-			column.AppendNilsV2(false)
+			column.AppendNil()
 		}
 	case "last":
 		recColMeta := rec.ColMeta[r.fieldItemIndex[i].index]
 		if value, t := recColMeta.Last(); !immutable.IsInterfaceNil(value) {
 			transMetaFun(value, column)
-			column.AppendColumnTimes(t)
+			column.AppendColumnTime(t)
 		} else {
-			column.AppendNilsV2(false)
+			column.AppendNil()
 		}
 	default:
 		return times
@@ -617,7 +613,7 @@ func (r *ChunkReader) transToChunkByPreAgg(rec *record.Record, info comm.SeriesI
 		}
 	}
 	r.appendTagsByPreAgg(chunk)
-	chunk.AppendTime(times...)
+	chunk.AppendTimes(times)
 	return nil
 }
 
@@ -654,7 +650,7 @@ func (r *ChunkReader) transToChunk(rec *record.Record, chunk executor.Chunk) err
 		}
 	}
 	r.appendTags(rec, chunk)
-	chunk.AppendTime(times...)
+	chunk.AppendTimes(times)
 	return nil
 }
 
@@ -697,7 +693,7 @@ func (r *ChunkReader) readChunk() (executor.Chunk, error) {
 		if err != nil {
 			return nil, err
 		}
-		executor.IntervalIndexGen(ck, *r.schema.Options().(*query.ProcessorOptions))
+		executor.IntervalIndexGen(ck, r.schema.Options().(*query.ProcessorOptions))
 		return ck, nil
 	}
 }
@@ -717,7 +713,7 @@ func (r *ChunkReader) readChunkByPreAgg() (executor.Chunk, error) {
 				if ck.Len() == 0 {
 					return nil, nil
 				}
-				executor.IntervalIndexGen(ck, *r.schema.Options().(*query.ProcessorOptions))
+				executor.IntervalIndexGen(ck, r.schema.Options().(*query.ProcessorOptions))
 				return ck, nil
 			}
 			rec, sInfo, err = r.nextRecord()
@@ -740,7 +736,7 @@ func (r *ChunkReader) readChunkByPreAgg() (executor.Chunk, error) {
 		ck.SetName(influx.GetOriginMstName(name))
 		rec = nil
 		if ck.Len() >= r.schema.Options().(*query.ProcessorOptions).ChunkSize {
-			executor.IntervalIndexGen(ck, *r.schema.Options().(*query.ProcessorOptions))
+			executor.IntervalIndexGen(ck, r.schema.Options().(*query.ProcessorOptions))
 			return ck, nil
 		}
 	}
@@ -871,7 +867,7 @@ func (r *ChunkReader) Explain() []executor.ValuePair {
 	return nil
 }
 
-func (r *ChunkReader) Create(plan executor.LogicalPlan, opt query.ProcessorOptions) (executor.Processor, error) {
+func (r *ChunkReader) Create(plan executor.LogicalPlan, opt *query.ProcessorOptions) (executor.Processor, error) {
 	lr, ok := plan.(*executor.LogicalReader)
 	if !ok {
 		err := fmt.Errorf("%v is not a LogicalReader plan", plan.String())
@@ -883,17 +879,17 @@ func (r *ChunkReader) Create(plan executor.LogicalPlan, opt query.ProcessorOptio
 		seriesPlan = lr.Children()[0]
 	}
 
-	p := NewChunkReader(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, opt.Sources, plan.Schema().(*executor.QuerySchema), lr.Cursors(), plan.(*executor.LogicalReader).GetOneReaderState())
+	p := NewChunkReader(plan.RowDataType(), plan.RowExprOptions(), seriesPlan, plan.Schema().(*executor.QuerySchema), lr.Cursors(), plan.(*executor.LogicalReader).GetOneReaderState())
 	return p, nil
 }
 
 func AppendColumnTimes(bitmap []bool, column executor.Column, columnTimes []int64, recCol *record.ColVal) {
 	if recCol.NilCount == 0 {
-		column.AppendColumnTimes(columnTimes...)
+		column.AppendColumnTimes(columnTimes)
 	} else if len(columnTimes) > 0 && recCol.NilCount != recCol.Length() {
 		for j := range columnTimes {
 			if bitmap[j] {
-				column.AppendColumnTimes(columnTimes[j])
+				column.AppendColumnTime(columnTimes[j])
 			}
 		}
 	}

@@ -140,8 +140,8 @@ func TestFilterRecInMemTable(t *testing.T) {
 	s := &fileLoopCursor{}
 	s.ctx = &idKeyCursorContext{
 		tr: util.TimeRange{Max: 100},
-		m:  map[string]interface{}{},
 	}
+	s.ctx.filterOption.FiltersMap = map[string]interface{}{}
 	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true}, nil)
 	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
 	s.mergeRecIters[sInfo.sid] = nil

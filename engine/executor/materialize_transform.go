@@ -51,24 +51,24 @@ func AdjustNils(dst Column, src Column) {
 			if src.IsNilV2(i) {
 				dst.AppendNil()
 			} else {
-				dst.AppendNilsV2(true)
+				dst.AppendNotNil()
 			}
 		}
 	}
 }
 
 func TransparentForwardIntegerColumn(dst Column, src Column) {
-	dst.AppendIntegerValues(src.IntegerValues()...)
+	dst.AppendIntegerValues(src.IntegerValues())
 	AdjustNils(dst, src)
 }
 
 func TransparentForwardFloatColumn(dst Column, src Column) {
-	dst.AppendFloatValues(src.FloatValues()...)
+	dst.AppendFloatValues(src.FloatValues())
 	AdjustNils(dst, src)
 }
 
 func TransparentForwardBooleanColumn(dst Column, src Column) {
-	dst.AppendBooleanValues(src.BooleanValues()...)
+	dst.AppendBooleanValues(src.BooleanValues())
 	AdjustNils(dst, src)
 }
 
@@ -135,10 +135,10 @@ func rowMaxInteger(dst Column, src Chunk, index []int) {
 			}
 		}
 		if isNil {
-			dst.AppendNilsV2(false)
+			dst.AppendNil()
 		} else {
-			dst.AppendIntegerValues(val)
-			dst.AppendNilsV2(true)
+			dst.AppendIntegerValue(val)
+			dst.AppendNotNil()
 		}
 	}
 }
@@ -159,10 +159,10 @@ func rowMaxFloat(dst Column, src Chunk, index []int) {
 			}
 		}
 		if isNil {
-			dst.AppendNilsV2(false)
+			dst.AppendNil()
 		} else {
-			dst.AppendFloatValues(val)
-			dst.AppendNilsV2(true)
+			dst.AppendFloatValue(val)
+			dst.AppendNotNil()
 		}
 	}
 }
@@ -183,10 +183,10 @@ func rowMaxBoolean(dst Column, src Chunk, index []int) {
 			}
 		}
 		if isNil {
-			dst.AppendNilsV2(false)
+			dst.AppendNil()
 		} else {
-			dst.AppendBooleanValues(val)
-			dst.AppendNilsV2(true)
+			dst.AppendBooleanValue(val)
+			dst.AppendNotNil()
 		}
 	}
 }
@@ -222,25 +222,25 @@ func AppendRowValue(column Column, value interface{}) {
 	switch column.DataType() {
 	case influxql.Integer:
 		if v, ok := value.(int64); ok {
-			column.AppendIntegerValues(v)
+			column.AppendIntegerValue(v)
 		} else {
 			panic("expect integer value")
 		}
 	case influxql.Float:
 		if v, ok := value.(float64); ok {
-			column.AppendFloatValues(v)
+			column.AppendFloatValue(v)
 		} else {
 			panic("expect float value")
 		}
 	case influxql.Boolean:
 		if v, ok := value.(bool); ok {
-			column.AppendBooleanValues(v)
+			column.AppendBooleanValue(v)
 		} else {
 			panic("expect bool value")
 		}
 	case influxql.String, influxql.Tag:
 		if v, ok := value.(string); ok {
-			column.AppendStringValues(v)
+			column.AppendStringValue(v)
 		} else {
 			panic("expect string value")
 		}
@@ -288,7 +288,7 @@ type MaterializeTransform struct {
 	input           *ChunkPort
 	output          *ChunkPort
 	ops             []hybridqp.ExprOptions
-	opt             query.ProcessorOptions
+	opt             *query.ProcessorOptions
 	valuer          influxql.ValuerEval
 	m               map[string]interface{}
 	chunkValuer     *ChunkValuer
@@ -332,7 +332,7 @@ func createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk
 	return transparents
 }
 
-func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions, writer ChunkWriter, schema *QuerySchema) *MaterializeTransform {
+func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions, writer ChunkWriter, schema *QuerySchema) *MaterializeTransform {
 	trans := &MaterializeTransform{
 		input:           NewChunkPort(inRowDataType),
 		output:          NewChunkPort(outRowDataType),
@@ -371,7 +371,7 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 type MaterializeTransformCreator struct {
 }
 
-func (c *MaterializeTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *MaterializeTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewMaterializeTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), plan.RowExprOptions(), opt, NewStdoutChunkWriter(), plan.Schema().(*QuerySchema))
 	return p, nil
 }
@@ -435,17 +435,17 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	oChunk := trans.resultChunkPool.GetChunk()
 	oChunk.SetName(chunk.Name())
 	if !trans.ResetTime {
-		oChunk.AppendTime(chunk.Time()...)
+		oChunk.AppendTimes(chunk.Time())
 	} else {
 		resetTimes := make([]int64, len(chunk.Time()))
 		zeroTime := maxTime(ZeroTimeStamp, trans.opt.StartTime)
 		for j := 0; j < len(chunk.Time()); j++ {
 			resetTimes[j] = zeroTime
 		}
-		oChunk.AppendTime(resetTimes...)
+		oChunk.AppendTimes(resetTimes)
 	}
 	oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
-	oChunk.AppendIntervalIndex(chunk.IntervalIndex()...)
+	oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)
@@ -464,7 +464,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 					continue
 				}
 				AppendRowValue(dst, value)
-				dst.AppendNilsV2(true)
+				dst.AppendNotNil()
 			}
 		}
 	}

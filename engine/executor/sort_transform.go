@@ -100,7 +100,7 @@ var _ = RegistryTransformCreator(&LogicalSort{}, &SortTransformCreator{})
 type SortTransformCreator struct {
 }
 
-func (c *SortTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *SortTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
 	p, err := NewSortTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema().(*QuerySchema), plan.(*LogicalSort).sortFields)
 	if err != nil {
 		return nil, err
@@ -388,10 +388,16 @@ func (trans *SortTransform) partitionOutput(p *sortPartition, i int) {
 		}
 		row.AppendToChunk(chunk, len(trans.dimension))
 		if chunk.Len() >= trans.schema.GetOptions().ChunkSizeNum() {
+			if chunk.TagLen() == 0 {
+				chunk.AppendTagsAndIndex(*NewChunkTagsByTagKVs(trans.dimension, preTagVals), 0)
+			}
 			trans.sendChunk(chunk)
 			chunk = trans.outputChunkPool.GetChunk()
 			chunk.SetName(trans.sortWorkerBufChunk[i].Name())
 		}
+	}
+	if chunk.TagLen() == 0 {
+		chunk.AppendTagsAndIndex(*NewChunkTagsByTagKVs(trans.dimension, preTagVals), 0)
 	}
 	trans.sendChunk(chunk)
 }

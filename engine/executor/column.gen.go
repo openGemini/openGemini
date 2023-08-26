@@ -42,13 +42,15 @@ type Column interface {
 
 	ColumnTime(int) int64
 	ColumnTimes() []int64
-	AppendColumnTimes(...int64)
+	AppendColumnTime(int64)
+	AppendColumnTimes([]int64)
 	SetColumnTimes([]int64)
 
 	IsNilV2(int) bool
 	NilsV2() *Bitmap
 	SetNilsBitmap(new *Bitmap)
 	AppendNil()
+	AppendNotNil()
 	AppendNilsV2(dat ...bool)
 	AppendManyNotNil(num int)
 	AppendManyNil(num int)
@@ -60,24 +62,28 @@ type Column interface {
 
 	FloatTuple(int) floatTuple
 	FloatTuples() []floatTuple
-	AppendFloatTuples(...floatTuple)
+	AppendFloatTuple(floatTuple)
+	AppendFloatTuples([]floatTuple)
 	SetFloatTuples([]floatTuple)
 
 	FloatValue(int) float64
 	FloatValues() []float64
-	AppendFloatValues(...float64)
+	AppendFloatValue(float64)
+	AppendFloatValues([]float64)
 	SetFloatValues([]float64)
 
 	IntegerValue(int) int64
 	IntegerValues() []int64
-	AppendIntegerValues(...int64)
+	AppendIntegerValue(int64)
+	AppendIntegerValues([]int64)
 	SetIntegerValues([]int64)
 
 	StringValue(int) string
 	StringValuesV2(dst []string) []string
 	StringValuesRange(dst []string, start, end int) []string
 	StringValuesWithOffset(start, end int, offsets []uint32) ([]byte, []uint32)
-	AppendStringValues(...string)
+	AppendStringValue(string)
+	AppendStringValues([]string)
 	AppendStringBytes([]byte, []uint32)
 	SetStringValues([]byte, []uint32)
 	GetStringBytes() ([]byte, []uint32)
@@ -86,7 +92,8 @@ type Column interface {
 
 	BooleanValue(int) bool
 	BooleanValues() []bool
-	AppendBooleanValues(...bool)
+	AppendBooleanValue(bool)
+	AppendBooleanValues([]bool)
 	SetBooleanValues([]bool)
 
 	//TODO:CheckColumn used to check the chunk's structure
@@ -150,24 +157,16 @@ func (c *ColumnImpl) ColumnTimes() []int64 {
 	return c.times
 }
 
-func (c *ColumnImpl) AppendColumnTimes(values ...int64) {
+func (c *ColumnImpl) AppendColumnTime(value int64) {
+	c.times = append(c.times, value)
+}
+
+func (c *ColumnImpl) AppendColumnTimes(values []int64) {
 	c.times = append(c.times, values...)
 }
 
 func (c *ColumnImpl) SetColumnTimes(values []int64) {
 	c.times = values
-}
-
-func (c *ColumnImpl) Time(idx int) int64 {
-	return c.times[idx]
-}
-
-func (c *ColumnImpl) Times() []int64 {
-	return c.times
-}
-
-func (c *ColumnImpl) AppendTimes(times ...int64) {
-	c.times = append(c.times, times...)
 }
 
 func (c *ColumnImpl) IsNilV2(idx int) bool {
@@ -181,6 +180,10 @@ func (c *ColumnImpl) NilsV2() *Bitmap {
 // SetNilsBitmap just for test use now.
 func (c *ColumnImpl) SetNilsBitmap(new *Bitmap) {
 	c.nilsV2 = new
+}
+
+func (c *ColumnImpl) AppendNotNil() {
+	c.nilsV2.append(true)
 }
 
 func (c *ColumnImpl) AppendNil() {
@@ -220,7 +223,7 @@ func (c *ColumnImpl) StringValuesRangeV2(dst []string, start, end int) []string 
 
 func (c *ColumnImpl) AppendManyNotNil(num int) {
 	for i := 0; i < num; i++ {
-		c.AppendNilsV2(true)
+		c.AppendNotNil()
 	}
 }
 
@@ -236,7 +239,7 @@ func (c *ColumnImpl) AppendManyNil(num int) {
 		return
 	}
 	for i := 0; i < num; i++ {
-		c.AppendNilsV2(false)
+		c.AppendNil()
 	}
 }
 
@@ -263,7 +266,11 @@ func (c *ColumnImpl) FloatTuples() []floatTuple {
 	return c.floatTuples
 }
 
-func (c *ColumnImpl) AppendFloatTuples(tuples ...floatTuple) {
+func (c *ColumnImpl) AppendFloatTuple(tuple floatTuple) {
+	c.floatTuples = append(c.floatTuples, tuple)
+}
+
+func (c *ColumnImpl) AppendFloatTuples(tuples []floatTuple) {
 	c.floatTuples = append(c.floatTuples, tuples...)
 }
 
@@ -279,7 +286,11 @@ func (c *ColumnImpl) FloatValues() []float64 {
 	return c.floatValues
 }
 
-func (c *ColumnImpl) AppendFloatValues(values ...float64) {
+func (c *ColumnImpl) AppendFloatValue(value float64) {
+	c.floatValues = append(c.floatValues, value)
+}
+
+func (c *ColumnImpl) AppendFloatValues(values []float64) {
 	c.floatValues = append(c.floatValues, values...)
 }
 
@@ -295,7 +306,11 @@ func (c *ColumnImpl) IntegerValues() []int64 {
 	return c.integerValues
 }
 
-func (c *ColumnImpl) AppendIntegerValues(values ...int64) {
+func (c *ColumnImpl) AppendIntegerValue(value int64) {
+	c.integerValues = append(c.integerValues, value)
+}
+
+func (c *ColumnImpl) AppendIntegerValues(values []int64) {
 	c.integerValues = append(c.integerValues, values...)
 }
 
@@ -376,7 +391,13 @@ func (c *ColumnImpl) StringValuesWithOffset(start, end int, offsets []uint32) ([
 }
 
 // Deprecated: please do not use. recommend to use AppendStringBytes
-func (c *ColumnImpl) AppendStringValues(values ...string) {
+func (c *ColumnImpl) AppendStringValue(value string) {
+	c.offset = append(c.offset, uint32(len(c.stringBytes)))
+	c.stringBytes = append(c.stringBytes, value...)
+}
+
+// Deprecated: please do not use. recommend to use AppendStringBytes
+func (c *ColumnImpl) AppendStringValues(values []string) {
 	for i := range values {
 		c.offset = append(c.offset, uint32(len(c.stringBytes)))
 		c.stringBytes = append(c.stringBytes, values[i]...)
@@ -441,7 +462,11 @@ func (c *ColumnImpl) BooleanValues() []bool {
 	return c.booleanValues
 }
 
-func (c *ColumnImpl) AppendBooleanValues(values ...bool) {
+func (c *ColumnImpl) AppendBooleanValue(value bool) {
+	c.booleanValues = append(c.booleanValues, value)
+}
+
+func (c *ColumnImpl) AppendBooleanValues(values []bool) {
 	c.booleanValues = append(c.booleanValues, values...)
 }
 

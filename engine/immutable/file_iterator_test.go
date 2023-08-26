@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ func TestBufferReader(t *testing.T) {
 		buf1, err1 := reader.Read(offset, size)
 
 		buf = buf[:0]
-		buf2, err2 := file.ReadData(offset, size, &buf)
+		buf2, err2 := file.ReadData(offset, size, &buf, fileops.IO_PRIORITY_LOW_READ)
 
 		require.NoError(t, err1)
 		require.NoError(t, err2)
@@ -66,7 +67,7 @@ func TestBufferReader(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		offset -= 10
 		buf1, err1 := reader.Read(offset, size)
-		buf2, err2 := file.ReadData(offset, size, &buf)
+		buf2, err2 := file.ReadData(offset, size, &buf, fileops.IO_PRIORITY_LOW_READ)
 
 		require.NoError(t, err1)
 		require.NoError(t, err2)

@@ -25,7 +25,7 @@ import (
 )
 
 func NewSlidingWindowProcessors(
-	inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, schema hybridqp.Catalog,
+	inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, schema hybridqp.Catalog,
 ) (CoProcessor, int, int) {
 	windowSize, slidingNum := getSlidingWindowSizeAndSlidingNum(exprOpt, opt, schema)
 	coProcessor := NewCoProcessorImpl()
@@ -52,7 +52,7 @@ func NewSlidingWindowProcessors(
 	return coProcessor, windowSize, slidingNum
 }
 
-func getSlidingWindowSizeAndSlidingNum(exprOpt []hybridqp.ExprOptions, opt query.ProcessorOptions, schema hybridqp.Catalog) (int, int) {
+func getSlidingWindowSizeAndSlidingNum(exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, schema hybridqp.Catalog) (int, int) {
 	var (
 		windowSize      int
 		slidingNum      int

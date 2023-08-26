@@ -387,7 +387,7 @@ func (hw *holtWinters) setColumnRange(inEle *holtWintersChunk, start int, end in
 
 func (hw *holtWinters) appendValue(ocol Column, time int64) {
 	if time == hw.hwr.startTime && hw.hwr.forecastedLoc < len(hw.hwr.forecasted) {
-		ocol.AppendFloatValues(hw.hwr.forecasted[hw.hwr.forecastedLoc])
+		ocol.AppendFloatValue(hw.hwr.forecasted[hw.hwr.forecastedLoc])
 		ocol.AppendManyNotNil(1)
 		hw.hwr.forecastedLoc++
 		hw.hwr.startTime += hw.hwr.interval
@@ -429,7 +429,7 @@ type HoltWintersTransform struct {
 
 	Input             ChunkPort
 	Output            ChunkPort
-	opt               query.ProcessorOptions
+	opt               *query.ProcessorOptions
 	holtWintersLogger *logger.Logger
 	schema            hybridqp.Catalog
 	holtWintersCost   *tracing.Span
@@ -440,7 +440,7 @@ type HoltWintersTransform struct {
 }
 
 func NewHoltWintersTransform(
-	inRowDataType, outRowDataType hybridqp.RowDataType, opt query.ProcessorOptions, schema hybridqp.Catalog,
+	inRowDataType, outRowDataType hybridqp.RowDataType, opt *query.ProcessorOptions, schema hybridqp.Catalog,
 ) (*HoltWintersTransform, error) {
 	trans := &HoltWintersTransform{
 		opt:               opt,
@@ -474,7 +474,7 @@ func NewHoltWintersTransform(
 type HoltWintersTransformCreator struct {
 }
 
-func (c *HoltWintersTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *HoltWintersTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p, err := NewHoltWintersTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), opt, plan.Schema())
 	return p, err
 }
@@ -637,17 +637,17 @@ func (trans *HoltWintersTransform) appendValue(ocol Column, icol Column, start i
 	start = icol.GetValueIndexV2(start)
 	switch datatype {
 	case influxql.Integer:
-		ocol.AppendIntegerValues(icol.IntegerValue(start))
+		ocol.AppendIntegerValue(icol.IntegerValue(start))
 	case influxql.Float:
-		ocol.AppendFloatValues(icol.FloatValue(start))
+		ocol.AppendFloatValue(icol.FloatValue(start))
 	case influxql.Boolean:
-		ocol.AppendBooleanValues(icol.BooleanValue(start))
+		ocol.AppendBooleanValue(icol.BooleanValue(start))
 	case influxql.String:
-		ocol.AppendStringValues(icol.StringValue(start))
+		ocol.AppendStringValue(icol.StringValue(start))
 	case influxql.Tag:
-		ocol.AppendStringValues(icol.StringValue(start))
+		ocol.AppendStringValue(icol.StringValue(start))
 	}
-	ocol.AppendNilsV2(true)
+	ocol.AppendNotNil()
 }
 
 func (trans *HoltWintersTransform) getMinHwsStartTime() int64 {

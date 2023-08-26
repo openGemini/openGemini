@@ -24,13 +24,13 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	libcpu "github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
@@ -169,7 +169,7 @@ func (nc *NodeCollector) collectBasic(ctx context.Context) error {
 	nc.nodeMetric.mu.Unlock()
 
 	nc.nodeMetric.mu.Lock()
-	nc.nodeMetric.CpuNum = int64(runtime.NumCPU())
+	nc.nodeMetric.CpuNum = int64(libcpu.GetCpuNum())
 	nc.nodeMetric.mu.Unlock()
 
 	nc.nodeMetric.mu.Lock()

@@ -503,3 +503,47 @@ func compareResult(res, expRes []int) bool {
 	}
 	return true
 }
+
+func TestSortRecordAndDeduplicate(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "order1_int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "order2_float"},
+		record.Field{Type: influx.Field_Type_String, Name: "order3_string"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "ttbool"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+		[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+		[]int{1, 1, 1, 1}, []string{"ha", "helloNew", "helloNew", "hb"},
+		[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+		[]int64{22, 21, 20, 19})
+	expRec := genRowRec(schema,
+		[]int{1, 1, 1}, []int64{0, 1000, 1100},
+		[]int{1, 1, 1}, []float64{1002.4, 1001.3, 0},
+		[]int{1, 1, 1}, []string{"helloNew", "ha", "hb"},
+		[]int{1, 1, 1}, []bool{false, true, false},
+		[]int64{20, 22, 19})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	tbl := mutable.NewMemTable(config.COLUMNSTORE)
+	msInfo := &mutable.MsInfo{
+		Name:   "cpu",
+		Schema: schema,
+	}
+	pk := []string{"order1_int", "order2_float"}
+	sk := []string{"order1_int", "order2_float", "order3_string"}
+	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	wk := msInfo.GetWriteChunk()
+	wk.WriteRec.SetWriteRec(rec)
+	tbl.SetMsInfo("cpu", msInfo)
+
+	hlp := record.NewSortHelper()
+	defer hlp.Release()
+	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), hlp.SortData, mutable.GetPrimaryKeys(schema, pk), mutable.GetPrimaryKeys(schema, sk), true)
+
+	if !testRecsEqual(rec, expRec) {
+		t.Fatal("error result")
+	}
+}

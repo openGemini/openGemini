@@ -54,7 +54,7 @@ func TestFragmentRanges(t *testing.T) {
 	frs = append(frs, fr2)
 	frs = append(frs, fr3)
 
-	assert.Equal(t, frs.String(), "(\x00, \x02), (\x02, \x03), (\x00, \x01)")
+	assert.Equal(t, frs.String(), "(0, 2), (2, 3), (0, 1)")
 	assert.Equal(t, frs.GetLastFragment(), uint32(3))
 }
 

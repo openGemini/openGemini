@@ -34,19 +34,19 @@ func BuildHashMergeChunk1(i int64) executor.Chunk {
 
 	chunk := b.NewChunk("mst")
 
-	chunk.AppendTime([]int64{i, i + 1, i + 2, i + 3, i + 4}...)
+	chunk.AppendTimes([]int64{i, i + 1, i + 2, i + 3, i + 4})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
 
-	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "danteA", "martino"}...)
+	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "danteA", "martino"})
 	chunk.Column(1).AppendNilsV2(true, true, false, true, true)
 
-	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4}...)
+	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4})
 	chunk.Column(2).AppendManyNotNil(4)
 	chunk.Column(2).AppendNil()
 
-	chunk.Column(3).AppendBooleanValues([]bool{true, false, true, false, true}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, false, true, false, true})
 	chunk.Column(3).AppendManyNotNil(5)
 	return chunk
 }
@@ -64,19 +64,19 @@ func BuildHashMergeChunk2(i int) executor.Chunk {
 	chunk.AppendTagsAndIndex(*tag2, 3)
 
 	startTime := i * 10
-	chunk.AppendTime([]int64{int64(startTime), int64(startTime) + 1, int64(startTime) + 2, int64(startTime) + 3, int64(startTime) + 4, int64(startTime) + 5}...)
+	chunk.AppendTimes([]int64{int64(startTime), int64(startTime) + 1, int64(startTime) + 2, int64(startTime) + 3, int64(startTime) + 4, int64(startTime) + 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5, 6}...)
+	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5, 6})
 	chunk.Column(0).AppendManyNotNil(6)
 
-	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "danteA", "martino", "shirley"}...)
+	chunk.Column(1).AppendStringValues([]string{"tomA", "jerryA", "danteA", "martino", "shirley"})
 	chunk.Column(1).AppendNilsV2(true, true, false, true, true, true)
 
-	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4, 1.5}...)
+	chunk.Column(2).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4, 1.5})
 	chunk.Column(2).AppendManyNotNil(5)
 	chunk.Column(2).AppendNil()
 
-	chunk.Column(3).AppendBooleanValues([]bool{true, false, true, false, true, false}...)
+	chunk.Column(3).AppendBooleanValues([]bool{true, false, true, false, true, false})
 	chunk.Column(3).AppendManyNotNil(6)
 	return chunk
 }

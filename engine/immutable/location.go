@@ -19,6 +19,7 @@ package immutable
 import (
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -56,10 +57,16 @@ func (l *Location) SetFragmentRanges(frs []*fragment.FragmentRange) {
 	if len(frs) == 0 {
 		return
 	}
-	// suppose frs is ascending
-	l.segPos = int(frs[0].Start)
-	l.fragPos = 0
 	l.fragRgs = frs
+	// suppose frs is ascending
+	if l.ctx.Ascending {
+		l.fragPos = 0
+		l.segPos = int(frs[0].Start)
+		return
+	}
+	// frs is descending
+	l.fragPos = len(l.fragRgs) - 1
+	l.segPos = int(l.fragRgs[l.fragPos].End - 1)
 }
 
 func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buffer *[]byte) error {
@@ -72,7 +79,7 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buffer *[]byte) e
 		return nil
 	}
 
-	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta, buffer)
+	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta, buffer, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		return err
 	}
@@ -228,7 +235,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 		}
 
 		tracing.StartPP(l.ctx.readSpan)
-		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.ctx)
+		rec, err = l.r.ReadAt(l.meta, l.segPos, dst, l.ctx, fileops.IO_PRIORITY_ULTRA_HIGH)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -251,8 +258,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 
 			// filter by field
 			if rec != nil {
-				rec = FilterByField(rec, filterRec, filterOpts.filtersMap, filterOpts.cond, filterOpts.rowFilters, filterOpts.fieldsIdx,
-					filterOpts.filterTags, filterOpts.pointTags, filterOpts.condFunctions, filterBitmap)
+				rec = FilterByField(rec, filterRec, filterOpts.options, filterOpts.cond, filterOpts.rowFilters, filterOpts.pointTags, filterBitmap)
 			}
 		})
 	}

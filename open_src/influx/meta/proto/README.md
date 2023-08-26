@@ -30,5 +30,5 @@ With the installation of Protobuf and Gogo plugin, you can now use Protobuf in y
 
 ```bash
 # Generate Go code from .proto file
-protoc --gogo_out=. open_src/influx/meta/proto/meta.proto
+protoc --gogo_out=. ./meta.proto
 ```

@@ -262,7 +262,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 		}
 
 		decs := NewReadContext(true)
-		cms, err := f.ReadChunkMetaData(0, midx, nil)
+		cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -282,7 +282,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 			rec := record.NewRecordBuilder(schema)
 			rec.ReserveColumnRows(conf.maxRowsPerSegment)
 			for j := range cm.timeMeta().entries {
-				rec, err = f.ReadAt(cm, j, rec, decs)
+				rec, err = f.ReadAt(cm, j, rec, decs, fileops.IO_PRIORITY_LOW_READ)
 				if err != nil {
 					t.Fatal(err)
 				}

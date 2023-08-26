@@ -34,14 +34,14 @@ type GroupByTransform struct {
 	output       *ChunkPort
 	builder      *ChunkBuilder
 	ops          []hybridqp.ExprOptions
-	opt          query.ProcessorOptions
+	opt          *query.ProcessorOptions
 	transparents []func(dst Column, src Column)
 	mapTransToIn []int
 
 	workTracing *tracing.Span
 }
 
-func NewGroupByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt query.ProcessorOptions) *GroupByTransform {
+func NewGroupByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions) *GroupByTransform {
 	trans := &GroupByTransform{
 		input:        NewChunkPort(inRowDataType),
 		output:       NewChunkPort(outRowDataType),
@@ -62,7 +62,7 @@ func NewGroupByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybr
 type GroupByTransformCreator struct {
 }
 
-func (c *GroupByTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
+func (c *GroupByTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
 	p := NewGroupByTransform(plan.Children()[0].RowDataType(), plan.RowDataType(), plan.RowExprOptions(), opt)
 	return p, nil
 }
@@ -153,9 +153,9 @@ func (trans *GroupByTransform) Work(ctx context.Context) error {
 func (trans *GroupByTransform) transform(chunk Chunk) Chunk {
 	oChunk := trans.builder.NewChunk(chunk.Name())
 	oChunk.SetName(chunk.Name())
-	oChunk.AppendTime(chunk.Time()...)
+	oChunk.AppendTimes(chunk.Time())
 	oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
-	oChunk.AppendIntervalIndex(chunk.IntervalIndex()...)
+	oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)

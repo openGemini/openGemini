@@ -19,7 +19,9 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path"
 	"strconv"
@@ -140,6 +142,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	immutable.SetCacheMetaData(options.CacheMetaBlock)
 	immutable.SetCompactLimit(options.CompactThroughput, options.CompactThroughputBurst)
 	immutable.SetSnapshotLimit(options.SnapshotThroughput, options.SnapshotThroughputBurst)
+	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
 	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
 	immutable.Init()
 
@@ -277,6 +280,85 @@ func (e *Engine) Close() error {
 		e.dropDBPt(db)
 	}
 	return nil
+}
+
+type ShardStatus struct {
+	ShardId  uint64
+	Opened   bool
+	ReadOnly bool
+}
+
+// MarshalText keeps marshaled dict items order
+func (s ShardStatus) MarshalText() (data []byte, err error) {
+	ctx := fmt.Sprintf("{ShardId: %d, Opened: %t, ReadOnly: %t}", s.ShardId, s.Opened, s.ReadOnly)
+	return []byte(ctx), nil
+}
+
+func (e *Engine) getShardStatus(param map[string]string) (map[string]string, error) {
+	var dbName, rpName string
+	if db, ok := param["db"]; ok {
+		dbName = db
+	}
+	if rp, ok := param["rp"]; ok {
+		rpName = rp
+	}
+
+	var ptId uint32 = math.MaxUint32
+	if id, ok := param["pt"]; ok {
+		if n, err := strconv.Atoi(id); err == nil {
+			ptId = uint32(n)
+		}
+	}
+	var shardId uint64 = math.MaxUint64
+	if id, ok := param["shard"]; ok {
+		if n, err := strconv.Atoi(id); err == nil {
+			shardId = uint64(n)
+		}
+	}
+	e.log.Info("query shard status", zap.String("db", dbName), zap.String("rp", rpName), zap.Uint32("pt", ptId), zap.Uint64("shard", shardId))
+
+	resp := make(map[string][]ShardStatus)
+
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for db, partitions := range e.DBPartitions {
+		if dbName != "" && dbName != db {
+			continue
+		}
+		for pt, dbptInfo := range partitions {
+			if ptId != math.MaxUint32 && ptId != pt {
+				continue
+			}
+			dbptInfo.mu.RLock()
+			for sid, shd := range dbptInfo.shards {
+				if shardId != math.MaxUint64 && shardId != sid {
+					continue
+				}
+				if rpName != "" && rpName != shd.GetRPName() {
+					continue
+				}
+
+				key := fmt.Sprintf("db: %s, rp: %s, pt: %d", db, shd.GetRPName(), shd.GetID())
+				value := ShardStatus{
+					ShardId:  sid,
+					Opened:   shd.IsOpened(),
+					ReadOnly: shd.GetIdent().ReadOnly,
+				}
+				resp[key] = append(resp[key], value)
+			}
+			dbptInfo.mu.RUnlock()
+		}
+	}
+
+	var result = make(map[string]string)
+	for k, v := range resp {
+		val, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		result[k] = string(val)
+	}
+	return result, nil
 }
 
 func (e *Engine) ForceFlush() {
@@ -1059,7 +1141,8 @@ func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32
 			return nil, err
 		}
 		if s == nil {
-			return nil, errno.NewError(errno.ShardNotFound, shardId)
+			e.log.Warn(fmt.Sprintf("ScanWithSparseIndex shard is null. db: %s, ptId: %d, shardId: %d", db, ptId, shardId))
+			continue
 		}
 		fileFrags, err := s.ScanWithSparseIndex(ctx, schema, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
@@ -1164,7 +1247,7 @@ func (e *Engine) unrefDBPTNoLock(database string, ptID uint32) {
 	dbPT[ptID].unref()
 }
 
-func (e *Engine) SysCtrl(req *netstorage.SysCtrlRequest) error {
+func (e *Engine) SysCtrl(req *netstorage.SysCtrlRequest) (map[string]string, error) {
 	return e.processReq(req)
 }
 

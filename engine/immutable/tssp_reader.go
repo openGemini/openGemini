@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -68,14 +69,12 @@ type TSSPFile interface {
 	Inuse() bool
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error)
+	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
 	Read(id uint64, tr util.TimeRange, dst *record.Record) (*record.Record, error)
-	ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error)
-	ChunkAt(index int) (*ChunkMeta, error)
-	ReadData(offset int64, size uint32, dst *[]byte) ([]byte, error)
-	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error)
+	ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error)
+	ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
 
-	CreateTime() int64
 	FileStat() *Trailer
 	// FileSize get the size of the disk occupied by file
 	FileSize() int64
@@ -106,6 +105,7 @@ type TSSPFile interface {
 	MetaIndexItemNum() int64
 	AddToEvictList(level uint16)
 	RemoveFromEvictList(level uint16)
+	GetFileReaderRef() int64
 }
 
 type TSSPFiles struct {
@@ -315,7 +315,9 @@ func (f *tsspFile) UnrefFileReader() {
 	if f.stopped() {
 		return
 	}
-
+	if f.reader == nil {
+		return
+	}
 	if f.reader.Unref() > 0 {
 		return
 	}
@@ -354,13 +356,6 @@ func (f *tsspFile) Path() string {
 		return ""
 	}
 	return f.reader.FileName()
-}
-
-func (f *tsspFile) CreateTime() int64 {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	return f.reader.CreateTime()
 }
 
 func (f *tsspFile) Name() string {
@@ -446,13 +441,13 @@ func (f *tsspFile) MetaIndexAt(idx int) (*MetaIndex, error) {
 	return f.reader.MetaIndexAt(idx)
 }
 
-func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte) (*ChunkMeta, error) {
+func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.stopped() {
 		return nil, errFileClosed
 	}
-	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, dst, buffer)
+	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, dst, buffer, ioPriority)
 }
 
 func (f *tsspFile) Read(uint64, util.TimeRange, *record.Record) (*record.Record, error) {
@@ -462,7 +457,7 @@ func (f *tsspFile) Read(uint64, util.TimeRange, *record.Record) (*record.Record,
 	panic("impl me")
 }
 
-func (f *tsspFile) ReadData(offset int64, size uint32, dst *[]byte) ([]byte, error) {
+func (f *tsspFile) ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -470,10 +465,10 @@ func (f *tsspFile) ReadData(offset int64, size uint32, dst *[]byte) ([]byte, err
 		return nil, errFileClosed
 	}
 
-	return f.reader.Read(offset, size, dst)
+	return f.reader.Read(offset, size, dst, ioPriority)
 }
 
-func (f *tsspFile) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta) ([]ChunkMeta, error) {
+func (f *tsspFile) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -481,10 +476,10 @@ func (f *tsspFile) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta)
 		return dst, errFileClosed
 	}
 
-	return f.reader.ReadChunkMetaData(metaIdx, m, dst)
+	return f.reader.ReadChunkMetaData(metaIdx, m, dst, ioPriority)
 }
 
-func (f *tsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext) (*record.Record, error) {
+func (f *tsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -498,16 +493,7 @@ func (f *tsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *
 		return nil, err
 	}
 
-	return f.reader.ReadData(cm, segment, dst, decs)
-}
-
-func (f *tsspFile) ChunkAt(index int) (*ChunkMeta, error) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	if f.stopped() {
-		return nil, errFileClosed
-	}
-	return f.reader.ChunkMetaAt(index)
+	return f.reader.ReadData(cm, segment, dst, decs, ioPriority)
 }
 
 func (f *tsspFile) FileStat() *Trailer {
@@ -791,6 +777,15 @@ func (f *tsspFile) MetaIndexItemNum() int64 {
 	return f.reader.Stat().MetaIndexItemNum()
 }
 
+func (f *tsspFile) GetFileReaderRef() int64 {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	if f.reader != nil {
+		return f.reader.GetFileReaderRef()
+	}
+	return 0
+}
+
 var (
 	_ TSSPFile = (*tsspFile)(nil)
 )
@@ -858,4 +853,63 @@ func FileOperation(f TSSPFile, op func()) {
 		f.Unref()
 	}()
 	op()
+}
+
+var fileQueryCache *QueryfileCache
+
+func InitQueryFileCache(cap uint32, enable bool) {
+	if enable {
+		fileQueryCache = NewQueryfileCache(cap)
+	}
+}
+
+type QueryfileCache struct {
+	cache    chan TSSPFile
+	cacheCap uint32
+}
+
+func GetQueryfileCache() *QueryfileCache {
+	return fileQueryCache
+}
+
+func NewQueryfileCache(cap uint32) *QueryfileCache {
+	if cap == 0 {
+		return &QueryfileCache{
+			cache:    make(chan TSSPFile, cpu.GetCpuNum()*8),
+			cacheCap: uint32(cpu.GetCpuNum() * 8),
+		}
+	} else {
+		return &QueryfileCache{
+			cache:    make(chan TSSPFile, cap),
+			cacheCap: cap,
+		}
+	}
+}
+
+func (qfc *QueryfileCache) Put(f TSSPFile) {
+	if f.GetFileReaderRef() > 1 {
+		f.UnrefFileReader()
+		return
+	}
+	for {
+		select {
+		case qfc.cache <- f:
+			return
+		default:
+			qfc.Get()
+		}
+	}
+}
+
+func (qfc *QueryfileCache) Get() {
+	select {
+	case f := <-qfc.cache:
+		f.UnrefFileReader()
+	default:
+		return
+	}
+}
+
+func (qfc *QueryfileCache) GetCap() uint32 {
+	return qfc.cacheCap
 }
