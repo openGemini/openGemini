@@ -29,5 +29,7 @@ vendor/
 config/openGemini-*
 config/monitor-*
 
+dist/
+
 output/
 go.sum
