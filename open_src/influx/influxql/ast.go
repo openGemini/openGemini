@@ -6946,7 +6946,7 @@ func (p *CaseWhenExpr) expr() {}
 func (p *CaseWhenExpr) String() string {
 	var s string
 	for i := range p.Conditions {
-		s += "Condition：" + p.Conditions[i].String() + "Assigner:" + p.Assigners[i].String()
+		s += "Condition:" + p.Conditions[i].String() + "Assigner:" + p.Assigners[i].String()
 	}
 	s += "Else Condition:" + p.Assigners[len(p.Conditions)].String()
 	return fmt.Sprintf(s)

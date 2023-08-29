@@ -400,7 +400,7 @@ var messages = []struct {
 			"point." +
 			"When events occur, the Initiation Dispatcher" +
 			"returns from the synchronous event demultiplexing call" +
-			"and “reacts” by dispatching the Event Handler’s" +
+			"and “reacts” by dispatching the Event Handler's" +
 			"handle event hook method for each handle that is" +
 			"ready.” This hook method executes user-defined code and" +
 			"returns control to the Initiation Dispatcher when it" +
@@ -409,7 +409,7 @@ var messages = []struct {
 			"If the Reactor pattern is used in an application with only one" +
 			"thread of control it is possible to eliminate all synchronization. " +
 			"In this case, the Initiation Dispatcher serializes the Event Handler handle event hooks within" +
-			"the application’s process.",
+			"the application's process.",
 	},
 }
 

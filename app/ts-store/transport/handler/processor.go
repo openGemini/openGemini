@@ -142,7 +142,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	qm := query.NewManager(msg.ClientID())
 
-	// case for：
+	// case for:
 	// this query is retried by SQL when store closed and DBPT move to this node.
 	if qm.IsKilled(req.Opt.QueryId) {
 		err := errno.NewError(errno.ErrQueryKilled, req.Opt.QueryId)
