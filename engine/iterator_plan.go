@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -799,6 +800,8 @@ func (r *ChunkReader) Work(ctx context.Context) error {
 			}
 			iterCount++
 			rowCount += ch.Len()
+
+			failpoint.Inject("fixture-on-chunkreader", nil)
 
 			tracing.SpanElapsed(r.outputSpan, func() {
 				r.sendChunk(ch)
