@@ -17,9 +17,7 @@ limitations under the License.
 package config_test
 
 import (
-	"fmt"
 	"os"
-	"path"
 	"testing"
 	"time"
 
@@ -63,13 +61,17 @@ func TestLogger(t *testing.T) {
 	lg.Path = dir
 	assert.NoError(t, lg.Validate())
 
-	assert.Equal(t, path.Clean(fmt.Sprintf("%s/%s.log", dir, config.AppMeta)), lg.GetFileName())
+	assert.Equal(t, string(config.AppMeta), lg.GetApp())
 
 	lg.SetApp(config.AppSql)
-	assert.Equal(t, path.Clean(fmt.Sprintf("%s/%s.log", dir, config.AppSql)), lg.GetFileName())
+	assert.Equal(t, string(config.AppSql), lg.GetApp())
 
-	jack := lg.Build("raft")
+	jack := lg.NewLumberjackLogger("raft")
 	assert.Equal(t, lg.MaxAge, jack.MaxAge)
+
+	lg.MaxSize = 1024
+	jack = lg.NewLumberjackLogger("raft")
+	assert.Equal(t, jack.MaxSize, 1)
 }
 
 func TestTSMonitor(t *testing.T) {

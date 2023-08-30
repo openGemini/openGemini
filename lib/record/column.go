@@ -1161,6 +1161,21 @@ func (cv *ColVal) StringValueUnsafe(i int) (string, bool) {
 	}
 }
 
+func (cv *ColVal) BytesUnsafe(i int) ([]byte, bool) {
+	isNil := cv.IsNil(i)
+	if isNil {
+		return []byte{}, isNil
+	}
+
+	if i == len(cv.Offset)-1 {
+		off := cv.Offset[i]
+		return cv.Val[off:], false
+	}
+	start := cv.Offset[i]
+	end := cv.Offset[i+1]
+	return cv.Val[start:end], false
+}
+
 func (cv *ColVal) BooleanValue(i int) (bool, bool) {
 	isNil := cv.IsNil(i)
 	if isNil {

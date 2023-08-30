@@ -37,9 +37,6 @@ type SortData struct {
 
 func (d *SortData) Less(i, j int) bool {
 	for idx, item := range d.Data {
-		if item.Len() == 0 {
-			continue
-		}
 		v := item.Compare(i, j)
 		if v == 0 {
 			if len(d.Data)-1 == idx && len(d.DuplicateRows) > 0 {
@@ -48,9 +45,7 @@ func (d *SortData) Less(i, j int) bool {
 			}
 			continue
 		}
-		if v > 0 {
-			d.idx = idx //current swap column idx
-		}
+		d.idx = idx //current swap column idx
 		return v > 0
 	}
 	return false
@@ -58,10 +53,6 @@ func (d *SortData) Less(i, j int) bool {
 
 func (d *SortData) Swap(i, j int) {
 	for l := 0; l < len(d.Data); l++ {
-		if d.Data[l].Len() == 0 {
-			continue
-		}
-
 		d.Data[l].Swap(i, j)
 	}
 	d.RowIds[i], d.RowIds[j] = d.RowIds[j], d.RowIds[i]

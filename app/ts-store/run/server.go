@@ -83,7 +83,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	}
 
 	conf := c.(*config.TSStore)
-	conf.Data.Corrector(conf.Common.CPUNum, conf.Common.MemorySize)
+	conf.Data.Corrector(cpu.GetCpuNum(), conf.Common.MemorySize)
 	if err := conf.Data.ValidateEngine(netstorage.RegisteredEngines()); err != nil {
 		return nil, err
 	}

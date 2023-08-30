@@ -2957,6 +2957,7 @@ func (f *FloatHeapItem) appendForAux(input Chunk, start, end, ordinal int) []int
 	} else {
 		f.appendForAuxSlow(input, start, end, ordinal, maxIndex)
 	}
+	sort.Sort(f)
 	index := make([]int, 0)
 	for i := range f.items {
 		if idx := f.items[i].index - maxIndex; idx >= start {
@@ -3138,6 +3139,7 @@ func (f *IntegerHeapItem) appendForAux(input Chunk, start, end, ordinal int) []i
 	} else {
 		f.appendForAuxSlow(input, start, end, ordinal, maxIndex)
 	}
+	sort.Sort(f)
 	index := make([]int, 0)
 	for i := range f.items {
 		if idx := f.items[i].index - maxIndex; idx >= start {

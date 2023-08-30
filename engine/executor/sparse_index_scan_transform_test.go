@@ -26,10 +26,13 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 type MocTsspFile struct {
@@ -39,6 +42,12 @@ type MocTsspFile struct {
 
 func (m MocTsspFile) Path() string {
 	return m.path
+}
+
+func (m MocTsspFile) Unref() {
+}
+
+func (m MocTsspFile) UnrefFileReader() {
 }
 
 func buildInputRowDataType() hybridqp.RowDataType {
@@ -600,6 +609,7 @@ func TestSparseIndexScanTransform(t *testing.T) {
 
 	// build the pipeline executor
 	var process []executor.Processor
+	logger.InitLogger(config.Logger{Level: zap.DebugLevel})
 	trans := executor.NewSparseIndexScanTransform(outputRowDataType, index.Children()[0], index.RowExprOptions(), info, index.Schema())
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
 	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {

@@ -218,7 +218,7 @@ func CollectOpsSpdyStatistics() []opsStat.OpsStatistic {
 	spdyStat.mu.Lock()
 	defer spdyStat.mu.Unlock()
 
-	valueMap := make(map[string]interface{}, 0)
+	statistic := opsStat.NewStatistic("spdy")
 	for addr, values := range spdyStat.data {
 		spdyTagMap["remote_addr"] = addr
 
@@ -231,14 +231,15 @@ func CollectOpsSpdyStatistics() []opsStat.OpsStatistic {
 			}
 
 			vk := items[i]
-			valueMap[vk] = v
+			statistic.Values[vk] = v
 		}
 	}
 
-	return []opsStat.OpsStatistic{{
-		Name:   "spdy",
-		Tags:   spdyTagMap,
-		Values: valueMap,
-	},
+	// Add any supplied tags.
+	for k, v := range spdyTagMap {
+		statistic.Tags[k] = v
+	}
+	return []opsStat.OpsStatistic{
+		statistic,
 	}
 }

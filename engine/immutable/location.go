@@ -171,7 +171,8 @@ func (l *Location) nextSegment(toLast bool) {
 		if toLast {
 			l.AscendingDone()
 		} else {
-			if int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End) {
+			if (l.fragPos == len(l.fragRgs)-1 && int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End)) ||
+				(l.fragPos < len(l.fragRgs)-1 && int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End)-1) {
 				l.segPos++
 			} else {
 				l.fragPos++
@@ -182,7 +183,8 @@ func (l *Location) nextSegment(toLast bool) {
 		if toLast {
 			l.DescendingDone()
 		} else {
-			if int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End) {
+			if (l.fragPos == 0 && int(l.fragRgs[l.fragPos].Start) <= l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End)) ||
+				(l.fragPos > 0 && int(l.fragRgs[l.fragPos].Start) < l.segPos && l.segPos < int(l.fragRgs[l.fragPos].End)) {
 				l.segPos--
 			} else {
 				l.fragPos--

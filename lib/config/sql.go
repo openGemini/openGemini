@@ -106,7 +106,7 @@ func NewTSSql() *TSSql {
 	return c
 }
 
-func (c *TSSql) Corrector(cpuNum int) {
+func (c *TSSql) Corrector(cpuNum, cpuAllocRatio int) {
 	if cpuNum == 0 {
 		cpuNum = runtime.NumCPU()
 	}
@@ -114,10 +114,10 @@ func (c *TSSql) Corrector(cpuNum int) {
 		c.HTTP.MaxConnectionLimit = cpuNum * 125
 	}
 	if c.HTTP.MaxConcurrentWriteLimit == 0 {
-		c.HTTP.MaxConcurrentWriteLimit = cpuNum * 4
+		c.HTTP.MaxConcurrentWriteLimit = cpuNum * 4 * cpuAllocRatio
 	}
 	if c.HTTP.MaxConcurrentQueryLimit == 0 {
-		c.HTTP.MaxConcurrentQueryLimit = cpuNum
+		c.HTTP.MaxConcurrentQueryLimit = cpuNum * cpuAllocRatio
 	}
 	if c.HTTP.MaxEnqueuedWriteLimit == 0 {
 		c.HTTP.MaxEnqueuedWriteLimit = c.HTTP.MaxConnectionLimit - c.HTTP.MaxConcurrentWriteLimit

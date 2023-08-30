@@ -786,6 +786,17 @@ type CreateMeasurementStatement struct {
 	IndexOption     []*IndexOption
 }
 
+type CreateMeasurementStatementOption struct {
+	IndexType  []string
+	IndexList  [][]string
+	ShardKey   []string
+	Type       string
+	EngineType string
+	PrimaryKey []string
+	SortKey    []string
+	Property   [][]string
+}
+
 type IndexOption struct {
 	FieldName  string
 	Tokens     string

@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
@@ -119,9 +120,21 @@ type ColumnMeta struct {
 	entries []Segment
 }
 
+func (m *ColumnMeta) Equal(name string, ty int) bool {
+	return m.name == name && int(m.ty) == ty
+}
+
+func (m *ColumnMeta) IsTime() bool {
+	return m.name == record.TimeField
+}
+
+func (m *ColumnMeta) Name() string {
+	return m.name
+}
+
 func (m *ColumnMeta) Clone() ColumnMeta {
 	return ColumnMeta{
-		name:    m.name,
+		name:    m.Name(),
 		ty:      m.ty,
 		entries: append([]Segment{}, m.entries...),
 	}
@@ -200,7 +213,10 @@ func (m *ColumnMeta) unmarshal(src []byte, segs int) ([]byte, error) {
 		log.Error(err.Error())
 		return nil, err
 	}
-	m.name, src = string(src[:l]), src[l:]
+
+	m.name = stringinterner.InternSafe(util.Bytes2str(src[:l]))
+	src = src[l:]
+
 	m.ty, src = src[0], src[1:]
 	l, src = int(numberenc.UnmarshalUint16(src)), src[2:]
 	if len(src) < l {
@@ -466,7 +482,7 @@ func (m *ChunkMeta) unmarshal(src []byte) ([]byte, error) {
 
 func (m *ChunkMeta) columnIndex(ref *record.Field) int {
 	for i := range m.colMeta {
-		if ref.Name == m.colMeta[i].name && ref.Type == int(m.colMeta[i].ty) {
+		if m.colMeta[i].Equal(ref.Name, ref.Type) {
 			return i
 		}
 	}

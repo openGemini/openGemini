@@ -1874,6 +1874,19 @@ func createQuerySchemaWithID() *executor.QuerySchema {
 	return schema
 }
 
+func createQuerySchemaWithAge() *executor.QuerySchema {
+	opt := query.ProcessorOptions{Dimensions: []string{"name"}}
+	fields := make(influxql.Fields, 0, 1)
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:  "age",
+			Type: influxql.Integer,
+		},
+	})
+	schema := executor.NewQuerySchema(fields, []string{"age"}, &opt, nil)
+	return schema
+}
+
 func testBuildPipelineExecutor(t *testing.T, querySchema *executor.QuerySchema, rowDataType hybridqp.RowDataType) error {
 	info := buildIndexScanExtraInfo()
 	reader := executor.NewLogicalColumnStoreReader(nil, querySchema)
@@ -1882,7 +1895,12 @@ func testBuildPipelineExecutor(t *testing.T, querySchema *executor.QuerySchema, 
 		agg := executor.NewLogicalHashAgg(reader, querySchema, executor.READER_EXCHANGE, nil)
 		input = executor.NewLogicalHashAgg(agg, querySchema, executor.SHARD_EXCHANGE, nil)
 	} else {
-		input = executor.NewLogicalHashMerge(reader, querySchema, executor.READER_EXCHANGE, nil)
+		if len(querySchema.Options().GetDimensions()) == 0 {
+			input = executor.NewLogicalHashMerge(reader, querySchema, executor.SHARD_EXCHANGE, nil)
+		} else {
+			merge := executor.NewLogicalHashMerge(reader, querySchema, executor.READER_EXCHANGE, nil)
+			input = executor.NewLogicalHashMerge(merge, querySchema, executor.SHARD_EXCHANGE, nil)
+		}
 	}
 	indexScan := executor.NewLogicalSparseIndexScan(input, querySchema)
 	executor.ReWriteArgs(indexScan)
@@ -1908,4 +1926,9 @@ func TestBuildPipelineExecutorWithHashAggAndHashMerge(t *testing.T) {
 	rowDataType = hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "id", Type: influxql.Unknown})
 	querySchema = createQuerySchemaWithID()
 	assert.Equal(t, strings.Contains(testBuildPipelineExecutor(t, querySchema, rowDataType).Error(), "HashMergeTransform run error"), true)
+
+	// for hash merge group by
+	rowDataType = hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "age", Type: influxql.Integer})
+	querySchema = createQuerySchemaWithAge()
+	assert.Equal(t, testBuildPipelineExecutor(t, querySchema, rowDataType), nil)
 }

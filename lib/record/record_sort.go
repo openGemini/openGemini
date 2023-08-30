@@ -175,7 +175,6 @@ func (h *SortHelper) appendForColumnStore(rec *Record, data *SortData, start, en
 	if start > end {
 		return
 	}
-
 	rowStart, rowEnd := int(data.RowIds[start]), int(data.RowIds[end]+1)
 	h.appendRecord(rec, data.SortRec, rowStart, rowEnd)
 }

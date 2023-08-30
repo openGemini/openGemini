@@ -72,12 +72,12 @@ func (s *Service) handle() {
 	for _, sdsp := range infos {
 		logger.Info(fmt.Sprintf("start run downsample task with shardID:%d,downsample level:%d", sdsp.ShardId, sdsp.DownSamplePolicyLevel))
 		policy := s.Engine.GetDownSamplePolicy(sdsp.DbName + "." + sdsp.RpName)
-		infos, err := s.MetaClient.GetMstInfoWithInRp(sdsp.DbName, sdsp.RpName, policy.Info.GetTypes())
+		info, err := s.MetaClient.GetMstInfoWithInRp(sdsp.DbName, sdsp.RpName, policy.Info.GetTypes())
 		if err != nil {
 			logger.Warn("GetMstInfoWithInRp Failed", zap.Error(err))
 			return
 		}
-		policy.Schemas = downSampleQuerySchemaGen(sdsp, infos, policy.Info)
+		policy.Schemas = downSampleQuerySchemaGen(sdsp, info, policy.Info)
 		if e := s.Engine.StartDownSampleTask(sdsp, policy.Schemas[sdsp.DownSamplePolicyLevel-1], logger, s.MetaClient); e != nil {
 			logger.Warn("update shard downsample information Failed", zap.Error(e))
 		}

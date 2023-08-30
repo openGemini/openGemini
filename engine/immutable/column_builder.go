@@ -132,7 +132,7 @@ func (b *ColumnBuilder) encIntegerColumn(timeCols []record.ColVal, segCols []rec
 		segCol := &segCols[i]
 		tmCol := timeCols[i]
 		if segCol.Length() != tmCol.Length() {
-			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.name, segCol.Length(), tmCol.Length())
+			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.Name(), segCol.Length(), tmCol.Length())
 			b.log.Error(err.Error())
 			panic(err)
 		}
@@ -175,7 +175,7 @@ func (b *ColumnBuilder) encFloatColumn(timeCols []record.ColVal, segCols []recor
 		segCol := &segCols[i]
 		tmCol := timeCols[i]
 		if segCol.Length() != tmCol.Length() {
-			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.name, segCol.Length(), tmCol.Length())
+			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.Name(), segCol.Length(), tmCol.Length())
 			b.log.Error(err.Error())
 			panic(err)
 		}
@@ -219,7 +219,7 @@ func (b *ColumnBuilder) encStringColumn(timeCols []record.ColVal, segCols []reco
 		segCol := &segCols[i]
 		tmCol := timeCols[i]
 		if segCol.Length() != tmCol.Length() {
-			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.name, segCol.Length(), tmCol.Length())
+			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.Name(), segCol.Length(), tmCol.Length())
 			b.log.Error(err.Error())
 			panic(err)
 		}
@@ -262,7 +262,7 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 		segCol := &segCols[i]
 		tmCol := timeCols[i]
 		if segCol.Length() != tmCol.Length() {
-			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.name, segCol.Length(), tmCol.Length())
+			err = fmt.Errorf("%v column rows not equal time rows, %v != %v", b.colMeta.Name(), segCol.Length(), tmCol.Length())
 			b.log.Error(err.Error())
 			panic(err)
 		}
@@ -348,7 +348,7 @@ func (b *ColumnBuilder) BuildPreAgg() {
 	case influx.Field_Type_Float:
 		builder = b.floatPreAggBuilder
 	case influx.Field_Type_Int:
-		if b.colMeta.name == record.TimeField {
+		if b.colMeta.IsTime() {
 			builder = b.timePreAggBuilder
 		} else {
 			builder = b.intPreAggBuilder

@@ -570,9 +570,8 @@ func (c *StreamWriteFile) validate(id uint64, ref record.Field) error {
 		}
 	}
 
-	if ref.Name != c.colBuilder.colMeta.name || ref.Type != int(c.colBuilder.colMeta.ty) {
-		err := fmt.Errorf("invalid column,exp:%v, but:%v::%v", ref.String(),
-			c.colBuilder.colMeta.name,
+	if !c.colBuilder.colMeta.Equal(ref.Name, ref.Type) {
+		err := fmt.Errorf("invalid column,exp:%v, but:%v::%v", ref.String(), c.colBuilder.colMeta.Name(),
 			influx.FieldTypeName[int(c.colBuilder.colMeta.ty)])
 		c.log.Error(err.Error())
 		return err

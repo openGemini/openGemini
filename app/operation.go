@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -151,6 +152,15 @@ func (pm *ProactiveManager) interruptQuery(memPct float64) {
 	if !syscontrol.InterruptQuery {
 		return
 	}
+
+	// set-mem-use-percent: set the percentage of memory used by the system
+	failpoint.Inject("set-mem-use-percent", func(val failpoint.Value) {
+		if n, ok := val.(int); ok {
+			memPct = float64(n)
+		} else if m, ok := val.(float64); ok {
+			memPct = m
+		}
+	})
 
 	upperMemPct := atomic.LoadInt64(&syscontrol.UpperMemPct)
 	if int64(memPct) <= upperMemPct {

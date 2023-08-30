@@ -29,20 +29,29 @@ import (
 
 var balanceInterval = 10 * time.Second
 
+const SerialBalanceAlgoName string = "v1.0"
+
 type BalanceManager struct {
 	wg      sync.WaitGroup
 	stopped int32
+	algoFn  func()
 }
 
-func NewBalanceManager() *BalanceManager {
-	return &BalanceManager{}
+func NewBalanceManager(algo string) *BalanceManager {
+	bm := &BalanceManager{}
+	if algo == SerialBalanceAlgoName {
+		bm.algoFn = bm.balanceIfNeeded
+		return bm
+	}
+	bm.algoFn = bm.balanceIfNeededEx
+	return bm
 }
 
 // Start balance goroutine
 func (b *BalanceManager) Start() {
 	atomic.StoreInt32(&b.stopped, 0)
 	b.wg.Add(1)
-	go b.balanceIfNeeded()
+	go b.algoFn()
 }
 
 func (b *BalanceManager) balanceIfNeeded() {
@@ -56,6 +65,24 @@ func (b *BalanceManager) balanceIfNeeded() {
 			err := globalService.msm.executeEvent(e)
 			if err != nil {
 				logger.GetLogger().Error("[balancer] balance failed", zap.Any("event", e))
+			}
+		}
+
+		time.Sleep(balanceInterval)
+	}
+}
+
+func (b *BalanceManager) balanceIfNeededEx() {
+	defer b.wg.Done()
+	for {
+		if atomic.LoadInt32(&b.stopped) == 1 || config.GetHaPolicy() != config.SharedStorage {
+			return
+		}
+		events := globalService.store.balanceDBPts()
+		for _, e := range events {
+			err := globalService.msm.executeEvent(e)
+			if err != nil {
+				logger.GetLogger().Error("[balancer] DefaultBalanceAlgoVer failed", zap.Any("event", e))
 			}
 		}
 

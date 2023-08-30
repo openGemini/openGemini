@@ -125,6 +125,7 @@ func init() {
 		"DROP SHARD 3",                                               //add DROP SHARD
 		"set password for user3 = 'guass_345'",                       //add SET PASSWORD
 		"CREATE MEASUREMENT db0",                                     //add CREATE MEASUREMENT
+		"CREATE MEASUREMENT db0 with enginetype = tsstore",           //add CREATE MEASUREMENT
 		"select * from db where a>0 tz('UTC')",                       //add time zone
 		"drop measurement m1",                                        //drop measurement
 		"select * from (select * from t1;select * from t2)",
@@ -133,6 +134,10 @@ func init() {
 		"create measurement cpu with indextype text indexlist msg",
 		"create measurement cpu with indextype text indexlist msg text1 indexlist msg1,msg2",
 		"create measurement TSDB_SIT_AlterMeasurement_BaseFunction_002 with shardkey tag1,tag2",
+		"create measurement cpu with enginetype = tsstore indextype text indexlist msg shardkey hostname type range",
+		"create measurement cpu with enginetype = tsstore indextype text indexlist msg",
+		"create measurement cpu with enginetype = tsstore indextype text indexlist msg text1 indexlist msg1,msg2",
+		"create measurement TSDB_SIT_AlterMeasurement_BaseFunction_002 with enginetype = tsstore shardkey tag1,tag2",
 		"create user xxxxx with password 'xxxx' with partition privileges", // add partition privileges.
 		// select into
 		"select a into bd.rp.mst from mst",
@@ -312,11 +317,19 @@ func TestSingleParser(t *testing.T) {
 				"drop stream stream1",*/
 		"select * from mst where thingid = $thingIdTag ",
 		"select * from mst where a like b and match(a,b) and matchphrase(c,d)",
-		"create measurement mst0 (tag1name string tag,fieldname int field, index aaa bbb type ccc token cxe tokenizers kkk,index aaa bbb type ccc token cxe tokenizers kkk,index aaa bbb type ccc)",
-		"create measurement mst0 (tag1name string tag default a ,fieldname int field, index aaa bbb type ccc segment 2,index eee ffff type hhh segment 3 ) with ENGINETYPE = columnstore SHARDKEY sky1,sky2 type hash primarykey pk1,pk2 sortkey sky1,sky2 property p1=k1,p2=k2",
+		"create measurement mst0 (tag1 tag, field1 int64 field, field2 bool, field3 string, field4 float64)",
+		"create measurement mst0 (tag1 tag, field1 int64 field, field2 bool, field3 sTring, field4 flOAt64)",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 type hash primarykey tag1 sortkey tag1,field1 property p1=k1,p2=k2",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore type hash primarykey tag1 sortkey tag1,field1 property p1=k1,p2=k2",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore primarykey tag1",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore primarykey tag1,field1 sortkey tag1,field1",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore sortkey field1",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = ColumnStore",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = ColumnStore",
 		"show sortkey from mst",
 		"show enginetype from mst",
 		"show primarykey from mst",
+		"show schema from mst",
 	}
 	for _, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

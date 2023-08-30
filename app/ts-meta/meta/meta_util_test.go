@@ -97,7 +97,7 @@ func MakeRaftListen(c *config.Meta) (net.Listener, net.Listener, error) {
 	if err != nil {
 		return ln, nil, err
 	}
-	mux := tcp.NewMux(tcp.MuxLogger(c.Logging.Build("meta_mux")))
+	mux := tcp.NewMux(tcp.MuxLogger(c.Logging.NewLumberjackLogger("meta_mux")))
 	log := zap.NewNop()
 	go func() {
 		if err := mux.Serve(ln); err != nil {
@@ -167,7 +167,7 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 		return nil, err
 	}
 	mms.service.msm = NewMigrateStateMachine()
-	mms.service.balanceManager = NewBalanceManager()
+	mms.service.balanceManager = NewBalanceManager(SerialBalanceAlgoName)
 	balanceInterval = 200 * time.Millisecond
 
 	if err := mms.service.Open(); err != nil {

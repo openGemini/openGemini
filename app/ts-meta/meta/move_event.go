@@ -118,6 +118,10 @@ func (e *MoveEvent) String() string {
 		e.eventType.String(), e.eventId, e.operateId, e.curState.String(), e.preState.String(), e.retryNum)
 }
 
+func (e *MoveEvent) StringForTest() string {
+	return fmt.Sprintf("srcNode: %d, dstNode: %d, ptId: %d", e.src, e.dst, e.pt.Pti.PtId)
+}
+
 func (e *MoveEvent) stateTransition(err error) {
 	nextState := e.curState
 	switch e.curState {

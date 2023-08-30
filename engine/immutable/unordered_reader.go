@@ -61,7 +61,7 @@ func newUnorderedColumnReader(f TSSPFile, cm *ChunkMeta, sr *SegmentReader, pool
 
 func (r *UnorderedColumnReader) findColumnIndex(ref *record.Field) (int, bool) {
 	for i := range r.cm.colMeta {
-		if r.cm.colMeta[i].name == ref.Name && int(r.cm.colMeta[i].ty) == ref.Type {
+		if r.cm.colMeta[i].Equal(ref.Name, ref.Type) {
 			return i, true
 		}
 	}
@@ -138,13 +138,13 @@ func (r *UnorderedColumnReader) ReadSchema(res map[string]record.Field, maxTime 
 
 	for i := range r.cm.colMeta {
 		meta := &r.cm.colMeta[i]
-		if meta.name == record.TimeField {
+		if meta.IsTime() {
 			continue
 		}
 
-		tmp, ok := res[meta.name]
+		tmp, ok := res[meta.Name()]
 		if !ok {
-			res[meta.name] = record.Field{Type: int(meta.ty), Name: meta.name}
+			res[meta.Name()] = record.Field{Type: int(meta.ty), Name: meta.Name()}
 			continue
 		}
 
@@ -211,10 +211,9 @@ type UnorderedReader struct {
 	swap    []int64
 	offsets map[string]int
 	timeCol record.ColVal
-	mh      *record.MergeHelper
 	nilCol  record.ColVal
 
-	colPool *MergeColPool
+	ctx *UnorderedReaderContext
 }
 
 func NewUnorderedReader(log *logger.Logger) *UnorderedReader {
@@ -222,8 +221,7 @@ func NewUnorderedReader(log *logger.Logger) *UnorderedReader {
 		log:     log,
 		meta:    make(map[uint64][]*UnorderedColumnReader),
 		offsets: make(map[string]int),
-		mh:      record.NewMergeHelper(),
-		colPool: &MergeColPool{},
+		ctx:     newUnorderedReadTool(),
 	}
 }
 
@@ -251,7 +249,7 @@ func (r *UnorderedReader) addFile(f TSSPFile) {
 			r.sid = append(r.sid, cm.sid)
 		}
 
-		r.meta[cm.sid] = append(r.meta[itr.curtChunkMeta.sid], newUnorderedColumnReader(f, cm, sr, r.colPool))
+		r.meta[cm.sid] = append(r.meta[itr.curtChunkMeta.sid], newUnorderedColumnReader(f, cm, sr, r.ctx.colPool))
 
 		itr.chunkUsed++
 		itr.curtChunkMeta = nil
@@ -347,36 +345,16 @@ func (r *UnorderedReader) Read(sid uint64, ref *record.Field, maxTime int64) (*r
 	}
 	nilCol := r.AllocNilCol(len(nilTimes), ref)
 
-	var colList []*record.ColVal
-	var timesList [][]int64
-
 	for i := 0; i < len(items); i++ {
 		col, times, err := items[i].Read(ref, maxTime)
 		if err != nil {
 			return nil, nil, err
 		}
 
-		if len(times) > 0 {
-			colList = append(colList, col)
-			timesList = append(timesList, times)
-		}
+		r.ctx.add(times, col)
 	}
 
-	if len(colList) == 0 {
-		return nilCol, nilTimes, nil
-	}
-
-	defer func() {
-		for i := range colList {
-			r.colPool.Put(colList[i])
-		}
-	}()
-
-	for i := 0; i < len(colList); i++ {
-		r.mh.AddUnorderedCol(colList[i], timesList[i])
-	}
-
-	return r.mh.Merge(nilCol, nilTimes, ref.Type)
+	return r.ctx.merge(nilCol, nilTimes, ref.Type)
 }
 
 func (r *UnorderedReader) ReadSeriesSchemas(sid uint64, maxTime int64) record.Schemas {
@@ -498,4 +476,50 @@ func (sr *SegmentReader) decode(data []byte, ref *record.Field, col *record.ColV
 	}
 
 	return decodeColumnData(ref, data, col, sr.ctx, false)
+}
+
+type UnorderedReaderContext struct {
+	mh      *record.MergeHelper
+	colPool *MergeColPool
+
+	cols  []*record.ColVal
+	times [][]int64
+}
+
+func newUnorderedReadTool() *UnorderedReaderContext {
+	return &UnorderedReaderContext{
+		colPool: &MergeColPool{},
+		mh:      record.NewMergeHelper(),
+	}
+}
+
+func (t *UnorderedReaderContext) add(times []int64, col *record.ColVal) {
+	if len(times) > 0 {
+		t.cols = append(t.cols, col)
+		t.times = append(t.times, times)
+	}
+}
+
+func (t *UnorderedReaderContext) release() {
+	for i := range t.cols {
+		t.colPool.Put(t.cols[i])
+	}
+
+	t.cols = t.cols[:0]
+	t.times = t.times[:0]
+
+}
+
+func (t *UnorderedReaderContext) merge(nilCol *record.ColVal, nilTimes []int64, typ int) (*record.ColVal, []int64, error) {
+	if len(t.cols) == 0 {
+		return nilCol, nilTimes, nil
+	}
+
+	defer t.release()
+
+	for i := 0; i < len(t.cols); i++ {
+		t.mh.AddUnorderedCol(t.cols[i], t.times[i])
+	}
+
+	return t.mh.Merge(nilCol, nilTimes, typ)
 }
