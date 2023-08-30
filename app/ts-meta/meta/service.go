@@ -103,11 +103,9 @@ func (s *Service) startMetaServer() error {
 		return fmt.Errorf("metaRPCServer start failed: addr=%s, err=%s", s.config.RPCBindAddress, err)
 	}
 
-	if len(s.config.JoinPeers) > 1 || s.balanceManager != nil {
-		s.clusterManager = NewClusterManager(s.store)
-		s.balanceManager = NewBalanceManager()
-		s.msm = NewMigrateStateMachine()
-	}
+	s.clusterManager = NewClusterManager(s.store)
+	s.balanceManager = NewBalanceManager()
+	s.msm = NewMigrateStateMachine()
 	s.store.cm = s.clusterManager
 	return nil
 }

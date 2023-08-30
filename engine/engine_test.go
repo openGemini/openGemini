@@ -404,7 +404,7 @@ func TestEngine_DropRetentionPolicy(t *testing.T) {
 	}
 
 	delete(eng.DBPartitions["db0"], defaultPtId)
-	require.NoError(t, eng.DropRetentionPolicy("db0", "rp0", defaultPtId))
+	require.Equal(t, true, errno.Equal(eng.DropRetentionPolicy("db0", "rp0", defaultPtId), errno.PtNotFound))
 }
 
 func TestEngine_DropRetentionPolicyErrorRP(t *testing.T) {
@@ -601,7 +601,7 @@ func TestEngine_SeriesKeys(t *testing.T) {
 	// ignore pt not found
 	keys, err := eng.SeriesKeys("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil)
 	assert(len(keys) == 0, "series keys expect 0")
-	require.NoError(t, err)
+	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not exist
 	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil)
@@ -631,7 +631,7 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 	// ignore pt not found
 	mcis, err := eng.SeriesCardinality("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil)
 	assert(len(mcis) == 0, "seriesCardinality expect 0")
-	require.NoError(t, err)
+	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not exist
 	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil)
@@ -679,7 +679,7 @@ func TestEngine_TagValues(t *testing.T) {
 	tagsets, err := eng.TagValues("db0", []uint32{0xff}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
 	}, nil)
-	require.NoError(t, err)
+	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not found
 	tagsets, err = eng.TagValues("db0", []uint32{0}, map[string][][]byte{
@@ -723,7 +723,7 @@ func TestEngine_TagValuesCardinality(t *testing.T) {
 	tagsets, err := eng.TagValuesCardinality("db0", []uint32{0xff}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
 	}, nil)
-	require.NoError(t, err)
+	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not found
 	tagsets, err = eng.TagValuesCardinality("db0", []uint32{0}, map[string][][]byte{

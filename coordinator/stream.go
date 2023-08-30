@@ -29,7 +29,6 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	atomic2 "github.com/openGemini/openGemini/lib/atomic"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -447,7 +446,7 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 		return
 	}
 
-	if !config.GetHaEnable() && !sameSg {
+	if !sameSg {
 		*aliveShardIdxes = s.MetaClient.GetAliveShards(database, sg)
 	}
 

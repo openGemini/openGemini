@@ -19,7 +19,6 @@ package meta
 import (
 	"testing"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
@@ -37,26 +36,33 @@ func TestAssignEventStateTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := "db0"
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
-		t.Fatal(err)
-	}
-	config.SetHaEnable(true)
 	globalService.store.NetStore = NewMockNetStorage()
 	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
-	dataNode.AliveConnID = dataNode.ConnID - 1
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	err = ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	globalService.clusterManager.addClusterMember(1)
+	defer globalService.clusterManager.removeClusterMember(1)
+	// active take over
+	cmd = GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = globalService.store.ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 3, "127.0.0.1:8011")
+	assert.Equal(t, nil, err)
 	dbBriefInfo := &meta.DatabaseBriefInfo{
 		Name:           db,
 		EnableTagArray: false,
 	}
 	dbPt := &meta.DbPtInfo{Db: db, Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 2}}, DBBriefInfo: dbBriefInfo}
 	event := NewAssignEvent(dbPt, 1, dataNode.AliveConnID, false)
-	globalService.clusterManager.addClusterMember(1)
-	defer globalService.clusterManager.removeClusterMember(1)
+
 	assert.Equal(t, dbPt.String(), event.getEventId())
 	assert.Equal(t, Init, event.curState)
 	action, err := event.getNextAction()
@@ -64,7 +70,7 @@ func TestAssignEventStateTransition(t *testing.T) {
 	assert.Equal(t, nil, err)
 	events := globalService.store.data.MigrateEvents
 	assert.Equal(t, 1, len(events))
-	assert.Equal(t, uint64(1), events[dbPt.String()].GetOpId())
+	assert.Equal(t, uint64(2), events[dbPt.String()].GetOpId())
 	assert.Equal(t, uint64(1), events[dbPt.String()].GetDst())
 	assert.Equal(t, int(AssignType), events[dbPt.String()].GetEventType())
 	assert.Equal(t, uint64(0), events[dbPt.String()].GetSrc())

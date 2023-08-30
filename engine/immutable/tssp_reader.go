@@ -70,7 +70,6 @@ type TSSPFile interface {
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
 	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
-	Read(id uint64, tr util.TimeRange, dst *record.Record) (*record.Record, error)
 	ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error)
 	ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
@@ -84,11 +83,6 @@ type TSSPFile interface {
 	ContainsByTime(tr util.TimeRange) (bool, error)
 	ContainsValue(id uint64, tr util.TimeRange) (bool, error)
 	MinMaxTime() (int64, int64, error)
-
-	Delete(ids []int64) error
-	DeleteRange(ids []int64, min, max int64) error
-	HasTombstones() bool
-	TombstoneFiles() []TombstoneFile
 
 	Open() error
 	Close() error
@@ -450,13 +444,6 @@ func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, me
 	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, dst, buffer, ioPriority)
 }
 
-func (f *tsspFile) Read(uint64, util.TimeRange, *record.Record) (*record.Record, error) {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-
-	panic("impl me")
-}
-
 func (f *tsspFile) ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -551,30 +538,6 @@ func (f *tsspFile) ContainsByTime(tr util.TimeRange) (contains bool, err error) 
 	contains = f.reader.ContainsTime(tr)
 
 	return
-}
-
-func (f *tsspFile) Delete([]int64) error {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	panic("impl me")
-}
-
-func (f *tsspFile) DeleteRange([]int64, int64, int64) error {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	panic("impl me")
-}
-
-func (f *tsspFile) HasTombstones() bool {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	panic("impl me")
-}
-
-func (f *tsspFile) TombstoneFiles() []TombstoneFile {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	panic("impl me")
 }
 
 func (f *tsspFile) Rename(newName string) error {

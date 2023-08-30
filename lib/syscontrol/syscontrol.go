@@ -71,6 +71,9 @@ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=verifynode&switchon=false'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=memusagelimit&limit=85'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=backgroundReadLimiter&limit=100m'
 
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=interruptquery&switchon=true&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=uppermemusepct&limit=99&allnodes=y'
+
 Sql cmd:
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=chunk_reader_parallel&limit=4'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=binary_tree_merge&enabled=1'
@@ -103,6 +106,9 @@ const (
 	disableWrite          = "disablewrite"
 	disableRead           = "disableread"
 	BackgroundReadLimiter = "backgroundReadLimiter"
+
+	NodeInterruptQuery = "interruptquery"
+	UpperMemUsePct     = "uppermemusepct"
 )
 
 var (
@@ -114,7 +120,22 @@ var (
 
 	DisableReads  = false
 	DisableWrites = false
+
+	InterruptQuery       = false
+	UpperMemPct    int64 = 0
 )
+
+func UpdateInterruptQuery(switchOn bool) {
+	InterruptQuery = switchOn
+}
+
+func SetUpperMemUsePct(d int64) {
+	logger.GetLogger().Info("SetUpperMemPct:", zap.Int64("UpperMemPct", d))
+	if d <= 0 || d > 100 {
+		return
+	}
+	atomic.StoreInt64(&UpperMemPct, d)
+}
 
 func SetDisableWrite(en bool) {
 	DisableWrites = en
@@ -361,9 +382,38 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		SetDisableRead(en)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
+	case NodeInterruptQuery:
+		if err != nil {
+			return err
+		}
+		return broadcastCmdToStore(req, resp)
+	case UpperMemUsePct:
+		if err != nil {
+			return err
+		}
+		return broadcastCmdToStore(req, resp)
 	default:
 		return fmt.Errorf("unknown sysctrl mod: %v", req.Mod())
 	}
+	return nil
+}
+
+func broadcastCmdToStore(req netstorage.SysCtrlRequest, resp *strings.Builder) error {
+	// store SysCtrl cmd
+	if SysCtrl.MetaClient == nil {
+		return fmt.Errorf("broadcastCmdToStore fail: metaClient nil")
+	}
+	dataNodes, err := SysCtrl.MetaClient.DataNodes()
+	if err != nil {
+		return err
+	}
+	var lock sync.Mutex
+	var wg sync.WaitGroup
+	for _, d := range dataNodes {
+		wg.Add(1)
+		go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+	}
+	wg.Wait()
 	return nil
 }
 

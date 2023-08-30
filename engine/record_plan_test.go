@@ -1918,10 +1918,6 @@ func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, 
 	return nil, nil
 }
 
-func (m MocTsspFile) Read(id uint64, tr util.TimeRange, dst *record.Record) (*record.Record, error) {
-	return nil, nil
-}
-
 func (m MocTsspFile) ReadAt(cm *immutable.ChunkMeta, segment int, dst *record.Record, decs *immutable.ReadContext, ioPriority int) (*record.Record, error) {
 	return nil, nil
 }
@@ -1964,22 +1960,6 @@ func (m MocTsspFile) ContainsValue(id uint64, tr util.TimeRange) (bool, error) {
 
 func (m MocTsspFile) MinMaxTime() (int64, int64, error) {
 	return 0, 0, nil
-}
-
-func (m MocTsspFile) Delete(ids []int64) error {
-	return nil
-}
-
-func (m MocTsspFile) DeleteRange(ids []int64, min, max int64) error {
-	return nil
-}
-
-func (m MocTsspFile) HasTombstones() bool {
-	return false
-}
-
-func (m MocTsspFile) TombstoneFiles() []immutable.TombstoneFile {
-	return nil
 }
 
 func (m MocTsspFile) Open() error {

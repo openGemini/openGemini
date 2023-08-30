@@ -177,6 +177,20 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		}
 		fileops.SetBackgroundReadLimiter(int(limit))
 		return nil, nil
+	case syscontrol.NodeInterruptQuery:
+		switchOn, err := syscontrol.GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return nil, err
+		}
+		syscontrol.UpdateInterruptQuery(switchOn)
+		return nil, nil
+	case syscontrol.UpperMemUsePct:
+		upper, err := syscontrol.GetIntValue(req.Param(), "limit")
+		if err != nil {
+			return nil, err
+		}
+		syscontrol.SetUpperMemUsePct(upper)
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}
@@ -238,15 +252,12 @@ func GetMemUsageLimit() int32 {
 }
 
 func IsMemUsageExceeded() bool {
-	memLimit := GetMemUsageLimit()
-	if memLimit < 1 || memLimit >= 100 {
+	memLimitPct := GetMemUsageLimit()
+	if memLimitPct < 1 || memLimitPct >= 100 {
 		return false
 	}
-	total, available := memory.SysMem()
-	memUsed := total - available
-	memUsedLimit := (total * int64(memLimit)) / 100
-	exceeded := memUsed > memUsedLimit
-	log.Info("system mem usage", zap.Int64("total", total), zap.Int64("available", available), zap.Int64("memUsed", memUsed),
-		zap.Float64("memLimit", float64(memLimit)/100), zap.Int64("memUsedLimit", memUsedLimit), zap.Bool("exceeded", exceeded))
+	memUsedPct := memory.MemUsedPct()
+	exceeded := memUsedPct > float64(memLimitPct)
+	log.Info("system mem usage", zap.Float64("memUsedPct", memUsedPct), zap.Float64("memLimitPct", float64(memLimitPct)), zap.Bool("exceeded", exceeded))
 	return exceeded
 }

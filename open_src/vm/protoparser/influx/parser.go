@@ -1204,16 +1204,16 @@ type Field struct {
 
 type Fields []Field
 
-func (fs Fields) Less(i, j int) bool {
-	return fs[i].Key < fs[j].Key
+func (fs *Fields) Less(i, j int) bool {
+	return (*fs)[i].Key < (*fs)[j].Key
 }
 
-func (fs Fields) Len() int {
-	return len(fs)
+func (fs *Fields) Len() int {
+	return len(*fs)
 }
 
-func (fs Fields) Swap(i, j int) {
-	fs[i], fs[j] = fs[j], fs[i]
+func (fs *Fields) Swap(i, j int) {
+	(*fs)[i], (*fs)[j] = (*fs)[j], (*fs)[i]
 }
 
 func (f *Field) Reset() {

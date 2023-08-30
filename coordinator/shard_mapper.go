@@ -94,13 +94,7 @@ func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, csming *Clu
 			if shardKeyInfo == nil {
 				shardKeyInfo = measurements[0].GetShardKey(groups[i].ID)
 			}
-			var aliveShardIdxes []int
-			if !config.GetHaEnable() {
-				aliveShardIdxes = csm.MetaClient.GetAliveShards(s.Database, &groups[i])
-			} else {
-				// all shards to query
-				aliveShardIdxes = make([]int, len(groups[i].Shards))
-			}
+			aliveShardIdxes := csm.MetaClient.GetAliveShards(s.Database, &groups[i])
 			var shs []meta2.ShardInfo
 			if opt.HintType == hybridqp.FullSeriesQuery || opt.HintType == hybridqp.SpecificSeriesQuery {
 				shs, csming.seriesKey = groups[i].TargetShardsHintQuery(measurements[0], shardKeyInfo, condition, opt, aliveShardIdxes)

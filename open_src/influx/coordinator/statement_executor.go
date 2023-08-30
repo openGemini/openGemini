@@ -1144,7 +1144,7 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 	if !ok {
 		return nil, errors.New("measurement not found")
 	}
-	mst := rp.Measurements[influx.GetNameWithVersion(stmt.Measurement, mstVersion)]
+	mst := rp.Measurements[mstVersion.NameWithVersion]
 
 	switch stmt.Name {
 	case "PRIMARYKEY":
@@ -1530,7 +1530,7 @@ func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, c
 		arr, err := e.NetStorage.ShowSeries(nodeID, q.Database, pts, names, q.Condition)
 		lock.Lock()
 		defer lock.Unlock()
-		if err != nil && config.GetHaEnable() {
+		if err != nil {
 			*hasErr = true
 			series = series[:0] // if execute command failed reset res
 		}
@@ -1598,7 +1598,7 @@ func (e *StatementExecutor) showSeriesCardinality(stmt *influxql.ShowSeriesCardi
 		mstCardinality, err := e.NetStorage.SeriesCardinality(nodeID, stmt.Database, pts, names, stmt.Condition)
 		lock.Lock()
 		defer lock.Unlock()
-		if err != nil && config.GetHaEnable() {
+		if err != nil {
 			*hasErr = true
 			ret = ret[:0]
 		}
@@ -1645,7 +1645,7 @@ func (e *StatementExecutor) showSeriesCardinalityWithCondition(stmt *influxql.Sh
 		mstCardinality, err := e.NetStorage.SeriesCardinality(nodeID, stmt.Database, pts, names, stmt.Condition)
 		lock.Lock()
 		defer lock.Unlock()
-		if err != nil && config.GetHaEnable() {
+		if err != nil {
 			*hasErr = true
 			ret = make(map[string]meta2.CardinalityInfos)
 		}
@@ -1698,7 +1698,7 @@ func (e *StatementExecutor) showSeriesExactCardinality(stmt *influxql.ShowSeries
 		tmp, err := e.NetStorage.SeriesExactCardinality(nodeID, stmt.Database, pts, names, stmt.Condition)
 		lock.Lock()
 		defer lock.Unlock()
-		if err != nil && config.GetHaEnable() {
+		if err != nil {
 			*hasErr = true
 			ret = make(map[string]uint64)
 		}

@@ -196,20 +196,6 @@ func (rec *Record) ReserveSchemaAndColVal(size int) {
 	}
 }
 
-func (rec *Record) ColumnAppendNull(colIdx int) {
-	if rec.Schema[colIdx].Type == influx.Field_Type_Int {
-		rec.ColVals[colIdx].AppendIntegerNull()
-	} else if rec.Schema[colIdx].Type == influx.Field_Type_Float {
-		rec.ColVals[colIdx].AppendFloatNull()
-	} else if rec.Schema[colIdx].Type == influx.Field_Type_Boolean {
-		rec.ColVals[colIdx].AppendBooleanNull()
-	} else if rec.Schema[colIdx].Type == influx.Field_Type_String {
-		rec.ColVals[colIdx].AppendStringNull()
-	} else {
-		panic("error type")
-	}
-}
-
 func (rec *Record) CopyWithCondition(ascending bool, tr util.TimeRange, schema Schemas) *Record {
 	times := rec.Times()
 	startIndex := GetTimeRangeStartIndex(times, 0, tr.Min)
@@ -1307,15 +1293,6 @@ func (rec *Record) AppendIntervalEmptyRow(rowTime int64, initRecMeta bool) {
 			rec.RecMeta.Times[i] = append(rec.RecMeta.Times[i], 0)
 		}
 	}
-}
-
-func (rec *Record) AppendRecRow2IntervalRec(re *Record, row int) {
-	for i := 0; i < len(re.Schema)-1; i++ {
-		intervalRecAppendFunctions[re.Schema[i].Type](re, rec, i, row)
-	}
-	time, _ := re.ColVals[len(re.Schema)-1].IntegerValue(row)
-	rec.ColVals[len(rec.Schema)-1].AppendInteger(time)
-	appendRecMeta2iRec(re, rec, len(re.Schema)-1, row)
 }
 
 func (rec *Record) BuildEmptyIntervalRec(min, max, interval int64, initRecMeta, hasInterval, ascending bool) {

@@ -153,7 +153,7 @@ func (gkp *IntervalKeysMPool) AllocIntervalKeys(size int) []int64 {
 func (gkp *IntervalKeysMPool) AllocValues(size int) []uint64 {
 	n := size - cap(gkp.values)
 	if n > 0 {
-		gkp.values = append(gkp.values[:cap(gkp.intervalKeys)], make([]uint64, n)...)
+		gkp.values = append(gkp.values[:cap(gkp.values)], make([]uint64, n)...)
 	}
 	return gkp.values[:size]
 }
@@ -254,11 +254,21 @@ type HashAggTransform struct {
 	intervalStartTime      int64
 	intervalEndTime        int64
 
-	diskChunks     *chunkInDisk
-	isSpill        bool
-	isChildDrained bool
-	hashAggType    HashAggType
+	diskChunks         *chunkInDisk
+	isSpill            bool
+	isChildDrained     bool
+	hashAggType        HashAggType
+	timeFuncState      TimeFuncState
+	firstOrLastFuncLoc int
 }
+
+type TimeFuncState uint32
+
+const (
+	hasFirst TimeFuncState = iota
+	hasLast
+	unKnown
+)
 
 const (
 	hashAggTransfromName = "HashAggTransform"
@@ -301,6 +311,7 @@ func NewHashAggTransform(
 		mapIntervalValue:     make([]uint64, 1),
 		hashAggType:          t,
 		outputChunkPool:      NewCircularChunkPool(5, NewChunkBuilder(outRowDataType[0])),
+		timeFuncState:        unKnown,
 	}
 	var err error
 	trans.chunkBuilder = NewChunkBuilder(trans.output.RowDataType)
@@ -308,7 +319,7 @@ func NewHashAggTransform(
 		input := NewChunkPort(schema)
 		trans.inputs = append(trans.inputs, input)
 	}
-	if err := trans.initFuncs(inRowDataType[0], outRowDataType[0], exprOpt); err != nil {
+	if err := trans.InitFuncs(inRowDataType[0], outRowDataType[0], exprOpt); err != nil {
 		return nil, err
 	}
 	trans.nilAggResult = trans.newNilAggResultMsg()
@@ -336,7 +347,7 @@ func (trans *HashAggTransform) initIntervalWindow() error {
 	return nil
 }
 
-func (trans *HashAggTransform) initFuncs(inRowDataType, outRowDataType hybridqp.RowDataType,
+func (trans *HashAggTransform) InitFuncs(inRowDataType, outRowDataType hybridqp.RowDataType,
 	exprOpt []hybridqp.ExprOptions) error {
 	var err error
 	var fn *aggFunc
@@ -351,8 +362,14 @@ func (trans *HashAggTransform) initFuncs(inRowDataType, outRowDataType hybridqp.
 				fn, err = NewSumFunc(inRowDataType, outRowDataType, exprOpt[i])
 			case "first":
 				fn, err = NewFirstFunc(inRowDataType, outRowDataType, exprOpt[i])
+				trans.timeFuncState = hasFirst
+				trans.firstOrLastFuncLoc = len(trans.funcs)
 			case "last":
 				fn, err = NewLastFunc(inRowDataType, outRowDataType, exprOpt[i])
+				if trans.timeFuncState == unKnown {
+					trans.timeFuncState = hasLast
+					trans.firstOrLastFuncLoc = len(trans.funcs)
+				}
 			case "min":
 				fn, err = NewMinFunc(inRowDataType, outRowDataType, exprOpt[i])
 			case "max":
@@ -935,7 +952,11 @@ func (trans *HashAggTransform) generateFixIntervalNoFillOutPut() {
 			for k, f := range trans.funcs {
 				aggOperators[k].SetOutVal(chunk, f.outIdx, f.percentile)
 			}
-			chunk.AppendTime(interval.intervalStartTime)
+			if !trans.opt.HasInterval() && trans.timeFuncState != unKnown {
+				chunk.AppendTime(aggOperators[trans.firstOrLastFuncLoc].GetTime())
+			} else {
+				chunk.AppendTime(interval.intervalStartTime)
+			}
 			if chunk.Len() >= trans.schema.GetOptions().ChunkSizeNum() {
 				trans.sendChunk(chunk)
 				chunk = trans.outputChunkPool.GetChunk()
@@ -1015,4 +1036,8 @@ func (trans *HashAggTransform) GetOutputNumber(_ Port) int {
 
 func (trans *HashAggTransform) GetInputNumber(_ Port) int {
 	return 0
+}
+
+func (trans *HashAggTransform) GetFuncs() []aggFunc {
+	return trans.funcs
 }

@@ -57,6 +57,7 @@ type MigrateEvent interface {
 	increaseRetryCnt()
 	exhaustRetries() bool
 	getAliveConnId() uint64
+	handleCommandErr(err error) error
 }
 
 type EventResultInfo struct {

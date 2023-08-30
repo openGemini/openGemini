@@ -850,7 +850,8 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		return
 	}
 
-	database := r.URL.Query().Get("db")
+	urlValues := r.URL.Query()
+	database := urlValues.Get("db")
 	if database == "" {
 		err := errno.NewError(errno.HttpDatabaseNotFound)
 		h.Logger.Error("serveWrite", zap.Error(err))
@@ -914,7 +915,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		}
 	}
 
-	precision := r.URL.Query().Get("precision")
+	precision := urlValues.Get("precision")
 
 	tsMultiplier := int64(1)
 	switch precision {
@@ -938,7 +939,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 	var numPtsParse, numPtsInsert int
 
 	readBlockSize := int(h.Config.ReadBlockSize)
-	rp := r.URL.Query().Get("rp")
+	rp := urlValues.Get("rp")
 	for ctx.Read(readBlockSize) {
 		numPtsParse++
 		uw := influx.GetUnmarshalWork()
@@ -1147,7 +1148,8 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 		return
 	}
 
-	database := r.URL.Query().Get("db")
+	urlValues := r.URL.Query()
+	database := urlValues.Get("db")
 	if database == "" {
 		h.httpError(w, "database is required", http.StatusBadRequest)
 		return
@@ -1237,7 +1239,7 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 	}
 
 	// Determine required consistency level.
-	level := r.URL.Query().Get("consistency")
+	level := urlValues.Get("consistency")
 	if level != "" {
 		if err != nil {
 			h.httpError(w, err.Error(), http.StatusBadRequest)
@@ -1246,7 +1248,7 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 	}
 
 	// Write points.
-	if err := h.PointsWriter.RetryWritePointRows(database, r.URL.Query().Get("rp"), rows); influxdb.IsClientError(err) {
+	if err := h.PointsWriter.RetryWritePointRows(database, urlValues.Get("rp"), rows); influxdb.IsClientError(err) {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
 		return
 	} else if influxdb.IsAuthorizationError(err) {

@@ -341,6 +341,8 @@ func (m *MigrateStateMachine) executeEvent(e MigrateEvent) error {
 	if e.getUserCommand() {
 		err = <-e.getEventRes().ch
 		m.deleteEvent(e)
+		// ignore err when create migrate event successfully, new leader will retry this event
+		err = e.handleCommandErr(err)
 	}
 	return err
 }

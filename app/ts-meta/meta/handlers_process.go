@@ -26,7 +26,6 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -151,7 +150,7 @@ func (h *Execute) Process() (transport.Codec, error) {
 		return rsp, nil
 	}
 
-	if config.GetHaEnable() && cmd.GetType() == proto2.Command_CreateDatabaseCommand {
+	if cmd.GetType() == proto2.Command_CreateDatabaseCommand {
 		err = createDatabase(cmd)
 		if err != nil {
 			rsp.Err = err.Error()
@@ -214,6 +213,8 @@ func createDatabase(cmd *proto2.Command) error {
 			if err != nil {
 				errChan <- err
 			} else {
+				// Do not wait db pt assign successfully.
+				// If wait, in write-available-first, create database will failed due to store is not alive.
 				errChan <- globalService.balanceManager.assignDbPt(pt, nodeId, aliveConnId, true)
 			}
 		}(dbPt)
@@ -304,6 +305,7 @@ func (h *GetDownSampleInfo) Process() (transport.Codec, error) {
 	rsp.Data = b
 	return rsp, nil
 }
+
 func (h *GetRpMstInfos) Process() (transport.Codec, error) {
 	rsp := &message.GetRpMstInfosResponse{}
 	if h.isClosed() {
@@ -421,4 +423,8 @@ func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
 	}
 	rsp.Offset = offset
 	return rsp, nil
+}
+
+func (h *GetReplicaInfo) Process() (transport.Codec, error) {
+	return h.store.GetReplicaInfo(h.req.Database, h.req.NodeID, h.req.PtID)
 }

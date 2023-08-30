@@ -321,5 +321,6 @@ var messageMap = map[Errno]*Message{
 	EmptyData:                newNoticeMessage("empty input data", ModuleCastor),
 	TaskQueueFull:            newNoticeMessage("task queue full", ModuleCastor),
 	ExceedRetryChance:        newNoticeMessage("exceed retry chance", ModuleCastor),
+	InvalidHaPolicy:          newNoticeMessage("HaPolicy should in (write-available-first, shared-storage, replication)", ModuleCastor),
 	UnknownErr:               newNoticeMessage("unknown error", ModuleCastor),
 }

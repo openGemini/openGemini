@@ -26,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -177,9 +176,6 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	}()
 
 	if err := s.store.RefEngineDbPt(req.Database, req.PtID); err != nil {
-		if !config.GetHaEnable() {
-			return nil
-		}
 		return err
 	}
 	defer s.store.UnrefEngineDbPt(req.Database, req.PtID)

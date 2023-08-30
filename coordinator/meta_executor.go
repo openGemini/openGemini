@@ -20,11 +20,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
 )
 
@@ -72,17 +70,8 @@ func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts [
 		return err
 	}
 
-	// Get a list of all nodes the query needs to be executed on.
-	nodes, err := m.MetaClient.DataNodes()
-	if err != nil {
-		return err
-	}
-	if len(nodes) < 1 {
-		return nil
-	}
-
 	start := time.Now()
-	var dbPtInfo []meta2.PtInfo
+	//var dbPtInfo []meta2.PtInfo
 	var wg sync.WaitGroup
 
 retryExecute:
@@ -90,24 +79,17 @@ retryExecute:
 		if time.Since(start).Seconds() >= 30*time.Second.Seconds() {
 			break retryExecute
 		}
-		dbPtInfo, err = m.MetaClient.DBPtView(database)
-		if err != nil {
+		// write-available-first: skip offline pts and tolerate data lost
+		var nodePtMap map[uint64][]uint32
+		nodePtMap, err = m.MetaClient.GetNodePtsMap(database)
+		if err != nil || len(nodePtMap) == 0 {
 			break retryExecute
-		}
-		nodePtMap := make(map[uint64][]uint32, len(nodes))
-		for i := range dbPtInfo {
-			nodePtMap[dbPtInfo[i].Owner.NodeID] = append(nodePtMap[dbPtInfo[i].Owner.NodeID], dbPtInfo[i].PtId)
 		}
 		hasErr := false
 		wg.Add(len(nodePtMap))
 		for nodeId := range nodePtMap {
 			go func(nodeID uint64, pts []uint32) {
 				errR := fn(nodeID, pts, &hasErr)
-				// in none ha case create pt in write process so ignore it.
-				// ignore node is not available
-				if !config.GetHaEnable() && IgnoreErrForNotHA(errR) {
-					errR = nil
-				}
 				if errR != nil {
 					err = errR
 				}
@@ -123,12 +105,4 @@ retryExecute:
 	}
 
 	return err
-}
-
-// IgnoreErrForNotHA returns true if we should ignore the error in not ha case.
-// Prevents query errors, but query data may be lost.
-func IgnoreErrForNotHA(err error) bool {
-	return errno.Equal(err, errno.PtNotFound) ||
-		errno.Equal(err, errno.NoConnectionAvailable) ||
-		errno.Equal(err, errno.NoNodeAvailable)
 }

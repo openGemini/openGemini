@@ -23,11 +23,13 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	retention2 "github.com/influxdata/influxdb/services/retention"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -103,4 +105,82 @@ func TestWriteRec(t *testing.T) {
 	s := &Storage{engine: &MockEngine{}}
 	err := s.WriteRec("db0", "rp0", "mst0", 0, 0, nil, nil)
 	assert.Equal(t, err, nil)
+}
+
+type MockMetaClient struct {
+	GetShardRangeInfoFn       func(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
+	GetMeasurementInfoStoreFn func(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
+}
+
+func (mc *MockMetaClient) GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error) {
+	return mc.GetShardRangeInfoFn(db, rp, shardID)
+}
+
+func (mc *MockMetaClient) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+	return mc.GetMeasurementInfoStoreFn(dbName, rpName, mstName)
+}
+
+func TestStorage_Write(t *testing.T) {
+	dir := t.TempDir()
+	st := &Storage{
+		log:  logger.NewLogger(errno.ModuleStorageEngine),
+		stop: make(chan struct{}),
+	}
+	defer st.MustClose()
+
+	st.MetaClient = &MockMetaClient{
+		GetShardRangeInfoFn: func(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error) {
+			return &meta.ShardTimeRangeInfo{
+				ShardDuration: &meta.ShardDurationInfo{
+					Ident:        meta.ShardIdentifier{ShardID: 1, Policy: "autogen", OwnerDb: "db0", OwnerPt: 1},
+					DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+				OwnerIndex: meta.IndexDescriptor{IndexID: 1, TimeRange: meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)}},
+				TimeRange:  meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)},
+			}, nil
+		},
+		GetMeasurementInfoStoreFn: func(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+			return &meta.MeasurementInfo{Name: "mst"}, nil
+		},
+	}
+
+	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+	opt := netstorage.NewEngineOptions()
+	loadCtx := metaclient.LoadCtx{}
+	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
+	eng, err := newEngineFn(dir, dir, opt, &loadCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.engine = eng
+	db := "db0"
+	rp := "autogen"
+	mst := "mst"
+	var ptId uint32 = 1
+	var shardID uint64 = 1
+	st.engine.CreateDBPT(db, ptId, false)
+	err = st.Write(db, rp, mst, ptId, shardID, func() error {
+		return st.engine.WriteRows(db, rp, ptId, shardID, nil, nil)
+	})
+	assert.Equal(t, nil, err)
+
+	// test get measurement info failed
+	st.MetaClient = &MockMetaClient{
+		GetShardRangeInfoFn: func(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error) {
+			return &meta.ShardTimeRangeInfo{
+				ShardDuration: &meta.ShardDurationInfo{
+					Ident:        meta.ShardIdentifier{ShardID: 2, Policy: "autogen", OwnerDb: "db0", OwnerPt: 1},
+					DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+				OwnerIndex: meta.IndexDescriptor{IndexID: 1, TimeRange: meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)}},
+				TimeRange:  meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)},
+			}, nil
+		},
+		GetMeasurementInfoStoreFn: func(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+			return &meta.MeasurementInfo{Name: "mst"}, errno.NewError(errno.NoNodeAvailable)
+		},
+	}
+
+	err = st.Write(db, rp, mst, ptId, 2, func() error {
+		return st.engine.WriteRows(db, rp, ptId, 2, nil, nil)
+	})
+	assert.Equal(t, true, errno.Equal(err, errno.NoNodeAvailable))
 }

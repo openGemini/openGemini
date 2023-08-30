@@ -17,10 +17,12 @@ limitations under the License.
 package meta
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
@@ -217,18 +219,25 @@ func TestClusterManager_PassiveTakeOver(t *testing.T) {
 	e = *generateMemberEvent(serf.EventMemberJoin, "3", 2, serf.StatusAlive)
 	globalService.clusterManager.eventCh <- e
 	time.Sleep(time.Second)
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+	globalService.store.NetStore = NewMockNetStorage()
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	config.SetHaEnable(true)
-	globalService.store.data.TakeOverEnabled = true
-	globalService.store.NetStore = NewMockNetStorage()
+
+	// do not take over when takeoverEnabled is false
+	globalService.store.data.TakeOverEnabled = false
+	globalService.clusterManager.enableTakeover(false)
 	e = *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)
 	globalService.clusterManager.eventCh <- e
 	time.Sleep(time.Second)
-	assert.Equal(t, serf.StatusFailed, globalService.store.data.DataNode(2).Status)
-	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(3).Status)
+	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(2).Status)
+	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
+	// take over when take over enabled
+	globalService.store.data.TakeOverEnabled = true
+	globalService.clusterManager.enableTakeover(true)
+	time.Sleep(time.Second)
 	globalService.msm.eventsWg.Wait()
+	assert.Equal(t, serf.StatusFailed, globalService.store.data.DataNode(2).Status)
 	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
 	assert.Equal(t, uint64(3), globalService.store.data.PtView[db][0].Owner.NodeID)
 	assert.Equal(t, 0, len(globalService.store.data.MigrateEvents))
@@ -249,12 +258,12 @@ func TestClusterManager_ActiveTakeover(t *testing.T) {
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
 	globalService.clusterManager.eventCh <- e
 	time.Sleep(time.Second)
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+	globalService.store.NetStore = NewMockNetStorage()
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	config.SetHaEnable(true)
+	config.SetHaPolicy("shared-storage")
 	globalService.store.data.TakeOverEnabled = true
-	globalService.store.NetStore = NewMockNetStorage()
 
 	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
 		t.Fatal(err)
@@ -305,13 +314,13 @@ func TestClusterManager_LeaderChanged(t *testing.T) {
 	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
 	globalService.clusterManager.eventCh <- e
 	time.Sleep(time.Second)
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+	globalService.store.NetStore = NewMockNetStorage()
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
-	config.SetHaEnable(true)
+	config.SetHaPolicy("shared-storage")
 	globalService.store.data.TakeOverEnabled = true
-	globalService.store.NetStore = NewMockNetStorage()
 
 	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
 		t.Fatal(err)
@@ -365,13 +374,7 @@ func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := &ClusterManager{
-		reOpen:    make(chan struct{}),
-		closing:   make(chan struct{}),
-		eventCh:   make(chan serf.Event, 1024),
-		eventMap:  make(map[string]*serf.MemberEvent),
-		memberIds: make(map[uint64]struct{}),
-		takeover:  make(chan bool)}
+	c := CreateClusterManager()
 
 	store := &Store{
 		data: &meta.Data{
@@ -396,4 +399,22 @@ func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
 	}
 
 	assert.EqualError(t, c.processFailedDbPt(dbPt, nil, true), "pt not found")
+}
+
+func TestClusterManager_getTakeoverNode(t *testing.T) {
+	c := CreateClusterManager()
+	c.memberIds[1] = struct{}{}
+	nid, err := c.getTakeOverNode(c, 1, nil, false)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, uint64(1), nid)
+	wg := &sync.WaitGroup{}
+	go func() {
+		wg.Add(1)
+		nid, err = c.getTakeOverNode(c, 2, nil, false)
+		wg.Done()
+	}()
+	time.Sleep(time.Second)
+	c.Close()
+	wg.Wait()
+	assert.Equal(t, true, errno.Equal(err, errno.ClusterManagerIsNotRunning))
 }

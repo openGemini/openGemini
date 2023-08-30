@@ -202,6 +202,13 @@ func (e *AssignEvent) rollbackLastTransition() {
 	e.curState, e.preState = e.preState, e.rollbackState
 }
 
+func (e *AssignEvent) handleCommandErr(err error) error {
+	if e.curState == Init {
+		return err
+	}
+	return nil
+}
+
 func initHandler(e *AssignEvent) (NextAction, error) {
 	if !e.inRecover {
 		err := globalService.store.createMigrateEvent(e)

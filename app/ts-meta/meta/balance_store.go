@@ -29,7 +29,7 @@ func (s *Store) selectDbPtsToMove() []*MoveEvent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if !config.GetHaEnable() || !s.data.BalancerEnabled {
+	if config.GetHaPolicy() != config.SharedStorage || !s.data.BalancerEnabled {
 		return nil
 	}
 

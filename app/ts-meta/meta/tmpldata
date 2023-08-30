@@ -14,5 +14,6 @@
 	"GetMeasurementInfo",
 	"GetMeasurementsInfo",
 	"GetDBBriefInfo",
- 	"RegisterQueryIDOffset"
+ 	"RegisterQueryIDOffset",
+ 	"GetReplicaInfo"
 ]

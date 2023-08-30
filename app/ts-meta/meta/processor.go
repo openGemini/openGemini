@@ -54,6 +54,7 @@ type MetaStoreInterface interface {
 	getDBBriefInfo(dbName string) ([]byte, error)
 	getDataNodeAliveConnId(nodeId uint64) (uint64, error)
 	registerQueryIDOffset(host meta.SQLHost) (uint64, error)
+	GetReplicaInfo(dbName string, NodeID uint64, PtID uint32) (*message.ReplicaInfo, error)
 }
 
 type RPCHandler interface {

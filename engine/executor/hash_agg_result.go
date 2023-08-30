@@ -45,6 +45,8 @@ const (
 	percentileFunc
 )
 
+const DefaultTime = 0
+
 type NewAggOperator func() aggOperator
 type aggFunc struct {
 	funcType         AggFuncType
@@ -73,6 +75,7 @@ type aggOperator interface {
 	SetOutVal(c Chunk, colLoc int, para any)
 	SetNullFill(oc Chunk, colLoc int, time int64)
 	SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64)
+	GetTime() int64
 }
 
 type aggOperatorMsg struct {
@@ -116,6 +119,10 @@ func (s *sumAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interfac
 	oc.Column(colLoc).AppendNotNil()
 }
 
+func (s *sumAggOperator4Float) GetTime() int64 {
+	return DefaultTime
+}
+
 type sumAggOperator4Integer struct {
 	val int64 // sum
 }
@@ -152,6 +159,10 @@ func (s *sumAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interf
 	oc.Column(colLoc).AppendNotNil()
 }
 
+func (s *sumAggOperator4Integer) GetTime() int64 {
+	return DefaultTime
+}
+
 type countAggOperator struct {
 	val int64 // count
 }
@@ -184,6 +195,10 @@ func (s *countAggOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{},
 	val, _ := hybridqp.TransToInteger(fillVal)
 	oc.Column(colLoc).AppendIntegerValue(val)
 	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *countAggOperator) GetTime() int64 {
+	return DefaultTime
 }
 
 type firstAggOperator4Float struct {
@@ -246,6 +261,10 @@ func (s *firstAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interf
 	oc.Column(colLoc).AppendColumnTime(time)
 }
 
+func (s *firstAggOperator4Float) GetTime() int64 {
+	return s.time
+}
+
 type firstAggOperator4Integer struct {
 	val     int64 // first
 	time    int64
@@ -304,6 +323,10 @@ func (s *firstAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal inte
 	oc.Column(colLoc).AppendIntegerValue(val)
 	oc.Column(colLoc).AppendNotNil()
 	oc.Column(colLoc).AppendColumnTime(time)
+}
+
+func (s *firstAggOperator4Integer) GetTime() int64 {
+	return s.time
 }
 
 type firstAggOperator4String struct {
@@ -366,6 +389,10 @@ func (s *firstAggOperator4String) SetNumFill(oc Chunk, colLoc int, fillVal inter
 	oc.Column(colLoc).AppendColumnTime(time)
 }
 
+func (s *firstAggOperator4String) GetTime() int64 {
+	return s.time
+}
+
 type firstAggOperator4Boolean struct {
 	val     bool // first
 	time    int64
@@ -424,6 +451,10 @@ func (s *firstAggOperator4Boolean) SetNumFill(oc Chunk, colLoc int, fillVal inte
 	oc.Column(colLoc).AppendBooleanValue(val)
 	oc.Column(colLoc).AppendNotNil()
 	oc.Column(colLoc).AppendColumnTime(time)
+}
+
+func (s *firstAggOperator4Boolean) GetTime() int64 {
+	return s.time
 }
 
 type lastAggOperator4Float struct {
@@ -486,6 +517,10 @@ func (s *lastAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interfa
 	oc.Column(colLoc).AppendColumnTime(time)
 }
 
+func (s *lastAggOperator4Float) GetTime() int64 {
+	return s.time
+}
+
 type lastAggOperator4Integer struct {
 	val     int64
 	time    int64
@@ -544,6 +579,10 @@ func (s *lastAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal inter
 	oc.Column(colLoc).AppendIntegerValue(val)
 	oc.Column(colLoc).AppendNotNil()
 	oc.Column(colLoc).AppendColumnTime(time)
+}
+
+func (s *lastAggOperator4Integer) GetTime() int64 {
+	return s.time
 }
 
 type lastAggOperator4String struct {
@@ -606,6 +645,10 @@ func (s *lastAggOperator4String) SetNumFill(oc Chunk, colLoc int, fillVal interf
 	oc.Column(colLoc).AppendColumnTime(time)
 }
 
+func (s *lastAggOperator4String) GetTime() int64 {
+	return s.time
+}
+
 type lastAggOperator4Boolean struct {
 	val     bool
 	time    int64
@@ -666,6 +709,10 @@ func (s *lastAggOperator4Boolean) SetNumFill(oc Chunk, colLoc int, fillVal inter
 	oc.Column(colLoc).AppendColumnTime(time)
 }
 
+func (s *lastAggOperator4Boolean) GetTime() int64 {
+	return s.time
+}
+
 type minAggOperator4Float struct {
 	val     float64
 	nilFlag bool
@@ -709,6 +756,10 @@ func (s *minAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interfac
 	val, _ := hybridqp.TransToFloat(fillVal)
 	oc.Column(colLoc).AppendFloatValue(val)
 	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *minAggOperator4Float) GetTime() int64 {
+	return DefaultTime
 }
 
 type minAggOperator4Integer struct {
@@ -756,6 +807,10 @@ func (s *minAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interf
 	oc.Column(colLoc).AppendNotNil()
 }
 
+func (s *minAggOperator4Integer) GetTime() int64 {
+	return DefaultTime
+}
+
 type maxAggOperator4Float struct {
 	val     float64
 	nilFlag bool
@@ -801,6 +856,10 @@ func (s *maxAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal interfac
 	oc.Column(colLoc).AppendNotNil()
 }
 
+func (s *maxAggOperator4Float) GetTime() int64 {
+	return DefaultTime
+}
+
 type maxAggOperator4Integer struct {
 	val     int64
 	nilFlag bool
@@ -844,6 +903,10 @@ func (s *maxAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal interf
 	val, _ := hybridqp.TransToInteger(fillVal)
 	oc.Column(colLoc).AppendIntegerValue(val)
 	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *maxAggOperator4Integer) GetTime() int64 {
+	return DefaultTime
 }
 
 type percentileAggOperator4Float struct {
@@ -901,6 +964,10 @@ func (s *percentileAggOperator4Float) SetNumFill(oc Chunk, colLoc int, fillVal i
 	oc.Column(colLoc).AppendNotNil()
 }
 
+func (s *percentileAggOperator4Float) GetTime() int64 {
+	return DefaultTime
+}
+
 type percentileAggOperator4Integer struct {
 	val []int64
 }
@@ -954,6 +1021,10 @@ func (s *percentileAggOperator4Integer) SetNumFill(oc Chunk, colLoc int, fillVal
 	val, _ := hybridqp.TransToInteger(fillVal)
 	oc.Column(colLoc).AppendIntegerValue(val)
 	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *percentileAggOperator4Integer) GetTime() int64 {
+	return DefaultTime
 }
 
 func NewCountFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {

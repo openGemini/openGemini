@@ -173,7 +173,7 @@ func GenDataRecord(seriesNum, pointNumOfPerSeries int,
 			j++
 		}
 
-		sort.Sort(r.Fields)
+		sort.Sort(&r.Fields)
 
 		vInt++
 		vFloat += 1.1
@@ -259,7 +259,7 @@ func writeData(sh engine.Shard, rs []influx.Row, forceFlush bool) error {
 	}
 
 	for i := range rs {
-		sort.Sort(rs[i].Fields)
+		sort.Sort(&rs[i].Fields)
 	}
 
 	err = sh.WriteRows(rs, buff)

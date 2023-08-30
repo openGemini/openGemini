@@ -31,6 +31,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -835,8 +836,9 @@ func (s *Store) deleteDatabase(dbName string) error {
 			continue
 		}
 
-		// HA enable and the node is not alive status, remove pt dir directly
-		if config.GetHaEnable() && node.Status != serf.StatusAlive {
+		// in shared-storage case and the node is not alive status, remove pt dir directly
+		// case: 1.drop database 2.store1 failed 3.database only dropped until store1 startup
+		if config.GetHaPolicy() == config.SharedStorage && node.Status != serf.StatusAlive {
 			if err := s.deletePtDir(dbName, ptInfos[i].PtId); err != nil {
 				return err
 			}
@@ -1329,15 +1331,22 @@ func (s *Store) createDataNode(writeHost, queryHost string) ([]byte, error) {
 	s.mu.RLock()
 	dn := s.data.DataNodeByHttpHost(writeHost)
 	logger.GetLogger().Info("create data node", zap.Uint64("id", dn.ID), zap.Uint64("lTime", dn.LTime))
-	dbPtIds := s.getDbPtsByNodeId(dn.ID)
 	nodeStartInfo.NodeId = dn.ID
 	nodeStartInfo.LTime = dn.LTime
-	nodeStartInfo.ShardDurationInfos = s.data.GetDurationInfos(dbPtIds)
-	nodeStartInfo.DBBriefInfo = s.data.GetAllDatabases()
 	nodeStartInfo.ConnId = dn.ConnID
-
 	status := dn.Status
 	s.mu.RUnlock()
+	// todo it is not approtiate to judge as single node, please modify it later
+	if len(s.config.JoinPeers) == 1 {
+		s.cm.eventCh <- serf.MemberEvent{
+			Type:      serf.EventMemberJoin,
+			EventTime: serf.LamportTime(nodeStartInfo.LTime + 1),
+			Members: []serf.Member{
+				serf.Member{Name: strconv.FormatUint(nodeStartInfo.NodeId, 10),
+					Tags:   map[string]string{"role": "store"},
+					Status: serf.StatusAlive},
+			}}
+	}
 	// register the store node to SPDY, support send message from meta to store.
 	transport.NewNodeManager().Add(dn.ID, dn.TCPHost)
 	stat.NewMetaStatCollector().Push(&stat.MetaStatItem{Status: int64(status),
@@ -1765,6 +1774,50 @@ func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 		return 0, fmt.Errorf("register query id failed, host: %s", host)
 	}
 	return offset, nil
+}
+
+func (s *Store) GetReplicaInfo(dbName string, nodeID uint64, ptID uint32) (*message.ReplicaInfo, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	info := &message.ReplicaInfo{
+		Master:        message.PeerInfo{},
+		ReplicaStatus: 0,
+		Term:          0,
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	pt := s.data.GetPtInfo(dbName, ptID)
+	if pt == nil {
+		return nil, errno.NewError(errno.DatabaseNotFound)
+	}
+
+	rg := s.data.GetReplicaGroup(dbName, pt.RGID)
+	if rg == nil {
+		return nil, errno.NewError(errno.DatabaseNotFound)
+	}
+
+	info.ReplicaStatus = rg.Status
+
+	if rg.MasterPtID == ptID && pt.Owner.NodeID == nodeID {
+		info.ReplicaRole = meta.Master
+		info.Master.Update(pt)
+
+		info.Peers = make([]message.PeerInfo, len(rg.Peers))
+		for i := range rg.Peers {
+			info.Peers[i].Update(s.data.GetPtInfo(dbName, rg.Peers[i].ID))
+		}
+		return info, nil
+	}
+
+	masterPt := s.data.GetPtInfo(dbName, rg.MasterPtID)
+	if masterPt == nil {
+		return nil, errno.NewError(errno.DatabaseNotFound)
+	}
+	info.Master.Update(masterPt)
+	info.ReplicaRole = rg.GetPtRole(ptID)
+
+	return info, nil
 }
 
 func (s *Store) leadershipTransfer() error {

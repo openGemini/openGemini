@@ -24,7 +24,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/machine"
@@ -239,12 +238,7 @@ func (c *RPCClient) errorMessage(data interface{}) error {
 		return err
 	}
 
-	if config.GetHaEnable() && msg.errCode != 0 {
-		// with error number err
-		return errno.NewError(msg.errCode, msg.data)
-	}
-
-	return errno.NewRemote(msg.data, errno.RemoteError)
+	return errno.NewError(msg.errCode, msg.data)
 }
 
 func (c *RPCClient) emptyMessage(data interface{}) error {

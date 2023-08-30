@@ -26,12 +26,13 @@ import (
 )
 
 func TestSelectDbPtsToMove(t *testing.T) {
-	config.SetHaEnable(true)
-	defer config.SetHaEnable(false)
+	config.SetHaPolicy("shared-storage")
+	defer config.SetHaPolicy("write-available-first")
 	store := &Store{
 		data: &meta.Data{
 			ClusterPtNum:    6,
 			BalancerEnabled: true,
+			TakeOverEnabled: true,
 		},
 	}
 	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")

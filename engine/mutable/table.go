@@ -198,7 +198,7 @@ type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
 	ApplyConcurrency(table *MemTable, f func(msName string, ids []uint64))
 	SortAndDedup(table *MemTable, msName string, ids []uint64)
-	sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, pk, sk []record.PrimaryKey)
+	sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, sk []record.PrimaryKey)
 	FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore, sids []uint64)
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
 	WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error
@@ -237,13 +237,13 @@ func (t *tsMemTableImpl) SortAndDedup(table *MemTable, msName string, sids []uin
 	for _, v := range sids {
 		writeChunk := sidMap[v]
 		writeChunk.Mu.Lock()
-		t.sortWriteRec(hlp, &writeChunk.OrderWriteRec, nil, nil)
-		t.sortWriteRec(hlp, &writeChunk.UnOrderWriteRec, nil, nil)
+		t.sortWriteRec(hlp, &writeChunk.OrderWriteRec, nil)
+		t.sortWriteRec(hlp, &writeChunk.UnOrderWriteRec, nil)
 		writeChunk.Mu.Unlock()
 	}
 }
 
-func (t *tsMemTableImpl) sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, pk, sk []record.PrimaryKey) {
+func (t *tsMemTableImpl) sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, sk []record.PrimaryKey) {
 	if !wRec.timeAsd {
 		wRec.rec = hlp.Sort(wRec.rec)
 		wRec.timeAsd = true
@@ -448,12 +448,12 @@ func (c *csMemTableImpl) SortAndDedup(table *MemTable, msName string, ids []uint
 
 	writeChunk := table.msInfoMap[msName].writeChunk
 	writeChunk.Mu.Lock()
-	c.sortWriteRec(hlp, &writeChunk.WriteRec, writeChunk.primaryKeys, writeChunk.sortKeys)
+	c.sortWriteRec(hlp, &writeChunk.WriteRec, writeChunk.sortKeys)
 	writeChunk.Mu.Unlock()
 }
 
-func (c *csMemTableImpl) sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, pk, sk []record.PrimaryKey) {
-	wRec.rec = hlp.SortForColumnStore(wRec.rec, hlp.SortData, pk, sk, false)
+func (c *csMemTableImpl) sortWriteRec(hlp *record.SortHelper, wRec *WriteRec, sk []record.PrimaryKey) {
+	wRec.rec = hlp.SortForColumnStore(wRec.rec, hlp.SortData, sk, false)
 }
 
 func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string, tbStore immutable.TablesStore,
@@ -1219,8 +1219,8 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 
 	var rec *record.Record
 	chunk.Mu.Lock()
-	t.MTable.sortWriteRec(hlp, &chunk.OrderWriteRec, nil, nil)
-	t.MTable.sortWriteRec(hlp, &chunk.UnOrderWriteRec, nil, nil)
+	t.MTable.sortWriteRec(hlp, &chunk.OrderWriteRec, nil)
+	t.MTable.sortWriteRec(hlp, &chunk.UnOrderWriteRec, nil)
 
 	if chunk.OrderWriteRec.rec.RowNums() == 0 {
 		rec = chunk.UnOrderWriteRec.rec.CopyWithCondition(ascending, tr, schema)

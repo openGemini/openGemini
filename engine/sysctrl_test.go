@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -292,5 +293,47 @@ func TestEngine_backgroundReadLimiter(t *testing.T) {
 	_, err = e.processReq(req)
 	if err == nil {
 		t.Error("error set BackgroundReadLimiter")
+	}
+}
+
+func TestNodeInterruptQuery(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(syscontrol.NodeInterruptQuery)
+	req.SetParam(map[string]string{
+		"switchon": "true",
+	})
+	if _, err := e.processReq(req); err != nil {
+		t.Error("TestNodeInterruptQuery fail")
+	}
+	req.SetParam(map[string]string{
+		"unkown": "true",
+	})
+	if _, err := e.processReq(req); err == nil {
+		t.Error("TestNodeInterruptQuery fail")
+	}
+}
+
+func TestUpperMemUsePct(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(syscontrol.UpperMemUsePct)
+	req.SetParam(map[string]string{
+		"limit": "99",
+	})
+	if _, err := e.processReq(req); err != nil {
+		t.Error("TestUpperMemUsePct fail")
+	}
+	req.SetParam(map[string]string{
+		"unkown": "true",
+	})
+	if _, err := e.processReq(req); err == nil {
+		t.Error("TestUpperMemUsePct fail")
 	}
 }

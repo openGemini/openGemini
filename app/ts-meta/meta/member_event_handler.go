@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
@@ -53,31 +52,22 @@ func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint6
 	if errno.Equal(err, errno.OlderEvent) || errno.Equal(err, errno.DataNodeSplitBrain) {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	if e.Type == serf.EventMemberFailed {
-		bh.cm.removeClusterMember(id)
-	}
-	if e.Type == serf.EventMemberJoin {
-		bh.cm.addClusterMember(id)
-	}
+	return err
+}
 
-	if !config.GetHaEnable() || !globalService.store.shouldTakeOver() {
-		return nil
-	}
+func (bh *baseHandler) takeoverDbPts(id uint64) {
 	// get pts and add to failed dbPts
 	dbPtInfos := globalService.store.getFailedDbPts(id, meta.Offline)
 	nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
+	var err error
 	for i := range dbPtInfos {
 		err = bh.cm.processFailedDbPt(dbPtInfos[i], nodePtNumMap, false)
 		if err != nil {
+			// if process event failed migrate state machine will retry event when retry needed
 			logger.NewLogger(errno.ModuleHA).Error("fail to take over db pt",
 				zap.String("db", dbPtInfos[i].Db), zap.Uint32("pt", dbPtInfos[i].Pti.PtId))
 		}
 	}
-	// if process event failed migrate state machine will retry event when retry needed
-	return nil
 }
 
 type joinHandler struct {
@@ -97,6 +87,8 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 		if err != nil {
 			return err
 		}
+		jh.cm.addClusterMember(id)
+		jh.takeoverDbPts(id)
 	}
 	return nil
 }
@@ -116,6 +108,8 @@ func (fh *failedHandler) handle(e *memberEvent) error {
 			logger.GetLogger().Error("handle event failed", zap.Error(err))
 			return err
 		}
+		fh.cm.removeClusterMember(id)
+		fh.takeoverDbPts(id)
 	}
 	return nil
 }

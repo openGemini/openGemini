@@ -23,18 +23,9 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/bufferpool"
-	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"go.uber.org/zap"
-)
-
-const (
-	maxRetry      = 5
-	retryInterval = time.Millisecond * 100
 )
 
 func NewRPCReaderTransform(outRowDataType hybridqp.RowDataType, queryId uint64, rq *RemoteQuery) *RPCReaderTransform {
@@ -132,36 +123,14 @@ func (t *RPCReaderTransform) Work(ctx context.Context) error {
 
 	statistics.ExecutorStat.SourceWidth.Push(int64(t.Output.RowDataType.NumColumn()))
 
-	// 1. case HA
-	// Do not retry request
-	if config.GetHaEnable() {
-		return client.Run()
-	}
-
-	// 2. case not HA
-	var i = 0
-	for ; i < maxRetry; i++ {
-		err = client.Run()
-		if err == nil {
-			break
-		}
-		// kill query, no need to retry
-		if errno.Equal(err, errno.ErrQueryKilled) {
-			return err
-		}
-		logger.NewLogger(errno.ModuleQueryEngine).Error("RPC request failed.", zap.Error(err),
-			zap.String("query", "rpc executor"),
-			zap.Uint64("query_id", t.queryId))
-		time.Sleep(retryInterval * (1 << i))
-	}
-	if t.span != nil {
-		t.span.AppendNameValue("retry", i)
-	}
-
-	if errno.Equal(err, errno.RemoteError) {
-		return err
-	}
-	return nil
+	/*
+		1. write-available-first: datanode dead but pt status is online when get alive shards,
+					retry outside until pt status is offline or datanode join cluster again
+		2. shared-storage: datanode dead but pt owner is the dead node,
+					retry outside until pt owner is alive node
+		3. replication: master pt offline retry until master pt online
+	*/
+	return client.Run()
 }
 
 func (t *RPCReaderTransform) GetOutputs() Ports {
