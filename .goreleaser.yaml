@@ -20,6 +20,8 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=0
   - id: "ts-meta"
@@ -35,6 +37,8 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=0
   - id: "ts-monitor"
@@ -50,6 +54,8 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=0
   - id: "ts-server"
@@ -65,6 +71,8 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=0
   - id: "ts-sql"
@@ -80,6 +88,8 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=0
   - id: "ts-store"
@@ -95,6 +105,8 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=0
 archives:
