@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/arrow/go/arrow/array"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -43,6 +44,14 @@ func (c *MockSubscriberClient) Send(db, rp string, lineProtocol []byte) error {
 
 func (c *MockSubscriberClient) Destination() string {
 	return c.dest
+}
+
+func (c *MockSubscriberClient) SendColumn(db, rp, mst string, record array.Record) error {
+	panic("implement me")
+}
+
+func (c *MockSubscriberClient) Close() {
+	panic("implement me")
 }
 
 func TestAllWriter(t *testing.T) {
@@ -224,7 +233,12 @@ func TestInitWriter(t *testing.T) {
 	client.CreateSubscription("db1", "rp1", "sub0", "ALL", []string{"http://127.0.0.1:8086"})
 
 	conf := config.NewSubscriber()
-	s := NewSubscriberManager(conf, client, logger.NewLogger(errno.ModuleCoordinator))
+	s := &SubscriberManager{
+		writers:    make(map[string]map[string][]SubscriberWriter),
+		metaclient: client,
+		config:     &conf,
+	}
+	s.WithLogger(logger.NewLogger(errno.ModuleUnknown))
 	s.InitWriters()
 	err := JudgeSame(client.databases, s.writers)
 	assert2.NoError(t, err)
@@ -236,7 +250,12 @@ func TestUpdateWriter(t *testing.T) {
 	client.CreateSubscription("db0", "rp0", "sub1", "ANY", []string{"http://127.0.0.2:8086", "https://127.0.0.3:8086"})
 
 	conf := config.NewSubscriber()
-	s := NewSubscriberManager(conf, client, logger.NewLogger(errno.ModuleCoordinator))
+	s := &SubscriberManager{
+		writers:    make(map[string]map[string][]SubscriberWriter),
+		metaclient: client,
+		config:     &conf,
+	}
+	s.WithLogger(logger.NewLogger(errno.ModuleUnknown))
 	s.InitWriters()
 	err := JudgeSame(client.databases, s.writers)
 	assert2.NoError(t, err)
@@ -244,7 +263,7 @@ func TestUpdateWriter(t *testing.T) {
 	// test add new subscriptions
 	client.CreateSubscription("db1", "rp1", "sub0", "ALL", []string{"http://127.0.0.1:8086"})
 	client.CreateSubscription("db1", "rp2", "sub0", "ANY", []string{"https://127.0.0.1:8086"})
-	client.CreateSubscription("db0", "rp0", "sub2", "ALL", []string{"http://127.0.0.2:8086", "http://127.0.0.2:8087"})
+	client.CreateSubscription("db0", "rp0", "sub2", "ALL", []string{"http://127.0.0.1:8086", "http://127.0.0.2:8087"})
 	s.UpdateWriters()
 	err = JudgeSame(client.databases, s.writers)
 	assert2.NoError(t, err)
@@ -280,7 +299,12 @@ func TestUpdateWriter(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	client := &MockSubscriberMetaClient{databases: make(map[string]*meta.DatabaseInfo)}
 	conf := config.NewSubscriber()
-	s := NewSubscriberManager(conf, client, logger.NewLogger(errno.ModuleCoordinator))
+	s := &SubscriberManager{
+		writers:    make(map[string]map[string][]SubscriberWriter),
+		metaclient: client,
+		config:     &conf,
+	}
+	s.WithLogger(logger.NewLogger(errno.ModuleUnknown))
 
 	go s.Update()
 	client.CreateSubscription("db0", "rp0", "sub0", "ANY", []string{"http://127.0.0.2:8086", "https://127.0.0.3:8086"})
@@ -323,10 +347,15 @@ func TestSendWriteRequest(t *testing.T) {
 	client.CreateSubscription("db0", "rp0", "sub0", "ALL", []string{server1.URL, server2.URL, server3.URL})
 	client.CreateSubscription("db1", "rp1", "sub0", "ANY", []string{server1.URL, server2.URL})
 
-	config := config.NewSubscriber()
-	config.InsecureSkipVerify = true
-	config.HTTPTimeout = toml.Duration(time.Second)
-	s := NewSubscriberManager(config, client, logger.NewLogger(errno.ModuleCoordinator))
+	conf := config.NewSubscriber()
+	conf.InsecureSkipVerify = true
+	conf.HTTPTimeout = toml.Duration(time.Second)
+	s := &SubscriberManager{
+		writers:    make(map[string]map[string][]SubscriberWriter),
+		metaclient: client,
+		config:     &conf,
+	}
+	s.WithLogger(logger.NewLogger(errno.ModuleUnknown))
 	s.InitWriters()
 	line := "cpu_load,host=\"server-01\",region=\"west_cn\" value=75.3"
 

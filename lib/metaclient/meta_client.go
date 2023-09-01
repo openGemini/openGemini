@@ -2217,18 +2217,25 @@ func (c *Client) DeleteMetaNode(id uint64) error {
 func validateURL(input string) error {
 	u, err := url.Parse(input)
 	if err != nil {
-		return errors.New("invalid url")
-	}
-
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return errors.New("invalid url")
+		return fmt.Errorf("invalid url %s", input)
 	}
 
 	_, port, err := net.SplitHostPort(u.Host)
 	if err != nil || port == "" {
-		return errors.New("invalid url")
+		return fmt.Errorf("missing port %s", u.Host)
 	}
 
+	switch u.Scheme {
+	case "http":
+	case "https":
+	case "rpc":
+		return nil
+	default:
+		return fmt.Errorf("invalid schema %s", u.Scheme)
+	}
+	if err = pingServer(input); err != nil {
+		return fmt.Errorf("fail to ping %s", input)
+	}
 	return nil
 }
 
@@ -2251,9 +2258,6 @@ func (c *Client) CreateSubscription(database, rp, name, mode string, destination
 	for _, destination := range destinations {
 		if err := validateURL(destination); err != nil {
 			return fmt.Errorf("invalid url %s", destination)
-		}
-		if err := pingServer(destination); err != nil {
-			return fmt.Errorf("fail to ping %s", destination)
 		}
 	}
 	return c.retryUntilExec(proto2.Command_CreateSubscriptionCommand, proto2.E_CreateSubscriptionCommand_Command,

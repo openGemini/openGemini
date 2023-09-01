@@ -129,7 +129,8 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	coordinator.SetTagLimit(c.Coordinator.TagLimit)
 
 	if s.config.Subscriber.Enabled {
-		s.SubscriberManager = coordinator.NewSubscriberManager(s.config.Subscriber, s.MetaClient, s.httpService.Handler.Logger)
+		s.SubscriberManager = coordinator.NewSubscriberManager(&s.config.Subscriber, s.MetaClient)
+		s.SubscriberManager.WithLogger(s.httpService.Handler.Logger)
 	}
 	config.SetSubscriptionEnable(s.config.Subscriber.Enabled)
 
@@ -152,6 +153,9 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	if c.HTTP.FlightEnabled {
 		if err = s.initArrowFlightService(c); err != nil {
 			return nil, err
+		}
+		if c.Subscriber.Enabled {
+			s.arrowFlightService.WithSubscriber(&c.Subscriber, s.MetaClient)
 		}
 	}
 
