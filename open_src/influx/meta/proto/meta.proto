@@ -297,6 +297,7 @@ message Command {
 		CreateContinuousQueryCommand               = 83;
 		Sql2MetaHeartbeatCommand                   = 84;
 		ContinuousQueryReportCommand               = 85;
+		GetContinuousQueryLeaseCommand             = 86;
 	}
 
 	required Type type = 1;
@@ -986,4 +987,11 @@ message ContinuousQueryReportCommand {
 	extend Command { optional ContinuousQueryReportCommand command = 185; }
 	required string Name = 1;
 	required int64 LastRunTime = 2;
+}
+
+message GetContinuousQueryLeaseCommand {
+	extend Command { optional GetContinuousQueryLeaseCommand command = 186; }
+	required string Host = 1;
+	repeated string Cqs = 2;
+	optional bool FirstTime = 3;
 }

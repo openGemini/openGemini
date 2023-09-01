@@ -70,6 +70,9 @@ const (
 
 	Sql2MetaHeartbeatRequestMessage
 	Sql2MetaHeartbeatResponseMessage
+
+	GetContinuousQueryLeaseRequestMessage
+	GetContinuousQueryLeaseResponseMessage
 )
 
 func NewMessage(typ uint8) transport.Codec {
@@ -130,6 +133,10 @@ func NewMessage(typ uint8) transport.Codec {
 		return &Sql2MetaHeartbeatRequest{}
 	case Sql2MetaHeartbeatResponseMessage:
 		return &Sql2MetaHeartbeatResponse{}
+	case GetContinuousQueryLeaseRequestMessage:
+		return &GetContinuousQueryLeaseRequest{}
+	case GetContinuousQueryLeaseResponseMessage:
+		return &GetContinuousQueryLeaseResponse{}
 	default:
 		return nil
 	}
@@ -165,6 +172,8 @@ func GetResponseMessageType(typ uint8) uint8 {
 		return GetMeasurementInfoResponseMessage
 	case Sql2MetaHeartbeatRequestMessage:
 		return Sql2MetaHeartbeatResponseMessage
+	case GetContinuousQueryLeaseRequestMessage:
+		return GetContinuousQueryLeaseResponseMessage
 	default:
 		return UnknownMessage
 	}

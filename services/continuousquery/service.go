@@ -62,6 +62,9 @@ type Service struct {
 	ReportInterval     time.Duration
 	MaxProcessCQNumber int
 	ContinuousQuery    []*ContinuousQuery
+
+	// ts-sql needs to record which cqs are running on it. This will be used when obtaining the lease.
+	RunningCqs []string
 }
 
 // NewService creates a new Service instance named continuousQuery

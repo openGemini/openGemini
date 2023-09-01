@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -371,7 +372,35 @@ func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) inte
 		MarkDeleted: pb.GetMarkDeleted(),
 	}
 
-	return fsm.data.CreateContinuousQuery(v.GetDatabase(), cqi)
+	if err := fsm.data.CreateContinuousQuery(v.GetDatabase(), cqi); err != nil {
+		return err
+	}
+	fsm.sqlMu.Lock()
+	defer fsm.sqlMu.Unlock()
+	fsm.scheduleCq2Sql(cqi.Name, true)
+
+	return nil
+}
+
+func (fsm *storeFSM) scheduleCq2Sql(cq string, create bool) {
+	if len(fsm.SqlNodes) == 0 {
+		// restart without ts-sql heartbeat arrived
+		return
+	}
+	if create {
+		var sql string
+		var minLoad = math.MaxInt
+		for s, sni := range fsm.SqlNodes {
+			if sni.CqInfo.GetLoad() < minLoad {
+				minLoad = sni.CqInfo.GetLoad()
+				sql = s
+			}
+		}
+		fsm.SqlNodes[sql].CqInfo.AssignCqs[cq] = cq
+		fsm.SqlNodes[sql].CqInfo.IsNew = false
+		return
+	}
+	// TODO: delete cq
 }
 
 func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) interface{} {

@@ -208,6 +208,7 @@ type MetaClient interface {
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	SendSql2MetaHeartbeat(host string) error
 	CQStatusReport(name string, lastRunTime time.Time) error
+	GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error)
 }
 
 type LoadCtx struct {
@@ -664,16 +665,6 @@ func (c *Client) getMeasurementInfo(currentServer int, database string, rpName s
 }
 
 func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-	val := &proto2.GetMeasurementInfoStoreCommand{
-		DbName:  &dbName,
-		RpName:  &rpName,
-		MstName: &mstName,
-	}
-	t := proto2.Command_GetMeasurementInfoStoreCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_GetMeasurementInfoStoreCommand_Command, val); err != nil {
-		panic(err)
-	}
 	b, err := c.RetryGetMeasurementInfoStore(dbName, rpName, mstName)
 	if err != nil {
 		return nil, err
@@ -685,7 +676,63 @@ func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName s
 	return mst, nil
 }
 
-func (c *Client) RetrySql2MetaHeartbeat(host string) error {
+func (c *Client) sendGetCqLease(currentServer int, firstTime bool, host string, cqs []string) ([]string, []string, error) {
+	callback := &GetCqLeaseCallback{}
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{Host: host, Cqs: cqs, IsFirstTime: firstTime})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		c.logger.Error("GetCqLease SendRPCMsg fail", zap.Error(err))
+		return nil, nil, err
+	}
+	return callback.AssignCqs, callback.RevokeCqs, nil
+}
+
+func (c *Client) GetCqLease(firstTime bool, host string, cqs []string) ([]string, []string, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	var assignCqs, revokeCqs []string
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil, nil, errors.New("GetCqLease fail")
+		default:
+
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		assignCqs, revokeCqs, err = c.sendGetCqLease(currentServer, firstTime, host, cqs)
+		if err == nil {
+			break
+		}
+
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+	return assignCqs, revokeCqs, nil
+}
+
+func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
+	callback := &Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		c.logger.Error("Sql2MetaHeartbeat SendRPCMsg fail", zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (c *Client) SendSql2MetaHeartbeat(host string) error {
 	startTime := time.Now()
 	currentServer := connectedServer
 	var err error
@@ -716,29 +763,6 @@ func (c *Client) RetrySql2MetaHeartbeat(host string) error {
 		currentServer++
 	}
 	return nil
-}
-
-func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
-	callback := &Sql2MetaHeartbeatCallback{}
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		c.logger.Error("Sql2MetaHeartbeat SendRPCMsg fail", zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-func (c *Client) SendSql2MetaHeartbeat(host string) error {
-	val := &proto2.Sql2MetaHeartbeatCommand{
-		Host: &host,
-	}
-	t := proto2.Command_Sql2MetaHeartbeatCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_Sql2MetaHeartbeatCommand_Command, val); err != nil {
-		panic(err)
-	}
-	return c.RetrySql2MetaHeartbeat(host)
 }
 
 // Database returns info for the requested database.
@@ -2808,12 +2832,6 @@ func (c *Client) ShowDownSamplePolicies(database string) (models.Rows, error) {
 }
 
 func (c *Client) GetDownSamplePolicies() (*meta2.DownSamplePoliciesInfoWithDbRp, error) {
-	val := &proto2.GetDownSamplePolicyCommand{}
-	t := proto2.Command_GetDownSamplePolicyCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_GetDownSamplePolicyCommand_Command, val); err != nil {
-		panic(err)
-	}
 	b, err := c.RetryDownSampleInfo()
 	if err != nil {
 		return nil, err
@@ -2830,16 +2848,6 @@ func (c *Client) unmarshalDownSamplePolicies(b []byte) (*meta2.DownSamplePolicie
 }
 
 func (c *Client) GetMstInfoWithInRp(dbName, rpName string, dataTypes []int64) (*meta2.RpMeasurementsFieldsInfo, error) {
-	val := &proto2.GetMeasurementInfoWithinSameRpCommand{
-		DbName:    &dbName,
-		RpName:    &rpName,
-		DataTypes: dataTypes,
-	}
-	t := proto2.Command_GetMeasurementInfoWithinSameRpCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_GetMeasurementInfoWithinSameRpCommand_Command, val); err != nil {
-		panic(err)
-	}
 	b, err := c.RetryMstInfosInRp(dbName, rpName, dataTypes)
 	if err != nil {
 		return nil, err

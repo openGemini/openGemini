@@ -135,6 +135,10 @@ func (s *MockRPCStore) applySql2MetaHeartbeat(host string) error {
 	return nil
 }
 
+func (s *MockRPCStore) getContinuousQueryLease(firstTime bool, host string, cqs []string) ([]string, []string, error) {
+	return nil, nil, nil
+}
+
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,
@@ -288,10 +292,25 @@ func TestSql2MetaHeartbeatMessage(t *testing.T) {
 	server := startServer()
 	defer server.Stop()
 
-	// case 1. normal
 	callback := &metaclient.Sql2MetaHeartbeatCallback{}
 	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
 		Host: "localhost:8086",
+	})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}
+
+func TestGetCqLeaseMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	callback := &metaclient.GetCqLeaseCallback{}
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{
+		Host:        "localhost:8086",
+		Cqs:         []string{},
+		IsFirstTime: true,
 	})
 	err := sendTestMsg(msg, callback)
 	if err != nil {
