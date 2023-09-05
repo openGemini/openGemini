@@ -1166,7 +1166,8 @@ func TestData_CreateMigrateEvent(t *testing.T) {
 		Dest:      proto.Uint64(1),
 		Pti:       dbPt1.Marshal(),
 		EventType: proto.Int(1)}
-	data.CreateMigrateEvent(pb)
+	err := data.CreateMigrateEvent(pb)
+	assert2.NoError(t, err)
 	assert2.Equal(t, uint64(1), data.MigrateEvents[dbPt1.String()].opId)
 }
 
@@ -1187,18 +1188,28 @@ func TestData_CqReport(t *testing.T) {
 		},
 	}
 	ts := time.Now()
-	if err := data.CQStatusReport("cq0", ts); err != nil {
-		t.Fatal()
+	cqStat := []*proto2.CQState{
+		{
+			Name:        proto.String("cq0"),
+			LastRunTime: proto.Int64(ts.UnixNano()),
+		},
 	}
+	err := data.BatchUpdateContinuousQueryStat(cqStat)
+	assert2.NoError(t, err)
 
 	lastRunTime := data.Databases["db0"].ContinuousQueries["cq0"].LastRunTime
 	if !ts.Equal(lastRunTime) {
 		t.Fatal()
 	}
 
-	if err := data.CQStatusReport("cq1", ts); err != ErrContinuousQueryNotFound {
-		t.Fatal()
+	cqStat = []*proto2.CQState{
+		{
+			Name:        proto.String("cq1"),
+			LastRunTime: proto.Int64(ts.UnixNano()),
+		},
 	}
+	err = data.BatchUpdateContinuousQueryStat(cqStat) // No cq1
+	assert2.NoError(t, err)
 }
 
 func PrintMemUsage() {

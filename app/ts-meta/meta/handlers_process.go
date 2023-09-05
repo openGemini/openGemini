@@ -392,12 +392,11 @@ func (h *Sql2MetaHeartbeat) Process() (transport.Codec, error) {
 
 func (h *GetContinuousQueryLease) Process() (transport.Codec, error) {
 	rsp := &message.GetContinuousQueryLeaseResponse{}
-	assignCqs, revokeCqs, err := h.store.getContinuousQueryLease(h.req.IsFirstTime, h.req.Host, h.req.Cqs)
+	cqNames, err := h.store.getContinuousQueryLease(h.req.Host)
 	if err != nil {
 		rsp.Err = err.Error()
 		return rsp, nil
 	}
-	rsp.AssignCqs = assignCqs
-	rsp.RevokeCqs = revokeCqs
+	rsp.CQNames = cqNames
 	return rsp, nil
 }

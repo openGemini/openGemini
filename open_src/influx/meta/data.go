@@ -111,6 +111,7 @@ type Data struct {
 	MaxDownSampleID uint64
 	MaxStreamID     uint64
 	MaxConnID       uint64
+	MaxCQChangeID   uint64 // +1 for any changes to continuous queries
 }
 
 var DataLogger *zap.Logger
@@ -1168,7 +1169,7 @@ func (data *Data) CheckCanCreateContinuousQuery(dbi *DatabaseInfo, cqi *Continuo
 	// check same name
 	if dbi.ContinuousQuery(cqi.Name) != nil {
 		// Benevor TODO: how about a cq with the same name but marked as deleted.
-		return ErrSameContinuosQueryName
+		return ErrSameContinuousQueryName
 	}
 
 	// check same action
@@ -1193,25 +1194,22 @@ func (data *Data) CreateContinuousQuery(dbName string, cqi *ContinuousQueryInfo)
 	}
 	err = data.CheckCanCreateContinuousQuery(dbi, cqi)
 	if err != nil {
-		if err == ErrContinuousQueryExists {
-			return nil
-		}
 		return err
 	}
 	data.SetContinuousQuery(dbi, cqi)
+	data.MaxCQChangeID++
 	return nil
 }
 
-func (data *Data) CQStatusReport(cqName string, lastRunTime time.Time) error {
+func (data *Data) BatchUpdateContinuousQueryStat(cqStates []*proto2.CQState) error {
 	for _, dbi := range data.Databases {
-		for name, cqi := range dbi.ContinuousQueries {
-			if name == cqName {
-				cqi.LastRunTime = lastRunTime
-				return nil
+		for _, cqStat := range cqStates {
+			if cqi, ok := dbi.ContinuousQueries[cqStat.GetName()]; ok {
+				cqi.UpdateContinuousQueryStat(cqStat.GetLastRunTime())
 			}
 		}
 	}
-	return ErrContinuousQueryNotFound
+	return nil
 }
 
 func (data *Data) MarkMeasurementDelete(database, policy, measurement string) error {
@@ -2105,6 +2103,7 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxDownSampleID: proto.Uint64(data.MaxDownSampleID),
 		MaxStreamID:     proto.Uint64(data.MaxStreamID),
 		MaxConnId:       proto.Uint64(data.MaxConnID),
+		MaxCQChangeID:   proto.Uint64(data.MaxCQChangeID),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2176,6 +2175,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxDownSampleID = pb.GetMaxDownSampleID()
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
+	data.MaxCQChangeID = pb.GetMaxCQChangeID()
 
 	for i, x := range pb.GetDataNodes() {
 		data.DataNodes[i].unmarshal(x)

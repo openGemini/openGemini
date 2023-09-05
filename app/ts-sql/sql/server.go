@@ -110,11 +110,12 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *Logger.Logger) (a
 		metaMaxConcurrentWriteLimit = c.HTTP.MaxConcurrentWriteLimit + c.HTTP.MaxEnqueuedWriteLimit
 	}
 
+	hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
 	s := &Server{
 		cmd:         cmd,
 		Logger:      logger,
 		httpService: httpd.NewService(c.HTTP),
-		cqService:   continuousquery.NewService(c.ContinuousQuery.RunInterval, c.ContinuousQuery.MaxProcessCQNumber),
+		cqService:   continuousquery.NewService(hostname, c.ContinuousQuery.RunInterval, c.ContinuousQuery.MaxProcessCQNumber),
 		MetaClient:  meta.NewClient(c.HTTP.WeakPwdPath, false, metaMaxConcurrentWriteLimit),
 
 		metaJoinPeers:    c.Common.MetaJoin,
@@ -306,7 +307,7 @@ func (s *Server) initializeMetaClient() error {
 
 func (s *Server) SendHeartbeat2Meta() {
 	ticker := time.NewTicker(time.Second)
-	host := s.config.HTTP.BindAddress
+	hostname := config.CombineDomain(s.config.HTTP.Domain, s.config.HTTP.BindAddress)
 	defer ticker.Stop()
 
 	for {
@@ -314,7 +315,7 @@ func (s *Server) SendHeartbeat2Meta() {
 		case <-s.heartbeatClosing:
 			return
 		case <-ticker.C:
-			if err := s.MetaClient.SendSql2MetaHeartbeat(host); err != nil {
+			if err := s.MetaClient.SendSql2MetaHeartbeat(hostname); err != nil {
 				s.Logger.Error("TSSQL send heartbeart to TSMeta failed.")
 			}
 		}

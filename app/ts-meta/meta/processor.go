@@ -51,7 +51,7 @@ type MetaStoreInterface interface {
 	getStreamInfo() ([]byte, error)
 	getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error)
 	applySql2MetaHeartbeat(host string) error
-	getContinuousQueryLease(firstTime bool, host string, cqs []string) ([]string, []string, error)
+	getContinuousQueryLease(host string) ([]string, error)
 }
 
 type RPCHandler interface {

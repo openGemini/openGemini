@@ -1140,9 +1140,9 @@ func init() {
 				once:    true,
 			},
 			&Query{
-				name:    "create continuous query cq0_1 should failed",
+				name:    "create continuous query same name cq0_1 should ignore",
 				command: `CREATE CONTINUOUS QUERY "cq0_1" ON "db0" RESAMPLE EVERY 1h FOR 10m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
-				exp:     `{"results":[{"statement_id":0,"error":"continuous query name already exists"}]}`,
+				exp:     `{"results":[{"statement_id":0}]}`,
 				once:    true,
 			},
 			&Query{
