@@ -76,11 +76,6 @@ func (di *DatabaseInfo) GetContinuousQuery(name string) (*ContinuousQueryInfo, e
 	return cqi, nil
 }
 
-// return the cq with corresponding name.
-func (di *DatabaseInfo) ContinuousQuery(name string) *ContinuousQueryInfo {
-	return di.ContinuousQueries[name]
-}
-
 // Check if there is a cq with the same action.
 func (di *DatabaseInfo) CheckConfilctWithConfiltCq(checked *ContinuousQueryInfo) error {
 	// Benevor TODO:

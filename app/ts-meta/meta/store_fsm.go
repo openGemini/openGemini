@@ -204,6 +204,10 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 		return fsm.applyCreateContinuousQueryCommand(&cmd)
 	case proto2.Command_ContinuousQueryReportCommand:
 		return fsm.applyContinuousQueryReportCommand(&cmd)
+	case proto2.Command_DropContinuousQueryCommand:
+		return fsm.applyDropContinuousQueryCommand(&cmd)
+	case proto2.Command_NotifyCQLeaseChangedCommand:
+		return fsm.applyNotifyCQLeaseChangedCommand(&cmd)
 	default:
 		panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
 	}
@@ -379,31 +383,9 @@ func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) inte
 		}
 		return err
 	}
-	fsm.handleCQCreated(cqi.Name)
-	return nil
-}
-
-// handleCQCreated sorts fsm.cqNames and inserts the new cq to the fsm.cqNames slice.
-// At the same time assign sql node to the new cq.
-func (fsm *storeFSM) handleCQCreated(newCQ string) {
-	fsm.cqLock.Lock()
-	defer fsm.cqLock.Unlock()
-
-	sort.Strings(fsm.cqNames)
-	n := sort.Search(len(fsm.cqNames), func(i int) bool {
-		return newCQ <= fsm.cqNames[i]
-	})
-
-	if n >= len(fsm.cqNames) {
-		fsm.cqNames = append(fsm.cqNames, newCQ)
-	} else {
-		fsm.cqNames = append(fsm.cqNames, "")
-		copy(fsm.cqNames[n+1:], fsm.cqNames[n:])
-		fsm.cqNames[n] = newCQ
-	}
-
 	s := (*Store)(fsm)
-	s.scheduleCQsWithoutLock(cqCreated)
+	s.handleCQCreated(cqi.Name)
+	return nil
 }
 
 func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) interface{} {
@@ -414,6 +396,33 @@ func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) inte
 	}
 
 	return fsm.data.BatchUpdateContinuousQueryStat(v.GetCQStates())
+}
+
+func (fsm *storeFSM) applyDropContinuousQueryCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
+	v, ok := ext.(*proto2.DropContinuousQueryCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a DropContinuousQueryCommand", ext))
+	}
+	changed, err := fsm.data.DropContinuousQuery(v.GetName(), v.GetDatabase())
+	if err != nil || !changed {
+		return err
+	}
+
+	s := (*Store)(fsm)
+	s.handleCQDropped(v.GetName())
+	return nil
+}
+
+// applyNotifyCQLeaseChangedCommand notify all sql that cq lease has been changed.
+func (fsm *storeFSM) applyNotifyCQLeaseChangedCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command)
+	_, ok := ext.(*proto2.NotifyCQLeaseChangedCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a NotifyCQLeaseChangedCommand", ext))
+	}
+	fsm.data.MaxCQChangeID++
+	return nil
 }
 
 func (fsm *storeFSM) applyDropRetentionPolicyCommand(cmd *proto2.Command) interface{} {
@@ -694,12 +703,12 @@ func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	}
 
 	fsm.data = data
-	fsm.refactorCQNames()
+	fsm.restoreCQNames()
 
 	return nil
 }
 
-func (fsm *storeFSM) refactorCQNames() {
+func (fsm *storeFSM) restoreCQNames() {
 	fsm.cqNames = fsm.cqNames[:0]
 
 	fsm.data.WalkDatabases(func(db *meta2.DatabaseInfo) {

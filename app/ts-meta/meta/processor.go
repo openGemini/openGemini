@@ -50,7 +50,7 @@ type MetaStoreInterface interface {
 	GetUserInfo() ([]byte, error)
 	getStreamInfo() ([]byte, error)
 	getMeasurementInfo(dbName, rpName, mstName string) ([]byte, error)
-	applySql2MetaHeartbeat(host string) error
+	handlerSql2MetaHeartbeat(host string) error
 	getContinuousQueryLease(host string) ([]string, error)
 }
 

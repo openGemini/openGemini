@@ -25,6 +25,7 @@ import (
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -43,6 +44,8 @@ func TestRetriedErrorCode(t *testing.T) {
 
 type mocShardMapperMetaClient struct {
 	databases map[string]*meta.DatabaseInfo
+
+	metaclient.MetaClient
 }
 
 func (m mocShardMapperMetaClient) GetMaxCQChangeID() uint64 {

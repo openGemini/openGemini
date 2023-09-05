@@ -97,15 +97,11 @@ func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time, interval time
 
 func getContinuousQueries(dst []*ContinuousQuery, dbs map[string]*meta.DatabaseInfo, cqLease map[string]struct{}) []*ContinuousQuery {
 	for _, dbi := range dbs {
-		for rp, cqi := range dbi.ContinuousQueries {
-			// ignore not default retention policy
-			if rp != dbi.DefaultRetentionPolicy {
+		for cqName, cqi := range dbi.ContinuousQueries {
+			if _, ok := cqLease[cqName]; !ok {
 				continue
 			}
-			if _, ok := cqLease[cqi.Name]; !ok {
-				continue
-			}
-			cq := NewContinuousQuery(dbi.Name, rp, cqi.Query)
+			cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
 			if cq != nil {
 				dst = append(dst, cq)
 			}

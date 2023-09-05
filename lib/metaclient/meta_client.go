@@ -187,7 +187,6 @@ type MetaClient interface {
 	ShowShardGroups() models.Rows
 	ShowSubscriptions() models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
-	ShowContinuousQueries() (models.Rows, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
 	DropDownSamplePolicy(database, name string, dropAll bool) error
@@ -205,13 +204,12 @@ type MetaClient interface {
 	ShowStreams(database string, showAll bool) (models.Rows, error)
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	SendSql2MetaHeartbeat(host string) error
-	//BatchUpdateContinuousQueryStat(name string, lastRunTime time.Time) error
-	//GetCqLease(host string) ([]string, error)
 
-	// for continuous queries
+	// for continuous query
+	SendSql2MetaHeartbeat(host string) error
 	CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) /**/
-	GetMaxCQChangeID() uint64
+	ShowContinuousQueries() (models.Rows, error)
+	DropContinuousQuery(name string, database string) error
 }
 
 type LoadCtx struct {
@@ -679,50 +677,6 @@ func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName s
 	return mst, nil
 }
 
-func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
-	callback := &Sql2MetaHeartbeatCallback{}
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		c.logger.Error("Sql2MetaHeartbeat SendRPCMsg fail", zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-func (c *Client) SendSql2MetaHeartbeat(host string) error {
-	startTime := time.Now()
-	currentServer := connectedServer
-	var err error
-	for {
-		c.mu.RLock()
-		select {
-		case <-c.closing:
-			c.mu.RUnlock()
-			return errors.New("Sql2MetaHeartbeat fail")
-		default:
-
-		}
-
-		if currentServer >= len(c.metaServers) {
-			currentServer = 0
-		}
-		c.mu.RUnlock()
-		err = c.sendSql2MetaHeartbeat(currentServer, host)
-		if err == nil {
-			break
-		}
-
-		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
-			break
-		}
-		time.Sleep(errSleep)
-
-		currentServer++
-	}
-	return nil
-}
-
 // Database returns info for the requested database.
 func (c *Client) Database(name string) (*meta2.DatabaseInfo, error) {
 	c.mu.RLock()
@@ -760,12 +714,6 @@ func (c *Client) ShowRetentionPolicies(database string) (models.Rows, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.ShowRetentionPolicies(database)
-}
-
-func (c *Client) ShowContinuousQueries() (models.Rows, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cacheData.ShowContinuousQueries()
 }
 
 func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,
@@ -1018,30 +966,6 @@ func (c *Client) CreateRetentionPolicy(database string, spec *meta2.RetentionPol
 	return c.RetentionPolicy(database, rpi.Name)
 }
 
-func (c *Client) CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) {
-	// Benevor TODO: Check if all durations are valid
-
-	cqi := spec.NewContinuousQueryInfoBySpec()
-	// Benevor TODO: Check if the length of the cq name is legal
-
-	cmd := &proto2.CreateContinuousQueryCommand{
-		Database:        proto.String(database),
-		ContinuousQuery: cqi.Marshal(),
-	}
-
-	if err := c.retryUntilExec(proto2.Command_CreateContinuousQueryCommand, proto2.E_CreateContinuousQueryCommand_Command, cmd); err != nil {
-		return nil, err
-	}
-
-	return c.ContinuousQuery(database, cqi.Name)
-}
-
-func (c *Client) GetMaxCQChangeID() uint64 {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cacheData.MaxCQChangeID
-}
-
 // RetentionPolicy returns the requested retention policy info.
 func (c *Client) RetentionPolicy(database, name string) (rpi *meta2.RetentionPolicyInfo, err error) {
 	c.mu.RLock()
@@ -1053,19 +977,6 @@ func (c *Client) RetentionPolicy(database, name string) (rpi *meta2.RetentionPol
 	}
 
 	return db.RetentionPolicy(name), nil
-}
-
-// ContinuousQuery returns the requested continuous query info.
-func (c *Client) ContinuousQuery(database, name string) (cqi *meta2.ContinuousQueryInfo, err error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	db := c.cacheData.Database(database)
-	if db == nil || db.MarkDeleted {
-		return nil, errno.NewError(errno.DatabaseNotFound, database)
-	}
-
-	return db.GetContinuousQuery(name)
 }
 
 func (c *Client) DBPtView(database string) (meta2.DBPtInfos, error) {

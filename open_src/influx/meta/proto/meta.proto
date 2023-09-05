@@ -299,6 +299,8 @@ message Command {
 		Sql2MetaHeartbeatCommand                   = 84;
 		ContinuousQueryReportCommand               = 85;
 		GetContinuousQueryLeaseCommand             = 86;
+		DropContinuousQueryCommand                 = 87;
+		NotifyCQLeaseChangedCommand                = 88;
 	}
 
 	required Type type = 1;
@@ -999,4 +1001,14 @@ message GetContinuousQueryLeaseCommand {
 	required string Host = 1;
 	repeated string Cqs = 2;
 	optional bool FirstTime = 3;
+}
+
+message DropContinuousQueryCommand {
+	extend Command { optional DropContinuousQueryCommand command = 187; }
+	required string Name = 1;
+	required string Database = 2;
+}
+
+message NotifyCQLeaseChangedCommand {
+	extend Command { optional NotifyCQLeaseChangedCommand command = 188; }
 }

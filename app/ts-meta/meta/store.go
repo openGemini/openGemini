@@ -81,22 +81,6 @@ const categoryDatanode = "datanode"
 const categoryMetadata = "metanode"
 const categoryParam = "param"
 
-type situation int
-
-const (
-	sqlJoin situation = iota
-	//sqlOffline
-	cqCreated
-	//cqDeleted
-)
-
-var (
-	// heartbeatToleranceDuration represents ts-sql heartbeat tolerance duration for crash
-	heartbeatToleranceDuration = 5 * time.Second
-
-	detectTSSqlCrashInterval = time.Second
-)
-
 type ShardStat struct {
 	id          uint64
 	ownerPT     uint32
@@ -408,8 +392,9 @@ type Store struct {
 	cacheDataBytes   []byte
 	cacheDataChanged chan struct{}
 
+	// for continuous query
 	cqLock            sync.RWMutex            // lock for all cq related items
-	cqNames           []string                // sorted cq names
+	cqNames           []string                // sorted cq names. Restore from data unmarshal.
 	HeartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
 	cqLease           map[string]*cqLeaseInfo // sql host to cq lease.
 	sqlHosts          []string                // sorted hostname ["127.0.0.1:8086", "127.0.0.2:8086", "127.0.0.3:8086"]
@@ -424,17 +409,19 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 			TakeOverEnabled: true,
 			BalancerEnabled: true,
 		},
-		cacheData:         &meta.Data{},
-		closing:           make(chan struct{}),
-		dataChanged:       make(chan struct{}),
-		cacheDataChanged:  make(chan struct{}),
-		path:              c.Dir,
-		config:            c,
-		httpAddr:          httpAddr,
-		rpcAddr:           rpcAddr,
-		raftAddr:          raftAddr,
-		dbStatistics:      make(map[string]*dbInfo),
-		notifyCh:          make(chan bool, 1),
+		cacheData:        &meta.Data{},
+		closing:          make(chan struct{}),
+		dataChanged:      make(chan struct{}),
+		cacheDataChanged: make(chan struct{}),
+		path:             c.Dir,
+		config:           c,
+		httpAddr:         httpAddr,
+		rpcAddr:          rpcAddr,
+		raftAddr:         raftAddr,
+		dbStatistics:     make(map[string]*dbInfo),
+		notifyCh:         make(chan bool, 1),
+
+		// for continuous query
 		HeartbeatInfoList: list.New(),
 		cqLease:           make(map[string]*cqLeaseInfo),
 	}
@@ -526,7 +513,7 @@ func (s *Store) Open(raftln net.Listener) error {
 	s.wg.Add(3)
 	go s.serveSnapshot()
 	go s.checkLeaderChanged()
-	go s.detectSqlNodeCrash()
+	go s.detectSqlNodeOffline()
 
 	return nil
 }
@@ -1398,103 +1385,6 @@ func (s *Store) getMeasurementInfo(dbName, rpName, mstName string) ([]byte, erro
 		return nil, err
 	}
 	return mst.MarshalBinary()
-}
-
-func (s *Store) detectSqlNodeCrash() {
-	defer s.wg.Done()
-	ticker := time.NewTicker(detectTSSqlCrashInterval)
-	for {
-		select {
-		case <-s.closing:
-			return
-		case <-ticker.C:
-			s.checkSQLNodesHeartbeat()
-			ticker.Reset(detectTSSqlCrashInterval)
-		}
-	}
-}
-
-// checkSQLNodesHeartbeat detects all sql nodes whether crashed or not.
-func (s *Store) checkSQLNodesHeartbeat() {
-	var hbi *list.Element
-	if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
-		return
-	}
-
-	for {
-		if time.Since(hbi.Value.(*HeartbeatInfo).LastHeartbeatTime) >= heartbeatToleranceDuration {
-			sqlHost := hbi.Value.(*HeartbeatInfo).Host
-			// reassign cqs.
-			s.deleteSqlNode(sqlHost, hbi)
-
-			if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
-				return
-			}
-			continue
-		}
-		break
-	}
-}
-
-// delete sqlnode info and reassign cqs to other ts-sqls when one ts-sql is down
-func (s *Store) deleteSqlNode(sqlHost string, hbi *list.Element) {
-	s.cqLock.Lock()
-	defer s.cqLock.Unlock()
-	//
-	//sni := s.SqlNodes[sqlName]
-	//if sni == nil {
-	//	return
-	//}
-	//
-	//// Get all cqs that need to be reassigned
-	//for _, name := range sni.CqInfo.AssignCqs {
-	//	sni.CqInfo.RunningCqs[name] = name
-	//}
-	//for _, name := range sni.CqInfo.RevokeCqs {
-	//	delete(sni.CqInfo.RunningCqs, name)
-	//}
-	//var cqs []string
-	//for cq := range sni.CqInfo.RunningCqs {
-	//	cqs = append(cqs, cq)
-	//}
-	//
-	// delete cqLeaseInfo.
-	delete(s.cqLease, sqlHost)
-	//delete HeartbeatInfo.
-	s.HeartbeatInfoList.Remove(hbi)
-	//
-	//for _, cq := range cqs {
-	//	s.assignCQ2SQL(cq)
-	//}
-}
-
-//func (s *Store) assignCQ2SQL(cq string) {
-//	var sql string
-//	var minLoad = math.MaxInt
-//	for s, sni := range s.SqlNodes {
-//		if sni.CqInfo.GetLoad() < minLoad {
-//			minLoad = sni.CqInfo.GetLoad()
-//			sql = s
-//		}
-//	}
-//	s.SqlNodes[sql].CqInfo.AssignCqs[cq] = cq
-//	s.SqlNodes[sql].CqInfo.IsNew = false
-//}
-
-func (s *Store) getContinuousQueryLease(host string) ([]string, error) {
-	if !s.IsLeader() {
-		return nil, raft.ErrNotLeader
-	}
-
-	s.cqLock.RLock()
-	defer s.cqLock.RUnlock()
-
-	leaseInfo, ok := s.cqLease[host]
-	if !ok {
-		return nil, nil
-	}
-
-	return leaseInfo.CQNames, nil
 }
 
 func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {

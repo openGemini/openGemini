@@ -32,6 +32,8 @@ import (
 // Define a mockMetaClient struct to mimic the MetaClient struct
 type MockMetaClient struct {
 	DatabasesFn func() map[string]*meta.DatabaseInfo
+
+	MetaClient
 }
 
 func (mc *MockMetaClient) WaitForDataChanged() chan struct{} {
@@ -50,6 +52,10 @@ func (mc *MockMetaClient) GetCqLease(host string) ([]string, error) {
 	return nil, nil
 }
 
+func (mc *MockMetaClient) Databases() map[string]*meta.DatabaseInfo {
+	return mc.DatabasesFn()
+}
+
 // StatementExecutor is a mock statement executor.
 type StatementExecutor struct {
 	ExecuteStatementFn func(stmt influxql.Statement, ctx *query.ExecutionContext) error
@@ -60,16 +66,11 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 }
 
 func (e *StatementExecutor) Statistics(buffer []byte) ([]byte, error) {
-	//TODO implement me
 	panic("implement me")
 }
 
-func (mc *MockMetaClient) Databases() map[string]*meta.DatabaseInfo {
-	return mc.DatabasesFn()
-}
-
 // NewTestService returns a new *Service with default mock object members.
-func NewTestService(t *testing.T) *Service {
+func NewTestService() *Service {
 	s := NewService("127.0.0.1:8086", config.DefaultRunInterval, config.DefaultMaxProcessCQNumber)
 	s.MetaClient = &MockMetaClient{}
 
@@ -77,7 +78,7 @@ func NewTestService(t *testing.T) *Service {
 }
 
 func TestTTL(t *testing.T) {
-	s := NewTestService(t)
+	s := NewTestService()
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
 			return nil
@@ -88,12 +89,12 @@ func TestTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 	s.Close()
 }
 
 func TestService_handle(t *testing.T) {
-	s := NewTestService(t)
+	s := NewTestService()
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
 			return nil
@@ -167,7 +168,7 @@ func NewContinuousQueryService(t *testing.T) (*Service, *ContinuousQuery) {
 		},
 	}
 	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
-	s := NewTestService(t)
+	s := NewTestService()
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
 			return map[string]*meta.DatabaseInfo{"db1": dbi}

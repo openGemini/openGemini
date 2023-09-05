@@ -150,6 +150,11 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
 		err = e.executeCreateContinuousQueryStatement(stmt)
+	case *influxql.DropContinuousQueryStatement:
+		if ctx.ReadOnly {
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeDropContinuousQueryStatement(stmt)
 	case *influxql.CreateUserStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
@@ -624,6 +629,16 @@ func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql
 	// Create new continuous query.
 	_, err := e.MetaClient.CreateContinuousQuery(stmt.Database, &spec)
 	return err
+}
+
+// executeDropContinuousQueryStatement drops a continuous query from the cluster.
+func (e *StatementExecutor) executeDropContinuousQueryStatement(stmt *influxql.DropContinuousQueryStatement) error {
+	e.StmtExecLogger.Info("delete continuous query start", zap.String("cq name", stmt.Name), zap.String("database", stmt.Database))
+	if err := e.MetaClient.DropContinuousQuery(stmt.Name, stmt.Database); err != nil {
+		e.StmtExecLogger.Error("delete continuous query error", zap.String("cq name", stmt.Name), zap.String("database", stmt.Database), zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func (e *StatementExecutor) executeCreateSubscriptionStatement(q *influxql.CreateSubscriptionStatement) error {

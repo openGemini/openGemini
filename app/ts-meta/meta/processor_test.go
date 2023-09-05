@@ -131,7 +131,7 @@ func (s *MockRPCStore) getMeasurementInfo(dbName, rpName, mstName string) ([]byt
 	return []byte{}, nil
 }
 
-func (s *MockRPCStore) applySql2MetaHeartbeat(host string) error {
+func (s *MockRPCStore) handlerSql2MetaHeartbeat(host string) error {
 	return nil
 }
 

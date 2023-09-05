@@ -17,18 +17,15 @@ limitations under the License.
 package meta
 
 import (
-	"container/list"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,8 +34,14 @@ func TestCheckLeaderChanged(t *testing.T) {
 	s.cm = NewClusterManager(s)
 	c := raft.MakeCluster(1, t, nil)
 	s.raft = &raftWrapper{raft: c.Leader()}
-	time.Sleep(time.Second)
+
+	globalService = &Service{}
+	defer func() {
+		globalService = nil
+	}()
+
 	s.Node = &metaclient.Node{ID: 1}
+
 	s.wg.Add(1)
 	go s.checkLeaderChanged()
 	s.notifyCh <- false
@@ -103,46 +106,12 @@ func Test_getSnapshot(t *testing.T) {
 
 type MockRaft struct {
 	isLeader bool
-}
 
-func (m MockRaft) State() raft.RaftState {
-	panic("implement me")
-}
-
-func (m MockRaft) Peers() ([]string, error) {
-	panic("implement me")
-}
-
-func (m MockRaft) Close() error {
-	panic("implement me")
+	RaftInterface
 }
 
 func (m MockRaft) IsLeader() bool {
 	return m.isLeader
-}
-
-func (m MockRaft) IsCandidate() bool {
-	panic("implement me")
-}
-
-func (m MockRaft) Leader() string {
-	panic("implement me")
-}
-
-func (m MockRaft) Apply(b []byte) error {
-	panic("implement me")
-}
-
-func (m MockRaft) AddServer(addr string) error {
-	panic("implement me")
-}
-
-func (m MockRaft) ShowDebugInfo(witch string) ([]byte, error) {
-	panic("implement me")
-}
-
-func (m MockRaft) UserSnapshot() error {
-	panic("implement me")
 }
 
 func Test_GetStreamInfo(t *testing.T) {
@@ -281,247 +250,4 @@ func Test_GetRpMstInfos(t *testing.T) {
 	if rsp2.(*message.GetRpMstInfosResponse).Err != "server closed" {
 		t.Fatal("unexpected error")
 	}
-}
-
-func Test_ApplyHeartbeat(t *testing.T) {
-	s := &Store{
-		HeartbeatInfoList: list.New(),
-		raft:              &MockRaft{isLeader: false},
-	}
-	host1 := "127.0.0.1:8086"
-	host2 := "127.0.0.2:8086"
-
-	err := s.applySql2MetaHeartbeat(host1)
-	require.EqualError(t, raft.ErrNotLeader, err.Error())
-
-	s = &Store{
-		HeartbeatInfoList: list.New(),
-		raft:              &MockRaft{isLeader: true},
-		cqLease:           make(map[string]*cqLeaseInfo),
-	}
-
-	err = s.applySql2MetaHeartbeat(host1)
-	require.NoError(t, err)
-	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.HeartbeatInfoList.Front())
-	require.Equal(t, s.HeartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
-
-	err = s.applySql2MetaHeartbeat(host2)
-	require.NoError(t, err)
-	require.Equal(t, s.cqLease[host2].LastHeartbeat, s.HeartbeatInfoList.Front().Next())
-
-	err = s.applySql2MetaHeartbeat(host1)
-	require.NoError(t, err)
-	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.HeartbeatInfoList.Front().Next())
-}
-
-func Test_checkSQLNodesHeartbeat(t *testing.T) {
-	s := &Store{
-		raft: &MockRaft{isLeader: true},
-
-		HeartbeatInfoList: list.New(),
-		cqLease:           make(map[string]*cqLeaseInfo),
-		closing:           make(chan struct{}),
-	}
-	host1 := "127.0.0.1:8086"
-
-	err := s.applySql2MetaHeartbeat(host1)
-	require.NoError(t, err)
-	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.HeartbeatInfoList.Front())
-	require.Equal(t, s.HeartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
-
-	originInterval := detectTSSqlCrashInterval
-	detectTSSqlCrashInterval = 10 * time.Millisecond
-
-	originToleranceDuration := heartbeatToleranceDuration
-	heartbeatToleranceDuration = 100 * time.Millisecond
-
-	defer func() {
-		detectTSSqlCrashInterval = originInterval
-		heartbeatToleranceDuration = originToleranceDuration
-	}()
-
-	go func() {
-		time.Sleep(time.Second)
-		close(s.closing)
-	}()
-
-	s.wg.Add(1)
-	s.detectSqlNodeCrash()
-
-	s.wg.Wait()
-
-	require.Nil(t, s.cqLease[host1])
-	require.Nil(t, s.HeartbeatInfoList.Front())
-}
-
-func Test_ApplyContinuousQueryReportCommand(t *testing.T) {
-	s := &Store{
-		raft: &MockRaft{isLeader: true},
-		data: &meta2.Data{
-			Databases: map[string]*meta2.DatabaseInfo{
-				"db0": {
-					Name: "db0",
-					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
-						"cq0": {
-							Name:        "cq0",
-							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
-							MarkDeleted: false,
-							LastRunTime: time.Time{},
-						},
-					},
-				},
-			},
-		},
-	}
-	fsm := (*storeFSM)(s)
-	ts := time.Now()
-	value := &proto2.ContinuousQueryReportCommand{
-		CQStates: []*proto2.CQState{
-			{
-				Name:        proto.String("cq0"),
-				LastRunTime: proto.Int64(ts.UnixNano()),
-			},
-		},
-	}
-	typ := proto2.Command_ContinuousQueryReportCommand
-	cmd := &proto2.Command{Type: &typ}
-	err := proto.SetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command, value)
-	require.NoError(t, err)
-
-	resErr := fsm.applyContinuousQueryReportCommand(cmd)
-	require.Nil(t, resErr)
-	require.Equal(t, ts.UnixNano(), fsm.data.Databases["db0"].ContinuousQueries["cq0"].LastRunTime.UnixNano())
-}
-
-func Test_GetContinuousQueryLeaseCommand(t *testing.T) {
-	// case 1: leader not found
-	s := &Store{
-		HeartbeatInfoList: list.New(),
-		cqLease:           make(map[string]*cqLeaseInfo),
-		closing:           make(chan struct{}),
-		raft:              &MockRaft{isLeader: false},
-	}
-	host1 := "127.0.0.1:8086"
-	_, err := s.getContinuousQueryLease(host1)
-	require.Equal(t, raft.ErrNotLeader, err)
-
-	// case 2:
-	s = &Store{
-		HeartbeatInfoList: list.New(),
-		cqLease:           make(map[string]*cqLeaseInfo),
-		closing:           make(chan struct{}),
-		raft:              &MockRaft{isLeader: true},
-	}
-
-	err = s.applySql2MetaHeartbeat(host1)
-	require.Nil(t, err)
-	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.HeartbeatInfoList.Front())
-	require.Equal(t, host1, s.HeartbeatInfoList.Front().Value.(*HeartbeatInfo).Host)
-	s.cqLease[host1].CQNames = []string{"cq1_1", "cq1_2"}
-
-	// first get
-	cqs, err := s.getContinuousQueryLease(host1)
-	require.NoError(t, err)
-	require.Equal(t, []string{"cq1_1", "cq1_2"}, cqs)
-
-	//
-	//s.cqLease[host1].CqInfo.AssignCqs["cq1_3"] = "cq1_3"
-	//s.cqLease[host1].CqInfo.RevokeCqs["cq1_2"] = "cq1_2"
-	//
-	//// second get
-	//assignCqs, revokeCqs, err = s.getContinuousQueryLease(false, host1, []string{"cq1_1", "cq1_2"})
-	//require.Equal(t, []string{"cq1_3"}, assignCqs)
-	//require.Equal(t, []string{"cq1_2"}, revokeCqs)
-	//require.Nil(t, err)
-	//require.Equal(t, map[string]string(map[string]string{"cq1_1": "cq1_1", "cq1_3": "cq1_3"}), s.cqLease[host1].CqInfo.RunningCqs)
-	//require.Equal(t, map[string]string{}, s.cqLease[host1].CqInfo.AssignCqs)
-	//require.Equal(t, map[string]string{}, s.cqLease[host1].CqInfo.RevokeCqs)
-	//
-	//// ts-meta restart and lose sqlnodeinfo.
-	//s = &Store{
-	//	HeartbeatInfoList: list.New(),
-	//	cqLease:           make(map[string]*cqLeaseInfo),
-	//	closing:           make(chan struct{}),
-	//	raft:              &MockRaft{isLeader: true},
-	//}
-	//err = s.applySql2MetaHeartbeat(host1)
-	//require.Nil(t, err)
-	//assignCqs, revokeCqs, err = s.getContinuousQueryLease(false, host1, []string{"cq1_1", "cq1_2"})
-	//require.Nil(t, err)
-	//require.Equal(t, map[string]string(map[string]string{"cq1_1": "cq1_1", "cq1_2": "cq1_2"}), s.cqLease[host1].CqInfo.RunningCqs)
-	//require.Nil(t, assignCqs)
-	//require.Nil(t, revokeCqs)
-	//
-	//// network problem 1.
-	//s = &Store{
-	//	HeartbeatInfoList: list.New(),
-	//	cqLease:           make(map[string]*cqLeaseInfo),
-	//	closing:           make(chan struct{}),
-	//	raft:              &MockRaft{isLeader: true},
-	//}
-	//err = s.applySql2MetaHeartbeat(host1)
-	//require.Nil(t, err)
-	//s.cqLease[host1].CqInfo.IsNew = false
-	//assignCqs, revokeCqs, err = s.getContinuousQueryLease(false, host1, []string{"cq1_1"})
-	//require.Nil(t, err)
-	//require.Nil(t, assignCqs)
-	//require.Equal(t, []string{"cq1_1"}, revokeCqs)
-	//
-	//// network problem 2.
-	//s = &Store{
-	//	HeartbeatInfoList: list.New(),
-	//	cqLease:           make(map[string]*cqLeaseInfo),
-	//	closing:           make(chan struct{}),
-	//	raft:              &MockRaft{isLeader: true},
-	//}
-	//err = s.applySql2MetaHeartbeat(host1)
-	//require.Nil(t, err)
-	//s.cqLease[host1].CqInfo.IsNew = false
-	//s.cqLease[host1].CqInfo.RunningCqs["cq1_1"] = "cq1_1"
-	//assignCqs, revokeCqs, err = s.getContinuousQueryLease(false, host1, nil)
-	//require.Nil(t, err)
-	//require.Nil(t, revokeCqs)
-	//require.Equal(t, []string{"cq1_1"}, assignCqs)
-}
-
-func Test_refactorCQNames(t *testing.T) {
-	s := &Store{
-		data: &meta2.Data{
-			Databases: map[string]*meta2.DatabaseInfo{
-				"db0": {
-					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
-						"cq1": {},
-						"cq0": {},
-					},
-				},
-				"db1": {
-					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
-						"cq2": {},
-						"cq3": {},
-					},
-				},
-			},
-		},
-		cqNames: nil,
-	}
-	fsm := (*storeFSM)(s)
-
-	fsm.refactorCQNames()
-	require.Equal(t, []string{"cq0", "cq1", "cq2", "cq3"}, fsm.cqNames)
-}
-
-func Test_handleCQCreated(t *testing.T) {
-	s := &Store{
-		cqNames: []string{"cq1", "cq3"},
-	}
-	fsm := (*storeFSM)(s)
-
-	fsm.handleCQCreated("cq0")
-	require.Equal(t, []string{"cq0", "cq1", "cq3"}, fsm.cqNames)
-
-	fsm.handleCQCreated("cq2")
-	require.Equal(t, []string{"cq0", "cq1", "cq2", "cq3"}, fsm.cqNames)
-
-	fsm.handleCQCreated("cq4")
-	require.Equal(t, []string{"cq0", "cq1", "cq2", "cq3", "cq4"}, fsm.cqNames)
 }

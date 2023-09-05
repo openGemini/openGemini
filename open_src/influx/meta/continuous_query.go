@@ -23,6 +23,76 @@ import (
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
 
+func (data *Data) CreateContinuousQuery(dbName string, cqi *ContinuousQueryInfo) error {
+	dbi, err := data.GetDatabase(dbName)
+	if err != nil {
+		return err
+	}
+	err = checkCanCreateContinuousQuery(dbi, cqi)
+	if err != nil {
+		return err
+	}
+
+	if dbi.ContinuousQueries == nil {
+		dbi.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
+	}
+	dbi.ContinuousQueries[cqi.Name] = cqi
+	data.MaxCQChangeID++
+	return nil
+}
+
+func checkCanCreateContinuousQuery(dbi *DatabaseInfo, cqi *ContinuousQueryInfo) error {
+	// validate continuous query
+	if cqi == nil {
+		return ErrContinuosQueryRequired
+	} else if cqi.Name == "" {
+		return ErrContinuosQueryNameRequired
+	} else if cqi.Query == "" {
+		return ErrContinuosQuerySourceRequired
+	}
+
+	if err := cqi.CheckSpecValid(); err != nil {
+		return err
+	}
+
+	if _, ok := dbi.ContinuousQueries[cqi.Name]; ok {
+		// Benevor TODO: how about a cq with the same name but marked as deleted.
+		return ErrSameContinuousQueryName
+	}
+
+	// check same action
+	if err := dbi.CheckConfilctWithConfiltCq(cqi); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DropContinuousQuery drops one continuous query and notify ALL sql nodes that CQ has been changed.
+func (data *Data) DropContinuousQuery(cqName string, database string) (bool, error) {
+	dbi, err := data.GetDatabase(database)
+	if err != nil {
+		return false, err
+	}
+	if _, ok := dbi.ContinuousQueries[cqName]; !ok {
+		return false, nil
+	}
+	delete(dbi.ContinuousQueries, cqName)
+	data.MaxCQChangeID++
+	return true, nil
+}
+
+func (data *Data) BatchUpdateContinuousQueryStat(cqStates []*proto2.CQState) error {
+	for _, dbi := range data.Databases {
+		for _, cqStat := range cqStates {
+			if cqi, ok := dbi.ContinuousQueries[cqStat.GetName()]; ok {
+				cqi.UpdateContinuousQueryStat(cqStat.GetLastRunTime())
+			}
+		}
+	}
+	return nil
+}
+
 // ContinuousQueryInfo represents metadata about a continuous query.
 type ContinuousQueryInfo struct {
 	// Name of the continuous query to be created.
@@ -93,11 +163,6 @@ func (cqi *ContinuousQueryInfo) CheckSpecValid() error {
 	// Benevor TODO : what need to check
 
 	return nil
-}
-
-// Determine if the actions of two cqs are exactly the same.
-func (cqi *ContinuousQueryInfo) EqualsAnotherCq(other *ContinuousQueryInfo) bool {
-	return cqi.Query == other.Query
 }
 
 func (cqi *ContinuousQueryInfo) UpdateContinuousQueryStat(lastRun int64) {

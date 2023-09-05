@@ -219,6 +219,7 @@ func TestNewServer(t *testing.T) {
 }
 
 type MockMetaClient struct {
+	metaclient.MetaClient
 }
 
 func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo {

@@ -45,6 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -3406,6 +3407,7 @@ func TestInitDownSampleTaskNum(t *testing.T) {
 }
 
 type MockMetaClient struct {
+	metaclient.MetaClient
 }
 
 func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo {

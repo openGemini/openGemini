@@ -316,7 +316,7 @@ func (s *Server) SendHeartbeat2Meta() {
 			return
 		case <-ticker.C:
 			if err := s.MetaClient.SendSql2MetaHeartbeat(hostname); err != nil {
-				s.Logger.Error("TSSQL send heartbeart to TSMeta failed.")
+				s.Logger.Warn("sql node send heartbeat to meta node failed", zap.Error(err))
 			}
 		}
 	}
