@@ -6,7 +6,7 @@
 
 简体中文 | [English](README.md)
 
-[官网](http://www.openGemini.org) | [文档](http://www.openGemini.org/docs) | [贡献指南](CONTRIBUTION_CN.md) | [RoadMap](ROADMAP.md)
+[官网](http://www.openGemini.org) | [文档](https://docs.opengemini.org/zh/guide) | [贡献指南](CONTRIBUTION_CN.md) | [RoadMap](ROADMAP.md) | [性能](https://docs.opengemini.org/zh/guide/introduction/performance.html)
 
 ## 关于openGemini
 
