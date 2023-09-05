@@ -5,8 +5,8 @@
 ![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)                                                                                                
 [简体中文](README_CN.md) | English
 
-[Official Website](http://www.openGemini.org) | [Docs](http://www.openGemini.org/docs) | [Contribution Guide](CONTRIBUTION.md) 
- | [RoadMap](./ROADMAP.md)
+[Official Website](http://www.openGemini.org) | [Docs](https://docs.opengemini.org/guide) | [Contribution Guide](CONTRIBUTION.md) 
+ | [RoadMap](./ROADMAP.md) | [Performance](https://docs.opengemini.org/guide/introduction/performance.html)
 
 ## About openGemini
 
