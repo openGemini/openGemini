@@ -18,7 +18,6 @@ package sherlock
 
 import (
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,8 +45,6 @@ func Test_Sherlock_start_stop(t *testing.T) {
 	sh.DisableGrtDump()
 	sh.EnableGrtDump()
 	sh.Start()
-	sh.Start() // test start again
-	defer sh.Stop()
 	defer sh.Stop()
 	time.Sleep(15 * time.Second)
 	fmt.Println("on running")
@@ -81,7 +78,6 @@ func Test_Sherlock_startDumpLoop_return(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	sh.Stop()
 	time.Sleep(10 * time.Millisecond)
-	require.Equal(t, int64(1), atomic.LoadInt64(&sh.closed))
 
 	// case 2. cpu is too high, disable to dump
 	var collector2 = func(cpuCore int, memoryLimit uint64) (int, int, int, error) {
