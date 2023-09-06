@@ -222,7 +222,7 @@ type MetaClient interface {
 
 	// for continuous query
 	SendSql2MetaHeartbeat(host string) error
-	CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) /**/
+	CreateContinuousQuery(database, name, query string) error
 	ShowContinuousQueries() (models.Rows, error)
 	DropContinuousQuery(name string, database string) error
 }

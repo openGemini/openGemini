@@ -421,11 +421,11 @@ func ProcessExecuteRequest(s MetaStoreInterface, cmd *proto2.Command, metaconfig
 	return err
 }
 
-func GenerateCreateContinuousQueryCommand(spec *meta2.ContinuousQuerySpec, db string) *proto2.Command {
-	cqi := spec.NewContinuousQueryInfoBySpec()
+func GenerateCreateContinuousQueryCommand(db, name, query string) *proto2.Command {
 	val := &proto2.CreateContinuousQueryCommand{
-		Database:        &db,
-		ContinuousQuery: cqi.Marshal(),
+		Database: proto.String(db),
+		Name:     proto.String(name),
+		Query:    proto.String(query),
 	}
 	t1 := proto2.Command_CreateContinuousQueryCommand
 

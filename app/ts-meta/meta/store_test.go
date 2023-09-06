@@ -915,11 +915,9 @@ func TestCreateContinuousQueryCommands(t *testing.T) {
 	//store := ms.GetStore()
 	//store.cqLease["127.0.0.1"] = &meta.cqLeaseInfo{}
 
-	spec := &meta2.ContinuousQuerySpec{
-		Query: `CREATE CONTINUOUS QUERY cq0 ON db0 BEGIN SELECT mean("passengers") INTO "average_passengers" FROM "bus_data" GROUP BY time(1h) END`,
-		Name:  "cq0",
-	}
-	cmd = meta.GenerateCreateContinuousQueryCommand(spec, dbName)
+	cqName := "cq0"
+	cqQuery := `CREATE CONTINUOUS QUERY cq0 ON db0 BEGIN SELECT mean("passengers") INTO "average_passengers" FROM "bus_data" GROUP BY time(1h) END`
+	cmd = meta.GenerateCreateContinuousQueryCommand(dbName, cqName, cqQuery)
 
 	if err := ms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)

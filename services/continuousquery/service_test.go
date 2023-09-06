@@ -17,16 +17,21 @@ limitations under the License.
 package continuousquery
 
 import (
-	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 // Define a mockMetaClient struct to mimic the MetaClient struct
@@ -36,15 +41,7 @@ type MockMetaClient struct {
 	MetaClient
 }
 
-func (mc *MockMetaClient) WaitForDataChanged() chan struct{} {
-	return nil
-}
-
-func (mc *MockMetaClient) GetMaxCQChangeID() uint64 {
-	return 0
-}
-
-func (mc *MockMetaClient) BatchUpdateContinuousQueryStat(cqStats map[string]int64) error {
+func (mc *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
 	return nil
 }
 
@@ -56,22 +53,21 @@ func (mc *MockMetaClient) Databases() map[string]*meta.DatabaseInfo {
 	return mc.DatabasesFn()
 }
 
-// StatementExecutor is a mock statement executor.
-type StatementExecutor struct {
-	ExecuteStatementFn func(stmt influxql.Statement, ctx *query.ExecutionContext) error
+// mockQueryExecutor is a mock query executor
+type mockQueryExecutor struct {
+	ExecuteQueryFn func(results chan *query2.Result)
 }
 
-func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-	return e.ExecuteStatementFn(stmt, ctx)
-}
-
-func (e *StatementExecutor) Statistics(buffer []byte) ([]byte, error) {
-	panic("implement me")
+func (e *mockQueryExecutor) ExecuteQuery(query *influxql.Query, opt query.ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query2.Result {
+	res := make(chan *query2.Result)
+	go e.ExecuteQueryFn(res)
+	return res
 }
 
 // NewTestService returns a new *Service with default mock object members.
 func NewTestService() *Service {
 	s := NewService("127.0.0.1:8086", config.DefaultRunInterval, config.DefaultMaxProcessCQNumber)
+	s.WithLogger(logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()))
 	s.MetaClient = &MockMetaClient{}
 
 	return s
@@ -107,9 +103,8 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 	interval := time.Minute
 	// test the invalid time range
 	cq1 := &meta.ContinuousQueryInfo{
-		Name:        "test",
-		Query:       "CREATE CONTINUOUS QUERY test ON db1 BEGIN SELECT count(value) INTO db1.autogen.value FROM db1.autogen.test GROUP BY time(1m) END",
-		MarkDeleted: false,
+		Name:  "test",
+		Query: "CREATE CONTINUOUS QUERY test ON db1 BEGIN SELECT count(value) INTO db1.autogen.value FROM db1.autogen.test GROUP BY time(1m) END",
 	}
 	db1 := &meta.DatabaseInfo{
 		Name:                   "db1",
@@ -127,9 +122,8 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 
 	// test the valid CQ query
 	cq2 := &meta.ContinuousQueryInfo{
-		Name:        "test",
-		Query:       "CREATE CONTINUOUS QUERY test ON db1 BEGIN SELECT count(value) INTO db1.autogen.value FROM db1.autogen.test GROUP BY time(1m) END",
-		MarkDeleted: false,
+		Name:  "test",
+		Query: "CREATE CONTINUOUS QUERY test ON db1 BEGIN SELECT count(value) INTO db1.autogen.value FROM db1.autogen.test GROUP BY time(1m) END",
 	}
 	db2 := &meta.DatabaseInfo{
 		Name:                   "db2",
@@ -155,7 +149,7 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 	assert.Equal(t, ok, false)
 }
 
-func NewContinuousQueryService(t *testing.T) (*Service, *ContinuousQuery) {
+func NewContinuousQueryService() (*Service, *ContinuousQuery) {
 	cqi := &meta.ContinuousQueryInfo{
 		Name:  "cq1",
 		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "test" GROUP BY time(1h) END`,
@@ -177,27 +171,17 @@ func NewContinuousQueryService(t *testing.T) (*Service, *ContinuousQuery) {
 	return s, cq
 }
 
-func TestService_ExecuteContinuousQuery_Fail(t *testing.T) {
-	// test the error when executing a statement
-	s, cq := NewContinuousQueryService(t)
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			return errors.New("error executing statement")
+func TestService_ExecuteContinuousQuery_Error(t *testing.T) {
+	s, cq := NewContinuousQueryService()
+	s.QueryExecutor = &mockQueryExecutor{
+		ExecuteQueryFn: func(results chan *query2.Result) {
+			results <- &query2.Result{Err: fmt.Errorf("mock error")}
 		},
 	}
 	now := time.Now()
-
 	ok, err := s.ExecuteContinuousQuery(cq, now)
-	if ok || err == nil {
-		t.Fatalf("ExecuteContinuousQuery failed, ok=%t, err=%v", ok, err)
-	}
-
-	// test the error when invalidating the CQ
-	cq.query = `THIS IS AN INVALID QUERY`
-	ok, err = s.ExecuteContinuousQuery(cq, now)
-	if err == nil || ok {
-		t.Fatal(err)
-	}
+	assert.False(t, ok)
+	assert.EqualError(t, err, "mock error")
 }
 
 // mockRegister is a mock task manager
@@ -209,200 +193,44 @@ func (mockRegister) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	return 1, nil
 }
 
-func TestService_ExecuteContinuousQuery_WithInterval(t *testing.T) {
-	s, _ := NewContinuousQueryService(t)
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			ctx.Results <- &query2.Result{}
-			return nil
+func TestService_ExecuteContinuousQuery_Successful(t *testing.T) {
+	s, cq := NewContinuousQueryService()
+	s.QueryExecutor = &mockQueryExecutor{
+		ExecuteQueryFn: func(results chan *query2.Result) {
+			results <- &query2.Result{}
 		},
 	}
-	taskManager := query.NewTaskManager()
-	taskManager.Register = &mockRegister{}
-	s.QueryExecutor.TaskManager = taskManager
 
 	now := time.Now()
-
-	// test the wrong interval
-	cq1 := &meta.ContinuousQueryInfo{
-		Name:  "cq2",
-		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "test" GROUP BY time(wrong) END`,
-	}
-	dbi := &meta.DatabaseInfo{
-		Name:                   "db1",
-		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq1": cq1,
-		},
-	}
-	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq1.Query)
-	if cq != nil {
-		t.Fatal("Expected NewContinuousQuery to fail")
-	}
-
-	// test when interval is set to zero
-	cq2 := &meta.ContinuousQueryInfo{
-		Name:  "cq3",
-		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "test" GROUP BY time(0) END`,
-	}
-	dbi = &meta.DatabaseInfo{
-		Name:                   "db1",
-		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq2": cq2,
-		},
-	}
-	cq = NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq2.Query)
-	if cq != nil {
-		t.Fatal("Expected NewContinuousQuery to fail")
-	}
-
-	// test the correct interval
-	cq3 := &meta.ContinuousQueryInfo{
-		Name:  "cq3",
-		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "test" GROUP BY time(1h) END`,
-	}
-	dbi = &meta.DatabaseInfo{
-		Name:                   "db1",
-		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq3": cq3,
-		},
-	}
-	cq = NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq3.Query)
-	if cq == nil {
-		t.Fatal("Expected NewContinuousQuery to succeed")
-	}
 	ok, err := s.ExecuteContinuousQuery(cq, now)
-	if err != nil || !ok {
-		t.Fatal("Expected ExecuteContinuousQuery to succeed", err)
-	}
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.Equal(t, s.lastRuns[strings.ToLower(cq.query)], now.Truncate(time.Hour))
 }
 
-func TestService_ExecuteContinuousQuery_WithOffset(t *testing.T) {
-	s, _ := NewContinuousQueryService(t)
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			ctx.Results <- &query2.Result{}
-			return nil
-		},
-	}
-	taskManager := query.NewTaskManager()
-	taskManager.Register = &mockRegister{}
-	s.QueryExecutor.TaskManager = taskManager
-
-	now := time.Now()
-
-	// test when the offset is invalid
-	cq1 := &meta.ContinuousQueryInfo{
-		Name:  "cq1",
-		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "test" GROUP BY time(1h) OFFSET invalid END`,
-	}
-	dbi := &meta.DatabaseInfo{
-		Name:                   "db1",
-		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq1": cq1,
-		},
-	}
-	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq1.Query)
-	if cq != nil {
-		t.Fatal("Expected NewContinuousQuery to fail")
-	}
-
-	// test when the offset is set to zero
-	cq2 := &meta.ContinuousQueryInfo{
-		Name:  "cq2",
-		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "test" GROUP BY time(1h) OFFSET 0 END`,
-	}
-	dbi = &meta.DatabaseInfo{
-		Name:                   "db1",
-		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq2": cq2,
-		},
-	}
-	cq = NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cq2.Query)
-	if cq == nil {
-		t.Fatal("Expected NewContinuousQuery to succeed")
-	}
-	ok, err := s.ExecuteContinuousQuery(cq, now)
-	if err != nil || !ok {
-		t.Fatal("Expected ExecuteContinuousQuery to succeed", err)
-	}
-
-}
-
-func TestService_ExecuteContinuousQuery_Panic(t *testing.T) {
+func TestService_ExecuteContinuousQuery_Cooling(t *testing.T) {
 	// test when the statement is executed successfully
-	s, cq := NewContinuousQueryService(t)
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			ctx.Results = nil
-			return nil
+	s, cq := NewContinuousQueryService()
+	s.QueryExecutor = &mockQueryExecutor{
+		ExecuteQueryFn: func(results chan *query2.Result) {
+			results <- &query2.Result{}
 		},
 	}
-	taskManager := query.NewTaskManager()
-	taskManager.Register = &mockRegister{}
-	s.QueryExecutor.TaskManager = taskManager
 
-	result := make(chan int)
-	close(result)
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("The function did not panic")
-		}
-	}()
-
+	s.lastRuns[strings.ToLower(cq.query)] = time.Now()
 	ok, err := s.ExecuteContinuousQuery(cq, time.Now())
-	if ok || err == nil {
-		panic("The function did not panic")
-	}
-}
-
-func TestService_ExecuteContinuousQuery_Time(t *testing.T) {
-	// test when the statement is executed successfully
-	s, cq := NewContinuousQueryService(t)
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			ctx.Results <- &query2.Result{}
-			return nil
-		},
-	}
-
-	s.lastRuns[cq.query] = time.Now()
-	ok, err := s.ExecuteContinuousQuery(cq, time.Now().Add(-2*time.Hour))
 	assert.False(t, ok)
 	assert.NoError(t, err)
 }
 
-func TestService_ExecuteContinuousQuery_Success(t *testing.T) {
-	// test when the statement is executed successfully
-	s, cq := NewContinuousQueryService(t)
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			ctx.Results <- &query2.Result{}
-			return nil
+func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
+	s, _ := NewContinuousQueryService()
+	s.QueryExecutor = &mockQueryExecutor{
+		ExecuteQueryFn: func(results chan *query2.Result) {
+			results <- &query2.Result{}
 		},
 	}
-	taskManager := query.NewTaskManager()
-	taskManager.Register = &mockRegister{}
-	s.QueryExecutor.TaskManager = taskManager
 
-	ok, err := s.ExecuteContinuousQuery(cq, time.Now())
-	if !ok || err != nil {
-		t.Fatalf("ExecuteContinuousQuery failed, ok=%t, err=%v", ok, err)
-	}
-}
-
-func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
-	s, _ := NewContinuousQueryService(t)
-	taskManager := query.NewTaskManager()
-	taskManager.Register = &mockRegister{}
-	s.QueryExecutor.TaskManager = taskManager
-
-	// test when the offset is invalid
 	cqi := &meta.ContinuousQueryInfo{
 		Name:  "cq",
 		Query: `CREATE CONTINUOUS QUERY "cq" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "measurement" GROUP BY time(1h) TZ('Asia/Shanghai') END`,
@@ -415,23 +243,13 @@ func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
 		},
 	}
 	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
-	if cq == nil {
-		t.Fatal("Expected NewContinuousQuery to succeed")
-	}
-	s.QueryExecutor.StatementExecutor = &StatementExecutor{
-		ExecuteStatementFn: func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
-			if stmt.(*influxql.SelectStatement).Location.String() != "Asia/Shanghai" {
-				return errors.New("invalid time zone")
-			}
-			ctx.Results <- &query2.Result{}
-			return nil
-		},
-	}
+	assert.NotNil(t, cq)
+
 	now := time.Now()
 	ok, err := s.ExecuteContinuousQuery(cq, now)
-	if err != nil || !ok {
-		t.Fatal(err)
-	}
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	assert.Equal(t, s.lastRuns[strings.ToLower(cq.query)], now.In(cq.stmt.Location).Truncate(time.Hour))
 }
 
 func TestService_NewContinuousQuery(t *testing.T) {
@@ -471,9 +289,8 @@ func TestService_NewContinuousQuery(t *testing.T) {
 
 	// test the invalid CQ query
 	cq3 := &meta.ContinuousQueryInfo{
-		Name:        "test",
-		Query:       "select * from test",
-		MarkDeleted: false,
+		Name:  "test",
+		Query: "select * from test",
 	}
 	db3 := &meta.DatabaseInfo{
 		Name:                   "db1",

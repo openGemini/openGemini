@@ -65,31 +65,6 @@ func (di *DatabaseInfo) checkUpdateRetentionPolicyName(name string, updateName *
 	return nil
 }
 
-// Expecting to obtain the corresponding cq, so there is no error reported.
-func (di *DatabaseInfo) GetContinuousQuery(name string) (*ContinuousQueryInfo, error) {
-	cqi := di.ContinuousQueries[name]
-	if cqi == nil {
-		return nil, ErrContinuousQueryNotFound
-	}
-	if cqi.MarkDeleted {
-		return nil, ErrContinuousQueryIsBeingDelete
-	}
-	return cqi, nil
-}
-
-// Check if there is a cq with the same action.
-func (di *DatabaseInfo) CheckConfilctWithConfiltCq(checked *ContinuousQueryInfo) error {
-	// Benevor TODO:
-	// how about a cq with the same action but marked as deleted.
-
-	// for _, cq := range di.ContinuousQueries {
-	// 	if checked.EqualsAnotherCq(cq) {
-	// 		return ErrContinuosQueryConflict
-	// 	}
-	// }
-	return nil
-}
-
 // ShardInfos returns a list of all shards' info for the database.
 func (di DatabaseInfo) ShardInfos() []ShardInfo {
 	shards := map[uint64]*ShardInfo{}

@@ -256,7 +256,6 @@ func Test_ApplyContinuousQueryReportCommand(t *testing.T) {
 						"cq0": {
 							Name:        "cq0",
 							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
-							MarkDeleted: false,
 							LastRunTime: time.Time{},
 						},
 					},

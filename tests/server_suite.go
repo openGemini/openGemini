@@ -1141,20 +1141,20 @@ func init() {
 			},
 			&Query{
 				name:    "create continuous query same name cq0_1 should ignore",
-				command: `CREATE CONTINUOUS QUERY "cq0_1" ON "db0" RESAMPLE EVERY 1h FOR 10m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				command: `create continuous query "cq0_1" on "db0" resample every 1h for 90m begin select mean("passengers") into "average_passengers" from "bus_data" group by time(30m) end`,
 				exp:     `{"results":[{"statement_id":0}]}`,
 				once:    true,
 			},
 			&Query{
 				name:    "create continuous query cq1_1 should succeed",
-				command: `CREATE CONTINUOUS QUERY "cq1_1" ON "db1" RESAMPLE EVERY 1h FOR 30m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				command: `CREATE CONTINUOUS QUERY "cq1_1" ON "db1" RESAMPLE EVERY 1h FOR 90m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
 				exp:     `{"results":[{"statement_id":0}]}`,
 				once:    true,
 			},
 			&Query{
 				name:    "show continuous query should succeed",
 				command: `SHOW CONTINUOUS QUERIES`,
-				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq0_1","CREATE CONTINUOUS QUERY cq0_1 ON db0 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean(passengers) INTO db0.autogen.average_passengers FROM db0.autogen.bus_data GROUP BY time(30m) END"]]},{"name":"db1","columns":["name","query"],"values":[["cq1_1","CREATE CONTINUOUS QUERY cq1_1 ON db1 RESAMPLE EVERY 1h FOR 30m BEGIN SELECT min(passengers) INTO db1.autogen.min_passengers FROM db1.autogen.bus_data GROUP BY time(15m) END"]]},{"name":"db2","columns":["name","query"]}]}]}`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq0_1","CREATE CONTINUOUS QUERY cq0_1 ON db0 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean(passengers) INTO db0.autogen.average_passengers FROM db0.autogen.bus_data GROUP BY time(30m) END"]]},{"name":"db1","columns":["name","query"],"values":[["cq1_1","CREATE CONTINUOUS QUERY cq1_1 ON db1 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT min(passengers) INTO db1.autogen.min_passengers FROM db1.autogen.bus_data GROUP BY time(15m) END"]]},{"name":"db2","columns":["name","query"]}]}]}`,
 			},
 		},
 	}

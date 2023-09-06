@@ -159,16 +159,6 @@ var (
 
 	// ErrContinuosQueryConflict is returned when creating an already existing continuous query.
 	ErrContinuosQueryConflict = errors.New("continuous query conflicts with an existing continuous query")
-
-	// ErrContinuosQueryRequired is returned when a continuous query is required
-	// by an operation, but a nil continuous query was passed.
-	ErrContinuosQueryRequired = errors.New("continuous query required")
-
-	// ErrContinuosQueryNameRequired is returned when creating a continuous query without a name.
-	ErrContinuosQueryNameRequired = errors.New("continuous query name required")
-
-	// ErrContinuosQueryNameRequired is returned when creating a continuous query without a cq statement.
-	ErrContinuosQuerySourceRequired = errors.New("continuous query source required")
 )
 
 var (

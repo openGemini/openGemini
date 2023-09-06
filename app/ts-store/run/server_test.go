@@ -308,21 +308,6 @@ func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spe
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) {
-	return nil, nil
-}
-func (client *MockMetaClient) GetMaxCQChangeID() uint64 {
-	return 0
-}
-func (client *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
-	return nil
-}
-func (client *MockMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
-	return nil
-}
-func (client *MockMetaClient) GetCqLease(host string) ([]string, error) {
-	return nil, nil
-}
 func (client *MockMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }

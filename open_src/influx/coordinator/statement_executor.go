@@ -717,23 +717,52 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 	return err
 }
 
+func isValidContinuousQueryStatement(query string) error {
+	p := influxql.NewParser(strings.NewReader(query))
+	defer p.Release()
+
+	YyParser := influxql.NewYyParser(p.GetScanner(), p.GetPara())
+	YyParser.ParseTokens()
+
+	qr, err := YyParser.GetQuery()
+	if err != nil {
+		return err
+	}
+	if len(qr.Statements) == 0 {
+		return errors.New("no valid continuous query statement")
+	}
+	stmt := qr.Statements[0]
+
+	// check if the statement is a valid continuous query.
+	q, ok := stmt.(*influxql.CreateContinuousQueryStatement)
+	if !ok || q.Source.Target == nil || q.Source.Target.Measurement == nil {
+		return errors.New("must be a select into clause")
+	}
+
+	// check group by time
+	interval, err := q.Source.GroupByInterval()
+	if err != nil {
+		return err
+	}
+
+	// check interval and ResampleFor/ResampleEvery
+	if q.ResampleFor != 0 {
+		if q.ResampleEvery != 0 && q.ResampleEvery > interval {
+			interval = q.ResampleEvery
+		}
+		if interval > q.ResampleFor {
+			return fmt.Errorf("FOR duration must be >= GROUP BY time duration: must be a minimum of %s, got %s", interval.String(), q.ResampleFor.String())
+		}
+	}
+	return nil
+}
+
 func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql.CreateContinuousQueryStatement) error {
-	if !meta2.ValidName(stmt.Name) {
-		// TODO This should probably be in `(*meta.Data).CreateContinuousQuery`
-		// but can't go there until 1.1 is used everywhere
-		return meta2.ErrInvalidName
+	cqQuery := stmt.String()
+	if err := isValidContinuousQueryStatement(cqQuery); err != nil {
+		return err
 	}
-
-	// Benevor TODO: Check if the number of existing cqs exceeds the upper limit
-
-	spec := meta2.ContinuousQuerySpec{
-		Name:  stmt.Name,
-		Query: stmt.String(),
-	}
-
-	// Create new continuous query.
-	_, err := e.MetaClient.CreateContinuousQuery(stmt.Database, &spec)
-	return err
+	return e.MetaClient.CreateContinuousQuery(stmt.Database, stmt.Name, cqQuery)
 }
 
 // executeDropContinuousQueryStatement drops a continuous query from the cluster.

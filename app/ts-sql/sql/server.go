@@ -82,8 +82,6 @@ type Server struct {
 	sherlockService *sherlock.Service
 
 	cqService *continuousquery.Service
-
-	heartbeatClosing chan bool
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -145,6 +143,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	syscontrol.SetQuerySchemaLimit(c.SelectSpec.QuerySchemaLimit)
 
 	s.initQueryExecutor(c)
+	s.cqService.QueryExecutor = s.QueryExecutor
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
 
 	s.initStatisticsPusher()
@@ -168,7 +167,11 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 }
 
 func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, metaMaxConcurrentWriteLimit int) *Server {
+	// new continuous query service
 	hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
+	cqService := continuousquery.NewService(hostname, c.ContinuousQuery.RunInterval, c.ContinuousQuery.MaxProcessCQNumber)
+	cqService.WithLogger(logger)
+
 	return &Server{
 		info:          info,
 		Logger:        logger,
@@ -178,7 +181,7 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		metaUseTLS:    false,
 		config:        c,
 
-		cqService: continuousquery.NewService(hostname, c.ContinuousQuery.RunInterval, c.ContinuousQuery.MaxProcessCQNumber),
+		cqService: cqService,
 	}
 }
 
@@ -270,8 +273,6 @@ func (s *Server) Open() error {
 		return err
 	}
 
-	go s.SendHeartbeat2Meta()
-
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
 	if s.SubscriberManager != nil {
@@ -279,8 +280,6 @@ func (s *Server) Open() error {
 		s.SubscriberManager.InitWriters()
 		go s.SubscriberManager.Update()
 	}
-
-	s.cqService.QueryExecutor.PointsWriter = s.PointsWriter
 
 	if err := s.castorService.Open(); err != nil {
 		return err
@@ -353,9 +352,10 @@ func (s *Server) Close() error {
 		s.sherlockService.Stop()
 	}
 
-	if s.heartbeatClosing != nil {
-		close(s.heartbeatClosing)
+	if s.cqService != nil {
+		util.MustClose(s.cqService)
 	}
+
 	return nil
 }
 
@@ -375,23 +375,6 @@ func (s *Server) initializeMetaClient() error {
 			return err
 		}
 		return nil
-	}
-}
-
-func (s *Server) SendHeartbeat2Meta() {
-	ticker := time.NewTicker(time.Second)
-	hostname := config.CombineDomain(s.config.HTTP.Domain, s.config.HTTP.BindAddress)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.heartbeatClosing:
-			return
-		case <-ticker.C:
-			if err := s.MetaClient.SendSql2MetaHeartbeat(hostname); err != nil {
-				s.Logger.Warn("sql node send heartbeat to meta node failed", zap.Error(err))
-			}
-		}
 	}
 }
 

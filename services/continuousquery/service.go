@@ -18,10 +18,12 @@ package continuousquery
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	query2 "github.com/influxdata/influxdb/query"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -37,6 +39,7 @@ const (
 )
 
 type MetaClient interface {
+	SendSql2MetaHeartbeat(host string) error
 	WaitForDataChanged() chan struct{}
 	GetMaxCQChangeID() uint64
 	Databases() map[string]*meta.DatabaseInfo
@@ -44,18 +47,26 @@ type MetaClient interface {
 	BatchUpdateContinuousQueryStat(cqStats map[string]int64) error
 }
 
+type QueryExecutor interface {
+	ExecuteQuery(query *influxql.Query, opt query.ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query2.Result
+}
+
 // Service represents a service for managing continuous queries.
 type Service struct {
-	services.Base
+	base services.Base
 
 	init     bool
 	hostname string
+	wg       sync.WaitGroup
+	closing  chan struct{} // notify cq service to close
+	logger   *logger.Logger
 
-	MetaClient
+	MetaClient MetaClient // interface for MetaClient
 
-	mu            sync.RWMutex
-	lastRuns      map[string]time.Time // query last run time {"select into ...": time}
-	QueryExecutor *query.Executor
+	QueryExecutor QueryExecutor // interface for QueryExecutor
+
+	mu       sync.RWMutex
+	lastRuns map[string]time.Time // query last run time, the key is the created cq original statement
 
 	// report continuous query last successfully run time
 	reportInterval time.Duration // at least 5min
@@ -63,9 +74,6 @@ type Service struct {
 
 	MaxProcessCQNumber int
 	ContinuousQueries  []*ContinuousQuery
-
-	//// ts-sql needs to record which cqs are running on it. This will be used when obtaining the lease.
-	//RunningCqs []string
 
 	maxCQChangedID uint64 // cache maxCQChangedID to check cq is changed
 	metaChangedCh  chan struct{}
@@ -75,25 +83,57 @@ type Service struct {
 // NewService creates a new Service instance named continuousQuery
 func NewService(hostname string, interval time.Duration, number int) *Service {
 	s := &Service{
-		hostname:      hostname,
-		lastRuns:      map[string]time.Time{},
-		QueryExecutor: query.NewExecutor(),
+		hostname: hostname,
+		closing:  make(chan struct{}),
+		lastRuns: map[string]time.Time{},
 
 		reportInterval: DefaultReportTime,
 		lastReportTime: time.Now(),
 
 		MaxProcessCQNumber: number,
-		//metaChanged:        make(chan struct{}),
-		cqLeaseChanged: make(chan struct{}),
+		cqLeaseChanged:     make(chan struct{}),
 	}
-	s.Init("continuousQuery", interval, s.handle)
+	s.base.Init("continuousQuery", interval, s.handle)
 	return s
+}
+
+func (s *Service) WithLogger(logger *logger.Logger) {
+	s.logger = logger.With(zap.String("service", "continuousQuery"))
+}
+
+func (s *Service) Open() error {
+	if err := s.base.Open(); err != nil {
+		return err
+	}
+
+	s.wg.Add(1)
+	go s.sendHeartbeat2Meta()
+	return nil
+}
+
+func (s *Service) sendHeartbeat2Meta() {
+	defer s.wg.Done()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.closing:
+			return
+		case <-ticker.C:
+			if err := s.MetaClient.SendSql2MetaHeartbeat(s.hostname); err != nil {
+				s.logger.Warn("sql node send heartbeat to meta node failed", zap.Error(err))
+			}
+			ticker.Reset(time.Second)
+		}
+	}
 }
 
 func (s *Service) getCQLease() map[string]struct{} {
 	cqNames, err := s.MetaClient.GetCqLease(s.hostname)
 	if err != nil {
-		s.Logger.Error("cq service get cq lease failed", zap.Error(err))
+		s.logger.Error("cq service get cq lease failed", zap.Error(err))
 		return nil
 	}
 
@@ -156,7 +196,7 @@ func (s *Service) handle() {
 			defer wg.Done()
 			tokens <- struct{}{}
 			ok, err := s.ExecuteContinuousQuery(cq, now)
-			s.Logger.Info("execute query", zap.String("query", cq.query), zap.Bool("ok", ok), zap.Error(err))
+			s.logger.Info("execute query", zap.String("query", cq.query), zap.Bool("ok", ok), zap.Error(err))
 			<-tokens
 		}(cq)
 	}
@@ -168,12 +208,11 @@ func (s *Service) handle() {
 // ExecuteContinuousQuery may execute a single CQ. This will return false if there were no errors and the CQ was not run.
 func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bool, error) {
 	// check time zone, if not set, use UTC.
-	now = now.UTC()
 	if cq.stmt.Location != nil {
 		now = now.In(cq.stmt.Location)
 	}
 
-	cq.lastRun, cq.hasRun = s.lastRuns[cq.query]
+	cq.lastRun, cq.hasRun = s.lastRuns[strings.ToLower(cq.query)]
 
 	// Get the group by interval and report time for cq service.
 	interval, err := cq.stmt.GroupByInterval()
@@ -220,7 +259,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	// update cq.lastRun and s.lastRuns
 	cq.lastRun = now.Truncate(interval)
 	s.mu.Lock()
-	s.lastRuns[cq.query] = cq.lastRun
+	s.lastRuns[strings.ToLower(cq.query)] = cq.lastRun
 	s.mu.Unlock()
 	return true, nil
 }
@@ -246,7 +285,7 @@ func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query2.
 				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
 				statistics.AppendSqlQueryDuration(qDuration)
 			}
-			s.Logger.Info("continuous query duration", zap.Duration("duration", d))
+			s.logger.Info("continuous query duration", zap.Duration("duration", d))
 		}()
 	}
 
@@ -279,7 +318,7 @@ func (s *Service) tryReportLastRunTime() {
 	}
 	err := s.MetaClient.BatchUpdateContinuousQueryStat(cqStat)
 	if err != nil {
-		s.Logger.Error("[run Continuous Query] batch update stat err", zap.Error(err))
+		s.logger.Error("[run Continuous Query] batch update stat err", zap.Error(err))
 		return
 	}
 	s.lastReportTime = time.Now()
@@ -288,4 +327,19 @@ func (s *Service) tryReportLastRunTime() {
 // isInternalDatabase returns true if the database is "_internal".
 func isInternalDatabase(dbName string) bool {
 	return dbName == "_internal"
+}
+
+func (s *Service) Close() error {
+	if s.closing == nil {
+		return nil
+	}
+
+	if err := s.base.Close(); err != nil {
+		return err
+	}
+	close(s.closing)
+
+	s.wg.Wait()
+	s.closing = nil
+	return nil
 }

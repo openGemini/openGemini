@@ -31,7 +31,6 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -541,22 +540,11 @@ func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) inte
 		panic(fmt.Errorf("%s is not a CreateContinuousQueryCommand", ext))
 	}
 
-	pb := v.GetContinuousQuery()
-
-	cqi := &meta2.ContinuousQueryInfo{
-		Name:        pb.GetName(),
-		Query:       pb.GetQuery(),
-		MarkDeleted: pb.GetMarkDeleted(),
-	}
-
-	if err := fsm.data.CreateContinuousQuery(v.GetDatabase(), cqi); err != nil {
-		if errors.Is(err, meta2.ErrSameContinuousQueryName) || errors.Is(err, meta2.ErrContinuousQueryExists) {
-			return nil
-		}
+	if err := fsm.data.CreateContinuousQuery(v.GetDatabase(), v.GetName(), v.GetQuery()); err != nil {
 		return err
 	}
 	s := (*Store)(fsm)
-	s.handleCQCreated(cqi.Name)
+	s.handleCQCreated(v.GetName())
 	return nil
 }
 

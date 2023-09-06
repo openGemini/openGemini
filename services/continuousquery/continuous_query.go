@@ -29,15 +29,14 @@ type ContinuousQuery struct {
 	name  string
 	query string
 
-	DBName  string // database than the cq runs on. Default RP for the DBName.
+	DBName  string // database that the cq runs on. Default RP for the DBName.
 	hasRun  bool
 	lastRun time.Time
-	stmt    *influxql.SelectStatement
+	stmt    *influxql.SelectStatement // select into clause
 }
 
 // NewContinuousQuery returns a ContinuousQuery object with a parsed SQL statement.
 func NewContinuousQuery(db, rp string, query string) *ContinuousQuery {
-	// Parse the query.
 	p := influxql.NewParser(strings.NewReader(query))
 	defer p.Release()
 
@@ -55,8 +54,7 @@ func NewContinuousQuery(db, rp string, query string) *ContinuousQuery {
 
 	// Check if the statement is a valid continuous query.
 	q, ok := stmt.(*influxql.CreateContinuousQueryStatement)
-	if !ok || q.Source.Target == nil || q.Source.Target.Measurement == nil {
-		// stmt.Source.Target (destination) for the result of a SELECT INTO query.
+	if !ok {
 		return nil
 	}
 

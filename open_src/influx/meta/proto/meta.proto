@@ -146,8 +146,7 @@ message RetentionPolicyInfo {
 message ContinuousQueryInfo {
 	required string Name = 1;
 	required string Query = 2;
-	optional bool MarkDeleted = 3;
-	optional int64 LastRunTime = 4;
+	optional int64 LastRunTime = 3;
 }
 
 message ShardGroupInfo {
@@ -361,7 +360,6 @@ message CreateDatabaseCommand {
 	optional uint32 ReplicaNum = 3;
 	optional ShardKeyInfo Ski = 4;
 	optional bool EnableTagArray = 5;
-	optional ContinuousQueryInfo ContinuousQuery = 6;
 }
 
 message DropDatabaseCommand {
@@ -1059,7 +1057,8 @@ message CreateContinuousQueryCommand {
 		optional CreateContinuousQueryCommand command = 185;
 	}
 	required string Database = 1;
-	required ContinuousQueryInfo ContinuousQuery = 2;
+	required string Name = 2;
+	required string Query = 3;
 }
 
 message Sql2MetaHeartbeatCommand {

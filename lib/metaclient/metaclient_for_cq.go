@@ -22,8 +22,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/lib/errno"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
@@ -73,35 +71,14 @@ func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
 	return nil
 }
 
-func (c *Client) CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) {
-	// Benevor TODO: Check if all durations are valid
-
-	cqi := spec.NewContinuousQueryInfoBySpec()
-	// Benevor TODO: Check if the length of the cq name is legal
-
+func (c *Client) CreateContinuousQuery(database, name, query string) error {
 	cmd := &proto2.CreateContinuousQueryCommand{
-		Database:        proto.String(database),
-		ContinuousQuery: cqi.Marshal(),
+		Database: proto.String(database),
+		Name:     proto.String(name),
+		Query:    proto.String(query),
 	}
 
-	if err := c.retryUntilExec(proto2.Command_CreateContinuousQueryCommand, proto2.E_CreateContinuousQueryCommand_Command, cmd); err != nil {
-		return nil, err
-	}
-
-	return c.getContinuousQuery(database, cqi.Name)
-}
-
-// getContinuousQuery returns the requested continuous query info.
-func (c *Client) getContinuousQuery(database, name string) (cqi *meta2.ContinuousQueryInfo, err error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	db := c.cacheData.Database(database)
-	if db == nil || db.MarkDeleted {
-		return nil, errno.NewError(errno.DatabaseNotFound, database)
-	}
-
-	return db.GetContinuousQuery(name)
+	return c.retryUntilExec(proto2.Command_CreateContinuousQueryCommand, proto2.E_CreateContinuousQueryCommand_Command, cmd)
 }
 
 func (c *Client) ShowContinuousQueries() (models.Rows, error) {

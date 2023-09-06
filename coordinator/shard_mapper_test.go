@@ -119,26 +119,6 @@ func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string,
 func (m mocShardMapperMetaClient) CreateRetentionPolicy(database string, spec *meta.RetentionPolicySpec, makeDefault bool) (*meta.RetentionPolicyInfo, error) {
 	return nil, nil
 }
-
-func (m mocShardMapperMetaClient) CreateContinuousQuery(database string, spec *meta.ContinuousQuerySpec) (*meta.ContinuousQueryInfo, error) {
-	return nil, nil
-}
-func (m *MockMetaClient) GetMaxCQChangeID() uint64 {
-	return 0
-}
-
-func (m mocShardMapperMetaClient) SendSql2MetaHeartbeat(host string) error {
-	return nil
-}
-
-func (m mocShardMapperMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
-	return nil
-}
-
-func (m mocShardMapperMetaClient) GetCqLease(host string) ([]string, error) {
-	return nil, nil
-}
-
 func (m mocShardMapperMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }

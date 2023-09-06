@@ -18,6 +18,7 @@ package meta
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -25,12 +26,8 @@ import (
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
 
-func (data *Data) CreateContinuousQuery(dbName string, cqi *ContinuousQueryInfo) error {
+func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {
 	dbi, err := data.GetDatabase(dbName)
-	if err != nil {
-		return err
-	}
-	err = checkCanCreateContinuousQuery(dbi, cqi)
 	if err != nil {
 		return err
 	}
@@ -38,35 +35,20 @@ func (data *Data) CreateContinuousQuery(dbName string, cqi *ContinuousQueryInfo)
 	if dbi.ContinuousQueries == nil {
 		dbi.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
 	}
-	dbi.ContinuousQueries[cqi.Name] = cqi
-	data.MaxCQChangeID++
-	return nil
-}
 
-func checkCanCreateContinuousQuery(dbi *DatabaseInfo, cqi *ContinuousQueryInfo) error {
-	// validate continuous query
-	if cqi == nil {
-		return ErrContinuosQueryRequired
-	} else if cqi.Name == "" {
-		return ErrContinuosQueryNameRequired
-	} else if cqi.Query == "" {
-		return ErrContinuosQuerySourceRequired
-	}
-
-	if err := cqi.CheckSpecValid(); err != nil {
-		return err
-	}
-
-	if _, ok := dbi.ContinuousQueries[cqi.Name]; ok {
-		// Benevor TODO: how about a cq with the same name but marked as deleted.
+	if theQuery, ok := dbi.ContinuousQueries[cqName]; ok {
+		// If the query string is the same, we'll silently return.
+		if strings.ToLower(theQuery.Query) == strings.ToLower(cqQuery) {
+			return nil
+		}
 		return ErrSameContinuousQueryName
 	}
 
-	// check same action
-	if err := dbi.CheckConfilctWithConfiltCq(cqi); err != nil {
-		return err
+	dbi.ContinuousQueries[cqQuery] = &ContinuousQueryInfo{
+		Name:  cqName,
+		Query: cqQuery,
 	}
-
+	data.MaxCQChangeID++
 	return nil
 }
 
@@ -83,7 +65,7 @@ func (data *Data) BatchUpdateContinuousQueryStat(cqStates []*proto2.CQState) err
 
 // ShowContinuousQueries shows all continuous queries group by db.
 func (data *Data) ShowContinuousQueries() (models.Rows, error) {
-	rows := []*models.Row{}
+	var rows []*models.Row
 
 	data.WalkDatabases(func(dbi *DatabaseInfo) {
 		row := &models.Row{Name: dbi.Name, Columns: []string{"name", "query"}}
@@ -126,36 +108,8 @@ type ContinuousQueryInfo struct {
 	// String corresponding to continuous query statement
 	Query string
 
-	// Mark whether this cq has been deleted
-	MarkDeleted bool // TODO: delete me
-
 	// Last successful run time
 	LastRunTime time.Time
-}
-
-// NewContinuousQueryInfo returns a new instance of ContinuousQueryInfo
-// with default values.
-func NewContinuousQueryInfo() *ContinuousQueryInfo {
-	return &ContinuousQueryInfo{}
-}
-
-// Apply applies a specification to the continuous query info.
-func (cqi *ContinuousQueryInfo) Apply(spec *ContinuousQuerySpec) *ContinuousQueryInfo {
-	cq := &ContinuousQueryInfo{
-		Name:        cqi.Name,
-		Query:       cqi.Query,
-		MarkDeleted: cqi.MarkDeleted,
-	}
-
-	if spec.Name != "" {
-		cq.Name = spec.Name
-	}
-
-	if spec.Query != "" {
-		cq.Query = spec.Query
-	}
-
-	return cq
 }
 
 // Marshal serializes to a protobuf representation.
@@ -163,7 +117,6 @@ func (cqi *ContinuousQueryInfo) Marshal() *proto2.ContinuousQueryInfo {
 	pb := &proto2.ContinuousQueryInfo{
 		Name:        proto.String(cqi.Name),
 		Query:       proto.String(cqi.Query),
-		MarkDeleted: proto.Bool(cqi.MarkDeleted),
 		LastRunTime: proto.Int64(cqi.LastRunTime.UnixNano()),
 	}
 
@@ -174,7 +127,6 @@ func (cqi *ContinuousQueryInfo) Marshal() *proto2.ContinuousQueryInfo {
 func (cqi *ContinuousQueryInfo) unmarshal(pb *proto2.ContinuousQueryInfo) {
 	cqi.Name = pb.GetName()
 	cqi.Query = pb.GetQuery()
-	cqi.MarkDeleted = pb.GetMarkDeleted()
 	cqi.LastRunTime = time.Unix(0, pb.GetLastRunTime())
 }
 
@@ -184,25 +136,6 @@ func (cqi ContinuousQueryInfo) Clone() *ContinuousQueryInfo {
 	return &other
 }
 
-func (cqi *ContinuousQueryInfo) CheckSpecValid() error {
-	// Benevor TODO : what need to check
-
-	return nil
-}
-
 func (cqi *ContinuousQueryInfo) UpdateContinuousQueryStat(lastRun int64) {
 	cqi.LastRunTime = time.Unix(0, lastRun)
-}
-
-type ContinuousQuerySpec struct {
-	// Name of the continuous query to be created.
-	Name string
-
-	// String corresponding to continuous query statement
-	Query string
-}
-
-// NewContinuousQueryInfoBySpec creates a new continuous query info from the specification.
-func (s *ContinuousQuerySpec) NewContinuousQueryInfoBySpec() *ContinuousQueryInfo {
-	return NewContinuousQueryInfo().Apply(s)
 }
