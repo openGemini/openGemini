@@ -22,11 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,18 +101,8 @@ func Test_getSnapshot(t *testing.T) {
 
 type MockRaft struct {
 	isLeader bool
-}
 
-func (m MockRaft) State() raft.RaftState {
-	panic("implement me")
-}
-
-func (m MockRaft) Peers() ([]string, error) {
-	panic("implement me")
-}
-
-func (m MockRaft) Close() error {
-	panic("implement me")
+	RaftInterface
 }
 
 func (m MockRaft) IsLeader() bool {
@@ -379,4 +372,41 @@ func TestGetReplicaInfo(t *testing.T) {
 	store.raft = &MockRaft{isLeader: false}
 	_, err = store.GetReplicaInfo("db_not_exists", 2, 2)
 	require.EqualError(t, err, raft.ErrNotLeader.Error())
+}
+
+func Test_applyDropDatabaseCommand(t *testing.T) {
+	fsm := &storeFSM{
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {},
+					},
+				},
+			},
+		},
+	}
+
+	// db not exist
+	typ := proto2.Command_DropDatabaseCommand
+	desc := proto2.E_DropDatabaseCommand_Command
+	value := &proto2.DropDatabaseCommand{
+		Name: proto.String("db999"),
+	}
+	cmd := &proto2.Command{Type: &typ}
+	_ = proto.SetExtension(cmd, desc, value)
+	err := fsm.applyDropDatabaseCommand(cmd)
+	assert2.Nil(t, err)
+
+	// drop successfully and notify cq changed
+	value = &proto2.DropDatabaseCommand{
+		Name: proto.String("db0"),
+	}
+	cmd = &proto2.Command{Type: &typ}
+	_ = proto.SetExtension(cmd, desc, value)
+	err = fsm.applyDropDatabaseCommand(cmd)
+	assert2.Nil(t, err)
+	assert2.Equal(t, uint64(1), fsm.data.MaxCQChangeID)
+	_, ok := fsm.data.Databases["db0"] // db0 is dropped successfully
+	assert2.False(t, ok)
 }

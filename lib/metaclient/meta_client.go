@@ -219,6 +219,12 @@ type MetaClient interface {
 	RetryRegisterQueryIDOffset(host string) (uint64, error)
 	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
 	GetNodePtsMap(database string) (map[uint64][]uint32, error)
+
+	// for continuous query
+	SendSql2MetaHeartbeat(host string) error
+	CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) /**/
+	ShowContinuousQueries() (models.Rows, error)
+	DropContinuousQuery(name string, database string) error
 }
 
 type LoadCtx struct {
@@ -712,16 +718,6 @@ func (c *Client) getMeasurementInfo(currentServer int, database string, rpName s
 }
 
 func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-	val := &proto2.GetMeasurementInfoStoreCommand{
-		DbName:  &dbName,
-		RpName:  &rpName,
-		MstName: &mstName,
-	}
-	t := proto2.Command_GetMeasurementInfoStoreCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_GetMeasurementInfoStoreCommand_Command, val); err != nil {
-		panic(err)
-	}
 	b, err := c.RetryGetMeasurementInfoStore(dbName, rpName, mstName)
 	if err != nil {
 		return nil, err
@@ -2981,12 +2977,6 @@ func (c *Client) ShowDownSamplePolicies(database string) (models.Rows, error) {
 }
 
 func (c *Client) GetDownSamplePolicies() (*meta2.DownSamplePoliciesInfoWithDbRp, error) {
-	val := &proto2.GetDownSamplePolicyCommand{}
-	t := proto2.Command_GetDownSamplePolicyCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_GetDownSamplePolicyCommand_Command, val); err != nil {
-		panic(err)
-	}
 	b, err := c.RetryDownSampleInfo()
 	if err != nil {
 		return nil, err
@@ -3003,16 +2993,6 @@ func (c *Client) unmarshalDownSamplePolicies(b []byte) (*meta2.DownSamplePolicie
 }
 
 func (c *Client) GetMstInfoWithInRp(dbName, rpName string, dataTypes []int64) (*meta2.RpMeasurementsFieldsInfo, error) {
-	val := &proto2.GetMeasurementInfoWithinSameRpCommand{
-		DbName:    &dbName,
-		RpName:    &rpName,
-		DataTypes: dataTypes,
-	}
-	t := proto2.Command_GetMeasurementInfoWithinSameRpCommand
-	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_GetMeasurementInfoWithinSameRpCommand_Command, val); err != nil {
-		panic(err)
-	}
 	b, err := c.RetryMstInfosInRp(dbName, rpName, dataTypes)
 	if err != nil {
 		return nil, err

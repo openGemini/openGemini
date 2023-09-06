@@ -103,3 +103,19 @@ func TestRegisterQueryIDOffsetCallbackResponse(t *testing.T) {
 	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetResponseMessage, &message.RegisterQueryIDOffsetResponse{})
 	assert.NoError(t, callback.Handle(msg))
 }
+
+func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
+	callback := &metaclient.Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatResponse{})
+	if err := callback.Handle(msg); err != nil {
+		t.Fail()
+	}
+}
+
+func TestGetCqLeaseCallbackResponse(t *testing.T) {
+	callback := &metaclient.GetCqLeaseCallback{}
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseResponse{})
+	if err := callback.Handle(msg); err != nil {
+		t.Fail()
+	}
+}

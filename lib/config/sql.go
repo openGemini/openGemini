@@ -88,6 +88,8 @@ type TSSql struct {
 	SelectSpec SelectSpecConfig `toml:"spec-limit"`
 
 	Subscriber Subscriber `toml:"subscriber"`
+
+	ContinuousQuery ContinuousQueryConfig `toml:"continuous_query"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -103,6 +105,7 @@ func NewTSSql() *TSSql {
 	c.Sherlock = NewSherlockConfig()
 	c.SelectSpec = NewSelectSpecConfig()
 	c.Subscriber = NewSubscriber()
+	c.ContinuousQuery = NewContinuousQueryConfig()
 	return c
 }
 
@@ -151,6 +154,7 @@ func (c *TSSql) Validate() error {
 		c.Analysis,
 		c.Sherlock,
 		c.Subscriber,
+		c.ContinuousQuery,
 	}
 
 	for _, item := range items {

@@ -63,6 +63,10 @@ func New(typ uint8) RPCHandler {
 		return &RegisterQueryIDOffset{}
 	case message.GetReplicaInfoRequestMessage:
 		return &GetReplicaInfo{}
+	case message.Sql2MetaHeartbeatRequestMessage:
+		return &Sql2MetaHeartbeat{}
+	case message.GetContinuousQueryLeaseRequestMessage:
+		return &GetContinuousQueryLease{}
 	default:
 		return nil
 	}
@@ -389,4 +393,42 @@ func (h *GetReplicaInfo) SetRequestMsg(data transport.Codec) error {
 
 func (h *GetReplicaInfo) Instance() RPCHandler {
 	return &GetReplicaInfo{}
+}
+
+type Sql2MetaHeartbeat struct {
+	BaseHandler
+
+	req *message.Sql2MetaHeartbeatRequest
+}
+
+func (h *Sql2MetaHeartbeat) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.Sql2MetaHeartbeatRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.Sql2MetaHeartbeatRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *Sql2MetaHeartbeat) Instance() RPCHandler {
+	return &Sql2MetaHeartbeat{}
+}
+
+type GetContinuousQueryLease struct {
+	BaseHandler
+
+	req *message.GetContinuousQueryLeaseRequest
+}
+
+func (h *GetContinuousQueryLease) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.GetContinuousQueryLeaseRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.GetContinuousQueryLeaseRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *GetContinuousQueryLease) Instance() RPCHandler {
+	return &GetContinuousQueryLease{}
 }

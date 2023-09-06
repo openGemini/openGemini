@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -49,6 +50,12 @@ func TestRetriedErrorCode(t *testing.T) {
 
 type mocShardMapperMetaClient struct {
 	databases map[string]*meta.DatabaseInfo
+
+	metaclient.MetaClient
+}
+
+func (m mocShardMapperMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
 }
 
 func (m mocShardMapperMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -65,7 +72,6 @@ func (m mocShardMapperMetaClient) GetStreamInfos() map[string]*meta.StreamInfo {
 }
 
 func (m mocShardMapperMetaClient) GetStreamInfosStore() map[string]*meta.StreamInfo {
-	//TODO implement me
 	panic("implement me")
 }
 
@@ -111,6 +117,25 @@ func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string,
 }
 
 func (m mocShardMapperMetaClient) CreateRetentionPolicy(database string, spec *meta.RetentionPolicySpec, makeDefault bool) (*meta.RetentionPolicyInfo, error) {
+	return nil, nil
+}
+
+func (m mocShardMapperMetaClient) CreateContinuousQuery(database string, spec *meta.ContinuousQuerySpec) (*meta.ContinuousQueryInfo, error) {
+	return nil, nil
+}
+func (m *MockMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
+}
+
+func (m mocShardMapperMetaClient) SendSql2MetaHeartbeat(host string) error {
+	return nil
+}
+
+func (m mocShardMapperMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
+	return nil
+}
+
+func (m mocShardMapperMetaClient) GetCqLease(host string) ([]string, error) {
 	return nil, nil
 }
 
@@ -320,6 +345,10 @@ func (m mocShardMapperMetaClient) ShowSubscriptions() models.Rows {
 }
 
 func (m mocShardMapperMetaClient) ShowRetentionPolicies(database string) (models.Rows, error) {
+	return nil, nil
+}
+
+func (m mocShardMapperMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
 

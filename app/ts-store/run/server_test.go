@@ -239,6 +239,7 @@ func TestNewServer(t *testing.T) {
 }
 
 type MockMetaClient struct {
+	metaclient.MetaClient
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -305,6 +306,21 @@ func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spe
 	return nil, nil
 }
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
+	return nil, nil
+}
+func (client *MockMetaClient) CreateContinuousQuery(database string, spec *meta2.ContinuousQuerySpec) (*meta2.ContinuousQueryInfo, error) {
+	return nil, nil
+}
+func (client *MockMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
+}
+func (client *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
+	return nil
+}
+func (client *MockMetaClient) CQStatusReport(name string, lastRunTime time.Time) error {
+	return nil
+}
+func (client *MockMetaClient) GetCqLease(host string) ([]string, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
@@ -432,6 +448,9 @@ func (client *MockMetaClient) ShowSubscriptions() models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Rows, error) {
+	return nil, nil
+}
+func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {

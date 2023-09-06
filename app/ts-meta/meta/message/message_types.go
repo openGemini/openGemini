@@ -73,6 +73,12 @@ const (
 
 	GetReplicaInfoRequestMessage
 	GetReplicaInfoResponseMessage
+
+	Sql2MetaHeartbeatRequestMessage
+	Sql2MetaHeartbeatResponseMessage
+
+	GetContinuousQueryLeaseRequestMessage
+	GetContinuousQueryLeaseResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -115,24 +121,30 @@ func init() {
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetResponseMessage] = func() transport.Codec { return &RegisterQueryIDOffsetResponse{} }
 	MetaMessageBinaryCodec[GetReplicaInfoRequestMessage] = func() transport.Codec { return &GetReplicaInfoRequest{} }
 	MetaMessageBinaryCodec[GetReplicaInfoResponseMessage] = func() transport.Codec { return &GetReplicaInfoResponse{} }
+	MetaMessageBinaryCodec[Sql2MetaHeartbeatRequestMessage] = func() transport.Codec { return &Sql2MetaHeartbeatRequest{} }
+	MetaMessageBinaryCodec[Sql2MetaHeartbeatResponseMessage] = func() transport.Codec { return &Sql2MetaHeartbeatResponse{} }
+	MetaMessageBinaryCodec[GetContinuousQueryLeaseRequestMessage] = func() transport.Codec { return &GetContinuousQueryLeaseRequest{} }
+	MetaMessageBinaryCodec[GetContinuousQueryLeaseResponseMessage] = func() transport.Codec { return &GetContinuousQueryLeaseResponse{} }
 
 	MetaMessageResponseTyp = map[uint8]uint8{
-		PingRequestMessage:                  PingResponseMessage,
-		PeersRequestMessage:                 PeersResponseMessage,
-		CreateNodeRequestMessage:            CreateNodeResponseMessage,
-		SnapshotRequestMessage:              SnapshotResponseMessage,
-		ExecuteRequestMessage:               ExecuteResponseMessage,
-		UpdateRequestMessage:                UpdateResponseMessage,
-		ReportRequestMessage:                ReportResponseMessage,
-		GetShardInfoRequestMessage:          GetShardInfoResponseMessage,
-		GetDownSampleInfoRequestMessage:     GetDownSampleInfoResponseMessage,
-		GetRpMstInfosRequestMessage:         GetRpMstInfosResponseMessage,
-		GetUserInfoRequestMessage:           GetUserInfoResponseMessage,
-		GetStreamInfoRequestMessage:         GetStreamInfoResponseMessage,
-		GetMeasurementInfoRequestMessage:    GetMeasurementInfoResponseMessage,
-		GetMeasurementsInfoRequestMessage:   GetMeasurementsInfoResponseMessage,
-		GetDBBriefInfoRequestMessage:        GetDBBriefInfoResponseMessage,
-		RegisterQueryIDOffsetRequestMessage: RegisterQueryIDOffsetResponseMessage,
-		GetReplicaInfoRequestMessage:        GetReplicaInfoResponseMessage,
+		PingRequestMessage:                    PingResponseMessage,
+		PeersRequestMessage:                   PeersResponseMessage,
+		CreateNodeRequestMessage:              CreateNodeResponseMessage,
+		SnapshotRequestMessage:                SnapshotResponseMessage,
+		ExecuteRequestMessage:                 ExecuteResponseMessage,
+		UpdateRequestMessage:                  UpdateResponseMessage,
+		ReportRequestMessage:                  ReportResponseMessage,
+		GetShardInfoRequestMessage:            GetShardInfoResponseMessage,
+		GetDownSampleInfoRequestMessage:       GetDownSampleInfoResponseMessage,
+		GetRpMstInfosRequestMessage:           GetRpMstInfosResponseMessage,
+		GetUserInfoRequestMessage:             GetUserInfoResponseMessage,
+		GetStreamInfoRequestMessage:           GetStreamInfoResponseMessage,
+		GetMeasurementInfoRequestMessage:      GetMeasurementInfoResponseMessage,
+		GetMeasurementsInfoRequestMessage:     GetMeasurementsInfoResponseMessage,
+		GetDBBriefInfoRequestMessage:          GetDBBriefInfoResponseMessage,
+		RegisterQueryIDOffsetRequestMessage:   RegisterQueryIDOffsetResponseMessage,
+		GetReplicaInfoRequestMessage:          GetReplicaInfoResponseMessage,
+		Sql2MetaHeartbeatRequestMessage:       Sql2MetaHeartbeatResponseMessage,
+		GetContinuousQueryLeaseRequestMessage: GetContinuousQueryLeaseResponseMessage,
 	}
 }

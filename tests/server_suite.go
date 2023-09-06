@@ -1131,6 +1131,64 @@ func init() {
 		},
 	}
 
+	tests["continuous_query_commands"] = Test{
+		queries: []*Query{
+			&Query{
+				name:    "create continuous query cq0_1 should succeed",
+				command: `CREATE CONTINUOUS QUERY "cq0_1" ON "db0" RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean("passengers") INTO "average_passengers" FROM "bus_data" GROUP BY time(30m) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "create continuous query same name cq0_1 should ignore",
+				command: `CREATE CONTINUOUS QUERY "cq0_1" ON "db0" RESAMPLE EVERY 1h FOR 10m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "create continuous query cq1_1 should succeed",
+				command: `CREATE CONTINUOUS QUERY "cq1_1" ON "db1" RESAMPLE EVERY 1h FOR 30m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "show continuous query should succeed",
+				command: `SHOW CONTINUOUS QUERIES`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq0_1","CREATE CONTINUOUS QUERY cq0_1 ON db0 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean(passengers) INTO db0.autogen.average_passengers FROM db0.autogen.bus_data GROUP BY time(30m) END"]]},{"name":"db1","columns":["name","query"],"values":[["cq1_1","CREATE CONTINUOUS QUERY cq1_1 ON db1 RESAMPLE EVERY 1h FOR 30m BEGIN SELECT min(passengers) INTO db1.autogen.min_passengers FROM db1.autogen.bus_data GROUP BY time(15m) END"]]},{"name":"db2","columns":["name","query"]}]}]}`,
+			},
+		},
+	}
+
+	tests["run_continuous_queries"] = Test{
+		queries: []*Query{
+			&Query{
+				name:    `create a new retention policy for CQ to write into`,
+				command: `CREATE RETENTION POLICY rp1 ON db0 DURATION 1h REPLICATION 1`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query with backreference",
+				command: `CREATE CONTINUOUS QUERY cq1 ON db0 BEGIN SELECT min(value) INTO db0.rp1.min_value FROM cpu GROUP BY time(5s) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `create another retention policy for CQ to write into`,
+				command: `CREATE RETENTION POLICY rp2 ON db0 DURATION 1h REPLICATION 1`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query with backreference and group by time",
+				command: `CREATE CONTINUOUS QUERY "cq2" ON db0 BEGIN SELECT max(value) INTO db0.rp2.max_value FROM cpu GROUP BY time(5s) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `show continuous queries`,
+				command: `SHOW CONTINUOUS QUERIES`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq1","CREATE CONTINUOUS QUERY cq1 ON db0 BEGIN SELECT min(value) INTO db0.rp1.min_value FROM db0.rp0.cpu GROUP BY time(5s) END"],["cq2","CREATE CONTINUOUS QUERY cq2 ON db0 BEGIN SELECT max(value) INTO db0.rp2.max_value FROM db0.rp0.cpu GROUP BY time(5s) END"]]}]}]}`,
+			},
+		},
+	}
+
 }
 
 func (tests Tests) load(t *testing.T, key string) Test {

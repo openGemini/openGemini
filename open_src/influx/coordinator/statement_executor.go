@@ -241,6 +241,18 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		err = e.executeCreateRetentionPolicyStatement(stmt)
 	case *influxql.CreateSubscriptionStatement:
 		err = e.executeCreateSubscriptionStatement(stmt)
+	case *influxql.CreateContinuousQueryStatement:
+		if ctx.ReadOnly {
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeCreateContinuousQueryStatement(stmt)
+	case *influxql.ShowContinuousQueriesStatement:
+		rows, err = e.executeShowContinuousQueriesStatement(stmt)
+	case *influxql.DropContinuousQueryStatement:
+		if ctx.ReadOnly {
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeDropContinuousQueryStatement(stmt)
 	case *influxql.CreateUserStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
@@ -703,6 +715,35 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 	// Create new retention policy.
 	_, err := e.MetaClient.CreateRetentionPolicy(stmt.Database, &spec, stmt.Default)
 	return err
+}
+
+func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql.CreateContinuousQueryStatement) error {
+	if !meta2.ValidName(stmt.Name) {
+		// TODO This should probably be in `(*meta.Data).CreateContinuousQuery`
+		// but can't go there until 1.1 is used everywhere
+		return meta2.ErrInvalidName
+	}
+
+	// Benevor TODO: Check if the number of existing cqs exceeds the upper limit
+
+	spec := meta2.ContinuousQuerySpec{
+		Name:  stmt.Name,
+		Query: stmt.String(),
+	}
+
+	// Create new continuous query.
+	_, err := e.MetaClient.CreateContinuousQuery(stmt.Database, &spec)
+	return err
+}
+
+// executeDropContinuousQueryStatement drops a continuous query from the cluster.
+func (e *StatementExecutor) executeDropContinuousQueryStatement(stmt *influxql.DropContinuousQueryStatement) error {
+	e.StmtExecLogger.Info("delete continuous query start", zap.String("cq name", stmt.Name), zap.String("database", stmt.Database))
+	if err := e.MetaClient.DropContinuousQuery(stmt.Name, stmt.Database); err != nil {
+		e.StmtExecLogger.Error("delete continuous query error", zap.String("cq name", stmt.Name), zap.String("database", stmt.Database), zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func (e *StatementExecutor) executeCreateSubscriptionStatement(q *influxql.CreateSubscriptionStatement) error {
@@ -1311,6 +1352,10 @@ func (e *StatementExecutor) executeShowRetentionPoliciesStatement(q *influxql.Sh
 	}
 
 	return e.MetaClient.ShowRetentionPolicies(q.Database)
+}
+
+func (e *StatementExecutor) executeShowContinuousQueriesStatement(q *influxql.ShowContinuousQueriesStatement) (models.Rows, error) {
+	return e.MetaClient.ShowContinuousQueries()
 }
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {

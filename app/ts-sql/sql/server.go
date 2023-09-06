@@ -44,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"go.uber.org/zap"
 )
@@ -79,6 +80,10 @@ type Server struct {
 	castorService *castor.Service
 
 	sherlockService *sherlock.Service
+
+	cqService *continuousquery.Service
+
+	heartbeatClosing chan bool
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -111,6 +116,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s := newServer(info, logger, c, metaMaxConcurrentWriteLimit)
 	s.httpService.Handler.Version = info.Version
 	s.httpService.Handler.BuildType = "OSS"
+
 	s.initMetaClientFn = s.initializeMetaClient
 	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
@@ -162,6 +168,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 }
 
 func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, metaMaxConcurrentWriteLimit int) *Server {
+	hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
 	return &Server{
 		info:          info,
 		Logger:        logger,
@@ -170,6 +177,8 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		metaJoinPeers: c.Common.MetaJoin,
 		metaUseTLS:    false,
 		config:        c,
+
+		cqService: continuousquery.NewService(hostname, c.ContinuousQuery.RunInterval, c.ContinuousQuery.MaxProcessCQNumber),
 	}
 }
 
@@ -252,10 +261,16 @@ func (s *Server) Open() error {
 
 	s.PointsWriter.MetaClient = s.MetaClient
 	s.httpService.Handler.MetaClient = s.MetaClient
+	s.cqService.MetaClient = s.MetaClient
 
 	if err := s.httpService.Open(); err != nil {
 		return err
 	}
+	if err := s.cqService.Open(); err != nil {
+		return err
+	}
+
+	go s.SendHeartbeat2Meta()
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
 	s.httpService.Handler.PointsWriter = s.PointsWriter
@@ -264,6 +279,8 @@ func (s *Server) Open() error {
 		s.SubscriberManager.InitWriters()
 		go s.SubscriberManager.Update()
 	}
+
+	s.cqService.QueryExecutor.PointsWriter = s.PointsWriter
 
 	if err := s.castorService.Open(); err != nil {
 		return err
@@ -312,6 +329,10 @@ func (s *Server) Close() error {
 		util.MustClose(s.RecordWriter)
 	}
 
+	if s.cqService != nil {
+		util.MustClose(s.cqService)
+	}
+
 	if s.QueryExecutor != nil {
 		util.MustClose(s.QueryExecutor)
 	}
@@ -330,6 +351,10 @@ func (s *Server) Close() error {
 
 	if s.sherlockService != nil {
 		s.sherlockService.Stop()
+	}
+
+	if s.heartbeatClosing != nil {
+		close(s.heartbeatClosing)
 	}
 	return nil
 }
@@ -350,6 +375,23 @@ func (s *Server) initializeMetaClient() error {
 			return err
 		}
 		return nil
+	}
+}
+
+func (s *Server) SendHeartbeat2Meta() {
+	ticker := time.NewTicker(time.Second)
+	hostname := config.CombineDomain(s.config.HTTP.Domain, s.config.HTTP.BindAddress)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.heartbeatClosing:
+			return
+		case <-ticker.C:
+			if err := s.MetaClient.SendSql2MetaHeartbeat(hostname); err != nil {
+				s.Logger.Warn("sql node send heartbeat to meta node failed", zap.Error(err))
+			}
+		}
 	}
 }
 

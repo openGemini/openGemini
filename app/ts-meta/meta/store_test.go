@@ -888,3 +888,43 @@ func TestStore_registerQueryIDOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestCreateContinuousQueryCommands(t *testing.T) {
+	dir := t.TempDir()
+	ms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ms.Close()
+	}()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	dbName := "db0"
+	cmd = meta.GenerateCreateDatabaseCmd(dbName)
+	if err = ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	// TODO: shilinlee
+	//store := ms.GetStore()
+	//store.cqLease["127.0.0.1"] = &meta.cqLeaseInfo{}
+
+	spec := &meta2.ContinuousQuerySpec{
+		Query: `CREATE CONTINUOUS QUERY cq0 ON db0 BEGIN SELECT mean("passengers") INTO "average_passengers" FROM "bus_data" GROUP BY time(1h) END`,
+		Name:  "cq0",
+	}
+	cmd = meta.GenerateCreateContinuousQueryCommand(spec, dbName)
+
+	if err := ms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	// TODO: shilinlee
+	//require.Equal(t, map[string]string(map[string]string{"cq0": "cq0"}), ms.GetStore().SqlNodes["127.0.0.1"].CqInfo.AssignCqs)
+}

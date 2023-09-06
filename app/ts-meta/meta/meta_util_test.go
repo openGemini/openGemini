@@ -421,6 +421,21 @@ func ProcessExecuteRequest(s MetaStoreInterface, cmd *proto2.Command, metaconfig
 	return err
 }
 
+func GenerateCreateContinuousQueryCommand(spec *meta2.ContinuousQuerySpec, db string) *proto2.Command {
+	cqi := spec.NewContinuousQueryInfoBySpec()
+	val := &proto2.CreateContinuousQueryCommand{
+		Database:        &db,
+		ContinuousQuery: cqi.Marshal(),
+	}
+	t1 := proto2.Command_CreateContinuousQueryCommand
+
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 type MockStore interface {
 	GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
 		shardId uint64, idxes []int64) ([]string, error)

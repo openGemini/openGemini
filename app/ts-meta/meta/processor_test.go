@@ -137,6 +137,14 @@ func (s *MockRPCStore) getMeasurementsInfo(dbName, rpName string) ([]byte, error
 	return []byte{}, nil
 }
 
+func (s *MockRPCStore) handlerSql2MetaHeartbeat(host string) error {
+	return nil
+}
+
+func (s *MockRPCStore) getContinuousQueryLease(host string) ([]string, error) {
+	return nil, nil
+}
+
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,
@@ -308,6 +316,35 @@ func TestRegisterQueryIDOffset(t *testing.T) {
 
 	callback := &metaclient.RegisterQueryIDOffsetCallback{}
 	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{Host: "192.168.1.9999"})
+
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}
+
+func TestSql2MetaHeartbeatMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	callback := &metaclient.Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+		Host: "localhost:8086",
+	})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+}
+
+func TestGetCqLeaseMessage(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	callback := &metaclient.GetCqLeaseCallback{}
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{
+		Host: "localhost:8086",
+	})
 	err := sendTestMsg(msg, callback)
 	if err != nil {
 		t.Errorf("send msg error: %s", err)

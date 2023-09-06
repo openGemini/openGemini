@@ -383,3 +383,44 @@ func (c *RegisterQueryIDOffsetCallback) Handle(data interface{}) error {
 	c.Offset = msg.Offset
 	return nil
 }
+
+type Sql2MetaHeartbeatCallback struct {
+	BaseCallback
+}
+
+func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.Sql2MetaHeartbeatResponse)
+	if !ok {
+		return fmt.Errorf("data is not a Sql2MetaHeartbeatResponse, type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+
+	return nil
+}
+
+type GetCqLeaseCallback struct {
+	BaseCallback
+	CQNames []string
+}
+
+func (c *GetCqLeaseCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetContinuousQueryLeaseResponse)
+	if !ok {
+		return errors.New("data is not a GetContinuousQueryLease")
+	}
+	if msg.Err != "" {
+		return fmt.Errorf("get cq lease callback error %s", msg.Err)
+	}
+	c.CQNames = msg.CQNames
+	return nil
+}
