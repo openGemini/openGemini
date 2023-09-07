@@ -136,15 +136,6 @@ func (s *MockRPCStore) getMeasurementInfo(dbName, rpName, mstName string) ([]byt
 func (s *MockRPCStore) getMeasurementsInfo(dbName, rpName string) ([]byte, error) {
 	return []byte{}, nil
 }
-
-func (s *MockRPCStore) handlerSql2MetaHeartbeat(host string) error {
-	return nil
-}
-
-func (s *MockRPCStore) getContinuousQueryLease(host string) ([]string, error) {
-	return nil, nil
-}
-
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,
@@ -185,6 +176,14 @@ func (s *MockRPCStore) getDataNodeAliveConnId(nodeId uint64) (uint64, error) {
 
 func (s *MockRPCStore) GetReplicaInfo(dbName string, NodeID uint64, PtID uint32) (*message.ReplicaInfo, error) {
 	return &message.ReplicaInfo{}, nil
+}
+
+func (s *MockRPCStore) handlerSql2MetaHeartbeat(host string) error {
+	return nil
+}
+
+func (s *MockRPCStore) getContinuousQueryLease(host string) ([]string, error) {
+	return nil, nil
 }
 
 func TestPing(t *testing.T) {

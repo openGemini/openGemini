@@ -18,7 +18,6 @@ package continuousquery
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -66,13 +65,13 @@ type Service struct {
 	QueryExecutor QueryExecutor // interface for QueryExecutor
 
 	mu       sync.RWMutex
-	lastRuns map[string]time.Time // query last run time, the key is the created cq original statement
+	lastRuns map[string]time.Time // continuous query last run time. e.g.{"cq_name1": time}
 
 	// report continuous query last successfully run time
 	reportInterval time.Duration // at least 5min
 	lastReportTime time.Time     // the time that all continuous queries reported
 
-	MaxProcessCQNumber int
+	maxProcessCQNumber int
 	ContinuousQueries  []*ContinuousQuery
 
 	maxCQChangedID uint64 // cache maxCQChangedID to check cq is changed
@@ -90,7 +89,7 @@ func NewService(hostname string, interval time.Duration, number int) *Service {
 		reportInterval: DefaultReportTime,
 		lastReportTime: time.Now(),
 
-		MaxProcessCQNumber: number,
+		maxProcessCQNumber: number,
 		cqLeaseChanged:     make(chan struct{}),
 	}
 	s.base.Init("continuousQuery", interval, s.handle)
@@ -188,7 +187,7 @@ func (s *Service) handle() {
 	now := time.Now()
 
 	var wg sync.WaitGroup
-	tokens := make(chan struct{}, s.MaxProcessCQNumber) // tokens ars used to limit the number of goroutines.
+	tokens := make(chan struct{}, s.maxProcessCQNumber) // tokens ars used to limit the number of goroutines.
 	// set up a goroutine pool to execute CQs.
 	for _, cq := range s.ContinuousQueries {
 		wg.Add(1)
@@ -196,7 +195,7 @@ func (s *Service) handle() {
 			defer wg.Done()
 			tokens <- struct{}{}
 			ok, err := s.ExecuteContinuousQuery(cq, now)
-			s.logger.Info("execute query", zap.String("query", cq.query), zap.Bool("ok", ok), zap.Error(err))
+			s.logger.Debug("try to execute continuous query", zap.String("query", cq.source.String()), zap.Bool("ok", ok), zap.Error(err))
 			<-tokens
 		}(cq)
 	}
@@ -208,14 +207,14 @@ func (s *Service) handle() {
 // ExecuteContinuousQuery may execute a single CQ. This will return false if there were no errors and the CQ was not run.
 func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bool, error) {
 	// check time zone, if not set, use UTC.
-	if cq.stmt.Location != nil {
-		now = now.In(cq.stmt.Location)
+	if cq.source.Location != nil {
+		now = now.In(cq.source.Location)
 	}
 
-	cq.lastRun, cq.hasRun = s.lastRuns[strings.ToLower(cq.query)]
+	cq.lastRun, cq.hasRun = s.lastRuns[cq.name]
 
 	// Get the group by interval and report time for cq service.
-	interval, err := cq.stmt.GroupByInterval()
+	interval, err := cq.source.GroupByInterval()
 	if err != nil {
 		return false, err
 	} else if interval == 0 {
@@ -230,7 +229,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	}
 
 	// Get the group by offset.
-	offset, err := cq.stmt.GroupByOffset()
+	offset, err := cq.source.GroupByOffset()
 	if err != nil {
 		return false, err
 	}
@@ -246,7 +245,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	startTime := nextRun.Add(-interval - offset - 1).Truncate(interval).Add(offset)
 	endTime := startTime.Add(interval - offset).Truncate(interval).Add(offset)
 
-	if err = cq.stmt.SetTimeRange(startTime, endTime); err != nil {
+	if err = cq.source.SetTimeRange(startTime, endTime); err != nil {
 		return false, fmt.Errorf("unable to set time range: %s", err)
 	}
 
@@ -259,7 +258,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	// update cq.lastRun and s.lastRuns
 	cq.lastRun = now.Truncate(interval)
 	s.mu.Lock()
-	s.lastRuns[strings.ToLower(cq.query)] = cq.lastRun
+	s.lastRuns[cq.name] = cq.lastRun
 	s.mu.Unlock()
 	return true, nil
 }
@@ -268,16 +267,16 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query2.Result {
 	// Wrap the CQ's inner SELECT statement in a Query for the Executor.
 	q := &influxql.Query{
-		Statements: influxql.Statements([]influxql.Statement{cq.stmt}),
+		Statements: influxql.Statements([]influxql.Statement{cq.source}),
 	}
 
 	closing := make(chan struct{})
 	defer close(closing)
 
 	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(cq.DBName) {
+	if !isInternalDatabase(cq.database) {
 		qDuration = statistics.NewSqlSlowQueryStatistics()
-		qDuration.SetDatabase(cq.DBName)
+		qDuration.SetDatabase(cq.database)
 		startTime := time.Now()
 		defer func() {
 			d := time.Since(startTime)
@@ -290,7 +289,7 @@ func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query2.
 	}
 
 	opts := query.ExecutionOptions{
-		Database: cq.DBName,
+		Database: cq.database,
 		//Chunked:        true,
 		//Quiet:          true,
 		InnerChunkSize: DefaultInnerChunkSize,
@@ -318,7 +317,7 @@ func (s *Service) tryReportLastRunTime() {
 	}
 	err := s.MetaClient.BatchUpdateContinuousQueryStat(cqStat)
 	if err != nil {
-		s.logger.Error("[run Continuous Query] batch update stat err", zap.Error(err))
+		s.logger.Error("batch update continuous queries stat err", zap.Error(err))
 		return
 	}
 	s.lastReportTime = time.Now()

@@ -36,15 +36,15 @@ func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {
 		dbi.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
 	}
 
-	if theQuery, ok := dbi.ContinuousQueries[cqName]; ok {
+	if theCQ, ok := dbi.ContinuousQueries[cqName]; ok {
 		// If the query string is the same, we'll silently return.
-		if strings.ToLower(theQuery.Query) == strings.ToLower(cqQuery) {
+		if strings.ToLower(theCQ.Query) == strings.ToLower(cqQuery) {
 			return nil
 		}
 		return ErrSameContinuousQueryName
 	}
 
-	dbi.ContinuousQueries[cqQuery] = &ContinuousQueryInfo{
+	dbi.ContinuousQueries[cqName] = &ContinuousQueryInfo{
 		Name:  cqName,
 		Query: cqQuery,
 	}

@@ -6,27 +6,110 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
+
+type CQTests map[string]Test
+
+var continuousQueryTests CQTests
+
+// Load all continuous query tests
+func init() {
+	continuousQueryTests = make(map[string]Test)
+
+	continuousQueryTests["continuous_query_commands"] = Test{
+		queries: []*Query{
+			&Query{
+				name:    "create continuous query cq0_1 should succeed",
+				command: `CREATE CONTINUOUS QUERY "cq0_1" ON "db0" RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean("passengers") INTO "average_passengers" FROM "bus_data" GROUP BY time(30m) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query the same name cq0_1 and the same query should ignore",
+				command: `create continuous query "cq0_1" on "db0" resample every 1h for 90m begin select mean("passengers") into "average_passengers" from "bus_data" group by time(30m) end`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query cq1_1 should succeed",
+				command: `CREATE CONTINUOUS QUERY "cq1_1" ON "db1" RESAMPLE EVERY 1h FOR 90m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query cq2_1 should succeed",
+				command: `CREATE CONTINUOUS QUERY "cq2_1" ON "db2" RESAMPLE EVERY 1h FOR 90m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "drop continuous query cq2_1 should succeed",
+				command: `DROP CONTINUOUS QUERY "cq2_1" ON "db2"`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "show continuous query should succeed",
+				command: `SHOW CONTINUOUS QUERIES`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq0_1","CREATE CONTINUOUS QUERY cq0_1 ON db0 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT mean(passengers) INTO db0.autogen.average_passengers FROM db0.autogen.bus_data GROUP BY time(30m) END"]]},{"name":"db1","columns":["name","query"],"values":[["cq1_1","CREATE CONTINUOUS QUERY cq1_1 ON db1 RESAMPLE EVERY 1h FOR 90m BEGIN SELECT min(passengers) INTO db1.autogen.min_passengers FROM db1.autogen.bus_data GROUP BY time(15m) END"]]},{"name":"db2","columns":["name","query"]}]}]}`,
+			},
+		},
+	}
+
+	continuousQueryTests["run_continuous_queries"] = Test{
+		queries: []*Query{
+			&Query{
+				name:    `create a new retention policy for CQ to write into`,
+				command: `CREATE RETENTION POLICY rp1 ON db0 DURATION 1h REPLICATION 1`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query with backreference",
+				command: `CREATE CONTINUOUS QUERY cq1 ON db0 BEGIN SELECT min(value) INTO db0.rp1.min_value FROM cpu GROUP BY time(5s) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `create another retention policy for CQ to write into`,
+				command: `CREATE RETENTION POLICY rp2 ON db0 DURATION 1h REPLICATION 1`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    "create continuous query with backreference and group by time",
+				command: `CREATE CONTINUOUS QUERY "cq2" ON db0 BEGIN SELECT max(value) INTO db0.rp2.max_value FROM cpu GROUP BY time(5s) END`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+			},
+			&Query{
+				name:    `show continuous queries`,
+				command: `SHOW CONTINUOUS QUERIES`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"db0","columns":["name","query"],"values":[["cq1","CREATE CONTINUOUS QUERY cq1 ON db0 BEGIN SELECT min(value) INTO db0.rp1.min_value FROM db0.rp0.cpu GROUP BY time(5s) END"],["cq2","CREATE CONTINUOUS QUERY cq2 ON db0 BEGIN SELECT max(value) INTO db0.rp2.max_value FROM db0.rp0.cpu GROUP BY time(5s) END"]]}]}]}`,
+			},
+		},
+	}
+
+}
+
+func (continuousQueryTests CQTests) load(t *testing.T, key string) Test {
+	test, ok := continuousQueryTests[key]
+	if !ok {
+		t.Fatalf("no test %q", key)
+	}
+
+	return test.duplicate()
+}
 
 func TestServer_ContinuousQueryCommand(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
 	defer s.Close()
 
-	test := tests.load(t, "continuous_query_commands")
+	test := continuousQueryTests.load(t, "continuous_query_commands")
 
 	// Create all databases.
-	if _, err := s.CreateDatabase("db0"); err != nil {
-		t.Fatal(err)
-	}
+	_, err := s.CreateDatabase("db0")
+	assert.NoError(t, err)
 
-	if _, err := s.CreateDatabase("db1"); err != nil {
-		t.Fatal(err)
-	}
+	_, err = s.CreateDatabase("db1")
+	assert.NoError(t, err)
 
-	if _, err := s.CreateDatabase("db2"); err != nil {
-		t.Fatal(err)
-	}
+	_, err = s.CreateDatabase("db2")
+	assert.NoError(t, err)
 
 	for i, query := range test.queries {
 		t.Run(query.name, func(t *testing.T) {
@@ -98,7 +181,7 @@ func TestServer_ContinuousQueryService(t *testing.T) {
 		fmt.Sprintf("cpu,host=server01 value=9 %d", now.Add(2*time.Second).UnixNano()),
 	}
 
-	test1 := tests.load(t, "run_continuous_queries")
+	test1 := continuousQueryTests.load(t, "run_continuous_queries")
 
 	test1.writes = Writes{
 		&Write{data: strings.Join(writes, "\n")},

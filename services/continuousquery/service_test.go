@@ -114,7 +114,7 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 		},
 	}
 	// create a new CQ with the specified database and CQInfo.
-	cqi := NewContinuousQuery(db1.Name, db1.DefaultRetentionPolicy, cq1.Query)
+	cqi := NewContinuousQuery(db1.DefaultRetentionPolicy, cq1.Query)
 	cqi.hasRun = true
 	cqi.lastRun = time.Now()
 	ok, _ := cqi.shouldRunContinuousQuery(time.Now().Add(-2*interval), interval)
@@ -133,7 +133,7 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 		},
 	}
 	// create a new CQ with the specified database and CQInfo.
-	cqi = NewContinuousQuery(db2.Name, db2.DefaultRetentionPolicy, cq2.Query)
+	cqi = NewContinuousQuery(db2.DefaultRetentionPolicy, cq2.Query)
 	// test the query has not run before
 	cqi.hasRun = false
 	ok, _ = cqi.shouldRunContinuousQuery(time.Now(), interval)
@@ -161,7 +161,7 @@ func NewContinuousQueryService() (*Service, *ContinuousQuery) {
 			"cq1": cqi,
 		},
 	}
-	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
+	cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
 	s := NewTestService()
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
@@ -193,7 +193,7 @@ func (mockRegister) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	return 1, nil
 }
 
-func TestService_ExecuteContinuousQuery_Successful(t *testing.T) {
+func TestService_ExecuteContinuousQuery_Successfully(t *testing.T) {
 	s, cq := NewContinuousQueryService()
 	s.QueryExecutor = &mockQueryExecutor{
 		ExecuteQueryFn: func(results chan *query2.Result) {
@@ -205,7 +205,7 @@ func TestService_ExecuteContinuousQuery_Successful(t *testing.T) {
 	ok, err := s.ExecuteContinuousQuery(cq, now)
 	assert.True(t, ok)
 	assert.NoError(t, err)
-	assert.Equal(t, s.lastRuns[strings.ToLower(cq.query)], now.Truncate(time.Hour))
+	assert.Equal(t, s.lastRuns[strings.ToLower(cq.name)], now.Truncate(time.Hour))
 }
 
 func TestService_ExecuteContinuousQuery_Cooling(t *testing.T) {
@@ -217,7 +217,7 @@ func TestService_ExecuteContinuousQuery_Cooling(t *testing.T) {
 		},
 	}
 
-	s.lastRuns[strings.ToLower(cq.query)] = time.Now()
+	s.lastRuns[cq.name] = time.Now()
 	ok, err := s.ExecuteContinuousQuery(cq, time.Now())
 	assert.False(t, ok)
 	assert.NoError(t, err)
@@ -242,14 +242,14 @@ func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
 			"cq": cqi,
 		},
 	}
-	cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
+	cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
 	assert.NotNil(t, cq)
 
 	now := time.Now()
 	ok, err := s.ExecuteContinuousQuery(cq, now)
 	assert.True(t, ok)
 	assert.NoError(t, err)
-	assert.Equal(t, s.lastRuns[strings.ToLower(cq.query)], now.In(cq.stmt.Location).Truncate(time.Hour))
+	assert.Equal(t, s.lastRuns[cq.name], now.In(cq.source.Location).Truncate(time.Hour))
 }
 
 func TestService_NewContinuousQuery(t *testing.T) {
@@ -265,7 +265,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 			"test": cq1,
 		},
 	}
-	cq := NewContinuousQuery(db1.Name, db1.DefaultRetentionPolicy, cq1.Query)
+	cq := NewContinuousQuery(db1.DefaultRetentionPolicy, cq1.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -282,7 +282,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 			"test": cq2,
 		},
 	}
-	cq = NewContinuousQuery(db2.Name, db2.DefaultRetentionPolicy, cq2.Query)
+	cq = NewContinuousQuery(db2.DefaultRetentionPolicy, cq2.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -300,7 +300,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 		},
 	}
 	// create a new CQ with the specified database and CQInfo.
-	cq = NewContinuousQuery(db3.Name, db3.DefaultRetentionPolicy, cq3.Query)
+	cq = NewContinuousQuery(db3.DefaultRetentionPolicy, cq3.Query)
 	if cq != nil {
 		t.Fatal("Expected NewContinuousQuery to fail")
 	}
@@ -317,7 +317,7 @@ func TestService_NewContinuousQuery(t *testing.T) {
 			"test": cq4,
 		},
 	}
-	cq = NewContinuousQuery(db4.Name, db4.DefaultRetentionPolicy, cq4.Query)
+	cq = NewContinuousQuery(db4.DefaultRetentionPolicy, cq4.Query)
 	if cq == nil {
 		t.Fatal("Expected NewContinuousQuery to succeed")
 	}

@@ -114,7 +114,6 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s := newServer(info, logger, c, metaMaxConcurrentWriteLimit)
 	s.httpService.Handler.Version = info.Version
 	s.httpService.Handler.BuildType = "OSS"
-
 	s.initMetaClientFn = s.initializeMetaClient
 	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
@@ -143,7 +142,6 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	syscontrol.SetQuerySchemaLimit(c.SelectSpec.QuerySchemaLimit)
 
 	s.initQueryExecutor(c)
-	s.cqService.QueryExecutor = s.QueryExecutor
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
 
 	s.initStatisticsPusher()
@@ -168,9 +166,12 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 
 func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, metaMaxConcurrentWriteLimit int) *Server {
 	// new continuous query service
-	hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
-	cqService := continuousquery.NewService(hostname, c.ContinuousQuery.RunInterval, c.ContinuousQuery.MaxProcessCQNumber)
-	cqService.WithLogger(logger)
+	var cqService *continuousquery.Service
+	if c.ContinuousQuery.Enabled {
+		hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
+		cqService = continuousquery.NewService(hostname, time.Duration(c.ContinuousQuery.RunInterval), c.ContinuousQuery.MaxProcessCQNumber)
+		cqService.WithLogger(logger)
+	}
 
 	return &Server{
 		info:          info,
@@ -229,6 +230,9 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	s.QueryExecutor.TaskManager.Host = config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
 
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
+	if s.cqService != nil {
+		s.cqService.QueryExecutor = s.QueryExecutor
+	}
 }
 
 func openServer(c *config.TSSql, logger *Logger.Logger) {
@@ -264,13 +268,17 @@ func (s *Server) Open() error {
 
 	s.PointsWriter.MetaClient = s.MetaClient
 	s.httpService.Handler.MetaClient = s.MetaClient
-	s.cqService.MetaClient = s.MetaClient
 
 	if err := s.httpService.Open(); err != nil {
 		return err
 	}
-	if err := s.cqService.Open(); err != nil {
-		return err
+
+	// try to open continuous query service
+	if s.cqService != nil {
+		s.cqService.MetaClient = s.MetaClient
+		if err := s.cqService.Open(); err != nil {
+			return err
+		}
 	}
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
@@ -326,10 +334,6 @@ func (s *Server) Close() error {
 
 	if s.RecordWriter != nil {
 		util.MustClose(s.RecordWriter)
-	}
-
-	if s.cqService != nil {
-		util.MustClose(s.cqService)
 	}
 
 	if s.QueryExecutor != nil {

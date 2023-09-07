@@ -44,7 +44,6 @@ var (
 	detectSQLNodeOfflineInterval = time.Second
 )
 
-// cqLeaseInfo represents metadata about a ts-sql.
 type cqLeaseInfo struct {
 	LastHeartbeat *list.Element
 	CQNames       []string
@@ -68,7 +67,6 @@ func (s *Store) getContinuousQueryLease(host string) ([]string, error) {
 	if !ok {
 		return nil, nil
 	}
-
 	return leaseInfo.CQNames, nil
 }
 
@@ -79,17 +77,17 @@ func (s *Store) handlerSql2MetaHeartbeat(host string) error {
 	s.cqLock.Lock()
 	defer s.cqLock.Unlock()
 
-	element := s.HeartbeatInfoList.PushBack(&HeartbeatInfo{
+	// update sql node heartbeat time
+	if s.cqLease[host] != nil {
+		element := s.cqLease[host].LastHeartbeat
+		element.Value.(*HeartbeatInfo).LastHeartbeatTime = time.Now()
+		s.heartbeatInfoList.MoveToBack(element)
+		return nil
+	}
+	element := s.heartbeatInfoList.PushBack(&HeartbeatInfo{
 		Host:              host,
 		LastHeartbeatTime: time.Now(),
 	})
-
-	// existed sql node
-	if s.cqLease[host] != nil {
-		s.HeartbeatInfoList.Remove(s.cqLease[host].LastHeartbeat)
-		s.cqLease[host].LastHeartbeat = element
-		return nil
-	}
 	// new sql node
 	s.cqLease[host] = &cqLeaseInfo{
 		LastHeartbeat: element,
@@ -135,31 +133,32 @@ func (s *Store) detectSqlNodeOffline() {
 
 // checkSQLNodesHeartbeat detects all sql nodes whether offline or not.
 func (s *Store) checkSQLNodesHeartbeat() {
-	var hbi *list.Element
-	if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
-		return
-	}
-
-	for {
-		if time.Since(hbi.Value.(*HeartbeatInfo).LastHeartbeatTime) >= heartbeatToleranceDuration {
-			sqlHost := hbi.Value.(*HeartbeatInfo).Host
-			s.handlerSQLNodeOffline(sqlHost, hbi)
-			if hbi = s.HeartbeatInfoList.Front(); hbi == nil {
-				return
-			}
-			continue
-		}
-		break
-	}
-}
-
-// handlerSQLNodeOffline removes sql host when one ts-sql is down.
-// delete sqlHost from cqLease and sqlHosts and HeartbeatInfoList
-func (s *Store) handlerSQLNodeOffline(sqlHost string, hbi *list.Element) {
 	if !s.IsLeader() {
 		return
 	}
 
+	for {
+		s.cqLock.RLock()
+		var hbi *list.Element
+		if hbi = s.heartbeatInfoList.Front(); hbi == nil {
+			s.cqLock.RUnlock()
+			break
+		}
+		if time.Since(hbi.Value.(*HeartbeatInfo).LastHeartbeatTime) <= heartbeatToleranceDuration {
+			s.cqLock.RUnlock()
+			break
+		}
+		sqlHost := hbi.Value.(*HeartbeatInfo).Host
+		s.cqLock.RUnlock()
+
+		s.Logger.Debug("detect that a SQL node was offline", zap.String("sql host", sqlHost))
+		s.handlerSQLNodeOffline(sqlHost, hbi)
+	}
+}
+
+// handlerSQLNodeOffline removes sql host when one ts-sql is down.
+// delete sqlHost from cqLease and sqlHosts and heartbeatInfoList
+func (s *Store) handlerSQLNodeOffline(sqlHost string, hbi *list.Element) {
 	s.cqLock.Lock()
 	defer s.cqLock.Unlock()
 
@@ -173,7 +172,7 @@ func (s *Store) handlerSQLNodeOffline(sqlHost string, hbi *list.Element) {
 		s.sqlHosts = append(s.sqlHosts[:n], s.sqlHosts[n+1:]...)
 	}
 	// delete from HeartbeatInfo
-	s.HeartbeatInfoList.Remove(hbi)
+	s.heartbeatInfoList.Remove(hbi)
 
 	s.scheduleCQsWithoutLock(sqlOffline)
 

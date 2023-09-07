@@ -26,17 +26,19 @@ import (
 
 // ContinuousQuery is a struct for cq info, lastRun etc.
 type ContinuousQuery struct {
-	name  string
-	query string
+	name     string // Name of the continuous query.
+	database string // Name of the database to create the continuous query on.  Default RP for the database.
+	query    string // The original sql of the continuous query.
 
-	DBName  string // database that the cq runs on. Default RP for the DBName.
-	hasRun  bool
-	lastRun time.Time
-	stmt    *influxql.SelectStatement // select into clause
+	hasRun        bool                      // Is the first run for this continuous query.
+	resampleEvery time.Duration             // Interval to resample previous queries.
+	resampleFor   time.Duration             // Maximum duration to resample previous queries.
+	lastRun       time.Time                 // The time that the cq runs successfully
+	source        *influxql.SelectStatement // The select into clause.
 }
 
 // NewContinuousQuery returns a ContinuousQuery object with a parsed SQL statement.
-func NewContinuousQuery(db, rp string, query string) *ContinuousQuery {
+func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 	p := influxql.NewParser(strings.NewReader(query))
 	defer p.Release()
 
@@ -59,10 +61,13 @@ func NewContinuousQuery(db, rp string, query string) *ContinuousQuery {
 	}
 
 	cq := &ContinuousQuery{
-		name:   q.Name,
-		query:  query,
-		DBName: db,
-		stmt:   q.Source,
+		name:     q.Name,
+		query:    query,
+		database: q.Database,
+
+		resampleEvery: q.ResampleEvery,
+		resampleFor:   q.ResampleFor,
+		source:        q.Source,
 	}
 
 	if cq.getIntoRP() == "" {
@@ -72,11 +77,11 @@ func NewContinuousQuery(db, rp string, query string) *ContinuousQuery {
 }
 
 func (cq *ContinuousQuery) getIntoRP() string {
-	return cq.stmt.Target.Measurement.RetentionPolicy
+	return cq.source.Target.Measurement.RetentionPolicy
 }
 
 func (cq *ContinuousQuery) setIntoRP(rp string) {
-	cq.stmt.Target.Measurement.RetentionPolicy = rp
+	cq.source.Target.Measurement.RetentionPolicy = rp
 }
 
 // shouldRunContinuousQuery returns true if the CQ should run.
@@ -99,7 +104,7 @@ func getContinuousQueries(dst []*ContinuousQuery, dbs map[string]*meta.DatabaseI
 			if _, ok := cqLease[cqName]; !ok {
 				continue
 			}
-			cq := NewContinuousQuery(dbi.Name, dbi.DefaultRetentionPolicy, cqi.Query)
+			cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
 			if cq != nil {
 				dst = append(dst, cq)
 			}

@@ -1,5 +1,5 @@
 /*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,6 +19,8 @@ package config
 import (
 	"errors"
 	"time"
+
+	"github.com/influxdata/influxdb/toml"
 )
 
 // ContinuousQueryConfig is the configuration for the continuous query service.
@@ -27,15 +29,13 @@ type ContinuousQueryConfig struct {
 	Enabled bool `toml:"enabled"`
 
 	// The interval at which the CQ service will run.
-	RunInterval time.Duration `toml:"run-interval"`
+	RunInterval toml.Duration `toml:"run-interval"`
 
 	// MaxProcessCQNumber is the max number of CQs to process in one run.
 	MaxProcessCQNumber int `toml:"max-process-CQ-number"`
 }
 
 const (
-	// DefaultEnabled is the default value for the enabled flag.
-	DefaultEnabled = true
 	// DefaultRunInterval is the default interval at which the CQ service will run.
 	DefaultRunInterval = time.Second
 	// DefaultMaxProcessCQNumber is the default max number of CQs to process in one run.
@@ -45,15 +45,15 @@ const (
 // NewContinuousQueryConfig returns a new instance of ContinuousQueryConfig with defaults.
 func NewContinuousQueryConfig() ContinuousQueryConfig {
 	return ContinuousQueryConfig{
-		Enabled:            DefaultEnabled,
-		RunInterval:        DefaultRunInterval,
+		Enabled:            false,
+		RunInterval:        toml.Duration(DefaultRunInterval),
 		MaxProcessCQNumber: DefaultMaxProcessCQNumber,
 	}
 }
 
 // Validate returns an error if the config is invalid.
 func (c ContinuousQueryConfig) Validate() error {
-	if c.RunInterval < time.Second { // RunInterval must be at least 1 second
+	if time.Duration(c.RunInterval) < time.Second { // RunInterval must be at least 1 second
 		return errors.New("continuous query run interval must be must be at least 1 second")
 	}
 	if c.MaxProcessCQNumber <= 0 {

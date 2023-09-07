@@ -397,7 +397,7 @@ type Store struct {
 	// for continuous query
 	cqLock            sync.RWMutex            // lock for all cq related items
 	cqNames           []string                // sorted cq names. Restore from data unmarshal.
-	HeartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
+	heartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
 	cqLease           map[string]*cqLeaseInfo // sql host to cq lease.
 	sqlHosts          []string                // sorted hostname ["127.0.0.1:8086", "127.0.0.2:8086", "127.0.0.3:8086"]
 }
@@ -424,7 +424,7 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 		notifyCh:         make(chan bool, 1),
 
 		// for continuous query
-		HeartbeatInfoList: list.New(),
+		heartbeatInfoList: list.New(),
 		cqLease:           make(map[string]*cqLeaseInfo),
 	}
 

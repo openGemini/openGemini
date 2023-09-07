@@ -89,7 +89,7 @@ type TSSql struct {
 
 	Subscriber Subscriber `toml:"subscriber"`
 
-	ContinuousQuery ContinuousQueryConfig `toml:"continuous_query"`
+	ContinuousQuery ContinuousQueryConfig `toml:"continuous_queries"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.

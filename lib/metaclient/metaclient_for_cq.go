@@ -23,7 +23,6 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -36,9 +35,8 @@ func (c *Client) SendSql2MetaHeartbeat(host string) error {
 		select {
 		case <-c.closing:
 			c.mu.RUnlock()
-			return errors.New("Sql2MetaHeartbeat fail")
+			return nil
 		default:
-
 		}
 
 		if currentServer >= len(c.metaServers) {
@@ -49,7 +47,7 @@ func (c *Client) SendSql2MetaHeartbeat(host string) error {
 		if err == nil {
 			break
 		}
-
+		c.logger.Debug("sql send heartbeat to meta failed", zap.String("sql host", host), zap.Error(err), zap.Duration("duration", time.Since(startTime)))
 		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
 			break
 		}
@@ -63,12 +61,7 @@ func (c *Client) SendSql2MetaHeartbeat(host string) error {
 func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
 	callback := &Sql2MetaHeartbeatCallback{}
 	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{Host: host})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		c.logger.Error("Sql2MetaHeartbeat SendRPCMsg fail", zap.Error(err))
-		return err
-	}
-	return nil
+	return c.SendRPCMsg(currentServer, msg, callback)
 }
 
 func (c *Client) CreateContinuousQuery(database, name, query string) error {
@@ -115,9 +108,8 @@ func (c *Client) GetCqLease(host string) ([]string, error) {
 		select {
 		case <-c.closing:
 			c.mu.RUnlock()
-			return nil, errors.New("GetCqLease fail")
+			return nil, nil
 		default:
-
 		}
 
 		if currentServer >= len(c.metaServers) {
@@ -129,6 +121,7 @@ func (c *Client) GetCqLease(host string) ([]string, error) {
 			break
 		}
 
+		c.logger.Debug("get continuous query lease failed", zap.String("sql host", host), zap.Error(err), zap.Duration("duration", time.Since(startTime)))
 		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
 			break
 		}
@@ -144,7 +137,6 @@ func (c *Client) getCQLease(currentServer int, host string) ([]string, error) {
 	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{Host: host})
 	err := c.SendRPCMsg(currentServer, msg, callback)
 	if err != nil {
-		c.logger.Error("GetCqLease SendRPCMsg fail", zap.Error(err))
 		return nil, err
 	}
 	return callback.CQNames, nil

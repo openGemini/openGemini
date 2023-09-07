@@ -410,3 +410,41 @@ func Test_applyDropDatabaseCommand(t *testing.T) {
 	_, ok := fsm.data.Databases["db0"] // db0 is dropped successfully
 	assert2.False(t, ok)
 }
+
+func Test_applyContinuousQueryReportCommand(t *testing.T) {
+	s := &Store{
+		raft: &MockRaftForCQ{isLeader: true},
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {
+							Name:        "cq0",
+							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
+							LastRunTime: time.Time{},
+						},
+					},
+				},
+			},
+		},
+	}
+	fsm := (*storeFSM)(s)
+	ts := time.Now()
+	value := &proto2.ContinuousQueryReportCommand{
+		CQStates: []*proto2.CQState{
+			{
+				Name:        proto.String("cq0"),
+				LastRunTime: proto.Int64(ts.UnixNano()),
+			},
+		},
+	}
+	typ := proto2.Command_ContinuousQueryReportCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command, value)
+	require.NoError(t, err)
+
+	resErr := fsm.applyContinuousQueryReportCommand(cmd)
+	require.Nil(t, resErr)
+	require.Equal(t, ts.UnixNano(), fsm.data.Databases["db0"].ContinuousQueries["cq0"].LastRunTime.UnixNano())
+}
