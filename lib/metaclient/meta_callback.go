@@ -395,10 +395,10 @@ func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
 	}
 	msg, ok := metaMsg.Data().(*message.Sql2MetaHeartbeatResponse)
 	if !ok {
-		return fmt.Errorf("data is not a Sql2MetaHeartbeatResponse, type %T", metaMsg.Data())
+		return fmt.Errorf("data is not a Sql2MetaHeartbeatResponse, got type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
-		return errors.New(msg.Err)
+		return fmt.Errorf("get sql to meta heartbeat callback error: %s", msg.Err)
 	}
 
 	return nil
@@ -416,10 +416,10 @@ func (c *GetCqLeaseCallback) Handle(data interface{}) error {
 	}
 	msg, ok := metaMsg.Data().(*message.GetContinuousQueryLeaseResponse)
 	if !ok {
-		return errors.New("data is not a GetContinuousQueryLease")
+		return fmt.Errorf("data is not a GetContinuousQueryLeaseResponse, got type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
-		return fmt.Errorf("get cq lease callback error %s", msg.Err)
+		return fmt.Errorf("get cq lease callback error: %s", msg.Err)
 	}
 	c.CQNames = msg.CQNames
 	return nil

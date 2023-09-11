@@ -24,17 +24,20 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 )
 
-// ContinuousQuery is a struct for cq info, lastRun etc.
 type ContinuousQuery struct {
 	name     string // Name of the continuous query.
 	database string // Name of the database to create the continuous query on.  Default RP for the database.
 	query    string // The original sql of the continuous query.
 
-	hasRun        bool                      // Is the first run for this continuous query.
-	resampleEvery time.Duration             // Interval to resample previous queries.
-	resampleFor   time.Duration             // Maximum duration to resample previous queries.
-	lastRun       time.Time                 // The time that the cq runs successfully
-	source        *influxql.SelectStatement // The select into clause.
+	hasRun        bool          // Is the first run for this continuous query.
+	resampleEvery time.Duration // Interval to resample previous queries.
+	resampleFor   time.Duration // Maximum duration to resample previous queries.
+	groupByOffset time.Duration
+
+	lastRun time.Time                 // The time that the cq runs successfully.
+	source  *influxql.SelectStatement // The select into clause.
+
+	reportInterval time.Duration // The report interval of uploading the continuous query's last run time.
 }
 
 // NewContinuousQuery returns a ContinuousQuery object with a parsed SQL statement.
@@ -60,16 +63,42 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 		return nil
 	}
 
+	// get the group by interval
+	interval, err := q.Source.GroupByInterval()
+	if err != nil {
+		return nil
+	}
+	resampleFor := interval
+	// check interval and ResampleFor/ResampleEvery
+	if q.ResampleFor != 0 && q.ResampleEvery != 0 && q.ResampleEvery > interval {
+		interval = q.ResampleEvery
+		resampleFor = q.ResampleFor
+	}
+
+	// get the group by offset
+	groupByOffset, err := q.Source.GroupByOffset()
+	if err != nil {
+		return nil
+	}
+
 	cq := &ContinuousQuery{
 		name:     q.Name,
 		query:    query,
 		database: q.Database,
 
-		resampleEvery: q.ResampleEvery,
-		resampleFor:   q.ResampleFor,
-		source:        q.Source,
+		resampleEvery: interval,
+		resampleFor:   resampleFor,
+		groupByOffset: groupByOffset,
+
+		source: q.Source,
 	}
 
+	// setting reportInterval
+	if interval <= DefaultReportTime {
+		cq.reportInterval = DefaultReportTime
+	} else {
+		cq.reportInterval = interval
+	}
 	if cq.getIntoRP() == "" {
 		cq.setIntoRP(rp)
 	}
@@ -84,11 +113,11 @@ func (cq *ContinuousQuery) setIntoRP(rp string) {
 	cq.source.Target.Measurement.RetentionPolicy = rp
 }
 
-// shouldRunContinuousQuery returns true if the CQ should run.
-func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time, interval time.Duration) (bool, time.Time) {
+// shouldRunContinuousQuery returns true and next run time if the CQ should run.
+func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time) (bool, time.Time) {
 	if cq.hasRun {
 		// Return the nextRun time for cq.
-		nextRun := cq.lastRun.Add(interval).Truncate(interval)
+		nextRun := cq.lastRun.Add(cq.resampleEvery)
 		if nextRun.UnixNano() <= now.UnixNano() {
 			return true, nextRun
 		}

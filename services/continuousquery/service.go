@@ -64,11 +64,11 @@ type Service struct {
 
 	QueryExecutor QueryExecutor // interface for QueryExecutor
 
-	mu       sync.RWMutex
-	lastRuns map[string]time.Time // continuous query last run time. e.g.{"cq_name1": time}
+	lastRunsLock sync.RWMutex
+	lastRuns     map[string]time.Time // continuous query last run time. e.g.{"cq_name1": time}
 
 	// report continuous query last successfully run time
-	reportInterval time.Duration // at least 5min
+	reportInterval time.Duration // at least DefaultReportTime
 	lastReportTime time.Time     // the time that all continuous queries reported
 
 	maxProcessCQNumber int
@@ -162,11 +162,22 @@ func (s *Service) checkCQIsChanged() bool {
 	return false
 }
 
+// getContinuousQueries returns the newly continuous query lease and fixes the reportInterval
+func (s *Service) getContinuousQueries() []*ContinuousQuery {
+	cqLease := s.getCQLease()
+	dbs := s.MetaClient.Databases()
+	continuousQueries := getContinuousQueries(s.ContinuousQueries[:0], dbs, cqLease)
+	for i := range continuousQueries {
+		if continuousQueries[i].reportInterval < s.reportInterval {
+			s.reportInterval = continuousQueries[i].reportInterval
+		}
+	}
+	return continuousQueries
+}
+
 func (s *Service) handle() {
 	if !s.init {
-		cqLease := s.getCQLease()
-		dbs := s.MetaClient.Databases()
-		s.ContinuousQueries = getContinuousQueries(s.ContinuousQueries[:0], dbs, cqLease)
+		s.ContinuousQueries = s.getContinuousQueries()
 		if len(s.ContinuousQueries) == 0 {
 			return
 		}
@@ -175,9 +186,7 @@ func (s *Service) handle() {
 
 	if s.checkCQIsChanged() {
 		// get the newly cq lease
-		cqLease := s.getCQLease()
-		dbs := s.MetaClient.Databases()
-		s.ContinuousQueries = getContinuousQueries(s.ContinuousQueries[:0], dbs, cqLease)
+		s.ContinuousQueries = s.getContinuousQueries()
 	}
 
 	if len(s.ContinuousQueries) == 0 {
@@ -211,41 +220,21 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 		now = now.In(cq.source.Location)
 	}
 
+	s.lastRunsLock.RLock()
 	cq.lastRun, cq.hasRun = s.lastRuns[cq.name]
-
-	// Get the group by interval and report time for cq service.
-	interval, err := cq.source.GroupByInterval()
-	if err != nil {
-		return false, err
-	} else if interval == 0 {
-		return false, err
-	}
-
-	// set s.reportInterval above DefaultReportTime
-	if interval < DefaultReportTime {
-		s.reportInterval = DefaultReportTime
-	} else {
-		s.reportInterval = interval
-	}
-
-	// Get the group by offset.
-	offset, err := cq.source.GroupByOffset()
-	if err != nil {
-		return false, err
-	}
+	s.lastRunsLock.RUnlock()
 
 	// Check if the CQ should be run.
-	ok, nextRun := cq.shouldRunContinuousQuery(now, interval)
+	ok, nextRun := cq.shouldRunContinuousQuery(now)
 	if !ok {
 		return false, nil
 	}
 
 	// Calculate and set the time range for the query.
 	// startTime should be earlier than current time.
-	startTime := nextRun.Add(-interval - offset - 1).Truncate(interval).Add(offset)
-	endTime := startTime.Add(interval - offset).Truncate(interval).Add(offset)
-
-	if err = cq.source.SetTimeRange(startTime, endTime); err != nil {
+	startTime := nextRun.Add(-cq.resampleEvery - cq.groupByOffset - 1).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
+	endTime := startTime.Add(cq.resampleEvery - cq.groupByOffset).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
+	if err := cq.source.SetTimeRange(startTime, endTime); err != nil {
 		return false, fmt.Errorf("unable to set time range: %s", err)
 	}
 
@@ -256,10 +245,10 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	}
 
 	// update cq.lastRun and s.lastRuns
-	cq.lastRun = now.Truncate(interval)
-	s.mu.Lock()
+	cq.lastRun = now.Truncate(cq.resampleEvery)
+	s.lastRunsLock.Lock()
 	s.lastRuns[cq.name] = cq.lastRun
-	s.mu.Unlock()
+	s.lastRunsLock.Unlock()
 	return true, nil
 }
 

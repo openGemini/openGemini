@@ -32,7 +32,6 @@ require (
 	github.com/nxadm/tail v1.4.8
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.12.1
 	github.com/prometheus/common v0.32.1
 	github.com/prometheus/prometheus v1.8.2-0.20201119142752-3ad25a6dc3d9
@@ -124,6 +123,7 @@ require (
 	github.com/philhofer/fwd v1.1.2-0.20210722190033-5c56ac6d0bb9 // indirect
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pingcap/errors v0.11.4 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/term v0.0.0-20180730021639-bffc007b7fd5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/posener/complete v1.2.3 // indirect

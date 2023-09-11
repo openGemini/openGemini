@@ -18,16 +18,22 @@ package config
 
 import (
 	"testing"
+	"time"
 
+	"github.com/influxdata/influxdb/toml"
 	"github.com/stretchr/testify/require"
 )
 
 func Test_ContinuousQueryConfig_Validate(t *testing.T) {
-	conf := NewContinuousQueryConfig()
-	conf.RunInterval = -5
-	require.EqualError(t, conf.Validate(), "continuous query run interval must be must be at least 1 second")
+	c := NewContinuousQueryConfig()
+	c.RunInterval = -5
+	require.EqualError(t, c.Validate(), "continuous query run interval must be must be at least 1 second")
+	c.RunInterval = toml.Duration(time.Second)
 
-	conf = NewContinuousQueryConfig()
-	conf.MaxProcessCQNumber = -5
-	require.EqualError(t, conf.Validate(), "continuous query max process CQ number must be greater than 0")
+	c.MaxProcessCQNumber = -5
+	require.EqualError(t, c.Validate(), "continuous query max process CQ number must be greater or equal than 0")
+
+	c.MaxProcessCQNumber = 0
+	require.NoError(t, c.Validate())
+
 }

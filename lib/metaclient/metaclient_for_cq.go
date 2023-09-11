@@ -55,7 +55,7 @@ func (c *Client) SendSql2MetaHeartbeat(host string) error {
 
 		currentServer++
 	}
-	return nil
+	return err
 }
 
 func (c *Client) sendSql2MetaHeartbeat(currentServer int, host string) error {
@@ -85,11 +85,7 @@ func (c *Client) DropContinuousQuery(name string, database string) error {
 		Name:     proto.String(name),
 		Database: proto.String(database),
 	}
-
-	if err := c.retryUntilExec(proto2.Command_DropContinuousQueryCommand, proto2.E_DropContinuousQueryCommand_Command, cmd); err != nil {
-		return err
-	}
-	return nil
+	return c.retryUntilExec(proto2.Command_DropContinuousQueryCommand, proto2.E_DropContinuousQueryCommand_Command, cmd)
 }
 
 func (c *Client) GetMaxCQChangeID() uint64 {
@@ -129,17 +125,14 @@ func (c *Client) GetCqLease(host string) ([]string, error) {
 
 		currentServer++
 	}
-	return cqNames, nil
+	return cqNames, err
 }
 
 func (c *Client) getCQLease(currentServer int, host string) ([]string, error) {
 	callback := &GetCqLeaseCallback{}
 	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{Host: host})
 	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		return nil, err
-	}
-	return callback.CQNames, nil
+	return callback.CQNames, err
 }
 
 // BatchUpdateContinuousQueryStat reports all continuous queries state
@@ -151,8 +144,6 @@ func (c *Client) BatchUpdateContinuousQueryStat(cqStats map[string]int64) error 
 			LastRunTime: proto.Int64(lastRun),
 		})
 	}
-	if _, err := c.retryExec(proto2.Command_ContinuousQueryReportCommand, proto2.E_ContinuousQueryReportCommand_Command, cmd); err != nil {
-		return err
-	}
-	return nil
+	_, err := c.retryExec(proto2.Command_ContinuousQueryReportCommand, proto2.E_ContinuousQueryReportCommand_Command, cmd)
+	return err
 }

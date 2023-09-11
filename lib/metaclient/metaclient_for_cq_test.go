@@ -17,14 +17,71 @@ limitations under the License.
 package metaclient
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
+
+type mockRPCMessageSender struct{}
+
+func (s *mockRPCMessageSender) SendRPCMsg(currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+	if currentServer == 1 {
+		return nil
+	}
+	return errors.New("mock error")
+}
+
+func TestClient_SendSql2MetaHeartbeat(t *testing.T) {
+	defer func() {
+		connectedServer = 0
+	}()
+	c := &Client{
+		changed: make(chan chan struct{}, 1),
+		logger:  logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		closing: make(chan struct{}),
+	}
+	c.SendRPCMessage = &mockRPCMessageSender{}
+	err := c.SendSql2MetaHeartbeat("127.0.0.1:8086")
+	assert.EqualError(t, err, "mock error")
+
+	// SetMetaServers
+	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
+	err = c.SendSql2MetaHeartbeat("127.0.0.1:8086")
+	assert.NoError(t, err)
+
+	// close
+	close(c.closing)
+	err = c.SendSql2MetaHeartbeat("127.0.0.1:8086")
+	assert.NoError(t, err)
+}
+
+func TestClient_CreateContinuousQuery(t *testing.T) {
+	defer func() {
+		connectedServer = 0
+	}()
+	c := &Client{
+		cacheData: &meta.Data{},
+		changed:   make(chan chan struct{}, 1),
+		logger:    logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		closing:   make(chan struct{}),
+	}
+	c.SendRPCMessage = &mockRPCMessageSender{}
+	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
+	err := c.CreateContinuousQuery("db0", "cq0", "create continuous query ...")
+	assert.NoError(t, err)
+
+	// close
+	close(c.closing)
+	err = c.CreateContinuousQuery("db0", "cq0", "create continuous query ...")
+	assert.EqualError(t, err, "client already closed")
+}
 
 func TestClient_ShowContinuousQueries(t *testing.T) {
 	c := &Client{
@@ -62,15 +119,82 @@ func TestClient_ShowContinuousQueries(t *testing.T) {
 		t.Fatal("query continuous queries failed!")
 	}
 
-	require.EqualValues(t, 2, len(rows))
+	assert.Equal(t, 2, len(rows))
 	for i := 0; i < rows.Len(); i++ {
 		switch rows[i].Name {
 		case "test1":
-			require.EqualValues(t, 2, len(rows[i].Values))
+			assert.Equal(t, 2, len(rows[i].Values))
 		case "test2":
-			require.EqualValues(t, 1, len(rows[i].Values))
+			assert.Equal(t, 1, len(rows[i].Values))
 		default:
 			t.Fatal("unexcepted query continuous queries result!")
 		}
 	}
+}
+
+func TestClient_DropContinuousQuery(t *testing.T) {
+	defer func() {
+		connectedServer = 0
+	}()
+	c := &Client{
+		cacheData: &meta.Data{},
+		changed:   make(chan chan struct{}, 1),
+		logger:    logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	c.SendRPCMessage = &mockRPCMessageSender{}
+	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
+	err := c.DropContinuousQuery("db0", "cq0")
+	assert.NoError(t, err)
+}
+
+func TestClient_GetMaxCQChangeID(t *testing.T) {
+	defer func() {
+		connectedServer = 0
+	}()
+	c := &Client{
+		logger:    logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		cacheData: &meta.Data{MaxCQChangeID: 100},
+	}
+	c.SendRPCMessage = &mockRPCMessageSender{}
+	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
+	ID := c.GetMaxCQChangeID()
+	assert.Equal(t, uint64(100), ID)
+}
+
+func TestClient_GetCqLease(t *testing.T) {
+	defer func() {
+		connectedServer = 0
+	}()
+	c := &Client{
+		changed: make(chan chan struct{}, 1),
+		logger:  logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		closing: make(chan struct{}),
+	}
+	c.SendRPCMessage = &mockRPCMessageSender{}
+	_, err := c.GetCqLease("127.0.0.1:8086")
+	assert.EqualError(t, err, "mock error")
+
+	// SetMetaServers
+	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
+	cqs, err := c.GetCqLease("127.0.0.1:8086")
+	assert.NoError(t, err)
+	assert.Nil(t, cqs)
+
+	// close
+	close(c.closing)
+	_, err = c.GetCqLease("127.0.0.1:8086")
+	assert.NoError(t, err)
+}
+
+func TestClient_BatchUpdateContinuousQueryStat(t *testing.T) {
+	defer func() {
+		connectedServer = 0
+	}()
+	c := &Client{
+		logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	c.SendRPCMessage = &mockRPCMessageSender{}
+	c.SetMetaServers([]string{"127.0.0.1:8088", "127.0.0.2:8088", "127.0.0.3:8088"})
+	err := c.BatchUpdateContinuousQueryStat(map[string]int64{"cq": 123})
+	assert.NoError(t, err)
 }

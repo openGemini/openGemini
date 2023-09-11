@@ -139,6 +139,17 @@ func (c *TSSql) Corrector(cpuNum, cpuAllocRatio int) {
 	if c.SelectSpec.QuerySchemaLimit == 0 {
 		c.SelectSpec.QuerySchemaLimit = cpuNum * 500
 	}
+
+	if c.ContinuousQuery.MaxProcessCQNumber == 0 {
+		maxProcessCQNumber := cpuNum * cpuAllocRatio / 3
+		if maxProcessCQNumber <= 1 {
+			maxProcessCQNumber = 1
+		}
+		if maxProcessCQNumber >= 5 {
+			maxProcessCQNumber = 5
+		}
+		c.ContinuousQuery.MaxProcessCQNumber = maxProcessCQNumber
+	}
 }
 
 // Validate returns an error if the config is invalid.

@@ -38,8 +38,6 @@ type ContinuousQueryConfig struct {
 const (
 	// DefaultRunInterval is the default interval at which the CQ service will run.
 	DefaultRunInterval = time.Second
-	// DefaultMaxProcessCQNumber is the default max number of CQs to process in one run.
-	DefaultMaxProcessCQNumber = 5
 )
 
 // NewContinuousQueryConfig returns a new instance of ContinuousQueryConfig with defaults.
@@ -47,7 +45,7 @@ func NewContinuousQueryConfig() ContinuousQueryConfig {
 	return ContinuousQueryConfig{
 		Enabled:            false,
 		RunInterval:        toml.Duration(DefaultRunInterval),
-		MaxProcessCQNumber: DefaultMaxProcessCQNumber,
+		MaxProcessCQNumber: 0,
 	}
 }
 
@@ -56,8 +54,8 @@ func (c ContinuousQueryConfig) Validate() error {
 	if time.Duration(c.RunInterval) < time.Second { // RunInterval must be at least 1 second
 		return errors.New("continuous query run interval must be must be at least 1 second")
 	}
-	if c.MaxProcessCQNumber <= 0 {
-		return errors.New("continuous query max process CQ number must be greater than 0")
+	if c.MaxProcessCQNumber < 0 {
+		return errors.New("continuous query max process CQ number must be greater or equal than 0")
 	}
 	return nil
 }

@@ -36,8 +36,13 @@ import (
 
 // Define a mockMetaClient struct to mimic the MetaClient struct
 type MockMetaClient struct {
-	DatabasesFn func() map[string]*meta.DatabaseInfo
+	DatabasesFn                      func() map[string]*meta.DatabaseInfo
+	GetCqLeaseFn                     func() ([]string, error)
+	QueryExecutorFn                  func() <-chan *query2.Result
+	GetMaxCQChangeIDFn               func() uint64
+	BatchUpdateContinuousQueryStatFn func() error
 
+	changed chan chan struct{}
 	MetaClient
 }
 
@@ -46,11 +51,25 @@ func (mc *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
 }
 
 func (mc *MockMetaClient) GetCqLease(host string) ([]string, error) {
-	return nil, nil
+	return mc.GetCqLeaseFn()
 }
 
 func (mc *MockMetaClient) Databases() map[string]*meta.DatabaseInfo {
 	return mc.DatabasesFn()
+}
+
+func (mc *MockMetaClient) WaitForDataChanged() chan struct{} {
+	ch := make(chan struct{})
+	mc.changed <- ch
+	return ch
+}
+
+func (mc *MockMetaClient) GetMaxCQChangeID() uint64 {
+	return mc.GetMaxCQChangeIDFn()
+}
+
+func (mc *MockMetaClient) BatchUpdateContinuousQueryStat(cqStats map[string]int64) error {
+	return mc.BatchUpdateContinuousQueryStatFn()
 }
 
 // mockQueryExecutor is a mock query executor
@@ -66,7 +85,7 @@ func (e *mockQueryExecutor) ExecuteQuery(query *influxql.Query, opt query.Execut
 
 // NewTestService returns a new *Service with default mock object members.
 func NewTestService() *Service {
-	s := NewService("127.0.0.1:8086", config.DefaultRunInterval, config.DefaultMaxProcessCQNumber)
+	s := NewService("127.0.0.1:8086", config.DefaultRunInterval, 1)
 	s.WithLogger(logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()))
 	s.MetaClient = &MockMetaClient{}
 
@@ -78,6 +97,9 @@ func TestTTL(t *testing.T) {
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
 			return nil
+		},
+		GetCqLeaseFn: func() ([]string, error) {
+			return nil, nil
 		},
 	}
 	err := s.Open()
@@ -93,10 +115,51 @@ func TestService_handle(t *testing.T) {
 	s := NewTestService()
 	s.MetaClient = &MockMetaClient{
 		DatabasesFn: func() map[string]*meta.DatabaseInfo {
+			return map[string]*meta.DatabaseInfo{
+				"db0": {
+					ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
+						"cq0": {
+							Name:  "cq0",
+							Query: `CREATE CONTINUOUS QUERY cq0 ON db0 RESAMPLE EVERY 10s FOR 1m BEGIN SELECT mean(v0) INTO stress.autogen.mst FROM stress.autogen.m0 GROUP BY time(10s), * fill(none) END`,
+						},
+						"cq1": {
+							Name:  "cq1",
+							Query: `CREATE CONTINUOUS QUERY cq1 ON db0 RESAMPLE EVERY 10s FOR 1m BEGIN SELECT mean(v0) INTO stress.autogen.mst FROM stress.autogen.m0 GROUP BY time(10s), * fill(none) END`,
+						},
+					},
+				},
+			}
+		},
+		GetCqLeaseFn: func() ([]string, error) {
+			return []string{"cq0", "cq1"}, nil
+		},
+		GetMaxCQChangeIDFn: func() uint64 {
+			return 10
+		},
+		BatchUpdateContinuousQueryStatFn: func() error {
 			return nil
+		},
+		changed: make(chan chan struct{}, 10),
+	}
+	s.QueryExecutor = &mockQueryExecutor{
+		ExecuteQueryFn: func(results chan *query2.Result) {
+			results <- &query2.Result{}
 		},
 	}
 	s.handle()
+	assert.NotNil(t, s.lastRuns["cq0"])
+	assert.NotNil(t, s.lastRuns["cq1"])
+	lastReportTime := time.Now().Add(-time.Hour)
+	s.lastReportTime = lastReportTime
+	go func() {
+		for len(s.MetaClient.(*MockMetaClient).changed) > 0 {
+			notifyC := <-s.MetaClient.(*MockMetaClient).changed
+			close(notifyC)
+		}
+	}()
+	time.Sleep(10 * time.Millisecond)
+	s.handle()
+	assert.Greater(t, s.lastReportTime.String(), lastReportTime.String())
 }
 
 func TestService_shouldRunContinuousQuery(t *testing.T) {
@@ -117,7 +180,7 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 	cqi := NewContinuousQuery(db1.DefaultRetentionPolicy, cq1.Query)
 	cqi.hasRun = true
 	cqi.lastRun = time.Now()
-	ok, _ := cqi.shouldRunContinuousQuery(time.Now().Add(-2*interval), interval)
+	ok, _ := cqi.shouldRunContinuousQuery(time.Now().Add(-2 * interval))
 	assert.Equal(t, ok, false)
 
 	// test the valid CQ query
@@ -136,16 +199,16 @@ func TestService_shouldRunContinuousQuery(t *testing.T) {
 	cqi = NewContinuousQuery(db2.DefaultRetentionPolicy, cq2.Query)
 	// test the query has not run before
 	cqi.hasRun = false
-	ok, _ = cqi.shouldRunContinuousQuery(time.Now(), interval)
+	ok, _ = cqi.shouldRunContinuousQuery(time.Now())
 	assert.Equal(t, ok, true)
 	// test the query has run before
 	cqi.hasRun = true
 	cqi.lastRun = time.Now().Add(-2 * time.Minute)
-	ok, _ = cqi.shouldRunContinuousQuery(time.Now(), interval)
+	ok, _ = cqi.shouldRunContinuousQuery(time.Now())
 	assert.Equal(t, ok, true)
 	// test the query has run before but not enough time has passed
 	cqi.lastRun = time.Now().Truncate(interval)
-	ok, _ = cqi.shouldRunContinuousQuery(time.Now(), interval)
+	ok, _ = cqi.shouldRunContinuousQuery(time.Now())
 	assert.Equal(t, ok, false)
 }
 
@@ -318,7 +381,5 @@ func TestService_NewContinuousQuery(t *testing.T) {
 		},
 	}
 	cq = NewContinuousQuery(db4.DefaultRetentionPolicy, cq4.Query)
-	if cq == nil {
-		t.Fatal("Expected NewContinuousQuery to succeed")
-	}
+	assert.NotNil(t, cq)
 }

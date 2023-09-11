@@ -736,13 +736,15 @@ func isValidContinuousQueryStatement(query string) error {
 	// check if the statement is a valid continuous query.
 	q, ok := stmt.(*influxql.CreateContinuousQueryStatement)
 	if !ok || q.Source.Target == nil || q.Source.Target.Measurement == nil {
-		return errors.New("must be a select into clause")
+		return errors.New("must be a SELECT INTO clause")
 	}
 
 	// check group by time
 	interval, err := q.Source.GroupByInterval()
 	if err != nil {
 		return err
+	} else if interval == 0 {
+		return fmt.Errorf("GROUP BY time duration must be greater than 0s")
 	}
 
 	// check interval and ResampleFor/ResampleEvery
@@ -758,8 +760,16 @@ func isValidContinuousQueryStatement(query string) error {
 }
 
 func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql.CreateContinuousQueryStatement) error {
+	// remote the time filter condition
+	valuer := influxql.NowValuer{Now: time.Now()}
+	cond, _, err := influxql.ConditionExpr(stmt.Source.Condition, &valuer)
+	if err != nil {
+		return err
+	}
+	stmt.Source.Condition = cond
+
 	cqQuery := stmt.String()
-	if err := isValidContinuousQueryStatement(cqQuery); err != nil {
+	if err = isValidContinuousQueryStatement(cqQuery); err != nil {
 		return err
 	}
 	return e.MetaClient.CreateContinuousQuery(stmt.Database, stmt.Name, cqQuery)
