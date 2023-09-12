@@ -1131,6 +1131,32 @@ func init() {
 		},
 	}
 
+	tests["explain_analyze_select_into"] = Test{
+		writes: Writes{
+			&Write{db: "db0", data: fmt.Sprintf(`cpu,host=serverA,region=uswest val=23.2 %d`, mustParseTime(time.RFC3339Nano, "2000-01-01T00:00:00Z").UnixNano())},
+		},
+		queries: []*Query{
+			&Query{
+				name:    "show measurements after write to db0",
+				params:  url.Values{"db": []string{"db0"}},
+				command: `SHOW MEASUREMENTS`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"name":"measurements","columns":["name"],"values":[["cpu"]]}]}]}`,
+				once:    true,
+			},
+			&Query{
+				name:    "explain analyze select into",
+				command: `explain analyze select * into db1..cpu from db0..cpu group by *`,
+				once:    true,
+			},
+			&Query{
+				name:    "show measurements after explain analyze",
+				params:  url.Values{"db": []string{"db1"}},
+				command: `SHOW MEASUREMENTS`,
+				exp:     `{"results":[{"statement_id":0}]}`,
+				once:    true,
+			},
+		},
+	}
 }
 
 func (tests Tests) load(t *testing.T, key string) Test {

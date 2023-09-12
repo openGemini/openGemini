@@ -333,6 +333,34 @@ func TestServer_Query_DropDatabaseIsolated(t *testing.T) {
 	}
 }
 
+func TestServer_ExplainAnalyzeSelectInto(t *testing.T) {
+	t.Parallel()
+	c := NewConfig()
+	s := OpenServer(c)
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateDatabaseAndRetentionPolicy("db1", NewRetentionPolicySpec("rp1", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	test := tests.load(t, "explain_analyze_select_into")
+	if err := test.init(s); err != nil {
+		t.Fatalf("test init failed: %s", err)
+	}
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if strings.Contains(query.name, "show measurements") && !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 // Ensure retention policy commands work.
 func TestServer_RetentionPolicyCommands(t *testing.T) {
 	t.Parallel()
