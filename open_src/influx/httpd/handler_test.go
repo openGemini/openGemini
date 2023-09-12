@@ -233,3 +233,85 @@ func TestHandler_Invalid_Disabled_Write_Read(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }
+
+func TestHandler_SysCtrl(t *testing.T) {
+	h := Handler{
+		requestTracker: httpd.NewRequestTracker(),
+		Logger:         logger.NewLogger(errno.ModuleHTTP),
+	}
+	t.Run("ChunkReaderParallel", func(t *testing.T) {
+		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
+		syscontrol.SysCtrl.NetStore = &mockStorage{}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=chunk_reader_parallel&lmit=4", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=chunk_reader_parallel&limit=4", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+	})
+
+	t.Run("PrintLogicalPlan", func(t *testing.T) {
+		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
+		syscontrol.SysCtrl.NetStore = &mockStorage{}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=print_logical_plan&enabled=0", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=print_logical_plan&enabld=0", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=print_logical_plan&enabled=2", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("BinaryTreeMerge", func(t *testing.T) {
+		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
+		syscontrol.SysCtrl.NetStore = &mockStorage{}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=binary_tree_merge&enabled=0", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=binary_tree_merge&enabe=0", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=binary_tree_merge&enabled=2", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("sliding_window_push_up", func(t *testing.T) {
+		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
+		syscontrol.SysCtrl.NetStore = &mockStorage{}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=sliding_window_push_up&enabled=1", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=sliding_window_push_up&enable=2", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=sliding_window_push_up&enabled=2", nil)
+		h.serveDebug(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+}

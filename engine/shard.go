@@ -415,7 +415,6 @@ type Shard interface {
 
 	// compaction && merge, only work for tsstore
 	Compact() error
-	CompactionEnabled() bool
 	DisableCompAndMerge()
 	EnableCompAndMerge()
 }
@@ -774,10 +773,6 @@ func (s *shard) shouldSnapshot() bool {
 	return false
 }
 
-func (s *shard) CompactionEnabled() bool {
-	return s.immTables.CompactionEnabled()
-}
-
 func (s *shard) DisableCompAndMerge() {
 	s.immTables.DisableCompAndMerge()
 }
@@ -856,12 +851,12 @@ func (mw *mstWriteCtx) getMstMap() *dictpool.Dict {
 	return &mw.mstMap
 }
 
-func (mw *mstWriteCtx) getRowsPool() []influx.Row {
+func (mw *mstWriteCtx) getRowsPool() *[]influx.Row {
 	v := mw.rowsPool.Get()
 	if v == nil {
-		return []influx.Row{}
+		return &[]influx.Row{}
 	}
-	rp := v.([]influx.Row)
+	rp := v.(*[]influx.Row)
 
 	return rp
 }
@@ -873,13 +868,11 @@ func (mw *mstWriteCtx) initWriteRowsCtx(getLastFlushTime func(msName string, sid
 	mw.writeRowsCtx.MstsInfo = mstsInfo
 }
 
-// nolint
-func (mw *mstWriteCtx) putRowsPool(rp []influx.Row) {
-	for i := range rp {
-		rp[i].Reset()
+func (mw *mstWriteCtx) putRowsPool(rp *[]influx.Row) {
+	for i := range *rp {
+		(*rp)[i].Reset()
 	}
-	rp = rp[:0]
-	//lint:ignore SA6002 argument should be pointer-like to avoid allocations
+	*rp = (*rp)[:0]
 	mw.rowsPool.Put(rp)
 }
 
@@ -912,7 +905,7 @@ func putMstWriteCtx(mw *mstWriteCtx) {
 		if !ok {
 			panic("can't map mmPoints")
 		}
-		mw.putRowsPool(*rows)
+		mw.putRowsPool(rows)
 	}
 
 	if !mw.timer.Stop() {
@@ -1011,7 +1004,7 @@ func calculateMemSize(rows influx.Rows) int64 {
 func cloneRowToDict(mmPoints *dictpool.Dict, mw *mstWriteCtx, row *influx.Row) *influx.Row {
 	if !mmPoints.Has(row.Name) {
 		rp := mw.getRowsPool()
-		mmPoints.Set(row.Name, &rp)
+		mmPoints.Set(row.Name, rp)
 	}
 	rowsPool := mmPoints.Get(row.Name)
 	rp, _ := rowsPool.(*[]influx.Row)

@@ -93,10 +93,7 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	lockPath := ""
 	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
 	dbPt.SetOption(e.engOpt)
-	dbPt.unload = make(chan struct{})
-	dbPt.preload = true
-	dbPt.lockPath = &lockPath
-	dbPt.enableTagArray = dbBriefInfo.EnableTagArray
+	dbPt.SetParams(true, &lockPath, dbBriefInfo.EnableTagArray)
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.PRELOAD, client); err != nil {
 		if rbErr := e.offloadDbPT(dbPt); rbErr != nil {
 			e.log.Error("both preload pt and rollback failed", zap.String("db", db), zap.Uint32("pt", ptId))
@@ -171,10 +168,14 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 		return err
 	}
 	statistics.DBPTStepDuration(opId, "DBPTFenceDuration", time.Since(start).Nanoseconds(), statistics.DBPTLoading, "")
+	// normalize createIndex with unique tsid in indexbuilder
+	// make logicClock which used for Generate UUID monotonically increasing
+	if metaclient.LogicClock > ver {
+		ver = metaclient.LogicClock
+	}
 	dbPt.logicClock = ver
-	dbPt.lockPath = &lockPath
-	dbPt.enableTagArray = dbBriefInfo.EnableTagArray
 	dbPt.SetOption(e.engOpt)
+	dbPt.SetParams(dbPt.preload, &lockPath, dbBriefInfo.EnableTagArray)
 
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.LOAD, client); err != nil {
 		e.log.Error("engine load all shards failed", zap.Error(err), zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))

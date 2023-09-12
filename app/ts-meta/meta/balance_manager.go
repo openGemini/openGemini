@@ -48,7 +48,7 @@ func (b *BalanceManager) Start() {
 func (b *BalanceManager) balanceIfNeeded() {
 	defer b.wg.Done()
 	for {
-		if atomic.LoadInt32(&b.stopped) == 1 || !config.GetHaEnable() {
+		if atomic.LoadInt32(&b.stopped) == 1 || config.GetHaPolicy() != config.SharedStorage {
 			return
 		}
 		events := globalService.store.selectDbPtsToMove()

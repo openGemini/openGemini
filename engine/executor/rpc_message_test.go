@@ -195,7 +195,7 @@ func TestTransport(t *testing.T) {
 	client.StartAnalyze(span)
 	client.Init(ctx, nil)
 	err := client.Run()
-	assert.EqualError(t, err, fmt.Sprintf("remote error: some error"))
+	assert.EqualError(t, err, fmt.Sprintf("unknown error"))
 }
 
 func TestTransportAbort(t *testing.T) {

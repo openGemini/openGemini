@@ -203,7 +203,8 @@ func (w *PointsWriter) RetryWritePointRows(database, retentionPolicy string, row
 		if err == nil {
 			break
 		}
-		if !errno.Equal(err, errno.ShardMetaNotFound) {
+		// if pt is offline, retry to get alive shards to write in write-available-first policy
+		if !IsRetryErrorForPtView(err) {
 			w.logger.Error("write point rows failed",
 				zap.String("db", database),
 				zap.String("rp", retentionPolicy),
@@ -218,9 +219,18 @@ func (w *PointsWriter) RetryWritePointRows(database, retentionPolicy string, row
 				zap.Error(err))
 			break
 		}
+		w.resetRowsRouter(rows)
 		time.Sleep(time.Second)
 	}
 	return err
+}
+
+func (w *PointsWriter) resetRowsRouter(rows []influx.Row) {
+	for i := range rows {
+		rows[i].Name = influx.GetOriginMstName(rows[i].Name)
+		rows[i].ShardKey = rows[i].ShardKey[:0]
+		rows[i].StreamId = rows[i].StreamId[:0]
+	}
 }
 
 func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []influx.Row) error {
@@ -343,7 +353,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			dropped++
 			continue
 		}
-		sort.Stable(r.Fields)
+		sort.Stable(&r.Fields)
 
 		if r.Fields, pErr = fixFields(r.Fields); pErr != nil {
 			partialErr = pErr
@@ -626,7 +636,7 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 	}
 
 	//atomic.AddInt64(&statistics.HandlerStat.WriteUnmarshalSkDuration, time.Since(start).Nanoseconds())
-	if !config.GetHaEnable() && !sameSg {
+	if !sameSg {
 		*asis = w.MetaClient.GetAliveShards(database, sg)
 	}
 
@@ -780,7 +790,7 @@ func (w *PointsWriter) Close() {
 // IsRetryErrorForPtView returns true if dbpt is not on this node.
 func IsRetryErrorForPtView(err error) bool {
 	// Errors that need to be retried in both HA and non-HA scenarios.
-	if errno.Equal(err, errno.NoConnectionAvailable) ||
+	return errno.Equal(err, errno.NoConnectionAvailable) ||
 		errno.Equal(err, errno.ConnectionClosed) ||
 		errno.Equal(err, errno.NoNodeAvailable) ||
 		errno.Equal(err, errno.SelectClosedConn) ||
@@ -790,16 +800,8 @@ func IsRetryErrorForPtView(err error) bool {
 		strings.Contains(err.Error(), "connection refused") ||
 		strings.Contains(err.Error(), "broken pipe") ||
 		strings.Contains(err.Error(), "write: connection timed out") ||
-		strings.Contains(err.Error(), "use of closed network connection") {
-		return true
-	}
-	if !config.GetHaEnable() {
-		// In non-HA scenarios, no need to retry.
-		return false
-	}
-	// In HA scenarios, retry is required.
-	return errno.Equal(err, errno.PtNotFound) ||
-		errno.Equal(err, errno.DBPTClosed)
+		strings.Contains(err.Error(), "use of closed network connection") || errno.Equal(err, errno.PtNotFound) ||
+		errno.Equal(err, errno.DBPTClosed) || errno.Equal(err, errno.ShardMetaNotFound)
 }
 
 func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16, bool) {

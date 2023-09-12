@@ -18,8 +18,6 @@ package netstorage
 
 import (
 	"fmt"
-
-	"go.uber.org/zap"
 )
 
 // PartialWriteError indicates a write request could only write a portion of the
@@ -34,12 +32,4 @@ type PartialWriteError struct {
 
 func (e PartialWriteError) Error() string {
 	return fmt.Sprintf("partial write: %s dropped=%d", e.Reason, e.Dropped)
-}
-
-func ErrorPanic(err error, log *zap.Logger) {
-	if debugEn {
-		panic(err)
-	} else {
-		log.Error(err.Error())
-	}
 }

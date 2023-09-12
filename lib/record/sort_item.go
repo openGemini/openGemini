@@ -24,6 +24,7 @@ package record
 
 import (
 	"errors"
+	"math"
 )
 
 type SortItem interface {
@@ -34,23 +35,10 @@ type SortItem interface {
 }
 
 type FloatSlice struct {
-	V  []float64
-	CV ColVal
+	V []float64
 }
 
 func (sli *FloatSlice) Swap(i, j int) {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return
-	}
-
-	if sli.CV.IsNil(i) {
-		sli.CV.setBitMap(i)
-		sli.CV.resetBitMap(j)
-	} else if sli.CV.IsNil(j) {
-		sli.CV.setBitMap(j)
-		sli.CV.resetBitMap(i)
-	}
-
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
 }
 
@@ -59,23 +47,10 @@ func (sli *FloatSlice) Len() int {
 }
 
 type IntegerSlice struct {
-	V  []int64
-	CV ColVal
+	V []int64
 }
 
 func (sli *IntegerSlice) Swap(i, j int) {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return
-	}
-
-	if sli.CV.IsNil(i) {
-		sli.CV.setBitMap(i)
-		sli.CV.resetBitMap(j)
-	} else if sli.CV.IsNil(j) {
-		sli.CV.setBitMap(j)
-		sli.CV.resetBitMap(i)
-	}
-
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
 }
 
@@ -84,23 +59,10 @@ func (sli *IntegerSlice) Len() int {
 }
 
 type StringSlice struct {
-	V  []string
-	CV ColVal
+	V []string
 }
 
 func (sli *StringSlice) Swap(i, j int) {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return
-	}
-
-	if sli.CV.IsNil(i) {
-		sli.CV.setBitMap(i)
-		sli.CV.resetBitMap(j)
-	} else if sli.CV.IsNil(j) {
-		sli.CV.setBitMap(j)
-		sli.CV.resetBitMap(i)
-	}
-
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
 }
 
@@ -109,23 +71,10 @@ func (sli *StringSlice) Len() int {
 }
 
 type BooleanSlice struct {
-	V  []bool
-	CV ColVal
+	V []bool
 }
 
 func (sli *BooleanSlice) Swap(i, j int) {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return
-	}
-
-	if sli.CV.IsNil(i) {
-		sli.CV.setBitMap(i)
-		sli.CV.resetBitMap(j)
-	} else if sli.CV.IsNil(j) {
-		sli.CV.setBitMap(j)
-		sli.CV.resetBitMap(i)
-	}
-
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
 }
 
@@ -134,16 +83,6 @@ func (sli *BooleanSlice) Len() int {
 }
 
 func (sli *FloatSlice) Compare(i, j int) int {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return 0
-	}
-
-	if sli.CV.IsNil(i) {
-		return 1
-	} else if sli.CV.IsNil(j) {
-		return -1
-	}
-
 	if sli.V[i] > sli.V[j] {
 		return -1
 	} else if sli.V[i] == sli.V[j] {
@@ -158,18 +97,6 @@ func (sli *FloatSlice) CompareSingleValue(data interface{}, postionX, postionY i
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.CV.IsNil(postionX) && cm.CV.IsNil(postionY) {
-		return 0, nil
-	}
-
-	if sli.CV.IsNil(postionX) {
-		return 1, nil
-	}
-
-	if cm.CV.IsNil(postionY) {
-		return -1, nil
-	}
-
 	if sli.V[postionX] > cm.V[postionY] {
 		return -1, nil
 	} else if sli.V[postionX] == cm.V[postionY] {
@@ -179,16 +106,6 @@ func (sli *FloatSlice) CompareSingleValue(data interface{}, postionX, postionY i
 }
 
 func (sli *IntegerSlice) Compare(i, j int) int {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return 0
-	}
-
-	if sli.CV.IsNil(i) {
-		return 1
-	} else if sli.CV.IsNil(j) {
-		return -1
-	}
-
 	if sli.V[i] > sli.V[j] {
 		return -1
 	} else if sli.V[i] == sli.V[j] {
@@ -203,18 +120,6 @@ func (sli *IntegerSlice) CompareSingleValue(data interface{}, postionX, postionY
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.CV.IsNil(postionX) && cm.CV.IsNil(postionY) {
-		return 0, nil
-	}
-
-	if sli.CV.IsNil(postionX) {
-		return 1, nil
-	}
-
-	if cm.CV.IsNil(postionY) {
-		return -1, nil
-	}
-
 	if sli.V[postionX] > cm.V[postionY] {
 		return -1, nil
 	} else if sli.V[postionX] == cm.V[postionY] {
@@ -224,16 +129,6 @@ func (sli *IntegerSlice) CompareSingleValue(data interface{}, postionX, postionY
 }
 
 func (sli *StringSlice) Compare(i, j int) int {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return 0
-	}
-
-	if sli.CV.IsNil(i) {
-		return 1
-	} else if sli.CV.IsNil(j) {
-		return -1
-	}
-
 	if sli.V[i] > sli.V[j] {
 		return -1
 	} else if sli.V[i] == sli.V[j] {
@@ -248,18 +143,6 @@ func (sli *StringSlice) CompareSingleValue(data interface{}, postionX, postionY 
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.CV.IsNil(postionX) && cm.CV.IsNil(postionY) {
-		return 0, nil
-	}
-
-	if sli.CV.IsNil(postionX) {
-		return 1, nil
-	}
-
-	if cm.CV.IsNil(postionY) {
-		return -1, nil
-	}
-
 	if sli.V[postionX] > cm.V[postionY] {
 		return -1, nil
 	} else if sli.V[postionX] == cm.V[postionY] {
@@ -269,15 +152,6 @@ func (sli *StringSlice) CompareSingleValue(data interface{}, postionX, postionY 
 }
 
 func (sli *BooleanSlice) Compare(i, j int) int {
-	if sli.CV.IsNil(i) && sli.CV.IsNil(j) {
-		return 0
-	}
-	if sli.CV.IsNil(i) {
-		return 1
-	} else if sli.CV.IsNil(j) {
-		return -1
-	}
-
 	if sli.V[i] == sli.V[j] {
 		return 0
 	} else if sli.V[i] {
@@ -292,16 +166,6 @@ func (sli *BooleanSlice) CompareSingleValue(data interface{}, postionX, postionY
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.CV.IsNil(postionX) && cm.CV.IsNil(postionY) {
-		return 0, nil
-	}
-	if sli.CV.IsNil(postionX) {
-		return 1, nil
-	}
-	if cm.CV.IsNil(postionY) {
-		return -1, nil
-	}
-
 	if sli.V[postionX] == cm.V[postionY] {
 		return 0, nil
 	} else if sli.V[postionX] {
@@ -310,23 +174,36 @@ func (sli *BooleanSlice) CompareSingleValue(data interface{}, postionX, postionY
 	return 1, nil
 }
 
-func (sli *BooleanSlice) PadBoolSlice(cv ColVal) {
-	var v bool
+func (sli *BooleanSlice) PadBoolSlice(cv *ColVal) {
+	if cv.NilCount == 0 {
+		sli.V = append(sli.V, cv.BooleanValues()...)
+		return
+	}
+
+	value := cv.BooleanValues()
+	sli.V = make([]bool, 0, cv.Len)
+	var nilCount int
 	for i := 0; i < cv.Len; i++ {
 		if cv.IsNil(i) {
 			sli.V = append(sli.V, false)
+			nilCount++
 			continue
 		}
-		v, _ = cv.BooleanValue(i)
-		sli.V = append(sli.V, v)
+		sli.V = append(sli.V, value[i-nilCount])
 	}
 }
 
-func (sli *StringSlice) PadStringSlice(cv ColVal) {
+func (sli *StringSlice) PadStringSlice(cv *ColVal) {
+	sli.V = make([]string, 0, cv.Len)
+	if cv.NilCount == 0 {
+		sli.V = cv.StringValues(sli.V)
+		return
+	}
+
 	var v string
 	for i := 0; i < cv.Len; i++ {
 		if cv.IsNil(i) {
-			sli.V = append(sli.V, " ")
+			sli.V = append(sli.V, "")
 			continue
 		}
 		v, _ = cv.StringValueSafe(i)
@@ -334,26 +211,40 @@ func (sli *StringSlice) PadStringSlice(cv ColVal) {
 	}
 }
 
-func (sli *FloatSlice) PadFloatSlice(cv ColVal) {
-	var v float64
+func (sli *FloatSlice) PadFloatSlice(cv *ColVal) {
+	if cv.NilCount == 0 {
+		sli.V = append(sli.V, cv.FloatValues()...)
+		return
+	}
+
+	value := cv.FloatValues()
+	sli.V = make([]float64, 0, cv.Len)
+	var nilCount int
 	for i := 0; i < cv.Len; i++ {
 		if cv.IsNil(i) {
-			sli.V = append(sli.V, 0)
+			sli.V = append(sli.V, -math.MaxFloat64)
+			nilCount++
 			continue
 		}
-		v, _ = cv.FloatValue(i)
-		sli.V = append(sli.V, v)
+		sli.V = append(sli.V, value[i-nilCount])
 	}
 }
 
-func (sli *IntegerSlice) PadIntSlice(cv ColVal) {
-	var v int64
+func (sli *IntegerSlice) PadIntSlice(cv *ColVal) {
+	if cv.NilCount == 0 {
+		sli.V = append(sli.V, cv.IntegerValues()...)
+		return
+	}
+
+	value := cv.IntegerValues()
+	sli.V = make([]int64, 0, cv.Len)
+	var nilCount int
 	for i := 0; i < cv.Len; i++ {
 		if cv.IsNil(i) {
-			sli.V = append(sli.V, 0)
+			sli.V = append(sli.V, math.MinInt64)
+			nilCount++
 			continue
 		}
-		v, _ = cv.IntegerValue(i)
-		sli.V = append(sli.V, v)
+		sli.V = append(sli.V, value[i-nilCount])
 	}
 }

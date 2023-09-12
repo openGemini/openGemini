@@ -72,28 +72,6 @@ func (r *RecMeta) Copy() *RecMeta {
 	return copyMeta
 }
 
-func (r *RecMeta) ResetDeep() {
-	for i := range r.ColMeta {
-		r.ColMeta[i].Init()
-	}
-	r.tags = r.tags[:0]
-	r.IntervalIndex = r.IntervalIndex[:0]
-	r.tagIndex = r.tagIndex[:0]
-	r.ColMeta = r.ColMeta[:0]
-	r.Times = r.Times[:0]
-}
-func (r *RecMeta) ResetForReuse() {
-	for i := range r.ColMeta {
-		r.ColMeta[i].Init()
-	}
-	r.tags = r.tags[:0]
-	r.tagIndex = r.tagIndex[:0]
-	r.IntervalIndex = r.IntervalIndex[:0]
-	for i := range r.Times {
-		r.Times[i] = r.Times[i][:0]
-	}
-}
-
 func cloneBytes(v []byte) *[]byte {
 	var clone = make([]byte, len(v))
 	copy(clone, v)

@@ -193,22 +193,7 @@ func (t *tagSetCursor) sinkChildPlan(plan hybridqp.QueryNode) {
 	}
 
 	if len(t.keyCursors) > 0 {
-		fieldSchema := t.GetSchema()
-		if len(t.ctx.auxTags) == 0 {
-			t.SetSchema(fieldSchema)
-			return
-		}
-		schema := make(record.Schemas, len(fieldSchema))
-		copy(schema[:len(fieldSchema)], fieldSchema)
-		schema = schema[:len(schema)-1]
-
-		// append tag fields
-		for _, auxCol := range t.ctx.auxTags {
-			t.auxColIndex = append(t.auxColIndex, len(schema))
-			schema = append(schema, record.Field{Name: auxCol, Type: influx.Field_Type_Tag})
-		}
-		// time field
-		schema = append(schema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+		schema := t.GetSchema()
 		t.SetSchema(schema)
 	}
 }
@@ -285,8 +270,17 @@ func (t *tagSetCursor) GetSeriesSchema() record.Schemas {
 			t.ridIdx[i] = struct{}{}
 		}
 	}
+	if len(t.ctx.auxTags) == 0 {
+		schema = append(schema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+		return schema
+	}
 
-	// time
+	// append tag fields
+	for _, auxCol := range t.ctx.auxTags {
+		t.auxColIndex = append(t.auxColIndex, len(schema))
+		schema = append(schema, record.Field{Name: auxCol, Type: influx.Field_Type_Tag})
+	}
+	// time field
 	schema = append(schema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
 	return schema
 }
@@ -448,7 +442,21 @@ func (t *tagSetCursor) GetSchema() record.Schemas {
 		return t.GetSeriesSchema()
 	}
 	if len(t.keyCursors) > 0 {
-		return t.keyCursors[0].GetSchema()
+		schema := t.keyCursors[0].GetSchema()
+		if len(t.ctx.auxTags) == 0 {
+			return schema
+		}
+		newSchema := make(record.Schemas, len(schema))
+		copy(newSchema[:len(schema)], schema)
+		newSchema = newSchema[:len(newSchema)-1]
+		// append tag fields
+		for _, auxCol := range t.ctx.auxTags {
+			t.auxColIndex = append(t.auxColIndex, len(newSchema))
+			newSchema = append(newSchema, record.Field{Name: auxCol, Type: influx.Field_Type_Tag})
+		}
+		// time field
+		newSchema = append(newSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+		return newSchema
 	}
 	return nil
 }

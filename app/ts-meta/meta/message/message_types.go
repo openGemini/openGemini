@@ -70,6 +70,9 @@ const (
 
 	RegisterQueryIDOffsetRequestMessage
 	RegisterQueryIDOffsetResponseMessage
+
+	GetReplicaInfoRequestMessage
+	GetReplicaInfoResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -110,6 +113,8 @@ func init() {
 	MetaMessageBinaryCodec[GetDBBriefInfoResponseMessage] = func() transport.Codec { return &GetDBBriefInfoResponse{} }
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetRequestMessage] = func() transport.Codec { return &RegisterQueryIDOffsetRequest{} }
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetResponseMessage] = func() transport.Codec { return &RegisterQueryIDOffsetResponse{} }
+	MetaMessageBinaryCodec[GetReplicaInfoRequestMessage] = func() transport.Codec { return &GetReplicaInfoRequest{} }
+	MetaMessageBinaryCodec[GetReplicaInfoResponseMessage] = func() transport.Codec { return &GetReplicaInfoResponse{} }
 
 	MetaMessageResponseTyp = map[uint8]uint8{
 		PingRequestMessage:                  PingResponseMessage,
@@ -128,5 +133,6 @@ func init() {
 		GetMeasurementsInfoRequestMessage:   GetMeasurementsInfoResponseMessage,
 		GetDBBriefInfoRequestMessage:        GetDBBriefInfoResponseMessage,
 		RegisterQueryIDOffsetRequestMessage: RegisterQueryIDOffsetResponseMessage,
+		GetReplicaInfoRequestMessage:        GetReplicaInfoResponseMessage,
 	}
 }

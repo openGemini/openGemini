@@ -33,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -486,7 +487,12 @@ func TestGetShardInfo_Process(t *testing.T) {
 	db := "db0"
 	rp := "autogen"
 	mst := "mst0"
-	err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(db), mms.GetConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +510,7 @@ func TestGetShardInfo_Process(t *testing.T) {
 	assert.True(t, err.Error() == errno.NewError(errno.ShardMetaNotFound, 2).Error(),
 		"actual err ", err.Error(), ";expect err ", errno.NewError(errno.ShardMetaNotFound, 2).Error())
 
-	cmd = meta.GenerateShardDurationCmd(12, []uint32{0}, mms.GetService().Node.ID)
+	cmd = meta.GenerateShardDurationCmd(14, []uint32{0}, mms.GetService().Node.ID)
 	err = shardInfoMsgHandler(cmd, mms)
 	assert.True(t, err.Error() == errno.NewError(errno.DataIsOlder).Error(),
 		"actual err ", err.Error(), ";expect err ", errno.NewError(errno.DataIsOlder, mms.GetStore().GetData().Index, 12).Error())
@@ -530,8 +536,13 @@ func TestStoreDeleteDatabase(t *testing.T) {
 	}
 
 	db := "test"
-	cmd = meta.GenerateCreateDatabaseCmd(db)
-	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(db), mms.GetConfig())
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -554,7 +565,7 @@ func TestStoreDeleteDatabase(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db)); err != nil {
+	if err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 	netStore.DeleteDatabaseFn = func(node *meta2.DataNode, database string, ptId uint32) error {
@@ -583,8 +594,12 @@ func TestStoreDeleteRetentionPolicy(t *testing.T) {
 
 	dbName := "test"
 	rpName := "autogen"
-	cmd = meta.GenerateCreateDatabaseCmd(dbName)
-	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(dbName), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -612,7 +627,7 @@ func TestStoreDeleteRetentionPolicy(t *testing.T) {
 		return errno.NewError(errno.NoConnectionAvailable)
 	}
 	dbName = "test1"
-	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(dbName)); err != nil {
+	if err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(dbName), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if err = mms.GetStore().ApplyCmd(meta.GenerateMarkRpDelete(dbName, rpName)); err != nil {
@@ -638,7 +653,13 @@ func TestStoreDeleteMeasurement(t *testing.T) {
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db)); err != nil {
+	netStore := meta.NewMockNetStorage()
+	mms.GetStore().NetStore = netStore
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -649,8 +670,7 @@ func TestStoreDeleteMeasurement(t *testing.T) {
 	if err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now(), config.TSSTORE)); err != nil {
 		t.Fatal(err)
 	}
-	netStore := meta.NewMockNetStorage()
-	mms.GetStore().NetStore = netStore
+
 	if err = mms.GetStore().ApplyCmd(meta.GenerateMarkMeasurementDeleteCmd(db, rp, mst)); err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +732,14 @@ func TestDownSampleCommands(t *testing.T) {
 			DataType: int64(influxql.Integer),
 		},
 	}
-	err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
+	ms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = ms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = meta.ProcessExecuteRequest(ms.GetStore(), meta.GenerateCreateDatabaseCmd(db), ms.GetConfig()); err != nil {
+		t.Fatal(err)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,8 +765,8 @@ func TestDownSampleCommands(t *testing.T) {
 			Name:   "mst_0000",
 			Schema: map[string]int32{"age": influx.Field_Type_Int},
 		}},
-		MstVersions: map[string]uint32{
-			"mst": 0,
+		MstVersions: map[string]meta2.MeasurementVer{
+			"mst": {NameWithVersion: "mst_0000", Version: 0},
 		},
 	}
 	dataTypes := []int64{influx.Field_Type_Int}
@@ -768,8 +795,8 @@ func TestStreamCommands(t *testing.T) {
 	desMst := "mst1"
 	name := "test"
 	dims := []string{"tag1"}
-	err = ms.GetStore().ApplyCmd(meta.GenerateCreateDatabaseCmd(db))
-	if err != nil {
+	ms.GetStore().NetStore = meta.NewMockNetStorage()
+	if err = meta.ProcessExecuteRequest(ms.GetStore(), meta.GenerateCreateDatabaseCmd(db), ms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 	calls := []*meta2.StreamCall{

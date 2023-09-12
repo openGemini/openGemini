@@ -64,7 +64,17 @@ func (c *groupCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	return c.nextWithReuse()
 }
 
-//
+func (c *groupCursor) CloseSubCursor(pos int) error {
+	if c.lazyInit {
+		return nil
+	}
+	if err := c.tagSetCursors[pos].Close(); err != nil {
+		log.Error("close tagSet cursor failed, ", zap.Error(err))
+		return err
+	}
+	return nil
+}
+
 func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, error) {
 	if c.recordPool == nil {
 		c.recordPool = record.NewCircularRecordPool(c.ctx.aggPool, groupCursorRecordNum, c.GetSchema(), true)
@@ -79,8 +89,7 @@ func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, erro
 		if abortNow := c.limitBound > 0 && c.rowCount >= c.limitBound; c.pos >= len(c.tagSetCursors) || abortNow {
 			if abortNow && c.pos < len(c.tagSetCursors) {
 				c.pos++
-				if err := c.tagSetCursors[c.pos-1].Close(); err != nil {
-					log.Error("close tagSet cursor failed, ", zap.Error(err))
+				if err := c.CloseSubCursor(c.pos - 1); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -97,8 +106,7 @@ func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, erro
 		if rec == nil {
 			// This variable must be incremented by 1 to avoid repeated close
 			c.pos++
-			if err := c.tagSetCursors[c.pos-1].Close(); err != nil {
-				log.Error("close tagSet cursor failed, ", zap.Error(err))
+			if err := c.CloseSubCursor(c.pos - 1); err != nil {
 				return nil, nil, err
 			}
 			sameTag = false
@@ -141,8 +149,7 @@ func (c *groupCursor) next() (*record.Record, comm.SeriesInfoIntf, error) {
 		}
 
 		c.pos++
-		if err := c.tagSetCursors[c.pos-1].Close(); err != nil {
-			log.Error("close tagSet cursor failed, ", zap.Error(err))
+		if err := c.CloseSubCursor(c.pos - 1); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -162,8 +169,12 @@ func (c *groupCursor) Close() error {
 		if (executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg()) || c.lazyInit {
 			c.ctx.UnRef()
 		}
+		startPos := c.pos
+		if c.lazyInit {
+			startPos = 0
+		}
 		// some cursors may have been closed during iterate, so we start from c.pos
-		for i := c.pos; i < len(c.tagSetCursors); i++ {
+		for i := startPos; i < len(c.tagSetCursors); i++ {
 			itr := c.tagSetCursors[i]
 			if itr != nil {
 				err = itr.Close()

@@ -138,50 +138,6 @@ func (data *Data) WalkDatabases(fn func(db *DatabaseInfo)) {
 	}
 }
 
-func (data *Data) GetDurationInfos(dbPtIds map[string][]uint32) map[uint64]*ShardDurationInfo {
-	r := make(map[uint64]*ShardDurationInfo)
-	data.WalkDatabases(func(db *DatabaseInfo) {
-		if db.MarkDeleted {
-			return
-		}
-		if _, ok := dbPtIds[db.Name]; !ok {
-			return
-		}
-		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-			if rp.MarkDeleted {
-				return
-			}
-			rp.walkShardGroups(func(sg *ShardGroupInfo) {
-				sg.walkShards(func(sh *ShardInfo) {
-					for i := range dbPtIds[db.Name] {
-						if sh.Owners[0] == dbPtIds[db.Name][i] {
-							durationInfo := &ShardDurationInfo{}
-							durationInfo.Ident = ShardIdentifier{}
-							durationInfo.Ident.ShardID = sh.ID
-							durationInfo.Ident.ShardGroupID = sg.ID
-							durationInfo.Ident.OwnerDb = db.Name
-							durationInfo.Ident.OwnerPt = dbPtIds[db.Name][i]
-							durationInfo.Ident.Policy = rp.Name
-							durationInfo.Ident.ShardType = rp.shardingType()
-							durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
-							durationInfo.Ident.DownSampleID = sh.DownSampleID
-							durationInfo.Ident.ReadOnly = sh.ReadOnly
-							durationInfo.Ident.EngineType = uint32(sg.EngineType)
-							durationInfo.DurationInfo = DurationDescriptor{}
-							durationInfo.DurationInfo.Duration = rp.Duration
-							durationInfo.DurationInfo.Tier = sh.Tier
-							durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
-							r[sh.ID] = durationInfo
-							return
-						}
-					}
-				})
-			})
-		})
-	})
-	return r
-}
-
 func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationResponse {
 	r := &ShardDurationResponse{DataIndex: data.Index}
 	data.WalkDatabases(func(db *DatabaseInfo) {
@@ -437,7 +393,7 @@ func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, s
 		rp.Measurements = make(map[string]*MeasurementInfo)
 	}
 
-	rp.MstVersions[mst] = version
+	rp.MstVersions[mst] = MeasurementVer{nameWithVer, version}
 	rp.Measurements[nameWithVer] = msti
 
 	if len(schemaInfo) > 0 {
@@ -470,15 +426,15 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string,
 
 	msti := rp.Measurement(mst)
 	if msti == nil || msti.MarkDeleted {
+		var ver uint32
 		version, ok := rp.MstVersions[mst]
 		if ok {
-			version = (version + 1) & 0xffff
+			ver = (version.Version + 1) & 0xffff
 		}
 		if len(rp.MstVersions) == 0 {
-			rp.MstVersions = make(map[string]uint32)
+			rp.MstVersions = make(map[string]MeasurementVer)
 		}
-		rp.MstVersions[mst] = version
-		return data.createVersionMeasurement(database, rp, shardKey, indexR, ski, mst, version, engineType, hInfo, schemaInfo)
+		return data.createVersionMeasurement(database, rp, shardKey, indexR, ski, mst, ver, engineType, hInfo, schemaInfo)
 	}
 
 	n := len(msti.ShardKeys)
@@ -659,11 +615,6 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 			Host:    host,
 			TCPHost: tcpHost},
 		ConnID: data.MaxConnID}
-	if len(data.MetaNodes) == 1 {
-		dn.Status = serf.StatusAlive
-		dn.LTime = 1
-		dn.AliveConnID = dn.ConnID
-	}
 	// Append new node.
 	data.DataNodes = append(data.DataNodes, dn)
 
@@ -918,33 +869,32 @@ func (data *Data) CloneQueryIDInit() map[SQLHost]uint64 {
 	return cloneIdInit
 }
 
-// assign db to all data nodes that have been joined.
-func (data *Data) createDBPtView(name string) error {
-	if data.PtView == nil {
-		data.PtView = make(map[string]DBPtInfos)
-	}
+type assignPtFn func(data *Data, name string) error
 
+var dbPtAssigner []assignPtFn
+
+func init() {
+	dbPtAssigner = make([]assignPtFn, config.PolicyEnd)
+	dbPtAssigner[config.WriteAvailableFirst] = assignPtForWAF
+	dbPtAssigner[config.SharedStorage] = assignPtForSS
+	dbPtAssigner[config.Replication] = assignPtForWAF
+}
+
+// assign pts to all datanodes, because move db pt is not permitted in write-available-first policy and replication policy
+func assignPtForWAF(data *Data, name string) error {
+	if len(data.DataNodes) == 0 {
+		return errno.NewError(errno.DataNoAlive)
+	}
 	for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
 		pos := ptId % len(data.DataNodes)
-		if err := data.CheckDataNodeAlive(data.DataNodes[pos].ID); err != nil {
-			data.updatePtStatus(name, uint32(ptId), data.DataNodes[pos].ID, Offline)
-			continue
-		}
-		data.updatePtStatus(name, uint32(ptId), data.DataNodes[pos].ID, Online)
+		data.updatePtStatus(name, uint32(ptId), data.DataNodes[pos].ID, Offline)
 	}
 
 	return nil
 }
 
-func (data *Data) CreateDBPtView(name string) error {
-	if data.PtView == nil {
-		data.PtView = make(map[string]DBPtInfos)
-	}
-
-	// pt view is already exist
-	if data.PtView[name] != nil {
-		return nil
-	}
+// assign pts to alive datanodes in shared-storage policy due to pts can balance by background balancer
+func assignPtForSS(data *Data, name string) error {
 	var aliveDataNodeIds []uint64
 	for i := range data.DataNodes {
 		if data.DataNodes[i].Status == serf.StatusAlive {
@@ -960,6 +910,18 @@ func (data *Data) CreateDBPtView(name string) error {
 		data.updatePtStatus(name, uint32(ptId), aliveDataNodeIds[pos], Offline)
 	}
 	return nil
+}
+
+func (data *Data) CreateDBPtView(name string) error {
+	if data.PtView == nil {
+		data.PtView = make(map[string]DBPtInfos)
+	}
+
+	// pt view is already exist
+	if data.PtView[name] != nil {
+		return nil
+	}
+	return dbPtAssigner[config.GetHaPolicy()](data, name)
 }
 
 // CloneDatabases returns a copy of the DatabaseInfo.
@@ -1042,15 +1004,6 @@ func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardK
 }
 
 func (data *Data) SetDatabase(dbi *DatabaseInfo) error {
-	var err error
-	if !config.GetHaEnable() {
-		err = data.createDBPtView(dbi.Name)
-	}
-
-	if err != nil {
-		return err
-	}
-
 	if data.Databases == nil {
 		data.Databases = make(map[string]*DatabaseInfo)
 	}
@@ -1687,10 +1640,7 @@ func (data *Data) expendDBPtView(database string, ptNum uint32) {
 
 	for ptId := oldDBPtNums; ptId < ptNum; ptId++ {
 		pos := ptId % uint32(len(data.DataNodes))
-		if data.DataNodes[pos].Status == serf.StatusAlive {
-			data.updatePtStatus(database, ptId, data.DataNodes[pos].ID, Online)
-			continue
-		}
+		// set pt status offline, and set it online when assigned successfully
 		data.updatePtStatus(database, ptId, data.DataNodes[pos].ID, Offline)
 	}
 }
@@ -2464,6 +2414,10 @@ func (data *Data) UpdateShardInfoTier(shardID uint64, shardTier uint64, dbName, 
 }
 
 func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error {
+	// do not take over
+	if !data.TakeOverEnabled {
+		return nil
+	}
 	dn := data.DataNode(id)
 	if dn == nil {
 		return errno.NewError(errno.DataNodeNotFound, id)
@@ -2476,7 +2430,8 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 
 	updateStatus := serf.MemberStatus(status)
 	// node cannot join into cluster after network faulty and no need to handle repeated event
-	if config.GetHaEnable() && updateStatus == serf.StatusAlive && dn.ConnID == dn.AliveConnID {
+	// in write-available-first policy, pt can not assign to other node, so make the node join cluster and do not kill it self
+	if config.GetHaPolicy() == config.SharedStorage && updateStatus == serf.StatusAlive && dn.ConnID == dn.AliveConnID {
 		return errno.NewError(errno.DataNodeSplitBrain)
 	}
 	dn.Status = updateStatus
@@ -2489,12 +2444,7 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 		dn.GossipAddr = fmt.Sprintf("%s:%s", host, gossipAddr)
 	}
 
-	if config.GetHaEnable() || updateStatus == serf.StatusFailed {
-		data.updatePtViewStatus(id, Offline)
-		return nil
-	}
-
-	data.updatePtViewStatus(id, Online)
+	data.updatePtViewStatus(id, Offline)
 	return nil
 }
 
@@ -2926,23 +2876,40 @@ func (data *Data) RegisterQueryIDOffset(host SQLHost) error {
 	return nil
 }
 
-func (data *Data) GetAllDatabases() map[string]*DatabaseBriefInfo {
-	r := make(map[string]*DatabaseBriefInfo)
-	for dbName, dbInfo := range data.Databases {
-		r[dbName] = &DatabaseBriefInfo{
-			Name:           dbName,
-			EnableTagArray: dbInfo.EnableTagArray,
-		}
-	}
-	return r
-}
-
 func (data *Data) GetDBBriefInfo(name string) *DatabaseBriefInfo {
 	dbBriefInfo := &DatabaseBriefInfo{
 		Name: name,
 	}
 	dbBriefInfo.EnableTagArray = data.Databases[name].EnableTagArray
 	return dbBriefInfo
+}
+
+func (data *Data) GetReplicaGroup(db string, groupID uint32) *ReplicaGroup {
+	rgs, ok := data.ReplicaGroups[db]
+	if !ok {
+		return nil
+	}
+
+	for i := range rgs {
+		if rgs[i].ID == groupID {
+			return &rgs[i]
+		}
+	}
+	return nil
+}
+
+func (data *Data) GetPtInfo(name string, ptID uint32) *PtInfo {
+	view, ok := data.PtView[name]
+	if !ok {
+		return nil
+	}
+
+	for i := range view {
+		if view[i].PtId == ptID {
+			return &view[i]
+		}
+	}
+	return nil
 }
 
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.

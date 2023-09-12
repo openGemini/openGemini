@@ -1011,8 +1011,8 @@ func TestUserInfo(t *testing.T) {
 }
 
 func TestVerifyDataNodeStatus(t *testing.T) {
-	config.SetHaEnable(true)
-	defer config.SetHaEnable(false)
+	config.SetHaPolicy("shared-storage")
+	defer config.SetHaPolicy("write-available-first")
 
 	address := "127.0.0.10:8492"
 	nodeId := 0
@@ -1385,4 +1385,41 @@ func TestClient_CreateSubscription(t *testing.T) {
 	destinations := []string{server1.URL, server2.URL}
 	err := c.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)
 	require.EqualError(t, err, "execute command timeout")
+}
+
+func TestClient_GetNodePtsMap(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{ID: 1, StartTime: ts, EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{{
+					PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline}},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	// test db not found
+	nodePtMap, err := c.GetNodePtsMap("db1")
+	assert.Equal(t, true, errno.Equal(err, errno.DatabaseNotFound))
+	// test db has offline and online pt
+	nodePtMap, err = c.GetNodePtsMap("db0")
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 1, len(nodePtMap))
+	assert.Equal(t, uint32(0), nodePtMap[0][0])
 }

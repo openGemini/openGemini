@@ -28,6 +28,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/tcp"
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -153,12 +154,11 @@ type MockMetaService struct {
 
 func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 	transport.NewMetaNodeManager().Clear()
-
 	c, err := NewMetaConfig(dir, ip)
 	if err != nil {
 		return nil, err
 	}
-
+	config.SetHaPolicy("shared-storage")
 	mms := &MockMetaService{}
 	mms.service = NewService(c, nil)
 	mms.service.Node = metaclient.NewNode(c.Dir)
@@ -180,7 +180,7 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 func (mms *MockMetaService) Close() {
 	mms.service.Close()
 	mms.ln.Close()
-	config.SetHaEnable(false)
+	config.SetHaPolicy("write-available-first")
 }
 
 func (mms *MockMetaService) GetService() *Service {
@@ -404,6 +404,21 @@ func GenerateRegisterQueryIDOffsetCmd(host string) *proto2.Command {
 		panic(err)
 	}
 	return cmd
+}
+
+func ProcessExecuteRequest(s MetaStoreInterface, cmd *proto2.Command, metaconfig *config.Meta) error {
+	body, err := proto.Marshal(cmd)
+	if err != nil {
+		return err
+	}
+	msg := message.NewMetaMessage(message.ExecuteRequestMessage, &message.ExecuteRequest{Body: body})
+	h := New(msg.Type())
+	h.InitHandler(s, metaconfig, nil)
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		return err
+	}
+	_, err = h.Process()
+	return err
 }
 
 type MockStore interface {

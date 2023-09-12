@@ -20,8 +20,11 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_MetaMessage_Unmarshal_Error(t *testing.T) {
@@ -261,4 +264,61 @@ func TestDBBriefInfoMessage(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, newDBBriefInfoResponse.Size(), getDBBriefInfoResponse.Size())
 	assert.Equal(t, newDBBriefInfoRequest.Size(), newDBBriefInfoRequest.Size())
+}
+
+func TestGetReplicaInfoRequestMessage(t *testing.T) {
+	msg := message.MetaMessageBinaryCodec[message.GetReplicaInfoRequestMessage]()
+	req, ok := msg.(*message.GetReplicaInfoRequest)
+	require.True(t, ok)
+
+	req.Database = "db0"
+	req.PtID = 1
+	req.NodeID = 2
+	testCodec(t, req)
+
+	master := message.PeerInfo{}
+	masterPt := &meta.PtInfo{
+		Owner: meta.PtOwner{NodeID: 100},
+		PtId:  10,
+	}
+	master.Update(masterPt)
+	master.Update(nil)
+	testCodec(t, &master)
+	require.Equal(t, master.PtId, masterPt.PtId)
+	require.Equal(t, master.NodeId, masterPt.Owner.NodeID)
+
+	msg = message.MetaMessageBinaryCodec[message.GetReplicaInfoResponseMessage]()
+	resp, ok := msg.(*message.GetReplicaInfoResponse)
+	require.True(t, ok)
+
+	resp.ReplicaInfo = &message.ReplicaInfo{
+		ReplicaRole: meta.Master,
+		Master:      master,
+		Peers: []message.PeerInfo{
+			{PtId: 11, NodeId: 11},
+		},
+		ReplicaStatus: 1,
+		Term:          1,
+	}
+	resp.Err = "none"
+	testCodec(t, resp.ReplicaInfo)
+	testCodec(t, resp)
+
+	resp.ReplicaInfo.Peers = nil
+	testCodec(t, resp)
+
+	resp.ReplicaInfo = nil
+	testCodec(t, resp)
+}
+
+func testCodec(t *testing.T, obj transport.Codec) {
+	buf, err := obj.Marshal(nil)
+	require.NoError(t, err)
+	other := obj.Instance()
+
+	require.NoError(t, other.Unmarshal(nil))
+
+	require.Equal(t, len(buf), obj.Size())
+	require.NoError(t, other.Unmarshal(buf))
+	require.Equal(t, obj, other)
 }

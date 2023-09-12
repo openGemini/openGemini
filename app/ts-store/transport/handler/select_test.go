@@ -207,10 +207,6 @@ func TestCreateSerfInstance(t *testing.T) {
 	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
 	h := NewSelect(store, resp, req)
 
-	config.SetHaEnable(false)
-	require.NoError(t, h.Process())
-
-	config.SetHaEnable(true)
 	require.EqualError(t, h.Process(), "pt not found")
 
 	req.PtID = 1
@@ -304,7 +300,7 @@ func mockStorage(dir string) *storage.Storage {
 		Pushers:      "http",
 		StoreEnabled: true,
 	}
-	config.SetHaEnable(true)
+	config.SetHaPolicy("shared-storage")
 	config := &config.TSStore{
 		Data:    storeConfig,
 		Monitor: monitorConfig,
@@ -328,7 +324,6 @@ func TestNewShardTraits(t *testing.T) {
 	store := mockStorage(t.TempDir())
 	p := NewSelectProcessor(store)
 	s := NewSelect(p.store, resp, req)
-	config.SetHaEnable(false)
 	traits := s.NewShardTraits(s.req, s.w)
 	require.NotEmpty(t, traits)
 }

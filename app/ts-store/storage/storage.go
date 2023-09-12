@@ -25,6 +25,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/limiter"
 	retention2 "github.com/influxdata/influxdb/services/retention"
+	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -39,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -80,6 +82,10 @@ type StoreEngine interface {
 type Storage struct {
 	path string
 
+	MetaClient interface {
+		GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
+		GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
+	}
 	metaClient *metaclient.Client
 	node       *metaclient.Node
 
@@ -136,6 +142,13 @@ func (s *Storage) appendAnalysisService(c config.Castor) {
 		return
 	}
 	srv := castor.NewService(c)
+	s.Services = append(s.Services, srv)
+}
+
+func (s *Storage) appendProactiveMgrService(c config.Store) {
+	srv := app.NewProactiveManager()
+	srv.WithLogger(s.log)
+	srv.SetInspectInterval(time.Duration(c.ProactiveMgrInterval))
 	s.Services = append(s.Services, srv)
 }
 
@@ -226,19 +239,18 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 		WriteLimit: limiter.NewFixed(conf.Data.WriteConcurrentLimit),
 	}
 
+	s.MetaClient = cli
 	s.log = logger.NewLogger(errno.ModuleStorageEngine)
-
-	if !config.GetHaEnable() {
-		if err := s.engine.Open(s.metaClient.ShardDurations, s.metaClient.DBBriefInfos, s.metaClient); err != nil {
-			return nil, fmt.Errorf("err open engine %s", err)
-		}
-	}
 	s.engine.SetReadOnly(conf.Data.Readonly)
 	// Append services.
 	s.appendRetentionPolicyService(conf.Retention)
 	s.appendDownSamplePolicyService(conf.DownSample)
 	s.appendHierarchicalService(conf.HierarchicalStore)
 	s.appendAnalysisService(conf.Analysis)
+	s.appendProactiveMgrService(conf.Data)
+
+	syscontrol.UpdateInterruptQuery(conf.Data.InterruptQuery)
+	syscontrol.SetUpperMemUsePct(int64(conf.Data.InterruptSqlMemPct))
 
 	for _, service := range s.Services {
 		if err := service.Open(); err != nil {
@@ -273,54 +285,31 @@ func (s *Storage) Write(db, rp, mst string, ptId uint32, shardID uint64, writeDa
 		atomic.AddInt64(&statistics.PerfStat.WriteStorageDurationNs, d)
 	}(time.Now())
 
-	var timeRangeInfo *meta.ShardTimeRangeInfo
 	err := writeData()
 	err2, ok := err.(*errno.Error)
-	if !ok {
+	if !ok || !errno.Equal(err2, errno.ShardNotFound) {
 		return err
 	}
-	switch err2.Errno() {
-	case errno.PtNotFound:
-		// case ha enabled: db pt is created in create database
-		if config.GetHaEnable() {
-			return err
-		}
-		enableTagArray, err := s.metaClient.TagArrayEnabledFromServer(db)
-		if err != nil {
-			return err
-		}
-		s.engine.CreateDBPT(db, ptId, enableTagArray)
-		fallthrough
-	case errno.ShardNotFound:
-		// get index meta data, shard meta data
-		startT := time.Now()
-		timeRangeInfo, err = s.metaClient.GetShardRangeInfo(db, rp, shardID)
-		if err != nil {
-			return err
-		}
-		// all rows belongs to the same shard/engine type, we can get engine type from the first one.
-		mstInfo, err := s.metaClient.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
-		if err != nil {
-			return err
-		}
-		err = s.engine.CreateShard(db, rp, ptId, shardID, timeRangeInfo, mstInfo)
-		if err != nil {
-			return err
-		}
-		atomic.AddInt64(&statistics.PerfStat.WriteCreateShardNs, time.Since(startT).Nanoseconds())
-		err = writeData()
+
+	// get index meta data, shard meta data
+	startT := time.Now()
+	var timeRangeInfo *meta.ShardTimeRangeInfo
+	timeRangeInfo, err = s.MetaClient.GetShardRangeInfo(db, rp, shardID)
+	if err != nil {
 		return err
-	default:
 	}
-	return err2
-}
-
-func (s *Storage) VerifyNodeId(id uint64) error {
-	if s.metaClient.NodeID() != id {
-		return fmt.Errorf("node id invalid, need send task to %d, but my id is %d", id, s.metaClient.NodeID())
+	// all rows belongs to the same shard/engine type, we can get engine type from the first one.
+	var mstInfo *meta.MeasurementInfo
+	mstInfo, err = s.MetaClient.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
+	if err != nil {
+		return err
 	}
-
-	return nil
+	err = s.engine.CreateShard(db, rp, ptId, shardID, timeRangeInfo, mstInfo)
+	if err != nil {
+		return err
+	}
+	atomic.AddInt64(&statistics.PerfStat.WriteCreateShardNs, time.Since(startT).Nanoseconds())
+	return writeData()
 }
 
 func (s *Storage) ReportLoad() {

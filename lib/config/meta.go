@@ -50,6 +50,7 @@ const (
 	DefaultProbInterval         = toml.Duration(time.Second)
 	DefaultPtNumPerNode         = 1
 	DefaultHashAlgo             = "ver03"
+	DefaultHaPolicy             = "write-available-first"
 )
 
 var DefaultMetaJoin = []string{"127.0.0.1:8092"}

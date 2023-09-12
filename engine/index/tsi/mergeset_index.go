@@ -595,12 +595,7 @@ func (idx *MergeSetIndex) createIndexesIfNotExistsWithTagArray(vkey, vname []byt
 var idxItemsPool mergeindex.IndexItemsPool
 
 func (idx *MergeSetIndex) createIndexes(seriesKey []byte, name []byte, tags []influx.Tag, tagArray [][]influx.Tag, enableTagArray bool) (uint64, error) {
-	var tsid uint64
-	if config.GetHaEnable() {
-		tsid = idx.indexBuilder.GenerateUUID()
-	} else {
-		tsid = GenerateUUID()
-	}
+	tsid := idx.indexBuilder.GenerateUUID()
 
 	ii := idxItemsPool.Get()
 	defer idxItemsPool.Put(ii)

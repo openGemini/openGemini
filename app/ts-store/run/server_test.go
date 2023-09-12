@@ -52,7 +52,7 @@ var addr1 = "127.0.0.1:8503"
 func mockStorage() *storage.Storage {
 	node := metaclient.NewNode(metaPath)
 	storeConfig := config.NewStore()
-	config.SetHaEnable(true)
+	config.SetHaPolicy("shared-storage")
 	monitorConfig := config.Monitor{
 		Pushers:      "http",
 		StoreEnabled: true,
@@ -286,6 +286,10 @@ func (client *MockMetaClient) UpdateShardDownSampleInfo(Ident *meta2.ShardIdenti
 
 func mockMetaClient() *MockMetaClient {
 	return &MockMetaClient{}
+}
+
+func (client *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
+	panic("implement me")
 }
 
 func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {

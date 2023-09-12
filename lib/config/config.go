@@ -55,16 +55,7 @@ const (
 	DefaultCpuAllocationRatio = 1
 )
 
-var haEnable bool
 var subscriptionEnable bool
-
-func SetHaEnable(en bool) {
-	haEnable = en
-}
-
-func GetHaEnable() bool {
-	return haEnable
-}
 
 func SetSubscriptionEnable(en bool) {
 	subscriptionEnable = en
@@ -104,7 +95,6 @@ func fromToml(c Config, input string) error {
 // Common represents the CommonConfiguration format for the influxd binary.
 type Common struct {
 	MetaJoin       []string `toml:"meta-join"`
-	HaEnable       bool     `toml:"ha-enable"`
 	IgnoreEmptyTag bool     `toml:"ignore-empty-tag"`
 	ReportEnable   bool     `toml:"report-enable"`
 	CryptoConfig   string   `toml:"crypto-config"`
@@ -118,6 +108,7 @@ type Common struct {
 	MemoryWaitTime     itoml.Duration `toml:"executor-memory-wait-time"`
 	OptHashAlgo        string         `toml:"select-hash-algorithm"`
 	CpuAllocationRatio int            `toml:"cpu-allocation-ratio"`
+	HaPolicy           string         `toml:"ha-policy"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -127,6 +118,7 @@ func NewCommon() *Common {
 		ReportEnable:       true,
 		OptHashAlgo:        DefaultHashAlgo,
 		CpuAllocationRatio: DefaultCpuAllocationRatio,
+		HaPolicy:           DefaultHaPolicy,
 	}
 }
 

@@ -17,6 +17,7 @@ limitations under the License.
 package record
 
 import (
+	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
@@ -47,7 +48,9 @@ func (d *SortData) Less(i, j int) bool {
 			}
 			continue
 		}
-		d.idx = idx //current swap column idx
+		if v > 0 {
+			d.idx = idx //current swap column idx
+		}
 		return v > 0
 	}
 	return false
@@ -62,11 +65,11 @@ func (d *SortData) Swap(i, j int) {
 		d.Data[l].Swap(i, j)
 	}
 	d.RowIds[i], d.RowIds[j] = d.RowIds[j], d.RowIds[i]
-	d.Times[i], d.Times[j] = d.Times[j], d.Times[i]
+	d.idx = 0
 }
 
 func (d *SortData) Len() int {
-	return len(d.Times)
+	return len(d.RowIds)
 }
 
 func (d *SortData) InitRecord(schemas Schemas) {
@@ -77,29 +80,23 @@ func (d *SortData) InitRecord(schemas Schemas) {
 	}
 }
 
-func (d *SortData) Init(times []int64, primaryKey, sortKey []PrimaryKey, record *Record) {
+func (d *SortData) Init(times []int64, sortKey []PrimaryKey, record *Record) {
 	if len(record.ColVals) == 0 {
 		return
 	}
-	d.Data = d.Data[:0]
 	size := len(times)
-	if cap(d.Times) < size {
-		d.Times = make([]int64, size)
-	}
-	d.Times = d.Times[:size]
 
 	if cap(d.RowIds) < size {
 		d.RowIds = make([]int32, size)
 	}
 	d.RowIds = d.RowIds[:size]
+	d.Data = d.Data[:0]
 
 	for i := 0; i < size; i++ {
 		d.RowIds[i] = int32(i)
-		d.Times[i] = times[i]
 	}
-
-	orderByMap := d.setOrderByMap(sortKey, record.Schema)
-	d.genSortData(times, orderByMap, sortKey, record, 0)
+	d.idx = 0
+	d.genSortData(times, sortKey, record, d.SortRec, 0)
 }
 
 func (d *SortData) InitDuplicateRows(size int, record *Record, deduplicate bool) {
@@ -120,51 +117,37 @@ func (d *SortData) InitDuplicateRows(size int, record *Record, deduplicate bool)
 	}
 }
 
-func (d *SortData) genSortData(times []int64, orderByMap map[int]int, sortFileds []PrimaryKey, record *Record, start int) {
-	var cv ColVal
-	for i := start; i < len(sortFileds); i++ {
-		if sortFileds[i].Key == "time" {
+func (d *SortData) genSortData(times []int64, sortFields []PrimaryKey, record, sortRec *Record, start int) {
+	for i := start; i < len(sortFields); i++ {
+		if sortFields[i].Key == "time" {
 			is := IntegerSlice{}
 			is.V = append(is.V, times...)
-			is.CV = record.ColVals[len(record.ColVals)-1]
 			d.Data = append(d.Data, &is)
 			continue
 		}
 
-		cv = record.ColVals[orderByMap[i]]
-		switch sortFileds[i].Type {
+		idx := record.Schema.FieldIndex(sortFields[i].Key)
+		if idx < 0 {
+			Logger.GetLogger().Error("sortField is not exist")
+			return
+		}
+		switch sortFields[i].Type {
 		case influx.Field_Type_Int:
 			is := IntegerSlice{}
-			is.PadIntSlice(cv)
-			is.CV = cv
+			is.PadIntSlice(&record.ColVals[idx])
 			d.Data = append(d.Data, &is)
 		case influx.Field_Type_Float:
 			fs := FloatSlice{}
-			fs.PadFloatSlice(cv)
-			fs.CV = cv
+			fs.PadFloatSlice(&record.ColVals[idx])
 			d.Data = append(d.Data, &fs)
 		case influx.Field_Type_String:
 			ss := StringSlice{}
-			ss.PadStringSlice(cv)
-			ss.CV = cv
+			ss.PadStringSlice(&record.ColVals[idx])
 			d.Data = append(d.Data, &ss)
 		case influx.Field_Type_Boolean:
 			bs := BooleanSlice{}
-			bs.PadBoolSlice(cv)
-			bs.CV = cv
+			bs.PadBoolSlice(&record.ColVals[idx])
 			d.Data = append(d.Data, &bs)
 		}
 	}
-}
-
-func (d *SortData) setOrderByMap(orderBy []PrimaryKey, schemas Schemas) map[int]int {
-	orderByMap := make(map[int]int)
-	for i, ob := range orderBy {
-		for j := range schemas {
-			if ob.Key == schemas[j].Name {
-				orderByMap[i] = j
-			}
-		}
-	}
-	return orderByMap
 }

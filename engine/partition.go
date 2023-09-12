@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
@@ -55,24 +56,9 @@ var (
 type PtNNLock struct {
 }
 
-//lint:ignore U1000 use for replication feature
-type PeerInfo struct {
-	ptId   uint32
-	nodeId uint64
-}
-
-//lint:ignore U1000 use for replication feature
-type ReplicaInfo struct {
-	replicaRole   meta.Role
-	master        PeerInfo
-	peers         []PeerInfo
-	replicaStatus meta.RGStatus
-	term          uint64
-}
-
 type DBPTInfo struct {
 	//lint:ignore U1000 use for replication feature
-	replicaInfo *ReplicaInfo
+	replicaInfo *message.ReplicaInfo
 
 	mu       sync.RWMutex
 	database string
@@ -666,6 +652,13 @@ func (dbPT *DBPTInfo) ptReceiveShard(resC chan *res, n int, rp string) error {
 
 func (dbPT *DBPTInfo) SetOption(opt netstorage.EngineOptions) {
 	dbPT.opt = opt
+}
+
+func (dbPT *DBPTInfo) SetParams(preload bool, lockPath *string, enableTagArray bool) {
+	dbPT.unload = make(chan struct{})
+	dbPT.preload = preload
+	dbPT.lockPath = lockPath
+	dbPT.enableTagArray = enableTagArray
 }
 
 func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient, engineType config.EngineType) (Shard, error) {

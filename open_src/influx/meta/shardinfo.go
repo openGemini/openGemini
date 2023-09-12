@@ -347,7 +347,8 @@ func (sgi *ShardGroupInfo) DestShard(shardKey string) *ShardInfo {
 
 // ShardFor returns the ShardInfo for a Point hash.
 func (sgi *ShardGroupInfo) ShardFor(hash uint64, aliveShardIdxes []int) *ShardInfo {
-	if config.GetHaEnable() {
+	// hash mod all shards in shard-storage and replication policy
+	if config.GetHaPolicy() != config.WriteAvailableFirst {
 		return &sgi.Shards[hash%uint64(len(sgi.Shards))]
 	}
 	if len(aliveShardIdxes) == 0 {

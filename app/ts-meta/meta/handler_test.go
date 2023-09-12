@@ -112,7 +112,8 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err = mms.GetStore().data.CreateDatabase("test", nil, nil, false); err != nil {
+	globalService.store.NetStore = NewMockNetStorage()
+	if err = ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd("test"), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -127,7 +128,6 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 	}
 	assert.Equal(t, false, mms.GetStore().data.BalancerEnabled)
 
-	globalService.store.NetStore = NewMockNetStorage()
 	if _, err = http.Post(fmt.Sprintf("http://%s:9091/movePt?db=test&ptId=0&to=%d", testIp, node2), "", nil); err != nil {
 		t.Fatal(err)
 	}

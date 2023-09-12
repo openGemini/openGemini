@@ -1165,9 +1165,6 @@ func (e *Engine) checkAndAddRefPTSNoLock(database string, ptIDs []uint32) ([]uin
 	var err error
 	for _, ptId := range ptIDs {
 		if err1 := e.checkAndAddRefPTNoLock(database, ptId); err1 != nil {
-			if !config.GetHaEnable() && errno.Equal(err1, errno.PtNotFound) {
-				continue
-			}
 			err = err1
 			break
 		} else {

@@ -129,13 +129,16 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	lockPath := ""
 	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
 	indexIdent.Index = &meta.IndexDescriptor{IndexID: 3, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	ltime := uint64(time.Now().Unix())
 	opts := new(Options).
 		Path(path).
 		IndexType(Field).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		Ident(indexIdent).
-		Lock(&lockPath)
+		Lock(&lockPath).
+		LogicalClock(1).
+		SequenceId(&ltime)
 
 	indexBuilder := NewIndexBuilder(opts)
 
@@ -1021,13 +1024,16 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	lockPath := ""
 	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
 	indexIdent.Index = &meta.IndexDescriptor{IndexID: 3, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	ltime := uint64(time.Now().Unix())
 	opts := new(Options).
 		Path(path).
 		IndexType(Field).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		Ident(indexIdent).
-		Lock(&lockPath)
+		Lock(&lockPath).
+		LogicalClock(1).
+		SequenceId(&ltime)
 
 	indexBuilder := NewIndexBuilder(opts)
 

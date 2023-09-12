@@ -64,6 +64,7 @@ func sendTestMsg(msg *message.MetaMessage, callback transport.Callback) error {
 var mockAfterIndexFail bool = true
 
 type MockRPCStore struct {
+	MetaStoreInterface
 }
 
 func NewMockRPCStore() *MockRPCStore {
@@ -172,6 +173,10 @@ func (s *MockRPCStore) getDBBriefInfo(dbName string) ([]byte, error) {
 
 func (s *MockRPCStore) getDataNodeAliveConnId(nodeId uint64) (uint64, error) {
 	return 0, nil
+}
+
+func (s *MockRPCStore) GetReplicaInfo(dbName string, NodeID uint64, PtID uint32) (*message.ReplicaInfo, error) {
+	return &message.ReplicaInfo{}, nil
 }
 
 func TestPing(t *testing.T) {

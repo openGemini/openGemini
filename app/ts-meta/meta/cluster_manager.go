@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
@@ -38,20 +39,32 @@ type storeInterface interface {
 	dataNodes() meta.DataNodeInfos
 }
 
+type chooseTakeoverNodeFn func(cm *ClusterManager, oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error)
+
+var takeOverNodeChoose []chooseTakeoverNodeFn
+
+func init() {
+	takeOverNodeChoose = make([]chooseTakeoverNodeFn, config.PolicyEnd)
+	takeOverNodeChoose[config.WriteAvailableFirst] = getTakeOverNodeForWAF
+	takeOverNodeChoose[config.SharedStorage] = getTakeOverNodeForSS
+	takeOverNodeChoose[config.Replication] = getTakeOverNodeForWAF
+}
+
 type ClusterManager struct {
-	store        storeInterface
-	eventCh      chan serf.Event
-	retryEventCh chan serf.Event
-	closing      chan struct{}
-	reOpen       chan struct{} //used for meta transfer to leader, reSend event and reopen checkEvents
-	handlerMap   map[serf.EventType]memberEventHandler
-	wg           sync.WaitGroup
-	mu           sync.RWMutex
-	eventMap     map[string]*serf.MemberEvent // only read when leader changed
-	eventWg      sync.WaitGroup
-	memberIds    map[uint64]struct{} // alive ts-store members
-	stop         int32               // used for meta leader step down and do not process any event
-	takeover     chan bool
+	store           storeInterface
+	eventCh         chan serf.Event
+	retryEventCh    chan serf.Event
+	closing         chan struct{}
+	reOpen          chan struct{} //used for meta transfer to leader, reSend event and reopen checkEvents
+	handlerMap      map[serf.EventType]memberEventHandler
+	wg              sync.WaitGroup
+	mu              sync.RWMutex
+	eventMap        map[string]*serf.MemberEvent // only read when leader changed
+	eventWg         sync.WaitGroup
+	memberIds       map[uint64]struct{} // alive ts-store members
+	stop            int32               // used for meta leader step down and do not process any event
+	takeover        chan bool
+	getTakeOverNode chooseTakeoverNodeFn
 }
 
 func CreateClusterManager() *ClusterManager {
@@ -67,14 +80,15 @@ func CreateClusterManager() *ClusterManager {
 		serf.EventMemberJoin:   &joinHandler{baseHandler{c}},
 		serf.EventMemberFailed: &failedHandler{baseHandler{c}},
 		serf.EventMemberLeave:  &leaveHandler{baseHandler{c}}}
-	atomic.StoreInt32(&c.stop, 1)
-	c.wg.Add(1)
-	go c.checkEvents()
+	c.getTakeOverNode = takeOverNodeChoose[config.GetHaPolicy()]
 	return c
 }
 
 func NewClusterManager(store storeInterface) *ClusterManager {
 	c := CreateClusterManager()
+	atomic.StoreInt32(&c.stop, 1)
+	c.wg.Add(1)
+	go c.checkEvents()
 	c.store = store
 	return c
 }
@@ -280,7 +294,31 @@ func (cm *ClusterManager) removeClusterMember(id uint64) {
 	cm.mu.Unlock()
 }
 
-func (cm *ClusterManager) getTakeOverNode(oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error) {
+// only choose the pt owner as the dest node in write-available-first policy
+func getTakeOverNodeForWAF(cm *ClusterManager, oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error) {
+	for {
+		if cm.isStopped() || cm.isClosed() {
+			break
+		}
+
+		cm.mu.RLock()
+		if _, ok := cm.memberIds[oid]; ok {
+			cm.mu.RUnlock()
+			return oid, nil
+		}
+
+		cm.mu.RUnlock()
+		time.Sleep(time.Second)
+		logger.GetSuppressLogger().Warn("the target store is not alive", zap.Uint64("id", oid), zap.Bool("isRetry", isRetry))
+	}
+	return 0, errno.NewError(errno.ClusterManagerIsNotRunning)
+}
+
+/* choose take over node for shared-storage policy.
+choose the node which has least pt if not retry.
+choose the random node in retry case.
+*/
+func getTakeOverNodeForSS(cm *ClusterManager, oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error) {
 	cm.mu.RLock()
 	_, ok := cm.memberIds[oid]
 	cm.mu.RUnlock()
@@ -353,7 +391,7 @@ func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *m
 		logger.GetLogger().Info("no need to assign online pt", zap.String("db", dbPt.Db), zap.Uint32("pt", dbPt.Pti.PtId))
 		return nil
 	}
-	targetId, err := cm.getTakeOverNode(dbPt.Pti.Owner.NodeID, nodePtNumMap, isRetry)
+	targetId, err := cm.getTakeOverNode(cm, dbPt.Pti.Owner.NodeID, nodePtNumMap, isRetry)
 	if err != nil {
 		return err
 	}

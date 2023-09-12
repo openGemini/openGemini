@@ -63,6 +63,8 @@ const (
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
 
+	DefaultInterruptSqlMemPct = 90
+
 	IndexFileDirectory = "index"
 	DataDirectory      = "data"
 	WalDirectory       = "wal"
@@ -254,6 +256,11 @@ type Store struct {
 	LazyLoadShardEnable       bool          `toml:"lazy-load-shard-enable"`
 	ThermalShardStartDuration toml.Duration `toml:"thermal-shard-start-duration"`
 	ThermalShardEndDuration   toml.Duration `toml:"thermal-shard-end-duration"`
+
+	// for auto interrupt query
+	InterruptQuery       bool          `toml:"interrupt-query"`
+	InterruptSqlMemPct   int           `toml:"interrupt-sql-mem-pct"`
+	ProactiveMgrInterval toml.Duration `toml:"proactive-manager-interval"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -292,6 +299,8 @@ func NewStore() Store {
 		OpenShardLimit:               0,
 		DownSampleWriteDrop:          true,
 		EnableQueryFileHandleCache:   true,
+		InterruptQuery:               true,
+		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
 	}
 }
 

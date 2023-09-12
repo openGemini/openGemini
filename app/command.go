@@ -116,9 +116,11 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		common.Corrector()
 		cpu.SetCpuNum(common.CPUNum, common.CpuAllocationRatio)
 		runtime.GOMAXPROCS(cpu.GetCpuNum())
-		config.SetHaEnable(common.HaEnable)
 		syscontrol.SetDisableWrite(common.WriterStop)
 		syscontrol.SetDisableRead(common.ReaderStop)
+		if err := config.SetHaPolicy(common.HaPolicy); err != nil {
+			return err
+		}
 	}
 
 	crypto.Initialize(conf.GetCommon().CryptoConfig)

@@ -28,11 +28,10 @@ import (
 )
 
 type FileIterator struct {
-	r          TSSPFile
-	tombstones []TombstoneFile
-	err        error
-	chunkN     int
-	chunkUsed  int
+	r         TSSPFile
+	err       error
+	chunkN    int
+	chunkUsed int
 
 	mIndexN   int
 	mIndexPos int
@@ -82,7 +81,6 @@ func NewFileIterator(r TSSPFile, log *Log.Logger) *FileIterator {
 
 func (itr *FileIterator) reset() {
 	itr.r = nil
-	itr.tombstones = itr.tombstones[:0]
 	itr.err = nil
 	itr.chunkN = 0
 	itr.chunkUsed = 0

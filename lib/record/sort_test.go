@@ -17,8 +17,10 @@ limitations under the License.
 package record_test
 
 import (
+	"fmt"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -204,7 +206,7 @@ func TestSortRecordByOrderTags4(t *testing.T) {
 		[]int{0, 0, 1, 1}, []int64{0, 0, 1000, 1100},
 		[]int{1, 1, 1, 0}, []float64{1002.4, 1002.4, 1001.3, 0},
 		[]int{0, 0, 1, 0}, []string{"", "", "ha", ""},
-		[]int{0, 1, 1, 1}, []bool{true, false, true, false},
+		[]int{1, 0, 1, 1}, []bool{false, false, true, false},
 		[]int64{21, 21, 22, 19})
 	sort.Sort(rec)
 	sort.Sort(expRec)
@@ -348,6 +350,46 @@ func TestSortRecordByOrderTags7(t *testing.T) {
 	}
 }
 
+func TestSortRecordByOrderTags8(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "order1_int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "order2_float"},
+		record.Field{Type: influx.Field_Type_String, Name: "order3_string"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "order4_bool"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{1000, 300, 0, 1100},
+		[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+		[]int{1, 1, 1, 1}, []string{"d", "c", "b", "a"},
+		[]int{1, 1, 1, 1}, []bool{true, false, true, false},
+		[]int64{22, 21, 20, 19})
+	expRec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{1100, 0, 300, 1000},
+		[]int{1, 1, 1, 1}, []float64{0, 1002.4, 1002.4, 1001.3},
+		[]int{1, 1, 1, 1}, []string{"a", "b", "c", "d"},
+		[]int{1, 1, 1, 1}, []bool{false, true, false, true},
+		[]int64{19, 20, 21, 22})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	tbl := mutable.NewMemTable(config.COLUMNSTORE)
+	msInfo := &mutable.MsInfo{
+		Name:   "cpu",
+		Schema: schema,
+	}
+	pk := []string{"order3_string"}
+	sk := []string{"order3_string"}
+	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	wk := msInfo.GetWriteChunk()
+	wk.WriteRec.SetWriteRec(rec)
+	tbl.SetMsInfo("cpu", msInfo)
+	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
+		t.Fatal("error result")
+	}
+}
+
 func TestBoolSliceSingleValueCompare(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "order1_int"},
@@ -377,8 +419,8 @@ func TestBoolSliceSingleValueCompare(t *testing.T) {
 	sk := pk
 	data := record.SortData{}
 	dataCmp := record.SortData{}
-	data.Init(times, pk, sk, rec)
-	dataCmp.Init(cmpRec.Times(), pk, sk, cmpRec)
+	data.Init(times, sk, rec)
+	dataCmp.Init(cmpRec.Times(), sk, cmpRec)
 
 	im := data.Data
 	jm := dataCmp.Data
@@ -424,8 +466,8 @@ func TestBoolSliceSingleValueCompare2(t *testing.T) {
 	sk := pk
 	data := record.SortData{}
 	dataCmp := record.SortData{}
-	data.Init(times, pk, sk, rec)
-	dataCmp.Init(cmpRec.Times(), pk, sk, cmpRec)
+	data.Init(times, sk, rec)
+	dataCmp.Init(cmpRec.Times(), sk, cmpRec)
 
 	im := data.Data
 	jm := dataCmp.Data
@@ -462,7 +504,7 @@ func TestBoolSliceSingleValueCompare3(t *testing.T) {
 		[]int{1}, []string{"ha"},
 		[]int{1}, []bool{false},
 		[]int64{19})
-	expResult := []int{0, 0, -1, 1}
+	expResult := []int{0, 0, -1, 0}
 	sort.Sort(rec)
 	sort.Sort(cmpRec)
 	times := rec.Times()
@@ -471,8 +513,8 @@ func TestBoolSliceSingleValueCompare3(t *testing.T) {
 	sk := pk
 	data := record.SortData{}
 	dataCmp := record.SortData{}
-	data.Init(times, pk, sk, rec)
-	dataCmp.Init(cmpRec.Times(), pk, sk, cmpRec)
+	data.Init(times, sk, rec)
+	dataCmp.Init(cmpRec.Times(), sk, cmpRec)
 
 	im := data.Data
 	jm := dataCmp.Data
@@ -541,9 +583,70 @@ func TestSortRecordAndDeduplicate(t *testing.T) {
 
 	hlp := record.NewSortHelper()
 	defer hlp.Release()
-	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), hlp.SortData, mutable.GetPrimaryKeys(schema, pk), mutable.GetPrimaryKeys(schema, sk), true)
+	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), hlp.SortData, mutable.GetPrimaryKeys(schema, sk), true)
 
 	if !testRecsEqual(rec, expRec) {
 		t.Fatal("error result")
 	}
+}
+
+func BenchmarkSortForColumnStore(b *testing.B) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "order1_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order2_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order3_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order4_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order5_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order6_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order7_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order8_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order9_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order10_string"},
+		record.Field{Type: influx.Field_Type_String, Name: "order11_string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	sk := []record.PrimaryKey{{"order1_string", influx.Field_Type_String}, {"order2_string", influx.Field_Type_String},
+		{"order3_string", influx.Field_Type_String}, {"order4_string", influx.Field_Type_String}, {"order5_string", influx.Field_Type_String},
+		{"order6_string", influx.Field_Type_String}, {"order7_string", influx.Field_Type_String}, {"order8_string", influx.Field_Type_String},
+		{"order9_string", influx.Field_Type_String}, {"order10_string", influx.Field_Type_String}, {"order11_string", influx.Field_Type_String}}
+	hlp := record.NewSortHelper()
+	defer hlp.Release()
+	rec := genSortData(5000000, 10, schema)
+	hlp.SortForColumnStore(rec, hlp.SortData, sk, false)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 100000; j++ {
+			hlp.SortForColumnStore(rec, hlp.SortData, sk, false)
+		}
+	}
+}
+
+func genSortData(rows, targetIdx int, schema record.Schemas) *record.Record {
+	tm := time.Now().Truncate(time.Minute).UnixNano()
+	genRecFn := func() *record.Record {
+		b := record.NewRecordBuilder(schema)
+		for idx := 0; idx < len(schema)-1; idx++ {
+			builder := b.Column(idx)
+			if idx < targetIdx {
+				for i := 0; i <= rows; i++ {
+					builder.AppendString("test_test_test")
+				}
+				continue
+			}
+			if idx == targetIdx {
+				tmBuilder := b.Column(len(schema) - 1)
+				for i := 0; i < rows; i++ {
+					f := fmt.Sprintf("test_test_test_%d", rows-i)
+					builder.AppendString(f)
+					tmBuilder.AppendInteger(tm)
+					tm += time.Millisecond.Milliseconds()
+				}
+			}
+		}
+
+		return b
+	}
+	data := genRecFn()
+	return data
 }

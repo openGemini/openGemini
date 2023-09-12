@@ -142,8 +142,8 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	start := time.Now()
 
 	var lazyInit bool
-	//  #sort series for query with:1.limit 2.no aux tag 3.group by * 4.no call functions
-	if !schema.HasCall() && schema.HasLimit() && !schema.HasAuxTag() && schema.Options().IsGroupByAllDims() {
+	//  #sort series for query with:1.limit 2.group by tag 3.no call functions
+	if !schema.HasCall() && schema.HasLimit() && (len(schema.Options().GetDimensions()) > 0 || schema.GetOptions().IsGroupByAllDims()) {
 		lazyInit = true
 	}
 	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)

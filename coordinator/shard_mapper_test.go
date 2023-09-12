@@ -56,6 +56,10 @@ func (m mocShardMapperMetaClient) ThermalShards(db string, start, end time.Durat
 	panic("implement me")
 }
 
+func (m mocShardMapperMetaClient) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
+	panic("implement me")
+}
+
 func (m mocShardMapperMetaClient) GetStreamInfos() map[string]*meta.StreamInfo {
 	return nil
 }

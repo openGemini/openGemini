@@ -58,14 +58,15 @@ func TestInterruptEvent(t *testing.T) {
 	}
 
 	db := "db0"
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
-		t.Fatal(err)
-	}
-	config.SetHaEnable(true)
-	globalService.store.data.TakeOverEnabled = true
-	globalService.clusterManager.Close()
 	netStore := NewMockNetStorage()
 	globalService.store.NetStore = netStore
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
+		t.Fatal(err)
+	}
+	config.SetHaPolicy("shared-storage")
+	globalService.store.data.TakeOverEnabled = true
+	globalService.clusterManager.Close()
+
 	globalService.clusterManager.addClusterMember(2)
 	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
 	dataNode.AliveConnID = dataNode.ConnID - 1

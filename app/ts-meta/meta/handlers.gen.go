@@ -61,6 +61,8 @@ func New(typ uint8) RPCHandler {
 		return &GetDBBriefInfo{}
 	case message.RegisterQueryIDOffsetRequestMessage:
 		return &RegisterQueryIDOffset{}
+	case message.GetReplicaInfoRequestMessage:
+		return &GetReplicaInfo{}
 	default:
 		return nil
 	}
@@ -368,4 +370,23 @@ func (h *RegisterQueryIDOffset) SetRequestMsg(data transport.Codec) error {
 
 func (h *RegisterQueryIDOffset) Instance() RPCHandler {
 	return &RegisterQueryIDOffset{}
+}
+
+type GetReplicaInfo struct {
+	BaseHandler
+
+	req *message.GetReplicaInfoRequest
+}
+
+func (h *GetReplicaInfo) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.GetReplicaInfoRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.GetReplicaInfoRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *GetReplicaInfo) Instance() RPCHandler {
+	return &GetReplicaInfo{}
 }

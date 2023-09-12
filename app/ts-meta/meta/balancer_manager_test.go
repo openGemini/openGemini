@@ -58,12 +58,12 @@ func TestBalanceIfNeeded(t *testing.T) {
 	globalService.clusterManager.eventCh <- e
 	time.Sleep(time.Second)
 	globalService.store.data.ClusterPtNum = 6
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
+	globalService.store.NetStore = NewMockNetStorage()
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	config.SetHaEnable(true)
+	config.SetHaPolicy("shared-storage")
 	globalService.store.data.TakeOverEnabled = true
-	globalService.store.NetStore = NewMockNetStorage()
 
 	e = *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)
 	globalService.clusterManager.eventCh <- e

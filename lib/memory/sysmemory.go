@@ -19,10 +19,12 @@ package memory
 import (
 	"bytes"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
 const maxMemUse = 64 * 1024 * 1024 * 1024
@@ -38,6 +40,10 @@ func init() {
 }
 
 func ReadSysMemory() (int64, int64) {
+	if runtime.GOOS != "linux" {
+		info, _ := mem.VirtualMemory()
+		return int64(info.Total / 1024), int64(info.Free / 1024)
+	}
 	var buf [256]byte
 	n := readSysMemInfo(buf[:])
 	if n == 0 {
@@ -111,4 +117,9 @@ func bytes2Int(b []byte) int64 {
 		v = v*10 + int64(c-'0')
 	}
 	return v
+}
+
+func MemUsedPct() float64 {
+	total, available := SysMem()
+	return (1 - float64(available)/float64(total)) * 100
 }

@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
@@ -1040,4 +1041,12 @@ func TestPointsWriter_TagLimit(t *testing.T) {
 
 	exp := "partial write: " + errno.NewError(errno.TooManyTagKeys).Error() + " dropped=2"
 	assert.EqualError(t, err, exp)
+}
+
+func TestResetRowsRouter(t *testing.T) {
+	pw := NewPointsWriter(time.Second)
+	var rows []influx.Row
+	rows = append(rows, influx.Row{ShardKey: bytesutil.ToUnsafeBytes("tag1")})
+	pw.resetRowsRouter(rows)
+	assert.Equal(t, 0, len(rows[0].ShardKey))
 }

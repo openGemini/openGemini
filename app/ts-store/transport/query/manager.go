@@ -204,3 +204,14 @@ func (qm *Manager) GetAll() []*netstorage.QueryExeInfo {
 
 	return exeInfos
 }
+
+func GetAllQueries() []*netstorage.QueryExeInfo {
+	var queries []*netstorage.QueryExeInfo
+
+	// get all query exe info from all query managers
+	getAllQueries := func(manager *Manager) {
+		queries = append(queries, manager.GetAll()...)
+	}
+	VisitManagers(getAllQueries)
+	return queries
+}

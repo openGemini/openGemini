@@ -48,6 +48,13 @@ type MockMetaClient struct {
 	metaclient.Client
 }
 
+func (c *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
+	if database == "dbpt_not_exists" {
+		return nil, errno.NewError(errno.DatabaseNotFound, database)
+	}
+	return nil, nil
+}
+
 func (c *MockMetaClient) Database(name string) (*meta2.DatabaseInfo, error) {
 	if name == "db_not_exists" {
 		return nil, errno.NewError(errno.DatabaseNotFound, name)

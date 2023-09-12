@@ -156,7 +156,6 @@ func (w *tsspFileWriter) MetaDataBlocks(dst [][]byte) [][]byte {
 
 var (
 	indexWriterPool pool.FixedPool
-	diskWriterPool  pool.FixedPool
 	metaBlkPool     = sync.Pool{}
 )
 
@@ -166,7 +165,7 @@ func InitWriterPool(size int) {
 		return &indexWriter{}
 	}, pool.NewHitRatioHook(stat.AddIndexWriterGetTotal, stat.AddIndexWriterHitTotal))
 
-	diskWriterPool.Reset(size, nil, nil)
+	fileops.InitWriterPool(size)
 }
 
 func getMetaBlockBuffer(size int) []byte {
