@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"runtime/pprof"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -50,9 +49,8 @@ type Sherlock struct {
 	// collector
 	collectFn func(cpuCore int, memoryLimit uint64) (int, int, int, error)
 
-	closed int64
-
-	mu sync.Mutex
+	stop chan struct{}
+	wg   sync.WaitGroup
 }
 
 // New creates a sherlock dumper.
@@ -60,7 +58,6 @@ func New(opts ...Option) *Sherlock {
 	sherlock := &Sherlock{
 		opts:      newOptions(),
 		collectFn: collectMetrics,
-		closed:    1, // init close the sherlock before start
 	}
 
 	for _, opt := range opts {
@@ -109,33 +106,24 @@ func (s *Sherlock) DisableGrtDump() {
 
 // Start starts the dump loop of sherlock.
 func (s *Sherlock) Start() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !atomic.CompareAndSwapInt64(&s.closed, 1, 0) {
-		s.opts.logger.Error("Sherlock has started, please don't start it again")
-		return
-	}
 	s.opts.logger.Info("sherlock is starting")
 
+	s.stop = make(chan struct{})
+	s.wg.Add(1)
 	go s.startDumpLoop()
 }
 
 // Stop the dump loop of sherlock.
 func (s *Sherlock) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if !atomic.CompareAndSwapInt64(&s.closed, 0, 1) {
-		//nolint
-		s.opts.logger.Error("Sherlock has stop, please don't stop it again.")
-		return
-	}
+	close(s.stop)
+	s.wg.Wait()
 }
 
 const minMetricsBeforeDump = 10
 
 func (s *Sherlock) startDumpLoop() {
+	defer s.wg.Done()
+
 	// init previous cool down time
 	now := time.Now()
 	s.cpuCoolDownTime = now
@@ -151,10 +139,11 @@ func (s *Sherlock) startDumpLoop() {
 	ticker := time.NewTicker(s.opts.MonitorInterval)
 	defer ticker.Stop()
 	for {
-		<-ticker.C
-		if atomic.LoadInt64(&s.closed) == 1 {
+		select {
+		case <-s.stop:
 			s.opts.logger.Info("[Sherlock] dump loop stopped")
 			return
+		case <-ticker.C:
 		}
 
 		cpuCore := cpu.GetCpuNum()
@@ -310,6 +299,7 @@ func (s *Sherlock) goroutineCheckAndDump(gNum int) {
 		s.grtTriggerCount++
 	}
 }
+
 func (s *Sherlock) goroutineProfile(gNum int, c grtOptions) bool {
 	match, _ := matchRule(s.grtStats, gNum, c.TriggerMin, c.TriggerDiff, c.TriggerAbs)
 	if c.GoroutineTriggerMaxNum > 0 && gNum >= c.GoroutineTriggerMaxNum {
