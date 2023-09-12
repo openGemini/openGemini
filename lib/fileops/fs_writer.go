@@ -38,6 +38,10 @@ const (
 
 var diskWriterPool pool.FixedPool
 
+func InitWriterPool(size int) {
+	diskWriterPool.Reset(size, nil, nil)
+}
+
 type BasicFileWriter interface {
 	Write(b []byte) (int, error)
 	Close() error

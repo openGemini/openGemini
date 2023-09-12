@@ -189,6 +189,7 @@ func Test_Data_ReSharding(t *testing.T) {
 		}
 	}
 
+	data.CreateDBPtView("foo")
 	must(data.CreateDatabase("foo", nil, nil, false))
 	rp := NewRetentionPolicyInfo("bar")
 	rp.ShardGroupDuration = 24 * time.Hour

@@ -111,8 +111,8 @@ func compareRow(mst string, tags map[string]string, fields map[string]interface{
 		return fmt.Errorf("error fields length, exp: %d; got: %d", len(expFields), len(gotFields))
 	}
 
-	sort.Sort(expFields)
-	sort.Sort(row.Fields)
+	sort.Sort(&expFields)
+	sort.Sort(&row.Fields)
 
 	for i, item := range gotFields {
 		if item.StrValue != "" {

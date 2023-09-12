@@ -26,7 +26,6 @@ import (
 
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
@@ -148,11 +147,6 @@ func (e *Engine) DropRetentionPolicy(db string, rp string, ptId uint32) error {
 	}
 
 	if err := e.DbPTRef(db, ptId); err != nil {
-		if errno.Equal(err, errno.PtNotFound) && !config.GetHaEnable() {
-			e.log.Error("db pt not found", zap.String("db", db),
-				zap.String("rp", rp), zap.Uint32("pt", ptId))
-			return deleteDirFunc()
-		}
 		atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
 		return err
 	}

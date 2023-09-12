@@ -319,4 +319,5 @@ const (
 	TaskQueueFull            = 8034
 	ExceedRetryChance        = 8035
 	UnknownErr               = 8036
+	InvalidHaPolicy          = 8037
 )

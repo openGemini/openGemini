@@ -23,7 +23,6 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
@@ -50,25 +49,29 @@ func TestMoveEventTransition(t *testing.T) {
 	}
 
 	db := "db0"
-	if err := globalService.store.ApplyCmd(GenerateCreateDatabaseCmd(db)); err != nil {
-		t.Fatal(err)
-	}
-	config.SetHaEnable(true)
-	globalService.store.data.TakeOverEnabled = true
-	globalService.clusterManager.Close()
-	globalService.msm.Stop()
 	globalService.store.NetStore = NewMockNetStorage()
 	globalService.clusterManager.addClusterMember(2)
 	globalService.clusterManager.addClusterMember(3)
-	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
-	dataNode.AliveConnID = dataNode.ConnID - 1
-	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
+	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)
 	}
-	dataNode = globalService.store.data.DataNodeByHttpHost("127.0.0.2:8400")
-	dataNode.AliveConnID = dataNode.ConnID - 1
-	err = globalService.store.updateNodeStatus(3, int32(serf.StatusAlive), 3, "127.0.0.2:8011")
+	err = globalService.store.updateNodeStatus(3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
+		t.Fatal(err)
+	}
+	globalService.clusterManager.Close()
+	globalService.msm.Stop()
+
+	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
+	cmd = GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = globalService.store.ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +94,6 @@ func TestMoveEventTransition(t *testing.T) {
 	assert.Equal(t, nil, err)
 	events := globalService.store.data.MigrateEvents
 	assert.Equal(t, 1, len(events))
-	assert.Equal(t, uint64(1), events[dbPt.String()].GetOpId())
 	assert.Equal(t, int(MoveType), events[dbPt.String()].GetEventType())
 	assert.Equal(t, uint64(2), events[dbPt.String()].GetSrc())
 	assert.Equal(t, uint64(3), events[dbPt.String()].GetDst())

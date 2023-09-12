@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -118,7 +117,6 @@ func TestExcuteStatementErr(t *testing.T) {
 	err = MockExcuteStatementErr("rp", "mst", 1)
 	assert.True(t, strings.Contains(err.Error(), "timeout"))
 
-	config.SetHaEnable(true)
 	err = MockExcuteStatementErr("wrongRp", "mst", 5)
 	assert.True(t, strings.Contains(err.Error(), "retention policy not found"))
 

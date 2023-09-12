@@ -240,10 +240,6 @@ func (cv *ColVal) ValidCount(start, end int) int {
 	return validCount
 }
 
-func (cv *ColVal) ValidAt(i int) bool {
-	return cv.Bitmap[cv.BitMapOffset+i>>3]&BitMask[cv.BitMapOffset+i&0x07] != 0
-}
-
 func (cv *ColVal) sliceBitMap(srcCol *ColVal, start, end int) {
 	s := srcCol.BitMapOffset + start
 	offset := s % 8
@@ -255,10 +251,6 @@ func (cv *ColVal) sliceBitMap(srcCol *ColVal, start, end int) {
 
 	cv.Bitmap = srcCol.Bitmap[s:e]
 	cv.BitMapOffset = offset
-}
-
-func (cv *ColVal) SliceBitMap(srcCol *ColVal, start, end int) {
-	cv.sliceBitMap(srcCol, start, end)
 }
 
 func (cv *ColVal) reserveValOffset(size int) {
@@ -1110,15 +1102,12 @@ func (cv *ColVal) SubFloatValues(start, end int) []float64 {
 	return values[s:e]
 }
 
-func (cv *ColVal) SubBooleanValues(start, end int) []bool {
-	values := cv.BooleanValues()
-	s, e := cv.getValIndexRange(start, end)
-	return values[s:e]
-}
-
 func (cv *ColVal) IsNil(i int) bool {
-	if len(cv.Bitmap) == 0 {
+	if i >= cv.Len || len(cv.Bitmap) == 0 {
 		return true
+	}
+	if cv.NilCount == 0 {
+		return false
 	}
 	idx := cv.BitMapOffset + i
 	return !((cv.Bitmap[idx>>3] & BitMask[idx&0x07]) != 0)
@@ -1610,14 +1599,6 @@ func (cv *ColVal) UpdateStringValue(v string, isNil bool, row int) {
 func (cv *ColVal) UpdateFloatIntoNull(row int) {
 	if !cv.IsNil(row) {
 		cv.FloatValues()[row] = 0
-		cv.NilCount++
-	}
-	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
-}
-
-func (cv *ColVal) UpdateIntegerIntoNull(row int) {
-	if !cv.IsNil(row) {
-		cv.IntegerValues()[row] = 0
 		cv.NilCount++
 	}
 	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]

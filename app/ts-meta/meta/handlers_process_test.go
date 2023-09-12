@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateDatabase(t *testing.T) {
@@ -47,25 +48,13 @@ func TestCreateDatabase(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	mms.service.clusterManager.WaitEventDone()
 	db := "test"
-	command := GenerateCreateDatabaseCmd(db)
-	config.SetHaEnable(true)
-	defer config.SetHaEnable(false)
-	globalService.store.data.TakeOverEnabled = true
+	config.SetHaPolicy("shared-storage")
+	defer config.SetHaPolicy("write-available-first")
 	globalService.store.NetStore = NewMockNetStorage()
-	body, err := proto.Marshal(command)
-	if err != nil {
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	msg := message.NewMetaMessage(message.ExecuteRequestMessage, &message.ExecuteRequest{Body: body})
-	h := New(msg.Type())
-	h.InitHandler(globalService.store, mms.GetConfig(), nil)
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-	_, err = h.Process()
-	if err != nil {
-		t.Fatal(err)
-	}
+	globalService.store.data.TakeOverEnabled = true
 
 	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
 	assert.Equal(t, db, globalService.store.data.Database(db).Name)
@@ -308,4 +297,16 @@ func TestRegisterQueryIDOffset_Process(t *testing.T) {
 	if err != nil {
 		t.Fatal("TestRegisterQueryIDOffsetProcess fail", err)
 	}
+}
+
+func TestGetReplicaInfo_Process(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.GetReplicaInfoRequestMessage, &message.GetReplicaInfoRequest{})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	require.NoError(t, h.SetRequestMsg(msg.Data()))
+	require.NotEmpty(t, h.SetRequestMsg(&message.GetReplicaInfoResponse{}))
+
+	_, err := h.Process()
+	require.NoError(t, err)
 }

@@ -218,6 +218,7 @@ type MetaClient interface {
 	GetAllMst(dbName string) []string
 	RetryRegisterQueryIDOffset(host string) (uint64, error)
 	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
+	GetNodePtsMap(database string) (map[uint64][]uint32, error)
 }
 
 type LoadCtx struct {
@@ -512,8 +513,6 @@ func (c *Client) CreateDataNode(writeHost, queryHost string) (uint64, uint64, ui
 
 		if err == nil && node.NodeId > 0 {
 			c.nodeID = node.NodeId
-			c.ShardDurations = node.ShardDurationInfos
-			c.DBBriefInfos = node.DBBriefInfo
 			return c.nodeID, node.LTime, node.ConnId, nil
 		}
 
@@ -1104,6 +1103,24 @@ func (c *Client) RetentionPolicy(database, name string) (rpi *meta2.RetentionPol
 	}
 
 	return db.RetentionPolicy(name), nil
+}
+
+func (c *Client) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.cacheData == nil || len(c.cacheData.PtView[database]) == 0 {
+		return nil, errno.NewError(errno.DatabaseNotFound, database)
+	}
+	nodePtMap := make(map[uint64][]uint32, len(c.cacheData.DataNodes))
+	for i := range c.cacheData.PtView[database] {
+		if config.GetHaPolicy() == config.WriteAvailableFirst && c.cacheData.PtView[database][i].Status == meta2.Offline {
+			continue
+		}
+		nodePtMap[c.cacheData.PtView[database][i].Owner.NodeID] =
+			append(nodePtMap[c.cacheData.PtView[database][i].Owner.NodeID], c.cacheData.PtView[database][i].PtId)
+	}
+	return nodePtMap, nil
 }
 
 func (c *Client) DBPtView(database string) (meta2.DBPtInfos, error) {
@@ -2059,9 +2076,16 @@ func (c *Client) GetShardInfoByTime(database, retentionPolicy string, t time.Tim
 	return &shard, nil
 }
 
+/*
+used for map shards in select and write progress.
+write progress shard for all shards in shared-storage and replication policy.
+*/
 func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
+	if config.GetHaPolicy() != config.WriteAvailableFirst {
+		return make([]int, len(sgi.Shards))
+	}
 	c.mu.RLock()
-	aliveShardIdxes := make([]int, 0, c.cacheData.ClusterPtNum)
+	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
 	for i := range sgi.Shards {
 		if c.cacheData.PtView[database][sgi.Shards[i].Owners[0]].Status == meta2.Online {
 			aliveShardIdxes = append(aliveShardIdxes, i)
@@ -3234,8 +3258,21 @@ func (c *Client) DropStream(name string) error {
 
 var VerifyNodeEn = true
 
+/*
+case :
+1.store1 network partition
+2.assign dbpt to store2
+3.store1 network recovery
+4.move dbpt to store1, store1 already has this dbpt
+5.write rows to dbpt, store1 has no lease and panic
+attention:
+if always recover lease in assign dbpt no matter db pt is already on this node
+flush may write older data to disk, compaction may choose file which has already deleted
+stop flush and compaction , then clear memtable may solve this problem, but need replay new logs
+*/
 func (c *Client) verifyDataNodeStatus() {
-	if !config.GetHaEnable() {
+	// only shared-storage policy suicide after network partition
+	if config.GetHaPolicy() != config.SharedStorage {
 		return
 	}
 

@@ -36,7 +36,6 @@ import (
 )
 
 var (
-	debugEn        = true
 	migrateTimeout = 5 * time.Second
 )
 

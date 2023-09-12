@@ -26,11 +26,11 @@ type Peer struct {
 }
 
 type ReplicaGroup struct {
-	ID       uint32
-	MasterID uint32
-	Peers    []Peer // the other member in this replica group
-	Status   RGStatus
-	Term     uint64 // term of master, if master changed term changed
+	ID         uint32
+	MasterPtID uint32
+	Peers      []Peer // the other member in this replica group
+	Status     RGStatus
+	Term       uint64 // term of master, if master changed term changed
 }
 
 func (rg *ReplicaGroup) clone() {
@@ -43,10 +43,19 @@ func (rg *ReplicaGroup) clone() {
 	}
 }
 
+func (rg *ReplicaGroup) GetPtRole(ptID uint32) Role {
+	for i := range rg.Peers {
+		if rg.Peers[i].ID == ptID {
+			return rg.Peers[i].PtRole
+		}
+	}
+	return Catcher
+}
+
 func (rg *ReplicaGroup) marshal() *proto2.ReplicaGroup {
 	pb := &proto2.ReplicaGroup{
 		ID:       proto.Uint32(rg.ID),
-		MasterID: proto.Uint32(rg.MasterID),
+		MasterID: proto.Uint32(rg.MasterPtID),
 		Status:   proto.Uint32(uint32(rg.Status)),
 		Term:     proto.Uint64(rg.Term),
 	}
@@ -64,7 +73,7 @@ func (rg *ReplicaGroup) marshal() *proto2.ReplicaGroup {
 
 func (rg *ReplicaGroup) unmarshal(pb *proto2.ReplicaGroup) {
 	rg.ID = pb.GetID()
-	rg.MasterID = pb.GetID()
+	rg.MasterPtID = pb.GetID()
 	rg.Term = pb.GetTerm()
 	rg.Status = RGStatus(pb.GetStatus())
 	if len(pb.GetPeers()) > 0 {

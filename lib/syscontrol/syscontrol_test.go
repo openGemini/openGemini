@@ -17,6 +17,7 @@ limitations under the License.
 package syscontrol
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -47,6 +48,14 @@ func (mockMetaClient) DataNodes() ([]meta2.DataNode, error) {
 			},
 		},
 	}, nil
+}
+
+type mockErrMetaClient struct {
+	meta.MetaClient
+}
+
+func (mockErrMetaClient) DataNodes() ([]meta2.DataNode, error) {
+	return nil, fmt.Errorf("no datanode")
 }
 
 type mockStorage struct {
@@ -146,6 +155,26 @@ func TestProcessRequest_ForceBroadcastQuery(t *testing.T) {
 	sb.Reset()
 }
 
+func TestProcessRequest_ForceBroadcastQueryInvalid(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("force_broadcast_query")
+	req.SetParam(map[string]string{
+		"enable": "1",
+	})
+	var sb strings.Builder
+	require.Error(t, ProcessRequest(req, &sb))
+	sb.Reset()
+
+	var req2 netstorage.SysCtrlRequest
+	req2.SetParam(map[string]string{
+		"enabled": "2",
+	})
+	require.Error(t, ProcessRequest(req2, &sb))
+	sb.Reset()
+}
+
 func TestQuerySeriesLimit(t *testing.T) {
 	SetQuerySeriesLimit(123)
 	limit := GetQuerySeriesLimit()
@@ -168,6 +197,19 @@ func TestSetTimeFilterProtection(t *testing.T) {
 	SetTimeFilterProtection(false)
 	enable := GetTimeFilterProtection()
 	assert.Equal(t, enable, false)
+}
+
+func TestSetTimeFilterProtectionInvalid(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("time_filter_protection")
+	req.SetParam(map[string]string{
+		"enabed": "true",
+	})
+	var sb strings.Builder
+	require.Error(t, ProcessRequest(req, &sb))
+	sb.Reset()
 }
 
 type mockQueryStorage struct {
@@ -193,4 +235,73 @@ func Test_handleQueryShardStatus(t *testing.T) {
 	res, err = ProcessQueryRequest(QueryShardStatus, param)
 	assert.NoError(t, err)
 	assert.Equal(t, res, `{"db0-rp0-pt0":[{}]}`)
+}
+
+func TestProcessRequest_compactionEn(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("compen")
+	req.SetParam(map[string]string{
+		"allnodes": "y",
+	})
+	var sb strings.Builder
+	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "127.0.0.1:8400: success,")
+	require.Contains(t, sb.String(), "127.0.0.2:8400: success,")
+	sb.Reset()
+
+	req.SetParam(map[string]string{
+		"host": "127.0.0.1",
+	})
+	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "127.0.0.1:8400: success,")
+	sb.Reset()
+}
+
+func Test_handleNodeInterruptQuery(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var sb strings.Builder
+	var req netstorage.SysCtrlRequest
+	req.SetMod("interruptquery")
+	req.SetParam(map[string]string{
+		"switchon": "true",
+	})
+	assert.Equal(t, ProcessRequest(req, &sb), nil)
+	req.SetParam(map[string]string{
+		"unkown": "true",
+	})
+	assert.Equal(t, ProcessRequest(req, &sb), nil)
+	req.SetParam(map[string]string{
+		"switchon": "true",
+	})
+	SysCtrl.MetaClient = nil
+	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
+	SysCtrl.MetaClient = &mockErrMetaClient{}
+	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
+}
+
+func Test_handleUpperMemUsePct(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var sb strings.Builder
+	var req netstorage.SysCtrlRequest
+	req.SetMod("uppermemusepct")
+	req.SetParam(map[string]string{
+		"limit": "99",
+	})
+	assert.Equal(t, ProcessRequest(req, &sb), nil)
+	req.SetParam(map[string]string{
+		"unkown": "true",
+	})
+	assert.Equal(t, ProcessRequest(req, &sb), nil)
+	req.SetParam(map[string]string{
+		"limit": "99",
+	})
+	SysCtrl.MetaClient = nil
+	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
+	SysCtrl.MetaClient = &mockErrMetaClient{}
+	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
+	SetUpperMemUsePct(0)
 }

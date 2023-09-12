@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -122,11 +123,12 @@ func TestAllocSlice(t *testing.T) {
 	buf := make([]byte, 0, 30)
 	var sub []byte
 
-	buf, sub = util.AllocSlice(buf, 20)
-	require.Equal(t, 20, len(buf))
-	require.Equal(t, 20, len(sub))
+	size := 20
+	buf, sub = util.AllocSlice(buf, size)
+	require.Equal(t, size, len(buf))
+	require.Equal(t, size, len(sub))
 
-	buf, sub = util.AllocSlice(buf, 20)
-	require.Equal(t, 50, cap(buf))
-	require.Equal(t, 20, len(sub))
+	buf, sub = util.AllocSlice(buf, size)
+	require.Equal(t, size*cpu.GetCpuNum(), cap(buf))
+	require.Equal(t, size, len(sub))
 }

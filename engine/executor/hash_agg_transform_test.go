@@ -1524,3 +1524,17 @@ func BenchmarkHashAggTransformGroupbyBatchCompare(b *testing.B) {
 	}
 	benchmarkHashAggTransformBatch(b, chunkCount, ChunkSize, tagPerChunk, exprOpt, inRowDataType, outRowDataType)
 }
+
+func TestIntervalKeysMPool(t *testing.T) {
+	mpool := executor.NewIntervalKeysMpool(1)
+	itervalKeys := mpool.AllocIntervalKeys(100)
+	if len(itervalKeys) != 100 {
+		t.Fatalf("alloc interval keys failed, expect:100, real:%d", len(itervalKeys))
+	}
+	values := mpool.AllocValues(110)
+	if len(values) != 110 {
+		t.Fatalf("alloc interval keys failed, expect:110, real:%d", len(values))
+	}
+	mpool.FreeValues(values)
+	mpool.FreeIntervalKeys(itervalKeys)
+}

@@ -92,19 +92,16 @@ func (h *SortHelper) Sort(rec *Record) *Record {
 	return rec
 }
 
-func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, pk, orderBy []PrimaryKey, deduplicate bool) *Record {
+func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, orderBy []PrimaryKey, deduplicate bool) *Record {
 	times := rec.Times()
-	tmpRec := rec.Copy()
-
 	data.InitRecord(rec.Schema)
-	data.Init(times, pk, orderBy, tmpRec)
-	data.InitDuplicateRows(len(times), tmpRec, deduplicate)
-	sort.Stable(data)
+	data.Init(times, orderBy, rec)
+	data.InitDuplicateRows(len(times), rec, deduplicate)
+	sort.Sort(data)
 	rows := data.RowIds
 
 	h.initNilCount(rec, times)
 	h.times = h.times[:0]
-
 	if deduplicate {
 		h.handleDuplication(rec, data)
 	} else {
@@ -177,10 +174,6 @@ loop:
 func (h *SortHelper) appendForColumnStore(rec *Record, data *SortData, start, end int) {
 	if start > end {
 		return
-	}
-
-	for i := start; i <= end; i++ {
-		h.times = append(h.times, data.Times[i])
 	}
 
 	rowStart, rowEnd := int(data.RowIds[start]), int(data.RowIds[end]+1)
@@ -304,8 +297,8 @@ func (cv *ColVal) deleteLast(typ int) {
 		return
 	}
 
+	isNil := cv.IsNil(cv.Len - 1)
 	cv.Len--
-	isNil := cv.IsNil(cv.Len)
 	if cv.Len%8 == 0 {
 		cv.Bitmap = cv.Bitmap[:len(cv.Bitmap)-1]
 	}

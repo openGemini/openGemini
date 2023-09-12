@@ -24,6 +24,7 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"go.uber.org/zap"
 )
 
@@ -481,7 +482,7 @@ func AllocSlice[T allocItem](data []T, size int) ([]T, []T) {
 	end := start + size
 
 	if end > cap(data) {
-		data = make([]T, 0, cap(data)+size)
+		data = make([]T, 0, size*cpu.GetCpuNum())
 		end = size
 		start = 0
 	}

@@ -21,7 +21,6 @@ import (
 	"sync"
 
 	"github.com/influxdata/influxdb/models"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -200,7 +199,7 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition)
 		lock.Lock()
 		defer lock.Unlock()
-		if err != nil && config.GetHaEnable() {
+		if err != nil {
 			*hasErr = true
 			tagValuesSlice = tagValuesSlice[:0]
 		}

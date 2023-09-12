@@ -19,18 +19,24 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
+type MeasurementVer struct {
+	NameWithVersion string
+	Version         uint32
+}
+
 // RetentionPolicyInfo represents metadata about a retention policy.
 type RetentionPolicyInfo struct {
-	Name                 string
-	ReplicaN             int
-	Duration             time.Duration
-	ShardGroupDuration   time.Duration
-	HotDuration          time.Duration
-	WarmDuration         time.Duration
-	IndexGroupDuration   time.Duration
-	IndexGroups          []IndexGroupInfo
-	Measurements         map[string]*MeasurementInfo // {"cpu_0001": *MeasurementInfo}
-	MstVersions          map[string]uint32           // { "cpu": 1}
+	Name               string
+	ReplicaN           int
+	Duration           time.Duration
+	ShardGroupDuration time.Duration
+	HotDuration        time.Duration
+	WarmDuration       time.Duration
+	IndexGroupDuration time.Duration
+	IndexGroups        []IndexGroupInfo
+	Measurements       map[string]*MeasurementInfo // {"cpu_0001": *MeasurementInfo}
+	MstVersions        map[string]MeasurementVer   // {"cpu": {"cpu_0001", 1}}
+
 	ShardGroups          []ShardGroupInfo
 	Subscriptions        []SubscriptionInfo
 	DownSamplePolicyInfo *DownSamplePolicyInfo
@@ -314,7 +320,7 @@ func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 	if rpi.MstVersions != nil {
 		pb.MstVersions = make(map[string]uint32, len(rpi.MstVersions))
 		for n, v := range rpi.MstVersions {
-			pb.MstVersions[n] = v
+			pb.MstVersions[n] = v.Version
 		}
 	}
 
@@ -363,7 +369,11 @@ func (rpi *RetentionPolicyInfo) unmarshal(pb *proto2.RetentionPolicyInfo) {
 	}
 
 	if len(pb.GetMstVersions()) > 0 {
-		rpi.MstVersions = pb.GetMstVersions()
+		mstVersions := pb.GetMstVersions()
+		rpi.MstVersions = make(map[string]MeasurementVer, len(mstVersions))
+		for k, v := range mstVersions {
+			rpi.MstVersions[k] = MeasurementVer{influx.GetNameWithVersion(k, v), v}
+		}
 	}
 
 	if len(pb.GetShardGroups()) > 0 {
@@ -510,9 +520,12 @@ func (rpi *RetentionPolicyInfo) GetMeasurement(name string) (*MeasurementInfo, e
 }
 
 func (rpi *RetentionPolicyInfo) Measurement(name string) *MeasurementInfo {
-	version := rpi.MstVersions[name]
-	nameWithVer := influx.GetNameWithVersion(name, version)
-	return rpi.Measurements[nameWithVer]
+	mstVerion, ok := rpi.MstVersions[name]
+	if !ok {
+		return nil
+	}
+
+	return rpi.Measurements[mstVerion.NameWithVersion]
 }
 
 func (rpi *RetentionPolicyInfo) validMeasurementShardType(shardType, mstName string) error {

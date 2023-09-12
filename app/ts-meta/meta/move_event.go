@@ -199,6 +199,10 @@ func (e *MoveEvent) rollbackLastTransition() {
 	e.curState, e.preState = e.preState, e.rollbackState
 }
 
+func (e *MoveEvent) handleCommandErr(err error) error {
+	return err
+}
+
 type MoveState int
 
 const (

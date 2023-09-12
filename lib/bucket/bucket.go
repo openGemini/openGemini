@@ -32,14 +32,8 @@ var (
 type ResourceBucket interface {
 	ReleaseResource(int64)
 	GetResource(int64) error
-	ReleaseDirectResource(int64)
-	GetResourceDirect(int64) error
 	GetResDetected(int64, *time.Timer) error
-	Reset()
-	GetTotalResource() int64
 	GetFreeResource() int64
-	SetTotalSource(int64)
-	GetTimeDuration() time.Duration
 }
 
 type Int64bucket struct {
@@ -110,26 +104,6 @@ func (b *Int64bucket) getResImpl(cost int64, timer *time.Timer) error {
 	}
 }
 
-// !use getResImplDirect to get resource must use ReleaseDirectResource to release
-func (b *Int64bucket) ReleaseDirectResource(freeResource int64) {
-	atomic.AddInt64(&b.freeResource, freeResource)
-}
-
-// !don't use getResImplDirect with getResImpl in one Int64bucket
-func (b *Int64bucket) getResImplDirect(cost int64) error {
-	var freeMem int64
-	b.lock.Lock()
-	freeMem = b.freeResource - cost
-	if (b.freeResource >= 0 && b.outOfLimitOnce) || (!b.outOfLimitOnce && freeMem >= 0) {
-		// CAS guarantees the atomic operation for the reResource info.
-		b.freeResource = freeMem
-		b.lock.Unlock()
-		return nil
-	}
-	b.lock.Unlock()
-	return errno.NewError(errno.DirectBucketLacks)
-}
-
 func (b *Int64bucket) GetResource(cost int64) error {
 	// timer used to send time-out signal.
 	timer := timerPool.GetTimer(b.timeout)
@@ -137,49 +111,10 @@ func (b *Int64bucket) GetResource(cost int64) error {
 	return b.getResImpl(cost, timer)
 }
 
-func (b *Int64bucket) GetResourceDirect(cost int64) error {
-	return b.getResImplDirect(cost)
-}
-
 func (b *Int64bucket) GetResDetected(cost int64, timer *time.Timer) error {
 	return b.getResImpl(cost, timer)
 }
 
-func (b *Int64bucket) SetTimeDuration(time time.Duration) {
-	b.timeout = time
-}
-
-func (b *Int64bucket) Reset() {
-	free := atomic.LoadInt64(&b.freeResource)
-	block := atomic.LoadInt64(&b.blockExecutor)
-	var changeBlock, changeFree bool
-	for !changeFree && !changeBlock {
-		if !changeFree {
-			if atomic.CompareAndSwapInt64(&b.freeResource, free, b.totalResource) {
-				changeFree = true
-			}
-		}
-		if !changeBlock {
-			if atomic.CompareAndSwapInt64(&b.blockExecutor, block, 0) {
-				changeFree = true
-			}
-		}
-	}
-}
-
-func (b *Int64bucket) GetTimeDuration() time.Duration {
-	return b.timeout
-}
-
-func (b *Int64bucket) GetTotalResource() int64 {
-	return b.totalResource
-}
-
 func (b *Int64bucket) GetFreeResource() int64 {
 	return b.freeResource
-}
-
-func (b *Int64bucket) SetTotalSource(s int64) {
-	b.totalResource = s
-	b.freeResource = s
 }
