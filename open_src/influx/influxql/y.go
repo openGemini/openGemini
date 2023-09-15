@@ -19,12 +19,11 @@ limitations under the License.
 
 package influxql
 
+import __yyfmt__ "fmt"
 
 //line sql.y:18
 
 import (
-	__yyfmt__ "fmt"
-
 	"fmt"
 	"regexp"
 	"sort"

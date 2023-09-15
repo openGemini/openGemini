@@ -10,15 +10,14 @@ go generate -x ./...
 for i in `find . -name "*.y"`
 do
   cd `dirname $i`
-  goyacc `basename $i`
-  # set ErrorVerbose=ture
-  sed -i 's/yyErrorVerbose = false/yyErrorVerbose = true/g' y.go
-  # move 'import package' together
-  sed -i 's/import __yyfmt__ "fmt"/	__yyfmt__ "fmt"/g' y.go
-  yyfmtLineNum=`grep '__yyfmt__ "fmt"' y.go -n | awk -v FS=':' '{print $1}'`
-  importLineNum=`grep "import (" y.go -n | awk -v FS=':' '{print $1}'`
-  sed -i "${yyfmtLineNum}{h;d};${importLineNum}G" y.go
-  sed -i "${importLineNum}G" y.go
+  if [[ `dirname $i` == *"ts-cli"* ]]; then
+    goyacc -o parser.go -p QL `basename $i`
+    sed -i 's/QLErrorVerbose = false/QLErrorVerbose = true/g' parser.go
+  else
+    goyacc `basename $i`
+    sed -i 's/yyErrorVerbose = false/yyErrorVerbose = true/g' y.go
+  fi
+  rm -f y.output
   cd -
 done
 
