@@ -184,7 +184,7 @@ var QLErrorMessages = [...]struct {
 
 var (
 	QLDebug        = 0
-	QLErrorVerbose = false
+	QLErrorVerbose = true
 )
 
 type QLLexer interface {
