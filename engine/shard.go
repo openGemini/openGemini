@@ -82,12 +82,15 @@ var (
 )
 
 type Storage interface {
+	writeSnapshot(s *shard)
 	WriteRowsToTable(s *shard, rows influx.Rows, mw *mstWriteCtx, binaryRows []byte) error
 	WriteRows(s *shard, mw *mstWriteCtx) error                                    // line protocol
 	WriteCols(s *shard, cols *record.Record, mst string, binaryCols []byte) error // native protocol
 	WriteIndex(s *shard, rows *influx.Rows, mw *mstWriteCtx) error
+	shouldSnapshot(s *shard) bool
 	SetClient(client metaclient.MetaClient)
 	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
+	ForceFlush(s *shard)
 }
 
 type tsstoreImpl struct {
@@ -140,16 +143,97 @@ func (storage *tsstoreImpl) SetClient(client metaclient.MetaClient) {}
 
 func (storage *tsstoreImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {}
 
-type columnstoreImpl struct {
-	mu       sync.RWMutex
-	client   metaclient.MetaClient
-	mstsInfo map[string]*meta.MeasurementInfo // map[cpu-001]meta.MeasurementInfo
+func (storage *tsstoreImpl) shouldSnapshot(s *shard) bool {
+	if s.activeTbl == nil || s.snapshotTbl != nil || s.forceFlushing() {
+		return false
+	}
+	return true
 }
 
-func newColumnstoreImpl() *columnstoreImpl {
-	return &columnstoreImpl{
-		mstsInfo: make(map[string]*meta.MeasurementInfo),
+func (storage *tsstoreImpl) ForceFlush(s *shard) {
+	if s.indexBuilder == nil {
+		return
 	}
+	s.enableForceFlush()
+	defer s.disableForceFlush()
+
+	s.waitSnapshot()
+	s.prepareSnapshot()
+	s.storage.writeSnapshot(s)
+	s.endSnapshot()
+}
+
+func (storage *tsstoreImpl) writeSnapshot(s *shard) {
+	s.writeSnapshot()
+}
+
+type columnstoreImpl struct {
+	mu                sync.RWMutex
+	client            metaclient.MetaClient
+	snapshotContainer []*mutable.MemTable
+	snapshotStatus    []int
+	mstsInfo          map[string]*meta.MeasurementInfo // map[cpu-001]meta.MeasurementInfo
+}
+
+func newColumnstoreImpl(snapshotTblNum int) *columnstoreImpl {
+	return &columnstoreImpl{
+		mstsInfo:          make(map[string]*meta.MeasurementInfo),
+		snapshotContainer: make([]*mutable.MemTable, snapshotTblNum),
+		snapshotStatus:    make([]int, snapshotTblNum),
+	}
+}
+
+func (storage *columnstoreImpl) writeSnapshot(s *shard) {
+	s.snapshotLock.Lock()
+	if s.activeTbl == nil {
+		s.snapshotLock.Unlock()
+		return
+	}
+	walFiles, err := s.wal.Switch()
+	if err != nil {
+		s.snapshotLock.Unlock()
+		panic("wal switch failed")
+	}
+
+	idx := storage.getFreeSnapShotTbl()
+	if idx == -1 {
+		s.snapshotLock.Unlock()
+		panic("error: there is not free snapShotTbl")
+	}
+	storage.snapshotContainer[idx] = s.activeTbl
+	storage.snapshotStatus[idx] = 1
+	curSize := storage.snapshotContainer[idx].GetMemSize()
+
+	s.activeTbl = mutable.GetMemTable(s.engineType)
+	s.activeTbl.SetIdx(s.skIdx)
+	s.snapshotLock.Unlock()
+
+	start := time.Now()
+	s.indexBuilder.Flush()
+
+	go func(idx int, curSize int64, walFiles []string, start time.Time) {
+		s.commitSnapshot(storage.snapshotContainer[idx])
+		nodeMutableLimit.freeResource(curSize)
+
+		err = s.wal.Remove(walFiles)
+		if err != nil {
+			panic("wal remove files failed: " + err.Error())
+		}
+
+		//This fail point is used in scenarios where "s.snapshotTbl" is not recycled
+		failpoint.Inject("snapshot-table-reset-delay", func() {
+			time.Sleep(2 * time.Second)
+		})
+
+		s.snapshotLock.Lock()
+		storage.snapshotContainer[idx].PutMemTable()
+		storage.snapshotContainer[idx] = nil
+		storage.snapshotStatus[idx] = 0
+		s.snapshotLock.Unlock()
+
+		atomic.AddInt64(&statistics.PerfStat.FlushSnapshotDurationNs, time.Since(start).Nanoseconds())
+		atomic.AddInt64(&statistics.PerfStat.FlushSnapshotCount, 1)
+	}(idx, curSize, walFiles, start)
 }
 
 func (storage *columnstoreImpl) WriteRows(s *shard, mw *mstWriteCtx) error {
@@ -249,6 +333,49 @@ func (storage *columnstoreImpl) SetMstInfo(name string, mstInfo *meta.Measuremen
 	if mstInfo.EngineType == config.COLUMNSTORE {
 		storage.mstsInfo[name] = mstInfo
 	}
+}
+
+func (storage *columnstoreImpl) shouldSnapshot(s *shard) bool {
+	if s.activeTbl == nil || !storage.isSnapShotTblFree() || s.forceFlushing() {
+		return false
+	}
+	return true
+}
+
+func (storage *columnstoreImpl) isSnapShotTblFree() bool {
+	for i := range storage.snapshotContainer {
+		if storage.snapshotContainer[i] == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (storage *columnstoreImpl) ForceFlush(s *shard) {
+	if s.indexBuilder == nil {
+		return
+	}
+	s.enableForceFlush()
+	defer s.disableForceFlush()
+
+	s.waitSnapshot()
+	idx := storage.getFreeSnapShotTbl()
+	if idx == -1 {
+		log.Debug("there is no free snapshot table", zap.Uint64("shard id", s.ident.ShardID))
+		return
+	}
+	s.prepareSnapshot()
+	s.storage.writeSnapshot(s)
+	s.endSnapshot()
+}
+
+func (storage *columnstoreImpl) getFreeSnapShotTbl() int {
+	for i := range storage.snapshotStatus {
+		if storage.snapshotStatus[i] == 0 {
+			return i
+		}
+	}
+	return -1
 }
 
 func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst string, binaryCols []byte) error {
@@ -588,8 +715,8 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		s.storage = &tsstoreImpl{}
 		conf = immutable.GetTsStoreConfig()
 	case config.COLUMNSTORE:
-		s.storage = newColumnstoreImpl()
 		conf = immutable.GetColStoreConfig()
+		s.storage = newColumnstoreImpl(conf.SnapshotTblNum)
 	default:
 		return nil
 	}
@@ -753,7 +880,7 @@ func (s *shard) shouldSnapshot() bool {
 	s.snapshotLock.RLock()
 	defer s.snapshotLock.RUnlock()
 
-	if s.activeTbl == nil || s.snapshotTbl != nil || s.forceFlushing() {
+	if !s.storage.shouldSnapshot(s) {
 		return false
 	}
 
@@ -833,7 +960,7 @@ func (s *shard) Snapshot() {
 			if !s.shouldSnapshot() {
 				continue
 			}
-			s.writeSnapshot()
+			s.storage.writeSnapshot(s)
 			s.endSnapshot()
 		}
 	}
@@ -1121,34 +1248,18 @@ func (s *shard) forceFlushing() bool {
 }
 
 func (s *shard) ForceFlush() {
-	if s.indexBuilder == nil {
-		return
-	}
-	s.enableForceFlush()
-	defer s.disableForceFlush()
-
-	s.waitSnapshot()
-	s.prepareSnapshot()
-	s.writeSnapshot()
-	s.endSnapshot()
+	s.storage.ForceFlush(s)
 }
 
 func (s *shard) commitSnapshot(snapshot *mutable.MemTable) {
-	snapshot.MTable.ApplyConcurrency(snapshot, func(msName string, sids []uint64) {
+	snapshot.MTable.ApplyConcurrency(snapshot, func(msName string) {
 		// do not flush measurement that is deleting
 		if s.checkMstDeleting(msName) {
 			return
 		}
 		start := time.Now()
-		t := start
-		snapshot.MTable.SortAndDedup(snapshot, msName, sids)
-		atomic.AddInt64(&statistics.PerfStat.SnapshotSortChunksNs, time.Since(t).Nanoseconds())
-
-		t = time.Now()
-		snapshot.MTable.FlushChunks(snapshot, s.filesPath, msName, s.lock, s.immTables, sids)
-		atomic.AddInt64(&statistics.PerfStat.SnapshotFlushChunksNs, time.Since(t).Nanoseconds())
-
-		atomic.AddInt64(&statistics.PerfStat.SnapshotHandleChunksNs, time.Since(start).Nanoseconds())
+		snapshot.MTable.FlushChunks(snapshot, s.filesPath, msName, s.lock, s.immTables)
+		atomic.AddInt64(&statistics.PerfStat.SnapshotFlushChunksNs, time.Since(start).Nanoseconds())
 	})
 }
 
@@ -1399,7 +1510,7 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 	s.log.Info("replay wal files ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId))
 
 	s.ForceFlush()
-	s.log.Info("force flush shard ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId))
+	s.log.Info("force flush shard ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Int("wal filename number", len(walFileNames)))
 	err = s.wal.Remove(walFileNames)
 	if err != nil {
 		return err
@@ -1624,10 +1735,8 @@ func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
 	s.log.Info("call replayWal method ok", zap.Uint64("id", s.ident.ShardID),
 		zap.Duration("time used", time.Since(wStart)), zap.Uint64("opId", s.opId))
 
-	// Must shard open successfully,
+	// The shard MUST open successfully,
 	// then add this shard to compaction worker.
-	s.immTables.CompactionEnable()
-	s.immTables.MergeEnable()
 	compWorker.RegisterShard(s)
 	s.EnableDownSample()
 	s.wg.Add(1)

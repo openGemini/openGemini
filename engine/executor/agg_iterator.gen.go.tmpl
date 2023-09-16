@@ -1455,6 +1455,7 @@ func (f *{{.Name}}HeapItem) appendForAux(input Chunk, start, end, ordinal int) [
 	} else {
 		f.appendForAuxSlow(input, start, end, ordinal, maxIndex)
 	}
+	sort.Sort(f)
 	index := make([]int, 0)
 	for i := range f.items {
 		if idx := f.items[i].index - maxIndex; idx >= start {

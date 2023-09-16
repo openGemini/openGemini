@@ -1146,24 +1146,25 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 	}
 	mst := rp.Measurements[mstVersion.NameWithVersion]
 
-	switch stmt.Name {
-	case "PRIMARYKEY":
+	getPrimaryKey := func() *models.Row {
 		row := &models.Row{Columns: []string{"primary_key"}}
 		res := make([]interface{}, 0, len(mst.ColStoreInfo.PrimaryKey))
 		for i := range mst.ColStoreInfo.PrimaryKey {
 			res = append(res, mst.ColStoreInfo.PrimaryKey[i])
 		}
 		row.Values = [][]interface{}{{res}}
-		return []*models.Row{row}, nil
-	case "SORTKEY":
+		return row
+	}
+	getSortKey := func() *models.Row {
 		row := &models.Row{Columns: []string{"sort_key"}}
 		res := make([]interface{}, 0, len(mst.ColStoreInfo.SortKey))
 		for i := range mst.ColStoreInfo.SortKey {
 			res = append(res, mst.ColStoreInfo.SortKey[i])
 		}
 		row.Values = [][]interface{}{{res}}
-		return []*models.Row{row}, nil
-	case "PROPERTY":
+		return row
+	}
+	getProperty := func() *models.Row {
 		row := &models.Row{Columns: []string{"property_key", "property_value"}}
 		keys := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyKey))
 		values := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyValue))
@@ -1172,8 +1173,9 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 			values = append(values, mst.ColStoreInfo.PropertyValue[i])
 		}
 		row.Values = [][]interface{}{{keys, values}}
-		return []*models.Row{row}, nil
-	case "SHARDKEY":
+		return row
+	}
+	getShardKey := func() *models.Row {
 		row := &models.Row{Columns: []string{"shard_key", "type", "ShardGroup"}}
 		res := make([][]interface{}, len(mst.ShardKeys))
 		for i := range res {
@@ -1185,10 +1187,54 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 			res[i][2] = mst.ShardKeys[i].ShardGroup
 		}
 		row.Values = res
-		return []*models.Row{row}, nil
-	case "ENGINETYPE":
+		return row
+	}
+	getEngineType := func() *models.Row {
 		row := &models.Row{Columns: []string{"ENGINETYPE"}}
 		row.Values = [][]interface{}{{config.EngineType2String[mst.EngineType]}}
+		return row
+	}
+	switch stmt.Name {
+	case "PRIMARYKEY":
+		if mst.EngineType != config.COLUMNSTORE {
+			return nil, errors.New("only support for COLUMNSTORE engine")
+		}
+		return []*models.Row{getPrimaryKey()}, nil
+	case "SORTKEY":
+		if mst.EngineType != config.COLUMNSTORE {
+			return nil, errors.New("only support for COLUMNSTORE engine")
+		}
+		return []*models.Row{getSortKey()}, nil
+	case "PROPERTY":
+		if mst.EngineType != config.COLUMNSTORE {
+			return nil, errors.New("only support for COLUMNSTORE engine")
+		}
+		return []*models.Row{getProperty()}, nil
+	case "SHARDKEY":
+		return []*models.Row{getShardKey()}, nil
+	case "ENGINETYPE":
+		return []*models.Row{getEngineType()}, nil
+	case "SCHEMA":
+		var row *models.Row
+		if mst.EngineType == config.COLUMNSTORE {
+			row = &models.Row{Columns: []string{"shard_key", "type", "ShardGroup", "engine_type", "primary_key", "sort_key"}}
+			res := [][]interface{}{{
+				getShardKey().Values[0][0],
+				getShardKey().Values[0][1],
+				getShardKey().Values[0][2],
+				getEngineType().Values[0][0],
+				getPrimaryKey().Values[0][0],
+				getSortKey().Values[0][0]}}
+			row.Values = res
+		} else {
+			row = &models.Row{Columns: []string{"shard_key", "type", "ShardGroup", "engine_type"}}
+			res := [][]interface{}{{
+				getShardKey().Values[0][0],
+				getShardKey().Values[0][1],
+				getShardKey().Values[0][2],
+				getEngineType().Values[0][0]}}
+			row.Values = res
+		}
 		return []*models.Row{row}, nil
 	default:
 		return nil, fmt.Errorf("%s is not support for this command", stmt.Name)

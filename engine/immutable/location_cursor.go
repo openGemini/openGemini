@@ -204,12 +204,16 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 	var err error
 	var rowNum int
 	var rec *record.Record
+	var filterRec *record.Record
 	var readCtx = l.lcs[0].ctx
 
 	if len(readCtx.ops) > 0 {
 		return l.ReadMeta(filterOpts, dst, filterBitmap)
 	}
 
+	if l.filterRecPool != nil {
+		filterRec = l.filterRecPool.Get()
+	}
 	for {
 		if l.pos >= len(l.lcs) {
 			return nil, nil
@@ -219,10 +223,7 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 			l.pos++
 			continue
 		}
-		var filterRec *record.Record
-		if l.filterRecPool != nil {
-			filterRec = l.filterRecPool.Get()
-		}
+
 		rec, rowNum, err = loc.readData(filterOpts, dst, filterRec, filterBitmap)
 		if err != nil {
 			return nil, err
@@ -233,6 +234,9 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 			return rec, nil
 		}
 		dst.Reuse()
+		if filterRec != nil {
+			filterRec.Reuse()
+		}
 		l.pos++
 	}
 }

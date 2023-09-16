@@ -197,6 +197,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
 	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
 	opt.MaxSeriesPerDatabase = conf.Data.MaxSeriesPerDatabase
+	opt.SnapshotTblNum = conf.Data.SnapshotTblNum
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)

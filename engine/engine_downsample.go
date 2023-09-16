@@ -58,22 +58,27 @@ func (e *Engine) GetShardDownSamplePolicyInfos(meta interface {
 					continue
 				}
 				p := shardData.GetShardDownSamplePolicy(dsp.Info)
-				if p != nil {
-					if e := shardData.UpdateShardReadOnly(meta); e != nil {
-						ptInfo.mu.RUnlock()
-						return nil, e
-					}
-					shardData.WaitWriteFinish()
-					shardData.ForceFlush()
-					if shardData.IsOutOfOrderFilesExist() {
-						continue
-					}
-					p.Ident = shardData.GetIdent()
-					p.DbName = dbName
-					p.PtId = ptId
-					p.ShardId = shardId
-					policies = append(policies, p)
+				if p == nil {
+					continue
 				}
+				if err := e.openShardLazy(shardData); err != nil {
+					ptInfo.mu.RUnlock()
+					return nil, err
+				}
+				if err := shardData.UpdateShardReadOnly(meta); err != nil {
+					ptInfo.mu.RUnlock()
+					return nil, err
+				}
+				shardData.WaitWriteFinish()
+				shardData.ForceFlush()
+				if shardData.IsOutOfOrderFilesExist() {
+					continue
+				}
+				p.Ident = shardData.GetIdent()
+				p.DbName = dbName
+				p.PtId = ptId
+				p.ShardId = shardId
+				policies = append(policies, p)
 			}
 			ptInfo.mu.RUnlock()
 			e.unrefDBPTNoLock(dbName, ptId)

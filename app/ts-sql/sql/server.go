@@ -92,7 +92,7 @@ func updateTLSConfig(into **tls.Config, with *tls.Config) {
 func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (app.Server, error) {
 	// First grab the base tls config we will use for all clients and servers
 	c := conf.(*config.TSSql)
-	c.Corrector(c.Common.CPUNum)
+	c.Corrector(c.Common.CPUNum, c.Common.CpuAllocationRatio)
 	tlsConfig, err := c.TLS.Parse()
 	if err != nil {
 		return nil, fmt.Errorf("tls configuration: %v", err)

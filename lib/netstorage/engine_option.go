@@ -56,6 +56,7 @@ type EngineOptions struct {
 	CompactRecovery          bool
 	SnapshotThroughput       int64
 	SnapshotThroughputBurst  int64
+	SnapshotTblNum           int
 	BackgroundReadThroughput int
 
 	// WalSyncInterval is the interval of wal file sync

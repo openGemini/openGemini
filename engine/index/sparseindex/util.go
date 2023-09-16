@@ -75,7 +75,7 @@ func (si *SetIndex) Not() bool {
 	return false
 }
 
-func (si *SetIndex) checkInRange(_ []*Range, _ []int, _ bool) *Mark {
+func (si *SetIndex) checkInRange(_ []*Range, _ []int, _ bool) Mark {
 	return NewMark(false, false)
 }
 
@@ -142,6 +142,10 @@ type ColumnRef struct {
 	column   *record.ColVal
 }
 
+func NewColumnRef(name string, dataType int, column *record.ColVal) *ColumnRef {
+	return &ColumnRef{name: name, dataType: dataType, column: column}
+}
+
 func genIndexColumnsBySchema(schemas record.Schemas) []*ColumnRef {
 	indexColumns := make([]*ColumnRef, len(schemas))
 	colVals := make([]record.ColVal, len(schemas))
@@ -151,43 +155,9 @@ func genIndexColumnsBySchema(schemas record.Schemas) []*ColumnRef {
 	return indexColumns
 }
 
-func genIndexColumnsByRec(rec *record.Record) []*ColumnRef {
-	indexColumns := make([]*ColumnRef, rec.ColNums())
-	for i := range indexColumns {
-		indexColumns[i] = &ColumnRef{name: rec.Schemas()[i].Name, dataType: rec.Schemas()[i].Type, column: rec.Column(i)}
-	}
-	return indexColumns
-}
-
 func getSearchStatus(fr fragment.FragmentRanges) string {
 	if len(fr) == 0 {
 		return Empty
 	}
 	return Continuous + ": " + fr.String()
-}
-
-// IsFieldKey is used to distinguish primary key from field key in conditions
-// and determine whether field key  exist in expressions.
-// field keys are not filtered by primary index.
-func IsFieldKey(b *influxql.BinaryExpr, s record.Schemas) bool {
-	switch item := b.RHS.(type) {
-	case *influxql.BinaryExpr:
-		return IsFieldKey(item, s)
-	case *influxql.VarRef:
-		if idx := s.FieldIndex(item.Val); idx < 0 {
-			return true
-		}
-	default:
-	}
-
-	switch item := b.LHS.(type) {
-	case *influxql.BinaryExpr:
-		return IsFieldKey(item, s)
-	case *influxql.VarRef:
-		if idx := s.FieldIndex(item.Val); idx < 0 {
-			return true
-		}
-	default:
-	}
-	return false
 }

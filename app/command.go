@@ -121,9 +121,9 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		if err := config.SetHaPolicy(common.HaPolicy); err != nil {
 			return err
 		}
+		crypto.Initialize(common.CryptoConfig)
 	}
 
-	crypto.Initialize(conf.GetCommon().CryptoConfig)
 	if err := conf.Validate(); err != nil {
 		return err
 	}

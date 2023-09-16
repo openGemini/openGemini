@@ -82,10 +82,15 @@ func (s *ErrnoStat) Collect(buf []byte) ([]byte, error) {
 		s.fields["value"] = n
 		buf = AddPointToBuffer(errnoStatisticsName, s.tags, s.fields, buf)
 
-		stat := opsStat.OpsStatistic{
-			Name:   errnoStatisticsName,
-			Tags:   s.tags,
-			Values: s.fields,
+		stat := opsStat.NewStatistic(errnoStatisticsName)
+		// Add any supplied tags.
+		for k, v := range s.tags {
+			stat.Tags[k] = v
+		}
+
+		// Add any supplied fields.
+		for k, v := range s.fields {
+			stat.Values[k] = v
 		}
 		s.stats = append(s.stats, stat)
 	}

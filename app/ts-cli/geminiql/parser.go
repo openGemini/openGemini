@@ -19,8 +19,11 @@ limitations under the License.
 
 package geminiql
 
+import __yyfmt__ "fmt"
+
+//line parser.y:18
+
 import (
-	__yyfmt__ "fmt"
 	"strconv"
 )
 
@@ -181,7 +184,7 @@ var QLErrorMessages = [...]struct {
 
 var (
 	QLDebug        = 0
-	QLErrorVerbose = false
+	QLErrorVerbose = true
 )
 
 type QLLexer interface {

@@ -19,13 +19,12 @@ package config
 import (
 	"errors"
 	"fmt"
-	"path"
 	"path/filepath"
 
 	"github.com/influxdata/influxdb/toml"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	lumberjack "gopkg.in/natefinch/lumberjack.v2"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -106,20 +105,30 @@ func (c *Logger) SetApp(app App) {
 	c.app = app
 }
 
-func (c *Logger) GetFileName() string {
-	return c.filename(string(c.app))
+func (c *Logger) GetApp() string {
+	return string(c.app)
 }
 
-func (c *Logger) filename(name string) string {
-	return path.Clean(fmt.Sprintf("%s/%s.log", c.Path, name))
-}
-
-func (c *Logger) Build(name string) *lumberjack.Logger {
-	return &lumberjack.Logger{
-		Filename:   c.filename(name),
-		MaxSize:    int(c.MaxSize),
-		MaxBackups: c.MaxNum,
-		MaxAge:     c.MaxAge,
-		Compress:   c.CompressEnabled,
+func rewriteMaxSize(size toml.Size) int {
+	maxSize := int(size)
+	if maxSize < 1024*1024 {
+		maxSize = 1
+	} else {
+		maxSize = maxSize / (1024 * 1024)
 	}
+	return maxSize
+}
+
+func (c *Logger) NewLumberjackLogger(fileName string) *lumberjack.Logger {
+	logName := filepath.Join(c.Path, fmt.Sprintf("%s.log", fileName))
+	maxSize := rewriteMaxSize(c.MaxSize)
+
+	hook := &lumberjack.Logger{
+		Filename:   logName,
+		MaxSize:    maxSize,
+		MaxBackups: c.MaxNum,
+		Compress:   c.CompressEnabled,
+		MaxAge:     c.MaxAge,
+	}
+	return hook
 }

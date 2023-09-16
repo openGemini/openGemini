@@ -201,7 +201,7 @@ func (c *ChunkIterator) Next() bool {
 	c.fields = c.fields[:c.curtChunkMeta.columnCount]
 	for i := range c.curtChunkMeta.colMeta {
 		cm := c.curtChunkMeta.colMeta[i]
-		c.fields[i].Name = cm.name
+		c.fields[i].Name = cm.Name()
 		c.fields[i].Type = int(cm.ty)
 	}
 

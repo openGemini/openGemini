@@ -52,6 +52,9 @@ install-failpoint:
 install-tmpl:
 	@$(GO) install github.com/benbjohnson/tmpl@v1.1.0
 
+install-goyacc:
+	@$(GO) install golang.org/x/tools/cmd/goyacc@v0.13.0
+
 install-protoc:
 	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc 3.14.0" ]; then exit 0; fi; \
 	if [ $$(uname -s) = "Linux" ];  then \

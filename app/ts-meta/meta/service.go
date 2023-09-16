@@ -104,7 +104,7 @@ func (s *Service) startMetaServer() error {
 	}
 
 	s.clusterManager = NewClusterManager(s.store)
-	s.balanceManager = NewBalanceManager()
+	s.balanceManager = NewBalanceManager(s.config.BalanceAlgo)
 	s.msm = NewMigrateStateMachine()
 	s.store.cm = s.clusterManager
 	return nil

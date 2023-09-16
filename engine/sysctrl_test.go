@@ -249,9 +249,9 @@ func TestEngine_getShardStatus(t *testing.T) {
 	})
 	result, err := e.processReq(req)
 	require.NoError(t, err)
-	require.Contains(t, result["db: db0, rp: rp0, pt: 1"], `ShardId: 1`)
-	require.Contains(t, result["db: db0, rp: rp0, pt: 1"], `ReadOnly: false`)
-	require.Contains(t, result["db: db0, rp: rp0, pt: 1"], `Opened: false`)
+	require.Contains(t, result["db: db0, rp: rp0, pt: 0"], `ShardId: 1`)
+	require.Contains(t, result["db: db0, rp: rp0, pt: 0"], `ReadOnly: false`)
+	require.Contains(t, result["db: db0, rp: rp0, pt: 0"], `Opened: false`)
 }
 
 func TestEngine_backgroundReadLimiter(t *testing.T) {

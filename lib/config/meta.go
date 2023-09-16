@@ -51,6 +51,7 @@ const (
 	DefaultPtNumPerNode         = 1
 	DefaultHashAlgo             = "ver03"
 	DefaultHaPolicy             = "write-available-first"
+	DefaultBalanceAlgoVer       = "v1.1"
 )
 
 var DefaultMetaJoin = []string{"127.0.0.1:8092"}
@@ -163,6 +164,7 @@ type Meta struct {
 	Logging            Logger        `toml:"logging"`
 
 	PtNumPerNode uint32 `toml:"ptnum-pernode"`
+	BalanceAlgo  string `toml:"balance-algorithm-version"`
 }
 
 // NewMeta builds a new configuration with default values.
@@ -190,6 +192,7 @@ func NewMeta() *Meta {
 		RemoteHostname:          DefaultHostname,
 		ClusterTracing:          true,
 		PtNumPerNode:            DefaultPtNumPerNode,
+		BalanceAlgo:             DefaultBalanceAlgoVer,
 	}
 }
 
@@ -219,7 +222,7 @@ func (c *Meta) Validate() error {
 func (c *Meta) BuildRaft() *raft.Config {
 	conf := raft.DefaultConfig()
 	if c.ClusterTracing {
-		conf.LogOutput = c.Logging.Build(DefaultRaftFileName)
+		conf.LogOutput = c.Logging.NewLumberjackLogger(DefaultRaftFileName)
 	}
 	conf.HeartbeatTimeout = time.Duration(c.HeartbeatTimeout)
 	conf.ElectionTimeout = time.Duration(c.ElectionTimeout)
@@ -274,7 +277,7 @@ func (c *Gossip) BuildSerf(lg Logger, app App, name string, event chan<- serf.Ev
 	serfConf.Tags = map[string]string{"role": string(app)}
 	serfConf.EventCh = event
 	if c.LogEnabled {
-		serfConf.LogOutput = lg.Build(DefaultGossipFileName)
+		serfConf.LogOutput = lg.NewLumberjackLogger(DefaultGossipFileName)
 	}
 
 	member := serfConf.MemberlistConfig

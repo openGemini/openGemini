@@ -241,12 +241,13 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx i
 func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp, mst string, rec *record.Record, ptIdx int, engineType config.EngineType) error {
 	start := 0
 	var subRec *record.Record
+	var err error
 	for i := range sgis {
 		interval := SearchLowerBoundOfRec(rec, sgis[i], start)
 		if interval == NotInShardDuration {
-			err := errno.NewError(errno.ArrowFlightGetShardGroupErr, sgis[i].StartTime, rec.Time(start))
-			w.logger.Error("SearchLowerBoundOfRec failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
-			return err
+			err = errno.NewError(errno.ArrowFlightGetShardGroupErr, sgis[i].StartTime, rec.Time(start))
+			w.logger.Warn("SearchLowerBoundOfRec failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
+			continue
 		}
 		end := start + interval
 		if start == 0 && end == rec.RowNums() {
@@ -267,7 +268,7 @@ func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp,
 		}
 		start = end
 	}
-	return nil
+	return err
 }
 
 func (w *RecordWriter) writeRecordToShard(shard *meta.ShardInfo, database, retentionPolicy, measurement string, rec *record.Record) error {

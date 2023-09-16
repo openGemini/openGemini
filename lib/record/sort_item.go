@@ -31,7 +31,6 @@ type SortItem interface {
 	Compare(i, j int) int
 	CompareSingleValue(data interface{}, postionX, postionY int) (int, error)
 	Swap(i, j int)
-	Len() int
 }
 
 type FloatSlice struct {
@@ -42,20 +41,12 @@ func (sli *FloatSlice) Swap(i, j int) {
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
 }
 
-func (sli *FloatSlice) Len() int {
-	return len(sli.V)
-}
-
 type IntegerSlice struct {
 	V []int64
 }
 
 func (sli *IntegerSlice) Swap(i, j int) {
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
-}
-
-func (sli *IntegerSlice) Len() int {
-	return len(sli.V)
 }
 
 type StringSlice struct {
@@ -66,20 +57,12 @@ func (sli *StringSlice) Swap(i, j int) {
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
 }
 
-func (sli *StringSlice) Len() int {
-	return len(sli.V)
-}
-
 type BooleanSlice struct {
 	V []bool
 }
 
 func (sli *BooleanSlice) Swap(i, j int) {
 	sli.V[i], sli.V[j] = sli.V[j], sli.V[i]
-}
-
-func (sli *BooleanSlice) Len() int {
-	return len(sli.V)
 }
 
 func (sli *FloatSlice) Compare(i, j int) int {

@@ -1423,3 +1423,50 @@ func TestClient_GetNodePtsMap(t *testing.T) {
 	assert.Equal(t, 1, len(nodePtMap))
 	assert.Equal(t, uint32(0), nodePtMap[0][0])
 }
+
+func TestClient_MultiRpWithSameMeasurement(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{ID: 1, StartTime: ts, EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.TSSTORE}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+					"rp1": {
+						Name:         "rp1",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+					"rp2": {
+						Name:         "rp2",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{{
+					PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline}},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	ms, err := c.Measurements("db0", nil)
+	// test db not found
+	if len(ms) != 1 || err != nil {
+		t.Fatal("the number of measurement is not correct, actual", len(ms))
+	}
+
+}

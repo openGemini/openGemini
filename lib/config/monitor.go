@@ -97,7 +97,7 @@ func (c *TSMonitor) GetSpdy() *Spdy {
 }
 
 func (c *TSMonitor) GetCommon() *Common {
-	return &Common{}
+	return nil
 }
 
 type MonitorMain struct {
