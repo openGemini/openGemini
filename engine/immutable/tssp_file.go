@@ -398,7 +398,7 @@ func (r *tsspFileReader) readSegmentRecord(cm *ChunkMeta, segment int, dst *reco
 		} else {
 			data, err = r.ReadDataBlock(segOff, segSize, &decs.readBuf, ioPriority)
 			if err != nil {
-				log.Error("read column data fail", zap.String("file", r.FileName()), zap.String("col", cMeta.name), zap.Error(err))
+				log.Error("read column data fail", zap.String("file", r.FileName()), zap.String("col", cMeta.Name()), zap.Error(err))
 				return nil, err
 			}
 		}

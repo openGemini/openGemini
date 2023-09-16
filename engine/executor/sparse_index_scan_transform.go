@@ -220,9 +220,11 @@ func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, f
 	}
 
 	tracing.StartPP(trans.allocateSpan)
-	trans.indexLogger.Debug("SparseIndexScan meta infos", zap.String("db", trans.info.Req.Database),
-		zap.Uint32("pt", trans.info.Req.PtID), zap.Uint64s("shardIds", trans.info.Req.ShardIDs))
-	trans.indexLogger.Debug("SparseIndexScan index results", zap.String("shards fragments", fragments.String()))
+	if trans.indexLogger.IsDebugLevel() {
+		trans.indexLogger.Debug("SparseIndexScan meta infos", zap.String("db", trans.info.Req.Database),
+			zap.Uint32("pt", trans.info.Req.PtID), zap.Uint64s("shardIds", trans.info.Req.ShardIDs))
+		trans.indexLogger.Debug("SparseIndexScan index results", zap.String("shards fragments", fragments.String()))
+	}
 
 	fragmentsGroups, err := DistributeFragmentsV2(fragments, parallelism)
 	if err != nil {
@@ -230,7 +232,9 @@ func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, f
 		return err
 	}
 
-	trans.indexLogger.Debug("SparseIndexScan allocates result", zap.String("groups fragments", fragmentsGroups.String()))
+	if trans.indexLogger.IsDebugLevel() {
+		trans.indexLogger.Debug("SparseIndexScan allocates result", zap.String("groups fragments", fragmentsGroups.String()))
+	}
 	tracing.EndPP(trans.allocateSpan)
 
 	tracing.StartPP(trans.buildSpan)

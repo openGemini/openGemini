@@ -414,6 +414,26 @@ func TestScanWithComplex(t *testing.T) {
 			"UserID > 'U2' OR URL > 'W2'",
 		)
 	})
+
+	t.Run("exclusion search LT and GT or LT and GT", func(t *testing.T) {
+		f(
+			pkFile,
+			buildIndexFragmentVariable(),
+			buildPkRecordComplex(),
+			[]*fragment.FragmentRange{fragment.NewFragmentRange(0, 4)},
+			"UserID > 'U2' and URL > 'W2' or height = 180 and age = 18",
+		)
+	})
+
+	t.Run("exclusion search LT and GT", func(t *testing.T) {
+		f(
+			pkFile,
+			buildIndexFragmentVariable(),
+			buildPkRecordComplex(),
+			[]*fragment.FragmentRange{fragment.NewFragmentRange(1, 3)},
+			"UserID > 'U2' and UserID < 'U4'",
+		)
+	})
 }
 
 func TestScanWithAllType(t *testing.T) {

@@ -2896,7 +2896,8 @@ func (c *Client) Measurements(database string, ms influxql.Measurements) ([]stri
 	for i := 1; i < l; i++ {
 		if measurements[i] == measurements[i-1] {
 			l--
-			measurements = append(measurements[:i], measurements[i+1:]...)
+			measurements = append(measurements[:i-1], measurements[i:]...)
+			i--
 		}
 	}
 	return measurements, nil
@@ -3538,15 +3539,3 @@ type uint64Slice []uint64
 func (a uint64Slice) Len() int           { return len(a) }
 func (a uint64Slice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a uint64Slice) Less(i, j int) bool { return a[i] < a[j] }
-
-func DefaultHost(hostname, addr string) (string, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "", err
-	}
-
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		return net.JoinHostPort(hostname, port), nil
-	}
-	return addr, nil
-}

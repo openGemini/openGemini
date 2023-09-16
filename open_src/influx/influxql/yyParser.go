@@ -189,8 +189,7 @@ type cqSamplePolicyInfo struct {
 }
 
 type fieldList struct {
-	fieldName   string
-	fieldType   string
-	tagOrField  string
-	defaultFill Expr
+	fieldName  string
+	fieldType  string
+	tagOrField string
 }

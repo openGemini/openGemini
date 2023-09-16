@@ -101,10 +101,7 @@ func (c *RPCClient) Handle(data interface{}) error {
 		return NewInvalidTypeError("*rpc.Message", data)
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if c.aborted && msg.Type() != AnalyzeResponseMessage {
+	if c.isAborted() && msg.Type() != AnalyzeResponseMessage {
 		return nil
 	}
 

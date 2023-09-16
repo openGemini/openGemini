@@ -38,8 +38,8 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
-const ColumnStoreReaderRecordNum = 5
-const ColumnStoreReaderChunkNum = 5
+const ColumnStoreReaderRecordNum = 7
+const ColumnStoreReaderChunkNum = 7
 
 type ColumnStoreReader struct {
 	executor.BaseProcessor

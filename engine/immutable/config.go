@@ -29,6 +29,7 @@ const (
 	DefaultMaxSegmentLimit4ColStore   = 256 * 1024
 	DefaultMaxChunkMetaItemSize       = 256 * 1024
 	DefaultMaxChunkMetaItemCount      = 512
+	DefaultSnapshotTblNum             = 8
 
 	NonStreamingCompact = 2
 	StreamingCompact    = 1
@@ -84,6 +85,7 @@ type Config struct {
 	fileSizeLimit         int64
 	maxChunkMetaItemSize  int
 	maxChunkMetaItemCount int
+	SnapshotTblNum        int
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
@@ -130,6 +132,14 @@ func (c *Config) GetMaxRowsPerSegment() int {
 
 func (c *Config) GetMaxSegmentLimit() int {
 	return c.maxSegmentLimit
+}
+
+func SetSnapshotTblNum(snapshotTblNum int) {
+	if snapshotTblNum < 1 {
+		snapshotTblNum = 1
+	}
+	colStoreConf.SnapshotTblNum = snapshotTblNum
+	log.Info("Set snapshotTblNum", zap.Int("snapshotTblNum", snapshotTblNum))
 }
 
 func SetCacheDataBlock(en bool) {

@@ -360,6 +360,22 @@ func TestRetryWriteRecordWriteErr(t *testing.T) {
 	rw.processRecord(msg, 0)
 }
 
+func TestSplitAndWriteByShardErr(t *testing.T) {
+	var err error
+	db, rp, mst := "db0", "rp0", "rtt"
+	// build the record writer
+	rw := NewRecordWriter(10*time.Second, 1, 2)
+	recs := MockArrowRecords(1, 1)
+	rec := record.NewRecord(record.ArrowSchemaToNativeSchema(recs[0].Schema()), false)
+	err = record.ArrowRecordToNativeRecord(recs[0], rec)
+	sgi := make([]*meta.ShardGroupInfo, 1)
+	sgi[0] = &meta.ShardGroupInfo{}
+	sgi[0].StartTime = time.Unix(0, 0)
+	sgi[0].EndTime = time.Unix(0, 1)
+	err = rw.splitAndWriteByShard(sgi, db, rp, mst, rec, 0, config.COLUMNSTORE)
+	assert.Equal(t, errno.Equal(err, errno.ArrowFlightGetShardGroupErr), true)
+}
+
 func MockArrowRecord1() array.Record {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
 	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()

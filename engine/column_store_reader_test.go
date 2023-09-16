@@ -327,7 +327,7 @@ func TestColumnStoreReaderV1(t *testing.T) {
 	}
 	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	time.Sleep(time.Second * 3)
 
 	shardId := sh.GetID()
 	dataFiles, ok := sh.immTables.GetCSFiles(mst)

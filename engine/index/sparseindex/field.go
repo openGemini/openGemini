@@ -17,6 +17,7 @@ limitations under the License.
 package sparseindex
 
 import (
+	"bytes"
 	"math"
 
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -59,9 +60,9 @@ func (f *FieldRef) Equals(rhs *FieldRef) bool {
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.FloatValue(rhs.row)
 		return (!isNil1 && !isNil2 && lhsVal == rhsVal) || (isNil1 && isNil2)
 	case influx.Field_Type_String, influx.Field_Type_Tag:
-		lhsVal, isNil1 := f.cols[f.column].column.StringValueSafe(f.row)
-		rhsVal, isNil2 := rhs.cols[rhs.column].column.StringValueSafe(rhs.row)
-		return (!isNil1 && !isNil2 && lhsVal == rhsVal) || (isNil1 && isNil2)
+		lhsVal, isNil1 := f.cols[f.column].column.BytesUnsafe(f.row)
+		rhsVal, isNil2 := rhs.cols[rhs.column].column.BytesUnsafe(rhs.row)
+		return (!isNil1 && !isNil2 && bytes.Equal(lhsVal, rhsVal)) || (isNil1 && isNil2)
 	case influx.Field_Type_Boolean:
 		lhsVal, isNil1 := f.cols[f.column].column.BooleanValue(f.row)
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.BooleanValue(rhs.row)
@@ -90,9 +91,9 @@ func (f *FieldRef) Less(rhs *FieldRef) bool {
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.FloatValue(rhs.row)
 		return (!isNil1 && !isNil2 && lhsVal < rhsVal) || (isNil1 && !isNil2)
 	case influx.Field_Type_String, influx.Field_Type_Tag:
-		lhsVal, isNil1 := f.cols[f.column].column.StringValueSafe(f.row)
-		rhsVal, isNil2 := rhs.cols[rhs.column].column.StringValueSafe(rhs.row)
-		return (!isNil1 && !isNil2 && lhsVal < rhsVal) || (isNil1 && !isNil2)
+		lhsVal, isNil1 := f.cols[f.column].column.BytesUnsafe(f.row)
+		rhsVal, isNil2 := rhs.cols[rhs.column].column.BytesUnsafe(rhs.row)
+		return (!isNil1 && !isNil2 && bytes.Compare(lhsVal, rhsVal) < 0) || (isNil1 && !isNil2)
 	case influx.Field_Type_Boolean:
 		lhsVal, isNil1 := f.cols[f.column].column.BooleanValue(f.row)
 		rhsVal, isNil2 := rhs.cols[rhs.column].column.BooleanValue(rhs.row)

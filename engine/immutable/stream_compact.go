@@ -305,9 +305,9 @@ func (c *StreamIterators) swapLastSegment(ref *record.Field, col *record.ColVal)
 
 func (c *StreamIterators) mergeSchema(m *ChunkMeta) {
 	for i := 0; i < len(m.colMeta)-1; i++ {
-		cm := m.colMeta[i]
-		ref := record.Field{Name: cm.name, Type: int(cm.ty)}
-		if !c.schemaMap.Has(ref.Name) {
+		cm := &m.colMeta[i]
+		if !c.schemaMap.Has(cm.Name()) {
+			ref := record.Field{Name: cm.Name(), Type: int(cm.ty)}
 			c.schemaMap.Set(ref.Name, ref)
 			c.fields = append(c.fields, ref)
 		}
@@ -1013,9 +1013,8 @@ func (c *StreamIterators) validate(id uint64, ref record.Field) error {
 		}
 	}
 
-	if ref.Name != c.colBuilder.colMeta.name || ref.Type != int(c.colBuilder.colMeta.ty) {
-		err := fmt.Errorf("invalid column,exp:%v, but:%v::%v", ref.String(),
-			c.colBuilder.colMeta.name,
+	if !c.colBuilder.colMeta.Equal(ref.Name, ref.Type) {
+		err := fmt.Errorf("invalid column,exp:%v, but:%v::%v", ref.String(), c.colBuilder.colMeta.Name(),
 			influx.FieldTypeName[int(c.colBuilder.colMeta.ty)])
 		c.log.Error(err.Error())
 		return err
@@ -1336,10 +1335,10 @@ func (c *StreamIterators) mergeBooleanPreAgg(cm *ColumnMeta, ref *record.Field) 
 
 func (c *StreamIterators) genColumnPreAgg(cm *ColumnMeta) error {
 	var err error
-	ref := &record.Field{Name: cm.name, Type: int(cm.ty)}
+	ref := &record.Field{Name: cm.Name(), Type: int(cm.ty)}
 	switch int(cm.ty) {
 	case influx.Field_Type_Int:
-		if cm.name == record.TimeField {
+		if cm.IsTime() {
 			err = c.mergeTimePreAgg(cm)
 		} else {
 			err = c.mergeIntegerPreAgg(cm, ref)
@@ -1351,7 +1350,7 @@ func (c *StreamIterators) genColumnPreAgg(cm *ColumnMeta) error {
 	case influx.Field_Type_String:
 		err = c.mergeStringPreAgg(cm, ref)
 	default:
-		err = fmt.Errorf("unknown column data type, %v::%v", cm.name, cm.ty)
+		err = fmt.Errorf("unknown column data type, %v::%v", cm.Name(), cm.ty)
 	}
 	return err
 }

@@ -86,7 +86,7 @@ func (itr *ColumnIterator) NextColumn(colIdx int) (*record.Field, bool) {
 		return nil, false
 	}
 
-	itr.field.Name = itr.fi.curtChunkMeta.colMeta[colIdx].name
+	itr.field.Name = itr.fi.curtChunkMeta.colMeta[colIdx].Name()
 	itr.field.Type = int(itr.fi.curtChunkMeta.colMeta[colIdx].ty)
 
 	return &itr.field, true

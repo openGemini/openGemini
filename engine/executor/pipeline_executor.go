@@ -847,22 +847,12 @@ func (builder *ExecutorBuilder) addHashMerge(hashMerge *LogicalHashMerge) (*Tran
 				readers = append(readers, v)
 				inRowDataTypes = append(inRowDataTypes, hashMerge.RowDataType())
 			case *ShardsFragmentsGroup:
-				var err error
-				var reader Processor
-				if creator, ok := GetReaderFactoryInstance().Find(hashMerge.inputs[0].String()); ok {
-					reader, err = creator.CreateReader(hashMerge.inputs[0].RowDataType(), hashMerge.inputs[0].RowExprOptions(), hashMerge.schema, t.frags, builder.info.Req.Database, builder.info.Req.PtID)
-					if err != nil {
-						return nil, err
-					}
+				if err := builder.addShardsHashMerge(hashMerge, t, &readers, &inRowDataTypes); err != nil {
+					return nil, err
 				}
-				v := NewTransformVertex(hashMerge, reader)
-				builder.dag.AddVertex(v)
-				readers = append(readers, v)
-				inRowDataTypes = append(inRowDataTypes, hashMerge.inputs[0].RowDataType())
 			default:
 				return nil, errno.NewError(errno.LogicalPlanBuildFail, "only *executor.RemoteQuery support in node exchange consumer")
 			}
-
 		}
 		merge, err := NewHashMergeTransform(inRowDataTypes, []hybridqp.RowDataType{hashMerge.RowDataType()}, hashMerge.schema.(*QuerySchema))
 		if err != nil {
@@ -877,6 +867,58 @@ func (builder *ExecutorBuilder) addHashMerge(hashMerge *LogicalHashMerge) (*Tran
 		return vertex, nil
 	}
 	return builder.addDefaultNode(hashMerge)
+}
+
+func (builder *ExecutorBuilder) addShardsHashMerge(hashMerge *LogicalHashMerge, t *ShardsFragmentsGroup, readers *[]*TransformVertex, inRowDataTypes *[]hybridqp.RowDataType) error {
+	var v *TransformVertex
+	var err error
+	if len(hashMerge.schema.Options().GetDimensions()) == 0 {
+		v, err = builder.addReaderForHashMerge(hashMerge, t)
+		if err != nil {
+			return err
+		}
+	} else {
+		v, err = builder.addGroupHashMerge(hashMerge.Children()[0], t)
+		if err != nil {
+			return err
+		}
+	}
+	*readers = append(*readers, v)
+	*inRowDataTypes = append(*inRowDataTypes, hashMerge.inputs[0].RowDataType())
+	return nil
+}
+
+func (builder *ExecutorBuilder) addReaderForHashMerge(hashMerge *LogicalHashMerge, t *ShardsFragmentsGroup) (*TransformVertex, error) {
+	var reader Processor
+	var err error
+	if creator, ok := GetReaderFactoryInstance().Find(hashMerge.inputs[0].String()); ok {
+		reader, err = creator.CreateReader(hashMerge.inputs[0].RowDataType(), hashMerge.inputs[0].RowExprOptions(), hashMerge.schema, t.frags, builder.info.Req.Database, builder.info.Req.PtID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	v := NewTransformVertex(hashMerge, reader)
+	builder.dag.AddVertex(v)
+	return v, nil
+}
+
+func (builder *ExecutorBuilder) addGroupHashMerge(node hybridqp.QueryNode, t *ShardsFragmentsGroup) (*TransformVertex, error) {
+	HashMerge, ok := node.(*LogicalHashMerge)
+	if !ok {
+		return nil, errors.New("expect LogicalHashMerge")
+	}
+	v, err := builder.addReaderForHashMerge(HashMerge, t)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := NewHashMergeTransform([]hybridqp.RowDataType{HashMerge.inputs[0].RowDataType()}, []hybridqp.RowDataType{HashMerge.RowDataType()}, HashMerge.schema.(*QuerySchema))
+	if err != nil {
+		return nil, err
+	}
+	vertex := NewTransformVertex(HashMerge, hash)
+	builder.dag.AddVertex(vertex)
+	builder.dag.AddEdge(v, vertex)
+	return vertex, nil
 }
 
 func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformVertex, error) {
@@ -903,7 +945,7 @@ func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformV
 				readers = append(readers, v)
 				inRowDataTypes = append(inRowDataTypes, hashAgg.RowDataType())
 			case *ShardsFragmentsGroup:
-				v, err := builder.addFragsHashAgg(hashAgg.Children()[0], &t.frags)
+				v, err := builder.addGroupHashAgg(hashAgg.Children()[0], &t.frags)
 				if err != nil {
 					return nil, err
 				}
@@ -929,7 +971,7 @@ func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformV
 	return builder.addDefaultNode(hashAgg)
 }
 
-func (builder *ExecutorBuilder) addFragsHashAgg(node hybridqp.QueryNode, frags *ShardsFragments) (*TransformVertex, error) {
+func (builder *ExecutorBuilder) addGroupHashAgg(node hybridqp.QueryNode, frags *ShardsFragments) (*TransformVertex, error) {
 	hashAgg, ok := node.(*LogicalHashAgg)
 	if !ok {
 		return nil, errors.New("expect LogicalHashAgg")

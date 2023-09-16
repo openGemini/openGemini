@@ -276,7 +276,10 @@ func (m *MmsTables) disableCompAndMerge() {
 
 	m.CompactionDisable()
 	m.MergeDisable()
-	close(m.stopCompMerge)
+	if m.stopCompMerge != nil {
+		close(m.stopCompMerge)
+		m.stopCompMerge = nil
+	}
 }
 
 func (m *MmsTables) DisableCompAndMerge() {

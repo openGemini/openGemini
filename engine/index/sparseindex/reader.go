@@ -88,7 +88,7 @@ func (s *IndexReaderImpl) Scan(
 	usedKeySize := keyCondition.GetMaxKeyIndex() + 1
 	primaryKey := pkSchema
 	pkTypes := getDataTypesFromPk(primaryKey)
-	createFieldRef = s.createFieldRefFunc(keyCondition, index, primaryKey, usedKeySize)
+	createFieldRef = s.createFieldRefFunc(index, primaryKey, usedKeySize)
 
 	indexLeft := make([]*FieldRef, usedKeySize)
 	indexRight := make([]*FieldRef, usedKeySize)
@@ -113,7 +113,6 @@ func (s *IndexReaderImpl) Scan(
 }
 
 func (s *IndexReaderImpl) createFieldRefFunc(
-	keyCondition KeyCondition,
 	index *record.Record,
 	primaryKey record.Schemas,
 	usedKeySize int,
@@ -124,21 +123,16 @@ func (s *IndexReaderImpl) createFieldRefFunc(
 			field.SetPositiveInfinity()
 		}
 	}
-	if keyCondition.IsFirstPrimaryKey() {
-		indexPartColumns := make([]*ColumnRef, usedKeySize)
-		for i := 0; i < usedKeySize; i++ {
-			indexPartColumns[i] = &ColumnRef{
-				column:   index.Column(i),
-				name:     primaryKey[i].Name,
-				dataType: primaryKey[i].Type}
-		}
-		createFieldRef = func(row int, column int, field *FieldRef) {
-			doCreateFieldRef(row, column, field, indexPartColumns)
-		}
-	} else {
-		createFieldRef = func(row int, column int, field *FieldRef) {
-			doCreateFieldRef(row, column, field, genIndexColumnsByRec(index))
-		}
+
+	indexPartColumns := make([]*ColumnRef, usedKeySize)
+	for i := 0; i < usedKeySize; i++ {
+		indexPartColumns[i] = &ColumnRef{
+			column:   index.Column(i),
+			name:     primaryKey[i].Name,
+			dataType: primaryKey[i].Type}
+	}
+	createFieldRef = func(row int, column int, field *FieldRef) {
+		doCreateFieldRef(row, column, field, indexPartColumns)
 	}
 	return
 }

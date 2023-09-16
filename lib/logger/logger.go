@@ -456,3 +456,7 @@ func (l *Logger) SetZapLogger(lg *zap.Logger) *Logger {
 func (l *Logger) GetSuppressLogger() *SuppressLogger {
 	return l.logger
 }
+
+func (l *Logger) IsDebugLevel() bool {
+	return level == zap.DebugLevel
+}

@@ -22,8 +22,11 @@ limitations under the License.
 package binaryfilterfunc
 
 import (
+	"bytes"
+
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 func GetFloatLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
@@ -31,21 +34,21 @@ func GetFloatLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, 
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] >= cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -57,21 +60,21 @@ func GetIntegerLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] >= cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -79,53 +82,52 @@ func GetIntegerLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetStringLTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []string
-	values = col.StringValues(values)
 	var idx int
-	var index int
-	cmpData, _ := compare.(string)
-
-	for i := 0; i < col.Len; i++ {
+	cmpData := util.Str2bytes(compare.(string))
+	for i := 0; i < col.Len-1; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
-		if values[index] >= cmpData {
-			bitmap.SetBitMap(pos, index)
+		if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) >= 0 {
+			bitmap.SetBitMap(pos, idx)
 		}
-		index++
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || bytes.Compare(col.Val[col.Offset[col.Len-1]:], cmpData) >= 0 {
+		bitmap.SetBitMap(pos, idx)
 	}
 	return pos
 }
 
 func GetFloatLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] > cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -133,26 +135,25 @@ func GetFloatLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetIntegerLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] > cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -160,53 +161,52 @@ func GetIntegerLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMa
 }
 
 func GetStringLTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []string
-	values = col.StringValues(values)
 	var idx int
-	var index int
-	cmpData, _ := compare.(string)
-
-	for i := 0; i < col.Len; i++ {
+	cmpData := util.Str2bytes(compare.(string))
+	for i := 0; i < col.Len-1; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
-		if values[index] > cmpData {
-			bitmap.SetBitMap(pos, index)
+		if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) > 0 {
+			bitmap.SetBitMap(pos, idx)
 		}
-		index++
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || bytes.Compare(col.Val[col.Offset[col.Len-1]:], cmpData) > 0 {
+		bitmap.SetBitMap(pos, idx)
 	}
 	return pos
 }
 
 func GetFloatGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] <= cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -214,26 +214,25 @@ func GetFloatGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, 
 }
 
 func GetIntegerGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] <= cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -241,53 +240,52 @@ func GetIntegerGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetStringGTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []string
-	values = col.StringValues(values)
 	var idx int
-	var index int
-	cmpData, _ := compare.(string)
-
-	for i := 0; i < col.Len; i++ {
+	cmpData := util.Str2bytes(compare.(string))
+	for i := 0; i < col.Len-1; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
-		if values[index] <= cmpData {
-			bitmap.SetBitMap(pos, index)
+		if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) <= 0 {
+			bitmap.SetBitMap(pos, idx)
 		}
-		index++
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || bytes.Compare(col.Val[col.Offset[col.Len-1]:], cmpData) <= 0 {
+		bitmap.SetBitMap(pos, idx)
 	}
 	return pos
 }
 
 func GetFloatGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] < cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -295,26 +293,25 @@ func GetFloatGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetIntegerGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] < cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -322,53 +319,52 @@ func GetIntegerGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMa
 }
 
 func GetStringGTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []string
-	values = col.StringValues(values)
 	var idx int
-	var index int
-	cmpData, _ := compare.(string)
-
-	for i := 0; i < col.Len; i++ {
+	cmpData := util.Str2bytes(compare.(string))
+	for i := 0; i < col.Len-1; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
-		if values[index] < cmpData {
-			bitmap.SetBitMap(pos, index)
+		if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) < 0 {
+			bitmap.SetBitMap(pos, idx)
 		}
-		index++
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || bytes.Compare(col.Val[col.Offset[col.Len-1]:], cmpData) < 0 {
+		bitmap.SetBitMap(pos, idx)
 	}
 	return pos
 }
 
 func GetFloatEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] != cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -376,26 +372,25 @@ func GetFloatEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, 
 }
 
 func GetIntegerEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] != cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -403,53 +398,52 @@ func GetIntegerEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetStringEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []string
-	values = col.StringValues(values)
 	var idx int
-	var index int
-	cmpData, _ := compare.(string)
-
-	for i := 0; i < col.Len; i++ {
+	cmpData := util.Str2bytes(compare.(string))
+	for i := 0; i < col.Len-1; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
-		if values[index] != cmpData {
-			bitmap.SetBitMap(pos, index)
+		if !bytes.Equal(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) {
+			bitmap.SetBitMap(pos, idx)
 		}
-		index++
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || !bytes.Equal(col.Val[col.Offset[col.Len-1]:], cmpData) {
+		bitmap.SetBitMap(pos, idx)
 	}
 	return pos
 }
 
 func GetBooleanEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []bool
-	values = col.BooleanValues()
+	values := col.BooleanValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(bool)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] != cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -457,26 +451,25 @@ func GetBooleanEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap
 }
 
 func GetFloatNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []float64
-	values = col.FloatValues()
+	values := col.FloatValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] == cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -484,26 +477,25 @@ func GetFloatNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap,
 }
 
 func GetIntegerNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []int64
-	values = col.IntegerValues()
+	values := col.IntegerValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(int64)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] == cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}
@@ -511,53 +503,52 @@ func GetIntegerNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMa
 }
 
 func GetStringNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []string
-	values = col.StringValues(values)
 	var idx int
-	var index int
-	cmpData, _ := compare.(string)
-
-	for i := 0; i < col.Len; i++ {
+	cmpData := util.Str2bytes(compare.(string))
+	for i := 0; i < col.Len-1; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
-		if values[index] == cmpData {
-			bitmap.SetBitMap(pos, index)
+		if bytes.Equal(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) {
+			bitmap.SetBitMap(pos, idx)
 		}
-		index++
+	}
+	idx = offset + col.Len - 1
+	if bitmap.IsNil(pos, idx) {
+		return pos
+	}
+	if bitmap.IsNil(bitMap, idx) || bytes.Equal(col.Val[col.Offset[col.Len-1]:], cmpData) {
+		bitmap.SetBitMap(pos, idx)
 	}
 	return pos
 }
 
 func GetBooleanNEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	var values []bool
-	values = col.BooleanValues()
+	values := col.BooleanValues()
 	var idx int
 	var index int
 	cmpData, _ := compare.(bool)
-
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
 		if bitmap.IsNil(pos, idx) {
-			index++
+			if !bitmap.IsNil(bitMap, idx) {
+				index++
+			}
 			continue
 		}
 
 		if bitmap.IsNil(bitMap, idx) {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 			continue
 		}
-
 		if values[index] == cmpData {
-			bitmap.SetBitMap(pos, index)
+			bitmap.SetBitMap(pos, idx)
 		}
 		index++
 	}

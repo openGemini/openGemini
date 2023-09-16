@@ -17,10 +17,14 @@ limitations under the License.
 package binaryfilterfunc
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
@@ -173,4 +177,104 @@ func TestRotateRewriteTimeCompareVal(t *testing.T) {
 	}
 	valuer = influxql.NowValuer{Now: now, Location: nil}
 	RewriteTimeCompareVal(root, &valuer)
+}
+
+const RandomString = "aaaaabbbbbcccccdddddeeeeefffff"
+
+func prepareStringColValue(colNum, colSize int) (*record.ColVal, []byte) {
+	col := &record.ColVal{}
+	for i := 0; i < colNum; i++ {
+		for j := 0; j < colSize; j++ {
+			col.AppendString(fmt.Sprintf("%s-%d", RandomString, j))
+		}
+	}
+	var bitMap []byte
+	bitNum, bitRemain := (colNum*colSize)/8, (colNum*colSize)%8
+	if bitRemain > 0 {
+		bitNum++
+	}
+	for i := 0; i < bitNum; i++ {
+		bitMap = append(bitMap, byte(255))
+	}
+	return col, bitMap
+}
+
+func GetStringLTConditionBitMapByBytes(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var idx, index int
+	cmpData, _ := compare.(string)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			index++
+			continue
+		}
+
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, index)
+			continue
+		}
+
+		if index == len(col.Offset)-1 {
+			if util.Bytes2str(col.Val[col.Offset[index]:]) > cmpData {
+				bitmap.SetBitMap(pos, index)
+			}
+		} else {
+			if util.Bytes2str(col.Val[col.Offset[index]:col.Offset[index+1]]) > cmpData {
+				bitmap.SetBitMap(pos, index)
+			}
+		}
+		index++
+	}
+	return pos
+}
+
+func GetStringLTConditionBitMapByStrings(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var idx, index int
+	cmpData, _ := compare.(string)
+	values := col.StringValues(nil)
+
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			index++
+			continue
+		}
+
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, index)
+			continue
+		}
+		if values[index] > cmpData {
+			bitmap.SetBitMap(pos, index)
+		}
+		index++
+	}
+	return pos
+}
+
+func BenchmarkStringCompareByBytes(b *testing.B) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetStringLTConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	}
+}
+
+func BenchmarkStringCompareByString(b *testing.B) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetStringLTConditionBitMapByBytes(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	}
+}
+
+func BenchmarkStringCompareByStrings(b *testing.B) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetStringLTConditionBitMapByStrings(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	}
 }

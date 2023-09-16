@@ -144,6 +144,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	immutable.SetSnapshotLimit(options.SnapshotThroughput, options.SnapshotThroughputBurst)
 	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
 	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
+	immutable.SetSnapshotTblNum(options.SnapshotTblNum)
 	immutable.Init()
 
 	return eng, nil
@@ -338,7 +339,7 @@ func (e *Engine) getShardStatus(param map[string]string) (map[string]string, err
 					continue
 				}
 
-				key := fmt.Sprintf("db: %s, rp: %s, pt: %d", db, shd.GetRPName(), shd.GetID())
+				key := fmt.Sprintf("db: %s, rp: %s, pt: %d", db, shd.GetRPName(), pt)
 				value := ShardStatus{
 					ShardId:  sid,
 					Opened:   shd.IsOpened(),

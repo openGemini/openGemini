@@ -18,16 +18,13 @@ package logger
 
 import (
 	"fmt"
-	"path/filepath"
-	"strings"
 
-	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	lumberjack "gopkg.in/natefinch/lumberjack.v2"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 var logger *zap.Logger
@@ -73,16 +70,15 @@ func CloseLogger() {
 }
 
 func getLogger(conf config.Logger) *zap.Logger {
-	maxSize := rewriteMaxSize(conf.MaxSize)
-	level := rewriteLevel(conf.Level)
-	hookNormal := newHook(conf, maxSize, conf.GetFileName())
-	hookError := newHook(conf, maxSize, makeErrFileName(conf.GetFileName()))
+	hookNormal := conf.NewLumberjackLogger(conf.GetApp())
+	hookError := conf.NewLumberjackLogger(makeErrFileName(conf.GetApp()))
 	hooks = append(hooks, hookNormal, hookError)
 
 	encoder := newEncoder()
 
+	logLevel := rewriteLevel(conf.Level)
 	levelNormal := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
-		return lvl >= level
+		return lvl >= logLevel
 	})
 	levelError := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 		return lvl >= zapcore.ErrorLevel
@@ -95,16 +91,6 @@ func getLogger(conf config.Logger) *zap.Logger {
 	return zap.New(core, zap.AddCaller(), zap.Development())
 }
 
-func rewriteMaxSize(size toml.Size) int {
-	maxSize := int(size)
-	if maxSize < 1024*1024 {
-		maxSize = 1
-	} else {
-		maxSize = maxSize / (1024 * 1024)
-	}
-	return maxSize
-}
-
 func rewriteLevel(level zapcore.Level) zapcore.Level {
 	if level < zap.DebugLevel || level > zap.FatalLevel {
 		level = zap.InfoLevel
@@ -113,21 +99,8 @@ func rewriteLevel(level zapcore.Level) zapcore.Level {
 	return level
 }
 
-func newHook(conf config.Logger, maxSize int, fileName string) *lumberjack.Logger {
-	hook := &lumberjack.Logger{
-		Filename:   fileName,
-		MaxSize:    maxSize,
-		MaxBackups: conf.MaxNum,
-		Compress:   conf.CompressEnabled,
-		MaxAge:     conf.MaxAge,
-	}
-	return hook
-}
-
 func makeErrFileName(fileName string) string {
-	ext := filepath.Ext(fileName)
-	name := strings.TrimSuffix(filepath.Base(fileName), ext)
-	return fmt.Sprintf("%s/%s.error%s", filepath.Dir(fileName), name, ext)
+	return fmt.Sprintf("%s.error", fileName)
 }
 
 func closeHooks() {

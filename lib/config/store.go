@@ -222,6 +222,7 @@ type Store struct {
 	NodeMutableSizeLimit  toml.Size     `toml:"node-mutable-size-limit"`
 	MaxWriteHangTime      toml.Duration `toml:"max-write-hang-time"`
 	MemDataReadEnabled    bool          `toml:"mem-data-read-enabled"`
+	SnapshotTblNum        int           `toml:"snapshot-table-number"`
 
 	WalSyncInterval   toml.Duration `toml:"wal-sync-interval"`
 	WalEnabled        bool          `toml:"wal-enabled"`
@@ -299,6 +300,7 @@ func NewStore() Store {
 		OpenShardLimit:               0,
 		DownSampleWriteDrop:          true,
 		EnableQueryFileHandleCache:   true,
+		LazyLoadShardEnable:          true,
 		InterruptQuery:               true,
 		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
 	}

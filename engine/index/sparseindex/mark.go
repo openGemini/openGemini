@@ -26,24 +26,29 @@ type Mark struct {
 	canBeFalse bool
 }
 
-func NewMark(canBeTrue, canBeFalse bool) *Mark {
-	return &Mark{canBeTrue: canBeTrue, canBeFalse: canBeFalse}
+func NewMark(canBeTrue, canBeFalse bool) Mark {
+	return Mark{canBeTrue: canBeTrue, canBeFalse: canBeFalse}
 }
 
-func (m *Mark) And(mask *Mark) *Mark {
-	return NewMark(m.canBeTrue && mask.canBeTrue, m.canBeFalse || mask.canBeFalse)
+func (m Mark) And(mask Mark) Mark {
+	m.canBeTrue = m.canBeTrue && mask.canBeTrue
+	m.canBeFalse = m.canBeFalse || mask.canBeFalse
+	return m
 }
 
-func (m *Mark) Or(mask *Mark) *Mark {
-	return NewMark(m.canBeTrue || mask.canBeTrue, m.canBeFalse && mask.canBeFalse)
+func (m Mark) Or(mask Mark) Mark {
+	m.canBeTrue = m.canBeTrue || mask.canBeTrue
+	m.canBeFalse = m.canBeFalse && mask.canBeFalse
+	return m
 }
 
-func (m *Mark) Not() *Mark {
-	return NewMark(m.canBeFalse, m.canBeTrue)
+func (m Mark) Not() Mark {
+	m.canBeTrue, m.canBeFalse = m.canBeFalse, m.canBeTrue
+	return m
 }
 
 // isComplete If mask is (true, true), then it can no longer change under operation |.
 // We use this condition to early-exit.
-func (m *Mark) isComplete() bool {
+func (m Mark) isComplete() bool {
 	return m.canBeFalse && m.canBeTrue
 }

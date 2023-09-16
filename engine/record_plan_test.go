@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -755,10 +756,14 @@ func TestDownSamplesExecutor(t *testing.T) {
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"db": {1: &DBPTInfo{
 				shards: map[uint64]Shard{1: &shard{
-					ident: &meta.ShardIdentifier{Policy: "p1"},
+					opened:  true,
+					ident:   &meta.ShardIdentifier{Policy: "p1"},
+					storage: &tsstoreImpl{},
+					log:     logger.NewLogger(errno.ModuleUnknown),
 				}},
 			}},
 		},
+		log: logger.NewLogger(errno.ModuleUnknown),
 	}
 	policies := &meta.DownSamplePoliciesInfoWithDbRp{
 		Infos: []*meta.DownSamplePolicyInfoWithDbRp{

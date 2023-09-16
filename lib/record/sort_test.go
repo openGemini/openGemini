@@ -56,13 +56,12 @@ func TestSortRecordByOrderTags(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order1_int", "order2_float"}
 	sk := []string{"order1_int", "order2_float", "order3_string"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -96,13 +95,12 @@ func TestSortRecordByOrderTags1(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order1_int", "order2_float", "order3_string"}
 	sk := []string{"order1_int", "order2_float", "order3_string"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -136,13 +134,12 @@ func TestSortRecordByOrderTags2(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order1_int"}
 	sk := []string{"order1_int", "ttbool"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -176,13 +173,12 @@ func TestSortRecordByOrderTags3(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order3_string", "order2_float"}
 	sk := []string{"order3_string", "order2_float"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -216,13 +212,12 @@ func TestSortRecordByOrderTags4(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order1_int", "order2_float", "order3_string"}
 	sk := []string{"order1_int", "order2_float", "order3_string", "order4_bool"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -256,13 +251,12 @@ func TestSortRecordByOrderTags5(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order1_int", "order4_bool"}
 	sk := []string{"order1_int", "order4_bool"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -296,13 +290,12 @@ func TestSortRecordByOrderTags6(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order3_string", "order4_bool"}
 	sk := []string{"order3_string", "order4_bool"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -337,14 +330,13 @@ func TestSortRecordByOrderTags7(t *testing.T) {
 		Schema: schema,
 	}
 
-	pk := []string{"time"}
 	sk := []string{"time"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -378,13 +370,12 @@ func TestSortRecordByOrderTags8(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order3_string"}
 	sk := []string{"order3_string"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	tbl.MTable.SortAndDedup(tbl, "cpu", nil)
+	mutable.SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -574,9 +565,8 @@ func TestSortRecordAndDeduplicate(t *testing.T) {
 		Name:   "cpu",
 		Schema: schema,
 	}
-	pk := []string{"order1_int", "order2_float"}
 	sk := []string{"order1_int", "order2_float", "order3_string"}
-	msInfo.CreateWriteChunkForColumnStore(pk, sk)
+	msInfo.CreateWriteChunkForColumnStore(sk)
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)

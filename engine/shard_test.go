@@ -275,6 +275,9 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1970-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2099-01-01T01:00:00Z")}
 	shardIdent := &meta.ShardIdentifier{ShardID: defaultShardId, ShardGroupID: 1, OwnerDb: db, OwnerPt: ptId, Policy: rp}
+	if engineType == config.COLUMNSTORE {
+		immutable.SetSnapshotTblNum(1)
+	}
 	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
 	sh.indexBuilder = indexBuilder
 	sh.storage.SetClient(&MockMetaClient{})
@@ -1010,6 +1013,7 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1082,6 +1086,7 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1243,8 +1248,8 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
-	record := msInfo.GetWriteChunk().WriteRec.GetRecord()
-	if !testRecsEqual(rec, record) {
+	got := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	if !testRecsEqual(rec, got) {
 		t.Fatal("error result")
 	}
 	err = sh.Close()
@@ -1267,12 +1272,19 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 	}
 	rec.AppendRec(rec, 0, rec.RowNums())
 	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
-	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
+	tmp := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	got.ResetWithSchema(tmp.Schema)
+	got.AppendRec(tmp, 0, tmp.RowNums())
 	for !newSh.loadWalDone {
 		time.Sleep(10 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
-	if !testRecsEqual(rec, record) {
+
+	hlp := record.NewSortHelper()
+	rec = hlp.Sort(rec)
+	got = hlp.Sort(got)
+
+	if !testRecsEqual(rec, got) {
 		t.Fatal("error result")
 	}
 
@@ -3131,6 +3143,7 @@ func TestDropMeasurementForColStore(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -3487,6 +3500,14 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					[]int{1, 1}, []string{"ha", "hd"},
 					[]int{1, 1}, []bool{true, false},
 					[]int64{22, 19})},
+			{"AllFieldLTCondition01", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field1_string > 'ha' AND field2_int >=1000 OR field1_string > 'ha' AND field4_float < 1002", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
 			{"AllFieldLTCondition02", influxql.MinTime, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
 				"field2_int < 1100 AND field1_string < 'hb' OR field4_float < 1002", nil, false,
 				genRowRec(schema,
@@ -3495,6 +3516,30 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					[]int{1, 1}, []string{"ha", "hd"},
 					[]int{1, 1}, []bool{true, false},
 					[]int64{22, 19})},
+			{"AllFieldLTCondition03", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field1_string > 'ha' AND field2_int < 1100 OR field1_string > 'ha' AND field2_int <= 1000", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{0, 0},
+					[]int{1, 1}, []float64{1002.4, 1002.4},
+					[]int{1, 1}, []string{"hb", "hc"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{21, 20})},
+			{"AllFieldLTCondition04", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field1_string > 'ha' AND field2_int < 1100 OR field1_string > 'ha' AND field2_int <= 1000", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{0, 0},
+					[]int{1, 1}, []float64{1002.4, 1002.4},
+					[]int{1, 1}, []string{"hb", "hc"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{21, 20})},
+			{"AllFieldLTCondition05", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field1_string > 'ha' AND field4_float > 1000 OR field1_string > 'hb' AND field4_float >= 1000", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{0, 0},
+					[]int{1, 1}, []float64{1002.4, 1002.4},
+					[]int{1, 1}, []string{"hb", "hc"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{21, 20})},
 			{"AllFieldLTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
 				" 1000 < field2_int AND 'hb' < field1_string OR 1002 < field4_float", nil, false,
 				genRowRec(schema,
@@ -3625,6 +3670,198 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 	}
 }
 
+func TestFilterByFiledWithFastPath2(t *testing.T) {
+	msNames := []string{"cpu"}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "field1_string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "field2_int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "field3_bool"},
+		record.Field{Type: influx.Field_Type_Float, Name: "field4_float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+		[]int{1, 0, 0, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+		[]int{1, 0, 0, 1}, []string{"ha", "hb", "hc", "hd"},
+		[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+		[]int64{22, 21, 20, 19})
+	minTime, maxTime := int64(0), int64(23)
+
+	for nameIdx := range msNames {
+		cases := []TestCase{
+			{"FilterByTime01", 0, 20, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{0, 1100},
+					[]int{0, 1}, []float64{1002.4, 0},
+					[]int{0, 1}, []string{"hc", "hd"},
+					[]int{1, 1}, []bool{false, false},
+					[]int64{20, 19})},
+			{"FilterByTime02", influxql.MinTime, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+					[]int{1, 0, 0, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+					[]int{1, 0, 0, 1}, []string{"ha", "hb", "hc", "hd"},
+					[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+					[]int64{22, 21, 20, 19})},
+			{"FilterByTime03", 20, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{1000, 0, 0},
+					[]int{1, 0, 0}, []float64{1001.3, 1002.4, 1002.4},
+					[]int{1, 0, 0}, []string{"ha", "hb", "hc"},
+					[]int{1, 1, 1}, []bool{true, true, false},
+					[]int64{22, 21, 20})},
+			{"FilterByTime04", influxql.MinTime, 21, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"", nil, false,
+				genRowRec(schema,
+					[]int{1, 1, 1}, []int64{0, 0, 1100},
+					[]int{0, 0, 1}, []float64{1002.4, 1002.4, 0},
+					[]int{0, 0, 1}, []string{"hb", "hc", "hd"},
+					[]int{1, 1, 1}, []bool{true, false, false},
+					[]int64{21, 20, 19})},
+			{"AllFieldLTCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int <= 1000 AND field1_string <= 'hb' OR field4_float < 1002", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldLTCondition02", influxql.MinTime, influxql.MaxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int > 1100 AND field1_string < 'hb' OR field4_float <= 1002.4", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldLTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				" 1000 < field2_int AND 'hb' < field1_string OR 1002 < field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
+			{"AllFieldLTECondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int <= 1100 AND field1_string <= 'hb' OR field4_float <= 1002.4", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldLTEConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				" 1000 <= field2_int AND 'hb' <= field1_string OR  1002.4 <= field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
+			{"AllFieldGTCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int > 1100 AND field1_string > 'hb' OR field4_float > 1002.4", nil, false, nil},
+			{"AllFieldGTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				" 1100 > field2_int AND 'hb' > field1_string OR 1002.4 > field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldGTECondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int >= 1100 AND field1_string >= 'hb' OR field4_float >= 1002.4", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
+			{"AllFieldGTEConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"1100 >= field2_int AND 'hb' >= field1_string OR 1002.4 >= field4_float", nil, false,
+				genRowRec(schema,
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
+			{"AllFieldEQCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int = 0 AND field1_string = 'hb' OR field4_float = 1002.4 AND field3_bool = true", nil, false,
+				nil},
+			{"AllFieldNEQCondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
+				"field2_int != 1000 AND field1_string != 'hd' OR field4_float != 1002.4 AND field3_bool != true", nil, false,
+				genRowRec(schema,
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
+		}
+
+		ascending := true
+		for _, c := range cases {
+			c := c
+			t.Run(c.Name, func(t *testing.T) {
+				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
+				querySchema := genQuerySchema(c.fieldAux, opt)
+				var filterConditions []*influxql.VarRef
+				var err error
+				filterConditions, err = getFilterFieldsByExpr(querySchema.Options().GetCondition(), filterConditions[:0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				queryCtx := &QueryCtx{}
+				queryCtx.auxTags, queryCtx.schema = NewRecordSchema(querySchema, queryCtx.auxTags[:0], queryCtx.schema[:0], filterConditions, config.TSSTORE)
+				if queryCtx.auxTags == nil && queryCtx.schema.Len() <= 1 {
+					return
+				}
+				queryCtx.filterFieldsIdx = queryCtx.filterFieldsIdx[:0]
+				queryCtx.filterTags = queryCtx.filterTags[:0]
+				for _, f := range filterConditions {
+					idx := queryCtx.schema.FieldIndex(f.Val)
+					if idx >= 0 && f.Type != influxql.Unknown {
+						queryCtx.filterFieldsIdx = append(queryCtx.filterFieldsIdx, idx)
+					} else if f.Type != influxql.Unknown {
+						queryCtx.filterTags = append(queryCtx.filterTags, f.Val)
+					}
+				}
+				conFunctions, err := binaryfilterfunc.InitCondFunctions(querySchema.Options().GetCondition(), &queryCtx.schema)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var newRecord *record.Record
+
+				// with time condition
+				newRecord = record.NewRecordBuilder(rec.Schema)
+				filterOption := &immutable.BaseFilterOptions{}
+				filterOption.CondFunctions = conFunctions
+				filterOption.TimeCondFunction = binaryfilterfunc.InitTimeCondFunctions(opt.StartTime, opt.EndTime, &queryCtx.schema)
+				filterBitmap := bitmap.NewFilterBitmap(len(conFunctions) + 1)
+
+				if len(conFunctions)+len(filterOption.TimeCondFunction) > 0 {
+					newRecord = immutable.FilterByFieldFuncs(rec, newRecord, filterOption, filterBitmap)
+				} else {
+					newRecord = rec
+				}
+
+				if newRecord != nil && c.expRecord != nil {
+					if !testRecsEqual(newRecord, c.expRecord) {
+						t.Fatal("error result")
+					}
+				}
+
+				if newRecord != nil && c.expRecord != nil {
+					if !testRecsEqual(newRecord, c.expRecord) {
+						t.Fatal("error result")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestColumnStoreFlush(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -3659,6 +3896,48 @@ func TestColumnStoreFlush(t *testing.T) {
 	sh.ForceFlush()
 
 	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestColumnStoreFlushErr(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	storage := sh.storage.(*columnstoreImpl)
+	for i := range storage.snapshotStatus {
+		storage.snapshotStatus[i] = 1
+	}
+	sh.ForceFlush()
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestColumnStoreFlushErr2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sh.indexBuilder.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.indexBuilder = nil
+	sh.ForceFlush()
+	err = sh.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3752,6 +4031,45 @@ func TestWriteDataByNewEngine2(t *testing.T) {
 	}
 }
 
+func TestWriteDataByNewEngine3(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mutable.SetWriteChunk(msInfo, rec)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.commitSnapshot(sh.activeTbl)
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteDataByNewEngineWithTag(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -3779,6 +4097,7 @@ func TestWriteDataByNewEngineWithTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mutable.JoinWriteRec(sh.activeTbl, defaultMeasurementName)
 	writeRec := msInfo.GetWriteChunk().WriteRec
 	require.Equal(t, 9, writeRec.GetRecord().Len())
 	// wait mem table flush
@@ -4168,6 +4487,19 @@ func swapMemTable(sh *shard, dir string) {
 	sh.activeTbl.SetIdx(sh.skIdx)
 }
 
+func getFirstSid(table *mutable.MemTable, mst string) uint64 {
+	msinfo, err := table.GetMsInfo(mst)
+	if err != nil {
+		return 0
+	}
+
+	sids := msinfo.GetAllSid()
+	if len(sids) > 0 {
+		return sids[0]
+	}
+	return 0
+}
+
 func TestLastFlushTime(t *testing.T) {
 	dir := t.TempDir()
 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
@@ -4181,9 +4513,7 @@ func TestLastFlushTime(t *testing.T) {
 		require.NoError(t, writeOneRow(sh, mst, ts))
 	}
 
-	sidList := sh.activeTbl.GetSids(mst)
-	require.Equal(t, 1, len(sidList))
-	sid := sidList[0]
+	sid := getFirstSid(sh.activeTbl, mst)
 	require.NotEqual(t, int64(0), sid)
 
 	swapMemTable(sh, dir)
@@ -4223,9 +4553,7 @@ func TestFlushMstDeleted(t *testing.T) {
 		require.NoError(t, writeOneRow(sh, mst, ts))
 	}
 
-	sidList := sh.activeTbl.GetSids(mst)
-	require.Equal(t, 1, len(sidList))
-	sid := sidList[0]
+	sid := getFirstSid(sh.activeTbl, mst)
 	require.NotEqual(t, int64(0), sid)
 
 	swapMemTable(sh, dir)
@@ -4271,10 +4599,8 @@ func TestGetValuesInMemTables(t *testing.T) {
 
 	require.NoError(t, writeOneRow(sh, mst, begin))
 
-	require.Nil(t, sh.activeTbl.GetSids("mst_not_exists"))
-	sidList := sh.activeTbl.GetSids(mst)
-	require.Equal(t, 1, len(sidList))
-	sid := sidList[0]
+	require.Equal(t, uint64(0), getFirstSid(sh.activeTbl, "mst_not_exists"))
+	sid := getFirstSid(sh.activeTbl, mst)
 
 	memtables.Init(sh.activeTbl, sh.snapshotTbl, true)
 	assertValue(sid, true, 1)
