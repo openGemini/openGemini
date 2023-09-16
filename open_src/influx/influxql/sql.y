@@ -113,7 +113,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
-                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG
+                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS
                 REPLICAS DETAIL DESTINATIONS
                 Hash Range SCHEMA
 %token <bool>   DESC ASC
@@ -146,7 +146,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     CREATE_CONTINUOUS_QUERY_STATEMENT SHOW_CONTINUOUS_QUERIES_STATEMENT DROP_CONTINUOUS_QUERY_STATEMENT
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
                                     CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
-                                    SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SET_CONFIG_STATEMENT
+                                    SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SHOW_CONFIGS_STATEMENT SET_CONFIG_STATEMENT
                                     CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT
 %type <fields>                      COLUMN_CLAUSES IDENTS
 %type <field>                       COLUMN_CLAUSE
@@ -413,6 +413,10 @@ STATEMENT:
     	$$ = $1
     }
     |DROP_SUBSCRIPTION_STATEMENT
+    {
+    	$$ = $1
+    }
+    |SHOW_CONFIGS_STATEMENT
     {
     	$$ = $1
     }
@@ -3139,6 +3143,13 @@ DROP_SUBSCRIPTION_STATEMENT:
     |DROP SUBSCRIPTION STRING_TYPE ON STRING_TYPE
     {
         $$ = &DropSubscriptionStatement{Name : $3, Database : $5, RetentionPolicy : ""}
+    }
+
+SHOW_CONFIGS_STATEMENT:
+    SHOW CONFIGS
+    {
+        stmt := &ShowConfigsStatement{}
+        $$ = stmt
     }
 
 SET_CONFIG_STATEMENT:

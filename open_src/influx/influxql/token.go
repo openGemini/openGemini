@@ -239,6 +239,7 @@ var tokens = [...]string{
 	DEFAULT:        "DEFAULT",
 	DELETE:         "DELETE",
 	CONFIG:         "CONFIG",
+	CONFIGS:        "CONFIGS",
 	DESC:           "DESC",
 	DESTINATIONS:   "DESTINATIONS",
 	DIAGNOSTICS:    "DIAGNOSTICS",
