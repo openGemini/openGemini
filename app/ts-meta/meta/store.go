@@ -17,6 +17,7 @@ limitations under the License.
 package meta
 
 import (
+	"container/list"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -392,6 +393,13 @@ type Store struct {
 	cacheData        *meta.Data
 	cacheDataBytes   []byte
 	cacheDataChanged chan struct{}
+
+	// for continuous query
+	cqLock            sync.RWMutex            // lock for all cq related items
+	cqNames           []string                // sorted cq names. Restore from data unmarshal.
+	heartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
+	cqLease           map[string]*cqLeaseInfo // sql host to cq lease.
+	sqlHosts          []string                // sorted hostname ["127.0.0.1:8086", "127.0.0.2:8086", "127.0.0.3:8086"]
 }
 
 // NewStore will create a new metaStore with the passed in config
@@ -414,6 +422,10 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 		raftAddr:         raftAddr,
 		dbStatistics:     make(map[string]*dbInfo),
 		notifyCh:         make(chan bool, 1),
+
+		// for continuous query
+		heartbeatInfoList: list.New(),
+		cqLease:           make(map[string]*cqLeaseInfo),
 	}
 
 	return &s
@@ -500,9 +512,10 @@ func (s *Store) Open(raftln net.Listener) error {
 		return err
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.serveSnapshot()
 	go s.checkLeaderChanged()
+	go s.detectSqlNodeOffline()
 
 	return nil
 }

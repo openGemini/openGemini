@@ -88,6 +88,8 @@ type TSSql struct {
 	SelectSpec SelectSpecConfig `toml:"spec-limit"`
 
 	Subscriber Subscriber `toml:"subscriber"`
+
+	ContinuousQuery ContinuousQueryConfig `toml:"continuous_queries"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -103,6 +105,7 @@ func NewTSSql() *TSSql {
 	c.Sherlock = NewSherlockConfig()
 	c.SelectSpec = NewSelectSpecConfig()
 	c.Subscriber = NewSubscriber()
+	c.ContinuousQuery = NewContinuousQueryConfig()
 	return c
 }
 
@@ -136,6 +139,17 @@ func (c *TSSql) Corrector(cpuNum, cpuAllocRatio int) {
 	if c.SelectSpec.QuerySchemaLimit == 0 {
 		c.SelectSpec.QuerySchemaLimit = cpuNum * 500
 	}
+
+	if c.ContinuousQuery.MaxProcessCQNumber == 0 {
+		maxProcessCQNumber := cpuNum * cpuAllocRatio / 3
+		if maxProcessCQNumber <= 1 {
+			maxProcessCQNumber = 1
+		}
+		if maxProcessCQNumber >= 5 {
+			maxProcessCQNumber = 5
+		}
+		c.ContinuousQuery.MaxProcessCQNumber = maxProcessCQNumber
+	}
 }
 
 // Validate returns an error if the config is invalid.
@@ -151,6 +165,7 @@ func (c *TSSql) Validate() error {
 		c.Analysis,
 		c.Sherlock,
 		c.Subscriber,
+		c.ContinuousQuery,
 	}
 
 	for _, item := range items {

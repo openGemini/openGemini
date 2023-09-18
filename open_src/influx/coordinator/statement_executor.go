@@ -241,6 +241,18 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		err = e.executeCreateRetentionPolicyStatement(stmt)
 	case *influxql.CreateSubscriptionStatement:
 		err = e.executeCreateSubscriptionStatement(stmt)
+	case *influxql.CreateContinuousQueryStatement:
+		if ctx.ReadOnly {
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeCreateContinuousQueryStatement(stmt)
+	case *influxql.ShowContinuousQueriesStatement:
+		rows, err = e.executeShowContinuousQueriesStatement(stmt)
+	case *influxql.DropContinuousQueryStatement:
+		if ctx.ReadOnly {
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeDropContinuousQueryStatement(stmt)
 	case *influxql.CreateUserStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
@@ -705,6 +717,74 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 	// Create new retention policy.
 	_, err := e.MetaClient.CreateRetentionPolicy(stmt.Database, &spec, stmt.Default)
 	return err
+}
+
+func isValidContinuousQueryStatement(query string) error {
+	p := influxql.NewParser(strings.NewReader(query))
+	defer p.Release()
+
+	YyParser := influxql.NewYyParser(p.GetScanner(), p.GetPara())
+	YyParser.ParseTokens()
+
+	qr, err := YyParser.GetQuery()
+	if err != nil {
+		return err
+	}
+	if len(qr.Statements) == 0 {
+		return errors.New("no valid continuous query statement")
+	}
+	stmt := qr.Statements[0]
+
+	// check if the statement is a valid continuous query.
+	q, ok := stmt.(*influxql.CreateContinuousQueryStatement)
+	if !ok || q.Source.Target == nil || q.Source.Target.Measurement == nil {
+		return errors.New("must be a SELECT INTO clause")
+	}
+
+	// check group by time
+	interval, err := q.Source.GroupByInterval()
+	if err != nil {
+		return err
+	} else if interval == 0 {
+		return fmt.Errorf("GROUP BY time duration must be greater than 0s")
+	}
+
+	// check interval and ResampleFor/ResampleEvery
+	if q.ResampleFor != 0 {
+		if q.ResampleEvery != 0 && q.ResampleEvery > interval {
+			interval = q.ResampleEvery
+		}
+		if interval > q.ResampleFor {
+			return fmt.Errorf("FOR duration must be >= GROUP BY time duration: must be a minimum of %s, got %s", interval.String(), q.ResampleFor.String())
+		}
+	}
+	return nil
+}
+
+func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql.CreateContinuousQueryStatement) error {
+	// remote the time filter condition
+	valuer := influxql.NowValuer{Now: time.Now()}
+	cond, _, err := influxql.ConditionExpr(stmt.Source.Condition, &valuer)
+	if err != nil {
+		return err
+	}
+	stmt.Source.Condition = cond
+
+	cqQuery := stmt.String()
+	if err = isValidContinuousQueryStatement(cqQuery); err != nil {
+		return err
+	}
+	return e.MetaClient.CreateContinuousQuery(stmt.Database, stmt.Name, cqQuery)
+}
+
+// executeDropContinuousQueryStatement drops a continuous query from the cluster.
+func (e *StatementExecutor) executeDropContinuousQueryStatement(stmt *influxql.DropContinuousQueryStatement) error {
+	e.StmtExecLogger.Info("delete continuous query start", zap.String("cq name", stmt.Name), zap.String("database", stmt.Database))
+	if err := e.MetaClient.DropContinuousQuery(stmt.Name, stmt.Database); err != nil {
+		e.StmtExecLogger.Error("delete continuous query error", zap.String("cq name", stmt.Name), zap.String("database", stmt.Database), zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func (e *StatementExecutor) executeCreateSubscriptionStatement(q *influxql.CreateSubscriptionStatement) error {
@@ -1313,6 +1393,10 @@ func (e *StatementExecutor) executeShowRetentionPoliciesStatement(q *influxql.Sh
 	}
 
 	return e.MetaClient.ShowRetentionPolicies(q.Database)
+}
+
+func (e *StatementExecutor) executeShowContinuousQueriesStatement(q *influxql.ShowContinuousQueriesStatement) (models.Rows, error) {
+	return e.MetaClient.ShowContinuousQueries()
 }
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {

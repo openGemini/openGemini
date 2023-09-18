@@ -235,3 +235,20 @@ type RegisterQueryIDOffsetResponse struct {
 	Offset uint64
 	Err    string
 }
+
+type Sql2MetaHeartbeatRequest struct {
+	Host string
+}
+
+type Sql2MetaHeartbeatResponse struct {
+	Err string
+}
+
+type GetContinuousQueryLeaseRequest struct {
+	Host string
+}
+
+type GetContinuousQueryLeaseResponse struct {
+	CQNames []string
+	Err     string
+}

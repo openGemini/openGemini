@@ -83,7 +83,7 @@ const (
 	//BY
 	//CARDINALITY
 	//CREATE
-	//CONTINUOUS // ContinuousQuery
+	//CONTINUOUS // ContinuousQueries
 	//DATABASE
 	//DATABASES
 	//DEFAULT
