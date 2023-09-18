@@ -44,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/openGemini/openGemini/services/castor"
+	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"go.uber.org/zap"
 )
@@ -79,6 +80,8 @@ type Server struct {
 	castorService *castor.Service
 
 	sherlockService *sherlock.Service
+
+	cqService *continuousquery.Service
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -162,6 +165,14 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 }
 
 func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, metaMaxConcurrentWriteLimit int) *Server {
+	// new continuous query service
+	var cqService *continuousquery.Service
+	if c.ContinuousQuery.Enabled {
+		hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
+		cqService = continuousquery.NewService(hostname, time.Duration(c.ContinuousQuery.RunInterval), c.ContinuousQuery.MaxProcessCQNumber)
+		cqService.WithLogger(logger)
+	}
+
 	return &Server{
 		info:          info,
 		Logger:        logger,
@@ -170,6 +181,8 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		metaJoinPeers: c.Common.MetaJoin,
 		metaUseTLS:    false,
 		config:        c,
+
+		cqService: cqService,
 	}
 }
 
@@ -217,6 +230,9 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	s.QueryExecutor.TaskManager.Host = config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
 
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
+	if s.cqService != nil {
+		s.cqService.QueryExecutor = s.QueryExecutor
+	}
 }
 
 func openServer(c *config.TSSql, logger *Logger.Logger) {
@@ -255,6 +271,14 @@ func (s *Server) Open() error {
 
 	if err := s.httpService.Open(); err != nil {
 		return err
+	}
+
+	// try to open continuous query service
+	if s.cqService != nil {
+		s.cqService.MetaClient = s.MetaClient
+		if err := s.cqService.Open(); err != nil {
+			return err
+		}
 	}
 
 	s.httpService.Handler.QueryExecutor.PointsWriter = s.PointsWriter
@@ -331,6 +355,11 @@ func (s *Server) Close() error {
 	if s.sherlockService != nil {
 		s.sherlockService.Stop()
 	}
+
+	if s.cqService != nil {
+		util.MustClose(s.cqService)
+	}
+
 	return nil
 }
 
