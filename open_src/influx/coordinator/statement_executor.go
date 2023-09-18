@@ -405,6 +405,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		rows, err = e.executeShowStreamsStatement(stmt)
 	case *influxql.DropStreamsStatement:
 		err = e.executeDropStream(stmt)
+	case *influxql.ShowConfigsStatement:
+		err = e.executeShowConfigs(stmt)
 	case *influxql.SetConfigStatement:
 		err = e.executeSetConfig(stmt)
 	default:
@@ -2162,6 +2164,10 @@ func (e *StatementExecutor) executeShowStreamsStatement(stmt *influxql.ShowStrea
 
 func (e *StatementExecutor) executeDropStream(stmt *influxql.DropStreamsStatement) error {
 	return e.MetaClient.DropStream(stmt.Name)
+}
+
+func (e *StatementExecutor) executeShowConfigs(stmt *influxql.ShowConfigsStatement) error {
+	return fmt.Errorf("impl me")
 }
 
 func (e *StatementExecutor) executeSetConfig(stmt *influxql.SetConfigStatement) error {
