@@ -15,5 +15,7 @@
 	"GetMeasurementsInfo",
 	"GetDBBriefInfo",
  	"RegisterQueryIDOffset",
- 	"GetReplicaInfo"
+ 	"GetReplicaInfo",
+	"Sql2MetaHeartbeat",
+	"GetContinuousQueryLease"
 ]
