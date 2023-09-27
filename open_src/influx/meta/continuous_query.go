@@ -44,6 +44,13 @@ func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {
 		return ErrSameContinuousQueryName
 	}
 
+	// Make sure continuous query name is unique.
+	for _, db := range data.Databases {
+		if _, ok := db.ContinuousQueries[cqName]; ok {
+			return ErrSameContinuousQueryName
+		}
+	}
+
 	dbi.ContinuousQueries[cqName] = &ContinuousQueryInfo{
 		Name:  cqName,
 		Query: cqQuery,

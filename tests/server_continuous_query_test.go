@@ -41,6 +41,11 @@ func init() {
 				exp:     `{"results":[{"statement_id":0}]}`,
 			},
 			&Query{
+				name:    "create continuous query cq2_1 should return conflict name error",
+				command: `CREATE CONTINUOUS QUERY "cq2_1" ON "db0" RESAMPLE EVERY 1h FOR 90m BEGIN SELECT min("passengers") INTO "min_passengers" FROM "bus_data" GROUP BY time(15m) END`,
+				exp:     `{"results":[{"statement_id":0,"error":"continuous query name already exists"}]}`,
+			},
+			&Query{
 				name:    "drop continuous query cq2_1 should succeed",
 				command: `DROP CONTINUOUS QUERY "cq2_1" ON "db2"`,
 				exp:     `{"results":[{"statement_id":0}]}`,
