@@ -67,7 +67,7 @@ func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.Po
 	shards = append(shards, *shard)
 	// Force the query to be broadcast
 	if executor.GetEnableForceBroadcastQuery() == executor.OnForceBroadcastQuery {
-		return sgi.Shards, r.IndexKey
+		return sgi.genShardInfosByIndex(aliveShardIdxes), r.IndexKey
 	}
 	return shards, r.IndexKey
 }
@@ -75,7 +75,7 @@ func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.Po
 func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, opt *query.SelectOptions, aliveShardIdxes []int) ([]ShardInfo, []byte) {
 	tagsGroup := getConditionTags(condition, mst.Schema)
 	if len(tagsGroup) != 1 {
-		return sgi.Shards, nil
+		return sgi.genShardInfosByIndex(aliveShardIdxes), nil
 	}
 
 	// it's used for specific series of the hint query
@@ -88,13 +88,13 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *Shard
 		}
 		// check whether the query contains the all tags of the measurement
 		if tagCount != len(*tagsGroup[0]) {
-			return sgi.Shards, nil
+			return sgi.genShardInfosByIndex(aliveShardIdxes), nil
 		}
 
 		// check whether the query's tagKey matches the schema's tagKey
 		for i := 0; i < tagCount; i++ {
 			if _, ok := mst.Schema[(*tagsGroup[0])[i].Key]; !ok {
-				return sgi.Shards, nil
+				return sgi.genShardInfosByIndex(aliveShardIdxes), nil
 			}
 		}
 	}
@@ -104,28 +104,29 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *Shard
 
 }
 
-func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, aliveShardIdxes []int) []ShardInfo {
+func (sgi *ShardGroupInfo) genShardInfosByIndex(aliveShardIdxes []int) []ShardInfo {
 	shards := make([]ShardInfo, 0, len(sgi.Shards))
-	if ski == nil || ski.ShardKey == nil || (ski.Type == HASH && condition == nil) {
-		if len(aliveShardIdxes) == len(sgi.Shards) {
-			return sgi.Shards
-		}
-		for i := range aliveShardIdxes {
-			shards = append(shards, sgi.Shards[aliveShardIdxes[i]])
-		}
-		return shards
+	for i := range aliveShardIdxes {
+		shards = append(shards, sgi.Shards[aliveShardIdxes[i]])
 	}
+	return shards
+}
 
+func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, aliveShardIdxes []int) []ShardInfo {
+	if ski == nil || ski.ShardKey == nil || (ski.Type == HASH && condition == nil) {
+		return sgi.genShardInfosByIndex(aliveShardIdxes)
+	}
 	tagsGroup := getConditionTags(condition, mst.Schema)
 	if len(tagsGroup) == 0 {
-		return sgi.Shards
+		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
 
 	// Force the query to be broadcast
 	if executor.GetEnableForceBroadcastQuery() == executor.OnForceBroadcastQuery {
-		return sgi.Shards
+		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
 	var shardKeyAndValue []byte
+	shards := make([]ShardInfo, 0, len(sgi.Shards))
 	shardKeyAndValue = append(shardKeyAndValue, mst.Name...)
 	for tagGroupIdx := range tagsGroup {
 		sort.Sort(tagsGroup[tagGroupIdx])
@@ -155,7 +156,7 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 		}
 
 		if i < len(ski.ShardKey) {
-			return sgi.Shards
+			return sgi.genShardInfosByIndex(aliveShardIdxes)
 		}
 
 		shard := sgi.ShardFor(HashID(shardKeyAndValue[len(mst.Name)+1:]), aliveShardIdxes)
@@ -348,9 +349,6 @@ func (sgi *ShardGroupInfo) DestShard(shardKey string) *ShardInfo {
 // ShardFor returns the ShardInfo for a Point hash.
 func (sgi *ShardGroupInfo) ShardFor(hash uint64, aliveShardIdxes []int) *ShardInfo {
 	// hash mod all shards in shard-storage and replication policy
-	if config.GetHaPolicy() != config.WriteAvailableFirst {
-		return &sgi.Shards[hash%uint64(len(sgi.Shards))]
-	}
 	if len(aliveShardIdxes) == 0 {
 		return nil
 	}

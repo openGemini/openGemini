@@ -23,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConfig_Parse(t *testing.T) {
@@ -267,4 +268,11 @@ func TestTSStoreThroughput(t *testing.T) {
 	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.SnapshotThroughput))
 	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.SnapshotThroughputBurst))
 	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*8), uint64(conf.Data.BackGroundReadThroughput))
+}
+
+func TestHAPolicy(t *testing.T) {
+	require.NotEmpty(t, config.SetHaPolicy("invalid_policy"))
+	require.NoError(t, config.SetHaPolicy("replication"))
+	require.True(t, config.IsReplication())
+	require.NoError(t, config.SetHaPolicy(config.DefaultHaPolicy))
 }

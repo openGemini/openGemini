@@ -48,24 +48,25 @@ func NewIndexReader(rowsNumPerFragment int, coarseIndexFragment int, minRowsForS
 // Scan is used to filter fragment ranges based on the primary key in the condition,
 // and it determines whether to do binary search or exclusion search according to the sequence of keys in the primary key.
 // give a specific example to illustrate the usage of scan.
-// 1. origin record:
-//	x -> [1, 2, 1, 2, 1, 2, 2, 1]
-//	y -> [1, 1, 3, 4, 2, 2, 3, 4]
 //
-// 2. sorted record(sorted by x, y):
-//	x -> [1, 1, 1, 1, 2, 2, 2, 2]
-//	y -> [1, 2, 3, 4, 1, 2, 3, 4]
+//  1. origin record:
+//     x -> [1, 2, 1, 2, 1, 2, 2, 1]
+//     y -> [1, 1, 3, 4, 2, 2, 3, 4]
 //
-// 3. primary index record(fragment size is 2):
-//   x ->  [1, 1, 2, 2, 2]
-//   y ->  [1, 3, 1, 3, 4]
-//   fragment index -> [0, 1, 2, 3]
+//  2. sorted record(sorted by x, y):
+//     x -> [1, 1, 1, 1, 2, 2, 2, 2]
+//     y -> [1, 2, 3, 4, 1, 2, 3, 4]
 //
-// 4. key condition:
-//   x > 1 and y < 3
+//  3. primary index record(fragment size is 2):
+//     x ->  [1, 1, 2, 2, 2]
+//     y ->  [1, 3, 1, 3, 4]
+//     fragment index -> [0, 1, 2, 3]
 //
-// 5. scan results:
-//   fragment range -> [1, 3)
+//  4. key condition:
+//     x > 1 and y < 3
+//
+//  5. scan results:
+//     fragment range -> [1, 3)
 func (s *IndexReaderImpl) Scan(
 	pkFile string,
 	pkRec *record.Record,

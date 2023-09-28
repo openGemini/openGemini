@@ -30,6 +30,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -174,7 +175,7 @@ func NewHandler(c config.Config) *Handler {
 		CLFLogger:      logger.GetLogger(),
 		requestTracker: httpd.NewRequestTracker(),
 		slowQueries:    make(chan *hybridqp.SelectDuration, 256),
-		QueryExecutor:  query2.NewExecutor(),
+		QueryExecutor:  query2.NewExecutor(cpu.GetCpuNum()),
 	}
 
 	// Limit the number of concurrent & enqueued write requests.
@@ -601,7 +602,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		ReadOnly:        r.Method == "GET",
 		NodeID:          nodeID,
 		InnerChunkSize:  innerChunkSize,
-		//ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
+		ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
 		//QueryLimitEn:    atomic.LoadInt32(&syscontrol.QueryLimitEn) == 1,
 		Quiet: true,
 	}

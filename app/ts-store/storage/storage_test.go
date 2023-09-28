@@ -17,12 +17,14 @@ limitations under the License.
 package storage
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	retention2 "github.com/influxdata/influxdb/services/retention"
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -31,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,6 +113,8 @@ func TestWriteRec(t *testing.T) {
 type MockMetaClient struct {
 	GetShardRangeInfoFn       func(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
 	GetMeasurementInfoStoreFn func(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
+
+	replicaInfo *message.ReplicaInfo
 }
 
 func (mc *MockMetaClient) GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error) {
@@ -118,6 +123,10 @@ func (mc *MockMetaClient) GetShardRangeInfo(db string, rp string, shardID uint64
 
 func (mc *MockMetaClient) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
 	return mc.GetMeasurementInfoStoreFn(dbName, rpName, mstName)
+}
+
+func (mc *MockMetaClient) GetReplicaInfo(db string, pt uint32) *message.ReplicaInfo {
+	return mc.replicaInfo
 }
 
 func TestStorage_Write(t *testing.T) {
@@ -183,4 +192,33 @@ func TestStorage_Write(t *testing.T) {
 		return st.engine.WriteRows(db, rp, ptId, 2, nil, nil)
 	})
 	assert.Equal(t, true, errno.Equal(err, errno.NoNodeAvailable))
+}
+
+func TestWriteRowsToSlave(t *testing.T) {
+	slaveStorage := &MockSlaveStorage{}
+	mc := &MockMetaClient{}
+	st := &Storage{
+		log:          logger.NewLogger(errno.ModuleStorageEngine),
+		stop:         make(chan struct{}),
+		slaveStorage: slaveStorage,
+		MetaClient:   mc,
+	}
+
+	rows := make([]influx.Row, 10)
+	require.NoError(t, st.WriteRowsToSlave(rows, "db", "rp", 1, 1))
+
+	mc.replicaInfo = &message.ReplicaInfo{ReplicaRole: meta.Master, Peers: []*message.PeerInfo{{}}}
+	slaveStorage.err = errors.New("some mock error")
+	require.EqualError(t, st.WriteRowsToSlave(rows, "db", "rp", 1, 1), slaveStorage.err.Error())
+
+	slaveStorage.err = nil
+	require.NoError(t, st.WriteRowsToSlave(rows, "db", "rp", 1, 1))
+}
+
+type MockSlaveStorage struct {
+	err error
+}
+
+func (s *MockSlaveStorage) WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error {
+	return s.err
 }

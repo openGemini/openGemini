@@ -209,6 +209,10 @@ const (
 	MstIsBeingDelete                   = 4043
 	ErrMeasurementsNotFound            = 4044
 	InvalidTagKey                      = 4045
+	ConflictWithRep                    = 4046
+	ReplicaNumberNotEqual              = 4047
+	ReplicaNumberNotSupport            = 4048
+	ReplicaNodeNumIncorrect            = 4049
 )
 
 // meta-client process

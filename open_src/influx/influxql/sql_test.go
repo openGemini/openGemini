@@ -342,6 +342,51 @@ func TestSingleParser(t *testing.T) {
 	}
 }
 
+func TestSingleParserError(t *testing.T) {
+	YyParser := &influxql.YyParser{
+		Query: influxql.Query{},
+	}
+	c := []string{
+		"create measurement mst0 (tag1 tag, field1 int64 field, field2 bool1, field3 string, field4 float64)",
+		"create measurement mst0 (tag1 tag, field1 int64 field, field2 bool, field3 sTring1, field4 flOAt64)",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag11 type hash primarykey tag1 sortkey tag1,field1 property p1=k1,p2=k2",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore type hash1 primarykey tag1 sortkey tag1,field1 property p1=k1,p2=k2",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore primarykey tag11 sortkey tag11,field1",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore primarykey tag11",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore primarykey tag1 sortkey tag1,field11",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore sortkey field11",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = ColumnStore1",
+		"create measurement db0.rp0.mst0 (tag1 string tag, field1 int64 field) with ENGINETYPE = ColumnStore",
+		"create measurement mst0 (column4 float,column1 string,column0 string,column3 float,column2 int) with enginetype = columnstore  SHARDKEY column2,column3 TYPE hash  PRIMARYKEY column3,column4,column0,column1 SORTKEY column2,column3,column4,column0,column1",
+		"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  SHARDKEY column2,column3 TYPE hash  PRIMARYKEY column3,column4,column0,column1 SORTKEY column2,column3,column4,column0,column1",
+		"show sortkey1 from mst",
+	}
+	cr := []string{
+		"expect FLOAT64, INT64, BOOL, STRING for column data type",
+		"expect FLOAT64, INT64, BOOL, STRING for column data type",
+		"Invalid ShardKey",
+		"expect HASH or RANGE for TYPE",
+		"Invalid PrimaryKey",
+		"Invalid PrimaryKey/SortKey",
+		"Invalid SortKey",
+		"Invalid PrimaryKey/SortKey",
+		"syntax error: unexpected IDENT, expecting COLUMNSTORE or TSSTORE",
+		"syntax error: unexpected TAG, expecting COMMA or RPAREN",
+		"expect FLOAT64, INT64, BOOL, STRING for column data type",
+		"PrimaryKey should be left prefix of SortKey",
+		"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, SCHEMA",
+	}
+	for i, c := range c {
+		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))
+		YyParser.Params = map[string]interface{}{"thingIdTag": "aa"}
+		YyParser.ParseTokens()
+		q, err := YyParser.GetQuery()
+		if err.Error() != cr[i] {
+			t.Errorf(err.Error(), "with sql: %s", q.String())
+		}
+	}
+}
+
 func BenchmarkNewParser(b *testing.B) {
 	YyParser := &influxql.YyParser{
 		Query: influxql.Query{},

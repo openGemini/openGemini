@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
+	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -336,5 +338,104 @@ func TestDecodeColumnData(t *testing.T) {
 		other := &record.ColVal{}
 		require.NoError(t, decodeColumnData(&ref, builder.data, other, ctx, true))
 		require.Equal(t, []byte{7}, other.Bitmap)
+	}
+}
+
+func preparePreAggBaseRec() *record.Record {
+	s := []record.Field{
+		{Name: "bps", Type: influx.Field_Type_Int},
+		{Name: "direction", Type: influx.Field_Type_String},
+		{Name: "campus", Type: influx.Field_Type_String},
+		{Name: "net_export_name", Type: influx.Field_Type_String},
+		{Name: "isp_as", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	rec := record.NewRecord(s, false)
+	for i := 0; i < rec.ColNums(); i++ {
+		switch rec.Schema.Field(i).Name {
+		case "bps":
+			for j := 0; j < 8192; j++ {
+				rec.Column(i).AppendInteger(int64(j))
+			}
+		case "direction":
+			for j := 0; j < 8192; j++ {
+				if j < 4096 {
+					rec.Column(i).AppendString("out")
+				} else {
+					rec.Column(i).AppendString("in")
+				}
+			}
+		case "campus":
+			for j := 0; j < 8192; j++ {
+				if j < 2048 {
+					rec.Column(i).AppendString("")
+				} else if j < 4096 {
+					rec.Column(i).AppendString("广州1")
+				} else if j < 6144 {
+					rec.Column(i).AppendString("上海1")
+				} else {
+					rec.Column(i).AppendString("苏州1")
+				}
+			}
+		case "net_export_name":
+			for j := 0; j < 8192; j++ {
+				if j < 2048 {
+					rec.Column(i).AppendString("")
+				} else if j < 4096 {
+					rec.Column(i).AppendString("华南-广州_PNI_广州移动")
+				} else if j < 6144 {
+					rec.Column(i).AppendString("华东-上海_PNI_上海联通")
+				} else {
+					rec.Column(i).AppendString("华东-苏州_PNI_苏州电信")
+				}
+			}
+		case "isp_as":
+			for j := 0; j < 8192; j++ {
+				if j < 2048 {
+					rec.Column(i).AppendString("1234")
+				} else if j < 4096 {
+					rec.Column(i).AppendString("1235")
+				} else if j < 6144 {
+					rec.Column(i).AppendString("1236")
+				} else {
+					rec.Column(i).AppendString("1237")
+				}
+			}
+		case "time":
+			for j := 0; j < 8192; j++ {
+				if j < 4091 {
+					rec.Column(i).AppendInteger(int64(1695461186000000000))
+				} else {
+					rec.Column(i).AppendInteger(int64(1695461486000000000))
+				}
+			}
+		}
+	}
+	return rec
+}
+
+func BenchmarkFilterByFieldFuncs(b *testing.B) {
+	_ = "time >= 1695461186000000000 and time <= 1695461486000000000 and direction = 'out' and campus = '广州1' and net_export_name = '华南-广州_PNI_广州移动'"
+	rec := preparePreAggBaseRec()
+	filterRec := record.NewRecord(rec.Schema, false)
+	filterOption := &BaseFilterOptions{
+		CondFunctions: []binaryfilterfunc.IdxFunctions{{
+			{Idx: 1, Function: binaryfilterfunc.GetStringEQConditionBitMap, Compare: "out"},
+			{Idx: 2, Function: binaryfilterfunc.GetStringEQConditionBitMap, Compare: "广州1"},
+			{Idx: 3, Function: binaryfilterfunc.GetStringEQConditionBitMap, Compare: "华南-广州_PNI_广州移动"},
+		}},
+		TimeCondFunction: binaryfilterfunc.IdxFunctions{
+			{Idx: 5, Function: binaryfilterfunc.GetIntegerGTEConditionBitMap, Compare: int64(1695461186000000000)},
+			{Idx: 5, Function: binaryfilterfunc.GetIntegerLTEConditionBitMap, Compare: int64(1695461486000000000)},
+		},
+	}
+
+	filterBitMap := bitmap.NewFilterBitmap(len(filterOption.CondFunctions) + 1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FilterByFieldFuncs(rec, filterRec, filterOption, filterBitMap)
+		filterBitMap.Reset()
+		filterRec.Reuse()
 	}
 }

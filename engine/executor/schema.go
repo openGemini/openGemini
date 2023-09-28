@@ -367,6 +367,37 @@ func (qs *QuerySchema) HasCall() bool {
 	return len(qs.calls) > 0
 }
 
+// HasRowCount check whether all data is queried to use mst-level pre-aggregation.
+func (qs *QuerySchema) HasRowCount() bool {
+	// pre-aggregation is not used for exact statistic aggregation.
+	if qs.Options().GetHintType() == hybridqp.ExactStatisticQuery {
+		return false
+	}
+
+	if len(qs.origCalls) != 1 {
+		return false
+	}
+
+	for _, c := range qs.origCalls {
+		if c.Name != "count" {
+			return false
+		}
+	}
+
+	if qs.Options().GetCondition() != nil {
+		return false
+	}
+
+	if qs.Options().HasInterval() {
+		return false
+	}
+
+	if len(qs.Options().GetOptDimension()) > 0 {
+		return false
+	}
+	return true
+}
+
 func (qs *QuerySchema) HasOptimizeAgg() bool {
 	if qs.MatchPreAgg() {
 		return true

@@ -151,8 +151,8 @@ func (a FieldKeys) Less(i, j int) bool { return a[i].Field < a[j].Field }
 type MetaClient interface {
 	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
-	CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error)
-	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error)
+	CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
+	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
 	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
 	CreateSubscription(database, rp, name, mode string, destinations []string) error
 	CreateUser(name, password string, admin, rwuser bool) (meta2.User, error)
@@ -163,8 +163,6 @@ type MetaClient interface {
 	DeleteDataNode(id uint64) error
 	DeleteMetaNode(id uint64) error
 	DropShard(id uint64) error
-	DropDatabase(name string) error
-	DropRetentionPolicy(database, name string) error
 	DropSubscription(database, rp, name string) error
 	DropUser(name string) error
 	MetaNodes() ([]meta2.NodeInfo, error)
@@ -173,7 +171,6 @@ type MetaClient interface {
 	SetPrivilege(username, database string, p originql.Privilege) error
 	ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error)
 	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error)
-	TruncateShardGroups(t time.Time) error
 	UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error
 	UpdateUser(name, password string) error
 	UserPrivilege(username, database string) (*originql.Privilege, error)
@@ -203,7 +200,6 @@ type MetaClient interface {
 	GetMstInfoWithInRp(dbName, rpName string, dataTypes []int64) (*meta2.RpMeasurementsFieldsInfo, error)
 	AdminUserExists() bool
 	Authenticate(username, password string) (u meta2.User, e error)
-	UpdateUserInfo()
 	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
 	OpenAtStore()
 	UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error
@@ -214,11 +210,12 @@ type MetaClient interface {
 	DropStream(name string) error
 	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error)
-	TagArrayEnabledFromServer(dbName string) (bool, error)
 	GetAllMst(dbName string) []string
 	RetryRegisterQueryIDOffset(host string) (uint64, error)
 	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
 	GetNodePtsMap(database string) (map[uint64][]uint32, error)
+	DBRepGroups(database string) []meta2.ReplicaGroup
+	GetReplicaN(database string) (int, error)
 
 	// for continuous query
 	SendSql2MetaHeartbeat(host string) error
@@ -341,6 +338,8 @@ type Client struct {
 	// select hash ver
 	optAlgoVer int
 
+	replicaInfoManager *ReplicaInfoManager
+
 	// send RPC message interface.
 	SendRPCMessage
 }
@@ -375,6 +374,7 @@ func NewClient(weakPwdPath string, retentionAutoCreate bool, maxConcurrentWriteL
 		arChan:              make(chan *authRcd, authFailCacheLimit),
 		authFailRcds:        make(map[string]authFailCache),
 		authSuccRcds:        make(map[string]time.Time),
+		replicaInfoManager:  NewReplicaInfoManager(),
 		SendRPCMessage:      &RPCMessageSender{},
 	}
 	cliOnce.Do(func() {
@@ -956,10 +956,17 @@ func (c *Client) AlterShardKey(database, retentionPolicy, mst string, shardKey *
 }
 
 // CreateDatabase creates a database or returns it if it already exists.
-func (c *Client) CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error) {
+func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
 	if strings.Count(name, "") > maxDbOrRpName {
 		return nil, ErrNameTooLong
 	}
+
+	var err error
+	replicaN, _, err = checkAndUpdateReplication(replicaN, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	db, err := c.Database(name)
 	if db != nil || !errno.Equal(err, errno.DatabaseNotFound) {
 		return db, err
@@ -968,6 +975,7 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool) (*meta2.Databa
 	cmd := &proto2.CreateDatabaseCommand{
 		Name:           proto.String(name),
 		EnableTagArray: proto.Bool(enableTagArray),
+		ReplicaNum:     proto.Uint32(replicaN),
 	}
 
 	err = c.retryUntilExec(proto2.Command_CreateDatabaseCommand, proto2.E_CreateDatabaseCommand_Command, cmd)
@@ -976,6 +984,31 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool) (*meta2.Databa
 	}
 
 	return c.Database(name)
+}
+
+func checkAndUpdateReplication(dbReplicaN uint32, rpReplicaN *int) (uint32, *int, error) {
+	oneReplication := 1
+	if dbReplicaN == 0 && rpReplicaN == nil {
+		// Default number of replication: 1
+		dbReplicaN = 1
+		rpReplicaN = &oneReplication
+	} else if dbReplicaN == 0 && rpReplicaN != nil {
+		dbReplicaN = uint32(*rpReplicaN)
+	} else if dbReplicaN != 0 && rpReplicaN == nil {
+		rpReplicaN = &oneReplication
+		*rpReplicaN = int(dbReplicaN)
+	}
+
+	if dbReplicaN != uint32(*rpReplicaN) {
+		return dbReplicaN, rpReplicaN, errno.NewError(errno.ReplicaNumberNotEqual)
+	}
+	if dbReplicaN > 2 {
+		return dbReplicaN, rpReplicaN, errno.NewError(errno.ReplicaNumberNotSupport)
+	}
+	if dbReplicaN > 1 && config.GetHaPolicy() != config.Replication {
+		return dbReplicaN, rpReplicaN, errno.NewError(errno.ConflictWithRep)
+	}
+	return dbReplicaN, rpReplicaN, nil
 }
 
 // CreateDatabaseWithRetentionPolicy creates a database with the specified
@@ -989,9 +1022,16 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool) (*meta2.Databa
 // This call is only idempotent when the caller provides the exact same
 // retention policy, and that retention policy is already the default for the
 // database.
-func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error) {
+func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo,
+	enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
 	if spec == nil {
 		return nil, errors.New("CreateDatabaseWithRetentionPolicy called with nil spec")
+	}
+
+	var err error
+	replicaN, spec.ReplicaN, err = checkAndUpdateReplication(replicaN, spec.ReplicaN)
+	if err != nil {
+		return nil, err
 	}
 
 	rpi := spec.NewRetentionPolicyInfo()
@@ -1020,6 +1060,7 @@ func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.Rete
 		Name:            proto.String(name),
 		RetentionPolicy: rpi.Marshal(),
 		EnableTagArray:  proto.Bool(enableTagArray),
+		ReplicaNum:      proto.Uint32(replicaN),
 	}
 
 	if len(shardKey.ShardKey) > 0 {
@@ -1079,15 +1120,6 @@ func (c *Client) MarkRetentionPolicyDelete(database, name string) error {
 	}
 
 	return c.retryUntilExec(proto2.Command_MarkRetentionPolicyDeleteCommand, proto2.E_MarkRetentionPolicyDeleteCommand_Command, cmd)
-}
-
-// DropDatabase deletes a database.
-func (c *Client) DropDatabase(name string) error {
-	cmd := &proto2.DropDatabaseCommand{
-		Name: proto.String(name),
-	}
-
-	return c.retryUntilExec(proto2.Command_DropDatabaseCommand, proto2.E_DropDatabaseCommand_Command, cmd)
 }
 
 // CreateRetentionPolicy creates a retention policy on the specified database.
@@ -1157,14 +1189,22 @@ func (c *Client) DBPtView(database string) (meta2.DBPtInfos, error) {
 	return pts, nil
 }
 
-// DropRetentionPolicy drops a retention policy from a database.
-func (c *Client) DropRetentionPolicy(database, name string) error {
-	cmd := &proto2.DropRetentionPolicyCommand{
-		Database: proto.String(database),
-		Name:     proto.String(name),
-	}
+func (c *Client) DBRepGroups(database string) []meta2.ReplicaGroup {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 
-	return c.retryUntilExec(proto2.Command_DropRetentionPolicyCommand, proto2.E_DropRetentionPolicyCommand_Command, cmd)
+	return c.cacheData.DBRepGroups(database)
+}
+
+func (c *Client) GetReplicaN(database string) (int, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	db := c.cacheData.Database(database)
+	if db == nil {
+		return 0, errno.NewError(errno.DatabaseNotFound, database)
+	}
+	return db.ReplicaN, nil
 }
 
 // SetDefaultRetentionPolicy sets a database's default retention policy.
@@ -1989,37 +2029,6 @@ func (c *Client) DropShard(id uint64) error {
 	return nil
 }
 
-// TruncateShardGroups truncates any shard group that could contain timestamps beyond t.
-func (c *Client) TruncateShardGroups(t time.Time) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	data := c.cacheData.Clone()
-	data.TruncateShardGroups(t)
-	return nil
-}
-
-// PruneShardGroups remove deleted shard groups from the data store.
-func (c *Client) PruneShardGroups() error {
-	expiration := time.Now().Add(ShardGroupDeletedExpiration)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	data := c.cacheData.Clone()
-	for i, d := range data.Databases {
-		for j, rp := range d.RetentionPolicies {
-			var remainingShardGroups []meta2.ShardGroupInfo
-			for _, sgi := range rp.ShardGroups {
-				if sgi.DeletedAt.IsZero() || !expiration.After(sgi.DeletedAt) {
-					remainingShardGroups = append(remainingShardGroups, sgi)
-					continue
-				}
-			}
-			data.Databases[i].RetentionPolicies[j].ShardGroups = remainingShardGroups
-		}
-	}
-	return nil
-}
-
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
 func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
 	c.mu.RLock()
@@ -2098,14 +2107,7 @@ func (c *Client) GetShardInfoByTime(database, retentionPolicy string, t time.Tim
 	return &shard, nil
 }
 
-/*
-used for map shards in select and write progress.
-write progress shard for all shards in shared-storage and replication policy.
-*/
-func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
-	if config.GetHaPolicy() != config.WriteAvailableFirst {
-		return make([]int, len(sgi.Shards))
-	}
+func (c *Client) getAliveShardsForWAF(database string, sgi *meta2.ShardGroupInfo) []int {
 	c.mu.RLock()
 	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
 	for i := range sgi.Shards {
@@ -2115,6 +2117,43 @@ func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []in
 	}
 	c.mu.RUnlock()
 	return aliveShardIdxes
+}
+
+func (c *Client) getAliveShardsForSSAndRep(database string, sgi *meta2.ShardGroupInfo) []int {
+	repGroups := c.DBRepGroups(database)
+	replicaN, err := c.GetReplicaN(database)
+	if replicaN == 0 || err != nil {
+		replicaN = 1
+	}
+
+	c.mu.RLock()
+	aliveShardIdxes := make([]int, 0, len(sgi.Shards)/replicaN)
+	ptView := c.cacheData.PtView[database]
+	for i := range sgi.Shards {
+		for _, ptId := range sgi.Shards[i].Owners {
+			if replicaN == 1 {
+				aliveShardIdxes = append(aliveShardIdxes, i)
+				break
+			}
+			if repGroups[ptView[ptId].RGID].IsMasterPt(ptId) {
+				aliveShardIdxes = append(aliveShardIdxes, i)
+				break
+			}
+		}
+	}
+	c.mu.RUnlock()
+	return aliveShardIdxes
+}
+
+/*
+used for map shards in select and write progress.
+write progress shard for all shards in shared-storage and replication policy.
+*/
+func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
+	if config.GetHaPolicy() != config.WriteAvailableFirst {
+		return c.getAliveShardsForSSAndRep(database, sgi)
+	}
+	return c.getAliveShardsForWAF(database, sgi)
 }
 
 func (c *Client) DeleteIndexGroup(database, policy string, id uint64) error {
@@ -2337,14 +2376,6 @@ func (c *Client) SetData(data *meta2.Data) error {
 	)
 }
 
-// Data returns a Clone of the underlying data in the meta store.
-func (c *Client) Data() meta2.Data {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	d := c.cacheData.Clone()
-	return *d
-}
-
 // WaitForDataChanged returns a channel that will get a stuct{} when
 // the metastore data has changed.
 func (c *Client) WaitForDataChanged() chan struct{} {
@@ -2352,13 +2383,6 @@ func (c *Client) WaitForDataChanged() chan struct{} {
 
 	c.changed <- ch
 	return ch
-}
-
-// MarshalBinary returns a binary representation of the underlying data.
-func (c *Client) MarshalBinary() ([]byte, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cacheData.MarshalBinary()
 }
 
 func (c *Client) index() uint64 {
@@ -2493,6 +2517,7 @@ func (c *Client) pollForUpdates(role Role) {
 		if idx < data.Index {
 			c.cacheData = data
 			c.updateAuthCache()
+			c.replicaInfoManager.Update(data, c.nodeID)
 			for len(c.changed) > 0 {
 				notifyC := <-c.changed
 				close(notifyC)
@@ -3018,58 +3043,6 @@ func (c *Client) unmarshalMstInfoWithInRp(b []byte) (*meta2.RpMeasurementsFields
 	return DownSample, nil
 }
 
-func (c *Client) UpdateUserInfo() {
-	go c.retryGetUserInfo()
-}
-
-func (c *Client) retryGetUserInfo() {
-	currentServer := connectedServer
-	ticker := time.NewTicker(RetryGetUserInfoTimeout)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			c.mu.RLock()
-			server := c.metaServers[currentServer]
-			c.mu.RUnlock()
-			data, err := c.getUserInfo(currentServer, c.index())
-			if err != nil {
-				c.logger.Error("failure getting userinfo from", zap.String("server", server), zap.Error(err))
-			}
-			if data != nil {
-				idx := c.index()
-				if idx < data.Index {
-					c.mu.Lock()
-					c.cacheData = data
-					c.mu.Unlock()
-				}
-			}
-		case <-c.closing:
-			return
-		}
-	}
-}
-
-func (c *Client) getUserInfo(currentServer int, index uint64) (*meta2.Data, error) {
-	callback := &GetUserInfoCallback{}
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: index})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(callback.Data) == 0 {
-		return nil, nil
-	}
-
-	data := &meta2.Data{}
-	if err = data.UnmarshalBinary(callback.Data); err != nil {
-		return nil, err
-	}
-
-	return data, nil
-}
-
 func (c *Client) UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error {
 	val := &proto2.UpdateShardDownSampleInfoCommand{
 		Ident: Ident.Marshal(),
@@ -3301,63 +3274,6 @@ func (c *Client) Suicide(err error) {
 	c.logger.Error("Suicide for fault data node", zap.Error(err))
 	time.Sleep(errSleep)
 	sysinfo.Suicide()
-}
-
-func (c *Client) RetryDBBriefInfo(dbName string) ([]byte, error) {
-	startTime := time.Now()
-	currentServer := connectedServer
-	var err error
-	var dbBriefInfo []byte
-	for {
-		c.mu.RLock()
-		select {
-		case <-c.closing:
-			c.mu.RUnlock()
-			return nil, meta2.ErrClientClosed
-		default:
-		}
-		if currentServer >= len(c.metaServers) {
-			currentServer = 0
-		}
-		c.mu.RUnlock()
-		dbBriefInfo, err = c.getDBBriefInfo(currentServer, dbName)
-		if err == nil {
-			break
-		}
-		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
-			break
-		}
-		time.Sleep(errSleep)
-		currentServer++
-	}
-	return dbBriefInfo, err
-}
-
-func (c *Client) getDBBriefInfo(currentServer int, dbName string) ([]byte, error) {
-	callback := &GetDBBriefInfoCallback{}
-	msg := message.NewMetaMessage(message.GetDBBriefInfoRequestMessage, &message.GetDBBriefInfoRequest{DbName: dbName})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		return nil, err
-	}
-	return callback.Data, nil
-}
-
-func (c *Client) TagArrayEnabledFromServer(dbName string) (bool, error) {
-	b, err := c.RetryDBBriefInfo(dbName)
-	if err != nil {
-		return false, err
-	}
-
-	return c.unmarshalDBBriefInfo(b)
-}
-
-func (c *Client) unmarshalDBBriefInfo(b []byte) (bool, error) {
-	pb := &proto2.DatabaseBriefInfo{}
-	if err := proto.Unmarshal(b, pb); err != nil {
-		return false, err
-	}
-	return pb.GetEnableTagArray(), nil
 }
 
 func (c *Client) TagArrayEnabled(db string) bool {

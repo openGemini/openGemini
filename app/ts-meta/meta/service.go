@@ -115,7 +115,6 @@ func (s *Service) openStore() error {
 		return err
 	}
 	s.handler.client = s.store.client
-	s.handler.client.UpdateUserInfo()
 	return nil
 }
 
