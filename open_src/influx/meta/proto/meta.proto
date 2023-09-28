@@ -47,7 +47,6 @@ message Data {
 	map<string,uint64> QueryIDInit = 27;
 	map<string, Replications> ReplicaGroups = 28;
 	optional uint64 MaxSubscriptionID = 29;
-	optional uint64 MaxCQChangeID = 30;
 }
 
 message Replications {
@@ -103,7 +102,6 @@ message DatabaseInfo {
 	required string Name = 1;
 	required string DefaultRetentionPolicy = 2;
 	repeated RetentionPolicyInfo RetentionPolicies = 3;
-	repeated ContinuousQueryInfo ContinuousQueries = 4;
 	optional bool MarkDeleted  = 5;
 	optional ShardKeyInfo ShardKey = 6;
 	optional bool EnableTagArray = 7;
@@ -141,12 +139,6 @@ message RetentionPolicyInfo {
 	required int64 IndexGroupDuration = 11;
 	repeated IndexGroupInfo IndexGroups = 12;
 	optional DownSamplePolicyInfo DownSamplePolicyInfo = 13;
-}
-
-message ContinuousQueryInfo {
-	required string Name = 1;
-	required string Query = 2;
-	optional int64 LastRunTime = 3;
 }
 
 message ShardGroupInfo {
@@ -340,12 +332,6 @@ message Command {
 		GetDBBriefInfoCommand                      = 83;
 		GetMeasurementsInfoCommand                 = 84;
 		RegisterQueryIDOffsetCommand               = 85;
-		CreateContinuousQueryCommand               = 86;
-		Sql2MetaHeartbeatCommand                   = 87;
-		ContinuousQueryReportCommand               = 88;
-		GetContinuousQueryLeaseCommand             = 89;
-		DropContinuousQueryCommand                 = 90;
-		NotifyCQLeaseChangedCommand                = 91;
 	}
 
 	required Type type = 1;
@@ -1050,43 +1036,4 @@ message RegisterQueryIDOffsetCommand {
 		optional  RegisterQueryIDOffsetCommand command = 184;
 	}
 	required string Host = 1;
-}
-
-message CreateContinuousQueryCommand {
-	extend Command {
-		optional CreateContinuousQueryCommand command = 185;
-	}
-	required string Database = 1;
-	required string Name = 2;
-	required string Query = 3;
-}
-
-message Sql2MetaHeartbeatCommand {
-	extend Command { optional Sql2MetaHeartbeatCommand command = 186; }
-	required string Host = 1;
-}
-
-message ContinuousQueryReportCommand {
-	extend Command { optional ContinuousQueryReportCommand command = 187; }
-	repeated CQState CQStates = 1;
-}
-
-message CQState {
-	required string Name = 1;
-	required int64 LastRunTime = 2;
-}
-
-message GetContinuousQueryLeaseCommand {
-	extend Command { optional GetContinuousQueryLeaseCommand command = 188; }
-	required string Host = 1;
-}
-
-message DropContinuousQueryCommand {
-	extend Command { optional DropContinuousQueryCommand command = 189; }
-	required string Name = 1;
-	required string Database = 2;
-}
-
-message NotifyCQLeaseChangedCommand {
-	extend Command { optional NotifyCQLeaseChangedCommand command = 190; }
 }

@@ -40,7 +40,6 @@ func Test_NewServer(t *testing.T) {
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
-	conf.ContinuousQuery.Enabled = true
 
 	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)

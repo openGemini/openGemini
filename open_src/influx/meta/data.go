@@ -120,7 +120,6 @@ type Data struct {
 	MaxStreamID       uint64
 	MaxConnID         uint64
 	MaxSubscriptionID uint64 // +1 for any changes to subscriptions
-	MaxCQChangeID     uint64 // +1 for any changes to continuous queries
 }
 
 var DataLogger *zap.Logger
@@ -2055,7 +2054,6 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxStreamID:       proto.Uint64(data.MaxStreamID),
 		MaxConnId:         proto.Uint64(data.MaxConnID),
 		MaxSubscriptionID: proto.Uint64(data.MaxSubscriptionID),
-		MaxCQChangeID:     proto.Uint64(data.MaxCQChangeID),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2145,7 +2143,6 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
 	data.MaxSubscriptionID = pb.GetMaxSubscriptionID()
-	data.MaxCQChangeID = pb.GetMaxCQChangeID()
 
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {

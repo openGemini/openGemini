@@ -83,7 +83,7 @@ const (
 	//BY
 	//CARDINALITY
 	//CREATE
-	//CONTINUOUS // ContinuousQueries
+	//CONTINUOUS // ContinuousQuery
 	//DATABASE
 	//DATABASES
 	//DEFAULT
@@ -239,7 +239,6 @@ var tokens = [...]string{
 	DEFAULT:        "DEFAULT",
 	DELETE:         "DELETE",
 	CONFIG:         "CONFIG",
-	CONFIGS:        "CONFIGS",
 	DESC:           "DESC",
 	DESTINATIONS:   "DESTINATIONS",
 	DIAGNOSTICS:    "DIAGNOSTICS",

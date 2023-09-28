@@ -36,7 +36,7 @@ import (
 
 func init() {
 	RetryGetUserInfoTimeout = 1 * time.Second
-	RetryExecTimeout = 3 * time.Second
+	RetryExecTimeout = 1 * time.Second
 	RetryReportTimeout = 1 * time.Second
 	HttpReqTimeout = 1 * time.Second
 }
@@ -120,7 +120,7 @@ func startServer(address string) (*spdy.RRCServer, error) {
 }
 
 func TestSnapshot(t *testing.T) {
-	address := "127.0.0.1:8491"
+	address := "127.0.0.10:8491"
 	nodeId := 1
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
@@ -132,10 +132,7 @@ func TestSnapshot(t *testing.T) {
 	defer rrcServer.Stop()
 	time.Sleep(time.Second)
 
-	mc := Client{
-		logger:         logger.NewLogger(errno.ModuleUnknown),
-		SendRPCMessage: &RPCMessageSender{},
-	}
+	mc := Client{logger: logger.NewLogger(errno.ModuleUnknown)}
 	data, err := mc.getSnapshot(SQL, nodeId, 0)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -428,9 +425,8 @@ func TestClient_CreateShardGroup(t *testing.T) {
 				}},
 			},
 		},
-		metaServers:    []string{"127.0.0.1"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
 
 	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), config.COLUMNSTORE)
@@ -499,9 +495,8 @@ func TestClient_CreateMeasurement(t *testing.T) {
 				}},
 			},
 		},
-		metaServers:    []string{"127.0.0.1"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
 	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil)
 	schemaInfo := meta2.NewSchemaInfo(map[string]int32{"a": influx.Field_Type_Tag}, map[string]int32{"b": influx.Field_Type_Float})
@@ -515,10 +510,9 @@ func TestClient_CreateMeasurement(t *testing.T) {
 
 func TestClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	c := &Client{
-		cacheData:      &meta2.Data{},
-		metaServers:    []string{"127.0.0.1"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		cacheData:   &meta2.Data{},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
 	spec := &meta2.RetentionPolicySpec{Name: "testRp"}
 	ski := &meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}}
@@ -566,9 +560,8 @@ func TestClient_Stream(t *testing.T) {
 				},
 			},
 		},
-		metaServers:    []string{"127.0.0.1:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 	}
 	info := &meta2.StreamInfo{
 		Name: "test",
@@ -698,9 +691,8 @@ func TestClient_MeasurementInfo(t *testing.T) {
 					},
 				}}},
 		},
-		metaServers:    []string{"127.0.0.1:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 	}
 	_, err := c.GetMeasurementInfoStore("test", "rp0", "test")
 	if err == nil {
@@ -709,7 +701,7 @@ func TestClient_MeasurementInfo(t *testing.T) {
 }
 
 func TestClient_MeasurementsInfo(t *testing.T) {
-	address := "127.0.0.1:8492"
+	address := "127.0.0.10:8492"
 	nodeId := 0
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
@@ -733,9 +725,8 @@ func TestClient_MeasurementsInfo(t *testing.T) {
 					},
 				}}},
 		},
-		metaServers:    []string{"127.0.0.1:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 	}
 	_, err = c.GetMeasurementsInfoStore("test", "rp0")
 	if err != nil {
@@ -873,9 +864,8 @@ func TestClient_CreateDownSamplePolicy(t *testing.T) {
 					},
 				}}},
 		},
-		metaServers:    []string{"127.0.0.1:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 	}
 	err := c.NewDownSamplePolicy("test", "rp0", info)
 	require.EqualError(t, err, "execute command timeout")
@@ -937,9 +927,8 @@ func TestGetDownSampleInfo(t *testing.T) {
 					},
 				}}},
 		},
-		metaServers:    []string{"127.0.0.1:8491"},
-		logger:         logger.NewLogger(errno.ModuleUnknown),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8491"},
+		logger:      logger.NewLogger(errno.ModuleUnknown),
 	}
 
 	mc.cacheData.Databases["test"].RetentionPolicies["rp0"].DownSamplePolicyInfo = info
@@ -988,7 +977,7 @@ func TestGetDownSampleInfo(t *testing.T) {
 }
 
 func TestUserInfo(t *testing.T) {
-	address := "127.0.0.1:8492"
+	address := "127.0.0.10:8492"
 	nodeId := 1
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
@@ -1014,9 +1003,8 @@ func TestUserInfo(t *testing.T) {
 				}}},
 			Index: 0,
 		},
-		metaServers:    []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 	}
 	mc.UpdateUserInfo()
 	time.Sleep(2 * time.Second)
@@ -1026,7 +1014,7 @@ func TestVerifyDataNodeStatus(t *testing.T) {
 	config.SetHaPolicy("shared-storage")
 	defer config.SetHaPolicy("write-available-first")
 
-	address := "127.0.0.1:8492"
+	address := "127.0.0.10:8492"
 	nodeId := 0
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
@@ -1049,15 +1037,14 @@ func TestVerifyDataNodeStatus(t *testing.T) {
 					},
 				}}},
 		},
-		nodeID:         1,
-		metaServers:    []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		closing:        make(chan struct{}),
-		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		nodeID:      1,
+		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+		closing:     make(chan struct{}),
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
 
-	close(mc.closing)
-	mc.verifyDataNodeStatus()
+	go mc.verifyDataNodeStatus()
+	time.Sleep(2 * time.Second)
 }
 
 func TestCreateMeasurement(t *testing.T) {
@@ -1113,7 +1100,7 @@ func TestDBPTCtx_String(t *testing.T) {
 }
 
 func TestTagArrayEnabledFromServer(t *testing.T) {
-	address := "127.0.0.1:8492"
+	address := "127.0.0.10:8492"
 	nodeId := 1
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
@@ -1137,11 +1124,10 @@ func TestTagArrayEnabledFromServer(t *testing.T) {
 					},
 				}}},
 		},
-		nodeID:         1,
-		metaServers:    []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		closing:        make(chan struct{}),
-		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		nodeID:      1,
+		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+		closing:     make(chan struct{}),
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
 
 	mc.cacheData.Databases["db0"].EnableTagArray = true
@@ -1191,7 +1177,7 @@ func TestTagArrayEnabled(t *testing.T) {
 }
 
 func TestInitMetaClient(t *testing.T) {
-	address := "127.0.0.1:8496"
+	address := "127.0.0.15:8496"
 	nodeId := 0
 	transport.NewMetaNodeManager().Clear()
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
@@ -1216,8 +1202,7 @@ func TestInitMetaClient(t *testing.T) {
 					},
 				}}},
 		},
-		logger:         logger.NewLogger(errno.ModuleUnknown),
-		SendRPCMessage: &RPCMessageSender{},
+		logger: logger.NewLogger(errno.ModuleUnknown),
 	}
 
 	_, _, _, err = mc.InitMetaClient(nil, true, nil)
@@ -1280,10 +1265,9 @@ func TestClient_RetryRegisterQueryIDOffset(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
-				metaServers:    tt.fields.metaServers,
-				cacheData:      tt.fields.cacheData,
-				logger:         tt.fields.logger,
-				SendRPCMessage: &RPCMessageSender{},
+				metaServers: tt.fields.metaServers,
+				cacheData:   tt.fields.cacheData,
+				logger:      tt.fields.logger,
 			}
 
 			offset, err := c.RetryRegisterQueryIDOffset(tt.args.host)
@@ -1395,9 +1379,8 @@ func TestClient_CreateSubscription(t *testing.T) {
 					},
 				}}},
 		},
-		metaServers:    []string{"127.0.0.1:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
+		metaServers: []string{"127.0.0.1:8092"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 	}
 	destinations := []string{server1.URL, server2.URL}
 	err := c.CreateSubscription("db0", "rp0", "subs1", "ALL", destinations)

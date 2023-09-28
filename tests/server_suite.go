@@ -1131,27 +1131,6 @@ func init() {
 		},
 	}
 
-	tests["config_command"] = Test{
-		db: "db0",
-		rp: "rp0",
-		queries: []*Query{
-			&Query{
-				name:    "show configs",
-				command: `SHOW CONFIGS`,
-				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
-			},
-			&Query{
-				name:    "set config",
-				command: `SET CONFIG sql logging.level = debug`,
-				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
-			},
-			&Query{
-				name:    "show configs",
-				command: `SHOW CONFIGS`,
-				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
-			},
-		},
-	}
 }
 
 func (tests Tests) load(t *testing.T, key string) Test {

@@ -310,39 +310,3 @@ func TestGetReplicaInfo_Process(t *testing.T) {
 	_, err := h.Process()
 	require.NoError(t, err)
 }
-
-func TestSql2MetaHeartbeatProcess(t *testing.T) {
-	mockStore := NewMockRPCStore()
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
-		Host: "localhost:8086",
-	})
-	h := New(msg.Type())
-	h.InitHandler(mockStore, nil, nil)
-	var err error
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = h.Process()
-	if err != nil {
-		t.Fatal("TestSql2MetaHeartbeatProcess fail", err)
-	}
-}
-
-func TestGetCqLeaseProcess(t *testing.T) {
-	mockStore := NewMockRPCStore()
-	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{
-		Host: "localhost:8086",
-	})
-	h := New(msg.Type())
-	h.InitHandler(mockStore, nil, nil)
-	var err error
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = h.Process()
-	if err != nil {
-		t.Fatal("TestGetCqLeaseProcess fail", err)
-	}
-}

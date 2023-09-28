@@ -392,22 +392,11 @@ func (h *GetMeasurementInfo) Process() (transport.Codec, error) {
 func (h *GetMeasurementsInfo) Process() (transport.Codec, error) {
 	rsp := &message.GetMeasurementsInfoResponse{}
 	b, err := h.store.getMeasurementsInfo(h.req.DbName, h.req.RpName)
-
 	if err != nil {
 		rsp.Err = err.Error()
 		return rsp, nil
 	}
 	rsp.Data = b
-	return rsp, nil
-}
-
-func (h *Sql2MetaHeartbeat) Process() (transport.Codec, error) {
-	rsp := &message.Sql2MetaHeartbeatResponse{}
-	err := h.store.handlerSql2MetaHeartbeat(h.req.Host)
-	if err != nil {
-		rsp.Err = err.Error()
-		return rsp, nil
-	}
 	return rsp, nil
 }
 
@@ -438,15 +427,4 @@ func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
 
 func (h *GetReplicaInfo) Process() (transport.Codec, error) {
 	return h.store.GetReplicaInfo(h.req.Database, h.req.NodeID, h.req.PtID)
-}
-
-func (h *GetContinuousQueryLease) Process() (transport.Codec, error) {
-	rsp := &message.GetContinuousQueryLeaseResponse{}
-	cqNames, err := h.store.getContinuousQueryLease(h.req.Host)
-	if err != nil {
-		rsp.Err = err.Error()
-		return rsp, nil
-	}
-	rsp.CQNames = cqNames
-	return rsp, nil
 }

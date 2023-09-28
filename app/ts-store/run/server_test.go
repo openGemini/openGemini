@@ -239,7 +239,6 @@ func TestNewServer(t *testing.T) {
 }
 
 type MockMetaClient struct {
-	metaclient.MetaClient
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -433,9 +432,6 @@ func (client *MockMetaClient) ShowSubscriptions() models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Rows, error) {
-	return nil, nil
-}
-func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {

@@ -28,17 +28,6 @@ import (
 )
 
 var logger *zap.Logger
-var Alevel zap.AtomicLevel
-
-func SetLevel(lev string) error {
-	var l zapcore.Level
-	if err := l.UnmarshalText([]byte(lev)); err != nil {
-		return err
-	}
-	Alevel.SetLevel(l)
-
-	return nil
-}
 
 var hooks []*lumberjack.Logger
 
@@ -88,16 +77,14 @@ func getLogger(conf config.Logger) *zap.Logger {
 	encoder := newEncoder()
 
 	logLevel := rewriteLevel(conf.Level)
-
+	levelNormal := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl >= logLevel
+	})
 	levelError := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
 		return lvl >= zapcore.ErrorLevel
 	})
-
-	Alevel = zap.NewAtomicLevel()
-	Alevel.SetLevel(logLevel)
-
 	core := zapcore.NewTee(
-		zapcore.NewCore(encoder, zapcore.AddSync(hookNormal), Alevel),
+		zapcore.NewCore(encoder, zapcore.AddSync(hookNormal), levelNormal),
 		zapcore.NewCore(encoder, zapcore.AddSync(hookError), levelError),
 	)
 
