@@ -224,8 +224,6 @@ var tokens = [...]string{
 	COLUMNSTORE:    "COLUMNSTORE",
 	TSSTORE:        "TSSTORE",
 	PRIMARYKEY:     "PRIMARYKEY",
-	Hash:           "HASH",
-	Range:          "RANGE",
 	SCHEMA:         "SCHEMA",
 	PROPERTY:       "PROPERTY",
 	BEGIN:          "BEGIN",
@@ -333,6 +331,8 @@ var tokens = [...]string{
 	STREAMS:        "STREAMS",
 	DELAY:          "DELAY",
 	ATTRIBUTE:      "ATTRIBUTE",
+	REPLICAS:       "REPLICAS",
+	DETAIL:         "DETAIL",
 }
 
 var keywords map[string]int

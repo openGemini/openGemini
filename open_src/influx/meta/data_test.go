@@ -69,7 +69,7 @@ func Test_Data_CreateMeasurement(t *testing.T) {
 		Name:     rpName,
 		ReplicaN: 1,
 		Duration: 24 * time.Hour,
-	}, nil, false)
+	}, nil, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 		Name:     rpName,
 		ReplicaN: 1,
 		Duration: 24 * time.Hour,
-	}, nil, false)
+	}, nil, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func Test_Data_ReSharding(t *testing.T) {
 	}
 
 	data.CreateDBPtView("foo")
-	must(data.CreateDatabase("foo", nil, nil, false))
+	must(data.CreateDatabase("foo", nil, nil, false, 1))
 	rp := NewRetentionPolicyInfo("bar")
 	rp.ShardGroupDuration = 24 * time.Hour
 	must(data.CreateRetentionPolicy("foo", rp, false))
@@ -319,7 +319,7 @@ func initData() *Data {
 }
 
 func generateMeasurement(data *Data, dbName, rpName, mstName string) error {
-	err := data.CreateDatabase(dbName, nil, nil, false)
+	err := data.CreateDatabase(dbName, nil, nil, false, 1)
 	if err != nil {
 		return err
 	}
@@ -544,7 +544,7 @@ func TestData_CreateRetentionPolicy(t *testing.T) {
 		ReplicaN:           1,
 		ShardGroupDuration: 12 * time.Hour,
 		IndexGroupDuration: 30 * 365 * 24 * time.Hour}
-	err := data.CreateDatabase(dbName, rpi, nil, false)
+	err := data.CreateDatabase(dbName, rpi, nil, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -580,7 +580,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	dbName := "test"
 	rpName := "default"
 	mstName := "foo"
-	err = data.CreateDatabase(dbName, nil, nil, false)
+	err = data.CreateDatabase(dbName, nil, nil, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 	dbName := "test"
 	rpName := "default"
 	mstName := "foo"
-	err := data.CreateDatabase(dbName, nil, nil, false)
+	err := data.CreateDatabase(dbName, nil, nil, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestDatabase_Clone(t *testing.T) {
 	data := initDataWithDataNode()
 	dbName := "testDb"
 	rpName := "cloneRp"
-	if err := data.CreateDatabase(dbName, nil, nil, false); err != nil {
+	if err := data.CreateDatabase(dbName, nil, nil, false, 1); err != nil {
 		t.Fatal(err)
 	}
 	rpi := &RetentionPolicyInfo{Name: rpName, ReplicaN: 1, ShardGroupDuration: 24 * time.Hour, Duration: 7 * 24 * time.Hour}
@@ -710,7 +710,7 @@ func TestDatabase_Clone(t *testing.T) {
 func TestData_MarkRetentionPolicyDelete(t *testing.T) {
 	data := initData()
 	dbName := "testDb"
-	err := data.CreateDatabase(dbName, nil, nil, false)
+	err := data.CreateDatabase(dbName, nil, nil, false, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,7 +811,7 @@ func BenchmarkData_CreateDatabase(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateDatabase(databases[i%n], nil, nil, false)
+		_ = data.CreateDatabase(databases[i%n], nil, nil, false, 1)
 	}
 	b.StopTimer()
 }
@@ -825,7 +825,7 @@ func BenchmarkData_CreateRetentionPolicy(b *testing.B) {
 	rps := make([]*RetentionPolicyInfo, n)
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -850,7 +850,7 @@ func BenchmarkData_CreateMeasurement(b *testing.B) {
 	mstName := "testMst"
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -880,7 +880,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 	currentTime := time.Now()
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -916,7 +916,7 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 	currentTime := time.Now()
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -999,7 +999,7 @@ func BenchmarkData_UpdateSchema(b *testing.B) {
 	schemas := make([][]*proto2.FieldSchema, n)
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1040,7 +1040,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 	databases := make([]string, n)
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1091,7 +1091,7 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 	currentTime := time.Now()
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1)
 		if err != nil {
 			t.Fatal(err)
 		}

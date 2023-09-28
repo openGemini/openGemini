@@ -7221,13 +7221,12 @@ type ConfigKey struct {
 
 // String returns a string representation of the measurement.
 func (ck *ConfigKey) String() string {
-	var buf bytes.Buffer
 	if ck.Name != "" {
-		_, _ = buf.WriteString(QuoteIdent(ck.Name))
+		return QuoteIdent(ck.Name)
 	} else if ck.Regex != nil {
-		_, _ = buf.WriteString(ck.Regex.String())
+		return ck.Regex.String()
 	}
-	return buf.String()
+	return ""
 }
 
 func (s *ShowConfigsStatement) stmt() {}
@@ -7242,7 +7241,7 @@ func (s *ShowConfigsStatement) String() string {
 	var buf bytes.Buffer
 
 	if s.Scope == "" && s.Key == nil {
-		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS`))
+		return `SHOW CONFIGS`
 	} else if s.Scope == "" {
 		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE scope = %s`, s.Scope))
 	} else if s.Key == nil {

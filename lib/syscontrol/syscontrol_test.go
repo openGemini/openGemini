@@ -305,3 +305,25 @@ func Test_handleUpperMemUsePct(t *testing.T) {
 	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
 	SetUpperMemUsePct(0)
 }
+
+func TestParallelQuery(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("parallelbatch")
+	req.SetParam(map[string]string{
+		"enabled": "true",
+	})
+	var sb strings.Builder
+	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "success")
+	sb.Reset()
+
+	req.SetMod("parallelbatch")
+	req.SetParam(map[string]string{
+		"enabled": "false",
+	})
+	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "success")
+	sb.Reset()
+}

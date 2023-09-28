@@ -24,7 +24,7 @@ import (
 )
 
 func TestParseTagKeyCondition(t *testing.T) {
-	condition, err := parseTagKeyCondition("val = 100 and ((a= 'abc' or b = 1.1 or c=*) and d=e or f=false or g=true)")
+	condition, tr, err := parseTagKeyCondition("val = 100 and ((a= 'abc' or b = 1.1 or c=*) and d=e or f=false or g=true)")
 	if err != nil {
 		t.Fatalf("%v \n", err)
 	}
@@ -34,6 +34,18 @@ func TestParseTagKeyCondition(t *testing.T) {
 	if condition.String() != exp {
 		t.Fatalf("parse tag key condition failed, \n exp: %s, \n got: %s \n", exp, condition.String())
 	}
+
+	if !tr.Min.IsZero() || !tr.Max.IsZero() {
+		t.Fatalf("parse time failed")
+	}
+
+	// no condition
+	_, _, err = parseTagKeyCondition("")
+	assert.Nil(t, err)
+
+	// incorrect param
+	_, _, err = parseTagKeyCondition("tag == 'abc'")
+	assert.NotNil(t, err)
 }
 
 func TestCreateDir(t *testing.T) {

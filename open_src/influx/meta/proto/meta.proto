@@ -107,6 +107,7 @@ message DatabaseInfo {
 	optional bool MarkDeleted  = 5;
 	optional ShardKeyInfo ShardKey = 6;
 	optional bool EnableTagArray = 7;
+	optional int64 ReplicaN = 8;
 }
 
 message RetentionPolicySpec {
@@ -952,6 +953,7 @@ message CreateDbPtViewCommand {
         optional CreateDbPtViewCommand command = 172;
     }
     required string DbName = 1;
+	  optional uint32 replicaNum = 2;
 }
 
 message GetMeasurementInfoWithinSameRpCommand {

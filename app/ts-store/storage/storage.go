@@ -26,6 +26,7 @@ import (
 	"github.com/influxdata/influxdb/pkg/limiter"
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/app"
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -60,15 +61,16 @@ type Service interface {
 }
 
 type StoreEngine interface {
+	RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error)
 	RefEngineDbPt(string, uint32) error
 	UnrefEngineDbPt(string, uint32)
 	ExecuteDelete(*netstorage.DeleteRequest) error
 	GetShardSplitPoints(string, uint32, uint64, []int64) ([]string, error)
-	SeriesCardinality(string, []uint32, []string, influxql.Expr) ([]meta.MeasurementCardinalityInfo, error)
-	SeriesExactCardinality(string, []uint32, []string, influxql.Expr) (map[string]uint64, error)
-	SeriesKeys(string, []uint32, []string, influxql.Expr) ([]string, error)
-	TagValues(string, []uint32, map[string][][]byte, influxql.Expr) (netstorage.TablesTagSets, error)
-	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr) (map[string]uint64, error)
+	SeriesCardinality(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error)
+	SeriesExactCardinality(string, []uint32, []string, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
+	SeriesKeys(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]string, error)
+	TagValues(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (netstorage.TablesTagSets, error)
+	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
 	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) (map[string]string, error)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 	PreOffload(*meta.DbPtInfo) error
@@ -79,17 +81,25 @@ type StoreEngine interface {
 	GetConnId() uint64
 }
 
+type SlaveStorage interface {
+	WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error
+}
+
+type MetaClient interface {
+	GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
+	GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
+	GetReplicaInfo(db string, pt uint32) *message.ReplicaInfo
+}
+
 type Storage struct {
 	path string
 
-	MetaClient interface {
-		GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
-		GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
-	}
+	MetaClient MetaClient
 	metaClient *metaclient.Client
 	node       *metaclient.Node
 
-	engine netstorage.Engine
+	engine       netstorage.Engine
+	slaveStorage SlaveStorage
 
 	stop chan struct{}
 
@@ -231,13 +241,14 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	conf.Data.WriteConcurrentLimit = util.IntLimit(minWriteConcurrentLimit, maxWriteConcurrentLimit, conf.Data.WriteConcurrentLimit)
 
 	s := &Storage{
-		path:       path,
-		metaClient: cli,
-		node:       node,
-		engine:     eng,
-		stop:       make(chan struct{}),
-		loadCtx:    &loadCtx,
-		WriteLimit: limiter.NewFixed(conf.Data.WriteConcurrentLimit),
+		path:         path,
+		metaClient:   cli,
+		node:         node,
+		engine:       eng,
+		stop:         make(chan struct{}),
+		loadCtx:      &loadCtx,
+		WriteLimit:   limiter.NewFixed(conf.Data.WriteConcurrentLimit),
+		slaveStorage: netstorage.NewNetStorage(cli),
 	}
 
 	s.MetaClient = cli
@@ -268,6 +279,23 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 	return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
 		return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
 	})
+}
+
+func (s *Storage) WriteRowsToSlave(rows []influx.Row, db, rp string, pt uint32, shardID uint64) error {
+	info := s.MetaClient.GetReplicaInfo(db, pt)
+	if info == nil || info.ReplicaRole != meta.Master {
+		return nil
+	}
+
+	ctx := &netstorage.WriteContext{Rows: rows, Shard: &meta.ShardInfo{}}
+	for _, peer := range info.Peers {
+		ctx.Shard.ID = peer.GetSlaveShardID(shardID)
+		err := s.slaveStorage.WriteRows(ctx, peer.NodeId, peer.PtId, db, rp, time.Second)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
@@ -394,34 +422,39 @@ func (s *Storage) ScanWithSparseIndex(ctx context.Context, db string, ptId uint3
 	return filesFragments, err
 }
 
-func (s *Storage) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (netstorage.TablesTagSets, error) {
-
-	return s.engine.TagValues(db, ptIDs, tagKeys, condition)
+func (s *Storage) RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error) {
+	rowCount, err := s.engine.RowCount(db, ptId, shardIDS, schema.(*executor.QuerySchema))
+	return rowCount, err
 }
 
-func (s *Storage) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (map[string]uint64, error) {
-	return s.engine.TagValuesCardinality(db, ptIDs, tagKeys, condition)
+func (s *Storage) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (netstorage.TablesTagSets, error) {
+
+	return s.engine.TagValues(db, ptIDs, tagKeys, condition, tr)
 }
 
-func (s *Storage) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]string, error) {
+func (s *Storage) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
+	return s.engine.TagValuesCardinality(db, ptIDs, tagKeys, condition, tr)
+}
+
+func (s *Storage) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	ms := stringSlice2BytesSlice(measurements)
 
-	return s.engine.SeriesKeys(db, ptIDs, ms, condition)
+	return s.engine.SeriesKeys(db, ptIDs, ms, condition, tr)
 }
 
-func (s *Storage) SeriesCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]meta.MeasurementCardinalityInfo, error) {
+func (s *Storage) SeriesCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error) {
 	ms := stringSlice2BytesSlice(measurements)
-	return s.engine.SeriesCardinality(db, ptIDs, ms, condition)
+	return s.engine.SeriesCardinality(db, ptIDs, ms, condition, tr)
 }
 
 func (s *Storage) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map[string]string, error) {
 	return s.engine.SysCtrl(req)
 }
 
-func (s *Storage) SeriesExactCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr) (map[string]uint64, error) {
+func (s *Storage) SeriesExactCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
 	ms := stringSlice2BytesSlice(measurements)
 
-	return s.engine.SeriesExactCardinality(db, ptIDs, ms, condition)
+	return s.engine.SeriesExactCardinality(db, ptIDs, ms, condition, tr)
 }
 
 func (s *Storage) GetEngine() netstorage.Engine {
@@ -450,6 +483,10 @@ func (s *Storage) Assign(opId uint64, ptInfo *meta.DbPtInfo) error {
 
 func (s *Storage) GetConnId() uint64 {
 	return s.node.ConnId
+}
+
+func (s *Storage) SetEngine(engine netstorage.Engine) {
+	s.engine = engine
 }
 
 func stringSlice2BytesSlice(s []string) [][]byte {

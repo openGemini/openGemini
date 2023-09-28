@@ -55,8 +55,6 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	switch msg := metaMsg.Data().(type) {
 	case *message.SnapshotRequest:
 		return c.HandleSnapshot(w, msg)
-	case *message.GetDBBriefInfoRequest:
-		return c.HandleDBBriefInfo(w, msg)
 	case *message.CreateNodeRequest:
 		return c.HandleCreateNode(w, msg)
 	}
@@ -77,23 +75,6 @@ func (c *RPCServer) HandleSnapshot(w spdy.Responser, msg *message.SnapshotReques
 	}
 
 	return w.Response(message.NewMetaMessage(message.SnapshotResponseMessage, rsp), true)
-}
-
-func (c *RPCServer) HandleDBBriefInfo(w spdy.Responser, msg *message.GetDBBriefInfoRequest) error {
-	fmt.Printf("server HandleDBBriefInfo: %+v \n", msg)
-
-	dbInfo := &meta2.DatabaseBriefInfo{
-		Name:           "db0",
-		EnableTagArray: false,
-	}
-
-	buf, _ := dbInfo.Marshal()
-	rsp := &message.GetDBBriefInfoResponse{
-		Data: buf,
-		Err:  "",
-	}
-
-	return w.Response(message.NewMetaMessage(message.GetDBBriefInfoResponseMessage, rsp), true)
 }
 
 func (c *RPCServer) HandleCreateNode(w spdy.Responser, msg *message.CreateNodeRequest) error {
@@ -522,7 +503,7 @@ func TestClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	}
 	spec := &meta2.RetentionPolicySpec{Name: "testRp"}
 	ski := &meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}}
-	_, err := c.CreateDatabaseWithRetentionPolicy("db0", spec, ski, false)
+	_, err := c.CreateDatabaseWithRetentionPolicy("db0", spec, ski, false, 1)
 	require.EqualError(t, err, "execute command timeout")
 }
 
@@ -536,7 +517,7 @@ func TestClient_CreateDatabaseWithRetentionPolicy2(t *testing.T) {
 	}
 	spec := &meta2.RetentionPolicySpec{Name: "testRp"}
 	ski := &meta2.ShardKeyInfo{ShardKey: []string{"tag2", "tag3"}}
-	_, err := c.CreateDatabaseWithRetentionPolicy("test", spec, ski, false)
+	_, err := c.CreateDatabaseWithRetentionPolicy("test", spec, ski, false, 1)
 	require.EqualError(t, err, "shard key conflict")
 }
 
@@ -987,41 +968,6 @@ func TestGetDownSampleInfo(t *testing.T) {
 	}
 }
 
-func TestUserInfo(t *testing.T) {
-	address := "127.0.0.1:8492"
-	nodeId := 1
-	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
-
-	// Server
-	rrcServer, err := startServer(address)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	defer rrcServer.Stop()
-	time.Sleep(time.Second)
-
-	RetryGetUserInfoTimeout = 1 * time.Second
-	mc := &Client{
-		cacheData: &meta2.Data{
-			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
-				Name:     "test",
-				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
-				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-					"rp0": {
-						Name:     "rp0",
-						Duration: 72 * time.Hour,
-					},
-				}}},
-			Index: 0,
-		},
-		metaServers:    []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
-	}
-	mc.UpdateUserInfo()
-	time.Sleep(2 * time.Second)
-}
-
 func TestVerifyDataNodeStatus(t *testing.T) {
 	config.SetHaPolicy("shared-storage")
 	defer config.SetHaPolicy("write-available-first")
@@ -1030,7 +976,7 @@ func TestVerifyDataNodeStatus(t *testing.T) {
 	nodeId := 0
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
-	// Server
+	// ServerestVerifyDataN
 	rrcServer, err := startServer(address)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -1110,45 +1056,6 @@ func TestDBPTCtx_String(t *testing.T) {
 	require.Equal(t, exp, ctx.String())
 	ctx.DBPTStat = nil
 	require.Equal(t, "", ctx.String())
-}
-
-func TestTagArrayEnabledFromServer(t *testing.T) {
-	address := "127.0.0.1:8492"
-	nodeId := 1
-	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
-
-	// Server
-	rrcServer, err := startServer(address)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	defer rrcServer.Stop()
-	time.Sleep(time.Second)
-
-	mc := &Client{
-		cacheData: &meta2.Data{
-			Databases: map[string]*meta2.DatabaseInfo{"db0": &meta2.DatabaseInfo{
-				Name:     "db0",
-				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
-				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-					"rp0": {
-						Name:     "rp0",
-						Duration: 72 * time.Hour,
-					},
-				}}},
-		},
-		nodeID:         1,
-		metaServers:    []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		closing:        make(chan struct{}),
-		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
-	}
-
-	mc.cacheData.Databases["db0"].EnableTagArray = true
-	var data []byte
-	_ = data
-	_, err = mc.TagArrayEnabledFromServer("db0")
-	assert.NoError(t, err)
 }
 
 func TestTagArrayEnabled(t *testing.T) {
@@ -1486,4 +1393,142 @@ func TestClient_MultiRpWithSameMeasurement(t *testing.T) {
 		t.Fatal("the number of measurement is not correct, actual", len(ms))
 	}
 
+}
+
+func TestClient_GetReplicaN(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			ReplicaGroups: nil,
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				ReplicaN: 1,
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+					},
+				}},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	replicaN, err := c.GetReplicaN("db0")
+	assert.Equal(t, replicaN, 1)
+	assert.Equal(t, err, nil)
+
+	_, err = c.GetReplicaN("db1")
+	assert.Equal(t, err, errno.NewError(errno.DatabaseNotFound, "db1"))
+
+	repGroups := c.DBRepGroups("db0")
+	assert.Equal(t, len(repGroups), 0)
+}
+
+func TestClient_GetAliveShards(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(3600)),
+		DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{
+			{ID: 1, Owners: []uint32{0}},
+			{ID: 2, Owners: []uint32{1}},
+			{ID: 3, Owners: []uint32{2}},
+			{ID: 4, Owners: []uint32{3}},
+		},
+		EngineType: config.TSSTORE,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	shardIndexes := c.GetAliveShards("db0", &sgInfo1)
+	assert.Equal(t, shardIndexes, []int{0, 1, 2, 3})
+
+	config.SetHaPolicy("shared-storage")
+	defer config.SetHaPolicy("write-available-first")
+	shardIndexes = c.GetAliveShards("db0", &sgInfo1)
+	assert.Equal(t, shardIndexes, []int{0, 1, 2, 3})
+}
+
+func TestClient_GetAliveShardsForReplication(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(3600)),
+		DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{
+			{ID: 1, Owners: []uint32{0}},
+			{ID: 2, Owners: []uint32{1}},
+			{ID: 3, Owners: []uint32{2}},
+			{ID: 4, Owners: []uint32{3}},
+		},
+		EngineType: config.TSSTORE,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ReplicaN: 2,
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, RGID: 0},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online, RGID: 0},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 1},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, RGID: 1},
+				},
+			},
+			ReplicaGroups: map[string][]meta2.ReplicaGroup{
+				"db0": {
+					{ID: 0, MasterPtID: 0, Peers: []meta2.Peer{{ID: 1, PtRole: meta2.Slave}}},
+					{ID: 1, MasterPtID: 2, Peers: []meta2.Peer{{ID: 3, PtRole: meta2.Slave}}},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+
+	config.SetHaPolicy("replication")
+	defer config.SetHaPolicy("write-available-first")
+	shardIndexes := c.GetAliveShards("db0", &sgInfo1)
+	assert.Equal(t, shardIndexes, []int{0, 2})
 }

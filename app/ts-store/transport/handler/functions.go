@@ -19,6 +19,7 @@ package handler
 import (
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
@@ -40,21 +41,27 @@ func rewriteBinary(expr *influxql.BinaryExpr) {
 	}
 }
 
-func parseTagKeyCondition(cond string) (influxql.Expr, error) {
+func parseTagKeyCondition(cond string) (influxql.Expr, influxql.TimeRange, error) {
 	var expr influxql.Expr
 	if cond == "" {
-		return expr, nil
+		return expr, influxql.TimeRange{}, nil
 	}
 	p := influxql.NewParser(strings.NewReader(cond))
 	expr, err := p.ParseExpr()
 	if err != nil {
 		p.Release()
-		return nil, err
+		return nil, influxql.TimeRange{}, err
 	}
 	p.Release()
 
+	valuer := influxql.NowValuer{Now: time.Now()}
+	e, tr, err := influxql.ConditionExpr(expr, &valuer)
+	if err != nil {
+		return e, tr, err
+	}
+
 	// defaults to influxql.Tag for all types
-	influxql.WalkFunc(expr, func(node influxql.Node) {
+	influxql.WalkFunc(e, func(node influxql.Node) {
 		switch ref := node.(type) {
 		case *influxql.VarRef:
 			ref.Type = influxql.Tag
@@ -62,6 +69,5 @@ func parseTagKeyCondition(cond string) (influxql.Expr, error) {
 			rewriteBinary(ref)
 		}
 	})
-
-	return expr, nil
+	return e, tr, nil
 }

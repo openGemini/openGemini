@@ -109,6 +109,7 @@ const (
 
 	NodeInterruptQuery = "interruptquery"
 	UpperMemUsePct     = "uppermemusepct"
+	ParallelQuery      = "parallelbatch"
 )
 
 var (
@@ -123,6 +124,8 @@ var (
 
 	InterruptQuery       = false
 	UpperMemPct    int64 = 0
+
+	ParallelQueryInBatch int32 = 0 // this determines whether to use parallel query when a query is combined with multi queries
 )
 
 func UpdateInterruptQuery(switchOn bool) {
@@ -177,6 +180,15 @@ func SetTimeFilterProtection(enabled bool) {
 
 func GetTimeFilterProtection() bool {
 	return query.TimeFilterProtection
+}
+
+func SetParallelQueryInBatch(en bool) {
+	if en {
+		atomic.StoreInt32(&ParallelQueryInBatch, 1)
+	} else {
+		atomic.StoreInt32(&ParallelQueryInBatch, 0)
+	}
+	fmt.Println("ParallelQueryInBatch:", ParallelQueryInBatch)
 }
 
 type LogRowsRule struct {
@@ -392,6 +404,14 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 			return err
 		}
 		return broadcastCmdToStore(req, resp)
+	case ParallelQuery:
+		enabled, err := GetBoolValue(req.Param(), "enabled")
+		if err != nil {
+			return err
+		}
+		SetParallelQueryInBatch(enabled)
+		res := "\n\tsuccess"
+		resp.WriteString(res)
 	default:
 		return fmt.Errorf("unknown sysctrl mod: %v", req.Mod())
 	}

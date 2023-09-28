@@ -101,6 +101,10 @@ func (s *MockStoreEngine) ScanWithSparseIndex(_ context.Context, _ string, _ uin
 	return buildShardsFragments1(), nil
 }
 
+func (s *MockStoreEngine) RowCount(_ string, _ uint32, _ []uint64, _ hybridqp.Catalog) (int64, error) {
+	return 0, nil
+}
+
 func (s *MockStoreEngine) UnrefEngineDbPt(_ string, _ uint32) {
 
 }
@@ -576,6 +580,19 @@ func TestDistributeFragmentsV2(t *testing.T) {
 	t.Run("2-4", func(t *testing.T) {
 		frags := buildShardsFragments2()
 		expected = buildShardsFragmentsGroups24V2()
+		actual, err = executor.DistributeFragmentsV2(frags, 4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testEqualShardsFragmentsGroups(t, expected, actual)
+	})
+
+	t.Run("3-4", func(t *testing.T) {
+		frags := executor.NewShardsFragments()
+		expected = buildShardsFragmentsGroups24V2()
+		fragmentsGroups := executor.NewShardsFragmentsGroups(1)
+		fragmentsGroups.Items[0] = executor.NewShardsFragmentsGroup(executor.NewShardsFragments(), 0)
+		expected = fragmentsGroups
 		actual, err = executor.DistributeFragmentsV2(frags, 4)
 		if err != nil {
 			t.Fatal(err)

@@ -33,6 +33,14 @@ type ReplicaGroup struct {
 	Term       uint64 // term of master, if master changed term changed
 }
 
+func (rg *ReplicaGroup) init(id, masterPtId uint32, peers []Peer, status RGStatus, term uint64) {
+	rg.ID = id
+	rg.MasterPtID = masterPtId
+	rg.Peers = peers
+	rg.Status = status
+	rg.Term = term
+}
+
 func (rg *ReplicaGroup) clone() {
 	other := *rg
 	if len(rg.Peers) > 0 {
@@ -50,6 +58,10 @@ func (rg *ReplicaGroup) GetPtRole(ptID uint32) Role {
 		}
 	}
 	return Catcher
+}
+
+func (rg *ReplicaGroup) IsMasterPt(ptID uint32) bool {
+	return ptID == rg.MasterPtID
 }
 
 func (rg *ReplicaGroup) marshal() *proto2.ReplicaGroup {

@@ -115,7 +115,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 QUERY PARTITION
                 TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS
                 REPLICAS DETAIL DESTINATIONS
-                Hash Range SCHEMA
+                SCHEMA
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -165,7 +165,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
 %type <durations>                   SHARD_HOT_WARM_INDEX_DURATIONS SHARD_HOT_WARM_INDEX_DURATION CREAT_DATABASE_POLICY  CREAT_DATABASE_POLICYS
-%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CALUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE
+%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE
 %type <strSlice>                    SHARDKEYLIST CMOPTION_SHARDKEY INDEX_LIST PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION CMOPTION_PRIMARYKEY CMOPTION_SORTKEY
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST CMOPTION_PROPERTIES
 %type <location>                    TIME_ZONE
@@ -453,11 +453,11 @@ SELECT_STATEMENT:
 	})
         stmt.Location = $10
         if len($3) > 1{
-            yylex.Error("into caluse only support one measurement")
+            yylex.Error("into clause only support one measurement")
         }else if len($3) == 1{
             mst,ok := $3[0].(*Measurement)
             if !ok{
-                 yylex.Error("into caluse only support measurement caluse")
+                 yylex.Error("into clause only support measurement clause")
             }
             mst.IsTarget = true
             stmt.Target = &Target{
@@ -494,11 +494,11 @@ SELECT_STATEMENT:
 	})
         stmt.Location = $11
         if len($4) > 1{
-            yylex.Error("into caluse only support one measurement")
+            yylex.Error("into clause only support one measurement")
         }else if len($4) == 1{
             mst,ok := $4[0].(*Measurement)
             if !ok{
-                 yylex.Error("into caluse only support measurement caluse")
+                 yylex.Error("into clause only support measurement clause")
             }
             mst.IsTarget = true
             stmt.Target = &Target{
@@ -1367,7 +1367,6 @@ WITH_CLAUSES:
         }else{
            stmt.RetentionPolicyIndexGroupDuration = $2.IndexGroupDuration
         }
-        stmt.ReplicaNum = $2.ReplicaNum
         $$ = stmt
     }
 
@@ -1440,10 +1439,6 @@ CREAT_DATABASE_POLICYS:
             }
         }else{
             yylex.Error("Repeat Policy Name")
-        }
-
-        if $2.ReplicaNum != 0{
-            $1.ReplicaNum = $2.ReplicaNum
         }
 
         if $1.rpdefault == false || $2.rpdefault == false{
@@ -1815,7 +1810,6 @@ ALTER_RENTRENTION_POLICY_STATEMENT:
            yylex.Error("PolicyName and ReplicaNum")
         }
         $$ = stmt
-
     }
 
 
@@ -1976,7 +1970,7 @@ MEASUREMENT_INFO:
     }
     |IDENT
     {
-        $$ = $1
+        yylex.Error("SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, SCHEMA")
     }
 
 SHOW_MEASUREMENT_KEYS_STATEMENT:
@@ -2364,14 +2358,24 @@ CREATE_MEASUREMENT_STATEMENT:
             _, inTag := stmt.Tags[key]
             _, inField := stmt.Fields[key]
             if !inTag && !inField && key != "time" {
-                yylex.Error("Invalid PrimaryKey")
+                if len($5.PrimaryKey) != len($5.SortKey) {
+                    yylex.Error("Invalid PrimaryKey")
+                } else {
+                    yylex.Error("Invalid PrimaryKey/SortKey")
+                }
+                return 1
             }
         }
         for _, key := range $5.SortKey {
             _, inTag := stmt.Tags[key]
             _, inField := stmt.Fields[key]
             if !inTag && !inField && key != "time" {
-                yylex.Error("Invalid SortKey")
+                if len($5.PrimaryKey) != len($5.SortKey) {
+                    yylex.Error("Invalid SortKey")
+                } else {
+                    yylex.Error("Invalid PrimaryKey/SortKey")
+                }
+                return 1
             }
         }
         // check if ShardKey is IN Tags/Fields
@@ -2380,15 +2384,18 @@ CREATE_MEASUREMENT_STATEMENT:
             _, inField := stmt.Fields[key]
             if !inTag && !inField {
                 yylex.Error("Invalid ShardKey")
+                return 1
             }
         }
         // check if primary key is left prefix of sort key
         if len($5.PrimaryKey) > len($5.SortKey) {
             yylex.Error("PrimaryKey should be left prefix of SortKey")
+            return 1
         }
         for i, v := range $5.PrimaryKey {
             if v != $5.SortKey[i] {
                 yylex.Error("PrimaryKey should be left prefix of SortKey")
+                return 1
             }
         }
         stmt.EngineType = $5.EngineType
@@ -2407,7 +2414,7 @@ CMOPTIONS_TS:
         option.EngineType = "tsstore"
         $$ = option
     }
-    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE CMOPTION_SHARDKEY TYPE_CALUSE
+    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE CMOPTION_SHARDKEY TYPE_CLAUSE
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2423,7 +2430,7 @@ CMOPTIONS_TS:
     }
 
 CMOPTIONS_CS:
-    WITH CMOPTION_ENGINETYPE_CS CMOPTION_SHARDKEY TYPE_CALUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES
+    WITH CMOPTION_ENGINETYPE_CS CMOPTION_SHARDKEY TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2535,6 +2542,7 @@ COLUMN_LISTS:
                     stmt.Fields[fieldName] = influx.Field_Type_Boolean
                 } else {
                     yylex.Error("expect FLOAT64, INT64, BOOL, STRING for column data type")
+                    return 1 // syntax error
                 }
             }
         }
@@ -2631,14 +2639,15 @@ INDEX_LIST:
         $$ = append([]string{$1}, $3...)
     }
 
-TYPE_CALUSE:
-    TYPE Hash
+TYPE_CLAUSE:
+    TYPE IDENT
     {
-        $$ = "hash"
-    }
-    | TYPE Range
-    {
-        $$ = "range"
+        shardType := strings.ToLower($2)
+        if shardType != "hash" && shardType != "range" {
+            yylex.Error("expect HASH or RANGE for TYPE")
+            return 1
+        }
+        $$ = shardType
     }
     |
     {
@@ -2842,7 +2851,7 @@ SHOW_SHARDS_STATEMENT:
 
 
 ALTER_SHARD_KEY_STATEMENT:
-    ALTER MEASUREMENT TABLE_CASE WITH SHARDKEY SHARDKEYLIST TYPE_CALUSE
+    ALTER MEASUREMENT TABLE_CASE WITH SHARDKEY SHARDKEYLIST TYPE_CLAUSE
     {
         stmt := &AlterShardKeyStatement{}
         stmt.Database = $3.Database
@@ -3029,12 +3038,12 @@ CREATE_STREAM_STATEMENT:
     	    Delay: $8,
     	}
         if len($4) > 1{
-            yylex.Error("into caluse only support one target")
+            yylex.Error("into clause only support one target")
         }
         if len($4) == 1{
             mst,ok := $4[0].(*Measurement)
             if !ok{
-                 yylex.Error("into caluse only support measurement caluse")
+                 yylex.Error("into clause only support measurement clause")
             }
             mst.IsTarget = true
             stmt.Target = &Target{
@@ -3050,12 +3059,12 @@ CREATE_STREAM_STATEMENT:
     	    Query: $6,
     	}
         if len($4) > 1{
-            yylex.Error("into caluse only support one target")
+            yylex.Error("into clause only support one target")
         }
         if len($4) == 1{
             mst,ok := $4[0].(*Measurement)
             if !ok{
-                 yylex.Error("into caluse only support measurement caluse")
+                 yylex.Error("into clause only support measurement clause")
             }
             mst.IsTarget = true
             stmt.Target = &Target{

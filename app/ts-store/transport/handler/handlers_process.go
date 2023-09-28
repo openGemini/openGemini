@@ -18,6 +18,7 @@ package handler
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/kit/errors"
@@ -43,7 +44,7 @@ func (h *GetShardSplitPoints) Process() (codec.BinaryCodec, error) {
 		zap.Any("sharedID", h.req.GetShardID()),
 		zap.Any("idxes", h.req.GetIdxes()))
 
-	h.rsp.Err = processDDL(nil, func(expr influxql.Expr) error {
+	h.rsp.Err = processDDL(nil, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		var err error
 		h.rsp.SplitPoints, err = h.store.GetShardSplitPoints(h.req.GetDB(), h.req.GetPtID(), h.req.GetShardID(), h.req.GetIdxes())
 		return err
@@ -53,9 +54,9 @@ func (h *GetShardSplitPoints) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *SeriesCardinality) Process() (codec.BinaryCodec, error) {
-	err := processDDL(h.req.Condition, func(expr influxql.Expr) error {
+	err := processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		var err error
-		h.rsp.CardinalityInfos, err = h.store.SeriesCardinality(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr)
+		h.rsp.CardinalityInfos, err = h.store.SeriesCardinality(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr, tr)
 		return err
 	})
 
@@ -67,18 +68,18 @@ func (h *SeriesCardinality) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *SeriesExactCardinality) Process() (codec.BinaryCodec, error) {
-	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr) error {
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		var err error
-		h.rsp.Cardinality, err = h.store.SeriesExactCardinality(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr)
+		h.rsp.Cardinality, err = h.store.SeriesExactCardinality(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr, tr)
 		return err
 	})
 	return h.rsp, nil
 }
 
 func (h *SeriesKeys) Process() (codec.BinaryCodec, error) {
-	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr) error {
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		var err error
-		h.rsp.Series, err = h.store.SeriesKeys(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr)
+		h.rsp.Series, err = h.store.SeriesKeys(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr, tr)
 		return err
 	})
 
@@ -94,13 +95,13 @@ func (h *CreateDataBase) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *ShowTagValues) Process() (codec.BinaryCodec, error) {
-	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr) error {
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		tagKeys := h.req.GetTagKeysBytes()
 		if len(tagKeys) == 0 {
 			return nil
 		}
 
-		tagValues, err := h.store.TagValues(*h.req.Db, h.req.PtIDs, tagKeys, expr)
+		tagValues, err := h.store.TagValues(*h.req.Db, h.req.PtIDs, tagKeys, expr, tr)
 		h.rsp.SetTagValuesSlice(tagValues)
 
 		return err
@@ -110,9 +111,9 @@ func (h *ShowTagValues) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
-	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr) error {
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		var err error
-		h.rsp.Cardinality, err = h.store.TagValuesCardinality(*h.req.Db, h.req.PtIDs, h.req.GetTagKeysBytes(), expr)
+		h.rsp.Cardinality, err = h.store.TagValuesCardinality(*h.req.Db, h.req.PtIDs, h.req.GetTagKeysBytes(), expr, tr)
 		return err
 	})
 
@@ -159,18 +160,26 @@ func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 	return h.rsp, nil
 }
 
-func processDDL(cond *string, processor func(expr influxql.Expr) error) *string {
+func processDDL(cond *string, processor func(expr influxql.Expr, timeRange influxql.TimeRange) error) *string {
 	var err error
 	var expr influxql.Expr
+	var tr influxql.TimeRange
 
 	if cond != nil {
-		expr, err = parseTagKeyCondition(*cond)
+		expr, tr, err = parseTagKeyCondition(*cond)
 		if err != nil {
 			return netstorage.MarshalError(err)
 		}
 	}
 
-	err = processor(expr)
+	if tr.Min.IsZero() {
+		tr.Min = time.Unix(0, influxql.MinTime).UTC()
+	}
+	if tr.Max.IsZero() {
+		tr.Max = time.Unix(0, influxql.MaxTime).UTC()
+	}
+
+	err = processor(expr, tr)
 	return netstorage.MarshalError(err)
 }
 
