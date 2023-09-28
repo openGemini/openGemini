@@ -32,8 +32,8 @@ jobs:
         uses: wagoid/commitlint-github-action@v5
       - name: Run licence check
         run: make licence-check
-  StaticCheck:
-    name: "static check"
+  GoLint:
+    name: "static check, style check, go vet and other go lint"
     needs: CommitLint
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -46,18 +46,6 @@ jobs:
           go-version: "1.19"
       - name: Run static check
         run: make static-check
-  OtherGoLint:
-    name: "style check, go vet and other go lint"
-    needs: CommitLint
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v1
-        with:
-          fetch-depth: 1
-      - uses: WillAbides/setup-go-faster@v1.7.0
-        with:
-          go-version: "1.18"
       - name: Run go version check
         run: make go-version-check
       - name: Run go generate check
@@ -80,12 +68,12 @@ jobs:
   UT:
     name: unit test
     if: github.event.pull_request.draft == false
-    needs: [StaticCheck, OtherGoLint]
+    needs: [GoLint]
     strategy:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.18.x", "1.20.x"]
+        go: ["1.19.x"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -107,12 +95,12 @@ jobs:
   IntegrationTest:
     name: integration test
     if: github.event.pull_request.draft == false
-    needs: [StaticCheck, OtherGoLint]
+    needs: [GoLint]
     strategy:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.18.x", "1.20.x"]
+        go: ["1.19.x"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
