@@ -17,6 +17,7 @@ limitations under the License.
 package meta
 
 import (
+	"container/list"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,7 +32,6 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
-	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -52,10 +52,6 @@ import (
 const (
 	autoCreateRetentionPolicyName   = "autogen"
 	autoCreateRetentionPolicyPeriod = 0
-
-	// maxAutoCreatedRetentionPolicyReplicaN is the maximum replication factor that will
-	// be set for auto-created retention policies.
-	maxAutoCreatedRetentionPolicyReplicaN = 1
 
 	reportTimeSpan = 10 * time.Second
 
@@ -392,6 +388,13 @@ type Store struct {
 	cacheData        *meta.Data
 	cacheDataBytes   []byte
 	cacheDataChanged chan struct{}
+
+	// for continuous query
+	cqLock            sync.RWMutex            // lock for all cq related items
+	cqNames           []string                // sorted cq names. Restore from data unmarshal.
+	heartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
+	cqLease           map[string]*cqLeaseInfo // sql host to cq lease.
+	sqlHosts          []string                // sorted hostname ["127.0.0.1:8086", "127.0.0.2:8086", "127.0.0.3:8086"]
 }
 
 // NewStore will create a new metaStore with the passed in config
@@ -414,6 +417,10 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 		raftAddr:         raftAddr,
 		dbStatistics:     make(map[string]*dbInfo),
 		notifyCh:         make(chan bool, 1),
+
+		// for continuous query
+		heartbeatInfoList: list.New(),
+		cqLease:           make(map[string]*cqLeaseInfo),
 	}
 
 	return &s
@@ -500,9 +507,10 @@ func (s *Store) Open(raftln net.Listener) error {
 		return err
 	}
 
-	s.wg.Add(2)
+	s.wg.Add(3)
 	go s.serveSnapshot()
 	go s.checkLeaderChanged()
+	go s.detectSqlNodeOffline()
 
 	return nil
 }
@@ -670,11 +678,12 @@ func (s *Store) deleteMeasurement(db string, rp *meta.RetentionPolicyInfo, mst s
 			if !rp.ShardGroups[sgIdx].Shards[shIdx].ContainPrefix(originName) {
 				continue
 			}
-			ptId := rp.ShardGroups[sgIdx].Shards[shIdx].Owners[0]
 			if pts, ok := s.cacheData.PtView[db]; ok {
-				if int(ptId) < len(pts) {
-					nodeId := pts[ptId].Owner.NodeID
-					nodeShardsMap[nodeId] = append(nodeShardsMap[nodeId], rp.ShardGroups[sgIdx].Shards[shIdx].ID)
+				for _, ptId := range rp.ShardGroups[sgIdx].Shards[shIdx].Owners {
+					if int(ptId) < len(pts) {
+						nodeId := pts[ptId].Owner.NodeID
+						nodeShardsMap[nodeId] = append(nodeShardsMap[nodeId], rp.ShardGroups[sgIdx].Shards[shIdx].ID)
+					}
 				}
 			}
 		}
@@ -948,32 +957,13 @@ func (s *Store) close() error {
 }
 
 func (s *Store) getSnapshot(role mclient.Role) []byte {
-	switch role {
-	case mclient.SQL:
-		return s.getSnapshotBySql()
-	case mclient.STORE:
-		return s.getSnapshotByStore()
-	case mclient.META:
-		return s.getSnapshotBySql()
-	default:
-		panic("not exist role")
-	}
+	return s.getSnapshotBySql()
 }
 
 func (s *Store) getSnapshotBySql() []byte {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	return s.cacheDataBytes
-}
-
-func (s *Store) getSnapshotByStore() []byte {
-	s.cacheMu.RLock()
-	defer s.cacheMu.RUnlock()
-	b, err := s.cacheData.MarshalBinaryToStore()
-	if err != nil {
-		s.Logger.Error("marshal binary to store error", zap.Error(err))
-	}
-	return b
 }
 
 // afterIndex returns a channel that will be closed to signal
@@ -1774,50 +1764,6 @@ func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 		return 0, fmt.Errorf("register query id failed, host: %s", host)
 	}
 	return offset, nil
-}
-
-func (s *Store) GetReplicaInfo(dbName string, nodeID uint64, ptID uint32) (*message.ReplicaInfo, error) {
-	if !s.IsLeader() {
-		return nil, raft.ErrNotLeader
-	}
-	info := &message.ReplicaInfo{
-		Master:        message.PeerInfo{},
-		ReplicaStatus: 0,
-		Term:          0,
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	pt := s.data.GetPtInfo(dbName, ptID)
-	if pt == nil {
-		return nil, errno.NewError(errno.DatabaseNotFound)
-	}
-
-	rg := s.data.GetReplicaGroup(dbName, pt.RGID)
-	if rg == nil {
-		return nil, errno.NewError(errno.DatabaseNotFound)
-	}
-
-	info.ReplicaStatus = rg.Status
-
-	if rg.MasterPtID == ptID && pt.Owner.NodeID == nodeID {
-		info.ReplicaRole = meta.Master
-		info.Master.Update(pt)
-
-		info.Peers = make([]message.PeerInfo, len(rg.Peers))
-		for i := range rg.Peers {
-			info.Peers[i].Update(s.data.GetPtInfo(dbName, rg.Peers[i].ID))
-		}
-		return info, nil
-	}
-
-	masterPt := s.data.GetPtInfo(dbName, rg.MasterPtID)
-	if masterPt == nil {
-		return nil, errno.NewError(errno.DatabaseNotFound)
-	}
-	info.Master.Update(masterPt)
-	info.ReplicaRole = rg.GetPtRole(ptID)
-
-	return info, nil
 }
 
 func (s *Store) leadershipTransfer() error {

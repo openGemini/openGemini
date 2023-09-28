@@ -33,7 +33,7 @@ func init() {
 			},
 			&Query{
 				name:    "create database with retention duration should succeed",
-				command: `CREATE DATABASE db0_r WITH DURATION 24h REPLICATION 2 NAME db0_r_policy`,
+				command: `CREATE DATABASE db0_r WITH DURATION 24h REPLICATION 1 NAME db0_r_policy`,
 				exp:     `{"results":[{"statement_id":0}]}`,
 				once:    true,
 			},
@@ -1131,6 +1131,27 @@ func init() {
 		},
 	}
 
+	tests["config_command"] = Test{
+		db: "db0",
+		rp: "rp0",
+		queries: []*Query{
+			&Query{
+				name:    "show configs",
+				command: `SHOW CONFIGS`,
+				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
+			},
+			&Query{
+				name:    "set config",
+				command: `SET CONFIG sql logging.level = debug`,
+				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
+			},
+			&Query{
+				name:    "show configs",
+				command: `SHOW CONFIGS`,
+				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
+			},
+		},
+	}
 }
 
 func (tests Tests) load(t *testing.T, key string) Test {

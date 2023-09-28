@@ -146,8 +146,8 @@ const (
 
 // newMemOptions
 // enable the heap dumper, should dump if one of the following requirements is matched
-//   1. memory usage > TriggerMin && memory usage diff > TriggerDiff
-//   2. memory usage > TriggerAbs
+//  1. memory usage > TriggerMin && memory usage diff > TriggerDiff
+//  2. memory usage > TriggerAbs
 func newMemOptions() *commonOption {
 	return newCommonOption(
 		defaultMemTriggerMin,
@@ -179,8 +179,8 @@ const (
 // newCPUOptions
 // enable the cpu dumper, should dump if one of the following requirements is matched
 // in percent
-//   1. cpu usage > CPUTriggerMin && cpu usage diff > CPUTriggerDiff
-//   2. cpu usage > CPUTriggerAbs
+//  1. cpu usage > CPUTriggerMin && cpu usage diff > CPUTriggerDiff
+//  2. cpu usage > CPUTriggerAbs
 func newCPUOptions() *commonOption {
 	return newCommonOption(
 		defaultCPUTriggerMin,
@@ -215,8 +215,8 @@ const (
 )
 
 // enable the goroutine dumper, should dump if one of the following requirements is matched
-//   1. goroutine_num > TriggerMin && goroutine_num < GoroutineTriggerNumMax && goroutine diff percent > TriggerDiff
-//   2. goroutine_num > GoroutineTriggerNumAbsNum && goroutine_num < GoroutineTriggerNumMax
+//  1. goroutine_num > TriggerMin && goroutine_num < GoroutineTriggerNumMax && goroutine diff percent > TriggerDiff
+//  2. goroutine_num > GoroutineTriggerNumAbsNum && goroutine_num < GoroutineTriggerNumMax
 func newGrtOptions() *grtOptions {
 	comm := newCommonOption(defaultGoroutineTriggerMin, defaultGoroutineTriggerDiff, defaultGoroutineTriggerAbs, defaultGoroutineCoolDown)
 	return &grtOptions{commonOption: comm}

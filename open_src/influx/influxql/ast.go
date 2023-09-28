@@ -7209,6 +7209,49 @@ func (s *ShowMeasurementKeysStatement) String() string {
 	return buf.String()
 }
 
+type ShowConfigsStatement struct {
+	Scope string
+	Key   *ConfigKey
+}
+
+type ConfigKey struct {
+	Name  string
+	Regex *RegexLiteral
+}
+
+// String returns a string representation of the measurement.
+func (ck *ConfigKey) String() string {
+	if ck.Name != "" {
+		return QuoteIdent(ck.Name)
+	} else if ck.Regex != nil {
+		return ck.Regex.String()
+	}
+	return ""
+}
+
+func (s *ShowConfigsStatement) stmt() {}
+
+func (s *ShowConfigsStatement) node() {}
+
+func (s *ShowConfigsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *ShowConfigsStatement) String() string {
+	var buf bytes.Buffer
+
+	if s.Scope == "" && s.Key == nil {
+		return `SHOW CONFIGS`
+	} else if s.Scope == "" {
+		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE scope = %s`, s.Scope))
+	} else if s.Key == nil {
+		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE name = %s`, s.Key.String()))
+	} else {
+		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE scope = %s AND name = %s`, s.Scope, s.Key.String()))
+	}
+	return buf.String()
+}
+
 type SetConfigStatement struct {
 	Component string
 	Key       string

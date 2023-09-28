@@ -22,6 +22,8 @@ type DatabaseInfo struct {
 	MarkDeleted            bool
 	ShardKey               ShardKeyInfo
 	EnableTagArray         bool
+	ReplicaN               int
+	ContinuousQueries      map[string]*ContinuousQueryInfo // {"cqName": *ContinuousQueryInfo}
 }
 
 func NewDatabase(name string) *DatabaseInfo {
@@ -100,6 +102,13 @@ func (di DatabaseInfo) clone() *DatabaseInfo {
 		}
 	}
 
+	if di.ContinuousQueries != nil {
+		other.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
+		for _, cq := range di.ContinuousQueries {
+			other.ContinuousQueries[cq.Name] = cq.Clone()
+		}
+	}
+
 	return &other
 }
 
@@ -116,11 +125,19 @@ func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 		i++
 	}
 
+	pb.ContinuousQueries = make([]*proto2.ContinuousQueryInfo, len(di.ContinuousQueries))
+	i = 0
+	for _, cq := range di.ContinuousQueries {
+		pb.ContinuousQueries[i] = cq.Marshal()
+		i++
+	}
+
 	pb.MarkDeleted = proto.Bool(di.MarkDeleted)
 	if di.ShardKey.ShardKey != nil {
 		pb.ShardKey = di.ShardKey.Marshal()
 	}
 	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
+	pb.ReplicaN = proto.Int64(int64(di.ReplicaN))
 
 	return pb
 }
@@ -139,11 +156,24 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 		}
 	}
 
+	if len(pb.GetContinuousQueries()) > 0 {
+		di.ContinuousQueries = make(map[string]*ContinuousQueryInfo)
+		for _, x := range pb.GetContinuousQueries() {
+			cq := &ContinuousQueryInfo{}
+			cq.unmarshal(x)
+			di.ContinuousQueries[cq.Name] = cq
+		}
+	}
+
 	di.MarkDeleted = pb.GetMarkDeleted()
 	if pb.ShardKey != nil {
 		di.ShardKey.unmarshal(pb.GetShardKey())
 	}
 	di.EnableTagArray = pb.GetEnableTagArray()
+	di.ReplicaN = int(pb.GetReplicaN())
+	if di.ReplicaN == 0 {
+		di.ReplicaN = 1
+	}
 }
 
 type PtOwner struct {
@@ -235,4 +265,10 @@ func (di *DatabaseBriefInfo) Marshal() ([]byte, error) {
 	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
 
 	return proto.Marshal(pb)
+}
+
+func (di *DatabaseInfo) WalkContinuousQuery(fn func(cq *ContinuousQueryInfo)) {
+	for cqName := range di.ContinuousQueries {
+		fn(di.ContinuousQueries[cqName])
+	}
 }

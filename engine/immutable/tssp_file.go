@@ -467,7 +467,7 @@ func (r *tsspFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, siz
 		return nil, err
 	}
 
-	if fileops.ReadCacheEn {
+	if fileops.ReadCacheEn && ioPriority == fileops.IO_PRIORITY_ULTRA_HIGH {
 		rb, err = r.GetTSSPFileBytes(offset, size, dst, ioPriority)
 	} else {
 		rb, err = r.Read(offset, size, dst, ioPriority)

@@ -884,67 +884,66 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 		return rec
 	}
 
-	var reserveId []int
+	// the Bitmap of filterBitmap have n columns. the first n-1 correspond to CondFunctions.
 	bp := filterBitmap.Bitmap
-	resIdx := len(bp) - 1
-	var bpTime []byte
+
+	// the last one indicates the filtered bitmap.
+	lastIdx := len(bp) - 1
 
 	// if time condition EXIST
 	if len(filterOption.TimeCondFunction) > 0 {
-		bpTime = append(bpTime, rec.ColVals[filterOption.TimeCondFunction[0].Idx].Bitmap...)
+		bp[0] = append(bp[0], rec.ColVals[filterOption.TimeCondFunction[0].Idx].Bitmap...)
 		for i := range filterOption.TimeCondFunction {
 			item := filterOption.TimeCondFunction[i]
 			col := rec.ColVals[item.Idx]
-			bpTime = item.Function(&col, item.Compare, col.Bitmap, bpTime, col.BitMapOffset)
+			bp[0] = item.Function(&col, item.Compare, col.Bitmap, bp[0], col.BitMapOffset)
 		}
-	}
 
-	// if there is ONLY condition for time column
-	if len(filterOption.CondFunctions) == 0 {
-		bp[0] = append(bp[0], bpTime...)
-	} else {
-		// loop for OR condition
+		// init with time condition if time condition EXIST
 		for i := range filterOption.CondFunctions {
-			if len(bpTime) > 0 {
-				// init with time condition if time condition EXIST
-				bp[i] = append(bp[i], bpTime...)
-			} else {
-				// init with the fisrt AND condition (sub-expr) if time condition NOT EXIST
-				bp[i] = append(bp[i], rec.ColVals[filterOption.CondFunctions[i][0].Idx].Bitmap...)
-			}
-			// loop for AND condition (sub-expr)
-			for j := range filterOption.CondFunctions[i] {
-				item := filterOption.CondFunctions[i][j]
-				col := rec.ColVals[item.Idx]
-				bp[i] = item.Function(&col, item.Compare, col.Bitmap, bp[i], col.BitMapOffset)
+			if i > 0 {
+				bp[i] = append(bp[i], bp[0]...)
 			}
 		}
 	}
 
-	bp[resIdx] = append(bp[resIdx], bp[0]...)
-	for i := 0; i < len(bp)-1; i++ {
-		for j := range bp[i] {
-			bp = bitmap.GetValWithOrOp(bp, resIdx, i, j)
+	// loop for OR condition
+	for i := range filterOption.CondFunctions {
+		if len(filterOption.TimeCondFunction) == 0 {
+			// init with the first AND condition (sub-expr) if time condition NOT EXIST
+			bp[i] = append(bp[i], rec.ColVals[filterOption.CondFunctions[i][0].Idx].Bitmap...)
+		}
+
+		// loop for AND condition (sub-expr)
+		for j := range filterOption.CondFunctions[i] {
+			item := filterOption.CondFunctions[i][j]
+			col := rec.ColVals[item.Idx]
+			bp[i] = item.Function(&col, item.Compare, col.Bitmap, bp[i], col.BitMapOffset)
 		}
 	}
 
+	// loop for or condition
+	bp[lastIdx] = append(bp[lastIdx], bp[0]...)
+	bp = bitmap.GetValWithOrOp(bp, lastIdx)
+
+	// get the reserveId
 	offset := rec.ColVals[0].BitMapOffset
 	rowNum := rec.RowNums()
 	for i := 0; i < rowNum; i++ {
-		if !bitmap.IsNil(bp[resIdx], i+offset) {
-			reserveId = append(reserveId, i)
+		if !bitmap.IsNil(bp[lastIdx], i+offset) {
+			filterBitmap.ReserveId = append(filterBitmap.ReserveId, i)
 		}
 	}
 
-	if len(reserveId) == rec.ColVals[len(rec.ColVals)-1].Len {
+	if len(filterBitmap.ReserveId) == rec.ColVals[len(rec.ColVals)-1].Len {
 		return rec
 	}
-	if len(reserveId) == 0 {
+	if len(filterBitmap.ReserveId) == 0 {
 		filterBitmap.Reset()
 		return nil
 	}
 
-	return genRecByRowNumbers(rec, filterRec, reserveId)
+	return genRecByRowNumbers(rec, filterRec, filterBitmap.ReserveId)
 }
 
 var ignoreTypeFun []func(i int, col record.ColVal) interface{}

@@ -17,12 +17,16 @@ limitations under the License.
 package mutable_test
 
 import (
+	"os"
+	"path"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,4 +67,33 @@ func TestMemTable_GetMaxTimeBySidNoLock(t *testing.T) {
 	chunk.UnOrderWriteRec.SetLastAppendTime(200)
 
 	require.Equal(t, int64(200), tbl.GetMaxTimeBySidNoLock("mst", 100))
+}
+
+func TestStoreLoadMstRowCount(t *testing.T) {
+	dir := t.TempDir()
+	err := os.MkdirAll(path.Join(dir, immutable.ColumnStoreDirName, "mst_0001"), 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	countFile := path.Join(dir, immutable.ColumnStoreDirName, "mst_0001", immutable.CountBinFile)
+	rowCount := 8192
+	err = mutable.StoreMstRowCount(countFile, rowCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := mutable.LoadMstRowCount(countFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, count, 8192)
+
+	countFile = path.Join(dir, immutable.ColumnStoreDirName, "mst_0001", "count.bin")
+	_, err = mutable.LoadMstRowCount(countFile)
+	assert.Equal(t, err != nil, true)
+
+	countFile = path.Join(dir, immutable.ColumnStoreDirName, "mst_0001", immutable.CountBinFile)
+	file, _ := os.OpenFile(countFile, os.O_WRONLY|os.O_TRUNC, 0640)
+	_, _ = file.WriteString("")
+	_, err = mutable.LoadMstRowCount(countFile)
+	assert.Equal(t, err != nil, true)
 }

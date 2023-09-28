@@ -463,6 +463,17 @@ func TestRebuildColumnStorePlan(t *testing.T) {
 	if best == nil {
 		t.Fatalf(" wrong result")
 	}
+
+	agg = executor.NewLogicalAggregate(readerMerge, schema)
+	orderBy := executor.NewLogicalOrderBy(agg, agg.Schema())
+	groupBy := executor.NewLogicalGroupBy(orderBy, orderBy.Schema())
+	subQuery := executor.NewLogicalSubQuery(groupBy, groupBy.Schema())
+	merge = executor.NewLogicalHashMerge(subQuery, schema, executor.NODE_EXCHANGE, nil)
+	best = executor.RebuildColumnStorePlan(merge)[0]
+	executor.RebuildAggNodes(best)
+	if best == nil {
+		t.Fatalf(" wrong result")
+	}
 }
 
 func buildColumnStorePlan(t *testing.T, schema *executor.QuerySchema) hybridqp.QueryNode {

@@ -179,15 +179,6 @@ type GetRpMstInfosResponse struct {
 	Err  string
 }
 
-type GetUserInfoRequest struct {
-	Index uint64
-}
-
-type GetUserInfoResponse struct {
-	Data []byte
-	Err  string
-}
-
 type GetStreamInfoRequest struct {
 	Body []byte
 }
@@ -218,15 +209,6 @@ type GetMeasurementsInfoResponse struct {
 	Err  string
 }
 
-type GetDBBriefInfoRequest struct {
-	DbName string
-}
-
-type GetDBBriefInfoResponse struct {
-	Data []byte
-	Err  string
-}
-
 type RegisterQueryIDOffsetRequest struct {
 	Host string
 }
@@ -234,4 +216,21 @@ type RegisterQueryIDOffsetRequest struct {
 type RegisterQueryIDOffsetResponse struct {
 	Offset uint64
 	Err    string
+}
+
+type Sql2MetaHeartbeatRequest struct {
+	Host string
+}
+
+type Sql2MetaHeartbeatResponse struct {
+	Err string
+}
+
+type GetContinuousQueryLeaseRequest struct {
+	Host string
+}
+
+type GetContinuousQueryLeaseResponse struct {
+	CQNames []string
+	Err     string
 }

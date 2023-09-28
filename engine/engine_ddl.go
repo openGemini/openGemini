@@ -229,8 +229,8 @@ func (e *Engine) DropSeries(database string, sources []influxql.Source, ptId []u
 	panic("implement me")
 }
 
-func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) ([]string, error) {
-	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition)
+func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition, tr)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +251,7 @@ func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, co
 	return result, nil
 }
 
-func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]byte, condition influxql.Expr) ([]meta2.MeasurementCardinalityInfo, error) {
+func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]meta2.MeasurementCardinalityInfo, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -273,9 +273,9 @@ func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]b
 		}
 		pt.mu.RLock()
 		if condition != nil {
-			measurementCardinalityInfos, err = pt.seriesCardinalityWithCondition(namesWithVer, condition, measurementCardinalityInfos)
+			measurementCardinalityInfos, err = pt.seriesCardinalityWithCondition(namesWithVer, condition, measurementCardinalityInfos, tr)
 		} else {
-			measurementCardinalityInfos, err = pt.seriesCardinality(namesWithVer, measurementCardinalityInfos)
+			measurementCardinalityInfos, err = pt.seriesCardinality(namesWithVer, measurementCardinalityInfos, tr)
 		}
 
 		if err != nil {
@@ -287,7 +287,7 @@ func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]b
 	return measurementCardinalityInfos, nil
 }
 
-func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (map[string]uint64, error) {
+func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -311,6 +311,9 @@ func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[str
 		}
 		pt.mu.RLock()
 		for _, iBuild := range pt.indexBuilder {
+			if !iBuild.Overlaps(tr) {
+				continue
+			}
 			for name, tks := range tagKeys {
 				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
 				values, err := idx.SearchTagValues([]byte(name), tks, condition)
@@ -340,7 +343,7 @@ func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[str
 	return result, nil
 }
 
-func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (netstorage.TablesTagSets, error) {
+func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (netstorage.TablesTagSets, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -363,6 +366,9 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 		}
 		pt.mu.RLock()
 		for _, iBuild := range pt.indexBuilder {
+			if !iBuild.Overlaps(tr) {
+				continue
+			}
 			for name, tks := range tagKeys {
 				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
 				values, err := idx.SearchTagValues([]byte(name), tks, condition)
@@ -416,7 +422,10 @@ func (e *Engine) StatisticsOps() []opsStat.OpsStatistic {
 			continue
 		}
 		ptIDs := e.getDBPtIds(database)
-		mstCardinality, err := e.SeriesCardinality(database, ptIDs, msts, nil)
+		mstCardinality, err := e.SeriesCardinality(database, ptIDs, msts, nil, influxql.TimeRange{
+			Min: time.Unix(0, influxql.MinTime).UTC(),
+			Max: time.Unix(0, influxql.MaxTime).UTC(),
+		})
 		if err != nil {
 			return nil
 		}

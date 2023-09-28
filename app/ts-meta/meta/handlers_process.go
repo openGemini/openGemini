@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -134,6 +135,10 @@ func (h *Update) Process() (transport.Codec, error) {
 	return rsp, nil
 }
 
+func needRetry(err error) bool {
+	return !errno.Equal(err, errno.ReplicaNodeNumIncorrect)
+}
+
 func (h *Execute) Process() (transport.Codec, error) {
 	rsp := &message.ExecuteResponse{}
 	if h.isClosed() {
@@ -153,7 +158,11 @@ func (h *Execute) Process() (transport.Codec, error) {
 	if cmd.GetType() == proto2.Command_CreateDatabaseCommand {
 		err = createDatabase(cmd)
 		if err != nil {
-			rsp.Err = err.Error()
+			if needRetry(err) {
+				rsp.Err = err.Error()
+			} else {
+				rsp.ErrCommand = err.Error()
+			}
 			return rsp, nil
 		}
 	}
@@ -189,7 +198,8 @@ func createDatabase(cmd *proto2.Command) error {
 
 	// 1.create db pt view
 	val := &proto2.CreateDbPtViewCommand{
-		DbName: v.Name,
+		DbName:     v.Name,
+		ReplicaNum: v.ReplicaNum,
 	}
 	t := proto2.Command_CreateDbPtViewCommand
 	command := &proto2.Command{Type: &t}
@@ -205,28 +215,30 @@ func createDatabase(cmd *proto2.Command) error {
 	if err != nil {
 		return err
 	}
-	errChan := make(chan error, len(dbPts))
+
+	once := sync.Once{}
+	wg := sync.WaitGroup{}
+	wg.Add(len(dbPts))
 	for _, dbPt := range dbPts {
 		go func(pt *meta.DbPtInfo) {
 			nodeId := pt.Pti.Owner.NodeID
-			aliveConnId, err := globalService.store.getDataNodeAliveConnId(nodeId)
-			if err != nil {
-				errChan <- err
-			} else {
+			aliveConnId, innerErr := globalService.store.getDataNodeAliveConnId(nodeId)
+			if innerErr == nil {
 				// Do not wait db pt assign successfully.
 				// If wait, in write-available-first, create database will failed due to store is not alive.
-				errChan <- globalService.balanceManager.assignDbPt(pt, nodeId, aliveConnId, true)
+				innerErr = globalService.balanceManager.assignDbPt(pt, nodeId, aliveConnId, true)
 			}
+
+			if innerErr != nil {
+				once.Do(func() {
+					err = innerErr
+				})
+			}
+			wg.Done()
 		}(dbPt)
 	}
+	wg.Wait()
 
-	for i := 0; i < len(dbPts); i++ {
-		errC := <-errChan
-		if errC != nil {
-			err = errC
-		}
-	}
-	close(errChan)
 	return err
 }
 
@@ -320,46 +332,6 @@ func (h *GetRpMstInfos) Process() (transport.Codec, error) {
 	return rsp, nil
 }
 
-func (h *GetUserInfo) Process() (transport.Codec, error) {
-	rsp := &message.GetUserInfoResponse{}
-	if h.isClosed() {
-		rsp.Err = "server closed"
-		return rsp, nil
-	}
-
-	index := h.req.Index
-	checkRaft := time.After(2 * time.Second)
-	tries := 0
-	for {
-		select {
-		case <-h.store.afterIndex(index):
-			var err error
-			rsp.Data, err = h.store.GetUserInfo()
-			if err != nil {
-				h.logger.Error("get serveUserinfo fail", zap.Uint64("index", index))
-				return rsp, err
-			}
-			h.logger.Info("serveUserinfo ok", zap.Uint64("index", index))
-			return rsp, nil
-		case <-h.closing:
-			rsp.Err = "server closed"
-			return rsp, nil
-		case <-checkRaft:
-			checkRaft = time.After(2 * time.Second)
-			if h.store.isCandidate() {
-				tries++
-				if tries >= 3 {
-					rsp.Err = "server closed"
-					return rsp, nil
-				}
-				h.logger.Info("checkRaft failed", zap.Int("tries", tries))
-				continue
-			}
-			return rsp, nil
-		}
-	}
-}
-
 func (h *GetStreamInfo) Process() (transport.Codec, error) {
 	rsp := &message.GetStreamInfoResponse{}
 
@@ -400,20 +372,6 @@ func (h *GetMeasurementsInfo) Process() (transport.Codec, error) {
 	return rsp, nil
 }
 
-func (h *GetDBBriefInfo) Process() (transport.Codec, error) {
-	rsp := &message.GetDBBriefInfoResponse{}
-	if h.isClosed() {
-		rsp.Err = "server closed"
-		return rsp, nil
-	}
-	b, err := h.store.getDBBriefInfo(h.req.DbName)
-	if err != nil {
-		rsp.Err = err.Error()
-	}
-	rsp.Data = b
-	return rsp, nil
-}
-
 func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
 	rsp := &message.RegisterQueryIDOffsetResponse{}
 	offset, err := h.store.registerQueryIDOffset(meta.SQLHost(h.req.Host))
@@ -425,6 +383,23 @@ func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
 	return rsp, nil
 }
 
-func (h *GetReplicaInfo) Process() (transport.Codec, error) {
-	return h.store.GetReplicaInfo(h.req.Database, h.req.NodeID, h.req.PtID)
+func (h *Sql2MetaHeartbeat) Process() (transport.Codec, error) {
+	rsp := &message.Sql2MetaHeartbeatResponse{}
+	err := h.store.handlerSql2MetaHeartbeat(h.req.Host)
+	if err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	return rsp, nil
+}
+
+func (h *GetContinuousQueryLease) Process() (transport.Codec, error) {
+	rsp := &message.GetContinuousQueryLeaseResponse{}
+	cqNames, err := h.store.getContinuousQueryLease(h.req.Host)
+	if err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.CQNames = cqNames
+	return rsp, nil
 }

@@ -9,11 +9,10 @@
 	"GetShardInfo",
 	"GetDownSampleInfo",
 	"GetRpMstInfos",
-	"GetUserInfo",
 	"GetStreamInfo",
 	"GetMeasurementInfo",
 	"GetMeasurementsInfo",
-	"GetDBBriefInfo",
  	"RegisterQueryIDOffset",
- 	"GetReplicaInfo"
+	"Sql2MetaHeartbeat",
+	"GetContinuousQueryLease"
 ]

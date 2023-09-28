@@ -49,6 +49,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -254,6 +255,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 		Path(indexPath).
 		IndexType(tsi.MergeSet).
 		EngineType(engineType).
+		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).
@@ -3221,7 +3223,7 @@ func TestEngine_DropMeasurement(t *testing.T) {
 	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
 	idx.DebugFlush()
 
-	ret, err := eng.SeriesExactCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0]), []byte(msNames[1])}, nil)
+	ret, err := eng.SeriesExactCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0]), []byte(msNames[1])}, nil, globalTime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3235,7 +3237,7 @@ func TestEngine_DropMeasurement(t *testing.T) {
 		}
 	}
 
-	seriesKeys, err := eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte(msNames[0]), []byte(msNames[1])}, nil)
+	seriesKeys, err := eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte(msNames[0]), []byte(msNames[1])}, nil, globalTime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3248,7 +3250,7 @@ func TestEngine_DropMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ret, err = eng.SeriesExactCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0]), []byte(msNames[1])}, nil)
+	ret, err = eng.SeriesExactCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0]), []byte(msNames[1])}, nil, globalTime)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4982,14 +4984,15 @@ func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
 			"time":          influx.Field_Type_Int,
 		},
 		ColStoreInfo: &meta2.ColStoreInfo{
-			PrimaryKey: []string{"time"},
-			SortKey:    []string{"time"},
+			PrimaryKey: []string{"time", "field1_string"},
+			SortKey:    []string{"time", "field1_string"},
 		},
 		EngineType: config.COLUMNSTORE,
 	}
 }
 
 type MockMetaClient struct {
+	metaclient.MetaClient
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -5032,10 +5035,10 @@ func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
@@ -5098,9 +5101,7 @@ func (client *MockMetaClient) ShardsByTimeRange(sources influxql.Sources, tmin, 
 func (client *MockMetaClient) ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error) {
 	return nil, nil
 }
-func (client *MockMetaClient) TruncateShardGroups(t time.Time) error {
-	return nil
-}
+
 func (client *MockMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error {
 	return nil
 }
@@ -5127,6 +5128,12 @@ func (client *MockMetaClient) MarkMeasurementDelete(database, mst string) error 
 }
 func (client *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
 	return nil, nil
+}
+func (client *MockMetaClient) DBRepGroups(database string) []meta2.ReplicaGroup {
+	return nil
+}
+func (client *MockMetaClient) GetReplicaN(database string) (int, error) {
+	return 1, nil
 }
 func (client *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo) {
 	return "", "", nil
@@ -5166,6 +5173,9 @@ func (client *MockMetaClient) ShowSubscriptions() models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Rows, error) {
+	return nil, nil
+}
+func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
@@ -5226,10 +5236,6 @@ func (client *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func (client *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
-}
-
-func (mmc *MockMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
-	return false, nil
 }
 
 func (mmc *MockMetaClient) GetAllMst(dbName string) []string {

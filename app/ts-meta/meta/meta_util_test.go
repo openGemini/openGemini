@@ -285,8 +285,10 @@ func GenerateCreateDataNodeCmd(httpAddr, tcpAddr string) *proto2.Command {
 }
 
 func GenerateCreateDatabaseCmd(database string) *proto2.Command {
+	oneReplication := uint32(1)
 	val := &proto2.CreateDatabaseCommand{
-		Name: proto.String(database),
+		Name:       proto.String(database),
+		ReplicaNum: proto.Uint32(oneReplication),
 	}
 
 	t1 := proto2.Command_CreateDatabaseCommand
@@ -419,6 +421,21 @@ func ProcessExecuteRequest(s MetaStoreInterface, cmd *proto2.Command, metaconfig
 	}
 	_, err = h.Process()
 	return err
+}
+
+func GenerateCreateContinuousQueryCommand(db, name, query string) *proto2.Command {
+	val := &proto2.CreateContinuousQueryCommand{
+		Database: proto.String(db),
+		Name:     proto.String(name),
+		Query:    proto.String(query),
+	}
+	t1 := proto2.Command_CreateContinuousQueryCommand
+
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
 }
 
 type MockStore interface {

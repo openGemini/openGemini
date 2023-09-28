@@ -26,6 +26,7 @@ import (
 	"hash/crc32"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -239,6 +240,7 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 func (storage *columnstoreImpl) WriteRows(s *shard, mw *mstWriteCtx) error {
 	mmPoints := mw.getMstMap()
 	mw.initWriteRowsCtx(s.getLastFlushTime, s.addRowCountsBySid, storage.mstsInfo)
+	mw.writeRowsCtx.MsRowCount = s.msRowCount
 	return s.activeTbl.MTable.WriteRows(s.activeTbl, mmPoints, mw.writeRowsCtx)
 }
 
@@ -494,6 +496,7 @@ type Shard interface {
 	CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error)
 	Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error)
 	ScanWithSparseIndex(ctx context.Context, schema *executor.QuerySchema, callBack func(num int64) error) (*executor.FileFragments, error)
+	RowCount(schema *executor.QuerySchema) (int64, error)
 	NewShardKeyIdx(shardType, dataPath string, lockPath *string) error
 
 	// admin
@@ -583,6 +586,7 @@ type shard struct {
 	durationInfo       *meta.DurationDescriptor
 	log                *Log.Logger
 	droppedMst         sync.Map
+	msRowCount         *sync.Map
 
 	tier uint64
 
@@ -706,6 +710,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		stopDownSample: make(chan struct{}),
 		downSampleEn:   0,
 		droppedMst:     sync.Map{},
+		msRowCount:     &sync.Map{},
 		engineType:     engineType,
 		seriesLimit:    uint64(options.MaxSeriesPerDatabase),
 	}
@@ -753,6 +758,15 @@ func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) er
 		log.Error("write cols rec to memory table fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err
 	}
+
+	// update the row count for each mst
+	if rowCount, ok := s.msRowCount.Load(mst); ok {
+		atomic.AddInt64(rowCount.(*int64), int64(cols.RowNums()))
+	} else {
+		count := int64(cols.RowNums())
+		s.msRowCount.Store(mst, &count)
+	}
+
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
 
 	// write wal
@@ -1259,6 +1273,13 @@ func (s *shard) commitSnapshot(snapshot *mutable.MemTable) {
 		}
 		start := time.Now()
 		snapshot.MTable.FlushChunks(snapshot, s.filesPath, msName, s.lock, s.immTables)
+
+		// store the row count of each measurement.
+		if rowCount, ok := s.msRowCount.Load(msName); ok {
+			if err := mutable.StoreMstRowCount(path.Join(s.dataPath, immutable.ColumnStoreDirName, msName, immutable.CountBinFile), int(*(rowCount.(*int64)))); err != nil {
+				s.log.Error(fmt.Sprintf("shard: %s, mst: %s, flush row count failed", s.dataPath, msName))
+			}
+		}
 		atomic.AddInt64(&statistics.PerfStat.SnapshotFlushChunksNs, time.Since(start).Nanoseconds())
 	})
 }
@@ -2377,9 +2398,37 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 		for j := range fragmentRanges {
 			fragmentCount += fragmentRanges[j].End - fragmentRanges[j].Start
 		}
+		if fragmentCount == 0 {
+			continue
+		}
 		filesFragments.AddFileFragment(dataFile.Path(), executor.NewFileFragment(dataFile, fragmentRanges, int64(fragmentCount)), int64(fragmentCount))
 	}
+	if filesFragments.FragmentCount == 0 {
+		return nil, skipFileIdx, nil
+	}
 	return filesFragments, skipFileIdx, nil
+}
+
+func (s *shard) RowCount(schema *executor.QuerySchema) (int64, error) {
+	if len(schema.Options().GetSourcesNames()) != 1 {
+		return 0, fmt.Errorf("currently, Only a single table is supported")
+	}
+
+	// get the source measurement.
+	mst := schema.Options().GetSourcesNames()[0]
+
+	// get the row count of the measurement
+	mstRowCount, ok := s.msRowCount.Load(mst)
+	if !ok {
+		return 0, fmt.Errorf("get the row count failed. shardId: %d, mst: %s", s.GetID(), mst)
+	}
+
+	// the type of the row count is int64
+	rowCount, ok := mstRowCount.(*int64)
+	if !ok {
+		return 0, fmt.Errorf("the type of the row count should be int64. mst: %s", mst)
+	}
+	return *rowCount, nil
 }
 
 func (s *shard) GetEngineType() config.EngineType {

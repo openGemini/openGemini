@@ -24,23 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGetUserInfoCallback_Handle(t *testing.T) {
-	callback := &metaclient.GetUserInfoCallback{}
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	assert.Errorf(t, callback.Handle(msg), "data is not a GetUserInfoResponse")
-}
-
-func TestGetUserInfoCallback_Handle1(t *testing.T) {
-	callback := &metaclient.GetUserInfoCallback{}
-	msg := message.NewMetaMessage(message.GetUserInfoResponseMessage, &message.GetUserInfoResponse{})
-	assert.NoError(t, callback.Handle(msg))
-}
-
-func TestGetUserInfoCallback_Handle2(t *testing.T) {
-	callback := &metaclient.GetUserInfoCallback{}
-	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
-}
-
 func TestGetStreamInfoCallback(t *testing.T) {
 	callback := &metaclient.GetStreamInfoCallback{}
 	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
@@ -102,4 +85,47 @@ func TestRegisterQueryIDOffsetCallbackResponse(t *testing.T) {
 	callback := &metaclient.RegisterQueryIDOffsetCallback{}
 	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetResponseMessage, &message.RegisterQueryIDOffsetResponse{})
 	assert.NoError(t, callback.Handle(msg))
+}
+
+func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
+	callback := &metaclient.Sql2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatResponse{})
+	err := callback.Handle(msg)
+	assert.NoError(t, err)
+
+	// wrong message
+	err = callback.Handle(nil)
+	assert.EqualError(t, err, "data is not a MetaMessage")
+
+	// wrong message
+	badMsg := message.NewMetaMessage(message.UnknownMessage, &message.PingResponse{})
+	err = callback.Handle(badMsg)
+	assert.EqualError(t, err, "data is not a Sql2MetaHeartbeatResponse, got type *message.PingResponse")
+
+	// wrong message
+	badMsg2 := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatResponse{Err: "mock error"})
+	err = callback.Handle(badMsg2)
+	assert.EqualError(t, err, "get sql to meta heartbeat callback error: mock error")
+}
+
+func TestGetCqLeaseCallbackResponse(t *testing.T) {
+	callback := &metaclient.GetCqLeaseCallback{}
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseResponse{CQNames: []string{"cq1", "cq2"}})
+	err := callback.Handle(msg)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"cq1", "cq2"}, callback.CQNames)
+
+	// wrong message
+	err = callback.Handle(nil)
+	assert.EqualError(t, err, "data is not a MetaMessage")
+
+	// wrong message
+	badMsg := message.NewMetaMessage(message.UnknownMessage, &message.PingResponse{})
+	err = callback.Handle(badMsg)
+	assert.EqualError(t, err, "data is not a GetContinuousQueryLeaseResponse, got type *message.PingResponse")
+
+	// wrong message
+	badMsg2 := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseResponse{Err: "mock error"})
+	err = callback.Handle(badMsg2)
+	assert.EqualError(t, err, "get cq lease callback error: mock error")
 }

@@ -257,25 +257,6 @@ func (c *GetRpMstInfoCallback) Handle(data interface{}) error {
 	return nil
 }
 
-type GetUserInfoCallback struct {
-	BaseCallback
-
-	Data []byte
-}
-
-func (c *GetUserInfoCallback) Handle(data interface{}) error {
-	metaMsg, err := c.Trans2MetaMsg(data)
-	if err != nil {
-		return err
-	}
-	msg, ok := metaMsg.Data().(*message.GetUserInfoResponse)
-	if !ok {
-		return errors.New("data is not a GetUserInfoResponse")
-	}
-	c.Data = msg.Data
-	return nil
-}
-
 type GetStreamInfoCallback struct {
 	BaseCallback
 
@@ -342,27 +323,6 @@ func (c *GetMeasurementsInfoCallback) Handle(data interface{}) error {
 	return nil
 }
 
-type GetDBBriefInfoCallback struct {
-	BaseCallback
-	Data []byte
-}
-
-func (c *GetDBBriefInfoCallback) Handle(data interface{}) error {
-	metaMsg, err := c.Trans2MetaMsg(data)
-	if err != nil {
-		return err
-	}
-	msg, ok := metaMsg.Data().(*message.GetDBBriefInfoResponse)
-	if !ok {
-		return fmt.Errorf("data is not a GetDBBriefInfoResponse, type %T", metaMsg.Data())
-	}
-	if msg.Err != "" {
-		return errors.New(msg.Err)
-	}
-	c.Data = msg.Data
-	return nil
-}
-
 type RegisterQueryIDOffsetCallback struct {
 	BaseCallback
 	Offset uint64
@@ -381,5 +341,46 @@ func (c *RegisterQueryIDOffsetCallback) Handle(data interface{}) error {
 		return errors.New(msg.Err)
 	}
 	c.Offset = msg.Offset
+	return nil
+}
+
+type Sql2MetaHeartbeatCallback struct {
+	BaseCallback
+}
+
+func (c *Sql2MetaHeartbeatCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.Sql2MetaHeartbeatResponse)
+	if !ok {
+		return fmt.Errorf("data is not a Sql2MetaHeartbeatResponse, got type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return fmt.Errorf("get sql to meta heartbeat callback error: %s", msg.Err)
+	}
+
+	return nil
+}
+
+type GetCqLeaseCallback struct {
+	BaseCallback
+	CQNames []string
+}
+
+func (c *GetCqLeaseCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.GetContinuousQueryLeaseResponse)
+	if !ok {
+		return fmt.Errorf("data is not a GetContinuousQueryLeaseResponse, got type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return fmt.Errorf("get cq lease callback error: %s", msg.Err)
+	}
+	c.CQNames = msg.CQNames
 	return nil
 }

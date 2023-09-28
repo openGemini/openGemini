@@ -71,8 +71,11 @@ const (
 	RegisterQueryIDOffsetRequestMessage
 	RegisterQueryIDOffsetResponseMessage
 
-	GetReplicaInfoRequestMessage
-	GetReplicaInfoResponseMessage
+	Sql2MetaHeartbeatRequestMessage
+	Sql2MetaHeartbeatResponseMessage
+
+	GetContinuousQueryLeaseRequestMessage
+	GetContinuousQueryLeaseResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -101,38 +104,35 @@ func init() {
 	MetaMessageBinaryCodec[GetDownSampleInfoResponseMessage] = func() transport.Codec { return &GetDownSampleInfoResponse{} }
 	MetaMessageBinaryCodec[GetRpMstInfosRequestMessage] = func() transport.Codec { return &GetRpMstInfosRequest{} }
 	MetaMessageBinaryCodec[GetRpMstInfosResponseMessage] = func() transport.Codec { return &GetRpMstInfosResponse{} }
-	MetaMessageBinaryCodec[GetUserInfoRequestMessage] = func() transport.Codec { return &GetUserInfoRequest{} }
-	MetaMessageBinaryCodec[GetUserInfoResponseMessage] = func() transport.Codec { return &GetUserInfoResponse{} }
 	MetaMessageBinaryCodec[GetStreamInfoRequestMessage] = func() transport.Codec { return &GetStreamInfoRequest{} }
 	MetaMessageBinaryCodec[GetStreamInfoResponseMessage] = func() transport.Codec { return &GetStreamInfoResponse{} }
 	MetaMessageBinaryCodec[GetMeasurementInfoRequestMessage] = func() transport.Codec { return &GetMeasurementInfoRequest{} }
 	MetaMessageBinaryCodec[GetMeasurementInfoResponseMessage] = func() transport.Codec { return &GetMeasurementInfoResponse{} }
 	MetaMessageBinaryCodec[GetMeasurementsInfoRequestMessage] = func() transport.Codec { return &GetMeasurementsInfoRequest{} }
 	MetaMessageBinaryCodec[GetMeasurementsInfoResponseMessage] = func() transport.Codec { return &GetMeasurementsInfoResponse{} }
-	MetaMessageBinaryCodec[GetDBBriefInfoRequestMessage] = func() transport.Codec { return &GetDBBriefInfoRequest{} }
-	MetaMessageBinaryCodec[GetDBBriefInfoResponseMessage] = func() transport.Codec { return &GetDBBriefInfoResponse{} }
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetRequestMessage] = func() transport.Codec { return &RegisterQueryIDOffsetRequest{} }
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetResponseMessage] = func() transport.Codec { return &RegisterQueryIDOffsetResponse{} }
-	MetaMessageBinaryCodec[GetReplicaInfoRequestMessage] = func() transport.Codec { return &GetReplicaInfoRequest{} }
-	MetaMessageBinaryCodec[GetReplicaInfoResponseMessage] = func() transport.Codec { return &GetReplicaInfoResponse{} }
+	MetaMessageBinaryCodec[Sql2MetaHeartbeatRequestMessage] = func() transport.Codec { return &Sql2MetaHeartbeatRequest{} }
+	MetaMessageBinaryCodec[Sql2MetaHeartbeatResponseMessage] = func() transport.Codec { return &Sql2MetaHeartbeatResponse{} }
+	MetaMessageBinaryCodec[GetContinuousQueryLeaseRequestMessage] = func() transport.Codec { return &GetContinuousQueryLeaseRequest{} }
+	MetaMessageBinaryCodec[GetContinuousQueryLeaseResponseMessage] = func() transport.Codec { return &GetContinuousQueryLeaseResponse{} }
 
 	MetaMessageResponseTyp = map[uint8]uint8{
-		PingRequestMessage:                  PingResponseMessage,
-		PeersRequestMessage:                 PeersResponseMessage,
-		CreateNodeRequestMessage:            CreateNodeResponseMessage,
-		SnapshotRequestMessage:              SnapshotResponseMessage,
-		ExecuteRequestMessage:               ExecuteResponseMessage,
-		UpdateRequestMessage:                UpdateResponseMessage,
-		ReportRequestMessage:                ReportResponseMessage,
-		GetShardInfoRequestMessage:          GetShardInfoResponseMessage,
-		GetDownSampleInfoRequestMessage:     GetDownSampleInfoResponseMessage,
-		GetRpMstInfosRequestMessage:         GetRpMstInfosResponseMessage,
-		GetUserInfoRequestMessage:           GetUserInfoResponseMessage,
-		GetStreamInfoRequestMessage:         GetStreamInfoResponseMessage,
-		GetMeasurementInfoRequestMessage:    GetMeasurementInfoResponseMessage,
-		GetMeasurementsInfoRequestMessage:   GetMeasurementsInfoResponseMessage,
-		GetDBBriefInfoRequestMessage:        GetDBBriefInfoResponseMessage,
-		RegisterQueryIDOffsetRequestMessage: RegisterQueryIDOffsetResponseMessage,
-		GetReplicaInfoRequestMessage:        GetReplicaInfoResponseMessage,
+		PingRequestMessage:                    PingResponseMessage,
+		PeersRequestMessage:                   PeersResponseMessage,
+		CreateNodeRequestMessage:              CreateNodeResponseMessage,
+		SnapshotRequestMessage:                SnapshotResponseMessage,
+		ExecuteRequestMessage:                 ExecuteResponseMessage,
+		UpdateRequestMessage:                  UpdateResponseMessage,
+		ReportRequestMessage:                  ReportResponseMessage,
+		GetShardInfoRequestMessage:            GetShardInfoResponseMessage,
+		GetDownSampleInfoRequestMessage:       GetDownSampleInfoResponseMessage,
+		GetRpMstInfosRequestMessage:           GetRpMstInfosResponseMessage,
+		GetStreamInfoRequestMessage:           GetStreamInfoResponseMessage,
+		GetMeasurementInfoRequestMessage:      GetMeasurementInfoResponseMessage,
+		GetMeasurementsInfoRequestMessage:     GetMeasurementsInfoResponseMessage,
+		RegisterQueryIDOffsetRequestMessage:   RegisterQueryIDOffsetResponseMessage,
+		Sql2MetaHeartbeatRequestMessage:       Sql2MetaHeartbeatResponseMessage,
+		GetContinuousQueryLeaseRequestMessage: GetContinuousQueryLeaseResponseMessage,
 	}
 }

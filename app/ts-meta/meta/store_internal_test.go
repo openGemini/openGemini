@@ -22,11 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,39 +80,32 @@ func Test_getSnapshot(t *testing.T) {
 				},
 			},
 		},
-		cacheDataBytes: []byte{1, 2, 3},
+		cacheDataBytes:   []byte{1, 2, 3},
+		cacheDataChanged: make(chan struct{}),
 	}
 
 	// case sql
 	sqlBytes := s.getSnapshot(metaclient.SQL)
 	require.Equal(t, []byte{1, 2, 3}, sqlBytes)
 
+	// case meta
+	metaBytes := s.getSnapshot(metaclient.META)
+	require.Equal(t, []byte{1, 2, 3}, metaBytes)
+
 	// case store
+	s.data = s.cacheData
+	s.updateCacheData()
 	storeBytes := s.getSnapshot(metaclient.STORE)
 	data := &meta2.Data{}
 	require.NoError(t, data.UnmarshalBinary(storeBytes))
 	require.Equal(t, len(data.Databases), len(s.cacheData.Databases))
 	require.Equal(t, len(data.Users), len(s.cacheData.Users))
-
-	// case meta
-	metaBytes := s.getSnapshot(metaclient.META)
-	require.Equal(t, []byte{1, 2, 3}, metaBytes)
 }
 
 type MockRaft struct {
 	isLeader bool
-}
 
-func (m MockRaft) State() raft.RaftState {
-	panic("implement me")
-}
-
-func (m MockRaft) Peers() ([]string, error) {
-	panic("implement me")
-}
-
-func (m MockRaft) Close() error {
-	panic("implement me")
+	RaftInterface
 }
 
 func (m MockRaft) IsLeader() bool {
@@ -332,51 +328,194 @@ func Test_GetRpMstInfos(t *testing.T) {
 	}
 }
 
-func TestGetReplicaInfo(t *testing.T) {
-	store := &Store{}
-	data := &meta2.Data{
-		PtView:        make(map[string]meta2.DBPtInfos),
-		ReplicaGroups: make(map[string][]meta2.ReplicaGroup),
+func Test_applyDropDatabaseCommand(t *testing.T) {
+	fsm := &storeFSM{
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {},
+					},
+				},
+			},
+		},
 	}
-	store.data = data
-	store.raft = &MockRaft{isLeader: true}
 
-	data.PtView["db0"] = append(data.PtView["db0"], meta2.PtInfo{
-		Owner: meta2.PtOwner{NodeID: 1},
-		PtId:  1,
-		RGID:  1,
-	}, meta2.PtInfo{
-		Owner: meta2.PtOwner{NodeID: 2},
-		PtId:  2,
-		RGID:  1,
-	})
-	data.ReplicaGroups["db0"] = append(data.ReplicaGroups["db0"], meta2.ReplicaGroup{
-		ID:         1,
-		MasterPtID: 1,
-		Peers:      []meta2.Peer{{ID: 2, PtRole: meta2.Slave}},
-	}, meta2.ReplicaGroup{
-		ID:         2,
-		MasterPtID: 3,
-		Peers:      []meta2.Peer{},
-	})
+	// db not exist
+	typ := proto2.Command_DropDatabaseCommand
+	desc := proto2.E_DropDatabaseCommand_Command
+	value := &proto2.DropDatabaseCommand{
+		Name: proto.String("db999"),
+	}
+	cmd := &proto2.Command{Type: &typ}
+	_ = proto.SetExtension(cmd, desc, value)
+	err := fsm.applyDropDatabaseCommand(cmd)
+	assert2.Nil(t, err)
 
-	// master
-	info, err := store.GetReplicaInfo("db0", 1, 1)
+	// drop successfully and notify cq changed
+	value = &proto2.DropDatabaseCommand{
+		Name: proto.String("db0"),
+	}
+	cmd = &proto2.Command{Type: &typ}
+	_ = proto.SetExtension(cmd, desc, value)
+	err = fsm.applyDropDatabaseCommand(cmd)
+	assert2.Nil(t, err)
+	assert2.Equal(t, uint64(1), fsm.data.MaxCQChangeID)
+	_, ok := fsm.data.Databases["db0"] // db0 is dropped successfully
+	assert2.False(t, ok)
+}
+
+func Test_applyCreateContinuousQuery(t *testing.T) {
+	s := &Store{
+		raft:     &MockRaftForCQ{isLeader: true},
+		sqlHosts: []string{"127.0.0.1:8086"},
+		cqLease: map[string]*cqLeaseInfo{
+			"127.0.0.1:8086": {},
+		},
+		data: &meta2.Data{},
+	}
+	fsm := (*storeFSM)(s)
+	value := &proto2.CreateContinuousQueryCommand{
+		Database: proto.String("db0"),
+		Name:     proto.String("cq0"),
+		Query:    proto.String(`CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`),
+	}
+	typ := proto2.Command_CreateContinuousQueryCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, value)
 	require.NoError(t, err)
-	require.Equal(t, meta2.Master, info.ReplicaRole)
-	require.Equal(t, 1, len(info.Peers))
-	require.Equal(t, uint32(2), info.Peers[0].PtId)
 
-	// slave
-	info, err = store.GetReplicaInfo("db0", 2, 2)
+	// database not found
+	resErr := applyCreateContinuousQuery(fsm, cmd)
+	require.EqualError(t, resErr.(error), "database not found: db0")
+	fsm.data = &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": {
+				Name: "db0",
+			},
+		},
+	}
+	resErr = applyCreateContinuousQuery(fsm, cmd)
+	resErr = applyCreateContinuousQuery(fsm, cmd) // try to create the same CQ
+	require.Nil(t, resErr)
+	require.Equal(t, "cq0", fsm.data.Databases["db0"].ContinuousQueries["cq0"].Name)
+	require.Equal(t, "cq0", fsm.cqNames[0])
+	require.Equal(t, "cq0", fsm.cqLease["127.0.0.1:8086"].CQNames[0])
+	require.Equal(t, uint64(1), fsm.data.MaxCQChangeID)
+
+	value = &proto2.CreateContinuousQueryCommand{
+		Database: proto.String("db0"),
+		Name:     proto.String("cq0"),
+		Query:    proto.String(`CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 1h FOR 20m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(1m) END`),
+	}
+	_ = proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, value)
+	resErr = applyCreateContinuousQuery(fsm, cmd) // try to create the same name CQ
+	require.EqualError(t, resErr.(error), "continuous query name already exists")
+}
+
+func Test_applyContinuousQueryReportCommand(t *testing.T) {
+	s := &Store{
+		raft: &MockRaftForCQ{isLeader: true},
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {
+							Name:        "cq0",
+							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
+							LastRunTime: time.Time{},
+						},
+					},
+				},
+			},
+		},
+	}
+	fsm := (*storeFSM)(s)
+	ts := time.Now()
+	value := &proto2.ContinuousQueryReportCommand{
+		CQStates: []*proto2.CQState{
+			{
+				Name:        proto.String("cq0"),
+				LastRunTime: proto.Int64(ts.UnixNano()),
+			},
+		},
+	}
+	typ := proto2.Command_ContinuousQueryReportCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command, value)
 	require.NoError(t, err)
-	require.Equal(t, meta2.Slave, info.ReplicaRole)
-	require.Equal(t, uint32(1), info.Master.PtId)
 
-	_, err = store.GetReplicaInfo("db_not_exists", 2, 2)
-	require.NotEmpty(t, err)
+	resErr := applyContinuousQueryReport(fsm, cmd)
+	require.Nil(t, resErr)
+	require.Equal(t, ts.UnixNano(), fsm.data.Databases["db0"].ContinuousQueries["cq0"].LastRunTime.UnixNano())
+}
 
-	store.raft = &MockRaft{isLeader: false}
-	_, err = store.GetReplicaInfo("db_not_exists", 2, 2)
-	require.EqualError(t, err, raft.ErrNotLeader.Error())
+func Test_applyDropContinuousQuery(t *testing.T) {
+	s := &Store{
+		raft: &MockRaftForCQ{isLeader: true},
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {
+							Name:        "cq0",
+							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
+							LastRunTime: time.Time{},
+						},
+					},
+				},
+			},
+		},
+	}
+	fsm := (*storeFSM)(s)
+	value := &proto2.DropContinuousQueryCommand{
+		Name:     proto.String("cq0"),
+		Database: proto.String("db0"),
+	}
+	typ := proto2.Command_DropContinuousQueryCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command, value)
+	require.NoError(t, err)
+
+	resErr := applyDropContinuousQuery(fsm, cmd)
+	require.Nil(t, resErr)
+	require.Equal(t, uint64(1), fsm.data.MaxCQChangeID)
+	require.Equal(t, 0, len(fsm.data.Databases["db0"].ContinuousQueries))
+}
+
+func Test_applyNotifyCQLeaseChanged(t *testing.T) {
+	s := &Store{
+		raft: &MockRaftForCQ{isLeader: true},
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					ContinuousQueries: map[string]*meta2.ContinuousQueryInfo{
+						"cq0": {
+							Name:        "cq0",
+							Query:       `CREATE CONTINUOUS QUERY "cq0" ON "db0" RESAMPLE EVERY 2h FOR 30m BEGIN SELECT max("passengers") INTO "max_passengers" FROM "bus_data" GROUP BY time(10m) END`,
+							LastRunTime: time.Time{},
+						},
+					},
+				},
+			},
+		},
+	}
+	fsm := (*storeFSM)(s)
+	value := &proto2.NotifyCQLeaseChangedCommand{}
+	typ := proto2.Command_NotifyCQLeaseChangedCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command, value)
+	require.NoError(t, err)
+
+	resErr := applyNotifyCQLeaseChanged(fsm, cmd)
+	require.Nil(t, resErr)
+	require.Equal(t, uint64(1), fsm.data.MaxCQChangeID)
+
+	// the second time to notify
+	resErr = applyNotifyCQLeaseChanged(fsm, cmd)
+	require.Nil(t, resErr)
+	require.Equal(t, uint64(2), fsm.data.MaxCQChangeID)
 }

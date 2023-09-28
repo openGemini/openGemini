@@ -239,6 +239,7 @@ func TestNewServer(t *testing.T) {
 }
 
 type MockMetaClient struct {
+	metaclient.MetaClient
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -298,10 +299,10 @@ func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error) {
@@ -364,9 +365,7 @@ func (client *MockMetaClient) ShardsByTimeRange(sources influxql.Sources, tmin, 
 func (client *MockMetaClient) ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error) {
 	return nil, nil
 }
-func (client *MockMetaClient) TruncateShardGroups(t time.Time) error {
-	return nil
-}
+
 func (client *MockMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error {
 	return nil
 }
@@ -393,6 +392,12 @@ func (client *MockMetaClient) MarkMeasurementDelete(database, mst string) error 
 }
 func (client *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
 	return nil, nil
+}
+func (client *MockMetaClient) DBRepGroups(database string) []meta2.ReplicaGroup {
+	return nil
+}
+func (client *MockMetaClient) GetReplicaN(database string) (int, error) {
+	return 1, nil
 }
 func (client *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo) {
 	return "", "", nil
@@ -432,6 +437,9 @@ func (client *MockMetaClient) ShowSubscriptions() models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Rows, error) {
+	return nil, nil
+}
+func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
@@ -477,10 +485,6 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
-}
-
-func (mmc *MockMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
-	return false, nil
 }
 
 func (mmc *MockMetaClient) GetAllMst(dbName string) []string {

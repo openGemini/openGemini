@@ -49,20 +49,18 @@ func New(typ uint8) RPCHandler {
 		return &GetDownSampleInfo{}
 	case message.GetRpMstInfosRequestMessage:
 		return &GetRpMstInfos{}
-	case message.GetUserInfoRequestMessage:
-		return &GetUserInfo{}
 	case message.GetStreamInfoRequestMessage:
 		return &GetStreamInfo{}
 	case message.GetMeasurementInfoRequestMessage:
 		return &GetMeasurementInfo{}
 	case message.GetMeasurementsInfoRequestMessage:
 		return &GetMeasurementsInfo{}
-	case message.GetDBBriefInfoRequestMessage:
-		return &GetDBBriefInfo{}
 	case message.RegisterQueryIDOffsetRequestMessage:
 		return &RegisterQueryIDOffset{}
-	case message.GetReplicaInfoRequestMessage:
-		return &GetReplicaInfo{}
+	case message.Sql2MetaHeartbeatRequestMessage:
+		return &Sql2MetaHeartbeat{}
+	case message.GetContinuousQueryLeaseRequestMessage:
+		return &GetContinuousQueryLease{}
 	default:
 		return nil
 	}
@@ -258,25 +256,6 @@ func (h *GetRpMstInfos) Instance() RPCHandler {
 	return &GetRpMstInfos{}
 }
 
-type GetUserInfo struct {
-	BaseHandler
-
-	req *message.GetUserInfoRequest
-}
-
-func (h *GetUserInfo) SetRequestMsg(data transport.Codec) error {
-	msg, ok := data.(*message.GetUserInfoRequest)
-	if !ok {
-		return executor.NewInvalidTypeError("*message.GetUserInfoRequest", data)
-	}
-	h.req = msg
-	return nil
-}
-
-func (h *GetUserInfo) Instance() RPCHandler {
-	return &GetUserInfo{}
-}
-
 type GetStreamInfo struct {
 	BaseHandler
 
@@ -334,25 +313,6 @@ func (h *GetMeasurementsInfo) Instance() RPCHandler {
 	return &GetMeasurementsInfo{}
 }
 
-type GetDBBriefInfo struct {
-	BaseHandler
-
-	req *message.GetDBBriefInfoRequest
-}
-
-func (h *GetDBBriefInfo) SetRequestMsg(data transport.Codec) error {
-	msg, ok := data.(*message.GetDBBriefInfoRequest)
-	if !ok {
-		return executor.NewInvalidTypeError("*message.GetDBBriefInfoRequest", data)
-	}
-	h.req = msg
-	return nil
-}
-
-func (h *GetDBBriefInfo) Instance() RPCHandler {
-	return &GetDBBriefInfo{}
-}
-
 type RegisterQueryIDOffset struct {
 	BaseHandler
 
@@ -372,21 +332,40 @@ func (h *RegisterQueryIDOffset) Instance() RPCHandler {
 	return &RegisterQueryIDOffset{}
 }
 
-type GetReplicaInfo struct {
+type Sql2MetaHeartbeat struct {
 	BaseHandler
 
-	req *message.GetReplicaInfoRequest
+	req *message.Sql2MetaHeartbeatRequest
 }
 
-func (h *GetReplicaInfo) SetRequestMsg(data transport.Codec) error {
-	msg, ok := data.(*message.GetReplicaInfoRequest)
+func (h *Sql2MetaHeartbeat) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.Sql2MetaHeartbeatRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetReplicaInfoRequest", data)
+		return executor.NewInvalidTypeError("*message.Sql2MetaHeartbeatRequest", data)
 	}
 	h.req = msg
 	return nil
 }
 
-func (h *GetReplicaInfo) Instance() RPCHandler {
-	return &GetReplicaInfo{}
+func (h *Sql2MetaHeartbeat) Instance() RPCHandler {
+	return &Sql2MetaHeartbeat{}
+}
+
+type GetContinuousQueryLease struct {
+	BaseHandler
+
+	req *message.GetContinuousQueryLeaseRequest
+}
+
+func (h *GetContinuousQueryLease) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.GetContinuousQueryLeaseRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.GetContinuousQueryLeaseRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *GetContinuousQueryLease) Instance() RPCHandler {
+	return &GetContinuousQueryLease{}
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -349,6 +350,7 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 				Path(ipath).
 				IndexType(tsi.MergeSet).
 				EngineType(engineType).
+				StartTime(tr.StartTime).
 				EndTime(tr.EndTime).
 				LogicalClock(dbPT.logicClock).
 				SequenceId(&dbPT.sequenceID).
@@ -602,6 +604,16 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 			sh.SetMstInfo(mstInfo.Name, mstInfo)
 		}
 		sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+		// Load the row count of each measurement.
+		for _, mst := range mstsInfo.MstsInfo {
+			rowCount, err1 := mutable.LoadMstRowCount(path.Join(sh.dataPath, immutable.ColumnStoreDirName, mst.Name, immutable.CountBinFile))
+			if err1 != nil {
+				sh.log.Error("load row count failed", zap.Uint64("shard", sh.GetID()), zap.String("mst", mst.OriginName()), zap.Error(err1))
+			}
+			rowCountPtr := int64(rowCount)
+			sh.msRowCount.Store(mst.Name, &rowCountPtr)
+		}
 	}
 
 	if _, ok = thermalShards[sh.ident.ShardID]; ok || !dbPT.opt.LazyLoadShardEnable {
@@ -687,6 +699,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 			Path(iPath).
 			IndexType(tsi.MergeSet).
 			EngineType(engineType).
+			StartTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime).
 			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
 			Duration(timeRangeInfo.ShardDuration.DurationInfo.Duration).
 			LogicalClock(dbPT.logicClock).
@@ -799,8 +812,12 @@ func (dbPT *DBPTInfo) closeDBPt() error {
 	return nil
 }
 
-func (dbPT *DBPTInfo) seriesCardinality(measurements [][]byte, measurementCardinalityInfos []meta.MeasurementCardinalityInfo) ([]meta.MeasurementCardinalityInfo, error) {
+func (dbPT *DBPTInfo) seriesCardinality(measurements [][]byte, measurementCardinalityInfos []meta.MeasurementCardinalityInfo,
+	tr influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error) {
 	for _, indexBuilder := range dbPT.indexBuilder {
+		if !indexBuilder.Overlaps(tr) {
+			continue
+		}
 		var seriesCount uint64
 		idx := indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
 		for i := range measurements {
@@ -820,10 +837,14 @@ func (dbPT *DBPTInfo) seriesCardinality(measurements [][]byte, measurementCardin
 	return measurementCardinalityInfos, nil
 }
 
-func (dbPT *DBPTInfo) seriesCardinalityWithCondition(measurements [][]byte, condition influxql.Expr, measurementCardinalityInfos []meta.MeasurementCardinalityInfo) ([]meta.MeasurementCardinalityInfo, error) {
+func (dbPT *DBPTInfo) seriesCardinalityWithCondition(measurements [][]byte, condition influxql.Expr,
+	measurementCardinalityInfos []meta.MeasurementCardinalityInfo, tr influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error) {
 	for i := range measurements {
-		cardinality := &meta.MeasurementCardinalityInfo{Name: string(measurements[i])}
+		var cardinalityInfo []meta.CardinalityInfo
 		for _, indexBuilder := range dbPT.indexBuilder {
+			if !indexBuilder.Overlaps(tr) {
+				continue
+			}
 			idx := indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
 			stime := time.Now()
 			count, err := idx.SeriesCardinality(measurements[i], condition, tsi.DefaultTR)
@@ -834,11 +855,16 @@ func (dbPT *DBPTInfo) seriesCardinalityWithCondition(measurements [][]byte, cond
 				continue
 			}
 			log.Info("get series cardinality", zap.String("mst", string(measurements[i])), zap.Duration("cost", time.Since(stime)))
-			cardinality.CardinalityInfos = append(cardinality.CardinalityInfos, meta.CardinalityInfo{
+			cardinalityInfo = append(cardinalityInfo, meta.CardinalityInfo{
 				TimeRange:   indexBuilder.Ident().Index.TimeRange,
 				Cardinality: count})
 		}
-		measurementCardinalityInfos = append(measurementCardinalityInfos, *cardinality)
+		if len(cardinalityInfo) != 0 {
+			measurementCardinalityInfos = append(measurementCardinalityInfos, meta.MeasurementCardinalityInfo{
+				Name:             string(measurements[i]),
+				CardinalityInfos: cardinalityInfo,
+			})
+		}
 	}
 	return measurementCardinalityInfos, nil
 }

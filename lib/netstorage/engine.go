@@ -88,18 +88,20 @@ type Engine interface {
 
 	DropMeasurement(db string, rp string, name string, shardIds []uint64) error
 
-	SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) ([]string, error)
-	SeriesCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) ([]meta.MeasurementCardinalityInfo, error)
-	SeriesExactCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) (map[string]uint64, error)
+	SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error)
+	SeriesCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error)
+	SeriesExactCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error)
 
-	TagValues(db string, ptId []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (TablesTagSets, error)
-	TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (map[string]uint64, error)
+	TagValues(db string, ptId []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (TablesTagSets, error)
+	TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error)
 	DropSeries(database string, sources []influxql.Source, ptId []uint32, condition influxql.Expr) (int, error)
 
 	DbPTRef(db string, ptId uint32) error
 	DbPTUnref(db string, ptId uint32)
 	CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error)
+	RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error)
+
 	LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
 	UpdateShardDurationInfo(info *meta.ShardDurationInfo) error

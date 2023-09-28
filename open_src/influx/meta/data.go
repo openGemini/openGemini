@@ -120,6 +120,7 @@ type Data struct {
 	MaxStreamID       uint64
 	MaxConnID         uint64
 	MaxSubscriptionID uint64 // +1 for any changes to subscriptions
+	MaxCQChangeID     uint64 // +1 for any changes to continuous queries
 }
 
 var DataLogger *zap.Logger
@@ -145,7 +146,7 @@ func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationRespo
 			return
 		}
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 				sg.walkShards(func(sh *ShardInfo) {
 					for i := range dbPtIds[db.Name] {
 						if sh.Owners[0] == dbPtIds[db.Name][i] {
@@ -416,10 +417,16 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string,
 		if err := rp.validMeasurementShardType(ski.Type, mst); err != nil {
 			return err
 		}
+		if rp.ReplicaN > 1 && ski.Type == RANGE {
+			return errno.NewError(errno.ConflictWithRep)
+		}
 	}
 
 	var hInfo *ColStoreInfo
 	if colStoreInfo != nil {
+		if rp.ReplicaN > 1 {
+			return errno.NewError(errno.ConflictWithRep)
+		}
 		hInfo = &ColStoreInfo{}
 		hInfo.Unmarshal(colStoreInfo)
 	}
@@ -508,27 +515,6 @@ func (data *Data) CheckDataNodeAlive(nodeId uint64) error {
 	} else {
 		return nil
 	}
-}
-
-func (data *Data) UpdateShardOwnerId(db, rp string, id, ownerId uint64) error {
-	rpi, err := data.RetentionPolicy(db, rp)
-	if err != nil {
-		return err
-	}
-	for sgIdx := range rpi.ShardGroups {
-		for shIdx := range rpi.ShardGroups[sgIdx].Shards {
-			sh := &rpi.ShardGroups[sgIdx].Shards[shIdx]
-			if sh.ID != id {
-				continue
-			}
-			if len(sh.Owners) == 1 {
-				sh.Owners[0] = uint32(ownerId)
-				return nil
-			}
-		}
-	}
-
-	return fmt.Errorf("shard(%d) not found", id)
 }
 
 // DataNode returns a node by id.
@@ -767,6 +753,10 @@ func (data *Data) DBPtView(name string) DBPtInfos {
 	return data.PtView[name]
 }
 
+func (data *Data) DBRepGroups(name string) []ReplicaGroup {
+	return data.ReplicaGroups[name]
+}
+
 func (data *Data) GetDatabase(name string) (*DatabaseInfo, error) {
 	dbi := data.Database(name)
 	if dbi == nil {
@@ -780,35 +770,6 @@ func (data *Data) GetDatabase(name string) (*DatabaseInfo, error) {
 
 func (data *Data) Database(name string) *DatabaseInfo {
 	return data.Databases[name]
-}
-
-func (data *Data) ShardsOfDBPT(name string, ptID uint32) map[string][]uint64 {
-	rpShards := make(map[string][]uint64)
-
-	for i := range data.Databases {
-		if data.Databases[i].Name == name {
-			for _, rp := range data.Databases[i].RetentionPolicies {
-				if rp.MarkDeleted {
-					continue
-				}
-				var shardIds []uint64
-				for _, sg := range rp.ShardGroups {
-					if sg.Deleted() {
-						continue
-					}
-					for _, sh := range sg.Shards {
-						if sh.Owners[0] == ptID {
-							shardIds = append(shardIds, sh.ID)
-						}
-					}
-				}
-				if len(shardIds) != 0 {
-					rpShards[rp.Name] = shardIds
-				}
-			}
-		}
-	}
-	return rpShards
 }
 
 // CloneDatabases returns a copy of the DatabaseInfo.
@@ -975,7 +936,7 @@ func (data *Data) CheckCanCreateDatabase(name string) error {
 
 // CreateDatabase creates a new database.
 // It returns an error if name is blank or if a database with the same name already exists.
-func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo, enableTagArray bool) error {
+func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo, enableTagArray bool, replicaN uint32) error {
 	err := data.CheckCanCreateDatabase(dbName)
 	if err != nil {
 		if err == ErrDatabaseExists {
@@ -999,6 +960,7 @@ func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardK
 	}
 
 	dbi.EnableTagArray = enableTagArray
+	dbi.ReplicaN = int(replicaN)
 	err = data.SetDatabase(dbi)
 	return err
 }
@@ -1221,7 +1183,7 @@ func (data *Data) ShowShards() models.Rows {
 	data.WalkDatabases(func(db *DatabaseInfo) {
 		row := &models.Row{Columns: []string{"id", "database", "retention_policy", "shard_group", "start_time", "end_time", "expiry_time", "owners", "tier", "downSample_level"}, Name: db.Name}
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 				if sg.Deleted() {
 					return
 				}
@@ -1261,7 +1223,7 @@ func (data *Data) ShowShardGroups() models.Rows {
 	row := &models.Row{Columns: []string{"id", "database", "retention_policy", "start_time", "end_time", "expiry_time"}, Name: "shard groups"}
 	data.WalkDatabases(func(db *DatabaseInfo) {
 		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 				if sg.Deleted() {
 					return
 				}
@@ -1496,6 +1458,59 @@ func (data *Data) ShardGroupByTimestampAndEngineType(database, policy string, ti
 	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
 }
 
+func (data *Data) createShards(sgi *ShardGroupInfo, igi *IndexGroupInfo,
+	rpi *RetentionPolicyInfo, msti *MeasurementInfo, tier uint64) {
+	// Determine shard count by node count divided by replication factor.
+	// This will ensure nodes will get distributed across nodes evenly and
+	// replicated the correct number of times.
+	shardN := int(data.ClusterPtNum)
+
+	var lastSgi *ShardGroupInfo
+	if len(msti.ShardKeys) > 0 && msti.ShardKeys[0].Type == RANGE {
+		if len(rpi.ShardGroups) == 0 {
+			sgi.Shards = make([]ShardInfo, 1)
+		} else {
+			lastSgi = &rpi.ShardGroups[len(rpi.ShardGroups)-1]
+			sgi.Shards = make([]ShardInfo, len(lastSgi.Shards))
+		}
+	} else {
+		sgi.Shards = make([]ShardInfo, shardN)
+	}
+
+	for i := range sgi.Shards {
+		data.MaxShardID++
+		sgi.Shards[i] = ShardInfo{ID: data.MaxShardID, Tier: tier}
+
+		for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
+			if ptId%shardN == i {
+				sgi.Shards[i].Owners = append(sgi.Shards[i].Owners, uint32(ptId))
+				sgi.Shards[i].IndexID = igi.Indexes[ptId].ID
+			}
+		}
+
+		if lastSgi != nil {
+			sgi.Shards[i].Min = lastSgi.Shards[i].Min
+			sgi.Shards[i].Max = lastSgi.Shards[i].Max
+		}
+	}
+}
+
+func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType) *ShardGroupInfo {
+	startTime := timestamp.Truncate(rpi.ShardGroupDuration)
+	data.MaxShardGroupID++
+	sgi := ShardGroupInfo{
+		ID:         data.MaxShardGroupID,
+		StartTime:  startTime.UTC(),
+		EndTime:    startTime.Add(rpi.ShardGroupDuration).UTC(),
+		EngineType: engineType,
+	}
+	if sgi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
+		// Shard group range is [start, end) so add one to the max time.
+		sgi.EndTime = time.Unix(0, models.MaxNanoTime+1)
+	}
+	return &sgi
+}
+
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
 func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64, engineType config.EngineType) error {
 	if err := data.checkStoreReady(); err != nil {
@@ -1530,61 +1545,19 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 		replicaN = len(data.DataNodes)
 	}
 
-	// Determine shard count by node count divided by replication factor.
-	// This will ensure nodes will get distributed across nodes evenly and
-	// replicated the correct number of times.
-	shardN := int(data.ClusterPtNum) / replicaN
-
-	// Create the shard group.
-	data.MaxShardGroupID++
-	sgi := ShardGroupInfo{}
-	sgi.ID = data.MaxShardGroupID
-	sgi.StartTime = timestamp.Truncate(rpi.ShardGroupDuration).UTC()
-	sgi.EndTime = sgi.StartTime.Add(rpi.ShardGroupDuration).UTC()
-	sgi.EngineType = engineType
-	if sgi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
-		// Shard group range is [start, end) so add one to the max time.
-		sgi.EndTime = time.Unix(0, models.MaxNanoTime+1)
-	}
-
-	// Create shards on the group.
-	var lastSgi *ShardGroupInfo
-	if len(msti.ShardKeys) > 0 && msti.ShardKeys[0].Type == RANGE {
-		if len(rpi.ShardGroups) == 0 {
-			sgi.Shards = make([]ShardInfo, 1)
-		} else {
-			lastSgi = &rpi.ShardGroups[len(rpi.ShardGroups)-1]
-			sgi.Shards = make([]ShardInfo, len(lastSgi.Shards))
-		}
-	} else {
-		sgi.Shards = make([]ShardInfo, shardN)
-	}
-
 	//check index group contain this shard group
 	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType)
 
-	for i := range sgi.Shards {
-		data.MaxShardID++
-		sgi.Shards[i] = ShardInfo{ID: data.MaxShardID, Tier: tier}
-		sgi.Shards[i].Owners = make([]uint32, 0, replicaN)
-		for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
-			if ptId%shardN == i {
-				for j := 0; j < replicaN; j++ {
-					sgi.Shards[i].Owners = append(sgi.Shards[i].Owners, uint32(ptId+j))
-					sgi.Shards[i].IndexID = igi.Indexes[ptId].ID
-				}
-			}
-		}
-		if lastSgi != nil {
-			sgi.Shards[i].Min = lastSgi.Shards[i].Min
-			sgi.Shards[i].Max = lastSgi.Shards[i].Max
-		}
-	}
+	// Create the shard group.
+	sgi := data.newShardGroup(rpi, timestamp, engineType)
+
+	// Create shards on the group.
+	data.createShards(sgi, igi, rpi, msti, tier)
 
 	// Retention policy has a new shard group, so update the policy. Shard
 	// Groups must be stored in sorted order, as other parts of the system
 	// assume this to be the case.
-	rpi.ShardGroups = append(rpi.ShardGroups, sgi)
+	rpi.ShardGroups = append(rpi.ShardGroups, *sgi)
 	sort.Sort(ShardGroupInfos(rpi.ShardGroups))
 
 	return nil
@@ -1662,7 +1635,7 @@ func (data *Data) ExpandGroups() {
 				}
 			})
 
-			rp.walkShardGroups(func(sg *ShardGroupInfo) {
+			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 				for i := len(sg.Shards); i < int(data.ClusterPtNum); i++ {
 					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime, sg.EngineType)
 					data.MaxShardID++
@@ -2054,6 +2027,7 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxStreamID:       proto.Uint64(data.MaxStreamID),
 		MaxConnId:         proto.Uint64(data.MaxConnID),
 		MaxSubscriptionID: proto.Uint64(data.MaxSubscriptionID),
+		MaxCQChangeID:     proto.Uint64(data.MaxCQChangeID),
 	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
@@ -2143,6 +2117,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxStreamID = pb.GetMaxStreamID()
 	data.MaxConnID = pb.GetMaxConnId()
 	data.MaxSubscriptionID = pb.GetMaxSubscriptionID()
+	data.MaxCQChangeID = pb.GetMaxCQChangeID()
 
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {
@@ -2226,68 +2201,6 @@ func (data *Data) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
-// MarshalToStore serializes data to a protobuf representation. Just for ts-store use
-func (data *Data) MarshalToStore() *proto2.Data {
-	pb := &proto2.Data{
-		Term:         proto.Uint64(data.Term),
-		Index:        proto.Uint64(data.Index),
-		ClusterID:    proto.Uint64(data.ClusterID),
-		ClusterPtNum: proto.Uint32(data.ClusterPtNum),
-
-		MaxShardGroupID: proto.Uint64(data.MaxShardGroupID),
-		MaxShardID:      proto.Uint64(data.MaxShardID),
-		MaxIndexGroupID: proto.Uint64(data.MaxIndexGroupID),
-		MaxIndexID:      proto.Uint64(data.MaxIndexID),
-
-		// Need this for reverse compatibility
-		MaxNodeID: proto.Uint64(data.MaxNodeID),
-
-		PtNumPerNode:    proto.Uint32(data.PtNumPerNode),
-		MaxEventOpId:    proto.Uint64(data.MaxEventOpId),
-		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
-	}
-
-	pb.Databases = make([]*proto2.DatabaseInfo, len(data.Databases))
-	i := 0
-	for dbName := range data.Databases {
-		pb.Databases[i] = data.Databases[dbName].marshal()
-		i++
-	}
-
-	pb.Users = make([]*proto2.UserInfo, len(data.Users))
-	for i := range data.Users {
-		pb.Users[i] = data.Users[i].marshal()
-	}
-	return pb
-}
-
-// MarshalBinaryToStore encodes the metadata to a binary format. Just for ts-store use
-func (data *Data) MarshalBinaryToStore() ([]byte, error) {
-	return proto.Marshal(data.MarshalToStore())
-}
-
-// TruncateShardGroups truncates any shard group that could contain timestamps beyond t.
-func (data *Data) TruncateShardGroups(t time.Time) {
-	data.WalkDatabases(func(db *DatabaseInfo) {
-		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
-			for k := range rp.ShardGroups {
-				sgi := &rp.ShardGroups[k]
-
-				if !t.Before(sgi.EndTime) || sgi.Deleted() || (sgi.Truncated() && sgi.TruncatedAt.Before(t)) {
-					continue
-				}
-
-				if !t.After(sgi.StartTime) {
-					// future shardgroup
-					sgi.TruncatedAt = sgi.StartTime
-				} else {
-					sgi.TruncatedAt = t
-				}
-			}
-		})
-	})
-}
-
 // HasAdminUser exhaustively checks for the presence of at least one admin
 // GetUser.
 func (data *Data) HasAdminUser() bool {
@@ -2347,7 +2260,7 @@ func (data *Data) importOneDB(other Data, backupDBName, restoreDBName, backupRPN
 		return "", errors.New("database already exists")
 	}
 	// change the names if we want/need to
-	err := data.CreateDatabase(restoreDBName, nil, nil, false)
+	err := data.CreateDatabase(restoreDBName, nil, nil, false, 1)
 	if err != nil {
 		return "", err
 	}
@@ -2516,7 +2429,7 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 		if rp.MarkDeleted {
 			return
 		}
-		rp.walkShardGroups(func(sg *ShardGroupInfo) {
+		rp.WalkShardGroups(func(sg *ShardGroupInfo) {
 			// need remove shard directory in store
 			if sg.Deleted() {
 				return
@@ -2874,6 +2787,54 @@ func (data *Data) RegisterQueryIDOffset(host SQLHost) error {
 	data.QueryIDInit[host] = newOffset
 
 	return nil
+}
+
+func (data *Data) createReplicationImp(db string, replicaN uint32) error {
+	ptView := data.DBPtView(db)
+	ptNum := uint32(len(ptView))
+	nodeNum := ptNum / data.PtNumPerNode
+	if nodeNum%replicaN != 0 {
+		return errno.NewError(errno.ReplicaNodeNumIncorrect, nodeNum, replicaN)
+	}
+
+	repGroupN := ptNum / replicaN
+	repGroups := make([]ReplicaGroup, repGroupN, repGroupN)
+	if data.ReplicaGroups == nil {
+		data.ReplicaGroups = make(map[string][]ReplicaGroup)
+	}
+	data.ReplicaGroups[db] = repGroups
+
+	var masterPtId, slavePtId uint32
+	for repGroupId, ptIdx := uint32(0), uint32(0); repGroupId < repGroupN; {
+		for k := uint32(0); k < data.PtNumPerNode; k++ {
+			peers := make([]Peer, replicaN-1, replicaN-1)
+			for i := uint32(0); i < replicaN-1; i++ {
+				slavePtId = ptIdx + data.PtNumPerNode*(i+1)
+				peers[i].ID = slavePtId
+				peers[i].PtRole = Slave
+
+				// update slave pt RG id
+				ptView[slavePtId].RGID = repGroupId
+			}
+
+			masterPtId = ptIdx
+			repGroups[repGroupId].init(repGroupId, masterPtId, peers, Health, 0)
+
+			// update master pt RG id
+			ptView[masterPtId].RGID = repGroupId
+			repGroupId++
+		}
+		ptIdx += data.PtNumPerNode * replicaN
+	}
+
+	return nil
+}
+
+func (data *Data) CreateReplication(db string, replicaN uint32) error {
+	if replicaN <= 1 {
+		return nil
+	}
+	return data.createReplicationImp(db, replicaN)
 }
 
 func (data *Data) GetDBBriefInfo(name string) *DatabaseBriefInfo {

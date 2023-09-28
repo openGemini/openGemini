@@ -17,7 +17,6 @@ limitations under the License.
 package meta
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestCreateDatabase(t *testing.T) {
@@ -109,107 +107,6 @@ func TestUpdateShardDownSampleInfo(t *testing.T) {
 	assert.Equal(t, nil, err)
 }
 
-func TestGetUserInfoProcess_Success(t *testing.T) {
-	mockStore := NewMockRPCStore()
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	h := New(msg.Type())
-	h.InitHandler(mockStore, nil, nil)
-	var err error
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-	_, err = h.Process()
-	assert.Equal(t, nil, err)
-}
-
-func TestGetUserInfoProcess_Timeout(t *testing.T) {
-	dir := t.TempDir()
-	config, err := NewMetaConfig(dir, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewStore(config, "", "", "")
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	h := New(msg.Type())
-	h.InitHandler(s, nil, nil)
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-	_, err = h.Process()
-	assert.Equal(t, nil, err)
-
-	errMsg := &message.GetUserInfoResponse{}
-	err = h.SetRequestMsg(errMsg)
-	if !strings.Contains(err.Error(), "message.GetUserInfoRequest") {
-		t.Fatal("get message error fail!")
-	}
-
-	newHandler := h.Instance()
-	switch newHandler.(type) {
-	case *GetUserInfo:
-	default:
-		t.Fatal("error type")
-	}
-}
-
-func TestGetUserInfoProcess_Close_Fail(t *testing.T) {
-	dir := t.TempDir()
-	config, err := NewMetaConfig(dir, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := NewStore(config, "", "", "")
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	h := New(msg.Type())
-	ch := make(chan struct{})
-	close(ch)
-	h.InitHandler(s, nil, ch)
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-	_, err = h.Process()
-	assert.Equal(t, nil, err)
-}
-
-func TestGetUserInfoProcess_Retry_Fail(t *testing.T) {
-	mockStore := NewMockRPCStore()
-	mockAfterIndexFail = false
-	isCandidateTrue = true
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	h := New(msg.Type())
-	h.InitHandler(mockStore, nil, nil)
-	var err error
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = h.Process()
-	ch := make(chan struct{})
-	close(ch)
-	h.InitHandler(mockStore, nil, ch)
-	assert.Equal(t, nil, err)
-	mockAfterIndexFail = true
-	isCandidateTrue = false
-}
-
-func TestGetUserInfoProcess_Fail(t *testing.T) {
-	mockStore := NewMockRPCStore()
-	mockAfterIndexFail = true
-	mockGetUserInfoFail = true
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	h := New(msg.Type())
-	h.InitHandler(mockStore, nil, nil)
-	var err error
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = h.Process()
-	if err == nil {
-		t.Fatal("TestGetUserInfoProcess_Fail fail")
-	}
-}
-
 func TestGetStreamInfoProcess(t *testing.T) {
 	mockStore := NewMockRPCStore()
 	msg := message.NewMetaMessage(message.GetStreamInfoRequestMessage, &message.GetStreamInfoRequest{Body: []byte{1}})
@@ -265,22 +162,6 @@ func TestGetMeasurementsInfoProcess(t *testing.T) {
 	}
 }
 
-func TestGetDBBriefInfo(t *testing.T) {
-	mockStore := NewMockRPCStore()
-	msg := message.NewMetaMessage(message.GetDBBriefInfoRequestMessage, &message.GetDBBriefInfoRequest{DbName: "db0"})
-	h := New(msg.Type())
-	h.InitHandler(mockStore, nil, nil)
-	var err error
-	if err = h.SetRequestMsg(msg.Data()); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = h.Process()
-	if err != nil {
-		t.Fatal("TestGetDBBriefInfo fail")
-	}
-}
-
 func TestRegisterQueryIDOffset_Process(t *testing.T) {
 	mockStore := NewMockRPCStore()
 	msg := message.NewMetaMessage(message.RegisterQueryIDOffsetRequestMessage, &message.RegisterQueryIDOffsetRequest{
@@ -299,14 +180,38 @@ func TestRegisterQueryIDOffset_Process(t *testing.T) {
 	}
 }
 
-func TestGetReplicaInfo_Process(t *testing.T) {
+func TestSql2MetaHeartbeatProcess(t *testing.T) {
 	mockStore := NewMockRPCStore()
-	msg := message.NewMetaMessage(message.GetReplicaInfoRequestMessage, &message.GetReplicaInfoRequest{})
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+		Host: "localhost:8086",
+	})
 	h := New(msg.Type())
 	h.InitHandler(mockStore, nil, nil)
-	require.NoError(t, h.SetRequestMsg(msg.Data()))
-	require.NotEmpty(t, h.SetRequestMsg(&message.GetReplicaInfoResponse{}))
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := h.Process()
-	require.NoError(t, err)
+	_, err = h.Process()
+	if err != nil {
+		t.Fatal("TestSql2MetaHeartbeatProcess fail", err)
+	}
+}
+
+func TestGetCqLeaseProcess(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseRequest{
+		Host: "localhost:8086",
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.Process()
+	if err != nil {
+		t.Fatal("TestGetCqLeaseProcess fail", err)
+	}
 }

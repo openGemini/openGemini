@@ -51,7 +51,6 @@ type cacheStat struct {
 // newBlockCache constructs a fixed size cache with the given eviction callback.
 // size: all page count
 // blockSize: block count
-///*
 func newBlockCache(sizeLimit int64) *blockCache {
 	blockLimit := sizeLimit / int64(blocksMax)
 	logger.GetLogger().Info("NewBlockCache :", zap.Int64("totalLimit", sizeLimit),

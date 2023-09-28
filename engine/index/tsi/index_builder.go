@@ -44,6 +44,7 @@ type IndexBuilder struct {
 	path      string           // eg, data/db/pt/rp/index/indexid
 	Relations []*IndexRelation // <oid, indexRelation>
 	ident     *meta.IndexIdentifier
+	startTime time.Time
 	endTime   time.Time
 	duration  time.Duration
 
@@ -62,6 +63,7 @@ func NewIndexBuilder(opt *Options) *IndexBuilder {
 		path:         opt.path,
 		ident:        opt.ident,
 		duration:     opt.duration,
+		startTime:    opt.startTime,
 		endTime:      opt.endTime,
 		logicalClock: opt.logicalClock,
 		sequenceID:   opt.sequenceID,
@@ -201,6 +203,10 @@ func (iBuilder *IndexBuilder) Expired() bool {
 
 func (iBuilder *IndexBuilder) GetEndTime() time.Time {
 	return iBuilder.endTime
+}
+
+func (iBuilder *IndexBuilder) Overlaps(tr influxql.TimeRange) bool {
+	return iBuilder.startTime.Before(tr.Max) && iBuilder.endTime.After(tr.Min)
 }
 
 func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, needSecondaryIndex bool) error {

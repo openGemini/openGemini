@@ -40,6 +40,10 @@ type MockMetaClient struct {
 	meta.MetaClient
 }
 
+func (m *MockMetaClient) CreateContinuousQuery(database, name, query string) error {
+	return nil
+}
+
 type MockShardMapper struct {
 	query.ShardMapper
 }
@@ -95,7 +99,7 @@ func MockExcuteStatementErr(rp, mst string, tm time.Duration) error {
 		statementExecutor := newMockStatementExecutor()
 		slectStatement := newMockSelectStatement(rp, mst)
 		ctx := &query.ExecutionContext{}
-		err = statementExecutor.ExecuteStatement(slectStatement, ctx)
+		err = statementExecutor.ExecuteStatement(slectStatement, ctx, 0)
 		ch <- struct{}{}
 	}()
 
@@ -259,4 +263,103 @@ func TestStatementExecutor_executeKillQuery(t *testing.T) {
 
 	err2 := e.executeKillQuery(&influxql.KillQueryStatement{QueryID: uint64(1)})
 	assert.NoError(t, err2)
+}
+
+func TestStatementExecutor_executeCreateContinuousQueryStatement(t *testing.T) {
+	e := StatementExecutor{MetaClient: &MockMetaClient{}, NetStorage: &mockNS{}, StmtExecLogger: Logger.NewLogger(errno.ModuleUnknown)}
+	err := e.executeCreateContinuousQueryStatement(
+		&influxql.CreateContinuousQueryStatement{
+			Name:          "cq0",
+			Database:      "db0",
+			Source:        newMockSelectStatement("rp0", "mst0"),
+			ResampleEvery: 10 * time.Minute,
+			ResampleFor:   time.Hour,
+		})
+	assert.EqualError(t, err, "must be a SELECT INTO clause")
+
+	// case: no GROUP BY time clause
+	selectStatement1 := func() *influxql.SelectStatement {
+		selectStatement := &influxql.SelectStatement{
+			Fields:  make(influxql.Fields, 0, 3),
+			Sources: make(influxql.Sources, 0, 3),
+		}
+		selectStatement.Target = &influxql.Target{Measurement: &influxql.Measurement{Database: "db1", Name: "mst1"}}
+		selectStatement.Fields = append(selectStatement.Fields,
+			&influxql.Field{
+				Expr:  &influxql.VarRef{Val: "field", Type: influxql.Integer},
+				Alias: "",
+			},
+		)
+		selectStatement.Sources = append(selectStatement.Sources,
+			&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: "mst0"})
+		return selectStatement
+	}
+	err = e.executeCreateContinuousQueryStatement(
+		&influxql.CreateContinuousQueryStatement{
+			Name:          "cq0",
+			Database:      "db0",
+			Source:        selectStatement1(),
+			ResampleEvery: 10 * time.Minute,
+			ResampleFor:   time.Hour,
+		})
+	assert.EqualError(t, err, "GROUP BY time duration must be greater than 0s")
+
+	// case: time filter condition clause
+	selectStatement2 := func() *influxql.SelectStatement {
+		selectStatement := &influxql.SelectStatement{
+			Fields:  make(influxql.Fields, 0, 3),
+			Sources: make(influxql.Sources, 0, 3),
+		}
+		selectStatement.Target = &influxql.Target{Measurement: &influxql.Measurement{Database: "db1", Name: "mst1"}}
+		selectStatement.Fields = append(selectStatement.Fields,
+			&influxql.Field{
+				Expr:  &influxql.VarRef{Val: "field", Type: influxql.Integer},
+				Alias: "",
+			},
+		)
+		selectStatement.Dimensions = influxql.Dimensions{
+			{
+				Expr: &influxql.Call{
+					Name: "time",
+					Args: []influxql.Expr{
+						&influxql.DurationLiteral{
+							Val: time.Minute,
+						},
+					},
+				},
+			},
+		}
+		selectStatement.SetTimeInterval(time.Minute)
+		selectStatement.Condition =
+			&influxql.BinaryExpr{
+				LHS: &influxql.VarRef{
+					Type: influxql.Unknown,
+					Val:  "time",
+				},
+				Op: influxql.GT,
+				RHS: &influxql.BinaryExpr{
+					LHS: &influxql.Call{
+						Name: "now",
+					},
+					Op: influxql.SUB,
+					RHS: &influxql.DurationLiteral{
+						Val: time.Hour,
+					},
+				},
+			}
+		selectStatement.Sources = append(selectStatement.Sources,
+			&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: "mst0"})
+		return selectStatement
+	}
+	stmt := &influxql.CreateContinuousQueryStatement{
+		Name:          "cq0",
+		Database:      "db0",
+		Source:        selectStatement2(),
+		ResampleEvery: 10 * time.Minute,
+		ResampleFor:   time.Hour,
+	}
+	err = e.executeCreateContinuousQueryStatement(stmt)
+	assert.NoError(t, err)
+	cqQuery := stmt.String()
+	assert.Equal(t, `CREATE CONTINUOUS QUERY cq0 ON db0 RESAMPLE EVERY 10m FOR 1h BEGIN SELECT "field"::integer INTO db1..mst1 FROM db0.rp0.mst0 GROUP BY time(1m) END`, cqQuery)
 }

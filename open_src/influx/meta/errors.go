@@ -148,11 +148,17 @@ var (
 	// ErrContinuousQueryExists is returned when creating an already existing continuous query.
 	ErrContinuousQueryExists = errors.New("continuous query already exists")
 
-	// ErrContinuousQueryNotFound is returned when removing a continuous query that doesn't exist.
+	// ErrContinuousQueryNotFound is returned when removing/finding a continuous query that doesn't exist.
 	ErrContinuousQueryNotFound = errors.New("continuous query not found")
 
-	// ErrSameContinuosQueryName is returned when creating an already existing continuous query name.
-	ErrSameContinuosQueryName = errors.New("continuous query name already exists")
+	// ErrContinuousQueryIsBeingDelete is returned when removing/finding a continuous query that is marked as deleted.
+	ErrContinuousQueryIsBeingDelete = errors.New("continuous query is being delete")
+
+	// ErrSameContinuousQueryName is returned when creating an already existing continuous query name.
+	ErrSameContinuousQueryName = errors.New("continuous query name already exists")
+
+	// ErrContinuosQueryConflict is returned when creating an already existing continuous query.
+	ErrContinuosQueryConflict = errors.New("continuous query conflicts with an existing continuous query")
 )
 
 var (

@@ -83,7 +83,7 @@ const (
 	//BY
 	//CARDINALITY
 	//CREATE
-	//CONTINUOUS // ContinuousQuery
+	//CONTINUOUS // ContinuousQueries
 	//DATABASE
 	//DATABASES
 	//DEFAULT
@@ -224,8 +224,6 @@ var tokens = [...]string{
 	COLUMNSTORE:    "COLUMNSTORE",
 	TSSTORE:        "TSSTORE",
 	PRIMARYKEY:     "PRIMARYKEY",
-	Hash:           "HASH",
-	Range:          "RANGE",
 	SCHEMA:         "SCHEMA",
 	PROPERTY:       "PROPERTY",
 	BEGIN:          "BEGIN",
@@ -239,6 +237,7 @@ var tokens = [...]string{
 	DEFAULT:        "DEFAULT",
 	DELETE:         "DELETE",
 	CONFIG:         "CONFIG",
+	CONFIGS:        "CONFIGS",
 	DESC:           "DESC",
 	DESTINATIONS:   "DESTINATIONS",
 	DIAGNOSTICS:    "DIAGNOSTICS",
@@ -332,6 +331,8 @@ var tokens = [...]string{
 	STREAMS:        "STREAMS",
 	DELAY:          "DELAY",
 	ATTRIBUTE:      "ATTRIBUTE",
+	REPLICAS:       "REPLICAS",
+	DETAIL:         "DETAIL",
 }
 
 var keywords map[string]int

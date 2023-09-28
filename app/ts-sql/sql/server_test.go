@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -40,6 +41,7 @@ func Test_NewServer(t *testing.T) {
 	conf := config.NewTSSql()
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	conf.ContinuousQuery.Enabled = true
 
 	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
@@ -82,7 +84,7 @@ func TestServer_Close(t *testing.T) {
 		return
 	}
 
-	server.QueryExecutor = query.NewExecutor()
+	server.QueryExecutor = query.NewExecutor(cpu.GetCpuNum())
 	server.MetaClient = metaclient.NewClient("", false, 100)
 
 	assert.NoError(t, server.Close())

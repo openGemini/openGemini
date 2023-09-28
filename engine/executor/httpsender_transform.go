@@ -315,6 +315,7 @@ func (g *RowsGenerator) Release() {
 func (g *RowsGenerator) Reset() {
 	g.name = ""
 	// pre-allocated memory
+	g.columnNames = make([]string, 0, cap(g.columnNames))
 	g.buf = make([]byte, 0, cap(g.buf))
 	g.values = make([]interface{}, 0, cap(g.values))
 	g.rows = make([]models.Row, 0, cap(g.rows))

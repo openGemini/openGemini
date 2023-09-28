@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -49,6 +50,12 @@ func TestRetriedErrorCode(t *testing.T) {
 
 type mocShardMapperMetaClient struct {
 	databases map[string]*meta.DatabaseInfo
+
+	metaclient.MetaClient
+}
+
+func (m mocShardMapperMetaClient) GetMaxCQChangeID() uint64 {
+	return 0
 }
 
 func (m mocShardMapperMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -65,7 +72,6 @@ func (m mocShardMapperMetaClient) GetStreamInfos() map[string]*meta.StreamInfo {
 }
 
 func (m mocShardMapperMetaClient) GetStreamInfosStore() map[string]*meta.StreamInfo {
-	//TODO implement me
 	panic("implement me")
 }
 
@@ -102,18 +108,17 @@ func (m mocShardMapperMetaClient) AlterShardKey(database, retentionPolicy, mst s
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta.DatabaseInfo, error) {
 	return m.databases[name], nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec, shardKey *meta.ShardKeyInfo, enableTagArray bool) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec, shardKey *meta.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta.DatabaseInfo, error) {
 	return nil, nil
 }
 
 func (m mocShardMapperMetaClient) CreateRetentionPolicy(database string, spec *meta.RetentionPolicySpec, makeDefault bool) (*meta.RetentionPolicyInfo, error) {
 	return nil, nil
 }
-
 func (m mocShardMapperMetaClient) CreateSubscription(database, rp, name, mode string, destinations []string) error {
 	return nil
 }
@@ -205,10 +210,6 @@ func (m mocShardMapperMetaClient) ShardGroupsByTimeRange(database, policy string
 	return groups, nil
 }
 
-func (m mocShardMapperMetaClient) TruncateShardGroups(t time.Time) error {
-	return nil
-}
-
 func (m mocShardMapperMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta.RetentionPolicyUpdate, makeDefault bool) error {
 	return nil
 }
@@ -243,6 +244,14 @@ func (m mocShardMapperMetaClient) MarkMeasurementDelete(database, mst string) er
 
 func (m mocShardMapperMetaClient) DBPtView(database string) (meta.DBPtInfos, error) {
 	return nil, nil
+}
+
+func (m mocShardMapperMetaClient) DBRepGroups(database string) []meta.ReplicaGroup {
+	return nil
+}
+
+func (m mocShardMapperMetaClient) GetReplicaN(database string) (int, error) {
+	return 1, nil
 }
 
 func (m mocShardMapperMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo) {
@@ -323,6 +332,10 @@ func (m mocShardMapperMetaClient) ShowRetentionPolicies(database string) (models
 	return nil, nil
 }
 
+func (m mocShardMapperMetaClient) ShowContinuousQueries() (models.Rows, error) {
+	return nil, nil
+}
+
 func (m mocShardMapperMetaClient) GetAliveShards(database string, sgi *meta.ShardGroupInfo) []int {
 	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
 	for i := range sgi.Shards {
@@ -365,10 +378,6 @@ func (m mocShardMapperMetaClient) UpdateShardDownSampleInfo(Ident *meta.ShardIde
 
 func (m mocShardMapperMetaClient) OpenAtStore() {
 	return
-}
-
-func (mmc *mocShardMapperMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
-	return false, nil
 }
 
 func (mmc *mocShardMapperMetaClient) GetAllMst(dbName string) []string {

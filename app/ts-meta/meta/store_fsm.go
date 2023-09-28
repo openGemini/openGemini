@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"sort"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -122,7 +123,6 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_CreateDataNodeCommand:            applyCreateDataNode,
 	proto2.Command_DeleteDataNodeCommand:            applyDeleteDataNode,
 	proto2.Command_MarkDatabaseDeleteCommand:        applyMarkDatabaseDelete,
-	proto2.Command_UpdateShardOwnerCommand:          applyUpdateShardOwner,
 	proto2.Command_MarkRetentionPolicyDeleteCommand: applyMarkRetentionPolicyDelete,
 	proto2.Command_CreateMeasurementCommand:         applyCreateMeasurement,
 	proto2.Command_ReShardingCommand:                applyReSharding,
@@ -150,6 +150,10 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_ExpandGroupsCommand:              applyExpandGroups,
 	proto2.Command_UpdatePtVersionCommand:           applyUpdatePtVersion,
 	proto2.Command_RegisterQueryIDOffsetCommand:     applyRegisterQueryIDOffset,
+	proto2.Command_CreateContinuousQueryCommand:     applyCreateContinuousQuery,
+	proto2.Command_ContinuousQueryReportCommand:     applyContinuousQueryReport,
+	proto2.Command_DropContinuousQueryCommand:       applyDropContinuousQuery,
+	proto2.Command_NotifyCQLeaseChangedCommand:      applyNotifyCQLeaseChanged,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -238,10 +242,6 @@ func applyDeleteDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
 
 func applyMarkDatabaseDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyMarkDatabaseDeleteCommand(cmd)
-}
-
-func applyUpdateShardOwner(fsm *storeFSM, cmd *proto2.Command) interface{} {
-	return fsm.applyUpdateShardOwnerCommand(cmd)
 }
 
 func applyMarkRetentionPolicyDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -352,6 +352,22 @@ func applyRegisterQueryIDOffset(fsm *storeFSM, cmd *proto2.Command) interface{} 
 	return fsm.applyRegisterQueryIDOffsetCommand(cmd)
 }
 
+func applyCreateContinuousQuery(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateContinuousQueryCommand(cmd)
+}
+
+func applyContinuousQueryReport(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyContinuousQueryReportCommand(cmd)
+}
+
+func applyDropContinuousQuery(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyDropContinuousQueryCommand(cmd)
+}
+
+func applyNotifyCQLeaseChanged(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyNotifyCQLeaseChangedCommand(cmd)
+}
+
 func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 	if handler, ok := applyFunc[cmd.GetType()]; ok {
 		return handler(fsm, &cmd)
@@ -414,7 +430,12 @@ func (fsm *storeFSM) applyCreateDbPtViewCommand(cmd *proto2.Command) interface{}
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
 	}
-	return fsm.data.CreateDBPtView(v.GetDbName())
+
+	if err := fsm.data.CreateDBPtView(v.GetDbName()); err != nil {
+		return err
+	}
+
+	return fsm.data.CreateReplication(v.GetDbName(), v.GetReplicaNum())
 }
 
 func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{} {
@@ -437,19 +458,13 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 			WarmDuration:       time.Duration(0), // FIXME DO NOT SUPPORT WARM DURATION
 			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration())}
 	} else if s.config.RetentionAutoCreate {
-		replicaN := len(fsm.data.DataNodes)
-		if replicaN > maxAutoCreatedRetentionPolicyReplicaN {
-			replicaN = maxAutoCreatedRetentionPolicyReplicaN
-		} else if replicaN < 1 {
-			replicaN = 1
-		}
-
 		// Create a retention policy.
 		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
-		rp.ReplicaN = replicaN
+		rp.ReplicaN = int(v.GetReplicaNum())
 		rp.Duration = autoCreateRetentionPolicyPeriod
 	}
-	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray())
+
+	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), v.GetReplicaNum())
 	fsm.Logger.Info("apply create database", zap.Error(err))
 	return err
 }
@@ -472,6 +487,10 @@ func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
 	dbi := fsm.data.Database(v.GetName())
 	if dbi == nil {
 		return nil
+	}
+	// notify all sql nodes that CQ has been changed
+	if len(dbi.ContinuousQueries) > 0 {
+		fsm.data.MaxCQChangeID++
 	}
 	fsm.data.DropDatabase(v.GetName())
 
@@ -506,6 +525,58 @@ func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) inte
 	}
 
 	return fsm.data.CreateRetentionPolicy(v.GetDatabase(), rpi, v.GetDefaultRP())
+}
+
+func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command)
+	v, ok := ext.(*proto2.CreateContinuousQueryCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateContinuousQueryCommand", ext))
+	}
+
+	if err := fsm.data.CreateContinuousQuery(v.GetDatabase(), v.GetName(), v.GetQuery()); err != nil {
+		return err
+	}
+	s := (*Store)(fsm)
+	s.handleCQCreated(v.GetName())
+	return nil
+}
+
+func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command)
+	v, ok := ext.(*proto2.ContinuousQueryReportCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a ContinuousQueryReportCommand", ext))
+	}
+
+	return fsm.data.BatchUpdateContinuousQueryStat(v.GetCQStates())
+}
+
+func (fsm *storeFSM) applyDropContinuousQueryCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
+	v, ok := ext.(*proto2.DropContinuousQueryCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a DropContinuousQueryCommand", ext))
+	}
+	changed, err := fsm.data.DropContinuousQuery(v.GetName(), v.GetDatabase())
+	if err != nil || !changed {
+		return err
+	}
+
+	s := (*Store)(fsm)
+	s.handleCQDropped(v.GetName())
+	return nil
+}
+
+// applyNotifyCQLeaseChangedCommand notify all sql that cq lease has been changed.
+func (fsm *storeFSM) applyNotifyCQLeaseChangedCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_NotifyCQLeaseChangedCommand_Command)
+	_, ok := ext.(*proto2.NotifyCQLeaseChangedCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a NotifyCQLeaseChangedCommand", ext))
+	}
+	fsm.data.MaxCQChangeID++
+	return nil
 }
 
 func (fsm *storeFSM) applyDropRetentionPolicyCommand(cmd *proto2.Command) interface{} {
@@ -694,12 +765,6 @@ func (fsm *storeFSM) Snapshot() (raft.FSMSnapshot, error) {
 	return &storeFSMSnapshot{Data: fsm.data.Clone()}, nil
 }
 
-func (fsm *storeFSM) applyUpdateShardOwnerCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardOwnerCommand_Command)
-	v := ext.(*proto2.UpdateShardOwnerCommand)
-	return fsm.data.UpdateShardOwnerId(v.GetDbName(), v.GetRpName(), uint64(v.GetShardId()), uint64(v.GetOwnerId()))
-}
-
 func (fsm *storeFSM) applyUpdateShardInfoTierCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardInfoTierCommand_Command)
 	v := ext.(*proto2.UpdateShardInfoTierCommand)
@@ -782,8 +847,20 @@ func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	}
 
 	fsm.data = data
+	fsm.restoreCQNames()
 
 	return nil
+}
+
+func (fsm *storeFSM) restoreCQNames() {
+	fsm.cqNames = fsm.cqNames[:0]
+
+	fsm.data.WalkDatabases(func(db *meta2.DatabaseInfo) {
+		for cqName := range db.ContinuousQueries {
+			fsm.cqNames = append(fsm.cqNames, cqName)
+		}
+	})
+	sort.Strings(fsm.cqNames)
 }
 
 func (fsm *storeFSM) applyCreateDownSampleCommand(cmd *proto2.Command) interface{} {

@@ -117,7 +117,7 @@ func NewTaskManager() *TaskManager {
 }
 
 // ExecuteStatement executes a statement containing one of the task management queries.
-func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionContext) error {
+func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionContext, seq int) error {
 	switch stmt := stmt.(type) {
 	case *influxql.ShowQueriesStatement:
 		rows, err := t.executeShowQueriesStatement(stmt)
@@ -127,7 +127,7 @@ func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionCo
 
 		ctx.Send(&query.Result{
 			Series: rows,
-		})
+		}, seq)
 	case *influxql.KillQueryStatement:
 		var messages []*query.Message
 		if ctx.ReadOnly {
@@ -139,7 +139,7 @@ func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionCo
 		}
 		ctx.Send(&query.Result{
 			Messages: messages,
-		})
+		}, seq)
 	default:
 		return ErrInvalidQuery
 	}
