@@ -19,7 +19,9 @@ package mutable
 import (
 	"errors"
 	"math"
+	"os"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -41,6 +43,7 @@ type WriteRowsCtx struct {
 	GetLastFlushTime  func(msName string, sid uint64) int64
 	AddRowCountsBySid func(msName string, sid uint64, rowCounts int64)
 	MstsInfo          map[string]*meta.MeasurementInfo
+	MsRowCount        *sync.Map
 }
 
 type WriteRec struct {
@@ -237,6 +240,27 @@ type MTable interface {
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
 	WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error
 	Reset(table *MemTable)
+}
+
+// StoreMstRowCount is used to persist the rowcount value for mst-level pre-aggregation.
+func StoreMstRowCount(countFile string, rowCount int) error {
+	str := strconv.Itoa(rowCount)
+
+	return os.WriteFile(countFile, []byte(str), 0640)
+}
+
+// LoadMstRowCount is used to load the rowcount value for mst-level pre-aggregation.
+func LoadMstRowCount(countFile string) (int, error) {
+	data, err := os.ReadFile(countFile)
+	if err != nil {
+		return 0, err
+	}
+
+	rowCount, err := strconv.Atoi(string(data))
+	if err != nil {
+		return 0, err
+	}
+	return rowCount, nil
 }
 
 func WriteIntoFile(msb *immutable.MsBuilder, tmp bool, withPKIndex bool) error {

@@ -62,7 +62,7 @@ func MockMetaData() (meta.Data, error) {
 	data.DataNodes = dataNodes
 
 	exec.Add(func() {
-		exec.err = data.CreateDatabase("foo", nil, nil, false)
+		exec.err = data.CreateDatabase("foo", nil, nil, false, 1)
 	})
 
 	exec.Add(func() {

@@ -22,6 +22,7 @@ type DatabaseInfo struct {
 	MarkDeleted            bool
 	ShardKey               ShardKeyInfo
 	EnableTagArray         bool
+	ReplicaN               int
 	ContinuousQueries      map[string]*ContinuousQueryInfo // {"cqName": *ContinuousQueryInfo}
 }
 
@@ -136,6 +137,7 @@ func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 		pb.ShardKey = di.ShardKey.Marshal()
 	}
 	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
+	pb.ReplicaN = proto.Int64(int64(di.ReplicaN))
 
 	return pb
 }
@@ -168,6 +170,10 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 		di.ShardKey.unmarshal(pb.GetShardKey())
 	}
 	di.EnableTagArray = pb.GetEnableTagArray()
+	di.ReplicaN = int(pb.GetReplicaN())
+	if di.ReplicaN == 0 {
+		di.ReplicaN = 1
+	}
 }
 
 type PtOwner struct {

@@ -42,6 +42,7 @@ const (
 type SparseIndexScanTransform struct {
 	BaseProcessor
 
+	hasRowCount  bool
 	span         *tracing.Span
 	indexSpan    *tracing.Span
 	allocateSpan *tracing.Span
@@ -54,7 +55,9 @@ type SparseIndexScanTransform struct {
 	pipelineExecutor *PipelineExecutor
 	info             *IndexScanExtraInfo
 	indexLogger      *logger.Logger
+	outRowDataType   hybridqp.RowDataType
 	frags            ShardsFragments
+	rowCount         int64
 	schema           hybridqp.Catalog
 	node             hybridqp.QueryNode
 	wg               sync.WaitGroup
@@ -64,15 +67,17 @@ type SparseIndexScanTransform struct {
 
 func NewSparseIndexScanTransform(inRowDataType hybridqp.RowDataType, node hybridqp.QueryNode, ops []hybridqp.ExprOptions, info *IndexScanExtraInfo, schema hybridqp.Catalog) *SparseIndexScanTransform {
 	trans := &SparseIndexScanTransform{
-		input:        NewChunkPort(inRowDataType),
-		output:       NewChunkPort(inRowDataType),
-		chunkBuilder: NewChunkBuilder(inRowDataType),
-		ops:          ops,
-		opt:          *schema.Options().(*query.ProcessorOptions),
-		info:         info,
-		schema:       schema,
-		node:         node,
-		indexLogger:  logger.NewLogger(errno.ModuleIndex),
+		input:          NewChunkPort(inRowDataType),
+		output:         NewChunkPort(inRowDataType),
+		chunkBuilder:   NewChunkBuilder(inRowDataType),
+		hasRowCount:    schema.HasRowCount(),
+		outRowDataType: inRowDataType,
+		ops:            ops,
+		opt:            *schema.Options().(*query.ProcessorOptions),
+		info:           info,
+		schema:         schema,
+		node:           node,
+		indexLogger:    logger.NewLogger(errno.ModuleIndex),
 	}
 	return trans
 }
@@ -155,18 +160,26 @@ func (trans *SparseIndexScanTransform) scanWithSparseIndex(ctx context.Context) 
 	}
 
 	tracing.StartPP(trans.indexSpan)
-	fragments, err := trans.info.Store.ScanWithSparseIndex(ctx, trans.info.Req.Database, trans.info.Req.PtID, trans.info.Req.ShardIDs, schema)
-	if err != nil {
-		return err
-	}
-	frs, ok := fragments.(ShardsFragments)
-	if !ok {
-		return errors.New("the fragments is invalid for SparseIndexScanTransform")
+	if trans.hasRowCount {
+		rowCount, err := trans.info.Store.RowCount(trans.info.Req.Database, trans.info.Req.PtID, trans.info.Req.ShardIDs, schema)
+		if err != nil {
+			return err
+		}
+		trans.rowCount = rowCount
+	} else {
+		fragments, err := trans.info.Store.ScanWithSparseIndex(ctx, trans.info.Req.Database, trans.info.Req.PtID, trans.info.Req.ShardIDs, schema)
+		if err != nil {
+			return err
+		}
+		frs, ok := fragments.(ShardsFragments)
+		if !ok {
+			return errors.New("the fragments is invalid for SparseIndexScanTransform")
+		}
+		trans.frags = frs
 	}
 	tracing.EndPP(trans.indexSpan)
 
-	trans.frags = frs
-	if err = trans.buildExecutor(trans.node, frs); err != nil {
+	if err := trans.buildExecutor(trans.node, trans.frags); err != nil {
 		return err
 	}
 	output := trans.pipelineExecutor.root.transform.GetOutputs()
@@ -192,7 +205,11 @@ func (trans *SparseIndexScanTransform) WorkHelper(ctx context.Context) error {
 			return
 		}
 	}()
-	trans.Running(ctx)
+	if trans.hasRowCount {
+		trans.Counting(ctx)
+	} else {
+		trans.Running(ctx)
+	}
 	trans.wg.Wait()
 	return nil
 }
@@ -213,6 +230,26 @@ func (trans *SparseIndexScanTransform) Running(ctx context.Context) {
 	}
 }
 
+func (trans *SparseIndexScanTransform) Counting(ctx context.Context) {
+	trans.wg.Add(1)
+	defer trans.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			c := NewChunkBuilder(trans.outRowDataType).NewChunk(trans.schema.Options().GetSourcesNames()[0])
+			c.AppendTagsAndIndex(ChunkTags{}, 0)
+			c.AppendIntervalIndex(0)
+			c.AppendTime(0)
+			c.Column(0).AppendIntegerValue(trans.rowCount)
+			c.Column(0).AppendNilsV2(true)
+			trans.output.State <- c
+			return
+		}
+	}
+}
+
 func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, fragments ShardsFragments) error {
 	parallelism := trans.schema.Options().GetMaxParallel()
 	if parallelism <= 0 {
@@ -226,10 +263,17 @@ func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, f
 		trans.indexLogger.Debug("SparseIndexScan index results", zap.String("shards fragments", fragments.String()))
 	}
 
-	fragmentsGroups, err := DistributeFragmentsV2(fragments, parallelism)
-	if err != nil {
-		trans.indexLogger.Error("SparseIndexScan allocates error", zap.Error(err))
-		return err
+	var err error
+	var fragmentsGroups *ShardsFragmentsGroups
+	if trans.hasRowCount {
+		fragmentsGroups = NewShardsFragmentsGroups(1)
+		fragmentsGroups.Items[0] = NewShardsFragmentsGroup(NewShardsFragments(), 0)
+	} else {
+		fragmentsGroups, err = DistributeFragmentsV2(fragments, parallelism)
+		if err != nil {
+			trans.indexLogger.Error("SparseIndexScan allocates error", zap.Error(err))
+			return err
+		}
 	}
 
 	if trans.indexLogger.IsDebugLevel() {
@@ -415,6 +459,12 @@ func DistributeFragmentsV2(frags ShardsFragments, parallel int) (*ShardsFragment
 		for _, file := range shardFrag.FileMarks {
 			files = append(files, NewShardFileFragment(shardId, file))
 		}
+	}
+
+	if fragTotalCount == 0 {
+		fragmentsGroups := NewShardsFragmentsGroups(1)
+		fragmentsGroups.Items[0] = NewShardsFragmentsGroup(NewShardsFragments(), 0)
+		return fragmentsGroups, nil
 	}
 
 	if fragTotalCount < parallel {

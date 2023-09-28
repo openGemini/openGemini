@@ -43,6 +43,7 @@ const (
 
 	TsspDirName        = "tssp"
 	ColumnStoreDirName = "columnstore"
+	CountBinFile       = "count.txt"
 
 	defaultCap = 64
 )

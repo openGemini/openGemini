@@ -91,8 +91,8 @@ func (l *limitListenerConn) Close() error {
 }
 
 /*
-   whiteList: [127.0.0.1:8086,127.0.0.2:8086,127.0.0.3:8086]
-   remoteAddr: 127.0.0.1:8086
+whiteList: [127.0.0.1:8086,127.0.0.2:8086,127.0.0.3:8086]
+remoteAddr: 127.0.0.1:8086
 */
 func checkInWhiteList(whiteList []string, remoteAddr string) bool {
 	if len(whiteList) == 0 || remoteAddr == "" {

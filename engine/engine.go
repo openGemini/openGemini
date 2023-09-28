@@ -988,8 +988,8 @@ func (e *Engine) deleteOneIndex(dbPTInfo *DBPTInfo, indexId uint64) error {
 	return err
 }
 
-func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) (map[string]uint64, error) {
-	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition)
+func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
+	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition, tr)
 	if err != nil {
 		return nil, err
 	}
@@ -1003,7 +1003,7 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 	return result, nil
 }
 
-func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr) (map[string]map[string]struct{}, error) {
+func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]map[string]struct{}, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -1039,6 +1039,9 @@ func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, 
 		}
 		pt.mu.RLock()
 		for _, iBuild := range pt.indexBuilder {
+			if !iBuild.Overlaps(tr) {
+				continue
+			}
 			for _, nameWithVer := range measurements {
 				mstName := influx.GetOriginMstName(util.Bytes2str(nameWithVer))
 				stime := time.Now()
@@ -1155,6 +1158,26 @@ func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32
 		shardFrags[shardId] = fileFrags
 	}
 	return shardFrags, nil
+}
+
+func (e *Engine) RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error) {
+	var rowCount int64
+	for _, shardId := range shardIDs {
+		s, err := e.GetShard(db, ptId, shardId)
+		if err != nil {
+			return 0, err
+		}
+		if s == nil {
+			e.log.Warn(fmt.Sprintf("RowCount shard is null. db: %s, ptId: %d, shardId: %d", db, ptId, shardId))
+			continue
+		}
+		shardRowCount, err := s.RowCount(schema)
+		if err != nil {
+			return 0, err
+		}
+		rowCount += shardRowCount
+	}
+	return rowCount, nil
 }
 
 func (e *Engine) LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error) {

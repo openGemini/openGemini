@@ -82,10 +82,14 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 		}
 	}
 
+	var dropTagIndex []int
+	var err error
 	// check tag need to add or not
 	for i, tag := range r.Tags {
 		if tag.Key == "time" {
-			return fieldToCreatePool, true, errno.NewError(errno.InvalidTagKey, tag.Key)
+			dropTagIndex = append(dropTagIndex, i)
+			err = errno.NewError(errno.InvalidTagKey, originName)
+			continue
 		}
 		if err := r.CheckDuplicateTag(i); err != nil {
 			return fieldToCreatePool, true, err
@@ -99,13 +103,16 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 		}
 	}
 
+	if len(dropTagIndex) > 0 {
+		dropTagByIndex(r, dropTagIndex)
+	}
+
 	if tl := GetTagLimit(); tl > 0 && len(fieldToCreatePool) > 0 && mst.TagKeysTotal() > tl {
 		return fieldToCreatePool, true, errno.NewError(errno.TooManyTagKeys)
 	}
 
 	// check field type is conflict or not
 	var dropFieldIndex []int
-	var err error
 	for i, field := range r.Fields {
 		fieldType, ok := schemaMap[field.Key]
 		if ok {

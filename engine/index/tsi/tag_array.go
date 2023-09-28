@@ -84,17 +84,20 @@ func (pool *TagSetsPool) Put(tags *tagSets) {
 }
 
 /*
-eg, inputTags:{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
-               {Key: "tk2", Value: "[tv2,tv22]", IsArray: 0},
-	       {Key: "tk3", Value: "[tv3,tv33]", IsArray: 0}}
+eg, inputTags:
 
-tagArray:[[{Key: "tk1", Value: "tv1", IsArray: 0},
-           {Key: "tk2", Value: "tv2", IsArray: 0},
-           {Key: "tk3", Value: "tv3", IsArray: 0},]
-	 [{Key: "tk1", Value: "tv11", IsArray: 0},
-          {Key: "tk2", Value: "tv22", IsArray: 0},
-          {Key: "tk3", Value: "tv33", IsArray: 0},]]
+	{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
+	{Key: "tk2", Value: "[tv2,tv22]", IsArray: 0},
+	{Key: "tk3", Value: "[tv3,tv33]", IsArray: 0}}
 
+tagArray:
+
+	[[{Key: "tk1", Value: "tv1", IsArray: 0},
+	{Key: "tk2", Value: "tv2", IsArray: 0},
+	{Key: "tk3", Value: "tv3", IsArray: 0},]
+	[{Key: "tk1", Value: "tv11", IsArray: 0},
+	{Key: "tk2", Value: "tv22", IsArray: 0},
+	{Key: "tk3", Value: "tv33", IsArray: 0},]]
 */
 func analyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
 	var arrayLen int

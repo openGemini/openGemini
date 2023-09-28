@@ -7,6 +7,5 @@ and configure the InfluxDB server.
 
 See https://docs.influxdata.com/influxdb/latest/query_language/
 for a reference on using InfluxQL.
-
 */
 package influxql

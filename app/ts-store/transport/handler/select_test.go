@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -71,23 +72,23 @@ func (s *MockStoreEngine) GetShardSplitPoints(db string, pt uint32, shardID uint
 	return nil, nil
 }
 
-func (s *MockStoreEngine) SeriesCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]meta.MeasurementCardinalityInfo, error) {
+func (s *MockStoreEngine) SeriesCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error) {
 	return nil, nil
 }
 
-func (s *MockStoreEngine) SeriesExactCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr) (map[string]uint64, error) {
+func (s *MockStoreEngine) SeriesExactCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
 	return nil, nil
 }
 
-func (s *MockStoreEngine) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]string, error) {
+func (s *MockStoreEngine) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	return nil, nil
 }
 
-func (s *MockStoreEngine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (netstorage.TablesTagSets, error) {
+func (s *MockStoreEngine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (netstorage.TablesTagSets, error) {
 	return nil, nil
 }
 
-func (s *MockStoreEngine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr) (map[string]uint64, error) {
+func (s *MockStoreEngine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
 	return nil, nil
 }
 
@@ -117,6 +118,10 @@ func (s *MockStoreEngine) Assign(uint64, *meta.DbPtInfo) error {
 
 func (s *MockStoreEngine) GetConnId() uint64 {
 	return 0
+}
+
+func (s *MockStoreEngine) RowCount(_ string, _ uint32, _ []uint64, _ hybridqp.Catalog) (int64, error) {
+	return 0, nil
 }
 
 type DummySeriesTransform struct {

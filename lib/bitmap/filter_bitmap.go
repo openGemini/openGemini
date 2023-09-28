@@ -18,12 +18,16 @@ package bitmap
 
 import "github.com/openGemini/openGemini/lib/record"
 
+const RowsNumPerFragment int = 8192
+
 type FilterBitmap struct {
-	Bitmap [][]byte
+	ReserveId []int
+	Bitmap    [][]byte
 }
 
 func NewFilterBitmap(length int) *FilterBitmap {
 	f := &FilterBitmap{}
+	f.ReserveId = make([]int, 0, RowsNumPerFragment)
 	f.Bitmap = make([][]byte, length)
 	for i := range f.Bitmap {
 		f.Bitmap[i] = []byte{}
@@ -35,6 +39,7 @@ func (f *FilterBitmap) Reset() {
 	for i := range f.Bitmap {
 		f.Bitmap[i] = f.Bitmap[i][:0]
 	}
+	f.ReserveId = f.ReserveId[:0]
 }
 
 func IsNil(bitMap []byte, idx int) bool {
@@ -45,8 +50,12 @@ func SetBitMap(bitMap []byte, idx int) {
 	bitMap[idx>>3] &= record.FlippedBitMask[idx&0x07]
 }
 
-func GetValWithOrOp(bitmap [][]byte, resIdx, i, j int) [][]byte {
-	// Get target idx bitmap value under or operation
-	bitmap[resIdx][j] = bitmap[resIdx][j] | bitmap[i][j]
+func GetValWithOrOp(bitmap [][]byte, lastIdx int) [][]byte {
+	for i := 0; i < len(bitmap)-1; i++ {
+		for j := range bitmap[i] {
+			// Get target idx bitmap value under or operation
+			bitmap[lastIdx][j] = bitmap[lastIdx][j] | bitmap[i][j]
+		}
+	}
 	return bitmap
 }

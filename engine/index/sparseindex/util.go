@@ -27,7 +27,7 @@ const Continuous = "continuous"
 
 type Operator uint8
 
-//  Atoms of a Boolean expression.
+// Atoms of a Boolean expression.
 const (
 	InRange Operator = iota
 	NotInRange

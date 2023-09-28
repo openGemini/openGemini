@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-//_00001.wal
+// _00001.wal
 func TestGlob(t *testing.T) {
 	tmpDir := t.TempDir()
 	files := []string{

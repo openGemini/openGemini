@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
@@ -41,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/pingcap/failpoint"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +56,10 @@ type shardMock struct {
 }
 
 var DefaultEngineOption netstorage.EngineOptions
+var globalTime = influxql.TimeRange{
+	Min: time.Unix(0, influxql.MinTime).UTC(),
+	Max: time.Unix(0, influxql.MaxTime).UTC(),
+}
 
 func init() {
 	DefaultEngineOption = netstorage.NewEngineOptions()
@@ -599,12 +605,20 @@ func TestEngine_SeriesKeys(t *testing.T) {
 	idx.DebugFlush()
 
 	// ignore pt not found
-	keys, err := eng.SeriesKeys("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil)
+	keys, err := eng.SeriesKeys("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil, globalTime)
 	assert(len(keys) == 0, "series keys expect 0")
 	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not exist
-	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil)
+	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil, globalTime)
+	assert(len(keys) == 0, "series keys expect 0")
+	assert(err == nil, "err should bu nil")
+
+	// no intersection of time
+	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("cpu")}, nil, influxql.TimeRange{
+		Min: time.Now().Add(7 * 24 * time.Hour),
+		Max: time.Now().Add(8 * 24 * time.Hour),
+	})
 	assert(len(keys) == 0, "series keys expect 0")
 	assert(err == nil, "err should bu nil")
 }
@@ -629,16 +643,22 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 	idx.DebugFlush()
 
 	// ignore pt not found
-	mcis, err := eng.SeriesCardinality("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil)
+	mcis, err := eng.SeriesCardinality("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil, globalTime)
 	assert(len(mcis) == 0, "seriesCardinality expect 0")
 	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not exist
-	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil)
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	assert(len(mcis) == 0, "seriesCardinality expect 0")
 	assert(err == nil, "err is nil")
 
-	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, nil)
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -647,10 +667,29 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 	assert(mcis[0].CardinalityInfos[0].Cardinality == 10, "series count should be 10")
 
 	condition := influxql.MustParseExpr(`tagkey1=tagvalue1_1`)
-	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, condition)
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, condition, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	assert(len(mcis) == 1, "seriesCardinality expect 1")
 	assert(len(mcis[0].CardinalityInfos) == 1, "series cardinality res should only be 1")
 	assert(mcis[0].CardinalityInfos[0].Cardinality == 10, "series count should be 1")
+
+	// no intersection of time & no condition
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, nil, influxql.TimeRange{
+		Min: time.Now().Add(7 * 24 * time.Hour),
+		Max: time.Now().Add(8 * 24 * time.Hour),
+	})
+	assert(len(mcis) == 0, "seriesCardinality expect 0")
+	assert(err == nil, "no error expected")
+
+	// no intersection of time & has condition
+	mcis, err = eng.SeriesCardinality("db0", []uint32{0}, [][]byte{[]byte(msNames[0])}, condition, influxql.TimeRange{
+		Min: time.Now().Add(7 * 24 * time.Hour),
+		Max: time.Now().Add(8 * 24 * time.Hour),
+	})
+	assert(len(mcis) == 0, "seriesCardinality expect 0")
+	assert(err == nil, "no error expected")
 }
 
 func TestEngine_TagValues(t *testing.T) {
@@ -678,23 +717,42 @@ func TestEngine_TagValues(t *testing.T) {
 	// ignore pt not exist
 	tagsets, err := eng.TagValues("db0", []uint32{0xff}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
-	}, nil)
+	}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not found
 	tagsets, err = eng.TagValues("db0", []uint32{0}, map[string][][]byte{
 		"invalid_measurement": {[]byte("tagkey1")},
-	}, nil)
+	}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	require.Equal(t, err, nil)
 
 	tagsets, err = eng.TagValues("db0", []uint32{0}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
-	}, nil)
+	}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	require.Equal(t, 1, len(tagsets))
 	require.Equal(t, 10, len(tagsets[0].Values))
+
+	// No intersection of time
+	tagsets, err = eng.TagValues("db0", []uint32{0}, map[string][][]byte{
+		msNames[0]: {[]byte("tagkey1")},
+	}, nil, influxql.TimeRange{
+		Min: time.Now().Add(7 * 24 * time.Hour),
+		Max: time.Now().Add(8 * 24 * time.Hour),
+	})
+	require.Equal(t, nil, err)
+	require.Equal(t, 0, len(tagsets))
 }
 
 func TestEngine_TagValuesCardinality(t *testing.T) {
@@ -722,23 +780,42 @@ func TestEngine_TagValuesCardinality(t *testing.T) {
 	// ignore pt not exist
 	tagsets, err := eng.TagValuesCardinality("db0", []uint32{0xff}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
-	}, nil)
+	}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	// measurement not found
 	tagsets, err = eng.TagValuesCardinality("db0", []uint32{0}, map[string][][]byte{
 		"invalid_measurement": {[]byte("tagkey1")},
-	}, nil)
+	}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	require.Equal(t, err, nil)
 
 	tagsets, err = eng.TagValuesCardinality("db0", []uint32{0}, map[string][][]byte{
 		msNames[0]: {[]byte("tagkey1")},
-	}, nil)
+	}, nil, influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime).UTC(),
+		Max: time.Unix(0, influxql.MaxTime).UTC(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	require.Equal(t, len(msNames), len(tagsets))
 	require.Equal(t, uint64(10), tagsets[msNames[0]])
+
+	// No intersection of time
+	tagsets, err = eng.TagValuesCardinality("db0", []uint32{0}, map[string][][]byte{
+		msNames[0]: {[]byte("tagkey1")},
+	}, nil, influxql.TimeRange{
+		Min: time.Now().Add(7 * 24 * time.Hour),
+		Max: time.Now().Add(8 * 24 * time.Hour),
+	})
+	require.Equal(t, nil, err)
+	require.Equal(t, uint64(0), tagsets["cpu"])
 }
 
 func Test_Engine_DropMeasurement(t *testing.T) {
@@ -981,6 +1058,26 @@ func TestEngine_SeriesLimited(t *testing.T) {
 	rows[0].UnmarshalIndexKeys(nil)
 	err = writeData(sh, rows, true)
 	require.EqualError(t, err, errno.NewError(errno.SeriesLimited, defaultDb, 10, 20).Error())
+}
+
+func TestEngine_RowCount(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	var fields influxql.Fields
+	var names []string
+	opt := query.ProcessorOptions{}
+	fields = append(fields, &influxql.Field{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Integer}})
+	names = append(names, "f1")
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	m := &influxql.Measurement{Name: "students"}
+	schema.AddTable(m, schema.MakeRefs())
+	count, err := eng.RowCount("db0", 0, []uint64{1}, schema)
+	assert2.Equal(t, count, int64(0))
 }
 
 type mockShard struct {

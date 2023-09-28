@@ -111,7 +111,7 @@ func NewConfig() Config {
 		EnqueuedWriteTimeout:    toml.Duration(DefaultEnqueuedWriteTimeout),
 		EnqueuedQueryTimeout:    toml.Duration(DefaultEnqueuedQueryTimeout),
 		SlowQueryTime:           toml.Duration(time.Second * 10),
-		ParallelQueryInBatch:    false,
+		ParallelQueryInBatch:    true,
 		QueryMemoryLimitEnabled: true,
 		ChunkReaderParallel:     cpu.GetCpuNum(),
 		ReadBlockSize:           toml.Size(DefaultBlockSize),

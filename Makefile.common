@@ -33,6 +33,9 @@ COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisti
 COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
 COPYRIGHT_HEADER  := "Copyright 2022|2023 Huawei Cloud Computing Technologies Co., Ltd."
 
+STYLE_CHECK_EXCEPT :=  "open_src/github.com/hashicorp"
+STYLE_CHECK_GOFILE  := $$(find . -name '*.go' | grep -vE $(STYLE_CHECK_EXCEPT))
+
 PROTOC_ZIP_LINUX=protoc-3.14.0-linux-x86_64.zip
 PROTOC_ZIP_MACOS=protoc-3.14.0-osx-x86_64.zip
 PROTOC_ZIP_WINDOWS=protoc-3.14.0-win64.zip

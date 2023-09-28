@@ -53,6 +53,7 @@ func getTestIndexAndBuilder(path string, engineType config.EngineType) (Index, *
 		Ident(indexIdent).
 		IndexType(MergeSet).
 		EngineType(engineType).
+		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).
@@ -91,6 +92,7 @@ func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		Path(path).
 		Ident(indexIdent).
 		IndexType(Text).
+		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		LogicalClock(1).
@@ -133,6 +135,7 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	opts := new(Options).
 		Path(path).
 		IndexType(Field).
+		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		Ident(indexIdent).
@@ -1028,6 +1031,7 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	opts := new(Options).
 		Path(path).
 		IndexType(Field).
+		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
 		Ident(indexIdent).

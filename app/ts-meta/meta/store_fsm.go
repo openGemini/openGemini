@@ -123,7 +123,6 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_CreateDataNodeCommand:            applyCreateDataNode,
 	proto2.Command_DeleteDataNodeCommand:            applyDeleteDataNode,
 	proto2.Command_MarkDatabaseDeleteCommand:        applyMarkDatabaseDelete,
-	proto2.Command_UpdateShardOwnerCommand:          applyUpdateShardOwner,
 	proto2.Command_MarkRetentionPolicyDeleteCommand: applyMarkRetentionPolicyDelete,
 	proto2.Command_CreateMeasurementCommand:         applyCreateMeasurement,
 	proto2.Command_ReShardingCommand:                applyReSharding,
@@ -243,10 +242,6 @@ func applyDeleteDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
 
 func applyMarkDatabaseDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyMarkDatabaseDeleteCommand(cmd)
-}
-
-func applyUpdateShardOwner(fsm *storeFSM, cmd *proto2.Command) interface{} {
-	return fsm.applyUpdateShardOwnerCommand(cmd)
 }
 
 func applyMarkRetentionPolicyDelete(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -435,7 +430,12 @@ func (fsm *storeFSM) applyCreateDbPtViewCommand(cmd *proto2.Command) interface{}
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
 	}
-	return fsm.data.CreateDBPtView(v.GetDbName())
+
+	if err := fsm.data.CreateDBPtView(v.GetDbName()); err != nil {
+		return err
+	}
+
+	return fsm.data.CreateReplication(v.GetDbName(), v.GetReplicaNum())
 }
 
 func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{} {
@@ -458,19 +458,13 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 			WarmDuration:       time.Duration(0), // FIXME DO NOT SUPPORT WARM DURATION
 			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration())}
 	} else if s.config.RetentionAutoCreate {
-		replicaN := len(fsm.data.DataNodes)
-		if replicaN > maxAutoCreatedRetentionPolicyReplicaN {
-			replicaN = maxAutoCreatedRetentionPolicyReplicaN
-		} else if replicaN < 1 {
-			replicaN = 1
-		}
-
 		// Create a retention policy.
 		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
-		rp.ReplicaN = replicaN
+		rp.ReplicaN = int(v.GetReplicaNum())
 		rp.Duration = autoCreateRetentionPolicyPeriod
 	}
-	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray())
+
+	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), v.GetReplicaNum())
 	fsm.Logger.Info("apply create database", zap.Error(err))
 	return err
 }
@@ -769,12 +763,6 @@ func (fsm *storeFSM) Snapshot() (raft.FSMSnapshot, error) {
 	defer s.mu.Unlock()
 
 	return &storeFSMSnapshot{Data: fsm.data.Clone()}, nil
-}
-
-func (fsm *storeFSM) applyUpdateShardOwnerCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardOwnerCommand_Command)
-	v := ext.(*proto2.UpdateShardOwnerCommand)
-	return fsm.data.UpdateShardOwnerId(v.GetDbName(), v.GetRpName(), uint64(v.GetShardId()), uint64(v.GetOwnerId()))
 }
 
 func (fsm *storeFSM) applyUpdateShardInfoTierCommand(cmd *proto2.Command) interface{} {

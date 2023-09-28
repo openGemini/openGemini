@@ -108,11 +108,11 @@ func (m mocShardMapperMetaClient) AlterShardKey(database, retentionPolicy, mst s
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta.DatabaseInfo, error) {
 	return m.databases[name], nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec, shardKey *meta.ShardKeyInfo, enableTagArray bool) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta.RetentionPolicySpec, shardKey *meta.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta.DatabaseInfo, error) {
 	return nil, nil
 }
 
@@ -210,10 +210,6 @@ func (m mocShardMapperMetaClient) ShardGroupsByTimeRange(database, policy string
 	return groups, nil
 }
 
-func (m mocShardMapperMetaClient) TruncateShardGroups(t time.Time) error {
-	return nil
-}
-
 func (m mocShardMapperMetaClient) UpdateRetentionPolicy(database, name string, rpu *meta.RetentionPolicyUpdate, makeDefault bool) error {
 	return nil
 }
@@ -248,6 +244,14 @@ func (m mocShardMapperMetaClient) MarkMeasurementDelete(database, mst string) er
 
 func (m mocShardMapperMetaClient) DBPtView(database string) (meta.DBPtInfos, error) {
 	return nil, nil
+}
+
+func (m mocShardMapperMetaClient) DBRepGroups(database string) []meta.ReplicaGroup {
+	return nil
+}
+
+func (m mocShardMapperMetaClient) GetReplicaN(database string) (int, error) {
+	return 1, nil
 }
 
 func (m mocShardMapperMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo) {
@@ -374,10 +378,6 @@ func (m mocShardMapperMetaClient) UpdateShardDownSampleInfo(Ident *meta.ShardIde
 
 func (m mocShardMapperMetaClient) OpenAtStore() {
 	return
-}
-
-func (mmc *mocShardMapperMetaClient) TagArrayEnabledFromServer(dbName string) (bool, error) {
-	return false, nil
 }
 
 func (mmc *mocShardMapperMetaClient) GetAllMst(dbName string) []string {

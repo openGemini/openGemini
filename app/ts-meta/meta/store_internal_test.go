@@ -80,23 +80,26 @@ func Test_getSnapshot(t *testing.T) {
 				},
 			},
 		},
-		cacheDataBytes: []byte{1, 2, 3},
+		cacheDataBytes:   []byte{1, 2, 3},
+		cacheDataChanged: make(chan struct{}),
 	}
 
 	// case sql
 	sqlBytes := s.getSnapshot(metaclient.SQL)
 	require.Equal(t, []byte{1, 2, 3}, sqlBytes)
 
+	// case meta
+	metaBytes := s.getSnapshot(metaclient.META)
+	require.Equal(t, []byte{1, 2, 3}, metaBytes)
+
 	// case store
+	s.data = s.cacheData
+	s.updateCacheData()
 	storeBytes := s.getSnapshot(metaclient.STORE)
 	data := &meta2.Data{}
 	require.NoError(t, data.UnmarshalBinary(storeBytes))
 	require.Equal(t, len(data.Databases), len(s.cacheData.Databases))
 	require.Equal(t, len(data.Users), len(s.cacheData.Users))
-
-	// case meta
-	metaBytes := s.getSnapshot(metaclient.META)
-	require.Equal(t, []byte{1, 2, 3}, metaBytes)
 }
 
 type MockRaft struct {
@@ -323,55 +326,6 @@ func Test_GetRpMstInfos(t *testing.T) {
 	if rsp2.(*message.GetRpMstInfosResponse).Err != "server closed" {
 		t.Fatal("unexpected error")
 	}
-}
-
-func TestGetReplicaInfo(t *testing.T) {
-	store := &Store{}
-	data := &meta2.Data{
-		PtView:        make(map[string]meta2.DBPtInfos),
-		ReplicaGroups: make(map[string][]meta2.ReplicaGroup),
-	}
-	store.data = data
-	store.raft = &MockRaft{isLeader: true}
-
-	data.PtView["db0"] = append(data.PtView["db0"], meta2.PtInfo{
-		Owner: meta2.PtOwner{NodeID: 1},
-		PtId:  1,
-		RGID:  1,
-	}, meta2.PtInfo{
-		Owner: meta2.PtOwner{NodeID: 2},
-		PtId:  2,
-		RGID:  1,
-	})
-	data.ReplicaGroups["db0"] = append(data.ReplicaGroups["db0"], meta2.ReplicaGroup{
-		ID:         1,
-		MasterPtID: 1,
-		Peers:      []meta2.Peer{{ID: 2, PtRole: meta2.Slave}},
-	}, meta2.ReplicaGroup{
-		ID:         2,
-		MasterPtID: 3,
-		Peers:      []meta2.Peer{},
-	})
-
-	// master
-	info, err := store.GetReplicaInfo("db0", 1, 1)
-	require.NoError(t, err)
-	require.Equal(t, meta2.Master, info.ReplicaRole)
-	require.Equal(t, 1, len(info.Peers))
-	require.Equal(t, uint32(2), info.Peers[0].PtId)
-
-	// slave
-	info, err = store.GetReplicaInfo("db0", 2, 2)
-	require.NoError(t, err)
-	require.Equal(t, meta2.Slave, info.ReplicaRole)
-	require.Equal(t, uint32(1), info.Master.PtId)
-
-	_, err = store.GetReplicaInfo("db_not_exists", 2, 2)
-	require.NotEmpty(t, err)
-
-	store.raft = &MockRaft{isLeader: false}
-	_, err = store.GetReplicaInfo("db_not_exists", 2, 2)
-	require.EqualError(t, err, raft.ErrNotLeader.Error())
 }
 
 func Test_applyDropDatabaseCommand(t *testing.T) {

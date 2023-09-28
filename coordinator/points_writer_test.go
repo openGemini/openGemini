@@ -63,6 +63,8 @@ type MockMetaClient struct {
 	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
 	GetAliveShardsFn     func(database string, sgi *meta2.ShardGroupInfo) []int
 	GetShardInfoByTimeFn func(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error)
+	DBRepGroupsFn        func(database string) []meta2.ReplicaGroup
+	GetReplicaNFn        func(database string) (int, error)
 }
 
 func (mmc *MockMetaClient) Database(name string) (di *meta2.DatabaseInfo, err error) {
@@ -79,6 +81,14 @@ func (mmc *MockMetaClient) CreateShardGroup(database, policy string, timestamp t
 
 func (mmc *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
 	return mmc.DBPtViewFn(database)
+}
+
+func (mmc *MockMetaClient) DBRepGroups(database string) []meta2.ReplicaGroup {
+	return mmc.DBRepGroupsFn(database)
+}
+
+func (mmc *MockMetaClient) GetReplicaN(database string) (int, error) {
+	return mmc.GetReplicaNFn(database)
 }
 
 func (mmc *MockMetaClient) Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
@@ -269,6 +279,12 @@ func NewMockMetaClient() *MockMetaClient {
 	mc.DBPtViewFn = func(database string) (meta2.DBPtInfos, error) {
 		return []meta2.PtInfo{{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online}}, nil
 	}
+	mc.DBRepGroupsFn = func(database string) []meta2.ReplicaGroup {
+		return nil
+	}
+	mc.GetReplicaNFn = func(database string) (int, error) {
+		return 1, nil
+	}
 	mc.GetAliveShardsFn = func(database string, sgi *meta2.ShardGroupInfo) []int {
 		ptView, _ := mc.DBPtViewFn(database)
 		idxes := make([]int, 0, len(ptView))
@@ -407,7 +423,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 		`field type conflict: input field "value2" on measurement "mst" is type float, already exists as type string`,
 		"field type conflict",
 		"",
-		"tag key can't be 'time'",
+		"tag key can't be time, measurement is 'mst'",
 	}
 
 	var callback = func(db string, rows []influx.Row, err error) {
@@ -435,7 +451,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 	buf.WriteByte('\n')
 	buf.WriteString(`mst,tk1=value11,tk2=value22,tk3=value33 value4=99`)
 	buf.WriteByte('\n')
-	buf.WriteString(`far,boo=1,time=2 f1=1,f2=2`)
+	buf.WriteString(`mst,boo=1,time=2 f1=1,f2=2`)
 	unmarshal(buf.Bytes(), callback)
 }
 

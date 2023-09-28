@@ -41,7 +41,7 @@ func TestSelectDbPtsToMove(t *testing.T) {
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
@@ -124,7 +124,7 @@ func TestBalanceDBPts1(t *testing.T) {
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
@@ -161,7 +161,7 @@ func TestBalanceDBPts2(t *testing.T) {
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
@@ -199,7 +199,7 @@ func TestBalanceDBPts3(t *testing.T) {
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},

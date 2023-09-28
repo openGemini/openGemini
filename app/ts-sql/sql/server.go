@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/machine"
@@ -140,6 +141,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	syscontrol.SysCtrl.NetStore = store
 	// set query schema limit
 	syscontrol.SetQuerySchemaLimit(c.SelectSpec.QuerySchemaLimit)
+	syscontrol.SetParallelQueryInBatch(c.HTTP.ParallelQueryInBatch)
 
 	s.initQueryExecutor(c)
 	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
@@ -206,7 +208,7 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	metaExecutor.MetaClient = s.MetaClient
 	metaExecutor.SetTimeOut(time.Duration(c.Coordinator.MetaExecutorWriteTimeout))
 
-	s.QueryExecutor = query.NewExecutor()
+	s.QueryExecutor = query.NewExecutor(cpu.GetCpuNum())
 	s.QueryExecutor.StatementExecutor = &coordinator2.StatementExecutor{
 		MetaClient:  s.MetaClient,
 		TaskManager: s.QueryExecutor.TaskManager,

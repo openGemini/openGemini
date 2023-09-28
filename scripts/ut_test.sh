@@ -32,8 +32,7 @@ fi
 splittingLine "end: check licence header"
 
 ########################### static check ###############################################
-### go 1.19
-splittingLine "start: static check"
+splittingLine "start: static check and other go lint"
 
 [[ -s "$GVM_ROOT/scripts/gvm" ]] && source "$GVM_ROOT/scripts/gvm"
 gvm use go1.19 -y --default
@@ -43,17 +42,6 @@ go mod tidy
 
 make static-check
 golang_static_status=$?
-
-splittingLine "end: static check"
-
-########################### other go lint ###############################################
-### go 1.18
-splittingLine "start: other go lint"
-
-gvm use go1.18 -y --default
-
-rm -f go.sum
-go mod tidy
 
 make go-version-check
 golang_version_status=$?
@@ -70,7 +58,7 @@ golang_vet_status=$?
 make golangci-lint-check
 golang_lint_status=$?
 
-splittingLine "end: other go lint"
+splittingLine "end: static check and other go lint"
 
 if [[ $golang_static_status -ne 0 || $golang_version_status -ne 0
       || $golang_generate_status -ne 0 || $golang_style_status  -ne 0
@@ -105,7 +93,7 @@ splittingLine "end: test build for multi platform"
 
 ########################### integration test ###############################################
 
-sed -i 's/# time-range-limit = \["72h", "24h"\]/time-range-limit = ["0s", "24h"]/g' config/openGemini.conf
+sed -i 's/# time-range-limit = \["72h", "24h"\]/time-range-limit = \["0s", "24h"\]/g' config/openGemini.conf
 sed -i "s/# ptnum-pernode = 2/ptnum-pernode = 2/g" config/openGemini.conf
 sed -i "s/# pushers = \"\"/pushers = \"file\"/g" config/openGemini.conf
 sed -i "s/# store-enabled = false/store-enabled = true/g" config/openGemini.conf
@@ -157,7 +145,7 @@ do
     sed -i "s/cache-table-meta-block = true/cache-table-meta-block = false/g" config/openGemini.conf
     sed -i "s/enable-mmap-read = true/enable-mmap-read = false/g" config/openGemini.conf
     sed -i "s/read-cache-limit = 0/read-cache-limit = 5368709120/g" config/openGemini.conf
-    sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf
+    sed -i "/subscriber/a\  enabled = true"	config/openGemini.conf
 
     if [[ $t == "HA" ]]; then
         sed -i "s/ha-enable = false/ha-enable = true/g" config/openGemini.conf
@@ -183,6 +171,7 @@ do
 done
 
 # restore the preceding changes.
+sed -i 's/time-range-limit = \["0s", "24h"\]/# time-range-limit = \["72h", "24h"\]/g' config/openGemini.conf
 sed -i "s/shard-tier = \"warm\"/# shard-tier = \"warm\"/g" config/openGemini.conf
 sed -i "s/read-cache-limit = 5368709120/read-cache-limit = 0/g" config/openGemini.conf
 
@@ -192,4 +181,4 @@ sed -i "s/ptnum-pernode = 2/# ptnum-pernode = 2/g" config/openGemini.conf
 sed -i "s/pushers = \"file\"/# pushers = \"\"/g" config/openGemini.conf
 sed -i "s/store-enabled = true/# store-enabled = false/g" config/openGemini.conf
 sed -i "s~store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~# store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~g" config/openGemini.conf
-sed -i '/\[subscriber\]/{n;s/.*/  # enabled = false/;}' config/openGemini.conf
+sed -i -e "/subscriber/{n;d}" config/openGemini.conf

@@ -236,6 +236,19 @@ func buildAggChunk() []executor.Chunk {
 	return dstChunks
 }
 
+func buildCountChunk() []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 1)
+	rowDataType := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "count_time", Type: influxql.Integer})
+	b := executor.NewChunkBuilder(rowDataType)
+	inCk1 := b.NewChunk("cpu")
+	inCk1.AppendTagsAndIndex(executor.ChunkTags{}, 0)
+	inCk1.AppendTimes([]int64{0})
+	inCk1.Column(0).AppendIntegerValues([]int64{16384})
+	inCk1.Column(0).AppendNotNil()
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
 func buildDimRowDataType() hybridqp.RowDataType {
 	return hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "field1_string", Type: influxql.String})
@@ -540,6 +553,14 @@ func (s *MockStoreEngine) ScanWithSparseIndex(ctx context.Context, _ string, _ u
 	return shardFrags, nil
 }
 
+func (s *MockStoreEngine) RowCount(_ string, _ uint32, _ []uint64, schema hybridqp.Catalog) (int64, error) {
+	rowCount, err := s.shard.RowCount(schema.(*executor.QuerySchema))
+	if err != nil {
+		return rowCount, err
+	}
+	return rowCount, nil
+}
+
 func (s *MockStoreEngine) UnrefEngineDbPt(_ string, _ uint32) {
 
 }
@@ -698,6 +719,26 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunks,
 		},
 		{
+			name:      "select count(time) from cpu",
+			q:         `select count(time) from cpu`,
+			tr:        util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  buildCountChunk(),
+			expect:    testEqualChunk1,
+		},
+		{
+			name:      "select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1'",
+			q:         `select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1'`,
+			tr:        util.TimeRange{Min: 1609460838300000000, Max: influxql.MaxTime},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  nil,
+			expect:    testEqualChunk1,
+		},
+		{
 			name:      "select sum(field2_int) from cpu",
 			q:         `select sum(field2_int) from cpu`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
@@ -723,7 +764,6 @@ func TestColumnStoreReader(t *testing.T) {
 			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
-			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
 			opt.Name = msNames[0]

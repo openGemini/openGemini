@@ -277,7 +277,7 @@ func (rpi *RetentionPolicyInfo) DeletedShardGroups() []*ShardGroupInfo {
 	return groups
 }
 
-func (rpi *RetentionPolicyInfo) walkShardGroups(fn func(sg *ShardGroupInfo)) {
+func (rpi *RetentionPolicyInfo) WalkShardGroups(fn func(sg *ShardGroupInfo)) {
 	for i := range rpi.ShardGroups {
 		fn(&rpi.ShardGroups[i])
 	}

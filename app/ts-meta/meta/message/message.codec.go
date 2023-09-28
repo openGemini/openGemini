@@ -142,63 +142,6 @@ func (o *ExecuteResponse) Instance() transport.Codec {
 	return &ExecuteResponse{}
 }
 
-func (o *GetDBBriefInfoRequest) Marshal(buf []byte) ([]byte, error) {
-	buf = codec.AppendString(buf, o.DbName)
-
-	return buf, nil
-}
-
-func (o *GetDBBriefInfoRequest) Unmarshal(buf []byte) error {
-	if len(buf) == 0 {
-		return nil
-	}
-	dec := codec.NewBinaryDecoder(buf)
-	o.DbName = dec.String()
-
-	return nil
-}
-
-func (o *GetDBBriefInfoRequest) Size() int {
-	size := 0
-	size += codec.SizeOfString(o.DbName)
-
-	return size
-}
-
-func (o *GetDBBriefInfoRequest) Instance() transport.Codec {
-	return &GetDBBriefInfoRequest{}
-}
-
-func (o *GetDBBriefInfoResponse) Marshal(buf []byte) ([]byte, error) {
-	buf = codec.AppendBytes(buf, o.Data)
-	buf = codec.AppendString(buf, o.Err)
-
-	return buf, nil
-}
-
-func (o *GetDBBriefInfoResponse) Unmarshal(buf []byte) error {
-	if len(buf) == 0 {
-		return nil
-	}
-	dec := codec.NewBinaryDecoder(buf)
-	o.Data = dec.Bytes()
-	o.Err = dec.String()
-
-	return nil
-}
-
-func (o *GetDBBriefInfoResponse) Size() int {
-	size := 0
-	size += codec.SizeOfByteSlice(o.Data)
-	size += codec.SizeOfString(o.Err)
-
-	return size
-}
-
-func (o *GetDBBriefInfoResponse) Instance() transport.Codec {
-	return &GetDBBriefInfoResponse{}
-}
-
 func (o *GetDownSampleInfoRequest) Marshal(buf []byte) ([]byte, error) {
 
 	return buf, nil
@@ -697,63 +640,6 @@ func (o *UserSnapshotResponse) Size() int {
 
 func (o *UserSnapshotResponse) Instance() transport.Codec {
 	return &UserSnapshotResponse{}
-}
-
-func (o *GetUserInfoRequest) Marshal(buf []byte) ([]byte, error) {
-	buf = codec.AppendUint64(buf, o.Index)
-
-	return buf, nil
-}
-
-func (o *GetUserInfoRequest) Unmarshal(buf []byte) error {
-	if len(buf) == 0 {
-		return nil
-	}
-	dec := codec.NewBinaryDecoder(buf)
-	o.Index = dec.Uint64()
-
-	return nil
-}
-
-func (o *GetUserInfoRequest) Size() int {
-	size := 0
-	size += codec.SizeOfUint64()
-
-	return size
-}
-
-func (o *GetUserInfoRequest) Instance() transport.Codec {
-	return &GetUserInfoRequest{}
-}
-
-func (o *GetUserInfoResponse) Marshal(buf []byte) ([]byte, error) {
-	buf = codec.AppendBytes(buf, o.Data)
-	buf = codec.AppendString(buf, o.Err)
-
-	return buf, nil
-}
-
-func (o *GetUserInfoResponse) Unmarshal(buf []byte) error {
-	if len(buf) == 0 {
-		return nil
-	}
-	dec := codec.NewBinaryDecoder(buf)
-	o.Data = dec.Bytes()
-	o.Err = dec.String()
-
-	return nil
-}
-
-func (o *GetUserInfoResponse) Size() int {
-	size := 0
-	size += codec.SizeOfByteSlice(o.Data)
-	size += codec.SizeOfString(o.Err)
-
-	return size
-}
-
-func (o *GetUserInfoResponse) Instance() transport.Codec {
-	return &GetUserInfoResponse{}
 }
 
 func (o *GetMeasurementInfoRequest) Marshal(buf []byte) ([]byte, error) {

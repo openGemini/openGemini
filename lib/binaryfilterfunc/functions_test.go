@@ -199,6 +199,24 @@ func prepareStringColValue(colNum, colSize int) (*record.ColVal, []byte) {
 	return col, bitMap
 }
 
+func prepareIntegerColValue(colNum, colSize int) (*record.ColVal, []byte) {
+	col := &record.ColVal{}
+	for i := 0; i < colNum; i++ {
+		for j := 0; j < colSize; j++ {
+			col.AppendInteger(int64(i*colSize + j))
+		}
+	}
+	var bitMap []byte
+	bitNum, bitRemain := (colNum*colSize)/8, (colNum*colSize)%8
+	if bitRemain > 0 {
+		bitNum++
+	}
+	for i := 0; i < bitNum; i++ {
+		bitMap = append(bitMap, byte(255))
+	}
+	return col, bitMap
+}
+
 func GetStringLTConditionBitMapByBytes(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
 	var idx, index int
 	cmpData, _ := compare.(string)
@@ -276,5 +294,41 @@ func BenchmarkStringCompareByStrings(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		GetStringLTConditionBitMapByStrings(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	}
+}
+
+func BenchmarkGetStringEQConditionBitMap(b *testing.B) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetStringEQConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	}
+}
+
+func BenchmarkGetStringEQConditionBitMapWithNull(b *testing.B) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetStringEQConditionBitMapWithNull(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	}
+}
+
+func BenchmarkGetIntegerLTEConditionBitMap(b *testing.B) {
+	col, bitMap := prepareIntegerColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetIntegerLTEConditionBitMap(col, 4096, col.Bitmap, bitMap, 0)
+	}
+}
+
+func BenchmarkGetIntegerLTEConditionBitMapWithNull(b *testing.B) {
+	col, bitMap := prepareIntegerColValue(1, 8192)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		GetIntegerLTEConditionBitMapWithNull(col, 4096, col.Bitmap, bitMap, 0)
 	}
 }

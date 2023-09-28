@@ -162,6 +162,17 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 				return err
 			}
 		}
+
+		// update the row count for each mst
+		if wc.MsRowCount != nil {
+			if value, ok := wc.MsRowCount.Load(msName); ok {
+				atomic.AddInt64(value.(*int64), int64(len(*rows)))
+			} else {
+				count := int64(len(*rows))
+				wc.MsRowCount.Store(msName, &count)
+			}
+		}
+
 		atomic.AddInt64(&Statistics.PerfStat.WriteMstInfoNs, time.Since(start).Nanoseconds())
 		msInfo.concurrencyChunks.rowChunksStatus[idx] = 0
 		<-msInfo.concurrencyChunks.writeRowChunksToken

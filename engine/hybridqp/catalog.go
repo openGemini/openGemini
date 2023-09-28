@@ -197,6 +197,7 @@ type Catalog interface {
 	GetQueryFields() influxql.Fields
 	CloneField(f *influxql.Field) *influxql.Field
 	HasCall() bool
+	HasRowCount() bool
 	HasMath() bool
 	HasString() bool
 	HasNonPreCall() bool
@@ -299,6 +300,7 @@ type StoreEngine interface {
 	ReportLoad()
 	CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema Catalog) (IShardsFragments, error)
+	RowCount(db string, ptId uint32, shardIDS []uint64, schema Catalog) (int64, error)
 	UnrefEngineDbPt(db string, ptId uint32)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 }

@@ -179,15 +179,6 @@ type GetRpMstInfosResponse struct {
 	Err  string
 }
 
-type GetUserInfoRequest struct {
-	Index uint64
-}
-
-type GetUserInfoResponse struct {
-	Data []byte
-	Err  string
-}
-
 type GetStreamInfoRequest struct {
 	Body []byte
 }
@@ -214,15 +205,6 @@ type GetMeasurementsInfoRequest struct {
 }
 
 type GetMeasurementsInfoResponse struct {
-	Data []byte
-	Err  string
-}
-
-type GetDBBriefInfoRequest struct {
-	DbName string
-}
-
-type GetDBBriefInfoResponse struct {
 	Data []byte
 	Err  string
 }

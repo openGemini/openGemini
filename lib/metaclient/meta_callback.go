@@ -257,25 +257,6 @@ func (c *GetRpMstInfoCallback) Handle(data interface{}) error {
 	return nil
 }
 
-type GetUserInfoCallback struct {
-	BaseCallback
-
-	Data []byte
-}
-
-func (c *GetUserInfoCallback) Handle(data interface{}) error {
-	metaMsg, err := c.Trans2MetaMsg(data)
-	if err != nil {
-		return err
-	}
-	msg, ok := metaMsg.Data().(*message.GetUserInfoResponse)
-	if !ok {
-		return errors.New("data is not a GetUserInfoResponse")
-	}
-	c.Data = msg.Data
-	return nil
-}
-
 type GetStreamInfoCallback struct {
 	BaseCallback
 
@@ -334,27 +315,6 @@ func (c *GetMeasurementsInfoCallback) Handle(data interface{}) error {
 	msg, ok := metaMsg.Data().(*message.GetMeasurementsInfoResponse)
 	if !ok {
 		return fmt.Errorf("data is not a GetMeasurementsInfoResponse, type %T", metaMsg.Data())
-	}
-	if msg.Err != "" {
-		return errors.New(msg.Err)
-	}
-	c.Data = msg.Data
-	return nil
-}
-
-type GetDBBriefInfoCallback struct {
-	BaseCallback
-	Data []byte
-}
-
-func (c *GetDBBriefInfoCallback) Handle(data interface{}) error {
-	metaMsg, err := c.Trans2MetaMsg(data)
-	if err != nil {
-		return err
-	}
-	msg, ok := metaMsg.Data().(*message.GetDBBriefInfoResponse)
-	if !ok {
-		return fmt.Errorf("data is not a GetDBBriefInfoResponse, type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)

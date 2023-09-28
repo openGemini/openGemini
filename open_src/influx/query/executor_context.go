@@ -104,8 +104,8 @@ func (ctx *ExecutionContext) Value(key interface{}) interface{} {
 
 // send sends a Result to the Results channel and will exit if the query has
 // been aborted.
-func (ctx *ExecutionContext) send(result *query.Result) error {
-	result.StatementID = ctx.statementID
+func (ctx *ExecutionContext) send(result *query.Result, seq int) error {
+	result.StatementID = seq
 	select {
 	case <-ctx.AbortCh:
 		return ErrQueryAborted
@@ -116,8 +116,8 @@ func (ctx *ExecutionContext) send(result *query.Result) error {
 
 // Send sends a Result to the Results channel and will exit if the query has
 // been interrupted or aborted.
-func (ctx *ExecutionContext) Send(result *query.Result) error {
-	result.StatementID = ctx.statementID
+func (ctx *ExecutionContext) Send(result *query.Result, seq int) error {
+	result.StatementID = seq
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

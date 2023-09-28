@@ -178,7 +178,7 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 	// init the query ctx
 	r.queryCtx = &idKeyCursorContext{
 		engineType:  config.COLUMNSTORE,
-		decs:        immutable.NewReadContext(querySchema.Options().IsAscending()),
+		decs:        immutable.NewReadContext(true),
 		querySchema: querySchema}
 	err = newCursorSchema(r.queryCtx, querySchema)
 	if err != nil {
@@ -356,7 +356,7 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 
 func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFilter int, err error) {
 	var ch executor.Chunk
-	filterBitmap := bitmap.NewFilterBitmap(len(r.inSchema) + 1)
+	filterBitmap := bitmap.NewFilterBitmap(len(r.queryCtx.filterOption.CondFunctions) + 1)
 	for {
 		filterBitmap.Reset()
 		select {
@@ -382,7 +382,7 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 			rowCountAfterFilter += rec.RowNums()
 
 			if r.limit > 0 && rowCountAfterFilter >= r.limit {
-				err = r.runLimit(rec, ch)
+				err = r.runLimit(rec, ch, rowCountAfterFilter)
 				if err != nil {
 					return
 				}
@@ -403,17 +403,15 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 	}
 }
 
-func (r *ColumnStoreReader) runLimit(rec *record.Record, ch executor.Chunk) (err error) {
-	sliceRec := &record.Record{}
-	sliceRec.RecMeta = rec.RecMeta
-	var limitLen int
-	if r.limit >= rec.RowNums() {
-		limitLen = r.limit - rec.RowNums()
+func (r *ColumnStoreReader) runLimit(rec *record.Record, ch executor.Chunk, rowCountAfterFilter int) (err error) {
+	var sliceRec *record.Record
+	if r.limit < rowCountAfterFilter {
+		sliceRec = &record.Record{}
+		sliceRec.RecMeta = rec.RecMeta
+		sliceRec.SliceFromRecord(rec, 0, r.limit-(rowCountAfterFilter-rec.RowNums()))
 	} else {
-		limitLen = r.limit
+		sliceRec = rec
 	}
-	sliceRec.SliceFromRecord(rec, 0, limitLen)
-
 	tracing.StartPP(r.recToChunkSpan)
 	ch, err = r.tranRecToChunk(sliceRec)
 	if err != nil {

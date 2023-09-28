@@ -89,7 +89,7 @@ func findSensitivePos(url string) int {
 	return -1
 }
 
-//in some situations, encode password still has sensitive info
+// in some situations, encode password still has sensitive info
 func hideUrlPassword(url string) string {
 	url = strings.ToLower(url)
 	processIndex := findSensitivePos(url)
@@ -113,7 +113,8 @@ func hideUrlPassword(url string) string {
 // in addition to the common fields, we also append referrer, user agent,
 // request ID and response time (microseconds)
 // ie, in apache mod_log_config terms:
-//     %h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\"" %L %D
+//
+//	%h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-agent}i\"" %L %D
 func buildLogLine(l *responseLogger, r *http.Request, start time.Time) string {
 
 	redactPassword(r)

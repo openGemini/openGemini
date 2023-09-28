@@ -18,6 +18,7 @@ package executor_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -284,4 +285,43 @@ func TestGetSortFields(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	schema = executor.NewQuerySchema(nil, nil, &opt, []*influxql.SortField{{Name: "a"}})
 	assert.Equal(t, len(schema.GetSortFields()), 1)
+}
+
+func createCall(call string) influxql.Fields {
+	fields := make(influxql.Fields, 0, 1)
+	fields = append(fields,
+		&influxql.Field{Expr: &influxql.Call{
+			Name: call,
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "time",
+					Type: influxql.Integer,
+				},
+			},
+		},
+		},
+	)
+	return fields
+}
+
+func TestHasRowCount(t *testing.T) {
+	opt := query.ProcessorOptions{HintType: hybridqp.ExactStatisticQuery}
+	schema := executor.NewQuerySchema(nil, nil, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), false)
+
+	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint}
+	schema = executor.NewQuerySchema(createCall("sum"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), false)
+
+	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint, Condition: &influxql.BinaryExpr{}}
+	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), false)
+
+	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint, Interval: hybridqp.Interval{Duration: 1 * time.Hour}}
+	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), false)
+
+	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint, Dimensions: []string{"a", "b"}}
+	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), false)
 }

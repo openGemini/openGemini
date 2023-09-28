@@ -288,6 +288,7 @@ type Options struct {
 	lock         *string
 	indexType    IndexType
 	engineType   config.EngineType
+	startTime    time.Time
 	endTime      time.Time
 	duration     time.Duration
 	logicalClock uint64
@@ -331,6 +332,11 @@ func (opts *Options) IndexType(indexType IndexType) *Options {
 
 func (opts *Options) EngineType(engineType config.EngineType) *Options {
 	opts.engineType = engineType
+	return opts
+}
+
+func (opts *Options) StartTime(startTime time.Time) *Options {
+	opts.startTime = startTime
 	return opts
 }
 

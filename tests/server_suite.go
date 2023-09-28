@@ -33,7 +33,7 @@ func init() {
 			},
 			&Query{
 				name:    "create database with retention duration should succeed",
-				command: `CREATE DATABASE db0_r WITH DURATION 24h REPLICATION 2 NAME db0_r_policy`,
+				command: `CREATE DATABASE db0_r WITH DURATION 24h REPLICATION 1 NAME db0_r_policy`,
 				exp:     `{"results":[{"statement_id":0}]}`,
 				once:    true,
 			},

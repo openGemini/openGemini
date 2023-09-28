@@ -24,23 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGetUserInfoCallback_Handle(t *testing.T) {
-	callback := &metaclient.GetUserInfoCallback{}
-	msg := message.NewMetaMessage(message.GetUserInfoRequestMessage, &message.GetUserInfoRequest{Index: 1})
-	assert.Errorf(t, callback.Handle(msg), "data is not a GetUserInfoResponse")
-}
-
-func TestGetUserInfoCallback_Handle1(t *testing.T) {
-	callback := &metaclient.GetUserInfoCallback{}
-	msg := message.NewMetaMessage(message.GetUserInfoResponseMessage, &message.GetUserInfoResponse{})
-	assert.NoError(t, callback.Handle(msg))
-}
-
-func TestGetUserInfoCallback_Handle2(t *testing.T) {
-	callback := &metaclient.GetUserInfoCallback{}
-	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")
-}
-
 func TestGetStreamInfoCallback(t *testing.T) {
 	callback := &metaclient.GetStreamInfoCallback{}
 	assert.Errorf(t, callback.Handle(nil), "data is not a MetaMessage")

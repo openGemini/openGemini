@@ -314,7 +314,8 @@ func getTakeOverNodeForWAF(cm *ClusterManager, oid uint64, nodePtNumMap *map[uin
 	return 0, errno.NewError(errno.ClusterManagerIsNotRunning)
 }
 
-/* choose take over node for shared-storage policy.
+/*
+choose take over node for shared-storage policy.
 choose the node which has least pt if not retry.
 choose the random node in retry case.
 */

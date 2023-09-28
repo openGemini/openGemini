@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/pkg/limiter"
 	query2 "github.com/influxdata/influxdb/query"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -65,6 +66,15 @@ const (
 
 	QueryIDKey
 )
+
+var batchQueryConcurrenceLimiter limiter.Fixed
+var batchQueryLimiterMu sync.RWMutex
+
+func SetBatchqueryLimit(concurrence int) {
+	batchQueryLimiterMu.Lock()
+	batchQueryConcurrenceLimiter = limiter.NewFixed(concurrence)
+	batchQueryLimiterMu.Unlock()
+}
 
 // ErrDatabaseNotFound returns a database not found error for the given database name.
 func ErrDatabaseNotFound(name string) error { return fmt.Errorf("database not found: %s", name) }
@@ -189,6 +199,8 @@ type ExecutionOptions struct {
 
 	// The results of the query executor
 	RowsChan chan RowsChan
+
+	ParallelQuery bool
 }
 
 type (
@@ -207,7 +219,7 @@ type (
 type StatementExecutor interface {
 	// ExecuteStatement executes a statement. Results should be sent to the
 	// results channel in the ExecutionContext.
-	ExecuteStatement(stmt influxql.Statement, ctx *ExecutionContext) error
+	ExecuteStatement(stmt influxql.Statement, ctx *ExecutionContext, seq int) error
 	Statistics(buffer []byte) ([]byte, error)
 }
 
@@ -237,7 +249,9 @@ type Executor struct {
 }
 
 // NewExecutor returns a new instance of Executor.
-func NewExecutor() *Executor {
+func NewExecutor(concurrence int) *Executor {
+	batchQueryConcurrenceLimiter = limiter.NewFixed(concurrence)
+
 	return &Executor{
 		TaskManager: NewTaskManager(),
 		Logger:      logger.NewLogger(errno.ModuleHTTP).With(zap.String("service", "executor")),
@@ -258,7 +272,11 @@ func (e *Executor) WithLogger(log *logger.Logger) {
 // ExecuteQuery executes each statement within a query.
 func (e *Executor) ExecuteQuery(query *influxql.Query, opt ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query2.Result {
 	results := make(chan *query2.Result)
-	go e.executeQuery(query, opt, closing, qDuration, results)
+	if opt.ParallelQuery {
+		go e.executeParallelQuery(query, opt, closing, qDuration, results)
+	} else {
+		go e.executeQuery(query, opt, closing, qDuration, results)
+	}
 	return results
 }
 
@@ -299,34 +317,11 @@ LOOP:
 			}
 		}
 
-		// Do not let queries manually use the system measurements. If we find
-		// one, return an error. This prevents a person from using the
-		// measurement incorrectly and causing a panic.
-		if stmt, ok := stmt.(*influxql.SelectStatement); ok {
-			for _, s := range stmt.Sources {
-				switch s := s.(type) {
-				case *influxql.Measurement:
-					if influxql.IsSystemName(s.Name) {
-						command := "the appropriate meta command"
-						switch s.Name {
-						case "_fieldKeys":
-							command = "SHOW FIELD KEYS"
-						case "_measurements":
-							command = "SHOW MEASUREMENTS"
-						case "_series":
-							command = "SHOW SERIES"
-						case "_tagKeys":
-							command = "SHOW TAG KEYS"
-						case "_tags":
-							command = "SHOW TAG VALUES"
-						}
-						results <- &query2.Result{
-							Err: fmt.Errorf("unable to use system source '%s': use %s instead", s.Name, command),
-						}
-						break LOOP
-					}
-				}
+		if ok, err := isSystemMeasurements(stmt); ok {
+			results <- &query2.Result{
+				Err: err,
 			}
+			break LOOP
 		}
 
 		// Rewrite statements, if necessary.
@@ -341,7 +336,7 @@ LOOP:
 		// Normalize each statement if possible.
 		if normalizer, ok := e.StatementExecutor.(StatementNormalizer); ok {
 			if err := normalizer.NormalizeStatement(stmt, defaultDB, opt.RetentionPolicy); err != nil {
-				if err := ctx.send(&query2.Result{Err: err}); err == ErrQueryAborted {
+				if err := ctx.send(&query2.Result{Err: err}, i); err == ErrQueryAborted {
 					return
 				}
 				break
@@ -354,7 +349,7 @@ LOOP:
 		}
 
 		// Send any other statements to the underlying statement executor.
-		err = e.StatementExecutor.ExecuteStatement(stmt, ctx)
+		err = e.StatementExecutor.ExecuteStatement(stmt, ctx, i)
 		if errno.Equal(err, errno.ErrQueryKilled) {
 			// Query was interrupted so retrieve the real interrupt error from
 			// the query task if there is one.
@@ -368,7 +363,7 @@ LOOP:
 			if err := ctx.send(&query2.Result{
 				StatementID: i,
 				Err:         err,
-			}); err == ErrQueryAborted {
+			}, i); err == ErrQueryAborted {
 				return
 			}
 			// Stop after the first error.
@@ -394,10 +389,169 @@ LOOP:
 		if err := ctx.send(&query2.Result{
 			StatementID: i,
 			Err:         ErrNotExecuted,
-		}); err == ErrQueryAborted {
+		}, i); err == ErrQueryAborted {
 			return
 		}
 	}
+}
+
+func (e *Executor) executeParallelQuery(query *influxql.Query, opt ExecutionOptions, closing <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics, results chan *query2.Result) {
+	defer close(results)
+	defer e.recover(query, results)
+	if qStat != nil && len(query.Statements) > 0 {
+		qStat.SetQueryBatch(len(query.Statements))
+		qStat.SetQuery(query.String())
+	}
+
+	ctx, detach, err := e.TaskManager.AttachQuery(query, opt, closing, qStat)
+	if err != nil {
+		select {
+		case results <- &query2.Result{Err: err}:
+		case <-opt.AbortCh:
+		}
+		return
+	}
+	defer detach()
+
+	// init point writer of context which may be used to write data with into statement
+	ctx.PointsWriter = e.PointsWriter
+	// Setup the execution context that will be used when executing statements.
+	ctx.Results = results
+
+	atomic.AddInt64(&statistics.HandlerStat.QueryStmtCount, int64(len(query.Statements)))
+
+	var wg sync.WaitGroup
+	var i int
+LOOP:
+	for ; i < len(query.Statements); i++ {
+		ctx.statementID = i
+		stmt := query.Statements[i]
+
+		// If a default database wasn't passed in by the caller, check the statement.
+		defaultDB := opt.Database
+		if defaultDB == "" {
+			if s, ok := stmt.(influxql.HasDefaultDatabase); ok {
+				defaultDB = s.DefaultDatabase()
+			}
+		}
+
+		if ok, err := isSystemMeasurements(stmt); ok {
+			results <- &query2.Result{
+				Err: err,
+			}
+			break LOOP
+		}
+
+		batchQueryConcurrenceLimiter.Take()
+
+		wg.Add(1)
+		go func(stmt influxql.Statement, seq int) {
+			defer func() {
+				wg.Done()
+
+				batchQueryConcurrenceLimiter.Release()
+			}()
+
+			// Rewrite statements, if necessary.
+			// This can occur on meta read statements which convert to SELECT statements.
+			newStmt, err := RewriteStatement(stmt)
+			if err != nil {
+				results <- &query2.Result{Err: err}
+				e.Logger.Error("Rewrite Statement", zap.Stringer("query", stmt), zap.Error(err))
+				return
+			}
+			stmt = newStmt
+
+			// Normalize each statement if possible.
+			if normalizer, ok := e.StatementExecutor.(StatementNormalizer); ok {
+				if err := normalizer.NormalizeStatement(stmt, defaultDB, opt.RetentionPolicy); err != nil {
+					if err := ctx.send(&query2.Result{Err: err}, seq); err == ErrQueryAborted {
+						e.Logger.Error("Normalize Statement ErrQueryAborted", zap.Stringer("query", stmt))
+						return
+					}
+					e.Logger.Error("Normalize Statement", zap.Stringer("query", stmt), zap.Error(err))
+					return
+				}
+			}
+
+			// Log each normalized statement.
+			if !ctx.Quiet {
+				e.Logger.Info("Executing query", zap.Stringer("query", stmt))
+			} else {
+				if seq == 0 {
+					e.Logger.Info("Executing query", zap.Stringer("query", stmt), zap.Int("batch", len(query.Statements)))
+				}
+			}
+
+			// Send any other statements to the underlying statement executor.
+			err = e.StatementExecutor.ExecuteStatement(stmt, ctx, seq)
+			if errno.Equal(err, errno.ErrQueryKilled) {
+				// Query was interrupted so retrieve the real interrupt error from
+				// the query task if there is one.
+				if qerr := ctx.Err(); qerr != nil {
+					err = qerr
+				}
+			}
+
+			// Send an error for this result if it failed for some reason.
+			if err != nil {
+				if err := ctx.send(&query2.Result{
+					StatementID: i,
+					Err:         err,
+				}, seq); err == ErrQueryAborted {
+					e.Logger.Error("ctx send fail, ErrQueryAborted", zap.Stringer("query", stmt))
+					return
+				}
+
+				e.Logger.Error("ctx send fail", zap.Stringer("query", stmt), zap.Error(err))
+			}
+		}(stmt, i)
+
+		// Check if the query was interrupted during an uninterruptible statement.
+		interrupted := false
+		select {
+		case <-ctx.Done():
+			interrupted = true
+		default:
+			// Query has not been interrupted.
+		}
+
+		if interrupted {
+			break
+		}
+	}
+
+	wg.Wait()
+}
+
+// Do not let queries manually use the system measurements. If we find
+// one, return an error. This prevents a person from using the
+// measurement incorrectly and causing a panic.
+func isSystemMeasurements(stmt influxql.Statement) (bool, error) {
+	if stmt, ok := stmt.(*influxql.SelectStatement); ok {
+		for _, s := range stmt.Sources {
+			switch s := s.(type) {
+			case *influxql.Measurement:
+				if influxql.IsSystemName(s.Name) {
+					command := "the appropriate meta command"
+					switch s.Name {
+					case "_fieldKeys":
+						command = "SHOW FIELD KEYS"
+					case "_measurements":
+						command = "SHOW MEASUREMENTS"
+					case "_series":
+						command = "SHOW SERIES"
+					case "_tagKeys":
+						command = "SHOW TAG KEYS"
+					case "_tags":
+						command = "SHOW TAG VALUES"
+					}
+					return true, fmt.Errorf("unable to use system source '%s': use %s instead", s.Name, command)
+				}
+			}
+		}
+	}
+	return false, nil
 }
 
 // Determines if the Executor will recover any panics or let them crash

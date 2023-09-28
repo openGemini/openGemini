@@ -577,8 +577,10 @@ func RebuildAggNodes(plan hybridqp.QueryNode) {
 			RebuildAggNodes(plan.Children()[i])
 		}
 	}
-	if _, ok := plan.Children()[0].(*LogicalAggregate); ok {
-		plan.SetInputs(plan.Children()[0].Children())
+	if childPlan, ok := plan.Children()[0].(*LogicalAggregate); ok {
+		if _, ok = childPlan.Children()[0].(*LogicalOrderBy); !ok {
+			plan.SetInputs(plan.Children()[0].Children())
+		}
 	}
 	RebuildAggNodes(plan.Children()[0])
 }

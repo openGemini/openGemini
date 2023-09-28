@@ -99,7 +99,7 @@ func MockExcuteStatementErr(rp, mst string, tm time.Duration) error {
 		statementExecutor := newMockStatementExecutor()
 		slectStatement := newMockSelectStatement(rp, mst)
 		ctx := &query.ExecutionContext{}
-		err = statementExecutor.ExecuteStatement(slectStatement, ctx)
+		err = statementExecutor.ExecuteStatement(slectStatement, ctx, 0)
 		ch <- struct{}{}
 	}()
 
