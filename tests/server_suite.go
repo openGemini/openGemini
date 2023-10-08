@@ -1143,7 +1143,7 @@ func init() {
 			&Query{
 				name:    "set config",
 				command: `SET CONFIG sql logging.level = debug`,
-				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
+				exp:     `{"results":[{"statement_id":0}]}`,
 			},
 			&Query{
 				name:    "show configs",
