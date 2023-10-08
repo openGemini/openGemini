@@ -58,6 +58,11 @@ var dbStatCount int
 const (
 	maxRetrySelectCount = 8
 	retrySelectInterval = time.Millisecond * 100
+
+	// setconfig params
+	// logging config
+	sqlConfig    = "sql"
+	loggingLevel = "logging.level"
 )
 
 var streamSupportMap = map[string]bool{"min": true, "max": true, "sum": true, "count": true}
@@ -2221,7 +2226,19 @@ func (e *StatementExecutor) executeShowConfigs(stmt *influxql.ShowConfigsStateme
 }
 
 func (e *StatementExecutor) executeSetConfig(stmt *influxql.SetConfigStatement) error {
-	return fmt.Errorf("impl me")
+	switch stmt.Component {
+	case sqlConfig:
+		switch stmt.Key {
+		case loggingLevel:
+			if levelString, ok := stmt.Value.(string); ok {
+				return logger.SetLevel(levelString)
+			}
+			return fmt.Errorf("illegal type of logging level input")
+		default:
+		}
+	default:
+	}
+	return fmt.Errorf("unsupported config command")
 }
 
 type ByteStringSlice [][]byte
