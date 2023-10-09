@@ -156,6 +156,53 @@ func TestLoggerLevel(t *testing.T) {
 		messages[1:])
 }
 
+func TestSetLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		lev      string
+		expected zapcore.Level
+		wantErr  bool
+	}{
+		{
+			name:     "Valid level",
+			lev:      "info",
+			expected: zapcore.InfoLevel,
+			wantErr:  false,
+		},
+		{
+			name:     "Invalid level",
+			lev:      "invalid",
+			expected: zapcore.InfoLevel, // Default level
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := logger.SetLevel(tt.lev)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SetLevel() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr {
+				// If an error is expected, the level should remain unchanged.
+				currentLevel := logger.Alevel.Level()
+				if currentLevel != zapcore.InfoLevel {
+					t.Errorf("SetLevel() level = %v, want %v", currentLevel, zapcore.InfoLevel)
+				}
+			} else {
+				// If no error is expected, the level should be set correctly.
+				currentLevel := logger.Alevel.Level()
+				if currentLevel != tt.expected {
+					t.Errorf("SetLevel() level = %v, want %v", currentLevel, tt.expected)
+				}
+			}
+		})
+	}
+}
+
 func TestZapLogger(t *testing.T) {
 	lg := logger.NewLogger(errno.ModuleUnknown)
 

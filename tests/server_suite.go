@@ -1138,7 +1138,7 @@ func init() {
 			&Query{
 				name:    "show configs",
 				command: `SHOW CONFIGS`,
-				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"columns":["component","instance","name","value"],"values":[["sql","127.0.0.1:8086","logging.level","info"]]}]}]}`,
 			},
 			&Query{
 				name:    "set config",
@@ -1148,7 +1148,7 @@ func init() {
 			&Query{
 				name:    "show configs",
 				command: `SHOW CONFIGS`,
-				exp:     `{"results":[{"statement_id":0,"error":"impl me"}]}`,
+				exp:     `{"results":[{"statement_id":0,"series":[{"columns":["component","instance","name","value"],"values":[["sql","127.0.0.1:8086","logging.level","debug"]]}]}]}`,
 			},
 		},
 	}
