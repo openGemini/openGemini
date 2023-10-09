@@ -95,6 +95,9 @@ type StatementExecutor struct {
 	MaxQueryParallel        int
 
 	StmtExecLogger *logger.Logger
+
+	// hostname for show configs statement
+	Hostname string
 }
 
 type combinedRunState uint8
@@ -419,7 +422,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	case *influxql.DropStreamsStatement:
 		err = e.executeDropStream(stmt)
 	case *influxql.ShowConfigsStatement:
-		err = e.executeShowConfigs(stmt)
+		rows, err = e.executeShowConfigs(stmt)
 	case *influxql.SetConfigStatement:
 		err = e.executeSetConfig(stmt)
 	default:
@@ -2221,8 +2224,10 @@ func (e *StatementExecutor) executeDropStream(stmt *influxql.DropStreamsStatemen
 	return e.MetaClient.DropStream(stmt.Name)
 }
 
-func (e *StatementExecutor) executeShowConfigs(stmt *influxql.ShowConfigsStatement) error {
-	return fmt.Errorf("impl me")
+func (e *StatementExecutor) executeShowConfigs(stmt *influxql.ShowConfigsStatement) (models.Rows, error) {
+	row := &models.Row{Columns: []string{"component", "instance", "name", "value"}}
+	row.Values = append(row.Values, []interface{}{sqlConfig, e.Hostname, loggingLevel, logger.Alevel})
+	return []*models.Row{row}, nil
 }
 
 func (e *StatementExecutor) executeSetConfig(stmt *influxql.SetConfigStatement) error {
