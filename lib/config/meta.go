@@ -127,6 +127,10 @@ func (c *TSMeta) GetCommon() *Common {
 	return c.Common
 }
 
+func (c *TSMeta) ShowConfigs() map[string]interface{} {
+	return nil
+}
+
 // Meta represents the meta configuration.
 type Meta struct {
 	HTTPSEnabled        bool `toml:"https-enabled"`

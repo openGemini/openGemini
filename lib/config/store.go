@@ -172,6 +172,10 @@ func (c *TSStore) GetCommon() *Common {
 	return c.Common
 }
 
+func (c *TSStore) ShowConfigs() map[string]interface{} {
+	return nil
+}
+
 /*
 	these are limiter specs for difference flavors, unit is MB
 	0: CompactThroughput

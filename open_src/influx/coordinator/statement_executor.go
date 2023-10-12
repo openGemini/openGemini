@@ -59,8 +59,7 @@ const (
 	maxRetrySelectCount = 8
 	retrySelectInterval = time.Millisecond * 100
 
-	// setconfig params
-	// logging config
+	// SHOW CONFIGS parameters
 	sqlConfig    = "sql"
 	loggingLevel = "logging.level"
 )
@@ -97,7 +96,8 @@ type StatementExecutor struct {
 	StmtExecLogger *logger.Logger
 
 	// hostname for show configs statement
-	Hostname string
+	Hostname   string
+	SqlConfigs map[string]interface{}
 }
 
 type combinedRunState uint8
@@ -2226,7 +2226,13 @@ func (e *StatementExecutor) executeDropStream(stmt *influxql.DropStreamsStatemen
 
 func (e *StatementExecutor) executeShowConfigs(stmt *influxql.ShowConfigsStatement) (models.Rows, error) {
 	row := &models.Row{Columns: []string{"component", "instance", "name", "value"}}
-	row.Values = append(row.Values, []interface{}{sqlConfig, e.Hostname, loggingLevel, logger.Alevel})
+	e.SqlConfigs[loggingLevel] = logger.Alevel
+
+	keys := sortConfigs(e.SqlConfigs)
+
+	for _, key := range keys {
+		row.Values = append(row.Values, []interface{}{sqlConfig, e.Hostname, key, e.SqlConfigs[key]})
+	}
 	return []*models.Row{row}, nil
 }
 
@@ -2244,6 +2250,15 @@ func (e *StatementExecutor) executeSetConfig(stmt *influxql.SetConfigStatement) 
 	default:
 	}
 	return fmt.Errorf("unsupported config command")
+}
+
+func sortConfigs(configs map[string]interface{}) []string {
+	keys := make([]string, 0, len(configs))
+	for key := range configs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 type ByteStringSlice [][]byte

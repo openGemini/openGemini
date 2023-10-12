@@ -63,3 +63,11 @@ func (c ContinuousQueryConfig) Validate() error {
 func (c ContinuousQueryConfig) ApplyEnvOverrides(_ func(string) string) error {
 	return nil
 }
+
+func (c *ContinuousQueryConfig) ShowConfigs() map[string]interface{} {
+	return map[string]interface{}{
+		"continuous-query.enabled":               c.Enabled,
+		"continuous-query.run-interval":          c.RunInterval,
+		"continuous-query.max-process-CQ-number": c.MaxProcessCQNumber,
+	}
+}
