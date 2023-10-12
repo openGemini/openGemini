@@ -67,6 +67,17 @@ func doRun(args ...string) error {
 			return err
 		}
 		mainCmd := app.NewCommand()
+		info := app.ServerInfo{
+			App:       config.AppMonitor,
+			Version:   TsVersion,
+			Commit:    TsCommit,
+			Branch:    TsBranch,
+			BuildTime: TsBuildTime,
+		}
+		mainCmd.Info = info
+		mainCmd.Logo = app.MONITORLOGO
+		mainCmd.Version = info.FullVersion()
+		mainCmd.Usage = fmt.Sprintf(app.RunUsage, info.App, info.App)
 		err = mainCmd.InitConfig(config.NewTSMonitor(), options.ConfigPath)
 		if err != nil {
 			return err
