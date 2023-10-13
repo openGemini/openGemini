@@ -103,12 +103,10 @@ type Common struct {
 	ReaderStop     bool     `toml:"read-stop"`
 	WriterStop     bool     `toml:"write-stop"`
 
-	MemorySize         itoml.Size     `toml:"memory-size"`
-	MemoryLimitSize    itoml.Size     `toml:"executor-memory-size-limit"`
-	MemoryWaitTime     itoml.Duration `toml:"executor-memory-wait-time"`
-	OptHashAlgo        string         `toml:"select-hash-algorithm"`
-	CpuAllocationRatio int            `toml:"cpu-allocation-ratio"`
-	HaPolicy           string         `toml:"ha-policy"`
+	MemorySize         itoml.Size `toml:"memory-size"`
+	OptHashAlgo        string     `toml:"select-hash-algorithm"`
+	CpuAllocationRatio int        `toml:"cpu-allocation-ratio"`
+	HaPolicy           string     `toml:"ha-policy"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -154,11 +152,7 @@ func CombineDomain(domain, addr string) string {
 	return fmt.Sprintf("%s:%s", domain, port)
 }
 
-func (c *Common) Corrector() {
-	if c.MemorySize > 0 && c.MemoryLimitSize == 0 {
-		c.MemoryLimitSize = c.MemorySize / 2
-	}
-}
+func (c *Common) Corrector() {}
 
 // storage engine type
 

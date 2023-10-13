@@ -17,17 +17,18 @@ limitations under the License.
 package listener
 
 import (
-	"fmt"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"go.uber.org/zap"
 )
 
-// LimitListener returns a Listener that accepts at most n simultaneous
+// NewLimitListener returns a Listener that accepts at most n simultaneous
 // connections from the provided Listener and will drop extra connections.
 func NewLimitListener(l net.Listener, n int, list string) net.Listener {
 	return &limitListener{
@@ -35,6 +36,7 @@ func NewLimitListener(l net.Listener, n int, list string) net.Listener {
 		listenChan: make(chan struct{}, n),
 		whiteList:  strings.Split(list, ","),
 		maxLimit:   n,
+		logger:     logger.NewLogger(errno.ModuleHTTP),
 	}
 }
 
@@ -45,6 +47,8 @@ type limitListener struct {
 	listenChan chan struct{}
 	whiteList  []string
 	maxLimit   int
+
+	logger *logger.Logger
 }
 
 func (l *limitListener) release() {
@@ -69,9 +73,8 @@ func (l *limitListener) Accept() (net.Conn, error) {
 			atomic.AddInt64(&statistics.HandlerStat.ConnectionNums, 1)
 			return &limitListenerConn{Conn: c, releaseFunc: l.release}, nil
 		default:
-			fmt.Printf("%s, connection exceed! Max Connection Limit is: %d\n",
-				time.Now().Format(time.RFC3339Nano), l.maxLimit)
-			if err := c.Close(); err != nil {
+			l.logger.Warn("connection exceed!", zap.Int("connection limit", l.maxLimit))
+			if err = c.Close(); err != nil {
 				return nil, err
 			}
 		}
