@@ -30,6 +30,10 @@ var executeCmd = &cobra.Command{
 	Use:   "execute",
 	Short: "Execute a query",
 	Long:  `Execute a query`,
+	Example: `
+$ ts-cli execute "show databases"
+$ ts-cli execute "select xxx"
+`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := connectCLI(); err != nil {
 			return err

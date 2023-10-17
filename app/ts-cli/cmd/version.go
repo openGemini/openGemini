@@ -17,10 +17,10 @@ limitations under the License.
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 )
+
+const TsCli = "ts-cli"
 
 func init() {
 	rootCmd.AddCommand(versionCmd)
@@ -28,11 +28,8 @@ func init() {
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the version of openGemini CLI",
-	Long: `The version of openGemini CLI. Higher
-version of openGemini CLI is compatible with lower
- version of open-Gemini.`,
+	Short: "Display the version of openGemini CLI",
+	Long:  `Display the version of openGemini CLI.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("openGemini CLI v0.0.1 - HEAD")
 	},
 }

@@ -17,6 +17,8 @@ limitations under the License.
 package cmd
 
 import (
+	"os"
+
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 	"github.com/spf13/cobra"
 )
@@ -27,26 +29,59 @@ const (
 )
 
 var (
+	options = geminicli.CommandLineConfig{}
+
+	cli *geminicli.CommandLine
+)
+
+// Execute executes the root command.
+func Execute() {
+	rootCmd.AddCommand()
+	err := rootCmd.Execute()
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+func init() {
+	rootCmd.Flags().StringVar(&options.Host, "host", DEFAULT_HOST, "ts-sql host to connect to.")
+	rootCmd.Flags().IntVar(&options.Port, "port", DEFAULT_PORT, "ts-sql tcp port to connect to.")
+	rootCmd.Flags().StringVar(&options.UnixSocket, "socket", "", "openGemini unix domain socket to connect to.")
+	rootCmd.Flags().StringVarP(&options.Username, "username", "u", "", "Username to connect to openGemini.")
+	rootCmd.Flags().StringVarP(&options.Password, "password", "p", "", "Password to connect to openGemini.")
+	rootCmd.Flags().StringVar(&options.Database, "database", "", "Database to connect to openGemini.")
+	rootCmd.Flags().BoolVar(&options.Ssl, "ssl", false, "Use https for connecting to openGemini.")
+	rootCmd.Flags().BoolVar(&options.IgnoreSsl, "unsafeSsl", true, "Ignore ssl verification when connecting openGemini by https.")
+	rootCmd.Flags().StringVar(&options.Precision, "precision", "ns", "Specify the format of the timestamp: rfc3339, h, m, s, ms, u or ns.")
+}
+
+var (
 	rootCmd = &cobra.Command{
 		Use:   "ts-cli",
 		Short: "openGemini CLI tool",
-		Long:  `ts-cli is a CLI tool of openGemini. It's compatible with influxdb cli.`,
+		Long:  `ts-cli is a CLI tool of openGemini.`,
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd:   true,
+			DisableNoDescFlag:   true,
+			DisableDescriptions: true,
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return interactiveCmd.RunE(cmd, args)
 		},
 	}
 )
 
-func bindFlags(cmd *cobra.Command, c *geminicli.CommandLineConfig) {
-	cmd.PersistentFlags().StringVar(&c.Host, "host", DEFAULT_HOST, "openGemini host to connect to.")
-	cmd.PersistentFlags().IntVar(&c.Port, "port", DEFAULT_PORT, "openGemini port to connect to.")
-	cmd.PersistentFlags().StringVar(&c.UnixSocket, "socket", "", "openGemini unix domain socket to connect to.")
-	cmd.PersistentFlags().StringVarP(&c.Username, "username", "u", "", "Username to connect to openGemini.")
-	cmd.PersistentFlags().StringVarP(&c.Password, "password", "p", "", "Password to connect to openGemini.")
-	cmd.PersistentFlags().StringVar(&c.Database, "database", "", "Database to connect to openGemini.")
-	cmd.PersistentFlags().BoolVar(&c.Ssl, "ssl", false, "Use https for connecting to openGemini.")
-	cmd.PersistentFlags().BoolVar(&c.IgnoreSsl, "unsafeSsl", true, "Ignore ssl verification when connecting openGemini by https.")
-	cmd.PersistentFlags().BoolVar(&c.Import, "import", false, "Import a previous database export from file")
-	cmd.PersistentFlags().StringVar(&c.Path, "path", "", "path to the file to import to OpenGemini.")
-	cmd.PersistentFlags().StringVar(&c.Precision, "precision", "ns", "Specify the format of the timestamp: rfc3339, h, m, s, ms, u or ns. default is ns.")
+func connectCLI() error {
+	factory := geminicli.CommandLineFactory{}
+	if c, err := factory.CreateCommandLine(options); err != nil {
+		return err
+	} else {
+		cli = c
+	}
+
+	if err := cli.Connect(""); err != nil {
+		return err
+	}
+
+	return nil
 }
