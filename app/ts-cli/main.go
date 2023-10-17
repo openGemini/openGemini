@@ -32,19 +32,14 @@ var (
 	TsBranch  string
 )
 
-const TsStore = "TsCli"
-
 func main() {
 	doRun(os.Args[1:]...)
-	if err := cmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 }
+
 func doRun(args ...string) {
 	name, _ := parse.ParseCommandName(args)
 	if name == "version" {
-		fmt.Printf(app.VERSION, TsStore, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
-		os.Exit(1)
+		fmt.Printf(app.VERSION, cmd.TsCli, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
 	}
+	cmd.Execute()
 }
