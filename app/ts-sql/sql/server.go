@@ -225,6 +225,7 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 		RetentionPolicyLimit:    c.Coordinator.RetentionPolicyLimit,
 		StmtExecLogger:          Logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "StatementExecutor")),
 		Hostname:                config.CombineDomain(s.config.HTTP.Domain, s.config.HTTP.BindAddress),
+		SqlConfigs:              c.ShowConfigs(),
 	}
 	s.QueryExecutor.TaskManager.QueryTimeout = time.Duration(c.Coordinator.QueryTimeout)
 	s.QueryExecutor.TaskManager.LogQueriesAfter = time.Duration(c.Coordinator.LogQueriesAfter)

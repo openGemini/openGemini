@@ -109,6 +109,19 @@ func (c *Logger) GetApp() string {
 	return string(c.app)
 }
 
+func (c *Logger) ShowConfigs() map[string]interface{} {
+	return map[string]interface{}{
+		"logging.level":            c.Level,
+		"logging.max-size":         rewriteMaxSize(c.MaxSize),
+		"logging.max-num":          c.MaxNum,
+		"logging.max-age":          c.MaxAge,
+		"logging.compress-enabled": c.CompressEnabled,
+		"logging.path":             c.Path,
+		"logging.format":           c.Format,
+		"logging.app":              c.app,
+	}
+}
+
 func rewriteMaxSize(size toml.Size) int {
 	maxSize := int(size)
 	if maxSize < 1024*1024 {

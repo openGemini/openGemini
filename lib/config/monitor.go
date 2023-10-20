@@ -100,6 +100,10 @@ func (c *TSMonitor) GetCommon() *Common {
 	return nil
 }
 
+func (c *TSMonitor) ShowConfigs() map[string]interface{} {
+	return nil
+}
+
 type MonitorMain struct {
 	Host        string `toml:"host"`
 	MetricPath  string `toml:"metric-path"`

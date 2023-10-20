@@ -130,6 +130,29 @@ func (c Spdy) Validate() error {
 	return cv.Validate()
 }
 
+func (c *Spdy) ShowConfigs() map[string]interface{} {
+	return map[string]interface{}{
+		"spdy.recv-window-size":              c.RecvWindowSize,
+		"spdy.concurrent-accept-session":     c.ConcurrentAcceptSession,
+		"spdy.open-session-timeout":          c.OpenSessionTimeout,
+		"spdy.data-ack-timeout":              c.DataAckTimeout,
+		"spdy.compress-enable":               c.CompressEnable,
+		"spdy.session-select-timeout":        c.SessionSelectTimeout,
+		"spdy.tcp-dial-timeout":              c.TCPDialTimeout,
+		"spdy.conn-pool-size":                c.ConnPoolSize,
+		"spdy.tls-enable":                    c.TLSEnable,
+		"spdy.tls-client-auth":               c.TLSClientAuth,
+		"spdy.tls-insecure-skip-verify":      c.TLSInsecureSkipVerify,
+		"spdy.tls-certificate":               c.TLSCertificate,
+		"spdy.tls-private-key":               c.TLSPrivateKey,
+		"spdy.tls-client-certificate":        c.TLSClientCertificate,
+		"spdy.tls-client-private-key":        c.TLSClientPrivateKey,
+		"spdy.tls-ca-root":                   c.TLSCARoot,
+		"spdy.tls-server-name":               c.TLSServerName,
+		"spdy.byte-buffer-pool-default-size": c.ByteBufferPoolDefaultSize,
+	}
+}
+
 func (c *Spdy) newTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	if !c.TLSEnable {
 		return nil, errno.NewError(errno.InvalidTLSConfig)

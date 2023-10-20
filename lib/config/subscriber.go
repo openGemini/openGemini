@@ -61,3 +61,14 @@ func (s Subscriber) Validate() error {
 	}
 	return nil
 }
+
+func (c *Subscriber) ShowConfigs() map[string]interface{} {
+	return map[string]interface{}{
+		"subscriber.enabled":              c.Enabled,
+		"subscriber.http-timeout":         c.HTTPTimeout,
+		"subscriber.insecure-skip-verify": c.InsecureSkipVerify,
+		"subscriber.https-certificate":    c.HttpsCertificate,
+		"subscriber.write-buffer-size":    c.WriteBufferSize,
+		"subscriber.write-concurrency":    c.WriteConcurrency,
+	}
+}
