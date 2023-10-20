@@ -194,6 +194,32 @@ func (c *TSSql) GetCommon() *Common {
 	return c.Common
 }
 
+func (c *TSSql) ShowConfigs() map[string]interface{} {
+	sqlConfig := make(map[string]interface{})
+	for k, v := range c.Common.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.Coordinator.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.Logging.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.Spdy.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.Subscriber.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.ContinuousQuery.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.HTTP.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	return sqlConfig
+}
+
 // Coordinator represents the configuration for the coordinator service.
 type Coordinator struct {
 	WriteTimeout         toml.Duration `toml:"write-timeout"`
@@ -251,4 +277,26 @@ func (c Coordinator) Validate() error {
 		return errors.New("coordinator shard-mapper-timeout can not be negative")
 	}
 	return nil
+}
+
+func (c *Coordinator) ShowConfigs() map[string]interface{} {
+	return map[string]interface{}{
+		"coordinator.write-timeout":               c.WriteTimeout,
+		"coordinator.max-concurrent-queries":      c.MaxConcurrentQueries,
+		"coordinator.log-queries-after":           c.LogQueriesAfter,
+		"coordinator.shard-writer-timeout":        c.ShardWriterTimeout,
+		"coordinator.shard-mapper-timeout":        c.ShardMapperTimeout,
+		"coordinator.max-query-mem":               c.MaxQueryMem,
+		"coordinator.meta-executor-write-timeout": c.MetaExecutorWriteTimeout,
+		"coordinator.query-timeout":               c.QueryTimeout,
+		"coordinator.query-limit-interval-time":   c.QueryLimitIntervalTime,
+		"coordinator.query-limit-level":           c.QueryLimitLevel,
+		"coordinator.query-limit-flag":            c.QueryLimitFlag,
+		"coordinator.query-time-compare-enabled":  c.QueryTimeCompareEnabled,
+		"coordinator.force-broadcast-query":       c.ForceBroadcastQuery,
+		"coordinator.shard-tier":                  c.ShardTier,
+		"coordinator.rp-limit":                    c.RetentionPolicyLimit,
+		"coordinator.time-range-limit":            c.TimeRangeLimit,
+		"coordinator.tag-limit":                   c.TagLimit,
+	}
 }
