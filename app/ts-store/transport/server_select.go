@@ -66,4 +66,7 @@ func (s *SelectServer) register(store *storage.Storage) {
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.PtRequest,
 		handler.NewPtProcessor(store), &netstorage.PtRequest{}))
+
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.BackupRecoverRequest,
+		handler.NewBackupRecoverProcessor(store), &netstorage.BackupRequest{}))
 }

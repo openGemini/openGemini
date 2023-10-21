@@ -217,3 +217,24 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 	}
 	return nil
 }
+
+type BackupRecoverProcessor struct {
+	store *storage.Storage
+}
+
+func NewBackupRecoverProcessor(store *storage.Storage) *BackupRecoverProcessor {
+	return &BackupRecoverProcessor{
+		store: store,
+	}
+}
+
+func (p *BackupRecoverProcessor) Handle(w spdy.Responser, data interface{}) error {
+	switch req := data.(type) {
+	case *netstorage.BackupRequest:
+		h := &BackupCmd{req: req, w: w}
+		h.SetStore(p.store)
+		return h.Process()
+	default:
+		return executor.NewInvalidTypeError("backup recover request", data)
+	}
+}

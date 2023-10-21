@@ -67,6 +67,11 @@ func (r *Requester) initWithNodeID(nodeID uint64) error {
 	return nil
 }
 
+func (r *Requester) InitWithNode(node *meta2.DataNode) error {
+	r.initWithNode(node)
+	return nil
+}
+
 func (r *Requester) initWithNode(node *meta2.DataNode) {
 	r.node = node
 	if r.insert {
@@ -80,7 +85,7 @@ func (r *Requester) ddl() (interface{}, error) {
 	data := NewDDLMessage(r.msgTyp, r.data)
 	cb := &DDLCallback{}
 
-	if err := r.request(spdy.DDLRequest, data, cb); err != nil {
+	if err := r.Request(spdy.DDLRequest, data, cb); err != nil {
 		return nil, err
 	}
 
@@ -90,14 +95,14 @@ func (r *Requester) ddl() (interface{}, error) {
 func (r *Requester) sysCtrl(req *SysCtrlRequest) (interface{}, error) {
 	cb := &SysCtrlCallback{}
 
-	if err := r.request(spdy.SysCtrlRequest, req, cb); err != nil {
+	if err := r.Request(spdy.SysCtrlRequest, req, cb); err != nil {
 		return nil, err
 	}
 
 	return cb.GetResponse(), nil
 }
 
-func (r *Requester) request(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
+func (r *Requester) Request(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
 	var trans *transport.Transport
 	var err error
 

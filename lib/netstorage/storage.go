@@ -192,14 +192,14 @@ func (s *NetStorage) WriteRows(ctx *WriteContext, nodeID uint64, pt uint32, data
 			streamVars[i].Id = rows[i].StreamId
 		}
 		cb := &WriteStreamPointsCallback{}
-		err = r.request(spdy.WriteStreamPointsRequest, NewWriteStreamPointsRequest(pBuf, streamVars), cb)
+		err = r.Request(spdy.WriteStreamPointsRequest, NewWriteStreamPointsRequest(pBuf, streamVars), cb)
 		if err != nil {
 			return err
 		}
 		return nil
 	}
 	cb := &WritePointsCallback{}
-	err = r.request(spdy.WritePointsRequest, NewWritePointsRequest(pBuf), cb)
+	err = r.Request(spdy.WritePointsRequest, NewWritePointsRequest(pBuf), cb)
 	if err != nil {
 		return err
 	}

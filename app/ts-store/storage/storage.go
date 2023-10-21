@@ -489,6 +489,12 @@ func (s *Storage) SetEngine(engine netstorage.Engine) {
 	s.engine = engine
 }
 
+func (s *Storage) Backup(req *netstorage.BackupRequest) error {
+	// TODO: engine backup data
+	// return s.engine.Backup(req)
+	return nil
+}
+
 func stringSlice2BytesSlice(s []string) [][]byte {
 	ret := make([][]byte, 0, len(s))
 	for _, name := range s {

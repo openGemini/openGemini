@@ -507,3 +507,94 @@ func (r *PtResponse) Error() error {
 	}
 	return NormalizeError(r.Err)
 }
+
+type BackupRequest struct {
+	StorageType string
+	// storage type for sftp required
+	SftpHost       string
+	SftpPort       int
+	SftpUser       string
+	SftpPassword   string
+	SftpRemotePath string
+}
+
+func (r *BackupRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendString(buf, r.StorageType)
+	buf = codec.AppendString(buf, r.SftpHost)
+	buf = codec.AppendInt(buf, r.SftpPort)
+	buf = codec.AppendString(buf, r.SftpUser)
+	buf = codec.AppendString(buf, r.SftpPassword)
+	buf = codec.AppendString(buf, r.SftpRemotePath)
+	return buf, nil
+}
+
+func (r *BackupRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	r.StorageType = dec.String()
+	r.SftpHost = dec.String()
+	r.SftpPort = dec.Int()
+	r.SftpUser = dec.String()
+	r.SftpPassword = dec.String()
+	r.SftpRemotePath = dec.String()
+	return nil
+}
+
+func (r *BackupRequest) Instance() transport.Codec {
+	return &BackupRequest{}
+}
+
+func (r *BackupRequest) Size() int {
+	size := codec.SizeOfString(r.StorageType)
+	size += codec.SizeOfString(r.SftpHost)
+	size += codec.SizeOfInt()
+	size += codec.SizeOfString(r.SftpUser)
+	size += codec.SizeOfString(r.SftpPassword)
+	size += codec.SizeOfString(r.SftpRemotePath)
+	return size
+}
+
+type BackupResponse struct {
+	Code    uint8
+	ErrCode errno.Errno
+	Message string
+}
+
+func NewBackupResponse(code uint8, errCode errno.Errno, message string) *BackupResponse {
+	return &BackupResponse{
+		Code:    code,
+		ErrCode: errCode,
+		Message: message,
+	}
+}
+
+func (r *BackupResponse) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendUint8(buf, r.Code)
+	buf = codec.AppendUint16(buf, uint16(r.ErrCode))
+	buf = codec.AppendString(buf, r.Message)
+	return buf, nil
+}
+
+func (r *BackupResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return errno.NewError(errno.ShortBufferSize, 0, 0)
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	r.Code = dec.Uint8()
+	r.ErrCode = errno.Errno(dec.Uint16())
+	r.Message = dec.String()
+	return nil
+}
+
+func (r *BackupResponse) Instance() transport.Codec {
+	return &BackupResponse{}
+}
+
+func (r *BackupResponse) Size() int {
+	size := codec.SizeOfUint8()
+	size += codec.SizeOfUint16()
+	size += codec.SizeOfString(r.Message)
+	return size
+}
