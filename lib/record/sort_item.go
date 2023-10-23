@@ -29,7 +29,7 @@ import (
 
 type SortItem interface {
 	Compare(i, j int) int
-	CompareSingleValue(data interface{}, postionX, postionY int) (int, error)
+	CompareSingleValue(data interface{}, positionX, positionY int) (int, error)
 	Swap(i, j int)
 }
 
@@ -74,15 +74,15 @@ func (sli *FloatSlice) Compare(i, j int) int {
 	return 1
 }
 
-func (sli *FloatSlice) CompareSingleValue(data interface{}, postionX, postionY int) (int, error) {
+func (sli *FloatSlice) CompareSingleValue(data interface{}, positionX, positionY int) (int, error) {
 	cm, ok := data.(*FloatSlice)
 	if !ok {
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.V[postionX] > cm.V[postionY] {
+	if sli.V[positionX] > cm.V[positionY] {
 		return -1, nil
-	} else if sli.V[postionX] == cm.V[postionY] {
+	} else if sli.V[positionX] == cm.V[positionY] {
 		return 0, nil
 	}
 	return 1, nil
@@ -97,15 +97,15 @@ func (sli *IntegerSlice) Compare(i, j int) int {
 	return 1
 }
 
-func (sli *IntegerSlice) CompareSingleValue(data interface{}, postionX, postionY int) (int, error) {
+func (sli *IntegerSlice) CompareSingleValue(data interface{}, positionX, positionY int) (int, error) {
 	cm, ok := data.(*IntegerSlice)
 	if !ok {
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.V[postionX] > cm.V[postionY] {
+	if sli.V[positionX] > cm.V[positionY] {
 		return -1, nil
-	} else if sli.V[postionX] == cm.V[postionY] {
+	} else if sli.V[positionX] == cm.V[positionY] {
 		return 0, nil
 	}
 	return 1, nil
@@ -120,15 +120,15 @@ func (sli *StringSlice) Compare(i, j int) int {
 	return 1
 }
 
-func (sli *StringSlice) CompareSingleValue(data interface{}, postionX, postionY int) (int, error) {
+func (sli *StringSlice) CompareSingleValue(data interface{}, positionX, positionY int) (int, error) {
 	cm, ok := data.(*StringSlice)
 	if !ok {
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.V[postionX] > cm.V[postionY] {
+	if sli.V[positionX] > cm.V[positionY] {
 		return -1, nil
-	} else if sli.V[postionX] == cm.V[postionY] {
+	} else if sli.V[positionX] == cm.V[positionY] {
 		return 0, nil
 	}
 	return 1, nil
@@ -143,15 +143,15 @@ func (sli *BooleanSlice) Compare(i, j int) int {
 	return 1
 }
 
-func (sli *BooleanSlice) CompareSingleValue(data interface{}, postionX, postionY int) (int, error) {
+func (sli *BooleanSlice) CompareSingleValue(data interface{}, positionX, positionY int) (int, error) {
 	cm, ok := data.(*BooleanSlice)
 	if !ok {
 		return 0, errors.New("complex binary expression unsupported")
 	}
 
-	if sli.V[postionX] == cm.V[postionY] {
+	if sli.V[positionX] == cm.V[positionY] {
 		return 0, nil
-	} else if sli.V[postionX] {
+	} else if sli.V[positionX] {
 		return -1, nil
 	}
 	return 1, nil
