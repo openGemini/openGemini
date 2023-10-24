@@ -227,6 +227,8 @@ func (c *CommandLine) executeOnLocal(stmt geminiql.Statement) error {
 		return c.executeChunkSize(stmt)
 	case *geminiql.AuthStatement:
 		return c.executeAuth(stmt)
+	case *geminiql.HelpStatement:
+		return c.executeHelp(stmt)
 	case *geminiql.PrecisionStatement:
 		return c.executePrecision(stmt)
 	case *geminiql.TimerStatement:
@@ -374,6 +376,29 @@ func (c *CommandLine) executeAuth(stmt *geminiql.AuthStatement) error {
 	fmt.Printf("\n")
 	c.config.Password = string(password)
 	c.client.SetAuth(c.config.Username, c.config.Password)
+	return nil
+}
+
+func (c *CommandLine) executeHelp(stmt *geminiql.HelpStatement) error {
+	fmt.Println(
+		`
+Usage:
+	auth                    prompts for username and password
+	chunked                 turns on chunked responses from server
+	chunk_size <size>       sets the size of the chunked responses. Set to 0 to reset to the default chunked size
+	use <db name>           sets current database
+	precision <format>      specifies the format of the timestamp: rfc3339, h, m, s, ms, u or ns
+	exit/quit/ctrl+d        quits the openGemini shell
+
+	show databases          show database names
+	show series             show series information
+	show measurements       show measurement information
+	show tag keys           show tag key information
+	show field keys         show field key information
+
+	A full list of openGemini commands can be found at:
+	https://docs.opengemini.org
+	`)
 	return nil
 }
 
