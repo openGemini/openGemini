@@ -715,12 +715,16 @@ func (b *Bitmap) rank(x int) int {
 	return -answer - 1
 }
 
-func (b *Bitmap) ToArray() []uint16 {
+func (b *Bitmap) GetArray() []uint16 {
 	return b.array
 }
 
-func (b *Bitmap) ToBit() []byte {
+func (b *Bitmap) GetBit() []byte {
 	return b.bits
+}
+
+func (b *Bitmap) GetLength() int {
+	return b.length
 }
 
 func (b *Bitmap) SetArray(arr []uint16) {

@@ -123,7 +123,7 @@ func (s *Store) balanceDBPts() []*MoveEvent {
 
 	var aliveNodes []uint64
 	for _, dataNode := range s.data.DataNodes {
-		if dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
+		if dataNode.SegregateStatus == meta.Normal && dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
 			aliveNodes = append(aliveNodes, dataNode.ID)
 		}
 	}
@@ -142,6 +142,7 @@ func (s *Store) balanceDBPts() []*MoveEvent {
 
 	for _, db := range dbLst {
 		if err := s.data.CheckCanMoveDb(db); err != nil {
+			logger.GetLogger().Error("balance pts db error", zap.String("db", db), zap.String("error", err.Error()))
 			continue
 		}
 		dbInfo := s.data.GetDBBriefInfo(db)
@@ -235,8 +236,10 @@ func (s *Store) balanceOneDBPts(db string, aliveNodes *[]uint64, moveEvents []*M
 
 	// create move pt tasks
 	moveEvents = s.addMovePtTasks(db, &tasks, moveEvents, dbBriefInfo)
-	logger.GetLogger().Info("[time use] balance pts", zap.String("duration", time.Since(st).String()),
-		zap.String("db", db), zap.String("tasks", tasks.String()))
+	if len(moveEvents) != 0 {
+		logger.GetLogger().Info("[time use] balance pts", zap.String("duration", time.Since(st).String()),
+			zap.String("db", db), zap.String("tasks", tasks.String()))
+	}
 	return moveEvents
 }
 
@@ -524,7 +527,7 @@ func (s *Store) selectDbPtsToMove() []*MoveEvent {
 
 	var aliveNodes []uint64
 	for _, dataNode := range s.data.DataNodes {
-		if dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
+		if dataNode.SegregateStatus == meta.Normal && dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
 			aliveNodes = append(aliveNodes, dataNode.ID)
 		}
 	}

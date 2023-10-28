@@ -68,7 +68,6 @@ type Engine struct {
 	closed   *interruptsignal.InterruptSignal
 	dataPath string
 	walPath  string
-	ReadOnly bool
 
 	engOpt       netstorage.EngineOptions
 	DBPartitions map[string]map[uint32]*DBPTInfo
@@ -145,6 +144,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
 	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
 	immutable.SetSnapshotTblNum(options.SnapshotTblNum)
+	immutable.SetFragmentsNumPerFlush(options.FragmentsNumPerFlush)
 	immutable.Init()
 
 	return eng, nil
@@ -394,10 +394,6 @@ func (e *Engine) ForceFlush() {
 
 	d := time.Since(start)
 	log.Info("shard flush done", zap.Duration("time used(s)", d))
-}
-
-func (e *Engine) SetReadOnly(readonly bool) {
-	e.ReadOnly = readonly
 }
 
 func (e *Engine) UpdateShardDurationInfo(info *meta2.ShardDurationInfo) error {
@@ -675,9 +671,6 @@ func (e *Engine) openShardLazy(sh Shard) error {
 
 // getShard return Shard for write api
 func (e *Engine) getShard(db string, ptId uint32, shardID uint64) (Shard, error) {
-	if err := e.checkReadonly(); err != nil {
-		return nil, err
-	}
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
@@ -713,15 +706,6 @@ func (e *Engine) WriteRec(db, mst string, ptId uint32, shardID uint64, rec *reco
 		return err
 	}
 	return sh.WriteCols(mst, rec, binaryRec)
-}
-
-func (e *Engine) checkReadonly() error {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.ReadOnly {
-		return errno.NewError(errno.ErrWriteReadonly)
-	}
-	return nil
 }
 
 func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta2.ShardTimeRangeInfo, mstInfo *meta2.MeasurementInfo) error {

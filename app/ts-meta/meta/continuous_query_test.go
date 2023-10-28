@@ -22,8 +22,11 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type MockRaftForCQ struct {
@@ -47,6 +50,7 @@ func Test_getContinuousQueryLease(t *testing.T) {
 		cqLease:           make(map[string]*cqLeaseInfo),
 		closing:           make(chan struct{}),
 		raft:              &MockRaftForCQ{isLeader: false},
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	host := "127.0.0.1:8086"
 	_, err := s.getContinuousQueryLease(host)
@@ -58,6 +62,7 @@ func Test_getContinuousQueryLease(t *testing.T) {
 		cqLease:           make(map[string]*cqLeaseInfo),
 		closing:           make(chan struct{}),
 		raft:              &MockRaftForCQ{isLeader: true},
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	cqs, err := s.getContinuousQueryLease(host)
 	require.NoError(t, err)
@@ -77,6 +82,7 @@ func Test_handlerSql2MetaHeartbeat(t *testing.T) {
 	s := &Store{
 		heartbeatInfoList: list.New(),
 		raft:              &MockRaftForCQ{isLeader: false},
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	host1 := "127.0.0.1:8086"
 	host2 := "127.0.0.2:8086"
@@ -88,6 +94,7 @@ func Test_handlerSql2MetaHeartbeat(t *testing.T) {
 		heartbeatInfoList: list.New(),
 		raft:              &MockRaftForCQ{isLeader: true},
 		cqLease:           make(map[string]*cqLeaseInfo),
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 
 	err = s.handlerSql2MetaHeartbeat(host1)
@@ -111,6 +118,7 @@ func Test_checkSQLNodesHeartbeat(t *testing.T) {
 		heartbeatInfoList: list.New(),
 		cqLease:           make(map[string]*cqLeaseInfo),
 		closing:           make(chan struct{}),
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	host1 := "127.0.0.1:8086"
 
@@ -163,6 +171,7 @@ func Test_restoreCQNames(t *testing.T) {
 			},
 		},
 		cqNames: nil,
+		Logger:  logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	fsm := (*storeFSM)(s)
 
@@ -173,6 +182,7 @@ func Test_restoreCQNames(t *testing.T) {
 func Test_handleCQCreated(t *testing.T) {
 	s := &Store{
 		cqNames: []string{"cq1", "cq3"},
+		Logger:  logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 
 	s.handleCQCreated("cq0")

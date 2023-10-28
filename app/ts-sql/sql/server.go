@@ -17,6 +17,7 @@ limitations under the License.
 package ingestserver
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -47,6 +48,7 @@ import (
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/sherlock"
+	gopscpu "github.com/shirou/gopsutil/v3/cpu"
 	"go.uber.org/zap"
 )
 
@@ -83,6 +85,9 @@ type Server struct {
 	sherlockService *sherlock.Service
 
 	cqService *continuousquery.Service
+
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -113,6 +118,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	}
 
 	s := newServer(info, logger, c, metaMaxConcurrentWriteLimit)
+	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 	s.httpService.Handler.Version = info.Version
 	s.httpService.Handler.BuildType = "OSS"
 	s.initMetaClientFn = s.initializeMetaClient
@@ -150,6 +156,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.httpService.Handler.StatisticsPusher = s.statisticsPusher
 	syscontrol.SetQueryParallel(int64(c.HTTP.ChunkReaderParallel))
 	syscontrol.SetTimeFilterProtection(c.HTTP.TimeFilterProtection)
+	syscontrol.UpdateNodeReadonly(c.Data.Readonly)
 	executor.IgnoreEmptyTag = c.Common.IgnoreEmptyTag
 
 	machine.InitMachineID(c.HTTP.BindAddress)
@@ -315,10 +322,41 @@ func (s *Server) Open() error {
 			return err
 		}
 	}
+
+	if s.config.HTTP.CPUThreshold > 0 {
+		go s.handleCPUThreshold(s.config.HTTP.CPUThreshold, 5*time.Minute)
+	}
+
 	return nil
 }
 
+// deprecated handleCPUThreshold
+func (s *Server) handleCPUThreshold(threshold int, duration time.Duration) {
+	ticker := time.NewTicker(duration)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			cpuPercent, err := gopscpu.PercentWithContext(s.ctx, 0, false)
+			if err != nil {
+				continue
+			}
+			if cpuPercent[0] > float64(threshold) {
+				err = errno.NewError(errno.HttpCpuOverLoad)
+				s.Logger.Error(err.Error(), zap.Int("cpu threshold", threshold), zap.Float64("current cpu", cpuPercent[0]))
+			}
+		}
+	}
+}
+
 func (s *Server) Close() error {
+	if s.ctxCancel != nil {
+		s.ctxCancel()
+	}
+
 	if s.statisticsPusher != nil {
 		s.statisticsPusher.Stop()
 	}

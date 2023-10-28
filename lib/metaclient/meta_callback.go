@@ -384,3 +384,22 @@ func (c *GetCqLeaseCallback) Handle(data interface{}) error {
 	c.CQNames = msg.CQNames
 	return nil
 }
+
+type VerifyDataNodeStatusCallback struct {
+	BaseCallback
+}
+
+func (c *VerifyDataNodeStatusCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.VerifyDataNodeStatusResponse)
+	if !ok {
+		return fmt.Errorf("data is not a VerifyDataNodeStatusResponse, got type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return fmt.Errorf("get verify datanode status callback error: %s", msg.Err)
+	}
+	return nil
+}

@@ -28,8 +28,10 @@ func TestCheckInRange(t *testing.T) {
 	pkRec := buildPKRecord()
 	pkSchema := pkRec.Schema
 	conStr := "UserID='U1' and URL='W3'"
-	keyCondition := sparseindex.NewKeyCondition(MustParseExpr(conStr), pkSchema)
-
+	keyCondition, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cols := make([]*sparseindex.ColumnRef, 2)
 	for i := 0; i < 2; i++ {
 		cols[i] = sparseindex.NewColumnRef(pkRec.Schema[i].Name, pkRec.Schema[i].Type, pkRec.Column(i))
@@ -43,7 +45,7 @@ func TestCheckInRange(t *testing.T) {
 	rpn = append(rpn, keyCondition.GetRPN()...)
 	rpn1 = append(rpn1, rpn[:len(rpn)-1]...)
 	keyCondition.SetRPN(rpn1)
-	_, err := keyCondition.CheckInRange(rgs, dataTypes)
+	_, err = keyCondition.CheckInRange(rgs, dataTypes)
 	assert.Equal(t, errno.Equal(err, errno.ErrInvalidStackInCondition), true)
 
 	rpn2 = append(rpn2, rpn[2:]...)

@@ -26,10 +26,16 @@ const (
 	PolicyEnd
 )
 
+const (
+	WAFPolicy = "write-available-first"
+	SSPolicy  = "shared-storage"
+	RepPolicy = "replication"
+)
+
 var policies = map[string]HAPolicy{
-	"write-available-first": WriteAvailableFirst,
-	"shared-storage":        SharedStorage,
-	"replication":           Replication,
+	WAFPolicy: WriteAvailableFirst,
+	SSPolicy:  SharedStorage,
+	RepPolicy: Replication,
 }
 
 var policy HAPolicy
@@ -49,4 +55,8 @@ func GetHaPolicy() HAPolicy {
 
 func IsReplication() bool {
 	return policy == Replication
+}
+
+func IsSharedStorage() bool {
+	return policy == SharedStorage
 }

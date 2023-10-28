@@ -50,7 +50,6 @@ const (
 	snapshot              = "snapshot"
 	downSampleInOrder     = "downsample_in_order"
 	Failpoint             = "failpoint"
-	Readonly              = "readonly"
 	verifyNode            = "verifynode"
 	memUsageLimit         = "memusagelimit"
 	BackgroundReadLimiter = "backgroundReadLimiter"
@@ -141,8 +140,6 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		}
 		log.Info("failpoint switch ok", zap.String("switchon", req.Param()["switchon"]))
 		return nil, nil
-	case Readonly:
-		return nil, e.handleReadonly(req)
 	case downSampleInOrder:
 		order, err := syscontrol.GetBoolValue(req.Param(), "order")
 		if err != nil {
@@ -226,19 +223,6 @@ func handleFailpoint(req *netstorage.SysCtrlRequest) error {
 		log.Error("enable failpoint fail", zap.Error(err))
 		return err
 	}
-	return nil
-}
-
-func (e *Engine) handleReadonly(req *netstorage.SysCtrlRequest) error {
-	switchon, err := syscontrol.GetBoolValue(req.Param(), "switchon")
-	if err != nil {
-		log.Error("get switchon from param fail", zap.Error(err))
-		return err
-	}
-	e.mu.Lock()
-	e.ReadOnly = switchon
-	e.mu.Unlock()
-	log.Info("readonly status switch ok", zap.String("switchon", req.Param()["switchon"]))
 	return nil
 }
 

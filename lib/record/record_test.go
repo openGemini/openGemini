@@ -100,7 +100,8 @@ func isRecEqual(firstRec, secondRec *record.Record) bool {
 		if firstRec.ColVals[i].Len != secondRec.ColVals[i].Len ||
 			firstRec.ColVals[i].NilCount != secondRec.ColVals[i].NilCount ||
 			!bytes.Equal(firstRec.ColVals[i].Val, secondRec.ColVals[i].Val) ||
-			!reflect.DeepEqual(firstRec.ColVals[i].Offset, secondRec.ColVals[i].Offset) {
+			(len(firstRec.ColVals[i].Offset)+len(secondRec.ColVals[i].Offset) > 0 &&
+				!reflect.DeepEqual(firstRec.ColVals[i].Offset, secondRec.ColVals[i].Offset)) {
 			return false
 		}
 
@@ -3150,9 +3151,9 @@ func TestRecUpdateFunc(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
 	iRec := record.NewRecord(schema1, true)
-	iRec.AppendIntervalEmptyRow(1, true)
+	iRec.AppendIntervalEmptyRow(1, true, nil)
 	rec := record.NewRecord(schema1, true)
-	rec.AppendIntervalEmptyRow(1, true)
+	rec.AppendIntervalEmptyRow(1, true, nil)
 	record.UpdateIntegerFirst(iRec, rec, 0, 0, 0, 0)
 	record.UpdateIntegerLast(iRec, rec, 0, 0, 0, 0)
 	record.UpdateFloatFirst(iRec, rec, 1, 1, 0, 0)

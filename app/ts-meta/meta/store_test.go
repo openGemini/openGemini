@@ -39,6 +39,7 @@ import (
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -182,6 +183,7 @@ type MockStore interface {
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, ptId uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
 	MigratePt(uint64, transport.Codec, transport.Callback) error
+	SendSegregateNodeCmds(nodeIDs []uint64) (int, error)
 }
 
 type MockNetStorage struct {
@@ -221,6 +223,10 @@ func (s *MockNetStorage) DeleteMeasurement(node *meta2.DataNode, db, rp, name st
 
 func (s *MockNetStorage) MigratePt(uint64, transport.Codec, transport.Callback) error {
 	return nil
+}
+
+func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64) (int, error) {
+	return 0, nil
 }
 
 func NewMockNetStorage() MockStore {
@@ -887,4 +893,97 @@ func TestStore_registerQueryIDOffset(t *testing.T) {
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestRetentionPolicyAutoCreate(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "test"
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 1), mms.GetConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func createUpdateReplicationCmd(db string, rgId, masterId uint32, peers []meta2.Peer, rgStatus uint32) *proto2.Command {
+	mPeers := make([]*proto2.Peer, len(peers))
+	for i := range peers {
+		role := uint32(peers[i].PtRole)
+		mPeers[i] = &proto2.Peer{
+			ID:   &peers[i].ID,
+			Role: &role,
+		}
+	}
+
+	val := &proto2.UpdateReplicationCommand{
+		Database:   proto.String(db),
+		RepGroupId: proto.Uint32(rgId),
+		MasterId:   proto.Uint32(masterId),
+		Peers:      mPeers,
+		RgStatus:   proto.Uint32(rgStatus),
+	}
+
+	t1 := proto2.Command_UpdateReplicationCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_UpdateReplicationCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func TestUpdateReplicationCommand(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "test"
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 2), mms.GetConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// abnormal branch, database does not exist
+	cmd = createUpdateReplicationCmd("db not exist", 0, 0, nil, uint32(meta2.SubHealth))
+	err = mms.GetStore().ApplyCmd(cmd)
+	require.Error(t, errno.NewError(errno.DatabaseNotFound, "db not exist"))
+
+	// normal branch, database exist
+	cmd = createUpdateReplicationCmd(db, 0, 0, nil, uint32(meta2.SubHealth))
+	err = mms.GetStore().ApplyCmd(cmd)
+	require.Equal(t, nil, err)
 }

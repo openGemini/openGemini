@@ -20,8 +20,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"go.uber.org/zap"
 )
 
 type ContinuousQuery struct {
@@ -50,6 +52,7 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 
 	qr, err := YyParser.GetQuery()
 	if err != nil {
+		logger.GetLogger().Warn("continuous query statement parse error", zap.Error(err))
 		return nil
 	}
 	if len(qr.Statements) == 0 {
@@ -66,6 +69,7 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 	// get the group by interval
 	interval, err := q.Source.GroupByInterval()
 	if err != nil {
+		logger.GetLogger().Warn("continuous query statement get group by interval error", zap.Error(err))
 		return nil
 	}
 	resampleFor := interval
@@ -78,6 +82,7 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 	// get the group by offset
 	groupByOffset, err := q.Source.GroupByOffset()
 	if err != nil {
+		logger.GetLogger().Warn("continuous query statement get group by offset error", zap.Error(err))
 		return nil
 	}
 

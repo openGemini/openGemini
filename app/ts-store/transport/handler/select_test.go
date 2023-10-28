@@ -124,6 +124,10 @@ func (s *MockStoreEngine) RowCount(_ string, _ uint32, _ []uint64, _ hybridqp.Ca
 	return 0, nil
 }
 
+func (s *MockStoreEngine) CheckPtsRemovedDone() error {
+	return nil
+}
+
 type DummySeriesTransform struct {
 	executor.BaseProcessor
 }
@@ -305,7 +309,7 @@ func mockStorage(dir string) *storage.Storage {
 		Pushers:      "http",
 		StoreEnabled: true,
 	}
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	config := &config.TSStore{
 		Data:    storeConfig,
 		Monitor: monitorConfig,

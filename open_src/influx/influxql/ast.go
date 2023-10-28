@@ -770,31 +770,33 @@ func (s *CreateDatabaseStatement) RequiredPrivileges() (ExecutionPrivileges, err
 }
 
 type CreateMeasurementStatement struct {
-	Database        string
-	RetentionPolicy string
-	Name            string
-	ShardKey        []string
-	EngineType      string
-	PrimaryKey      []string
-	SortKey         []string
-	Property        [][]string
-	Type            string
-	Tags            map[string]int32
-	Fields          map[string]int32
-	IndexType       []string
-	IndexList       [][]string
-	IndexOption     []*IndexOption
+	Database            string
+	RetentionPolicy     string
+	Name                string
+	ShardKey            []string
+	EngineType          string
+	PrimaryKey          []string
+	SortKey             []string
+	Property            [][]string
+	Type                string
+	Tags                map[string]int32
+	Fields              map[string]int32
+	IndexType           []string
+	IndexList           [][]string
+	IndexOption         []*IndexOption
+	TimeClusterDuration time.Duration
 }
 
 type CreateMeasurementStatementOption struct {
-	IndexType  []string
-	IndexList  [][]string
-	ShardKey   []string
-	Type       string
-	EngineType string
-	PrimaryKey []string
-	SortKey    []string
-	Property   [][]string
+	IndexType           []string
+	IndexList           [][]string
+	ShardKey            []string
+	Type                string
+	EngineType          string
+	PrimaryKey          []string
+	SortKey             []string
+	Property            [][]string
+	TimeClusterDuration time.Duration
 }
 
 type IndexOption struct {
@@ -1371,8 +1373,6 @@ type SelectStatement struct {
 	// An expression evaluated on data point.
 	Condition Expr
 
-	SourceCondition Expr
-
 	// Fields to sort results by.
 	SortFields SortFields
 
@@ -1723,7 +1723,6 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	WalkFunc(other.Fields, getFieldVarRef)
 	WalkFunc(other.Condition, getCondVarRef)
-	WalkFunc(other.SourceCondition, getCondVarRef)
 
 	if len(allVarRef) > 0 {
 		err := EvalTypeBatch(allVarRef, other.Sources, m, &other.Schema, batchEn)
@@ -1731,14 +1730,12 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 			if err == ErrUnsupportBatchMap {
 				WalkFunc(other.Fields, mapType)
 				WalkFunc(other.Condition, mapType)
-				WalkFunc(other.SourceCondition, mapType)
 			} else {
 				return nil, err
 			}
 		} else {
 			WalkFunc(other.Fields, rewrite)
 			WalkFunc(other.Condition, rewrite)
-			WalkFunc(other.SourceCondition, rewrite)
 		}
 	}
 

@@ -272,7 +272,7 @@ func TestTSStoreThroughput(t *testing.T) {
 
 func TestHAPolicy(t *testing.T) {
 	require.NotEmpty(t, config.SetHaPolicy("invalid_policy"))
-	require.NoError(t, config.SetHaPolicy("replication"))
+	require.NoError(t, config.SetHaPolicy(config.RepPolicy))
 	require.True(t, config.IsReplication())
 	require.NoError(t, config.SetHaPolicy(config.DefaultHaPolicy))
 }

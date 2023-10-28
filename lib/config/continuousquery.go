@@ -43,7 +43,7 @@ const (
 // NewContinuousQueryConfig returns a new instance of ContinuousQueryConfig with defaults.
 func NewContinuousQueryConfig() ContinuousQueryConfig {
 	return ContinuousQueryConfig{
-		Enabled:            false,
+		Enabled:            true,
 		RunInterval:        toml.Duration(DefaultRunInterval),
 		MaxProcessCQNumber: 0,
 	}

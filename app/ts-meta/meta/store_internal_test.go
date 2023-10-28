@@ -26,11 +26,14 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestCheckLeaderChanged(t *testing.T) {
@@ -372,7 +375,8 @@ func Test_applyCreateContinuousQuery(t *testing.T) {
 		cqLease: map[string]*cqLeaseInfo{
 			"127.0.0.1:8086": {},
 		},
-		data: &meta2.Data{},
+		data:   &meta2.Data{},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	fsm := (*storeFSM)(s)
 	value := &proto2.CreateContinuousQueryCommand{
@@ -430,6 +434,7 @@ func Test_applyContinuousQueryReportCommand(t *testing.T) {
 				},
 			},
 		},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	fsm := (*storeFSM)(s)
 	ts := time.Now()
@@ -468,6 +473,7 @@ func Test_applyDropContinuousQuery(t *testing.T) {
 				},
 			},
 		},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	fsm := (*storeFSM)(s)
 	value := &proto2.DropContinuousQueryCommand{
@@ -502,6 +508,7 @@ func Test_applyNotifyCQLeaseChanged(t *testing.T) {
 				},
 			},
 		},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	fsm := (*storeFSM)(s)
 	value := &proto2.NotifyCQLeaseChangedCommand{}

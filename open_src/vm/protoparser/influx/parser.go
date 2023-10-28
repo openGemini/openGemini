@@ -458,6 +458,7 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 			rows = append(rows, Row{})
 		}
 		row := &rows[len(rows)-1]
+		row.StreamOnly = false
 		src, tagPool, fieldPool, indexOptionPool, indexKeyPool, err =
 			row.FastUnmarshalBinary(src, tagPool, fieldPool, indexOptionPool, indexKeyPool)
 		if err != nil {

@@ -236,6 +236,26 @@ func buildAggChunk() []executor.Chunk {
 	return dstChunks
 }
 
+func buildAggGroupByChunk() []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 1)
+	rowDataType := buildAggRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("cpu")
+	inCk1.AppendTagsAndIndex(*executor.NewChunkTagsByTagKVs([]string{"field1_string"}, []string{"test-test-test-test-0"}), 0)
+	inCk1.AppendTimes([]int64{1609459200000000000})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1})
+	inCk1.Column(0).AppendNotNil()
+
+	inCk1.Column(1).AppendFloatValues([]float64{1.1})
+	inCk1.Column(1).AppendNotNil()
+
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
 func buildCountChunk() []executor.Chunk {
 	dstChunks := make([]executor.Chunk, 0, 1)
 	rowDataType := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "count_time", Type: influxql.Integer})
@@ -439,7 +459,7 @@ time = 1609459200000000000 and field2_int = 1`,
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			opt.SourceCondition = stmt.Condition
+			opt.Condition = stmt.Condition
 			opt.SetTimeFirstKey()
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
@@ -643,6 +663,7 @@ func TestColumnStoreReader(t *testing.T) {
 	for _, tt := range []struct {
 		skip      bool
 		exec      bool
+		scanErr   bool
 		name      string
 		q         string
 		tr        util.TimeRange
@@ -664,7 +685,7 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunks,
 		},
 		{
-			name:      "select * from cpu limit order by time desc limit 1",
+			name:      "select * from cpu orderBy desc limit 1",
 			q:         `select field1_string,field2_int,field3_bool,field4_float from cpu order by time desc limit 1`,
 			tr:        util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 			out:       buildComRowDataType(),
@@ -675,7 +696,7 @@ func TestColumnStoreReader(t *testing.T) {
 			exec:      false,
 		},
 		{
-			name: "select * from cpu where timeFilter group by field1_string",
+			name: "select * from cpu where timeFilter groupBy",
 			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where
 				time >= 1609459200000000000 and time <= 1609459201000000000`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200100000000},
@@ -697,7 +718,7 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunks,
 		},
 		{
-			name: "select sum(field2_int),sum(field4_float) from cpu where timeFilter and fieldFilter",
+			name: "select sum(filed) from cpu where timeFilter and fieldFilter",
 			q: `select sum(field2_int),sum(field4_float) from cpu where
 		time >= 1609459200000000000`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
@@ -708,7 +729,7 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunks,
 		},
 		{
-			name: "select sum(field2_int),sum(field4_float) from cpu where timeFilter and fieldFilter limit 1",
+			name: "select sum(filed) from cpu where timeFilter and fieldFilter limit 1",
 			q: `select sum(field2_int),sum(field4_float) from cpu where
 		time >= 1609459200000000000 limit 1`,
 			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
@@ -716,6 +737,17 @@ func TestColumnStoreReader(t *testing.T) {
 			readerOps: buildAggReaderOps(),
 			fields:    fields,
 			expected:  buildAggChunk(),
+			expect:    testEqualChunks,
+		},
+		{
+			name: "select sum(field) from cpu where timeFilter and fieldFilter groupBy",
+			q: `select sum(field2_int),sum(field4_float) from cpu where
+		time >= 1609459200000000000 group by field1_string`,
+			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  buildAggGroupByChunk(),
 			expect:    testEqualChunks,
 		},
 		{
@@ -729,7 +761,7 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunk1,
 		},
 		{
-			name:      "select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1'",
+			name:      "select sum(field) from cpu where timeFilter and fieldFilter",
 			q:         `select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1'`,
 			tr:        util.TimeRange{Min: 1609460838300000000, Max: influxql.MaxTime},
 			out:       buildAggRowDataType(),
@@ -737,6 +769,17 @@ func TestColumnStoreReader(t *testing.T) {
 			fields:    fields,
 			expected:  nil,
 			expect:    testEqualChunk1,
+		},
+		{
+			name:      "select sum(field) from cpu where timeFilter and fieldFilter",
+			q:         `select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1'`,
+			tr:        util.TimeRange{Min: 1609460838300000000, Max: influxql.MaxTime},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  nil,
+			expect:    testEqualChunk1,
+			scanErr:   true, // Initialize an index scan err
 		},
 		{
 			name:      "select sum(field2_int) from cpu",
@@ -757,6 +800,9 @@ func TestColumnStoreReader(t *testing.T) {
 			if tt.exec {
 				sh.immTables = immutable.NewTableStore(immutable.GetDir(config.COLUMNSTORE, testDir), sh.lock, &sh.tier, false, immutable.GetColStoreConfig())
 			}
+			if tt.scanErr {
+				sh.sparseIndexReader = sparseindex.NewIndexReader(0, 0, 0)
+			}
 			// step1: parse stmt and opt
 			ctx := context.Background()
 
@@ -770,7 +816,7 @@ func TestColumnStoreReader(t *testing.T) {
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
-			opt.SourceCondition = stmt.Condition
+			opt.Condition = stmt.Condition
 			opt.MaxParallel = 1
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
@@ -800,7 +846,7 @@ func TestColumnStoreReader(t *testing.T) {
 			// step3: build the pipeline executor from the dag
 			executors := executor.NewPipelineExecutor(processors)
 			err = executors.Execute(ctx)
-			if err != nil {
+			if err != nil && !tt.scanErr {
 				t.Fatalf("connect error")
 			}
 			executors.Release()

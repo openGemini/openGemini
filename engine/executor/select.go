@@ -516,17 +516,17 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 			continue
 		}
 		p := RebuildColumnStorePlan(child)
-		switch c := plan.(type) {
+		switch n := plan.(type) {
 		case *LogicalExchange:
 			var eType ExchangeType
 			var eTraits []hybridqp.Trait
-			if c.eType == NODE_EXCHANGE {
+			if n.eType == NODE_EXCHANGE {
 				eType = NODE_EXCHANGE
-				eTraits = c.eTraits
-			} else if c.eType == READER_EXCHANGE {
+				eTraits = n.eTraits
+			} else if n.eType == READER_EXCHANGE {
 				eType = READER_EXCHANGE
 			}
-			if plan.Schema().HasCall() {
+			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE) {
 				node := NewLogicalHashAgg(p[0], plan.Schema(), eType, eTraits)
 				if node.schema.HasCall() {
 					n := findChildAggNode(plan)
@@ -578,7 +578,9 @@ func RebuildAggNodes(plan hybridqp.QueryNode) {
 		}
 	}
 	if childPlan, ok := plan.Children()[0].(*LogicalAggregate); ok {
-		if _, ok = childPlan.Children()[0].(*LogicalOrderBy); !ok {
+		switch childPlan.Children()[0].(type) {
+		case *LogicalOrderBy, *LogicalSortAppend, *LogicalFullJoin:
+		default:
 			plan.SetInputs(plan.Children()[0].Children())
 		}
 	}

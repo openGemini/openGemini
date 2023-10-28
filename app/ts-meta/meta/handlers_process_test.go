@@ -46,8 +46,8 @@ func TestCreateDatabase(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	mms.service.clusterManager.WaitEventDone()
 	db := "test"
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	globalService.store.NetStore = NewMockNetStorage()
 	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
@@ -214,4 +214,20 @@ func TestGetCqLeaseProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal("TestGetCqLeaseProcess fail", err)
 	}
+}
+
+func TestVerifyDataNodeStatusProcess(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	msg := message.NewMetaMessage(message.VerifyDataNodeStatusRequestMessage, &message.VerifyDataNodeStatusRequest{
+		NodeID: 2,
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	var err error
+	if err = h.SetRequestMsg(msg.Data()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = h.Process()
+	assert.NoError(t, err)
 }

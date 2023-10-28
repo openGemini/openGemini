@@ -26,15 +26,22 @@ const (
 	StatusLeft
 )
 
+const (
+	Normal uint64 = iota
+	Segregating
+	Segregated
+)
+
 // NodeInfo represents information about a single node in the cluster.
 type NodeInfo struct {
-	ID         uint64
-	Host       string
-	RPCAddr    string
-	TCPHost    string
-	Status     serf.MemberStatus
-	LTime      uint64
-	GossipAddr string
+	ID              uint64
+	Host            string
+	RPCAddr         string
+	TCPHost         string
+	Status          serf.MemberStatus
+	LTime           uint64
+	GossipAddr      string
+	SegregateStatus uint64
 }
 
 // clone returns a deep copy of ni.
@@ -50,6 +57,7 @@ func (ni NodeInfo) marshal() *proto2.NodeInfo {
 	pb.Status = proto.Int64(int64(ni.Status))
 	pb.LTime = proto.Uint64(ni.LTime)
 	pb.GossipAddr = proto.String(ni.GossipAddr)
+	pb.SegregateStatus = proto.Uint64(ni.SegregateStatus)
 	return pb
 }
 
@@ -62,6 +70,7 @@ func (ni *NodeInfo) unmarshal(pb *proto2.NodeInfo) {
 	ni.Status = serf.MemberStatus(pb.GetStatus())
 	ni.LTime = pb.GetLTime()
 	ni.GossipAddr = pb.GetGossipAddr()
+	ni.SegregateStatus = pb.GetSegregateStatus()
 }
 
 type DataNode struct {

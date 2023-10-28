@@ -29,6 +29,10 @@ import (
 	"golang.org/x/text/transform"
 )
 
+// Use byte 0 to replace spaces as the separator of stream group values.
+const StreamGroupValueSeparator byte = 0
+const StreamGroupValueStrSeparator string = "\x00"
+
 type Validator interface {
 	Validate() error
 }

@@ -33,8 +33,9 @@ import (
 )
 
 const (
-	unorderedDir      = "out-of-order"
-	tsspFileSuffix    = ".tssp"
+	unorderedDir   = "out-of-order"
+	tsspFileSuffix = ".tssp"
+
 	tmpFileSuffix     = ".init"
 	tmpSuffixNameLen  = len(tmpFileSuffix)
 	tsspFileSuffixLen = len(tsspFileSuffix)
@@ -787,18 +788,46 @@ func (g *CompactGroup) release() {
 }
 
 type FilesInfo struct {
-	name         string // measurement name with version
-	shId         uint64
-	dropping     *int64
-	compIts      FileIterators
-	oldFiles     []TSSPFile
-	oldFids      []string
-	maxColumns   int
-	maxChunkRows int
-	avgChunkRows int
-	estimateSize int
-	maxChunkN    int
-	toLevel      uint16
+	name          string // measurement name with version
+	shId          uint64
+	dropping      *int64
+	compIts       FileIterators
+	oldFiles      []TSSPFile
+	oldIndexFiles []string
+	oldFids       []string
+	maxColumns    int
+	maxChunkRows  int
+	avgChunkRows  int
+	estimateSize  int
+	maxChunkN     int
+	toLevel       uint16
+}
+
+func (fi *FilesInfo) updatingFilesInfo(f TSSPFile, itr *FileIterator) {
+	maxRows, avgRows := f.MaxChunkRows(), f.AverageChunkRows()
+	if fi.maxChunkRows < maxRows {
+		fi.maxChunkRows = maxRows
+	}
+
+	fi.avgChunkRows += avgRows
+	if fi.maxChunkN < itr.chunkN {
+		fi.maxChunkN = itr.chunkN
+	}
+
+	if fi.maxColumns < int(itr.curtChunkMeta.columnCount) {
+		fi.maxColumns = int(itr.curtChunkMeta.columnCount)
+	}
+
+	fi.estimateSize += int(itr.r.FileSize())
+}
+
+func (fi *FilesInfo) updateFinalFilesInfo(group *CompactGroup) {
+	fi.avgChunkRows /= len(fi.compIts)
+	fi.dropping = group.dropping
+	fi.name = group.name
+	fi.shId = group.shardId
+	fi.toLevel = group.toLevel
+	fi.oldFids = group.group
 }
 
 func GetTmpFileSuffix() string {

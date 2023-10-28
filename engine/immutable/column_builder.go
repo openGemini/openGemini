@@ -28,10 +28,11 @@ import (
 )
 
 type ColumnBuilder struct {
-	data    []byte
-	cm      *ChunkMeta
-	colMeta *ColumnMeta
-	segCol  []record.ColVal
+	data     []byte
+	position int
+	cm       *ChunkMeta
+	colMeta  *ColumnMeta
+	segCol   []record.ColVal
 
 	intPreAggBuilder    PreAggBuilder
 	floatPreAggBuilder  PreAggBuilder
@@ -139,7 +140,7 @@ func (b *ColumnBuilder) encIntegerColumn(timeCols []record.ColVal, segCols []rec
 
 		times := tmCol.IntegerValues()
 		b.intPreAggBuilder.addValues(segCol, times)
-		m := &b.colMeta.entries[i]
+		m := &b.colMeta.entries[i+b.position] // cur entry pos
 		m.setOffset(offset)
 
 		pos := len(b.data)
@@ -182,7 +183,7 @@ func (b *ColumnBuilder) encFloatColumn(timeCols []record.ColVal, segCols []recor
 
 		times := tmCol.IntegerValues()
 		b.floatPreAggBuilder.addValues(segCol, times)
-		m := &b.colMeta.entries[i]
+		m := &b.colMeta.entries[i+b.position]
 		m.setOffset(offset)
 
 		pos := len(b.data)
@@ -226,7 +227,7 @@ func (b *ColumnBuilder) encStringColumn(timeCols []record.ColVal, segCols []reco
 
 		times := tmCol.IntegerValues()
 		b.stringPreAggBuilder.addValues(segCol, times)
-		m := &b.colMeta.entries[i]
+		m := &b.colMeta.entries[i+b.position]
 		m.setOffset(offset)
 
 		pos := len(b.data)
@@ -269,7 +270,7 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 
 		times := tmCol.IntegerValues()
 		b.boolPreAggBuilder.addValues(segCol, times)
-		m := &b.colMeta.entries[i]
+		m := &b.colMeta.entries[i+b.position]
 		m.setOffset(offset)
 
 		pos := len(b.data)

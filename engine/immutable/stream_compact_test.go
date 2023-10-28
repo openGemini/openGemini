@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -160,7 +161,7 @@ func TestFileIterator(t *testing.T) {
 		dropping: &dropping,
 	}
 
-	fi, err := store.NewFileIterators(&group)
+	fi, err := store.ImmTable.NewFileIterators(store, &group)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +211,32 @@ func TestFileIterator(t *testing.T) {
 	}
 
 	fi.compIts.Close()
+}
+
+func TestFileIteratorError(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+
+	conf := NewTsStoreConfig()
+	conf.maxRowsPerSegment = 100
+	conf.maxSegmentLimit = 65535
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	store.SetImmTableType(config.TSSTORE)
+
+	names := make([]string, 8)
+	dropping := int64(0)
+	group := CompactGroup{
+		name:     "mst",
+		shardId:  1,
+		toLevel:  1,
+		group:    names,
+		dropping: &dropping,
+	}
+	store.Close()
+	_, err := store.ImmTable.NewFileIterators(store, &group)
+	require.Equal(t, err, errors.New("compact stopped"))
 }
 
 func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {

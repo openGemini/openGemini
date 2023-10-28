@@ -104,6 +104,8 @@ var (
 	// with an existing policy.
 	ErrRetentionPolicyConflict = errors.New("retention policy conflicts with an existing policy")
 
+	ErrReplicaNConflict = errors.New("retention policy replicaN conflicts with database replicaN")
+
 	// ErrIncompatibleDurations is returned when creating or updating a
 	// retention policy that has a duration lower than the current shard
 	// duration.

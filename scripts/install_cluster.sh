@@ -29,23 +29,11 @@ if [ "$(uname -s)" == "Darwin" ]; then
 
   echo "ref link:"
   echo "https://superuser.com/questions/458875/how-do-you-get-loopback-addresses-other-than-127-0-0-1-to-work-on-os-x"
-  echo "temporarily open 127.0.0.2/127.0.0.3 for ts-store/ts-meta, please enter admin pwd:"
+  echo "temporarily open 127.0.0.2/127.0.0.3 for ts-store/ts-meta, please enter your power-on password"
   sudo ifconfig lo0 alias 127.0.0.2 up
   sudo ifconfig lo0 alias 127.0.0.3 up
+  echo "\nif sed command occur error, please install gsed by: \nbrew install gnu-sed\nand then:\nexport PATH=\"/opt/homebrew/opt/gnu-sed/libexec/gnubin:\$PATH\""
 
-  # generate config
-  for((i = 1; i <= 3; i++))
-  do
-      rm -rf config/openGemini-$i.conf
-      cp config/openGemini.conf config/openGemini-$i.conf
-
-      sed -i "" "s/{{meta_addr_1}}/${nodes[1]}/g" config/openGemini-$i.conf
-      sed -i "" "s/{{meta_addr_2}}/${nodes[2]}/g" config/openGemini-$i.conf
-      sed -i "" "s/{{meta_addr_3}}/${nodes[3]}/g" config/openGemini-$i.conf
-      sed -i "" "s/{{addr}}/${nodes[$i]}/g" config/openGemini-$i.conf
-
-      sed -i "" "s/{{id}}/$i/g" config/openGemini-$i.conf
-  done
 elif [ "$(uname -s)" == "Linux" ]; then
   ps -ef | grep -v grep | grep ts-store | grep $USER > /dev/null
   if [ $? == 0 ];then
@@ -62,23 +50,24 @@ elif [ "$(uname -s)" == "Linux" ]; then
     killall -9 -w ts-sql
   fi
 
-  # generate config
-  for((i = 1; i <= 3; i++))
-  do
-      rm -rf config/openGemini-$i.conf
-      cp config/openGemini.conf config/openGemini-$i.conf
-
-      sed -i "s/{{meta_addr_1}}/${nodes[1]}/g" config/openGemini-$i.conf
-      sed -i "s/{{meta_addr_2}}/${nodes[2]}/g" config/openGemini-$i.conf
-      sed -i "s/{{meta_addr_3}}/${nodes[3]}/g" config/openGemini-$i.conf
-      sed -i "s/{{addr}}/${nodes[$i]}/g" config/openGemini-$i.conf
-
-      sed -i "s/{{id}}/$i/g" config/openGemini-$i.conf
-  done
 else
   echo "not support the platform": $(uname)
   exit 1
 fi
+
+# generate config
+for((i = 1; i <= 3; i++))
+do
+    rm -rf config/openGemini-$i.conf
+    cp config/openGemini.conf config/openGemini-$i.conf
+
+    sed -i "s/{{meta_addr_1}}/${nodes[1]}/g" config/openGemini-$i.conf
+    sed -i "s/{{meta_addr_2}}/${nodes[2]}/g" config/openGemini-$i.conf
+    sed -i "s/{{meta_addr_3}}/${nodes[3]}/g" config/openGemini-$i.conf
+    sed -i "s/{{addr}}/${nodes[$i]}/g" config/openGemini-$i.conf
+
+    sed -i "s/{{id}}/$i/g" config/openGemini-$i.conf
+done
 
 rm -rf /tmp/openGemini/logs
 mkdir -p /tmp/openGemini/logs/1

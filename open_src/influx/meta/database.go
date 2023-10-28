@@ -10,6 +10,8 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
+	"sort"
+
 	"github.com/gogo/protobuf/proto"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
@@ -270,5 +272,16 @@ func (di *DatabaseBriefInfo) Marshal() ([]byte, error) {
 func (di *DatabaseInfo) WalkContinuousQuery(fn func(cq *ContinuousQueryInfo)) {
 	for cqName := range di.ContinuousQueries {
 		fn(di.ContinuousQueries[cqName])
+	}
+}
+
+func (di *DatabaseInfo) WalkRetentionPolicyOrderly(fn func(rp *RetentionPolicyInfo)) {
+	rpNames := make([]string, 0, len(di.RetentionPolicies))
+	for rpName := range di.RetentionPolicies {
+		rpNames = append(rpNames, rpName)
+	}
+	sort.Strings(rpNames)
+	for i := 0; i < len(rpNames); i++ {
+		fn(di.RetentionPolicies[rpNames[i]])
 	}
 }

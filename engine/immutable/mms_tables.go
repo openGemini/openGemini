@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -45,7 +46,7 @@ type TablesStore interface {
 	Close() error
 	AddTable(ms *MsBuilder, isOrder bool, tmp bool)
 	AddTSSPFiles(name string, isOrder bool, f ...TSSPFile)
-	AddPKFile(name, file string, rec *record.Record, mark fragment.IndexFragment)
+	AddPKFile(name, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8)
 	GetPKFile(mstName string, file string) (pkInfo *colstore.PKInfo, ok bool)
 	FreeAllMemReader()
 	ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isOrder bool) error
@@ -80,102 +81,28 @@ type TablesStore interface {
 	EnableCompAndMerge()
 	FreeSequencer() bool
 	SetImmTableType(engineType config.EngineType)
+	SetMstInfo(name string, mstInfo *MeasurementInfo)
 	SeriesTotal() uint64
 }
 
 type ImmTable interface {
+	refMmsTable(m *MmsTables, name string, refOutOfOrder bool) (*sync.WaitGroup, *sync.WaitGroup)
+	unrefMmsTable(m *MmsTables, orderWg, outOfOrderWg *sync.WaitGroup)
 	addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nameWithVer string)
+	getTSSPFiles(m *MmsTables, mstName string, isOrder bool) (*TSSPFiles, bool)
+	getFiles(m *MmsTables, isOrder bool) map[string]*TSSPFiles
+	compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error
+	NewFileIterators(m *MmsTables, group *CompactGroup) (FilesInfo, error)
 	AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile)
+	LevelPlan(m *MmsTables, level uint16) []*CompactGroup
+	SetMstInfo(name string, mstInfo *MeasurementInfo)
 }
 
-type tsImmTableImpl struct {
-}
-
-func (t *tsImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile) {
-	m.mu.RLock()
-	tables := m.Order
-	if !isOrder {
-		tables = m.OutOfOrder
-	}
-	fs, ok := tables[name]
-	m.mu.RUnlock()
-
-	if !ok || fs == nil {
-		m.mu.Lock()
-		fs, ok = tables[name]
-		if !ok {
-			fs = NewTSSPFiles()
-			tables[name] = fs
-		}
-		m.mu.Unlock()
-	}
-
-	for _, f := range files {
-		stats.IOStat.AddIOSnapshotBytes(f.FileSize())
-	}
-
-	fs.lock.Lock()
-	fs.files = append(fs.files, files...)
-	sort.Sort(fs)
-	fs.lock.Unlock()
-}
-
-func (t *tsImmTableImpl) addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nameWithVer string) {
-	mmsTbls := m.Order
-	if !isOrder {
-		mmsTbls = m.OutOfOrder
-	}
-
-	v, ok := mmsTbls[nameWithVer]
-	if !ok || v == nil {
-		v = NewTSSPFiles()
-		mmsTbls[nameWithVer] = v
-	}
-	v.lock.Lock()
-	v.files = append(v.files, f)
-	v.lock.Unlock()
-}
-
-type csImmTableImpl struct {
-}
-
-func (c *csImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile) {
-	m.mu.RLock()
-	tables := m.CSFiles
-	fs, ok := tables[name]
-	m.mu.RUnlock()
-
-	if !ok || fs == nil {
-		m.mu.Lock()
-		fs, ok = tables[name]
-		if !ok {
-			fs = NewTSSPFiles()
-			tables[name] = fs
-		}
-		m.mu.Unlock()
-	}
-
-	for _, f := range files {
-		stats.IOStat.AddIOSnapshotBytes(f.FileSize())
-	}
-
-	fs.lock.Lock()
-	fs.files = append(fs.files, files...)
-	sort.Sort(fs)
-	fs.lock.Unlock()
-}
-
-func (c *csImmTableImpl) addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nameWithVer string) {
-	mmsTbls := m.CSFiles
-	v, ok := mmsTbls[nameWithVer]
-	if !ok || v == nil {
-		v = NewTSSPFiles()
-		mmsTbls[nameWithVer] = v
-	}
-
-	v.lock.Lock()
-	v.files = append(v.files, f)
-	v.lock.Unlock()
+type MeasurementInfo struct {
+	Name       string // measurement name with version
+	Schema     map[string]int32
+	PrimaryKey []string
+	SortKey    []string
 }
 
 type MmsTables struct {
@@ -252,9 +179,16 @@ func (m *MmsTables) SetImmTableType(engineType config.EngineType) {
 		m.ImmTable = &tsImmTableImpl{}
 		m.engineType = config.TSSTORE
 	} else if engineType == config.COLUMNSTORE {
-		m.ImmTable = &csImmTableImpl{}
+		m.ImmTable = &csImmTableImpl{
+			mstsInfo:   make(map[string]*MeasurementInfo),
+			primaryKey: make(map[string]record.Schemas),
+		}
 		m.engineType = config.COLUMNSTORE
 	}
+}
+
+func (m *MmsTables) SetMstInfo(name string, mstInfo *MeasurementInfo) {
+	m.ImmTable.SetMstInfo(name, mstInfo)
 }
 
 func (m *MmsTables) Tier() uint64 {
@@ -513,7 +447,7 @@ func (m *MmsTables) IsOutOfOrderFilesExist() bool {
 	return len(m.OutOfOrder) != 0
 }
 
-func (m *MmsTables) addPKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment) {
+func (m *MmsTables) addPKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8) {
 	fs, ok := m.PKFiles[mstName]
 
 	if !ok {
@@ -521,10 +455,10 @@ func (m *MmsTables) addPKFile(mstName string, file string, rec *record.Record, m
 		m.PKFiles[mstName] = fs
 	}
 
-	fs.SetPKInfo(file, rec, mark)
+	fs.SetPKInfo(file, rec, mark, tcLocation)
 }
 
-func (m *MmsTables) AddPKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment) {
+func (m *MmsTables) AddPKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8) {
 	m.mu.RLock()
 	tables := m.PKFiles
 	fs, ok := tables[mstName]
@@ -540,7 +474,7 @@ func (m *MmsTables) AddPKFile(mstName string, file string, rec *record.Record, m
 		m.mu.Unlock()
 	}
 
-	fs.SetPKInfo(file, rec, mark)
+	fs.SetPKInfo(file, rec, mark, tcLocation)
 }
 
 func (m *MmsTables) GetPKFile(mstName string, file string) (pkInfo *colstore.PKInfo, ok bool) {
@@ -556,11 +490,42 @@ func (m *MmsTables) GetPKFile(mstName string, file string) (pkInfo *colstore.PKI
 	return
 }
 
+func (m *MmsTables) ReplacePKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment, oldIndexFiles []string) error {
+	m.mu.RLock()
+	tables := m.PKFiles
+	fs, ok := tables[mstName]
+	m.mu.RUnlock()
+	if !ok {
+		return errors.New("mst is not exist in pkFiles when replace pkFiles")
+	}
+
+	m.mu.Lock()
+	for i := range oldIndexFiles {
+		fs.DelPKInfo(oldIndexFiles[i])
+	}
+	m.mu.Unlock()
+
+	fs.SetPKInfo(file, rec, mark, colstore.DefaultTCLocation)
+	return nil
+}
+
+func (m *MmsTables) getPKFiles(mstName string) (*colstore.PKFiles, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	files, ok := m.PKFiles[mstName]
+	return files, ok
+}
+
 func (m *MmsTables) sortTSSPFiles() {
 	for _, item := range m.Order {
 		sort.Sort(item)
 	}
 	for _, item := range m.OutOfOrder {
+		sort.Sort(item)
+	}
+
+	for _, item := range m.CSFiles {
 		sort.Sort(item)
 	}
 }
@@ -767,11 +732,7 @@ func (m *MmsTables) ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isO
 		return err
 	}
 
-	mmsTables := m.Order
-	if !isOrder {
-		mmsTables = m.OutOfOrder
-	}
-
+	mmsTables := m.ImmTable.getFiles(m, isOrder)
 	m.mu.RLock()
 	fs, ok := mmsTables[name]
 	m.mu.RUnlock()
@@ -1022,26 +983,13 @@ func (m *MmsTables) mmsPlan(name string, files *TSSPFiles, level uint16, minGrou
 	return plans
 }
 
-func (m *MmsTables) LevelPlan(level uint16) []*CompactGroup {
-	if !m.CompactionEnabled() {
-		return nil
+func (m *MmsTables) getMmsPlan(name string, files *TSSPFiles, level uint16, minGroupFileN int, plans []*CompactGroup) []*CompactGroup {
+	files.lock.RLock()
+	defer files.lock.RUnlock()
+	if atomic.LoadInt64(&files.closing) > 0 || files.Len() < minGroupFileN {
+		return plans
 	}
-
-	var plans []*CompactGroup
-	minGroupFileN := LeveLMinGroupFiles[level]
-
-	m.mu.RLock()
-	for k, v := range m.Order {
-		v.lock.RLock()
-		if atomic.LoadInt64(&v.closing) > 0 || v.Len() < minGroupFileN {
-			v.lock.RUnlock()
-			continue
-		}
-		plans = m.mmsPlan(k, v, level, minGroupFileN, plans)
-		v.lock.RUnlock()
-	}
-	m.mu.RUnlock()
-
+	plans = m.mmsPlan(name, files, level, minGroupFileN, plans)
 	return plans
 }
 
@@ -1059,7 +1007,7 @@ func (m *MmsTables) genCompactPlan(seqMap *dictpool.Dict, minGroupFileN int, nam
 }
 
 func (m *MmsTables) File(mstName string, fileName string, isOrder bool) TSSPFile {
-	files, ok := m.getTSSPFiles(mstName, isOrder)
+	files, ok := m.ImmTable.getTSSPFiles(m, mstName, isOrder)
 	if !ok || files == nil {
 		return nil
 	}
@@ -1081,16 +1029,7 @@ func (m *MmsTables) File(mstName string, fileName string, isOrder bool) TSSPFile
 }
 
 func (m *MmsTables) getTSSPFiles(mstName string, isOrder bool) (*TSSPFiles, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	mmsTbls := m.Order
-	if !isOrder {
-		mmsTbls = m.OutOfOrder
-	}
-
-	files, ok := mmsTbls[mstName]
-	return files, ok
+	return m.ImmTable.getTSSPFiles(m, mstName, isOrder)
 }
 
 func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {

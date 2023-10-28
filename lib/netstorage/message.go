@@ -507,3 +507,70 @@ func (r *PtResponse) Error() error {
 	}
 	return NormalizeError(r.Err)
 }
+
+type SegregateNodeRequest struct {
+	netdata.SegregateNodeRequest
+}
+
+func NewSegregateNodeRequest() *SegregateNodeRequest {
+	return &SegregateNodeRequest{}
+}
+
+func (r *SegregateNodeRequest) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&r.SegregateNodeRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (r *SegregateNodeRequest) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &r.SegregateNodeRequest)
+}
+
+func (r *SegregateNodeRequest) Instance() transport.Codec {
+	return &SegregateNodeRequest{}
+}
+
+func (r *SegregateNodeRequest) Size() int {
+	return 0
+}
+
+type SegregateNodeResponse struct {
+	netdata.SegregateNodeResponse
+}
+
+func NewSegregateNodeResponse() *SegregateNodeResponse {
+	return &SegregateNodeResponse{}
+}
+
+func (r *SegregateNodeResponse) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&r.SegregateNodeResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (r *SegregateNodeResponse) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &r.SegregateNodeResponse)
+}
+
+func (r *SegregateNodeResponse) Instance() transport.Codec {
+	return &SegregateNodeResponse{}
+}
+
+func (r *SegregateNodeResponse) Size() int {
+	return 0
+}
+
+func (r *SegregateNodeResponse) Error() error {
+	if r.Err == nil {
+		return nil
+	}
+	return NormalizeError(r.Err)
+}

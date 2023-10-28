@@ -18,12 +18,14 @@ package meta
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
+	libStrings "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
@@ -51,6 +53,18 @@ type DownSamplePolicyInfo struct {
 	Calls              []*DownSampleOperators
 	DownSamplePolicies []*DownSamplePolicy
 	Duration           time.Duration
+}
+
+func (d *DownSamplePolicyInfo) GetCalls() map[int64][]string {
+	calls := make(map[int64][]string)
+	for _, item := range d.Calls {
+		calls[item.DataType] = append(calls[item.DataType], item.RewriteOp()...)
+	}
+
+	for i := range calls {
+		calls[i] = libStrings.UnionSlice(calls[i])
+	}
+	return calls
 }
 
 type DownSamplePolicyInfoWithDbRp struct {
@@ -248,8 +262,18 @@ func (d *DownSamplePolicyInfo) Check(rpi *RetentionPolicyInfo) error {
 }
 
 func (d *DownSamplePolicyInfo) GetTypes() []int64 {
-	types := make([]int64, 0, len(d.Calls))
-	for _, c := range d.Calls {
+	types := make([]int64, 0, 2)
+
+	calls := d.Calls
+
+	sort.Slice(calls, func(i, j int) bool {
+		return calls[i].DataType < calls[j].DataType
+	})
+	for i, c := range calls {
+		if i > 0 && calls[i].DataType == calls[i-1].DataType {
+			continue
+		}
+
 		types = append(types, c.DataType)
 	}
 	return types

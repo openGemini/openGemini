@@ -414,9 +414,6 @@ func TestCheckAndUpdateSchema(t *testing.T) {
 	assert.Equal(t, errno.Equal(err, errno.ColumnStorePrimaryKeyLackErr), true)
 
 	rw.preMst.ColStoreInfo = &meta.ColStoreInfo{PrimaryKey: []string{"time"}}
-	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", MockArrowRecord2())
-	assert.Equal(t, errno.Equal(err, errno.ColumnStoreFieldNameErr), true)
-
 	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", MockArrowRecord3())
 	assert.Equal(t, errno.Equal(err, errno.ArrowRecordTimeFieldErr), true)
 

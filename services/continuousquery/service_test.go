@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -160,6 +161,12 @@ func TestService_handle(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	s.handle()
 	assert.Greater(t, s.lastReportTime.String(), lastReportTime.String())
+
+	syscontrol.UpdateNodeReadonly(true)
+	defer func() {
+		syscontrol.UpdateNodeReadonly(false)
+	}()
+	s.handle()
 }
 
 func TestService_shouldRunContinuousQuery(t *testing.T) {

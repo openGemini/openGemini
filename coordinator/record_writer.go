@@ -361,5 +361,6 @@ func IsKeepWritingErr(err error) bool {
 		errno.Equal(err, errno.ArrowRecordTimeFieldErr) ||
 		errno.Equal(err, errno.ColumnStoreFieldNameErr) ||
 		errno.Equal(err, errno.ColumnStoreFieldTypeErr) ||
-		errno.Equal(err, errno.BucketLacks)
+		errno.Equal(err, errno.BucketLacks) ||
+		errno.Equal(err, errno.PtNotFound)
 }

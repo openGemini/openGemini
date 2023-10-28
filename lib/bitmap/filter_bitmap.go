@@ -16,28 +16,29 @@ limitations under the License.
 
 package bitmap
 
-import "github.com/openGemini/openGemini/lib/record"
-
-const RowsNumPerFragment int = 8192
+import (
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
+)
 
 type FilterBitmap struct {
 	ReserveId []int
-	Bitmap    [][]byte
+	Bitmap    []*BitMap
 }
 
 func NewFilterBitmap(length int) *FilterBitmap {
 	f := &FilterBitmap{}
-	f.ReserveId = make([]int, 0, RowsNumPerFragment)
-	f.Bitmap = make([][]byte, length)
+	f.ReserveId = make([]int, 0, util.RowsNumPerFragment)
+	f.Bitmap = make([]*BitMap, length)
 	for i := range f.Bitmap {
-		f.Bitmap[i] = []byte{}
+		f.Bitmap[i] = &BitMap{}
 	}
 	return f
 }
 
 func (f *FilterBitmap) Reset() {
 	for i := range f.Bitmap {
-		f.Bitmap[i] = f.Bitmap[i][:0]
+		f.Bitmap[i].Val = f.Bitmap[i].Val[:0]
 	}
 	f.ReserveId = f.ReserveId[:0]
 }
@@ -50,12 +51,18 @@ func SetBitMap(bitMap []byte, idx int) {
 	bitMap[idx>>3] &= record.FlippedBitMask[idx&0x07]
 }
 
-func GetValWithOrOp(bitmap [][]byte, lastIdx int) [][]byte {
-	for i := 0; i < len(bitmap)-1; i++ {
-		for j := range bitmap[i] {
-			// Get target idx bitmap value under or operation
-			bitmap[lastIdx][j] = bitmap[lastIdx][j] | bitmap[i][j]
-		}
+type BitMap struct {
+	Val []byte
+}
+
+func (b *BitMap) And(b1 *BitMap) {
+	for i := 0; i < len(b.Val); i++ {
+		b.Val[i] = b.Val[i] & b1.Val[i]
 	}
-	return bitmap
+}
+
+func (b *BitMap) Or(b1 *BitMap) {
+	for i := 0; i < len(b.Val); i++ {
+		b.Val[i] = b.Val[i] | b1.Val[i]
+	}
 }

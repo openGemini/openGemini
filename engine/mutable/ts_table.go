@@ -59,7 +59,7 @@ func (t *tsMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 	}
 	if finish {
 		if writeMs != nil {
-			if err := WriteIntoFile(writeMs, true, false); err != nil {
+			if err := immutable.WriteIntoFile(writeMs, true, false); err != nil {
 				writeMs = nil
 				logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
 				return writeMs
@@ -200,6 +200,7 @@ func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo
 }
 
 func (t *tsMemTableImpl) Reset(table *MemTable) {
+
 }
 
 func (t *tsMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {

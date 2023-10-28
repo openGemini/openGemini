@@ -170,7 +170,7 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	statistics.DBPTStepDuration(opId, "DBPTFenceDuration", time.Since(start).Nanoseconds(), statistics.DBPTLoading, "")
 	// normalize createIndex with unique tsid in indexbuilder
 	// make logicClock which used for Generate UUID monotonically increasing
-	if metaclient.LogicClock > ver {
+	if !config.IsSharedStorage() {
 		ver = metaclient.LogicClock
 	}
 	dbPt.logicClock = ver
@@ -291,6 +291,9 @@ func (e *Engine) clearDbPtMigrating(db string, ptId uint32) {
 		return
 	}
 	delete(e.migratingDbPT[db], ptId)
+}
+func (e *Engine) CheckPtsRemovedDone() bool {
+	return len(e.DBPartitions) == 0
 }
 
 type fencer interface {

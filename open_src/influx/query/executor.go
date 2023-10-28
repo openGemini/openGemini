@@ -345,7 +345,7 @@ LOOP:
 
 		// Log each normalized statement.
 		if !ctx.Quiet {
-			e.Logger.Info("Executing query", zap.Stringer("query", stmt))
+			e.Logger.Info("Executing query", zap.String("query", stmt.String()))
 		}
 
 		// Send any other statements to the underlying statement executor.

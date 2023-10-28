@@ -462,6 +462,7 @@ func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 		"value1": influx.Field_Type_Float,
 		"value2": influx.Field_Type_Int,
 	}
+	mi.ColStoreInfo = &meta2.ColStoreInfo{}
 
 	fs := make([]*proto2.FieldSchema, 0, 8)
 
@@ -483,9 +484,9 @@ func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 	wh := newWriteHelper(pw)
 
 	var errors = []string{
-		"point schema length does not match ddl schema length: 3 != 2",
-		`column store write point has Invalid tag :tk1`,
-		"column store write point has Invalid field :value3",
+		"field type conflict: input field \"value2\" on measurement \"mst\" is type float, already exists as type integer",
+		"field type conflict: input field \"value2\" on measurement \"mst\" is type float, already exists as type integer",
+		"field type conflict",
 	}
 
 	var callback = func(db string, rows []influx.Row, err error) {
@@ -510,6 +511,63 @@ func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 	buf.WriteString(`mst,tk1=value11 value2=22`)
 	buf.WriteByte('\n')
 	buf.WriteString(`mst value2=22,value3=99`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+func TestPointsWriter_updateSchemaIfNeededErrorV2(t *testing.T) {
+	mi := meta2.NewMeasurementInfo("mst_0000")
+	mi.EngineType = config.COLUMNSTORE
+	mi.Schema = map[string]int32{
+		"tk1":    influx.Field_Type_Tag,
+		"value1": influx.Field_Type_Float,
+		"value2": influx.Field_Type_Int,
+	}
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		if len(fieldToCreate) > 0 && fieldToCreate[0].GetFieldName() == "value3" {
+			return fmt.Errorf("field type conflict")
+		}
+
+		for _, item := range fieldToCreate {
+			mi.Schema[item.GetFieldName()] = item.GetFieldType()
+		}
+		return nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var errors = []string{
+		`column store write point has Invalid tag :value1`,
+		"column store write point has Invalid field :tk1",
+	}
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for i, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+
+			if errors[i] == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, errors[i])
+			}
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="value1",value1=1.1 value2=2`)
+	buf.WriteByte('\n')
+	buf.WriteString(`mst tk1=1,value2=22,value3=99`)
 	buf.WriteByte('\n')
 	unmarshal(buf.Bytes(), callback)
 }
@@ -1065,4 +1123,20 @@ func TestResetRowsRouter(t *testing.T) {
 	rows = append(rows, influx.Row{ShardKey: bytesutil.ToUnsafeBytes("tag1")})
 	pw.resetRowsRouter(rows)
 	assert.Equal(t, 0, len(rows[0].ShardKey))
+}
+
+func TestPointsWriter_WritePointRows_TimeOutsideRange(t *testing.T) {
+	streamDistribution = sameShard
+	pw := NewPointsWriter(time.Second * 10)
+	pw.MetaClient = NewMockMetaClient()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	rows = generateRows(10, rows)
+	for i := range rows {
+		rows[i].Timestamp = 9223372036854775807
+	}
+	err := pw.writePointRows("db0", "rp0", rows)
+	if err == nil {
+		t.Fatal(err)
+	}
 }

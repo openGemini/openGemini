@@ -19,13 +19,18 @@ package binaryfilterfunc
 import (
 	"errors"
 
+	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
 func init() {
 	initIdxTypeFun()
 }
+
 func LeftRotate(expr influxql.Expr) influxql.Expr {
 	exp, ok := expr.(*influxql.BinaryExpr)
 	if !ok {
@@ -125,6 +130,7 @@ type IdxFunction struct {
 	Idx      int
 	Function func(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte
 	Compare  interface{}
+	Op       influxql.Token
 }
 
 type IdxFunctions []IdxFunction
@@ -150,38 +156,6 @@ func InitCondFunctions(expr influxql.Expr, schema *record.Schemas) (CondFunction
 	}
 
 	return funcs, nil
-}
-
-func InitTimeCondFunctions(startTime, endTime int64, schema *record.Schemas) IdxFunctions {
-	var funcs IdxFunctions
-	if startTime == endTime {
-		f := IdxFunction{
-			Idx: len(*schema) - 1,
-		}
-		f.Compare = startTime
-		f.Function = GetIntegerEQConditionBitMap
-		funcs = append(funcs, f)
-		return funcs
-	}
-	if startTime != influxql.MinTime {
-		f := IdxFunction{
-			Idx: len(*schema) - 1,
-		}
-		f.Compare = startTime
-		f.Function = GetIntegerGTEConditionBitMap
-		funcs = append(funcs, f)
-	}
-
-	if endTime != influxql.MaxTime {
-		f := IdxFunction{
-			Idx: len(*schema) - 1,
-		}
-		f.Compare = endTime
-		f.Function = GetIntegerLTEConditionBitMap
-		funcs = append(funcs, f)
-	}
-
-	return funcs
 }
 
 func generateIdxFunctions(expr influxql.Expr, funcs IdxFunctions, schema *record.Schemas) (IdxFunctions, error) {
@@ -396,6 +370,341 @@ func RewriteTimeCompareVal(expr influxql.Expr, valuer *influxql.NowValuer) {
 	}
 }
 
-func HaveTimeCond(startTime, endTime int64) bool {
-	return startTime == endTime || startTime != influxql.MinTime || endTime != influxql.MaxTime
+func GetTimeCondition(tr util.TimeRange, schema record.Schemas, tcIdx int) influxql.Expr {
+	if tcIdx < 0 || tcIdx >= len(schema) {
+		return nil
+	}
+	if tr.Min == tr.Max {
+		return &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: schema[tcIdx].Name, Type: influxql.Integer},
+			RHS: &influxql.IntegerLiteral{Val: tr.Min},
+		}
+	}
+	if tr.Min != influxql.MinTime && tr.Max != influxql.MaxTime {
+		return &influxql.BinaryExpr{
+			Op: influxql.AND,
+			LHS: &influxql.BinaryExpr{
+				Op:  influxql.GTE,
+				LHS: &influxql.VarRef{Val: schema[tcIdx].Name, Type: influxql.Integer},
+				RHS: &influxql.IntegerLiteral{Val: tr.Min},
+			},
+			RHS: &influxql.BinaryExpr{
+				Op:  influxql.LTE,
+				LHS: &influxql.VarRef{Val: schema[tcIdx].Name, Type: influxql.Integer},
+				RHS: &influxql.IntegerLiteral{Val: tr.Max},
+			},
+		}
+	}
+	if tr.Min != influxql.MinTime {
+		return &influxql.BinaryExpr{
+			Op:  influxql.GTE,
+			LHS: &influxql.VarRef{Val: schema[tcIdx].Name, Type: influxql.Integer},
+			RHS: &influxql.IntegerLiteral{Val: tr.Min},
+		}
+	}
+	if tr.Max != influxql.MaxTime {
+		return &influxql.BinaryExpr{
+			Op:  influxql.LTE,
+			LHS: &influxql.VarRef{Val: schema[tcIdx].Name, Type: influxql.Integer},
+			RHS: &influxql.IntegerLiteral{Val: tr.Max},
+		}
+	}
+	return nil
+}
+
+func CombineConditionWithAnd(lhs, rhs influxql.Expr) influxql.Expr {
+	if lhs == nil {
+		return rhs
+	}
+	if rhs == nil {
+		return lhs
+	}
+	return &influxql.BinaryExpr{Op: influxql.AND, LHS: lhs, RHS: rhs}
+}
+
+type RPNElement struct {
+	op rpn.Op
+	rg IdxFunction
+}
+
+type ConditionImpl struct {
+	isSimpleExpr bool
+	numFilter    int
+	schema       record.Schemas
+	rpn          []*RPNElement
+	rpnStack     []*RPNElement
+}
+
+func NewCondition(timeCondition, condition influxql.Expr, schema record.Schemas) (*ConditionImpl, error) {
+	var err error
+	c := &ConditionImpl{schema: schema, isSimpleExpr: true}
+	// use "AND" to connect the time condition to other conditions.
+	combineCondition := CombineConditionWithAnd(timeCondition, condition)
+	rpnExpr := rpn.ConvertToRPNExpr(combineCondition)
+	if err = c.convertToRPNElem(rpnExpr); err != nil {
+		return nil, err
+	}
+	if c.numFilter, err = c.getNumFilter(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
+	for i, expr := range rpnExpr.Val {
+		switch v := expr.(type) {
+		case influxql.Token:
+			switch v {
+			case influxql.AND:
+				c.rpn = append(c.rpn, &RPNElement{op: rpn.AND})
+			case influxql.OR:
+				c.isSimpleExpr = false
+				c.rpn = append(c.rpn, &RPNElement{op: rpn.OR})
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ:
+			default:
+				return errno.NewError(errno.ErrRPNOp, v)
+			}
+		case *influxql.VarRef:
+			idx := c.schema.FieldIndex(v.Val)
+			if idx < 0 {
+				return errno.NewError(errno.ErrRPNElemSchema)
+			}
+			if i+2 >= len(rpnExpr.Val) {
+				return errno.NewError(errno.ErrRPNElemNum)
+			}
+			value := rpnExpr.Val[i+1]
+			op, ok := rpnExpr.Val[i+2].(influxql.Token)
+			if !ok {
+				return errno.NewError(errno.ErrRPNElemOp)
+			}
+			if err := c.genRPNElementByVal(value, op, idx); err != nil {
+				return err
+			}
+		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral, *influxql.BooleanLiteral:
+		default:
+			return errno.NewError(errno.ErrRPNExpr, v)
+		}
+	}
+	return nil
+}
+
+func (c *ConditionImpl) genRPNElementByVal(value interface{}, op influxql.Token, idx int) error {
+	elem := &RPNElement{op: rpn.InRange, rg: IdxFunction{Idx: idx, Op: op}}
+	switch val := value.(type) {
+	case *influxql.StringLiteral:
+		elem.rg.Compare = val.Val
+		elem.rg.Function = idxTypeFun[operationMap[op]][StringFunc]
+	case *influxql.IntegerLiteral:
+		elem.rg.Compare = val.Val
+		elem.rg.Function = idxTypeFun[operationMap[op]][IntFunc]
+	case *influxql.NumberLiteral:
+		elem.rg.Compare = val.Val
+		elem.rg.Function = idxTypeFun[operationMap[op]][FloatFunc]
+	case *influxql.BooleanLiteral:
+		elem.rg.Compare = val.Val
+		elem.rg.Function = idxTypeFun[operationMap[op]][BoolFunc]
+	default:
+		return errno.NewError(errno.ErrRPNElement, value)
+	}
+	c.rpn = append(c.rpn, elem)
+	return nil
+}
+
+func (c *ConditionImpl) HaveFilter() bool {
+	return len(c.rpn) > 0
+}
+
+func (c *ConditionImpl) NumFilter() int {
+	return c.numFilter
+}
+
+func (c *ConditionImpl) getNumFilter() (int, error) {
+	if !c.HaveFilter() {
+		return 0, nil
+	}
+	if c.isSimpleExpr {
+		return 1, nil
+	}
+
+	var count int
+	for _, elem := range c.rpn {
+		switch elem.op {
+		case rpn.InRange, rpn.NotInRange:
+			c.rpnStack = append(c.rpnStack, elem)
+		case rpn.AND:
+			if len(c.rpnStack) == 1 {
+				c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
+			} else if len(c.rpnStack) >= 2 {
+				count++
+				c.rpnStack = c.rpnStack[:len(c.rpnStack)-2]
+			}
+		case rpn.OR:
+			if len(c.rpnStack) == 1 {
+				count++
+				c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
+			} else if len(c.rpnStack) >= 2 {
+				count += 2
+				c.rpnStack = c.rpnStack[:len(c.rpnStack)-2]
+			}
+		default:
+			return 0, errno.NewError(errno.ErrRPNOp, elem.op)
+		}
+	}
+	c.rpnStack = c.rpnStack[:0]
+	return count, nil
+}
+
+func (c *ConditionImpl) Filter(rec *record.Record, filterBitmap *bitmap.FilterBitmap) error {
+	if c.isSimpleExpr {
+		if err := c.filterSimplexExpr(rec, filterBitmap); err != nil {
+			return err
+		}
+	} else {
+		if err := c.filterCompoundExpr(rec, filterBitmap); err != nil {
+			return err
+		}
+	}
+	rowNum, offset := rec.RowNums(), rec.TimeColumn().BitMapOffset
+	b := filterBitmap.Bitmap[0].Val
+	for i := 0; i < rowNum; i++ {
+		if !bitmap.IsNil(b, i+offset) {
+			filterBitmap.ReserveId = append(filterBitmap.ReserveId, i)
+		}
+	}
+	return nil
+}
+
+func (c *ConditionImpl) filterSimplexExpr(rec *record.Record, filterBitmap *bitmap.FilterBitmap) error {
+	for _, elem := range c.rpn {
+		switch elem.op {
+		case rpn.InRange, rpn.NotInRange:
+			col := rec.ColVals[elem.rg.Idx]
+			if len(filterBitmap.Bitmap[0].Val) == 0 {
+				filterBitmap.Bitmap[0].Val = append(filterBitmap.Bitmap[0].Val, col.Bitmap...)
+			}
+			filterBitmap.Bitmap[0].Val = elem.rg.Function(&col, elem.rg.Compare, col.Bitmap, filterBitmap.Bitmap[0].Val, col.BitMapOffset)
+		case rpn.AND, rpn.OR:
+		default:
+			return errno.NewError(errno.ErrRPNOp, elem.op)
+		}
+	}
+	return nil
+}
+
+func (c *ConditionImpl) filterCompoundExpr(rec *record.Record, filterBitmap *bitmap.FilterBitmap) error {
+	// idx indicates the bitmap position in use.
+	var idx int
+	var err error
+	for _, elem := range c.rpn {
+		switch elem.op {
+		case rpn.InRange:
+			c.rpnStack = append(c.rpnStack, elem)
+		case rpn.AND:
+			idx, err = c.filterForAnd(rec, filterBitmap, idx)
+			if err != nil {
+				return err
+			}
+		case rpn.OR:
+			idx, err = c.filterForOr(rec, filterBitmap, idx)
+			if err != nil {
+				return err
+			}
+		default:
+			return errno.NewError(errno.ErrUnknownOpInCondition)
+		}
+	}
+	if idx != 0 {
+		return errno.NewError(errno.ErrInvalidStackInCondition)
+	}
+	return nil
+}
+
+func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.FilterBitmap, idx int) (int, error) {
+	switch len(c.rpnStack) {
+	case 0:
+		if idx < 1 {
+			return 0, errno.NewError(errno.ErrRPNIsNullForOR)
+		}
+		filterBitmap.Bitmap[idx-1].Or(filterBitmap.Bitmap[idx])
+		filterBitmap.Bitmap[idx].Val = filterBitmap.Bitmap[idx].Val[:0]
+		idx--
+	case 1:
+		if idx < 0 {
+			return 0, errno.NewError(errno.ErrRPNIsNullForOR)
+		}
+		e1 := c.rpnStack[len(c.rpnStack)-1]
+		col := rec.ColVals[e1.rg.Idx]
+		// Apply for a new bitmap.
+		idx++
+		b := filterBitmap.Bitmap[idx]
+		b.Val = append(b.Val, col.Bitmap...)
+		// Save the compare result in the new bitmap.
+		b.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		filterBitmap.Bitmap[idx-1].Or(filterBitmap.Bitmap[idx])
+		// Clear intermediate results
+		c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
+		filterBitmap.Bitmap[idx].Val = filterBitmap.Bitmap[idx].Val[:0]
+		idx--
+	default:
+		e1, e2 := c.rpnStack[len(c.rpnStack)-1], c.rpnStack[len(c.rpnStack)-2]
+		col := rec.ColVals[e1.rg.Idx]
+		// Apply for a new bitmap.
+		if len(filterBitmap.Bitmap[idx].Val) > 0 {
+			idx++
+		}
+		b1 := filterBitmap.Bitmap[idx]
+		b1.Val = append(b1.Val, col.Bitmap...)
+		// Save the compare result in the new bitmap.
+		b1.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b1.Val, col.BitMapOffset)
+		// Apply for a new bitmap.
+		idx++
+		b2 := filterBitmap.Bitmap[idx]
+		b2.Val = append(b2.Val, col.Bitmap...)
+		// Save the compare result in the new bitmap.
+		col = rec.ColVals[e2.rg.Idx]
+		b2.Val = e2.rg.Function(&col, e2.rg.Compare, col.Bitmap, b2.Val, col.BitMapOffset)
+		b1.Or(b2)
+		// Clear intermediate results
+		c.rpnStack = c.rpnStack[:len(c.rpnStack)-2]
+		filterBitmap.Bitmap[idx].Val = filterBitmap.Bitmap[idx].Val[:0]
+		idx--
+	}
+	return idx, nil
+}
+
+func (c *ConditionImpl) filterForAnd(rec *record.Record, filterBitmap *bitmap.FilterBitmap, idx int) (int, error) {
+	switch len(c.rpnStack) {
+	case 0:
+		if idx < 1 {
+			return 0, errno.NewError(errno.ErrRPNIsNullForAnd)
+		}
+		filterBitmap.Bitmap[idx-1].And(filterBitmap.Bitmap[idx])
+		filterBitmap.Bitmap[idx].Val = filterBitmap.Bitmap[idx].Val[:0]
+		idx--
+	case 1:
+		if idx < 0 {
+			return 0, errno.NewError(errno.ErrRPNIsNullForAnd)
+		}
+		e1 := c.rpnStack[len(c.rpnStack)-1]
+		col := rec.ColVals[e1.rg.Idx]
+		b := filterBitmap.Bitmap[idx]
+		b.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
+	default:
+		e1, e2 := c.rpnStack[len(c.rpnStack)-1], c.rpnStack[len(c.rpnStack)-2]
+		col := rec.ColVals[e1.rg.Idx]
+		// Apply for a new bitmap.
+		if len(filterBitmap.Bitmap[idx].Val) > 0 {
+			idx++
+		}
+		b := filterBitmap.Bitmap[idx]
+		b.Val = append(b.Val, col.Bitmap...)
+		// Save the AND result in the new bitmap.
+		b.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		col = rec.ColVals[e2.rg.Idx]
+		b.Val = e2.rg.Function(&col, e2.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		c.rpnStack = c.rpnStack[:len(c.rpnStack)-2]
+	}
+	return idx, nil
 }

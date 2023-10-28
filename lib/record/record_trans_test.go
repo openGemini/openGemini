@@ -337,11 +337,11 @@ func BenchmarkWriteRowsToColumnStore(t *testing.B) {
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
 		t.StartTimer()
-		memTable := mutable.GetMemTable(config.COLUMNSTORE)
+		memTable := mutable.NewMemTable(config.COLUMNSTORE)
 		if err := memTable.MTable.WriteRows(memTable, rowsD, writeCtx); err != nil {
 			t.Fatalf(err.Error())
 		}
-		memTable.PutMemTable()
+		memTable.UnRef()
 		t.StopTimer()
 	}
 }
@@ -362,11 +362,11 @@ func BenchmarkWriteRecsToColumnStore(t *testing.B) {
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
 		t.StartTimer()
-		memTable := mutable.GetMemTable(config.COLUMNSTORE)
+		memTable := mutable.NewMemTable(config.COLUMNSTORE)
 		if err := memTable.MTable.WriteRows(memTable, recsD, writeCtx); err != nil {
 			t.Fatalf(err.Error())
 		}
-		memTable.PutMemTable()
+		memTable.UnRef()
 		t.StopTimer()
 	}
 }

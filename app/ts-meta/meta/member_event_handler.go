@@ -19,7 +19,9 @@ package meta
 import (
 	"fmt"
 	"strconv"
+	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
@@ -70,6 +72,26 @@ func (bh *baseHandler) takeoverDbPts(id uint64) {
 	}
 }
 
+func (bh *baseHandler) failOverForRep(id uint64) error {
+	// get pts and add to failed dbPts
+	start := time.Now()
+	dbPtInfos := globalService.store.getFailedDbPts(id, meta.Offline)
+	logger.NewLogger(errno.ModuleHA).Info("fail over for replication start", zap.Any("dbpt", dbPtInfos))
+
+	var err error
+	for i := range dbPtInfos {
+		err = bh.cm.processReplication(dbPtInfos[i])
+		if err != nil {
+			// if process event failed migrate state machine will retry event when retry needed
+			logger.NewLogger(errno.ModuleHA).Error("fail to process replication",
+				zap.String("db", dbPtInfos[i].Db), zap.Uint32("pt", dbPtInfos[i].Pti.PtId))
+			return err
+		}
+	}
+	logger.NewLogger(errno.ModuleHA).Info("fail over for replication finish", zap.Duration("cost", time.Since(start)))
+	return nil
+}
+
 type joinHandler struct {
 	baseHandler
 }
@@ -93,8 +115,40 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 	return nil
 }
 
+type failHandle func(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error
+
+var failHandler []failHandle
+
+func init() {
+	failHandler = make([]failHandle, config.PolicyEnd)
+	failHandler[config.WriteAvailableFirst] = failHandlerForSSOrWAF
+	failHandler[config.SharedStorage] = failHandlerForSSOrWAF
+	failHandler[config.Replication] = failHandlerForRep
+}
+
 type failedHandler struct {
 	baseHandler
+}
+
+func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error {
+	err := fh.handleEvent(member, event, id)
+	if err != nil {
+		logger.GetLogger().Error("handle event failed", zap.Error(err))
+		return err
+	}
+	fh.cm.removeClusterMember(id)
+	return fh.failOverForRep(id)
+}
+
+func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error {
+	err := fh.handleEvent(member, event, id)
+	if err != nil {
+		logger.GetLogger().Error("handle event failed", zap.Error(err))
+		return err
+	}
+	fh.cm.removeClusterMember(id)
+	fh.takeoverDbPts(id)
+	return nil
 }
 
 func (fh *failedHandler) handle(e *memberEvent) error {
@@ -103,13 +157,10 @@ func (fh *failedHandler) handle(e *memberEvent) error {
 		if err != nil {
 			panic(err)
 		}
-		err = fh.handleEvent(&e.event.Members[i], &e.event, id)
+		err = failHandler[config.GetHaPolicy()](fh, id, &e.event, &e.event.Members[i])
 		if err != nil {
-			logger.GetLogger().Error("handle event failed", zap.Error(err))
 			return err
 		}
-		fh.cm.removeClusterMember(id)
-		fh.takeoverDbPts(id)
 	}
 	return nil
 }

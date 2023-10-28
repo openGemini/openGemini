@@ -17,6 +17,7 @@ limitations under the License.
 package ingestserver
 
 import (
+	"context"
 	"net"
 	"path"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func Test_NewServer(t *testing.T) {
@@ -309,4 +311,15 @@ func Test_NewServer_Subscription_Enabled(t *testing.T) {
 
 	err = server.Close()
 	require.NoError(t, err)
+}
+
+func Test_handleCPUThreshold(t *testing.T) {
+	server := &Server{
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	server.ctx, server.ctxCancel = context.WithCancel(context.Background())
+	go server.handleCPUThreshold(1, time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	err := server.Close()
+	assert.NoError(t, err)
 }

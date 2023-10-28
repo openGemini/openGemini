@@ -91,6 +91,7 @@ message NodeInfo {
 	required int64  Status = 4;
 	required uint64 LTime = 6;
 	required string GossipAddr = 7;
+	optional uint64 SegregateStatus = 8;
 }
 
 message DataNode {
@@ -259,6 +260,7 @@ message ColStoreInfo {
     repeated string SortKey       = 2;
     repeated string PropertyKey   = 3;
     repeated string PropertyValue = 4;
+    optional int64  TimeClusterDuration = 5;
 }
 
 message IndexOption {
@@ -347,6 +349,9 @@ message Command {
 		GetContinuousQueryLeaseCommand             = 89;
 		DropContinuousQueryCommand                 = 90;
 		NotifyCQLeaseChangedCommand                = 91;
+		SetNodeSegregateStatusCommand              = 92;
+		RemoveNodeCommand                          = 93;
+		UpdateReplicationCommand                   = 94;
 	}
 
 	required Type type = 1;
@@ -1091,4 +1096,30 @@ message DropContinuousQueryCommand {
 
 message NotifyCQLeaseChangedCommand {
 	extend Command { optional NotifyCQLeaseChangedCommand command = 190; }
+}
+
+message SetNodeSegregateStatusCommand{
+    extend Command {
+        optional SetNodeSegregateStatusCommand command = 191;
+    }
+    repeated uint64 status = 1;
+	repeated uint64 nodeIds = 2;
+}
+
+message RemoveNodeCommand{
+    extend Command {
+        optional RemoveNodeCommand command = 192;
+    }
+	repeated uint64 nodeIds = 1;
+}
+
+message UpdateReplicationCommand{
+	extend Command {
+		optional UpdateReplicationCommand command = 193;
+	}
+	required string database = 1;
+	required uint32 repGroupId = 2;
+	optional uint32 masterId = 3;
+	repeated Peer Peers = 4;
+	optional uint32 rgStatus = 5;
 }

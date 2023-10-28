@@ -2499,7 +2499,7 @@ func (b *LogicalPlanBuilderImpl) CreateSegmentPlan(schema hybridqp.Catalog) (hyb
 	if schema.HasCall() && schema.CanAggPushDown() {
 		b.Exchange(READER_EXCHANGE, nil)
 	}
-	if !schema.HasCall() && len(schema.Options().GetDimensions()) > 0 {
+	if len(schema.Options().GetDimensions()) > 0 && (!schema.HasCall() || schema.HasCall() && !schema.CanAggPushDown()) {
 		b.Exchange(READER_EXCHANGE, nil)
 	}
 	b.Exchange(SEGMENT_EXCHANGE, nil)

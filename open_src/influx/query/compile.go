@@ -39,8 +39,6 @@ type compiledStatement struct {
 	// Condition is the condition used for accessing data.
 	Condition influxql.Expr
 
-	SourceCondition influxql.Expr
-
 	// TimeRange is the TimeRange for selecting data.
 	TimeRange influxql.TimeRange
 
@@ -131,7 +129,6 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 	}
 	c.stmt.TimeAlias = c.TimeFieldName
 	c.stmt.Condition = c.Condition
-	c.stmt.SourceCondition = c.SourceCondition
 
 	// Convert TOP/BOTTOM into the TOP(max)/BOTTOM(min)
 	c.stmt.RewriteTopBottom()
@@ -167,7 +164,6 @@ func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 	c.HasTarget = stmt.Target != nil
 
 	valuer := influxql.NowValuer{Now: c.Options.Now, Location: stmt.Location}
-	c.SourceCondition = stmt.Condition
 	cond, t, err := influxql.ConditionExpr(stmt.Condition, &valuer)
 	if err != nil {
 		return err
@@ -1495,11 +1491,6 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 
 	if len(c.stmt.Sources) >= 2 && c.stmt.Sources.HaveMultiStore() {
 		return nil, fmt.Errorf("query across multiple storage engines is not supported")
-	}
-
-	// avoid the impact of moving sourceCondition downwards.
-	if len(c.stmt.Sources) > 0 && c.stmt.Sources.HaveOnlyTSStore() {
-		c.stmt.SourceCondition = nil
 	}
 
 	// Rewrite wildcards, if any exist.

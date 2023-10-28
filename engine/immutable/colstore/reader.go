@@ -150,15 +150,16 @@ func (r *PrimaryKeyReader) Read(offset int64, size uint32, dst *[]byte) ([]byte,
 	return b, nil
 }
 
-func (r *PrimaryKeyReader) ReadData() (*record.Record, error) {
+func (r *PrimaryKeyReader) ReadData() (*record.Record, int8, error) {
 	var err error
 	buf := []byte{}
 	data, err := r.Read(0, uint32(r.FileSize()), &buf)
 	if err != nil {
-		return nil, err
+		return nil, DefaultTCLocation, err
 	}
+	version := numberenc.UnmarshalUint32(data[fileMagicSize : fileMagicSize+util.Uint32SizeBytes])
 	metaSize := int(numberenc.UnmarshalUint32(data[headerSize : headerSize+util.Uint32SizeBytes]))
-	schema, offset, rowNum := unmarshalMeta(data[headerSize : headerSize+metaSize])
+	schema, offset, rowNum, tcLocation := unmarshalMeta(data[headerSize:headerSize+metaSize], version)
 	dst := record.NewRecord(schema, false)
 	coder := encoding.NewCoderContext()
 	for i := range offset {
@@ -173,14 +174,14 @@ func (r *PrimaryKeyReader) ReadData() (*record.Record, error) {
 		colBuilder.InitBitMap(rowNum)
 		if err != nil {
 			log.Error("decode column fail", zap.Error(err))
-			return nil, err
+			return nil, DefaultTCLocation, err
 		}
 		crc := crc32.ChecksumIEEE(colBuilder.Val)
 		crcWritten := numberenc.UnmarshalUint32(data[offset[i] : offset[i]+4])
 		if crc != crcWritten { // check crc
-			return nil, errors.New("failed to verify checksum")
+			return nil, DefaultTCLocation, errors.New("failed to verify checksum")
 		}
 	}
 
-	return dst, nil
+	return dst, tcLocation, nil
 }

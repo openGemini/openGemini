@@ -19,9 +19,12 @@ package record
 import (
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
+
+const TimeClusterCol = "clustered_time"
 
 type NilCount struct {
 	value []int
@@ -92,30 +95,43 @@ func (h *SortHelper) Sort(rec *Record) *Record {
 	return rec
 }
 
-func (h *SortHelper) SortForColumnStore(rec *Record, data *SortData, orderBy []PrimaryKey, deduplicate bool) *Record {
+func (h *SortHelper) SortForColumnStore(rec *Record, orderBy []PrimaryKey, deduplicate bool, tcDuration time.Duration) *Record {
 	times := rec.Times()
-	data.InitRecord(rec.Schema)
-	data.Init(times, orderBy, rec)
+	data := h.SortData
+	data.Init(times, orderBy, rec, tcDuration)
 	data.InitDuplicateRows(len(times), rec, deduplicate)
 	sort.Sort(data)
+	schema := rec.Schema
+	isTimeClusterSet := false
+	if tcDuration > 0 {
+		// update schema
+		schema = make([]Field, 0, len(rec.Schema)+1)
+		schema = append(schema, Field{Type: influx.Field_Type_Int, Name: TimeClusterCol})
+		schema = append(schema, rec.Schema...)
+		isTimeClusterSet = true
+	}
+	data.InitRecord(schema)
+	if tcDuration > 0 {
+		data.SortRec.ColVals[0].AppendIntegers(data.Times...)
+	}
 	rows := data.RowIds
 
 	h.initNilCount(rec, times)
 	h.times = h.times[:0]
 	if deduplicate {
-		h.handleDuplication(rec, data)
+		h.handleDuplication(rec, isTimeClusterSet)
 	} else {
 		start := 0
 
 		for i := 0; i < len(times)-1; i++ {
 			if (rows[i+1] - rows[i]) != 1 {
-				h.appendForColumnStore(rec, data, start, i)
+				h.appendForColumnStore(rec, start, i, isTimeClusterSet)
 				start = i + 1
 				continue
 			}
 		}
 
-		h.appendForColumnStore(rec, data, start, len(rows)-1)
+		h.appendForColumnStore(rec, start, len(rows)-1, isTimeClusterSet)
 	}
 	rec, data.SortRec = data.SortRec, rec
 	return rec
@@ -137,31 +153,32 @@ func (h *SortHelper) append(rec *Record, aux *SortAux, start, end int) {
 	}
 
 	rowStart, rowEnd := int(aux.RowIds[start]), int(aux.RowIds[end]+1)
-	h.appendRecord(rec, aux.SortRec, rowStart, rowEnd)
+	h.appendRecord(rec, aux.SortRec, rowStart, rowEnd, false)
 }
 
 // skip duplicate rows before executing appendForColumnStore
-func (h *SortHelper) handleDuplication(rec *Record, data *SortData) {
+func (h *SortHelper) handleDuplication(rec *Record, tc bool) {
 	length := len(rec.Times())
 	if length == 0 {
 		return
 	}
+	data := h.SortData
 
 loop:
 	for i := 0; i <= length-1; i++ {
 		if !data.DuplicateRows[data.RowIds[i]] {
 			for j := i; j <= length-1; j++ {
 				if data.DuplicateRows[data.RowIds[j]] {
-					h.appendForColumnStore(rec, data, i, j-1)
+					h.appendForColumnStore(rec, i, j-1, tc)
 					i = j
 					break
 				} else {
 					if j == length-1 {
-						h.appendForColumnStore(rec, data, i, j)
+						h.appendForColumnStore(rec, i, j, tc)
 						break loop
 					}
 					if data.RowIds[j+1]-data.RowIds[j] != 1 {
-						h.appendForColumnStore(rec, data, i, j)
+						h.appendForColumnStore(rec, i, j, tc)
 						i = j
 						break
 					}
@@ -171,22 +188,27 @@ loop:
 	}
 }
 
-func (h *SortHelper) appendForColumnStore(rec *Record, data *SortData, start, end int) {
+func (h *SortHelper) appendForColumnStore(rec *Record, start, end int, tc bool) {
 	if start > end {
 		return
 	}
+	data := h.SortData
 	rowStart, rowEnd := int(data.RowIds[start]), int(data.RowIds[end]+1)
-	h.appendRecord(rec, data.SortRec, rowStart, rowEnd)
+	h.appendRecord(rec, data.SortRec, rowStart, rowEnd, tc)
 }
 
-func (h *SortHelper) appendRecord(rec *Record, aux *Record, start, end int) {
+func (h *SortHelper) appendRecord(rec *Record, aux *Record, start, end int, tc bool) {
 	if start == end {
 		return
 	}
 
 	for i := 0; i < rec.Len(); i++ {
 		col := &rec.ColVals[i]
-		aux.ColVals[i].AppendWithNilCount(col, rec.Schema[i].Type, start, end, &h.nilCount[i])
+		if tc {
+			aux.ColVals[i+1].AppendWithNilCount(col, rec.Schema[i].Type, start, end, &h.nilCount[i])
+		} else {
+			aux.ColVals[i].AppendWithNilCount(col, rec.Schema[i].Type, start, end, &h.nilCount[i])
+		}
 	}
 }
 

@@ -1167,12 +1167,17 @@ func (c *Client) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
 		return nil, errno.NewError(errno.DatabaseNotFound, database)
 	}
 	nodePtMap := make(map[uint64][]uint32, len(c.cacheData.DataNodes))
-	for i := range c.cacheData.PtView[database] {
+	repGroups := c.cacheData.DBRepGroups(database)
+	ptInfo := c.cacheData.DBPtView(database)
+	repGroupN := uint32(len(repGroups))
+	for i := range ptInfo {
 		if config.GetHaPolicy() == config.WriteAvailableFirst && c.cacheData.PtView[database][i].Status == meta2.Offline {
 			continue
 		}
-		nodePtMap[c.cacheData.PtView[database][i].Owner.NodeID] =
-			append(nodePtMap[c.cacheData.PtView[database][i].Owner.NodeID], c.cacheData.PtView[database][i].PtId)
+		if config.GetHaPolicy() == config.Replication && ptInfo[i].RGID < repGroupN && !repGroups[ptInfo[i].RGID].IsMasterPt(ptInfo[i].PtId) {
+			continue
+		}
+		nodePtMap[ptInfo[i].Owner.NodeID] = append(nodePtMap[ptInfo[i].Owner.NodeID], ptInfo[i].PtId)
 	}
 	return nodePtMap, nil
 }
@@ -3264,10 +3269,41 @@ func (c *Client) verifyDataNodeStatus() {
 }
 
 func (c *Client) retryVerifyDataNodeStatus() error {
-	cmd := &proto2.VerifyDataNodeCommand{
-		NodeID: proto.Uint64(c.nodeID),
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil
+		default:
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		err = c.verifyDataNodeStatusCmd(currentServer, c.NodeID())
+		if err == nil {
+			break
+		}
+		c.logger.Debug("verify datanode status failed", zap.Uint64("node id", c.NodeID()), zap.Error(err), zap.Duration("duration", time.Since(startTime)))
+		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
+			break
+		}
+		time.Sleep(errSleep)
+
+		currentServer++
 	}
-	return c.retryUntilExec(proto2.Command_VerifyDataNodeCommand, proto2.E_VerifyDataNodeCommand_Command, cmd)
+	return err
+}
+
+func (c *Client) verifyDataNodeStatusCmd(currentServer int, nodeID uint64) error {
+	callback := &VerifyDataNodeStatusCallback{}
+	msg := message.NewMetaMessage(message.VerifyDataNodeStatusRequestMessage, &message.VerifyDataNodeStatusRequest{NodeID: nodeID})
+	return c.SendRPCMsg(currentServer, msg, callback)
 }
 
 func (c *Client) Suicide(err error) {
@@ -3383,7 +3419,7 @@ func (c *Client) ThermalShards(dbName string, start, end time.Duration) map[uint
 			}
 		}
 	}
-	c.logger.Info("thermal shards", zap.String("db", dbName), zap.Duration("start", start), zap.Duration("end", end),
+	c.logger.Info("thermal shards", zap.String("db", dbName), zap.Time("start", lt), zap.Time("end", rt),
 		zap.Any("shards", shards), zap.Duration("duration", time.Since(startTime)))
 	return shards
 }

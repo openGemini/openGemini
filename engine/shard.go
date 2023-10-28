@@ -68,11 +68,12 @@ import (
 )
 
 const (
-	MaxRetryUpdateOnShardNum    = 4
-	minDownSampleConcurrencyNum = 1
-	cpuDownSampleRatio          = 16
-	CRCLen                      = 4
-	BufferSize                  = 1024 * 1024
+	MaxRetryUpdateOnShardNum     = 4
+	minDownSampleConcurrencyNum  = 1
+	cpuDownSampleRatio           = 16
+	CRCLen                       = 4
+	BufferSize                   = 1024 * 1024
+	columnStoreCompactionIsClose = true
 )
 
 var (
@@ -90,7 +91,7 @@ type Storage interface {
 	WriteIndex(s *shard, rows *influx.Rows, mw *mstWriteCtx) error
 	shouldSnapshot(s *shard) bool
 	SetClient(client metaclient.MetaClient)
-	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
+	SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo)
 	ForceFlush(s *shard)
 }
 
@@ -142,7 +143,7 @@ func (storage *tsstoreImpl) WriteIndex(s *shard, rows *influx.Rows, mw *mstWrite
 
 func (storage *tsstoreImpl) SetClient(client metaclient.MetaClient) {}
 
-func (storage *tsstoreImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {}
+func (storage *tsstoreImpl) SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo) {}
 
 func (storage *tsstoreImpl) shouldSnapshot(s *shard) bool {
 	if s.activeTbl == nil || s.snapshotTbl != nil || s.forceFlushing() {
@@ -165,7 +166,47 @@ func (storage *tsstoreImpl) ForceFlush(s *shard) {
 }
 
 func (storage *tsstoreImpl) writeSnapshot(s *shard) {
-	s.writeSnapshot()
+	s.snapshotLock.Lock()
+	if s.activeTbl == nil {
+		s.snapshotLock.Unlock()
+		return
+	}
+	walFiles, err := s.wal.Switch()
+	if err != nil {
+		s.snapshotLock.Unlock()
+		panic("wal switch failed")
+	}
+
+	s.snapshotTbl = s.activeTbl
+	curSize := s.snapshotTbl.GetMemSize()
+
+	s.activeTbl = s.memTablePool.Get(s.engineType)
+	s.activeTbl.SetIdx(s.skIdx)
+	s.snapshotLock.Unlock()
+
+	start := time.Now()
+	s.indexBuilder.Flush()
+
+	s.commitSnapshot(s.snapshotTbl)
+	nodeMutableLimit.freeResource(curSize)
+
+	err = s.wal.Remove(walFiles)
+	if err != nil {
+		panic("wal remove files failed: " + err.Error())
+	}
+
+	//This fail point is used in scenarios where "s.snapshotTbl" is not recycled
+	failpoint.Inject("snapshot-table-reset-delay", func() {
+		time.Sleep(2 * time.Second)
+	})
+
+	s.snapshotLock.Lock()
+	s.snapshotTbl.UnRef()
+	s.snapshotTbl = nil
+	s.snapshotLock.Unlock()
+
+	atomic.AddInt64(&statistics.PerfStat.FlushSnapshotDurationNs, time.Since(start).Nanoseconds())
+	atomic.AddInt64(&statistics.PerfStat.FlushSnapshotCount, 1)
 }
 
 type columnstoreImpl struct {
@@ -205,7 +246,7 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 	storage.snapshotStatus[idx] = 1
 	curSize := storage.snapshotContainer[idx].GetMemSize()
 
-	s.activeTbl = mutable.GetMemTable(s.engineType)
+	s.activeTbl = s.memTablePool.Get(s.engineType)
 	s.activeTbl.SetIdx(s.skIdx)
 	s.snapshotLock.Unlock()
 
@@ -215,7 +256,6 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 	go func(idx int, curSize int64, walFiles []string, start time.Time) {
 		s.commitSnapshot(storage.snapshotContainer[idx])
 		nodeMutableLimit.freeResource(curSize)
-
 		err = s.wal.Remove(walFiles)
 		if err != nil {
 			panic("wal remove files failed: " + err.Error())
@@ -227,7 +267,7 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 		})
 
 		s.snapshotLock.Lock()
-		storage.snapshotContainer[idx].PutMemTable()
+		storage.snapshotContainer[idx].UnRef()
 		storage.snapshotContainer[idx] = nil
 		storage.snapshotStatus[idx] = 0
 		s.snapshotLock.Unlock()
@@ -282,7 +322,7 @@ func (storage *columnstoreImpl) WriteRowsToTable(s *shard, rows influx.Rows, mw 
 	return indexErr
 }
 
-func (storage *columnstoreImpl) UpdateMstsInfo(mst, db, rp string) error {
+func (storage *columnstoreImpl) UpdateMstsInfo(s *shard, mst, db, rp string) error {
 	storage.mu.RLock()
 	_, ok := storage.mstsInfo[mst]
 	storage.mu.RUnlock()
@@ -298,7 +338,7 @@ func (storage *columnstoreImpl) UpdateMstsInfo(mst, db, rp string) error {
 			if err != nil {
 				return err
 			}
-			storage.SetMstInfo(mst, mstInfo)
+			storage.SetMstInfo(s, mst, mstInfo)
 		}
 	}
 	return nil
@@ -317,7 +357,7 @@ func (storage *columnstoreImpl) updateMstMap(s *shard, rows influx.Rows, mw *mst
 		}
 
 		//update mstsInfo
-		err := storage.UpdateMstsInfo(rows[i].Name, s.ident.OwnerDb, s.ident.Policy)
+		err := storage.UpdateMstsInfo(s, rows[i].Name, s.ident.OwnerDb, s.ident.Policy)
 		if err != nil {
 			return err
 		}
@@ -331,10 +371,15 @@ func (storage *columnstoreImpl) updateMstMap(s *shard, rows influx.Rows, mw *mst
 	return nil
 }
 
-func (storage *columnstoreImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
-	if mstInfo.EngineType == config.COLUMNSTORE {
-		storage.mstsInfo[name] = mstInfo
+func (storage *columnstoreImpl) SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo) {
+	storage.mstsInfo[name] = mstInfo
+	info := &immutable.MeasurementInfo{
+		Name:       name,
+		PrimaryKey: mstInfo.ColStoreInfo.PrimaryKey,
+		SortKey:    mstInfo.ColStoreInfo.SortKey,
+		Schema:     mstInfo.Schema,
 	}
+	s.immTables.SetMstInfo(name, info)
 }
 
 func (storage *columnstoreImpl) shouldSnapshot(s *shard) bool {
@@ -418,7 +463,7 @@ func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst str
 	indexWg.Add(1)
 
 	//update mstsInfo
-	err = storage.UpdateMstsInfo(mst, s.ident.OwnerDb, s.ident.Policy)
+	err = storage.UpdateMstsInfo(s, mst, s.ident.OwnerDb, s.ident.Policy)
 	if err != nil {
 		return err
 	}
@@ -442,6 +487,10 @@ func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst str
 }
 
 func (storage *columnstoreImpl) writecols(s *shard, cols *record.Record, mst string) error {
+	// update the row count for each mst
+	storage.mu.Lock()
+	mutable.UpdateMstRowCount(s.msRowCount, mst, int64(cols.RowNums()))
+	storage.mu.Unlock()
 	return s.activeTbl.MTable.WriteCols(s.activeTbl, cols, storage.mstsInfo, mst)
 }
 
@@ -611,6 +660,8 @@ type shard struct {
 	seriesLimit uint64
 	//lint:ignore U1000 use for replication feature
 	summary *summaryInfo
+
+	memTablePool *mutable.MemTablePool
 }
 
 type shardDownSampleTaskInfo struct {
@@ -713,6 +764,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		msRowCount:     &sync.Map{},
 		engineType:     engineType,
 		seriesLimit:    uint64(options.MaxSeriesPerDatabase),
+		memTablePool:   mutable.NewMemTablePoolManager().Alloc(db + "/" + rp),
 	}
 	var conf *immutable.Config
 	switch engineType {
@@ -758,15 +810,6 @@ func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) er
 		log.Error("write cols rec to memory table fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err
 	}
-
-	// update the row count for each mst
-	if rowCount, ok := s.msRowCount.Load(mst); ok {
-		atomic.AddInt64(rowCount.(*int64), int64(cols.RowNums()))
-	} else {
-		count := int64(cols.RowNums())
-		s.msRowCount.Store(mst, &count)
-	}
-
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
 
 	// write wal
@@ -937,6 +980,16 @@ func (s *shard) Compact() error {
 		log.Info("closed", zap.Uint64("shardId", id))
 		return nil
 	default:
+		var rule []uint16
+		switch s.engineType {
+		case config.COLUMNSTORE:
+			rule = immutable.LevelCompactRuleForCs
+			if columnStoreCompactionIsClose {
+				s.immTables.CompactionDisable()
+			}
+		case config.TSSTORE:
+			rule = immutable.LevelCompactRule
+		}
 		if !s.immTables.CompactionEnabled() {
 			return nil
 		}
@@ -949,8 +1002,7 @@ func (s *shard) Compact() error {
 			}
 			return nil
 		}
-
-		for _, level := range immutable.LevelCompactRule {
+		for _, level := range rule {
 			if err := s.immTables.LevelCompact(level, id); err != nil {
 				log.Error("level compact error", zap.Uint64("shid", id), zap.Error(err))
 				continue
@@ -1296,50 +1348,6 @@ func (s *shard) waitSnapshot() {
 	s.snapshotWg.Wait()
 }
 
-func (s *shard) writeSnapshot() {
-	s.snapshotLock.Lock()
-	if s.activeTbl == nil {
-		s.snapshotLock.Unlock()
-		return
-	}
-	walFiles, err := s.wal.Switch()
-	if err != nil {
-		s.snapshotLock.Unlock()
-		panic("wal switch failed")
-	}
-
-	s.snapshotTbl = s.activeTbl
-	curSize := s.snapshotTbl.GetMemSize()
-
-	s.activeTbl = mutable.GetMemTable(s.engineType)
-	s.activeTbl.SetIdx(s.skIdx)
-	s.snapshotLock.Unlock()
-
-	start := time.Now()
-	s.indexBuilder.Flush()
-
-	s.commitSnapshot(s.snapshotTbl)
-	nodeMutableLimit.freeResource(curSize)
-
-	err = s.wal.Remove(walFiles)
-	if err != nil {
-		panic("wal remove files failed: " + err.Error())
-	}
-
-	//This fail point is used in scenarios where "s.snapshotTbl" is not recycled
-	failpoint.Inject("snapshot-table-reset-delay", func() {
-		time.Sleep(2 * time.Second)
-	})
-
-	s.snapshotLock.Lock()
-	s.snapshotTbl.PutMemTable()
-	s.snapshotTbl = nil
-	s.snapshotLock.Unlock()
-
-	atomic.AddInt64(&statistics.PerfStat.FlushSnapshotDurationNs, time.Since(start).Nanoseconds())
-	atomic.AddInt64(&statistics.PerfStat.FlushSnapshotCount, 1)
-}
-
 func (s *shard) GetMaxTime() int64 {
 	s.tmLock.RLock()
 	tm := s.maxTime
@@ -1390,6 +1398,7 @@ func (s *shard) Close() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.indexBuilder != nil {
 		compWorker.UnregisterShard(s.ident.ShardID)
 	}
@@ -1896,8 +1905,8 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 			var filesSlice []immutable.TSSPFile
 			for _, f := range files.Files() {
 				filesSlice = append(filesSlice, f)
-				f.Unref()
 				f.UnrefFileReader()
+				f.Unref()
 			}
 			mstNames = append(mstNames, nameWithVer)
 			originFiles = append(originFiles, filesSlice)
@@ -1911,8 +1920,8 @@ func (s *shard) StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSa
 	} else {
 		for _, v := range filesMap {
 			for _, f := range v.Files() {
-				f.Unref()
 				f.UnrefFileReader()
+				f.Unref()
 			}
 		}
 		s.DeleteDownSampleFiles(allDownSampleFiles)
@@ -2070,8 +2079,8 @@ func (s *shard) StartDownSampleTaskBySchema(start int, filesMap map[int]*immutab
 		e := s.StartDownSampleTask(start+i, mstName, files, ch, schemas[i].(*executor.QuerySchema), info.DbName, info.RpName)
 		if e != nil {
 			for _, v := range files.Files() {
-				v.Unref()
 				v.UnrefFileReader()
+				v.Unref()
 			}
 			err = e
 			logger.Warn(e.Error(), zap.Any("shardId", info.ShardId))
@@ -2157,7 +2166,7 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 }
 
 func (s *shard) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
-	s.storage.SetMstInfo(name, mstInfo)
+	s.storage.SetMstInfo(s, name, mstInfo)
 }
 
 func (s *shard) GetID() uint64 {
@@ -2338,14 +2347,14 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 	fileFrags, skipFileIdx, err := s.scanWithPrimaryIndex(dataFiles, schema, mst)
 	if err != nil {
 		for i := range dataFiles {
-			dataFiles[i].Unref()
 			dataFiles[i].UnrefFileReader()
+			dataFiles[i].Unref()
 		}
 		return nil, err
 	}
 	for _, idx := range skipFileIdx {
-		dataFiles[idx].Unref()
 		dataFiles[idx].UnrefFileReader()
+		dataFiles[idx].Unref()
 	}
 	return fileFrags, nil
 }
@@ -2353,34 +2362,38 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *executor.QuerySchema, mst string) (*executor.FileFragments, []int, error) {
 	var initCondition bool
 	var skipFileIdx []int
+	var err error
 	var keyCondition sparseindex.KeyCondition
-	valuer := influxql.NowValuer{Now: time.Now(), Location: schema.Options().GetLocation()}
-	binaryfilterfunc.RewriteTimeCompareVal(schema.Options().GetSourceCondition(), &valuer)
+	preTcIdx := colstore.DefaultTCLocation
+	condition := schema.Options().GetCondition()
 	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	filesFragments := executor.NewFileFragments()
 	for i, dataFile := range dataFiles {
-		if dataFile == nil {
-			skipFileIdx = append(skipFileIdx, i)
-			continue
-		}
 		dataFileName := dataFile.Path()
 		pkFileName := colstore.AppendIndexSuffix(immutable.RemoveTsspSuffix(dataFileName))
 		pkInfo, ok := s.immTables.GetPKFile(mst, pkFileName)
 		if !ok {
-			return nil, nil, fmt.Errorf("no pk file found")
+			// If the system is powered off abnormally, the index file may not be flushed to disks.
+			// When the system is powered on, the file can be played back based on the WAL and data can be read normally.
+			s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have no primary index file. mst: %s, shardID: %d, file: %s", mst, s.GetID(), pkFileName))
 		}
-		if !initCondition {
+		if tcIdx := pkInfo.GetTCLocation(); !initCondition || (tcIdx > colstore.DefaultTCLocation && tcIdx != preTcIdx) {
 			pkSchema := pkInfo.GetRec().Schema
-			keyCondition = sparseindex.NewKeyCondition(schema.Options().GetSourceCondition(), pkInfo.GetRec().Schema)
-			if pkSchema.FieldIndex(record.TimeField) == 0 {
-				schema.Options().SetSourceCondition(schema.Options().GetCondition())
+			tIdx := pkSchema.FieldIndex(record.TimeField)
+			timePrimaryCond := binaryfilterfunc.GetTimeCondition(tr, pkSchema, tIdx)
+			timeClusterCond := binaryfilterfunc.GetTimeCondition(tr, pkSchema, int(tcIdx))
+			timeCondition := binaryfilterfunc.CombineConditionWithAnd(timePrimaryCond, timeClusterCond)
+			keyCondition, err = sparseindex.NewKeyCondition(timeCondition, condition, pkSchema)
+			if err != nil {
+				return nil, nil, err
+			}
+			if tIdx == 0 {
 				schema.Options().SetTimeFirstKey()
 			}
-
 			initCondition = true
 		}
 		if schema.Options().GetTimeFirstKey() {
-			ok, err := dataFile.ContainsByTime(tr)
+			ok, err = dataFile.ContainsByTime(tr)
 			if err != nil {
 				return nil, nil, fmt.Errorf("data file contain by time error")
 			}
@@ -2399,6 +2412,7 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 			fragmentCount += fragmentRanges[j].End - fragmentRanges[j].Start
 		}
 		if fragmentCount == 0 {
+			skipFileIdx = append(skipFileIdx, i)
 			continue
 		}
 		filesFragments.AddFileFragment(dataFile.Path(), executor.NewFileFragment(dataFile, fragmentRanges, int64(fragmentCount)), int64(fragmentCount))

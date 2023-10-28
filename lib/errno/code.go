@@ -23,6 +23,7 @@ const (
 	HttpDatabaseNotFound      = 6404
 	HttpForbidden             = 6403
 	HttpRequestEntityTooLarge = 6413
+	HttpCpuOverLoad           = 6414
 )
 
 // common error codes
@@ -213,6 +214,8 @@ const (
 	ReplicaNumberNotEqual              = 4047
 	ReplicaNumberNotSupport            = 4048
 	ReplicaNodeNumIncorrect            = 4049
+	EventSrcNodeSegregating            = 4050
+	EventDstNodeSegregating            = 4051
 )
 
 // meta-client process
@@ -261,6 +264,7 @@ const (
 	WritePointHasInvalidTag      = 5031
 	WritePointHasInvalidField    = 5032
 	WritePointSchemaInvalid      = 5033
+	WritePointPrimaryKeyErr      = 5034
 )
 
 // index
@@ -277,8 +281,14 @@ const (
 	ErrRPNIsNullForNOT         = 6010
 	ErrRPNIsNullForAnd         = 6011
 	ErrRPNIsNullForOR          = 6012
-	ErrCoarseIndexFragment     = 6013
-	ErrQuerySchemaUpperBound   = 6014
+	ErrRPNElemSchema           = 6013
+	ErrRPNElemNum              = 6014
+	ErrRPNElemOp               = 6015
+	ErrRPNOp                   = 6016
+	ErrRPNExpr                 = 6017
+	ErrRPNElement              = 6018
+	ErrCoarseIndexFragment     = 6019
+	ErrQuerySchemaUpperBound   = 6020
 )
 
 const (

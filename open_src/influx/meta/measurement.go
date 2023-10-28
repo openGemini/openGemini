@@ -17,6 +17,8 @@ limitations under the License.
 package meta
 
 import (
+	"time"
+
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -48,7 +50,9 @@ func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
 func (msti *MeasurementInfo) OriginName() string {
 	return msti.originName
 }
-
+func (msti *MeasurementInfo) SetoriginName(originName string) {
+	msti.originName = originName
+}
 func (msti *MeasurementInfo) walkSchema(fn func(fieldName string, fieldType int32)) {
 	for fieldName := range msti.Schema {
 		fn(fieldName, msti.Schema[fieldName])
@@ -435,16 +439,18 @@ func (o *IndexOption) Unmarshal(pb *proto2.IndexOption) {
 }
 
 type ColStoreInfo struct {
-	PrimaryKey    []string
-	SortKey       []string
-	PropertyKey   []string
-	PropertyValue []string
+	PrimaryKey          []string
+	SortKey             []string
+	PropertyKey         []string
+	PropertyValue       []string
+	TimeClusterDuration time.Duration
 }
 
-func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string) *ColStoreInfo {
+func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string, Duration time.Duration) *ColStoreInfo {
 	h := &ColStoreInfo{
-		PrimaryKey: PrimaryKey,
-		SortKey:    SortKey,
+		PrimaryKey:          PrimaryKey,
+		SortKey:             SortKey,
+		TimeClusterDuration: Duration,
 	}
 	if Property != nil {
 		h.PropertyKey = Property[0]
@@ -455,10 +461,11 @@ func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string)
 
 func (h *ColStoreInfo) Marshal() *proto2.ColStoreInfo {
 	pb := &proto2.ColStoreInfo{
-		PrimaryKey:    h.PrimaryKey,
-		SortKey:       h.SortKey,
-		PropertyKey:   h.PropertyKey,
-		PropertyValue: h.PropertyValue,
+		PrimaryKey:          h.PrimaryKey,
+		SortKey:             h.SortKey,
+		PropertyKey:         h.PropertyKey,
+		PropertyValue:       h.PropertyValue,
+		TimeClusterDuration: (*int64)(&h.TimeClusterDuration),
 	}
 	return pb
 }
@@ -468,6 +475,7 @@ func (h *ColStoreInfo) Unmarshal(pb *proto2.ColStoreInfo) {
 	h.SortKey = pb.GetSortKey()
 	h.PropertyKey = pb.GetPropertyKey()
 	h.PropertyValue = pb.GetPropertyValue()
+	h.TimeClusterDuration = time.Duration(pb.GetTimeClusterDuration())
 }
 
 func NewSchemaInfo(tags, fields map[string]int32) []*proto2.FieldSchema {

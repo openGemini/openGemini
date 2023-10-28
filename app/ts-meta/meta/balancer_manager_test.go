@@ -62,7 +62,7 @@ func TestBalanceIfNeeded(t *testing.T) {
 	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	globalService.store.data.TakeOverEnabled = true
 
 	e = *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)

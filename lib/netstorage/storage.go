@@ -36,7 +36,8 @@ import (
 )
 
 var (
-	migrateTimeout = 5 * time.Second
+	migrateTimeout   = 5 * time.Second
+	segregateTimeout = 5 * time.Second
 )
 
 const (
@@ -66,6 +67,7 @@ type Storage interface {
 
 	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
 	KillQueryOnNode(nodeID, queryID uint64) error
+	SendSegregateNodeCmds(nodeIDs []uint64) (int, error)
 }
 
 type NetStorage struct {
@@ -405,6 +407,26 @@ func (s *NetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport
 		}
 	}()
 	return nil
+}
+
+func (s *NetStorage) SendSegregateNodeCmds(nodeIDs []uint64) (int, error) {
+	for i, nodeId := range nodeIDs {
+		segregateNodeReq := NewSegregateNodeRequest()
+		segregateNodeReq.NodeId = &nodeId
+		trans, err := transport.NewTransport(nodeId, spdy.SegregateNodeRequest, nil)
+		if err != nil {
+			return i, err
+		}
+		trans.SetTimeout(segregateTimeout)
+		if err := trans.Send(segregateNodeReq); err != nil {
+			return i, err
+		}
+		err = trans.Wait()
+		if err != nil {
+			return i, err
+		}
+	}
+	return -1, nil
 }
 
 func MarshalRows(ctx *WriteContext, db, rp string, pt uint32) ([]byte, error) {

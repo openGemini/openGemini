@@ -572,6 +572,7 @@ type AggTagSetCursor struct {
 	functions           [][2]func(intervalRec, rec *record.Record, recColumn, chunkColumn, recRow, chunkRow int)
 	nextFunction        func() (*record.Record, comm.SeriesInfoIntf, error)
 	funcIndex           []int
+	firstOrLastRecIdxs  []int
 }
 
 func NewAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, itr comm.KeyCursor, singleSeries bool) *AggTagSetCursor {
@@ -729,6 +730,7 @@ func (s *AggTagSetCursor) buildFirstFunc() {
 		s.functions[column][0] = record.UpdateBooleanFirst
 		s.functions[column][1] = record.UpdateBooleanFirstFast
 	}
+	s.firstOrLastRecIdxs = append(s.firstOrLastRecIdxs, column)
 }
 
 func (s *AggTagSetCursor) buildFirstFuncs(i int) {
@@ -747,6 +749,7 @@ func (s *AggTagSetCursor) buildFirstFuncs(i int) {
 		s.functions[column][0] = record.UpdateBooleanColumnFirst
 		s.functions[column][1] = record.UpdateBooleanColumnFirstFast
 	}
+	s.firstOrLastRecIdxs = append(s.firstOrLastRecIdxs, column)
 }
 
 func (s *AggTagSetCursor) buildLastFunc() {
@@ -765,6 +768,7 @@ func (s *AggTagSetCursor) buildLastFunc() {
 		s.functions[column][0] = record.UpdateBooleanLast
 		s.functions[column][1] = record.UpdateBooleanLastFast
 	}
+	s.firstOrLastRecIdxs = append(s.firstOrLastRecIdxs, column)
 }
 
 func (s *AggTagSetCursor) buildLastFuncs(i int) {
@@ -783,6 +787,7 @@ func (s *AggTagSetCursor) buildLastFuncs(i int) {
 		s.functions[column][0] = record.UpdateBooleanColumnLast
 		s.functions[column][1] = record.UpdateBooleanColumnLastFast
 	}
+	s.firstOrLastRecIdxs = append(s.firstOrLastRecIdxs, column)
 }
 
 func (s *AggTagSetCursor) buildSumFunc() {
@@ -973,7 +978,7 @@ func (s *AggTagSetCursor) TimeWindowsInit() {
 		//window function return time range which is left closed and right open, so when use max time, we must minus one.
 		s.intervalStartTime = s.baseAggCursorInfo.maxTime - 1
 	}
-	s.intervalRecord.BuildEmptyIntervalRec(s.baseAggCursorInfo.minTime, s.baseAggCursorInfo.maxTime, int64(opt.GetInterval()), s.firstOrLast, opt.HasInterval(), opt.IsAscending())
+	s.intervalRecord.BuildEmptyIntervalRec(s.baseAggCursorInfo.minTime, s.baseAggCursorInfo.maxTime, int64(opt.GetInterval()), s.firstOrLast, opt.HasInterval(), opt.IsAscending(), s.firstOrLastRecIdxs)
 }
 
 func (s *AggTagSetCursor) GetIndex(t int64) int64 {
