@@ -326,11 +326,6 @@ func TestSingleParser(t *testing.T) {
 		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore sortkey field1",
 		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = ColumnStore",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = ColumnStore",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1d)",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1w)",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(7d)",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1s)",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1m)",
 		"show sortkey from mst",
 		"show enginetype from mst",
 		"show primarykey from mst",
@@ -368,9 +363,6 @@ func TestSingleParserError(t *testing.T) {
 		"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  SHARDKEY column2,column3 TYPE hash  PRIMARYKEY column3,column4,column0,column1 SORTKEY column2,column3,column4,column0,column1",
 		"show sortkey1 from mst",
 		"show index from mst",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1y)",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1y) field1",
-		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1y) indextype text field1",
 	}
 	cr := []string{
 		"expect FLOAT64, INT64, BOOL, STRING for column data type",
@@ -387,9 +379,6 @@ func TestSingleParserError(t *testing.T) {
 		"PrimaryKey should be left prefix of SortKey",
 		"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA",
 		"syntax error: unexpected INDEX",
-		"invalid duration",
-		"syntax error: unexpected IDENT",
-		"syntax error: unexpected INDEXTYPE",
 	}
 	for i, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

@@ -2484,19 +2484,6 @@ CMOPTION_INDEXTYPE_CS:
     {
         $$ = nil
     }
-    | INDEXTYPE IDENT LPAREN DURATIONVAL RPAREN
-    {
-        indexType := strings.ToLower($2)
-        if indexType != "timecluster" {
-            yylex.Error("expect TIMECLUSTER for INDEXTYPE")
-            return 1
-        }
-        $$ = &IndexType{
-            types: []string{indexType},
-            lists: nil,
-            timeClusterDuration: $4,
-        }
-    }
 
 CMOPTION_SHARDKEY:
     {
