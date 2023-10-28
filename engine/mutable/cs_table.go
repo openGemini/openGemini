@@ -474,8 +474,8 @@ func getFreeWriteChunk(msi *MsInfo) (*WriteChunkForColumnStore, int) {
 	if msi.concurrencyChunks.writeChunks[i] == nil {
 		msi.concurrencyChunks.writeChunks[i] = &WriteChunkForColumnStore{}
 		msi.concurrencyChunks.writeChunks[i].WriteRec.initForReuse(msi.Schema)
+		msi.concurrencyChunks.writeChunks[i].sameSchema = true
 	}
-	msi.concurrencyChunks.writeChunks[i].sameSchema = true
 	msi.concurrencyChunks.rowChunksStatus[i] = 1
 	return msi.concurrencyChunks.writeChunks[i], i
 }
