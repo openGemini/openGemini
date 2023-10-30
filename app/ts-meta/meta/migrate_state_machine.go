@@ -346,6 +346,21 @@ func (m *MigrateStateMachine) executeEvent(e MigrateEvent) error {
 	}
 	return err
 }
+func (m *MigrateStateMachine) forceExecuteEvent(e MigrateEvent) error {
+	if !m.canExecuteEvent(!e.isInRecovery() && e.getUserCommand()) {
+		return errno.NewError(errno.StateMachineIsNotRunning)
+	}
+
+	err := m.softAddToEventMap(e)
+	if err != nil {
+		m.deleteEvent(e)
+		return err
+	}
+
+	m.eventsWg.Add(1)
+	go m.processEvent(e)
+	return err
+}
 
 func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 	if e == nil || reflect.ValueOf(e).IsNil() {
@@ -372,8 +387,36 @@ func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 
 func (m *MigrateStateMachine) addToEventMap(e MigrateEvent) error {
 	m.eventMapMu.Lock()
+	srcNodeSegStatus := globalService.store.data.GetSegregateStatusByNodeId(e.getSrc())
+	if srcNodeSegStatus != meta.Normal {
+		m.eventMapMu.Unlock()
+		return errno.NewError(errno.EventSrcNodeSegregating, e.getSrc())
+	}
+	dstNodeSegStatus := globalService.store.data.GetSegregateStatusByNodeId(e.getDst())
+	if dstNodeSegStatus != meta.Normal {
+		m.eventMapMu.Unlock()
+		return errno.NewError(errno.EventDstNodeSegregating, e.getDst())
+	}
 	currentEvent := m.eventMap[e.getEventId()]
 	if currentEvent == nil {
+		m.logger.Info("msm eventMap add event", zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId),
+			zap.Uint64("src", e.getSrc()), zap.Uint64("dst", e.getDst()), zap.String("event id", e.getEventId()))
+		m.eventMap[e.getEventId()] = e
+		m.eventMapMu.Unlock()
+		return nil
+	}
+	m.eventMapMu.Unlock()
+	err := errno.NewError(errno.ConflictWithEvent)
+	e.getEventRes().err = err // reAssign this db pt in delete event
+	return err
+}
+
+func (m *MigrateStateMachine) softAddToEventMap(e MigrateEvent) error {
+	m.eventMapMu.Lock()
+	currentEvent := m.eventMap[e.getEventId()]
+	if currentEvent == nil {
+		m.logger.Info("msm eventMap add event softly", zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId),
+			zap.Uint64("src", e.getSrc()), zap.Uint64("dst", e.getDst()), zap.String("event id", e.getEventId()))
 		m.eventMap[e.getEventId()] = e
 		m.eventMapMu.Unlock()
 		return nil
@@ -388,7 +431,23 @@ func (m *MigrateStateMachine) removeFromEventMap(e MigrateEvent) {
 	m.eventMapMu.Lock()
 	existEvent := m.eventMap[e.getEventId()]
 	if existEvent == e {
+		m.logger.Info("msm eventMap delete event", zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId),
+			zap.Uint64("src", e.getSrc()), zap.Uint64("dst", e.getDst()), zap.String("event id", e.getEventId()))
 		delete(m.eventMap, e.getEventId())
 	}
 	m.eventMapMu.Unlock()
+}
+
+// exsit: return true
+func (m *MigrateStateMachine) CheckNodeEventExsit(nodeIds []uint64) bool {
+	m.eventMapMu.RLock()
+	defer m.eventMapMu.RUnlock()
+	for _, nodeId := range nodeIds {
+		for _, event := range m.eventMap {
+			if event.getSrc() == nodeId || event.getDst() == nodeId {
+				return true
+			}
+		}
+	}
+	return false
 }

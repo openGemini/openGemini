@@ -24,8 +24,10 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -177,6 +179,194 @@ func TestRotateRewriteTimeCompareVal(t *testing.T) {
 	}
 	valuer = influxql.NowValuer{Now: now, Location: nil}
 	RewriteTimeCompareVal(root, &valuer)
+}
+
+var (
+	fieldMap = map[string]influxql.DataType{
+		"country": influxql.String,
+		"name":    influxql.String,
+		"age":     influxql.Integer,
+		"height":  influxql.Float,
+		"address": influxql.String,
+		"alive":   influxql.Boolean,
+		"time":    influxql.Integer,
+	}
+	inSchema = record.Schemas{
+		record.Field{Name: "country", Type: influx.Field_Type_String},
+		record.Field{Name: "name", Type: influx.Field_Type_String},
+		record.Field{Name: "age", Type: influx.Field_Type_Int},
+		record.Field{Name: "height", Type: influx.Field_Type_Float},
+		record.Field{Name: "address", Type: influx.Field_Type_String},
+		record.Field{Name: "alive", Type: influx.Field_Type_Boolean},
+		record.Field{Name: "time", Type: influx.Field_Type_Int},
+	}
+)
+
+// MustParseExpr parses an expression. Panic on error.
+func MustParseExpr(s string) influxql.Expr {
+	p := influxql.NewParser(strings.NewReader(s))
+	defer p.Release()
+	expr, err := p.ParseExpr()
+	if err != nil {
+		panic(err)
+	}
+	influxql.WalkFunc(expr, func(n influxql.Node) {
+		ref, ok := n.(*influxql.VarRef)
+		if !ok {
+			return
+		}
+		ty, ok := fieldMap[ref.Val]
+		if ok {
+			ref.Type = ty
+		} else {
+			ref.Type = influxql.Tag
+		}
+	})
+	return expr
+}
+
+func getTypeString(ty int) string {
+	switch ty {
+	case influx.Field_Type_String:
+		return "string"
+	case influx.Field_Type_Int:
+		return "integer"
+	case influx.Field_Type_Float:
+		return "float"
+	case influx.Field_Type_Boolean:
+		return "bool"
+	default:
+		return ""
+	}
+}
+
+func getElemString(e *RPNElement) string {
+	switch e.op {
+	case rpn.InRange:
+		if inSchema.Field(e.rg.Idx).Type == influx.Field_Type_String {
+			return fmt.Sprintf("%s::%s %s '%v'",
+				inSchema.Field(e.rg.Idx).Name,
+				getTypeString(inSchema.Field(e.rg.Idx).Type),
+				e.rg.Op.String(),
+				e.rg.Compare)
+		}
+		return fmt.Sprintf("%s::%s %s %v",
+			inSchema.Field(e.rg.Idx).Name,
+			getTypeString(inSchema.Field(e.rg.Idx).Type),
+			e.rg.Op.String(),
+			e.rg.Compare)
+	case rpn.AND:
+		return "and"
+	case rpn.OR:
+		return "or"
+	default:
+		return ""
+	}
+}
+
+func getCondString(c *ConditionImpl) string {
+	var b = strings.Builder{}
+	for i, elem := range c.rpn {
+		b.WriteString(getElemString(elem))
+		if i < len(c.rpn)-1 {
+			b.WriteString(" | ")
+		}
+	}
+	return b.String()
+}
+
+func TestConditionToRPN(t *testing.T) {
+	f := func(
+		timeStr string,
+		condStr string,
+		expected string,
+	) {
+		var timeExpr influxql.Expr
+		if len(timeStr) > 0 {
+			timeExpr = MustParseExpr(timeStr)
+		}
+		var condExpr influxql.Expr
+		if len(condStr) > 0 {
+			condExpr = MustParseExpr(condStr)
+		}
+		condition, err := NewCondition(timeExpr, condExpr, inSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, expected, getCondString(condition))
+	}
+
+	t.Run("1", func(t *testing.T) {
+		// 1 and 2 and 3 and 4 => 1 2 3 4 and and and
+		f(
+			"",
+			"country = 'china' and country  = 'american' and address = 'shenzhen' and address = 'shanghai'",
+			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | and | address::string = 'shanghai' | and",
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		// time and 1 and 2 and (3 or 4) => time 1 2 3 4 or and and and
+		f(
+			"time >= 1 and time <= 2",
+			"country = 'china' and country = 'american' and (address = 'shenzhen' or address = 'shanghai')",
+			"time::integer >= 1 | time::integer <= 2 | and | country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | address::string = 'shanghai' | or | and | and",
+		)
+	})
+
+	t.Run("3", func(t *testing.T) {
+		// 1 and 2 and (3 or 4)  = >  1 2 3 4 or and and
+		f(
+			"",
+			"country = 'china' and country  = 'american' and (address = 'shenzhen' or address = 'shanghai')",
+			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | address::string = 'shanghai' | or | and",
+		)
+	})
+
+	t.Run("4", func(t *testing.T) {
+		// 1 and (2 and (3 or 4)) => 1 2 3 4 or and and
+		f(
+			"",
+			"country = 'china' and (country  = 'american' and (address = 'shenzhen' or address = 'shanghai'))",
+			"country::string = 'china' | country::string = 'american' | address::string = 'shenzhen' | address::string = 'shanghai' | or | and | and",
+		)
+	})
+
+	t.Run("5", func(t *testing.T) {
+		// (1 or 2 ) and (3 or 4) => 1 2 or 3 4 or and
+		f(
+			"",
+			"(country = 'china' or country  = 'american') and (address = 'shenzhen' or address = 'shanghai')",
+			"country::string = 'china' | country::string = 'american' | or | address::string = 'shenzhen' | address::string = 'shanghai' | or | and",
+		)
+	})
+
+	t.Run("6", func(t *testing.T) {
+		// 1 and 2 and 3 or 4 => 1 2 and 3 and 4 or
+		f(
+			"",
+			"country = 'china' and country  = 'american' and address = 'shenzhen' or address = 'shanghai'",
+			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | and | address::string = 'shanghai' | or",
+		)
+	})
+
+	t.Run("7", func(t *testing.T) {
+		// (1 and 2) and 3 or 4  = >  1 2 and 3 and 4 or
+		f(
+			"",
+			"(country = 'china' and country  = 'american') and address = 'shenzhen' or address = 'shanghai'",
+			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | and | address::string = 'shanghai' | or",
+		)
+	})
+
+	t.Run("8", func(t *testing.T) {
+		// ((1 and 2) and 3) or 4 => 1 2 and 3 and 4 or
+		f(
+			"",
+			"((country = 'china' and country  = 'american') and address = 'shenzhen') or address = 'shanghai'",
+			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | and | address::string = 'shanghai' | or",
+		)
+	})
 }
 
 const RandomString = "aaaaabbbbbcccccdddddeeeeefffff"

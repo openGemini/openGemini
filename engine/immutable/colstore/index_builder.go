@@ -57,25 +57,27 @@ func NewIndexBuilder(lockPath *string, filePath string) *IndexBuilder {
 
 }
 
-func (b *IndexBuilder) WriteData(rec *record.Record) error {
+func (b *IndexBuilder) WriteData(rec *record.Record, tcLocation int8) error {
 	b.encodeChunk = b.encodeChunk[:0]
 	if !b.inited {
 		b.inited = true
 		b.encodeChunk = append(b.encodeChunk, primaryKeyMagic...)
 		b.encodeChunk = numberenc.MarshalUint32Append(b.encodeChunk, version)
-		b.meta = marshalMeta(&rec.Schema, rec.RowNums())
+		b.meta = marshalMeta(&rec.Schema, rec.RowNums(), tcLocation)
 	}
 	var err error
 	schemaByteSize := len(rec.Schemas()) * util.Uint32SizeBytes
 	/*
 		offset is encoding after
-		- total length of meta(uint32), length of schema(uint32), row number(uint32),
+		- total length of meta(uint32), length of schema(uint32), row number(uint32)
+		- time cluster location(int8)
 		- field name size details(schemaByteSize), field type details(schemaByteSize)
 		and length of offset is schemaByteSize, so the location of offset is:
 		  [util.Uint32SizeBytes*3+schemaByteSize*2 : util.Uint32SizeBytes*3+schemaByteSize*3]
 		see marshalMeta for more detail.
 	*/
-	offset := b.meta[util.Uint32SizeBytes*3+schemaByteSize*2 : util.Uint32SizeBytes*3+schemaByteSize*3]
+	offset := b.meta[util.Uint32SizeBytes*3+util.Int8SizeBytes+schemaByteSize*2 : util.Uint32SizeBytes*3+util.Int8SizeBytes+schemaByteSize*3]
+
 	data := make([]byte, 0)
 	data, err = b.chunkBuilder.EncodeChunk(rec, data, offset, uint32(len(b.meta)+headerSize))
 	if err != nil {

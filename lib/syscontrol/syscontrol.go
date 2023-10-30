@@ -98,7 +98,7 @@ const (
 	SlidingWindowPushUp   = "sliding_window_push_up"
 	ForceBroadcastQuery   = "force_broadcast_query"
 	Failpoint             = "failpoint"
-	Readonly              = "readonly"
+	NodeReadonly          = "readonly"
 	LogRows               = "log_rows"
 	verifyNode            = "verifynode"
 	memUsageLimit         = "memusagelimit"
@@ -126,6 +126,8 @@ var (
 	UpperMemPct    int64 = 0
 
 	ParallelQueryInBatch int32 = 0 // this determines whether to use parallel query when a query is combined with multi queries
+
+	Readonly = false
 )
 
 func UpdateInterruptQuery(switchOn bool) {
@@ -230,6 +232,14 @@ func SetLogRowsRuleSwitch(switchon bool, rules string) error {
 	return nil
 }
 
+func UpdateNodeReadonly(switchOn bool) {
+	Readonly = switchOn
+}
+
+func IsReadonly() bool {
+	return Readonly
+}
+
 var handlerOnQueryRequest = make(map[queryRequestMod]func(req netstorage.SysCtrlRequest) (string, error), 1)
 
 type queryRequestMod string
@@ -305,8 +315,14 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
 		}
 		wg.Wait()
-	case Readonly:
-		return handleSelectedStoreCmd(req, resp)
+	case NodeReadonly:
+		switchOn, err := GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return err
+		}
+		UpdateNodeReadonly(switchOn)
+		res := "\n\tsuccess"
+		resp.WriteString(res)
 	case ChunkReaderParallel:
 		// sql SysCtrl cmd
 		limit, err := GetIntValue(req.Param(), "limit")
@@ -443,36 +459,6 @@ func sendCmdToStoreAsync(req netstorage.SysCtrlRequest, resp *strings.Builder, n
 	resp.WriteString(res)
 	lock.Unlock()
 	wg.Done()
-}
-
-func handleSelectedStoreCmd(req netstorage.SysCtrlRequest, resp *strings.Builder) error {
-	// selected store SysCtrl cmd
-	dataNodes, err := SysCtrl.MetaClient.DataNodes()
-	if err != nil {
-		return err
-	}
-	_, ok := req.Param()["allnodes"]
-	target, nodeOk := req.Param()["host"]
-	if !ok {
-		if !nodeOk {
-			return fmt.Errorf("lack of allnodes or host param")
-		}
-	}
-
-	var lock sync.Mutex
-	var wg sync.WaitGroup
-	for _, d := range dataNodes {
-		if target != "" {
-			ip := strings.Split(d.Host, ":")[0]
-			if ip != target {
-				continue
-			}
-		}
-		wg.Add(1)
-		go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
-	}
-	wg.Wait()
-	return nil
 }
 
 func handleLogRowsCmd(req netstorage.SysCtrlRequest) error {

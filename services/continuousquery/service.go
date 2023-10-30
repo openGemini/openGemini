@@ -24,6 +24,7 @@ import (
 	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -34,6 +35,7 @@ import (
 const (
 	// DefaultReportTime is the default time interval for reporting stats.
 	DefaultReportTime     = 5 * time.Minute
+	DefaultChunkSize      = 10000
 	DefaultInnerChunkSize = 1024
 )
 
@@ -135,6 +137,7 @@ func (s *Service) getCQLease() map[string]struct{} {
 		s.logger.Error("cq service get cq lease failed", zap.Error(err))
 		return nil
 	}
+	s.logger.Info("get continuous query lease info", zap.Strings("cq names", cqNames))
 
 	var cqLease = make(map[string]struct{}, len(cqNames))
 	for _, cqName := range cqNames {
@@ -150,7 +153,7 @@ func (s *Service) checkCQIsChanged() bool {
 	}
 	select {
 	case <-s.metaChangedCh:
-		s.metaChangedCh = nil
+		s.metaChangedCh = s.MetaClient.WaitForDataChanged()
 
 		maxCQChangeID := s.MetaClient.GetMaxCQChangeID()
 		if maxCQChangeID > s.maxCQChangedID {
@@ -172,11 +175,18 @@ func (s *Service) getContinuousQueries() []*ContinuousQuery {
 			s.reportInterval = continuousQueries[i].reportInterval
 		}
 	}
+	s.logger.Info("get newly continuous query lease", zap.Int("CQ numbers", len(continuousQueries)))
 	return continuousQueries
 }
 
 func (s *Service) handle() {
+	if syscontrol.IsReadonly() {
+		return
+	}
 	if !s.init {
+		if s.metaChangedCh == nil {
+			s.metaChangedCh = s.MetaClient.WaitForDataChanged()
+		}
 		s.ContinuousQueries = s.getContinuousQueries()
 		if len(s.ContinuousQueries) == 0 {
 			return
@@ -186,6 +196,7 @@ func (s *Service) handle() {
 
 	if s.checkCQIsChanged() {
 		// get the newly cq lease
+		s.logger.Info("continuous query lease changed")
 		s.ContinuousQueries = s.getContinuousQueries()
 	}
 
@@ -193,7 +204,7 @@ func (s *Service) handle() {
 		return
 	}
 
-	now := time.Now()
+	now := time.Now().UTC()
 
 	var wg sync.WaitGroup
 	tokens := make(chan struct{}, s.maxProcessCQNumber) // tokens ars used to limit the number of goroutines.
@@ -278,16 +289,17 @@ func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query2.
 	}
 
 	opts := query.ExecutionOptions{
-		Database: cq.database,
-		//Chunked:        true,
-		//Quiet:          true,
+		Database:       cq.database,
+		ChunkSize:      DefaultChunkSize,
 		InnerChunkSize: DefaultInnerChunkSize,
+		AbortCh:        closing,
+		//Quiet:          true,
 	}
 
 	// Execute the SELECT INTO statement.
-	ch := s.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
-
-	res, ok := <-ch
+	results := s.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
+	// There is only one statement, so we will only ever receive one result
+	res, ok := <-results
 	if !ok {
 		panic("result channel was closed")
 	}

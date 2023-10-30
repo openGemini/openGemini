@@ -403,6 +403,73 @@ func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *m
 	return globalService.balanceManager.assignDbPt(dbPt, targetId, aliveConnId, false)
 }
 
+func electRgMaster(rg *meta.ReplicaGroup, ptInfo meta.DBPtInfos) (uint32, []meta.Peer, bool) {
+	var electSuccess bool
+	var newMasterId uint32
+
+	peers := rg.Peers
+	newPeers := make([]meta.Peer, len(rg.Peers))
+	for i := range peers {
+		newPeers[i].ID = peers[i].ID
+		newPeers[i].PtRole = peers[i].PtRole
+		if peers[i].PtRole == meta.Slave && ptInfo[peers[i].ID].Status == meta.Online && !electSuccess {
+			newMasterId = peers[i].ID
+			newPeers[i].ID = rg.MasterPtID
+			newPeers[i].PtRole = meta.Catcher
+			electSuccess = true
+		}
+	}
+
+	return newMasterId, newPeers, electSuccess
+}
+
+func generatePeers(rg *meta.ReplicaGroup, dbPt *meta.DbPtInfo) []meta.Peer {
+	peers := rg.Peers
+	newPeers := make([]meta.Peer, len(rg.Peers))
+	for i := range peers {
+		newPeers[i].ID = peers[i].ID
+		newPeers[i].PtRole = peers[i].PtRole
+		if peers[i].ID == dbPt.Pti.PtId {
+			newPeers[i].PtRole = meta.Catcher
+			continue
+		}
+	}
+	return newPeers
+}
+
+func (cm *ClusterManager) processReplication(dbPt *meta.DbPtInfo) error {
+	rgs := globalService.store.getReplicationGroup(dbPt.Db)
+	ptInfos := globalService.store.getDBPtInfos(dbPt.Db)
+	if len(rgs) == 0 || len(ptInfos) == 0 {
+		logger.GetLogger().Error("processReplication failed")
+		return errno.NewError(errno.DatabaseNotFound)
+	}
+
+	rgId := dbPt.Pti.RGID
+	rg := &rgs[rgId]
+	if rg.MasterPtID == dbPt.Pti.PtId {
+		masterId, peers, success := electRgMaster(rg, ptInfos)
+		logger.NewLogger(errno.ModuleHA).Info("master failed, elect rg new master", zap.Uint32("oldMaster", rg.MasterPtID),
+			zap.Uint32("newMaster", masterId), zap.Any("old peers", rg.Peers), zap.Any("new peers", peers), zap.Bool("success", success))
+		if success {
+			return globalService.store.updateReplication(dbPt.Db, rgId, masterId, peers, uint32(meta.SubHealth))
+		}
+		return nil
+	}
+
+	peers := generatePeers(rg, dbPt)
+	logger.NewLogger(errno.ModuleHA).Info("slave failed, update peers", zap.Any("old peers", rg.Peers), zap.Any("new peers", peers))
+	return globalService.store.updateReplication(dbPt.Db, rgId, rg.MasterPtID, peers, uint32(meta.SubHealth))
+}
+
 func (cm *ClusterManager) enableTakeover(enable bool) {
 	cm.takeover <- enable
+}
+
+func (cm *ClusterManager) SetStop(stop int32) {
+	atomic.StoreInt32(&cm.stop, stop)
+}
+
+func (cm *ClusterManager) SetMemberIds(memberIds map[uint64]struct{}) {
+	cm.memberIds = memberIds
 }

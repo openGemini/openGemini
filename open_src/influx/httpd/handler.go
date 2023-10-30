@@ -851,6 +851,11 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		return
 	}
 
+	if syscontrol.IsReadonly() {
+		h.httpError(w, "readonly now and writing is not allowed", http.StatusBadRequest)
+		return
+	}
+
 	urlValues := r.URL.Query()
 	database := urlValues.Get("db")
 	if database == "" {

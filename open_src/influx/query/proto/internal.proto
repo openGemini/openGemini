@@ -36,8 +36,7 @@ message ProcessorOptions {
     bytes       SeriesKey = 31;
     bool        GroupByAllDims = 32;
     uint32      EngineType = 33;
-    string      SourceCondition = 34;
-    string      SortFields = 35;
+    string      SortFields = 34;
 }
 
 message Measurement {

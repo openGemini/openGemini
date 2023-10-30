@@ -937,13 +937,13 @@ func (builder *ExecutorBuilder) addHashAgg(hashAgg *LogicalHashAgg) (*TransformV
 		for _, trait := range hashAgg.eTraits {
 			switch t := trait.(type) {
 			case *RemoteQuery:
-				reader := NewRPCReaderTransform(hashAgg.RowDataType(), hashAgg.schema.Options().(*query.ProcessorOptions).QueryId, t)
+				reader := NewRPCReaderTransform(hashAgg.inputs[0].RowDataType(), hashAgg.schema.Options().(*query.ProcessorOptions).QueryId, t)
 				clone := hashAgg.Clone()
 				reader.Distribute(clone.Children()[0])
 				v := NewTransformVertex(hashAgg, reader)
 				builder.dag.AddVertex(v)
 				readers = append(readers, v)
-				inRowDataTypes = append(inRowDataTypes, hashAgg.RowDataType())
+				inRowDataTypes = append(inRowDataTypes, hashAgg.inputs[0].RowDataType())
 			case *ShardsFragmentsGroup:
 				v, err := builder.addGroupHashAgg(hashAgg.Children()[0], &t.frags)
 				if err != nil {

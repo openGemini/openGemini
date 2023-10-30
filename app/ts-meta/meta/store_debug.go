@@ -64,6 +64,14 @@ func (s *Store) movePt(db string, pt uint32, to uint64) error {
 	if event == nil {
 		return nil
 	}
+	err = s.data.CheckDataNodeAlive(event.getSrc())
+	if err != nil {
+		return err
+	}
+	err = s.data.CheckDataNodeAlive(event.getDst())
+	if err != nil {
+		return err
+	}
 	return globalService.msm.executeEvent(event)
 }
 

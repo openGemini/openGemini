@@ -89,7 +89,7 @@ func TestRegisterQueryIDOffsetCallbackResponse(t *testing.T) {
 
 func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
 	callback := &metaclient.Sql2MetaHeartbeatCallback{}
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatResponse{})
+	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatResponseMessage, &message.Sql2MetaHeartbeatResponse{})
 	err := callback.Handle(msg)
 	assert.NoError(t, err)
 
@@ -103,14 +103,14 @@ func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
 	assert.EqualError(t, err, "data is not a Sql2MetaHeartbeatResponse, got type *message.PingResponse")
 
 	// wrong message
-	badMsg2 := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatResponse{Err: "mock error"})
+	badMsg2 := message.NewMetaMessage(message.Sql2MetaHeartbeatResponseMessage, &message.Sql2MetaHeartbeatResponse{Err: "mock error"})
 	err = callback.Handle(badMsg2)
 	assert.EqualError(t, err, "get sql to meta heartbeat callback error: mock error")
 }
 
 func TestGetCqLeaseCallbackResponse(t *testing.T) {
 	callback := &metaclient.GetCqLeaseCallback{}
-	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseResponse{CQNames: []string{"cq1", "cq2"}})
+	msg := message.NewMetaMessage(message.GetContinuousQueryLeaseResponseMessage, &message.GetContinuousQueryLeaseResponse{CQNames: []string{"cq1", "cq2"}})
 	err := callback.Handle(msg)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"cq1", "cq2"}, callback.CQNames)
@@ -125,7 +125,28 @@ func TestGetCqLeaseCallbackResponse(t *testing.T) {
 	assert.EqualError(t, err, "data is not a GetContinuousQueryLeaseResponse, got type *message.PingResponse")
 
 	// wrong message
-	badMsg2 := message.NewMetaMessage(message.GetContinuousQueryLeaseRequestMessage, &message.GetContinuousQueryLeaseResponse{Err: "mock error"})
+	badMsg2 := message.NewMetaMessage(message.GetContinuousQueryLeaseResponseMessage, &message.GetContinuousQueryLeaseResponse{Err: "mock error"})
 	err = callback.Handle(badMsg2)
 	assert.EqualError(t, err, "get cq lease callback error: mock error")
+}
+
+func TestVerifyDataNodeStatusCallbackResponse(t *testing.T) {
+	callback := &metaclient.VerifyDataNodeStatusCallback{}
+	msg := message.NewMetaMessage(message.VerifyDataNodeStatusResponseMessage, &message.VerifyDataNodeStatusResponse{})
+	err := callback.Handle(msg)
+	assert.NoError(t, err)
+
+	// wrong message
+	err = callback.Handle(nil)
+	assert.EqualError(t, err, "data is not a MetaMessage")
+
+	// wrong message
+	badMsg := message.NewMetaMessage(message.UnknownMessage, &message.PingResponse{})
+	err = callback.Handle(badMsg)
+	assert.EqualError(t, err, "data is not a VerifyDataNodeStatusResponse, got type *message.PingResponse")
+
+	// wrong message
+	badMsg2 := message.NewMetaMessage(message.VerifyDataNodeStatusResponseMessage, &message.VerifyDataNodeStatusResponse{Err: "mock error"})
+	err = callback.Handle(badMsg2)
+	assert.EqualError(t, err, "get verify datanode status callback error: mock error")
 }

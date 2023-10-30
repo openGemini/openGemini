@@ -348,7 +348,7 @@ func (t *TaskManager) waitForQuery(qid uint64, interrupt <-chan struct{}, closin
 
 	select {
 	case <-closing:
-		t.queryError(qid, errno.NewError(errno.ErrQueryKilled))
+		t.queryError(qid, errno.NewError(errno.ErrQueryKilled, qid))
 	case err := <-monitorCh:
 		if err == nil {
 			break

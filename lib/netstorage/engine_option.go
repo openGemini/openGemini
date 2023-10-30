@@ -57,6 +57,7 @@ type EngineOptions struct {
 	SnapshotThroughput       int64
 	SnapshotThroughputBurst  int64
 	SnapshotTblNum           int
+	FragmentsNumPerFlush     int
 	BackgroundReadThroughput int
 
 	// WalSyncInterval is the interval of wal file sync

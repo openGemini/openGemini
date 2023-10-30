@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"container/heap"
 	"context"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -339,7 +340,10 @@ func (trans *MergeTransform) Merge(ctx context.Context, errs *errno.Errs) {
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("query_id", trans.opt.QueryId))
+			trans.mergeLogger.Error(err.Error(),
+				zap.String("query", "MergeTransform"),
+				zap.Uint64("query_id", trans.opt.QueryId),
+				zap.String("stack", string(debug.Stack())))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)

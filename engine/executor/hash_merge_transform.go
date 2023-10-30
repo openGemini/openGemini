@@ -44,8 +44,8 @@ type HashMergeTransform struct {
 	BaseProcessor
 
 	groupMap          *hashtable.StringHashMap // <group_key, group_id>
-	groupResultMap    []*mergeResultMsg
-	newResultFuncs    []func() mergeResultCol
+	groupResultMap    []*HashMergeMsg
+	newResultFuncs    []func() HashMergeColumn
 	inputs            []*ChunkPort
 	inputChunk        chan Chunk
 	bufChunk          Chunk
@@ -106,7 +106,7 @@ func NewHashMergeHashTypeTransform(inRowDataType, outRowDataType []hybridqp.RowD
 		schema:            s,
 		opt:               s.opt.(*query.ProcessorOptions),
 		groupMap:          hashtable.DefaultStringHashMap(),
-		groupResultMap:    make([]*mergeResultMsg, 0),
+		groupResultMap:    make([]*HashMergeMsg, 0),
 		bufGroupKeysMPool: NewGroupKeysPool(HashMergeTransformBufCap),
 		isSpill:           false,
 		hashMergeType:     Hash,
@@ -140,13 +140,13 @@ func (trans *HashMergeTransform) initNewResultFuncs() error {
 		dt := f.Expr.(*influxql.VarRef).Type
 		switch dt {
 		case influxql.Float:
-			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultFloatCol)
+			trans.newResultFuncs = append(trans.newResultFuncs, NewHashMergeFloatColumn)
 		case influxql.Integer:
-			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultIntegerCol)
+			trans.newResultFuncs = append(trans.newResultFuncs, NewHashMergeIntegerColumn)
 		case influxql.Boolean:
-			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultBooleanCol)
+			trans.newResultFuncs = append(trans.newResultFuncs, NewHashMergeBooleanColumn)
 		case influxql.String, influxql.Tag:
-			trans.newResultFuncs = append(trans.newResultFuncs, NewMergeResultStringCol)
+			trans.newResultFuncs = append(trans.newResultFuncs, NewHashMergeStringColumn)
 		default:
 			return errno.NewError(errno.HashMergeTransformRunningErr)
 		}
@@ -332,16 +332,16 @@ func (trans *HashMergeTransform) putBufsToPools(groupIds []uint64) {
 	trans.bufGroupKeysMPool.FreeValues(groupIds)
 }
 
-func (trans *HashMergeTransform) newMergeResult() *mergeResult {
-	result := &mergeResult{}
+func (trans *HashMergeTransform) newMergeResult() *HashMergeResult {
+	result := &HashMergeResult{}
 	for _, f := range trans.newResultFuncs {
 		result.cols = append(result.cols, f())
 	}
 	return result
 }
 
-func (trans *HashMergeTransform) newMergeResultsMsg(tags ChunkTags) *mergeResultMsg {
-	resultMsg := &mergeResultMsg{
+func (trans *HashMergeTransform) newMergeResultsMsg(tags ChunkTags) *HashMergeMsg {
+	resultMsg := &HashMergeMsg{
 		tags:   tags,
 		result: trans.newMergeResult(),
 	}

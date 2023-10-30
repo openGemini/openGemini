@@ -330,6 +330,8 @@ func TestSingleParser(t *testing.T) {
 		"show enginetype from mst",
 		"show primarykey from mst",
 		"show schema from mst",
+		"show indexes from mst",
+		"show INDExeS from mst",
 	}
 	for _, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))
@@ -360,6 +362,7 @@ func TestSingleParserError(t *testing.T) {
 		"create measurement mst0 (column4 float,column1 string,column0 string,column3 float,column2 int) with enginetype = columnstore  SHARDKEY column2,column3 TYPE hash  PRIMARYKEY column3,column4,column0,column1 SORTKEY column2,column3,column4,column0,column1",
 		"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  SHARDKEY column2,column3 TYPE hash  PRIMARYKEY column3,column4,column0,column1 SORTKEY column2,column3,column4,column0,column1",
 		"show sortkey1 from mst",
+		"show index from mst",
 	}
 	cr := []string{
 		"expect FLOAT64, INT64, BOOL, STRING for column data type",
@@ -374,7 +377,8 @@ func TestSingleParserError(t *testing.T) {
 		"syntax error: unexpected TAG, expecting COMMA or RPAREN",
 		"expect FLOAT64, INT64, BOOL, STRING for column data type",
 		"PrimaryKey should be left prefix of SortKey",
-		"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, SCHEMA",
+		"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA",
+		"syntax error: unexpected INDEX",
 	}
 	for i, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

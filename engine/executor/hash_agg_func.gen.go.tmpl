@@ -1,0 +1,667 @@
+/*
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package executor
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"sort"
+
+	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
+)
+
+type AggFuncType uint32
+
+const (
+	sumFunc AggFuncType = iota
+	countFunc
+	firstFunc
+	lastFunc
+	minFunc
+	maxFunc
+	percentileFunc
+)
+
+const DefaultTime = 0
+
+type NewAggOperator func() aggOperator
+type aggFunc struct {
+	funcType         AggFuncType
+	newAggOperatorFn NewAggOperator
+	inIdx            int
+	outIdx           int
+	percentile       float64
+}
+
+func NewAggFunc(aggType AggFuncType, fn NewAggOperator, inIdx int, outIdx int, p float64) *aggFunc {
+	return &aggFunc{
+		funcType:         aggType,
+		newAggOperatorFn: fn,
+		inIdx:            inIdx,
+		outIdx:           outIdx,
+		percentile:       p,
+	}
+}
+
+func (af *aggFunc) NewAggOperator() aggOperator {
+	return af.newAggOperatorFn()
+}
+
+type aggOperator interface {
+	Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error
+	SetOutVal(c Chunk, colLoc int, para any)
+	SetNullFill(oc Chunk, colLoc int, time int64)
+	SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64)
+	GetTime() int64
+}
+
+type aggOperatorMsg struct {
+	results           []aggOperator
+	intervalStartTime int64 // interval time
+	time              int64 // true time
+}
+
+func NewCountFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for count iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer, influxql.Float, influxql.String, influxql.Boolean, influxql.Tag:
+		return NewAggFunc(countFunc, NewCountOperator, inOrdinal, outOrdinal, 0), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "count/mean", dataType.String())
+	}
+}
+
+func NewSumFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for sum iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(sumFunc, NewSumIntegerOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Float:
+		return NewAggFunc(sumFunc, NewSumFloatOperator, inOrdinal, outOrdinal, 0), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "sum/mean", dataType.String())
+	}
+}
+
+func NewFirstFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for first iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(firstFunc, NewFirstIntegerOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Float:
+		return NewAggFunc(firstFunc, NewFirstFloatOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.String, influxql.Tag:
+		return NewAggFunc(firstFunc, NewFirstStringOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Boolean:
+		return NewAggFunc(firstFunc, NewFirstBooleanOperator, inOrdinal, outOrdinal, 0), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "first", dataType.String())
+	}
+}
+
+func NewLastFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for last iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(lastFunc, NewLastIntegerOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Float:
+		return NewAggFunc(lastFunc, NewLastFloatOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.String, influxql.Tag:
+		return NewAggFunc(lastFunc, NewLastStringOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Boolean:
+		return NewAggFunc(lastFunc, NewLastBooleanOperator, inOrdinal, outOrdinal, 0), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "last", dataType.String())
+	}
+}
+
+func NewMinFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for min iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(minFunc, NewMinIntegerOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Float:
+		return NewAggFunc(minFunc, NewMinFloatOperator, inOrdinal, outOrdinal, 0), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "min", dataType.String())
+	}
+}
+
+func NewMaxFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for max iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(maxFunc, NewMaxIntegerOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Float:
+		return NewAggFunc(maxFunc, NewMaxFloatOperator, inOrdinal, outOrdinal, 0), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "max", dataType.String())
+	}
+}
+
+func NewPercentileFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	var percentile float64
+	switch arg := opt.Expr.(*influxql.Call).Args[1].(type) {
+	case *influxql.NumberLiteral:
+		percentile = arg.Val
+	case *influxql.IntegerLiteral:
+		percentile = float64(arg.Val)
+	default:
+		return nil, fmt.Errorf("the type of input args of percentile iterator is unsupported")
+	}
+	if percentile < 0 || percentile > 100 {
+		return nil, errors.New("invalid percentile, the value range must be 0 to 100")
+	}
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for Percentile iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(percentileFunc, NewPercentileIntegerOperator, inOrdinal, outOrdinal, percentile), nil
+	case influxql.Float:
+		return NewAggFunc(percentileFunc, NewPercentileFloatOperator, inOrdinal, outOrdinal, percentile), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "Percentile", dataType.String())
+	}
+}
+
+type countOperator struct {
+	val int64 // count
+}
+
+func NewCountOperator() aggOperator {
+	result := &countOperator{
+		val: 0,
+	}
+	return result
+}
+
+func (s *countOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	s.val += int64(endRowLoc) - int64(startRowLoc)
+	return nil
+}
+
+func (s *countOperator) SetOutVal(c Chunk, colLoc int, _ any) {
+	c.Column(colLoc).AppendIntegerValue(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *countOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *countOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransToInteger(fillVal)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *countOperator) GetTime() int64 {
+	return DefaultTime
+}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+type sum{{.Name}}Operator struct {
+	val {{.Type}} // sum
+}
+
+func NewSum{{.Name}}Operator() aggOperator {
+	return &sum{{.Name}}Operator{
+		val: 0,
+	}
+}
+
+func (s *sum{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		s.val += c.Column(colLoc).{{.Name}}Value(startRowLoc)
+	}
+	return nil
+}
+
+func (s *sum{{.Name}}Operator) SetOutVal(c Chunk, colLoc int, _ any) {
+	c.Column(colLoc).Append{{.Name}}Value(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *sum{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *sum{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *sum{{.Name}}Operator) GetTime() int64 {
+	return DefaultTime
+}
+{{- end}}
+{{end}}
+
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+type min{{.Name}}Operator struct {
+	val     {{.Type}}
+	nilFlag bool
+}
+
+func NewMin{{.Name}}Operator() aggOperator {
+	return &min{{.Name}}Operator{
+        {{- if or (eq .Name "Float")}}
+		val:     math.MaxFloat64,
+		{{- end}}
+        {{- if or (eq .Name "Integer")}}
+        val:     math.MaxInt64,
+        {{- end}}
+		nilFlag: true,
+	}
+}
+
+func (s *min{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		val := c.Column(colLoc).{{.Name}}Value(startRowLoc)
+		if val < s.val {
+			s.val = val
+			s.nilFlag = false
+		}
+	}
+	return nil
+}
+
+func (s *min{{.Name}}Operator) SetOutVal(c Chunk, colLoc int, _ any) {
+	if s.nilFlag {
+		c.Column(colLoc).AppendNil()
+		return
+	}
+	c.Column(colLoc).Append{{.Name}}Value(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *min{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *min{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *min{{.Name}}Operator) GetTime() int64 {
+	return DefaultTime
+}
+{{- end}}
+{{end}}
+
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+type max{{.Name}}Operator struct {
+	val     {{.Type}}
+	nilFlag bool
+}
+
+func NewMax{{.Name}}Operator() aggOperator {
+	return &max{{.Name}}Operator{
+        {{- if or (eq .Name "Float")}}
+		val:     -math.MaxFloat64,
+		{{- end}}
+        {{- if or (eq .Name "Integer")}}
+        val:     -math.MaxInt64,
+        {{- end}}
+		nilFlag: true,
+	}
+}
+
+func (s *max{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		val := c.Column(colLoc).{{.Name}}Value(startRowLoc)
+		if val > s.val {
+			s.val = val
+			s.nilFlag = false
+		}
+	}
+	return nil
+}
+
+func (s *max{{.Name}}Operator) SetOutVal(c Chunk, colLoc int, _ any) {
+	if s.nilFlag {
+		c.Column(colLoc).AppendNil()
+		return
+	}
+	c.Column(colLoc).Append{{.Name}}Value(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *max{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *max{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *max{{.Name}}Operator) GetTime() int64 {
+	return DefaultTime
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "String") (eq .Name "Boolean")}}
+type first{{.Name}}Operator struct {
+    {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+	val     {{.Type}} // first
+	{{- end}}
+    {{- if or (eq .Name "String")}}
+    val     []byte // first
+    {{- end}}
+	time    int64
+	loc     int
+	nilFlag bool
+}
+
+func NewFirst{{.Name}}Operator() aggOperator {
+	return &first{{.Name}}Operator{
+        {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+		val:     {{.Zero}},
+		{{- end}}
+		time:    influxql.MaxTime,
+		loc:     0,
+		nilFlag: true,
+	}
+}
+
+func (s *first{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newFirst := false
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		if c.TimeByIndex(startRowLoc) < s.time {
+			s.time = c.TimeByIndex(startRowLoc)
+			s.loc = startRowLoc
+			newFirst = true
+		}
+	}
+	if !newFirst {
+		return nil
+	}
+	if !c.Column(colLoc).IsNilV2(s.loc) {
+		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
+		{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+		s.val = c.Column(colLoc).{{.Name}}Value(rowLoc)
+		{{- end}}
+		{{- if or (eq .Name "String")}}
+        val := c.Column(colLoc).StringValue(rowLoc)
+        if cap(s.val) >= len(val) {
+            s.val = s.val[:len(val)]
+            copy(s.val, val)
+        } else {
+            s.val = make([]byte, len(val))
+            copy(s.val, val)
+        }
+		{{- end}}
+		s.nilFlag = false
+	} else {
+		s.nilFlag = true
+	}
+	return nil
+}
+
+func (s *first{{.Name}}Operator) SetOutVal(c Chunk, colLoc int, _ any) {
+	c.Column(colLoc).AppendColumnTime(s.time)
+	if !s.nilFlag {
+        {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+		c.Column(colLoc).Append{{.Name}}Value(s.val)
+		{{- end}}
+		{{- if or (eq .Name "String")}}
+		c.Column(colLoc).AppendStringValue(string(s.val))
+		{{- end}}
+		c.Column(colLoc).AppendNotNil()
+	} else {
+		c.Column(colLoc).AppendNil()
+	}
+}
+
+func (s *first{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendColumnTime(s.time)
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *first{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
+}
+
+func (s *first{{.Name}}Operator) GetTime() int64 {
+	return s.time
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "String") (eq .Name "Boolean")}}
+type last{{.Name}}Operator struct {
+    {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+	val     {{.Type}} // last
+	{{- end}}
+    {{- if or (eq .Name "String")}}
+    val     []byte // last
+    {{- end}}
+	time    int64
+	loc     int
+	nilFlag bool
+}
+
+func NewLast{{.Name}}Operator() aggOperator {
+	return &last{{.Name}}Operator{
+        {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+		val:     {{.Zero}},
+		{{- end}}
+		time:    influxql.MinTime,
+		loc:     0,
+		nilFlag: true,
+	}
+}
+
+func (s *last{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	newLast := false
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		if c.TimeByIndex(startRowLoc) > s.time {
+			s.loc = startRowLoc
+			s.time = c.TimeByIndex(startRowLoc)
+			newLast = true
+		}
+	}
+	if !newLast {
+		return nil
+	}
+	if !c.Column(colLoc).IsNilV2(s.loc) {
+		rowLoc := c.Column(colLoc).GetValueIndexV2(s.loc)
+		{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+		s.val = c.Column(colLoc).{{.Name}}Value(rowLoc)
+		{{- end}}
+		{{- if or (eq .Name "String")}}
+        val := c.Column(colLoc).StringValue(rowLoc)
+        if cap(s.val) >= len(val) {
+            s.val = s.val[:len(val)]
+            copy(s.val, val)
+        } else {
+            s.val = make([]byte, len(val))
+            copy(s.val, val)
+        }
+        {{- end}}
+		s.nilFlag = false
+	} else {
+		s.nilFlag = true
+	}
+	return nil
+}
+
+func (s *last{{.Name}}Operator) SetOutVal(c Chunk, colLoc int, _ any) {
+	c.Column(colLoc).AppendColumnTime(s.time)
+	if !s.nilFlag {
+        {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+		c.Column(colLoc).Append{{.Name}}Value(s.val)
+		{{- end}}
+		{{- if or (eq .Name "String")}}
+		c.Column(colLoc).AppendStringValue(string(s.val))
+		{{- end}}
+		c.Column(colLoc).AppendNotNil()
+	} else {
+		c.Column(colLoc).AppendNil()
+	}
+}
+
+func (s *last{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendColumnTime(s.time)
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *last{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
+	oc.Column(colLoc).AppendNotNil()
+	oc.Column(colLoc).AppendColumnTime(time)
+}
+
+func (s *last{{.Name}}Operator) GetTime() int64 {
+	return s.time
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+type percentile{{.Name}}Operator struct {
+	val []{{.Type}}
+}
+
+func NewPercentile{{.Name}}Operator() aggOperator {
+	return &percentile{{.Name}}Operator{
+		val: make([]{{.Type}}, 0),
+	}
+}
+
+func (s *percentile{{.Name}}Operator) Len() int {
+	return len(s.val)
+}
+
+func (s *percentile{{.Name}}Operator) Less(i, j int) bool {
+	return s.val[i] < s.val[j]
+}
+
+func (s *percentile{{.Name}}Operator) Swap(i, j int) {
+	s.val[i], s.val[j] = s.val[j], s.val[i]
+}
+
+func (s *percentile{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	s.val = append(s.val, c.Column(colLoc).{{.Name}}Values()[startRowLoc:endRowLoc]...)
+	return nil
+}
+
+func (s *percentile{{.Name}}Operator) SetOutVal(c Chunk, colLoc int, percentile any) {
+	if len(s.val) == 0 {
+		c.Column(colLoc).AppendNil()
+		return
+	}
+	sort.Sort(s)
+	{{- if or (eq .Name "Integer")}}
+	i := int(math.Floor(float64(len(s.val))*(percentile.(float64))/100.0+0.5)) - 1
+	{{- end}}
+    {{- if or (eq .Name "Float")}}
+    i := int(math.Floor({{.Type}}(len(s.val))*(percentile.({{.Type}}))/100.0+0.5)) - 1
+    {{- end}}
+	if i < 0 || i >= len(s.val) {
+		c.Column(colLoc).AppendNil()
+		return
+	}
+	c.Column(colLoc).Append{{.Name}}Value(s.val[i])
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *percentile{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *percentile{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *percentile{{.Name}}Operator) GetTime() int64 {
+	return DefaultTime
+}
+{{- end}}
+{{end}}

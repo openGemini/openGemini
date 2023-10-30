@@ -86,6 +86,7 @@ type Config struct {
 	maxChunkMetaItemSize  int
 	maxChunkMetaItemCount int
 	SnapshotTblNum        int
+	FragmentsNumPerFlush  int
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
@@ -103,6 +104,11 @@ func GetColStoreConfig() *Config {
 
 func NewTsStoreConfig() *Config {
 	c := tsStoreConf
+	return &c
+}
+
+func NewColumnStoreConfig() *Config {
+	c := colStoreConf
 	return &c
 }
 
@@ -140,6 +146,14 @@ func SetSnapshotTblNum(snapshotTblNum int) {
 	}
 	colStoreConf.SnapshotTblNum = snapshotTblNum
 	log.Info("Set snapshotTblNum", zap.Int("snapshotTblNum", snapshotTblNum))
+}
+
+func SetFragmentsNumPerFlush(fragmentsNumPerFlush int) {
+	if fragmentsNumPerFlush < 1 {
+		fragmentsNumPerFlush = 1
+	}
+	colStoreConf.FragmentsNumPerFlush = fragmentsNumPerFlush
+	log.Info("Set FragmentsNumPerFlush", zap.Int("FragmentsNumPerFlush", fragmentsNumPerFlush))
 }
 
 func SetCacheDataBlock(en bool) {

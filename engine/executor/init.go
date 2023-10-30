@@ -18,6 +18,9 @@ package executor
 
 import "github.com/openGemini/openGemini/engine/op"
 
+//go:generate tmpl -data=@./tmpldata hash_merge_func.gen.go.tmpl
+//go:generate tmpl -data=@./tmpldata hash_agg_func.gen.go.tmpl
+
 func init() {
 	_ = op.GetOpFactory().AddOp(op.NewSumOp(op.FuncRoutineFactory(sumRoutineFactory)))
 	_ = op.GetOpFactory().AddOp(op.NewCountOp(op.FuncRoutineFactory(countRoutineFactory)))

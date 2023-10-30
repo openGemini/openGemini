@@ -40,14 +40,33 @@ func init() {
 }
 
 func ReadSysMemory() (int64, int64) {
-	if runtime.GOOS != "linux" {
-		info, _ := mem.VirtualMemory()
-		return int64(info.Total / 1024), int64(info.Free / 1024)
+	if runtime.GOOS == "linux" {
+		return ReadSysMemoryLinux()
 	}
+	info, _ := mem.VirtualMemory()
+	return int64(info.Total / 1024), int64(info.Available / 1024)
+}
+
+func ReadSysMemoryLinux() (int64, int64) {
 	var buf [256]byte
-	n := readSysMemInfo(buf[:])
-	if n == 0 {
-		return maxMemUse, maxMemUse
+	n1 := readSysMemInfo(buf[:])
+	if n1 != 0 {
+		totalStart := bytes.Index(buf[:], []byte("MemTotal:")) + len("MemTotal:")
+		freeStart := bytes.Index(buf[totalStart:], []byte("MemAvailable:")) + len("MemAvailable:")
+		memTotal := buf[totalStart:]
+		memFree := buf[freeStart+totalStart:]
+		end := bytes.Index(memTotal, []byte("kB"))
+		memTotal = memTotal[:end]
+		end = bytes.Index(memFree, []byte("kB"))
+		memFree = memFree[:end]
+
+		memTotal = bytes.TrimSpace(memTotal)
+		memFree = bytes.TrimSpace(memFree)
+
+		total_ := bytes2Int(memTotal)
+		free_ := bytes2Int(memFree)
+
+		return total_, free_
 	}
 	/*
 		output like:
@@ -59,25 +78,8 @@ func ReadSysMemory() (int64, int64) {
 		SwapCached:            0 kB
 		Active:          3422876 kB
 	*/
-
-	totalStart := bytes.Index(buf[:], []byte("MemTotal:")) + len("MemTotal:")
-	freeStart := bytes.Index(buf[totalStart:], []byte("MemAvailable:")) + len("MemAvailable:")
-	memTotal := buf[totalStart:]
-	memFree := buf[freeStart+totalStart:]
-	end := bytes.Index(memTotal, []byte("kB"))
-	memTotal = memTotal[:end]
-	end = bytes.Index(memFree, []byte("kB"))
-	memFree = memFree[:end]
-
-	memTotal = bytes.TrimSpace(memTotal)
-	memFree = bytes.TrimSpace(memFree)
-
-	total := bytes2Int(memTotal)
-	free := bytes2Int(memFree)
-
-	return total, free
+	return maxMemUse, maxMemUse
 }
-
 func SysMem() (total, free int64) {
 	t := time.Now()
 	readMemMu.Lock()

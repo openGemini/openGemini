@@ -315,3 +315,24 @@ func TestHandler_SysCtrl(t *testing.T) {
 	})
 
 }
+
+func TestHandler_ServeWrite_ReadOnly(t *testing.T) {
+	h := Handler{
+		requestTracker: httpd.NewRequestTracker(),
+		Logger:         logger.NewLogger(errno.ModuleHTTP),
+	}
+
+	var user meta.User
+
+	t.Run("read only", func(t *testing.T) {
+		syscontrol.UpdateNodeReadonly(true)
+		defer func() {
+			syscontrol.UpdateNodeReadonly(false)
+		}()
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
+		h.serveWrite(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}

@@ -158,8 +158,7 @@ type ProcessorOptions struct {
 	FillValue interface{}
 
 	// Condition to filter by.
-	Condition       influxql.Expr
-	SourceCondition influxql.Expr
+	Condition influxql.Expr
 
 	// Time range for the iterator.
 	StartTime int64
@@ -267,7 +266,6 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 		}
 	}
 
-	opt.SourceCondition = stmt.SourceCondition
 	opt.Ascending = stmt.TimeAscending()
 	opt.Dedupe = stmt.Dedupe
 	opt.StripName = stmt.StripName
@@ -524,14 +522,6 @@ func (opt *ProcessorOptions) SetSortFields(sortFields influxql.SortFields) {
 
 func (opt *ProcessorOptions) GetSortFields() influxql.SortFields {
 	return opt.SortFields
-}
-
-func (opt *ProcessorOptions) SetSourceCondition(expr influxql.Expr) {
-	opt.SourceCondition = expr
-}
-
-func (opt *ProcessorOptions) GetSourceCondition() influxql.Expr {
-	return opt.SourceCondition
 }
 
 func (opt *ProcessorOptions) GetHintType() hybridqp.HintType {

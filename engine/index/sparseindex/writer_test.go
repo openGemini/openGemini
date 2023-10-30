@@ -19,6 +19,7 @@ package sparseindex_test
 import (
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/record"
@@ -70,7 +71,7 @@ func TestCreatePrimaryIndexWithStringType(t *testing.T) {
 	srcRec1 := buildDataRecord()
 
 	sparseindex.InitIndexFragmentFixedSize = true
-	pkRec, pkMark, err := indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize)
+	pkRec, pkMark, err := indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize, colstore.DefaultTCLocation)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
@@ -78,7 +79,7 @@ func TestCreatePrimaryIndexWithStringType(t *testing.T) {
 	assert.Equal(t, buildIndexFragmentWithFixedSize(), pkMark)
 
 	sparseindex.InitIndexFragmentFixedSize = false
-	pkRec, pkMark, err = indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize)
+	pkRec, pkMark, err = indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize, colstore.DefaultTCLocation)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
@@ -138,7 +139,7 @@ func TestCreatePrimaryIndexAllDataType(t *testing.T) {
 	srcRec1 := buildDataRecordAll()
 
 	sparseindex.InitIndexFragmentFixedSize = true
-	pkRec, pkMark, err := indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize)
+	pkRec, pkMark, err := indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize, colstore.DefaultTCLocation)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
@@ -146,7 +147,7 @@ func TestCreatePrimaryIndexAllDataType(t *testing.T) {
 	assert.Equal(t, buildIndexFragmentAllWtiFixedSize(), pkMark)
 
 	sparseindex.InitIndexFragmentFixedSize = false
-	pkRec, pkMark, err = indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize)
+	pkRec, pkMark, err = indexWriter.CreatePrimaryIndex(srcRec1, pkSchema, FragmentSize, colstore.DefaultTCLocation)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}

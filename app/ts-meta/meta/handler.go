@@ -56,6 +56,7 @@ type IStore interface {
 	ExpandGroups() error
 	leaderHTTP() string
 	leadershipTransfer() error
+	SpecialCtlData(cmd string) error
 }
 
 var httpScheme = map[bool]string{
@@ -139,6 +140,8 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.serveExpandGroups).ServeHTTP(w, r)
 		case "/leadershiptransfer":
 			h.WrapHandler(h.leadershipTransfer).ServeHTTP(w, r)
+		case "/specialCtlData":
+			h.WrapHandler(h.specialCtlData).ServeHTTP(w, r)
 		}
 		h.logger.Info("serve post")
 	default:
@@ -271,7 +274,7 @@ func (h *httpHandler) userSnapshot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "please check user snapshot parameter is valid\n", http.StatusBadRequest)
 		return
 	}
-	if version <= uint64(0) {
+	if version < uint64(0) {
 		h.logger.Error("error parsing snapshot version", zap.Uint64("version", version))
 		http.Error(w, "please check user snapshot parameter is valid\n", http.StatusBadRequest)
 		return
@@ -459,4 +462,62 @@ func (h *httpHandler) leadershipTransfer(w http.ResponseWriter, r *http.Request)
 		h.logger.Error("write result failed", zap.Error(err))
 	}
 	_, _ = w.Write([]byte("\n"))
+}
+
+// cmd sample: limit|192.168.0.11,192.168.0.12 or unlimit|xxxx  or delete|xxxx
+func (h *httpHandler) specialCtlData(w http.ResponseWriter, r *http.Request) {
+	h.logger.Info(fmt.Sprintf("url: %v, param: %v\n", r.URL.Path, r.URL.RawQuery))
+	q := r.URL.Query()
+	cmd := q.Get("cmdDetail")
+	if cmd == "" {
+		h.httpErr(fmt.Errorf("invalid cmd"), w, http.StatusBadRequest)
+		return
+	}
+
+	err := h.store.SpecialCtlData(cmd)
+	if errno.Equal(err, errno.MetaIsNotLeader) {
+		l := h.store.leaderHTTP()
+		if l == "" {
+			h.httpErr(errors.New("no leader"), w, http.StatusServiceUnavailable)
+			return
+		}
+		scheme := "http://"
+		if h.config.HTTPSEnabled {
+			scheme = "https://"
+		}
+
+		url := fmt.Sprintf("%s%s/specialCtlData?%s", scheme, l, r.URL.RawQuery)
+		h.logger.Info("specialCtlData Redirect", zap.String("url", url))
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+		return
+	}
+
+	if err != nil {
+		h.logger.Error("store.specialCtlData error", zap.String("cmd", cmd), zap.Error(err))
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Apply was successful. Return the new store index to the client.
+	resp := &proto2.Response{
+		OK:    proto.Bool(true),
+		Index: proto.Uint64(h.store.index()),
+	}
+
+	h.logger.Info("specialCtlData resp", zap.String("cmd", cmd), zap.Any("resp", resp))
+	// Marshal the response.
+	b, err := json.Marshal(resp)
+	if err != nil {
+		h.httpErr(err, w, http.StatusInternalServerError)
+		return
+	}
+
+	// Send response to client.
+	w.WriteHeader(http.StatusOK)
+	w.Header().Add("Content-Type", "application/octet-stream")
+	b = append(b, "\n"...)
+	_, err = w.Write(b)
+	if err != nil {
+		h.logger.Error("write result failed", zap.Error(err))
+	}
 }

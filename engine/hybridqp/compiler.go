@@ -49,8 +49,6 @@ type Options interface {
 	HaveOnlyCSStore() bool
 	GetDimensions() []string
 	SetFill(influxql.FillOption)
-	GetSourceCondition() influxql.Expr
-	SetSourceCondition(expr influxql.Expr)
 	SetTimeFirstKey()
 	GetTimeFirstKey() bool
 	SetSortFields(influxql.SortFields)

@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -123,8 +124,8 @@ func (trans *SparseIndexScanTransform) Release() error {
 		for _, shardFrags := range trans.frags {
 			for _, fileFrags := range shardFrags.FileMarks {
 				file := fileFrags.GetFile()
-				file.Unref()
 				file.UnrefFileReader()
+				file.Unref()
 			}
 		}
 	})
@@ -238,7 +239,7 @@ func (trans *SparseIndexScanTransform) Counting(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			c := NewChunkBuilder(trans.outRowDataType).NewChunk(trans.schema.Options().GetSourcesNames()[0])
+			c := NewChunkBuilder(trans.outRowDataType).NewChunk(influx.GetOriginMstName(trans.schema.Options().GetSourcesNames()[0]))
 			c.AppendTagsAndIndex(ChunkTags{}, 0)
 			c.AppendIntervalIndex(0)
 			c.AppendTime(0)

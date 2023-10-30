@@ -201,6 +201,10 @@ func (s *MockIStore) movePt(db string, pt uint32, to uint64) error {
 	return nil
 }
 
+func (s *MockIStore) SpecialCtlData(cmd string) error {
+	return nil
+}
+
 func TestServeExpandGroups(t *testing.T) {
 	handler := newHttpHandler(&config.Meta{}, &MockIStore{})
 	handler.serveExpandGroups(&MockResponseWriter{}, nil)

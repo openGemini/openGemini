@@ -17,7 +17,6 @@ limitations under the License.
 package storage
 
 import (
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -125,7 +125,7 @@ func (mc *MockMetaClient) GetMeasurementInfoStore(dbName string, rpName string, 
 	return mc.GetMeasurementInfoStoreFn(dbName, rpName, mstName)
 }
 
-func (mc *MockMetaClient) GetReplicaInfo(db string, pt uint32) *message.ReplicaInfo {
+func (mc *MockMetaClient) GetReplicaInfo(_ string, _ uint32) *message.ReplicaInfo {
 	return mc.replicaInfo
 }
 
@@ -153,10 +153,9 @@ func TestStorage_Write(t *testing.T) {
 	}
 
 	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
-	opt := netstorage.NewEngineOptions()
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
-	eng, err := newEngineFn(dir, dir, opt, &loadCtx)
+	eng, err := newEngineFn(dir, dir, engineOption, &loadCtx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,31 +193,126 @@ func TestStorage_Write(t *testing.T) {
 	assert.Equal(t, true, errno.Equal(err, errno.NoNodeAvailable))
 }
 
-func TestWriteRowsToSlave(t *testing.T) {
-	slaveStorage := &MockSlaveStorage{}
-	mc := &MockMetaClient{}
-	st := &Storage{
-		log:          logger.NewLogger(errno.ModuleStorageEngine),
-		stop:         make(chan struct{}),
-		slaveStorage: slaveStorage,
-		MetaClient:   mc,
-	}
-
-	rows := make([]influx.Row, 10)
-	require.NoError(t, st.WriteRowsToSlave(rows, "db", "rp", 1, 1))
-
-	mc.replicaInfo = &message.ReplicaInfo{ReplicaRole: meta.Master, Peers: []*message.PeerInfo{{}}}
-	slaveStorage.err = errors.New("some mock error")
-	require.EqualError(t, st.WriteRowsToSlave(rows, "db", "rp", 1, 1), slaveStorage.err.Error())
-
-	slaveStorage.err = nil
-	require.NoError(t, st.WriteRowsToSlave(rows, "db", "rp", 1, 1))
-}
-
 type MockSlaveStorage struct {
 	err error
 }
 
-func (s *MockSlaveStorage) WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error {
+func (s *MockSlaveStorage) WriteRows(_ *netstorage.WriteContext, _ uint64, _ uint32, _, _ string, _ time.Duration) error {
 	return s.err
+}
+
+func mockRows(num int) influx.Rows {
+	rows := make(influx.Rows, num)
+	t := time.Now().UnixNano()
+	tags := influx.PointTags{
+		{Key: "tag-key", Value: "tag-value"},
+	}
+	fields := influx.Fields{
+		{Key: "field-key", NumValue: 1, Type: influx.Field_Type_Int},
+	}
+	for i := 0; i < num; i++ {
+		rows[i].Name = "mock"
+		rows[i].Timestamp = t
+		rows[i].Tags = tags
+		rows[i].Fields = fields
+		t++
+	}
+	return rows
+}
+
+var engineOption netstorage.EngineOptions
+
+func init() {
+	engineOption = netstorage.NewEngineOptions()
+	engineOption.ShardMutableSizeLimit = 30 * 1024 * 1024
+	engineOption.NodeMutableSizeLimit = 1e9
+	engineOption.MaxWriteHangTime = time.Second
+}
+
+func TestStorage_WriteToSlave(t *testing.T) {
+	dir := t.TempDir()
+	st := &Storage{
+		log:          logger.NewLogger(errno.ModuleStorageEngine),
+		stop:         make(chan struct{}),
+		slaveStorage: &MockSlaveStorage{},
+	}
+	defer st.MustClose()
+
+	// no replication
+	mockClient := &MockMetaClient{
+		GetShardRangeInfoFn: func(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error) {
+			return &meta.ShardTimeRangeInfo{
+				ShardDuration: &meta.ShardDurationInfo{
+					Ident:        meta.ShardIdentifier{ShardID: 1, Policy: "autogen", OwnerDb: "db0", OwnerPt: 1},
+					DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+				OwnerIndex: meta.IndexDescriptor{IndexID: 1, TimeRange: meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)}},
+				TimeRange:  meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)},
+			}, nil
+		},
+		GetMeasurementInfoStoreFn: func(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+			return &meta.MeasurementInfo{Name: "mst"}, nil
+		},
+	}
+	st.MetaClient = mockClient
+	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+
+	loadCtx := metaclient.LoadCtx{}
+	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
+	eng, err := newEngineFn(dir, dir, engineOption, &loadCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.engine = eng
+	db := "db0"
+	rp := "autogen"
+	var ptId uint32 = 1
+	var shardID uint64 = 1
+	st.engine.CreateDBPT(db, ptId, false)
+	_ = config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+
+	rows := mockRows(1)
+	binaryRows, _ := influx.FastMarshalMultiRows(nil, rows)
+	err = st.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+	assert.Equal(t, nil, err)
+
+	// replication write
+	mockClient.replicaInfo = &message.ReplicaInfo{
+		ReplicaRole: meta.Master,
+		Master:      nil,
+		Peers: []*message.PeerInfo{
+			{
+				PtId:   1,
+				NodeId: 1,
+				ShardMapper: map[uint64]uint64{
+					1: 2,
+				},
+			},
+		},
+		ReplicaStatus: meta.Health,
+		Term:          0,
+	}
+	err = st.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+	assert.Equal(t, nil, err)
+}
+
+func Test_StorageCheckPtsRemovedDone(t *testing.T) {
+	st1 := &Storage{
+		engine: &engine.Engine{},
+	}
+	if st1.CheckPtsRemovedDone() != nil {
+		t.Fatal("Test_StorageCheckPtsRemovedDone nil DBPartitions error")
+	}
+	pts := make(map[uint32]*engine.DBPTInfo, 0)
+	pts[0] = &engine.DBPTInfo{}
+	dbpts := make(map[string]map[uint32]*engine.DBPTInfo, 0)
+	dbpts["db0"] = pts
+	st2 := &Storage{
+		engine: &engine.Engine{
+			DBPartitions: dbpts,
+		},
+	}
+	if st2.CheckPtsRemovedDone() == nil {
+		t.Fatal("Test_StorageCheckPtsRemovedDone one DBPartitions error")
+	}
 }

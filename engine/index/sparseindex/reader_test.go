@@ -88,7 +88,10 @@ func TestScanWithSimple(t *testing.T) {
 		conStr string,
 	) {
 		pkSchema := pkRec.Schema
-		KeyConditionImpl := sparseindex.NewKeyCondition(MustParseExpr(conStr), pkSchema)
+		KeyConditionImpl, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
 		outputFragmentRanges, err := indexReader.Scan(pkFile, pkRec, pkMark, KeyConditionImpl)
 		if err != nil {
 			t.Fatal(err)
@@ -248,7 +251,10 @@ func TestScanWithComplex(t *testing.T) {
 		conStr string,
 	) {
 		pkSchema := pkRec.Schema
-		KeyConditionImpl := sparseindex.NewKeyCondition(MustParseExpr(conStr), pkSchema)
+		KeyConditionImpl, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
 		outputFragmentRanges, err := indexReader.Scan(pkFile, pkRec, pkMark, KeyConditionImpl)
 		if err != nil {
 			t.Fatal(err)
@@ -420,7 +426,7 @@ func TestScanWithComplex(t *testing.T) {
 			pkFile,
 			buildIndexFragmentVariable(),
 			buildPkRecordComplex(),
-			[]*fragment.FragmentRange{fragment.NewFragmentRange(0, 4)},
+			[]*fragment.FragmentRange{fragment.NewFragmentRange(1, 3)},
 			"UserID > 'U2' and URL > 'W2' or height = 180 and age = 18",
 		)
 	})
@@ -447,7 +453,10 @@ func TestScanWithAllType(t *testing.T) {
 		conStr string,
 	) {
 		pkSchema := pkRec.Schema
-		KeyConditionImpl := sparseindex.NewKeyCondition(MustParseExpr(conStr), pkSchema)
+		KeyConditionImpl, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
 		outputFragmentRanges, err := indexReader.Scan(pkFile, pkRec, pkMark, KeyConditionImpl)
 		if err != nil {
 			t.Fatal(err)
@@ -511,16 +520,6 @@ func TestScanWithAllType(t *testing.T) {
 			buildPKRecordAllFinal(),
 			[]*fragment.FragmentRange{fragment.NewFragmentRange(0, 4)},
 			"floatKey > 1.0",
-		)
-	})
-
-	t.Run("Float exclusion search IN", func(t *testing.T) {
-		f(
-			pkFile,
-			buildIndexFragmentFixedSize(),
-			buildPKRecordAllFinal(),
-			[]*fragment.FragmentRange{fragment.NewFragmentRange(0, 4)},
-			"floatKey in [1.0]",
 		)
 	})
 }

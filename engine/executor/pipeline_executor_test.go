@@ -28,12 +28,48 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	qry "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 )
 
 // Second represents a helper for type converting durations.
 const Second = int64(time.Second)
 
+func MockNewExecutorBuilder() (hybridqp.PipelineExecutorBuilder, *executor.QuerySchema, *executor.StoreExchangeTraits) {
+	sql := "SELECT v1,u1 FROM mst1 limit 10"
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	query, err := yaccParser.GetQuery()
+	if err != nil {
+		return nil, nil, nil
+	}
+	stmt := query.Statements[0]
+
+	stmt, err = qry.RewriteStatement(stmt)
+	if err != nil {
+		return nil, nil, nil
+	}
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		return nil, nil, nil
+	}
+
+	selectStmt.OmitTime = true
+	msts := MeasurementsFromSelectStmt(selectStmt)
+	mapShard2Reader := make(map[uint64][][]interface{})
+	for i := range msts {
+		mapShard2Reader[uint64(i)] = [][]interface{}{nil}
+	}
+
+	traits := executor.NewStoreExchangeTraits(nil, mapShard2Reader)
+	schema := executor.NewQuerySchemaWithJoinCase(selectStmt.Fields, []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}, selectStmt.ColumnNames(), createQuerySchema().Options(), selectStmt.JoinSource, selectStmt.SortFields)
+	schema.SetFill(influxql.NoFill)
+	var executorBuilder *executor.ExecutorBuilder = executor.NewMocStoreExecutorBuilder(traits, 0)
+	return executorBuilder, schema, traits
+}
 func buildRowDataType() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "id", Type: influxql.Integer},
@@ -377,9 +413,9 @@ func TestMergeHelper_Ascending(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 16})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
-		assert.Equal(t, chunk.Column(2).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 16})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+		assert.Equal(t, chunk.Column(2).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
 		return nil
 	})
 
@@ -458,8 +494,8 @@ func TestMergeHelper_Descending(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 16}, len(expectTime)))
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), ReverseNilsV2([]uint16{0, 1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 16}, len(expectTime)))
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), ReverseNilsV2([]uint16{0, 1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
 		// TODO: fix me
 		//assert.Equal(t, chunk.Column(2).NilsV2().ToArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
 		return nil
@@ -540,9 +576,9 @@ func TestSortedMergeHelper_TimeCompare_Ascending(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
-		assert.Equal(t, chunk.Column(2).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+		assert.Equal(t, chunk.Column(2).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16})
 		return nil
 	})
 
@@ -621,9 +657,9 @@ func TestSortedMergeHelper_TimeCompare_Descending(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), ReverseNilsV2([]uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16}, len(expectTime)))
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
-		assert.Equal(t, chunk.Column(2).NilsV2().ToArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), ReverseNilsV2([]uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16}, len(expectTime)))
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
+		assert.Equal(t, chunk.Column(2).NilsV2().GetArray(), ReverseNilsV2([]uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16}, len(expectTime)))
 		return nil
 	})
 
@@ -705,7 +741,7 @@ func TestSortedMergeHelper_AuxCompare_Ascending(t *testing.T) {
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 		assert.Equal(t, chunk.Column(3).ColumnTimes(), expectColumnTimes4)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9})
 		assert.Equal(t, chunk.Column(1).NilCount(), 0)
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		assert.Equal(t, chunk.Column(3).NilCount(), 0)
@@ -788,7 +824,7 @@ func TestSortedMergeHelper_AuxCompare_Descending(t *testing.T) {
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 		assert.Equal(t, chunk.Column(3).ColumnTimes(), expectColumnTimes4)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8})
 		assert.Equal(t, chunk.Column(1).NilCount(), 0)
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		assert.Equal(t, chunk.Column(3).NilCount(), 0)
@@ -870,9 +906,9 @@ func TestSortedAppendHelper(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
-		assert.Equal(t, chunk.Column(2).NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+		assert.Equal(t, chunk.Column(2).NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16})
 		return nil
 	})
 
@@ -1075,7 +1111,7 @@ func TestLimitHelper(t *testing.T) {
 		assert.Equal(t, chunk.Column(2).ColumnTimes(), expectColumnTimes3)
 
 		assert.Equal(t, chunk.Column(0).NilCount(), 0)
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 2, 3})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 2, 3})
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
 	})
@@ -1148,7 +1184,7 @@ func TestMultiRowsLimitHelper(t *testing.T) {
 		assert.Equal(t, chunk.Column(0).ColumnTimes(), expectColumnTimes1)
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 3, 4, 5})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 3, 4, 5})
 		assert.Equal(t, chunk.Column(1).NilCount(), 0)
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
@@ -1220,7 +1256,7 @@ func TestIgnoreTagLimitHelper(t *testing.T) {
 		assert.Equal(t, chunk.Column(0).ColumnTimes(), expectColumnTimes1)
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2})
 		assert.Equal(t, chunk.Column(1).NilCount(), 0)
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
@@ -1292,7 +1328,7 @@ func TestMultiRowsIgnoreTagLimitHelper(t *testing.T) {
 		assert.Equal(t, chunk.Column(0).ColumnTimes(), expectColumnTimes1)
 		assert.Equal(t, chunk.Column(1).ColumnTimes(), expectColumnTimes2)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2, 3, 4})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2, 3, 4})
 		assert.Equal(t, chunk.Column(1).NilCount(), 0)
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
@@ -1351,8 +1387,8 @@ func TestOrderByHelperWithoutTimeWindow(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).StringValuesV2(nil), expectColumnValues2)
 		assert.Equal(t, chunk.Column(2).FloatValues(), expectColumnValues3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{0, 1, 2, 4})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 2, 3, 4})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{0, 1, 2, 4})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 2, 3, 4})
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
 	})
@@ -1413,8 +1449,8 @@ func TestOrderByHelperWithTimeWindow(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).StringValuesV2(nil), expectColumnValues2)
 		assert.Equal(t, chunk.Column(2).FloatValues(), expectColumnValues3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2, 3, 4})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 1, 2, 4})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2, 3, 4})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 1, 2, 4})
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
 	})
@@ -1476,8 +1512,8 @@ func TestOrderByHelperWithChunksAndTimeWindow(t *testing.T) {
 		assert.Equal(t, chunk.Column(1).StringValuesV2(nil), expectColumnValues2)
 		assert.Equal(t, chunk.Column(2).FloatValues(), expectColumnValues3)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 9})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 1, 2, 4, 5, 7, 8, 9})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{1, 2, 3, 4, 5, 6, 7, 9})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 1, 2, 4, 5, 7, 8, 9})
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		return nil
 	})
@@ -1553,8 +1589,8 @@ func TestSubQueryHelper(t *testing.T) {
 		assert.Equal(t, chunk.Column(2).FloatValues(), expectColumnValues3)
 		assert.Equal(t, chunk.Column(3).StringValuesV2(nil), expectColumnValues4)
 
-		assert.Equal(t, chunk.Column(0).NilsV2().ToArray(), []uint16{0, 1, 2, 4})
-		assert.Equal(t, chunk.Column(1).NilsV2().ToArray(), []uint16{0, 2, 3, 4})
+		assert.Equal(t, chunk.Column(0).NilsV2().GetArray(), []uint16{0, 1, 2, 4})
+		assert.Equal(t, chunk.Column(1).NilsV2().GetArray(), []uint16{0, 2, 3, 4})
 		assert.Equal(t, chunk.Column(2).NilCount(), 0)
 		assert.Equal(t, chunk.Column(3).NilCount(), 0)
 		return nil
@@ -1931,4 +1967,77 @@ func TestBuildPipelineExecutorWithHashAggAndHashMerge(t *testing.T) {
 	rowDataType = hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "age", Type: influxql.Integer})
 	querySchema = createQuerySchemaWithAge()
 	assert.Equal(t, testBuildPipelineExecutor(t, querySchema, rowDataType), nil)
+}
+
+func TestExecutorBuilder_addNodeExchange1(t *testing.T) {
+	var schema *executor.QuerySchema
+	var builder hybridqp.PipelineExecutorBuilder
+	var traits *executor.StoreExchangeTraits
+	builder, schema, traits = MockNewExecutorBuilder()
+	logicSeries1 := executor.NewLogicalSeries(schema)
+	inputLogicSeries1 := []hybridqp.QueryNode{logicSeries1}
+	Exchange := executor.NewLogicalExchange(inputLogicSeries1[0], executor.SERIES_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	_, err := builder.Build(Exchange)
+	require.Contains(t, err.Error(), "unsupport logical plan, can't build processor from itr")
+	input := executor.NewLogicalColumnStoreReader(nil, schema)
+	Exchange = executor.NewLogicalExchange(input, executor.SERIES_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	p, _ := builder.Build(Exchange)
+	pipelineExecutor := p.(*executor.PipelineExecutor)
+	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
+}
+func TestExecutorBuilder_addNodeExchange2(t *testing.T) {
+	var schema *executor.QuerySchema
+	var builder hybridqp.PipelineExecutorBuilder
+	builder, schema, _ = MockNewExecutorBuilder()
+	input := executor.NewLogicalColumnStoreReader(nil, schema)
+	rq := executor.RemoteQuery{
+		Database: "db0",
+		PtID:     1,
+		NodeID:   0,
+		ShardIDs: []uint64{1, 2, 3, 4},
+		Opt: query.ProcessorOptions{
+			Name:                  "test",
+			Expr:                  nil,
+			Exprs:                 nil,
+			Aux:                   []influxql.VarRef{{Val: "key", Type: influxql.String}},
+			Sources:               []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}},
+			Interval:              hybridqp.Interval{Duration: time.Second, Offset: 101},
+			Dimensions:            []string{"a", "b", "c"},
+			GroupBy:               map[string]struct{}{"a": {}, "b": {}},
+			Location:              nil,
+			Fill:                  1,
+			FillValue:             1.11,
+			Condition:             nil,
+			StartTime:             1,
+			EndTime:               2,
+			Limit:                 3,
+			Offset:                4,
+			SLimit:                5,
+			SOffset:               6,
+			Ascending:             false,
+			StripName:             false,
+			Dedupe:                false,
+			Ordered:               false,
+			Parallel:              false,
+			MaxSeriesN:            0,
+			InterruptCh:           nil,
+			Authorizer:            nil,
+			ChunkedSize:           0,
+			Chunked:               false,
+			ChunkSize:             0,
+			MaxParallel:           0,
+			RowsChan:              nil,
+			QueryId:               100001,
+			Query:                 "SELECT * FROM mst1 limit 10",
+			EnableBinaryTreeMerge: 0,
+			HintType:              0,
+		},
+		Analyze: false,
+		Node:    []byte{1, 2, 3, 4, 5, 6, 7},
+	}
+	Exchange := executor.NewLogicalExchange(input, executor.NODE_EXCHANGE, []hybridqp.Trait{&rq}, schema)
+	builder.Build(Exchange)
+	p, _ := builder.Build(Exchange)
+	pipelineExecutor := p.(*executor.PipelineExecutor)
+	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
 }

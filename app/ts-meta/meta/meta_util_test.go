@@ -158,7 +158,7 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 	if err != nil {
 		return nil, err
 	}
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	mms := &MockMetaService{}
 	mms.service = NewService(c, nil)
 	mms.service.Node = metaclient.NewNode(c.Dir)
@@ -180,7 +180,7 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 func (mms *MockMetaService) Close() {
 	mms.service.Close()
 	mms.ln.Close()
-	config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.WAFPolicy)
 }
 
 func (mms *MockMetaService) GetService() *Service {
@@ -289,6 +289,20 @@ func GenerateCreateDatabaseCmd(database string) *proto2.Command {
 	val := &proto2.CreateDatabaseCommand{
 		Name:       proto.String(database),
 		ReplicaNum: proto.Uint32(oneReplication),
+	}
+
+	t1 := proto2.Command_CreateDatabaseCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateCreateDatabaseCmdWithDefaultRep(database string, replicaN uint32) *proto2.Command {
+	val := &proto2.CreateDatabaseCommand{
+		Name:       proto.String(database),
+		ReplicaNum: proto.Uint32(replicaN),
 	}
 
 	t1 := proto2.Command_CreateDatabaseCommand
@@ -475,6 +489,13 @@ func (s *MockNetStorage) DeleteMeasurement(node *meta2.DataNode, db, rp, name st
 
 func (s *MockNetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error {
 	return s.MigratePtFn(nodeID, data, cb)
+}
+
+func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64) (int, error) {
+	if len(nodeIDs) == 1 && nodeIDs[0] == 10 {
+		return 0, fmt.Errorf("first node segregate error")
+	}
+	return 0, nil
 }
 
 func NewMockNetStorage() *MockNetStorage {

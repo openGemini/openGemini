@@ -186,7 +186,7 @@ var metaPath = "/tmp/meta"
 func mockStorage() *storage.Storage {
 	node := metaclient.NewNode(metaPath)
 	storeConfig := config.NewStore()
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	monitorConfig := config.Monitor{
 		Pushers:      "http",
 		StoreEnabled: true,

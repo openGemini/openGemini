@@ -24,8 +24,13 @@ import (
 )
 
 type PKInfo struct {
-	rec  *record.Record
-	mark fragment.IndexFragment
+	tcLocation int8
+	rec        *record.Record
+	mark       fragment.IndexFragment
+}
+
+func (p *PKInfo) GetTCLocation() int8 {
+	return p.tcLocation
 }
 
 func (p *PKInfo) GetRec() *record.Record {
@@ -49,11 +54,12 @@ func NewPKFiles() *PKFiles {
 	}
 }
 
-func (f *PKFiles) SetPKInfo(file string, rec *record.Record, mark fragment.IndexFragment) {
+func (f *PKFiles) SetPKInfo(file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8) {
 	f.mutex.Lock()
 	f.pkInfos[file] = &PKInfo{
-		rec:  rec,
-		mark: mark,
+		tcLocation: tcLocation,
+		rec:        rec,
+		mark:       mark,
 	}
 	f.mutex.Unlock()
 }

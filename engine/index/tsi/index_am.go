@@ -37,13 +37,21 @@ var IndexAms = []indexAm{
 	{0, MergeSet, "mergeset", MergeSetIndexHandler},
 	{1, Text, "text", TextIndexHandler},
 	{2, Field, "field", FieldIndexHandler},
+	{3, TimeCluster, "timecluster", nil},
 }
 
 var (
 	IndexNameToID = map[string]uint32{
-		"mergeset": 0,
-		"text":     1,
-		"field":    2,
+		"mergeset":    0,
+		"text":        1,
+		"field":       2,
+		"timecluster": 3,
+	}
+	IndexIDToName = map[uint32]string{
+		0: "mergeset",
+		1: "text",
+		2: "field",
+		3: "timecluster",
 	}
 )
 
@@ -53,6 +61,14 @@ func GetIndexIdByName(name string) (uint32, error) {
 		return 0, fmt.Errorf("invalid index type %s", name)
 	}
 	return id, nil
+}
+
+func GetIndexNameById(id uint32) (string, error) {
+	name, ok := IndexIDToName[id]
+	if !ok {
+		return "", fmt.Errorf("invalid index type %d", id)
+	}
+	return name, nil
 }
 
 func GetIndexTypeByName(name string) IndexType {

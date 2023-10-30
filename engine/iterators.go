@@ -218,7 +218,7 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 	var filterFieldsIdx []int
 	var filterTags []string
 	var auxTags []string
-	var condFunctions binaryfilterfunc.CondFunctions
+	var condFunctions *binaryfilterfunc.ConditionImpl
 	var queryMin, queryMax int64
 	var e error
 

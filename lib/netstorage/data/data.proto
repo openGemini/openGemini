@@ -121,3 +121,11 @@ message KillQueryResponse {
     optional uint32 ErrCode = 1;
     optional string ErrMsg = 2;
 }
+
+message SegregateNodeRequest {
+    required uint64 NodeId = 1;
+}
+
+message SegregateNodeResponse {
+    optional string Err = 1;
+}

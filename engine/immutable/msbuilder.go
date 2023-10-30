@@ -78,6 +78,7 @@ type MsBuilder struct {
 	pkIndexWriter sparseindex.IndexWriter
 	pkRec         []*record.Record
 	pkMark        []fragment.IndexFragment
+	tcLocation    int8 // time cluster
 }
 
 func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
@@ -141,6 +142,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	msBuilder.FileName = fileName
 	msBuilder.MaxIds = idCount
 	msBuilder.bf = nil
+	msBuilder.tcLocation = colstore.DefaultTCLocation
 
 	return msBuilder
 }
@@ -279,6 +281,7 @@ func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int,
 	builder.Files = append(builder.Files, msb.Files...)
 	builder.pkRec = append(builder.pkRec, msb.pkRec...)
 	builder.pkMark = append(builder.pkMark, msb.pkMark...)
+	builder.tcLocation = msb.tcLocation
 	builder.WithLog(msb.log)
 	return builder, nil
 }
@@ -287,14 +290,18 @@ func (b *MsBuilder) NewPKIndexWriter() {
 	b.pkIndexWriter = sparseindex.NewIndexWriter()
 }
 
-func (b *MsBuilder) writeIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string) error {
+func (b *MsBuilder) SetTCLocation(tcLocation int8) {
+	b.tcLocation = tcLocation
+}
+
+func (b *MsBuilder) writeIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string, tcLocation int8) error {
 	// Generate the primary key record from the sorted chunk based on the primary key.
-	pkRec, pkMark, err := b.pkIndexWriter.CreatePrimaryIndex(writeRec, pkSchema, colstore.RowsNumPerFragment)
+	pkRec, pkMark, err := b.pkIndexWriter.CreatePrimaryIndex(writeRec, pkSchema, colstore.RowsNumPerFragment, tcLocation)
 	if err != nil {
 		return err
 	}
 	indexBuilder := colstore.NewIndexBuilder(&lockpath, filepath)
-	err = indexBuilder.WriteData(pkRec)
+	err = indexBuilder.WriteData(pkRec, tcLocation)
 	defer indexBuilder.Reset()
 	if err != nil {
 		return err
@@ -305,23 +312,31 @@ func (b *MsBuilder) writeIndex(writeRec *record.Record, pkSchema record.Schemas,
 	return nil
 }
 
+func removeClusteredTimeCol(data *record.Record) {
+	data.ColVals = data.ColVals[1:]
+	data.Schema = data.Schema[1:]
+}
+
 func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Schemas, nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
 	rowsLimit := b.Conf.maxRowsPerSegment * b.Conf.maxSegmentLimit
-
 	// fast path, most data does not reach the threshold for splitting files.
 	if data.RowNums() <= rowsLimit {
-		if err := b.WriteData(id, data); err != nil {
-			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
-			return b, err
-		}
-
-		if len(schema) != 0 { // write index, works for colstore
+		if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // write index, works for colstore
 			dataFilePath := b.FileName.String()
 			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
-			if err := b.writeIndex(data, schema, indexFilePath, *b.lock); err != nil {
+			if err := b.writeIndex(data, schema, indexFilePath, *b.lock, b.tcLocation); err != nil {
 				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
 				return b, err
 			}
+		}
+
+		if b.tcLocation > colstore.DefaultTCLocation {
+			removeClusteredTimeCol(data)
+		}
+
+		if err := b.WriteData(id, data); err != nil {
+			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
+			return b, err
 		}
 
 		fSize := b.Size()
@@ -334,19 +349,25 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Sc
 
 	// slow path
 	recs := data.Split(nil, rowsLimit)
+
 	for i := range recs {
+		if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // write index, works for colstore
+			dataFilePath := b.FileName.String()
+			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
+			if err := b.writeIndex(&recs[i], schema, indexFilePath, *b.lock, b.tcLocation); err != nil {
+				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
+				return b, err
+			}
+		}
+
+		if b.tcLocation > colstore.DefaultTCLocation {
+			removeClusteredTimeCol(&recs[i])
+		}
+
 		err := b.WriteData(id, &recs[i])
 		if err != nil {
 			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
 			return b, err
-		}
-		if len(schema) != 0 { // write index, works for colstore
-			dataFilePath := b.FileName.String()
-			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
-			if err := b.writeIndex(&recs[i], schema, indexFilePath, *b.lock); err != nil {
-				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
-				return b, err
-			}
 		}
 
 		fSize := b.Size()
@@ -355,7 +376,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Sc
 			if err != nil {
 				return b, err
 			}
-			if len(schema) != 0 { // need to init indexwriter after switch tssp file, i.e. new b
+			if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // need to init indexwriter after switch tssp file, i.e. new b
 				b.NewPKIndexWriter()
 			}
 		}

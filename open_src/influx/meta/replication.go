@@ -85,7 +85,7 @@ func (rg *ReplicaGroup) marshal() *proto2.ReplicaGroup {
 
 func (rg *ReplicaGroup) unmarshal(pb *proto2.ReplicaGroup) {
 	rg.ID = pb.GetID()
-	rg.MasterPtID = pb.GetID()
+	rg.MasterPtID = pb.GetMasterID()
 	rg.Term = pb.GetTerm()
 	rg.Status = RGStatus(pb.GetStatus())
 	if len(pb.GetPeers()) > 0 {

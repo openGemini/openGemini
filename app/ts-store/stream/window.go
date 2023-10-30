@@ -30,6 +30,7 @@ import (
 	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	atomic2 "github.com/openGemini/openGemini/lib/atomic"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -414,7 +415,7 @@ func (s *Task) flushRows(indexKeyPool []byte) (int, []byte, error) {
 		key, _ := k.(string)
 		//window values only store float64 pointer type, no need to check
 		v, _ := vv.([]*float64)
-		values := strings.Split(key, " ")
+		values := strings.Split(key, config.StreamGroupValueStrSeparator)
 		if len(values) != len(s.groupKeys) {
 			panic(fmt.Sprintf("cannot occur this values %v len %v groupkeys %v key %v", values, len(values), s.groupKeys, key))
 		}
@@ -645,7 +646,7 @@ func (s *Task) generateGroupKey(keys []string, value *influx.Row) string {
 				builder.WriteString(value.Tags[idx].Value)
 			}
 			if i < len(keys)-1 {
-				builder.WriteString(" ")
+				builder.WriteByte(config.StreamGroupValueSeparator)
 			}
 			continue
 		} else if !haveFieldIndex {
@@ -660,7 +661,7 @@ func (s *Task) generateGroupKey(keys []string, value *influx.Row) string {
 				builder.WriteString(fmt.Sprint(value.Fields[fIdx].NumValue))
 			}
 			if i < len(keys)-1 {
-				builder.WriteString(" ")
+				builder.WriteByte(config.StreamGroupValueSeparator)
 			}
 		} else {
 			s.Logger.Error(fmt.Sprintf("the group key is incomplete, field key %v", keys[i]))

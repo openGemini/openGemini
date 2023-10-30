@@ -85,6 +85,7 @@ type Config struct {
 	ChunkReaderParallel     int            `toml:"chunk-reader-parallel"`
 	ReadBlockSize           toml.Size      `toml:"read-block-size"`
 	TimeFilterProtection    bool           `toml:"time-filter-protection"`
+	CPUThreshold            int            `toml:"cpu-threshold"`
 }
 
 // NewHttpConfig returns a new Config with default settings.
@@ -197,6 +198,7 @@ func (c *Config) ShowConfigs() map[string]interface{} {
 		"http.chunk-reader-parallel":           c.ChunkReaderParallel,
 		"http.read-block-size":                 c.ReadBlockSize,
 		"http.time-filter-protection":          c.TimeFilterProtection,
+		"http.cpu-threshold":                   c.CPUThreshold,
 	}
 }
 

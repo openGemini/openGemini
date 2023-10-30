@@ -51,6 +51,7 @@ const (
 	MergeSet IndexType = iota
 	Text
 	Field
+	TimeCluster
 	IndexTypeAll
 )
 

@@ -143,3 +143,7 @@ func (c *MigratePtCallback) GetCodec() transport.Codec {
 func (c *MigratePtCallback) GetResponse() interface{} {
 	return c.data
 }
+
+func (c *MigratePtCallback) CallFn(err error) {
+	c.fn(err)
+}

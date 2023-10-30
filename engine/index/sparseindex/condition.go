@@ -18,8 +18,10 @@ package sparseindex
 
 import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
@@ -35,108 +37,103 @@ type KeyCondition interface {
 }
 
 type KeyConditionImpl struct {
-	condition influxql.Expr
-	pkSchema  record.Schemas
-	lhs       record.Schemas
-	rhs       []influxql.Expr
-	ops       []influxql.Token
-	rpn       []*RPNElement
+	pkSchema record.Schemas
+	rpn      []*RPNElement
 }
 
-func NewKeyCondition(condition influxql.Expr, pkSchema record.Schemas) *KeyConditionImpl {
-	var stack []influxql.Token
-	kc := &KeyConditionImpl{condition: condition, pkSchema: pkSchema}
+func NewKeyCondition(timeCondition, condition influxql.Expr, pkSchema record.Schemas) (*KeyConditionImpl, error) {
+	kc := &KeyConditionImpl{pkSchema: pkSchema}
 	cols := genIndexColumnsBySchema(pkSchema)
-	kc.initRPN(condition, cols, &stack)
-	for len(stack) > 0 {
-		kc.rpn = append(kc.rpn, &RPNElement{op: InfluxOpToFunction(stack[len(stack)-1])})
-		stack = stack[:len(stack)-1]
+	// use "AND" to connect the time condition to other conditions.
+	combineCondition := binaryfilterfunc.CombineConditionWithAnd(timeCondition, condition)
+	rpnExpr := rpn.ConvertToRPNExpr(combineCondition)
+	if err := kc.convertToRPNElem(rpnExpr, cols); err != nil {
+		return nil, err
 	}
-	return kc
+	return kc, nil
 }
 
-func (kc *KeyConditionImpl) initRPN(
-	condition influxql.Expr,
+func (kc *KeyConditionImpl) convertToRPNElem(
+	rpnExpr *rpn.RPNExpr,
 	cols []*ColumnRef,
-	stack *[]influxql.Token,
-) {
-	switch condition.(type) {
-	case *influxql.BinaryExpr:
-		b := condition.(*influxql.BinaryExpr)
-		if IsLogicalOperator(b.Op) {
-			*stack = append(*stack, b.Op)
-		}
-		if nb, ok := b.LHS.(*influxql.BinaryExpr); ok {
-			kc.initRPN(nb, cols, stack)
-		}
-		if nb, ok := b.RHS.(*influxql.BinaryExpr); ok {
-			kc.initRPN(nb, cols, stack)
-		}
-		if lv, ok := b.LHS.(*influxql.VarRef); ok {
-			kc.lhs = append(kc.lhs, record.Field{Name: lv.Val, Type: record.ToModelTypes(lv.Type)})
-			kc.rhs = append(kc.rhs, b.RHS)
-			kc.ops = append(kc.ops, b.Op)
-			if idx := kc.pkSchema.FieldIndex(lv.Val); idx < 0 {
-				if len(*stack) > 0 && IsLogicalOperator((*stack)[len(*stack)-1]) {
-					*stack = (*stack)[:len(*stack)-1]
+) error {
+	var fieldCount int
+	for i, expr := range rpnExpr.Val {
+		switch v := expr.(type) {
+		case influxql.Token:
+			switch v {
+			case influxql.AND:
+				if fieldCount == 0 {
+					kc.rpn = append(kc.rpn, &RPNElement{op: rpn.AND})
+				} else {
+					fieldCount--
 				}
-			} else {
-				kc.genRPNElement(b, cols, stack, idx)
+			case influxql.OR:
+				if fieldCount == 0 {
+					kc.rpn = append(kc.rpn, &RPNElement{op: rpn.OR})
+				} else {
+					fieldCount--
+				}
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ:
+			default:
+				return errno.NewError(errno.ErrRPNOp, v)
 			}
+		case *influxql.VarRef:
+			// a filter expression is converted into three elements. such as, (A = 'a') => (A 'a' =).
+			// the first element is a field. rpnExpr.Val[i]
+			// the second element is a value. rpnExpr.Val[i+1]
+			// the third element is a operator. rpnExpr.Val[i+2]
+			idx := kc.pkSchema.FieldIndex(v.Val)
+			if idx < 0 {
+				fieldCount++
+				continue
+			}
+			if i+2 >= len(rpnExpr.Val) {
+				return errno.NewError(errno.ErrRPNElemNum)
+			}
+			value := rpnExpr.Val[i+1]
+			op, ok := rpnExpr.Val[i+2].(influxql.Token)
+			if !ok {
+				return errno.NewError(errno.ErrRPNElemOp)
+			}
+			if err := kc.genRPNElementByVal(value, op, cols, idx); err != nil {
+				return err
+			}
+		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral, *influxql.BooleanLiteral:
+		default:
+			return errno.NewError(errno.ErrRPNExpr, v)
 		}
-	default:
-		return
 	}
+	return nil
 }
 
-func (kc *KeyConditionImpl) genRPNElement(
-	b *influxql.BinaryExpr,
+func (kc *KeyConditionImpl) genRPNElementByVal(
+	rhs interface{},
+	op influxql.Token,
 	cols []*ColumnRef,
-	stack *[]influxql.Token,
 	idx int,
-) {
-	var ok bool
+) error {
 	rpnElem := &RPNElement{keyColumn: idx}
-	switch b.RHS.(type) {
+	value := NewFieldRef(cols, idx, 0)
+	switch rhs := rhs.(type) {
 	case *influxql.StringLiteral:
-		value := NewFieldRef(cols, idx, 0)
-		val := b.RHS.(*influxql.StringLiteral).Val
-		value.cols[idx].column.AppendString(val)
-		if value.cols[idx].column.Len > 1 {
-			value.row = value.cols[idx].column.Len - 1
-		}
-		ok = genRPNElementByOp(b.Op, value, rpnElem)
+		value.cols[idx].column.AppendString(rhs.Val)
 	case *influxql.NumberLiteral:
-		value := NewFieldRef(cols, idx, 0)
-		val := b.RHS.(*influxql.NumberLiteral).Val
-		value.cols[idx].column.AppendFloat(val)
-		if value.cols[idx].column.Len > 1 {
-			value.row = value.cols[idx].column.Len - 1
-		}
-		ok = genRPNElementByOp(b.Op, value, rpnElem)
+		value.cols[idx].column.AppendFloat(rhs.Val)
 	case *influxql.IntegerLiteral:
-		value := NewFieldRef(cols, idx, 0)
-		val := b.RHS.(*influxql.IntegerLiteral).Val
-		value.cols[idx].column.AppendInteger(val)
-		if value.cols[idx].column.Len > 1 {
-			value.row = value.cols[idx].column.Len - 1
-		}
-		ok = genRPNElementByOp(b.Op, value, rpnElem)
+		value.cols[idx].column.AppendInteger(rhs.Val)
+	case *influxql.BooleanLiteral:
+		value.cols[idx].column.AppendBoolean(rhs.Val)
 	default:
-		ok = false
+		return errno.NewError(errno.ErrRPNElement, rhs)
 	}
-	if ok {
+	if value.cols[idx].column.Len > 1 {
+		value.row = value.cols[idx].column.Len - 1
+	}
+	if ok := genRPNElementByOp(op, value, rpnElem); ok {
 		kc.rpn = append(kc.rpn, rpnElem)
 	}
-	if IsLogicalOperator(b.Op) {
-		for len(*stack) > 0 &&
-			IsLogicalOperator((*stack)[len(kc.rpn)-1]) &&
-			InfluxOpToFunction(b.Op) < InfluxOpToFunction((*stack)[len(kc.rpn)-1]) {
-			kc.rpn = append(kc.rpn, &RPNElement{op: InfluxOpToFunction((*stack)[len(*stack)-1])})
-			*stack = (*stack)[:len(*stack)-1]
-		}
-		*stack = append(*stack, b.Op)
-	}
+	return nil
 }
 
 // applyChainToRange apply the monotonicity of each function on a specific range.
@@ -149,7 +146,7 @@ func (kc *KeyConditionImpl) applyChainToRange(
 	return &Range{}
 }
 
-// checkInAnyRange check Whether the condition and its negation are feasible
+// CheckInRange check Whether the condition and its negation are feasible
 // in the direct product of single column ranges specified by hyper-rectangle.
 func (kc *KeyConditionImpl) CheckInRange(
 	rgs []*Range,
@@ -159,19 +156,19 @@ func (kc *KeyConditionImpl) CheckInRange(
 	var singlePoint bool
 	var rpnStack []Mark
 	for _, elem := range kc.rpn {
-		if elem.op == InRange || elem.op == NotInRange {
+		if elem.op == rpn.InRange || elem.op == rpn.NotInRange {
 			rpnStack = kc.checkInRangeForRange(rgs, rpnStack, elem, dataTypes, singlePoint)
-		} else if elem.op == InSet || elem.op == NotInSet {
+		} else if elem.op == rpn.InSet || elem.op == rpn.NotInSet {
 			rpnStack, err = kc.checkInRangeForSet(rgs, rpnStack, elem, dataTypes, singlePoint)
 			if err != nil {
 				return Mark{}, err
 			}
-		} else if elem.op == AND {
+		} else if elem.op == rpn.AND {
 			rpnStack, err = kc.checkInRangeForAnd(rpnStack)
 			if err != nil {
 				return Mark{}, err
 			}
-		} else if elem.op == OR {
+		} else if elem.op == rpn.OR {
 			rpnStack, err = kc.checkInRangeForOr(rpnStack)
 			if err != nil {
 				return Mark{}, err
@@ -205,7 +202,7 @@ func (kc *KeyConditionImpl) checkInRangeForRange(
 	intersects := elem.rg.intersectsRange(keyRange)
 	contains := elem.rg.containsRange(keyRange)
 	rpnStack = append(rpnStack, NewMark(intersects, !contains))
-	if elem.op == NotInRange {
+	if elem.op == rpn.NotInRange {
 		rpnStack[len(rpnStack)-1] = rpnStack[len(rpnStack)-1].Not()
 	}
 	return rpnStack
@@ -222,7 +219,7 @@ func (kc *KeyConditionImpl) checkInRangeForSet(
 		return nil, errno.NewError(errno.ErrRPNSetInNotCreated)
 	}
 	rpnStack = append(rpnStack, elem.setIndex.checkInRange(rgs, dataTypes, singlePoint))
-	if elem.op == NotInSet {
+	if elem.op == rpn.NotInSet {
 		rpnStack[len(rpnStack)-1] = rpnStack[len(rpnStack)-1].Not()
 	}
 	return rpnStack, nil
@@ -434,17 +431,15 @@ func (kc *KeyConditionImpl) MayBeInRange(
 }
 
 func (kc *KeyConditionImpl) HavePrimaryKey() bool {
-	for i := range kc.rhs {
-		if kc.pkSchema.FieldIndex(kc.lhs[i].Name) >= 0 {
-			return true
-		}
-	}
-	return false
+	return len(kc.rpn) > 0
 }
+
 func (kc *KeyConditionImpl) GetMaxKeyIndex() int {
-	var res int
-	for i := range kc.rhs {
-		res = hybridqp.MaxInt(res, kc.pkSchema.FieldIndex(kc.lhs[i].Name))
+	res := -1
+	for i := range kc.rpn {
+		if kc.rpn[i].op <= rpn.NotInSet {
+			res = hybridqp.MaxInt(res, kc.rpn[i].keyColumn)
+		}
 	}
 	return res
 }

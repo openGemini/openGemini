@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -30,6 +29,7 @@ import (
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -484,7 +484,7 @@ func TestClient_CreateMeasurement(t *testing.T) {
 		logger:         logger.NewLogger(errno.ModuleMetaClient),
 		SendRPCMessage: &RPCMessageSender{},
 	}
-	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil)
+	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil, 0)
 	schemaInfo := meta2.NewSchemaInfo(map[string]int32{"a": influx.Field_Type_Tag}, map[string]int32{"b": influx.Field_Type_Float})
 
 	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, nil)
@@ -969,41 +969,20 @@ func TestGetDownSampleInfo(t *testing.T) {
 }
 
 func TestVerifyDataNodeStatus(t *testing.T) {
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 
-	address := "127.0.0.1:8492"
-	nodeId := 0
-	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
-
-	// ServerestVerifyDataN
-	rrcServer, err := startServer(address)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
-	defer rrcServer.Stop()
-	time.Sleep(time.Second)
 	mc := &Client{
-		cacheData: &meta2.Data{
-			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
-				Name:     "test",
-				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
-				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-					"rp0": {
-						Name:     "rp0",
-						Duration: 72 * time.Hour,
-					},
-				}}},
-		},
 		nodeID:         1,
 		metaServers:    []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
 		closing:        make(chan struct{}),
 		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		SendRPCMessage: &mockRPCMessageSender{},
 	}
 
+	err := mc.retryVerifyDataNodeStatus()
+	assert.NoError(t, err)
 	close(mc.closing)
-	mc.verifyDataNodeStatus()
 }
 
 func TestCreateMeasurement(t *testing.T) {
@@ -1330,8 +1309,8 @@ func TestClient_GetNodePtsMap(t *testing.T) {
 				}},
 			},
 			PtView: map[string]meta2.DBPtInfos{
-				"db0": []meta2.PtInfo{{
-					PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online},
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online},
 					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline}},
 			},
 		},
@@ -1346,6 +1325,57 @@ func TestClient_GetNodePtsMap(t *testing.T) {
 	assert.Equal(t, nil, err)
 	assert.Equal(t, 1, len(nodePtMap))
 	assert.Equal(t, uint32(0), nodePtMap[0][0])
+}
+
+func TestClient_GetNodePtsMapForReplication(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{ID: 1, StartTime: ts, EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ReplicaN: 2,
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, RGID: 0},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, RGID: 0},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 1},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Offline, RGID: 1},
+				},
+			},
+			ReplicaGroups: map[string][]meta2.ReplicaGroup{
+				"db0": {
+					{ID: 0, MasterPtID: 0, Peers: []meta2.Peer{{ID: 1, PtRole: meta2.Slave}}},
+					{ID: 1, MasterPtID: 2, Peers: []meta2.Peer{{ID: 3, PtRole: meta2.Slave}}},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	// test db not found
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+	nodePtMap, err := c.GetNodePtsMap("db1")
+	assert.Equal(t, true, errno.Equal(err, errno.DatabaseNotFound))
+	// test db has offline and online pt
+	nodePtMap, err = c.GetNodePtsMap("db0")
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 2, len(nodePtMap))
+	assert.Equal(t, uint32(0), nodePtMap[0][0])
+	assert.Equal(t, uint32(2), nodePtMap[2][0])
+
 }
 
 func TestClient_MultiRpWithSameMeasurement(t *testing.T) {
@@ -1472,8 +1502,8 @@ func TestClient_GetAliveShards(t *testing.T) {
 	shardIndexes := c.GetAliveShards("db0", &sgInfo1)
 	assert.Equal(t, shardIndexes, []int{0, 1, 2, 3})
 
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	shardIndexes = c.GetAliveShards("db0", &sgInfo1)
 	assert.Equal(t, shardIndexes, []int{0, 1, 2, 3})
 }
@@ -1527,8 +1557,8 @@ func TestClient_GetAliveShardsForReplication(t *testing.T) {
 		logger:      logger.NewLogger(errno.ModuleMetaClient),
 	}
 
-	config.SetHaPolicy("replication")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	shardIndexes := c.GetAliveShards("db0", &sgInfo1)
 	assert.Equal(t, shardIndexes, []int{0, 2})
 }

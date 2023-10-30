@@ -17,9 +17,6 @@ limitations under the License.
 package immutable
 
 import (
-	"fmt"
-	"sync/atomic"
-
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -175,58 +172,6 @@ func (itr *FileIterator) NextChunkMeta() bool {
 }
 
 type FileIterators []*FileIterator
-
-func (m *MmsTables) NewFileIterators(group *CompactGroup) (FilesInfo, error) {
-	var fi FilesInfo
-	fi.compIts = make(FileIterators, 0, len(group.group))
-	fi.oldFiles = make([]TSSPFile, 0, len(group.group))
-	for _, fn := range group.group {
-		if m.isClosed() || m.isCompMergeStopped() {
-			fi.compIts.Close()
-			return fi, ErrCompStopped
-		}
-		if atomic.LoadInt64(group.dropping) > 0 {
-			fi.compIts.Close()
-			return fi, ErrDroppingMst
-		}
-		f := m.File(group.name, fn, true)
-		if f == nil {
-			fi.compIts.Close()
-			return fi, fmt.Errorf("table %v, %v, %v not find", group.name, fn, true)
-		}
-		fi.oldFiles = append(fi.oldFiles, f)
-		itr := NewFileIterator(f, CLog)
-		if itr.NextChunkMeta() {
-			fi.compIts = append(fi.compIts, itr)
-		} else {
-			continue
-		}
-
-		maxRows, avgRows := f.MaxChunkRows(), f.AverageChunkRows()
-		if fi.maxChunkRows < maxRows {
-			fi.maxChunkRows = maxRows
-		}
-
-		fi.avgChunkRows += avgRows
-		if fi.maxChunkN < itr.chunkN {
-			fi.maxChunkN = itr.chunkN
-		}
-
-		if fi.maxColumns < int(itr.curtChunkMeta.columnCount) {
-			fi.maxColumns = int(itr.curtChunkMeta.columnCount)
-		}
-
-		fi.estimateSize += int(itr.r.FileSize())
-	}
-	fi.avgChunkRows /= len(fi.compIts)
-	fi.dropping = group.dropping
-	fi.name = group.name
-	fi.shId = group.shardId
-	fi.toLevel = group.toLevel
-	fi.oldFids = group.group
-
-	return fi, nil
-}
 
 func (i FileIterators) Close() {
 	for _, itr := range i {

@@ -74,6 +74,92 @@ func TestClusterManagerHandleFailedEvent(t *testing.T) {
 	assert.Equal(t, uint64(1), dn.LTime)
 }
 
+func TestClusterManagerHandleFailedEventForRepMaster(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd = GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "test"
+	globalService.store.NetStore = NewMockNetStorage()
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmdWithDefaultRep(db, 2), mms.GetConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	e := *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)
+	eventCh := mms.service.clusterManager.GetEventCh()
+	eventCh <- e
+	time.Sleep(1 * time.Second)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(2)
+	assert.Equal(t, serf.StatusFailed, dn.Status)
+	assert.Equal(t, uint64(1), dn.LTime)
+
+	rgs := globalService.store.getReplicationGroup(db)
+	assert.Equal(t, 1, len(rgs))
+	assert.Equal(t, uint32(1), rgs[0].MasterPtID)
+	assert.Equal(t, uint32(0), rgs[0].Peers[0].ID)
+	assert.Equal(t, meta.Catcher, rgs[0].Peers[0].PtRole)
+	assert.Equal(t, meta.SubHealth, rgs[0].Status)
+}
+
+func TestClusterManagerHandleFailedEventForRepSlave(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd = GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
+	if err = mms.service.store.ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "test"
+	globalService.store.NetStore = NewMockNetStorage()
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmdWithDefaultRep(db, 2), mms.GetConfig()); err != nil {
+		t.Fatal(err)
+	}
+
+	e := *generateMemberEvent(serf.EventMemberFailed, "3", 1, serf.StatusFailed)
+	eventCh := mms.service.clusterManager.GetEventCh()
+	eventCh <- e
+	time.Sleep(1 * time.Second)
+	mms.service.clusterManager.WaitEventDone()
+	dn := mms.service.store.data.DataNode(3)
+	assert.Equal(t, serf.StatusFailed, dn.Status)
+	assert.Equal(t, uint64(1), dn.LTime)
+
+	rgs := globalService.store.getReplicationGroup(db)
+	assert.Equal(t, 1, len(rgs))
+	assert.Equal(t, uint32(0), rgs[0].MasterPtID)
+	assert.Equal(t, uint32(1), rgs[0].Peers[0].ID)
+	assert.Equal(t, meta.Catcher, rgs[0].Peers[0].PtRole)
+	assert.Equal(t, meta.SubHealth, rgs[0].Status)
+}
+
 func TestClusterManagerDoNotHandleOldEvent(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, testIp)
@@ -262,7 +348,7 @@ func TestClusterManager_ActiveTakeover(t *testing.T) {
 	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	globalService.store.data.TakeOverEnabled = true
 
 	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
@@ -319,7 +405,7 @@ func TestClusterManager_LeaderChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert.Equal(t, meta.Online, globalService.store.data.PtView[db][0].Status)
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	globalService.store.data.TakeOverEnabled = true
 
 	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {

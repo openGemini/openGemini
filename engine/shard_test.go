@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
@@ -81,7 +82,6 @@ const defaultChunkSize = 1000
 const defaultMeasurementName = "cpu"
 
 type checkSingleCursorFunction func(cur comm.KeyCursor, expectRecords *sync.Map, total *int, ascending bool, stop chan struct{}) error
-type checkAggSingleCursorFunction func(cur comm.KeyCursor, expectRecords *sync.Map, stop chan struct{}) error
 
 func GenDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, interval time.Duration,
 	tm time.Time, fullField, inc bool, fixBool bool, tv ...int) ([]influx.Row, int64, int64) {
@@ -538,7 +538,6 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 			filterOption.FiltersMap = valueMap
 			filterOption.FieldsIdx = idFields
 			filterOption.FilterTags = idTags
-			filterOption.CondFunctions = binaryfilterfunc.CondFunctions{}
 			filterRec := immutable.FilterByField(rec, nil, &filterOption, opt.GetCondition(), nil, &v.tags, nil)
 			if filterRec == nil {
 				emptyKeys = append(emptyKeys, k)
@@ -1044,6 +1043,158 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
 		rec1 := pkInfo1.GetRec().ColVals
 		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, pkInfo1.GetTCLocation(), colstore.DefaultTCLocation)
+		require.EqualValues(t, pkInfo2.GetTCLocation(), colstore.DefaultTCLocation)
+		require.EqualValues(t, len(rec1), len(rec2))
+		for i := range rec1 {
+			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
+		}
+
+		mark1 := pkInfo1.GetMark()
+		mark2 := pkInfo2.GetMark()
+		require.EqualValues(t, mark1, mark2)
+
+		schema1 := pkInfo1.GetRec().Schema
+		schema2 := pkInfo2.GetRec().Schema
+		require.EqualValues(t, schema1, schema2)
+
+		meta1 := pkInfo1.GetRec().RecMeta
+		meta2 := pkInfo2.GetRec().RecMeta
+		require.EqualValues(t, meta1, meta2)
+	}
+	require.NoError(t, closeShard(sh))
+}
+
+func TestShard_NewColStoreShardWithPKIndexAndTC(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:             []string{},
+			PrimaryKey:          []string{"field1_string", "field2_int"},
+			TimeClusterDuration: 60000000,
+		},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 1, len(files))
+	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	require.NoError(t, closeShard(sh))
+	// reopen shard to load data
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkFiles2 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	for _, file := range files {
+		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
+		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		rec1 := pkInfo1.GetRec().ColVals
+		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, pkInfo1.GetTCLocation(), 0)
+		require.EqualValues(t, pkInfo2.GetTCLocation(), 0)
+		require.EqualValues(t, len(rec1), len(rec2))
+		for i := range rec1 {
+			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
+		}
+
+		mark1 := pkInfo1.GetMark()
+		mark2 := pkInfo2.GetMark()
+		require.EqualValues(t, mark1, mark2)
+
+		schema1 := pkInfo1.GetRec().Schema
+		schema2 := pkInfo2.GetRec().Schema
+		require.EqualValues(t, schema1, schema2)
+
+		meta1 := pkInfo1.GetRec().RecMeta
+		meta2 := pkInfo2.GetRec().RecMeta
+		require.EqualValues(t, meta1, meta2)
+	}
+	require.NoError(t, closeShard(sh))
+}
+
+func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKey(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:             []string{},
+			PrimaryKey:          nil,
+			TimeClusterDuration: 60000000,
+		},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 1, len(files))
+	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	require.NoError(t, closeShard(sh))
+	// reopen shard to load data
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkFiles2 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	for _, file := range files {
+		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
+		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		rec1 := pkInfo1.GetRec().ColVals
+		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, pkInfo1.GetTCLocation(), 0)
+		require.EqualValues(t, pkInfo2.GetTCLocation(), 0)
 		require.EqualValues(t, len(rec1), len(rec2))
 		for i := range rec1 {
 			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
@@ -1119,6 +1270,172 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	for _, file := range files {
 		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
 		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		require.EqualValues(t, pkInfo1.GetTCLocation(), colstore.DefaultTCLocation)
+		require.EqualValues(t, pkInfo2.GetTCLocation(), colstore.DefaultTCLocation)
+		rec1 := pkInfo1.GetRec().ColVals
+		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, len(rec1), len(rec2))
+		for i := range rec1 {
+			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
+		}
+
+		mark1 := pkInfo1.GetMark()
+		mark2 := pkInfo2.GetMark()
+		require.EqualValues(t, mark1, mark2)
+
+		schema1 := pkInfo1.GetRec().Schema
+		schema2 := pkInfo2.GetRec().Schema
+		require.EqualValues(t, schema1, schema2)
+
+		meta1 := pkInfo1.GetRec().RecMeta
+		meta2 := pkInfo2.GetRec().RecMeta
+		require.EqualValues(t, meta1, meta2)
+	}
+	require.NoError(t, closeShard(sh))
+}
+
+func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxSegmentLimit(2)
+	conf.SetMaxRowsPerSegment(5)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:             []string{},
+			PrimaryKey:          []string{"field1_string", "field2_int"},
+			TimeClusterDuration: 60000000,
+		},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 25, len(files))
+
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	require.NoError(t, closeShard(sh))
+	// reopen shard to load data
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkFiles2 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	for _, file := range files {
+		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
+		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		require.EqualValues(t, pkInfo1.GetTCLocation(), 0)
+		require.EqualValues(t, pkInfo2.GetTCLocation(), 0)
+		rec1 := pkInfo1.GetRec().ColVals
+		rec2 := pkInfo2.GetRec().ColVals
+		require.EqualValues(t, len(rec1), len(rec2))
+		for i := range rec1 {
+			require.EqualValues(t, rec1[i].Val, rec2[i].Val)
+		}
+
+		mark1 := pkInfo1.GetMark()
+		mark2 := pkInfo2.GetMark()
+		require.EqualValues(t, mark1, mark2)
+
+		schema1 := pkInfo1.GetRec().Schema
+		schema2 := pkInfo2.GetRec().Schema
+		require.EqualValues(t, schema1, schema2)
+
+		meta1 := pkInfo1.GetRec().RecMeta
+		meta2 := pkInfo2.GetRec().RecMeta
+		require.EqualValues(t, meta1, meta2)
+	}
+	require.NoError(t, closeShard(sh))
+}
+
+func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxSegmentLimit(2)
+	conf.SetMaxRowsPerSegment(5)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:             []string{},
+			PrimaryKey:          nil,
+			TimeClusterDuration: 60000000,
+		},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	time.Sleep(3 * time.Second)
+	require.Equal(t, err, nil)
+	engineType := sh.GetEngineType()
+	require.Equal(t, config.COLUMNSTORE, engineType)
+	dataPath := sh.GetDataPath()
+	var files []string
+	err = filepath.Walk(dataPath, func(path string, info os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".idx" {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal("index does not exist!")
+	}
+	require.Equal(t, 25, len(files))
+
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	require.NoError(t, closeShard(sh))
+	// reopen shard to load data
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkFiles2 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
+	for _, file := range files {
+		pkInfo1, _ := pkFiles1[defaultMeasurementName].GetPKInfo(file)
+		pkInfo2, _ := pkFiles2[defaultMeasurementName].GetPKInfo(file)
+		require.EqualValues(t, pkInfo1.GetTCLocation(), 0)
+		require.EqualValues(t, pkInfo2.GetTCLocation(), 0)
 		rec1 := pkInfo1.GetRec().ColVals
 		rec2 := pkInfo2.GetRec().ColVals
 		require.EqualValues(t, len(rec1), len(rec2))
@@ -3543,13 +3860,13 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					[]int{1, 1}, []bool{true, false},
 					[]int64{21, 20})},
 			{"AllFieldLTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
-				" 1000 < field2_int AND 'hb' < field1_string OR 1002 < field4_float", nil, false,
+				" 1000 < field2_int AND ('hb' < field1_string OR 1002 < field4_float)", nil, false,
 				genRowRec(schema,
-					[]int{1, 1, 1}, []int64{0, 0, 1100},
-					[]int{1, 1, 1}, []float64{1002.4, 1002.4, 0},
-					[]int{1, 1, 1}, []string{"hb", "hc", "hd"},
-					[]int{1, 1, 1}, []bool{true, false, false},
-					[]int64{21, 20, 19})},
+					[]int{1}, []int64{1100},
+					[]int{1}, []float64{0},
+					[]int{1}, []string{"hd"},
+					[]int{1}, []bool{false},
+					[]int64{19})},
 			{"AllFieldLTECondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
 				"field2_int <= 1100 AND field1_string <= 'hb' OR field4_float <= 1002.4", nil, false,
 				genRowRec(schema,
@@ -3637,29 +3954,21 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 						queryCtx.filterTags = append(queryCtx.filterTags, f.Val)
 					}
 				}
-				conFunctions, err := binaryfilterfunc.InitCondFunctions(querySchema.Options().GetCondition(), &queryCtx.schema)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var newRecord *record.Record
+				timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}, queryCtx.schema, len(queryCtx.schema)-1)
+				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema)
 
 				// with time condition
+				var newRecord *record.Record
 				newRecord = record.NewRecordBuilder(rec.Schema)
 				filterOption := &immutable.BaseFilterOptions{}
 				filterOption.CondFunctions = conFunctions
-				filterOption.TimeCondFunction = binaryfilterfunc.InitTimeCondFunctions(opt.StartTime, opt.EndTime, &queryCtx.schema)
-				filterBitmap := bitmap.NewFilterBitmap(len(conFunctions) + 1)
+				filterOption.RedIdxMap = make(map[int]struct{})
+				filterBitmap := bitmap.NewFilterBitmap(conFunctions.NumFilter())
 
-				if len(conFunctions)+len(filterOption.TimeCondFunction) > 0 {
+				if conFunctions != nil && conFunctions.HaveFilter() {
 					newRecord = immutable.FilterByFieldFuncs(rec, newRecord, filterOption, filterBitmap)
 				} else {
 					newRecord = rec
-				}
-
-				if newRecord != nil && c.expRecord != nil {
-					if !testRecsEqual(newRecord, c.expRecord) {
-						t.Fatal("error result")
-					}
 				}
 
 				if newRecord != nil && c.expRecord != nil {
@@ -3740,13 +4049,13 @@ func TestFilterByFiledWithFastPath2(t *testing.T) {
 					[]int{1, 1}, []bool{true, false},
 					[]int64{22, 19})},
 			{"AllFieldLTConditionSwitchOps", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
-				" 1000 < field2_int AND 'hb' < field1_string OR 1002 < field4_float", nil, false,
+				" (1000 < field2_int AND 'hb' < field1_string) OR 1002 < field4_float", nil, false,
 				genRowRec(schema,
-					[]int{1}, []int64{1100},
-					[]int{1}, []float64{0},
-					[]int{1}, []string{"hd"},
-					[]int{1}, []bool{false},
-					[]int64{19})},
+					[]int{1, 1}, []int64{1000, 1100},
+					[]int{1, 1}, []float64{1001.3, 0},
+					[]int{1, 1}, []string{"ha", "hd"},
+					[]int{1, 1}, []bool{true, false},
+					[]int64{22, 19})},
 			{"AllFieldLTECondition", minTime, maxTime, createFieldAux([]string{"field1_string", "field2_int", "field3_bool", "field4_float"}),
 				"field2_int <= 1100 AND field1_string <= 'hb' OR field4_float <= 1002.4", nil, false,
 				genRowRec(schema,
@@ -3829,29 +4138,20 @@ func TestFilterByFiledWithFastPath2(t *testing.T) {
 						queryCtx.filterTags = append(queryCtx.filterTags, f.Val)
 					}
 				}
-				conFunctions, err := binaryfilterfunc.InitCondFunctions(querySchema.Options().GetCondition(), &queryCtx.schema)
-				if err != nil {
-					t.Fatal(err)
-				}
-				var newRecord *record.Record
+				timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}, queryCtx.schema, len(queryCtx.schema)-1)
+				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema)
 
 				// with time condition
+				var newRecord *record.Record
 				newRecord = record.NewRecordBuilder(rec.Schema)
 				filterOption := &immutable.BaseFilterOptions{}
 				filterOption.CondFunctions = conFunctions
-				filterOption.TimeCondFunction = binaryfilterfunc.InitTimeCondFunctions(opt.StartTime, opt.EndTime, &queryCtx.schema)
-				filterBitmap := bitmap.NewFilterBitmap(len(conFunctions) + 1)
-
-				if len(conFunctions)+len(filterOption.TimeCondFunction) > 0 {
+				filterOption.RedIdxMap = make(map[int]struct{})
+				filterBitmap := bitmap.NewFilterBitmap(conFunctions.NumFilter())
+				if conFunctions != nil && conFunctions.HaveFilter() {
 					newRecord = immutable.FilterByFieldFuncs(rec, newRecord, filterOption, filterBitmap)
 				} else {
 					newRecord = rec
-				}
-
-				if newRecord != nil && c.expRecord != nil {
-					if !testRecsEqual(newRecord, c.expRecord) {
-						t.Fatal("error result")
-					}
 				}
 
 				if newRecord != nil && c.expRecord != nil {
@@ -3977,6 +4277,57 @@ func TestWriteRecByColumnStore(t *testing.T) {
 	}
 }
 
+func TestWriteRecByColumnStoreWithSchemaLess(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = eng.Close()
+	}()
+
+	sh := eng.DBPartitions["db0"][0].Shard(1).(*shard)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+
+	oldRec := genRecord()
+	sort.Sort(oldRec)
+	err = eng.WriteRec("db0", defaultMeasurementName, 0, 1, oldRec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int1"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float1"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean1"},
+		record.Field{Type: influx.Field_Type_String, Name: "string1"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newRec := genRecord()
+	sort.Sort(newRec)
+	sort.Sort(newSchema)
+	newRec.Schema = newSchema
+	err = eng.WriteRec("db0", defaultMeasurementName, 0, 1, newRec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	rec := msInfo.GetWriteChunk().WriteRec.GetRecord()
+	resultRec := record.NewRecordBuilder(rec.Schemas())
+	resultRec.AppendRec(oldRec, 0, oldRec.RowNums())
+	resultRec.AppendRec(newRec, 0, newRec.RowNums())
+	if !testRecsEqual(rec, resultRec) {
+		t.Fatal("error result")
+	}
+}
+
 func TestWriteDataByNewEngine(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -4072,6 +4423,45 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 	}
 }
 
+func TestWriteDataByNewEngineWithSchemaLess(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, false, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mutable.SetWriteChunk(msInfo, rec)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.commitSnapshot(sh.activeTbl)
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWriteDataByNewEngineWithTag(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -4099,6 +4489,47 @@ func TestWriteDataByNewEngineWithTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mutable.JoinWriteRec(sh.activeTbl, defaultMeasurementName)
+	writeRec := msInfo.GetWriteChunk().WriteRec
+	require.Equal(t, 9, writeRec.GetRecord().Len())
+	// wait mem table flush
+	sh.ForceFlush()
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteDataByNewEngineWithTag2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, false, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutable.MergeSchema(sh.activeTbl, defaultMeasurementName)
 	mutable.JoinWriteRec(sh.activeTbl, defaultMeasurementName)
 	writeRec := msInfo.GetWriteChunk().WriteRec
 	require.Equal(t, 9, writeRec.GetRecord().Len())
@@ -4485,7 +4916,7 @@ func writeOneRow(sh *shard, mst string, ts int64) error {
 
 func swapMemTable(sh *shard, dir string) {
 	sh.snapshotTbl = sh.activeTbl
-	sh.activeTbl = mutable.GetMemTable(sh.engineType)
+	sh.activeTbl = mutable.NewMemTable(sh.engineType)
 	sh.activeTbl.SetIdx(sh.skIdx)
 }
 

@@ -58,6 +58,9 @@ type writeHelper struct {
 	sameSg     bool
 	preSg      *meta2.ShardGroupInfo
 	preMst     *meta2.MeasurementInfo
+
+	mstPrimaryKeyRowMap map[string]map[string]struct{} //check if tags and fields of rows contain primary keys for column store
+	pkLength            int                            // column store primary key length not included "time"
 }
 
 func newWriteHelper(pw *PointsWriter) *writeHelper {
@@ -76,14 +79,9 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
 	// update schema if needed
 	schemaMap := mst.Schema
-	if mst.EngineType == config.COLUMNSTORE {
-		if len(schemaMap) != len(r.Tags)+len(r.Fields) {
-			return fieldToCreatePool, true, errno.NewError(errno.WritePointSchemaInvalid, len(r.Tags)+len(r.Fields), len(schemaMap))
-		}
-	}
-
 	var dropTagIndex []int
 	var err error
+	var pkCount int
 	// check tag need to add or not
 	for i, tag := range r.Tags {
 		if tag.Key == "time" {
@@ -96,10 +94,17 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 		}
 
 		if _, ok := schemaMap[tag.Key]; !ok {
-			if mst.EngineType == config.COLUMNSTORE {
+			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
+			continue
+		}
+		if mst.EngineType == config.COLUMNSTORE {
+			if schemaMap[tag.Key] != influx.Field_Type_Tag {
 				return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidTag, tag.Key)
 			}
-			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
+			m := wh.mstPrimaryKeyRowMap[r.Name]
+			if _, exist := m[tag.Key]; exist {
+				pkCount++
+			}
 		}
 	}
 
@@ -122,17 +127,26 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 						failpoint.Continue()
 					}
 				})
-
+				if mst.EngineType == config.COLUMNSTORE && fieldType == influx.Field_Type_Tag {
+					return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
+				}
 				err = errno.NewError(errno.FieldTypeConflict, field.Key, originName, influx.FieldTypeString(field.Type),
 					influx.FieldTypeString(fieldType)).SetModule(errno.ModuleWrite)
 				dropFieldIndex = append(dropFieldIndex, i)
 			}
+			if mst.EngineType == config.COLUMNSTORE {
+				m := wh.mstPrimaryKeyRowMap[r.Name]
+				if _, exist := m[field.Key]; exist {
+					pkCount++
+				}
+			}
 			continue
 		}
-		if mst.EngineType == config.COLUMNSTORE {
-			return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
-		}
 		fieldToCreatePool = appendField(fieldToCreatePool, field.Key, field.Type)
+	}
+
+	if mst.EngineType == config.COLUMNSTORE && pkCount != wh.pkLength {
+		return fieldToCreatePool, true, errno.NewError(errno.WritePointPrimaryKeyErr, originName, len(mst.ColStoreInfo.PrimaryKey), pkCount)
 	}
 
 	if len(dropFieldIndex) > 0 {
@@ -153,11 +167,32 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 	return fieldToCreatePool, false, err
 }
 
+func (wh *writeHelper) updatePrimaryKeyMapIfNeeded(primaryKey []string, originName string) {
+	if wh.mstPrimaryKeyRowMap == nil {
+		wh.mstPrimaryKeyRowMap = make(map[string]map[string]struct{})
+	}
+
+	_, exist := wh.mstPrimaryKeyRowMap[originName]
+	if !exist {
+		m := make(map[string]struct{})
+		for i := range primaryKey {
+			if primaryKey[i] == "time" {
+				continue
+			}
+			m[primaryKey[i]] = struct{}{}
+		}
+		wh.mstPrimaryKeyRowMap[originName] = m
+		wh.pkLength = len(m)
+	}
+}
+
 func (wh *writeHelper) reset() {
 	wh.preSg = nil
 	wh.preMst = nil
 	wh.sameSchema = false
 	wh.sameSg = false
+	wh.mstPrimaryKeyRowMap = nil
+	wh.pkLength = 0
 }
 
 // The time range of the same batch of data may be similar,
@@ -175,18 +210,19 @@ func appendField(fields []*proto2.FieldSchema, name string, typ int32) []*proto2
 }
 
 type recordWriterHelper struct {
-	sameSchema     bool
-	nodeId         uint64
-	db             string
-	rp             string
-	preSgStartTime time.Time
-	preSgEndTime   time.Time
-	metaClient     RWMetaClient
-	preSg          *meta2.ShardGroupInfo
-	preShard       *meta2.ShardInfo
-	preMst         *meta2.MeasurementInfo
-	preSchema      *[]record.Field
-	preShardType   config.EngineType
+	sameSchema        bool
+	nodeId            uint64
+	db                string
+	rp                string
+	preSgStartTime    time.Time
+	preSgEndTime      time.Time
+	metaClient        RWMetaClient
+	preSg             *meta2.ShardGroupInfo
+	preShard          *meta2.ShardInfo
+	preMst            *meta2.MeasurementInfo
+	preSchema         *[]record.Field
+	preShardType      config.EngineType
+	fieldToCreatePool []*proto2.FieldSchema
 }
 
 func newRecordWriterHelper(metaClient RWMetaClient, nodeId uint64) *recordWriterHelper {
@@ -247,6 +283,7 @@ func (wh *recordWriterHelper) createMeasurement(database, retentionPolicy, name 
 }
 
 func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array.Record) (startTime, endTime int64, r *record.Record, err error) {
+	wh.fieldToCreatePool = wh.fieldToCreatePool[:0]
 	// check the number of columns
 	if rec.NumCols() <= 1 {
 		err = errno.NewError(errno.ColumnStoreColNumErr, db, rp, mst)
@@ -287,15 +324,21 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array
 	}
 	for i := 0; i < colNum; i++ {
 		colType, ok := wh.preMst.Schema[rec.ColumnName(i)]
-		if !ok {
-			err = errno.NewError(errno.ColumnStoreFieldNameErr, mst, rec.ColumnName(i))
-			return
-		}
 		fieldType := record.ArrowTypeToNativeType(rec.Column(i).DataType())
-		if (colType == influx.Field_Type_Tag && fieldType != influx.Field_Type_String) ||
-			(colType != influx.Field_Type_Tag && fieldType != int(colType)) {
-			err = errno.NewError(errno.ColumnStoreFieldTypeErr, mst, rec.ColumnName(i), fieldType, colType)
-			return
+		if !ok {
+			if rec.Schema().HasMetadata() {
+				if rec.Schema().Metadata().FindKey(rec.ColumnName(i)) != -1 {
+					wh.fieldToCreatePool = appendField(wh.fieldToCreatePool, rec.ColumnName(i), int32(influx.Field_Type_Tag))
+					continue
+				}
+			}
+			wh.fieldToCreatePool = appendField(wh.fieldToCreatePool, rec.ColumnName(i), int32(fieldType))
+		} else {
+			if (colType == influx.Field_Type_Tag && fieldType != influx.Field_Type_String) ||
+				(colType != influx.Field_Type_Tag && fieldType != int(colType)) {
+				err = errno.NewError(errno.ColumnStoreFieldTypeErr, mst, rec.ColumnName(i), fieldType, colType)
+				return
+			}
 		}
 		if !samePreSchema {
 			*wh.preSchema = append(*wh.preSchema, record.Field{Name: rec.ColumnName(i), Type: fieldType})
@@ -304,6 +347,9 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array
 	startTime, endTime = times.Value(0), times.Value(int(rec.NumRows()-1))
 	if !samePreSchema {
 		*wh.preSchema = append(*wh.preSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+		if err = wh.metaClient.UpdateSchema(db, rp, mst, wh.fieldToCreatePool); err != nil {
+			return
+		}
 	}
 	r = record.NewRecord(*wh.preSchema, false)
 	return
@@ -317,6 +363,7 @@ func (wh *recordWriterHelper) reset() {
 	wh.preSgEndTime = time.Time{}
 	wh.preSchema = nil
 	wh.sameSchema = false
+	wh.fieldToCreatePool = wh.fieldToCreatePool[:0]
 }
 
 func SearchLowerBoundOfRec(rec *record.Record, sg *meta2.ShardGroupInfo, start int) int {

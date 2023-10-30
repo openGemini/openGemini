@@ -88,6 +88,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 		return nil, err
 	}
 
+	mutable.NewMemTablePoolManager().Init()
 	mutable.SetSizeLimit(int64(conf.Data.ShardMutableSizeLimit))
 	mutable.InitConcurLimiter(cpu.GetCpuNum())
 	mutable.InitMutablePool(cpu.GetCpuNum())
@@ -253,6 +254,8 @@ func (s *Server) Close() error {
 	if s.iodetector != nil {
 		s.iodetector.Close()
 	}
+
+	mutable.NewMemTablePoolManager().Close()
 	log.Info("the storage has been stopped")
 	return nil
 }

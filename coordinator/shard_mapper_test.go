@@ -17,19 +17,25 @@ limitations under the License.
 package coordinator
 
 import (
+	"context"
+	"math"
+	"reflect"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	set "github.com/deckarep/golang-set"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
@@ -37,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRetriedErrorCode(t *testing.T) {
@@ -50,7 +57,7 @@ func TestRetriedErrorCode(t *testing.T) {
 
 type mocShardMapperMetaClient struct {
 	databases map[string]*meta.DatabaseInfo
-
+	cacheData *meta.Data
 	metaclient.MetaClient
 }
 
@@ -136,11 +143,17 @@ func (m mocShardMapperMetaClient) Database(name string) (*meta.DatabaseInfo, err
 }
 
 func (m mocShardMapperMetaClient) DataNode(id uint64) (*meta.DataNode, error) {
-	return nil, nil
+	for i := range m.cacheData.DataNodes {
+		if m.cacheData.DataNodes[i].ID == id {
+			return &m.cacheData.DataNodes[i], nil
+		}
+	}
+	return nil, meta.ErrNodeNotFound
 }
 
 func (m mocShardMapperMetaClient) DataNodes() ([]meta.DataNode, error) {
-	return nil, nil
+	nodes := m.cacheData.DataNodes
+	return nodes, nil
 }
 
 func (m mocShardMapperMetaClient) DeleteDataNode(id uint64) error {
@@ -243,7 +256,12 @@ func (m mocShardMapperMetaClient) MarkMeasurementDelete(database, mst string) er
 }
 
 func (m mocShardMapperMetaClient) DBPtView(database string) (meta.DBPtInfos, error) {
-	return nil, nil
+	pts := m.cacheData.DBPtView(database)
+	if pts == nil {
+		return nil, errno.NewError(errno.DatabaseNotFound, database)
+	}
+
+	return pts, nil
 }
 
 func (m mocShardMapperMetaClient) DBRepGroups(database string) []meta.ReplicaGroup {
@@ -259,11 +277,28 @@ func (m mocShardMapperMetaClient) ShardOwner(shardID uint64) (database, policy s
 }
 
 func (m mocShardMapperMetaClient) Measurement(database string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
-	return nil, nil
+	db := m.databases[database]
+	rp := db.RetentionPolicies[rpName]
+	mst := rp.Measurements[mstName]
+	return mst, nil
 }
 
 func (m mocShardMapperMetaClient) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error) {
-	return nil, nil, nil
+	fields = make(map[string]int32)
+	dimensions = make(map[string]struct{})
+	msti, err := m.Measurement(database, retentionPolicy, mst)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for key := range msti.Schema {
+		if msti.Schema[key] == influx.Field_Type_Tag {
+			dimensions[key] = struct{}{}
+		} else {
+			fields[key] = msti.Schema[key]
+		}
+	}
+	return fields, dimensions, nil
 }
 
 func (m mocShardMapperMetaClient) GetMeasurements(mst *influxql.Measurement) ([]*meta.MeasurementInfo, error) {
@@ -582,5 +617,461 @@ func TestShardMappingGetSources(t *testing.T) {
 	})
 	if (csming.GetSources(sources))[0].GetName() != "mst1_000" {
 		t.Error("csming getSources error")
+	}
+}
+func Test_FieldDimensions(t *testing.T) {
+	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
+	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
+	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
+	timeMid1 := time.Date(2022, 2, 1, 0, 0, 0, 0, time.UTC)
+	timeEnd1 := time.Date(2022, 2, 16, 0, 0, 0, 0, time.UTC)
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards2 := []meta.ShardInfo{{ID: 2, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards3 := []meta.ShardInfo{{ID: 3, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	csm := &ClusterShardMapper{
+		Logger: logger.NewLogger(1),
+	}
+	csm.MetaClient = &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"f1":   influx.Field_Type_String,
+									"tag1": influx.Field_Type_Tag,
+								},
+								EngineType: config.COLUMNSTORE,
+							},
+							"mst2": {
+								Name: "mst2",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 2,
+									},
+									{
+										ShardKey:   []string{"3", "4"},
+										Type:       "hash",
+										ShardGroup: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+						ShardGroups: []meta.ShardGroupInfo{
+							{
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.COLUMNSTORE,
+							},
+							{
+								ID:         2,
+								StartTime:  timeMid,
+								EndTime:    timeEnd,
+								Shards:     shards2,
+								EngineType: config.TSSTORE,
+							},
+							{
+								ID:         3,
+								StartTime:  timeMid1,
+								EndTime:    timeEnd1,
+								Shards:     shards3,
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+				ShardKey: meta.ShardKeyInfo{
+					ShardKey:   []string{"1", "2", "3"},
+					Type:       "hash",
+					ShardGroup: 3,
+				},
+			},
+		},
+	}
+	csm.Measurement("db0", "rp0", "mst1")
+	m, _ := csm.MetaClient.(*mocShardMapperMetaClient)
+	db, _ := m.databases["db0"]
+	rp, _ := db.RetentionPolicies["rp0"]
+	mst, _ := rp.Measurements["mst1"]
+	mst.SetoriginName("mst1")
+
+	opt := &query.SelectOptions{}
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.COLUMNSTORE,
+	}
+	join := &influxql.Join{
+		LSrc:      source,
+		RSrc:      source,
+		Condition: &influxql.BinaryExpr{},
+	}
+	shardMapping := &ClusterShardMapping{
+		ShardMap:  map[Source]map[uint32][]uint64{},
+		seriesKey: make([]byte, 0),
+	}
+	seriesKey := make([]byte, 0)
+	csm.mapShards(shardMapping, []influxql.Source{join}, timeStart, timeEnd, nil, opt)
+	Val, _ := regexp.Compile("")
+	sourceRegex := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst2", EngineType: config.COLUMNSTORE,
+		Regex: &influxql.RegexLiteral{Val: Val},
+	}
+	seriesKey = seriesKey[:0]
+	csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	shardMapping.MetaClient = csm.MetaClient
+	fields, dimensions, schema, err := shardMapping.FieldDimensions(source)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	expectedFields := map[string]influxql.DataType{
+		"f1": influxql.String,
+	}
+	if !reflect.DeepEqual(fields, expectedFields) {
+		t.Errorf("Expected fields to be %v, got %v", expectedFields, fields)
+	}
+	expectedDimensions := map[string]struct{}{
+		"tag1": struct{}{},
+	}
+	if !reflect.DeepEqual(dimensions, expectedDimensions) {
+		t.Errorf("Expected dimensions to be %v, got %v", expectedDimensions, dimensions)
+	}
+	expectedSchema := &influxql.Schema{
+		MinTime: math.MaxInt64,
+		MaxTime: math.MinInt64,
+	}
+	if !reflect.DeepEqual(schema, expectedSchema) {
+		t.Errorf("Expected schema to be %v, got %v", expectedSchema, schema)
+	}
+}
+func Test_CreateLogicalPlan(t *testing.T) {
+	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
+	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
+	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
+	timeMid1 := time.Date(2022, 2, 1, 0, 0, 0, 0, time.UTC)
+	timeEnd1 := time.Date(2022, 2, 16, 0, 0, 0, 0, time.UTC)
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards2 := []meta.ShardInfo{{ID: 2, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards3 := []meta.ShardInfo{{ID: 3, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	csm := &ClusterShardMapper{
+		Logger: logger.NewLogger(1),
+	}
+	csm.MetaClient = &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"v1", "u1"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"f1":   influx.Field_Type_String,
+									"tag1": influx.Field_Type_Tag,
+								},
+								EngineType: config.COLUMNSTORE,
+							},
+							"mst2": {
+								Name: "mst2",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 2,
+									},
+									{
+										ShardKey:   []string{"3", "4"},
+										Type:       "hash",
+										ShardGroup: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+						ShardGroups: []meta.ShardGroupInfo{
+							{
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.COLUMNSTORE,
+							},
+							{
+								ID:         2,
+								StartTime:  timeMid,
+								EndTime:    timeEnd,
+								Shards:     shards2,
+								EngineType: config.TSSTORE,
+							},
+							{
+								ID:         3,
+								StartTime:  timeMid1,
+								EndTime:    timeEnd1,
+								Shards:     shards3,
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+				ShardKey: meta.ShardKeyInfo{
+					ShardKey:   []string{"1", "2", "3"},
+					Type:       "hash",
+					ShardGroup: 3,
+				},
+			},
+		},
+	}
+	m, _ := csm.MetaClient.(*mocShardMapperMetaClient)
+	db, _ := m.databases["db0"]
+	data := &meta.Data{
+		PtNumPerNode: 1,
+		ClusterPtNum: 1,
+		DataNodes: []meta.DataNode{
+			{
+				NodeInfo: meta.NodeInfo{
+					ID: 1,
+				},
+				ConnID:      1,
+				AliveConnID: 1,
+			},
+		},
+	}
+	data.CreateDBPtView("db0")
+	data.SetDatabase(db)
+	opt := &query.SelectOptions{}
+	opt1 := &query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions: []string{"host"},
+		Ascending:  true,
+		ChunkSize:  100,
+	}
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.COLUMNSTORE,
+	}
+	join := &influxql.Join{
+		LSrc:      source,
+		RSrc:      source,
+		Condition: &influxql.BinaryExpr{},
+	}
+	shardMapping := &ClusterShardMapping{
+		ShardMap:    map[Source]map[uint32][]uint64{},
+		seriesKey:   make([]byte, 0),
+		ShardMapper: csm,
+	}
+	seriesKey := make([]byte, 0)
+	csm.mapShards(shardMapping, []influxql.Source{join}, timeStart, timeEnd, nil, opt)
+	Val, _ := regexp.Compile("")
+	sourceRegex := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst2", EngineType: config.COLUMNSTORE,
+		Regex: &influxql.RegexLiteral{Val: Val},
+	}
+	seriesKey = seriesKey[:0]
+	csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	shardMapping.MetaClient = m
+	sql := "SELECT v1,u1 FROM mst1 limit 10"
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	qry, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal()
+	}
+	stmt := qry.Statements[0]
+	stmt, err = query.RewriteStatement(stmt)
+	if err != nil {
+		t.Fatal()
+	}
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		t.Fatal()
+	}
+	selectStmt.OmitTime = true
+	schema := executor.NewQuerySchema(selectStmt.Fields, selectStmt.ColumnNames(), opt1, nil)
+	schema.SetFill(influxql.NoFill)
+	var key uint64 = 1
+	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
+	m.cacheData = data
+	plan, err := shardMapping.CreateLogicalPlan(ctx, []influxql.Source{source, sourceRegex}, schema)
+	if !reflect.DeepEqual(plan.Schema().GetSourcesNames(), []string{"mst1", "mst2"}) {
+		t.Fatal()
+	}
+	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
+		t.Fatal()
+	}
+	require.Equal(t, shardMapping.NodeNumbers(), 1)
+}
+
+func Test_MapTypeBatch(t *testing.T) {
+	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
+	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
+	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
+	timeMid1 := time.Date(2022, 2, 1, 0, 0, 0, 0, time.UTC)
+	timeEnd1 := time.Date(2022, 2, 16, 0, 0, 0, 0, time.UTC)
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards2 := []meta.ShardInfo{{ID: 2, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards3 := []meta.ShardInfo{{ID: 3, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	csm := &ClusterShardMapper{
+		Logger: logger.NewLogger(1),
+	}
+	defer csm.Close()
+	csm.MetaClient = &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"f1":   influx.Field_Type_String,
+									"tag1": influx.Field_Type_Tag,
+								},
+								EngineType: config.COLUMNSTORE,
+							},
+							"mst2": {
+								Name: "mst2",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 2,
+									},
+									{
+										ShardKey:   []string{"3", "4"},
+										Type:       "hash",
+										ShardGroup: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+						ShardGroups: []meta.ShardGroupInfo{
+							{
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.COLUMNSTORE,
+							},
+							{
+								ID:         2,
+								StartTime:  timeMid,
+								EndTime:    timeEnd,
+								Shards:     shards2,
+								EngineType: config.TSSTORE,
+							},
+							{
+								ID:         3,
+								StartTime:  timeMid1,
+								EndTime:    timeEnd1,
+								Shards:     shards3,
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+				ShardKey: meta.ShardKeyInfo{
+					ShardKey:   []string{"1", "2", "3"},
+					Type:       "hash",
+					ShardGroup: 3,
+				},
+			},
+		},
+	}
+	csm.Measurement("db0", "rp0", "mst1")
+	m, _ := csm.MetaClient.(*mocShardMapperMetaClient)
+	db, _ := m.databases["db0"]
+	rp, _ := db.RetentionPolicies["rp0"]
+	mst, _ := rp.Measurements["mst1"]
+	mst.SetoriginName("mst1")
+	opt := &query.SelectOptions{}
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.COLUMNSTORE,
+	}
+	join := &influxql.Join{
+		LSrc:      source,
+		RSrc:      source,
+		Condition: &influxql.BinaryExpr{},
+	}
+	ttime := influxql.TimeRange{
+		Min: timeStart,
+		Max: timeEnd,
+	}
+	csming, _ := csm.MapShards([]influxql.Source{join}, ttime, query.SelectOptions{}, nil)
+	shardMapping := csming.(*ClusterShardMapping)
+	seriesKey := make([]byte, 0)
+	Val, _ := regexp.Compile("")
+	sourceRegex := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst2", EngineType: config.COLUMNSTORE,
+		Regex: &influxql.RegexLiteral{Val: Val},
+	}
+	seriesKey = seriesKey[:0]
+	csm.mapMstShards(sourceRegex, shardMapping, timeStart, timeEnd, nil, opt)
+	schema := &influxql.Schema{
+		MinTime: math.MaxInt64,
+		MaxTime: math.MinInt64,
+	}
+	myFields := map[string]*influxql.FieldNameSpace{
+		"f1": {
+			RealName: "f1",
+			DataType: influx.Field_Type_String,
+		},
+		"f2": {
+			RealName: "f2",
+			DataType: influx.Field_Type_String,
+		},
+		"tag1": {
+			RealName: "tag1",
+			DataType: influx.Field_Type_Tag,
+		},
+	}
+	err := shardMapping.MapTypeBatch(source, myFields, schema)
+	if err != nil {
+		t.Fatal()
+	}
+	mytype := shardMapping.MapType(source, "f1")
+	if mytype != record.ToInfluxqlTypes(int(influx.Field_Type_String)) {
+		t.Fatal()
+	}
+	mytype = shardMapping.MapType(source, "tag1")
+	if mytype != record.ToInfluxqlTypes(int(influx.Field_Type_Tag)) {
+		t.Fatal()
 	}
 }

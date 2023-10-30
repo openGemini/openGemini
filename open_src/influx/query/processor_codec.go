@@ -104,9 +104,6 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 	if opt.Condition != nil {
 		pb.Condition = opt.Condition.String()
 	}
-	if opt.SourceCondition != nil {
-		pb.SourceCondition = opt.SourceCondition.String()
-	}
 
 	// set the sort fields
 	if len(opt.SortFields) > 0 {
@@ -186,13 +183,6 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 			return nil, err
 		}
 		opt.Condition = expr
-	}
-	if pb.SourceCondition != "" {
-		expr, err := influxql.ParseExpr(pb.GetSourceCondition())
-		if err != nil {
-			return nil, err
-		}
-		opt.SourceCondition = expr
 	}
 
 	if pb.SortFields != "" {

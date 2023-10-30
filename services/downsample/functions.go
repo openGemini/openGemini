@@ -67,16 +67,19 @@ func initDownSampleSchema(sinfo *meta.ShardDownSamplePolicyInfo, infos *meta.RpM
 		}
 		fields := make([]*influxql.Field, 0)
 		columnNames := make([]string, 0)
-		for _, c := range policy.Calls {
-			call := c.RewriteOp()
-			for _, f := range info.TypeFields {
-				if c.DataType == f.Type {
-					field, columnName := downSampleExprGen(call, f.Fields, f.Type)
-					columnNames = append(columnNames, columnName...)
-					fields = append(fields, field...)
-				}
+		calls := policy.GetCalls()
+
+		for _, f := range info.TypeFields {
+			call, ok := calls[f.Type]
+			if !ok {
+				continue
 			}
+
+			field, columnName := downSampleExprGen(call, f.Fields, f.Type)
+			columnNames = append(columnNames, columnName...)
+			fields = append(fields, field...)
 		}
+
 		opt.Interval = hybridqp.Interval{
 			Duration: policy.DownSamplePolicies[downSampleLevel-1].TimeInterval,
 		}

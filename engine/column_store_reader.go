@@ -242,38 +242,52 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	// TODO: to support the multi data type for tag, such as int/float/bool/string
 	// init the input schema
+	useIdxMap := make(map[int]struct{})
 	r.inSchema = append(r.inSchema, r.queryCtx.schema[:len(r.queryCtx.schema)-1]...)
+	preSchemaLen := len(r.inSchema)
 	for i := range r.opt.GetOptDimension() {
 		r.inSchema = append(r.inSchema, record.Field{Name: r.opt.Dimensions[i], Type: influx.Field_Type_String})
+		useIdxMap[preSchemaLen+i] = struct{}{} // fields for group by
 	}
 	for i := range r.ops {
 		if in, ok := r.ops[i].Expr.(*influxql.VarRef); ok {
 			inIdx, outIdx := r.inSchema.FieldIndex(in.Val), r.outSchema.FieldIndex(r.ops[i].Ref.Val)
 			if inIdx >= 0 && outIdx >= 0 {
-				r.outInIdxMap[outIdx] = inIdx
+				r.outInIdxMap[outIdx], useIdxMap[inIdx] = inIdx, struct{}{} //  fields for select
 			}
 		}
 	}
 	r.inSchema = append(r.inSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+	useIdxMap[len(r.inSchema)-1] = struct{}{} // time field
 
-	// init the filter functions
-	if r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.InitCondFunctions(r.schema.Options().GetCondition(), &r.inSchema); err != nil {
-		return
+	// init the redundant columns, which are not required after filtering.
+	r.queryCtx.filterOption.RedIdxMap = make(map[int]struct{})
+	for idx := range r.inSchema {
+		if _, ok := useIdxMap[idx]; !ok {
+			r.queryCtx.filterOption.RedIdxMap[idx] = struct{}{}
+		}
 	}
 
 	// if TIME column is the first column of the sort KEY, it would be filter by binary search by FilterByTime
-	startTime, endTime := r.schema.Options().GetStartTime(), r.schema.Options().GetEndTime()
 	if !r.schema.Options().GetTimeFirstKey() {
-		// init the filter function for time column
-		r.queryCtx.filterOption.TimeCondFunction = binaryfilterfunc.InitTimeCondFunctions(startTime, endTime, &r.inSchema)
+		startTime, endTime := r.schema.Options().GetStartTime(), r.schema.Options().GetEndTime()
+		timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: startTime, Max: endTime}, r.inSchema, len(r.inSchema)-1)
+		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(timeCond, r.schema.Options().GetCondition(), r.inSchema)
+	} else {
+		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(nil, r.schema.Options().GetCondition(), r.inSchema)
 	}
+	if err != nil {
+		return err
+	}
+
+	// init the filter functions
 	r.filterOpt.SetCondFuncs(&r.queryCtx.filterOption)
 
 	// init the data record pool
 	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false)
 
 	// init the filter record pool
-	if r.filterOpt.GetCond() != nil || binaryfilterfunc.HaveTimeCond(startTime, endTime) {
+	if r.queryCtx.filterOption.CondFunctions.HaveFilter() {
 		r.readCursor.AddFilterRecPool(
 			record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false))
 	}
@@ -356,7 +370,7 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 
 func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFilter int, err error) {
 	var ch executor.Chunk
-	filterBitmap := bitmap.NewFilterBitmap(len(r.queryCtx.filterOption.CondFunctions) + 1)
+	filterBitmap := bitmap.NewFilterBitmap(r.queryCtx.filterOption.CondFunctions.NumFilter())
 	for {
 		filterBitmap.Reset()
 		select {

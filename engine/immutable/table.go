@@ -132,3 +132,24 @@ func freeDataBlocks(buffers [][]byte) int {
 func EstimateBufferSize(recSize int, rows int) int {
 	return rows * recSize
 }
+
+func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool) error {
+	f, err := msb.NewTSSPFile(tmp)
+	if err != nil {
+		panic(err)
+	}
+	if f != nil {
+		msb.Files = append(msb.Files, f)
+	}
+
+	if !withPKIndex {
+		err = RenameTmpFiles(msb.Files)
+	} else {
+		err = RenameTmpFilesWithPKIndex(msb.Files)
+	}
+
+	if err != nil {
+		return err
+	}
+	return nil
+}

@@ -93,6 +93,7 @@ var messageMap = map[Errno]*Message{
 	WritePointHasInvalidTag:      newFatalMessage("column store write point has Invalid tag :%s", ModuleWrite),
 	WritePointHasInvalidField:    newFatalMessage("column store write point has Invalid field :%s", ModuleWrite),
 	WritePointSchemaInvalid:      newFatalMessage("point schema length does not match ddl schema length: %d != %d", ModuleWrite),
+	WritePointPrimaryKeyErr:      newFatalMessage("checkSchema: write point is not match the number of primary key. mst: %s,  expect:%d but:%d", ModuleWrite),
 
 	// network module error codes
 	NoConnectionAvailable: newFatalMessage("no connections available, node: %v, %v", ModuleNetwork),
@@ -254,12 +255,15 @@ var messageMap = map[Errno]*Message{
 	DownSampleUnsupportedAggOp:         newWarnMessage("%s is not supported for downSample", ModuleMeta),
 	RpNotFound:                         newWarnMessage("retention policy is not found", ModuleMeta),
 	UpdateShardIdentFail:               newWarnMessage("update shard ident fail", ModuleDownSample),
+	EventSrcNodeSegregating:            newWarnMessage("event srcNode %d is Segregating", ModuleMeta),
+	EventDstNodeSegregating:            newWarnMessage("event dstNode %d is Segregating", ModuleMeta),
 
 	// http error codes
 	HttpUnauthorized:          newWarnMessage("authorization failed", ModuleHTTP),
 	HttpDatabaseNotFound:      newWarnMessage("write error: database not found!", ModuleHTTP),
 	HttpForbidden:             newWarnMessage("user is required!", ModuleHTTP),
 	HttpRequestEntityTooLarge: newWarnMessage("write error:StatusRequestEntityTooLarge", ModuleHTTP),
+	HttpCpuOverLoad:           newWarnMessage("the CPU usage exceeds the threshold", ModuleHTTP),
 
 	// meta-client error codes
 	InvalidPwdLen:   newNoticeMessage("the password needs to be between %d and %d characters long", ModuleMetaClient),
@@ -283,6 +287,12 @@ var messageMap = map[Errno]*Message{
 	ErrRPNIsNullForNOT:         newFatalMessage("rpn stack should not be null for NOT", ModuleIndex),
 	ErrRPNIsNullForAnd:         newFatalMessage("rpn stack should not be null for AND", ModuleIndex),
 	ErrRPNIsNullForOR:          newFatalMessage("rpn stack should not be null for OR", ModuleIndex),
+	ErrRPNElemSchema:           newFatalMessage("rpn element should be in schema", ModuleIndex),
+	ErrRPNElemNum:              newFatalMessage("rpn element should consist of three elements", ModuleIndex),
+	ErrRPNElemOp:               newFatalMessage("rpn operator should be influxql.Token", ModuleIndex),
+	ErrRPNOp:                   newFatalMessage("unsupported the rpn op: %d", ModuleIndex),
+	ErrRPNExpr:                 newFatalMessage("unknown the rpn expr: %v", ModuleIndex),
+	ErrRPNElement:              newFatalMessage("unknown the rpn element: %v", ModuleIndex),
 	ErrCoarseIndexFragment:     newFatalMessage("property coarse_index_fragment should be greater than 1", ModuleIndex),
 	ErrQuerySchemaUpperBound:   newNoticeMessage("max-select-schema limit exceeded: %d/%d", ModuleQueryEngine),
 

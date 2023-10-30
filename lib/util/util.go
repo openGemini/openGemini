@@ -49,6 +49,8 @@ const (
 	Int8SizeBytes    = int(unsafe.Sizeof(int8(0)))
 )
 
+const RowsNumPerFragment int = 8192
+
 var logger *zap.Logger
 
 func SetLogger(lg *zap.Logger) {

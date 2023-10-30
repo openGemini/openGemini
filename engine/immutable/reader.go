@@ -692,11 +692,11 @@ func decodeColumnData(ref *record.Field, data []byte, col *record.ColVal, ctx *R
 }
 
 type BaseFilterOptions struct {
-	FiltersMap       map[string]interface{}
-	FieldsIdx        []int    // field index in schema
-	FilterTags       []string // filter tag name
-	CondFunctions    binaryfilterfunc.CondFunctions
-	TimeCondFunction binaryfilterfunc.IdxFunctions
+	FiltersMap    map[string]interface{}
+	RedIdxMap     map[int]struct{} // redundant columns, which are not required after filtering.
+	FieldsIdx     []int            // field index in schema
+	FilterTags    []string         // filter tag name
+	CondFunctions *binaryfilterfunc.ConditionImpl
 }
 
 type FilterOptions struct {
@@ -717,7 +717,6 @@ func NewFilterOpts(cond influxql.Expr, filterOption *BaseFilterOptions, tags *in
 
 func (fo *FilterOptions) SetCondFuncs(filterOption *BaseFilterOptions) {
 	fo.options.CondFunctions = filterOption.CondFunctions
-	fo.options.TimeCondFunction = filterOption.TimeCondFunction
 }
 
 func (fo *FilterOptions) GetCond() influxql.Expr {
@@ -779,6 +778,30 @@ func findRowFilterByRowId(rowFilters []clv.RowFilter, rowId int64) *clv.RowFilte
 	return nil
 }
 
+func genRecByReserveIds(rec, filterRec *record.Record, rowNumber []int, redIdxMap map[int]struct{}) *record.Record {
+	var newRecord *record.Record
+	if filterRec == nil {
+		newRecord = record.NewRecordBuilder(rec.Schema)
+	} else {
+		newRecord = filterRec
+	}
+	newRecord.RecMeta = rec.RecMeta
+
+	for startIndex, endIndex := 0, 0; endIndex < len(rowNumber); {
+		for endIndex < len(rowNumber)-1 && rowNumber[endIndex+1]-1 == rowNumber[endIndex] {
+			endIndex++
+		}
+		if startIndex == endIndex {
+			newRecord.AppendRecForFilter(rec, rowNumber[startIndex], rowNumber[startIndex]+1, redIdxMap)
+			endIndex++
+		} else {
+			newRecord.AppendRecForFilter(rec, rowNumber[startIndex], rowNumber[endIndex-1]+1, redIdxMap)
+		}
+		startIndex = endIndex
+	}
+	return newRecord
+}
+
 func genRecByRowNumbers(rec, filterRec *record.Record, rowNumber []int) *record.Record {
 	var newRecord *record.Record
 	if filterRec == nil {
@@ -824,12 +847,12 @@ func getRowCondition(con influxql.Expr, rowFilters *[]clv.RowFilter, rowId int64
 
 func FilterByField(rec *record.Record, filterRec *record.Record, filterOption *BaseFilterOptions, con influxql.Expr, rowFilters *[]clv.RowFilter,
 	tags *influx.PointTags, filterBitmap *bitmap.FilterBitmap) *record.Record {
-	numTimeCondFuncs := len(filterOption.TimeCondFunction)
-	if rec == nil || (numTimeCondFuncs == 0 && con == nil && rowFilters == nil) {
+	haveFilter := filterOption.CondFunctions != nil && filterOption.CondFunctions.HaveFilter()
+	if rec == nil || (!haveFilter && con == nil && rowFilters == nil) {
 		return rec
 	}
 
-	if len(filterOption.CondFunctions)+numTimeCondFuncs > 0 {
+	if haveFilter {
 		return FilterByFieldFuncs(rec, filterRec, filterOption, filterBitmap)
 	}
 
@@ -884,66 +907,19 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 		return rec
 	}
 
-	// the Bitmap of filterBitmap have n columns. the first n-1 correspond to CondFunctions.
-	bp := filterBitmap.Bitmap
-
-	// the last one indicates the filtered bitmap.
-	lastIdx := len(bp) - 1
-
-	// if time condition EXIST
-	if len(filterOption.TimeCondFunction) > 0 {
-		bp[0] = append(bp[0], rec.ColVals[filterOption.TimeCondFunction[0].Idx].Bitmap...)
-		for i := range filterOption.TimeCondFunction {
-			item := filterOption.TimeCondFunction[i]
-			col := rec.ColVals[item.Idx]
-			bp[0] = item.Function(&col, item.Compare, col.Bitmap, bp[0], col.BitMapOffset)
-		}
-
-		// init with time condition if time condition EXIST
-		for i := range filterOption.CondFunctions {
-			if i > 0 {
-				bp[i] = append(bp[i], bp[0]...)
-			}
-		}
-	}
-
-	// loop for OR condition
-	for i := range filterOption.CondFunctions {
-		if len(filterOption.TimeCondFunction) == 0 {
-			// init with the first AND condition (sub-expr) if time condition NOT EXIST
-			bp[i] = append(bp[i], rec.ColVals[filterOption.CondFunctions[i][0].Idx].Bitmap...)
-		}
-
-		// loop for AND condition (sub-expr)
-		for j := range filterOption.CondFunctions[i] {
-			item := filterOption.CondFunctions[i][j]
-			col := rec.ColVals[item.Idx]
-			bp[i] = item.Function(&col, item.Compare, col.Bitmap, bp[i], col.BitMapOffset)
-		}
-	}
-
-	// loop for or condition
-	bp[lastIdx] = append(bp[lastIdx], bp[0]...)
-	bp = bitmap.GetValWithOrOp(bp, lastIdx)
-
-	// get the reserveId
-	offset := rec.ColVals[0].BitMapOffset
-	rowNum := rec.RowNums()
-	for i := 0; i < rowNum; i++ {
-		if !bitmap.IsNil(bp[lastIdx], i+offset) {
-			filterBitmap.ReserveId = append(filterBitmap.ReserveId, i)
-		}
+	if err := filterOption.CondFunctions.Filter(rec, filterBitmap); err != nil {
+		panic(err)
 	}
 
 	if len(filterBitmap.ReserveId) == rec.ColVals[len(rec.ColVals)-1].Len {
 		return rec
 	}
+
 	if len(filterBitmap.ReserveId) == 0 {
 		filterBitmap.Reset()
 		return nil
 	}
-
-	return genRecByRowNumbers(rec, filterRec, filterBitmap.ReserveId)
+	return genRecByReserveIds(rec, filterRec, filterBitmap.ReserveId, filterOption.RedIdxMap)
 }
 
 var ignoreTypeFun []func(i int, col record.ColVal) interface{}

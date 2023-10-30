@@ -24,11 +24,11 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -36,7 +36,6 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"go.uber.org/zap"
 )
 
 type WriteRowsCtx struct {
@@ -75,21 +74,21 @@ func (chunk *WriteChunk) SortRecordNoLock(hlp *record.SortHelper) {
 
 func (chunk *WriteChunk) SortRecord(hlp *record.SortHelper) {
 	chunk.Mu.Lock()
-	chunk.OrderWriteRec.SortRecord(hlp)
-	chunk.UnOrderWriteRec.SortRecord(hlp)
+	chunk.SortRecordNoLock(hlp)
 	chunk.Mu.Unlock()
 }
 
 type WriteChunkForColumnStore struct {
-	Mu       sync.Mutex
-	WriteRec WriteRec
-	sortKeys []record.PrimaryKey
+	Mu         sync.Mutex
+	WriteRec   WriteRec
+	sortKeys   []record.PrimaryKey
+	sameSchema bool
 }
 
-func (chunk *WriteChunkForColumnStore) SortRecord() {
+func (chunk *WriteChunkForColumnStore) SortRecord(tcDuration time.Duration) {
 	hlp := record.NewSortHelper()
 	chunk.Mu.Lock()
-	chunk.WriteRec.rec = hlp.SortForColumnStore(chunk.WriteRec.rec, hlp.SortData, chunk.sortKeys, false)
+	chunk.WriteRec.rec = hlp.SortForColumnStore(chunk.WriteRec.rec, chunk.sortKeys, false, tcDuration)
 	chunk.Mu.Unlock()
 	hlp.Release()
 }
@@ -174,12 +173,12 @@ func (msi *MsInfo) CreateChunk(sid uint64) (*WriteChunk, bool) {
 	msi.mu.Lock()
 	chunk, ok := msi.sidMap[sid]
 	if !ok {
-		// init chunk buffer
 		chunk = msi.allocChunk()
 		chunk.Init(sid, msi.Schema)
 		msi.sidMap[sid] = chunk
 	}
 	msi.mu.Unlock()
+
 	return chunk, ok
 }
 
@@ -263,27 +262,6 @@ func LoadMstRowCount(countFile string) (int, error) {
 	return rowCount, nil
 }
 
-func WriteIntoFile(msb *immutable.MsBuilder, tmp bool, withPKIndex bool) error {
-	f, err := msb.NewTSSPFile(tmp)
-	if err != nil {
-		panic(err)
-	}
-	if f != nil {
-		msb.Files = append(msb.Files, f)
-	}
-
-	if !withPKIndex {
-		err = immutable.RenameTmpFiles(msb.Files)
-	} else {
-		err = immutable.RenameTmpFilesWithPKIndex(msb.Files)
-	}
-
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool, lastFlushTime int64, schema record.Schemas) *immutable.MsBuilder {
 	var err error
 
@@ -310,6 +288,8 @@ func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string
 	return msb
 }
 
+type MemTableReleaseHook func(t *MemTable)
+
 type MemTable struct {
 	mu  sync.RWMutex
 	ref int32
@@ -318,9 +298,10 @@ type MemTable struct {
 	msInfoMap map[string]*MsInfo // measurements schemas, {"cpu_0001": *MsInfo}
 	msInfos   []MsInfo           // pre-allocation
 
-	log     *zap.Logger
 	memSize int64
 	MTable  MTable //public method in MemTable
+
+	releaseHook MemTableReleaseHook
 }
 
 type MemTables struct {
@@ -374,39 +355,22 @@ func (m *MemTables) Values(msName string, id uint64, tr util.TimeRange, schema r
 	return &mergeRecord
 }
 
-var memTablePool sync.Pool
-var memTablePoolCh = make(chan *MemTable, 4)
-
-func GetMemTable(engineType config.EngineType) *MemTable {
-	select {
-	case v := <-memTablePoolCh:
-		atomic.AddInt32(&v.ref, 1)
-		return getMTable(v, engineType)
-	default:
-		if v := memTablePool.Get(); v != nil {
-			memTbl, ok := v.(*MemTable)
-			if !ok {
-				panic("GetMemTable memTablePool get value isn't *MemTable type")
-			}
-			atomic.AddInt32(&memTbl.ref, 1)
-			return getMTable(memTbl, engineType)
-		}
-		return NewMemTable(engineType)
-	}
-}
-
-func getMTable(mmTable *MemTable, engineType config.EngineType) *MemTable {
+func (t *MemTable) initMTable(engineType config.EngineType) {
 	switch engineType {
 	case config.TSSTORE:
-		mmTable.MTable = newTsMemTableImpl()
+		t.MTable = newTsMemTableImpl()
 	case config.COLUMNSTORE:
-		mmTable.MTable = &csMemTableImpl{
-			primaryKey: make(map[string]record.Schemas),
+		t.MTable = &csMemTableImpl{
+			primaryKey:          make(map[string]record.Schemas),
+			timeClusterDuration: make(map[string]time.Duration),
 		}
 	default:
 		panic("UnKnown engine type")
 	}
-	return mmTable
+}
+
+func (t *MemTable) SetReleaseHook(hook MemTableReleaseHook) {
+	t.releaseHook = hook
 }
 
 func (t *MemTable) SetIdx(idx *ski.ShardKeyIndex) {
@@ -418,17 +382,15 @@ func (t *MemTable) Ref() {
 }
 
 func (t *MemTable) UnRef() {
-	t.PutMemTable()
+	if atomic.AddInt32(&t.ref, -1) == 0 {
+		t.release()
+	}
 }
 
-func (t *MemTable) PutMemTable() {
-	if atomic.AddInt32(&t.ref, -1) == 0 {
+func (t *MemTable) release() {
+	if t.releaseHook != nil {
 		t.Reset()
-		select {
-		case memTablePoolCh <- t:
-		default:
-			memTablePool.Put(t)
-		}
+		t.releaseHook(t)
 	}
 }
 
@@ -486,12 +448,12 @@ func PutSidsImpl(sids []uint64) {
 
 func NewMemTable(engineType config.EngineType) *MemTable {
 	wb := &MemTable{
-		log:       logger.GetLogger(),
 		ref:       1,
 		msInfoMap: make(map[string]*MsInfo),
 	}
 
-	return getMTable(wb, engineType)
+	wb.initMTable(engineType)
+	return wb
 }
 
 func (t *MemTable) NeedFlush() bool {
@@ -661,6 +623,11 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 	}
 
 	// slow path
+	return t.appendFieldsToRecordSlow(rec, fields, time)
+}
+
+func (t *MemTable) appendFieldsToRecordSlow(rec *record.Record, fields []influx.Field, time int64) (int64, error) {
+	var size int64
 	recSchemaIdx, pointSchemaIdx := 0, 0
 	recSchemaLen, pointSchemaLen := rec.ColNums()-1, len(fields)
 	appendColIdx := rec.ColNums()
@@ -715,7 +682,6 @@ func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Fiel
 	}
 	rec.ColVals[newColNum-1].AppendInteger(time)
 	size += int64(util.Int64SizeBytes)
-
 	return size, nil
 }
 
@@ -825,4 +791,12 @@ func (t *MemTable) GetMaxTimeBySidNoLock(msName string, sid uint64) int64 {
 		return chunk.UnOrderWriteRec.lastAppendTime
 	}
 	return chunk.OrderWriteRec.lastAppendTime
+}
+
+func UpdateMstRowCount(msRowCount *sync.Map, mstName string, rowCount int64) {
+	if count, ok := msRowCount.Load(mstName); ok {
+		atomic.AddInt64(count.(*int64), rowCount)
+	} else {
+		msRowCount.Store(mstName, &rowCount)
+	}
 }

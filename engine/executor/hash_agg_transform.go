@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -582,38 +583,100 @@ func (trans *HashAggTransform) hashAggHelper(ctx context.Context, errs *errno.Er
 		tracing.EndPP(trans.computeSpan)
 	}
 }
-
 func (trans *HashAggTransform) computeBatchLocsByDims() {
 	trans.batchEndLocs = trans.batchMPool.AllocBatchEndLocs()
-	preLoc := 0
+	strings, offsets := trans.getDimStringValues()
 	if trans.opt.HasInterval() {
-		for rowId := 1; rowId < trans.bufChunk.Len(); rowId++ {
-			if trans.bufIntervalKeys[rowId] != trans.bufIntervalKeys[preLoc] {
-				trans.batchEndLocs = append(trans.batchEndLocs, rowId)
-				preLoc = rowId
-			} else {
-				for dimColId := range trans.opt.Dimensions {
-					if trans.bufChunk.Dim(dimColId).StringValue(rowId) != trans.bufChunk.Dim(dimColId).StringValue(preLoc) {
-						trans.batchEndLocs = append(trans.batchEndLocs, rowId)
-						preLoc = rowId
-						break
-					}
-				}
-			}
-		}
-		trans.batchEndLocs = append(trans.batchEndLocs, trans.bufChunk.Len())
+		trans.computeBatchLocsByDimsWithInterval(strings, offsets)
 	} else {
-		for rowId := 1; rowId < trans.bufChunk.Len(); rowId++ {
+		trans.computeBatchLocsByDimsWithoutInterval(strings, offsets)
+	}
+}
+
+func (trans *HashAggTransform) getDimStringValues() ([][]byte, [][]uint32) {
+	size := len(trans.opt.Dimensions)
+	strings := make([][]byte, size)
+	offsets := make([][]uint32, size)
+	for dimColId := range trans.opt.Dimensions {
+		col := trans.bufChunk.Dim(dimColId)
+		stringBytes, offset := col.GetStringBytes()
+		strings[dimColId] = stringBytes
+		offsets[dimColId] = offset
+	}
+	return strings, offsets
+}
+
+func (trans *HashAggTransform) computeBatchLocsByDimsWithInterval(strings [][]byte, offsets [][]uint32) {
+	preLoc := 0
+	rowNum := trans.bufChunk.Len()
+	for rowId := 1; rowId < rowNum-1; rowId++ {
+		if trans.bufIntervalKeys[rowId] != trans.bufIntervalKeys[preLoc] {
+			trans.batchEndLocs = append(trans.batchEndLocs, rowId)
+			preLoc = rowId
+		} else {
 			for dimColId := range trans.opt.Dimensions {
-				if trans.bufChunk.Dim(dimColId).StringValue(rowId) != trans.bufChunk.Dim(dimColId).StringValue(preLoc) {
+				stringBytes, offset := strings[dimColId], offsets[dimColId]
+				if !bytes.Equal(
+					stringBytes[offset[rowId]:offset[rowId+1]],
+					stringBytes[offset[preLoc]:offset[preLoc+1]],
+				) {
 					trans.batchEndLocs = append(trans.batchEndLocs, rowId)
 					preLoc = rowId
 					break
 				}
 			}
 		}
-		trans.batchEndLocs = append(trans.batchEndLocs, trans.bufChunk.Len())
 	}
+	if trans.bufIntervalKeys[rowNum-1] != trans.bufIntervalKeys[preLoc] {
+		trans.batchEndLocs = append(trans.batchEndLocs, rowNum-1)
+	} else {
+		var preString []byte
+		for dimColId := range trans.opt.Dimensions {
+			stringBytes, offset := strings[dimColId], offsets[dimColId]
+			if preLoc == len(offset)-1 {
+				preString = stringBytes[offset[preLoc]:]
+			} else {
+				preString = stringBytes[offset[preLoc]:offset[preLoc+1]]
+			}
+			if !bytes.Equal(stringBytes[offset[rowNum-1]:], preString) {
+				trans.batchEndLocs = append(trans.batchEndLocs, rowNum-1)
+				break
+			}
+		}
+	}
+	trans.batchEndLocs = append(trans.batchEndLocs, rowNum)
+}
+
+func (trans *HashAggTransform) computeBatchLocsByDimsWithoutInterval(strings [][]byte, offsets [][]uint32) {
+	preLoc := 0
+	rowNum := trans.bufChunk.Len()
+	for rowId := 1; rowId < rowNum-1; rowId++ {
+		for dimColId := range trans.opt.Dimensions {
+			stringBytes, offset := strings[dimColId], offsets[dimColId]
+			if !bytes.Equal(
+				stringBytes[offset[rowId]:offset[rowId+1]],
+				stringBytes[offset[preLoc]:offset[preLoc+1]],
+			) {
+				trans.batchEndLocs = append(trans.batchEndLocs, rowId)
+				preLoc = rowId
+				break
+			}
+		}
+	}
+	var preString []byte
+	for dimColId := range trans.opt.Dimensions {
+		stringBytes, offset := strings[dimColId], offsets[dimColId]
+		if preLoc == len(offset)-1 {
+			preString = stringBytes[offset[preLoc]:]
+		} else {
+			preString = stringBytes[offset[preLoc]:offset[preLoc+1]]
+		}
+		if !bytes.Equal(stringBytes[offset[rowNum-1]:], preString) {
+			trans.batchEndLocs = append(trans.batchEndLocs, rowNum-1)
+			break
+		}
+	}
+	trans.batchEndLocs = append(trans.batchEndLocs, rowNum)
 }
 
 func (trans *HashAggTransform) computeBatchLocsByChunkTags() {
@@ -688,14 +751,12 @@ func (trans *HashAggTransform) newNilAggResultMsg() *aggOperatorMsg {
 	}
 }
 
-func (trans *HashAggTransform) newIntervalAggResults(i int) []*aggOperatorMsg {
+func (trans *HashAggTransform) newIntervalAggResults() []*aggOperatorMsg {
 	if trans.fixSizeInterval {
 		intervalResult := make([]*aggOperatorMsg, trans.fixIntervalNum)
 		return intervalResult
 	}
-	result := trans.newAggResultsMsg(i)
 	intervalReslut := make([]*aggOperatorMsg, 0)
-	intervalReslut = append(intervalReslut, result)
 	return intervalReslut
 }
 
@@ -721,7 +782,7 @@ func (trans *HashAggTransform) updateResult(groupIds []uint64, intervalIds []uin
 		groupId = groupIds[i]
 		intervalId = intervalIds[i]
 		if groupId == uint64(len(trans.resultMap)) {
-			trans.resultMap = append(trans.resultMap, trans.newIntervalAggResults(batchStartLoc))
+			trans.resultMap = append(trans.resultMap, trans.newIntervalAggResults())
 			if trans.bufGroupTags[i] == nil {
 				var dimsVals []string
 				for _, col := range trans.bufChunk.Dims() {
@@ -830,15 +891,34 @@ func (trans *HashAggTransform) computeGroupKeysByDims() {
 	trans.bufGroupKeys = trans.bufGroupKeysMPool.AllocGroupKeys(len(trans.batchEndLocs))
 	trans.bufGroupTags = trans.bufGroupKeysMPool.AllocGroupTags(len(trans.batchEndLocs))
 	rowId := 0
-	for i, endLoc := range trans.batchEndLocs {
+	strings, offsets := trans.getDimStringValues()
+	endOfBatchEndLocs := len(trans.batchEndLocs) - 1
+	for i, endLoc := range trans.batchEndLocs[:endOfBatchEndLocs] {
 		trans.bufGroupKeys[i] = trans.bufGroupKeys[i][:0]
 		for colId, dimKey := range trans.opt.Dimensions {
+			stringBytes, offset := strings[colId], offsets[colId]
 			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], dimKey...)
-			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], trans.bufChunk.Dim(colId).StringValue(rowId)...)
+			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], stringBytes[offset[rowId]:offset[rowId+1]]...)
 		}
 		trans.bufGroupTags[i] = nil
 		rowId = endLoc
 	}
+	trans.bufGroupKeys[endOfBatchEndLocs] = trans.bufGroupKeys[endOfBatchEndLocs][:0]
+	for colId, dimKey := range trans.opt.Dimensions {
+		stringBytes, offset := strings[colId], offsets[colId]
+		trans.bufGroupKeys[endOfBatchEndLocs] = append(trans.bufGroupKeys[endOfBatchEndLocs], dimKey...)
+		if rowId < len(offset)-1 {
+			trans.bufGroupKeys[endOfBatchEndLocs] =
+				append(trans.bufGroupKeys[endOfBatchEndLocs], stringBytes[offset[rowId]:offset[rowId+1]]...)
+		} else if rowId == len(offset)-1 {
+			trans.bufGroupKeys[endOfBatchEndLocs] =
+				append(trans.bufGroupKeys[endOfBatchEndLocs], stringBytes[offset[rowId]:]...)
+		} else {
+			panic("HashAggTransform runing err")
+		}
+
+	}
+	trans.bufGroupTags[endOfBatchEndLocs] = nil
 }
 
 func (trans *HashAggTransform) computeGroupKeys() {
@@ -972,11 +1052,6 @@ func (trans *HashAggTransform) generateNormalOutPut() {
 	trans.generateFixIntervalNoFillOutPut()
 }
 
-// group by tag only support fill(none)
-func (trans *HashAggTransform) generateGroupByTagsOutPut() {
-	trans.generateFixIntervalNoFillOutPut()
-}
-
 func (trans *HashAggTransform) generateOutPut() {
 	if trans.bufChunk == nil {
 		return
@@ -986,7 +1061,7 @@ func (trans *HashAggTransform) generateOutPut() {
 		return
 	}
 	if !trans.opt.HasInterval() {
-		trans.generateGroupByTagsOutPut()
+		trans.generateFixIntervalNoFillOutPut()
 		return
 	}
 	if trans.fixSizeInterval {

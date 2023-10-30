@@ -28,11 +28,15 @@ import (
 	"go.uber.org/zap"
 )
 
+const crcSize = 4
+
 type ChunkDataBuilder struct {
-	segmentLimit int
-	maxRowsLimit int // must be multiple of 8
-	chunk        []byte
-	chunkMeta    *ChunkMeta
+	segmentLimit     int
+	maxRowsLimit     int // must be multiple of 8
+	position         int // segment entries position
+	chunk            []byte
+	chunkMeta        *ChunkMeta
+	preChunkMetaSize uint32
 
 	colBuilder *ColumnBuilder
 	timeCols   []record.ColVal
@@ -74,7 +78,7 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 	for i, col := range b.timeCols {
 		values := col.IntegerValues()
 		tb.addValues(nil, values)
-		m := &tm.entries[i]
+		m := &tm.entries[i+b.position]
 
 		pos := len(b.chunk)
 		b.chunk = append(b.chunk, encoding.BlockInteger)
@@ -123,29 +127,77 @@ func (b *ChunkDataBuilder) EncodeChunk(id uint64, offset int64, rec *record.Reco
 		pos := len(b.chunk)
 		b.chunk = numberenc.MarshalUint32Append(b.chunk, 0) // reserve crc32
 		b.colBuilder.set(b.chunk, cm)
-		offset += 4
-		b.chunkMeta.size += 4
+		offset += crcSize
+		b.chunkMeta.size += crcSize
 		if b.chunk, err = b.colBuilder.EncodeColumn(ref, col, b.timeCols, b.maxRowsLimit, offset); err != nil {
 			b.log.Error("encode column fail", zap.Error(err))
 			return nil, err
 		}
-		crc := crc32.ChecksumIEEE(b.chunk[pos+4:])
-		numberenc.MarshalUint32Copy(b.chunk[pos:pos+4], crc)
+		crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
+		numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
 
-		size := uint32(len(b.chunk) - pos - 4)
+		size := uint32(len(b.chunk) - pos - crcSize)
 		b.chunkMeta.size += size
 		offset += int64(size)
 	}
 
 	pos := len(b.chunk)
 	b.chunk = numberenc.MarshalUint32Append(b.chunk, 0)
-	offset += 4
-	b.chunkMeta.size += 4
+	offset += crcSize
+	b.chunkMeta.size += crcSize
 	if err = b.EncodeTime(offset); err != nil {
 		return nil, err
 	}
-	crc := crc32.ChecksumIEEE(b.chunk[pos+4:])
-	numberenc.MarshalUint32Copy(b.chunk[pos:pos+4], crc)
+	crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
+	numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
 
+	return b.chunk, nil
+}
+
+func (b *ChunkDataBuilder) EncodeChunkForColumnStore(offset int64, rec *record.Record, dst []byte) ([]byte, error) {
+	var err error
+	b.chunk = dst
+	timeCol := rec.TimeColumn()
+	b.timeCols = timeCol.Split(b.timeCols[:0], b.maxRowsLimit, influx.Field_Type_Int)
+	b.chunkMeta.segCount += uint32(len(b.timeCols))
+	var entriesCount int
+	if len(b.chunkMeta.colMeta) != 0 {
+		entriesCount = len(b.chunkMeta.timeMeta().entries)
+	}
+	b.chunkMeta.resize(int(b.chunkMeta.columnCount), len(b.timeCols)+entriesCount)
+	b.colBuilder.position = b.position
+	b.preChunkMetaSize = b.chunkMeta.size
+
+	for i := range rec.Schema[:len(rec.Schema)-1] {
+		ref := rec.Schema[i]
+		col := rec.Column(i)
+		cm := &b.chunkMeta.colMeta[i]
+		pos := len(b.chunk)
+		b.chunk = numberenc.MarshalUint32Append(b.chunk, 0) // reserve crc32
+		b.colBuilder.set(b.chunk, cm)
+		offset += crcSize
+		b.chunkMeta.size += crcSize
+		if b.chunk, err = b.colBuilder.EncodeColumn(ref, col, b.timeCols, b.maxRowsLimit, offset); err != nil {
+			b.log.Error("encode column fail", zap.Error(err))
+			return nil, err
+		}
+		crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
+		numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
+
+		size := uint32(len(b.chunk) - pos - crcSize)
+		b.chunkMeta.size += size
+		offset += int64(size)
+	}
+
+	pos := len(b.chunk)
+	b.chunk = numberenc.MarshalUint32Append(b.chunk, 0)
+	offset += crcSize
+	b.chunkMeta.size += crcSize
+	if err = b.EncodeTime(offset); err != nil {
+		return nil, err
+	}
+	crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
+	numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
+	b.position += len(b.timeCols)
 	return b.chunk, nil
 }

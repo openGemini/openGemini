@@ -591,6 +591,22 @@ func (rec *Record) AppendRecForTagSet(srcRec *Record, start, end int) {
 	rec.appendRecImpl(srcRec, start, end, false)
 }
 
+// AppendRecForFilter crop redundant columns, which are not required after filtering.
+// ridIdx indicates the index of a redundant column.
+func (rec *Record) AppendRecForFilter(srcRec *Record, start, end int, ridIdx map[int]struct{}) {
+	// note: there is not RecMeta to deal with.
+	if start == end {
+		return
+	}
+
+	for i := range srcRec.Schema {
+		if _, ok := ridIdx[i]; ok {
+			continue
+		}
+		rec.ColVals[i].AppendColVal(&srcRec.ColVals[i], srcRec.Schema[i].Type, start, end)
+	}
+}
+
 func (rec *Record) AppendRecForSeries(srcRec *Record, start, end int, ridIdx map[int]struct{}) {
 	// note: there is not RecMeta to deal with.
 	if start == end {
@@ -1266,13 +1282,13 @@ func (rec *Record) IntervalLastTime() int64 {
 	return rec.ColVals[len(rec.ColVals)-1].IntegerValues()[rec.RowNums()-1]
 }
 
-func (rec *Record) AppendIntervalEmptyRows(start, step, num int64, initRecMeta bool) {
+func (rec *Record) AppendIntervalEmptyRows(start, step, num int64, initRecMeta bool, firstOrLastRecIdxs []int) {
 	for i := int64(0); i < num; i++ {
-		rec.AppendIntervalEmptyRow(start+step*i, initRecMeta)
+		rec.AppendIntervalEmptyRow(start+step*i, initRecMeta, firstOrLastRecIdxs)
 	}
 }
 
-func (rec *Record) AppendIntervalEmptyRow(rowTime int64, initRecMeta bool) {
+func (rec *Record) AppendIntervalEmptyRow(rowTime int64, initRecMeta bool, firstOrLastRecIdxs []int) {
 	for i := 0; i < rec.Len()-1; i++ {
 		switch rec.Schema[i].Type {
 		case influx.Field_Type_Float:
@@ -1289,22 +1305,22 @@ func (rec *Record) AppendIntervalEmptyRow(rowTime int64, initRecMeta bool) {
 	}
 	rec.ColVals[len(rec.ColVals)-1].AppendInteger(rowTime)
 	if initRecMeta {
-		for i := 0; i < len(rec.RecMeta.Times)-1; i++ {
+		for _, i := range firstOrLastRecIdxs {
 			rec.RecMeta.Times[i] = append(rec.RecMeta.Times[i], 0)
 		}
 	}
 }
 
-func (rec *Record) BuildEmptyIntervalRec(min, max, interval int64, initRecMeta, hasInterval, ascending bool) {
+func (rec *Record) BuildEmptyIntervalRec(min, max, interval int64, initRecMeta, hasInterval, ascending bool, firstOrLastRecIdxs []int) {
 	if !hasInterval {
-		rec.AppendIntervalEmptyRows(0, interval, 1, initRecMeta)
+		rec.AppendIntervalEmptyRows(0, interval, 1, initRecMeta, firstOrLastRecIdxs)
 		return
 	}
 	num := (max - min) / interval
 	if ascending {
-		rec.AppendIntervalEmptyRows(min, interval, num, initRecMeta)
+		rec.AppendIntervalEmptyRows(min, interval, num, initRecMeta, firstOrLastRecIdxs)
 	} else {
-		rec.AppendIntervalEmptyRows(max-interval, -interval, num, initRecMeta)
+		rec.AppendIntervalEmptyRows(max-interval, -interval, num, initRecMeta, firstOrLastRecIdxs)
 	}
 }
 

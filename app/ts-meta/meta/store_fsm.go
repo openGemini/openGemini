@@ -27,8 +27,6 @@ import (
 	"github.com/hashicorp/raft"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"go.uber.org/zap"
@@ -154,6 +152,9 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_ContinuousQueryReportCommand:     applyContinuousQueryReport,
 	proto2.Command_DropContinuousQueryCommand:       applyDropContinuousQuery,
 	proto2.Command_NotifyCQLeaseChangedCommand:      applyNotifyCQLeaseChanged,
+	proto2.Command_SetNodeSegregateStatusCommand:    applySetNodeSegregateStatusCommand,
+	proto2.Command_RemoveNodeCommand:                applyRemoveNodeCommand,
+	proto2.Command_UpdateReplicationCommand:         applyUpdateReplicationCommand,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -337,7 +338,7 @@ func applyDropStream(fsm *storeFSM, cmd *proto2.Command) interface{} {
 }
 
 func applyVerifyDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
-	return fsm.applyVerifyDataNodeCommand(cmd)
+	return nil
 }
 
 func applyExpandGroups(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -366,6 +367,18 @@ func applyDropContinuousQuery(fsm *storeFSM, cmd *proto2.Command) interface{} {
 
 func applyNotifyCQLeaseChanged(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyNotifyCQLeaseChangedCommand(cmd)
+}
+
+func applySetNodeSegregateStatusCommand(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applySetNodeSegregateStatusCommand(cmd)
+}
+
+func applyRemoveNodeCommand(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyRemoveNodeCommand(cmd)
+}
+
+func applyUpdateReplicationCommand(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateReplicationCommand(cmd)
 }
 
 func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
@@ -448,6 +461,10 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 	s := (*Store)(fsm)
 	var rp *meta2.RetentionPolicyInfo
 	rpi := v.GetRetentionPolicy()
+	repN := v.GetReplicaNum()
+	if repN == 0 {
+		repN = 1
+	}
 	if rpi != nil {
 		rp = &meta2.RetentionPolicyInfo{
 			Name:               rpi.GetName(),
@@ -460,11 +477,11 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 	} else if s.config.RetentionAutoCreate {
 		// Create a retention policy.
 		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
-		rp.ReplicaN = int(v.GetReplicaNum())
+		rp.ReplicaN = int(repN)
 		rp.Duration = autoCreateRetentionPolicyPeriod
 	}
 
-	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), v.GetReplicaNum())
+	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN)
 	fsm.Logger.Info("apply create database", zap.Error(err))
 	return err
 }
@@ -488,8 +505,19 @@ func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
 	if dbi == nil {
 		return nil
 	}
+	// remove all deleted continuous query names from fsm.cqNames
 	// notify all sql nodes that CQ has been changed
 	if len(dbi.ContinuousQueries) > 0 {
+		s := (*Store)(fsm)
+		s.cqLock.Lock()
+		for cqName := range dbi.ContinuousQueries {
+			n := sort.SearchStrings(s.cqNames, cqName)
+			if n < len(s.cqNames) {
+				s.cqNames = append(s.cqNames[:n], s.cqNames[n+1:]...)
+			}
+		}
+		s.scheduleCQsWithoutLock(cqDropped)
+		s.cqLock.Unlock()
 		fsm.data.MaxCQChangeID++
 	}
 	fsm.data.DropDatabase(v.GetName())
@@ -910,30 +938,6 @@ func (fsm *storeFSM) applyMarkBalancerCommand(cmd *proto2.Command) interface{} {
 	return nil
 }
 
-func (fsm *storeFSM) applyVerifyDataNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_VerifyDataNodeCommand_Command)
-	v, ok := ext.(*proto2.VerifyDataNodeCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a VerifyDataNodeCommand", ext))
-	}
-	nodeID := v.GetNodeID()
-	nodeIndex, err := fsm.data.GetNodeIndex(nodeID)
-	if err != nil {
-		return err
-	}
-
-	dataNode := fsm.data.DataNodes[nodeIndex]
-	// The data node has not joined into the cluster
-	if dataNode.AliveConnID != dataNode.ConnID {
-		return nil
-	}
-	if dataNode.Status == serf.StatusFailed {
-		return errno.NewError(errno.DataNoAlive, nodeID)
-	}
-
-	return nil
-}
-
 func (fsm *storeFSM) applyRegisterQueryIDOffsetCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command)
 	v, ok := ext.(*proto2.RegisterQueryIDOffsetCommand)
@@ -942,4 +946,41 @@ func (fsm *storeFSM) applyRegisterQueryIDOffsetCommand(cmd *proto2.Command) inte
 	}
 	err := fsm.data.RegisterQueryIDOffset(meta2.SQLHost(v.GetHost()))
 	return err
+}
+
+func (fsm *storeFSM) applySetNodeSegregateStatusCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_SetNodeSegregateStatusCommand_Command)
+	v, ok := ext.(*proto2.SetNodeSegregateStatusCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a SetNodeSegregateStatusCommand", ext))
+	}
+	nodeIds := v.GetNodeIds()
+	status := v.GetStatus()
+	fsm.data.SetSegregateNodeStatus(status, nodeIds)
+	return nil
+}
+
+func (fsm *storeFSM) applyRemoveNodeCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_RemoveNodeCommand_Command)
+	v, ok := ext.(*proto2.RemoveNodeCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a RemoveNodeCommand", ext))
+	}
+	nodeIds := v.GetNodeIds()
+	fsm.data.RemoveNode(nodeIds)
+	return nil
+}
+
+func (fsm *storeFSM) applyUpdateReplicationCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateReplicationCommand_Command)
+	v, ok := ext.(*proto2.UpdateReplicationCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateReplicationCommand", ext))
+	}
+	db := v.GetDatabase()
+	rgId := v.GetRepGroupId()
+	peers := v.GetPeers()
+	masterId := v.GetMasterId()
+	rgStatus := v.GetRgStatus()
+	return fsm.data.UpdateReplication(db, rgId, masterId, peers, rgStatus)
 }

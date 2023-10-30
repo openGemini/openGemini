@@ -188,16 +188,9 @@ func (s *cacheStat) getHitRatio() (Ratio float64) {
 }
 
 func (c *blockCache) getUseByteSize() (byteSize int64) {
-	var sg sync.WaitGroup
-
-	sg.Add(c.blockSize)
 	for i := 0; i < c.blockSize; i++ {
-		go func(idx int) {
-			atomic.AddInt64(&byteSize, c.blocks[idx].getUseSize())
-			sg.Done()
-		}(i)
+		byteSize += c.blocks[i].getUseSize()
 	}
-	sg.Wait()
 	return byteSize
 }
 

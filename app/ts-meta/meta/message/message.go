@@ -234,3 +234,11 @@ type GetContinuousQueryLeaseResponse struct {
 	CQNames []string
 	Err     string
 }
+
+type VerifyDataNodeStatusRequest struct {
+	NodeID uint64 // datanode node id
+}
+
+type VerifyDataNodeStatusResponse struct {
+	Err string
+}

@@ -51,6 +51,7 @@ type Server interface {
 	CreateDatabaseTagArrayEnabledAndRp(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error
 	CreateDatabaseShardKey(db string, shardKey string) error
 	CreateDatabaseAndRetentionPolicy(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error
+	CreateMeasurement(mst string) error
 	DropDatabase(db string) error
 	Reset() error
 	ContainDatabase(name string) bool
@@ -142,6 +143,13 @@ func (s *RemoteServer) CreateDatabaseAndRetentionPolicy(db string, rp *meta.Rete
 	}
 
 	_, err := s.HTTPPost(s.URL()+"/query?q="+stmt, nil)
+	return err
+}
+
+func (s *RemoteServer) CreateMeasurement(mst string) error {
+	mst = url.QueryEscape(mst)
+	cmd := fmt.Sprintf("/query?q=%s", mst)
+	_, err := s.HTTPPost(s.URL()+cmd, nil)
 	return err
 }
 
@@ -418,6 +426,12 @@ func (s *LocalServer) CreateDatabaseShardKey(db string, shardKey string) error {
 
 // CreateDatabaseAndRetentionPolicy will create the database and retention policy.
 func (s *LocalServer) CreateDatabaseAndRetentionPolicy(db string, rp *meta.RetentionPolicySpec, makeDefault bool) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return nil
+}
+
+func (s *LocalServer) CreateMeasurement(mst string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return nil

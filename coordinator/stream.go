@@ -29,6 +29,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	atomic2 "github.com/openGemini/openGemini/lib/atomic"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -311,7 +312,7 @@ func (s *Stream) mapRowsToShard(
 		(*wRows)[i] = &influx.Row{}
 	}
 	for k, tv := range ctx.dataCache {
-		groupValue := strings.Split(k, " ")
+		groupValue := strings.Split(k, config.StreamGroupValueStrSeparator)
 		if len(groupValue) != dimLen {
 			errStr := fmt.Sprintf("group value is mssing for stream task %s, groupValue %v, tagDimKeys %v, fieldIndexKeys %v",
 				si.Name, groupValue, task.tagDimKeys, task.fieldIndexKeys)
@@ -477,7 +478,7 @@ func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.R
 		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
 			builder.WriteString(value.Tags[idx].Value)
 			if i < len(keys)-1 {
-				builder.WriteString(" ")
+				builder.WriteByte(config.StreamGroupValueSeparator)
 			}
 			continue
 		}
@@ -490,7 +491,7 @@ func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.R
 					builder.WriteString(fmt.Sprint(value.Fields[fIdx].NumValue))
 				}
 				if i < len(keys)-1 {
-					builder.WriteString(" ")
+					builder.WriteByte(config.StreamGroupValueSeparator)
 				}
 				continue
 			}

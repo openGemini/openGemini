@@ -1,0 +1,97 @@
+/*
+Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package executor
+
+type HashMergeColumn interface {
+	AppendValues(col Column, start int, end int)
+	SetOutPut(col Column)
+}
+
+type HashMergeResult struct {
+	time []int64
+	cols []HashMergeColumn
+}
+
+func (mr *HashMergeResult) AppendResult(chunk Chunk, start int, end int) {
+	mr.time = append(mr.time, chunk.Time()[start:end]...)
+	for i, col := range mr.cols {
+		col.AppendValues(chunk.Column(i), start, end)
+	}
+}
+
+type HashMergeMsg struct {
+	tags   ChunkTags
+	result *HashMergeResult
+}
+
+{{range .}}
+type HashMerge{{.Name}}Column struct {
+	values  []{{.Type}}
+	nils    []bool
+	oLoc    int
+	oValLoc int
+}
+
+func NewHashMerge{{.Name}}Column() HashMergeColumn {
+	return &HashMerge{{.Name}}Column{
+		values:  make([]{{.Type}}, 0),
+		nils:    make([]bool, 0),
+		oLoc:    0,
+		oValLoc: 0,
+	}
+}
+
+func (m *HashMerge{{.Name}}Column) AppendValues(col Column, start int, end int) {
+	srcPoints := end - start
+	valueStart, valueEnd := start, end
+	if col.NilCount() != 0 {
+		valueStart, valueEnd = col.GetRangeValueIndexV2(start, end)
+	}
+	{{- if or (eq .Name "String")}}
+	m.values = col.StringValuesRangeV2(m.values, valueStart, valueEnd)
+	{{- end}}
+	{{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+	m.values = append(m.values, col.{{.Name}}Values()[valueStart:valueEnd]...)
+	{{- end}}
+	dstPoints := valueEnd - valueStart
+	if dstPoints == srcPoints {
+		for ; start < end; start++ {
+			m.nils = append(m.nils, true)
+		}
+		return
+	}
+	for ; start < end; start++ {
+		if col.IsNilV2(start) {
+			m.nils = append(m.nils, false)
+		} else {
+			m.nils = append(m.nils, true)
+		}
+	}
+}
+
+func (m *HashMerge{{.Name}}Column) SetOutPut(col Column) {
+	if m.nils[m.oLoc] {
+		col.AppendNotNil()
+		col.Append{{.Name}}Value(m.values[m.oValLoc])
+		m.oLoc++
+		m.oValLoc++
+	} else {
+		col.AppendNil()
+		m.oLoc++
+	}
+}
+{{end}}

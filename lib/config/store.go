@@ -227,6 +227,7 @@ type Store struct {
 	MaxWriteHangTime      toml.Duration `toml:"max-write-hang-time"`
 	MemDataReadEnabled    bool          `toml:"mem-data-read-enabled"`
 	SnapshotTblNum        int           `toml:"snapshot-table-number"`
+	FragmentsNumPerFlush  int           `toml:"fragments-num-per-flush"`
 
 	WalSyncInterval   toml.Duration `toml:"wal-sync-interval"`
 	WalEnabled        bool          `toml:"wal-enabled"`

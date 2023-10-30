@@ -639,6 +639,10 @@ func TestData_CreateShardGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	err = data.CreateDBPtView(dbName)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rpi := &RetentionPolicyInfo{
 		Name:               rpName,
 		ReplicaN:           1,
@@ -754,28 +758,29 @@ func TestData_createIndexGroupIfNeeded(t *testing.T) {
 				Indexes:   make([]IndexInfo, 2),
 			},
 		}}
-	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour), config.TSSTORE)
+	ptNum := data.GetClusterPtNum()
+	ig := data.createIndexGroupIfNeeded(rpi, now.Add(-time.Hour), config.TSSTORE, ptNum)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour), config.TSSTORE)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(time.Hour), config.TSSTORE, ptNum)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[1], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour), config.TSSTORE)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(duration+time.Hour), config.TSSTORE, ptNum)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[2], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour), config.TSSTORE)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration+time.Hour), config.TSSTORE, ptNum)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[3], ig)
 
-	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour), config.TSSTORE)
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(3*duration+time.Hour), config.TSSTORE, ptNum)
 	require.Equal(t, 5, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[4], ig)
 
 	rpi.IndexGroups = nil
-	ig = data.createIndexGroupIfNeeded(rpi, now, config.TSSTORE)
+	ig = data.createIndexGroupIfNeeded(rpi, now, config.TSSTORE, ptNum)
 	require.Equal(t, 1, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[0], ig)
 }
@@ -1387,4 +1392,59 @@ func TestData_Drop_Subscription(t *testing.T) {
 	assert2.NoError(t, err)
 	err = data.DropSubscription("", "", "")
 	assert2.NoError(t, err)
+}
+
+func TestExpandGroups(t *testing.T) {
+	data := &Data{
+		PtNumPerNode: 3,
+		ClusterPtNum: 3,
+		Databases: map[string]*DatabaseInfo{
+			"database2": {
+				Name: "database2",
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp1": {
+						ShardGroups: []ShardGroupInfo{
+							{Shards: []ShardInfo{{ID: 1}}},
+							{Shards: []ShardInfo{{ID: 2}}},
+						},
+					},
+					"rp0": {
+						ShardGroups: []ShardGroupInfo{
+							{Shards: []ShardInfo{{ID: 3}}},
+							{Shards: []ShardInfo{{ID: 4}}},
+						},
+					},
+				},
+			},
+			"database0": {
+				Name: "database0",
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp2": {
+						ShardGroups: []ShardGroupInfo{
+							{Shards: []ShardInfo{{ID: 5}}},
+							{Shards: []ShardInfo{{ID: 6}}},
+						},
+					},
+					"rp3": {
+						ShardGroups: []ShardGroupInfo{
+							{Shards: []ShardInfo{{ID: 7}}},
+							{Shards: []ShardInfo{{ID: 8}}},
+						},
+					},
+				},
+			},
+		},
+		MaxShardID:         8,
+		ExpandShardsEnable: true,
+	}
+	DataLogger = logger.New(os.Stderr)
+	data.ExpandGroups()
+	firstShardId := data.Databases["database0"].RetentionPolicies["rp2"].ShardGroups[0].Shards[1].ID
+	if firstShardId != 9 {
+		t.Fatalf("the shard id is wrong, expect: %d, real: %d", 1, firstShardId)
+	}
+	lastShardId := data.Databases["database2"].RetentionPolicies["rp1"].ShardGroups[1].Shards[2].ID
+	if lastShardId != 24 {
+		t.Fatalf("the shard id is wrong, expect: %d, real: %d", 24, lastShardId)
+	}
 }

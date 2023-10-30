@@ -23,7 +23,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unsafe"
 
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
@@ -115,7 +114,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 QUERY PARTITION
                 TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS
                 REPLICAS DETAIL DESTINATIONS
-                SCHEMA
+                SCHEMA INDEXES
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -169,7 +168,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <strSlice>                    SHARDKEYLIST CMOPTION_SHARDKEY INDEX_LIST PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION CMOPTION_PRIMARYKEY CMOPTION_SORTKEY
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST CMOPTION_PROPERTIES
 %type <location>                    TIME_ZONE
-%type <indexType>                   INDEX_TYPE INDEX_TYPES CMOPTION_INDEXTYPE
+%type <indexType>                   INDEX_TYPE INDEX_TYPES CMOPTION_INDEXTYPE CMOPTION_INDEXTYPE_CS
 %type <cqsp>                        SAMPLE_POLICY
 %type <tdurs>                       DURATIONVALS
 %type <cqsp>                        SAMPLE_POLICY
@@ -1458,15 +1457,16 @@ CREAT_DATABASE_POLICY:
     }
     |DURATION DURATIONVAL
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,PolicyDuration: &$2}
+        duration := $2
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,PolicyDuration: &duration}
     }
     |REPLICATION INTEGER
     {
-        if $2<1 ||$2 > 2147483647{
-            yylex.Error("REPLICATION must be 1 <= n <= 2147483647")
+        if $2<1 ||$2 > 2{
+            yylex.Error("REPLICATION must be 1 <= n <= 2")
         }
-        int_integer := *(*int)(unsafe.Pointer(&$2))
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,Replication: &int_integer}
+        replicaN := int($2)
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,Replication: &replicaN}
     }
     |NAME IDENT
     {
@@ -1603,8 +1603,8 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-    	if $4<1 ||$4 > 2147483647{
-            yylex.Error("REPLICATION must be 1 <= n <= 2147483647")
+    	if $4<1 ||$4 > 2{
+            yylex.Error("REPLICATION must be 1 <= n <= 2")
         }
     	stmt.Replication = int($4)
 
@@ -1638,8 +1638,8 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-    	if $4<1 ||$4 > 2147483647{
-            yylex.Error("REPLICATION must be 1 <= n <= 2147483647")
+    	if $4<1 ||$4 > 2{
+            yylex.Error("REPLICATION must be 1 <= n <= 2")
         }
     	stmt.Replication = int($4)
     	$$ = stmt
@@ -1968,9 +1968,13 @@ MEASUREMENT_INFO:
     {
         $$ = "SCHEMA"
     }
+    |INDEXES
+    {
+        $$ = "INDEXES"
+    }
     |IDENT
     {
-        yylex.Error("SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, SCHEMA")
+        yylex.Error("SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA")
     }
 
 SHOW_MEASUREMENT_KEYS_STATEMENT:
@@ -2399,6 +2403,9 @@ CREATE_MEASUREMENT_STATEMENT:
             }
         }
         stmt.EngineType = $5.EngineType
+        stmt.IndexType = $5.IndexType
+        stmt.IndexList = $5.IndexList
+        stmt.TimeClusterDuration = $5.TimeClusterDuration
         stmt.ShardKey = $5.ShardKey
         stmt.Type = $5.Type
         stmt.PrimaryKey = $5.PrimaryKey
@@ -2430,27 +2437,32 @@ CMOPTIONS_TS:
     }
 
 CMOPTIONS_CS:
-    WITH CMOPTION_ENGINETYPE_CS CMOPTION_SHARDKEY TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES
+    WITH CMOPTION_ENGINETYPE_CS CMOPTION_INDEXTYPE_CS CMOPTION_SHARDKEY TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
-            option.ShardKey = $3
+            option.IndexType = $3.types
+            option.IndexList = $3.lists
+            option.TimeClusterDuration = $3.timeClusterDuration
         }
-        option.Type = $4
+        if $4 != nil {
+            option.ShardKey = $4
+        }
+        option.Type = $5
         option.EngineType = $2
-        if $5 != nil {
-            option.PrimaryKey = $5
-        } else if $6 != nil {
+        if $6 != nil {
             option.PrimaryKey = $6
+        } else if $7 != nil {
+            option.PrimaryKey = $7
         }
 
-        if $6 != nil {
-            option.SortKey = $6
-        } else if $5 != nil {
-            option.SortKey = $5
-        }
         if $7 != nil {
-            option.Property = $7
+            option.SortKey = $7
+        } else if $6 != nil {
+            option.SortKey = $6
+        }
+        if $8 != nil {
+            option.Property = $8
         }
         $$ = option
     }
@@ -2466,6 +2478,11 @@ CMOPTION_INDEXTYPE:
         } else {
             $$ = $2
         }
+    }
+
+CMOPTION_INDEXTYPE_CS:
+    {
+        $$ = nil
     }
 
 CMOPTION_SHARDKEY:

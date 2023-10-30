@@ -28,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/lib/bufferpool"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -261,11 +260,6 @@ func (ww *WritePointsWork) WritePoints() error {
 		ww.logger.Error("write rows failed", zap.String("db", db),
 			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
 	}
-
-	if err == nil && config.IsReplication() {
-		err = ww.storage.WriteRowsToSlave(ww.rows, db, rp, ptId, shard)
-	}
-
 	return err
 }
 

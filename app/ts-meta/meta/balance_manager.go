@@ -102,3 +102,8 @@ func (b *BalanceManager) assignDbPt(dbPt *meta.DbPtInfo, target uint64, aliveCon
 	me := NewAssignEvent(dbPt, target, aliveConnId, userCommand)
 	return globalService.msm.executeEvent(me)
 }
+
+func (b *BalanceManager) forceMoveDbPt(dbPt *meta.DbPtInfo, from uint64, to uint64, aliveConnId uint64) error {
+	moveEvent := NewMoveEvent(dbPt, from, to, aliveConnId, false)
+	return globalService.msm.forceExecuteEvent(moveEvent)
+}

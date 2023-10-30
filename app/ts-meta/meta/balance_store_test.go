@@ -26,8 +26,8 @@ import (
 )
 
 func TestSelectDbPtsToMove(t *testing.T) {
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	store := &Store{
 		data: &meta.Data{
 			ClusterPtNum:    6,
@@ -109,8 +109,8 @@ func TestSelectDbPtsToMove(t *testing.T) {
 }
 
 func TestBalanceDBPts1(t *testing.T) {
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	store := &Store{
 		data: &meta.Data{
 			ClusterPtNum:    6,
@@ -146,8 +146,8 @@ func TestBalanceDBPts1(t *testing.T) {
 }
 
 func TestBalanceDBPts2(t *testing.T) {
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	store := &Store{
 		data: &meta.Data{
 			ClusterPtNum:    7,
@@ -184,8 +184,8 @@ func TestBalanceDBPts2(t *testing.T) {
 }
 
 func TestBalanceDBPts3(t *testing.T) {
-	config.SetHaPolicy("shared-storage")
-	defer config.SetHaPolicy("write-available-first")
+	config.SetHaPolicy(config.SSPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
 	store := &Store{
 		data: &meta.Data{
 			ClusterPtNum:    8,

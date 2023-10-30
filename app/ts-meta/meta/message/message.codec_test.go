@@ -147,6 +147,41 @@ func TestUserInfoMessage(t *testing.T) {
 	assert.Equal(t, newGetMeasurementsInfoResponseMessage.Size(), getMeasurementsInfoResponse.Size())
 }
 
+func Test_VerifyDataNodeStatus_Request_Response(t *testing.T) {
+	request := message.VerifyDataNodeStatusRequest{
+		NodeID: 1,
+	}
+	buf, _ := request.Marshal(nil)
+
+	reqMsg := request.Instance()
+	err := reqMsg.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = reqMsg.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, reqMsg.Size(), request.Size())
+
+	response := message.VerifyDataNodeStatusResponse{
+		Err: "mock error",
+	}
+	buf, _ = response.Marshal(nil)
+
+	respMsg := response.Instance()
+	err = respMsg.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = respMsg.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, respMsg.Size(), response.Size())
+
+	msg1 := message.MetaMessageBinaryCodec[message.VerifyDataNodeStatusRequestMessage]
+	assert.NotNil(t, msg1)
+
+	msg2 := message.MetaMessageBinaryCodec[message.VerifyDataNodeStatusResponseMessage]
+	assert.NotNil(t, msg2)
+
+}
+
 func TestNewMessage(t *testing.T) {
 	var msgType uint8
 

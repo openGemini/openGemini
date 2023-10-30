@@ -85,7 +85,7 @@ func (m *ReplicaInfoManager) buildReplicaInfo(data *meta.Data, dbName string, pt
 		return nil
 	}
 
-	if rg.MasterPtID == pt.PtId {
+	if rg.IsMasterPt(pt.PtId) {
 		return m.buildMasterReplicaInfo(dbName, data, pt, rg)
 	}
 
@@ -110,7 +110,7 @@ func (m *ReplicaInfoManager) buildMasterReplicaInfo(dbName string, data *meta.Da
 	info := &message.ReplicaInfo{
 		ReplicaRole:   meta.Master,
 		Master:        message.NewPeerInfo(pt),
-		Peers:         make([]*message.PeerInfo, 0, len(rg.Peers)-1),
+		Peers:         make([]*message.PeerInfo, 0, len(rg.Peers)),
 		ReplicaStatus: rg.Status,
 		Term:          0,
 	}

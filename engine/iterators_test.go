@@ -2963,7 +2963,7 @@ func TestIntervalRecordBuildAsc(t *testing.T) {
 
 	intervalRecord := record.NewRecord(schema, false)
 
-	intervalRecord.BuildEmptyIntervalRec(0, baseTime, baseTime, false, true, true)
+	intervalRecord.BuildEmptyIntervalRec(0, baseTime, baseTime, false, true, true, nil)
 	if intervalRecord.IntervalFirstTime() != 0 {
 		t.Errorf("unexpected first time, expected: %d,actuall: %d", 0, intervalRecord.IntervalFirstTime())
 	}
@@ -2983,7 +2983,7 @@ func TestIntervalRecordBuildDesc(t *testing.T) {
 
 	baseTime := int64(time.Second)
 	intervalRecord := record.NewRecord(schema, false)
-	intervalRecord.BuildEmptyIntervalRec(11*baseTime, 12*baseTime, baseTime, false, true, false)
+	intervalRecord.BuildEmptyIntervalRec(11*baseTime, 12*baseTime, baseTime, false, true, false, nil)
 	times := intervalRecord.Times()
 	if len(times) != 1 {
 		t.Errorf("wrong interval rowNums")
@@ -3017,7 +3017,7 @@ func TestTransIntervalRecord2Rec(t *testing.T) {
 		[]int{0, 1, 1}, []bool{false, true, true},
 		[]int64{baseTime, baseTime * 3, baseTime * 5})
 	intervalRecord := record.NewRecord(schema, false)
-	intervalRecord.BuildEmptyIntervalRec(0, baseTime*6, baseTime, false, true, true)
+	intervalRecord.BuildEmptyIntervalRec(0, baseTime*6, baseTime, false, true, true, nil)
 	for i := 0; i < rec.RowNums(); i++ {
 		index := rec.Time(i) / baseTime
 		intervalRecord.UpdateIntervalRecRow(rec, i, int(index))

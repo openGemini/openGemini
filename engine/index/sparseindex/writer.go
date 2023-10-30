@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -35,6 +36,7 @@ type IndexWriter interface {
 		srcRec *record.Record,
 		pkSchema record.Schemas,
 		rowsNumPerFragment int,
+		tcLocation int8,
 	) (
 		*record.Record, fragment.IndexFragment, error,
 	)
@@ -53,6 +55,7 @@ func (w *IndexWriterImpl) CreatePrimaryIndex(
 	srcRec *record.Record,
 	pkSchema record.Schemas,
 	rowsNumPerFragment int,
+	tcLocation int8,
 ) (
 	*record.Record,
 	fragment.IndexFragment,
@@ -64,7 +67,7 @@ func (w *IndexWriterImpl) CreatePrimaryIndex(
 		numFragment += 1
 	}
 
-	dstRec, err := w.createPrimaryIndexData(srcRec, pkSchema, rowsNumPerFragment, numFragment)
+	dstRec, err := w.createPrimaryIndexData(srcRec, pkSchema, rowsNumPerFragment, numFragment, tcLocation)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -79,10 +82,15 @@ func (w *IndexWriterImpl) createPrimaryIndexData(
 	pkSchema record.Schemas,
 	rowsNumPerFragment int,
 	numFragment int,
+	tcLocation int8,
 ) (
 	*record.Record,
 	error,
 ) {
+	if tcLocation > colstore.DefaultTCLocation {
+		field := record.Field{Type: influx.Field_Type_Int, Name: record.TimeClusterCol}
+		pkSchema = append([]record.Field{field}, pkSchema...)
+	}
 	dstRec := record.NewRecord(pkSchema, false)
 	for i := 0; i < pkSchema.Len(); i++ {
 		if idx := srcRec.Schema.FieldIndex(pkSchema.Field(i).Name); idx >= 0 {
