@@ -137,7 +137,7 @@ func (s *Service) getCQLease() map[string]struct{} {
 		s.logger.Error("cq service get cq lease failed", zap.Error(err))
 		return nil
 	}
-	s.logger.Info("get continuous query lease info", zap.Strings("cq names", cqNames))
+	s.logger.Debug("get continuous query lease info", zap.Strings("cq names", cqNames))
 
 	var cqLease = make(map[string]struct{}, len(cqNames))
 	for _, cqName := range cqNames {
@@ -175,7 +175,7 @@ func (s *Service) getContinuousQueries() []*ContinuousQuery {
 			s.reportInterval = continuousQueries[i].reportInterval
 		}
 	}
-	s.logger.Info("get newly continuous query lease", zap.Int("CQ numbers", len(continuousQueries)))
+	s.logger.Debug("get newly continuous query lease", zap.Int("CQ numbers", len(continuousQueries)))
 	return continuousQueries
 }
 
