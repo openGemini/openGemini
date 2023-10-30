@@ -61,6 +61,8 @@ func New(typ uint8) RPCHandler {
 		return &Sql2MetaHeartbeat{}
 	case message.GetContinuousQueryLeaseRequestMessage:
 		return &GetContinuousQueryLease{}
+	case message.VerifyDataNodeStatusRequestMessage:
+		return &VerifyDataNodeStatus{}
 	default:
 		return nil
 	}
@@ -368,4 +370,23 @@ func (h *GetContinuousQueryLease) SetRequestMsg(data transport.Codec) error {
 
 func (h *GetContinuousQueryLease) Instance() RPCHandler {
 	return &GetContinuousQueryLease{}
+}
+
+type VerifyDataNodeStatus struct {
+	BaseHandler
+
+	req *message.VerifyDataNodeStatusRequest
+}
+
+func (h *VerifyDataNodeStatus) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.VerifyDataNodeStatusRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.VerifyDataNodeStatusRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *VerifyDataNodeStatus) Instance() RPCHandler {
+	return &VerifyDataNodeStatus{}
 }

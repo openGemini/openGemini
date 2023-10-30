@@ -72,21 +72,19 @@ func TestProcessRequest_Readonly(t *testing.T) {
 	var req netstorage.SysCtrlRequest
 	req.SetMod("readonly")
 	req.SetParam(map[string]string{
+		"switchon": "true",
 		"allnodes": "y",
 	})
 	var sb strings.Builder
 	require.NoError(t, ProcessRequest(req, &sb))
-	require.Contains(t, sb.String(), "127.0.0.1:8400: success,")
-	require.Contains(t, sb.String(), "127.0.0.2:8400: success,")
+	require.Contains(t, sb.String(), "\n\tsuccess")
 	sb.Reset()
 
 	req.SetParam(map[string]string{
-		"host": "127.0.0.1",
+		"allnodes": "y",
 	})
-	require.NoError(t, ProcessRequest(req, &sb))
-	require.Contains(t, sb.String(), "127.0.0.1:8400: success,")
+	require.Error(t, ProcessRequest(req, &sb))
 	sb.Reset()
-
 }
 
 func TestProcessRequest_LogRows(t *testing.T) {

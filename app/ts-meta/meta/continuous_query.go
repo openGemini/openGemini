@@ -37,6 +37,21 @@ const (
 	cqDropped
 )
 
+func (sit situation) String() string {
+	switch sit {
+	case sqlJoin:
+		return "sqlJoin"
+	case sqlOffline:
+		return "sqlOffline"
+	case cqCreated:
+		return "cqCreated"
+	case cqDropped:
+		return "cqDropped"
+	default:
+		return "unknown"
+	}
+}
+
 var (
 	// heartbeatToleranceDuration represents ts-sql heartbeat tolerance duration for crash
 	heartbeatToleranceDuration = 5 * time.Second
@@ -151,7 +166,7 @@ func (s *Store) checkSQLNodesHeartbeat() {
 		sqlHost := hbi.Value.(*HeartbeatInfo).Host
 		s.cqLock.RUnlock()
 
-		s.Logger.Debug("detect that a SQL node was offline", zap.String("sql host", sqlHost))
+		s.Logger.Info("detect that one sql node was offline", zap.String("sql host", sqlHost))
 		s.handlerSQLNodeOffline(sqlHost, hbi)
 	}
 }
@@ -179,7 +194,7 @@ func (s *Store) handlerSQLNodeOffline(sqlHost string, hbi *list.Element) {
 	// notify all alive sql nodes that CQ may be changed
 	err := s.notifyCQLeaseChanged()
 	if err != nil {
-		s.Logger.Warn("notify cq lease command failed", zap.String("sql host", sqlHost))
+		s.Logger.Warn("notify cq lease command failed", zap.String("sql host", sqlHost), zap.Error(err))
 	}
 }
 
@@ -231,6 +246,7 @@ func (s *Store) scheduleCQsWithoutLock(sit situation) {
 	if len(s.cqNames) == 0 || len(s.sqlHosts) == 0 {
 		return
 	}
+	s.Logger.Info("schedule continuous queries", zap.String("situation", sit.String()))
 
 	switch sit {
 	case sqlJoin:
@@ -242,7 +258,7 @@ func (s *Store) scheduleCQsWithoutLock(sit situation) {
 	case cqDropped:
 		s.scheduleCQs()
 	default:
-		panic(fmt.Sprintf("not exist situation %d", sit))
+		panic(fmt.Sprintf("not exist situation %s", sit.String()))
 	}
 }
 
@@ -256,4 +272,5 @@ func (s *Store) scheduleCQs() {
 		host := s.sqlHosts[i%len(s.sqlHosts)]
 		s.cqLease[host].CQNames = append(s.cqLease[host].CQNames, cqName)
 	}
+	s.Logger.Info("continuous query lease info", zap.Any("cq lease", s.cqLease))
 }

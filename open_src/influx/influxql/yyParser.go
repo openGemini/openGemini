@@ -179,8 +179,9 @@ type Durations struct {
 }
 
 type IndexType struct {
-	types []string
-	lists [][]string
+	types               []string
+	lists               [][]string
+	timeClusterDuration time.Duration
 }
 
 type cqSamplePolicyInfo struct {

@@ -182,6 +182,10 @@ func (s *MockRPCStore) getContinuousQueryLease(host string) ([]string, error) {
 	return nil, nil
 }
 
+func (s *MockRPCStore) verifyDataNodeStatus(nodeID uint64) error {
+	return nil
+}
+
 func TestPing(t *testing.T) {
 	server := startServer()
 	defer server.Stop()

@@ -986,3 +986,50 @@ func (o *GetContinuousQueryLeaseResponse) Size() int {
 func (o *GetContinuousQueryLeaseResponse) Instance() transport.Codec {
 	return &GetContinuousQueryLeaseResponse{}
 }
+
+func (req *VerifyDataNodeStatusRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendUint64(buf, req.NodeID)
+	return buf, nil
+}
+
+func (req *VerifyDataNodeStatusRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	req.NodeID = dec.Uint64()
+	return nil
+}
+
+func (req *VerifyDataNodeStatusRequest) Size() int {
+	return codec.SizeOfUint64()
+}
+
+func (req *VerifyDataNodeStatusRequest) Instance() transport.Codec {
+	return &VerifyDataNodeStatusRequest{}
+}
+
+func (resp *VerifyDataNodeStatusResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, resp.Err)
+
+	return buf, err
+}
+
+func (resp *VerifyDataNodeStatusResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+
+	dec := codec.NewBinaryDecoder(buf)
+	resp.Err = dec.String()
+	return nil
+}
+
+func (resp *VerifyDataNodeStatusResponse) Size() int {
+	return codec.SizeOfString(resp.Err)
+}
+
+func (resp *VerifyDataNodeStatusResponse) Instance() transport.Codec {
+	return &VerifyDataNodeStatusResponse{}
+}

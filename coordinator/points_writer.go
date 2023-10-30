@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -353,7 +354,11 @@ func (w *PointsWriter) isPartialErr(err error) bool {
 	return strings.Contains(err.Error(), "field type conflict") ||
 		strings.Contains(err.Error(), "duplicate tag") ||
 		errno.Equal(err, errno.TooManyTagKeys) ||
-		errno.Equal(err, errno.InvalidTagKey)
+		errno.Equal(err, errno.InvalidTagKey) ||
+		errno.Equal(err, errno.WritePointSchemaInvalid) ||
+		errno.Equal(err, errno.WritePointHasInvalidTag) ||
+		errno.Equal(err, errno.WritePointHasInvalidField) ||
+		errno.Equal(err, errno.WritePointPrimaryKeyErr)
 }
 
 // routeAndMapOriginRows preprocess rows, verify rows and map to shards,
@@ -384,6 +389,12 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			dropped++
 			continue
 		}
+
+		if err := models.CheckTime(time.Unix(0, r.Timestamp)); err != nil {
+			partialErr = err
+			dropped++
+			continue
+		}
 		sort.Stable(&r.Fields)
 
 		if r.Fields, pErr = fixFields(r.Fields); pErr != nil {
@@ -404,6 +415,9 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			return nil, dropped, err
 		}
 		r.Name = ctx.ms.Name
+		if ctx.ms.EngineType == config.COLUMNSTORE {
+			wh.updatePrimaryKeyMapIfNeeded(ctx.ms.ColStoreInfo.PrimaryKey, r.Name)
+		}
 
 		if ctx.fieldToCreatePool, isDropRow, err = wh.updateSchemaIfNeeded(database, retentionPolicy, r, ctx.ms, originName, ctx.fieldToCreatePool[:0]); err != nil {
 			if w.isPartialErr(err) {

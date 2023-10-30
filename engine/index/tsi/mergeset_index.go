@@ -807,12 +807,12 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	}
 	dimPos := genDimensionPosition(opt.Dimensions)
 
-	var tagSetMap map[string]*TagSetInfo
+	var tagSetsMap map[string]*TagSetInfo
 	var tagSetSlice []*TagSetInfo
 	if opt.GroupByAllDims {
 		tagSetSlice = make([]*TagSetInfo, 0, seriesNum)
 	} else {
-		tagSetMap = make(map[string]*TagSetInfo)
+		tagSetsMap = make(map[string]*TagSetInfo)
 	}
 
 	if indexSpan != nil {
@@ -878,12 +878,12 @@ LOOP:
 				tagSet.key = append(tagSet.key, groupTagKey...)
 				tagSetSlice = append(tagSetSlice, tagSet)
 			} else {
-				tagSet, ok = tagSetMap[bytesutil.ToUnsafeString(groupTagKey)]
+				tagSet, ok = tagSetsMap[bytesutil.ToUnsafeString(groupTagKey)]
 				if !ok {
 					tagSet = NewTagSetInfo()
 					tagSet.key = append(tagSet.key, groupTagKey...)
 				}
-				tagSetMap[string(groupTagKey)] = tagSet
+				tagSetsMap[string(groupTagKey)] = tagSet
 			}
 
 			if exprs[i] != nil {
@@ -908,7 +908,7 @@ LOOP:
 	if tsidIter != nil {
 		if !opt.GroupByAllDims {
 			tsidIter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
-				len(tagSetMap), seriesN, totalSeriesKeyLen))
+				len(tagSetsMap), seriesN, totalSeriesKeyLen))
 		} else {
 			tsidIter.SetNameValue(fmt.Sprintf("tagset_count=%d, series_cnt=%d, serieskey_len=%d",
 				len(tagSetSlice), seriesN, totalSeriesKeyLen))
@@ -924,8 +924,8 @@ LOOP:
 	// The TagSets have been created, as a map of TagSets. Just send
 	// the values back as a slice, sorting for consistency.
 	if !opt.GroupByAllDims {
-		tagSetSlice = make([]*TagSetInfo, 0, len(tagSetMap))
-		for _, v := range tagSetMap {
+		tagSetSlice = make([]*TagSetInfo, 0, len(tagSetsMap))
+		for _, v := range tagSetsMap {
 			tagSetSlice = append(tagSetSlice, v)
 		}
 	}

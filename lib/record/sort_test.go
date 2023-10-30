@@ -28,6 +28,15 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
+func SortAndDedup(table *mutable.MemTable, msName string) {
+	msInfo, err := table.GetMsInfo(msName)
+	if err != nil {
+		return
+	}
+	mutable.JoinWriteRec(table, msName)
+	msInfo.GetWriteChunk().SortRecord(0)
+}
+
 func TestSortRecordByOrderTags(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "order1_int"},
@@ -61,7 +70,7 @@ func TestSortRecordByOrderTags(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -100,7 +109,7 @@ func TestSortRecordByOrderTags1(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -139,7 +148,7 @@ func TestSortRecordByOrderTags2(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -178,7 +187,7 @@ func TestSortRecordByOrderTags3(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -217,7 +226,7 @@ func TestSortRecordByOrderTags4(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -256,7 +265,7 @@ func TestSortRecordByOrderTags5(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -295,7 +304,7 @@ func TestSortRecordByOrderTags6(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -336,7 +345,7 @@ func TestSortRecordByOrderTags7(t *testing.T) {
 	wk.WriteRec.SetWriteRec(rec)
 
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -375,7 +384,7 @@ func TestSortRecordByOrderTags8(t *testing.T) {
 	wk := msInfo.GetWriteChunk()
 	wk.WriteRec.SetWriteRec(rec)
 	tbl.SetMsInfo("cpu", msInfo)
-	mutable.SortAndDedup(tbl, "cpu")
+	SortAndDedup(tbl, "cpu")
 	if !testRecsEqual(msInfo.GetWriteChunk().WriteRec.GetRecord(), expRec) {
 		t.Fatal("error result")
 	}
@@ -410,8 +419,8 @@ func TestBoolSliceSingleValueCompare(t *testing.T) {
 	sk := pk
 	data := record.SortData{}
 	dataCmp := record.SortData{}
-	data.Init(times, sk, rec)
-	dataCmp.Init(cmpRec.Times(), sk, cmpRec)
+	data.Init(times, sk, rec, 0)
+	dataCmp.Init(cmpRec.Times(), sk, cmpRec, 0)
 
 	im := data.Data
 	jm := dataCmp.Data
@@ -457,8 +466,8 @@ func TestBoolSliceSingleValueCompare2(t *testing.T) {
 	sk := pk
 	data := record.SortData{}
 	dataCmp := record.SortData{}
-	data.Init(times, sk, rec)
-	dataCmp.Init(cmpRec.Times(), sk, cmpRec)
+	data.Init(times, sk, rec, 0)
+	dataCmp.Init(cmpRec.Times(), sk, cmpRec, 0)
 
 	im := data.Data
 	jm := dataCmp.Data
@@ -504,8 +513,8 @@ func TestBoolSliceSingleValueCompare3(t *testing.T) {
 	sk := pk
 	data := record.SortData{}
 	dataCmp := record.SortData{}
-	data.Init(times, sk, rec)
-	dataCmp.Init(cmpRec.Times(), sk, cmpRec)
+	data.Init(times, sk, rec, 0)
+	dataCmp.Init(cmpRec.Times(), sk, cmpRec, 0)
 
 	im := data.Data
 	jm := dataCmp.Data
@@ -573,7 +582,67 @@ func TestSortRecordAndDeduplicate(t *testing.T) {
 
 	hlp := record.NewSortHelper()
 	defer hlp.Release()
-	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), hlp.SortData, mutable.GetPrimaryKeys(schema, sk), true)
+	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), mutable.GetPrimaryKeys(schema, sk), true, 0)
+
+	if !testRecsEqual(rec, expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecordWithTimeCluster(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "order1_int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "order2_float"},
+		record.Field{Type: influx.Field_Type_String, Name: "order3_string"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "ttbool"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	ts, _ := time.Parse(time.RFC3339, "2023-01-01T01:00:00Z")
+	timestamp := int64(ts.UnixNano())
+	d, _ := time.ParseDuration("1m")
+	duration := int64(d)
+
+	timeClusterDuration, _ := time.ParseDuration("2m")
+	times := []int64{
+		timestamp,
+		timestamp + duration*1,
+		timestamp + duration*2,
+		timestamp + duration*3,
+	}
+
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{1000, 0, 0, 1100},
+		[]int{1, 1, 1, 1}, []float64{1001.3, 1002.4, 1002.4, 0},
+		[]int{1, 1, 1, 1}, []string{"ha", "helloNew", "helloNew", "hb"},
+		[]int{1, 1, 1, 1}, []bool{true, true, false, false},
+		[]int64{times[3], times[2], times[1], times[0]})
+	expRec := genRowRec(schema,
+		[]int{1, 1, 1, 1}, []int64{0, 1100, 0, 1000},
+		[]int{1, 1, 1, 1}, []float64{1002.4, 0, 1002.4, 1001.3},
+		[]int{1, 1, 1, 1}, []string{"helloNew", "hb", "helloNew", "ha"},
+		[]int{1, 1, 1, 1}, []bool{false, false, true, true},
+		[]int64{times[1], times[0], times[2], times[3]})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	tbl := mutable.NewMemTable(config.COLUMNSTORE)
+	msInfo := &mutable.MsInfo{
+		Name:   "cpu",
+		Schema: schema,
+	}
+	sk := []string{"order1_int", "order2_float", "order3_string"}
+	msInfo.CreateWriteChunkForColumnStore(sk)
+	wk := msInfo.GetWriteChunk()
+	wk.WriteRec.SetWriteRec(rec)
+	tbl.SetMsInfo("cpu", msInfo)
+
+	hlp := record.NewSortHelper()
+	defer hlp.Release()
+	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), mutable.GetPrimaryKeys(schema, sk), false, timeClusterDuration)
+
+	// need to remove the first column of rec(clustered time)
+	rec.ColVals = rec.ColVals[1:]
+	rec.Schema = rec.Schema[1:]
 
 	if !testRecsEqual(rec, expRec) {
 		t.Fatal("error result")
@@ -602,12 +671,12 @@ func BenchmarkSortForColumnStore(b *testing.B) {
 	hlp := record.NewSortHelper()
 	defer hlp.Release()
 	rec := genSortData(5000000, 10, schema)
-	hlp.SortForColumnStore(rec, hlp.SortData, sk, false)
+	hlp.SortForColumnStore(rec, sk, false, 0)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < 100000; j++ {
-			hlp.SortForColumnStore(rec, hlp.SortData, sk, false)
+			hlp.SortForColumnStore(rec, sk, false, 0)
 		}
 	}
 }

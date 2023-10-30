@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	assert1 "github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -2343,5 +2344,179 @@ func TestAppendRecWithNilRows(t *testing.T) {
 		if times3[i+1]-times3[i] != int64(opt2.Interval.Duration) {
 			t.Fatal("wrong time interval")
 		}
+	}
+}
+func Test_Create(t *testing.T) {
+	testDir := t.TempDir()
+	executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
+	msNames := []string{"cpu"}
+	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
+	//pts, minT, maxT := GenDataRecord_FullFields(msNames, 5, 10000, time.Millisecond*10, startTime)
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+	fields := map[string]influxql.DataType{
+		"field2_int":    influxql.Integer,
+		"field3_bool":   influxql.Boolean,
+		"field4_float":  influxql.Float,
+		"field1_string": influxql.String,
+	}
+
+	// **** start write data to the shard.
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
+	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
+	if err := sh.WriteRows(pts2, nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+
+	for _, tt := range []struct {
+		name              string
+		q                 string
+		tr                util.TimeRange
+		fields            map[string]influxql.DataType
+		skip              bool
+		outputRowDataType *hybridqp.RowDataTypeImpl
+		readerOps         []hybridqp.ExprOptions
+		aggOps            []hybridqp.ExprOptions
+		expect            func(chunks []*executor.SeriesRecord) bool
+	}{
+		/* min */
+		// select min[int]
+		{
+			name:   "select min[int],min[float]",
+			q:      fmt.Sprintf(`SELECT min(field2_int),min(field4_float) from cpu group by time(5s)`),
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			fields: fields,
+			outputRowDataType: hybridqp.NewRowDataTypeImpl(
+				influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				influxql.VarRef{Val: "val3", Type: influxql.Float},
+			),
+			readerOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "field2_int", Type: influxql.Integer}}},
+					Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				},
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "field3_float", Type: influxql.Float}}},
+					Ref:  influxql.VarRef{Val: "val3", Type: influxql.Float},
+				},
+			},
+			aggOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "val2", Type: influxql.Integer}}},
+					Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				},
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "val3", Type: influxql.Float}}},
+					Ref:  influxql.VarRef{Val: "val3", Type: influxql.Float},
+				},
+			},
+			expect: func(rec []*executor.SeriesRecord) bool {
+				if len(rec) != 1 {
+					t.Errorf("The result should be 1 chunk")
+				}
+				success := true
+				return success
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.skip {
+				t.Skipf("SKIP:: %s", tt.name)
+			}
+			// parse stmt and opt
+			stmt := MustParseSelectStatement(tt.q)
+			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
+			stmt.OmitTime = true
+			sopt := query.SelectOptions{ChunkSize: 1024}
+			RemoveTimeCondition(stmt)
+			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+			opt.Name = msNames[0]
+			opt.Sources = source
+			opt.StartTime = tt.tr.Min
+			opt.EndTime = tt.tr.Max
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+			node := executor.NewLogicalTSSPScan(querySchema)
+			executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
+			executor.RegistryTransformCreator(&executor.LogicalWriteIntoStorage{}, &WriteIntoStorageTransform{})
+			readers, _ := sh.GetTSSPFiles(msNames[0], true)
+			newSeqs := sh.GetNewFilesSeqs(readers.Files())
+			node.SetNewSeqs(newSeqs)
+			node.SetFiles(readers)
+			node2 := executor.NewLogicalWriteIntoStorage(node, querySchema)
+			node2.SetMmsTables(sh.GetTableStore().(*immutable.MmsTables))
+			node3 := executor.NewLogicalSequenceAggregate(node2, querySchema)
+			r1 := &TsspSequenceReader{}
+			sidSequenceReader, _ := r1.Create(node, &opt)
+			r1.files = readers
+			r1.schema = querySchema
+			r1.init()
+			err := r1.metaIndexIterator.nextChunkMetaByFieldIters()
+			require.Error(t, err)
+			r1.metaIndexIterator.pos = 0
+			err = r1.metaIndexIterator.nextChunkMetaByFieldIters()
+			require.Nil(t, err)
+			r2 := &WriteIntoStorageTransform{}
+			writeIntoStorage, _ := r2.Create(node2, &opt)
+			r3 := &FileSequenceAggregator{}
+			fileSequenceAgg, _ := r3.Create(node3, &opt)
+			sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
+			fileSequenceAgg.GetOutputs()[0].Connect(writeIntoStorage.GetInputs()[0])
+
+			ctx := context.Background()
+			go sidSequenceReader.Work(ctx)
+			go fileSequenceAgg.Work(ctx)
+			go writeIntoStorage.Work(ctx)
+			time.Sleep(time.Second * 2)
+			for _, r := range readers.Files() {
+				r.Unref()
+			}
+			if writeIntoStorage.(*WriteIntoStorageTransform).GetRowCount() != 4056 {
+				t.Fail()
+			}
+			var schema record.Schemas
+			var rowCount int
+			schema = querySchema.BuildDownSampleSchema(true)
+			recordPool := record.NewCircularRecordPool(TsspSequencePool, 3, schema, false)
+			newFiles := writeIntoStorage.(*WriteIntoStorageTransform).newFiles
+			decs := immutable.NewReadContext(true)
+			for _, v := range newFiles {
+				metaIndex, _ := v.MetaIndexAt(0)
+				chunkMeta, _ := v.ReadChunkMetaData(0, metaIndex, nil, fileops.IO_PRIORITY_LOW_READ)
+				for _, c := range chunkMeta {
+					for s := 0; s < c.SegmentCount(); s++ {
+						rec := recordPool.Get()
+						rec.Schema = schema
+						rec, _ = v.ReadAt(&c, s, rec, decs, fileops.IO_PRIORITY_LOW_READ)
+						rowCount += rec.RowNums()
+					}
+				}
+			}
+			if rowCount != 2028 {
+				t.Fail()
+			}
+			planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+			node2.ExplainIterms(planWriter)
+			require.Equal(t, writeIntoStorage.Name(), "WriteIntoStorageTransform")
+			require.Nil(t, writeIntoStorage.Explain())
+			require.Nil(t, writeIntoStorage.Release())
+
+		})
 	}
 }

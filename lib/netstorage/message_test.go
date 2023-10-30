@@ -445,3 +445,39 @@ func TestKillQueryResponse_Marshal_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, resp.String(), resp2.String())
 }
+
+func TestSegregateNodeRequest_Marshal_Unmarshal(t *testing.T) {
+	req := netstorage.NewSegregateNodeRequest()
+	req.NodeId = proto.Uint64(1)
+	var buf []byte
+	buf, err := req.Marshal(buf)
+	require.NoError(t, err)
+	req2 := netstorage.NewSegregateNodeRequest()
+	err = req2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
+	newReq := req.Instance()
+	if newReq.Size() != 0 {
+		t.Fatal("newReq.size() error")
+	}
+}
+
+func TestSegregateNodeResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := netstorage.NewSegregateNodeResponse()
+	var msg string = "error"
+	resp.Err = &msg
+	var buf []byte
+	buf, err := resp.Marshal(buf)
+	require.NoError(t, err)
+	resp2 := netstorage.NewSegregateNodeResponse()
+	err = resp2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, resp.String(), resp2.String())
+	newResp := resp.Instance()
+	if newResp.Size() != 0 {
+		t.Fatal("newResp.size() error")
+	}
+	if newResp.(*netstorage.SegregateNodeResponse).Error() != nil {
+		t.Fatal("newResp.Error() error")
+	}
+}

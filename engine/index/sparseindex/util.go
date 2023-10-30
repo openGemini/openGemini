@@ -19,50 +19,37 @@ package sparseindex
 import (
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
 const Empty = "empty"
 const Continuous = "continuous"
 
-type Operator uint8
-
-// Atoms of a Boolean expression.
-const (
-	InRange Operator = iota
-	NotInRange
-	InSet
-	NotInSet
-	NOT // operators of the logical expression.
-	AND
-	OR
-	UNKNOWN // unsupported type value.
-)
-
 func genRPNElementByOp(logicalOp influxql.Token, value *FieldRef, res *RPNElement) bool {
 	switch logicalOp {
 	case influxql.EQ:
-		res.op = InRange
+		res.op = rpn.InRange
 		res.rg = NewRange(value, value, true, true)
 	case influxql.NEQ:
-		res.op = NotInRange
+		res.op = rpn.NotInRange
 		res.rg = NewRange(value, value, true, true)
 	case influxql.LT:
-		res.op = InRange
+		res.op = rpn.InRange
 		res.rg = createRightBounded(value, false, false)
 	case influxql.GT:
-		res.op = InRange
+		res.op = rpn.InRange
 		res.rg = createLeftBounded(value, false, false)
 	case influxql.LTE:
-		res.op = InRange
+		res.op = rpn.InRange
 		res.rg = createRightBounded(value, true, false)
 	case influxql.GTE:
-		res.op = InRange
+		res.op = rpn.InRange
 		res.rg = createLeftBounded(value, true, false)
 	case influxql.IN:
-		res.op = InSet
+		res.op = rpn.InSet
 	default:
-		res.op = UNKNOWN
+		res.op = rpn.UNKNOWN
 		return false
 	}
 	return true
@@ -87,7 +74,7 @@ type FunctionBase struct {
 // their operands, hence removing the need for brackets to define evaluation priority.
 // More details: https://en.wikipedia.org/wiki/Reverse_Polish_notation.
 type RPNElement struct {
-	op        Operator
+	op        rpn.Op
 	rg        *Range
 	setIndex  *SetIndex
 	keyColumn int
@@ -95,23 +82,6 @@ type RPNElement struct {
 	// if the key column is wrapped in functions that can be monotonous in some value ranges.
 	// such as (2023.06.01, 2023.06.15) -> toMonth() -> [202306, 202306]
 	monotonicChains []*FunctionBase
-}
-
-func InfluxOpToFunction(op influxql.Token) Operator {
-	switch op {
-	case influxql.AND:
-		return AND
-	case influxql.OR:
-		return OR
-	case influxql.NOT:
-		return NOT
-	default:
-		return UNKNOWN
-	}
-}
-
-func IsLogicalOperator(op influxql.Token) bool {
-	return op == influxql.AND || op == influxql.OR || op == influxql.NOT
 }
 
 type IndexProperty struct {

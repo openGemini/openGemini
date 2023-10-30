@@ -23,8 +23,10 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/stretchr/testify/require"
 )
 
 func BuildChunk1() executor.Chunk {
@@ -623,4 +625,16 @@ func BenchmarkMergeHelper(b *testing.B) {
 		b.StopTimer()
 		executor.Release()
 	}
+}
+
+func TestMergePanic(t *testing.T) {
+	schema := executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{}, nil)
+	trans := executor.NewMergeTransform([]hybridqp.RowDataType{buildRowDataType(), buildRowDataType(), buildRowDataType()},
+		[]hybridqp.RowDataType{buildRowDataType()}, nil, schema)
+
+	errs := errno.NewErrs()
+	errs.Init(1, nil)
+	trans.Merge(nil, errs)
+
+	require.NotEmpty(t, errs.Err())
 }

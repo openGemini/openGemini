@@ -23,10 +23,13 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 )
 
 func TestCreateEventFromInfo(t *testing.T) {
@@ -63,7 +66,7 @@ func TestInterruptEvent(t *testing.T) {
 	if err := ProcessExecuteRequest(mms.GetStore(), GenerateCreateDatabaseCmd(db), mms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
-	config.SetHaPolicy("shared-storage")
+	config.SetHaPolicy(config.SSPolicy)
 	globalService.store.data.TakeOverEnabled = true
 	globalService.clusterManager.Close()
 
@@ -124,4 +127,33 @@ waitAssigned:
 		time.Sleep(time.Millisecond)
 	}
 	assert.Equal(t, 0, len(globalService.msm.eventMap))
+}
+
+func TestAddEventFail(t *testing.T) {
+	pt := &meta.DbPtInfo{
+		Db:  "test",
+		Pti: &meta.PtInfo{PtId: 0, Status: meta.Offline, Owner: meta.PtOwner{NodeID: 1}},
+	}
+	s := &Store{
+		raft: &MockRaftForSG{isLeader: false},
+		data: &meta.Data{
+			DataNodes: []meta2.DataNode{
+				meta2.DataNode{NodeInfo: meta.NodeInfo{ID: 1, Status: serf.StatusAlive, SegregateStatus: meta.Segregating, TCPHost: "127.0.0.1"}},
+			},
+		},
+		Logger: logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
+	}
+	globalService = &Service{}
+	globalService.store = s
+	event1 := NewMoveEvent(pt, 1, 2, 2, false)
+	msm := NewMigrateStateMachine()
+	err := msm.addToEventMap(event1)
+	if err.Error() != "event srcNode 1 is Segregating" {
+		t.Fatal("TestAddEventFail error")
+	}
+	event2 := NewMoveEvent(pt, 2, 1, 1, false)
+	err = msm.addToEventMap(event2)
+	if err.Error() != "event dstNode 1 is Segregating" {
+		t.Fatal("TestAddEventFail error")
+	}
 }

@@ -94,15 +94,7 @@ func startServer(address string) (*spdy.RRCServer, error) {
 }
 
 func newDataNode(id uint64, address string) *meta2.DataNode {
-	return &meta2.DataNode{NodeInfo: struct {
-		ID         uint64
-		Host       string
-		RPCAddr    string
-		TCPHost    string
-		Status     serf.MemberStatus
-		LTime      uint64
-		GossipAddr string
-	}{ID: id, Host: address, RPCAddr: address, TCPHost: address, Status: serf.StatusAlive}}
+	return &meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: id, Host: address, RPCAddr: address, TCPHost: address, Status: serf.StatusAlive}}
 }
 
 type MockMetaClient struct {

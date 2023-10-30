@@ -42,6 +42,7 @@ import (
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -133,9 +134,46 @@ type ReShardingInfo struct {
 	Bounds       []string
 }
 
+func (data *Data) DBReplicaN(db string) int {
+	replicaN := data.Databases[db].ReplicaN
+	if replicaN == 0 {
+		return 1
+	}
+	return replicaN
+}
+
+func (data *Data) GetEffectivePtNum(db string) uint32 {
+	replicaN := data.DBReplicaN(db)
+	if replicaN == 1 {
+		return data.ClusterPtNum
+	}
+
+	repGroupNum := len(data.DBRepGroups(db))
+	return uint32(replicaN * repGroupNum)
+}
+
+func (data *Data) GetClusterPtNum() uint32 {
+	return data.ClusterPtNum
+}
+
+func (data *Data) SetClusterPtNum(ptNum uint32) {
+	data.ClusterPtNum = ptNum
+}
+
 func (data *Data) WalkDatabases(fn func(db *DatabaseInfo)) {
 	for dbName := range data.Databases {
 		fn(data.Databases[dbName])
+	}
+}
+
+func (data *Data) WalkDatabasesOrderly(fn func(db *DatabaseInfo)) {
+	dbNames := make([]string, 0, len(data.Databases))
+	for dbName := range data.Databases {
+		dbNames = append(dbNames, dbName)
+	}
+	sort.Strings(dbNames)
+	for i := 0; i < len(dbNames); i++ {
+		fn(data.Databases[dbNames[i]])
 	}
 }
 
@@ -279,13 +317,13 @@ func (data *Data) ReSharding(info *ReShardingInfo) error {
 	}
 
 	startTime := time.Unix(0, info.SplitTime+1)
-	data.createIndexGroup(rp, startTime)
+	data.createIndexGroup(info.Database, rp, startTime)
 	DataLogger.Info("reSharding info", zap.Time("splitTime", time.Unix(0, info.SplitTime+1)), zap.Any("bounds", info.Bounds))
-	err = data.CreateShardGroupWithBounds(rp, startTime, info.Bounds, rp.ShardGroups[length-1].EngineType) // shard group id start from 1...
+	err = data.CreateShardGroupWithBounds(info.Database, rp, startTime, info.Bounds, rp.ShardGroups[length-1].EngineType) // shard group id start from 1...
 	return err
 }
 
-func (data *Data) createIndexGroup(rp *RetentionPolicyInfo, startTime time.Time) {
+func (data *Data) createIndexGroup(db string, rp *RetentionPolicyInfo, startTime time.Time) {
 	length := len(rp.ShardGroups)
 	endTime := rp.ShardGroups[length-1].EndTime
 	igLen := len(rp.IndexGroups)
@@ -302,7 +340,7 @@ func (data *Data) createIndexGroup(rp *RetentionPolicyInfo, startTime time.Time)
 	igi.ID = data.MaxIndexGroupID
 	igi.StartTime = startTime
 	igi.EndTime = endTime
-	igi.Indexes = make([]IndexInfo, data.ClusterPtNum)
+	igi.Indexes = make([]IndexInfo, data.GetEffectivePtNum(db))
 	for i := range igi.Indexes {
 		data.MaxIndexID++
 		igi.Indexes[i] = IndexInfo{ID: data.MaxIndexID, Owners: []uint32{uint32(i)}}
@@ -311,7 +349,7 @@ func (data *Data) createIndexGroup(rp *RetentionPolicyInfo, startTime time.Time)
 	sort.Sort(IndexGroupInfos(rp.IndexGroups))
 }
 
-func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime time.Time, bounds []string, engineType config.EngineType) error {
+func (data *Data) CreateShardGroupWithBounds(db string, rp *RetentionPolicyInfo, startTime time.Time, bounds []string, engineType config.EngineType) error {
 	// Create the shard group.
 	data.MaxShardGroupID++
 	sgi := ShardGroupInfo{}
@@ -330,7 +368,8 @@ func (data *Data) CreateShardGroupWithBounds(rp *RetentionPolicyInfo, startTime 
 		data.MaxShardID++
 		// FIXME shardTier should put in command
 		sgi.Shards[i] = ShardInfo{ID: data.MaxShardID, Tier: lastSg.Shards[0].Tier}
-		for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
+		ptNum := data.GetEffectivePtNum(db)
+		for ptId := 0; ptId < int(ptNum); ptId++ {
 			if ptId%shardN == i {
 				sgi.Shards[i].Owners = append(sgi.Shards[i].Owners, uint32(ptId))
 				sgi.Shards[i].IndexID = igi.Indexes[ptId].ID
@@ -508,7 +547,9 @@ func (data *Data) CheckDataNodeAlive(nodeId uint64) error {
 		err = fmt.Errorf("dataNode %d not found\n", nodeId)
 		return err
 	}
-
+	if data.DataNodes[nodeIndex].SegregateStatus != Normal {
+		return fmt.Errorf("dataNode %d is segregated, segregatedStatus:%d", nodeId, data.DataNodes[nodeIndex].SegregateStatus)
+	}
 	status := data.DataNodes[nodeIndex].Status
 	if status != serf.StatusAlive {
 		return errno.NewError(errno.DataNoAlive, nodeId)
@@ -605,9 +646,9 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 	data.DataNodes = append(data.DataNodes, dn)
 
 	sort.Sort(DataNodeInfos(data.DataNodes))
-	data.initDataNodePtView()
-	for db := range data.PtView {
-		data.expendDBPtView(db, data.ClusterPtNum)
+	data.initDataNodePtView(data.GetClusterPtNum())
+	for db := range data.Databases {
+		data.expendDBPtView(db, data.GetClusterPtNum())
 	}
 	if data.ExpandShardsEnable {
 		data.ExpandGroups()
@@ -616,13 +657,14 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 }
 
 func (data *Data) updatePtStatus(db string, ptId uint32, nodeId uint64, status PtStatus) {
+	ptNum := data.GetClusterPtNum()
 	dbPtView, ok := data.PtView[db]
 	if !ok {
-		dbPtView = make([]PtInfo, data.ClusterPtNum)
+		dbPtView = make([]PtInfo, ptNum)
 	}
 
 	if ptId >= uint32(len(dbPtView)) {
-		newPtView := make([]PtInfo, data.ClusterPtNum)
+		newPtView := make([]PtInfo, ptNum)
 		copy(newPtView, dbPtView)
 		dbPtView = newPtView
 	}
@@ -846,7 +888,8 @@ func assignPtForWAF(data *Data, name string) error {
 	if len(data.DataNodes) == 0 {
 		return errno.NewError(errno.DataNoAlive)
 	}
-	for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
+	ptNum := data.GetClusterPtNum()
+	for ptId := 0; ptId < int(ptNum); ptId++ {
 		pos := ptId % len(data.DataNodes)
 		data.updatePtStatus(name, uint32(ptId), data.DataNodes[pos].ID, Offline)
 	}
@@ -858,7 +901,7 @@ func assignPtForWAF(data *Data, name string) error {
 func assignPtForSS(data *Data, name string) error {
 	var aliveDataNodeIds []uint64
 	for i := range data.DataNodes {
-		if data.DataNodes[i].Status == serf.StatusAlive {
+		if data.DataNodes[i].SegregateStatus == Normal && data.DataNodes[i].Status == serf.StatusAlive {
 			aliveDataNodeIds = append(aliveDataNodeIds, data.DataNodes[i].ID)
 		}
 	}
@@ -866,7 +909,8 @@ func assignPtForSS(data *Data, name string) error {
 	if len(aliveDataNodeIds) == 0 {
 		return errno.NewError(errno.DataNoAlive)
 	}
-	for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
+	ptNum := data.GetClusterPtNum()
+	for ptId := 0; ptId < int(ptNum); ptId++ {
 		pos := ptId % len(aliveDataNodeIds)
 		data.updatePtStatus(name, uint32(ptId), aliveDataNodeIds[pos], Offline)
 	}
@@ -902,14 +946,15 @@ func (data *Data) CloneDBPtView() map[string]DBPtInfos {
 	return dbPts
 }
 
-func (data *Data) initDataNodePtView() {
-	if data.ClusterPtNum < data.PtNumPerNode*uint32(len(data.DataNodes)) {
-		data.ClusterPtNum = data.PtNumPerNode * uint32(len(data.DataNodes))
+func (data *Data) initDataNodePtView(ptNum uint32) {
+	newPtNum := data.PtNumPerNode * uint32(len(data.DataNodes))
+	if ptNum < newPtNum {
+		data.SetClusterPtNum(newPtNum)
 	}
 }
 
 func (data *Data) checkStoreReady() error {
-	if data.ClusterPtNum == 0 {
+	if data.GetClusterPtNum() == 0 {
 		return ErrStorageNodeNotReady
 	}
 	return nil
@@ -1018,6 +1063,8 @@ func (data *Data) MarkDatabaseDelete(name string) error {
 // if the database cannot be found.
 func (data *Data) DropDatabase(name string) {
 	delete(data.Databases, name)
+	delete(data.ReplicaGroups, name)
+
 	for i := range data.Users {
 		delete(data.Users[i].Privileges, name)
 	}
@@ -1053,6 +1100,9 @@ func (data *Data) CheckCanCreateRetentionPolicy(dbi *DatabaseInfo, rpi *Retentio
 
 	existRp := dbi.RetentionPolicy(rpi.Name)
 	if existRp == nil {
+		if dbi.ReplicaN != 0 && rpi.ReplicaN != dbi.ReplicaN {
+			return ErrReplicaNConflict
+		}
 		return nil
 	}
 
@@ -1280,7 +1330,7 @@ func (data *Data) ShowRetentionPolicies(database string) (models.Rows, error) {
 func (data *Data) GetDbPtOwners(database string, ptIds []uint32) []uint64 {
 	ownerIDs := make([]uint64, len(ptIds))
 	if data.PtView[database] == nil {
-		DataLogger.Error("db pt not found in ptView", zap.String("db", database), zap.Uint32s("pt", ptIds))
+		logger.GetLogger().Error("db pt not found in ptView", zap.String("db", database), zap.Uint32s("pt", ptIds))
 		return nil
 	}
 
@@ -1458,12 +1508,12 @@ func (data *Data) ShardGroupByTimestampAndEngineType(database, policy string, ti
 	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
 }
 
-func (data *Data) createShards(sgi *ShardGroupInfo, igi *IndexGroupInfo,
+func (data *Data) createShards(database string, sgi *ShardGroupInfo, igi *IndexGroupInfo,
 	rpi *RetentionPolicyInfo, msti *MeasurementInfo, tier uint64) {
 	// Determine shard count by node count divided by replication factor.
 	// This will ensure nodes will get distributed across nodes evenly and
 	// replicated the correct number of times.
-	shardN := int(data.ClusterPtNum)
+	shardN := int(data.GetEffectivePtNum(database))
 
 	var lastSgi *ShardGroupInfo
 	if len(msti.ShardKeys) > 0 && msti.ShardKeys[0].Type == RANGE {
@@ -1481,7 +1531,7 @@ func (data *Data) createShards(sgi *ShardGroupInfo, igi *IndexGroupInfo,
 		data.MaxShardID++
 		sgi.Shards[i] = ShardInfo{ID: data.MaxShardID, Tier: tier}
 
-		for ptId := 0; ptId < int(data.ClusterPtNum); ptId++ {
+		for ptId := 0; ptId < shardN; ptId++ {
 			if ptId%shardN == i {
 				sgi.Shards[i].Owners = append(sgi.Shards[i].Owners, uint32(ptId))
 				sgi.Shards[i].IndexID = igi.Indexes[ptId].ID
@@ -1546,13 +1596,14 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	}
 
 	//check index group contain this shard group
-	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType)
+	ptNum := data.GetEffectivePtNum(database)
+	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType, ptNum)
 
 	// Create the shard group.
 	sgi := data.newShardGroup(rpi, timestamp, engineType)
 
 	// Create shards on the group.
-	data.createShards(sgi, igi, rpi, msti, tier)
+	data.createShards(database, sgi, igi, rpi, msti, tier)
 
 	// Retention policy has a new shard group, so update the policy. Shard
 	// Groups must be stored in sorted order, as other parts of the system
@@ -1563,7 +1614,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	return nil
 }
 
-func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType) *IndexGroupInfo {
+func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, ptNum uint32) *IndexGroupInfo {
 	data.MaxIndexGroupID++
 	igi := IndexGroupInfo{}
 	igi.ID = data.MaxIndexGroupID
@@ -1573,7 +1624,7 @@ func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time
 		igi.EndTime = time.Unix(0, models.MaxNanoTime+1)
 	}
 	igi.EngineType = engineType
-	igi.Indexes = make([]IndexInfo, data.ClusterPtNum)
+	igi.Indexes = make([]IndexInfo, ptNum)
 	for i := range igi.Indexes {
 		data.MaxIndexID++
 		igi.Indexes[i] = IndexInfo{ID: data.MaxIndexID, Owners: []uint32{uint32(i)}}
@@ -1583,9 +1634,9 @@ func (data *Data) CreateIndexGroup(rpi *RetentionPolicyInfo, timestamp time.Time
 	return &igi
 }
 
-func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType) *IndexGroupInfo {
+func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, ptNum uint32) *IndexGroupInfo {
 	if len(rpi.IndexGroups) == 0 {
-		return data.CreateIndexGroup(rpi, timestamp, engineType)
+		return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum)
 	}
 
 	var igIdx int
@@ -1594,10 +1645,10 @@ func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp t
 			break
 		}
 	}
-	if igIdx < len(rpi.IndexGroups) && len(rpi.IndexGroups[igIdx].Indexes) >= int(data.ClusterPtNum) {
+	if igIdx < len(rpi.IndexGroups) && len(rpi.IndexGroups[igIdx].Indexes) >= int(ptNum) {
 		return &rpi.IndexGroups[igIdx]
 	}
-	return data.CreateIndexGroup(rpi, timestamp, engineType)
+	return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum)
 }
 
 func (data *Data) expendDBPtView(database string, ptNum uint32) {
@@ -1607,26 +1658,36 @@ func (data *Data) expendDBPtView(database string, ptNum uint32) {
 		return
 	} else if ptNum < oldDBPtNums {
 		assert(false, fmt.Sprintf("expend dbPT db:%s from %d to %d", database, oldDBPtNums, ptNum))
-	} else {
-		DataLogger.Info("expend db ptview", zap.String("db", database), zap.Uint32("from", oldDBPtNums), zap.Uint32("to", ptNum))
 	}
 
+	replicaN := uint32(data.DBReplicaN(database))
+	dataNodeNum := uint32(len(data.DataNodes))
+	DataLogger.Info("expend db ptview", zap.String("db", database), zap.Uint32("from", oldDBPtNums), zap.Uint32("to", ptNum),
+		zap.Uint32("replicaN", replicaN), zap.Uint32("total node num", dataNodeNum))
+
 	for ptId := oldDBPtNums; ptId < ptNum; ptId++ {
-		pos := ptId % uint32(len(data.DataNodes))
+		pos := ptId % dataNodeNum
 		// set pt status offline, and set it online when assigned successfully
 		data.updatePtStatus(database, ptId, data.DataNodes[pos].ID, Offline)
+	}
+
+	if replicaN > 1 && (dataNodeNum%replicaN == 0) {
+		oldRepGroupNum := uint32(len(data.DBRepGroups(database)))
+		oldPtNum := uint32(len(data.DBPtView(database))) - replicaN*data.PtNumPerNode
+		data.createReplicationInner(database, replicaN, oldRepGroupNum, oldRepGroupNum+data.PtNumPerNode, oldPtNum)
 	}
 }
 
 func (data *Data) ExpandGroups() {
-	data.WalkDatabases(func(db *DatabaseInfo) {
-		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+	data.WalkDatabasesOrderly(func(db *DatabaseInfo) {
+		ptNum := data.GetEffectivePtNum(db.Name)
+		db.WalkRetentionPolicyOrderly(func(rp *RetentionPolicyInfo) {
 			if rp.shardingType() == RANGE {
 				return
 			}
 
 			rp.walkIndexGroups(func(ig *IndexGroupInfo) {
-				for i := len(ig.Indexes); i < int(data.ClusterPtNum); i++ {
+				for i := len(ig.Indexes); i < int(ptNum); i++ {
 					data.MaxIndexID++
 					ig.Indexes = append(ig.Indexes, IndexInfo{
 						ID:     data.MaxIndexID,
@@ -1636,8 +1697,8 @@ func (data *Data) ExpandGroups() {
 			})
 
 			rp.WalkShardGroups(func(sg *ShardGroupInfo) {
-				for i := len(sg.Shards); i < int(data.ClusterPtNum); i++ {
-					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime, sg.EngineType)
+				for i := len(sg.Shards); i < int(ptNum); i++ {
+					igi := data.createIndexGroupIfNeeded(rp, sg.StartTime, sg.EngineType, ptNum)
 					data.MaxShardID++
 					sg.Shards = append(sg.Shards, ShardInfo{ID: data.MaxShardID, Owners: []uint32{uint32(i)}, IndexID: igi.Indexes[i].ID, Tier: sg.Shards[i-1].Tier})
 				}
@@ -2460,7 +2521,7 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 }
 
 func (data *Data) GetFailedPtInfos(id uint64, status PtStatus) []*DbPtInfo {
-	resPtInfos := make([]*DbPtInfo, 0, data.ClusterPtNum)
+	resPtInfos := make([]*DbPtInfo, 0, data.GetClusterPtNum())
 	for db := range data.PtView {
 		// do not get pt which db mark deleted
 		if data.Databases[db] == nil || data.Database(db).MarkDeleted {
@@ -2789,27 +2850,25 @@ func (data *Data) RegisterQueryIDOffset(host SQLHost) error {
 	return nil
 }
 
-func (data *Data) createReplicationImp(db string, replicaN uint32) error {
-	ptView := data.DBPtView(db)
-	ptNum := uint32(len(ptView))
-	nodeNum := ptNum / data.PtNumPerNode
-	if nodeNum%replicaN != 0 {
-		return errno.NewError(errno.ReplicaNodeNumIncorrect, nodeNum, replicaN)
-	}
-
-	repGroupN := ptNum / replicaN
-	repGroups := make([]ReplicaGroup, repGroupN, repGroupN)
+func (data *Data) expandRepGroups(db string, repNum uint32) {
 	if data.ReplicaGroups == nil {
 		data.ReplicaGroups = make(map[string][]ReplicaGroup)
 	}
-	data.ReplicaGroups[db] = repGroups
+	data.ReplicaGroups[db] = append(data.ReplicaGroups[db], make([]ReplicaGroup, repNum)...)
+}
 
+func (data *Data) createReplicationInner(db string, replicaN, repStart, repEnd, ptStart uint32) {
 	var masterPtId, slavePtId uint32
-	for repGroupId, ptIdx := uint32(0), uint32(0); repGroupId < repGroupN; {
-		for k := uint32(0); k < data.PtNumPerNode; k++ {
+
+	data.expandRepGroups(db, repEnd-repStart)
+	ptNumPerNode := data.PtNumPerNode
+	repGroups := data.DBRepGroups(db)
+	ptView := data.DBPtView(db)
+	for repGroupId, ptIdx := repStart, ptStart; repGroupId < repEnd; {
+		for k := uint32(0); k < ptNumPerNode; k++ {
 			peers := make([]Peer, replicaN-1, replicaN-1)
 			for i := uint32(0); i < replicaN-1; i++ {
-				slavePtId = ptIdx + data.PtNumPerNode*(i+1)
+				slavePtId = ptIdx + ptNumPerNode*(i+1)
 				peers[i].ID = slavePtId
 				peers[i].PtRole = Slave
 
@@ -2824,9 +2883,23 @@ func (data *Data) createReplicationImp(db string, replicaN uint32) error {
 			ptView[masterPtId].RGID = repGroupId
 			repGroupId++
 		}
-		ptIdx += data.PtNumPerNode * replicaN
+		ptIdx += ptNumPerNode * replicaN
+	}
+	DataLogger.Info("create replication", zap.String("db", db),
+		zap.Any("new replication group", repGroups[repStart:]), zap.Any("new pt info", ptView[ptStart:]),
+		zap.Uint32("replication start", repStart), zap.Uint32("replication end", repEnd),
+		zap.Uint32("pt start", ptStart))
+}
+
+func (data *Data) createReplicationImp(db string, replicaN uint32) error {
+	ptView := data.DBPtView(db)
+	ptNum := uint32(len(ptView))
+	nodeNum := ptNum / data.PtNumPerNode
+	if nodeNum%replicaN != 0 {
+		return errno.NewError(errno.ReplicaNodeNumIncorrect, nodeNum, replicaN)
 	}
 
+	data.createReplicationInner(db, replicaN, 0, ptNum/replicaN, 0)
 	return nil
 }
 
@@ -2870,6 +2943,131 @@ func (data *Data) GetPtInfo(name string, ptID uint32) *PtInfo {
 			return &view[i]
 		}
 	}
+	return nil
+}
+
+func (data *Data) GetSegregateStatusByNodeId(nodeId uint64) uint64 {
+	for _, dn := range data.DataNodes {
+		if dn.ID == nodeId {
+			return dn.SegregateStatus
+		}
+	}
+	return Normal
+}
+
+func (data *Data) GetPtInfosByNodeId(id uint64) []*DbPtInfo {
+	resPtInfos := make([]*DbPtInfo, 0, data.GetClusterPtNum())
+	for db := range data.PtView {
+		dbInfo := data.GetDBBriefInfo(db)
+		for i := range data.PtView[db] {
+			if data.PtView[db][i].Owner.NodeID == id {
+				shards := data.GetShardDurationsByDbPt(db, data.PtView[db][i].PtId)
+				pt := data.PtView[db][i]
+				resPtInfos = append(resPtInfos, &DbPtInfo{Db: db, Pti: &pt, Shards: shards, DBBriefInfo: dbInfo})
+			}
+		}
+	}
+	return resPtInfos
+}
+
+func (data *Data) GetNodeIdsByNodeLst(nodeLst []string) ([]uint64, error) {
+	nodeids := make([]uint64, 0, len(nodeLst))
+	for _, host := range nodeLst {
+		findNodeId := false
+		for _, node := range data.DataNodes {
+			nodeAddr := strings.Split(node.TCPHost, ":")[0]
+			if host == nodeAddr {
+				nodeids = append(nodeids, node.ID)
+				findNodeId = true
+				break
+			}
+		}
+		if !findNodeId {
+			return nil, fmt.Errorf("some limit node ip is not correct: %s", host)
+		}
+	}
+	return nodeids, nil
+}
+
+func (data *Data) GetNodeSegregateStatus(nodeIds []uint64) ([]uint64, error) {
+	nodesSegregateStatus := make([]uint64, 0)
+	for _, nodeId := range nodeIds {
+		findNodeId := false
+		for _, dn := range data.DataNodes {
+			if dn.ID == nodeId {
+				nodesSegregateStatus = append(nodesSegregateStatus, dn.SegregateStatus)
+				findNodeId = true
+				break
+			}
+		}
+		if !findNodeId {
+			return nil, fmt.Errorf("some node id is not find to get it's SegregateStatus: %d", nodeId)
+		}
+	}
+	return nodesSegregateStatus, nil
+}
+
+func (data *Data) GetAllNodeSegregateStatus() []uint64 {
+	nodesSegregateStatus := make([]uint64, 0, len(data.DataNodes))
+	for _, dn := range data.DataNodes {
+		nodesSegregateStatus = append(nodesSegregateStatus, dn.SegregateStatus)
+	}
+	return nodesSegregateStatus
+}
+
+func (data *Data) SetSegregateNodeStatus(status []uint64, nodeIds []uint64) {
+	for i, id := range nodeIds {
+		for idx, node := range data.DataNodes {
+			if id == node.ID {
+				data.DataNodes[idx].SegregateStatus = status[i]
+				DataLogger.Info("set segregate dn status", zap.Uint64("node id", node.ID), zap.Uint64("flag", status[i]))
+				break
+			}
+		}
+	}
+}
+
+func (data *Data) GetNodeIDs() []uint64 {
+	ids := make([]uint64, 0, len(data.DataNodes))
+	for i := range data.DataNodes {
+		ids = append(ids, data.DataNodes[i].ID)
+	}
+	return ids
+}
+
+func (data *Data) RemoveNode(nodeIds []uint64) {
+	newDns := make([]DataNode, 0, len(data.DataNodes))
+	for _, dn := range data.DataNodes {
+		findNodeId := false
+		for _, nodeId := range nodeIds {
+			if dn.ID == nodeId {
+				findNodeId = true
+				break
+			}
+		}
+		if !findNodeId {
+			newDns = append(newDns, dn)
+		}
+	}
+	data.DataNodes = newDns
+}
+
+func (data *Data) UpdateReplication(database string, rgId, masterId uint32, peers []*proto2.Peer, status uint32) error {
+	rgs, ok := data.ReplicaGroups[database]
+	if !ok {
+		return errno.NewError(errno.DatabaseNotFound, database)
+	}
+	rg := &rgs[rgId]
+	rg.MasterPtID = masterId
+	if len(peers) > 0 {
+		rg.Peers = make([]Peer, len(peers))
+		for i := range peers {
+			rg.Peers[i].ID = peers[i].GetID()
+			rg.Peers[i].PtRole = Role(peers[i].GetRole())
+		}
+	}
+	rg.Status = RGStatus(status)
+
 	return nil
 }
 

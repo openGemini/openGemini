@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
@@ -414,28 +415,111 @@ func preparePreAggBaseRec() *record.Record {
 	return rec
 }
 
-func BenchmarkFilterByFieldFuncs(b *testing.B) {
+func BenchmarkFilterByFieldFuncsForMemReuse(b *testing.B) {
 	_ = "time >= 1695461186000000000 and time <= 1695461486000000000 and direction = 'out' and campus = '广州1' and net_export_name = '华南-广州_PNI_广州移动'"
 	rec := preparePreAggBaseRec()
 	filterRec := record.NewRecord(rec.Schema, false)
-	filterOption := &BaseFilterOptions{
-		CondFunctions: []binaryfilterfunc.IdxFunctions{{
-			{Idx: 1, Function: binaryfilterfunc.GetStringEQConditionBitMap, Compare: "out"},
-			{Idx: 2, Function: binaryfilterfunc.GetStringEQConditionBitMap, Compare: "广州1"},
-			{Idx: 3, Function: binaryfilterfunc.GetStringEQConditionBitMap, Compare: "华南-广州_PNI_广州移动"},
-		}},
-		TimeCondFunction: binaryfilterfunc.IdxFunctions{
-			{Idx: 5, Function: binaryfilterfunc.GetIntegerGTEConditionBitMap, Compare: int64(1695461186000000000)},
-			{Idx: 5, Function: binaryfilterfunc.GetIntegerLTEConditionBitMap, Compare: int64(1695461486000000000)},
-		},
+	timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: 1695461186000000000, Max: 1695461486000000000}, rec.Schema, len(rec.Schema)-1)
+	condition := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.AND,
+			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "direction"}, RHS: &influxql.StringLiteral{Val: "out"}},
+			LHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "campus"}, RHS: &influxql.StringLiteral{Val: "广州1"}}},
+		RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "net_export_name"}, RHS: &influxql.StringLiteral{Val: "华南-广州_PNI_广州移动"}},
 	}
-
-	filterBitMap := bitmap.NewFilterBitmap(len(filterOption.CondFunctions) + 1)
+	condFunctions, _ := binaryfilterfunc.NewCondition(timeCond, condition, rec.Schema)
+	filterOption := &BaseFilterOptions{
+		CondFunctions: condFunctions,
+		RedIdxMap:     map[int]struct{}{},
+	}
+	filterBitMap := bitmap.NewFilterBitmap(filterOption.CondFunctions.NumFilter())
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		FilterByFieldFuncs(rec, filterRec, filterOption, filterBitMap)
 		filterBitMap.Reset()
+		filterRec.Reuse()
+	}
+}
+
+func BenchmarkFilterByFieldFuncsForProjection(b *testing.B) {
+	_ = "time >= 1695461186000000000 and time <= 1695461486000000000 and direction = 'out' and campus = '广州1' and net_export_name = '华南-广州_PNI_广州移动'"
+	rec := preparePreAggBaseRec()
+	timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: 1695461186000000000, Max: 1695461486000000000}, rec.Schema, len(rec.Schema)-1)
+	condition := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.AND,
+			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "direction"}, RHS: &influxql.StringLiteral{Val: "out"}},
+			LHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "campus"}, RHS: &influxql.StringLiteral{Val: "广州1"}}},
+		RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "net_export_name"}, RHS: &influxql.StringLiteral{Val: "华南-广州_PNI_广州移动"}},
+	}
+	condFunctions, _ := binaryfilterfunc.NewCondition(timeCond, condition, rec.Schema)
+	filterOption := &BaseFilterOptions{
+		CondFunctions: condFunctions,
+		RedIdxMap:     map[int]struct{}{1: {}, 2: {}, 3: {}},
+	}
+	filterRec := record.NewRecord([]record.Field{
+		{Name: "bps", Type: influx.Field_Type_Int},
+		{Name: "isp_as", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}, false)
+	filterBitMap := bitmap.NewFilterBitmap(filterOption.CondFunctions.NumFilter())
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FilterByFieldFuncs(rec, filterRec, filterOption, filterBitMap)
+		filterBitMap.Reset()
+		filterRec.Reuse()
+	}
+}
+
+func BenchmarkGenRecByReserveIds(b *testing.B) {
+	_ = "select sum(bps) as bps from pre_agg_base " +
+		"where time >= 1695461186000000000 and time <= 1695461486000000000 and direction = 'out' and campus = '广州1' and net_export_name = '华南-广州_PNI_广州移动'" +
+		"group by isp_as " +
+		"order by bps desc " +
+		"limit 100"
+	rec := preparePreAggBaseRec()
+	filterRec := record.NewRecord([]record.Field{
+		{Name: "bps", Type: influx.Field_Type_Int},
+		{Name: "direction", Type: influx.Field_Type_String},
+		{Name: "campus", Type: influx.Field_Type_String},
+		{Name: "net_export_name", Type: influx.Field_Type_String},
+		{Name: "isp_as", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}, false)
+	RedIdxMap := map[int]struct{}{1: {}, 2: {}, 3: {}}
+	var reserveId []int
+	for i := 0; i < 8092; i++ {
+		if i%2 == 0 {
+			reserveId = append(reserveId, i)
+		}
+	}
+	b.SetParallelism(1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		genRecByReserveIds(rec, filterRec, reserveId, RedIdxMap)
+		filterRec.Reuse()
+	}
+}
+
+func BenchmarkGenRecByRowNumbers(b *testing.B) {
+	rec := preparePreAggBaseRec()
+	filterRec := record.NewRecord(rec.Schema, false)
+	var reserveId []int
+	for i := 0; i < 8092; i++ {
+		if i%2 == 0 {
+			reserveId = append(reserveId, i)
+		}
+	}
+	b.SetParallelism(1)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		genRecByRowNumbers(rec, filterRec, reserveId)
 		filterRec.Reuse()
 	}
 }

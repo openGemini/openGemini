@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -79,6 +80,7 @@ type StoreEngine interface {
 	Offload(*meta.DbPtInfo) error
 	Assign(uint64, *meta.DbPtInfo) error
 	GetConnId() uint64
+	CheckPtsRemovedDone() error
 }
 
 type SlaveStorage interface {
@@ -208,6 +210,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
 	opt.MaxSeriesPerDatabase = conf.Data.MaxSeriesPerDatabase
 	opt.SnapshotTblNum = conf.Data.SnapshotTblNum
+	opt.FragmentsNumPerFlush = conf.Data.FragmentsNumPerFlush
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)
@@ -253,7 +256,6 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 
 	s.MetaClient = cli
 	s.log = logger.NewLogger(errno.ModuleStorageEngine)
-	s.engine.SetReadOnly(conf.Data.Readonly)
 	// Append services.
 	s.appendRetentionPolicyService(conf.Retention)
 	s.appendDownSamplePolicyService(conf.DownSample)
@@ -273,7 +275,18 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	return s, nil
 }
 
-func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+type write func(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
+
+var writeHandler []write
+
+func init() {
+	writeHandler = make([]write, config.PolicyEnd)
+	writeHandler[config.WriteAvailableFirst] = writeRows
+	writeHandler[config.SharedStorage] = writeRows
+	writeHandler[config.Replication] = writeRowsForRep
+}
+
+func writeRows(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 	return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
@@ -281,21 +294,58 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 	})
 }
 
-func (s *Storage) WriteRowsToSlave(rows []influx.Row, db, rp string, pt uint32, shardID uint64) error {
-	info := s.MetaClient.GetReplicaInfo(db, pt)
-	if info == nil || info.ReplicaRole != meta.Master {
-		return nil
+func handleError(once *sync.Once, err error, errs error) {
+	if err != nil {
+		once.Do(func() {
+			errs = err
+		})
+	}
+}
+
+func writeRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+	db = stringinterner.InternSafe(db)
+	rp = stringinterner.InternSafe(rp)
+
+	// obtain the number of peers
+	info := s.MetaClient.GetReplicaInfo(db, ptId)
+	if info == nil || info.ReplicaRole != meta.Master || len(info.Peers) == 0 {
+		// write master only
+		return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
+			return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+		})
 	}
 
-	ctx := &netstorage.WriteContext{Rows: rows, Shard: &meta.ShardInfo{}}
+	var errs error
+	once := sync.Once{}
+	wg := sync.WaitGroup{}
+
+	wg.Add(len(info.Peers) + 1)
+	// write master shard
+	go func() {
+		err := s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
+			return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+		})
+		handleError(&once, err, errs)
+		wg.Done()
+	}()
+
+	// write slave shard
 	for _, peer := range info.Peers {
-		ctx.Shard.ID = peer.GetSlaveShardID(shardID)
-		err := s.slaveStorage.WriteRows(ctx, peer.NodeId, peer.PtId, db, rp, time.Second)
-		if err != nil {
-			return err
-		}
+		writeCtx := &netstorage.WriteContext{Rows: rows, Shard: &meta.ShardInfo{}}
+		writeCtx.Shard.ID = peer.GetSlaveShardID(shardID)
+		go func(ctx *netstorage.WriteContext, nodeId uint64, ptId uint32) {
+			err := s.slaveStorage.WriteRows(ctx, nodeId, ptId, db, rp, time.Second)
+			handleError(&once, err, errs)
+			wg.Done()
+		}(writeCtx, peer.NodeId, peer.PtId)
 	}
-	return nil
+	wg.Wait()
+
+	return errs
+}
+
+func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+	return writeHandler[config.GetHaPolicy()](s, db, rp, ptId, shardID, rows, binaryRows)
 }
 
 func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
@@ -487,6 +537,22 @@ func (s *Storage) GetConnId() uint64 {
 
 func (s *Storage) SetEngine(engine netstorage.Engine) {
 	s.engine = engine
+}
+
+// The check is performed every 500 ms. The check times out after 5s.
+func (s *Storage) CheckPtsRemovedDone() error {
+	timer := time.NewTimer(5 * time.Second)
+	for {
+		select {
+		case <-timer.C:
+			return fmt.Errorf("segregate timeout in ts-store")
+		default:
+			if s.engine.CheckPtsRemovedDone() {
+				return nil
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 }
 
 func stringSlice2BytesSlice(s []string) [][]byte {

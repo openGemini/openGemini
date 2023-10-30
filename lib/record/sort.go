@@ -17,6 +17,8 @@ limitations under the License.
 package record
 
 import (
+	"time"
+
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
@@ -71,7 +73,7 @@ func (d *SortData) InitRecord(schemas Schemas) {
 	}
 }
 
-func (d *SortData) Init(times []int64, sortKey []PrimaryKey, record *Record) {
+func (d *SortData) Init(times []int64, sortKey []PrimaryKey, record *Record, tcDuration time.Duration) {
 	if len(record.ColVals) == 0 {
 		return
 	}
@@ -85,6 +87,21 @@ func (d *SortData) Init(times []int64, sortKey []PrimaryKey, record *Record) {
 
 	for i := 0; i < size; i++ {
 		d.RowIds[i] = int32(i)
+	}
+	if tcDuration > 0 {
+		// if time cluster duration index is SET, need to sort record with "clustered" time co
+		if cap(d.Times) < size {
+			d.Times = make([]int64, size)
+		}
+		d.Times = d.Times[:size]
+		for i, t := range times {
+			// truncate times and get "clustered" timestamp
+			d.Times[i] = int64(time.Duration(t).Truncate(tcDuration))
+		}
+		is := IntegerSlice{}
+		is.V = append(is.V, d.Times...)
+		// append "clustered" to the first column of d.Data
+		d.Data = append(d.Data, &is)
 	}
 	d.idx = 0
 	d.genSortData(times, sortKey, record, d.SortRec, 0)

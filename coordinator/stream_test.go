@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/coordinator"
+	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -53,13 +54,21 @@ func TestStreamGenerateGroupKey(t *testing.T) {
 	ctx.SetBP(coordinator.NewBuilderPool())
 	keys := []string{"tk1", "fk1"}
 	value, _ := s.GenerateGroupKey(ctx, keys, &rows[0])
-	assert2.Equal(t, value, "value1 1")
+	assert2.Equal(t, value, "value1\x001")
 
 	rows[0].IndexOptions = make([]influx.IndexOption, 1)
 	keys = []string{"tk3"}
 	value, _ = s.GenerateGroupKey(ctx, keys, &rows[0])
 	assert2.Equal(t, value, "value3")
 
+	rows[0].IndexOptions = make([]influx.IndexOption, 1)
+	rows[0].IndexOptions[0].Oid = uint32(tsi.Field)
+	rows[0].IndexOptions[0].IndexList = []uint16{5}
+	keys = []string{"fk3", "tk3"}
+	value, _ = s.GenerateGroupKey(ctx, keys, &rows[0])
+	assert2.Equal(t, value, "fv3\x00value3")
+
+	rows[0].Fields = rows[0].Fields[:2]
 	rows[0].IndexOptions = make([]influx.IndexOption, 1)
 	keys = []string{"tk1", "fk3"}
 	_, err := s.GenerateGroupKey(ctx, keys, &rows[0])
@@ -543,9 +552,8 @@ func generateRows(num int, rows []influx.Row) []influx.Row {
 		pt.Timestamp = time.Now().UnixNano()
 		pt.UnmarshalIndexKeys(nil)
 		pt.ShardKey = pt.IndexKey
-		pt.Fields = pt.Fields[:cap(pt.Fields)]
-		if cap(pt.Fields) < 1 {
-			pt.Fields = append(pt.Fields, influx.Field{}, influx.Field{})
+		for i := 0; i < 3; i++ {
+			pt.Fields = append(pt.Fields, influx.Field{})
 		}
 		pt.Fields[0].NumValue = 1
 		pt.Fields[0].StrValue = ""
@@ -555,6 +563,10 @@ func generateRows(num int, rows []influx.Row) []influx.Row {
 		pt.Fields[1].StrValue = ""
 		pt.Fields[1].Type = influx.Field_Type_Int
 		pt.Fields[1].Key = "fk2"
+		pt.Fields[2].NumValue = 1
+		pt.Fields[2].StrValue = "fv3"
+		pt.Fields[2].Type = influx.Field_Type_String
+		pt.Fields[2].Key = "fk3"
 	}
 	return rows[:num]
 }

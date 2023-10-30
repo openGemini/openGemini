@@ -403,3 +403,13 @@ func (h *GetContinuousQueryLease) Process() (transport.Codec, error) {
 	rsp.CQNames = cqNames
 	return rsp, nil
 }
+
+func (h *VerifyDataNodeStatus) Process() (transport.Codec, error) {
+	rsp := &message.VerifyDataNodeStatusResponse{}
+	err := h.store.verifyDataNodeStatus(h.req.NodeID)
+	if err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	return rsp, nil
+}

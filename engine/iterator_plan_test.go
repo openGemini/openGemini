@@ -29,6 +29,7 @@ import (
 	"time"
 
 	ast "github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -42,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -81,7 +83,6 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
 	time.Sleep(time.Second * 1)
 
@@ -1904,7 +1905,6 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
 	time.Sleep(time.Second * 2)
 
@@ -3415,17 +3415,16 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-
+	time.Sleep(time.Second * 1)
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2020-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
 	if err := sh.WriteRows(ptsOut, nil); err != nil {
 		t.Fatal(err)
 	}
 	if isFlush {
-		time.Sleep(time.Second * 1)
 		sh.ForceFlush()
+		time.Sleep(time.Second * 1)
 	} else {
 		idx, ok := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
 		if !ok {
@@ -4976,8 +4975,8 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
 
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2021-02-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
@@ -6445,7 +6444,6 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
 	time.Sleep(time.Second * 1)
 
@@ -8047,7 +8045,6 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
 	time.Sleep(time.Second * 2)
 
@@ -8260,7 +8257,6 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
 	time.Sleep(time.Second * 2)
 
@@ -8602,7 +8598,6 @@ func TestReadLastFromPreAgg(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
 	time.Sleep(time.Second * 1)
 
@@ -8731,5 +8726,159 @@ func TestReadLastFromPreAgg(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+func Test_CreateLogicalPlan(t *testing.T) {
+	testDir := t.TempDir()
+	executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
+	msNames := []string{"cpu"}
+	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
+	//pts, minT, maxT := GenDataRecord_FullFields(msNames, 5, 10000, time.Millisecond*10, startTime)
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+	fields := map[string]influxql.DataType{
+		"field2_int":    influxql.Integer,
+		"field3_bool":   influxql.Boolean,
+		"field4_float":  influxql.Float,
+		"field1_string": influxql.String,
+	}
+
+	// **** start write data to the shard.
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
+	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
+	if err := sh.WriteRows(pts2, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+
+	for _, tt := range []struct {
+		name              string
+		q                 string
+		tr                util.TimeRange
+		fields            map[string]influxql.DataType
+		skip              bool
+		outputRowDataType *hybridqp.RowDataTypeImpl
+		readerOps         []hybridqp.ExprOptions
+		aggOps            []hybridqp.ExprOptions
+		expect            func(chunks []*executor.SeriesRecord) bool
+	}{
+		/* min */
+		// select min[int]
+		{
+			name:   "read last[int] with aux",
+			q:      fmt.Sprintf(`SELECT last(field2_int),field4_float from cpu `),
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			fields: fields,
+			outputRowDataType: hybridqp.NewRowDataTypeImpl(
+				influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				influxql.VarRef{Val: "val3", Type: influxql.Float},
+			),
+			readerOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "field2_int", Type: influxql.Integer}}},
+					Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				},
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "field3_float", Type: influxql.Float}}},
+					Ref:  influxql.VarRef{Val: "val3", Type: influxql.Float},
+				},
+			},
+			aggOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "val2", Type: influxql.Integer}}},
+					Ref:  influxql.VarRef{Val: "val2", Type: influxql.Integer},
+				},
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "val3", Type: influxql.Float}}},
+					Ref:  influxql.VarRef{Val: "val3", Type: influxql.Float},
+				},
+			},
+			expect: func(rec []*executor.SeriesRecord) bool {
+				if len(rec) != 1 {
+					t.Errorf("The result should be 1 chunk")
+				}
+				success := true
+				return success
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.skip {
+				t.Skipf("SKIP:: %s", tt.name)
+			}
+			// parse stmt and opt
+			stmt := MustParseSelectStatement(tt.q)
+			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
+			stmt.OmitTime = true
+			sopt := query.SelectOptions{ChunkSize: 1024, MaxQueryParallel: 0}
+			RemoveTimeCondition(stmt)
+			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+			source1 := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp1", Name: msNames[0]}}
+			source = append(source, source1[0])
+
+			opt.Name = msNames[0]
+			opt.Sources = source
+			opt.StartTime = tt.tr.Min
+			opt.EndTime = tt.tr.Max
+			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+			ctx := context.Background()
+			cursorsN := 0
+			srcCursors := make([][]comm.KeyCursor, 0, len(source))
+			srcCursors1 := make([][]comm.KeyCursor, 0, len(source))
+			for _, source := range opt.Sources {
+				mm, ok := source.(*influxql.Measurement)
+				if !ok {
+					panic(fmt.Sprintf("%v not a measurement", source.String()))
+				}
+				querySchema.Options().(*query.ProcessorOptions).Name = mm.Name
+
+				cursors, err := sh.CreateCursor(ctx, querySchema) // source
+				require.Nil(t, err)
+
+				if len(cursors) > 0 {
+					cursorsN += len(cursors)
+					srcCursors = append(srcCursors, cursors)
+				}
+			}
+			srcCursors1 = append(srcCursors1, srcCursors...)
+			plan1, err1 := buildMultiSourcePlan(srcCursors, cursorsN)
+			require.NotNil(t, plan1)
+			require.Nil(t, err1)
+			plan2, err2 := buildOneSourcePlan(srcCursors[0])
+			require.NotNil(t, plan2)
+			require.Nil(t, err2)
+			plan3, err3 := sh.CreateLogicalPlan(ctx, source, querySchema)
+			plan := plan3.(*executor.LogicalDummyShard)
+			for _, r := range plan.Readers() {
+				for _, rr := range r {
+					cur := rr.(comm.KeyCursor)
+					cur.Close()
+				}
+			}
+			require.Nil(t, err3)
+			sh.immTables.CompactionDisable()
+			for _, srcCur := range srcCursors1 {
+				for _, cur := range srcCur {
+					cur.Close()
+				}
+			}
+			err := closeShard(sh)
+			require.Nil(t, err)
+			_, err4 := sh.CreateLogicalPlan(ctx, opt.Sources, querySchema)
+			require.Contains(t, err4.Error(), "shard closed 1")
+		})
 	}
 }

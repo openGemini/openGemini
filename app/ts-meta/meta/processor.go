@@ -56,6 +56,7 @@ type MetaStoreInterface interface {
 	registerQueryIDOffset(host meta.SQLHost) (uint64, error)
 	handlerSql2MetaHeartbeat(host string) error
 	getContinuousQueryLease(host string) ([]string, error)
+	verifyDataNodeStatus(nodeID uint64) error
 }
 
 type RPCHandler interface {

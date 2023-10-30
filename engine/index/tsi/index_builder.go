@@ -206,7 +206,7 @@ func (iBuilder *IndexBuilder) GetEndTime() time.Time {
 }
 
 func (iBuilder *IndexBuilder) Overlaps(tr influxql.TimeRange) bool {
-	return iBuilder.startTime.Before(tr.Max) && iBuilder.endTime.After(tr.Min)
+	return !iBuilder.startTime.After(tr.Max) && iBuilder.endTime.After(tr.Min)
 }
 
 func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, needSecondaryIndex bool) error {

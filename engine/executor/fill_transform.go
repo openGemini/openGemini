@@ -701,7 +701,7 @@ func (trans *FillTransform) updatePrevReadAt(i int) {
 			if trans.prevChunk.Column(i).NilCount() == 0 {
 				trans.prevReadAts[i] = end - 1
 			} else {
-				trans.prevReadAts[i] = int(trans.prevChunk.Column(i).NilsV2().ToArray()[end-1])
+				trans.prevReadAts[i] = int(trans.prevChunk.Column(i).NilsV2().GetArray()[end-1])
 			}
 		}
 	}
@@ -713,7 +713,7 @@ func (trans *FillTransform) updateInputReadAts(c Chunk, i int) {
 	} else if c.Column(i).IsNilV2(trans.inputReadAts[i]) {
 		start, end := c.Column(i).GetRangeValueIndexV2(trans.inputReadAts[i]+1, c.NumberOfRows())
 		if start < end {
-			trans.inputReadAts[i] = int(c.Column(i).NilsV2().ToArray()[start])
+			trans.inputReadAts[i] = int(c.Column(i).NilsV2().GetArray()[start])
 		}
 	}
 }

@@ -64,7 +64,6 @@ type Engine interface {
 	Open(durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfos map[string]*meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 	Close() error
 	ForceFlush()
-	SetReadOnly(readonly bool)
 
 	DeleteShard(db string, ptId uint32, shardID uint64) error
 	DeleteIndex(db string, pt uint32, shardID uint64) error
@@ -125,4 +124,5 @@ type Engine interface {
 	}) error
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
+	CheckPtsRemovedDone() bool
 }

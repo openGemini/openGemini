@@ -45,21 +45,6 @@ func TestEngine_processReq_error_point(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestEngine_processReq_readonly(t *testing.T) {
-	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
-		log: log,
-	}
-	req := &netstorage.SysCtrlRequest{}
-	req.SetMod(Readonly)
-	req.SetParam(map[string]string{
-		"switchon": "true",
-		"allnodes": "y",
-	})
-	_, err := e.processReq(req)
-	require.NoError(t, err)
-}
-
 func TestEngine_processReq_snapshot(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	e := Engine{

@@ -350,8 +350,9 @@ type RaftInterface interface {
 }
 
 type Store struct {
-	mu      sync.RWMutex
-	closing chan struct{}
+	mu          sync.RWMutex
+	segregateMu sync.Mutex
+	closing     chan struct{}
 
 	config *config.Meta
 
@@ -378,6 +379,7 @@ type Store struct {
 		DeleteRetentionPolicy(node *meta.DataNode, db string, rp string, pt uint32) error
 		DeleteMeasurement(node *meta.DataNode, db string, rp string, name string, shardIds []uint64) error
 		MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
+		SendSegregateNodeCmds(nodeIDs []uint64) (int, error)
 	}
 
 	statMu       sync.RWMutex
@@ -395,6 +397,7 @@ type Store struct {
 	heartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
 	cqLease           map[string]*cqLeaseInfo // sql host to cq lease.
 	sqlHosts          []string                // sorted hostname ["127.0.0.1:8086", "127.0.0.2:8086", "127.0.0.3:8086"]
+
 }
 
 // NewStore will create a new metaStore with the passed in config
@@ -1515,6 +1518,31 @@ func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipAd
 	return nil
 }
 
+func (s *Store) updateReplication(database string, rgId uint32, masterId uint32, peers []meta.Peer, rgStatus uint32) error {
+	mPeers := make([]*mproto.Peer, len(peers))
+	for i := range peers {
+		role := uint32(peers[i].PtRole)
+		mPeers[i] = &mproto.Peer{
+			ID:   &peers[i].ID,
+			Role: &role,
+		}
+	}
+
+	val := &mproto.UpdateReplicationCommand{
+		Database:   proto.String(database),
+		RepGroupId: proto.Uint32(rgId),
+		MasterId:   proto.Uint32(masterId),
+		Peers:      mPeers,
+		RgStatus:   proto.Uint32(rgStatus)}
+	t := mproto.Command_UpdateReplicationCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_UpdateReplicationCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	return s.ApplyCmd(cmd)
+}
+
 func (s *Store) dataNodes() meta.DataNodeInfos {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1615,7 +1643,7 @@ func (s *Store) getDbPtNumPerAliveNode() *map[uint64]uint32 {
 	nodePtNumMap := make(map[uint64]uint32)
 	s.mu.RLock()
 	for _, dataNode := range s.data.DataNodes {
-		if dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
+		if dataNode.SegregateStatus == meta.Normal && dataNode.Status == serf.StatusAlive && dataNode.AliveConnID == dataNode.ConnID {
 			nodePtNumMap[dataNode.ID] = 0
 		}
 	}
@@ -1697,6 +1725,20 @@ func (s *Store) getPtStatus(db string, ptId uint32) (meta.PtStatus, error) {
 	return status, nil
 }
 
+func (s *Store) getReplicationGroup(db string) []meta.ReplicaGroup {
+	s.mu.RLock()
+	repGroups := s.data.ReplicaGroups[db]
+	s.mu.RUnlock()
+	return repGroups
+}
+
+func (s *Store) getDBPtInfos(db string) meta.DBPtInfos {
+	s.mu.RLock()
+	ptInfos := s.data.PtView[db]
+	s.mu.RUnlock()
+	return ptInfos
+}
+
 // locked by the caller
 func (s *Store) getDbPtsByNodeId(nodeId uint64) map[string][]uint32 {
 	dbPtIds := make(map[string][]uint32)
@@ -1771,4 +1813,319 @@ func (s *Store) leadershipTransfer() error {
 		return errors.New("raft state not create")
 	}
 	return s.raft.LeadershipTransfer()
+}
+
+// cmd sample: limit|192.168.0.11,192.168.0.12 or unlimit|xxxx  or delete|xxxx
+func (s *Store) SpecialCtlData(cmd string) error {
+	s.segregateMu.Lock()
+	defer s.segregateMu.Unlock()
+	if !s.IsLeader() {
+		return errno.NewError(errno.MetaIsNotLeader)
+	}
+	infos := strings.Split(cmd, "|")
+	if len(infos) != 2 {
+		return errors.New("invalid command")
+	}
+
+	cmdKey := strings.ToLower(infos[0])
+	nodeLst := strings.Split(infos[1], ",")
+	switch cmdKey {
+	case "limit":
+		nodeIds, err := s.data.GetNodeIdsByNodeLst(nodeLst)
+		if err != nil {
+			return err
+		}
+		return s.segregateNode(nodeIds, false)
+	case "unlimit":
+		return s.cancelSegregateNode(nodeLst)
+	case "delete":
+		nodeIds, err := s.data.GetNodeIdsByNodeLst(nodeLst)
+		if err != nil {
+			return err
+		}
+		return s.segregateNode(nodeIds, true)
+	default:
+		return fmt.Errorf("unknown command: %s", cmdKey)
+	}
+}
+
+func (s *Store) segregateNodeSimple(nodeIds []uint64, remove bool) error {
+	// 1.set Node SegregateStatus to Segregated or remove node
+	preSegregateStatus, err := s.data.GetNodeSegregateStatus(nodeIds)
+	if err != nil {
+		return err
+	}
+	if !remove {
+		segregatedStatus := make([]uint64, len(nodeIds))
+		for i := range segregatedStatus {
+			segregatedStatus[i] = meta.Segregated
+		}
+		if err := s.SetSegregateNodeStatus(segregatedStatus, nodeIds); err != nil {
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		s.Logger.Info("segregateNode finish", zap.Uint64s("node ids", nodeIds))
+	} else {
+		if err := s.RemoveNode(nodeIds); err != nil {
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		s.Logger.Info("removeNode finish", zap.Uint64s("node ids", nodeIds))
+	}
+	return nil
+}
+
+func (s *Store) setNodeToSegregating(nodeIds []uint64) ([]uint64, error) {
+	preSegregateStatus, err := s.data.GetNodeSegregateStatus(nodeIds)
+	if err != nil {
+		return preSegregateStatus, err
+	}
+	segregatingStatus := make([]uint64, len(nodeIds))
+	for i := range segregatingStatus {
+		segregatingStatus[i] = meta.Segregating
+	}
+	err = s.SetSegregateNodeStatus(segregatingStatus, nodeIds)
+	if err != nil {
+		if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+		}
+		return preSegregateStatus, err
+	}
+	return preSegregateStatus, nil
+}
+
+func (s *Store) forceNodeToTakeOverPts(nodeIds []uint64, preSegregateStatus []uint64) error {
+	for _, nodeId := range nodeIds {
+		dbptInfos := s.data.GetPtInfosByNodeId(nodeId)
+		nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
+		if len(*nodePtNumMap) == 0 {
+			err := fmt.Errorf("no alive node to takeover segregate node pts")
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		targetId, err := globalService.clusterManager.getTakeOverNode(globalService.clusterManager, nodeId, nodePtNumMap, true)
+		if err != nil {
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		if targetId == nodeId {
+			err := fmt.Errorf("no alive node to takeover segregate node pts")
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		aliveConnId, err := globalService.store.getDataNodeAliveConnId(targetId)
+		if err != nil {
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		for _, dbptInfo := range dbptInfos {
+			err = globalService.balanceManager.forceMoveDbPt(dbptInfo, nodeId, targetId, aliveConnId)
+			if err != nil {
+				if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+					err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+				}
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) WaitNodeTakeOverDone(nodeIds []uint64, preSegregateStatus []uint64) error {
+	failNodeLoc, err := globalService.store.NetStore.SendSegregateNodeCmds(nodeIds)
+	if err != nil {
+		if err1 := s.SetSegregateNodeStatus(preSegregateStatus[failNodeLoc:], nodeIds[failNodeLoc:]); err1 != nil {
+			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			return err
+		}
+		segregatedStatus := make([]uint64, failNodeLoc)
+		for i := range segregatedStatus {
+			segregatedStatus[i] = meta.Segregated
+		}
+		err := fmt.Errorf("first fail node loc: %d when %v", failNodeLoc, err.Error())
+		if err1 := s.SetSegregateNodeStatus(segregatedStatus, nodeIds[0:failNodeLoc]); err1 != nil {
+			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Store) setNodeToSegregatedOrDelete(nodeIds []uint64, preSegregateStatus []uint64, delete bool) error {
+	if !delete {
+		segregatedStatus := make([]uint64, len(nodeIds))
+		for i := range segregatedStatus {
+			segregatedStatus[i] = meta.Segregated
+		}
+		if err := s.SetSegregateNodeStatus(segregatedStatus, nodeIds); err != nil {
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		s.Logger.Info("segregateNode finish", zap.Uint64s("node ids", nodeIds))
+	} else {
+		if err := s.RemoveNode(nodeIds); err != nil {
+			if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+				err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+			}
+			return err
+		}
+		s.Logger.Info("removeNode finish", zap.Uint64s("node ids", nodeIds))
+	}
+	return nil
+}
+
+func (s *Store) segregateNode(nodeIds []uint64, delete bool) error {
+	if config.GetHaPolicy() == config.WriteAvailableFirst {
+		return s.segregateNodeSimple(nodeIds, delete)
+	}
+	// 1.set Node SegregateStatus to Segregating
+	preSegregateStatus, err := s.setNodeToSegregating(nodeIds)
+	if err != nil {
+		return err
+	}
+	// 2.wait migration tasks of node done
+	if err := s.checkSegregateNodeTaskDone(nodeIds); err != nil {
+		if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+		}
+		return err
+	}
+	s.Logger.Info("segregateNode wait migrations done", zap.Uint64s("node ids", nodeIds))
+	// 3.force move dbpts of node to other node
+	if err := s.forceNodeToTakeOverPts(nodeIds, preSegregateStatus); err != nil {
+		return err
+	}
+	// 4.send Segregate cmds to ts-store and wait ts-store Segregate cmds all done
+	if err := s.WaitNodeTakeOverDone(nodeIds, preSegregateStatus); err != nil {
+		return err
+	}
+	// 5.wait force assign tasks done
+	if err := s.checkSegregateNodeTaskDone(nodeIds); err != nil {
+		if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+		}
+		return err
+	}
+	s.Logger.Info("segregateNode wait force takeover done", zap.Uint64s("node ids", nodeIds))
+	// 6.set Node SegregateStatus to Segregated or remove node
+	if err := s.setNodeToSegregatedOrDelete(nodeIds, preSegregateStatus, delete); err != nil {
+		return err
+	}
+	// 7.success return to client
+	return nil
+}
+
+func (s *Store) cancelSegregateNode(nodeLst []string) error {
+	// 1.get nodeIds by nodeLst
+	var nodeIds []uint64
+	var err error
+	if len(nodeLst) == 1 && strings.ToLower(nodeLst[0]) == "all" {
+		// unlimit|all
+		nodeIds = s.data.GetNodeIDs()
+	} else {
+		nodeIds, err = s.data.GetNodeIdsByNodeLst(nodeLst)
+		if err != nil {
+			return err
+		}
+	}
+	// 2.set Node SegregateStatus to Normal
+	preSegregateStatus, err := s.data.GetNodeSegregateStatus(nodeIds)
+	if err != nil {
+		return err
+	}
+	NormalStatus := make([]uint64, len(nodeIds))
+	for i := range NormalStatus {
+		NormalStatus[i] = meta.Normal
+	}
+	err = s.SetSegregateNodeStatus(NormalStatus, nodeIds)
+	if err != nil {
+		if err1 := s.SetSegregateNodeStatus(preSegregateStatus, nodeIds); err1 != nil {
+			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
+		}
+		return err
+	}
+	s.Logger.Info("cancel segregateNode finish", zap.Uint64s("node ids", nodeIds))
+	return nil
+}
+
+func (s *Store) RemoveNode(nodeIds []uint64) error {
+	val := &mproto.RemoveNodeCommand{
+		NodeIds: nodeIds,
+	}
+	t := mproto.Command_RemoveNodeCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_RemoveNodeCommand_Command, val); err != nil {
+		panic(err)
+	}
+	err := s.ApplyCmd(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// The check is performed every 500 ms. The check times out after 5s.
+func (s *Store) checkSegregateNodeTaskDone(nodeIds []uint64) error {
+	timer := time.NewTimer(5 * time.Second)
+	for {
+		select {
+		case <-timer.C:
+			return fmt.Errorf("segregate timeout because of too many pt migrations or pt migrations error")
+		default:
+			if !globalService.msm.CheckNodeEventExsit(nodeIds) {
+				return nil
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+}
+
+func (s *Store) SetSegregateNodeStatus(status []uint64, nodeIds []uint64) error {
+	val := &mproto.SetNodeSegregateStatusCommand{
+		Status:  status,
+		NodeIds: nodeIds,
+	}
+	t := mproto.Command_SetNodeSegregateStatusCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_SetNodeSegregateStatusCommand_Command, val); err != nil {
+		panic(err)
+	}
+	err := s.ApplyCmd(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) verifyDataNodeStatus(nodeID uint64) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nodeIndex, err := s.data.GetNodeIndex(nodeID)
+	if err != nil {
+		return err
+	}
+	dataNode := s.data.DataNodes[nodeIndex]
+	// The data node has not joined into the cluster
+	if dataNode.AliveConnID != dataNode.ConnID {
+		return nil
+	}
+	if dataNode.Status == serf.StatusFailed {
+		return errno.NewError(errno.DataNoAlive, nodeID)
+	}
+	return nil
 }

@@ -19,8 +19,11 @@ package app_test
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/app"
+	meta "github.com/openGemini/openGemini/app/ts-meta/run"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,8 +32,19 @@ func Test_Command_Run_Pidfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	err := cmd.Run("-config", "notFoundFile", "-pidfile", filepath.Join(tmpDir, "test.pid"))
 	require.EqualError(t, err, "parse config: parse config: open notFoundFile: no such file or directory")
+	info := app.ServerInfo{
+		App:       config.AppSingle,
+		Version:   "v1.1.0rc0",
+		BuildTime: time.Now().String(),
+	}
+	cmdMeta := meta.NewCommand(info, false)
+	cmdMeta.Logo = app.TSSERVER
+	err1 := cmdMeta.Run("-config", "../config/openGemini.singlenode.conf", "-pidfile", filepath.Join(tmpDir, "test.pid"))
+	if err1 == nil {
+		cmdMeta.Close()
+	}
+	require.EqualValues(t, cmdMeta.Config.GetCommon().MetaJoin[0], "127.0.0.1:8092")
 }
-
 func TestRunCommands(t *testing.T) {
 	cmd := app.NewCommand()
 	app.Run([]string{"version"})

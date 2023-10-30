@@ -606,7 +606,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		return err
 	}
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
-	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property)
+	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property, stmt.TimeClusterDuration)
 	schemaInfo := meta2.NewSchemaInfo(stmt.Tags, stmt.Fields)
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
 	indexR := &meta2.IndexRelation{}
@@ -615,6 +615,11 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 			oid, err := tsi.GetIndexIdByName(indexType)
 			if err != nil {
 				return err
+			}
+			if oid == uint32(tsi.TimeCluster) {
+				// TimeCluster index is NOT a secondary index.
+				// It's basically part of Primary Index for columnstore, no need to update indexR
+				continue
 			}
 			if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
 				return fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
@@ -707,11 +712,10 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 		return errors.New("THE TOTAL NUMBER OF RPs EXCEEDS THE LIMIT")
 	}
 
-	oneReplication := 1
 	spec := meta2.RetentionPolicySpec{
 		Name:               stmt.Name,
 		Duration:           &stmt.Duration,
-		ReplicaN:           &oneReplication,
+		ReplicaN:           &stmt.Replication,
 		ShardGroupDuration: stmt.ShardGroupDuration,
 		HotDuration:        &stmt.HotDuration,
 		WarmDuration:       &stmt.WarmDuration,
@@ -1201,99 +1205,110 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 	}
 	mst := rp.Measurements[mstVersion.NameWithVersion]
 
-	getPrimaryKey := func() *models.Row {
-		row := &models.Row{Columns: []string{"primary_key"}}
-		res := make([]interface{}, 0, len(mst.ColStoreInfo.PrimaryKey))
-		for i := range mst.ColStoreInfo.PrimaryKey {
-			res = append(res, mst.ColStoreInfo.PrimaryKey[i])
-		}
-		row.Values = [][]interface{}{{res}}
-		return row
-	}
-	getSortKey := func() *models.Row {
-		row := &models.Row{Columns: []string{"sort_key"}}
-		res := make([]interface{}, 0, len(mst.ColStoreInfo.SortKey))
-		for i := range mst.ColStoreInfo.SortKey {
-			res = append(res, mst.ColStoreInfo.SortKey[i])
-		}
-		row.Values = [][]interface{}{{res}}
-		return row
-	}
-	getProperty := func() *models.Row {
-		row := &models.Row{Columns: []string{"property_key", "property_value"}}
-		keys := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyKey))
-		values := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyValue))
-		for i := range mst.ColStoreInfo.PropertyKey {
-			keys = append(keys, mst.ColStoreInfo.PrimaryKey[i])
-			values = append(values, mst.ColStoreInfo.PropertyValue[i])
-		}
-		row.Values = [][]interface{}{{keys, values}}
-		return row
-	}
-	getShardKey := func() *models.Row {
-		row := &models.Row{Columns: []string{"shard_key", "type", "ShardGroup"}}
-		res := make([][]interface{}, len(mst.ShardKeys))
-		for i := range res {
-			res[i] = make([]interface{}, 3)
-		}
-		for i := range mst.ShardKeys {
-			res[i][0] = mst.ShardKeys[i].ShardKey
-			res[i][1] = mst.ShardKeys[i].Type
-			res[i][2] = mst.ShardKeys[i].ShardGroup
-		}
-		row.Values = res
-		return row
-	}
-	getEngineType := func() *models.Row {
-		row := &models.Row{Columns: []string{"ENGINETYPE"}}
-		row.Values = [][]interface{}{{config.EngineType2String[mst.EngineType]}}
-		return row
-	}
 	switch stmt.Name {
 	case "PRIMARYKEY":
 		if mst.EngineType != config.COLUMNSTORE {
 			return nil, errors.New("only support for COLUMNSTORE engine")
 		}
-		return []*models.Row{getPrimaryKey()}, nil
+		return []*models.Row{getPrimaryKey(mst)}, nil
 	case "SORTKEY":
 		if mst.EngineType != config.COLUMNSTORE {
 			return nil, errors.New("only support for COLUMNSTORE engine")
 		}
-		return []*models.Row{getSortKey()}, nil
+		return []*models.Row{getSortKey(mst)}, nil
 	case "PROPERTY":
 		if mst.EngineType != config.COLUMNSTORE {
 			return nil, errors.New("only support for COLUMNSTORE engine")
 		}
-		return []*models.Row{getProperty()}, nil
+		return []*models.Row{getProperty(mst)}, nil
 	case "SHARDKEY":
-		return []*models.Row{getShardKey()}, nil
+		return []*models.Row{getShardKey(mst)}, nil
 	case "ENGINETYPE":
-		return []*models.Row{getEngineType()}, nil
+		return []*models.Row{getEngineType(mst)}, nil
+	case "INDEXES":
+		return []*models.Row{getIndex(mst)}, nil
 	case "SCHEMA":
-		var row *models.Row
+		var rows []*models.Row
+		rows = append(rows, getShardKey(mst), getEngineType(mst), getIndex(mst))
 		if mst.EngineType == config.COLUMNSTORE {
-			row = &models.Row{Columns: []string{"shard_key", "type", "ShardGroup", "engine_type", "primary_key", "sort_key"}}
-			res := [][]interface{}{{
-				getShardKey().Values[0][0],
-				getShardKey().Values[0][1],
-				getShardKey().Values[0][2],
-				getEngineType().Values[0][0],
-				getPrimaryKey().Values[0][0],
-				getSortKey().Values[0][0]}}
-			row.Values = res
-		} else {
-			row = &models.Row{Columns: []string{"shard_key", "type", "ShardGroup", "engine_type"}}
-			res := [][]interface{}{{
-				getShardKey().Values[0][0],
-				getShardKey().Values[0][1],
-				getShardKey().Values[0][2],
-				getEngineType().Values[0][0]}}
-			row.Values = res
+			rows = append(rows, getPrimaryKey(mst), getSortKey(mst))
 		}
-		return []*models.Row{row}, nil
+		return rows, nil
 	default:
 		return nil, fmt.Errorf("%s is not support for this command", stmt.Name)
 	}
+}
+
+func getIndex(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"INDEXES"}}
+	if mst.ColStoreInfo.TimeClusterDuration != 0 {
+		row.Values = [][]interface{}{{"TIMECLUSTER(" + mst.ColStoreInfo.TimeClusterDuration.String() + ")"}}
+	}
+	res := make([][]interface{}, len(mst.IndexRelation.Oids))
+	for i, id := range mst.IndexRelation.Oids {
+		indexName, _ := tsi.GetIndexNameById(id)
+		var indexList string
+		for _, col := range mst.IndexRelation.IndexList[i].IList {
+			indexList += col + ","
+		}
+		indexList = indexList[:len(indexList)-1]
+		res[i] = []interface{}{strings.ToUpper(indexName) + "(" + indexList + ")"}
+	}
+	row.Values = append(row.Values, res...)
+	return row
+}
+
+func getEngineType(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"ENGINETYPE"}}
+	row.Values = [][]interface{}{{config.EngineType2String[mst.EngineType]}}
+	return row
+}
+
+func getShardKey(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"SHARD_KEY", "TYPE", "SHARD_GROUP"}}
+	res := make([][]interface{}, len(mst.ShardKeys))
+	for i := range res {
+		res[i] = make([]interface{}, 3)
+	}
+	for i := range mst.ShardKeys {
+		res[i][0] = mst.ShardKeys[i].ShardKey
+		res[i][1] = mst.ShardKeys[i].Type
+		res[i][2] = mst.ShardKeys[i].ShardGroup
+	}
+	row.Values = res
+	return row
+}
+
+func getProperty(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"PROPERTY_KEY", "PROPERTY_VALUE"}}
+	keys := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyKey))
+	values := make([]interface{}, 0, len(mst.ColStoreInfo.PropertyValue))
+	for i := range mst.ColStoreInfo.PropertyKey {
+		keys = append(keys, mst.ColStoreInfo.PrimaryKey[i])
+		values = append(values, mst.ColStoreInfo.PropertyValue[i])
+	}
+	row.Values = [][]interface{}{{keys, values}}
+	return row
+}
+
+func getSortKey(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"SORT_KEY"}}
+	res := make([]interface{}, 0, len(mst.ColStoreInfo.SortKey))
+	for i := range mst.ColStoreInfo.SortKey {
+		res = append(res, mst.ColStoreInfo.SortKey[i])
+	}
+	row.Values = [][]interface{}{{res}}
+	return row
+}
+
+func getPrimaryKey(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"PRIMARY_KEY"}}
+	res := make([]interface{}, 0, len(mst.ColStoreInfo.PrimaryKey))
+	for i := range mst.ColStoreInfo.PrimaryKey {
+		res = append(res, mst.ColStoreInfo.PrimaryKey[i])
+	}
+	row.Values = [][]interface{}{{res}}
+	return row
 }
 
 func (e *StatementExecutor) executeShowGrantsForUserStatement(q *influxql.ShowGrantsForUserStatement) (models.Rows, error) {
@@ -2237,6 +2252,7 @@ func (e *StatementExecutor) executeShowConfigs(stmt *influxql.ShowConfigsStateme
 }
 
 func (e *StatementExecutor) executeSetConfig(stmt *influxql.SetConfigStatement) error {
+	e.StmtExecLogger.Info("change config by ddl", zap.String("component", stmt.Component), zap.String("key", stmt.Key), zap.Any("value", stmt.Value))
 	switch stmt.Component {
 	case sqlConfig:
 		switch stmt.Key {

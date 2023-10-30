@@ -14,5 +14,6 @@
 	"GetMeasurementsInfo",
  	"RegisterQueryIDOffset",
 	"Sql2MetaHeartbeat",
-	"GetContinuousQueryLease"
+	"GetContinuousQueryLease",
+	"VerifyDataNodeStatus"
 ]

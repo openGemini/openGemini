@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -67,6 +68,10 @@ func TestDownSampleQuerySchemaGen(t *testing.T) {
 				DataType: int64(influxql.Integer),
 			},
 			{
+				AggOps:   []string{"sum", "count"},
+				DataType: int64(influxql.Integer),
+			},
+			{
 				AggOps:   []string{"min", "max", "mean"},
 				DataType: int64(influxql.Float),
 			},
@@ -97,6 +102,9 @@ func TestDownSampleQuerySchemaGen(t *testing.T) {
 	if len(schemas) != 2 {
 		t.Fatal("unexpected schemas length, expect: 2")
 	}
+	require.Equal(t, 2, len(schemas[1]))
+	require.Equal(t, 16, len(schemas[1][0].GetColumnNames()))
+
 	info2 := &meta.ShardDownSamplePolicyInfo{
 		DbName:                "test",
 		RpName:                "rp0",
@@ -177,9 +185,11 @@ func TestMocService(t *testing.T) {
 		Info: policy,
 	}
 	s.Logger = logger.NewLogger(errno.ModuleUnknown).With(zap.String("service", "downsample"))
-	s.MetaClient.(*mocMetaClient).returnFunc = s.MetaClient.(*mocMetaClient).GetMstInfoWithInRpNormal
+
+	cli := s.MetaClient.(*mocMetaClient)
+	cli.returnFunc = cli.GetMstInfoWithInRpNormal
 	s.handle()
-	s.MetaClient.(*mocMetaClient).returnFunc = s.MetaClient.(*mocMetaClient).GetMstInfoWithInRpError
+	cli.returnFunc = cli.GetMstInfoWithInRpError
 	s.handle()
 }
 

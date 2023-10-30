@@ -252,17 +252,17 @@ func TestBitmap_ToArray(t *testing.T) {
 	c1.AppendManyNotNil(8)
 	c1.AppendNilsV2(true, false, true, false, true, false, true, false)
 
-	assert.Equal(t, c1.NilsV2().ToArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14})
+	assert.Equal(t, c1.NilsV2().GetArray(), []uint16{0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14})
 	c1.Reset()
 
 	c1.AppendNilsV2(true, false, true, false, true, false, true, false)
 	c1.AppendNilsV2(true, false, true, false, true, false, true, false)
-	assert.Equal(t, c1.NilsV2().ToArray(), []uint16{0, 2, 4, 6, 8, 10, 12, 14})
+	assert.Equal(t, c1.NilsV2().GetArray(), []uint16{0, 2, 4, 6, 8, 10, 12, 14})
 	c1.Reset()
 
 	c1.AppendNilsV2(true, false, true, false, true, false, true, false)
 	c1.AppendNilsV2(true, false)
-	assert.Equal(t, c1.NilsV2().ToArray(), []uint16{0, 2, 4, 6, 8})
+	assert.Equal(t, c1.NilsV2().GetArray(), []uint16{0, 2, 4, 6, 8})
 }
 
 func TestGetStringValueBytes(t *testing.T) {
@@ -298,7 +298,7 @@ func TestUpdateBitWithArray(t *testing.T) {
 	b.SetNilCount(nilCount)
 	b.UpdateBitWithArray(dat)
 	dstBit := []byte{0x92, 0x40}
-	assert.Equal(t, dstBit, b.ToBit())
+	assert.Equal(t, dstBit, b.GetBit())
 }
 
 func TestBitMapOr(t *testing.T) {

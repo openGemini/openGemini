@@ -553,7 +553,9 @@ func (csm *ClusterShardMapping) makeRemoteQuery(ctx context.Context, src influxq
 	if err != nil {
 		return nil, err
 	}
-
+	if node.SegregateStatus != meta2.Normal {
+		return nil, fmt.Errorf("makeRemoteQuery error: nodeid %d is Segerate", node.ID)
+	}
 	transport.NewNodeManager().Add(nodeID, node.TCPHost)
 	rq := &executor.RemoteQuery{
 		Database: m.Database,

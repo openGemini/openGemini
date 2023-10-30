@@ -163,13 +163,13 @@ func (fl *fileLoader) openPKIndexFile(file, mst string) {
 		fl.mu.Lock()
 		defer fl.mu.Unlock()
 		defer f.Close()
-		rec, err := f.ReadData()
+		rec, tcLocation, err := f.ReadData()
 		mark := fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(colstore.RowsNumPerFragment))
 		if err != nil {
 			fl.lg.Error("read index file failed", zap.Error(err), zap.String("file", file))
 			fl.ctx.setError(err)
 		}
-		fl.mst.addPKFile(mst, file, rec, mark)
+		fl.mst.addPKFile(mst, file, rec, mark, tcLocation)
 	}()
 }
 

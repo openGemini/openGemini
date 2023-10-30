@@ -88,11 +88,36 @@ func genData(rows int) *record.Record {
 	return data
 }
 
-func TestMeta(t *testing.T) {
+func TestMetaV0(t *testing.T) {
 	data := genData(100)
-	meta := marshalMeta(&data.Schema, data.RowNums())
-	haha, _, _ := unmarshalMeta(meta)
+	meta := marshalMeta(&data.Schema, data.RowNums(), DefaultTCLocation)
+	haha, _, _, tcLocation := unmarshalMeta(meta, 0)
 	require.EqualValues(t, data.Schemas(), haha)
+	require.EqualValues(t, tcLocation, DefaultTCLocation)
+}
+
+func TestMetaV1(t *testing.T) {
+	data := genData(100)
+	meta := marshalMeta(&data.Schema, data.RowNums(), DefaultTCLocation)
+	haha, _, _, tcLocation := unmarshalMeta(meta, 1)
+	require.EqualValues(t, data.Schemas(), haha)
+	require.EqualValues(t, tcLocation, DefaultTCLocation)
+}
+
+func TestMetaV1_2(t *testing.T) {
+	data := genData(100)
+	meta := marshalMeta(&data.Schema, data.RowNums(), 0)
+	haha, _, _, tcLocation := unmarshalMeta(meta, 1)
+	require.EqualValues(t, data.Schemas(), haha)
+	require.EqualValues(t, tcLocation, 0)
+}
+
+func TestMetaV1_3(t *testing.T) {
+	data := genData(100)
+	meta := marshalMeta(&data.Schema, data.RowNums(), 127)
+	haha, _, _, tcLocation := unmarshalMeta(meta, 1)
+	require.EqualValues(t, data.Schemas(), haha)
+	require.EqualValues(t, tcLocation, 127)
 }
 
 func TestChunkBuilder(t *testing.T) {
@@ -106,9 +131,10 @@ func TestChunkBuilder(t *testing.T) {
 	lockPath := ""
 	indexBuilder := NewIndexBuilder(&lockPath, filePath)
 	defer indexBuilder.Reset()
-	err := indexBuilder.WriteData(data)
-	haha, _, _ := unmarshalMeta(indexBuilder.meta)
+	err := indexBuilder.WriteData(data, DefaultTCLocation)
+	haha, _, _, tcLocation := unmarshalMeta(indexBuilder.meta, 1)
 	require.EqualValues(t, data.Schemas(), haha)
+	require.EqualValues(t, tcLocation, DefaultTCLocation)
 	if err != nil {
 		t.Fatal("write data error")
 	}
