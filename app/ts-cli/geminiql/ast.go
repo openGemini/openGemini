@@ -89,6 +89,11 @@ type AuthStatement struct {
 
 func (s *AuthStatement) stmt() {}
 
+type HelpStatement struct {
+}
+
+func (s *HelpStatement) stmt() {}
+
 type TimerStatement struct {
 }
 
