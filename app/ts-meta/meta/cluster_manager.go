@@ -441,8 +441,7 @@ func (cm *ClusterManager) processReplication(dbPt *meta.DbPtInfo) error {
 	rgs := globalService.store.getReplicationGroup(dbPt.Db)
 	ptInfos := globalService.store.getDBPtInfos(dbPt.Db)
 	if len(rgs) == 0 || len(ptInfos) == 0 {
-		logger.GetLogger().Error("processReplication failed")
-		return errno.NewError(errno.DatabaseNotFound)
+		return nil
 	}
 
 	rgId := dbPt.Pti.RGID
