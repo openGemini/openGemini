@@ -51,16 +51,17 @@ const SET = 57349
 const CHUNKED = 57350
 const CHUNK_SIZE = 57351
 const AUTH = 57352
-const PRECISION = 57353
-const TIMER = 57354
-const DOT = 57355
-const COMMA = 57356
-const EQ = 57357
-const IDENT = 57358
-const INTEGER = 57359
-const DECIMAL = 57360
-const STRING = 57361
-const RAW = 57362
+const HELP = 57353
+const PRECISION = 57354
+const TIMER = 57355
+const DOT = 57356
+const COMMA = 57357
+const EQ = 57358
+const IDENT = 57359
+const INTEGER = 57360
+const DECIMAL = 57361
+const STRING = 57362
+const RAW = 57363
 
 var QLToknames = [...]string{
 	"$end",
@@ -73,6 +74,7 @@ var QLToknames = [...]string{
 	"CHUNKED",
 	"CHUNK_SIZE",
 	"AUTH",
+	"HELP",
 	"PRECISION",
 	"TIMER",
 	"DOT",
@@ -91,7 +93,7 @@ const QLEofCode = 1
 const QLErrCode = 2
 const QLInitialStackSize = 16
 
-//line parser.y:278
+//line parser.y:289
 
 //line yacctab:1
 var QLExca = [...]int8{
@@ -102,61 +104,62 @@ var QLExca = [...]int8{
 
 const QLPrivate = 57344
 
-const QLLast = 55
+const QLLast = 57
 
 var QLAct = [...]int8{
-	35, 25, 19, 23, 47, 49, 50, 48, 10, 53,
-	11, 12, 13, 14, 15, 16, 17, 34, 33, 37,
-	18, 37, 31, 29, 27, 24, 22, 30, 44, 40,
-	43, 22, 39, 38, 41, 42, 26, 28, 32, 36,
-	21, 46, 45, 51, 52, 20, 9, 8, 7, 6,
-	5, 4, 3, 2, 1,
+	37, 27, 21, 25, 49, 51, 52, 50, 11, 55,
+	12, 13, 14, 15, 16, 17, 18, 19, 36, 35,
+	39, 20, 46, 31, 33, 39, 29, 26, 24, 32,
+	42, 28, 45, 24, 41, 40, 43, 44, 30, 34,
+	38, 23, 22, 48, 47, 53, 54, 10, 9, 8,
+	7, 6, 5, 4, 3, 2, 1,
 }
 
 var QLPact = [...]int16{
 	4, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000, -1000,
-	15, 9, 8, -1000, 6, -1000, 11, -1000, 9, -1000,
-	1, 3, -1000, -1000, 20, -1000, 18, 14, -1000, -1000,
-	-1000, 10, -1000, -1000, 5, -1000, 16, 13, 9, 8,
-	-12, -1000, 5, 5, -11, -1000, -1000, -1000, -1000, -1000,
-	-1000, -1000, -1000, -1000,
+	-1000, 16, 10, 9, -1000, 5, -1000, -1000, 12, -1000,
+	10, -1000, 1, 3, -1000, -1000, 21, -1000, 19, 14,
+	-1000, -1000, -1000, 11, -1000, -1000, 8, -1000, 17, 6,
+	10, 9, -13, -1000, 8, 8, -12, -1000, -1000, -1000,
+	-1000, -1000, -1000, -1000, -1000, -1000,
 }
 
 var QLPgo = [...]int8{
-	0, 54, 53, 52, 51, 50, 49, 48, 47, 46,
-	2, 45, 40, 39, 0, 38, 37, 3, 36, 1,
+	0, 56, 55, 54, 53, 52, 51, 50, 49, 48,
+	47, 2, 42, 41, 40, 0, 39, 38, 3, 31,
+	1,
 }
 
 var QLR1 = [...]int8{
-	0, 1, 1, 1, 1, 1, 1, 1, 1, 4,
-	3, 2, 2, 5, 6, 16, 7, 8, 9, 17,
-	17, 10, 10, 11, 11, 18, 18, 18, 18, 19,
-	19, 14, 14, 13, 12, 15,
+	0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	4, 3, 2, 2, 5, 6, 17, 7, 8, 9,
+	10, 18, 18, 11, 11, 12, 12, 19, 19, 19,
+	19, 20, 20, 15, 15, 14, 13, 16,
 }
 
 var QLR2 = [...]int8{
-	0, 1, 1, 1, 1, 1, 1, 1, 1, 2,
-	2, 4, 2, 1, 2, 1, 1, 2, 1, 1,
-	3, 1, 2, 4, 2, 3, 3, 3, 3, 1,
-	3, 1, 3, 3, 1, 1,
+	0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+	2, 2, 4, 2, 1, 2, 1, 1, 1, 2,
+	1, 1, 3, 1, 2, 4, 2, 3, 3, 3,
+	3, 1, 3, 1, 3, 3, 1, 1,
 }
 
 var QLChk = [...]int16{
 	-1000, -1, -2, -3, -4, -5, -6, -7, -8, -9,
-	4, 6, 7, 8, 9, 10, 11, 12, 5, -10,
-	-11, -12, 16, -17, 16, -19, -18, 16, -16, 17,
-	16, -17, -15, 17, 14, -14, -13, 16, 13, 14,
-	15, -10, -14, 14, 15, -17, -19, 16, 19, 17,
-	18, -14, -14, 20,
+	-10, 4, 6, 7, 8, 9, 10, 11, 12, 13,
+	5, -11, -12, -13, 17, -18, 17, -20, -19, 17,
+	-17, 18, 17, -18, -16, 18, 15, -15, -14, 17,
+	14, 15, 16, -11, -15, 15, 16, -18, -20, 17,
+	20, 18, 19, -15, -15, 21,
 }
 
 var QLDef = [...]int8{
 	0, -2, 1, 2, 3, 4, 5, 6, 7, 8,
-	0, 0, 0, 13, 0, 16, 0, 18, 0, 12,
-	21, 0, 34, 10, 19, 9, 29, 0, 14, 15,
-	17, 0, 22, 35, 0, 24, 31, 0, 0, 0,
-	0, 11, 0, 0, 0, 20, 30, 25, 26, 27,
-	28, 23, 32, 33,
+	9, 0, 0, 0, 14, 0, 17, 18, 0, 20,
+	0, 13, 23, 0, 36, 11, 21, 10, 31, 0,
+	15, 16, 19, 0, 24, 37, 0, 26, 33, 0,
+	0, 0, 0, 12, 0, 0, 0, 22, 32, 27,
+	28, 29, 30, 25, 34, 35,
 }
 
 var QLTok1 = [...]int8{
@@ -165,7 +168,7 @@ var QLTok1 = [...]int8{
 
 var QLTok2 = [...]int8{
 	2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-	12, 13, 14, 15, 16, 17, 18, 19, 20,
+	12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
 }
 
 var QLTok3 = [...]int8{
@@ -558,16 +561,22 @@ QLdefault:
 			updateStmt(QLlex, QLDollar[1].stmt)
 		}
 	case 9:
+		QLDollar = QLS[QLpt-1 : QLpt+1]
+//line parser.y:99
+		{
+			updateStmt(QLlex, QLDollar[1].stmt)
+		}
+	case 10:
 		QLDollar = QLS[QLpt-2 : QLpt+1]
-//line parser.y:101
+//line parser.y:105
 		{
 			stmt := &SetStatement{}
 			stmt.KVS = QLDollar[2].pairs
 			QLVAL.stmt = stmt
 		}
-	case 10:
+	case 11:
 		QLDollar = QLS[QLpt-2 : QLpt+1]
-//line parser.y:109
+//line parser.y:113
 		{
 			stmt := &UseStatement{}
 			if len(QLDollar[2].strslice) == 1 {
@@ -581,9 +590,9 @@ QLdefault:
 				QLlex.Error("namespace must be <db>.<rp>")
 			}
 		}
-	case 11:
+	case 12:
 		QLDollar = QLS[QLpt-4 : QLpt+1]
-//line parser.y:125
+//line parser.y:129
 		{
 			stmt := &InsertStatement{}
 			stmt.LineProtocol = QLDollar[4].str
@@ -596,161 +605,168 @@ QLdefault:
 				QLVAL.stmt = stmt
 			}
 		}
-	case 12:
+	case 13:
 		QLDollar = QLS[QLpt-2 : QLpt+1]
-//line parser.y:138
+//line parser.y:142
 		{
 			stmt := &InsertStatement{}
 			stmt.LineProtocol = QLDollar[2].str
 			QLVAL.stmt = stmt
 		}
-	case 13:
+	case 14:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:146
+//line parser.y:150
 		{
 			stmt := &ChunkedStatement{}
 			QLVAL.stmt = stmt
 		}
-	case 14:
+	case 15:
 		QLDollar = QLS[QLpt-2 : QLpt+1]
-//line parser.y:153
+//line parser.y:157
 		{
 			stmt := &ChunkSizeStatement{}
 			stmt.Size = QLDollar[2].integer
 			QLVAL.stmt = stmt
 		}
-	case 15:
+	case 16:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:161
+//line parser.y:165
 		{
 			QLVAL.integer = QLDollar[1].integer
 		}
-	case 16:
+	case 17:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:167
+//line parser.y:171
 		{
 			stmt := &AuthStatement{}
 			QLVAL.stmt = stmt
 		}
-	case 17:
+	case 18:
+		QLDollar = QLS[QLpt-1 : QLpt+1]
+//line parser.y:178
+		{
+			stmt := &HelpStatement{}
+			QLVAL.stmt = stmt
+		}
+	case 19:
 		QLDollar = QLS[QLpt-2 : QLpt+1]
-//line parser.y:174
+//line parser.y:185
 		{
 			stmt := &PrecisionStatement{}
 			stmt.Precision = QLDollar[2].str
 			QLVAL.stmt = stmt
 		}
-	case 18:
+	case 20:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:182
+//line parser.y:193
 		{
 			stmt := &TimerStatement{}
 			QLVAL.stmt = stmt
-		}
-	case 19:
-		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:189
-		{
-			QLVAL.strslice = []string{QLDollar[1].str}
-		}
-	case 20:
-		QLDollar = QLS[QLpt-3 : QLpt+1]
-//line parser.y:193
-		{
-			ns := []string{QLDollar[1].str}
-			QLVAL.strslice = append(ns, QLDollar[3].strslice...)
 		}
 	case 21:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
 //line parser.y:200
 		{
-			QLVAL.str = QLDollar[1].str
+			QLVAL.strslice = []string{QLDollar[1].str}
 		}
 	case 22:
-		QLDollar = QLS[QLpt-2 : QLpt+1]
+		QLDollar = QLS[QLpt-3 : QLpt+1]
 //line parser.y:204
 		{
-			QLVAL.str = QLDollar[1].str + " " + QLDollar[2].str
+			ns := []string{QLDollar[1].str}
+			QLVAL.strslice = append(ns, QLDollar[3].strslice...)
 		}
 	case 23:
-		QLDollar = QLS[QLpt-4 : QLpt+1]
-//line parser.y:210
+		QLDollar = QLS[QLpt-1 : QLpt+1]
+//line parser.y:211
 		{
-			QLVAL.str = QLDollar[1].str + QLDollar[2].str + QLDollar[3].str + " " + QLDollar[4].str
+			QLVAL.str = QLDollar[1].str
 		}
 	case 24:
 		QLDollar = QLS[QLpt-2 : QLpt+1]
-//line parser.y:214
+//line parser.y:215
 		{
 			QLVAL.str = QLDollar[1].str + " " + QLDollar[2].str
 		}
 	case 25:
-		QLDollar = QLS[QLpt-3 : QLpt+1]
-//line parser.y:220
+		QLDollar = QLS[QLpt-4 : QLpt+1]
+//line parser.y:221
 		{
-			p := NewPair(QLDollar[1].str, QLDollar[3].str)
-			QLVAL.pair = *p
+			QLVAL.str = QLDollar[1].str + QLDollar[2].str + QLDollar[3].str + " " + QLDollar[4].str
 		}
 	case 26:
-		QLDollar = QLS[QLpt-3 : QLpt+1]
+		QLDollar = QLS[QLpt-2 : QLpt+1]
 //line parser.y:225
 		{
-			p := NewPair(QLDollar[1].str, QLDollar[3].str)
-			QLVAL.pair = *p
+			QLVAL.str = QLDollar[1].str + " " + QLDollar[2].str
 		}
 	case 27:
 		QLDollar = QLS[QLpt-3 : QLpt+1]
-//line parser.y:230
+//line parser.y:231
 		{
-			p := NewPair(QLDollar[1].str, QLDollar[3].integer)
+			p := NewPair(QLDollar[1].str, QLDollar[3].str)
 			QLVAL.pair = *p
 		}
 	case 28:
 		QLDollar = QLS[QLpt-3 : QLpt+1]
-//line parser.y:235
+//line parser.y:236
 		{
-			p := NewPair(QLDollar[1].str, QLDollar[3].decimal)
+			p := NewPair(QLDollar[1].str, QLDollar[3].str)
 			QLVAL.pair = *p
 		}
 	case 29:
-		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:242
+		QLDollar = QLS[QLpt-3 : QLpt+1]
+//line parser.y:241
 		{
-			QLVAL.pairs = Pairs{QLDollar[1].pair}
+			p := NewPair(QLDollar[1].str, QLDollar[3].integer)
+			QLVAL.pair = *p
 		}
 	case 30:
 		QLDollar = QLS[QLpt-3 : QLpt+1]
 //line parser.y:246
 		{
-			QLVAL.pairs = append(QLDollar[3].pairs, QLDollar[1].pair)
+			p := NewPair(QLDollar[1].str, QLDollar[3].decimal)
+			QLVAL.pair = *p
 		}
 	case 31:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:252
+//line parser.y:253
 		{
-			QLVAL.str = QLDollar[1].str
+			QLVAL.pairs = Pairs{QLDollar[1].pair}
 		}
 	case 32:
 		QLDollar = QLS[QLpt-3 : QLpt+1]
-//line parser.y:256
+//line parser.y:257
 		{
-			QLVAL.str = QLDollar[1].str + QLDollar[2].str + QLDollar[3].str
+			QLVAL.pairs = append(QLDollar[3].pairs, QLDollar[1].pair)
 		}
 	case 33:
-		QLDollar = QLS[QLpt-3 : QLpt+1]
-//line parser.y:262
-		{
-			QLVAL.str = QLDollar[1].str + QLDollar[2].str + QLDollar[3].str
-		}
-	case 34:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:268
+//line parser.y:263
 		{
 			QLVAL.str = QLDollar[1].str
 		}
+	case 34:
+		QLDollar = QLS[QLpt-3 : QLpt+1]
+//line parser.y:267
+		{
+			QLVAL.str = QLDollar[1].str + QLDollar[2].str + QLDollar[3].str
+		}
 	case 35:
+		QLDollar = QLS[QLpt-3 : QLpt+1]
+//line parser.y:273
+		{
+			QLVAL.str = QLDollar[1].str + QLDollar[2].str + QLDollar[3].str
+		}
+	case 36:
 		QLDollar = QLS[QLpt-1 : QLpt+1]
-//line parser.y:274
+//line parser.y:279
+		{
+			QLVAL.str = QLDollar[1].str
+		}
+	case 37:
+		QLDollar = QLS[QLpt-1 : QLpt+1]
+//line parser.y:285
 		{
 			QLVAL.str = strconv.FormatInt(QLDollar[1].integer, 10)
 		}
