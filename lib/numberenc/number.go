@@ -51,7 +51,7 @@ func MarshalUint16Append(dst []byte, u uint16) []byte {
 	return append(dst, byte(u>>8), byte(u))
 }
 
-// UnmarshalUint16 returns unmarshaled uint32 from src.
+// UnmarshalUint16 returns unmarshalled uint32 from src.
 func UnmarshalUint16(src []byte) uint16 {
 	return binary.BigEndian.Uint16(src)
 }
@@ -65,7 +65,7 @@ func MarshalUint32Copy(dst []byte, u uint32) {
 	dst[0], dst[1], dst[2], dst[3] = byte(u>>24), byte(u>>16), byte(u>>8), byte(u)
 }
 
-// UnmarshalUint32 returns unmarshaled uint32 from src.
+// UnmarshalUint32 returns unmarshalled uint32 from src.
 func UnmarshalUint32(src []byte) uint32 {
 	return binary.BigEndian.Uint32(src)
 }
@@ -107,7 +107,7 @@ func MarshalInt64SliceAppend(dst []byte, us []int64) []byte {
 	return dst
 }
 
-// UnmarshalInt64Slice2Bytes returns unmarshaled []byte from src.
+// UnmarshalInt64Slice2Bytes returns unmarshalled []byte from src.
 func UnmarshalInt64Slice2Bytes(src []byte, dst []byte) []byte {
 	if cap(dst)-len(dst) < len(src) {
 		dst = append(make([]byte, 0, len(src)+len(dst)), dst...)
@@ -136,7 +136,7 @@ func MarshalUint32SliceAppend(dst []byte, us []uint32) []byte {
 	return dst
 }
 
-// UnmarshalUint32Slice returns unmarshaled []uint32 from src.
+// UnmarshalUint32Slice returns unmarshalled []uint32 from src.
 func UnmarshalUint32Slice(src []byte, dst []uint32) []uint32 {
 	usNum := len(src) / util.Uint32SizeBytes
 	if cap(dst) < usNum {
@@ -149,7 +149,7 @@ func UnmarshalUint32Slice(src []byte, dst []uint32) []uint32 {
 	return dst
 }
 
-// UnmarshalUint64 returns unmarshaled uint64 from src.
+// UnmarshalUint64 returns unmarshalled uint64 from src.
 func UnmarshalUint64(src []byte) uint64 {
 	return binary.BigEndian.Uint64(src)
 }
@@ -161,7 +161,7 @@ func MarshalInt64Append(dst []byte, v int64) []byte {
 	return append(dst, byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32), byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
 
-// UnmarshalInt64 returns unmarshaled int64 from src.
+// UnmarshalInt64 returns unmarshalled int64 from src.
 func UnmarshalInt64(src []byte) int64 {
 	u := binary.BigEndian.Uint64(src)
 	v := int64(u>>1) ^ (int64(u<<63) >> 63) // zig-zag decoding
