@@ -162,7 +162,7 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 			orderRow += row
 
 			l.AddLocation(loc)
-			if orderRow >= int64(option.GetLimit()) {
+			if orderRow >= int64(option.GetLimit()+option.GetOffset()) {
 				break
 			}
 		} else {
