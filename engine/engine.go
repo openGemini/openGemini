@@ -21,10 +21,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/openGemini/openGemini/lib/sftpclient"
+	"golang.org/x/crypto/ssh"
 	"math"
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,6 +91,7 @@ type Engine struct {
 	mgtLock       sync.RWMutex // lock for migration
 	migratingDbPT map[string]map[uint32]struct{}
 	metaClient    meta.MetaClient
+	backupStatus  *netstorage.BackupStatus
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -126,6 +130,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 		droppingRP:    make(map[string]string),
 		droppingMst:   make(map[string]string),
 		migratingDbPT: make(map[string]map[uint32]struct{}),
+		backupStatus:  netstorage.NewBackupStatus(),
 	}
 
 	eng.DownSamplePolicies = make(map[string]*meta2.StoreDownSamplePolicy)
@@ -1296,4 +1301,152 @@ func (e *Engine) Statistics(buffer []byte) ([]byte, error) {
 		}
 	}
 	return buffer, nil
+}
+
+func (e *Engine) Backup(req *netstorage.BackupRequest) error {
+	addr := fmt.Sprintf("%s:%d", req.SftpHost, req.SftpPort)
+
+	var auth []ssh.AuthMethod
+	auth = append(auth, ssh.Password(req.SftpPassword))
+
+	client, err := sftpclient.NewClient(addr, req.SftpUser, auth) // get sftp client
+	if err != nil {
+		return err
+	}
+
+	walPath := path.Join(e.walPath, "wal")
+	if e.backupStatus.Wal, err = fileops.SubFiles(walPath); err != nil {
+		return err
+	}
+	e.backupStatus.ReadyFileAdd(int64(len(e.backupStatus.Wal)))
+
+	dataPath := path.Join(e.dataPath, "data")
+	dbs, err := fileops.ReadDir(dataPath)
+	if err != nil {
+		return err
+	}
+
+	for _, db := range dbs {
+		dbPath := path.Join(dataPath, db.Name())
+		nodes, err := fileops.ReadDir(dbPath)
+		if err != nil {
+			return err
+		}
+		for _, node := range nodes {
+			nodePath := path.Join(dbPath, node.Name())
+			shardInfos, err := fileops.ReadDir(path.Join(nodePath, "autogen"))
+			if err != nil {
+				return err
+			}
+			for _, shardInfo := range shardInfos {
+				if shardInfo.Name() != "index" {
+					shardPath := path.Join(nodePath, "autogen", shardInfo.Name())
+					if e.backupStatus.Shards[shardPath], err = fileops.SubFiles(path.Join(shardPath)); err != nil {
+						return err
+					}
+					e.backupStatus.ReadyFileAdd(int64(len(e.backupStatus.Shards[shardPath])))
+				} else {
+					indexPath := path.Join(nodePath, "autogen", "index")
+					if e.backupStatus.Index[indexPath], err = fileops.SubFiles(path.Join(indexPath)); err != nil {
+						return err
+					}
+					e.backupStatus.ReadyFileAdd(int64(len(e.backupStatus.Index[indexPath])))
+				}
+
+			}
+		}
+	}
+
+	maxThreads := e.engOpt.MaxThreadsBackup()
+	task := make(chan struct{}, maxThreads)
+
+	for shardPath, files := range e.backupStatus.Shards {
+		go func(shardPath string, files []string) {
+			task <- struct{}{}
+			defer func() {
+				if err := recover(); err != nil {
+					e.backupStatus.Logs[shardPath] = err
+					fmt.Printf("panic err is %s\n", err)
+				}
+				<-task
+			}()
+			//获取shard id
+			file := path.Base(shardPath)
+			shid := strings.Split(file, "_")[0]
+
+			sysCtrlReq := &netstorage.SysCtrlRequest{}
+			sysCtrlReq.SetMod("compen")
+			sysCtrlReq.SetParam(map[string]string{
+				"switchon":  "false",
+				"allshards": "false",
+				"shid":      shid,
+			})
+			if _, err := e.SysCtrl(sysCtrlReq); err != nil {
+				e.backupStatus.Logs["compen_off"] = err
+				return
+			}
+
+			for _, filePath := range files {
+				if err := client.Copy(filePath, strings.Replace(filePath, e.dataPath, req.SftpRemotePath, 1)); err != nil {
+					e.backupStatus.Logs[filePath] = err
+					continue
+				}
+				e.backupStatus.AlreadyFileIncrement()
+			}
+			delete(e.backupStatus.Shards, shardPath)
+			sysCtrlReq.SetParam(map[string]string{
+				"switchon":  "true",
+				"allshards": "false",
+				"shid":      shid,
+			})
+			if _, err = e.SysCtrl(sysCtrlReq); err != nil {
+				e.backupStatus.Logs["compen_on"] = err
+				return
+			}
+
+		}(shardPath, files)
+	}
+
+	for indexPath, files := range e.backupStatus.Index {
+		go func(indexPath string, files []string) {
+			task <- struct{}{}
+			defer func() {
+				if err := recover(); err != nil {
+					e.backupStatus.Logs[indexPath] = err
+					fmt.Printf("panic err is %s\n", err)
+				}
+				<-task
+			}()
+
+			for _, filePath := range files {
+				if err := client.Copy(filePath, strings.Replace(filePath, e.dataPath, req.SftpRemotePath, 1)); err != nil {
+					e.backupStatus.Logs[filePath] = err
+					continue
+				}
+				e.backupStatus.AlreadyFileIncrement()
+			}
+			delete(e.backupStatus.Index, indexPath)
+		}(indexPath, files)
+	}
+
+	go func() {
+		task <- struct{}{}
+		defer func() {
+			if err := recover(); err != nil {
+				e.backupStatus.Logs[walPath] = err
+				fmt.Printf("panic err is %s\n", err)
+			}
+			<-task
+		}()
+		for _, dir := range e.backupStatus.Wal {
+			if err := client.Copy(dir, strings.Replace(dir, e.walPath, req.SftpRemotePath, 1)); err != nil {
+				e.backupStatus.Logs[dir] = err
+				continue
+			}
+			e.backupStatus.AlreadyFileIncrement()
+		}
+		e.backupStatus.Wal = nil
+	}()
+
+	return nil
 }

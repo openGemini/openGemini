@@ -19,6 +19,7 @@ package fileops
 import (
 	"io"
 	"os"
+	"path"
 	"sync/atomic"
 	"time"
 
@@ -249,4 +250,24 @@ func opsStatEnd(startTime int64, opsType int, bytes int64) {
 		atomic.AddInt64(&statistics.IOStat.IOSyncDuration, t)
 		atomic.AddInt64(&statistics.IOStat.IOSyncOkCount, 1)
 	}
+}
+
+func SubFiles(root string) (result []string, err error) {
+	dirs, err := ReadDir(root)
+	for _, dir := range dirs {
+		if dir.IsDir() {
+			files, err := SubFiles(path.Join(root, dir.Name()))
+			if err != nil {
+				return nil, err
+			}
+			if len(files) == 0 {
+				result = append(result, path.Join(root, dir.Name()))
+			} else {
+				result = append(result, files...)
+			}
+		} else {
+			result = append(result, path.Join(root, dir.Name()))
+		}
+	}
+	return
 }

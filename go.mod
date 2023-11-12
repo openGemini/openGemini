@@ -32,6 +32,7 @@ require (
 	github.com/nxadm/tail v1.4.8
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
+	github.com/pkg/sftp v1.10.1
 	github.com/prometheus/client_golang v1.12.1
 	github.com/prometheus/common v0.32.1
 	github.com/prometheus/prometheus v1.8.2-0.20201119142752-3ad25a6dc3d9
@@ -80,6 +81,7 @@ require (
 	github.com/go-chi/chi v4.1.0+incompatible // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gofrs/uuid v3.3.0+incompatible // indirect
+	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/btree v1.0.0 // indirect
 	github.com/google/flatbuffers v2.0.8+incompatible // indirect
@@ -106,6 +108,7 @@ require (
 	github.com/jsternberg/zap-logfmt v1.2.0 // indirect
 	github.com/jtolds/gls v4.20.0+incompatible // indirect
 	github.com/jwilder/encoding v0.0.0-20170811194829-b4e1701a28ef // indirect
+	github.com/kr/fs v0.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.16 // indirect

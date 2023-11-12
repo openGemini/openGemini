@@ -374,3 +374,33 @@ func TestFadvise(t *testing.T) {
 		return
 	}
 }
+
+func TestSubFiles(t *testing.T) {
+	baseDir := t.TempDir() + "/test_subfiles_data"
+	subfiles := map[string]bool{
+		path.Join(baseDir, "src/main.go"):        true,
+		path.Join(baseDir, "src/lib/util.go"):    true,
+		path.Join(baseDir, "README.md"):          true,
+		path.Join(baseDir, "config/config.toml"): true,
+	}
+
+	for filePath, _ := range subfiles {
+		if err := MkdirAll(filePath, 0750, nil); err != nil {
+			t.Fatalf("mkdir dir fail, error:%v", err)
+		}
+	}
+
+	files, err := SubFiles(baseDir)
+	if err != nil {
+		t.Fatalf("subfiles get error:%v", err)
+	}
+	for _, filePath := range files {
+		if !subfiles[filePath] {
+			t.Fatalf("file not find: %v", filePath)
+		}
+		delete(subfiles, filePath)
+	}
+	if len(subfiles) > 0 {
+		t.Fatalf("files not find: %v", subfiles)
+	}
+}

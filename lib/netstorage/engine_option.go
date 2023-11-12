@@ -17,6 +17,9 @@ limitations under the License.
 package netstorage
 
 import (
+	"fmt"
+	"github.com/openGemini/openGemini/lib/cpu"
+	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/limiter"
@@ -82,10 +85,30 @@ type EngineOptions struct {
 	MaxDownSampleTaskConcurrency int
 
 	MaxSeriesPerDatabase int
+
+	// the max number of threads per backup task
+	maxThreadsBackup int32
 }
 
 func NewEngineOptions() EngineOptions {
-	return EngineOptions{
-		Version: tsspVersion,
+	numCPU := cpu.GetCpuNum() / 2
+	if numCPU > 8 {
+		numCPU = 8
 	}
+	return EngineOptions{
+		Version:          tsspVersion,
+		maxThreadsBackup: int32(numCPU),
+	}
+}
+
+func (e *EngineOptions) MaxThreadsBackup() int32 {
+	return e.maxThreadsBackup
+}
+
+func (e *EngineOptions) SetMaxThreadsBackup(num int) error {
+	if num < 1 || num > cpu.GetCpuNum() {
+		return fmt.Errorf("SetMaxThreadsBackup: invalid number of threads")
+	}
+	atomic.StoreInt32(&e.maxThreadsBackup, int32(num))
+	return nil
 }

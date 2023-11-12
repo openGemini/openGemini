@@ -45,7 +45,7 @@ func (h *BackupCmd) Process() error {
 		case errors.As(err, &stderr):
 			_ = h.w.Response(executor.NewErrorMessage(stderr.Errno(), stderr.Error()), true)
 		default:
-			_ = h.w.Response(executor.NewErrorMessage(0, stderr.Error()), true)
+			_ = h.w.Response(executor.NewErrorMessage(0, err.Error()), true)
 		}
 		return nil
 	}

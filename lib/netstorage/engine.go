@@ -125,4 +125,5 @@ type Engine interface {
 	}) error
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
+	Backup(req *BackupRequest) error
 }
