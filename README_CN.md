@@ -1,6 +1,6 @@
 # README
 
-![color](https://user-images.githubusercontent.com/49023462/231386185-a18cd5dd-30ef-4d03-b86b-3119b16843a0.png)
+![color](./images/github_log_591x183.svg)
 
 ![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)   
 
