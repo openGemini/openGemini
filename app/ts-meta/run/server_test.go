@@ -147,7 +147,7 @@ func TestNewServer1(t *testing.T) {
 }
 
 func TestNewCommand(t *testing.T) {
-	cmd := NewCommand(app.ServerInfo{App: config.AppMeta}, true)
+	cmd := NewCommand(app.ServerInfo{App: config.AppMeta}, false)
 	require.Equal(t, app.METALOGO, cmd.Logo)
 	require.Equal(t, config.AppMeta, cmd.Info.App)
 }
