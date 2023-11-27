@@ -1,2 +1,2 @@
-pyarrow==7.0.0
+pyarrow==14.0.1
 toml==0.10.2
