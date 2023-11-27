@@ -32,16 +32,21 @@ func Test_Command_Run_Pidfile(t *testing.T) {
 	tmpDir := t.TempDir()
 	err := cmd.Run("-config", "notFoundFile", "-pidfile", filepath.Join(tmpDir, "test.pid"))
 	require.EqualError(t, err, "parse config: parse config: open notFoundFile: no such file or directory")
+
 	info := app.ServerInfo{
-		App:       config.AppSingle,
-		Version:   "v1.1.0rc0",
-		BuildTime: time.Now().String(),
+		App:       config.AppMeta,
+		Version:   "unknown",
+		Commit:    "unknown",
+		Branch:    "unknown",
+		BuildTime: "unknown",
 	}
 	cmdMeta := meta.NewCommand(info, false)
-	cmdMeta.Logo = app.TSSERVER
 	err1 := cmdMeta.Run("-config", "../config/openGemini.singlenode.conf", "-pidfile", filepath.Join(tmpDir, "test.pid"))
 	if err1 == nil {
-		cmdMeta.Close()
+		go func() {
+			time.Sleep(2 * time.Second)
+			_ = cmdMeta.Close()
+		}()
 	}
 	require.EqualValues(t, cmdMeta.Config.GetCommon().MetaJoin[0], "127.0.0.1:8092")
 }

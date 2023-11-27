@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/bmizerany/pat"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/golang/snappy"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
