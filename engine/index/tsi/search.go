@@ -28,6 +28,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
+	"sync"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
@@ -37,6 +39,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 	"go.uber.org/zap"
 )
@@ -264,6 +267,310 @@ func (is *indexSearch) newSeriesIDSetIterator(name []byte, tsids **uint64set.Set
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
 }
 
+func initTagFilter(name []byte, expr influxql.Expr) (*tagFilter, error) {
+	n, ok := expr.(*influxql.BinaryExpr)
+	if !ok {
+		return nil, errors.New("expr arg for initTagFilter shall be of type *influxql.BinaryExpr")
+	}
+
+	key, ok := n.LHS.(*influxql.VarRef)
+	value := n.RHS
+	if !ok {
+		key, ok = n.RHS.(*influxql.VarRef)
+		if !ok {
+			return nil, errors.New("fail to find VarRef key of binary expr")
+		}
+		value = n.LHS
+	}
+
+	if key.Type != influxql.Tag {
+		return nil, ErrFieldExpr
+	}
+
+	var err error
+	err = nil
+	tf := &tagFilter{}
+	switch value := value.(type) {
+	case *influxql.StringLiteral:
+		err = tf.Init(name, []byte(key.Val), []byte(value.Val), n.Op == influxql.NEQ, false)
+	case *influxql.RegexLiteral:
+		err = tf.Init(name, []byte(key.Val), []byte(value.Val.String()), n.Op == influxql.NEQREGEX, true)
+		matchAll := value.Val.MatchString("")
+		if matchAll {
+			tf.SetRegexMatchAll(true)
+		}
+	default:
+		err = errors.New("unsupportted value type")
+	}
+	return tf, err
+}
+
+func extractTagsAndFilters(name []byte, root influxql.Expr) ([]*tagFilter, []*influxql.BinaryExpr, error) {
+	tagFilters := make([]*tagFilter, 0)
+	fieldExprs := make([]*influxql.BinaryExpr, 0)
+
+	stk := make([]influxql.Expr, 0)
+	// push root to stack
+	stk = append(stk, root)
+	for {
+		if len(stk) <= 0 {
+			break
+		}
+		// pop the stack
+		expr := stk[len(stk)-1]
+		stk = stk[:len(stk)-1]
+
+		switch expr := expr.(type) {
+		case *influxql.BinaryExpr:
+			switch expr.Op {
+			case influxql.AND:
+				// if this is an AND expr, push lhs & rhs to stack
+				stk = append(stk, expr.RHS)
+				stk = append(stk, expr.LHS)
+			default:
+				tf, err := initTagFilter(name, expr)
+				if err == nil {
+					tagFilters = append(tagFilters, tf)
+				} else if err == ErrFieldExpr {
+					fieldExprs = append(fieldExprs, expr)
+				} else {
+					return nil, nil, err
+				}
+			}
+		case *influxql.ParenExpr:
+			stk = append(stk, expr.Expr)
+		default:
+			continue
+		}
+	}
+	return tagFilters, fieldExprs, nil
+}
+
+// Cache for estimated costs for each tag filter.
+// It should only store tag filter with isNegative == false.
+var tagFilterCostCache sync.Map
+
+func getTagFilterCost(name []byte, tf *tagFilter) int64 {
+	dst := tf.Marshal(name)
+	if cnt, ok := tagFilterCostCache.Load(string(dst)); ok {
+		return cnt.(int64)
+	}
+	return 0
+}
+
+func storeTagFilterCost(name []byte, tf *tagFilter, cnt int64) {
+	dst := tf.Marshal(name)
+	tagFilterCostCache.Store(string(dst), cnt)
+}
+
+var pruneThreshold = 10
+
+func matchSeriesKeyTagFilters(seriesKey []byte, tfs []*tagFilter) bool {
+	tags, _, _, _, err := influx.Parse2SeriesGroupKey(seriesKey, seriesKey, nil)
+	if err != nil {
+		return false
+	}
+	for _, tf := range tfs {
+		if !matchSeriesKeyTagFilter(tags, tf) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchSeriesKeyTagFilter(tags influx.PointTags, tf *tagFilter) bool {
+	return tf.Contains(&tags, string(tf.key), string(tf.value), tf.isNegative, tf.isRegexp)
+}
+
+func (is *indexSearch) doTSIDsTagFiltersPrune(name []byte, tsids *uint64set.Set, tfs []*tagFilter) (*uint64set.Set, error) {
+	set := &uint64set.Set{}
+	itr := tsids.Iterator()
+	for itr.HasNext() {
+		tsid := itr.Next()
+		seriesKey, err := is.searchSeriesKey(make([]byte, 0), tsid)
+		if err != nil {
+			return nil, err
+		}
+		if matchSeriesKeyTagFilters(seriesKey, tfs) {
+			set.Add(tsid)
+		}
+	}
+	return set, nil
+}
+
+func (is *indexSearch) seriesByTagFilters(name []byte, tfs []*tagFilter) (index.SeriesIDIterator, error) {
+	type tagFilterWithCost struct {
+		tf         *tagFilter
+		cost       int64
+		isNegative bool
+	}
+	tfcosts := make([]tagFilterWithCost, len(tfs))
+	for i := 0; i < len(tfs); i++ {
+		tfcosts[i].tf = tfs[i]
+		tfcosts[i].isNegative = tfs[i].isNegative
+		tfcosts[i].tf.isNegative = false
+		tfcosts[i].cost = getTagFilterCost(name, tfcosts[i].tf)
+	}
+
+	// Select the best tag filter to be used at first.
+	// If a tag filter is negative, it costs more than the non-negative one.
+	// For negative tag filter, the indexSearch will extract all tsids first,
+	// and then set isNegative to false, and extract tsids with new tag filter,
+	// then return the subtract of two sets.
+	// So the costs of a negative filter equals that of it's non-negative version,
+	// plus the count of tsids of the measurement.
+	sort.Slice(tfcosts, func(i, j int) bool {
+		if tfcosts[i].isNegative == tfcosts[j].isNegative {
+			return tfcosts[i].cost < tfcosts[j].cost
+		} else if tfcosts[i].isNegative {
+			return false
+		}
+		return true
+	})
+
+	set, err := is.searchTSIDsByTagFilterAndDateRange(tfcosts[0].tf)
+	if err != nil {
+		return nil, err
+	}
+	storeTagFilterCost(name, tfcosts[0].tf, int64(set.Len()))
+	if tfcosts[0].isNegative {
+		allTSIDs, err := is.getTSIDsByMeasurementName(name)
+		if err != nil {
+			return nil, err
+		}
+		allTSIDs.Subtract(set)
+		set = allTSIDs
+	}
+
+	if set.Len() == 0 || len(tfs) == 1 {
+		return is.newSeriesIDSetIterator(name, &set)
+	}
+
+	tfcosts = tfcosts[1:]
+	// For the other filters, just sort by their cost
+	// bacause for the negative filters, we don't need to get all tsids,
+	// we can just subtract them from the result set.
+	sort.Slice(tfcosts, func(i, j int) bool {
+		return tfcosts[i].cost < tfcosts[j].cost
+	})
+	for i, tfcost := range tfcosts {
+		// if the cost of next filter is much larger
+		// than the current result set,
+		// it's very inefficient to tarverse the tsids of next filter,
+		// we can do prune there.
+		if tfcost.cost/int64(set.Len()) > int64(pruneThreshold) {
+			tfs := make([]*tagFilter, len(tfcosts)-i)
+			for j := 0; j < len(tfs); j++ {
+				tfs[j] = tfcosts[i+j].tf
+			}
+			set, err = is.doTSIDsTagFiltersPrune(name, set, tfs)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+
+		this, err := is.searchTSIDsByTagFilterAndDateRange(tfcost.tf)
+		if err != nil {
+			return nil, err
+		}
+		storeTagFilterCost(name, tfcost.tf, int64(this.Len()))
+		if tfcosts[i].isNegative {
+			set.Subtract(this)
+		} else {
+			set.Intersect(this)
+		}
+		// no need to continue
+		if set.Len() == 0 {
+			break
+		}
+	}
+	return is.newSeriesIDSetIterator(name, &set)
+}
+
+func (is *indexSearch) isAllAndOpValid(op influxql.Token) bool {
+	if op == influxql.EQ || op == influxql.NEQ || op == influxql.EQREGEX || op == influxql.NEQREGEX {
+		return true
+	}
+	return false
+}
+
+func (is *indexSearch) isAllAndSubExprValid(lhs influxql.Expr, rhs influxql.Expr) bool {
+	if _, lok := lhs.(*influxql.VarRef); lok {
+		return is.isAllAndValueExprValid(rhs)
+	}
+	if _, rok := rhs.(*influxql.VarRef); rok {
+		return is.isAllAndValueExprValid(lhs)
+	}
+	return false
+}
+
+// there maybe field filter in condition clause
+func (is *indexSearch) isAllAndValueExprValid(value influxql.Expr) bool {
+	switch value.(type) {
+	case *influxql.IntegerLiteral:
+		return true
+	case *influxql.NumberLiteral:
+		return true
+	case *influxql.StringLiteral:
+		return true
+	case *influxql.BooleanLiteral:
+		return true
+	case *influxql.RegexLiteral:
+		return true
+	default:
+		return false
+	}
+}
+
+// judge whether the expression is all and
+func (is *indexSearch) isAllAndExpr(expr influxql.Expr) bool {
+	switch expr := expr.(type) {
+	case *influxql.BinaryExpr:
+		switch expr.Op {
+		case influxql.AND:
+			return is.isAllAndExpr(expr.LHS) && is.isAllAndExpr(expr.RHS)
+		case influxql.OR:
+			return false
+		default:
+			if is.isAllAndOpValid(expr.Op) {
+				return is.isAllAndSubExprValid(expr.LHS, expr.RHS)
+			}
+			return false
+		}
+	case *influxql.ParenExpr:
+		return is.isAllAndExpr(expr.Expr)
+	default:
+		return false
+	}
+}
+
+var ErrAllFields = errors.New("error all fields")
+
+func (is *indexSearch) seriesByAllAndExprIterator(name []byte, expr influxql.Expr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
+	tagFilters, fieldExprs, err := extractTagsAndFilters(name, expr)
+	if err != nil {
+		return nil, err
+	}
+
+	// all the binary exprs are field exprs, fall back to normol path
+	if len(tagFilters) == 0 {
+		return nil, ErrAllFields
+	}
+	tagIter, err := is.seriesByTagFilters(name, tagFilters)
+	if err != nil {
+		return nil, err
+	}
+	if len(fieldExprs) == 0 {
+		return tagIter, nil
+	}
+	for _, expr := range fieldExprs {
+		fieldIter := index.NewSeriesIDExprIteratorWithSeries(tagIter.Ids(), expr)
+		tagIter = index.IntersectSeriesIDIterators(tagIter, fieldIter)
+	}
+	return tagIter, nil
+}
+
 func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
 	if expr == nil {
 		return is.newSeriesIDSetIterator(name, tsids)
@@ -273,6 +580,15 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsi
 	case *influxql.BinaryExpr:
 		switch expr.Op {
 		case influxql.AND, influxql.OR:
+			// Fast path for all and expr.
+			if is.isAllAndExpr(expr) {
+				iter, err := is.seriesByAllAndExprIterator(name, expr, tsids, singleSeries)
+				// if any error occurs, fall back to normol mode.
+				if err == nil {
+					return iter, nil
+				}
+			}
+
 			var err error
 			// Get the series IDs and filter expressions for the LHS.
 			litr, lerr := is.seriesByExprIterator(name, expr.LHS, tsids, singleSeries)
