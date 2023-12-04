@@ -44,6 +44,9 @@ type IndexCache struct {
 	// Cache for TagKeys -> TagValues
 	TagKeyValueCache *workingsetcache.Cache
 
+	// Cache for tagFilter->cost
+	TagFilterCostCache *workingsetcache.Cache
+
 	metrics *IndexMetrics
 
 	path string
@@ -135,7 +138,7 @@ func LoadCache(name, cachePath string, sizeBytes int) *workingsetcache.Cache {
 	return c
 }
 
-func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string, store bool) *IndexCache {
+func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize int, path string, store bool) *IndexCache {
 	if tsidCacheSize == 0 {
 		tsidCacheSize = defaultTSIDCacheSize
 	}
@@ -144,6 +147,9 @@ func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string, 
 	}
 	if tagCacheSize == 0 {
 		tagCacheSize = defaultTagCacheSize
+	}
+	if tagFilterCostSize == 0 {
+		tagFilterCostSize = defaultTagFilterCostSize
 	}
 	ic := &IndexCache{
 		tagCache: workingsetcache.New(tagCacheSize, time.Hour),
@@ -158,5 +164,6 @@ func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string, 
 		ic.TSIDToSeriesKeyCache = workingsetcache.New(skeyCacheSize, time.Hour)
 		ic.TagKeyValueCache = workingsetcache.New(skeyCacheSize, time.Hour)
 	}
+	ic.TagFilterCostCache = workingsetcache.New(tagFilterCostSize, time.Hour)
 	return ic
 }

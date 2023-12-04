@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/request"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -372,5 +373,31 @@ func TestFadvise(t *testing.T) {
 	err := Fadvise(111, 0, 0, 0)
 	if !assert.Error(t, err) {
 		return
+	}
+}
+
+func TestStreamRead(t *testing.T) {
+	fp, err := os.OpenFile(t.TempDir()+"/data", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0640)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	_, err = fp.Write([]byte("test"))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	f := &file{of: fp}
+	defer f.Close()
+	c := make(chan *request.StreamReader)
+	go f.StreamReadBatch([]int64{0}, []int64{2}, 1, c, 1)
+	for {
+		select {
+		case r, ok := <-c:
+			if !ok {
+				return
+			}
+			assert.Equal(t, "te", string(r.Content))
+		}
 	}
 }

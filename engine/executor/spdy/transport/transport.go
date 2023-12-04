@@ -58,6 +58,12 @@ func NewTransport(nodeId uint64, typ uint8, callback Callback) (*Transport, erro
 	return newTransport(node, typ, callback, readTimeOut)
 }
 
+func NewTransportByAddress(nodeId uint64, address string, typ uint8, callback Callback) (*Transport, error) {
+	NewNodeManager().Add(nodeId, address)
+	node := NewNodeManager().Get(nodeId)
+	return newTransport(node, typ, callback, readTimeOut)
+}
+
 func NewMetaTransport(nodeId uint64, typ uint8, callback Callback) (*Transport, error) {
 	node := NewMetaNodeManager().Get(nodeId)
 	if node == nil {

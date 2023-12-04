@@ -279,6 +279,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 	shardIdent := &meta.ShardIdentifier{ShardID: defaultShardId, ShardGroupID: 1, OwnerDb: db, OwnerPt: ptId, Policy: rp}
 	if engineType == config.COLUMNSTORE {
 		immutable.SetSnapshotTblNum(1)
+		immutable.SetCompactionEnabled(false)
 	}
 	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
 	sh.indexBuilder = indexBuilder
@@ -538,7 +539,7 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 			filterOption.FiltersMap = valueMap
 			filterOption.FieldsIdx = idFields
 			filterOption.FilterTags = idTags
-			filterRec := immutable.FilterByField(rec, nil, &filterOption, opt.GetCondition(), nil, &v.tags, nil)
+			filterRec := immutable.FilterByField(rec, nil, &filterOption, opt.GetCondition(), nil, &v.tags, nil, nil)
 			if filterRec == nil {
 				emptyKeys = append(emptyKeys, k)
 			} else {
@@ -1256,9 +1257,6 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	}
 	require.Equal(t, 25, len(files))
 
-	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
 	require.NoError(t, closeShard(sh))
 	// reopen shard to load data
@@ -1292,6 +1290,9 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 		require.EqualValues(t, meta1, meta2)
 	}
 	require.NoError(t, closeShard(sh))
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 }
 
 func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
@@ -1338,9 +1339,6 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 	}
 	require.Equal(t, 25, len(files))
 
-	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
 	require.NoError(t, closeShard(sh))
 	// reopen shard to load data
@@ -1374,6 +1372,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 		require.EqualValues(t, meta1, meta2)
 	}
 	require.NoError(t, closeShard(sh))
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 }
 
 func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testing.T) {
@@ -1420,9 +1421,6 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 	}
 	require.Equal(t, 25, len(files))
 
-	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
 	pkFiles1 := sh.GetTableStore().(*immutable.MmsTables).PKFiles
 	require.NoError(t, closeShard(sh))
 	// reopen shard to load data
@@ -1456,6 +1454,100 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 		require.EqualValues(t, meta1, meta2)
 	}
 	require.NoError(t, closeShard(sh))
+	// recover config so that not to affect other tests
+	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+}
+
+func TestColStoreWriteSkipIndex(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	list := make([]*influxql.IndexList, 1)
+	iList := influxql.IndexList{IList: []string{"field1_string"}}
+	list[0] = &iList
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{"field1_string", "field2_int"}},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, false)
+
+	require.Equal(t, err, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	require.Equal(t, err, nil)
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mstsInfo["cpu1"] = mstsInfo[defaultMeasurementName]
+	sh.SetMstInfo("cpu1", mstsInfo["cpu1"])
+	err = sh.WriteCols("cpu1", rec, nil)
+	require.Equal(t, err, nil)
+	sh.ForceFlush()
+	time.Sleep(3 * time.Second)
+	if err = closeShard(sh); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxSegmentLimit(2)
+	conf.SetMaxRowsPerSegment(5)
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	list := make([]*influxql.IndexList, 1)
+	iList := influxql.IndexList{IList: []string{"field1_string"}}
+	list[0] = &iList
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{"field1_string", "field2_int"}},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, false)
+
+	require.Equal(t, err, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	require.Equal(t, err, nil)
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mstsInfo["cpu1"] = mstsInfo[defaultMeasurementName]
+	sh.SetMstInfo("cpu1", mstsInfo["cpu1"])
+	err = sh.WriteCols("cpu1", rec, nil)
+	require.Equal(t, err, nil)
+	sh.ForceFlush()
+	time.Sleep(3 * time.Second)
+	if err = closeShard(sh); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestShard_AsyncWalReplay_serial(t *testing.T) {
@@ -1595,7 +1687,7 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 	got.ResetWithSchema(tmp.Schema)
 	got.AppendRec(tmp, 0, tmp.RowNums())
 	for !newSh.loadWalDone {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(13 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
 
@@ -1660,7 +1752,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
 	rec.AppendRec(rec, 0, rec.RowNums())
 	for !newSh.loadWalDone {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(13 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
 	if !testRecsEqual(rec, record) {
@@ -5315,7 +5407,7 @@ func TestWriteIndexForArrowFlight(t *testing.T) {
 		t.Fatal("wrong index type")
 	}
 	if writeIndexRequired {
-		err = csIndexImpl.CreateIndexIfNotExistsForArrowFlight(idx, &tagCol)
+		err = csIndexImpl.CreateIndexIfNotExistsByCol(idx, &tagCol)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -5347,7 +5439,7 @@ func TestWriteIndexForArrowFlight2(t *testing.T) {
 
 	rec := genRecord()
 	tagIndex := []int{3}
-	err = sh.indexBuilder.CreateIndexIfNotExistsForColumnStore(rec, tagIndex, defaultMeasurementName)
+	err = sh.indexBuilder.CreateIndexIfNotExistsByCol(rec, tagIndex, defaultMeasurementName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5460,13 +5552,14 @@ func (client *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint3
 	panic("implement me")
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, _ []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, _ []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {

@@ -48,6 +48,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
@@ -1044,6 +1045,9 @@ func (f *StreamFile) SyncTrue() error {
 	err := GetStreamClient().fsync(f, true)
 	opsStatEnd(begin.UnixNano(), opsTypeSync, int64(0))
 	return err
+}
+
+func (f *StreamFile) StreamReadBatch(offs []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, obsRangeSize int) {
 }
 
 func (f *StreamFile) SyncUpdateLength() error {

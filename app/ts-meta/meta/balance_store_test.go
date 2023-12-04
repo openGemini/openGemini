@@ -35,13 +35,13 @@ func TestSelectDbPtsToMove(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402")
+	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1, nil))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
@@ -118,13 +118,13 @@ func TestBalanceDBPts1(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402")
+	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1, nil))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n2}, Status: meta.Online},
@@ -155,13 +155,13 @@ func TestBalanceDBPts2(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402")
+	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1, nil))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},
@@ -193,13 +193,13 @@ func TestBalanceDBPts3(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402")
+	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1, nil))
 
 	store.data.PtView = map[string]meta.DBPtInfos{
 		"db0": []meta.PtInfo{meta.PtInfo{PtId: 0, Owner: meta.PtOwner{NodeID: n1}, Status: meta.Online},

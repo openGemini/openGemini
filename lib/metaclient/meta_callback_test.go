@@ -150,3 +150,24 @@ func TestVerifyDataNodeStatusCallbackResponse(t *testing.T) {
 	err = callback.Handle(badMsg2)
 	assert.EqualError(t, err, "get verify datanode status callback error: mock error")
 }
+
+func TestSendSysCtrlToMetaCallbackResponse(t *testing.T) {
+	callback := &metaclient.SendSysCtrlToMetaCallback{}
+	msg := message.NewMetaMessage(message.SendSysCtrlToMetaResponseMessage, &message.SendSysCtrlToMetaResponse{})
+	err := callback.Handle(msg)
+	assert.NoError(t, err)
+
+	// wrong message
+	err = callback.Handle(nil)
+	assert.EqualError(t, err, "data is not a MetaMessage")
+
+	// wrong message
+	badMsg := message.NewMetaMessage(message.UnknownMessage, &message.PingResponse{})
+	err = callback.Handle(badMsg)
+	assert.EqualError(t, err, "data is not a SendSysCtrlToMetaCallback, got type *message.PingResponse")
+
+	// wrong message
+	badMsg2 := message.NewMetaMessage(message.SendSysCtrlToMetaResponseMessage, &message.SendSysCtrlToMetaResponse{Err: "mock error"})
+	err = callback.Handle(badMsg2)
+	assert.EqualError(t, err, "send sys ctrl to meta callback error: mock error")
+}

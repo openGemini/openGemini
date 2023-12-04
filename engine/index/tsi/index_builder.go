@@ -270,23 +270,43 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, need
 	return nil
 }
 
-func (iBuilder *IndexBuilder) CreateIndexIfNotExistsForColumnStore(rec *record.Record, tagIndex []int, mst string) error {
+func (iBuilder *IndexBuilder) CreateIndexIfNotExistsByCol(rec *record.Record, tagIndex []int, mst string) error {
 	primaryIndex := iBuilder.GetPrimaryIndex()
 	idx, ok := primaryIndex.(*MergeSetIndex)
 	if !ok {
 		return errors.New("get mergeSetIndex failed")
 	}
-	tagCols := GetIndexTagCols()
-	defer PutIndexTagCols(tagCols)
+	tagCols := GetIndexTagCols(rec.RowNums()) // preset one colVal.Len cap
+	buf := GetWriteBuffer()
+	curVal := GetIndexKeyCache()
+
+	defer func() {
+		PutIndexTagCols(tagCols)
+		PutWriteBuffer(buf)
+		PutIndexKeyCache(curVal)
+	}()
+
 	mstBinary := []byte(mst)
 	tagsByteSlice := make([][]byte, len(tagIndex))
 	for i := range tagsByteSlice {
 		tagsByteSlice[i] = []byte(rec.Schema[tagIndex[i]].Name)
 	}
 	var wg sync.WaitGroup
-	for index := 0; index < rec.RowNums(); index++ {
-		for i := range tagIndex {
-			// hash by single mst,tag key,tag value
+	cache := make(map[string]struct{})
+	var cacheKey string
+	for i := range tagIndex {
+		for index := 0; index < rec.RowNums(); index++ {
+			*curVal, _ = rec.ColVals[tagIndex[i]].StringValue(index)
+			buf.Write(tagsByteSlice[i])
+			buf.Write(*curVal)
+			cacheKey = buf.String()
+			buf.Reset()
+			if _, ok = cache[cacheKey]; !ok {
+				cache[cacheKey] = struct{}{}
+			} else {
+				continue
+			}
+
 			if cap(*tagCols) > len(*tagCols) {
 				*tagCols = (*tagCols)[:len(*tagCols)+1]
 			} else {
@@ -295,13 +315,19 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExistsForColumnStore(rec *record.R
 			tagCol := &(*tagCols)[len(*tagCols)-1]
 			tagCol.Mst = mstBinary
 			tagCol.Key = tagsByteSlice[i]
-			tagCol.Val, _ = rec.ColVals[tagIndex[i]].StringValue(index)
+			tagCol.Val = *curVal
 			tagCol.Wg = &wg
 			wg.Add(1)
 			idx.WriteTagCols(tagCol)
 		}
 	}
 	wg.Wait()
+	// Check Err.
+	for _, tagCol := range *tagCols {
+		if tagCol.Err != nil {
+			return tagCol.Err
+		}
+	}
 	return nil
 }
 

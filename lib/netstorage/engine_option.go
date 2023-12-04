@@ -54,6 +54,7 @@ type EngineOptions struct {
 	CompactThroughput        int64
 	CompactThroughputBurst   int64
 	CompactRecovery          bool
+	CsCompactionEnabled      bool
 	SnapshotThroughput       int64
 	SnapshotThroughputBurst  int64
 	SnapshotTblNum           int
@@ -67,11 +68,13 @@ type EngineOptions struct {
 	WalReplayAsync    bool
 
 	// Immutable config
-	ReadCacheLimit   uint64
-	CacheDataBlock   bool
-	CacheMetaBlock   bool
-	EnableMmapRead   bool
-	CompactionMethod int // 0:auto, 1:stream, 2: non-stream
+	ReadPageSize       string
+	ReadMetaCacheLimit uint64
+	ReadDataCacheLimit uint64
+	CacheDataBlock     bool
+	CacheMetaBlock     bool
+	EnableMmapRead     bool
+	CompactionMethod   int // 0:auto, 1:stream, 2: non-stream
 
 	OpenShardLimit int
 	// lazy load shards

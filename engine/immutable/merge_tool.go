@@ -20,6 +20,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -291,8 +292,7 @@ func (mt *mergeTool) saveRecords(ctx *mergeContext, fileName TSSPFileName,
 	fileName.merge++
 	fileName.lock = mt.mts.lock
 	builder := NewMsBuilder(mt.mts.path, ctx.mst, mt.mts.lock, mt.mts.Conf,
-		len(data), fileName, 0, nil, int(ctx.unordered.size))
-
+		len(data), fileName, 0, nil, int(ctx.unordered.size), config.TSSTORE)
 	var err error
 	defer func(msb **MsBuilder) {
 		if err != nil {
@@ -311,7 +311,7 @@ func (mt *mergeTool) saveRecords(ctx *mergeContext, fileName TSSPFileName,
 		}
 
 		rec = sh.Sort(rec)
-		builder, err = builder.WriteRecord(sid, rec, nil, nil)
+		builder, err = builder.WriteRecord(sid, rec, nil)
 		if err != nil {
 			return nil, err
 		}

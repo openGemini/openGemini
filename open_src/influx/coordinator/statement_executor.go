@@ -606,30 +606,28 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 		return err
 	}
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
-	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property, stmt.TimeClusterDuration)
+	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property, stmt.TimeClusterDuration, stmt.CompactType)
 	schemaInfo := meta2.NewSchemaInfo(stmt.Tags, stmt.Fields)
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
-	indexR := &meta2.IndexRelation{}
+	indexR := &influxql.IndexRelation{}
 	if len(stmt.IndexList) > 0 {
 		for i, indexType := range stmt.IndexType {
 			oid, err := tsi.GetIndexIdByName(indexType)
 			if err != nil {
 				return err
 			}
-			if oid == uint32(tsi.TimeCluster) {
-				// TimeCluster index is NOT a secondary index.
-				// It's basically part of Primary Index for columnstore, no need to update indexR
-				continue
-			}
 			if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
 				return fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
 			}
 			indexR.Oids = append(indexR.Oids, oid)
+			if oid == tsi.IndexNameToID["bloomfilter"] {
+				indexR.IndexNames = append(indexR.IndexNames, indexType)
+			}
 		}
 	}
-	indexLists := make([]*meta2.IndexList, len(stmt.IndexList))
+	indexLists := make([]*influxql.IndexList, len(stmt.IndexList))
 	for i, indexList := range stmt.IndexList {
-		indexLists[i] = &meta2.IndexList{
+		indexLists[i] = &influxql.IndexList{
 			IList: indexList,
 		}
 	}
@@ -639,7 +637,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
 	}
-	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo)
+	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo, nil)
 	return err
 }
 
@@ -666,7 +664,7 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 	}
 
 	if !stmt.RetentionPolicyCreate {
-		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.DatabaseAttr.EnableTagArray, stmt.DatabaseAttr.Replicas)
+		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.DatabaseAttr.EnableTagArray, stmt.DatabaseAttr.Replicas, nil)
 		e.StmtExecLogger.Info("create database finish", zap.String("db", stmt.Name), zap.Error(err))
 		return err
 	}
@@ -1221,6 +1219,11 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 			return nil, errors.New("only support for COLUMNSTORE engine")
 		}
 		return []*models.Row{getProperty(mst)}, nil
+	case "COMPACT":
+		if mst.EngineType != config.COLUMNSTORE {
+			return nil, errors.New("only support for COLUMNSTORE engine")
+		}
+		return []*models.Row{getCompactionType(mst)}, nil
 	case "SHARDKEY":
 		return []*models.Row{getShardKey(mst)}, nil
 	case "ENGINETYPE":
@@ -1231,7 +1234,7 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 		var rows []*models.Row
 		rows = append(rows, getShardKey(mst), getEngineType(mst), getIndex(mst))
 		if mst.EngineType == config.COLUMNSTORE {
-			rows = append(rows, getPrimaryKey(mst), getSortKey(mst))
+			rows = append(rows, getPrimaryKey(mst), getSortKey(mst), getCompactionType(mst))
 		}
 		return rows, nil
 	default:
@@ -1241,9 +1244,6 @@ func (e *StatementExecutor) executeShowMeasurementKeysStatement(stmt *influxql.S
 
 func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 	row := &models.Row{Columns: []string{"INDEXES"}}
-	if mst.ColStoreInfo.TimeClusterDuration != 0 {
-		row.Values = [][]interface{}{{"TIMECLUSTER(" + mst.ColStoreInfo.TimeClusterDuration.String() + ")"}}
-	}
 	res := make([][]interface{}, len(mst.IndexRelation.Oids))
 	for i, id := range mst.IndexRelation.Oids {
 		indexName, _ := tsi.GetIndexNameById(id)
@@ -1252,6 +1252,9 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 			indexList += col + ","
 		}
 		indexList = indexList[:len(indexList)-1]
+		if id == uint32(tsi.TimeCluster) {
+			indexList = mst.ColStoreInfo.TimeClusterDuration.String()
+		}
 		res[i] = []interface{}{strings.ToUpper(indexName) + "(" + indexList + ")"}
 	}
 	row.Values = append(row.Values, res...)
@@ -1261,6 +1264,12 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 func getEngineType(mst *meta2.MeasurementInfo) *models.Row {
 	row := &models.Row{Columns: []string{"ENGINETYPE"}}
 	row.Values = [][]interface{}{{config.EngineType2String[mst.EngineType]}}
+	return row
+}
+
+func getCompactionType(mst *meta2.MeasurementInfo) *models.Row {
+	row := &models.Row{Columns: []string{"COMPACTION_TYPE"}}
+	row.Values = [][]interface{}{{config.CompactionType2Str(mst.ColStoreInfo.CompactionType)}}
 	return row
 }
 
@@ -2211,7 +2220,7 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 						} else {
 							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil)
 						}*/
-			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil, nil)
+			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil, nil, nil)
 
 			if err != nil {
 				return err

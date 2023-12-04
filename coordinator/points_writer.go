@@ -75,7 +75,8 @@ type PWMetaClient interface {
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	GetStreamInfos() map[string]*meta2.StreamInfo
 	GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool
@@ -647,14 +648,7 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 
 	if !reuseShardKey {
 		if stream {
-			if err = r.UnmarshalShardKeyByDimOrTag((*si).ShardKey, dims); err != nil {
-				if err != influx.ErrPointShouldHaveAllShardKey {
-					return
-				}
-				partialErr = err
-				err = nil
-				return
-			}
+			err = r.UnmarshalShardKeyByDimOrTag((*si).ShardKey, dims)
 		} else if engineType == config.COLUMNSTORE {
 			err = r.UnmarshalShardKeyByField((*si).ShardKey)
 		} else {
@@ -663,14 +657,14 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 			} else {
 				err = r.UnmarshalShardKeyByTag((*si).ShardKey)
 			}
-			if err != nil {
-				if err != influx.ErrPointShouldHaveAllShardKey {
-					return
-				}
-				partialErr = err
-				err = nil
+		}
+		if err != nil {
+			if err != influx.ErrPointShouldHaveAllShardKey {
 				return
 			}
+			partialErr = err
+			err = nil
+			return
 		}
 
 		if len(r.ShardKey) > MaxShardKey {
@@ -699,7 +693,7 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 	return
 }
 
-func updateIndexOptions(r *influx.Row, indexRelation meta2.IndexRelation) {
+func updateIndexOptions(r *influx.Row, indexRelation influxql.IndexRelation) {
 	r.IndexOptions = r.IndexOptions[:0]
 	if len(indexRelation.IndexList) > 0 && !r.ReadyBuildColumnToIndex {
 		buildColumnToIndex(r)

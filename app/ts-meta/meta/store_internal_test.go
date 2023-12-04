@@ -526,3 +526,45 @@ func Test_applyNotifyCQLeaseChanged(t *testing.T) {
 	require.Nil(t, resErr)
 	require.Equal(t, uint64(2), fsm.data.MaxCQChangeID)
 }
+
+func Test_applyUpdateMeasuremt(t *testing.T) {
+	orgOptions := &meta2.Options{Ttl: 1}
+	s := &Store{
+		raft: &MockRaftForCQ{isLeader: true},
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Duration: 1,
+							Measurements: map[string]*meta2.MeasurementInfo{
+								"cpu_0001": {Options: orgOptions},
+							},
+							MstVersions: map[string]meta2.MeasurementVer{
+								"cpu": {NameWithVersion: "cpu_0001", Version: 1},
+							},
+						},
+					},
+				},
+			},
+		},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	fsm := (*storeFSM)(s)
+
+	options := &meta2.Options{Ttl: 1}
+	value := &proto2.UpdateMeasurementCommand{
+		Db:      proto.String("db0"),
+		Rp:      proto.String("rp0"),
+		Mst:     proto.String("cpu"),
+		Options: options.Marshal(),
+	}
+	typ := proto2.Command_UpdateMeasurementCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command, value)
+	require.NoError(t, err)
+
+	resErr := applyUpdateMeasurement(fsm, cmd)
+	require.Nil(t, resErr)
+}

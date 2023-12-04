@@ -29,6 +29,7 @@ const (
 	NOT // operators of the logical expression.
 	AND
 	OR
+	MATCHPHRASE
 	UNKNOWN // unsupported type value.
 )
 
@@ -37,12 +38,13 @@ type RPNExpr struct {
 }
 
 var switchMap = map[influxql.Token]influxql.Token{
-	influxql.GT:  influxql.LT,
-	influxql.LT:  influxql.GT,
-	influxql.GTE: influxql.LTE,
-	influxql.LTE: influxql.GTE,
-	influxql.EQ:  influxql.EQ,
-	influxql.NEQ: influxql.NEQ,
+	influxql.GT:          influxql.LT,
+	influxql.LT:          influxql.GT,
+	influxql.GTE:         influxql.LTE,
+	influxql.LTE:         influxql.GTE,
+	influxql.EQ:          influxql.EQ,
+	influxql.NEQ:         influxql.NEQ,
+	influxql.MATCHPHRASE: influxql.MATCHPHRASE,
 }
 
 func ConvertToRPNExpr(expr influxql.Expr) *RPNExpr {

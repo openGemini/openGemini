@@ -61,7 +61,7 @@ func newTsspFileWriter(fd fileops.File, cacheMeta bool, limitCompact bool, lockP
 		fileWriter: fileops.NewFileWriter(lw, fileops.DefaultWriterBufferSize, lockPath),
 	}
 
-	w.cmw = NewIndexWriter(idxName, cacheMeta, limitCompact, lockPath)
+	w.cmw = NewPKIndexWriter(idxName, cacheMeta, limitCompact, lockPath)
 
 	return w
 }
@@ -210,7 +210,7 @@ type indexWriter struct {
 	metas        [][]byte
 }
 
-func NewIndexWriter(indexName string, cacheMeta bool, limitCompact bool, lockPath *string) *indexWriter {
+func NewPKIndexWriter(indexName string, cacheMeta bool, limitCompact bool, lockPath *string) *indexWriter {
 	w, ok := indexWriterPool.Get().(*indexWriter)
 	if !ok || w == nil {
 		w = &indexWriter{}

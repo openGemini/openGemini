@@ -34,7 +34,9 @@ import (
 var hitRatioStat = statistics.NewHitRatioStatistics()
 
 var MmapEn = false
-var ReadCacheEn = false
+var ReadMetaCacheEn = false
+var ReadDataCacheEn = false
+
 var (
 	errMapFail    = func(v ...interface{}) error { return errno.NewError(errno.MapFileFailed, v...) }
 	errReadFail   = func(v ...interface{}) error { return errno.NewError(errno.ReadFileFailed, v...) }
@@ -47,12 +49,25 @@ func EnableMmapRead(en bool) {
 	MmapEn = en
 }
 
-func EnableReadCache(readCacheLimit uint64) {
-	if readCacheLimit > 0 {
-		ReadCacheEn = true
-		readcache.SetCacheLimitSize(readCacheLimit)
+func SetPageSize(confPageSize string) {
+	readcache.SetPageSizeByConf(confPageSize)
+}
+
+func EnableReadMetaCache(en uint64) {
+	if en > 0 {
+		ReadMetaCacheEn = true
+		readcache.SetReadMetaCacheLimitSize(en)
 	} else {
-		ReadCacheEn = false
+		ReadMetaCacheEn = false
+	}
+}
+
+func EnableReadDataCache(en uint64) {
+	if en > 0 {
+		ReadDataCacheEn = true
+		readcache.SetReadDataCacheLimitSize(en)
+	} else {
+		ReadDataCacheEn = false
 	}
 }
 
@@ -248,9 +263,13 @@ func (r *fileReader) ReOpen() error {
 }
 
 func (r *fileReader) Close() error {
-	if ReadCacheEn {
-		cacheIns := readcache.GetReadCacheIns()
+	if ReadMetaCacheEn {
+		cacheIns := readcache.GetReadMetaCacheIns()
 		cacheIns.Remove(r.Name())
+	}
+	if ReadDataCacheEn {
+		dataCacheIns := readcache.GetReadDataCacheIns()
+		dataCacheIns.RemovePageCache(r.Name())
 	}
 
 	err := r.close()

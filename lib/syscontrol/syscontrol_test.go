@@ -22,9 +22,9 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
-	"github.com/openGemini/openGemini/engine/executor"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +48,10 @@ func (mockMetaClient) DataNodes() ([]meta2.DataNode, error) {
 			},
 		},
 	}, nil
+}
+
+func (mockMetaClient) SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error) {
+	return nil, nil
 }
 
 type mockErrMetaClient struct {
@@ -142,14 +146,14 @@ func TestProcessRequest_ForceBroadcastQuery(t *testing.T) {
 	var sb strings.Builder
 	require.NoError(t, ProcessRequest(req, &sb))
 	require.Contains(t, sb.String(), "\n\tsuccess")
-	assert.Equal(t, executor.EnableForceBroadcastQuery, int64(1))
+	assert.Equal(t, sysconfig.EnableForceBroadcastQuery, int64(1))
 	sb.Reset()
 
 	req.SetParam(map[string]string{
 		"enabled": "0",
 	})
 	require.NoError(t, ProcessRequest(req, &sb))
-	assert.Equal(t, executor.EnableForceBroadcastQuery, int64(0))
+	assert.Equal(t, sysconfig.EnableForceBroadcastQuery, int64(0))
 	sb.Reset()
 }
 
@@ -324,4 +328,17 @@ func TestParallelQuery(t *testing.T) {
 	require.NoError(t, ProcessRequest(req, &sb))
 	require.Contains(t, sb.String(), "success")
 	sb.Reset()
+}
+
+func Test_Failpoint(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("failpoint")
+	req.SetParam(map[string]string{
+		"switchon": "true",
+	})
+	var sb strings.Builder
+	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "success")
 }

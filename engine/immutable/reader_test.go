@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
@@ -342,6 +343,38 @@ func TestDecodeColumnData(t *testing.T) {
 	}
 }
 
+// fix #BUG2023110300631
+func TestDecodeStringColumnDataOfTimeDesc1(t *testing.T) {
+	timeCol := &record.ColVal{}
+	timeCol.AppendIntegers(1, 2, 3)
+
+	for _, typ := range []int{influx.Field_Type_String} {
+		col := &record.ColVal{}
+		col.Bitmap = make([]byte, 0)
+		col.BitMapOffset = 0
+		ref := record.Field{Name: "foo", Type: typ}
+		ctx := &ReadContext{
+			coderCtx:  &encoding.CoderContext{},
+			Ascending: false,
+		}
+		builder := ColumnBuilder{}
+		builder.colMeta = &ColumnMeta{name: "foo", ty: uint8(typ), entries: make([]Segment, 1)}
+		builder.coder = &encoding.CoderContext{}
+
+		switch typ {
+		case influx.Field_Type_String:
+			col.AppendStringNull()
+			col.AppendString("abc")
+			col.AppendStringNull()
+			require.NoError(t, builder.encStringColumn([]record.ColVal{*timeCol}, []record.ColVal{*col}, 0))
+		}
+
+		other := &record.ColVal{}
+		require.NoError(t, decodeColumnData(&ref, builder.data, other, ctx, true))
+		require.Equal(t, []byte{'\x02'}, other.Bitmap)
+	}
+}
+
 func preparePreAggBaseRec() *record.Record {
 	s := []record.Field{
 		{Name: "bps", Type: influx.Field_Type_Int},
@@ -519,7 +552,157 @@ func BenchmarkGenRecByRowNumbers(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		genRecByRowNumbers(rec, filterRec, reserveId)
+		genRecByRowNumbers(rec, filterRec, reserveId, nil, nil)
 		filterRec.Reuse()
 	}
+}
+
+type colValCodec struct {
+	timeCol record.ColVal
+	dataCol record.ColVal
+	other   record.ColVal
+
+	typ uint8
+	buf []byte
+}
+
+func (codec *colValCodec) setTyp(typ uint8) {
+	codec.typ = typ
+}
+
+func (codec *colValCodec) encode(t *testing.T) {
+	builder := NewColumnBuilder()
+	builder.colMeta = &ColumnMeta{}
+	builder.colMeta.growEntry()
+
+	timeCols := []record.ColVal{codec.timeCol}
+	dataCols := []record.ColVal{codec.dataCol}
+
+	ref := record.Field{
+		Type: int(codec.typ),
+		Name: "",
+	}
+	builder.segCol = dataCols
+	data, err := builder.encode(ref, timeCols, 0)
+
+	require.NoError(t, err)
+	codec.buf = data
+}
+
+func (codec *colValCodec) decode(t *testing.T) {
+	ref := &record.Field{
+		Type: int(codec.typ),
+		Name: "",
+	}
+
+	ctx := NewReadContext(true)
+	err := decodeColumnData(ref, codec.buf, &codec.other, ctx, true)
+	require.NoError(t, err)
+	require.Equal(t, codec.dataCol, codec.other)
+}
+
+func (codec *colValCodec) assertEncodeDataSize(t *testing.T, expSize int) {
+	require.Equal(t, expSize, len(codec.buf))
+}
+
+// ColVal.Len = 1
+func TestEncodeOneRowMode(t *testing.T) {
+	codec := &colValCodec{}
+	codec.setTyp(encoding.BlockInteger)
+
+	codec.timeCol.AppendIntegers(1)
+	codec.dataCol.AppendIntegers(2)
+	codec.encode(t)
+	codec.assertEncodeDataSize(t, 9)
+
+	other := &record.ColVal{}
+	DecodeColumnOfOneValue(codec.buf[1:], other, influx.Field_Type_Int)
+	require.Equal(t, 1, other.Len)
+	require.Equal(t, 0, other.NilCount)
+	require.Equal(t, 8, len(other.Val))
+
+	codec.dataCol.Init()
+	codec.dataCol.AppendIntegerNull()
+	codec.encode(t)
+	codec.assertEncodeDataSize(t, 1)
+
+	DecodeColumnOfOneValue(codec.buf[1:], other, influx.Field_Type_Int)
+	require.Equal(t, 1, other.Len)
+	require.Equal(t, 1, other.NilCount)
+	require.Equal(t, 0, len(other.Val))
+
+	var s = ""
+	for i := 0; i < 50; i++ {
+		s += "aaa"
+	}
+	codec.dataCol.Init()
+	codec.dataCol.AppendString(s)
+	codec.encode(t)
+	require.True(t, len(codec.buf) < 151)
+}
+
+// ColVal.NilCount = 0
+func TestEncodeFullMode(t *testing.T) {
+	codec := &colValCodec{}
+
+	codec.setTyp(encoding.BlockInteger)
+	codec.timeCol.AppendIntegers(1, 2, 3)
+	codec.dataCol.AppendIntegers(2, 3, 4)
+	codec.encode(t)
+	require.Equal(t, uint8(encoding.BlockIntegerFull), codec.buf[0])
+	codec.decode(t)
+
+	codec.setTyp(encoding.BlockString)
+	codec.dataCol.Init()
+	codec.dataCol.AppendStrings("aaa", "bbb", "ccc")
+	codec.encode(t)
+	require.Equal(t, uint8(encoding.BlockStringFull), codec.buf[0])
+	codec.decode(t)
+}
+
+// ColVal.NilCount == ColVal.Len
+func TestEncodeEmptyMode(t *testing.T) {
+	codec := &colValCodec{}
+
+	codec.setTyp(encoding.BlockInteger)
+	codec.timeCol.AppendIntegers(1, 2, 3)
+	codec.dataCol.AppendIntegerNulls(3)
+	codec.encode(t)
+	require.Equal(t, uint8(encoding.BlockIntegerEmpty), codec.buf[0])
+	codec.decode(t)
+
+	codec.setTyp(encoding.BlockString)
+	codec.dataCol.Init()
+	codec.dataCol.AppendStringNulls(3)
+	codec.encode(t)
+	require.Equal(t, uint8(encoding.BlockStringEmpty), codec.buf[0])
+	codec.decode(t)
+}
+
+func TestUpgrade(t *testing.T) {
+	codec := &colValCodec{}
+
+	codec.setTyp(encoding.BlockInteger)
+	codec.timeCol.AppendIntegers(1, 2, 3, 4)
+	codec.dataCol.AppendIntegers(1, 2, 3)
+	codec.dataCol.AppendIntegerNull()
+	codec.encode(t)
+
+	col := &record.ColVal{}
+	ctx := NewReadContext(true)
+	require.NoError(t, appendTimeColumnData(codec.buf, col, ctx, false))
+	require.Equal(t, 1, len(col.Bitmap))
+}
+
+func TestDecodeColumnHeader_error(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendFloat(1)
+
+	var invalidTyp uint8 = 100
+
+	buf := EncodeColumnHeader(col, nil, invalidTyp)
+	_, _, err := DecodeColumnHeader(col, buf, encoding.BlockInteger)
+
+	exp := fmt.Sprintf("type(%d) in table not eq select type(%d)", invalidTyp, encoding.BlockInteger)
+	require.EqualError(t, err, exp)
 }

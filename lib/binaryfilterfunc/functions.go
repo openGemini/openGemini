@@ -210,25 +210,28 @@ const (
 	LTE
 	EQ
 	NEQ
+	MATHCHPHRASE
 	BOTTOM
 )
 
 var operationMap = map[influxql.Token]int{
-	influxql.GT:  GT,
-	influxql.LT:  LT,
-	influxql.GTE: GTE,
-	influxql.LTE: LTE,
-	influxql.EQ:  EQ,
-	influxql.NEQ: NEQ,
+	influxql.GT:          GT,
+	influxql.LT:          LT,
+	influxql.GTE:         GTE,
+	influxql.LTE:         LTE,
+	influxql.EQ:          EQ,
+	influxql.NEQ:         NEQ,
+	influxql.MATCHPHRASE: MATHCHPHRASE,
 }
 
 var switchOpMap = map[int]int{
-	GT:  LT,
-	LT:  GT,
-	GTE: LTE,
-	LTE: GTE,
-	EQ:  EQ,
-	NEQ: NEQ,
+	GT:           LT,
+	LT:           GT,
+	GTE:          LTE,
+	LTE:          GTE,
+	EQ:           EQ,
+	NEQ:          NEQ,
+	MATHCHPHRASE: MATHCHPHRASE,
 }
 
 var idxTypeFun [BOTTOM][ColBottom]func(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte
@@ -243,7 +246,8 @@ func initIdxTypeFun() {
 		{GetStringGTEConditionBitMap, GetFloatGTEConditionBitMap, GetIntegerGTEConditionBitMap, nilFunc},
 		{GetStringLTEConditionBitMap, GetFloatLTEConditionBitMap, GetIntegerLTEConditionBitMap, nilFunc},
 		{GetStringEQConditionBitMap, GetFloatEQConditionBitMap, GetIntegerEQConditionBitMap, GetBooleanEQConditionBitMap},
-		{GetStringNEQConditionBitMap, GetFloatNEQConditionBitMap, GetIntegerNEQConditionBitMap, GetBooleanNEQConditionBitMap}}
+		{GetStringNEQConditionBitMap, GetFloatNEQConditionBitMap, GetIntegerNEQConditionBitMap, GetBooleanNEQConditionBitMap},
+	}
 }
 
 func getIdxFunction(expr *influxql.BinaryExpr, funcs IdxFunctions, switchOp bool, schema *record.Schemas, op influxql.Token) (IdxFunctions, error) {
@@ -461,7 +465,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 			case influxql.OR:
 				c.isSimpleExpr = false
 				c.rpn = append(c.rpn, &RPNElement{op: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}

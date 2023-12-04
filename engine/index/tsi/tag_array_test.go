@@ -1389,3 +1389,75 @@ func BenchmarkShowSeries_With_TagArray2(b *testing.B) {
 		searchSeriesWithTagArray2(idx.(*MergeSetIndex), series, []byte("mn-1"), nil, defaultTR)
 	}
 }
+
+func TestSearchSeries_With_TagArray_By_MultiTagAnd(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithTagArray1)
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+	}
+
+	f := func(name []byte, expr influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		index := idx.(*MergeSetIndex)
+		is := index.getIndexSearch()
+		defer index.putIndexSearch(is)
+
+		var tsids *uint64set.Set
+		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ids := iterator.Ids().AppendTo(nil)
+
+		keys := make([]string, 0, len(ids))
+		var seriesKeys [][]byte
+		var combineSeriesKey []byte
+		var isExpectSeries []bool
+		for _, id := range ids {
+			seriesKeys, _, isExpectSeries, err := index.searchSeriesWithTagArray(id, seriesKeys, nil, combineSeriesKey, isExpectSeries, opt.Condition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range seriesKeys {
+				if !isExpectSeries[i] {
+					continue
+				}
+
+				var seriesKey []byte
+				seriesKey = append(seriesKey, seriesKeys[i]...)
+				keys = append(keys, string(influx.Parse2SeriesKey(seriesKey, nil, true)))
+			}
+
+		}
+		sort.Strings(keys)
+		assert.Equal(t, len(keys), len(expectedSeriesKeys))
+
+		for i := 0; i < len(keys); i++ {
+			assert.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	// tag AND
+	opt.Condition = MustParseExpr(`tk1='value1' AND tk3='value33'`)
+	t.Run("tag AND 1", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+
+	preMaxIndexMetrics := maxIndexMetrics
+	maxIndexMetrics = 0
+	opt.Condition = MustParseExpr(`tk1='value1' AND tk3='value33'`)
+	t.Run("tag AND 2", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value33",
+		})
+	})
+	maxIndexMetrics = preMaxIndexMetrics
+}

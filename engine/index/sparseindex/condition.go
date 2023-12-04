@@ -34,6 +34,8 @@ type KeyCondition interface {
 	IsFirstPrimaryKey() bool
 	CanDoBinarySearch() bool
 	MayBeInRange(usedKeySize int, indexLeft []*FieldRef, indexRight []*FieldRef, dataTypes []int) (bool, error)
+	CheckInRange(rgs []*Range, dataTypes []int) (Mark, error)
+	AlwaysInRange() (bool, error)
 }
 
 type KeyConditionImpl struct {
@@ -74,7 +76,7 @@ func (kc *KeyConditionImpl) convertToRPNElem(
 				} else {
 					fieldCount--
 				}
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
@@ -428,6 +430,42 @@ func (kc *KeyConditionImpl) MayBeInRange(
 		return false, err
 	}
 	return mark.canBeTrue, nil
+}
+
+// AlwaysInRange checks that the index can not be used, pruning in advance to improve efficiency.
+func (kc *KeyConditionImpl) AlwaysInRange() (bool, error) {
+	var rpnStack []bool
+	for _, elem := range kc.rpn {
+		if elem.op == rpn.UNKNOWN {
+			return true, nil
+		} else if elem.op == rpn.InRange || elem.op == rpn.NotInRange || elem.op == rpn.InSet || elem.op == rpn.NotInSet {
+			rpnStack = append(rpnStack, false)
+		} else if elem.op == rpn.NOT {
+			// Not as a logical operator followed by an expression
+		} else if elem.op == rpn.AND {
+			if len(rpnStack) == 0 {
+				return false, errno.NewError(errno.ErrRPNIsNullForAnd)
+			}
+			v1 := rpnStack[len(rpnStack)-1]
+			rpnStack = rpnStack[:len(rpnStack)-1]
+			v2 := rpnStack[len(rpnStack)-1]
+			rpnStack[len(rpnStack)-1] = v1 && v2
+		} else if elem.op == rpn.OR {
+			if len(rpnStack) == 0 {
+				return false, errno.NewError(errno.ErrRPNIsNullForOR)
+			}
+			v1 := rpnStack[len(rpnStack)-1]
+			rpnStack = rpnStack[:len(rpnStack)-1]
+			v2 := rpnStack[len(rpnStack)-1]
+			rpnStack[len(rpnStack)-1] = v1 || v2
+		} else {
+			return false, errno.NewError(errno.ErrUnknownOpInCondition)
+		}
+	}
+	if len(rpnStack) != 1 {
+		return false, errno.NewError(errno.ErrInvalidStackInCondition)
+	}
+	return rpnStack[0], nil
 }
 
 func (kc *KeyConditionImpl) HavePrimaryKey() bool {

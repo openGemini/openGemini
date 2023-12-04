@@ -56,7 +56,8 @@ const (
 	DefaultBackGroundReadThroughput = 64 * MB
 	DefaultMaxWriteHangTime         = 15 * time.Second
 	DefaultWALSyncInterval          = 100 * time.Millisecond
-	DefaultReadCachePercent         = 3
+	DefaultReadMetaCachePercent     = 3
+	DefaultReadDataCachePercent     = 10
 	MinFlavorMemory                 = 8 * GB
 	MaxFlavorMemory                 = 512 * GB
 
@@ -70,6 +71,9 @@ const (
 	WalDirectory       = "wal"
 	MetaDirectory      = "meta"
 )
+
+var ReadMetaCachePct = DefaultReadMetaCachePercent
+var ReadDataCachePct = DefaultReadDataCachePercent
 
 // TSStore represents the configuration format for the influxd binary.
 type TSStore struct {
@@ -226,6 +230,7 @@ type Store struct {
 	NodeMutableSizeLimit  toml.Size     `toml:"node-mutable-size-limit"`
 	MaxWriteHangTime      toml.Duration `toml:"max-write-hang-time"`
 	MemDataReadEnabled    bool          `toml:"mem-data-read-enabled"`
+	CsCompactionEnabled   bool          `toml:"column-store-compact-enabled"`
 	SnapshotTblNum        int           `toml:"snapshot-table-number"`
 	FragmentsNumPerFlush  int           `toml:"fragments-num-per-flush"`
 
@@ -239,7 +244,11 @@ type Store struct {
 	Readonly          bool          `toml:"readonly"`
 	CompactRecovery   bool          `toml:"compact-recovery"`
 
-	ReadCacheLimit       toml.Size `toml:"read-cache-limit"`
+	ReadPageSize         string    `toml:"read-page-size"`
+	ReadMetaCacheEn      toml.Size `toml:"enable-meta-cache"`
+	ReadMetaCacheEnPct   toml.Size `toml:"read-meta-cache-limit-pct"`
+	ReadDataCacheEn      toml.Size `toml:"enable-data-cache"`
+	ReadDataCacheEnPct   toml.Size `toml:"read-data-cache-limit-pct"`
 	WriteConcurrentLimit int       `toml:"write-concurrent-limit"`
 	OpenShardLimit       int       `toml:"open-shard-limit"`
 	MaxSeriesPerDatabase int       `toml:"max-series-per-database"`
@@ -273,7 +282,7 @@ type Store struct {
 func NewStore() Store {
 	size, _ := memory.SysMem()
 	memorySize := toml.Size(size * KB)
-	readCacheLimit := getCacheLimitSize(uint64(memorySize))
+	ReadMetaCacheEn := getReadMetaCacheLimitSize(uint64(memorySize))
 	return Store{
 		IngesterAddress:              DefaultIngesterAddress,
 		SelectAddress:                DefaultSelectAddress,
@@ -293,7 +302,7 @@ func NewStore() Store {
 		CacheDataBlock:               false,
 		CacheMetaBlock:               false,
 		EnableMmapRead:               false,
-		ReadCacheLimit:               toml.Size(readCacheLimit),
+		ReadMetaCacheEn:              toml.Size(ReadMetaCacheEn),
 		WriteConcurrentLimit:         0,
 		WalSyncInterval:              toml.Duration(DefaultWALSyncInterval),
 		WalEnabled:                   true,
@@ -322,9 +331,13 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	if c.OpenShardLimit <= 0 {
 		c.OpenShardLimit = cpuNum
 	}
-
-	if c.ReadCacheLimit != 0 {
-		c.ReadCacheLimit = toml.Size(getCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
+	SetReadMetaCachePct(int(c.ReadMetaCacheEnPct))
+	if c.ReadMetaCacheEn != 0 {
+		c.ReadMetaCacheEn = toml.Size(getReadMetaCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
+	}
+	SetReadDataCachePct(int(c.ReadDataCacheEnPct))
+	if c.ReadDataCacheEn != 0 {
+		c.ReadDataCacheEn = toml.Size(getReadDataCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
 	}
 	defaultShardMutableSizeLimit := toml.Size(uint64Limit(8*MB, 1*GB, uint64(memorySize/256)))
 	defaultNodeMutableSizeLimit := toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/16)))
@@ -453,8 +466,24 @@ func NewOpsMonitorConfig() *OpsMonitor {
 	}
 }
 
-func getCacheLimitSize(size uint64) uint64 {
-	return size * DefaultReadCachePercent / 100
+func SetReadMetaCachePct(pct int) {
+	if pct > 0 && pct < 100 {
+		ReadMetaCachePct = pct
+	}
+}
+
+func SetReadDataCachePct(pct int) {
+	if pct > 0 && pct < 100 {
+		ReadDataCachePct = pct
+	}
+}
+
+func getReadMetaCacheLimitSize(size uint64) uint64 {
+	return size * uint64(ReadMetaCachePct) / 100
+}
+
+func getReadDataCacheLimitSize(size uint64) uint64 {
+	return size * uint64(ReadDataCachePct) / 100
 }
 
 type ClvConfig struct {

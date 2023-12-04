@@ -17,14 +17,19 @@ limitations under the License.
 package sparseindex
 
 import (
+	"errors"
+	"fmt"
+
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
-type IndexReader interface {
+type PKIndexReader interface {
 	Scan(pkFile string,
 		pkRec *record.Record,
 		pkMark fragment.IndexFragment,
@@ -33,13 +38,25 @@ type IndexReader interface {
 	Close() error
 }
 
-type IndexReaderImpl struct {
+type PKIndexWriter interface {
+	Build(srcRec *record.Record,
+		pkSchema record.Schemas,
+		rowsNumPerFragment []int,
+		tcLocation int8,
+		fixRowsPerSegment int,
+	) (
+		*record.Record, fragment.IndexFragment, error,
+	)
+	Close() error
+}
+
+type PKIndexReaderImpl struct {
 	property *IndexProperty
 	logger   *logger.Logger
 }
 
-func NewIndexReader(rowsNumPerFragment int, coarseIndexFragment int, minRowsForSeek int) *IndexReaderImpl {
-	return &IndexReaderImpl{
+func NewPKIndexReader(rowsNumPerFragment int, coarseIndexFragment int, minRowsForSeek int) *PKIndexReaderImpl {
+	return &PKIndexReaderImpl{
 		property: NewIndexProperty(rowsNumPerFragment, coarseIndexFragment, minRowsForSeek),
 		logger:   logger.NewLogger(errno.ModuleIndex),
 	}
@@ -67,7 +84,7 @@ func NewIndexReader(rowsNumPerFragment int, coarseIndexFragment int, minRowsForS
 //
 //  5. scan results:
 //     fragment range -> [1, 3)
-func (s *IndexReaderImpl) Scan(
+func (r *PKIndexReaderImpl) Scan(
 	pkFile string,
 	pkRec *record.Record,
 	pkMark fragment.IndexFragment,
@@ -89,7 +106,7 @@ func (s *IndexReaderImpl) Scan(
 	usedKeySize := keyCondition.GetMaxKeyIndex() + 1
 	primaryKey := pkSchema
 	pkTypes := getDataTypesFromPk(primaryKey)
-	createFieldRef = s.createFieldRefFunc(index, primaryKey, usedKeySize)
+	createFieldRef = r.createFieldRefFunc(index, primaryKey, usedKeySize)
 
 	indexLeft := make([]*FieldRef, usedKeySize)
 	indexRight := make([]*FieldRef, usedKeySize)
@@ -108,12 +125,12 @@ func (s *IndexReaderImpl) Scan(
 	}
 
 	if !keyCondition.CanDoBinarySearch() {
-		return s.doExclusionSearch(fragmentCount, pkFile, checkInRange)
+		return r.doExclusionSearch(fragmentCount, pkFile, checkInRange)
 	}
-	return s.doBinarySearch(fragmentCount, pkFile, checkInRange)
+	return r.doBinarySearch(fragmentCount, pkFile, checkInRange)
 }
 
-func (s *IndexReaderImpl) createFieldRefFunc(
+func (r *PKIndexReaderImpl) createFieldRefFunc(
 	index *record.Record,
 	primaryKey record.Schemas,
 	usedKeySize int,
@@ -139,12 +156,12 @@ func (s *IndexReaderImpl) createFieldRefFunc(
 }
 
 // doBinarySearch does binary search to get the target ranges
-func (s *IndexReaderImpl) doBinarySearch(
+func (r *PKIndexReaderImpl) doBinarySearch(
 	fragmentCount uint32,
 	fileName string,
 	checkInRange func(mr *fragment.FragmentRange) (bool, error),
 ) (fragment.FragmentRanges, error) {
-	s.logger.Debug("Running binary search on index range for", zap.String("datafile", fileName), zap.Uint32("masks", fragmentCount))
+	r.logger.Debug("Running binary search on index range for", zap.String("datafile", fileName), zap.Uint32("masks", fragmentCount))
 
 	var res fragment.FragmentRanges
 	steps, left, right := uint32(0), uint32(0), fragmentCount
@@ -164,7 +181,7 @@ func (s *IndexReaderImpl) doBinarySearch(
 		steps++
 	}
 	resRange.Start = left
-	s.logger.Debug("Found (LEFT) boundary", zap.Uint32("mark", left))
+	r.logger.Debug("Found (LEFT) boundary", zap.Uint32("mark", left))
 
 	right = fragmentCount
 	for left+1 < right {
@@ -182,7 +199,7 @@ func (s *IndexReaderImpl) doBinarySearch(
 		steps++
 	}
 	resRange.End = right
-	s.logger.Debug("Found (RIGHT) boundary", zap.Uint32("mark", right))
+	r.logger.Debug("Found (RIGHT) boundary", zap.Uint32("mark", right))
 
 	if resRange.Start < resRange.End {
 		inRange, err := checkInRange(resRange)
@@ -194,24 +211,24 @@ func (s *IndexReaderImpl) doBinarySearch(
 		}
 	}
 
-	s.logger.Debug("Found", zap.String("range", getSearchStatus(res)), zap.Uint32("steps", steps))
+	r.logger.Debug("Found", zap.String("range", getSearchStatus(res)), zap.Uint32("steps", steps))
 	return res, nil
 }
 
 // doExclusionSearch does exclusion search, where we drop ranges that do not match
-func (s *IndexReaderImpl) doExclusionSearch(
+func (r *PKIndexReaderImpl) doExclusionSearch(
 	fragmentCount uint32,
 	fileName string,
 	checkInRange func(mr *fragment.FragmentRange) (bool, error),
 ) (fragment.FragmentRanges, error) {
-	s.logger.Debug("Running exclusion search on index range for", zap.String("datafile", fileName), zap.Uint32("masks", fragmentCount))
-	if s.property.CoarseIndexFragment <= 1 {
+	r.logger.Debug("Running exclusion search on index range for", zap.String("datafile", fileName), zap.Uint32("masks", fragmentCount))
+	if r.property.CoarseIndexFragment <= 1 {
 		return nil, errno.NewError(errno.ErrCoarseIndexFragment)
 	}
 
 	var res fragment.FragmentRanges
 	steps := uint32(0)
-	minMarksForSeek := (s.property.MinRowsForSeek + s.property.RowsNumPerFragment - 1) / s.property.RowsNumPerFragment
+	minMarksForSeek := (r.property.MinRowsForSeek + r.property.RowsNumPerFragment - 1) / r.property.RowsNumPerFragment
 	rangesStack := []*fragment.FragmentRange{{Start: 0, End: fragmentCount}}
 	for len(rangesStack) > 0 {
 		mr := rangesStack[len(rangesStack)-1]
@@ -233,7 +250,7 @@ func (s *IndexReaderImpl) doExclusionSearch(
 				res[len(res)-1].End = mr.End
 			}
 		} else {
-			step := (mr.End-mr.Start-1)/uint32(s.property.CoarseIndexFragment) + 1
+			step := (mr.End-mr.Start-1)/uint32(r.property.CoarseIndexFragment) + 1
 			var end uint32
 			for end = mr.End; end > mr.Start+step; end -= step {
 				rangesStack = append(rangesStack, fragment.NewFragmentRange(end-step, end))
@@ -241,10 +258,120 @@ func (s *IndexReaderImpl) doExclusionSearch(
 			rangesStack = append(rangesStack, fragment.NewFragmentRange(mr.Start, end))
 		}
 	}
-	s.logger.Debug("Used generic exclusion search over index for", zap.String("datafile", fileName), zap.Uint32("steps", steps))
+	r.logger.Debug("Used generic exclusion search over index for", zap.String("datafile", fileName), zap.Uint32("steps", steps))
 	return res, nil
 }
 
-func (s *IndexReaderImpl) Close() error {
+func (r *PKIndexReaderImpl) Close() error {
+	return nil
+}
+
+var (
+	// InitIndexFragmentFixedSize means that each fragment is fixed in size except the last fragment.
+	InitIndexFragmentFixedSize = true
+)
+
+type PKIndexWriterImpl struct {
+}
+
+func NewPKIndexWriter() *PKIndexWriterImpl {
+	return &PKIndexWriterImpl{}
+}
+
+// Build generates sparse primary index based on sorted data to be flushed to disks.
+func (w *PKIndexWriterImpl) Build(
+	srcRec *record.Record,
+	pkSchema record.Schemas,
+	rowsNumPerFragment []int,
+	tcLocation int8,
+	fixRowsPerSegment int,
+) (
+	*record.Record,
+	fragment.IndexFragment,
+	error,
+) {
+	numFragment := len(rowsNumPerFragment)
+	dstRec, err := w.buildData(srcRec, pkSchema, rowsNumPerFragment, numFragment, tcLocation)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	indexFragment := w.buildFragment(rowsNumPerFragment, numFragment, fixRowsPerSegment)
+	return dstRec, indexFragment, nil
+}
+
+// buildData generates sparse primary index data based on sorted data to be flushed to disks.
+func (w *PKIndexWriterImpl) buildData(
+	srcRec *record.Record,
+	pkSchema record.Schemas,
+	rowsNumPerFragment []int,
+	numFragment int,
+	tcLocation int8,
+) (
+	*record.Record,
+	error,
+) {
+	if tcLocation > colstore.DefaultTCLocation {
+		field := record.Field{Type: influx.Field_Type_Int, Name: record.TimeClusterCol}
+		pkSchema = append([]record.Field{field}, pkSchema...)
+	}
+	dstRec := record.NewRecord(pkSchema, false)
+	for i := 0; i < pkSchema.Len(); i++ {
+		if idx := srcRec.Schema.FieldIndex(pkSchema.Field(i).Name); idx >= 0 {
+			switch pkSchema.Field(i).Type {
+			case influx.Field_Type_String, influx.Field_Type_Tag:
+				w.generateColumn(srcRec, dstRec, rowsNumPerFragment, numFragment, pkSchema.Field(i).Type, idx, i)
+			case influx.Field_Type_Int:
+				w.generateColumn(srcRec, dstRec, rowsNumPerFragment, numFragment, influx.Field_Type_Int, idx, i)
+			case influx.Field_Type_Float:
+				w.generateColumn(srcRec, dstRec, rowsNumPerFragment, numFragment, influx.Field_Type_Float, idx, i)
+			case influx.Field_Type_Boolean:
+				w.generateColumn(srcRec, dstRec, rowsNumPerFragment, numFragment, influx.Field_Type_Boolean, idx, i)
+			default:
+				return nil, errors.New("unsupported data type")
+			}
+		} else {
+			return nil, fmt.Errorf("the table does not have a primary key field, %s", pkSchema.Field(i).Name)
+		}
+	}
+	return dstRec, nil
+}
+
+func (w *PKIndexWriterImpl) generateColumn(
+	srcRec *record.Record,
+	dstRec *record.Record,
+	rowsNumPerFragment []int,
+	numFragment int,
+	dataType int,
+	srcColIdx int,
+	dstColIdx int,
+) {
+	// eg: rowsNumPerFragment -> [8192,8192*2,8192*3....,len(srcRec) - 8192*n]  or  [7000,13847,21420,...,len(srcRec)-1]
+	start := 0
+	dstRec.ColVals[dstColIdx].AppendColVal(&srcRec.ColVals[srcColIdx], dataType, start, start+1)
+	for j := 0; j < numFragment; j++ {
+		dstRec.ColVals[dstColIdx].AppendColVal(&srcRec.ColVals[srcColIdx], dataType, rowsNumPerFragment[j], rowsNumPerFragment[j]+1)
+	}
+}
+
+// buildFragment generates sparse primary index fragment based on sorted data to be flushed to disks.
+func (w *PKIndexWriterImpl) buildFragment(
+	rowsNumPerFragment []int,
+	numFragment int,
+	fixRowsPerSegment int,
+) fragment.IndexFragment {
+	if fixRowsPerSegment != 0 {
+		return fragment.NewIndexFragmentFixedSize(uint32(numFragment), uint64(fixRowsPerSegment))
+	}
+
+	accumulateRowCount := make([]uint64, numFragment)
+	for i := 0; i < numFragment-1; i++ {
+		accumulateRowCount[i] = uint64(rowsNumPerFragment[i])
+	}
+	accumulateRowCount[numFragment-1] = uint64(rowsNumPerFragment[numFragment-1] + 1)
+	return fragment.NewIndexFragmentVariable(accumulateRowCount)
+}
+
+func (w *PKIndexWriterImpl) Close() error {
 	return nil
 }

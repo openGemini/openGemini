@@ -95,6 +95,22 @@ var messageMap = map[Errno]*Message{
 	WritePointSchemaInvalid:      newFatalMessage("point schema length does not match ddl schema length: %d != %d", ModuleWrite),
 	WritePointPrimaryKeyErr:      newFatalMessage("checkSchema: write point is not match the number of primary key. mst: %s,  expect:%d but:%d", ModuleWrite),
 
+	// write interface error codes
+	InvalidLogDataType:                 newWarnMessage("invalid log data type value", ModuleWriteInterface),
+	InvalidMappingTimeKey:              newWarnMessage("mapping missing timestamp key", ModuleWriteInterface),
+	InvalidMappingContentKeyMissing:    newWarnMessage("mapping missing content key", ModuleWriteInterface),
+	InvalidMappingTimeKeyType:          newWarnMessage("mapping timestamp key type should be string", ModuleWriteInterface),
+	InvalidMappingTimeKeyVal:           newWarnMessage("mapping timestamp key is empty", ModuleWriteInterface),
+	InvalidMappingContentKeyType:       newWarnMessage("mapping content key type should be string array", ModuleWriteInterface),
+	InvalidMappingContentKeySubType:    newWarnMessage("mapping content sub key type should be string", ModuleWriteInterface),
+	InvalidMappingContentKeyValMissing: newWarnMessage("mapping content key value is empty array", ModuleWriteInterface),
+	InvalidMappingTagsKeyType:          newWarnMessage("mapping tags key type should be string array", ModuleWriteInterface),
+	InvalidMappingTagsKeySubType:       newWarnMessage("mapping tags sub key type should be string", ModuleWriteInterface),
+	InvalidRequestBodyLength:           newWarnMessage("request body length more than 100M", ModuleWriteInterface),
+	InvalidMappingDefaultType:          newWarnMessage("invalid mapping default type value", ModuleWriteInterface),
+	InvalidRetryPara:                   newWarnMessage("invalid retry value", ModuleWriteInterface),
+	InvalidXLogCompressType:            newWarnMessage("x-log-compresstype is err", ModuleWriteInterface),
+
 	// network module error codes
 	NoConnectionAvailable: newFatalMessage("no connections available, node: %v, %v", ModuleNetwork),
 	NoNodeAvailable:       newFatalMessage("no node available, node: %v", ModuleNetwork),
@@ -203,6 +219,7 @@ var messageMap = map[Errno]*Message{
 	SortTransformRunningErr:        newWarnMessage("SortTransform run error", ModuleQueryEngine),
 	HashMergeTransformRunningErr:   newWarnMessage("HashMergeTransform run error", ModuleQueryEngine),
 	HashAggTransformRunningErr:     newWarnMessage("HashAggTransform work error", ModuleQueryEngine),
+	InvalidIncQueryScrollID:        newFatalMessage("the format of the scroll_id inc query should be queryId-iterID. scroll_id=%s.", ModuleQueryEngine),
 
 	// meta error codes
 	InvalidTagKey:           newWarnMessage(`tag key can't be time, measurement is '%s'`, ModuleMeta),

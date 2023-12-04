@@ -24,11 +24,11 @@ import (
 
 func TestIndexCache(t *testing.T) {
 	dir := t.TempDir()
-	indexCache := NewIndexCache(0, 0, 0, dir)
+	indexCache := NewIndexCache(0, 0, 0, 0, dir)
 	err := indexCache.close()
 	require.Nil(t, err)
 
-	indexCache = newIndexCache(0, 0, 0, dir, false)
+	indexCache = newIndexCache(0, 0, 0, 0, dir, false)
 	err = indexCache.close()
 	require.Nil(t, err)
 }

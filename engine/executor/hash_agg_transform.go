@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -261,6 +262,7 @@ type HashAggTransform struct {
 	hashAggType        HashAggType
 	timeFuncState      TimeFuncState
 	firstOrLastFuncLoc int
+	haveTopBottomOp    bool
 }
 
 type TimeFuncState uint32
@@ -377,6 +379,12 @@ func (trans *HashAggTransform) InitFuncs(inRowDataType, outRowDataType hybridqp.
 				fn, err = NewMaxFunc(inRowDataType, outRowDataType, exprOpt[i])
 			case "percentile":
 				fn, err = NewPercentileFunc(inRowDataType, outRowDataType, exprOpt[i])
+			case "top":
+				trans.haveTopBottomOp = true
+				fn, err = NewHeapFunc(inRowDataType, outRowDataType, exprOpt, i, true)
+			case "bottom":
+				trans.haveTopBottomOp = true
+				fn, err = NewHeapFunc(inRowDataType, outRowDataType, exprOpt, i, false)
 			default:
 				return errors.New("unsupported aggregation operator of call processor")
 			}
@@ -524,7 +532,7 @@ func (trans *HashAggTransform) hashAggHelper(ctx context.Context, errs *errno.Er
 		close(trans.inputChunk)
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.hashAggLogger.Error(err.Error(), zap.String("query", "HashAggTransform"),
+			trans.hashAggLogger.Error(string(debug.Stack()), zap.String("query", "HashAggTransform"),
 				zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
@@ -722,7 +730,7 @@ func (trans *HashAggTransform) putBufsToPools(groupIds []uint64, intervalIds []u
 
 func (trans *HashAggTransform) aggCompute(results *aggOperatorMsg, startRowLoc int, endRowLoc int) error {
 	for j, f := range trans.funcs {
-		if err := results.results[j].Compute(trans.bufChunk, f.inIdx, startRowLoc, endRowLoc); err != nil {
+		if err := results.results[j].Compute(trans.bufChunk, f.inIdx, startRowLoc, endRowLoc, f.input); err != nil {
 			return err
 		}
 	}
@@ -984,9 +992,11 @@ func (trans *HashAggTransform) generateFixIntervalNullOrNumFillOutput() {
 			} else {
 				aggOperators := interval.results
 				for k, f := range trans.funcs {
-					aggOperators[k].SetOutVal(chunk, f.outIdx, f.percentile)
+					aggOperators[k].SetOutVal(chunk, f.outIdx, f.input)
 				}
-				chunk.AppendTime(interval.intervalStartTime)
+				if !trans.haveTopBottomOp {
+					chunk.AppendTime(interval.intervalStartTime)
+				}
 			}
 			if chunk.Len() >= trans.schema.GetOptions().ChunkSizeNum() {
 				trans.sendChunk(chunk)
@@ -1030,12 +1040,14 @@ func (trans *HashAggTransform) generateFixIntervalNoFillOutPut() {
 			}
 			aggOperators := interval.results
 			for k, f := range trans.funcs {
-				aggOperators[k].SetOutVal(chunk, f.outIdx, f.percentile)
+				aggOperators[k].SetOutVal(chunk, f.outIdx, f.input)
 			}
 			if !trans.opt.HasInterval() && trans.timeFuncState != unKnown {
 				chunk.AppendTime(aggOperators[trans.firstOrLastFuncLoc].GetTime())
 			} else {
-				chunk.AppendTime(interval.intervalStartTime)
+				if !trans.haveTopBottomOp {
+					chunk.AppendTime(interval.intervalStartTime)
+				}
 			}
 			if chunk.Len() >= trans.schema.GetOptions().ChunkSizeNum() {
 				trans.sendChunk(chunk)

@@ -33,8 +33,11 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -248,7 +251,8 @@ func (c *MockRWMetaClient) UpdateSchema(_ string, _ string, _ string, _ []*proto
 	return nil
 }
 
-func (c *MockRWMetaClient) CreateMeasurement(_ string, _ string, _ string, _ *meta.ShardKeyInfo, _ *meta.IndexRelation, _ config.EngineType, _ *meta.ColStoreInfo, _ []*proto.FieldSchema) (*meta.MeasurementInfo, error) {
+func (c *MockRWMetaClient) CreateMeasurement(_ string, _ string, _ string, _ *meta.ShardKeyInfo, _ *influxql.IndexRelation, _ config.EngineType, _ *meta.ColStoreInfo,
+	_ []*proto.FieldSchema, _ *meta2.Options) (*meta.MeasurementInfo, error) {
 	return nil, c.CreateMeasurementErr
 }
 
@@ -360,6 +364,61 @@ func TestRetryWriteRecordWriteErr(t *testing.T) {
 	rw.processRecord(msg, 0)
 }
 
+func TestProcessRecord(t *testing.T) {
+	rw := NewRecordWriter(10*time.Second, 1, 2)
+	rw.MetaClient = NewMockMetaClient()
+	rw.StorageEngine = NewMockStorageEngine()
+	recs := MockArrowRecords(1, 1)
+	client1 := &MockRWMetaClient{DatabaseErr: io.EOF}
+	rw.recWriterHelpers = append(rw.recWriterHelpers, newRecordWriterHelper(client1, 0))
+
+	msg := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: recs[0]}
+	rw.processRecord(msg, 0)
+	msg1 := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: &record.Record{}}
+	rw.processRecord(msg1, 0)
+	msg2 := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: 0}
+	rw.processRecord(msg2, 0)
+}
+
+func TestWriteLogRecord(t *testing.T) {
+	var err error
+	db, rp, mst := "db0", "rp0", "rtt"
+
+	// get the cur nodeId
+	startClient(t)
+
+	// build the record writer
+	rw := NewRecordWriter(10*time.Second, 1, 2)
+	defer func() {
+		if err = rw.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := record.NewRecord(schema, true)
+	rec.ColVals[0].AppendIntegers([]int64{1, 2, 3, 4, 5}...)
+	unixNano := time.Now().UnixNano() + 30*time.Minute.Nanoseconds()
+	rec.AppendTime([]int64{unixNano, unixNano, unixNano, unixNano, unixNano}...)
+
+	streamDistribution = diffDis
+	engineType = config.COLUMNSTORE
+	rw.MetaClient = NewMockMetaClient()
+	rw.StorageEngine = NewMockStorageEngine()
+	if err = rw.Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err = rw.RetryWriteLogRecord(db, rp, mst, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err = rw.writeLogRecord(db, rp, mst, rec, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSplitAndWriteByShardErr(t *testing.T) {
 	var err error
 	db, rp, mst := "db0", "rp0", "rtt"
@@ -398,25 +457,25 @@ func MockArrowRecord4() array.Record {
 
 func TestCheckAndUpdateSchema(t *testing.T) {
 	rw := newRecordWriterHelper(NewMockMetaClient(), 0)
-	_, _, _, err := rw.checkAndUpdateSchema("db0", "rp0", "mst0", MockArrowRecord1())
+	_, _, _, err := rw.checkAndUpdateSchema("db0", "rp0", "mst0", "mst0", MockArrowRecord1())
 	assert.Equal(t, errno.Equal(err, errno.ColumnStoreColNumErr), true)
 
-	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "mst0", MockArrowRecord2())
+	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "mst0", "mst0", MockArrowRecord2())
 	assert.Equal(t, errno.Equal(err, errno.ColumnStoreSchemaNullErr), true)
 
 	rw.preMst = NewMeasurement("rtt", config.COLUMNSTORE)
 	rw.preMst.ColStoreInfo = nil
-	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", MockArrowRecord2())
+	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", "mst0", MockArrowRecord2())
 	assert.Equal(t, errno.Equal(err, errno.ColumnStorePrimaryKeyNullErr), true)
 
 	rw.preMst.ColStoreInfo = &meta.ColStoreInfo{PrimaryKey: []string{"int1"}}
-	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", MockArrowRecord4())
+	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", "mst0", MockArrowRecord4())
 	assert.Equal(t, errno.Equal(err, errno.ColumnStorePrimaryKeyLackErr), true)
 
 	rw.preMst.ColStoreInfo = &meta.ColStoreInfo{PrimaryKey: []string{"time"}}
-	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", MockArrowRecord3())
+	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", "mst0", MockArrowRecord3())
 	assert.Equal(t, errno.Equal(err, errno.ArrowRecordTimeFieldErr), true)
 
-	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", MockArrowRecord4())
+	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", "mst0", MockArrowRecord4())
 	assert.Equal(t, errno.Equal(err, errno.ColumnStoreFieldTypeErr), true)
 }

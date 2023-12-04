@@ -182,6 +182,42 @@ func Test_VerifyDataNodeStatus_Request_Response(t *testing.T) {
 
 }
 
+func Test_SendSysCtrlToMeta_Request_Response(t *testing.T) {
+	request := message.SendSysCtrlToMetaRequest{
+		Mod:   "failpoint",
+		Param: map[string]string{"swithon": "true"},
+	}
+	buf, _ := request.Marshal(nil)
+
+	reqMsg := request.Instance()
+	err := reqMsg.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = reqMsg.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, reqMsg.Size(), request.Size())
+
+	response := message.SendSysCtrlToMetaResponse{
+		Err: "mock error",
+	}
+	buf, _ = response.Marshal(nil)
+
+	respMsg := response.Instance()
+	err = respMsg.Unmarshal(nil)
+	assert.NoError(t, err)
+
+	err = respMsg.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, respMsg.Size(), response.Size())
+
+	msg1 := message.MetaMessageBinaryCodec[message.SendSysCtrlToMetaRequestMessage]
+	assert.NotNil(t, msg1)
+
+	msg2 := message.MetaMessageBinaryCodec[message.SendSysCtrlToMetaResponseMessage]
+	assert.NotNil(t, msg2)
+
+}
+
 func TestNewMessage(t *testing.T) {
 	var msgType uint8
 

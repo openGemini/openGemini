@@ -50,8 +50,8 @@ func TestMoveEventTransition(t *testing.T) {
 
 	db := "db0"
 	globalService.store.NetStore = NewMockNetStorage()
-	globalService.clusterManager.addClusterMember(2)
-	globalService.clusterManager.addClusterMember(3)
+	globalService.clusterManager.handleClusterMember(2, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 1})
+	globalService.clusterManager.handleClusterMember(2, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 1})
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	if err != nil {
 		t.Fatal(err)

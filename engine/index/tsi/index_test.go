@@ -1138,3 +1138,323 @@ func TestGetIndexOidByName(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func CreateIndexByPtsOfAllAndExpr(idx Index, keys ...string) {
+	if keys == nil {
+		keys = []string{
+			"mn-1,tag1=1,tag2=1,tag3=1",
+			"mn-1,tag1=1,tag2=1,tag3=2",
+			"mn-1,tag1=1,tag2=2,tag3=3",
+			"mn-1,tag1=1,tag2=2,tag3=4",
+			"mn-1,tag2=99,tag3=99",
+		}
+	}
+
+	pts := make([]influx.Row, 0, len(keys))
+	for _, key := range keys {
+		pt := influx.Row{}
+		strs := strings.Split(key, ",")
+		pt.Name = strs[0] + "_0000"
+		pt.Tags = make(influx.PointTags, len(strs)-1)
+		for i, str := range strs[1:] {
+			kv := strings.Split(str, "=")
+			pt.Tags[i].Key = kv[0]
+			pt.Tags[i].Value = kv[1]
+		}
+		sort.Sort(&pt.Tags)
+		pt.Timestamp = time.Now().UnixNano()
+		pt.UnmarshalIndexKeys(nil)
+		pt.ShardKey = pt.IndexKey
+		pts = append(pts, pt)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &pts)
+	if err := idx.CreateIndexIfNotExists(mmPoints); err != nil {
+		panic(err)
+	}
+
+	for mmIndex := range mmPoints.D {
+		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
+		if !ok {
+			panic("create index failed due to map mmPoints")
+		}
+
+		for rowIdx := range *rows {
+			if (*rows)[rowIdx].SeriesId == 0 {
+				panic("create index failed")
+			}
+		}
+	}
+
+	idx.Close()
+	idx.Open()
+}
+
+func TestSeriesByAllAndExprIterator(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsOfAllAndExpr(idx)
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+	}
+
+	f := func(name []byte, expr influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		index := idx.(*MergeSetIndex)
+		is := index.getIndexSearch()
+		defer index.putIndexSearch(is)
+
+		name = append(name, []byte("_0000")...)
+
+		var tsids *uint64set.Set
+		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []uint64
+		if iterator == nil {
+			assert.Equal(t, 0, len(expectedSeriesKeys))
+		} else {
+			ids = iterator.Ids().AppendTo(nil)
+			assert.Equal(t, len(ids), len(expectedSeriesKeys))
+		}
+		keys := make([]string, 0, len(ids))
+		for _, id := range ids {
+			key, err := index.searchSeriesKey(nil, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys = append(keys, string(influx.Parse2SeriesKey(key, nil, true)))
+		}
+		sort.Strings(keys)
+
+		for i := 0; i < len(keys); i++ {
+			assert.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	// one tag filter
+	opt.Condition = MustParseExpr(`tag3='1' and field_str0 != 'abc'`)
+	t.Run("one tag filter", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+		})
+	})
+
+	// all AND filed, contain inValid SubExpr
+	opt.Condition = MustParseExpr(`field_str0 != 'abc' AND 3.0 != field_float1`)
+	t.Run("all AND tag, contain inValid SubExpr", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x002",
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x003",
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+			"mn-1_0000,tag2\x0099\x00tag3\x0099",
+		})
+	})
+
+	// all AND tag, contain inValid SubExpr
+	opt.Condition = MustParseExpr(`tag3='1' AND tag1=log(1)`)
+	t.Run("all AND tag, contain inValid SubExpr", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+		})
+	})
+
+	// all AND tag, one varRef break
+	opt.Condition = MustParseExpr(`tag4='5' AND tag1='1'`)
+	t.Run("all AND tag, one varRef break", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{})
+	})
+
+	// all AND tag, two varRef, last one is nil
+	opt.Condition = MustParseExpr(`tag2='1' AND tag3='4'`)
+	t.Run("all AND tag, two varRef, last one is nil", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{})
+	})
+
+	// all AND tag, all varRef is lhs
+	opt.Condition = MustParseExpr(`tag1='1' AND (tag2='2' AND tag3='4')`)
+	t.Run("all AND tag, all varRef is lhs", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+	preMaxIndexMetrics := maxIndexMetrics
+	maxIndexMetrics = 0
+	// all AND tag, some varRef is rhs
+	opt.Condition = MustParseExpr(`'1'=tag1 AND tag2='2' AND tag3='4'`)
+	t.Run("all AND tag, some varRef is rhs", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+	maxIndexMetrics = preMaxIndexMetrics
+
+	// all AND tag, contain both eq and noteq
+	opt.Condition = MustParseExpr(`'1'=tag1 AND tag2!='1' AND tag3='4'`)
+	t.Run("all AND tag, contain both eq and noteq", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+
+	// all AND tag, contain field filter
+	opt.Condition = MustParseExpr(`'1'=tag1 AND tag2!='1' AND 3.0 != field_float1 AND tag3='4'`)
+	t.Run("all AND tag, contain field filter", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+
+	// all AND tag, contain regex
+	opt.Condition = MustParseExpr(`'1'=tag1 AND tag2!~/1/ AND 3.0 != field_float1 AND tag3='4'`)
+	t.Run("all AND tag, contain regex", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+
+	// all AND tag, contain nil tagvalue
+	opt.Condition = MustParseExpr(`''=tag1 AND tag2='99'`)
+	t.Run("all AND tag, contain nil tagvalue", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag2\x0099\x00tag3\x0099",
+		})
+	})
+
+	// all match + !~, return nil tsids set
+	opt.Condition = MustParseExpr(`tag1!~/.*/ AND tag2='2'`)
+	t.Run("all match + !~, return nil tsids set", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{})
+	})
+
+	// or (and,and) tag
+	opt.Condition = MustParseExpr(`'1'=tag1 AND tag2='2' or '1'=tag1 AND tag2='1'`)
+	t.Run("or (and,and) tag", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x002",
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x003",
+			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+}
+
+func CreateIndexByPtsOfAllAndExprFilterBreak(idx Index, keys ...string) {
+	if keys == nil {
+		keys = []string{
+			"mn-1,tag1=1,tag2=1,tag3=1",
+			"mn-1,tag1=1,tag2=1,tag3=2",
+			"mn-1,tag1=1,tag2=1,tag3=3",
+			"mn-1,tag1=1,tag2=1,tag3=4",
+			"mn-1,tag1=1,tag2=1,tag3=5",
+			"mn-1,tag1=1,tag2=1,tag3=6",
+			"mn-1,tag1=1,tag2=1,tag3=7",
+			"mn-1,tag1=1,tag2=1,tag3=8",
+			"mn-1,tag1=1,tag2=1,tag3=9",
+			"mn-1,tag1=1,tag2=1,tag3=10",
+			"mn-1,tag1=1,tag2=1,tag3=11",
+			"mn-1,tag1=1,tag2=1,tag3=12",
+		}
+	}
+
+	pts := make([]influx.Row, 0, len(keys))
+	for _, key := range keys {
+		pt := influx.Row{}
+		strs := strings.Split(key, ",")
+		pt.Name = strs[0] + "_0000"
+		pt.Tags = make(influx.PointTags, len(strs)-1)
+		for i, str := range strs[1:] {
+			kv := strings.Split(str, "=")
+			pt.Tags[i].Key = kv[0]
+			pt.Tags[i].Value = kv[1]
+		}
+		sort.Sort(&pt.Tags)
+		pt.Timestamp = time.Now().UnixNano()
+		pt.UnmarshalIndexKeys(nil)
+		pt.ShardKey = pt.IndexKey
+		pts = append(pts, pt)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &pts)
+	if err := idx.CreateIndexIfNotExists(mmPoints); err != nil {
+		panic(err)
+	}
+
+	for mmIndex := range mmPoints.D {
+		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
+		if !ok {
+			panic("create index failed due to map mmPoints")
+		}
+
+		for rowIdx := range *rows {
+			if (*rows)[rowIdx].SeriesId == 0 {
+				panic("create index failed")
+			}
+		}
+	}
+
+	idx.Close()
+	idx.Open()
+}
+
+func TestSeriesByAllAndExprIteratorFilterBreak(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsOfAllAndExprFilterBreak(idx)
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+	}
+
+	f := func(name []byte, expr influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		index := idx.(*MergeSetIndex)
+		is := index.getIndexSearch()
+		defer index.putIndexSearch(is)
+
+		name = append(name, []byte("_0000")...)
+
+		var tsids *uint64set.Set
+		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ids := iterator.Ids().AppendTo(nil)
+		assert.Equal(t, len(ids), len(expectedSeriesKeys))
+
+		keys := make([]string, 0, len(ids))
+		for _, id := range ids {
+			key, err := index.searchSeriesKey(nil, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys = append(keys, string(influx.Parse2SeriesKey(key, nil, true)))
+		}
+		sort.Strings(keys)
+
+		for i := 0; i < len(keys); i++ {
+			assert.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	// all AND tag, do break filter
+	opt.Condition = MustParseExpr(`tag1='1' AND tag2='1' AND tag3='1'`)
+	t.Run("all AND tag, do break filter1", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+		})
+	})
+	t.Run("all AND tag, do break filter2", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+		})
+	})
+}

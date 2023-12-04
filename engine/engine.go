@@ -133,7 +133,9 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 
 	SetFullCompColdDuration(options.FullCompactColdDuration)
 	fileops.EnableMmapRead(options.EnableMmapRead)
-	fileops.EnableReadCache(options.ReadCacheLimit)
+	fileops.SetPageSize(options.ReadPageSize)
+	fileops.EnableReadMetaCache(options.ReadMetaCacheLimit)
+	fileops.EnableReadDataCache(options.ReadDataCacheLimit)
 	immutable.SetMaxCompactor(options.MaxConcurrentCompactions)
 	immutable.SetMaxFullCompactor(options.MaxFullCompactions)
 	immutable.SetImmTableMaxMemoryPercentage(sysTotalMemory(), options.ImmTableMaxMemoryPercentage)
@@ -144,6 +146,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
 	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
 	immutable.SetSnapshotTblNum(options.SnapshotTblNum)
+	immutable.SetCompactionEnabled(options.CsCompactionEnabled)
 	immutable.SetFragmentsNumPerFlush(options.FragmentsNumPerFlush)
 	immutable.Init()
 

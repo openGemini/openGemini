@@ -27,6 +27,20 @@ const (
 )
 
 const (
+	NodeDefault string = "" // prioritize as writer. If no reader in cluster, NodeDeafult is both a writer and a reader.
+	NodeReader  string = "reader"
+	NodeWriter  string = "writer"
+)
+
+func IsNodeWriter(role string) bool {
+	return role == NodeWriter || role == NodeDefault
+}
+
+func IsNodeReader(role string) bool {
+	return role == NodeReader
+}
+
+const (
 	Normal uint64 = iota
 	Segregating
 	Segregated
@@ -42,6 +56,7 @@ type NodeInfo struct {
 	LTime           uint64
 	GossipAddr      string
 	SegregateStatus uint64
+	Role            string
 }
 
 // clone returns a deep copy of ni.
@@ -58,6 +73,7 @@ func (ni NodeInfo) marshal() *proto2.NodeInfo {
 	pb.LTime = proto.Uint64(ni.LTime)
 	pb.GossipAddr = proto.String(ni.GossipAddr)
 	pb.SegregateStatus = proto.Uint64(ni.SegregateStatus)
+	pb.Role = proto.String(ni.Role)
 	return pb
 }
 
@@ -71,12 +87,13 @@ func (ni *NodeInfo) unmarshal(pb *proto2.NodeInfo) {
 	ni.LTime = pb.GetLTime()
 	ni.GossipAddr = pb.GetGossipAddr()
 	ni.SegregateStatus = pb.GetSegregateStatus()
+	ni.Role = pb.GetRole()
 }
 
 type DataNode struct {
 	NodeInfo
-	ConnID      uint64
-	AliveConnID uint64
+	ConnID      uint64 // after joined raft cluster. ConnID will +1 when restart
+	AliveConnID uint64 // after joined gossip cluster, AliveConnID will set by ConnID
 }
 
 func (n *DataNode) MarshalBinary() ([]byte, error) {

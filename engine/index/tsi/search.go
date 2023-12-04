@@ -28,6 +28,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"sort"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
@@ -37,6 +39,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
 	"github.com/openGemini/openGemini/open_src/influx/index"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 	"go.uber.org/zap"
 )
@@ -51,7 +54,7 @@ type indexSearch struct {
 	vrp tagToValuesRowParser
 
 	deleted *uint64set.Set
-	tf      tagFilter
+	tfs     []tagFilter
 }
 
 func (is *indexSearch) setDeleted(set *uint64set.Set) {
@@ -264,6 +267,407 @@ func (is *indexSearch) newSeriesIDSetIterator(name []byte, tsids **uint64set.Set
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
 }
 
+func (is *indexSearch) initTagFilter(name []byte, expr influxql.Expr, i int) error {
+	n, ok := expr.(*influxql.BinaryExpr)
+	if !ok {
+		return errors.New("expr arg for initTagFilter shall be of type *influxql.BinaryExpr")
+	}
+
+	key, ok := n.LHS.(*influxql.VarRef)
+	value := n.RHS
+	if !ok {
+		key, ok = n.RHS.(*influxql.VarRef)
+		if !ok {
+			return errors.New("fail to find VarRef key of binary expr")
+		}
+		value = n.LHS
+	}
+
+	if key.Type != influxql.Tag {
+		return ErrFieldExpr
+	}
+
+	var err error
+	err = nil
+	if cap(is.tfs) < i+1 {
+		is.tfs = append(is.tfs, tagFilter{})
+	} else {
+		is.tfs = is.tfs[:len(is.tfs)+1]
+	}
+	tf := &is.tfs[i]
+	switch value := value.(type) {
+	case *influxql.StringLiteral:
+		err = tf.Init(name, []byte(key.Val), []byte(value.Val), n.Op != influxql.EQ, false)
+	case *influxql.RegexLiteral:
+		err = tf.Init(name, []byte(key.Val), []byte(value.Val.String()), n.Op != influxql.EQREGEX, true)
+		matchAll := value.Val.MatchString("")
+		if matchAll {
+			tf.SetRegexMatchAll(true)
+		}
+	default:
+		err = errors.New("unsupportted value type")
+	}
+	return err
+}
+
+func (is *indexSearch) extractTagsAndFilters(name []byte, root influxql.Expr) ([]*influxql.BinaryExpr, error) {
+	fieldExprs := make([]*influxql.BinaryExpr, 0)
+	i := 0
+
+	stk := make([]influxql.Expr, 0)
+	// push root to stack
+	stk = append(stk, root)
+	for {
+		if len(stk) <= 0 {
+			break
+		}
+		// pop the stack
+		expr := stk[len(stk)-1]
+		stk = stk[:len(stk)-1]
+
+		switch expr := expr.(type) {
+		case *influxql.BinaryExpr:
+			switch expr.Op {
+			case influxql.AND:
+				// if this is an AND expr, push lhs & rhs to stack
+				stk = append(stk, expr.RHS)
+				stk = append(stk, expr.LHS)
+			default:
+				err := is.initTagFilter(name, expr, i)
+				if err == nil {
+					i++
+				} else if err == ErrFieldExpr {
+					fieldExprs = append(fieldExprs, expr)
+				} else {
+					return nil, err
+				}
+			}
+		case *influxql.ParenExpr:
+			stk = append(stk, expr.Expr)
+		default:
+			continue
+		}
+	}
+	return fieldExprs, nil
+}
+
+func (is *indexSearch) getTagFilterCost(name []byte, tf *tagFilter) int64 {
+	is.kb.B = appendDateTagFilterCacheKey(is.kb.B[:0], name, tf)
+	kb := kbPool.Get()
+	defer kbPool.Put(kb)
+	kb.B = is.idx.cache.TagFilterCostCache.Get(kb.B, is.kb.B)
+	if len(kb.B) != 8 {
+		return 0
+	}
+	cost := encoding.UnmarshalInt64(kb.B)
+	return cost
+}
+
+func (is *indexSearch) storeTagFilterCost(name []byte, tf *tagFilter, cost int64) {
+	is.kb.B = appendDateTagFilterCacheKey(is.kb.B[:0], name, tf)
+	kb := kbPool.Get()
+	defer kbPool.Put(kb)
+	kb.B = encoding.MarshalInt64(kb.B[:0], cost)
+	is.idx.cache.TagFilterCostCache.Set(is.kb.B, kb.B)
+}
+
+func appendDateTagFilterCacheKey(dst []byte, indexDBName []byte, tf *tagFilter) []byte {
+	dst = append(dst, indexDBName...)
+	dst = tf.Marshal(dst)
+	return dst
+}
+
+var pruneThreshold = 10
+
+func matchSeriesKeyTagFilters(seriesKey []byte, tfs []*tagFilter, seriesKeys [][]byte) (bool, error) {
+	var err error
+	seriesKeys, _, err = unmarshalCombineIndexKeys(seriesKeys, seriesKey)
+	if err != nil {
+		return false, err
+	}
+	var tags influx.PointTags
+	var tagArray bool
+	if len(seriesKeys) > 1 {
+		for i := range seriesKeys {
+			var tmpTags influx.PointTags
+			_, err := influx.IndexKeyToTags(seriesKeys[i], true, &tmpTags)
+			if err != nil {
+				return false, err
+			}
+			tags = append(tags, tmpTags...)
+		}
+		tagArray = true
+	} else {
+		tags, _, _, _, err = influx.Parse2SeriesGroupKey(seriesKey, seriesKey, nil)
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, tf := range tfs {
+		if !matchSeriesKeyTagFilter(tags, tf, tagArray) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func matchSeriesKeyTagFilter(tags influx.PointTags, tf *tagFilter, tagArray bool) bool {
+	var match bool
+	var exist bool
+	matchKey := string(tf.key)
+	matchValue := string(tf.value)
+	for _, tag := range tags {
+		if tag.Key == matchKey {
+			exist = true
+			if tf.isRegexp {
+				match = matchWithRegex(matchValue, tag.Value)
+			} else {
+				match = matchWithNoRegex(matchValue, tag.Value)
+			}
+			// not match then continue find when seriesKey of tags has tagArray
+			if tagArray && (!match && !tf.isNegative || match && tf.isNegative) {
+				continue
+			}
+			if tf.isNegative {
+				return !match
+			}
+			return match
+		}
+	}
+	// if find matchKey but matchValue != tag.Value, then return false
+	if exist {
+		return false
+	}
+	// if matchKey is not exsit in tags, compare matchValue with empty string
+	if tf.isRegexp {
+		match = matchWithRegex(matchValue, "")
+	} else {
+		match = matchWithNoRegex(matchValue, "")
+	}
+	if tf.isNegative {
+		return !match
+	}
+	return match
+}
+
+func (is *indexSearch) doPrune(name []byte, tsids *uint64set.Set, tfs []*tagFilter) (*uint64set.Set, error) {
+	set := &uint64set.Set{}
+	itr := tsids.Iterator()
+	var tmpSeriesKey []byte
+	var seriesKeys [][]byte
+	for itr.HasNext() {
+		tsid := itr.Next()
+		tmpSeriesKey, err := is.idx.searchSeriesKey(tmpSeriesKey[:0], tsid)
+		if err != nil {
+			return nil, err
+		}
+		match, err := matchSeriesKeyTagFilters(tmpSeriesKey, tfs, seriesKeys)
+		if err != nil {
+			return nil, err
+		}
+		if match {
+			set.Add(tsid)
+		}
+	}
+	return set, nil
+}
+
+var maxIndexMetrics int = 1500 * 10000
+
+func (is *indexSearch) seriesByOneTagFilter(name []byte) (index.SeriesIDIterator, error) {
+	isNegativeFilter := is.tfs[0].isNegative
+	set, cost, err := is.searchTSIDsByTagFilterAndDateRange(&is.tfs[0])
+	if err != nil {
+		return nil, err
+	}
+	is.tfs[0].isNegative = isNegativeFilter
+	is.storeTagFilterCost(name, &is.tfs[0], cost)
+	return is.newSeriesIDSetIterator(name, &set)
+}
+
+func (is *indexSearch) seriesByTagFilters(name []byte) (index.SeriesIDIterator, error) {
+	type tagFilterWithCost struct {
+		tf   *tagFilter
+		cost int64
+	}
+	// 1.fast way: one tag filter
+	if len(is.tfs) == 1 {
+		return is.seriesByOneTagFilter(name)
+	}
+	tfcosts := make([]tagFilterWithCost, len(is.tfs))
+	for i := 0; i < len(is.tfs); i++ {
+		tfcosts[i].tf = &is.tfs[i]
+		tfcosts[i].cost = is.getTagFilterCost(name, &is.tfs[i])
+	}
+	// if cost eq keep tf order in where clause
+	sort.Slice(tfcosts, func(i, j int) bool {
+		a, b := &tfcosts[i], &tfcosts[j]
+		return a.cost < b.cost
+	})
+	var err error
+	var set *uint64set.Set
+	var isNegativeFilter bool
+	// 2.choose one tf as start tf by tfcost
+	lastTfCosts := tfcosts[:0]
+	startTfLoc := len(tfcosts)
+	for i, tfcost := range tfcosts {
+		isNegativeFilter = tfcost.tf.isNegative
+		this, cost, err := is.searchTSIDsByTagFilterAndDateRange(tfcost.tf)
+		tfcost.tf.isNegative = isNegativeFilter
+		if err != nil {
+			// if one tagFilter err, must indexscan it in next time
+			is.storeTagFilterCost(name, tfcost.tf, math.MaxInt64)
+			return nil, err
+		}
+		if this.Len() < maxIndexMetrics {
+			lastTfCosts = append(lastTfCosts, tfcosts[i+1:]...)
+			set = this
+			is.storeTagFilterCost(name, tfcost.tf, cost)
+			startTfLoc = i
+			break
+		}
+		is.storeTagFilterCost(name, tfcost.tf, math.MaxInt64-1)
+		tfcost.cost = math.MaxInt64 - 1
+		lastTfCosts = append(lastTfCosts, tfcost)
+	}
+	if startTfLoc == len(tfcosts) {
+		// no start tag choose, all tag match too many series, back to search all tsids
+		set, err = is.searchTSIDsByTimeRange(name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if set == nil || set.Len() == 0 {
+		return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(set)), nil
+	}
+
+	// 3.no start tf satisfy, search all tsids as start
+	tfcosts = lastTfCosts
+	if startTfLoc > 0 {
+		sort.Slice(tfcosts, func(i, j int) bool {
+			a, b := &tfcosts[i], &tfcosts[j]
+			return a.cost < b.cost
+		})
+	}
+	for i, tfcost := range tfcosts {
+		// if the cost of next filter is much larger
+		// than the current result set,
+		// it's very inefficient to tarverse the tsids of next filter,
+		// we can do prune there.
+		if tfcost.cost/int64(set.Len()) > int64(pruneThreshold) {
+			tfs := make([]*tagFilter, len(tfcosts)-i)
+			for j := 0; j < len(tfs); j++ {
+				tfs[j] = tfcosts[i+j].tf
+			}
+			set, err = is.doPrune(name, set, tfs)
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+
+		isNegativeFilter = tfcost.tf.isNegative
+		this, cost, err := is.searchTSIDsByTagFilterAndDateRange(tfcost.tf)
+		tfcost.tf.isNegative = isNegativeFilter
+		if err != nil {
+			return nil, err
+		}
+
+		is.storeTagFilterCost(name, tfcost.tf, cost)
+		set.Intersect(this)
+		// no need to continue
+		if set.Len() == 0 {
+			break
+		}
+	}
+	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(set)), nil
+}
+
+func (is *indexSearch) isAllAndOpValid(op influxql.Token) bool {
+	if op == influxql.EQ || op == influxql.NEQ || op == influxql.EQREGEX || op == influxql.NEQREGEX || op == influxql.GT ||
+		op == influxql.GTE || op == influxql.LT || op == influxql.LTE {
+		return true
+	}
+	return false
+}
+
+func (is *indexSearch) isAllAndSubExprValid(lhs influxql.Expr, rhs influxql.Expr) bool {
+	if _, lok := lhs.(*influxql.VarRef); lok {
+		return is.isAllAndValueExprValid(rhs)
+	}
+	if _, rok := rhs.(*influxql.VarRef); rok {
+		return is.isAllAndValueExprValid(lhs)
+	}
+	return false
+}
+
+// there maybe field filter in condition clause
+func (is *indexSearch) isAllAndValueExprValid(value influxql.Expr) bool {
+	switch value.(type) {
+	case *influxql.IntegerLiteral:
+		return true
+	case *influxql.NumberLiteral:
+		return true
+	case *influxql.StringLiteral:
+		return true
+	case *influxql.BooleanLiteral:
+		return true
+	case *influxql.RegexLiteral:
+		return true
+	default:
+		return false
+	}
+}
+
+// judge whether the expression is all and
+func (is *indexSearch) isAllAndExpr(expr influxql.Expr) bool {
+	switch expr := expr.(type) {
+	case *influxql.BinaryExpr:
+		switch expr.Op {
+		case influxql.AND:
+			return is.isAllAndExpr(expr.LHS) && is.isAllAndExpr(expr.RHS)
+		case influxql.OR:
+			return false
+		default:
+			if is.isAllAndOpValid(expr.Op) {
+				return is.isAllAndSubExprValid(expr.LHS, expr.RHS)
+			}
+			return false
+		}
+	case *influxql.ParenExpr:
+		return is.isAllAndExpr(expr.Expr)
+	default:
+		return false
+	}
+}
+
+var ErrAllFields = errors.New("error all fields")
+
+func (is *indexSearch) seriesByAllAndExprIterator(name []byte, expr influxql.Expr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
+	is.tfs = is.tfs[:0]
+	fieldExprs, err := is.extractTagsAndFilters(name, expr)
+	if err != nil {
+		return nil, err
+	}
+
+	// all the binary exprs are field exprs, fall back to normol path
+	if len(is.tfs) == 0 {
+		return nil, ErrAllFields
+	}
+	tagIter, err := is.seriesByTagFilters(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(fieldExprs) == 0 {
+		return tagIter, nil
+	}
+	for _, expr := range fieldExprs {
+		fieldIter := index.NewSeriesIDExprIteratorWithSeries(tagIter.Ids(), expr)
+		tagIter = index.IntersectSeriesIDIterators(tagIter, fieldIter)
+	}
+	return tagIter, nil
+}
+
 func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
 	if expr == nil {
 		return is.newSeriesIDSetIterator(name, tsids)
@@ -273,6 +677,15 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsi
 	case *influxql.BinaryExpr:
 		switch expr.Op {
 		case influxql.AND, influxql.OR:
+			// Fast path for all and expr.
+			if !singleSeries && is.isAllAndExpr(expr) {
+				iter, err := is.seriesByAllAndExprIterator(name, expr, tsids, singleSeries)
+				// if any error occurs, fall back to normol mode.
+				if err == nil {
+					return iter, nil
+				}
+			}
+
 			var err error
 			// Get the series IDs and filter expressions for the LHS.
 			litr, lerr := is.seriesByExprIterator(name, expr.LHS, tsids, singleSeries)
@@ -473,7 +886,8 @@ func (is *indexSearch) searchTSIDsByBinaryExpr(name []byte, n *influxql.BinaryEx
 		return is.searchTSIDsByTimeRange(name)
 	}
 
-	return is.searchTSIDsByTagFilterAndDateRange(tf)
+	tsids, _, err := is.searchTSIDsByTagFilterAndDateRange(tf)
+	return tsids, err
 }
 
 func (is *indexSearch) genSeriesIDIterator(ids *uint64set.Set, n *influxql.BinaryExpr) index.SeriesIDIterator {
@@ -527,7 +941,10 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 		return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet((*tsids).Clone())), nil
 	}
 
-	tf := &is.tf
+	if len(is.tfs) == 0 {
+		is.tfs = is.tfs[:1]
+	}
+	tf := &is.tfs[0]
 	var err error
 	switch value := value.(type) {
 	case *influxql.StringLiteral:
@@ -547,7 +964,7 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 		return nil, err
 	}
 
-	ids, err := is.searchTSIDsByTagFilterAndDateRange(tf)
+	ids, _, err := is.searchTSIDsByTagFilterAndDateRange(tf)
 	if err != nil {
 		return nil, err
 	}
@@ -565,12 +982,12 @@ func (is *indexSearch) seriesByBinaryExprVarRef(name, key, val []byte, equal boo
 		return nil, err
 	}
 
-	set1, err := is.searchTSIDsByTagFilterAndDateRange(tf1)
+	set1, _, err := is.searchTSIDsByTagFilterAndDateRange(tf1)
 	if err != nil {
 		return nil, err
 	}
 
-	set2, err := is.searchTSIDsByTagFilterAndDateRange(tf2)
+	set2, _, err := is.searchTSIDsByTagFilterAndDateRange(tf2)
 	if err != nil {
 		return nil, err
 	}
@@ -583,75 +1000,78 @@ func (is *indexSearch) seriesByBinaryExprVarRef(name, key, val []byte, equal boo
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(set1)), nil
 }
 
-func (is *indexSearch) searchTSIDsByTagFilterAndDateRange(tf *tagFilter) (*uint64set.Set, error) {
+func (is *indexSearch) searchTSIDsByTagFilterAndDateRange(tf *tagFilter) (*uint64set.Set, int64, error) {
 	if tf.isRegexp {
 		return is.getTSIDsByTagFilterWithRegex(tf)
 	}
 	return is.getTSIDsByTagFilterNoRegex(tf)
 }
 
-func (is *indexSearch) getTSIDsByTagFilterNoRegex(tf *tagFilter) (*uint64set.Set, error) {
+func (is *indexSearch) getTSIDsByTagFilterNoRegex(tf *tagFilter) (*uint64set.Set, int64, error) {
 	if !tf.isNegative {
 		if len(tf.value) != 0 {
-			return is.searchTSIDsByTagFilter(tf)
+			tsids, err := is.searchTSIDsByTagFilter(tf)
+			return tsids, int64(tsids.Len()), err
 		}
 
 		tsids, err := is.getTSIDsByMeasurementName(tf.name)
 		if err != nil {
-			return nil, err
+			return nil, math.MaxInt64, err
 		}
 
 		m, err := is.searchTSIDsByTagFilter(tf)
 		if err != nil {
-			return nil, err
+			return nil, math.MaxInt64, err
 		}
 
+		cost := int64(tsids.Len() + m.Len())
 		tsids.Subtract(m)
-		return tsids, nil
+		return tsids, cost, nil
 	}
 
 	if len(tf.value) != 0 {
 		tsids, err := is.getTSIDsByMeasurementName(tf.name)
 		if err != nil {
-			return nil, err
+			return nil, math.MaxInt64, err
 		}
 
 		tf.isNegative = false
 		m, err := is.searchTSIDsByTagFilter(tf)
 		if err != nil {
-			return nil, err
+			return nil, math.MaxInt64, err
 		}
 
+		cost := int64(m.Len() + tsids.Len())
 		tsids, err = is.subTSIDSWithTagArray(tsids, m)
 		if err != nil {
-			return nil, err
+			return nil, math.MaxInt64, err
 		}
-		return tsids, nil
+		return tsids, cost, nil
 	}
 	tf.isNegative = false
 	tsids, err := is.searchTSIDsByTagFilter(tf)
 	if err != nil {
-		return nil, err
+		return nil, math.MaxInt64, err
 	}
-	return tsids, nil
+	return tsids, int64(tsids.Len()), nil
 }
 
-func (is *indexSearch) getTSIDsByTagFilterWithRegex(tf *tagFilter) (*uint64set.Set, error) {
+func (is *indexSearch) getTSIDsByTagFilterWithRegex(tf *tagFilter) (*uint64set.Set, int64, error) {
 	if !tf.isNegative {
 		if tf.isAllMatch {
 			tsids, err := is.getTSIDsByMeasurementName(tf.name)
 			if err != nil {
-				return nil, err
+				return nil, math.MaxInt64, err
 			}
-			return tsids, nil
+			return tsids, int64(tsids.Len()), nil
 		}
 
 		m, err := is.searchTSIDsByTagFilter(tf)
 		if err != nil {
-			return nil, err
+			return nil, math.MaxInt64, err
 		}
 
-		return m, nil
+		return m, int64(m.Len()), nil
 
 	}
 
@@ -659,25 +1079,26 @@ func (is *indexSearch) getTSIDsByTagFilterWithRegex(tf *tagFilter) (*uint64set.S
 	// eg, show series from mst where tagkey1 !~ /.*/
 	// eg, show tag values with key="tagkey1" where tagkey2 !~ /.*/
 	if tf.isAllMatch {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	tsids, err := is.getTSIDsByMeasurementName(tf.name)
 	if err != nil {
-		return nil, err
+		return nil, int64(tsids.Len()), err
 	}
 
 	tf.isNegative = false
 	m, err := is.searchTSIDsByTagFilter(tf)
 	if err != nil {
-		return nil, err
+		return nil, math.MaxInt64, err
 	}
 
+	cost := int64(m.Len() + tsids.Len())
 	tsids, err = is.subTSIDSWithTagArray(tsids, m)
 	if err != nil {
-		return nil, err
+		return nil, math.MaxInt64, err
 	}
-	return tsids, nil
+	return tsids, cost, nil
 }
 
 func (is *indexSearch) getTSIDsByMeasurementName(name []byte) (*uint64set.Set, error) {
@@ -686,7 +1107,6 @@ func (is *indexSearch) getTSIDsByMeasurementName(name []byte) (*uint64set.Set, e
 
 	compositeTagKey := kbPool.Get()
 	compositeTagKey.B = marshalCompositeNamePrefix(compositeTagKey.B[:0], name)
-
 	kb.B = mergeindex.MarshalCommonPrefix(kb.B[:0], nsPrefixTagToTSIDs)
 	kb.B = marshalTagValue(kb.B, compositeTagKey.B)
 	kb.B = kb.B[:len(kb.B)-1]

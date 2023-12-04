@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -52,6 +53,7 @@ func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint6
 
 	err := bh.cm.store.updateNodeStatus(id, int32(m.Status), uint64(e.EventTime), fmt.Sprintf("%d", m.Port))
 	if errno.Equal(err, errno.OlderEvent) || errno.Equal(err, errno.DataNodeSplitBrain) {
+		logger.GetLogger().Error("ignore handle event", zap.String("name", m.Name), zap.String("event", e.String()), zap.Error(err))
 		return nil
 	}
 	return err
@@ -67,7 +69,7 @@ func (bh *baseHandler) takeoverDbPts(id uint64) {
 		if err != nil {
 			// if process event failed migrate state machine will retry event when retry needed
 			logger.NewLogger(errno.ModuleHA).Error("fail to take over db pt",
-				zap.String("db", dbPtInfos[i].Db), zap.Uint32("pt", dbPtInfos[i].Pti.PtId))
+				zap.String("db", dbPtInfos[i].Db), zap.Uint32("pt", dbPtInfos[i].Pti.PtId), zap.Error(err))
 		}
 	}
 }
@@ -109,7 +111,22 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 		if err != nil {
 			return err
 		}
-		jh.cm.addClusterMember(id)
+		jh.cm.handleClusterMember(id, &e.event)
+		failpoint.Label("retry")
+		failpoint.Inject("stuckOnMemberJoinEvent", func(val failpoint.Value) {
+			for {
+				if v, ok := val.(bool); ok {
+					if v {
+						time.Sleep(time.Second)
+						failpoint.Goto("retry")
+						logger.GetLogger().Debug("stuck on store member join event")
+					} else {
+						logger.GetLogger().Debug("jump out of stuck on store member join event")
+						failpoint.Break()
+					}
+				}
+			}
+		})
 		jh.takeoverDbPts(id)
 	}
 	return nil
@@ -133,20 +150,50 @@ type failedHandler struct {
 func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error {
 	err := fh.handleEvent(member, event, id)
 	if err != nil {
-		logger.GetLogger().Error("handle event failed", zap.Error(err))
+		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()), zap.Error(err))
 		return err
 	}
-	fh.cm.removeClusterMember(id)
+	failpoint.Label("retry")
+	failpoint.Inject("stuckOnMemberFailEvent", func(val failpoint.Value) {
+		for {
+			if v, ok := val.(bool); ok {
+				if v {
+					time.Sleep(time.Second)
+					logger.GetLogger().Debug("stuck on store member fail event for replication")
+					failpoint.Goto("retry")
+				} else {
+					logger.GetLogger().Debug("jump out of stuck on store member fail event for replication")
+					failpoint.Break()
+				}
+			}
+		}
+	})
+	fh.cm.handleClusterMember(id, event)
 	return fh.failOverForRep(id)
 }
 
 func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error {
 	err := fh.handleEvent(member, event, id)
 	if err != nil {
-		logger.GetLogger().Error("handle event failed", zap.Error(err))
+		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()), zap.Error(err))
 		return err
 	}
-	fh.cm.removeClusterMember(id)
+	failpoint.Label("retry")
+	failpoint.Inject("stuckOnMemberFailEvent", func(val failpoint.Value) {
+		for {
+			if v, ok := val.(bool); ok {
+				if v {
+					time.Sleep(time.Second)
+					logger.GetLogger().Debug("stuck on store member fail event for sso or waf")
+					failpoint.Goto("retry")
+				} else {
+					logger.GetLogger().Debug("jump out of stuck on store member fail event for sso or waf")
+					failpoint.Break()
+				}
+			}
+		}
+	})
+	fh.cm.handleClusterMember(id, event)
 	fh.takeoverDbPts(id)
 	return nil
 }

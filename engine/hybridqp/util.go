@@ -137,6 +137,21 @@ func CompareSlice(a, b []int) bool {
 func BinarySearchForNils(array []uint16, k uint16) int {
 	low := 0
 	high := len(array) - 1
+	/*
+		Array is an array that does not repeat in ascending order.
+		It always meets the requirements of i<=array[i] and k<=array[k]. Therefore, high can be directly set to k.
+	*/
+	if high > int(k) {
+		high = int(k)
+	}
+	/*
+		The calculation num = array[k]-k indicates the maximum number of nil before array[k].
+		In the worst case, any nil is before k. Therefore, low can be k-num.
+	*/
+	if int(k) < len(array) && low < int(k)-(int(array[k])-int(k)) {
+		low = int(k) - (int(array[k]) - int(k))
+	}
+
 	for low+16 <= high {
 		midIdx := int(uint32(low+high) >> 1)
 		midVal := array[midIdx]

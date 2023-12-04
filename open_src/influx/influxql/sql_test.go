@@ -132,11 +132,11 @@ func init() {
 		"alter measurement tb1", //alter measurement
 		"create measurement cpu with indextype text indexlist msg shardkey hostname type range",
 		"create measurement cpu with indextype text indexlist msg",
-		"create measurement cpu with indextype text indexlist msg text1 indexlist msg1,msg2",
+		"create measurement cpu with indextype text indexlist msg text indexlist msg1,msg2",
 		"create measurement TSDB_SIT_AlterMeasurement_BaseFunction_002 with shardkey tag1,tag2",
 		"create measurement cpu with enginetype = tsstore indextype text indexlist msg shardkey hostname type range",
 		"create measurement cpu with enginetype = tsstore indextype text indexlist msg",
-		"create measurement cpu with enginetype = tsstore indextype text indexlist msg text1 indexlist msg1,msg2",
+		"create measurement cpu with enginetype = tsstore indextype text indexlist msg text indexlist msg1,msg2",
 		"create measurement TSDB_SIT_AlterMeasurement_BaseFunction_002 with enginetype = tsstore shardkey tag1,tag2",
 		"create user xxxxx with password 'xxxx' with partition privileges", // add partition privileges.
 		// select into
@@ -332,6 +332,13 @@ func TestSingleParser(t *testing.T) {
 		"show schema from mst",
 		"show indexes from mst",
 		"show INDExeS from mst",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype text indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype field indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype field indexlist tag11",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype text indexlist tag11",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1 compact block",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1 compact row",
 	}
 	for _, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))
@@ -363,7 +370,15 @@ func TestSingleParserError(t *testing.T) {
 		"create measurement mst0 (column4 float64,column1 string,column0 string,column3 float64,column2 int64) with enginetype = columnstore  SHARDKEY column2,column3 TYPE hash  PRIMARYKEY column3,column4,column0,column1 SORTKEY column2,column3,column4,column0,column1",
 		"show sortkey1 from mst",
 		"show index from mst",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype bloomfilter indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore indextype field1 indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype field indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype text indexlist tag1",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag11",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype field indexlist tag11",
+		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1 compact row0",
 	}
+
 	cr := []string{
 		"expect FLOAT64, INT64, BOOL, STRING for column data type",
 		"expect FLOAT64, INT64, BOOL, STRING for column data type",
@@ -377,8 +392,15 @@ func TestSingleParserError(t *testing.T) {
 		"syntax error: unexpected TAG, expecting COMMA or RPAREN",
 		"expect FLOAT64, INT64, BOOL, STRING for column data type",
 		"PrimaryKey should be left prefix of SortKey",
-		"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA",
+		"SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA, COMPACT",
 		"syntax error: unexpected INDEX",
+		"Invalid index type for TSSTORE",
+		"Invalid index type for TSSTORE",
+		"Invalid index type for COLUMNSTORE",
+		"Invalid index type for COLUMNSTORE",
+		"Invalid indexlist",
+		"Invalid indexlist",
+		"expect ROW or BLOCK for COMPACT type",
 	}
 	for i, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

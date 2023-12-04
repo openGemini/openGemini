@@ -17,8 +17,10 @@ limitations under the License.
 package executor
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -31,5 +33,30 @@ func TestSchemaOverLimit(t *testing.T) {
 	}
 	if ok {
 		t.Error("expect ok")
+	}
+}
+
+func Test_defaultQueryExecutorBuilderCreator(t *testing.T) {
+	tests := []struct {
+		name string
+		want hybridqp.PipelineExecutorBuilder
+	}{
+		{
+			name: "test",
+			want: &ExecutorBuilder{
+				dag:                   NewTransformDag(),
+				root:                  nil,
+				traits:                nil,
+				currConsumer:          0,
+				enableBinaryTreeMerge: 0,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := defaultQueryExecutorBuilderCreator(); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("defaultQueryExecutorBuilderCreator() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
