@@ -109,7 +109,7 @@ func TestIndexWriterWithoutCacheMeta(t *testing.T) {
 	fn := filepath.Join(testDir, "index.data")
 	lockPath := ""
 	InitWriterPool(8)
-	wr := NewIndexWriter(fn, false, false, &lockPath)
+	wr := NewPKIndexWriter(fn, false, false, &lockPath)
 	cm := getChunkMeta()
 
 	meta := cm.marshal(nil)
@@ -181,7 +181,7 @@ func TestIndexWriterWithCacheMeta(t *testing.T) {
 	fn := filepath.Join(testDir, "index.data")
 	lockPath := ""
 	InitWriterPool(8)
-	wr := NewIndexWriter(fn, true, true, &lockPath)
+	wr := NewPKIndexWriter(fn, true, true, &lockPath)
 	cm := getChunkMeta()
 
 	meta := cm.marshal(nil)

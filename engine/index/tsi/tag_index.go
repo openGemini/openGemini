@@ -16,7 +16,10 @@ limitations under the License.
 
 package tsi
 
-import "sync"
+import (
+	"bytes"
+	"sync"
+)
 
 type IndexRecord struct {
 	TagCol *TagCol
@@ -34,10 +37,11 @@ var IndexTagColsPool sync.Pool
 
 type IndexTagCols []TagCol
 
-func GetIndexTagCols() *IndexTagCols {
+func GetIndexTagCols(num int) *IndexTagCols {
 	tagCols := IndexTagColsPool.Get()
 	if tagCols == nil {
-		return &IndexTagCols{}
+		idxTagCols := make(IndexTagCols, 0, num)
+		return &idxTagCols
 	}
 	return tagCols.(*IndexTagCols)
 }
@@ -55,4 +59,37 @@ func (itc *IndexTagCols) reset() {
 		(*itc)[i].Val = (*itc)[i].Val[:0]
 		(*itc)[i].Err = nil
 	}
+}
+
+var IndexKeyPool sync.Pool
+
+type keyCache []byte
+
+func GetIndexKeyCache() *keyCache {
+	key := IndexKeyPool.Get()
+	if key == nil {
+		indexKey := make(keyCache, 0, 128)
+		return &indexKey
+	}
+	return key.(*keyCache)
+}
+
+func PutIndexKeyCache(key *keyCache) {
+	*key = (*key)[:0]
+	IndexKeyPool.Put(key)
+}
+
+var WriteBufferPool sync.Pool
+
+func GetWriteBuffer() *bytes.Buffer {
+	buf := WriteBufferPool.Get()
+	if buf == nil {
+		return &bytes.Buffer{}
+	}
+	return buf.(*bytes.Buffer)
+}
+
+func PutWriteBuffer(buf *bytes.Buffer) {
+	buf.Reset()
+	WriteBufferPool.Put(buf)
 }

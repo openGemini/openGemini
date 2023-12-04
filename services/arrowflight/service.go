@@ -91,7 +91,13 @@ func NewService(c config.Config) (*Service, error) {
 	sLogger := logger.NewLogger(errno.ModuleHTTP)
 	writer := NewWriteServer(sLogger)
 	authHandler := NewAuthServer(c.FlightAuthEnabled)
-	server := flight.NewServerWithMiddleware(authHandler, nil, grpc.MaxRecvMsgSize(c.MaxBodySize))
+	var maxRecvMsgSize int
+	if c.MaxBodySize <= 0 {
+		maxRecvMsgSize = config.DefaultMaxBodySize
+	} else {
+		maxRecvMsgSize = c.MaxBodySize
+	}
+	server := flight.NewServerWithMiddleware(authHandler, nil, grpc.MaxRecvMsgSize(maxRecvMsgSize))
 	if err := server.Init(c.FlightAddress); err != nil {
 		sLogger.Error("arrow flight service start failed", zap.Error(err))
 		return nil, err

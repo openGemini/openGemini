@@ -187,9 +187,16 @@ func TestTSStore(t *testing.T) {
 	conf.Data.Engine = config.EngineType1
 	assert.NoError(t, conf.Data.ValidateEngine(eng))
 
+	conf.Common.NodeRole = ""
+	conf.Common.MetaJoin = append(conf.Common.MetaJoin, "127.0.0.1:8092")
+	assert.NoError(t, conf.Common.ValidateRole())
+
+	conf.Common.NodeRole = "xx"
+	assert.EqualError(t, conf.Common.ValidateRole(), "invalid data role: xx")
+
 	maxSize := 600 * config.GB
 	conf.Data.Corrector(0, 600*config.GB)
-	assert.NotEqual(t, maxSize*3/100, conf.Data.ReadCacheLimit)
+	assert.NotEqual(t, maxSize*3/100, conf.Data.ReadMetaCacheEn)
 
 }
 
@@ -275,4 +282,37 @@ func TestHAPolicy(t *testing.T) {
 	require.NoError(t, config.SetHaPolicy(config.RepPolicy))
 	require.True(t, config.IsReplication())
 	require.NoError(t, config.SetHaPolicy(config.DefaultHaPolicy))
+}
+
+func TestTSStoreCorrector(t *testing.T) {
+	conf := config.NewTSStore(true)
+	conf.Data.ReadMetaCacheEn = 1
+	conf.Data.ReadMetaCacheEnPct = 5
+	conf.Data.ReadDataCacheEn = 1
+	conf.Data.ReadDataCacheEnPct = 15
+
+	assert.NoError(t, conf.Validate())
+	conf.Data.WALDir = "/opt/gemini/wal"
+
+	conf.Data.Corrector(conf.Common.CPUNum, 0)
+	assert.Equal(t, config.ReadMetaCachePct, int(conf.Data.ReadMetaCacheEnPct))
+	assert.Equal(t, config.ReadDataCachePct, int(conf.Data.ReadDataCacheEnPct))
+}
+
+func TestCompactType(t *testing.T) {
+	type compactTag struct {
+		compactStr  string
+		compactType config.CompactionType
+	}
+	compactList := []compactTag{{"row", config.ROW}, {"block", config.BLOCK}, {"", config.ROW}}
+	for i := 0; i < len(compactList); i++ {
+		compactType := config.Str2CompactionType(compactList[i].compactStr)
+		if compactType != compactList[i].compactType {
+			t.Fatalf("Str2CompactionType failed, expect:%d, real:%d", compactType, compactList[i].compactType)
+		}
+		compactStr := config.CompactionType2Str(compactList[i].compactType)
+		if compactList[i].compactStr != "" && compactStr != compactList[i].compactStr {
+			t.Fatalf("Str2CompactionType failed, expect:%s, real:%s", compactStr, compactList[i].compactStr)
+		}
+	}
 }

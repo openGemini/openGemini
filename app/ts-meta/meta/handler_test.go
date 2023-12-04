@@ -92,11 +92,11 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 	}
 	defer mms.Close()
 
-	err, node1 := mms.GetStore().data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401")
+	err, node1 := mms.GetStore().data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err, node2 := mms.GetStore().data.CreateDataNode("127.0.0.2:8400", "127.0.0.2:8401")
+	err, node2 := mms.GetStore().data.CreateDataNode("127.0.0.2:8400", "127.0.0.2:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}

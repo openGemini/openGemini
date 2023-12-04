@@ -242,17 +242,6 @@ func (m *MmsTables) matchOrderFiles(ctx *mergeContext) {
 		return
 	}
 
-	var recentFile TSSPFile = nil
-	var recentSeq uint64 = 0
-	var setRecent = func(f TSSPFile) {
-		_, seq := f.LevelAndSequence()
-
-		if recentFile == nil || recentSeq > seq {
-			recentFile = f
-			recentSeq = seq
-		}
-	}
-
 	files.lock.RLock()
 	defer files.lock.RUnlock()
 
@@ -265,15 +254,9 @@ func (m *MmsTables) matchOrderFiles(ctx *mergeContext) {
 			continue
 		}
 
-		if ctx.tr.Overlaps(min, max) {
+		if ctx.tr.Overlaps(min, max) || min > ctx.tr.Max {
 			ctx.order.add(f)
-		} else if min > ctx.tr.Max {
-			setRecent(f)
 		}
-	}
-
-	if recentFile != nil {
-		ctx.order.add(recentFile)
 	}
 
 	if ctx.order.Len() == 0 {

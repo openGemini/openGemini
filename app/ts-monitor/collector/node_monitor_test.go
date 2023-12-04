@@ -39,7 +39,7 @@ func TestNodeCollector(t *testing.T) {
 		Host:        "127.0.0.1",
 		DiskPath:    diskDir,
 		AuxDiskPath: diskDir,
-		Process:     "ts-store,ts-sql,ts-meta",
+		Process:     "ts-store,ts-sql,ts-data,ts-meta",
 	}
 	dname := fmt.Sprintf("%s/data/a/b/c/index", diskDir)
 	_ = os.MkdirAll(dname, 0750)
@@ -78,6 +78,7 @@ func TestNodeCollector_Manual(t *testing.T) {
 	conf := config.MonitorMain{
 		Host:     "127.0.0.1",
 		DiskPath: "/opt/tsdb",
+		Process:  "ts-store,ts-sql,ts-data,ts-meta",
 	}
 	nc := NewNodeCollector(logger, &conf)
 	defer nc.Close()
@@ -126,6 +127,8 @@ func TestNodeCollector_Manual(t *testing.T) {
 			nc.nodeMetric.StoreStatus = 0
 			nc.nodeMetric.SqlPid = 7055
 			nc.nodeMetric.SqlStatus = 1
+			nc.nodeMetric.DataPid = 7056
+			nc.nodeMetric.DataStatus = 0
 			nc.nodeMetric.MetaPid = 70556
 			nc.nodeMetric.MetaStatus = 2
 			nc.nodeMetric.DiskSize = 80505
@@ -137,7 +140,7 @@ func TestNodeCollector_Manual(t *testing.T) {
 			nc.nodeMetric.IndexUsed = 3541
 			nc.nodeMetric.mu.Unlock()
 			point := nc.formatPoint()
-			assert.EqualValues(t, "system,host=127.0.0.1 Uptime=963389,CpuNum=32,CpuUsage=48.48,MemSize=243526,MemInUse=3874,MemCacheBuffer=34574,MemUsage=15.90,StorePid=7054,StoreStatus=0,SqlPid=7055,SqlStatus=1,MetaPid=70556,MetaStatus=2,DiskSize=80505,DiskUsed=66133,DiskUsage=82.14,AuxDiskSize=92124,AuxDiskUsed=63257,AuxDiskUsage=68.66,IndexUsed=3541", point)
+			assert.EqualValues(t, "system,host=127.0.0.1 Uptime=963389,CpuNum=32,CpuUsage=48.48,MemSize=243526,MemInUse=3874,MemCacheBuffer=34574,MemUsage=15.90,StorePid=7054,StoreStatus=0,SqlPid=7055,SqlStatus=1,DataPid=7056,DataStatus=0,MetaPid=70556,MetaStatus=2,DiskSize=80505,DiskUsed=66133,DiskUsage=82.14,AuxDiskSize=92124,AuxDiskUsed=63257,AuxDiskUsage=68.66,IndexUsed=3541", point)
 			if err := nc.Reporter.WriteData(point); err != nil {
 				t.Error(err)
 			}

@@ -38,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	coordinator2 "github.com/openGemini/openGemini/open_src/influx/coordinator"
@@ -270,7 +271,7 @@ func (s *Server) Open() error {
 
 	// if the ForceBroadcastQuery with config is true, then the ForceBroadcastQuery in memory set to 1
 	if s.config.Coordinator.ForceBroadcastQuery {
-		executor.SetEnableForceBroadcastQuery(int64(1))
+		sysconfig.SetEnableForceBroadcastQuery(int64(1))
 	}
 
 	if err := s.initMetaClientFn(); err != nil {
@@ -279,6 +280,7 @@ func (s *Server) Open() error {
 
 	s.PointsWriter.MetaClient = s.MetaClient
 	s.httpService.Handler.MetaClient = s.MetaClient
+	s.httpService.Handler.RecordWriter = s.RecordWriter
 
 	if err := s.httpService.Open(); err != nil {
 		return err
@@ -412,7 +414,7 @@ func (s *Server) initializeMetaClient() error {
 		// start up a new single node cluster
 		return fmt.Errorf("server not set to join existing cluster must run also as a meta node")
 	} else {
-		_, _, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil)
+		_, _, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil, "")
 		if err != nil {
 			return err
 		}

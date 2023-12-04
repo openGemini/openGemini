@@ -26,17 +26,62 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
+type Options struct {
+	CaseInSensitive bool   `json:"case_insensitive"`
+	AppendMeta      bool   `json:"append_meta"`
+	WriteThreshold  int    `json:"write_threshold"`
+	ReadThreshold   int    `json:"read_threshold"`
+	StorageCapacity int    `json:"storage_capacity"`
+	SplitChar       string `json:"split_char"`
+	Ttl             int64  `json:"ttl"`
+}
+
+func (mo *Options) InitDefault() {
+	mo.CaseInSensitive = false
+	mo.Ttl = 0
+	mo.WriteThreshold = 1
+	mo.ReadThreshold = 1
+	mo.StorageCapacity = 1
+	mo.SplitChar = ""
+	mo.AppendMeta = false
+}
+
+func (mo *Options) Marshal() *proto2.Options {
+	if mo == nil {
+		mo = &Options{}
+	}
+	return &proto2.Options{
+		CaseInSensitive: proto.Bool(mo.CaseInSensitive),
+		AppendMeta:      proto.Bool(mo.AppendMeta),
+		WriteThreshold:  proto.Int(mo.WriteThreshold),
+		ReadThreshold:   proto.Int(mo.ReadThreshold),
+		StorageCapacity: proto.Int(mo.StorageCapacity),
+		SplitChar:       proto.String(mo.SplitChar),
+		Ttl:             proto.Int64(mo.Ttl),
+	}
+}
+
+func (mo *Options) Unmarshal(pb *proto2.Options) {
+	mo.CaseInSensitive = pb.GetCaseInSensitive()
+	mo.WriteThreshold = int(pb.GetWriteThreshold())
+	mo.ReadThreshold = int(pb.GetReadThreshold())
+	mo.StorageCapacity = int(pb.GetStorageCapacity())
+	mo.SplitChar = pb.GetSplitChar()
+	mo.AppendMeta = pb.GetAppendMeta()
+	mo.Ttl = pb.GetTtl()
+}
+
 type MeasurementInfo struct {
 	Name          string // measurement name with version
 	originName    string // cache original measurement name
 	ShardKeys     []ShardKeyInfo
 	Schema        map[string]int32
-	IndexRelation IndexRelation
+	IndexRelation influxql.IndexRelation
 	ColStoreInfo  *ColStoreInfo
 	MarkDeleted   bool
 	EngineType    config.EngineType
-
-	tagKeysTotal int
+	Options       *Options
+	tagKeysTotal  int
 }
 
 func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
@@ -89,9 +134,13 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 		}
 	}
 
-	pb.IndexRelation = msti.IndexRelation.Marshal()
+	pb.IndexRelation = EncodeIndexRelation(&msti.IndexRelation)
 	if msti.ColStoreInfo != nil {
 		pb.ColStoreInfo = msti.ColStoreInfo.Marshal()
+	}
+
+	if msti.Options != nil {
+		pb.Options = msti.Options.Marshal()
 	}
 	return pb
 }
@@ -119,10 +168,16 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 		}
 	}
 
-	msti.IndexRelation.unmarshal(pb.GetIndexRelation())
+	if pb.GetIndexRelation() != nil {
+		msti.IndexRelation = *DecodeIndexRelation(pb.GetIndexRelation())
+	}
 	if pb.GetColStoreInfo() != nil {
 		msti.ColStoreInfo = &ColStoreInfo{}
 		msti.ColStoreInfo.Unmarshal(pb.GetColStoreInfo())
+	}
+	if pb.GetOptions() != nil {
+		msti.Options = &Options{}
+		msti.Options.Unmarshal(pb.GetOptions())
 	}
 }
 
@@ -154,7 +209,10 @@ func (msti MeasurementInfo) clone() *MeasurementInfo {
 		colStoreInfo := *msti.ColStoreInfo
 		other.ColStoreInfo = &colStoreInfo
 	}
-
+	if msti.Options != nil {
+		options := *msti.Options
+		other.Options = &options
+	}
 	return &other
 }
 
@@ -288,78 +346,11 @@ func (ski ShardKeyInfo) clone() ShardKeyInfo {
 	return ski
 }
 
-type IndexRelation struct {
-	Rid          uint32
-	Oids         []uint32
-	IndexNames   []string
-	IndexList    []*IndexList              // indexType to column name (all column indexed with indexType)
-	IndexOptions map[string][]*IndexOption // columnName to index option (all index options for columnName)
-}
-
-type IndexList struct {
-	IList []string
-}
-
-func (indexR *IndexRelation) Marshal() *proto2.IndexRelation {
-	pb := &proto2.IndexRelation{Rid: proto.Uint32(indexR.Rid),
-		Oid:       indexR.Oids,
-		IndexName: indexR.IndexNames}
-
-	pb.IndexLists = make([]*proto2.IndexList, len(indexR.IndexList))
-	for i, IList := range indexR.IndexList {
-		indexList := &proto2.IndexList{
-			IList: IList.IList,
-		}
-		pb.IndexLists[i] = indexList
-	}
-	if indexR.IndexOptions != nil {
-		pb.IndexOptions = make(map[string]*proto2.IndexOptions, len(indexR.IndexOptions))
-		for i, indexOptions := range indexR.IndexOptions {
-			if indexOptions != nil {
-				pb.IndexOptions[i] = &proto2.IndexOptions{
-					Infos: make([]*proto2.IndexOption, len(indexOptions)),
-				}
-				for _, o := range indexOptions {
-					pb.IndexOptions[i].Infos = append(pb.IndexOptions[i].Infos, o.Marshal())
-				}
-			}
-		}
-	}
-
-	return pb
-}
-
-func (indexR *IndexRelation) unmarshal(pb *proto2.IndexRelation) {
-	indexR.Rid = pb.GetRid()
-	indexR.Oids = pb.GetOid()
-	indexR.IndexNames = pb.GetIndexName()
-	indexLists := pb.GetIndexLists()
-	indexR.IndexList = make([]*IndexList, len(indexLists))
-	for i, iList := range indexLists {
-		indexR.IndexList[i] = &IndexList{
-			IList: iList.GetIList(),
-		}
-	}
-	indexOptions := pb.GetIndexOptions()
-	if indexOptions != nil {
-		indexR.IndexOptions = make(map[string][]*IndexOption, len(indexOptions))
-		for i, idxOptions := range indexOptions {
-			infos := idxOptions.GetInfos()
-			if infos != nil {
-				indexR.IndexOptions[i] = make([]*IndexOption, len(infos))
-				for j, o := range infos {
-					indexR.IndexOptions[i][j].Unmarshal(o)
-				}
-			}
-		}
-	}
-}
-
 func (msti *MeasurementInfo) ContainIndexRelation(ID uint64) bool {
 	return true
 }
 
-func (msti *MeasurementInfo) GetIndexRelation() IndexRelation {
+func (msti *MeasurementInfo) GetIndexRelation() influxql.IndexRelation {
 	return msti.IndexRelation
 }
 
@@ -406,23 +397,7 @@ func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeF
 	return infos
 }
 
-type IndexOption struct {
-	Tokens     string
-	Tokenizers string
-	Segment    int64
-}
-
-func NewIndexOption(tokens string, tokenizers string, segment int64) *IndexOption {
-	indexOption := &IndexOption{
-		Tokens:     tokens,
-		Tokenizers: tokenizers,
-		Segment:    segment,
-	}
-
-	return indexOption
-}
-
-func (o *IndexOption) Marshal() *proto2.IndexOption {
+func EncodeIndexOption(o *influxql.IndexOption) *proto2.IndexOption {
 	pb := &proto2.IndexOption{
 		Tokens:     proto.String(o.Tokens),
 		Tokenizers: proto.String(o.Tokenizers),
@@ -432,10 +407,70 @@ func (o *IndexOption) Marshal() *proto2.IndexOption {
 	return pb
 }
 
-func (o *IndexOption) Unmarshal(pb *proto2.IndexOption) {
-	o.Tokens = pb.GetTokens()
-	o.Tokenizers = pb.GetTokenizers()
-	o.Segment = pb.GetSegment()
+func DecodeIndexOption(pb *proto2.IndexOption) *influxql.IndexOption {
+	o := &influxql.IndexOption{
+		Tokens:     pb.GetTokens(),
+		Tokenizers: pb.GetTokenizers(),
+		Segment:    pb.GetSegment(),
+	}
+	return o
+}
+
+func EncodeIndexRelation(indexR *influxql.IndexRelation) *proto2.IndexRelation {
+	pb := &proto2.IndexRelation{Rid: proto.Uint32(indexR.Rid),
+		Oid:       indexR.Oids,
+		IndexName: indexR.IndexNames}
+
+	pb.IndexLists = make([]*proto2.IndexList, len(indexR.IndexList))
+	for i, IList := range indexR.IndexList {
+		indexList := &proto2.IndexList{
+			IList: IList.IList,
+		}
+		pb.IndexLists[i] = indexList
+	}
+	if indexR.IndexOptions != nil {
+		pb.IndexOptions = make(map[string]*proto2.IndexOptions, len(indexR.IndexOptions))
+		for i, indexOptions := range indexR.IndexOptions {
+			if indexOptions != nil {
+				pb.IndexOptions[i] = &proto2.IndexOptions{
+					Infos: make([]*proto2.IndexOption, len(indexOptions)),
+				}
+				for _, o := range indexOptions {
+					pb.IndexOptions[i].Infos = append(pb.IndexOptions[i].Infos, EncodeIndexOption(o))
+				}
+			}
+		}
+	}
+
+	return pb
+}
+
+func DecodeIndexRelation(pb *proto2.IndexRelation) *influxql.IndexRelation {
+	indexR := &influxql.IndexRelation{}
+	indexR.Rid = pb.GetRid()
+	indexR.Oids = pb.GetOid()
+	indexR.IndexNames = pb.GetIndexName()
+	indexLists := pb.GetIndexLists()
+	indexR.IndexList = make([]*influxql.IndexList, len(indexLists))
+	for i, iList := range indexLists {
+		indexR.IndexList[i] = &influxql.IndexList{
+			IList: iList.GetIList(),
+		}
+	}
+	indexOptions := pb.GetIndexOptions()
+	if indexOptions != nil {
+		indexR.IndexOptions = make(map[string][]*influxql.IndexOption, len(indexOptions))
+		for i, idxOptions := range indexOptions {
+			infos := idxOptions.GetInfos()
+			if infos != nil {
+				indexR.IndexOptions[i] = make([]*influxql.IndexOption, len(infos))
+				for j, o := range infos {
+					indexR.IndexOptions[i][j] = DecodeIndexOption(o)
+				}
+			}
+		}
+	}
+	return indexR
 }
 
 type ColStoreInfo struct {
@@ -444,13 +479,16 @@ type ColStoreInfo struct {
 	PropertyKey         []string
 	PropertyValue       []string
 	TimeClusterDuration time.Duration
+	CompactionType      config.CompactionType
 }
 
-func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string, Duration time.Duration) *ColStoreInfo {
+func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string, Duration time.Duration,
+	CompactType string) *ColStoreInfo {
 	h := &ColStoreInfo{
 		PrimaryKey:          PrimaryKey,
 		SortKey:             SortKey,
 		TimeClusterDuration: Duration,
+		CompactionType:      config.Str2CompactionType(CompactType),
 	}
 	if Property != nil {
 		h.PropertyKey = Property[0]
@@ -466,6 +504,7 @@ func (h *ColStoreInfo) Marshal() *proto2.ColStoreInfo {
 		PropertyKey:         h.PropertyKey,
 		PropertyValue:       h.PropertyValue,
 		TimeClusterDuration: (*int64)(&h.TimeClusterDuration),
+		CompactionType:      (*int32)(&h.CompactionType),
 	}
 	return pb
 }
@@ -476,6 +515,7 @@ func (h *ColStoreInfo) Unmarshal(pb *proto2.ColStoreInfo) {
 	h.PropertyKey = pb.GetPropertyKey()
 	h.PropertyValue = pb.GetPropertyValue()
 	h.TimeClusterDuration = time.Duration(pb.GetTimeClusterDuration())
+	h.CompactionType = config.CompactionType(pb.GetCompactionType())
 }
 
 func NewSchemaInfo(tags, fields map[string]int32) []*proto2.FieldSchema {

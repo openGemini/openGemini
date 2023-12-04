@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
@@ -60,6 +61,7 @@ type File interface {
 	Stat() (os.FileInfo, error)
 	SyncUpdateLength() error
 	Fd() uintptr
+	StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int)
 }
 
 type FSOption interface {

@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -484,13 +485,26 @@ func TestClient_CreateMeasurement(t *testing.T) {
 		logger:         logger.NewLogger(errno.ModuleMetaClient),
 		SendRPCMessage: &RPCMessageSender{},
 	}
-	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil, 0)
+	colStoreInfo := meta2.NewColStoreInfo(nil, nil, nil, 0, "")
 	schemaInfo := meta2.NewSchemaInfo(map[string]int32{"a": influx.Field_Type_Tag}, map[string]int32{"b": influx.Field_Type_Float})
 
-	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, nil)
+	options := &meta2.Options{Ttl: 1}
+	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, nil, options)
 	require.EqualError(t, err, "execute command timeout")
 
-	_, err = c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, schemaInfo)
+	_, err = c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, schemaInfo, options)
+	require.EqualError(t, err, "execute command timeout")
+}
+
+func TestClient_CreateDatabase(t *testing.T) {
+	c := &Client{
+		cacheData:      &meta2.Data{},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	options := &meta2.ObsOptions{Enabled: true}
+	_, err := c.CreateDatabase("db0", false, 1, options)
 	require.EqualError(t, err, "execute command timeout")
 }
 
@@ -1005,7 +1019,7 @@ func TestCreateMeasurement(t *testing.T) {
 	invalidMst := []string{"", "/111", ".", "..", "bbb\\aaa", string([]byte{'m', 's', 't', 0, '_', '0', '0'})}
 
 	for _, mst := range invalidMst {
-		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil, config.TSSTORE, nil, nil)
+		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil, config.TSSTORE, nil, nil, nil)
 		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
 	}
 
@@ -1106,13 +1120,13 @@ func TestInitMetaClient(t *testing.T) {
 		SendRPCMessage: &RPCMessageSender{},
 	}
 
-	_, _, _, err = mc.InitMetaClient(nil, true, nil)
+	_, _, _, err = mc.InitMetaClient(nil, true, nil, "")
 	if err == nil {
 		t.Fatalf("fail")
 	}
 	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
 	info := &StorageNodeInfo{"127.0.0.5:8081", "127.0.0.5:8082"}
-	_, _, _, err = mc.InitMetaClient(joinPeers, true, info)
+	_, _, _, err = mc.InitMetaClient(joinPeers, true, info, "")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -1561,4 +1575,65 @@ func TestClient_GetAliveShardsForReplication(t *testing.T) {
 	defer config.SetHaPolicy(config.WAFPolicy)
 	shardIndexes := c.GetAliveShards("db0", &sgInfo1)
 	assert.Equal(t, shardIndexes, []int{0, 2})
+}
+
+func TestClient_UpdateMeasurement(t *testing.T) {
+	orgOptions := &meta2.Options{Ttl: 2}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Duration: 1,
+							Measurements: map[string]*meta2.MeasurementInfo{
+								"cpu_0001": {Options: orgOptions},
+							},
+							MstVersions: map[string]meta2.MeasurementVer{
+								"cpu": {NameWithVersion: "cpu_0001", Version: 1},
+							},
+						},
+					},
+				},
+			},
+		},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	options := &meta2.Options{Ttl: 1}
+	err := c.UpdateMeasurement("db0", "rp0", "cpu", options)
+	require.EqualError(t, err, "execute command timeout")
+}
+
+func TestGetAliveReadNode(t *testing.T) {
+	client := NewClient("", false, 0)
+	data := &meta2.Data{}
+	client.SetCacheData(data)
+
+	data.DataNodes = append(data.DataNodes, meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 5, Status: serf.StatusAlive, Role: meta2.NodeWriter}, ConnID: 0, AliveConnID: 0})
+	_, err := client.AliveReadNodes()
+	if err == nil {
+		t.Fatalf("get alive readNodes failed")
+	}
+
+	data.DataNodes = append(data.DataNodes, meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 6, Status: serf.StatusAlive, Role: meta2.NodeDefault}, ConnID: 0, AliveConnID: 0})
+	dataNodes, err := client.AliveReadNodes()
+	if err != nil {
+		t.Fatalf("get alive readNodes failed")
+	}
+	if len(dataNodes) != 1 || dataNodes[0].Role != meta2.NodeDefault {
+		t.Fatalf("get alive readNodes failed")
+	}
+
+	data.DataNodes = append(data.DataNodes, meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 7, Status: serf.StatusAlive, Role: meta2.NodeReader}, ConnID: 0, AliveConnID: 0})
+	data.DataNodes = append(data.DataNodes, meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 8, Status: serf.StatusFailed, Role: meta2.NodeReader}, ConnID: 0, AliveConnID: 0})
+	dataNodes, err = client.AliveReadNodes()
+	if err != nil {
+		t.Fatalf("get alive readNodes failed")
+	}
+	if len(dataNodes) != 1 || dataNodes[0].Role != meta2.NodeReader {
+		t.Fatalf("get alive readNodes failed")
+	}
 }

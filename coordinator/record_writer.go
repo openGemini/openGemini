@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"go.uber.org/zap"
@@ -46,7 +47,8 @@ type RWMetaClient interface {
 	DBPtView(database string) (meta.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema) (*meta.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+		colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema, options *meta.Options) (*meta.MeasurementInfo, error)
 	GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta.ShardInfo, error)
 }
 
@@ -55,7 +57,7 @@ type RecMsg struct {
 	Database        string
 	RetentionPolicy string
 	Measurement     string
-	Rec             array.Record
+	Rec             interface{}
 }
 
 // RecordWriter handles writes the local data node.
@@ -93,6 +95,16 @@ func NewRecordWriter(timeout time.Duration, ptNum, recMsgChFactor int) *RecordWr
 }
 
 func (w *RecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec array.Record) error {
+	w.recMsgCh <- &RecMsg{
+		Database:        database,
+		RetentionPolicy: retentionPolicy,
+		Measurement:     measurement,
+		Rec:             rec,
+	}
+	return nil
+}
+
+func (w *RecordWriter) RetryWriteLogRecord(database, retentionPolicy, measurement string, rec *record.Record) error {
 	w.recMsgCh <- &RecMsg{
 		Database:        database,
 		RetentionPolicy: retentionPolicy,
@@ -155,7 +167,10 @@ func (w *RecordWriter) consume(ptIdx int) {
 	defer w.wg.Done()
 	for {
 		select {
-		case msg := <-w.recMsgCh:
+		case msg, ok := <-w.recMsgCh:
+			if !ok {
+				return
+			}
 			w.processRecord(msg, ptIdx)
 		case <-w.ctx.Done():
 			return
@@ -165,6 +180,7 @@ func (w *RecordWriter) consume(ptIdx int) {
 
 func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	var writeErr error
+	var rowNums int64
 	defer func() {
 		if err := recover(); err != nil {
 			w.logger.Error("processRecord panic", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement),
@@ -174,23 +190,88 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 		}
 		if writeErr != nil && !IsKeepWritingErr(writeErr) {
 			w.logger.Error("processRecord err", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement), zap.Error(writeErr))
-			w.errs.Dispatch(writeErr)
 		}
-		msg.Rec.Release() // The memory is released. The value of reference counting is decreased by 1.
+		switch m := msg.Rec.(type) {
+		case array.Record:
+			m.Release() // The memory is released. The value of reference counting is decreased by 1.
+		case *record.Record:
+			m.ResetForReuse()
+		default:
+			break
+		}
 	}()
 
 	start := time.Now()
-	writeErr = w.writeRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, msg.Rec, ptIdx)
+	switch m := msg.Rec.(type) {
+	case array.Record:
+		writeErr = w.writeRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, m, ptIdx)
+		rowNums = m.NumRows()
+	case *record.Record:
+		writeErr = w.writeLogRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, m, ptIdx)
+		rowNums = int64(m.RowNums())
+	default:
+		break
+	}
 	if writeErr != nil {
 		w.recWriterHelpers[ptIdx].reset()
 		return
 	}
-	atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, msg.Rec.NumRows())
+	atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, rowNums)
 	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
 }
 
 func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx int) error {
 	colNum, rowNum := rec.NumCols(), rec.NumRows()
+	if colNum == 0 || rowNum == 0 {
+		return nil
+	}
+
+	ctx := getWriteRecCtx()
+	defer putWriteRecCtx(ctx)
+
+	wh := w.recWriterHelpers[ptIdx]
+	err := ctx.checkDBRP(db, rp, wh.metaClient)
+	if err != nil {
+		w.logger.Error("checkDBRP err", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
+		return err
+	}
+
+	if rp == "" {
+		rp = ctx.db.DefaultRetentionPolicy
+	}
+
+	originName := mst
+	ctx.ms, err = wh.createMeasurement(db, rp, mst)
+	if err != nil {
+		w.logger.Error("invalid measurement", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(errno.NewError(errno.InvalidMeasurement)))
+		return err
+	}
+	mst = ctx.ms.Name
+
+	startTime, endTime, r, err := wh.checkAndUpdateSchema(db, rp, mst, originName, rec)
+	if err != nil {
+		wh.sameSchema = false
+		w.logger.Error("checkSchema err", zap.String("db", db), zap.String("rp", rp), zap.Error(err))
+		return err
+	}
+
+	err = record.ArrowRecordToNativeRecord(rec, r)
+	if err != nil {
+		w.logger.Error("ArrowRecordToNativeRecord failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
+		return err
+	}
+
+	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), ctx.ms.EngineType)
+	if err != nil {
+		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
+		return err
+	}
+	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, rec.NumRows()*rec.NumCols())
+	return w.splitAndWriteByShard(sgis, db, rp, mst, r, ptIdx, ctx.ms.EngineType)
+}
+
+func (w *RecordWriter) writeLogRecord(db, rp, mst string, rec *record.Record, ptIdx int) error {
+	colNum, rowNum := rec.ColNums(), rec.RowNums()
 	if colNum == 0 || rowNum == 0 {
 		return nil
 	}
@@ -216,26 +297,15 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx i
 	}
 	mst = ctx.ms.Name
 
-	startTime, endTime, r, err := wh.checkAndUpdateSchema(db, rp, mst, rec)
-	if err != nil {
-		wh.sameSchema = false
-		w.logger.Error("checkSchema err", zap.String("db", db), zap.String("rp", rp), zap.Error(err))
-		return err
-	}
-
-	err = record.ArrowRecordToNativeRecord(rec, r)
-	if err != nil {
-		w.logger.Error("ArrowRecordToNativeRecord failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
-		return err
-	}
-
+	timeCol := &rec.ColVals[rec.ColNums()-1]
+	startTime, endTime := timeCol.IntegerValues()[0], timeCol.IntegerValues()[timeCol.Len-1]
 	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), ctx.ms.EngineType)
 	if err != nil {
 		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
 	}
-	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, rec.NumRows()*rec.NumCols())
-	return w.splitAndWriteByShard(sgis, db, rp, mst, r, ptIdx, ctx.ms.EngineType)
+	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(rec.RowNums()*rec.ColNums()))
+	return w.splitAndWriteByShard(sgis, db, rp, mst, rec, ptIdx, ctx.ms.EngineType)
 }
 
 func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp, mst string, rec *record.Record, ptIdx int, engineType config.EngineType) error {

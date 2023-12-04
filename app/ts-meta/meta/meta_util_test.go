@@ -491,7 +491,7 @@ func (s *MockNetStorage) MigratePt(nodeID uint64, data transport.Codec, cb trans
 	return s.MigratePtFn(nodeID, data, cb)
 }
 
-func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64) (int, error) {
+func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error) {
 	if len(nodeIDs) == 1 && nodeIDs[0] == 10 {
 		return 0, fmt.Errorf("first node segregate error")
 	}

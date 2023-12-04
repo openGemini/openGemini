@@ -48,6 +48,9 @@ func genRPNElementByOp(logicalOp influxql.Token, value *FieldRef, res *RPNElemen
 		res.rg = createLeftBounded(value, true, false)
 	case influxql.IN:
 		res.op = rpn.InSet
+	case influxql.MATCHPHRASE:
+		res.op = rpn.InRange
+		res.rg = NewRange(value, value, true, true)
 	default:
 		res.op = rpn.UNKNOWN
 		return false
@@ -55,14 +58,14 @@ func genRPNElementByOp(logicalOp influxql.Token, value *FieldRef, res *RPNElemen
 	return true
 }
 
-type SetIndex struct {
+type setIndex struct {
 }
 
-func (si *SetIndex) Not() bool {
+func (si *setIndex) Not() bool {
 	return false
 }
 
-func (si *SetIndex) checkInRange(_ []*Range, _ []int, _ bool) Mark {
+func (si *setIndex) checkInRange(_ []*Range, _ []int, _ bool) Mark {
 	return NewMark(false, false)
 }
 
@@ -76,12 +79,16 @@ type FunctionBase struct {
 type RPNElement struct {
 	op        rpn.Op
 	rg        *Range
-	setIndex  *SetIndex
+	setIndex  *setIndex
 	keyColumn int
 	// monotonicChains as a chain of possibly monotone functions.
 	// if the key column is wrapped in functions that can be monotonous in some value ranges.
 	// such as (2023.06.01, 2023.06.15) -> toMonth() -> [202306, 202306]
 	monotonicChains []*FunctionBase
+}
+
+func NewRPNElement(op rpn.Op) *RPNElement {
+	return &RPNElement{op: op}
 }
 
 type IndexProperty struct {

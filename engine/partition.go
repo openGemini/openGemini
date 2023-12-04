@@ -137,7 +137,7 @@ func (dbPT *DBPTInfo) reportLoad() {
 	defer func() {
 		dbPT.wg.Done()
 		t.Stop()
-		dbPT.logger.Info("dbpt reportLoad stoped", zap.Uint32("ptid", dbPT.id))
+		dbPT.logger.Info("dbpt reportLoad stopped", zap.Uint32("ptid", dbPT.id))
 	}()
 
 	for {
@@ -589,6 +589,7 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 	}()
 	start := time.Now()
 	sh.indexBuilder = i
+	sh.SetLockPath(dbPT.lockPath)
 	if err = sh.NewShardKeyIdx(durationInfos[shardId].Ident.ShardType, shardPath, dbPT.lockPath); err != nil {
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "ShardOpenErr", time.Since(start).Nanoseconds(), true)
 		return nil, err
@@ -603,7 +604,8 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 		for _, mstInfo := range mstsInfo.MstsInfo {
 			sh.SetMstInfo(mstInfo.Name, mstInfo)
 		}
-		sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 		// Load the row count of each measurement.
 		for _, mst := range mstsInfo.MstsInfo {
@@ -752,7 +754,8 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		return nil, err
 	}
 	if sh.engineType == config.COLUMNSTORE {
-		sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 	}
 	return sh, err
 }

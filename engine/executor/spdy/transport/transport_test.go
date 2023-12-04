@@ -274,3 +274,12 @@ func TestTransport_Error2(t *testing.T) {
 
 	assert.NotEmpty(t, trans.Send(&Message{data: "12345678"}))
 }
+
+func TestNewTransportByAddress(t *testing.T) {
+	var nodeID uint64 = 1
+	var err error
+	address := "127.0.0.10:18399"
+	noConnectionAvailable := errno.NewError(errno.NoConnectionAvailable, nodeID, address).Error()
+	_, err = transport.NewTransportByAddress(nodeID, address, spdy.SelectRequest, nil)
+	assert.EqualError(t, err, noConnectionAvailable)
+}

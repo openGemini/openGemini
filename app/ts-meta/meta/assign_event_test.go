@@ -47,8 +47,8 @@ func TestAssignEventStateTransition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	globalService.clusterManager.addClusterMember(1)
-	defer globalService.clusterManager.removeClusterMember(1)
+	globalService.clusterManager.handleClusterMember(1, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 1})
+	defer globalService.clusterManager.handleClusterMember(1, &serf.MemberEvent{Type: serf.EventMemberFailed, Members: nil, EventTime: 2})
 	// active take over
 	cmd = GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
 	if err = globalService.store.ApplyCmd(cmd); err != nil {

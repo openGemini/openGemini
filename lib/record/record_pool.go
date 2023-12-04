@@ -45,6 +45,7 @@ const (
 	SequenceAggPool
 	SeriesPool
 	ColumnReaderPool
+	LogStoreReaderPool
 	UnknownPool
 )
 

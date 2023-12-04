@@ -347,6 +347,7 @@ func (*Hint) node()                        {}
 func (Hints) node()                        {}
 func (*MatchExpr) node()                   {}
 func (*InCondition) node()                 {}
+func (*Unnest) node()                      {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
@@ -516,6 +517,7 @@ type Source interface {
 func (*Measurement) source() {}
 func (*SubQuery) source()    {}
 func (*Join) source()        {}
+func (*Unnest) source()      {}
 
 // Sources represents a list of sources.
 type Sources []Source
@@ -581,6 +583,14 @@ func (a Sources) HaveOnlyCSStore() bool {
 		}
 	}
 	return true
+}
+
+func (a Sources) IsSubQuery() bool {
+	if len(a) != 1 {
+		return false
+	}
+	_, ok := a[0].(*SubQuery)
+	return ok
 }
 
 // MarshalBinary encodes a list of sources to a binary format.
@@ -785,6 +795,7 @@ type CreateMeasurementStatement struct {
 	IndexList           [][]string
 	IndexOption         []*IndexOption
 	TimeClusterDuration time.Duration
+	CompactType         string
 }
 
 type CreateMeasurementStatementOption struct {
@@ -797,6 +808,7 @@ type CreateMeasurementStatementOption struct {
 	SortKey             []string
 	Property            [][]string
 	TimeClusterDuration time.Duration
+	CompactType         string
 }
 
 type IndexOption struct {
@@ -1424,6 +1436,98 @@ type SelectStatement struct {
 	Schema Schema
 
 	JoinSource []*Join
+
+	UnnestSource []*Unnest
+
+	Scroll Scroll
+}
+
+func (s *SelectStatement) CheckUnnest() error {
+	if len(s.UnnestSource) == 0 {
+		return nil
+	}
+	for _, unnest := range s.UnnestSource {
+		if dstCall, ok := unnest.DstFunc.(*Call); ok {
+			if len(dstCall.Args) != len(unnest.DstColumns) {
+				return fmt.Errorf("unnest dstFunc is not length equ to dstColumns")
+			}
+			unnest.DstType = make([]DataType, len(dstCall.Args))
+			for j, t := range dstCall.Args {
+				if val, ok := t.(*VarRef); ok {
+					if t, err := s.GetUnnestDataType(val.Val); err == nil {
+						unnest.DstType[j] = t
+					} else {
+						return err
+					}
+				} else {
+					return fmt.Errorf("unnest dstFunc args error")
+				}
+			}
+		} else {
+			return fmt.Errorf("unnest dstFunc error")
+		}
+	}
+	return nil
+}
+
+func (s *SelectStatement) GetUnnestSchema(unnestSchema map[string]DataType) {
+	if len(s.UnnestSource) == 0 {
+		return
+	}
+	for _, unnest := range s.UnnestSource {
+		for i := range unnest.DstFunc.(*Call).Args {
+			dstVar := unnest.DstColumns[i]
+			if _, ok := unnestSchema[dstVar]; !ok {
+				unnestSchema[dstVar] = unnest.DstType[i]
+			}
+		}
+	}
+}
+
+func (s *SelectStatement) UnnestGetValType(val string) (DataType, error) {
+	if len(s.UnnestSource) == 0 {
+		return Unknown, fmt.Errorf("not find field datatype")
+	}
+	for _, unnest := range s.UnnestSource {
+		for i := range unnest.DstFunc.(*Call).Args {
+			if unnest.DstColumns[i] == val {
+				return unnest.DstType[i], nil
+			}
+		}
+	}
+	return Unknown, fmt.Errorf("not find field datatype")
+}
+
+func (s *SelectStatement) GetUnnestDataType(t string) (DataType, error) {
+	switch t {
+	case "varchar":
+		return String, nil
+	case "integer":
+		return Integer, nil
+	case "float":
+		return Float, nil
+	case "bool":
+		return Boolean, nil
+	default:
+		return Unknown, fmt.Errorf("error unnest datatype")
+	}
+}
+
+func (s *SelectStatement) RewriteUnnestSource() {
+	sources := make([]*Unnest, 0, 8)
+	s.RewriteUnnestSourceDFS(&sources, s.Sources)
+	s.UnnestSource = sources
+}
+
+func (s *SelectStatement) RewriteUnnestSourceDFS(unnestSources *[]*Unnest, sources Sources) {
+	for i := range sources {
+		switch sub := sources[i].(type) {
+		case *SubQuery:
+			s.RewriteUnnestSourceDFS(&(sub.Statement.UnnestSource), sub.Statement.Sources)
+		case *Unnest:
+			*unnestSources = append(*unnestSources, CloneSource(sub).(*Unnest))
+		}
+	}
 }
 
 // TimeAscending returns true if the time field is sorted in chronological order.
@@ -4110,6 +4214,18 @@ func (a Measurements) String() string {
 	return strings.Join(str, ", ")
 }
 
+type IndexRelation struct {
+	Rid          uint32
+	Oids         []uint32
+	IndexNames   []string
+	IndexList    []*IndexList              // indexType to column name (all column indexed with indexType)
+	IndexOptions map[string][]*IndexOption // columnName to index option (all index options for columnName)
+}
+
+type IndexList struct {
+	IList []string
+}
+
 // Measurement represents a single measurement used as a datasource.
 type Measurement struct {
 	Database        string
@@ -4123,6 +4239,8 @@ type Measurement struct {
 	SystemIterator    string
 	IsSystemStatement bool
 	Alias             string
+
+	IndexRelation *IndexRelation
 
 	EngineType config.EngineType
 }
@@ -7273,4 +7391,88 @@ func (s *SetConfigStatement) String() string {
 
 	}
 	return buf.String()
+}
+
+type Unnests []*Unnest
+
+func (us Unnests) String() string {
+	var str []string
+	for _, u := range us {
+		str = append(str, u.String())
+	}
+	return strings.Join(str, ", ")
+}
+
+type Unnest struct {
+	Mst        *Measurement
+	CastFunc   string
+	ParseFunc  Expr
+	DstFunc    Expr
+	DstColumns []string
+	DstType    []DataType
+}
+
+// output example: cast(match_all(\"([a-z]+)\", content::string) AS array(varchar)) AS(key1)
+func (u *Unnest) String() string {
+	var buf bytes.Buffer
+	if u.Mst != nil {
+		buf.WriteString(u.Mst.String())
+	}
+	buf.WriteString(" ")
+	buf.WriteString(u.CastFunc)
+	buf.WriteString("(")
+	if u.ParseFunc != nil {
+		buf.WriteString(u.ParseFunc.String())
+	}
+	buf.WriteString(" AS ")
+	if u.DstFunc != nil {
+		buf.WriteString(u.DstFunc.String())
+	}
+	buf.WriteString(") AS(")
+	for i, t := range u.DstColumns {
+		buf.WriteString(t)
+		if i+1 != len(u.DstColumns) {
+			buf.WriteString(", ")
+		}
+	}
+	buf.WriteString(")")
+	for i, t := range u.DstType {
+		buf.WriteString(t.String())
+		if i+1 != len(u.DstColumns) {
+			buf.WriteString(", ")
+		}
+	}
+	return buf.String()
+}
+
+func (u *Unnest) GetName() string {
+	return ""
+}
+
+type LogPipeStatement struct {
+	Cond   Expr
+	Unnest *Unnest
+}
+
+func (s *LogPipeStatement) stmt() {}
+func (s *LogPipeStatement) node() {}
+func (s *LogPipeStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+func (s *LogPipeStatement) String() string {
+	var buf bytes.Buffer
+	if s.Cond != nil {
+		_, _ = buf.WriteString(s.Cond.String())
+	}
+	if s.Unnest != nil {
+		buf.WriteString("|")
+		_, _ = buf.WriteString(s.Unnest.String())
+	}
+	return buf.String()
+}
+
+type Scroll struct {
+	Timeout   int
+	Scroll    string
+	Scroll_id string
 }

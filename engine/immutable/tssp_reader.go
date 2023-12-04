@@ -24,6 +24,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -43,7 +44,7 @@ const (
 	DownSampleLogDir  = "downsample_log"
 
 	TsspDirName        = "tssp"
-	ColumnStoreDirName = "columnstore"
+	ColumnStoreDirName = config.ColumnStoreDirName
 	CountBinFile       = "count.txt"
 
 	defaultCap = 64

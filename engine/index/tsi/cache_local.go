@@ -19,8 +19,8 @@ limitations under the License.
 
 package tsi
 
-func NewIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string) *IndexCache {
-	return newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, path, true)
+func NewIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize int, path string) *IndexCache {
+	return newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize, path, true)
 }
 
 func (ic *IndexCache) close() error {
@@ -40,6 +40,8 @@ func (ic *IndexCache) close() error {
 	ic.tagCache.Stop()
 
 	ic.TagKeyValueCache.Stop()
+
+	ic.TagFilterCostCache.Stop()
 
 	return nil
 }

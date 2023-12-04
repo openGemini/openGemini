@@ -18,7 +18,6 @@ package engine
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -261,7 +260,8 @@ func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, record
 
 	writeWalType := WalRecordType(recordHeader[0])
 	if writeWalType <= WriteWalUnKnownType || writeWalType >= WriteWalEnd {
-		return offset, recordCompBuff, errors.New("unKnown write wal type")
+		l.log.Warn("unKnown write wal type", zap.Int("writeWalType", int(writeWalType)))
+		return offset, recordCompBuff, io.EOF
 	}
 	offset += int64(len(recordHeader))
 

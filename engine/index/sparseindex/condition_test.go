@@ -21,10 +21,11 @@ import (
 
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCheckInRange(t *testing.T) {
+func TestKeyConditionImpl_CheckInRange(t *testing.T) {
 	pkRec := buildPKRecord()
 	pkSchema := pkRec.Schema
 	conStr := "UserID='U1' and URL='W3'"
@@ -41,15 +42,63 @@ func TestCheckInRange(t *testing.T) {
 		sparseindex.NewRange(sparseindex.NewFieldRef(cols, 1, 0), sparseindex.NewFieldRef(cols, 1, 4), true, true),
 	}
 	dataTypes := []int{4, 4}
-	var rpn, rpn1, rpn2 []*sparseindex.RPNElement
-	rpn = append(rpn, keyCondition.GetRPN()...)
-	rpn1 = append(rpn1, rpn[:len(rpn)-1]...)
+	var rpns, rpn1, rpn2 []*sparseindex.RPNElement
+	rpns = append(rpns, keyCondition.GetRPN()...)
+	rpn1 = append(rpn1, rpns[:len(rpns)-1]...)
 	keyCondition.SetRPN(rpn1)
 	_, err = keyCondition.CheckInRange(rgs, dataTypes)
 	assert.Equal(t, errno.Equal(err, errno.ErrInvalidStackInCondition), true)
 
-	rpn2 = append(rpn2, rpn[2:]...)
+	rpn2 = append(rpn2, rpns[2:]...)
 	keyCondition.SetRPN(rpn2)
 	_, err = keyCondition.CheckInRange(rgs, dataTypes)
 	assert.Equal(t, errno.Equal(err, errno.ErrRPNIsNullForAnd), true)
+}
+
+func TestKeyConditionImpl_AlwaysInRange(t *testing.T) {
+	pkRec := buildPKRecord()
+	pkSchema := pkRec.Schema
+	conStr := "UserID='U1' and URL='W3'"
+	keyCondition, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr), pkSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conStr1 := "UserID='U1' or URL='W3'"
+	keyCondition1, err := sparseindex.NewKeyCondition(nil, MustParseExpr(conStr1), pkSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var rpns, rpn1, rpn2 []*sparseindex.RPNElement
+	rpns = append(rpns, keyCondition.GetRPN()...)
+	rpn1 = append(rpn1, rpns[:len(rpns)-1]...)
+	rpn2 = append(rpn2, rpns[2:]...)
+
+	keyCondition.SetRPN(rpns)
+	_, err = keyCondition.AlwaysInRange()
+	assert.Equal(t, err, nil)
+
+	keyCondition.SetRPN(rpn1)
+	_, err = keyCondition.AlwaysInRange()
+	assert.Equal(t, errno.Equal(err, errno.ErrInvalidStackInCondition), true)
+
+	keyCondition.SetRPN(rpn2)
+	_, err = keyCondition.AlwaysInRange()
+	assert.Equal(t, errno.Equal(err, errno.ErrRPNIsNullForAnd), true)
+
+	keyCondition1.SetRPN(keyCondition1.GetRPN())
+	_, err = keyCondition1.AlwaysInRange()
+	assert.Equal(t, err, nil)
+
+	keyCondition1.SetRPN(keyCondition1.GetRPN()[2:])
+	_, err = keyCondition1.AlwaysInRange()
+	assert.Equal(t, errno.Equal(err, errno.ErrRPNIsNullForOR), true)
+
+	keyCondition1.SetRPN([]*sparseindex.RPNElement{sparseindex.NewRPNElement(rpn.UNKNOWN)})
+	ok, _ := keyCondition1.AlwaysInRange()
+	assert.Equal(t, ok, true)
+
+	keyCondition1.SetRPN([]*sparseindex.RPNElement{sparseindex.NewRPNElement(10)})
+	_, err = keyCondition1.AlwaysInRange()
+	assert.Equal(t, errno.Equal(err, errno.ErrUnknownOpInCondition), true)
 }

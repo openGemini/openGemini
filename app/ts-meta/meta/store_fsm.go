@@ -155,6 +155,7 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_SetNodeSegregateStatusCommand:    applySetNodeSegregateStatusCommand,
 	proto2.Command_RemoveNodeCommand:                applyRemoveNodeCommand,
 	proto2.Command_UpdateReplicationCommand:         applyUpdateReplicationCommand,
+	proto2.Command_UpdateMeasurementCommand:         applyUpdateMeasurement,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -381,6 +382,10 @@ func applyUpdateReplicationCommand(fsm *storeFSM, cmd *proto2.Command) interface
 	return fsm.applyUpdateReplicationCommand(cmd)
 }
 
+func applyUpdateMeasurement(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateMeasurementCommand(cmd)
+}
+
 func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 	if handler, ok := applyFunc[cmd.GetType()]; ok {
 		return handler(fsm, &cmd)
@@ -481,7 +486,7 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 		rp.Duration = autoCreateRetentionPolicyPeriod
 	}
 
-	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN)
+	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN, v.GetOptions())
 	fsm.Logger.Info("apply create database", zap.Error(err))
 	return err
 }
@@ -531,7 +536,8 @@ func (fsm *storeFSM) applyCreateMeasurementCommand(cmd *proto2.Command) interfac
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateMeasurementCommand", ext))
 	}
-	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR(), config.EngineType(v.GetEngineType()), v.GetColStoreInfo(), v.GetSchemaInfo())
+	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR(), config.EngineType(v.GetEngineType()),
+		v.GetColStoreInfo(), v.GetSchemaInfo(), v.GetOptions())
 }
 
 func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) interface{} {
@@ -646,7 +652,8 @@ func (fsm *storeFSM) applyUpdateRetentionPolicyCommand(cmd *proto2.Command) inte
 func (fsm *storeFSM) applyCreateShardGroupCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateShardGroupCommand_Command)
 	v := ext.(*proto2.CreateShardGroupCommand)
-	return fsm.data.CreateShardGroup(v.GetDatabase(), v.GetPolicy(), time.Unix(0, v.GetTimestamp()), v.GetShardTier(), config.EngineType(v.GetEngineType()))
+	return fsm.data.CreateShardGroup(v.GetDatabase(), v.GetPolicy(), time.Unix(0, v.GetTimestamp()), v.GetShardTier(),
+		config.EngineType(v.GetEngineType()), v.GetVersion())
 }
 
 func (fsm *storeFSM) applyDeleteShardGroupCommand(cmd *proto2.Command) interface{} {
@@ -775,7 +782,7 @@ func (fsm *storeFSM) applyCreateDataNodeCommand(cmd *proto2.Command) interface{}
 	}
 
 	fsm.data.ExpandShardsEnable = fsm.config.ExpandShardsEnable
-	err, _ := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr())
+	err, _ := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole())
 	return err
 }
 
@@ -983,4 +990,13 @@ func (fsm *storeFSM) applyUpdateReplicationCommand(cmd *proto2.Command) interfac
 	masterId := v.GetMasterId()
 	rgStatus := v.GetRgStatus()
 	return fsm.data.UpdateReplication(db, rgId, masterId, peers, rgStatus)
+}
+
+func (fsm *storeFSM) applyUpdateMeasurementCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command)
+	v, ok := ext.(*proto2.UpdateMeasurementCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateMeasurementCommand", ext))
+	}
+	return fsm.data.UpdateMeasurement(v.GetDb(), v.GetRp(), v.GetMst(), v.GetOptions())
 }

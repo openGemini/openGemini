@@ -2,9 +2,12 @@ package fs
 
 import (
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
 // Disable mmap by default
@@ -34,13 +37,18 @@ func (r *ReaderAt) MustReadAt(p []byte, off int64) {
 		logger.Panicf("off=%d cannot be negative", off)
 	}
 	if len(r.mmapData) == 0 {
+		start := time.Now()
 		n, err := r.f.ReadAt(p, off)
 		if err != nil {
 			logger.Panicf("FATAL: cannot read %d bytes at offset %d of file %q: %s", len(p), off, r.f.Name(), err)
+			return
 		}
 		if n != len(p) {
 			logger.Panicf("FATAL: unexpected number of bytes read; got %d; want %d", n, len(p))
 		}
+		atomic.AddInt64(&statistics.IOStat.IOFrontIndexReadDuration, time.Since(start).Nanoseconds())
+		atomic.AddInt64(&statistics.IOStat.IOFrontIndexReadOkBytes, int64(len(p)))
+		atomic.AddInt64(&statistics.IOStat.IOFrontIndexReadOkCount, 1)
 	} else {
 		if off > int64(len(r.mmapData)-len(p)) {
 			logger.Panicf("off=%d is out of allowed range [0...%d] for len(p)=%d", off, len(r.mmapData)-len(p), len(p))

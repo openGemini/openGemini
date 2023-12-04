@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -292,4 +293,93 @@ func TestWalReplay_SeriesLimited(t *testing.T) {
 	sh, err = createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
 	require.NoError(t, err)
 	require.NoError(t, closeShard(sh))
+}
+
+func TestWalReplayWithUnKnowType(t *testing.T) {
+	testDir := t.TempDir()
+	conf := TestConfig{100, 101, time.Second, false}
+	if testing.Short() && conf.short {
+		t.Skip("skipping test in short mode.")
+	}
+	msNames := []string{"cpu", "cpu1", "disk"}
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// not flush data to snapshot
+	sh.SetWriteColdDuration(3 * time.Minute)
+	mutable.SetSizeLimit(3e10)
+
+	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
+	// writeWal
+	var buff []byte
+	buff, err = influx.FastMarshalMultiRows(buff, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wr := &walRecord{binary: buff, writeWalType: WriteWalUnKnownType}
+	err = sh.wal.Write(wr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = sh.Close(); err != nil {
+		t.Fatal(err)
+	}
+	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
+	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption, config.TSSTORE)
+	newSh.indexBuilder = sh.indexBuilder
+
+	// reopen shard, replay wal files
+	newSh.wal.replayParallel = true
+	defer func() {
+		newSh.wal.replayParallel = false
+	}()
+
+	if err = newSh.OpenAndEnable(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for nameIdx := range msNames {
+		// query data and judge
+		cases := []TestCase{
+			{"AllField", minTime, maxTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, false, nil},
+		}
+
+		ascending := true
+		for _, c := range cases {
+			c := c
+			t.Run(c.Name, func(t *testing.T) {
+				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
+				querySchema := genQuerySchema(c.fieldAux, opt)
+				cursors, err := newSh.CreateCursor(context.Background(), querySchema)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				// step5: loop all cursors to query data from shard
+				// key is indexKey, value is Record
+				m := genExpectRecordsMap(rows, querySchema)
+				errs := make(chan error, len(cursors))
+				checkQueryResultParallel(errs, cursors, m, ascending, checkQueryResultForSingleCursor)
+
+				close(errs)
+				for i := 0; i < len(cursors); i++ {
+					err = <-errs
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+	// step6: close shard
+	err = closeShard(newSh)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

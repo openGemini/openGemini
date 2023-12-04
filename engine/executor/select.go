@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -64,7 +65,7 @@ func Select(ctx context.Context, stmt *influxql.SelectStatement, shardMapper que
 }
 
 func defaultQueryExecutorBuilderCreator() hybridqp.PipelineExecutorBuilder {
-	return NewQueryExecutorBuilder(GetEnableBinaryTreeMerge())
+	return NewQueryExecutorBuilder(sysconfig.GetEnableBinaryTreeMerge())
 }
 
 type preparedStatement struct {
@@ -122,7 +123,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	if !ok {
 		return nil, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
 	}
-	opt.EnableBinaryTreeMerge = GetEnableBinaryTreeMerge()
+	opt.EnableBinaryTreeMerge = sysconfig.GetEnableBinaryTreeMerge()
 
 	rewriteVarfName(p.stmt.Fields)
 
@@ -146,7 +147,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 		return nil, nil
 	}
 
-	if GetEnablePrintLogicalPlan() == OnPrintLogicalPlan {
+	if sysconfig.GetEnablePrintLogicalPlan() == sysconfig.OnPrintLogicalPlan {
 		planWriter := NewLogicalPlanWriterImpl(&strings.Builder{})
 		plan.(LogicalPlan).Explain(planWriter)
 		fmt.Println("origin plan\n", planWriter.String())
@@ -159,9 +160,10 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	if HaveOnlyCSStore {
 		best = RebuildColumnStorePlan(best)[0]
 		RebuildAggNodes(best)
+		best = ReplaceSortAggWithHashAgg(best)[0]
 	}
 
-	if GetEnablePrintLogicalPlan() == OnPrintLogicalPlan {
+	if sysconfig.GetEnablePrintLogicalPlan() == sysconfig.OnPrintLogicalPlan {
 		planWriter := NewLogicalPlanWriterImpl(&strings.Builder{})
 		best.(LogicalPlan).Explain(planWriter)
 		fmt.Println("optimized plan\n", planWriter.String())
@@ -198,7 +200,7 @@ func (p *preparedStatement) isSchemaOverLimit(best hybridqp.QueryNode) (bool, er
 		logger.GetLogger().Error("nil plan", zap.Any("stmt", p.stmt))
 		return false, nil
 	}
-	querySchemaLimit := GetQuerySchemaLimit()
+	querySchemaLimit := sysconfig.GetQuerySchemaLimit()
 	schemaNum := len(best.Schema().Options().GetDimensions()) + best.Schema().Fields().Len()
 	if querySchemaLimit > 0 && schemaNum > querySchemaLimit {
 		return true, errno.NewError(errno.ErrQuerySchemaUpperBound, schemaNum, querySchemaLimit)
@@ -337,7 +339,7 @@ func hasDistinctSelectorCall(s *QuerySchema) (bool, bool) {
 
 func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasSlidingWindow bool) {
 	if hasSlidingWindow && (!schema.CanAggPushDown() ||
-		(schema.CanAggPushDown() && GetEnableSlidingWindowPushUp() == OnSlidingWindowPushUp) || schema.HasSubQuery()) {
+		(schema.CanAggPushDown() && sysconfig.GetEnableSlidingWindowPushUp() == sysconfig.OnSlidingWindowPushUp) || schema.HasSubQuery()) {
 		builder.SlidingWindow()
 	} else {
 		builder.Aggregate()
@@ -350,6 +352,7 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	hasHoltWinters := schema.HasHoltWintersCall()
 	hasSort := s.HasSort()
 	HaveOnlyCSStore := schema.Options().HaveOnlyCSStore()
+	isSubQuery := schema.Sources().IsSubQuery()
 
 	if len(schema.Calls()) > 0 {
 		buildAggNode(builder, schema, hasSlidingWindow)
@@ -379,7 +382,7 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 		builder.Fill()
 	}
 
-	if hasSort && HaveOnlyCSStore {
+	if hasSort && (HaveOnlyCSStore || isSubQuery) {
 		builder.Sort()
 	}
 
@@ -579,10 +582,44 @@ func RebuildAggNodes(plan hybridqp.QueryNode) {
 	}
 	if childPlan, ok := plan.Children()[0].(*LogicalAggregate); ok {
 		switch childPlan.Children()[0].(type) {
-		case *LogicalOrderBy, *LogicalSortAppend, *LogicalFullJoin:
+		case *LogicalOrderBy, *LogicalSortAppend, *LogicalFullJoin, *LogicalGroupBy, *LogicalSubQuery, *LogicalSort:
 		default:
 			plan.SetInputs(plan.Children()[0].Children())
 		}
 	}
 	RebuildAggNodes(plan.Children()[0])
+}
+
+func ReplaceSortAggWithHashAgg(plan hybridqp.QueryNode) []hybridqp.QueryNode {
+	if plan.Children() == nil || len(plan.Schema().Sources()) > 1 {
+		return []hybridqp.QueryNode{plan}
+	}
+	var replace bool
+	var nodes []hybridqp.QueryNode
+	for _, child := range plan.Children() {
+		if child == nil {
+			continue
+		}
+		p := ReplaceSortAggWithHashAgg(child)
+		switch plan.(type) {
+		case *LogicalAggregate:
+			node := NewLogicalHashAgg(p[0], plan.Schema(), NODE_EXCHANGE, nil)
+			if node.schema.HasCall() {
+				n1 := findChildAggNode(plan)
+				if n1 != nil {
+					node.LogicalPlanBase = n1.(*LogicalAggregate).LogicalPlanBase
+					node.inputs = p
+				}
+			}
+			nodes = append(nodes, node)
+		default:
+			nodes = append(nodes, p...)
+			replace = true
+		}
+	}
+	if replace {
+		plan.ReplaceChildren(nodes)
+		return []hybridqp.QueryNode{plan}
+	}
+	return nodes
 }

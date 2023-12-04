@@ -43,7 +43,70 @@ const (
 
 	// BlockTag designates a block encodes tag values.
 	BlockTag = byte(influx.Field_Type_Tag)
+
+	BlockOneBegin   = 16
+	BlockFloat64One = 17
+	BlockIntegerOne = 18
+	BlockBooleanOne = 19
+	BlockStringOne  = 20
+	BlockOneEnd     = 21
+
+	BlockFullBegin   = 30
+	BlockFloat64Full = 31
+	BlockIntegerFull = 32
+	BlockBooleanFull = 33
+	BlockStringFull  = 34
+	BlockFullEnd     = 35
+
+	BlockEmptyBegin   = 40
+	BlockFloat64Empty = 41
+	BlockIntegerEmpty = 42
+	BlockBooleanEmpty = 43
+	BlockStringEmpty  = 44
+	BlockEmptyEnd     = 45
 )
+
+func IsBlockOne(typ uint8) bool {
+	return typ > BlockOneBegin && typ < BlockOneEnd
+}
+
+func IsBlockFull(typ uint8) bool {
+	return typ > BlockFullBegin && typ < BlockFullEnd
+}
+
+func IsBlockEmpty(typ uint8) bool {
+	return typ > BlockEmptyBegin && typ < BlockEmptyEnd
+}
+
+func RewriteTypeToFull(typ uint8) uint8 {
+	switch typ {
+	case BlockFloat64:
+		return BlockFloat64Full
+	case BlockInteger:
+		return BlockIntegerFull
+	case BlockBoolean:
+		return BlockBooleanFull
+	case BlockString:
+		return BlockStringFull
+	default:
+		return typ
+	}
+}
+
+func RewriteTypeToEmpty(typ uint8) uint8 {
+	switch typ {
+	case BlockFloat64:
+		return BlockFloat64Empty
+	case BlockInteger:
+		return BlockIntegerEmpty
+	case BlockBoolean:
+		return BlockBooleanEmpty
+	case BlockString:
+		return BlockStringEmpty
+	default:
+		return typ
+	}
+}
 
 type DataCoder interface {
 	SetEncodingType(ty int)

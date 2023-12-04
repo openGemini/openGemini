@@ -9,6 +9,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -673,3 +674,67 @@ func (rpu *RetentionPolicyUpdate) SetReplicaN(v int) { rpu.ReplicaN = &v }
 
 // SetShardGroupDuration sets the RetentionPolicyUpdate.ShardGroupDuration.
 func (rpu *RetentionPolicyUpdate) SetShardGroupDuration(v time.Duration) { rpu.ShardGroupDuration = &v }
+
+type ObsOptions struct {
+	Enabled    bool   `json:"enabled"`
+	BucketName string `json:"bucket_name"`
+	Endpoint   string `json:"endpoint"`
+	Ak         string `json:"ak"`
+	Sk         string `json:"sk"`
+	BasePath   string `json:"path"`
+}
+
+func (cro *ObsOptions) GetObsPath() string {
+	if cro.Ak == "" || cro.Sk == "" {
+		return ""
+	}
+	path := fmt.Sprintf("obs://%v?bucket=%v&ak=%v&sk=%v/%v/", cro.Endpoint, cro.BucketName, cro.Ak, cro.Sk, cro.BasePath)
+	return path
+}
+
+func (cro *ObsOptions) Marshal() *proto2.ObsOptions {
+	if cro == nil {
+		cro = &ObsOptions{}
+	}
+	return &proto2.ObsOptions{
+		Enabled:    proto.Bool(cro.Enabled),
+		BucketName: proto.String(cro.BucketName),
+		Ak:         proto.String(cro.Ak),
+		Sk:         proto.String(cro.Sk),
+		Endpoint:   proto.String(cro.Endpoint),
+		BasePath:   proto.String(cro.BasePath),
+	}
+}
+
+func (cro *ObsOptions) Unmarshal(pb *proto2.ObsOptions) {
+	cro.Enabled = pb.GetEnabled()
+	cro.BucketName = pb.GetBucketName()
+	cro.Ak = pb.GetAk()
+	cro.Sk = pb.GetSk()
+	cro.Endpoint = pb.GetEndpoint()
+	cro.BasePath = pb.GetBasePath()
+}
+
+func (cro *ObsOptions) GetObsBucketName() string {
+	return cro.BucketName
+}
+
+func (cro *ObsOptions) GetObsEndpoint() string {
+	return cro.Endpoint
+}
+
+func (cro *ObsOptions) GetObsAk() string {
+	return cro.Ak
+}
+
+func (cro *ObsOptions) GetObsSk() string {
+	return cro.Sk
+}
+
+func (cro *ObsOptions) GetObsBasePath() string {
+	return cro.BasePath
+}
+
+func (cro *ObsOptions) Validate() bool {
+	return cro.BucketName != "" && cro.Ak != "" && cro.Sk != "" && cro.Endpoint != "" && cro.BasePath != ""
+}

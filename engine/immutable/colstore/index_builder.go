@@ -49,7 +49,7 @@ func NewIndexBuilder(lockPath *string, filePath string) *IndexBuilder {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		panic(err)
 	}
-	indexBuilder.writer = newPrimaryKeyWriter(indexBuilder.fd, lockPath)
+	indexBuilder.writer = newIndexWriter(indexBuilder.fd, lockPath)
 	indexBuilder.log = Log.NewLogger(errno.ModuleCompact).SetZapLogger(log)
 	indexBuilder.chunkBuilder = NewChunkBuilder()
 

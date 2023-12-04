@@ -30,9 +30,8 @@ func TestCollectOpsSqlSlowQueryStatistics(t *testing.T) {
 	}
 	statistics.InitSlowQueryStatistics(tags)
 
-	stats := statistics.NewSqlSlowQueryStatistics()
+	stats := statistics.NewSqlSlowQueryStatistics("db0")
 	stats.Query = "select * from cpu"
-	stats.DB = "db0"
 	stats.TotalDuration = 1
 	stats.PrepareDuration = 1
 	stats.IteratorDuration = 1

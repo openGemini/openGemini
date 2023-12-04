@@ -18,6 +18,7 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"reflect"
 	"regexp"
@@ -39,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -107,7 +109,8 @@ func (m mocShardMapperMetaClient) DropStream(name string) error {
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *meta.IndexRelation, engineType config.EngineType, colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema) (*meta.MeasurementInfo, error) {
+func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *influxql.IndexRelation,
+	engineType config.EngineType, colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema, options *meta2.Options) (*meta.MeasurementInfo, error) {
 	return nil, nil
 }
 
@@ -115,7 +118,7 @@ func (m mocShardMapperMetaClient) AlterShardKey(database, retentionPolicy, mst s
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta.DatabaseInfo, error) {
 	return m.databases[name], nil
 }
 
@@ -277,9 +280,20 @@ func (m mocShardMapperMetaClient) ShardOwner(shardID uint64) (database, policy s
 }
 
 func (m mocShardMapperMetaClient) Measurement(database string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
-	db := m.databases[database]
-	rp := db.RetentionPolicies[rpName]
-	mst := rp.Measurements[mstName]
+	db, ok := m.databases[database]
+	if !ok {
+		return nil, fmt.Errorf("not found the database: %s", database)
+	}
+
+	rp, ok := db.RetentionPolicies[rpName]
+	if !ok {
+		return nil, fmt.Errorf("not found the retention policies: %s", rpName)
+	}
+
+	mst, ok := rp.Measurements[mstName]
+	if !ok {
+		return nil, fmt.Errorf("not found the measurement: %s", mstName)
+	}
 	return mst, nil
 }
 
@@ -1073,5 +1087,72 @@ func Test_MapTypeBatch(t *testing.T) {
 	mytype = shardMapping.MapType(source, "tag1")
 	if mytype != record.ToInfluxqlTypes(int(influx.Field_Type_Tag)) {
 		t.Fatal()
+	}
+}
+
+func Test_CreateRemoteQuery(t *testing.T) {
+	csm := &ClusterShardMapping{
+		Logger: logger.NewLogger(1),
+	}
+	csm.MetaClient = &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"v1", "u1"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"f1":   influx.Field_Type_String,
+									"tag1": influx.Field_Type_Tag,
+								},
+								EngineType: config.COLUMNSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+		cacheData: &meta.Data{
+			PtNumPerNode: 1,
+			ClusterPtNum: 1,
+			DataNodes: []meta.DataNode{
+				{
+					NodeInfo: meta.NodeInfo{
+						ID: 1,
+					},
+					ConnID:      1,
+					AliveConnID: 1,
+				},
+			},
+		},
+	}
+
+	var key uint64 = 1
+	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
+	opt := query.ProcessorOptions{}
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst3", EngineType: config.COLUMNSTORE,
+	}
+	_, err := csm.makeRemoteQuery(ctx, influxql.Sources{source}, opt, 1, 1, []uint64{1, 2, 3, 4})
+	if err == nil {
+		t.Fatal("the measurement does not exist, but there is no error reported")
+	}
+	source = &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.COLUMNSTORE,
+	}
+	_, err = csm.makeRemoteQuery(ctx, influxql.Sources{source}, opt, 1, 1, []uint64{1, 2, 3, 4})
+	if err != nil {
+		t.Fatalf("makeRemoteQuery failed: %v", err)
 	}
 }

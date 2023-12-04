@@ -64,6 +64,16 @@ func (sp *sortPartition) Swap(i, j int) {
 	sp.rows[i], sp.rows[j] = sp.rows[j], sp.rows[i]
 }
 
+func (sp *sortPartition) Push(x interface{}) {
+	sp.rows = append(sp.rows, x.(*sortRowMsg))
+}
+
+func (sp *sortPartition) Pop() interface{} {
+	p := sp.rows[len(sp.rows)-1]
+	sp.rows = sp.rows[:len(sp.rows)-1]
+	return p
+}
+
 type SortTransform struct {
 	BaseProcessor
 	newResultFuncs         []func() sortEleMsg

@@ -647,8 +647,11 @@ func TestColumnStoreReader(t *testing.T) {
 	sh.ForceFlush()
 	time.Sleep(time.Second * 2)
 
-	// set the sparse index reader
-	sh.sparseIndexReader = sparseindex.NewIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	// set the primary index reader
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	// set the skip index reader
+	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// build the shard group
 	shardGroup := &mockShardGroup{
@@ -771,6 +774,16 @@ func TestColumnStoreReader(t *testing.T) {
 			expect:    testEqualChunk1,
 		},
 		{
+			name:      "select sum(field) from cpu where timeFilter and fieldFilter group by",
+			q:         `select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1' group by field1_string, tagKey1`,
+			tr:        util.TimeRange{Min: 1609459200000000000, Max: influxql.MaxTime},
+			out:       buildAggRowDataType(),
+			readerOps: buildAggReaderOps(),
+			fields:    fields,
+			expected:  nil,
+			expect:    testEqualChunk1,
+		},
+		{
 			name:      "select sum(field) from cpu where timeFilter and fieldFilter",
 			q:         `select sum(field2_int) from cpu where time >= 1609460838300000000 and field1_string = 'test-test-test-test-1'`,
 			tr:        util.TimeRange{Min: 1609460838300000000, Max: influxql.MaxTime},
@@ -801,7 +814,7 @@ func TestColumnStoreReader(t *testing.T) {
 				sh.immTables = immutable.NewTableStore(immutable.GetDir(config.COLUMNSTORE, testDir), sh.lock, &sh.tier, false, immutable.GetColStoreConfig())
 			}
 			if tt.scanErr {
-				sh.sparseIndexReader = sparseindex.NewIndexReader(0, 0, 0)
+				sh.pkIndexReader = sparseindex.NewPKIndexReader(0, 0, 0)
 			}
 			// step1: parse stmt and opt
 			ctx := context.Background()

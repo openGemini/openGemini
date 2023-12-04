@@ -195,6 +195,12 @@ func (m *IntegerPreAgg) size() int {
 }
 
 func (m *IntegerPreAgg) marshal(dst []byte) []byte {
+	if m.values[countIndex] == 1 {
+		dst = numberenc.MarshalInt64Append(dst, m.values[minIndex])
+		dst = numberenc.MarshalInt64Append(dst, m.values[minTIndex])
+		return dst
+	}
+
 	for _, val := range m.values {
 		dst = numberenc.MarshalInt64Append(dst, val)
 	}
@@ -202,6 +208,17 @@ func (m *IntegerPreAgg) marshal(dst []byte) []byte {
 }
 
 func (m *IntegerPreAgg) unmarshal(src []byte) ([]byte, error) {
+	if PreAggOnlyOneRow(src) {
+		// only one row of data
+		m.values[minIndex], src = numberenc.UnmarshalInt64(src), src[8:]
+		m.values[minTIndex], src = numberenc.UnmarshalInt64(src), src[8:]
+		m.values[maxIndex] = m.values[minIndex]
+		m.values[maxTIndex] = m.values[minTIndex]
+		m.values[sumIndex] = m.values[minIndex]
+		m.values[countIndex] = 1
+		return src, nil
+	}
+
 	if len(src) < m.size() {
 		return nil, fmt.Errorf("too small data %v for ColumnMetaInteger", len(src))
 	}
@@ -318,6 +335,12 @@ func (m *FloatPreAgg) size() int {
 }
 
 func (m *FloatPreAgg) marshal(dst []byte) []byte {
+	if m.countV == 1 {
+		dst = numberenc.MarshalFloat64(dst, m.minV)
+		dst = numberenc.MarshalInt64Append(dst, m.minTime)
+		return dst
+	}
+
 	dst = numberenc.MarshalFloat64(dst, m.minV)
 	dst = numberenc.MarshalFloat64(dst, m.maxV)
 	dst = numberenc.MarshalInt64Append(dst, m.minTime)
@@ -328,6 +351,17 @@ func (m *FloatPreAgg) marshal(dst []byte) []byte {
 }
 
 func (m *FloatPreAgg) unmarshal(src []byte) ([]byte, error) {
+	if PreAggOnlyOneRow(src) {
+		// only one row of data
+		m.minV, src = numberenc.UnmarshalFloat64(src), src[8:]
+		m.minTime, src = numberenc.UnmarshalInt64(src), src[8:]
+		m.maxV = m.minV
+		m.maxTime = m.minTime
+		m.sumV = m.minV
+		m.countV = 1
+		return src, nil
+	}
+
 	if len(src) < m.size() {
 		return nil, fmt.Errorf("too small data %v for ColumnMetaFloat", len(src))
 	}
@@ -658,3 +692,10 @@ func (b *TimePreAgg) addMin(float64, int64) {}
 func (b *TimePreAgg) addMax(float64, int64) {}
 func (b *TimePreAgg) addSum(float64)        {}
 func (b *TimePreAgg) addCount(n int64)      { b.countV += uint32(n) }
+
+func PreAggOnlyOneRow(buf []byte) bool {
+	// If a Chunk contains only one row of data,
+	// the pre-aggregation data retains only the minimum value and the corresponding time
+	// Therefore, the length of the pre-aggregated data is 16 bytes.
+	return len(buf) == 16
+}

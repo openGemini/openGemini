@@ -201,6 +201,29 @@ type ExecutionOptions struct {
 	RowsChan chan RowsChan
 
 	ParallelQuery bool
+
+	// IncQuery indicates whether the query is a incremental query.
+	IncQuery bool
+
+	// QueryID indicates the representation of the query.
+	QueryID string
+
+	// IterID indicates the number of iteration in incremental query, starting from 0.
+	IterID int32
+}
+
+func NewExecutionOptions(db, rp string, nodeID uint64, chunkSize, innerChunkSize int, chunked, readOnly, quiet, parallelQuery bool) *ExecutionOptions {
+	return &ExecutionOptions{
+		Database:        db,
+		RetentionPolicy: rp,
+		NodeID:          nodeID,
+		ChunkSize:       chunkSize,
+		InnerChunkSize:  innerChunkSize,
+		Chunked:         chunked,
+		ReadOnly:        readOnly,
+		Quiet:           quiet,
+		ParallelQuery:   parallelQuery,
+	}
 }
 
 type (

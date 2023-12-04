@@ -70,7 +70,7 @@ func TestInterruptEvent(t *testing.T) {
 	globalService.store.data.TakeOverEnabled = true
 	globalService.clusterManager.Close()
 
-	globalService.clusterManager.addClusterMember(2)
+	globalService.clusterManager.handleClusterMember(2, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 1})
 	dataNode := globalService.store.data.DataNodeByHttpHost("127.0.0.1:8400")
 	dataNode.AliveConnID = dataNode.ConnID - 1
 	err = globalService.store.updateNodeStatus(2, int32(serf.StatusAlive), 2, "127.0.0.1:8011")
@@ -104,14 +104,14 @@ waitAssign:
 		time.Sleep(time.Millisecond)
 	}
 	e := NewAssignEvent(dbPt, 2, dataNode.AliveConnID, false)
-	globalService.clusterManager.removeClusterMember(2)
+	globalService.clusterManager.handleClusterMember(2, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 3})
 	err = globalService.msm.executeEvent(e)
 	assert.Equal(t, true, errno.Equal(err, errno.ConflictWithEvent))
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
 		cb.Handle(&netstorage.PtResponse{})
 		return nil
 	}
-	globalService.clusterManager.addClusterMember(2)
+	globalService.clusterManager.handleClusterMember(2, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 4})
 waitAssigned:
 	for {
 		if len(globalService.msm.eventMap) == 0 {

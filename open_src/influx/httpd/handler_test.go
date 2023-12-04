@@ -336,3 +336,74 @@ func TestHandler_ServeWrite_ReadOnly(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }
+
+func TestTransYaccSyntaxErr(t *testing.T) {
+	testStr := [][2]string{
+		{"unexpected COMMA", "unexpected COMMA"},
+		{"unexpected COLON, expecting IDENT or STRING", "unexpected COLON, expecting IDENTIFIER or STRING"},
+		{"unexpected $end, expecting RPAREN or OR or AND", "unexpected END, expecting RIGHT PARENTHESIS or OR or AND"},
+		{"unexpected COLON, expecting LPAREN", "unexpected COLON, expecting LEFT PARENTHESIS"},
+		{"unexpected $unk", "unexpected UNKNOWN TOKEN"},
+		{"unexpected BITWISE_OR", "unexpected PIPE OPERATOR"},
+	}
+
+	for i := 0; i < len(testStr); i++ {
+		dstStr := TransYaccSyntaxErr(testStr[i][0])
+		if dstStr != testStr[i][1] {
+			t.Fatalf("TestTransYaccSyntaxErr failed, expect:%s, real:%s", testStr[i][1], dstStr)
+		}
+	}
+}
+
+func TestGetSqlAndPplQuery(t *testing.T) {
+	h := Handler{
+		requestTracker: httpd.NewRequestTracker(),
+		Logger:         logger.NewLogger(errno.ModuleHTTP),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/repo/repo0/logstreams/log0/logs", nil)
+	req.URL.RawQuery = "%3Arepository=repo0&%3AlogStream=log0&"
+	testStr := [][3]string{
+		{"content: abc and efg | select count(*) from log0",
+			"SELECT count(*) FROM repo0.log0.log0 WHERE content::string MATCHPHRASE 'abc' AND content::string MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content::string MATCHPHRASE 'abc' AND content::string MATCHPHRASE 'efg'"},
+		{"content: abc or content: efg | select count(*) from log0 where status > 200",
+			"SELECT count(*) FROM repo0.log0.log0 WHERE status > 200 AND content::string MATCHPHRASE 'abc' OR content::string MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content::string MATCHPHRASE 'abc' OR content::string MATCHPHRASE 'efg'"},
+		{"* | select count(*) from log0",
+			"SELECT count(*) FROM repo0.log0.log0 WHERE time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			""},
+		{"* | content: * | select count(*) from log0",
+			"SELECT count(*) FROM repo0.log0.log0 WHERE time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			""},
+		{"* | content: * | tag: host123 | select count(*) from log0",
+			"SELECT count(*) FROM repo0.log0.log0 WHERE \"tag\"::string MATCHPHRASE 'host123' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"\"tag\"::string MATCHPHRASE 'host123'"},
+		{"content: abc | tag: host123 | tag: host456",
+			"SELECT * FROM repo0.log0.log0 WHERE content::string MATCHPHRASE 'abc' AND \"tag\"::string MATCHPHRASE 'host123' AND \"tag\"::string MATCHPHRASE 'host456' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content::string MATCHPHRASE 'abc' AND \"tag\"::string MATCHPHRASE 'host123' AND \"tag\"::string MATCHPHRASE 'host456'"},
+	}
+
+	var user meta.User
+	for i := 0; i < len(testStr); i++ {
+		param := &QueryParam{
+			Query:     testStr[i][0],
+			TimeRange: TimeRange{1, 100},
+		}
+		sqlQuery, pplQuery, err, status := h.getSqlAndPplQuery(req, param, user)
+		if err != nil {
+			t.Fatalf("%d-parser pipe syntax: %v, %d", i, err, status)
+		}
+
+		sql := sqlQuery.String()
+		if sql != testStr[i][1] {
+			t.Fatalf("%d-expect ppl:%s,\n  real Ppl:%s", i, testStr[i][1], sql)
+		}
+
+		if pplQuery != nil {
+			ppl := pplQuery.String()
+			if ppl != testStr[i][2] {
+				t.Fatalf("%d-expect ppl:%s,\n  real Ppl:%s", i, testStr[i][2], ppl)
+			}
+		}
+	}
+}

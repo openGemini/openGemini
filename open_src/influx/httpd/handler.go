@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/ioutil"
 	"math"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"runtime/debug"
@@ -30,11 +31,13 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -43,6 +46,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
@@ -125,9 +129,21 @@ type Handler struct {
 		Authenticate(username, password string) (ui meta2.User, err error)
 		User(username string) (meta2.User, error)
 		AdminUserExists() bool
-		DataNodes() ([]meta2.DataNode, error)
 		ShowShards() models.Rows
 		TagArrayEnabled(db string) bool
+		DataNode(id uint64) (*meta2.DataNode, error)
+
+		CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error)
+		Databases() map[string]*meta2.DatabaseInfo
+		MarkDatabaseDelete(name string) error
+		Measurements(database string, ms influxql.Measurements) ([]string, error)
+
+		CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
+		RetentionPolicy(database, name string) (rpi *meta2.RetentionPolicyInfo, err error)
+		MarkRetentionPolicyDelete(database, name string) error
+		CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config2.EngineType,
+			colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
+		UpdateMeasurement(db, rp, mst string, options *meta2.Options) error
 	}
 
 	QueryAuthorizer interface {
@@ -149,6 +165,10 @@ type Handler struct {
 
 	PointsWriter interface {
 		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
+	}
+
+	RecordWriter interface {
+		RetryWriteLogRecord(database, retentionPolicy, measurement string, rec *record.Record) error
 	}
 
 	SubscriberManager
@@ -249,6 +269,52 @@ func NewHandler(c config.Config) *Handler {
 		Route{ // sysCtrl
 			"sysCtrl",
 			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
+		},
+		// repository related operations
+		Route{
+			"create-repository",
+			"POST", "/api/v1/repository/:repository", false, true, h.serveCreateRepository,
+		},
+		Route{
+			"delete-repository",
+			"DELETE", "/api/v1/repository/:repository", false, true, h.serveDeleteRepository,
+		},
+		Route{
+			"list-repository",
+			"GET", "/api/v1/repository", false, true, h.serveListRepository,
+		},
+		Route{
+			"show-repository",
+			"GET", "/api/v1/repository/:repository", false, true, h.serveShowRepository,
+		},
+		Route{
+			"update-repository",
+			"PUT", "/api/v1/repository/:repository", false, true, h.serveUpdateRepository,
+		},
+		// logstream related operations
+		Route{
+			"create-logStream",
+			"POST", "/api/v1/logstream/:repository/:logStream", false, true, h.serveCreateLogstream,
+		},
+		Route{
+			"delete-logStream",
+			"DELETE", "/api/v1/logstream/:repository/:logStream", false, true, h.serveDeleteLogstream,
+		},
+		Route{
+			"list-logStream",
+			"GET", "/api/v1/logstream/:repository", false, true, h.serveListLogstream,
+		},
+		Route{
+			"show-logStream",
+			"GET", "/api/v1/logstream/:repository/:logStream", false, true, h.serveShowLogstream,
+		},
+		Route{
+			"update-logStream",
+			"PUT", "/api/v1/logstream/:repository/:logStream", false, true, h.serveUpdateLogstream,
+		},
+		Route{
+			"write-log", // Data-ingest route.
+			"POST", "/repo/:repository/logstreams/:logStream/records", false, true, h.serveRecord,
 		},
 	}...)
 
@@ -417,6 +483,260 @@ func (h *Handler) serveSysCtrl(w http.ResponseWriter, r *http.Request, user meta
 	h.serveDebug(w, r)
 }
 
+func (h *Handler) getQueryFromRequest(r *http.Request, param *QueryParam, user meta2.User) string {
+	var qp string
+	if param == nil {
+		// Attempt to read the form value from the "q" form value.
+		qp = r.FormValue("q")
+	} else {
+		qp = param.Query
+	}
+
+	qp = strings.TrimSpace(qp)
+	if user != nil {
+		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()))
+	} else {
+		h.Logger.Info(app.HideQueryPassword(qp))
+	}
+
+	return qp
+}
+
+func (h *Handler) newQueryReader(r *http.Request, param *QueryParam, user meta2.User) (io.Reader, multipart.File, error) {
+	// Attempt to read the query value from the request.
+	qp := h.getQueryFromRequest(r, param, user)
+	if qp != "" {
+		return strings.NewReader(qp), nil, nil
+	}
+
+	if r.MultipartForm != nil && r.MultipartForm.File != nil {
+		// If we have a multipart/form-data, try to retrieve a file from 'q'.
+		if fhs := r.MultipartForm.File["q"]; len(fhs) > 0 {
+			f, err := fhs[0].Open()
+			if err != nil {
+				h.Logger.Error("query error! ", zap.Error(err), zap.Any("r", r))
+				return nil, nil, err
+			}
+			return f, f, nil
+		}
+	}
+	h.Logger.Error("query error! `missing required parameter: q", zap.Any("r", r))
+	return nil, nil, fmt.Errorf(`missing required parameter "q"`)
+}
+
+func (h *Handler) parseQueryParams(r *http.Request) (map[string]interface{}, error) {
+	rawParams := r.FormValue("params")
+	if rawParams == "" {
+		return nil, nil
+	}
+
+	var params map[string]interface{}
+	decoder := json.NewDecoder(strings.NewReader(rawParams))
+	decoder.UseNumber()
+	if err := decoder.Decode(&params); err != nil {
+		h.Logger.Error("query error! parsing query parameters", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
+		return nil, fmt.Errorf("error parsing query parameters: " + err.Error())
+	}
+
+	// Convert json.Number into int64 and float64 values
+	for k, v := range params {
+		if v, ok := v.(json2.Number); ok {
+			var err error
+			if strings.Contains(string(v), ".") {
+				params[k], err = v.Float64()
+			} else {
+				params[k], err = v.Int64()
+			}
+
+			if err != nil {
+				h.Logger.Error("query error! parsing json value", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
+				return nil, fmt.Errorf("error parsing json value: " + err.Error())
+			}
+		}
+	}
+	return params, nil
+}
+
+func (h *Handler) checkAuthorization(user meta2.User, query *influxql.Query, database string) error {
+	// Check authorization.
+	if !h.Config.AuthEnabled {
+		return nil
+	}
+	var userID string
+	if user != nil {
+		// no users in system
+		userID = user.ID()
+	}
+
+	if err := h.QueryAuthorizer.AuthorizeQuery(user, query, database); err != nil {
+		if err, ok := err.(meta2.ErrAuthorize); ok {
+			h.Logger.Info("Unauthorized request",
+				zap.String("user", err.User),
+				zap.Stringer("query", err.Query),
+				zap.String("database", err.Database))
+		}
+		h.Logger.Error("query error! authorizing query", zap.Error(err), zap.String("db", database), zap.String("userID", userID))
+		return err
+	}
+	h.Logger.Info("login success", zap.String("userID", userID))
+	return nil
+}
+
+func (h *Handler) parseChunkSize(r *http.Request) (bool, int, int, error) {
+	// Parse chunk size. Use default if not provided or unparsable.
+	chunked := r.FormValue("chunked") == "true"
+	chunkSize := DefaultChunkSize
+
+	if chunked {
+		if n, err := strconv.ParseInt(r.FormValue("chunk_size"), 10, 64); err == nil && int(n) > 0 {
+			chunkSize = int(n)
+			if chunkSize > MaxChunkSize {
+				msg := fmt.Sprintf("request chunk_size:%v larger than max chunk_size(%v)", n, MaxChunkSize)
+				h.Logger.Error(msg, zap.String("db", r.FormValue("db")), zap.Any("r", r))
+				return false, 0, 0, fmt.Errorf(msg)
+			}
+		}
+	}
+
+	innerChunkSize := DefaultInnerChunkSize
+	if n, err := strconv.ParseInt(r.FormValue("inner_chunk_size"), 10, 64); err == nil && int(n) > 0 {
+		if n <= MaxInnerChunkSize {
+			innerChunkSize = int(n)
+		}
+	}
+	return chunked, chunkSize, innerChunkSize, nil
+}
+
+func (h *Handler) getSqlQuery(r *http.Request, qr io.Reader) (*influxql.Query, error, int) {
+	p := influxql.NewParser(qr)
+	defer p.Release()
+
+	// Sanitize the request query params so it doesn't show up in the response logger.
+	// Do this before anything else so a parsing error doesn't leak passwords.
+	sanitize(r)
+
+	// Parse the parameters
+	params, err := h.parseQueryParams(r)
+	if err != nil {
+		return nil, err, http.StatusBadRequest
+	}
+	if params != nil {
+		p.SetParams(params)
+	}
+
+	YyParser := influxql.NewYyParser(p.GetScanner(), p.GetPara())
+	YyParser.ParseTokens()
+
+	q, err := YyParser.GetQuery()
+	if err != nil {
+		h.Logger.Error("query error! parsing query value:", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
+		return nil, fmt.Errorf("error parsing query: " + err.Error()), http.StatusBadRequest
+	}
+
+	return q, nil, http.StatusOK
+}
+
+func (h *Handler) getAuthorizer(user meta2.User) query2.FineAuthorizer {
+	if h.Config.AuthEnabled {
+		if user != nil && user.AuthorizeUnrestricted() {
+			return query2.OpenAuthorizer
+		} else {
+			// The current user determines the authorized actions.
+			return user
+		}
+	} else {
+		// Auth is disabled, so allow everything.
+		return query2.OpenAuthorizer
+	}
+}
+
+func (h *Handler) getResultRowsCnt(r *query.Result, rows int) int {
+	// Limit the number of rows that can be returned in a non-chunked
+	// response.  This is to prevent the server from going OOM when
+	// returning a large response.  If you want to return more than the
+	// default chunk size, then use chunking to process multiple blobs.
+	// Iterate through the series in this result to count the rows and
+	// truncate any rows we shouldn't return.
+	if h.Config.MaxRowLimit <= 0 {
+		return 0
+	}
+	for i, series := range r.Series {
+		n := h.Config.MaxRowLimit - rows
+		if n < len(series.Values) {
+			// We have reached the maximum number of values. Truncate
+			// the values within this row.
+			series.Values = series.Values[:n]
+			// Since this was truncated, it will always be a partial return.
+			// Add this so the client knows we truncated the response.
+			series.Partial = true
+		}
+		rows += len(series.Values)
+
+		if rows >= h.Config.MaxRowLimit {
+			// Drop any remaining series since we have already reached the row limit.
+			if i < len(r.Series) {
+				r.Series = r.Series[:i+1]
+			}
+			break
+		}
+	}
+	return rows
+}
+
+func (h *Handler) updateStmtId2Result(r *query.Result, stmtID2Result map[int]*query.Result) bool {
+	// It's not chunked so buffer results in memory.
+	// Results for statements need to be combined together.
+	// We need to check if this new result is for the same statement as
+	// the last result, or for the next statement
+	if result, ok := stmtID2Result[r.StatementID]; ok {
+		if r.Err != nil {
+			stmtID2Result[r.StatementID] = r
+			return false
+		}
+
+		cr := result
+		rowsMerged := 0
+		if len(cr.Series) > 0 {
+			lastSeries := cr.Series[len(cr.Series)-1]
+
+			for _, row := range r.Series {
+				if !lastSeries.SameSeries(row) {
+					// Next row is for a different series than last.
+					break
+				}
+				// Values are for the same series, so append them.
+				lastSeries.Values = append(lastSeries.Values, row.Values...)
+				lastSeries.Partial = row.Partial
+				rowsMerged++
+			}
+		}
+
+		// Append remaining rows as new rows.
+		r.Series = r.Series[rowsMerged:]
+		cr.Series = append(cr.Series, r.Series...)
+		cr.Messages = append(cr.Messages, r.Messages...)
+		cr.Partial = r.Partial
+	} else {
+		stmtID2Result[r.StatementID] = r
+	}
+
+	return true
+}
+
+func (h *Handler) getStmtResult(stmtID2Result map[int]*query.Result) Response {
+	resp := Response{Results: make([]*query.Result, 0, len(stmtID2Result))}
+	var keys []int
+	for k := range stmtID2Result {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+
+	for _, k := range keys {
+		resp.Results = append(resp.Results, stmtID2Result[k])
+	}
+	return resp
+}
+
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
@@ -442,47 +762,28 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 
 	// Retrieve the node id the query should be executed on.
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
-
-	var qr io.Reader
-	// Attempt to read the form value from the "q" form value.
-	qp := strings.TrimSpace(r.FormValue("q"))
-	if user != nil {
-		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()))
-	} else {
-		h.Logger.Info(app.HideQueryPassword(qp))
+	// new reader for sql statement
+	qr, f, err := h.newQueryReader(r, nil, user)
+	if err != nil {
+		h.httpError(rw, err.Error(), http.StatusBadRequest)
+		return
 	}
-	if qp != "" {
-		qr = strings.NewReader(qp)
-	} else if r.MultipartForm != nil && r.MultipartForm.File != nil {
-		// If we have a multipart/form-data, try to retrieve a file from 'q'.
-		if fhs := r.MultipartForm.File["q"]; len(fhs) > 0 {
-			f, err := fhs[0].Open()
-			if err != nil {
-				h.Logger.Error("query error! ", zap.Error(err), zap.Any("r", r))
-				h.httpError(rw, err.Error(), http.StatusBadRequest)
-				return
-			}
-			defer util.MustClose(f)
-			qr = f
-		}
+	if f != nil {
+		defer util.MustClose(f)
 	}
 
-	if qr == nil {
-		h.httpError(rw, `missing required parameter "q"`, http.StatusBadRequest)
-		h.Logger.Error("query error! `missing required parameter: q", zap.Any("r", r))
+	q, err, status := h.getSqlQuery(r, qr)
+	if err != nil {
+		h.httpError(rw, err.Error(), status)
 		return
 	}
 
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
 
-	p := influxql.NewParser(qr)
-	defer p.Release()
-
 	db := r.FormValue("db")
 	var qDuration *statistics.SQLSlowQueryStatistics
 	if !isInternalDatabase(db) {
-		qDuration = statistics.NewSqlSlowQueryStatistics()
-		qDuration.SetDatabase(db)
+		qDuration = statistics.NewSqlSlowQueryStatistics(db)
 		defer func() {
 			d := time.Now().Sub(start)
 			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
@@ -494,103 +795,18 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		}()
 	}
 
-	// Sanitize the request query params so it doesn't show up in the response logger.
-	// Do this before anything else so a parsing error doesn't leak passwords.
-	sanitize(r)
-
-	// Parse the parameters
-	rawParams := r.FormValue("params")
-	if rawParams != "" {
-		var params map[string]interface{}
-		decoder := json.NewDecoder(strings.NewReader(rawParams))
-		decoder.UseNumber()
-		if err := decoder.Decode(&params); err != nil {
-			h.httpError(rw, "error parsing query parameters: "+err.Error(), http.StatusBadRequest)
-			h.Logger.Error("query error! parsing query parameters", zap.Error(err), zap.String("db", db), zap.Any("r", r))
-			return
-		}
-
-		// Convert json.Number into int64 and float64 values
-		for k, v := range params {
-			if v, ok := v.(json2.Number); ok {
-				var err error
-				if strings.Contains(string(v), ".") {
-					params[k], err = v.Float64()
-				} else {
-					params[k], err = v.Int64()
-				}
-
-				if err != nil {
-					h.httpError(rw, "error parsing json value: "+err.Error(), http.StatusBadRequest)
-					h.Logger.Error("query error! parsing json value", zap.Error(err), zap.String("db", db), zap.Any("r", r))
-					return
-				}
-			}
-		}
-		p.SetParams(params)
-	}
-
-	YyParser := influxql.NewYyParser(p.GetScanner(), p.GetPara())
-	YyParser.ParseTokens()
-
-	/*	// Parse query from query string.
-		q, err := p.ParseQuery()
-		if err != nil {
-			h.httpError(rw, "error parsing query: "+err.Error(), http.StatusBadRequest)
-			h.Logger.Error("query error! parsing query value", zap.Error(err), zap.String("db", db), zap.Any("r", r))
-			return
-		}*/
-
-	q, err := YyParser.GetQuery()
-
+	// Check authorization.
+	err = h.checkAuthorization(user, q, db)
 	if err != nil {
-		h.httpError(rw, "error parsing query: "+err.Error(), http.StatusBadRequest)
-		h.Logger.Error("query error! parsing query value", zap.Error(err), zap.String("db", db), zap.Any("r", r))
+		h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
 		return
 	}
 
-	// Check authorization.
-	if h.Config.AuthEnabled {
-		var userID string
-		if user != nil {
-			// no users in system
-			userID = user.ID()
-		}
-		if err := h.QueryAuthorizer.AuthorizeQuery(user, q, db); err != nil {
-			if err, ok := err.(meta2.ErrAuthorize); ok {
-				h.Logger.Info("Unauthorized request",
-					zap.String("user", err.User),
-					zap.Stringer("query", err.Query),
-					zap.String("database", err.Database))
-			}
-			h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
-			h.Logger.Error("query error! authorizing query", zap.Error(err), zap.String("db", db), zap.Any("r", r), zap.String("userID", userID))
-			return
-		}
-		h.Logger.Info("login success", zap.String("userID", userID))
-	}
-
 	// Parse chunk size. Use default if not provided or unparsable.
-	chunked := r.FormValue("chunked") == "true"
-	chunkSize := DefaultChunkSize
-	if chunked {
-		if n, err := strconv.ParseInt(r.FormValue("chunk_size"), 10, 64); err == nil && int(n) > 0 {
-			chunkSize = int(n)
-			if chunkSize > MaxChunkSize {
-				msg := fmt.Sprintf("request chunk_size:%v larger than max chunk_size(%v)", n, MaxChunkSize)
-				h.httpError(rw, msg, http.StatusBadRequest)
-				h.Logger.Error(msg, zap.String("db", db), zap.Any("r", r))
-				return
-			}
-		}
+	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
+	if err != nil {
+		h.httpError(rw, err.Error(), http.StatusBadRequest)
 	}
-	innerChunkSize := DefaultInnerChunkSize
-	if n, err := strconv.ParseInt(r.FormValue("inner_chunk_size"), 10, 64); err == nil && int(n) > 0 {
-		if n <= MaxInnerChunkSize {
-			innerChunkSize = int(n)
-		}
-	}
-
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
 
@@ -603,20 +819,8 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		NodeID:          nodeID,
 		InnerChunkSize:  innerChunkSize,
 		ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
-		//QueryLimitEn:    atomic.LoadInt32(&syscontrol.QueryLimitEn) == 1,
-		Quiet: true,
-	}
-
-	if h.Config.AuthEnabled {
-		if user != nil && user.AuthorizeUnrestricted() {
-			opts.Authorizer = query2.OpenAuthorizer
-		} else {
-			// The current user determines the authorized actions.
-			opts.Authorizer = user
-		}
-	} else {
-		// Auth is disabled, so allow everything.
-		opts.Authorizer = query2.OpenAuthorizer
+		Quiet:           true,
+		Authorizer:      h.getAuthorizer(user),
 	}
 
 	// Make sure if the client disconnects we signal the query to abort
@@ -650,7 +854,6 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	}
 
 	// if we're not chunking, this will be the in memory buffer for all results before sending to client
-	resp := Response{Results: make([]*query.Result, 0)}
 	stmtID2Result := make(map[int]*query.Result)
 
 	// Status header is OK once this point is reached.
@@ -684,69 +887,9 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 			continue
 		}
 
-		// Limit the number of rows that can be returned in a non-chunked
-		// response.  This is to prevent the server from going OOM when
-		// returning a large response.  If you want to return more than the
-		// default chunk size, then use chunking to process multiple blobs.
-		// Iterate through the series in this result to count the rows and
-		// truncate any rows we shouldn't return.
-		if h.Config.MaxRowLimit > 0 {
-			for i, series := range r.Series {
-				n := h.Config.MaxRowLimit - rows
-				if n < len(series.Values) {
-					// We have reached the maximum number of values. Truncate
-					// the values within this row.
-					series.Values = series.Values[:n]
-					// Since this was truncated, it will always be a partial return.
-					// Add this so the client knows we truncated the response.
-					series.Partial = true
-				}
-				rows += len(series.Values)
-
-				if rows >= h.Config.MaxRowLimit {
-					// Drop any remaining series since we have already reached the row limit.
-					if i < len(r.Series) {
-						r.Series = r.Series[:i+1]
-					}
-					break
-				}
-			}
-		}
-
-		// It's not chunked so buffer results in memory.
-		// Results for statements need to be combined together.
-		// We need to check if this new result is for the same statement as
-		// the last result, or for the next statement
-		if result, ok := stmtID2Result[r.StatementID]; ok {
-			if r.Err != nil {
-				stmtID2Result[r.StatementID] = r
-				continue
-			}
-
-			cr := result
-			rowsMerged := 0
-			if len(cr.Series) > 0 {
-				lastSeries := cr.Series[len(cr.Series)-1]
-
-				for _, row := range r.Series {
-					if !lastSeries.SameSeries(row) {
-						// Next row is for a different series than last.
-						break
-					}
-					// Values are for the same series, so append them.
-					lastSeries.Values = append(lastSeries.Values, row.Values...)
-					lastSeries.Partial = row.Partial
-					rowsMerged++
-				}
-			}
-
-			// Append remaining rows as new rows.
-			r.Series = r.Series[rowsMerged:]
-			cr.Series = append(cr.Series, r.Series...)
-			cr.Messages = append(cr.Messages, r.Messages...)
-			cr.Partial = r.Partial
-		} else {
-			stmtID2Result[r.StatementID] = r
+		rows = h.getResultRowsCnt(r, rows)
+		if !h.updateStmtId2Result(r, stmtID2Result) {
+			continue
 		}
 
 		// Drop out of this loop and do not process further results when we hit the row limit.
@@ -764,17 +907,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		}
 	}
 
-	var keys []int
-	for k, _ := range stmtID2Result {
-		keys = append(keys, k)
-	}
-
-	sort.Ints(keys)
-
-	for _, k := range keys {
-		resp.Results = append(resp.Results, stmtID2Result[k])
-	}
-
+	resp := h.getStmtResult(stmtID2Result)
 	// If it's not chunked we buffered everything in memory, so write it out
 	if !chunked {
 		n, _ := rw.WriteResponse(resp)
@@ -1067,9 +1200,9 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 		term := strings.TrimSpace(r.FormValue("term"))
 		err = failpoint.Enable(point, term)
 		if err != nil {
-			h.Logger.Error("enable failpoint ", zap.String("point", point), zap.String("term", term), zap.Error(err))
+			h.Logger.Error("enable failpoint fail", zap.String("point", point), zap.String("term", term), zap.Error(err))
 		} else {
-			h.Logger.Info("enable failpoint suc:", zap.String("point", point), zap.String("term", term))
+			h.Logger.Info("enable failpoint success", zap.String("point", point), zap.String("term", term))
 		}
 		var req netstorage.SysCtrlRequest
 		req.SetMod(syscontrol.Failpoint)
@@ -1078,15 +1211,18 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 			"switchon": "true",
 			"term":     term,
 		})
+
 		var sb strings.Builder
+		sb.WriteString("{\n\t")
 		err = syscontrol.ProcessRequest(req, &sb)
+		sb.WriteString("\n}\n")
+		w.Write([]byte(sb.String()))
 	} else if flag == "disable" {
 		err = failpoint.Disable(point)
 		if err != nil {
-			h.Logger.Error("disable failpoint ", zap.String("point", point), zap.Error(err))
-			h.writeHeader(w, http.StatusOK)
+			h.Logger.Error("disable failpoint fail", zap.String("point", point), zap.Error(err))
 		} else {
-			h.Logger.Info("disable failpoint suc:", zap.String("point", point))
+			h.Logger.Info("disable failpoint success", zap.String("point", point))
 		}
 		var req netstorage.SysCtrlRequest
 		req.SetMod(syscontrol.Failpoint)
@@ -1095,17 +1231,17 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 			"switchon": "false",
 		})
 		var sb strings.Builder
+		sb.WriteString("{\n\t")
 		err = syscontrol.ProcessRequest(req, &sb)
+		sb.WriteString("\n}\n")
+		w.Write([]byte(sb.String()))
 	} else {
 		h.Logger.Error("invalid failpoint args", zap.String("flag", flag))
+		err = fmt.Errorf("invalid failpoint args: flag: %s. Optional for enable or disable", flag)
 	}
-
-	if err == nil {
-		h.writeHeader(w, http.StatusOK)
-		b, _ := json.Marshal(map[string]string{"version": h.Version})
-		w.Write(b)
-	} else {
-		h.writeHeader(w, http.StatusBadRequest)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
 	}
 }
 
@@ -1330,8 +1466,7 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 
 	var qDuration *statistics.SQLSlowQueryStatistics
 	if !isInternalDatabase(db) {
-		qDuration = statistics.NewSqlSlowQueryStatistics()
-		qDuration.SetDatabase(db)
+		qDuration = statistics.NewSqlSlowQueryStatistics(db)
 		defer func() {
 			d := time.Since(startTime)
 			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
@@ -2153,4 +2288,33 @@ func Points2Rows(points []models.Point) ([]influx.Row, error) {
 		rows = append(rows, r)
 	}
 	return rows, nil
+}
+
+func (h *Handler) httpErrorRsp(w http.ResponseWriter, b []byte, code int) {
+	if code == http.StatusUnauthorized {
+		// If an unauthorized header will be sent back, add a WWW-Authenticate header
+		// as an authorization challenge.
+		w.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=\"%s\"", h.Config.Realm))
+	}
+
+	// Default implementation if the response writer hasn't been replaced
+	// with our special response writer type.
+	w.Header().Add("Content-Type", "application/json")
+	h.writeHeader(w, code)
+	w.Write(b)
+}
+
+type LogResponse struct {
+	ErrorCode string `json:"error_code"`
+	ErrorMsg  string `json:"error_msg"`
+}
+
+func ErrorResponse(msg string, errCode string) []byte {
+	res := LogResponse{
+		ErrorCode: errCode,
+		ErrorMsg:  msg,
+	}
+
+	by, _ := json.Marshal(res)
+	return by
 }

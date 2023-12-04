@@ -19,6 +19,7 @@ package pusher
 import (
 	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,4 +51,39 @@ func TestSetBasicAuth(t *testing.T) {
 	obj.setBasicAuth(req)
 
 	assert.NotEmpty(t, req.Header["Authorization"])
+}
+
+func Test_http_push_createDatabase(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(204)
+	}))
+	defer ts.Close()
+
+	p := &Http{
+		conf: &HttpConfig{
+			Database: "_internal",
+			RP:       "monitor",
+			EndPoint: ts.URL[7:],
+		},
+	}
+
+	err := p.Push([]byte{1})
+	assert.NoError(t, err)
+}
+
+func Test_http_push(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer ts.Close()
+
+	p := &Http{
+		conf: &HttpConfig{
+			Database: "_internal",
+			EndPoint: ts.URL[7:],
+		},
+	}
+	p.storeCreated = true
+	err := p.Push([]byte{1})
+	assert.Errorf(t, err, "http push statistics failed, reason: 500 Internal Server Error")
 }

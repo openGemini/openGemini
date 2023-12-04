@@ -24,7 +24,7 @@ import (
 )
 
 // FragmentRange means a fragment range of a data file. The range is left closed and right open. Such as [Start, end).
-// A fragment is a logical data block based of row. It is used for data block filtering of Primary and Secondary Index.
+// A fragment is a logical data block based of row. It is used for data block filtering of primary index and skip index.
 // Currently, fragment and segment are one-to-one and can be expanded to one-to-N in the future.
 type FragmentRange struct {
 	Start uint32
@@ -50,6 +50,10 @@ func (fr *FragmentRange) Less(other *FragmentRange) (bool, error) {
 }
 
 type FragmentRanges []*FragmentRange
+
+func (frs FragmentRanges) Empty() bool {
+	return len(frs) == 0
+}
 
 func (frs FragmentRanges) String() string {
 	var res string

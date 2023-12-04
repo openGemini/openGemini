@@ -81,3 +81,10 @@ func TestBalanceIfNeeded(t *testing.T) {
 	assert.Equal(t, 3, nodePtNumMap[3])
 	assert.Equal(t, 3, nodePtNumMap[4])
 }
+
+func TestBalanceIfNeededStart(t *testing.T) {
+	bm := NewBalanceManager("v1.0")
+	bm.stopped = 1
+	bm.wg.Add(1)
+	bm.balanceIfNeeded()
+}

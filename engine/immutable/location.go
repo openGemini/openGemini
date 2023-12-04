@@ -34,7 +34,25 @@ type Location struct {
 	fragPos int // Indicates the sequence number of a fragment range.
 	fragRgs []*fragment.FragmentRange
 }
+type ColAux struct {
+	colPos           []int
+	colPosValidCount []int
+	validCounts      []int
+	floatValues      [][]float64
+	integerValues    [][]int64
+	booleanValues    [][]bool
+}
 
+func NewColAux(rec *record.Record, filterOption *BaseFilterOptions) *ColAux {
+	return &ColAux{
+		colPos:           make([]int, len(rec.ColVals)),
+		colPosValidCount: make([]int, rec.ColNums()),
+		validCounts:      make([]int, len(filterOption.FieldsIdx)),
+		floatValues:      make([][]float64, len(filterOption.FieldsIdx)),
+		integerValues:    make([][]int64, len(filterOption.FieldsIdx)),
+		booleanValues:    make([][]bool, len(filterOption.FieldsIdx)),
+	}
+}
 func NewLocation(r TSSPFile, ctx *ReadContext) *Location {
 	return &Location{
 		r:       r,
@@ -52,7 +70,15 @@ func NewLocationCursor(n int) *LocationCursor {
 		lcs: make([]*Location, 0, n),
 	}
 }
-
+func (c *ColAux) reset(rec *record.Record, filterOption *BaseFilterOptions) {
+	for i := 0; i < len(rec.ColVals); i++ {
+		c.colPos[i] = 0
+		c.colPosValidCount[i] = 0
+	}
+	for i := 0; i < len(filterOption.FieldsIdx); i++ {
+		c.validCounts[i] = 0
+	}
+}
 func (l *Location) SetFragmentRanges(frs []*fragment.FragmentRange) {
 	if len(frs) == 0 {
 		return
@@ -109,6 +135,10 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buffer *[]byte) e
 	}
 
 	return nil
+}
+
+func (l *Location) SetChunkMeta(chunkMeta *ChunkMeta) {
+	l.meta = chunkMeta
 }
 
 func (l *Location) GetChunkMeta() *ChunkMeta {
@@ -260,7 +290,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 
 			// filter by field
 			if rec != nil {
-				rec = FilterByField(rec, filterRec, filterOpts.options, filterOpts.cond, filterOpts.rowFilters, filterOpts.pointTags, filterBitmap)
+				rec = FilterByField(rec, filterRec, filterOpts.options, filterOpts.cond, filterOpts.rowFilters, filterOpts.pointTags, filterBitmap, &filterOpts.colAux)
 			}
 		})
 	}

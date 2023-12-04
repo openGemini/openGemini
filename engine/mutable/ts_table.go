@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -53,13 +54,13 @@ func (t *tsMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 	if writeRec.RowNums() != 0 {
 		if writeMs == nil {
 			conf := immutable.GetTsStoreConfig()
-			writeMs = createMsBuilder(tbStore, isOrder, lockPath, dataPath, msName, totalChunks, writeRec.Len(), conf)
+			writeMs = createMsBuilder(tbStore, isOrder, lockPath, dataPath, msName, totalChunks, writeRec.Len(), conf, config.TSSTORE)
 		}
-		writeMs = WriteRecordForFlush(writeRec, writeMs, tbStore, chunk.Sid, isOrder, chunk.LastFlushTime, nil)
+		writeMs = t.WriteRecordForFlush(writeRec, writeMs, tbStore, chunk.Sid, isOrder, chunk.LastFlushTime)
 	}
 	if finish {
 		if writeMs != nil {
-			if err := immutable.WriteIntoFile(writeMs, true, false); err != nil {
+			if err := immutable.WriteIntoFile(writeMs, true, false, nil); err != nil {
 				writeMs = nil
 				logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
 				return writeMs
@@ -71,6 +72,24 @@ func (t *tsMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 	}
 
 	return writeMs
+}
+
+func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
+	lastFlushTime int64) *immutable.MsBuilder {
+	var err error
+
+	if !order && lastFlushTime == math.MaxInt64 {
+		msb.StoreTimes()
+	}
+
+	msb, err = msb.WriteRecord(id, rec, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
+		return tbStore.NextSequence(), 0, 0, 0
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return msb
 }
 
 func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore) {

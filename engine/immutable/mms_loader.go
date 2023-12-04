@@ -41,7 +41,8 @@ type fileLoader struct {
 	ctx *fileLoadContext
 	lg  *zap.Logger
 
-	total int
+	total             int
+	maxRowsPerSegment int
 }
 
 func newFileLoader(mst *MmsTables, ctx *fileLoadContext) *fileLoader {
@@ -164,7 +165,7 @@ func (fl *fileLoader) openPKIndexFile(file, mst string) {
 		defer fl.mu.Unlock()
 		defer f.Close()
 		rec, tcLocation, err := f.ReadData()
-		mark := fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(colstore.RowsNumPerFragment))
+		mark := fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(fl.maxRowsPerSegment))
 		if err != nil {
 			fl.lg.Error("read index file failed", zap.Error(err), zap.String("file", file))
 			fl.ctx.setError(err)

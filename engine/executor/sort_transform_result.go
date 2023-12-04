@@ -65,6 +65,13 @@ func (sr *sortRowMsg) AppendToChunk(chunk Chunk, startColLoc int) {
 	chunk.AppendTime(sr.sortEle[len(sr.sortEle)-1].(*integerSortEle).val)
 }
 
+func (sr *sortRowMsg) AppendToChunkByColIdx(chunk Chunk, inOutColIdxMap map[int]int) {
+	for inIdx, outIdx := range inOutColIdxMap {
+		sr.sortEle[inIdx].AppendToCol(chunk.Column(outIdx))
+	}
+	chunk.AppendTime(sr.sortEle[len(sr.sortEle)-1].(*integerSortEle).val)
+}
+
 func (sr *sortRowMsg) LessThan(osr *sortRowMsg, sortKeysIdxs []int, ascending []bool) bool {
 	for i, idx := range sortKeysIdxs {
 		subResult := sr.sortEle[idx].LessThan(osr.sortEle[idx])

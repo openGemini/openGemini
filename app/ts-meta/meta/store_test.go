@@ -183,7 +183,7 @@ type MockStore interface {
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, ptId uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
 	MigratePt(uint64, transport.Codec, transport.Callback) error
-	SendSegregateNodeCmds(nodeIDs []uint64) (int, error)
+	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 }
 
 type MockNetStorage struct {
@@ -225,7 +225,7 @@ func (s *MockNetStorage) MigratePt(uint64, transport.Codec, transport.Callback) 
 	return nil
 }
 
-func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64) (int, error) {
+func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error) {
 	return 0, nil
 }
 

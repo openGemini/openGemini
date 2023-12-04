@@ -25,11 +25,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"go.uber.org/zap"
@@ -165,7 +165,7 @@ func GetQuerySeriesLimit() int {
 }
 
 func SetQuerySchemaLimit(limit int) {
-	executor.SetQuerySchemaLimit(limit)
+	sysconfig.SetQuerySchemaLimit(limit)
 }
 
 func SetQueryEnabledWhenExceedSeries(enabled bool) {
@@ -302,7 +302,28 @@ func ProcessQueryRequest(mod queryRequestMod, param map[string]string) (string, 
 
 func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err error) {
 	switch req.Mod() {
-	case DataFlush, compactionEn, compmerge, snapshot, Failpoint, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter:
+	case Failpoint:
+		// store SysCtrl cmd
+		dataNodes, err := SysCtrl.MetaClient.DataNodes()
+		if err != nil {
+			return err
+		}
+		var lock sync.Mutex
+		var wg sync.WaitGroup
+		for _, d := range dataNodes {
+			wg.Add(1)
+			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+		}
+		wg.Wait()
+		// meta SysCtrl cmd
+		metaRes, err := SysCtrl.MetaClient.SendSysCtrlToMeta(req.Mod(), req.Param())
+		if err != nil {
+			resp.WriteString(fmt.Sprintf("\n\t%v,", err))
+		}
+		for n, s := range metaRes {
+			resp.WriteString(fmt.Sprintf("\n\t%v: %s,", n, s))
+		}
+	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter:
 		// store SysCtrl cmd
 		dataNodes, err := SysCtrl.MetaClient.DataNodes()
 		if err != nil {
@@ -343,7 +364,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		if enabled != 0 && enabled != 1 {
 			return fmt.Errorf("invalid enabled:%v", enabled)
 		}
-		executor.SetEnableBinaryTreeMerge(enabled)
+		sysconfig.SetEnableBinaryTreeMerge(enabled)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
 	case PrintLogicalPlan:
@@ -354,7 +375,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		if enabled != 0 && enabled != 1 {
 			return fmt.Errorf("invalid enabled:%v", enabled)
 		}
-		executor.SetEnablePrintLogicalPlan(enabled)
+		sysconfig.SetEnablePrintLogicalPlan(enabled)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
 	case SlidingWindowPushUp:
@@ -365,7 +386,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		if enabled != 0 && enabled != 1 {
 			return fmt.Errorf("invalid enabled:%v", enabled)
 		}
-		executor.SetEnableSlidingWindowPushUp(enabled)
+		sysconfig.SetEnableSlidingWindowPushUp(enabled)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
 	case LogRows:
@@ -383,7 +404,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		if enabled != 0 && enabled != 1 {
 			return fmt.Errorf("invalid enabled:%v", enabled)
 		}
-		executor.SetEnableForceBroadcastQuery(enabled)
+		sysconfig.SetEnableForceBroadcastQuery(enabled)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
 	case TimeFilterProtection:

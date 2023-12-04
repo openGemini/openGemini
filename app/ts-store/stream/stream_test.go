@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	stream2 "github.com/openGemini/openGemini/services/stream"
@@ -138,7 +139,7 @@ func (m MockMetaclient) GetMeasurementInfoStore(dbName string, rpName string, ms
 		Name:          "flow",
 		ShardKeys:     nil,
 		Schema:        schema,
-		IndexRelation: meta.IndexRelation{},
+		IndexRelation: influxql.IndexRelation{},
 		MarkDeleted:   false,
 	}, nil
 }

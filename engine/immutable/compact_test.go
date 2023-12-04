@@ -315,8 +315,9 @@ func TestFullCompactForColumnStore(t *testing.T) {
 		}
 		if len(pkSchema) != 0 {
 			dataFilePath := msb.FileName.String()
-			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendIndexSuffix(dataFilePath))
-			if err = msb.writeIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation); err != nil {
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -406,7 +407,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
 		needMerge = true
@@ -420,7 +421,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 		if msb.GetPKInfoNum() != 0 {
 			for i, file := range msb.Files {
 				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
 				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
 			}
 		}
@@ -445,9 +446,11 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
-	pkRec, pkMark, err := msb.pkIndexWriter.CreatePrimaryIndex(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], conf.maxRowsPerSegment, colstore.DefaultTCLocation)
+
+	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +471,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 
 	dataFilePath := store.CSFiles["mst"].files[0].FileName()
 	dataFileName := dataFilePath.String()
-	indexFilePath := path.Join(store.path, "mst", colstore.AppendIndexSuffix(dataFileName))
+	indexFilePath := path.Join(store.path, "mst", colstore.AppendPKIndexSuffix(dataFileName))
 	newPkInfos := store.PKFiles["mst"].GetPKInfos()
 	if pkMark.GetFragmentCount() != newPkInfos[indexFilePath].GetMark().GetFragmentCount() {
 		t.Fatal("FragmentCount is not equal")
@@ -530,8 +533,9 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 		}
 		if len(pkSchema) != 0 {
 			dataFilePath := msb.FileName.String()
-			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendIndexSuffix(dataFilePath))
-			if err = msb.writeIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation); err != nil {
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -621,7 +625,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
 		needMerge = true
@@ -635,7 +639,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 		if msb.GetPKInfoNum() != 0 {
 			for i, file := range msb.Files {
 				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
 				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
 			}
 		}
@@ -660,9 +664,10 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
-	pkRec, pkMark, err := msb.pkIndexWriter.CreatePrimaryIndex(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], conf.maxRowsPerSegment, colstore.DefaultTCLocation)
+	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -683,7 +688,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 
 	dataFilePath := store.CSFiles["mst"].files[0].FileName()
 	dataFileName := dataFilePath.String()
-	indexFilePath := path.Join(store.path, "mst", colstore.AppendIndexSuffix(dataFileName))
+	indexFilePath := path.Join(store.path, "mst", colstore.AppendPKIndexSuffix(dataFileName))
 	newPkInfos := store.PKFiles["mst"].GetPKInfos()
 	if pkMark.GetFragmentCount() != newPkInfos[indexFilePath].GetMark().GetFragmentCount() {
 		t.Fatal("FragmentCount is not equal")
@@ -745,8 +750,9 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 		}
 		if len(pkSchema) != 0 {
 			dataFilePath := msb.FileName.String()
-			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendIndexSuffix(dataFilePath))
-			if err = msb.writeIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation); err != nil {
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -843,7 +849,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 		}
 		//ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
 		needMerge = true
@@ -857,7 +863,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 		if msb.GetPKInfoNum() != 0 {
 			for i, file := range msb.Files {
 				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
 				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
 			}
 		}
@@ -882,9 +888,10 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
-	pkRec, pkMark, err := msb.pkIndexWriter.CreatePrimaryIndex(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], conf.maxRowsPerSegment, colstore.DefaultTCLocation)
+	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -905,7 +912,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 
 	dataFilePath := store.CSFiles["mst"].files[0].FileName()
 	dataFileName := dataFilePath.String()
-	indexFilePath := path.Join(store.path, "mst", colstore.AppendIndexSuffix(dataFileName))
+	indexFilePath := path.Join(store.path, "mst", colstore.AppendPKIndexSuffix(dataFileName))
 	newPkInfos := store.PKFiles["mst"].GetPKInfos()
 	if pkMark.GetFragmentCount() != newPkInfos[indexFilePath].GetMark().GetFragmentCount() {
 		t.Fatal("FragmentCount is not equal")
@@ -968,8 +975,9 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 		}
 		if len(pkSchema) != 0 {
 			dataFilePath := msb.FileName.String()
-			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendIndexSuffix(dataFilePath))
-			if err = msb.writeIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation); err != nil {
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1059,7 +1067,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
 		needMerge = true
@@ -1073,7 +1081,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 		if msb.GetPKInfoNum() != 0 {
 			for i, file := range msb.Files {
 				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
 				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
 			}
 		}
@@ -1098,9 +1106,10 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
-	_, _, err = msb.pkIndexWriter.CreatePrimaryIndex(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], conf.maxRowsPerSegment, colstore.DefaultTCLocation)
+	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
+	_, _, err = msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1179,7 +1188,7 @@ func TestWriteMetaIndexForColumnStore(t *testing.T) {
 	defer store.Close()
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 	f := &FragmentIterators{}
-	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1)
+	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
 	f.builder.Conf = conf
 	f.builder.Conf.maxChunkMetaItemSize = 0
 	f.builder.trailer.idCount = 1
@@ -1246,7 +1255,7 @@ func TestCompactionWriteMetaErr(t *testing.T) {
 	group := FilesInfo{name: "mst", compIts: filesItr}
 	compItrs := getFragmentIterators()
 	fileName := NewTSSPFileName(uint64(1), group.toLevel, 0, 0, true, store.lock)
-	compItrs.builder = NewMsBuilder(store.path, compItrs.name, store.lock, store.Conf, 1, fileName, *store.tier, nil, 1)
+	compItrs.builder = NewMsBuilder(store.path, compItrs.name, store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
 	indexName := compItrs.builder.fd.Name()[:len(compItrs.builder.fd.Name())-len(tmpFileSuffix)] + ".index.init"
 	_, err := fileops.OpenFile(indexName, os.O_CREATE|os.O_RDWR, 0640)
 	if err != nil {
@@ -1315,7 +1324,7 @@ func TestNextSingleFragmentError(t *testing.T) {
 	cm := make([]ColumnMeta, 1)
 	curItrs.curtChunkMeta = &ChunkMeta{colMeta: cm}
 	f := &FragmentIterators{}
-	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1)
+	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
 	f.builder.Conf = conf
 	f.builder.Conf.maxRowsPerSegment = 1
 	f.Conf = f.builder.Conf
@@ -1385,7 +1394,7 @@ func genTestData(id uint64, idCount int, rows int, startValue *float64, starTime
 func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -1494,7 +1503,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -1553,7 +1562,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -1662,7 +1671,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -1711,7 +1720,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 func TestMmsTables_FullCompact(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -1820,7 +1829,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -1872,7 +1881,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 	lockPath := ""
 	for _, flag := range mergeFlags {
 		_ = fileops.RemoveAll(testCompDir)
-		cacheIns := readcache.GetReadCacheIns()
+		cacheIns := readcache.GetReadMetaCacheIns()
 		cacheIns.Purge()
 		sig := interruptsignal.NewInterruptSignal()
 		defer func() {
@@ -1990,7 +1999,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		for i := 0; i < filesN; i++ {
 			ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
+			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE)
 			write(ids, data, msb)
 
 			for j, id := range ids {
@@ -2387,7 +2396,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 	lockPath := ""
 	for _, cf := range confs {
 		_ = fileops.RemoveAll(testCompDir)
-		cacheIns := readcache.GetReadCacheIns()
+		cacheIns := readcache.GetReadMetaCacheIns()
 		cacheIns.Purge()
 		sig := interruptsignal.NewInterruptSignal()
 		defer func() {
@@ -2448,7 +2457,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 			}
 
 			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2)
+			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 			write(ids, data, msb, oldRec)
 			for _, v := range data {
 				recs = append(recs, v)
@@ -2563,7 +2572,7 @@ func TestMmsTables_SetMaxFullCompactor(t *testing.T) {
 func TestCompactRecovery(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -2595,7 +2604,7 @@ func TestCompactRecovery(t *testing.T) {
 func TestMergeRecovery(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {

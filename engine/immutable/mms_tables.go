@@ -83,6 +83,7 @@ type TablesStore interface {
 	SetImmTableType(engineType config.EngineType)
 	SetMstInfo(name string, mstInfo *MeasurementInfo)
 	SeriesTotal() uint64
+	SetLockPath(lock *string)
 }
 
 type ImmTable interface {
@@ -303,6 +304,7 @@ func (m *MmsTables) Open() (int64, error) {
 	m.sequencer.free()
 	ctx := &fileLoadContext{}
 	loader := newFileLoader(m, ctx)
+	loader.maxRowsPerSegment = m.Conf.maxRowsPerSegment
 	for i := range dirs {
 		mst := dirs[i].Name() // measurement name with version
 		loader.Load(filepath.Join(m.path, mst), mst, true)
@@ -838,7 +840,7 @@ func RenameTmpFiles(newFiles []TSSPFile) error {
 	return nil
 }
 
-func RenameTmpFilesWithPKIndex(newFiles []TSSPFile) error {
+func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, indexList []string) error {
 	lock := fileops.FileLockOption("")
 	for i := range newFiles {
 		f := newFiles[i]
@@ -864,6 +866,19 @@ func RenameTmpFilesWithPKIndex(newFiles []TSSPFile) error {
 				err = errno.NewError(errno.RenameFileFailed, zap.String("old", tmpIndexFileName), zap.String("new", IndexFileName), err)
 				log.Error("rename file fail", zap.Error(err))
 				return err
+			}
+
+			if len(indexList) != 0 {
+				// rename pk index file
+				for j := range indexList {
+					skipIndexFileName := fname[:len(fname)-tsspFileSuffixLen] + "." + indexList[j] + colstore.BloomFilterIndexFileSuffix
+					tmpSkipIndexFileName := skipIndexFileName + tmpFileSuffix
+					if err := fileops.RenameFile(tmpSkipIndexFileName, skipIndexFileName, lock); err != nil {
+						err = errno.NewError(errno.RenameFileFailed, zap.String("old", tmpSkipIndexFileName), zap.String("new", skipIndexFileName), err)
+						log.Error("rename file fail", zap.Error(err))
+						return err
+					}
+				}
 			}
 		}
 	}
@@ -1047,6 +1062,10 @@ func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 	sw.lock = m.lock
 	sw.colBuilder.timePreAggBuilder = acquireTimePreAggBuilder()
 	return sw
+}
+
+func (m *MmsTables) SetLockPath(lock *string) {
+	m.lock = lock
 }
 
 func levelSequenceEqual(level uint16, seq uint64, f TSSPFile) bool {

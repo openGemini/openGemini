@@ -282,7 +282,7 @@ func (wh *recordWriterHelper) createMeasurement(database, retentionPolicy, name 
 	return createMeasurement(database, retentionPolicy, name, wh.metaClient, &wh.preMst, &wh.sameSchema, config.COLUMNSTORE)
 }
 
-func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array.Record) (startTime, endTime int64, r *record.Record, err error) {
+func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName string, rec array.Record) (startTime, endTime int64, r *record.Record, err error) {
 	wh.fieldToCreatePool = wh.fieldToCreatePool[:0]
 	// check the number of columns
 	if rec.NumCols() <= 1 {
@@ -347,7 +347,9 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst string, rec array
 	startTime, endTime = times.Value(0), times.Value(int(rec.NumRows()-1))
 	if !samePreSchema {
 		*wh.preSchema = append(*wh.preSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
-		if err = wh.metaClient.UpdateSchema(db, rp, mst, wh.fieldToCreatePool); err != nil {
+	}
+	if len(wh.fieldToCreatePool) > 0 {
+		if err = wh.metaClient.UpdateSchema(db, rp, originName, wh.fieldToCreatePool); err != nil {
 			return
 		}
 	}
@@ -429,7 +431,8 @@ func (wc *writeRecCtx) Reset() {
 
 type ComMetaClient interface {
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error)
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 }
 
@@ -449,7 +452,7 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 	mst, err := client.Measurement(database, retentionPolicy, name)
 	if err == meta2.ErrMeasurementNotFound {
 		ski := &meta2.ShardKeyInfo{ShardKey: nil, Type: influxql.HASH}
-		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, nil, engineType, nil, nil)
+		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, nil, engineType, nil, nil, nil)
 	}
 
 	if err == nil {

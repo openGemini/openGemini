@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
@@ -60,7 +61,7 @@ type MockMetaClient struct {
 	DBPtViewFn           func(database string) (meta2.DBPtInfos, error)
 	MeasurementFn        func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchemaFn       func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
+	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
 	GetAliveShardsFn     func(database string, sgi *meta2.ShardGroupInfo) []int
 	GetShardInfoByTimeFn func(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error)
 	DBRepGroupsFn        func(database string) []meta2.ReplicaGroup
@@ -99,7 +100,8 @@ func (mmc *MockMetaClient) UpdateSchema(database string, retentionPolicy string,
 	return mmc.UpdateSchemaFn(database, retentionPolicy, mst, fieldToCreate)
 }
 
-func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
+func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, indexR, engineType, nil)
 }
 
@@ -267,7 +269,7 @@ func NewMockMetaClient() *MockMetaClient {
 		panic("could not find sg")
 	}
 
-	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
 		return NewMeasurement(mst, engineType), nil
 	}
 	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
@@ -357,8 +359,8 @@ func NewMeasurement(mst string, engineType config.EngineType) *meta2.Measurement
 
 	if enableFieldIndex {
 		ilist := []string{"tk3", "tk1"}
-		msti.IndexRelation = meta2.IndexRelation{
-			IndexList: []*meta2.IndexList{{IList: ilist}},
+		msti.IndexRelation = influxql.IndexRelation{
+			IndexList: []*influxql.IndexList{{IList: ilist}},
 			Oids:      []uint32{0},
 		}
 	}
@@ -1115,6 +1117,41 @@ func TestPointsWriter_TagLimit(t *testing.T) {
 
 	exp := "partial write: " + errno.NewError(errno.TooManyTagKeys).Error() + " dropped=2"
 	assert.EqualError(t, err, exp)
+}
+
+func TestPointsWriter_LackOfShardKey(t *testing.T) {
+	streamDistribution = noStream
+	pw := NewPointsWriter(time.Second * 10)
+	mc := NewMockMetaClient()
+	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+		mst := NewMeasurement("mst", config.COLUMNSTORE)
+		binary, err := mst.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		err = mst.UnmarshalBinary(binary)
+		return mst, err
+	}
+
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 1)
+	rows = generateRows(1, rows)
+	key := rows[0].Tags.FindPointTag("tk1")
+	key.Key = "tk10"
+	ctx := getInjestionCtx()
+	defer putInjestionCtx(ctx)
+	ctx.writeHelper = newWriteHelper(pw)
+	ctx.ms = &meta2.MeasurementInfo{EngineType: config.COLUMNSTORE}
+	shardKey := meta2.ShardKeyInfo{ShardKey: []string{"tk1"}}
+	ctx.db = &meta2.DatabaseInfo{ShardKey: shardKey}
+	err, _, pErr := pw.updateShardGroupAndShardKey("db0", "rp0", &rows[0], ctx, false, nil, 0, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+	exp := "point should have all shard key"
+	assert.EqualError(t, pErr, exp)
 }
 
 func TestResetRowsRouter(t *testing.T) {

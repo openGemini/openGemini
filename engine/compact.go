@@ -142,7 +142,6 @@ func (c *Compactor) merger() {
 			log.Info("closed", zap.Uint64("shardId", id))
 			return
 		default:
-			log.Info("begin merge out of order files", zap.Uint64("shardId", id))
 			_ = sh.immTables.MergeOutOfOrder(id, false)
 		}
 	}
@@ -162,7 +161,7 @@ func (c *Compactor) compact() {
 }
 
 func (c *Compactor) run() {
-	tm := time.NewTicker(time.Second * 30)
+	tm := time.NewTicker(time.Second * 10)
 	defer tm.Stop()
 	for range tm.C {
 		c.merger()

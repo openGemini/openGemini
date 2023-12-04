@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/pingcap/failpoint"
@@ -65,6 +66,8 @@ type tsspFileReader struct {
 
 	// in memory data and meta block
 	inMemBlock MemoryReader
+	// datablock cached to pages reader
+	pageCacheReader *PageCacheReader
 }
 
 func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *TableData, ver uint64, tmp bool, lockPath *string) (*tsspFileReader, error) {
@@ -137,7 +140,7 @@ func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *Tab
 		r.inMemBlock = NewMemoryReader(len(tb.inMemBlock.DataBlocks()[0]))
 	}
 	r.inMemBlock.CopyBlocks(tb.inMemBlock)
-
+	r.pageCacheReader = NewPageCacheReader(&r.trailer, r)
 	return r, nil
 }
 
@@ -231,7 +234,7 @@ func NewTSSPFileReader(name string, lockPath *string) (*tsspFileReader, error) {
 	r.r = dr
 	r.ref = 0
 	atomic.StoreInt32(&r.inited, 0)
-
+	r.pageCacheReader = NewPageCacheReader(&r.trailer, r)
 	return r, nil
 }
 
@@ -360,8 +363,9 @@ func columnData(chunk []byte, baseOffset int64, segOff int64, segSize uint32) []
 func (r *tsspFileReader) readSegmentRecord(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error) {
 	var err error
 	var chunkData []byte
+	var cachePage *readcache.CachePage
 	if cm.size < defaultIoSize {
-		chunkData, err = r.ReadDataBlock(cm.offset, cm.size, &decs.readBuf, ioPriority)
+		chunkData, cachePage, err = r.ReadDataBlock(cm.offset, cm.size, &decs.readBuf, ioPriority)
 		if err != nil {
 			log.Error("read chunk data fail", zap.String("file", r.r.Name()), zap.Error(err))
 			return nil, err
@@ -396,7 +400,8 @@ func (r *tsspFileReader) readSegmentRecord(cm *ChunkMeta, segment int, dst *reco
 		if len(chunkData) > 0 {
 			data = columnData(chunkData, cm.offset, segOff, segSize)
 		} else {
-			data, err = r.ReadDataBlock(segOff, segSize, &decs.readBuf, ioPriority)
+			r.UnrefCachePage(cachePage)
+			data, cachePage, err = r.ReadDataBlock(segOff, segSize, &decs.readBuf, ioPriority)
 			if err != nil {
 				log.Error("read column data fail", zap.String("file", r.FileName()), zap.String("col", cMeta.Name()), zap.Error(err))
 				return nil, err
@@ -406,12 +411,13 @@ func (r *tsspFileReader) readSegmentRecord(cm *ChunkMeta, segment int, dst *reco
 		err = decodeColumnData(ref, data, colBuilder, decs, false)
 		failpoint.Inject("mock-decodeColumnData-panic", nil)
 		if err != nil {
+			r.UnrefCachePage(cachePage)
 			err = errReadFail(r.FileName(), ref.Name, err)
 			log.Error("decode column fail", zap.Error(err))
 			return nil, err
 		}
 	}
-
+	defer r.UnrefCachePage(cachePage)
 	if !fieldMatched {
 		return nil, nil
 	}
@@ -428,13 +434,15 @@ func (r *tsspFileReader) decodeTimeColumn(cm *ChunkMeta, segment int, chunkData 
 
 	var tmData []byte
 	var err error
+	var cachePage *readcache.CachePage
 
 	timeSeg := cm.timeMeta().entries[segment]
 	segOff, segSize := timeSeg.offsetSize()
 	if len(chunkData) > 0 {
 		tmData = columnData(chunkData, cm.offset, segOff, segSize)
 	} else {
-		tmData, err = r.ReadDataBlock(segOff, segSize, &decs.readBuf, ioPriority)
+		tmData, cachePage, err = r.ReadDataBlock(segOff, segSize, &decs.readBuf, ioPriority)
+		defer r.UnrefCachePage(cachePage)
 		if err != nil {
 			log.Error("read time column fail", zap.String("file", r.FileName()), zap.Error(err))
 			return err
@@ -467,7 +475,7 @@ func (r *tsspFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, siz
 		return nil, err
 	}
 
-	if fileops.ReadCacheEn && ioPriority == fileops.IO_PRIORITY_ULTRA_HIGH {
+	if fileops.ReadMetaCacheEn && ioPriority == fileops.IO_PRIORITY_ULTRA_HIGH {
 		rb, err = r.GetTSSPFileBytes(offset, size, dst, ioPriority)
 	} else {
 		rb, err = r.Read(offset, size, dst, ioPriority)
@@ -476,28 +484,15 @@ func (r *tsspFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, siz
 		log.Error("read file failed", zap.String("file", r.r.Name()), zap.Error(err))
 		return nil, err
 	}
-
-	return rb, nil
-}
-
-func (r *tsspFileReader) ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) (rb []byte, err error) {
-	if r.inMemBlock.DataInMemory() {
-		return r.inMemBlock.ReadDataBlock(offset, size, dst)
-	}
-
-	rb, err = r.Read(offset, size, dst, ioPriority)
-
-	if err != nil {
-		log.Error("read file failed", zap.String("file", r.FileName()), zap.Error(err))
-		return nil, err
-	}
+	statistics.IOStat.AddReadMetaCount(size)
+	statistics.IOStat.AddReadMetaSize(size)
 	return rb, nil
 }
 
 func (r *tsspFileReader) GetTSSPFileBytes(offset int64, size uint32, buf *[]byte, ioPriority int) ([]byte, error) {
 	var err error
-	cacheIns := readcache.GetReadCacheIns()
-	cacheKey := cacheIns.CreatCacheKey(r.FileName(), offset)
+	cacheIns := readcache.GetReadMetaCacheIns()
+	cacheKey := cacheIns.CreateCacheKey(r.FileName(), offset)
 	var b []byte
 	var page *readcache.CachePage
 	if value, isGet := cacheIns.Get(cacheKey); isGet {
@@ -515,6 +510,33 @@ func (r *tsspFileReader) GetTSSPFileBytes(offset int64, size uint32, buf *[]byte
 	}
 	cacheIns.AddPage(cacheKey, b, int64(size))
 	return b, nil
+}
+
+func (r *tsspFileReader) UnrefCachePage(cachePage *readcache.CachePage) {
+	if cachePage != nil {
+		cachePage.Unref()
+	}
+}
+
+func (r *tsspFileReader) ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) (rb []byte, unRefPageCache *readcache.CachePage, err error) {
+	var cachePage *readcache.CachePage
+	if r.inMemBlock.DataInMemory() {
+		rb, err = r.inMemBlock.ReadDataBlock(offset, size, dst)
+		return rb, nil, err
+	}
+	if fileops.ReadDataCacheEn && ioPriority == fileops.IO_PRIORITY_ULTRA_HIGH {
+		rb, cachePage, err = r.pageCacheReader.Read(offset, size, dst, ioPriority)
+	} else {
+		rb, err = r.Read(offset, size, dst, ioPriority)
+	}
+	if err != nil {
+		log.Error("read file failed", zap.String("file", r.FileName()), zap.Error(err))
+		return nil, nil, err
+	}
+
+	statistics.IOStat.AddReadDataCount(size)
+	statistics.IOStat.AddReadDataSize(size)
+	return rb, cachePage, nil
 }
 
 func (r *tsspFileReader) Read(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {

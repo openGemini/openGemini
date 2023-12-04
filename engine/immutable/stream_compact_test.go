@@ -76,7 +76,7 @@ func TestFileWriter(t *testing.T) {
 func TestFileIterator(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -122,7 +122,7 @@ func TestFileIterator(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		write(ids, data, msb)
 
 		for j, id := range ids {
@@ -242,7 +242,7 @@ func TestFileIteratorError(t *testing.T) {
 func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -360,7 +360,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		write(ids, data, msb)
 
 		for j, id := range ids {
@@ -607,7 +607,7 @@ func readOrderChunks(mst string, store *MmsTables, chunks map[uint64]*record.Rec
 func TestFileSizeExceedLimit(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -635,7 +635,7 @@ func TestFileSizeExceedLimit(t *testing.T) {
 	oldIds := make([]uint64, 0, filesN)
 	for i := 0; i < filesN; i++ {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, size)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, size, config.TSSTORE)
 		rec := genIntColumn(&startTime, rows, 2)
 		if err := msb.WriteData(id, rec); err != nil {
 			t.Fatal(err)
@@ -712,7 +712,7 @@ func genIntColumn(st *int64, rows int, interval int64) *record.Record {
 func TestFileSizeExceedLimit1(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -736,7 +736,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 	oldIds := make([]uint64, 0, filesN)
 	for i := 0; i < filesN; i++ {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 1024)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 1024, config.TSSTORE)
 		rec := genIntColumn(&startTime, rows, 2)
 		if err := msb.WriteData(id, rec); err != nil {
 			t.Fatal(err)

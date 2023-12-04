@@ -15,9 +15,9 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/gogo/protobuf/proto"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -37,6 +37,7 @@ type ShardGroupInfo struct {
 	Shards      []ShardInfo
 	TruncatedAt time.Time
 	EngineType  config.EngineType
+	Version     uint32
 }
 
 func (sgi *ShardGroupInfo) canDelete() bool {
@@ -66,7 +67,7 @@ func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.Po
 	shard := sgi.ShardFor(HashID(r.ShardKey), aliveShardIdxes)
 	shards = append(shards, *shard)
 	// Force the query to be broadcast
-	if executor.GetEnableForceBroadcastQuery() == executor.OnForceBroadcastQuery {
+	if sysconfig.GetEnableForceBroadcastQuery() == sysconfig.OnForceBroadcastQuery {
 		return sgi.genShardInfosByIndex(aliveShardIdxes), r.IndexKey
 	}
 	return shards, r.IndexKey
@@ -122,7 +123,7 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 	}
 
 	// Force the query to be broadcast
-	if executor.GetEnableForceBroadcastQuery() == executor.OnForceBroadcastQuery {
+	if sysconfig.GetEnableForceBroadcastQuery() == sysconfig.OnForceBroadcastQuery {
 		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
 	var shardKeyAndValue []byte
@@ -363,6 +364,7 @@ func (sgi *ShardGroupInfo) marshal() *proto2.ShardGroupInfo {
 		EndTime:    proto.Int64(MarshalTime(sgi.EndTime)),
 		DeletedAt:  proto.Int64(MarshalTime(sgi.DeletedAt)),
 		EngineType: proto.Uint32(uint32(sgi.EngineType)),
+		Version:    proto.Uint32(sgi.Version),
 	}
 
 	if !sgi.TruncatedAt.IsZero() {
@@ -404,6 +406,8 @@ func (sgi *ShardGroupInfo) unmarshal(pb *proto2.ShardGroupInfo) {
 			sgi.Shards[i].unmarshal(x)
 		}
 	}
+
+	sgi.Version = pb.GetVersion()
 }
 
 // ShardInfo represents metadata about a shard.

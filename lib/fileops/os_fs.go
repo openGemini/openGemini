@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
@@ -64,6 +65,22 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 	res, err := f.of.ReadAt(b, off)
 	opsStatEnd(begin.UnixNano(), opsTypeRead, int64(res))
 	return res, err
+}
+
+func (f *file) StreamReadBatch(offs []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, obsRangeSize int) {
+	for i, offset := range offs {
+		content := make([]byte, sizes[i])
+		_, err := f.ReadAt(content, offset)
+		c <- &request.StreamReader{
+			Offset:  offset,
+			Err:     err,
+			Content: content,
+		}
+		if err != nil {
+			break
+		}
+	}
+	close(c)
 }
 
 func (f *file) Read(b []byte) (int, error) {

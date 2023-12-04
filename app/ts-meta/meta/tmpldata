@@ -15,5 +15,6 @@
  	"RegisterQueryIDOffset",
 	"Sql2MetaHeartbeat",
 	"GetContinuousQueryLease",
-	"VerifyDataNodeStatus"
+	"VerifyDataNodeStatus",
+	"SendSysCtrlToMeta"
 ]

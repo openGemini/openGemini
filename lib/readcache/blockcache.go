@@ -28,10 +28,15 @@ import (
 	"go.uber.org/zap"
 )
 
+var pageSizeValidConfs = []string{"1kb", "4kb", "8kb", "16kb", "32kb", "64kb", "variable"}
+var pageSizeValidNum = []int64{1 * 1024, 4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024, 64 * 1024}
+var IsPageSizeVariable bool
+
 var (
 	cacheSizeMin     int64 = 256 * 1024 * 1024
 	blocksMax              = 256
-	refreshStatistic int64 = 100 // every 100 quests refresh statistic data
+	refreshStatistic int64 = 100       // every 100 quests refresh statistic data
+	PageSize         int64 = 32 * 1024 // default 32kb
 )
 
 // blockCache is the interface for Level2 cache for block.
@@ -41,6 +46,7 @@ type blockCache struct {
 	blockLimit int64 // per block max size
 	hashPool   *sync.Pool
 	hitRecord  cacheStat
+	recordHit  func(isHit bool)
 }
 
 type cacheStat struct {
@@ -48,10 +54,29 @@ type cacheStat struct {
 	hitCount int64
 }
 
+func SetPageSize(s int64) {
+	if s != 0 {
+		PageSize = s
+	}
+}
+
+func SetPageSizeByConf(confPageSize string) {
+	if confPageSize == pageSizeValidConfs[len(pageSizeValidConfs)-1] {
+		IsPageSizeVariable = true
+		return
+	}
+	for i, validConf := range pageSizeValidConfs {
+		if confPageSize == validConf {
+			PageSize = pageSizeValidNum[i]
+		}
+	}
+	defaultSize = uint64(PageSize)
+}
+
 // newBlockCache constructs a fixed size cache with the given eviction callback.
 // size: all page count
 // blockSize: block count
-func newBlockCache(sizeLimit int64) *blockCache {
+func newBlockCache(sizeLimit int64, usePagePool bool) *blockCache {
 	blockLimit := sizeLimit / int64(blocksMax)
 	logger.GetLogger().Info("NewBlockCache :", zap.Int64("totalLimit", sizeLimit),
 		zap.Int("blocks", blocksMax))
@@ -69,14 +94,23 @@ func newBlockCache(sizeLimit int64) *blockCache {
 	for i := 0; i < blocksMax; i++ {
 		c.blocks[i] = newLRUCache(blockLimit)
 	}
+	if usePagePool {
+		c.recordHit = c.recordSegmentHit
+	} else {
+		c.recordHit = c.recordMetaHit
+	}
 	return c
 }
 
 // add a value to the cache. Returns true if an eviction occurred.
-func (c *blockCache) add(key string, value []byte, size int64) (evict bool) {
+func (c *blockCache) add(key string, value []byte, size int64) {
 	block := c.getBlockCache(key)
-	evict = block.add(key, value, size)
-	return
+	block.add(key, value, size)
+}
+
+func (c *blockCache) addPageCache(key string, cachePage *CachePage, size int64) {
+	block := c.getBlockCache(key)
+	block.addPageCache(key, cachePage, size)
 }
 
 // get looks up a key's value from the cache.
@@ -85,6 +119,13 @@ func (c *blockCache) get(key string) (value interface{}, hit bool) {
 	value, hit = block.get(key)
 	c.recordHit(hit)
 	return
+}
+
+func (c *blockCache) getPageCache(key string) (value interface{}, hit bool) {
+	block := c.getBlockCache(key)
+	value, hit = block.getPageCache(key)
+	c.recordHit(hit)
+	return value, hit
 }
 
 // purge is used to completely clear the cache.
@@ -99,6 +140,12 @@ func (c *blockCache) purge() {
 		}(i)
 	}
 	sg.Wait()
+}
+
+func (c *blockCache) purgeAndUnrefCachePage() {
+	for i := 0; i < c.blockSize; i++ {
+		c.blocks[i].purgeAndUnrefCachePage()
+	}
 }
 
 // contains checks if a key is in the cache, without updating the
@@ -126,6 +173,17 @@ func (c *blockCache) remove(filePath string) bool {
 		}(i)
 	}
 	sg.Wait()
+	return isRemove
+}
+
+func (c *blockCache) removePageCache(filePath string) bool {
+	isRemove := false
+	for i := 0; i < c.blockSize; i++ {
+		n := c.blocks[i].removePageCache(filePath)
+		if n {
+			isRemove = true
+		}
+	}
 	return isRemove
 }
 
@@ -174,6 +232,12 @@ func (c *blockCache) refreshOldBuffer() {
 	sg.Wait()
 }
 
+func (c *blockCache) refreshOldBufferAndUnrefCachePage() {
+	for i := 0; i < c.blockSize; i++ {
+		c.blocks[i].refreshOldBufferAndUnrefCachePage()
+	}
+}
+
 // getHitRatio Hit Ratio between two call to HitRatio
 func (s *cacheStat) getHitRatio() (Ratio float64) {
 	totalRequests := s.requests
@@ -195,7 +259,7 @@ func (c *blockCache) getUseByteSize() (byteSize int64) {
 }
 
 // recordHit Record Hit count.
-func (c *blockCache) recordHit(isHit bool) {
+func (c *blockCache) recordMetaHit(isHit bool) {
 	atomic.AddInt64(&c.hitRecord.requests, 1)
 	if isHit {
 		atomic.AddInt64(&c.hitRecord.hitCount, 1)
@@ -207,5 +271,21 @@ func (c *blockCache) recordHit(isHit bool) {
 		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadCacheRatio, statistics.IOStat.IOReadCacheRatio, rate)
 		memory := c.getUseByteSize()
 		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadCacheMem, statistics.IOStat.IOReadCacheMem, memory)
+	}
+}
+
+// recordHit Record Hit count.
+func (c *blockCache) recordSegmentHit(isHit bool) {
+	atomic.AddInt64(&c.hitRecord.requests, 1)
+	if isHit {
+		atomic.AddInt64(&c.hitRecord.hitCount, 1)
+	}
+	if c.hitRecord.requests%refreshStatistic == 0 {
+		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadPageCacheCount, statistics.IOStat.IOReadPageCacheCount,
+			c.hitRecord.hitCount)
+		rate := int64(c.hitRecord.getHitRatio())
+		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadPageCacheRatio, statistics.IOStat.IOReadPageCacheRatio, rate)
+		memory := c.getUseByteSize()
+		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadPageCacheMem, statistics.IOStat.IOReadPageCacheMem, memory)
 	}
 }

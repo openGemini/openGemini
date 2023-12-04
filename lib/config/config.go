@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"net"
 	"path"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	itoml "github.com/influxdata/influxdb/toml"
@@ -114,6 +115,7 @@ type Common struct {
 	OptHashAlgo        string         `toml:"select-hash-algorithm"`
 	CpuAllocationRatio int            `toml:"cpu-allocation-ratio"`
 	HaPolicy           string         `toml:"ha-policy"`
+	NodeRole           string         `toml:"node-role"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -140,6 +142,15 @@ func (c Common) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c Common) ValidateRole() error {
+	switch strings.ToLower(c.NodeRole) {
+	case "reader", "writer", "":
+		return nil
+	default:
+		return fmt.Errorf("invalid data role: %s", c.NodeRole)
+	}
 }
 
 func (c *Common) GetLogging() *Logger {
@@ -184,6 +195,35 @@ func (c *Common) Corrector() {
 	}
 }
 
+type CompactionType int32
+
+const (
+	ROW CompactionType = iota
+	BLOCK
+)
+
+func Str2CompactionType(compactStr string) CompactionType {
+	switch strings.ToLower(compactStr) {
+	case "row":
+		return ROW
+	case "block":
+		return BLOCK
+	default:
+	}
+	return ROW
+}
+
+func CompactionType2Str(compact CompactionType) string {
+	switch compact {
+	case ROW:
+		return "row"
+	case BLOCK:
+		return "block"
+	default:
+	}
+	return "row"
+}
+
 // storage engine type
 
 type EngineType uint8
@@ -191,20 +231,21 @@ type EngineType uint8
 const (
 	TSSTORE       EngineType = iota // tsstore, data aware(time series) column store, default value(0 for int) if engineType not set
 	COLUMNSTORE                     // columnstore, traditional column store
-	LOGSTORE                        // logstore, log store
 	ENGINETYPEEND                   // undefined
 )
 
 var String2EngineType map[string]EngineType = map[string]EngineType{
 	"tsstore":     TSSTORE,
 	"columnstore": COLUMNSTORE,
-	"logstore":    LOGSTORE,
 	"undefined":   ENGINETYPEEND,
 }
 
 var EngineType2String map[EngineType]string = map[EngineType]string{
 	TSSTORE:       "tsstore",
 	COLUMNSTORE:   "columnstore",
-	LOGSTORE:      "logstore",
 	ENGINETYPEEND: "undefined",
 }
+
+const (
+	ColumnStoreDirName = "columnstore"
+)

@@ -27,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
-const DefaultQueryTimeout = time.Duration(0) 
+const DefaultQueryTimeout = time.Duration(0)
 
 func setParseTree(yylex interface{}, stmts Statements) {
     for _,stmt :=range stmts{
@@ -107,7 +107,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 TO IN NOT EXISTS REVOKE FILL DELETE WITH ENGINETYPE COLUMNSTORE TSSTORE ALL ANY PASSWORD NAME REPLICANUM ALTER USER USERS
                 DATABASES DATABASE MEASUREMENTS RETENTION POLICIES POLICY DURATION DEFAULT SHARD INDEX GRANT HOT WARM TYPE SET FOR GRANTS
                 REPLICATION SERIES DROP CASE WHEN THEN ELSE BEGIN END TRUE FALSE TAG ATTRIBUTE FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
-                PRIMARYKEY SORTKEY PROPERTY
+                PRIMARYKEY SORTKEY PROPERTY COMPACT
                 CONTINUOUS DIAGNOSTICS QUERIES QUERIE SHARDS STATS SUBSCRIPTIONS SUBSCRIPTION GROUPS INDEXTYPE INDEXLIST SEGMENT KILL
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
@@ -164,11 +164,11 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
 %type <durations>                   SHARD_HOT_WARM_INDEX_DURATIONS SHARD_HOT_WARM_INDEX_DURATION CREAT_DATABASE_POLICY  CREAT_DATABASE_POLICYS
-%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE
+%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE COMPACTION_TYPE_CLAUSE
 %type <strSlice>                    SHARDKEYLIST CMOPTION_SHARDKEY INDEX_LIST PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION CMOPTION_PRIMARYKEY CMOPTION_SORTKEY
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST CMOPTION_PROPERTIES
 %type <location>                    TIME_ZONE
-%type <indexType>                   INDEX_TYPE INDEX_TYPES CMOPTION_INDEXTYPE CMOPTION_INDEXTYPE_CS
+%type <indexType>                   INDEX_TYPE INDEX_TYPES CMOPTION_INDEXTYPE_TS CMOPTION_INDEXTYPE_CS
 %type <cqsp>                        SAMPLE_POLICY
 %type <tdurs>                       DURATIONVALS
 %type <cqsp>                        SAMPLE_POLICY
@@ -1972,9 +1972,13 @@ MEASUREMENT_INFO:
     {
         $$ = "INDEXES"
     }
+    |COMPACT
+    {
+        $$ = "COMPACT"
+    }
     |IDENT
     {
-        yylex.Error("SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA")
+        yylex.Error("SHOW command error, only support PRIMARYKEY, SORTKEY, SHARDKEY, ENGINETYPE, INDEXES, SCHEMA, COMPACT")
     }
 
 SHOW_MEASUREMENT_KEYS_STATEMENT:
@@ -2357,6 +2361,7 @@ CREATE_MEASUREMENT_STATEMENT:
             stmt.Tags = $4.(*CreateMeasurementStatement).Tags
             stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
         }
+
         // check if PrimaryKey & SortKey is IN Tags/Fields/time
         for _, key := range $5.PrimaryKey {
             _, inTag := stmt.Tags[key]
@@ -2402,6 +2407,17 @@ CREATE_MEASUREMENT_STATEMENT:
                 return 1
             }
         }
+        // check if indexlist of secondary is IN Tags/Fields
+        for i := range $5.IndexType {
+            _, indexlist := $5.IndexType[i], $5.IndexList[i]
+                for _, col := range indexlist {
+                    _, inTag := stmt.Tags[col]
+                    _, inField := stmt.Fields[col]
+                    if !inTag && !inField {
+                        yylex.Error("Invalid indexlist")
+                    }
+                }
+        }
         stmt.EngineType = $5.EngineType
         stmt.IndexType = $5.IndexType
         stmt.IndexList = $5.IndexList
@@ -2411,6 +2427,7 @@ CREATE_MEASUREMENT_STATEMENT:
         stmt.PrimaryKey = $5.PrimaryKey
         stmt.SortKey = $5.SortKey
         stmt.Property = $5.Property
+        stmt.CompactType = $5.CompactType
         $$ = stmt
     }
 
@@ -2421,7 +2438,7 @@ CMOPTIONS_TS:
         option.EngineType = "tsstore"
         $$ = option
     }
-    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE CMOPTION_SHARDKEY TYPE_CLAUSE
+    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE_TS CMOPTION_SHARDKEY TYPE_CLAUSE
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2437,7 +2454,7 @@ CMOPTIONS_TS:
     }
 
 CMOPTIONS_CS:
-    WITH CMOPTION_ENGINETYPE_CS CMOPTION_INDEXTYPE_CS CMOPTION_SHARDKEY TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES
+    WITH CMOPTION_ENGINETYPE_CS CMOPTION_INDEXTYPE_CS CMOPTION_SHARDKEY TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES COMPACTION_TYPE_CLAUSE
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2464,18 +2481,27 @@ CMOPTIONS_CS:
         if $8 != nil {
             option.Property = $8
         }
+        option.CompactType = $9
         $$ = option
     }
 
-CMOPTION_INDEXTYPE:
+CMOPTION_INDEXTYPE_TS:
     {
         $$ = nil
     }
     | INDEXTYPE INDEX_TYPES
     {
+        validIndexType := map[string]struct{}{}
+        validIndexType["text"] = struct{}{}
+        validIndexType["field"] = struct{}{}
         if $2 == nil {
             $$ = nil
         } else {
+            for _, indexType := range $2.types {
+                if _, ok := validIndexType[strings.ToLower(indexType)]; !ok {
+                    yylex.Error("Invalid index type for TSSTORE")
+                }
+            }
             $$ = $2
         }
     }
@@ -2483,6 +2509,22 @@ CMOPTION_INDEXTYPE:
 CMOPTION_INDEXTYPE_CS:
     {
         $$ = nil
+    }
+    | INDEXTYPE INDEX_TYPES
+    {
+        validIndexType := map[string]struct{}{}
+        validIndexType["bloomfilter"] = struct{}{}
+        validIndexType["minmax"] = struct{}{}
+        if $2 == nil {
+            $$ = nil
+        } else {
+            for _, indexType := range $2.types {
+                if _, ok := validIndexType[strings.ToLower(indexType)]; !ok {
+                    yylex.Error("Invalid index type for COLUMNSTORE")
+                }
+            }
+            $$ = $2
+        }
     }
 
 CMOPTION_SHARDKEY:
@@ -2533,6 +2575,20 @@ CMOPTION_PROPERTIES:
     }
     | MEASUREMENT_PROPERTYS_LIST {
         $$ = $1
+    }
+
+COMPACTION_TYPE_CLAUSE:
+    {
+        $$ = "row"
+    }
+    | COMPACT IDENT
+    {
+        compactionType := strings.ToLower($2)
+        if compactionType != "row" && compactionType != "block" {
+            yylex.Error("expect ROW or BLOCK for COMPACT type")
+            return 1
+        }
+        $$ = compactionType
     }
 
 COLUMN_LISTS:
@@ -2626,6 +2682,14 @@ INDEX_TYPE:
     {
         $$ = &IndexType{
             types: []string{$1},
+            lists: [][]string{$3},
+        }
+    }
+    |
+    FIELD INDEXLIST INDEX_LIST
+    {
+        $$ = &IndexType{
+            types: []string{"field"},
             lists: [][]string{$3},
         }
     }

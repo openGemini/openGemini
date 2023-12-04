@@ -79,6 +79,9 @@ const (
 
 	VerifyDataNodeStatusRequestMessage
 	VerifyDataNodeStatusResponseMessage
+
+	SendSysCtrlToMetaRequestMessage
+	SendSysCtrlToMetaResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -121,6 +124,8 @@ func init() {
 	MetaMessageBinaryCodec[GetContinuousQueryLeaseResponseMessage] = func() transport.Codec { return &GetContinuousQueryLeaseResponse{} }
 	MetaMessageBinaryCodec[VerifyDataNodeStatusRequestMessage] = func() transport.Codec { return &VerifyDataNodeStatusRequest{} }
 	MetaMessageBinaryCodec[VerifyDataNodeStatusResponseMessage] = func() transport.Codec { return &VerifyDataNodeStatusResponse{} }
+	MetaMessageBinaryCodec[SendSysCtrlToMetaRequestMessage] = func() transport.Codec { return &SendSysCtrlToMetaRequest{} }
+	MetaMessageBinaryCodec[SendSysCtrlToMetaResponseMessage] = func() transport.Codec { return &SendSysCtrlToMetaResponse{} }
 
 	MetaMessageResponseTyp = map[uint8]uint8{
 		PingRequestMessage:                    PingResponseMessage,
@@ -140,5 +145,6 @@ func init() {
 		Sql2MetaHeartbeatRequestMessage:       Sql2MetaHeartbeatResponseMessage,
 		GetContinuousQueryLeaseRequestMessage: GetContinuousQueryLeaseResponseMessage,
 		VerifyDataNodeStatusRequestMessage:    VerifyDataNodeStatusResponseMessage,
+		SendSysCtrlToMetaRequestMessage:       SendSysCtrlToMetaResponseMessage,
 	}
 }

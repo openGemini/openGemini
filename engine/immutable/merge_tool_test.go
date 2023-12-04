@@ -42,7 +42,7 @@ type generateParams struct {
 }
 
 func beforeTest(t *testing.T, segLimit int) func() {
-	cacheIns := readcache.GetReadCacheIns()
+	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
 	saveDir = t.TempDir()
 
@@ -726,4 +726,60 @@ func TestMergeStopFiles(t *testing.T) {
 	delete(mh.store.OutOfOrder, "mst")
 	require.NoError(t, mh.store.ReplaceFiles("mst", files.Files(), files.Files(), true))
 	mh.store.Order["mst"] = orderFiles
+}
+
+func TestMergeTool_OneRowMode(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	rg.setBegin(begin).incrBegin(0)
+	mh.addRecord(100, rg.generate(schemas, 1001))
+	require.NoError(t, mh.saveToOrder())
+
+	rg.setBegin(begin - 1).incrBegin(5)
+	mh.addRecord(100, rg.generate(schemas, 1000))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+// order:
+// sid 100:                -----------------
+// sid 101:                       --------------
+// sid 102:           --------------
+// unordered:
+// sid 100:  ------------
+// sid 101:   -------------
+// sid 102:  --------------
+func TestMergeTool_writeHistory(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	orderIncr := []int{20, 20, 2, 3, 30}
+	unorderIncr := []int{-9, -1, -6, -2, -8}
+	for i := 0; i < 5; i++ {
+		rg.setBegin(begin).incrBegin(orderIncr[i])
+		mh.addRecord(uint64(100+i), rg.generate(schemas, 11))
+		require.NoError(t, mh.saveToOrder())
+	}
+
+	for i := 0; i < 5; i++ {
+		rg.setBegin(begin - 1).incrBegin(unorderIncr[i])
+		mh.addRecord(uint64(100+i), rg.generate(schemas, 10))
+		require.NoError(t, mh.saveToUnordered())
+	}
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
 }

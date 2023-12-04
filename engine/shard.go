@@ -51,6 +51,7 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -68,12 +69,11 @@ import (
 )
 
 const (
-	MaxRetryUpdateOnShardNum     = 4
-	minDownSampleConcurrencyNum  = 1
-	cpuDownSampleRatio           = 16
-	CRCLen                       = 4
-	BufferSize                   = 1024 * 1024
-	columnStoreCompactionIsClose = true
+	MaxRetryUpdateOnShardNum    = 4
+	minDownSampleConcurrencyNum = 1
+	cpuDownSampleRatio          = 16
+	CRCLen                      = 4
+	BufferSize                  = 1024 * 1024
 )
 
 var (
@@ -506,12 +506,7 @@ func (storage *columnstoreImpl) WriteIndexForCols(s *shard, cols *record.Record,
 	tagIndex := findTagIndex(cols.Schemas(), storage.mstsInfo[mst].Schema)
 
 	// write index
-	err := s.indexBuilder.CreateIndexIfNotExistsForColumnStore(cols, tagIndex, mst)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return s.indexBuilder.CreateIndexIfNotExistsByCol(cols, tagIndex, mst)
 }
 
 func (storage *columnstoreImpl) SetClient(client metaclient.MetaClient) {
@@ -528,7 +523,7 @@ func (storage *columnstoreImpl) checkMstInfo(mstInfo *meta.MeasurementInfo) erro
 func findTagIndex(schema record.Schemas, metaSchema map[string]int32) []int {
 	var res []int
 	for i := range schema {
-		if metaSchema[schema[i].Name] == influx.Field_Type_Tag {
+		if metaSchema[schema[i].Name] == influx.Field_Type_Tag { // according to the meta schema
 			res = append(res, i)
 		}
 	}
@@ -596,6 +591,7 @@ type Shard interface {
 	Compact() error
 	DisableCompAndMerge()
 	EnableCompAndMerge()
+	SetLockPath(lock *string)
 }
 
 type shard struct {
@@ -626,7 +622,8 @@ type shard struct {
 	immTables          immutable.TablesStore
 	indexBuilder       *tsi.IndexBuilder
 	skIdx              *ski.ShardKeyIndex
-	sparseIndexReader  sparseindex.IndexReader
+	pkIndexReader      sparseindex.PKIndexReader
+	skIndexReader      sparseindex.SKIndexReader
 	rowCount           int64
 	tmLock             sync.RWMutex
 	maxTime            int64
@@ -984,7 +981,7 @@ func (s *shard) Compact() error {
 		switch s.engineType {
 		case config.COLUMNSTORE:
 			rule = immutable.LevelCompactRuleForCs
-			if columnStoreCompactionIsClose {
+			if !immutable.GetColStoreConfig().GetCompactionEnabled() {
 				s.immTables.CompactionDisable()
 			}
 		case config.TSSTORE:
@@ -2343,8 +2340,8 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 	}
 	dataFiles := dataFileRes.Files()
 
-	// get the shard fragments by the primary index
-	fileFrags, skipFileIdx, err := s.scanWithPrimaryIndex(dataFiles, schema, mst)
+	// get the shard fragments by the primary index and skip index
+	fileFrags, skipFileIdx, err := s.scanWithSparseIndex(dataFiles, schema, mst)
 	if err != nil {
 		for i := range dataFiles {
 			dataFiles[i].UnrefFileReader()
@@ -2359,7 +2356,7 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 	return fileFrags, nil
 }
 
-func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *executor.QuerySchema, mst string) (*executor.FileFragments, []int, error) {
+func (s *shard) scanWithSparseIndex(dataFiles []immutable.TSSPFile, schema *executor.QuerySchema, mst string) (*executor.FileFragments, []int, error) {
 	var initCondition bool
 	var skipFileIdx []int
 	var err error
@@ -2368,9 +2365,12 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 	condition := schema.Options().GetCondition()
 	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	filesFragments := executor.NewFileFragments()
+	mstInfo := schema.Options().GetMeasurements()[0]
+
+	var SKFileReader []sparseindex.SKFileReader
 	for i, dataFile := range dataFiles {
 		dataFileName := dataFile.Path()
-		pkFileName := colstore.AppendIndexSuffix(immutable.RemoveTsspSuffix(dataFileName))
+		pkFileName := colstore.AppendPKIndexSuffix(immutable.RemoveTsspSuffix(dataFileName))
 		pkInfo, ok := s.immTables.GetPKFile(mst, pkFileName)
 		if !ok {
 			// If the system is powered off abnormally, the index file may not be flushed to disks.
@@ -2390,6 +2390,10 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 			if tIdx == 0 {
 				schema.Options().SetTimeFirstKey()
 			}
+			SKFileReader, err = s.skIndexReader.CreateSKFileReaders(schema.Options(), mstInfo, true)
+			if err != nil {
+				return nil, nil, err
+			}
 			initCondition = true
 		}
 		if schema.Options().GetTimeFirstKey() {
@@ -2402,10 +2406,30 @@ func (s *shard) scanWithPrimaryIndex(dataFiles []immutable.TSSPFile, schema *exe
 				continue
 			}
 		}
-
-		fragmentRanges, err := s.sparseIndexReader.Scan(pkFileName, pkInfo.GetRec(), pkInfo.GetMark(), keyCondition)
+		var fragmentRanges fragment.FragmentRanges
+		fragmentRanges, err = s.pkIndexReader.Scan(pkFileName, pkInfo.GetRec(), pkInfo.GetMark(), keyCondition)
 		if err != nil {
 			return nil, nil, err
+		}
+		if fragmentRanges.Empty() {
+			skipFileIdx = append(skipFileIdx, i)
+			continue
+		}
+		for j := range SKFileReader {
+			if err = SKFileReader[j].ReInit(dataFile); err != nil {
+				return nil, nil, err
+			}
+			fragmentRanges, err = s.skIndexReader.Scan(SKFileReader[j], fragmentRanges)
+			if err != nil {
+				return nil, nil, err
+			}
+			if fragmentRanges.Empty() {
+				skipFileIdx = append(skipFileIdx, i)
+				break
+			}
+		}
+		if len(skipFileIdx) > 0 && skipFileIdx[len(skipFileIdx)-1] == i {
+			continue
 		}
 		var fragmentCount uint32
 		for j := range fragmentRanges {
@@ -2447,6 +2471,11 @@ func (s *shard) RowCount(schema *executor.QuerySchema) (int64, error) {
 
 func (s *shard) GetEngineType() config.EngineType {
 	return s.engineType
+}
+
+func (s *shard) SetLockPath(lock *string) {
+	s.lock = lock
+	s.immTables.SetLockPath(lock)
 }
 
 var (

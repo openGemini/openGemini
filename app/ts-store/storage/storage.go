@@ -196,7 +196,9 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.CacheDataBlock = conf.Data.CacheDataBlock
 	opt.CacheMetaBlock = conf.Data.CacheMetaBlock
 	opt.EnableMmapRead = conf.Data.EnableMmapRead
-	opt.ReadCacheLimit = uint64(conf.Data.ReadCacheLimit)
+	opt.ReadPageSize = conf.Data.ReadPageSize
+	opt.ReadMetaCacheLimit = uint64(conf.Data.ReadMetaCacheEn)
+	opt.ReadDataCacheLimit = uint64(conf.Data.ReadDataCacheEn)
 	opt.WalSyncInterval = time.Duration(conf.Data.WalSyncInterval)
 	opt.WalEnabled = conf.Data.WalEnabled
 	opt.WalReplayParallel = conf.Data.WalReplayParallel
@@ -211,6 +213,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.MaxSeriesPerDatabase = conf.Data.MaxSeriesPerDatabase
 	opt.SnapshotTblNum = conf.Data.SnapshotTblNum
 	opt.FragmentsNumPerFlush = conf.Data.FragmentsNumPerFlush
+	opt.CsCompactionEnabled = conf.Data.CsCompactionEnabled
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)

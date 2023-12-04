@@ -195,7 +195,8 @@ func (r *FirstLastReader) next() bool {
 
 func (r *FirstLastReader) readColVal(seg *Segment, buf *[]byte, hook func(buf []byte) error, ioPriority int) error {
 	offset, size := seg.offsetSize()
-	data, err := r.cr.ReadDataBlock(offset, size, buf, ioPriority)
+	data, cachePage, err := r.cr.ReadDataBlock(offset, size, buf, ioPriority)
+	defer r.cr.UnrefCachePage(cachePage)
 	if err != nil {
 		return err
 	}
@@ -242,11 +243,17 @@ func (r *FirstLastReader) readMaxFromPreAgg(colMeta *ColumnMeta) (interface{}, i
 }
 
 func readFromPreAgg(ty byte, agg []byte, offset int) (interface{}, int64, bool) {
+	timeOffset := offset + 16
+	if PreAggOnlyOneRow(agg) {
+		offset = 0
+		timeOffset = 8
+	}
+
 	switch ty {
 	case influx.Field_Type_Float:
-		return numberenc.UnmarshalFloat64(agg[offset:]), numberenc.UnmarshalInt64(agg[offset+16:]), true
+		return numberenc.UnmarshalFloat64(agg[offset:]), numberenc.UnmarshalInt64(agg[timeOffset:]), true
 	case influx.Field_Type_Int:
-		return numberenc.UnmarshalInt64(agg[offset:]), numberenc.UnmarshalInt64(agg[offset+16:]), true
+		return numberenc.UnmarshalInt64(agg[offset:]), numberenc.UnmarshalInt64(agg[timeOffset:]), true
 	default:
 		break
 	}

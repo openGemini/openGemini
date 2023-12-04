@@ -45,6 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
@@ -114,7 +115,7 @@ const (
 )
 
 var (
-	ErrNameTooLong          = errors.New("database name must have fewer than 64 characters")
+	ErrNameTooLong          = fmt.Errorf("database name must have fewer than %d characters", maxDbOrRpName)
 	RetryGetUserInfoTimeout = 5 * time.Second
 	RetryExecTimeout        = 60 * time.Second
 	RetryReportTimeout      = 60 * time.Second
@@ -149,9 +150,10 @@ func (a FieldKeys) Less(i, j int) bool { return a[i].Field < a[j].Field }
 
 // MetaClient is an interface for accessing meta data.
 type MetaClient interface {
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error)
+	CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
-	CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
+	CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error)
 	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
 	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
 	CreateSubscription(database, rp, name, mode string, destinations []string) error
@@ -160,6 +162,7 @@ type MetaClient interface {
 	Database(name string) (*meta2.DatabaseInfo, error)
 	DataNode(id uint64) (*meta2.DataNode, error)
 	DataNodes() ([]meta2.DataNode, error)
+	AliveReadNodes() ([]meta2.DataNode, error)
 	DeleteDataNode(id uint64) error
 	DeleteMetaNode(id uint64) error
 	DropShard(id uint64) error
@@ -222,6 +225,9 @@ type MetaClient interface {
 	CreateContinuousQuery(database, name, query string) error
 	ShowContinuousQueries() (models.Rows, error)
 	DropContinuousQuery(name string, database string) error
+
+	// sysctrl for admin
+	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
 }
 
 type LoadCtx struct {
@@ -501,6 +507,34 @@ func (c *Client) DataNode(id uint64) (*meta2.DataNode, error) {
 	return nil, meta2.ErrNodeNotFound
 }
 
+func (c *Client) AliveReadNodes() ([]meta2.DataNode, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var aliveReaders []meta2.DataNode
+	var aliveDefault []meta2.DataNode
+	for _, n := range c.cacheData.DataNodes {
+		if n.Status != serf.StatusAlive {
+			continue
+		}
+		if n.Role == meta2.NodeReader {
+			aliveReaders = append(aliveReaders, n)
+		} else if n.Role == meta2.NodeDefault {
+			aliveDefault = append(aliveDefault, n)
+		}
+	}
+
+	if len(aliveReaders) == 0 {
+		if len(aliveDefault) == 0 {
+			return nil, fmt.Errorf("there is no data nodes for querying")
+		}
+		sort.Sort(meta2.DataNodeInfos(aliveDefault))
+		return aliveDefault, nil
+	}
+
+	sort.Sort(meta2.DataNodeInfos(aliveReaders))
+	return aliveReaders, nil
+}
+
 // DataNodes returns the data nodes' info.
 func (c *Client) DataNodes() ([]meta2.DataNode, error) {
 	c.mu.RLock()
@@ -525,7 +559,7 @@ func (c *Client) GetAllMst(dbName string) []string {
 }
 
 // CreateDataNode will create a new data node in the metastore
-func (c *Client) CreateDataNode(writeHost, queryHost string) (uint64, uint64, uint64, error) {
+func (c *Client) CreateDataNode(writeHost, queryHost, role string) (uint64, uint64, uint64, error) {
 	currentServer := connectedServer
 	for {
 		// exit if we're closed
@@ -541,7 +575,7 @@ func (c *Client) CreateDataNode(writeHost, queryHost string) (uint64, uint64, ui
 		}
 		c.mu.RUnlock()
 
-		node, err := c.getNode(currentServer, writeHost, queryHost)
+		node, err := c.getNode(currentServer, writeHost, queryHost, role)
 
 		if err == nil && node.NodeId > 0 {
 			c.nodeID = node.NodeId
@@ -886,7 +920,8 @@ func (c *Client) UpdateSchema(database string, retentionPolicy string, mst strin
 	return nil
 }
 
-func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
+func (c *Client) CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	msti, err := c.Measurement(database, retentionPolicy, mst)
 	if msti != nil {
 		// check shardkey equal or not
@@ -921,7 +956,7 @@ func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst 
 		} else {
 			indexR.Rid = 1
 		}
-		cmd.IR = indexR.Marshal()
+		cmd.IR = meta2.EncodeIndexRelation(indexR)
 	}
 
 	if colStoreInfo != nil {
@@ -930,6 +965,10 @@ func (c *Client) CreateMeasurement(database string, retentionPolicy string, mst 
 
 	if len(schemaInfo) > 0 {
 		cmd.SchemaInfo = schemaInfo
+	}
+
+	if options != nil {
+		cmd.Options = options.Marshal()
 	}
 
 	err = c.retryUntilExec(proto2.Command_CreateMeasurementCommand, proto2.E_CreateMeasurementCommand_Command, cmd)
@@ -956,7 +995,7 @@ func (c *Client) AlterShardKey(database, retentionPolicy, mst string, shardKey *
 }
 
 // CreateDatabase creates a database or returns it if it already exists.
-func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
+func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error) {
 	if strings.Count(name, "") > maxDbOrRpName {
 		return nil, ErrNameTooLong
 	}
@@ -976,6 +1015,10 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint3
 		Name:           proto.String(name),
 		EnableTagArray: proto.Bool(enableTagArray),
 		ReplicaNum:     proto.Uint32(replicaN),
+	}
+
+	if options != nil {
+		cmd.Options = options.Marshal()
 	}
 
 	err = c.retryUntilExec(proto2.Command_CreateDatabaseCommand, proto2.E_CreateDatabaseCommand_Command, cmd)
@@ -2532,11 +2575,11 @@ func (c *Client) pollForUpdates(role Role) {
 	}
 }
 
-func (c *Client) getNode(currentServer int, writeHost, queryHost string) (*meta2.NodeStartInfo, error) {
+func (c *Client) getNode(currentServer int, writeHost, queryHost, role string) (*meta2.NodeStartInfo, error) {
 	callback := &CreateNodeCallback{
 		NodeStartInfo: &meta2.NodeStartInfo{},
 	}
-	msg := message.NewMetaMessage(message.CreateNodeRequestMessage, &message.CreateNodeRequest{WriteHost: writeHost, QueryHost: queryHost})
+	msg := message.NewMetaMessage(message.CreateNodeRequestMessage, &message.CreateNodeRequest{WriteHost: writeHost, QueryHost: queryHost, Role: role})
 	err := c.SendRPCMsg(currentServer, msg, callback)
 	if err != nil {
 		return nil, err
@@ -2830,7 +2873,7 @@ func (c *Client) MetaServers() []string {
 	return c.metaServers
 }
 
-func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *StorageNodeInfo) (uint64, uint64, uint64, error) {
+func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *StorageNodeInfo, role string) (uint64, uint64, uint64, error) {
 	// It's the first time starting up and we need to either join
 	// the cluster or initialize this node as the first member
 	if len(joinPeers) == 0 {
@@ -2847,7 +2890,7 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 	var clock uint64
 	var connId uint64
 	if storageNodeInfo != nil {
-		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr)
+		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr, role)
 	}
 
 	return nid, clock, connId, err
@@ -3422,6 +3465,31 @@ func (c *Client) ThermalShards(dbName string, start, end time.Duration) map[uint
 	c.logger.Info("thermal shards", zap.String("db", dbName), zap.Time("start", lt), zap.Time("end", rt),
 		zap.Any("shards", shards), zap.Duration("duration", time.Since(startTime)))
 	return shards
+}
+
+func (c *Client) UpdateMeasurement(db, rp, mst string, options *meta2.Options) error {
+	_, err := c.Measurement(db, rp, mst)
+	if err != nil {
+		return err
+	}
+	cmd := &proto2.UpdateMeasurementCommand{
+		Db:      proto.String(db),
+		Rp:      proto.String(rp),
+		Mst:     proto.String(mst),
+		Options: options.Marshal(),
+	}
+
+	err = c.retryUntilExec(proto2.Command_UpdateMeasurementCommand, proto2.E_UpdateMeasurementCommand_Command, cmd)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// this function is used for UT testing
+func (c *Client) SetCacheData(cacheData *meta2.Data) {
+	c.cacheData = cacheData
 }
 
 func refreshConnectedServer(currentServer int) {

@@ -438,33 +438,18 @@ func Min(x, y int) int {
 	return y
 }
 
-func RemoveDuplicationInt(array []uint32) []uint32 {
-	swap := func(list []uint32, a, b int) {
-		list[a], list[b] = list[b], list[a]
-	}
-
-	length := len(array)
-	if length == 0 {
-		return array
-	}
-
-	j := 0
-	for i := 1; i < length; i++ {
-		if array[i] != array[j] {
-			j++
-			if j < i {
-				swap(array, i, j)
-			}
-		}
-	}
-	return array[:j+1]
-}
-
 func MaxUint32(x, y uint32) uint32 {
 	if x < y {
 		return y
 	}
 	return x
+}
+
+func MinUint32(x, y uint32) uint32 {
+	if x < y {
+		return x
+	}
+	return y
 }
 
 func Float64ToUint64(v float64) uint64 {

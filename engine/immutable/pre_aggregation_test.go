@@ -70,3 +70,36 @@ func TestFloatPreAgg(t *testing.T) {
 	require.Equal(t, float64(6), val.(float64))
 	require.Equal(t, int64(6), time)
 }
+
+type PreAggCodec interface {
+	marshal(dst []byte) []byte
+	unmarshal(src []byte) ([]byte, error)
+}
+
+func assertPreAggCodec(t *testing.T, a, b PreAggCodec) {
+	require.NotEmpty(t, a)
+	require.NotEmpty(t, b)
+
+	buf := a.marshal(nil)
+	_, err := b.unmarshal(buf)
+	require.NoError(t, err)
+
+	require.Equal(t, a, b)
+}
+
+func TestPreAggOnlyOneLine(t *testing.T) {
+	var times []int64 = []int64{100}
+	col := &record.ColVal{}
+
+	floatAgg := NewFloatPreAgg()
+	col.Init()
+	col.AppendFloat(1.1)
+	floatAgg.addValues(col, times)
+	assertPreAggCodec(t, floatAgg, NewFloatPreAgg())
+
+	intAgg := NewIntegerPreAgg()
+	col.Init()
+	col.AppendInteger(111)
+	intAgg.addValues(col, times)
+	assertPreAggCodec(t, intAgg, NewIntegerPreAgg())
+}

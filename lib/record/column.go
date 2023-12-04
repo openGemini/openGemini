@@ -39,6 +39,38 @@ type ColVal struct {
 	NilCount     int
 }
 
+func (cv *ColVal) GetOffsAndLens() ([]int32, []int32) {
+	count := cv.Len - cv.NilCount
+	offsets := make([]int32, count)
+	lengths := make([]int32, count)
+	start := 0
+	for i := range cv.Offset {
+		if cv.IsNil(i) {
+			continue
+		}
+		offsets[start] = int32(cv.Offset[i])
+		if start > 0 {
+			lengths[start-1] = offsets[start] - offsets[start-1]
+		}
+		start += 1
+	}
+	if start > 0 {
+		lengths[start-1] = int32(len(cv.Val)) - offsets[start-1]
+	}
+	return offsets, lengths
+}
+
+func (cv *ColVal) RemoveNilOffset() []uint32 {
+	nilCount := 0
+	for i := range cv.Offset {
+		cv.Offset[i-nilCount] = cv.Offset[i]
+		if cv.IsNil(i) {
+			nilCount++
+		}
+	}
+	return cv.Offset[:len(cv.Offset)-nilCount]
+}
+
 func (cv *ColVal) AppendBitmap(bitmap []byte, bitOffset int, rows int, start, end int) {
 	cv.appendBitmap(bitmap, bitOffset, rows, start, end)
 }
@@ -78,7 +110,7 @@ func (cv *ColVal) appendBitmap(bm []byte, bitOffset int, rows int, start, end in
 	}
 }
 
-func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffset int, vLen int, nilCount int, colType, start, end int) {
+func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffset int, vLen int, nilCount int, colType, start, end int, pos int, posValidCount int) {
 	if end <= start || vLen == 0 {
 		return
 	}
@@ -100,7 +132,7 @@ func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffse
 	if nilCount == 0 {
 		startOffset, endOffset = start, end
 	} else {
-		startOffset, endOffset = valueIndexRange(bitMap, bitOffset, start, end)
+		startOffset, endOffset = valueIndexRange(bitMap, bitOffset, start, end, pos, posValidCount)
 	}
 	if colType == influx.Field_Type_Int {
 		cv.Val = append(cv.Val, value[startOffset*util.Int64SizeBytes:endOffset*util.Int64SizeBytes]...)
@@ -131,9 +163,11 @@ func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffse
 }
 
 func (cv *ColVal) AppendColVal(srcCol *ColVal, colType, start, end int) {
-	cv.Append(srcCol.Val, srcCol.Offset, srcCol.Bitmap, srcCol.BitMapOffset, srcCol.Len, srcCol.NilCount, colType, start, end)
+	cv.Append(srcCol.Val, srcCol.Offset, srcCol.Bitmap, srcCol.BitMapOffset, srcCol.Len, srcCol.NilCount, colType, start, end, 0, 0)
 }
-
+func (cv *ColVal) AppendColValFast(srcCol *ColVal, colType, start, end int, pos int, posValidCount int) {
+	cv.Append(srcCol.Val, srcCol.Offset, srcCol.Bitmap, srcCol.BitMapOffset, srcCol.Len, srcCol.NilCount, colType, start, end, pos, posValidCount)
+}
 func (cv *ColVal) PadColVal(colType, padLen int) {
 	if padLen == 0 {
 		return
@@ -377,20 +411,6 @@ func (cv *ColVal) AppendInteger(v int64) {
 	cv.Len++
 }
 
-func (cv *ColVal) AppendFloats(values ...float64) {
-	for _, v := range values {
-		cv.AppendFloat(v)
-	}
-}
-
-func (cv *ColVal) AppendFloat(v float64) {
-	index := len(cv.Val)
-	cv.reserveVal(util.Float64SizeBytes)
-	*(*float64)(unsafe.Pointer(&cv.Val[index])) = v
-	cv.setBitMap(cv.Len)
-	cv.Len++
-}
-
 func (cv *ColVal) reserveOffset(size int) {
 	offsetCap := cap(cv.Offset)
 	offsetLen := len(cv.Offset)
@@ -417,16 +437,9 @@ func (cv *ColVal) AppendString(v string) {
 	cv.Len++
 }
 
-func (cv *ColVal) AppendBooleans(values ...bool) {
-	for _, v := range values {
-		cv.AppendBoolean(v)
-	}
-}
-
-func (cv *ColVal) AppendBoolean(v bool) {
-	index := len(cv.Val)
-	cv.reserveVal(util.BooleanSizeBytes)
-	*(*bool)(unsafe.Pointer(&cv.Val[index])) = v
+func (cv *ColVal) AppendByteSlice(v []byte) {
+	cv.Offset = append(cv.Offset, uint32(len(cv.Val)))
+	cv.Val = append(cv.Val, v...)
 	cv.setBitMap(cv.Len)
 	cv.Len++
 }
@@ -437,31 +450,13 @@ func (cv *ColVal) AppendIntegerNulls(count int) {
 	}
 }
 
-func (cv *ColVal) AppendFloatNulls(count int) {
-	for i := 0; i < count; i++ {
-		cv.AppendFloatNull()
-	}
-}
-
 func (cv *ColVal) AppendStringNulls(count int) {
 	for i := 0; i < count; i++ {
 		cv.AppendStringNull()
 	}
 }
 
-func (cv *ColVal) AppendBooleanNulls(count int) {
-	for i := 0; i < count; i++ {
-		cv.AppendBooleanNull()
-	}
-}
-
 func (cv *ColVal) AppendIntegerNull() {
-	cv.resetBitMap(cv.Len)
-	cv.Len++
-	cv.NilCount++
-}
-
-func (cv *ColVal) AppendFloatNull() {
 	cv.resetBitMap(cv.Len)
 	cv.Len++
 	cv.NilCount++
@@ -475,22 +470,8 @@ func (cv *ColVal) AppendStringNull() {
 	cv.NilCount++
 }
 
-func (cv *ColVal) AppendBooleanNull() {
-	cv.resetBitMap(cv.Len)
-	cv.Len++
-	cv.NilCount++
-}
-
 func (cv *ColVal) IntegerValues() []int64 {
 	return util.Bytes2Int64Slice(cv.Val)
-}
-
-func (cv *ColVal) FloatValues() []float64 {
-	return util.Bytes2Float64Slice(cv.Val)
-}
-
-func (cv *ColVal) BooleanValues() []bool {
-	return util.Bytes2BooleanSlice(cv.Val)
 }
 
 func (cv *ColVal) Int8Values() []int8 {
@@ -546,7 +527,7 @@ func (cv *ColVal) getValIndexRange(bmStart, bmEnd int) (valStart, valEnd int) {
 	if cv.NilCount == 0 {
 		return bmStart, bmEnd
 	}
-	return valueIndexRange(cv.Bitmap, cv.BitMapOffset, bmStart, bmEnd)
+	return valueIndexRange(cv.Bitmap, cv.BitMapOffset, bmStart, bmEnd, 0, 0)
 }
 
 func (cv *ColVal) calcColumnOffset(ty int, start int) int {
@@ -575,7 +556,7 @@ func (cv *ColVal) GetValIndexRange(bmStart, bmEnd int) (valStart, valEnd int) {
 	if cv.NilCount == 0 {
 		return bmStart, bmEnd
 	}
-	return valueIndexRange(cv.Bitmap, cv.BitMapOffset, bmStart, bmEnd)
+	return valueIndexRange(cv.Bitmap, cv.BitMapOffset, bmStart, bmEnd, 0, 0)
 }
 
 func (cv *ColVal) MaxIntegerValue(values []int64, start, end int) (int64, int) {
@@ -614,94 +595,6 @@ func (cv *ColVal) MaxIntegerValue(values []int64, start, end int) (int64, int) {
 			max = values[vIdx]
 			row = i
 		} else if max < values[vIdx] {
-			max = values[vIdx]
-			row = i
-		}
-		vIdx++
-	}
-	return max, row
-}
-
-func (cv *ColVal) MaxFloatValue(values []float64, start, end int) (float64, int) {
-	if len(values) == 0 {
-		return 0, -1
-	}
-
-	var (
-		max        float64
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		max = values[start]
-		row = start
-		for i := start; i < end; i++ {
-			if max < values[i] {
-				max = values[i]
-				row = i
-			}
-		}
-		return max, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			max = values[vIdx]
-			row = i
-		} else if max < values[vIdx] {
-			max = values[vIdx]
-			row = i
-		}
-		vIdx++
-	}
-	return max, row
-}
-
-func (cv *ColVal) MaxBooleanValue(values []bool, start, end int) (bool, int) {
-	if len(values) == 0 {
-		return false, -1
-	}
-
-	var (
-		max        bool
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		max = values[start]
-		row = start
-		for i := start; i < end; i++ {
-			if values[i] != max && values[i] {
-				max = values[i]
-				row = i
-			}
-		}
-		return max, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			max = values[vIdx]
-			row = i
-		} else if values[vIdx] != max && values[vIdx] {
 			max = values[vIdx]
 			row = i
 		}
@@ -754,94 +647,6 @@ func (cv *ColVal) MinIntegerValue(values []int64, start, end int) (int64, int) {
 	return min, row
 }
 
-func (cv *ColVal) MinFloatValue(values []float64, start, end int) (float64, int) {
-	if len(values) == 0 {
-		return 0, -1
-	}
-
-	var (
-		min        float64
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		min = values[start]
-		row = start
-		for i := start; i < end; i++ {
-			if min > values[i] {
-				min = values[i]
-				row = i
-			}
-		}
-		return min, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			min = values[vIdx]
-			row = i
-		} else if min > values[vIdx] {
-			min = values[vIdx]
-			row = i
-		}
-		vIdx++
-	}
-	return min, row
-}
-
-func (cv *ColVal) MinBooleanValue(values []bool, start, end int) (bool, int) {
-	if len(values) == 0 {
-		return false, -1
-	}
-
-	var (
-		min        bool
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		min = values[start]
-		row = start
-		for i := start; i < end; i++ {
-			if values[i] != min && !values[i] {
-				min = values[i]
-				row = i
-			}
-		}
-		return min, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			min = values[vIdx]
-			row = i
-		} else if values[vIdx] != min && !values[vIdx] {
-			min = values[vIdx]
-			row = i
-		}
-		vIdx++
-	}
-	return min, row
-}
-
 func (cv *ColVal) FirstIntegerValue(values []int64, start, end int) (int64, int) {
 	if len(values) == 0 {
 		return 0, -1
@@ -849,39 +654,6 @@ func (cv *ColVal) FirstIntegerValue(values []int64, start, end int) (int64, int)
 
 	var (
 		first      int64
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		first = values[start]
-		row = start
-		return first, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		first = values[vIdx]
-		row = i
-		break
-	}
-	return first, row
-}
-
-func (cv *ColVal) FirstFloatValue(values []float64, start, end int) (float64, int) {
-	if len(values) == 0 {
-		return 0, -1
-	}
-
-	var (
-		first      float64
 		skip, vIdx int
 	)
 	row := -1
@@ -941,74 +713,12 @@ func (cv *ColVal) FirstStringValue(values []string, start, end int) (string, int
 	return first, row
 }
 
-func (cv *ColVal) FirstBooleanValue(values []bool, start, end int) (bool, int) {
-	if len(values) == 0 {
-		return false, -1
-	}
-
-	var (
-		first      bool
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		first = values[start]
-		row = start
-		return first, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		first = values[vIdx]
-		row = i
-		break
-	}
-	return first, row
-}
-
 func (cv *ColVal) LastIntegerValue(values []int64, start, end int) (int64, int) {
 	if len(values) == 0 {
 		return 0, -1
 	}
 
 	var last int64
-	row := -1
-	if cv.NilCount == 0 {
-		last = values[end-1]
-		row = end - 1
-		return last, row
-	}
-
-	for i := end - 1; i >= start; i-- {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		row = i
-		break
-	}
-	if row < start {
-		return last, -1
-	}
-	vIdx := cv.ValidCount(0, row)
-	last = values[vIdx]
-	return last, row
-}
-
-func (cv *ColVal) LastFloatValue(values []float64, start, end int) (float64, int) {
-	if len(values) == 0 {
-		return 0, -1
-	}
-
-	var last float64
 	row := -1
 	if cv.NilCount == 0 {
 		last = values[end-1]
@@ -1061,43 +771,8 @@ func (cv *ColVal) LastStringValue(values []string, start, end int) (string, int)
 	return last, row
 }
 
-func (cv *ColVal) LastBooleanValue(values []bool, start, end int) (bool, int) {
-	if len(values) == 0 {
-		return false, -1
-	}
-
-	var last bool
-	row := -1
-	if cv.NilCount == 0 {
-		last = values[end-1]
-		row = end - 1
-		return last, row
-	}
-
-	for i := end - 1; i >= start; i-- {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		row = i
-		break
-	}
-	if row < start {
-		return last, -1
-	}
-	vIdx := cv.ValidCount(0, row)
-	last = values[vIdx]
-	return last, row
-}
-
 func (cv *ColVal) SubIntegerValues(start, end int) []int64 {
 	values := cv.IntegerValues()
-	s, e := cv.getValIndexRange(start, end)
-	return values[s:e]
-}
-
-func (cv *ColVal) SubFloatValues(start, end int) []float64 {
-	values := cv.FloatValues()
 	s, e := cv.getValIndexRange(start, end)
 	return values[s:e]
 }
@@ -1119,14 +794,6 @@ func (cv *ColVal) IntegerValue(i int) (int64, bool) {
 		return 0, isNil
 	}
 	return cv.IntegerValues()[cv.ValidCount(0, i)], isNil
-}
-
-func (cv *ColVal) FloatValue(i int) (float64, bool) {
-	isNil := cv.IsNil(i)
-	if isNil {
-		return 0, isNil
-	}
-	return cv.FloatValues()[cv.ValidCount(0, i)], isNil
 }
 
 func (cv *ColVal) StringValueSafe(i int) (string, bool) {
@@ -1176,14 +843,6 @@ func (cv *ColVal) BytesUnsafe(i int) ([]byte, bool) {
 	return cv.Val[start:end], false
 }
 
-func (cv *ColVal) BooleanValue(i int) (bool, bool) {
-	isNil := cv.IsNil(i)
-	if isNil {
-		return false, isNil
-	}
-	return cv.BooleanValues()[cv.ValidCount(0, i)], isNil
-}
-
 func resize(dst []ColVal, segs int) []ColVal {
 	if cap(dst) < segs {
 		delta := segs - cap(dst)
@@ -1201,8 +860,7 @@ func (cv *ColVal) Split(dst []ColVal, maxRows int, refType int) []ColVal {
 	segs := (cv.Len + maxRows - 1) / maxRows
 	dst = resize(dst, segs)
 
-	start := 0
-	offset, validCount := 0, 0
+	start, offset, validCount := 0, 0, 0
 	for i := 0; i < segs; i++ {
 		end := start + maxRows
 		if end > cv.Len {
@@ -1215,6 +873,28 @@ func (cv *ColVal) Split(dst []ColVal, maxRows int, refType int) []ColVal {
 		start = end
 	}
 
+	return dst
+}
+
+func (cv *ColVal) SplitColBySize(dst []ColVal, rowsPerSegment []int, refType int) []ColVal {
+	/*
+		0: rowsPerSegment = [2800]  segmentNum = 1, there is only one segment
+		1: rowsPerSegment = [700,1400,2100,2600,2800]  segmentNum = 5; 2800 = len(dst)-1
+	*/
+	segs := len(rowsPerSegment)
+	dst = resize(dst, segs)
+	start, offset, validCount := 0, 0, 0
+	for i := 0; i < segs; i++ {
+		end := rowsPerSegment[i]
+		if i == segs-1 { // rowsPerSegment[len(rowsPerSegment[i])-1] is not equal cv.Len, func sliceValAndOffset use data like:[start,end}
+			end = cv.Len
+		}
+		offset, validCount = dst[i].sliceValAndOffset(cv, start, end, refType, offset)
+		dst[i].sliceBitMap(cv, start, end)
+		dst[i].Len = end - start
+		dst[i].NilCount = dst[i].Len - validCount
+		start = end
+	}
 	return dst
 }
 
@@ -1262,107 +942,6 @@ func (cv *ColVal) MaxIntegerValues(values []int64, start, end int) (int64, []int
 			row = row[:0]
 			row = append(row, i)
 		} else if max == values[vIdx] {
-			row = append(row, i)
-		}
-		vIdx++
-	}
-	return max, row
-}
-
-func (cv *ColVal) MaxFloatValues(values []float64, start, end int) (float64, []int) {
-	var row []int
-	if len(values) == 0 {
-		return 0, row
-	}
-
-	var (
-		max        float64
-		skip, vIdx int
-	)
-	if cv.NilCount == 0 {
-		max = values[start]
-		row = append(row, start)
-		for i := start; i < end; i++ {
-			if max < values[i] {
-				max = values[i]
-				row = row[:0]
-				row = append(row, i)
-			} else if max == values[i] && i != start {
-				row = append(row, i)
-			}
-		}
-		return max, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			max = values[vIdx]
-			row = append(row, i)
-		} else if max < values[vIdx] {
-			max = values[vIdx]
-			row = row[:0]
-			row = append(row, i)
-		} else if max == values[vIdx] {
-			row = append(row, i)
-		}
-		vIdx++
-	}
-	return max, row
-}
-
-func (cv *ColVal) MaxBooleanValues(values []bool, start, end int) (bool, []int) {
-	var row []int
-	if len(values) == 0 {
-		return false, row
-	}
-
-	var (
-		max        bool
-		skip, vIdx int
-	)
-	if cv.NilCount == 0 {
-		max = values[start]
-		row = append(row, start)
-		for i := start; i < end; i++ {
-			if values[i] != max && values[i] && i != start {
-				max = values[i]
-				row = row[:0]
-				row = append(row, i)
-			} else if values[i] == max && values[i] && i != start {
-				row = append(row, i)
-			}
-		}
-		return max, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			max = values[vIdx]
-			row = append(row, i)
-		} else if values[vIdx] != max && values[vIdx] {
-			max = values[vIdx]
-			row = row[:0]
-			row = append(row, i)
-		} else if values[vIdx] == max && values[vIdx] {
-			max = values[vIdx]
 			row = append(row, i)
 		}
 		vIdx++
@@ -1420,116 +999,6 @@ func (cv *ColVal) MinIntegerValues(values []int64, start, end int) (int64, []int
 	return min, row
 }
 
-func (cv *ColVal) MinFloatValues(values []float64, start, end int) (float64, []int) {
-	var row []int
-	if len(values) == 0 {
-		return 0, row
-	}
-
-	var (
-		min        float64
-		skip, vIdx int
-	)
-	if cv.NilCount == 0 {
-		min = values[start]
-		row = append(row, start)
-		for i := start; i < end; i++ {
-			if min > values[i] {
-				min = values[i]
-				row = row[:0]
-				row = append(row, i)
-			} else if min == values[i] && i != start {
-				row = append(row, i)
-			}
-		}
-		return min, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			min = values[vIdx]
-			row = append(row, i)
-		} else if min > values[vIdx] {
-			min = values[vIdx]
-			row = row[:0]
-			row = append(row, i)
-		} else if min == values[vIdx] {
-			row = append(row, i)
-		}
-		vIdx++
-	}
-	return min, row
-}
-
-func (cv *ColVal) MinBooleanValues(values []bool, start, end int) (bool, []int) {
-	var row []int
-	if len(values) == 0 {
-		return false, row
-	}
-
-	var (
-		min        bool
-		skip, vIdx int
-	)
-	if cv.NilCount == 0 {
-		min = values[start]
-		row = append(row, start)
-		for i := start; i < end; i++ {
-			if values[i] != min && !values[i] && i != start {
-				min = values[i]
-				row = row[:0]
-				row = append(row, i)
-			} else if values[i] == min && !values[i] && i != start {
-				row = append(row, i)
-			}
-		}
-		return min, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		if vIdx == skip {
-			min = values[vIdx]
-			row = append(row, i)
-		} else if values[vIdx] != min && !values[vIdx] {
-			min = values[vIdx]
-			row = row[:0]
-			row = append(row, i)
-		} else if values[vIdx] == min && !values[vIdx] {
-			min = values[vIdx]
-			row = append(row, i)
-		}
-		vIdx++
-	}
-	return min, row
-}
-
-func (cv *ColVal) AppendFloatNullReserve() {
-	index := len(cv.Val)
-	cv.reserveVal(util.Float64SizeBytes)
-	*(*float64)(unsafe.Pointer(&cv.Val[index])) = 0
-	cv.resetBitMap(cv.Len)
-	cv.Len++
-	cv.NilCount++
-}
-
 func (cv *ColVal) AppendIntegerNullReserve() {
 	index := len(cv.Val)
 	cv.reserveVal(util.Int64SizeBytes)
@@ -1537,27 +1006,6 @@ func (cv *ColVal) AppendIntegerNullReserve() {
 	cv.resetBitMap(cv.Len)
 	cv.Len++
 	cv.NilCount++
-}
-
-func (cv *ColVal) AppendBooleanNullReserve() {
-	index := len(cv.Val)
-	cv.reserveVal(util.BooleanSizeBytes)
-	*(*bool)(unsafe.Pointer(&cv.Val[index])) = false
-	cv.resetBitMap(cv.Len)
-	cv.Len++
-	cv.NilCount++
-}
-
-func (cv *ColVal) UpdateFloatValue(v float64, isNil bool, row int) {
-	if isNil {
-		cv.UpdateFloatIntoNull(row)
-		return
-	}
-	if cv.IsNil(row) {
-		cv.NilCount--
-	}
-	cv.FloatValues()[row] = v
-	cv.Bitmap[row>>3] |= BitMask[row&0x07]
 }
 
 func (cv *ColVal) UpdateIntegerValue(v int64, isNil bool, row int) {
@@ -1569,18 +1017,6 @@ func (cv *ColVal) UpdateIntegerValue(v int64, isNil bool, row int) {
 		cv.NilCount--
 	}
 	cv.IntegerValues()[row] = v
-	cv.Bitmap[row>>3] |= BitMask[row&0x07]
-}
-
-func (cv *ColVal) UpdateBooleanValue(v bool, isNil bool, row int) {
-	if isNil {
-		cv.UpdateBooleanIntoNull(row)
-		return
-	}
-	if cv.IsNil(row) {
-		cv.NilCount--
-	}
-	cv.BooleanValues()[row] = v
 	cv.Bitmap[row>>3] |= BitMask[row&0x07]
 }
 
@@ -1611,22 +1047,6 @@ func (cv *ColVal) UpdateStringValue(v string, isNil bool, row int) {
 	cv.Bitmap[row>>3] |= BitMask[row&0x07]
 }
 
-func (cv *ColVal) UpdateFloatIntoNull(row int) {
-	if !cv.IsNil(row) {
-		cv.FloatValues()[row] = 0
-		cv.NilCount++
-	}
-	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
-}
-
-func (cv *ColVal) UpdateBooleanIntoNull(row int) {
-	if !cv.IsNil(row) {
-		cv.BooleanValues()[row] = false
-		cv.NilCount++
-	}
-	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
-}
-
 func (cv *ColVal) UpdateStringIntoNull(row int) {
 	var stringLen int
 	if v, isNil := cv.StringValueUnsafe(row); !isNil {
@@ -1646,16 +1066,8 @@ func (cv *ColVal) UpdateStringIntoNull(row int) {
 	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
 }
 
-func (cv *ColVal) FloatValueWithNullReserve(index int) (float64, bool) {
-	return cv.FloatValues()[index], cv.IsNil(index)
-}
-
 func (cv *ColVal) IntegerValueWithNullReserve(index int) (int64, bool) {
 	return cv.IntegerValues()[index], cv.IsNil(index)
-}
-
-func (cv *ColVal) BooleanValueWithNullReserve(index int) (bool, bool) {
-	return cv.BooleanValues()[index], cv.IsNil(index)
 }
 
 func (cv *ColVal) appendStringCol(src *ColVal, start, limit int) {
@@ -1712,11 +1124,7 @@ func (cv *ColVal) AppendTimes(times []int64) {
 	cv.Len += len(times)
 
 	cv.FillBitmap(255)
-	if cv.Len%8 > 0 {
-		for i := cv.Len; i < len(cv.Bitmap)*8; i++ {
-			cv.resetBitMap(i)
-		}
-	}
+	cv.RepairBitmap()
 }
 
 func (cv *ColVal) FillBitmap(val uint8) {
@@ -1728,5 +1136,13 @@ func (cv *ColVal) FillBitmap(val uint8) {
 	cv.Bitmap = bufferpool.Resize(cv.Bitmap, bitmapSize)
 	for i := 0; i < bitmapSize; i++ {
 		cv.Bitmap[i] = val
+	}
+}
+
+func (cv *ColVal) RepairBitmap() {
+	if cv.Len%8 > 0 {
+		for i := cv.Len; i < len(cv.Bitmap)*8; i++ {
+			cv.resetBitMap(i)
+		}
 	}
 }

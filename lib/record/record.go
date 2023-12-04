@@ -538,10 +538,20 @@ func (rec *Record) mergeRecRow(newRec, oldRec *Record, newRowIdx, oldRowIdx int)
 }
 
 func (rec *Record) AppendRec(srcRec *Record, start, end int) {
-	rec.appendRecImpl(srcRec, start, end, true)
+	rec.appendRecImpl(srcRec, start, end, true, nil, nil)
+}
+func (rec *Record) AppendRecFast(srcRec *Record, start, end int, colPos []int, colPosValidCount []int) {
+	rec.appendRecImpl(srcRec, start, end, true, colPos, colPosValidCount)
 }
 
-func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool) {
+func (c *ColVal) getValidCount(start int, pos int, posValidCount *int) {
+	for i := pos; i < start; i++ {
+		if c.Bitmap[(c.BitMapOffset+i)>>3]&BitMask[(c.BitMapOffset+i)&0x07] != 0 {
+			*posValidCount++
+		}
+	}
+}
+func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool, colPos []int, colPosValidCount []int) {
 	if start == end {
 		return
 	}
@@ -554,7 +564,14 @@ func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool) {
 			if srcRec.Schema[iSrcRec].Name > rec.Schema[iRec].Name {
 				rec.ColVals[iRec].PadColVal(rec.Schema[iRec].Type, end-start)
 			} else {
-				rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[iSrcRec], srcRec.Schema[iSrcRec].Type, start, end)
+				if len(colPos) == 0 || len(colPosValidCount) == 0 {
+					rec.ColVals[iRec].AppendColVal(&srcRec.ColVals[iSrcRec], srcRec.Schema[iSrcRec].Type, start, end)
+				} else {
+					srcRec.ColVals[iSrcRec].getValidCount(start, colPos[iSrcRec], &colPosValidCount[iSrcRec])
+					colPos[iSrcRec] = start
+					rec.ColVals[iRec].AppendColValFast(&srcRec.ColVals[iSrcRec], srcRec.Schema[iSrcRec].Type, start, end, colPos[iSrcRec], colPosValidCount[iSrcRec])
+				}
+
 				iSrcRec++
 			}
 			iRec++
@@ -588,7 +605,7 @@ func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool) {
 }
 
 func (rec *Record) AppendRecForTagSet(srcRec *Record, start, end int) {
-	rec.appendRecImpl(srcRec, start, end, false)
+	rec.appendRecImpl(srcRec, start, end, false, nil, nil)
 }
 
 // AppendRecForFilter crop redundant columns, which are not required after filtering.
@@ -981,9 +998,15 @@ func subBitmapBytes(bitmap []byte, bitMapOffset int, length int) ([]byte, int) {
 	return bitmap[bitMapOffset>>3 : (bitMapOffset+length)>>3], bitMapOffset & 0x7
 }
 
-func valueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int) (valStart, valEnd int) {
+func valueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, posValidCount int) (valStart, valEnd int) {
 	var start, end int
-	for i := 0; i < bmEnd; i++ {
+	firstIndex := 0
+	if bmStart >= pos {
+		start = posValidCount
+		end = posValidCount
+		firstIndex = pos
+	}
+	for i := firstIndex; i < bmEnd; i++ {
 		if bitMap[(bitOffset+i)>>3]&BitMask[(bitOffset+i)&0x07] != 0 {
 			if i < bmStart {
 				start++

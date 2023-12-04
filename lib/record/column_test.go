@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -136,6 +137,32 @@ func checkLastValue(rec *record.Record, iv int64, iIdx int, fv float64, fIdx int
 		}
 	}
 	return true
+}
+
+func TestGetOffsAndLens(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+	}
+	rec := genRowRec(schema, nil, nil, nil, nil,
+		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []string{"test", "test", "hi", "hi", "world", "world", "ok", "ok"},
+		nil, nil, []int64{1, 2, 3, 4, 5, 6, 7, 8})
+	offsets, lengths := rec.Column(0).GetOffsAndLens()
+	assert.Equal(t, []int32{0, 4, 8, 10, 12, 17, 22, 24}, offsets)
+	assert.Equal(t, []int32{4, 4, 2, 2, 5, 5, 2, 2}, lengths)
+
+	rec = genRowRec(schema, nil, nil, nil, nil,
+		[]int{0, 1, 0, 0, 1, 0, 1, 0}, []string{"test", "test", "hi", "hi", "world", "world", "ok", "ok"},
+		nil, nil, []int64{1, 2, 3, 4, 5, 6, 7, 8})
+	offsets, lengths = rec.Column(0).GetOffsAndLens()
+	assert.Equal(t, []int32{0, 4, 9}, offsets)
+	assert.Equal(t, []int32{4, 5, 2}, lengths)
+
+	rec = genRowRec(schema, nil, nil, nil, nil,
+		[]int{0, 0, 0, 0, 0, 0, 0, 0}, []string{"test", "test", "hi", "hi", "world", "world", "ok", "ok"},
+		nil, nil, []int64{1, 2, 3, 4, 5, 6, 7, 8})
+	offsets, lengths = rec.Column(0).GetOffsAndLens()
+	assert.Equal(t, []int32{}, offsets)
+	assert.Equal(t, []int32{}, lengths)
 }
 
 func TestMaxValue(t *testing.T) {
@@ -353,4 +380,14 @@ func TestStringValueToByteSlice(t *testing.T) {
 		exp = append(exp, []byte(expString[j])...)
 	}
 	require.Equal(t, exp, res)
+}
+
+func TestAppendByteSlice(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendByteSlice([]byte{1})
+	col.AppendByteSlice([]byte{2, 3})
+
+	require.Equal(t, []byte{1, 2, 3}, col.Val)
+	require.Equal(t, []byte{3}, col.Bitmap)
+	require.Equal(t, []uint32{0, 1}, col.Offset)
 }

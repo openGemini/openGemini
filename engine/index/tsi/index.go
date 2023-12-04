@@ -40,9 +40,10 @@ import (
 )
 
 const (
-	defaultTSIDCacheSize = 128 << 20
-	defaultSKeyCacheSize = 128 << 20
-	defaultTagCacheSize  = 512 << 20
+	defaultTSIDCacheSize     = 128 << 20
+	defaultSKeyCacheSize     = 128 << 20
+	defaultTagCacheSize      = 512 << 20
+	defaultTagFilterCostSize = 16 << 20 // 16MB
 )
 
 type IndexType int
@@ -52,6 +53,9 @@ const (
 	Text
 	Field
 	TimeCluster
+	BloomFilter
+	MinMax
+	Set
 	IndexTypeAll
 )
 

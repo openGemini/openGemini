@@ -231,3 +231,65 @@ func TestVerifyDataNodeStatusProcess(t *testing.T) {
 	_, err = h.Process()
 	assert.NoError(t, err)
 }
+
+func TestSendSysCtrlToMetaProcess(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	type TestCase struct {
+		Param     map[string]string
+		ExpectErr string
+	}
+	for _, testcase := range []TestCase{
+		{
+			Param:     map[string]string{},
+			ExpectErr: "missing the required parameter 'switchon' for failpoint",
+		},
+		{
+			Param: map[string]string{
+				"switchon": "not bool value",
+			},
+			ExpectErr: `strconv.ParseBool: parsing "not bool value": invalid syntax`,
+		},
+		{
+			Param: map[string]string{
+				"switchon": "true",
+			},
+			ExpectErr: "missing the required parameter 'point' for failpoint",
+		},
+		{
+			Param: map[string]string{
+				"switchon": "true",
+				"point":    "mock_point",
+			},
+			ExpectErr: "missing the required parameter 'term' for failpoint",
+		},
+		{
+			Param: map[string]string{
+				"switchon": "true",
+				"point":    "mock_point",
+				"term":     "return(true)",
+			},
+			ExpectErr: "",
+		},
+		{
+			Param: map[string]string{
+				"switchon": "false",
+				"point":    "mock_point",
+			},
+			ExpectErr: "",
+		},
+	} {
+		msg := message.NewMetaMessage(message.SendSysCtrlToMetaRequestMessage, &message.SendSysCtrlToMetaRequest{
+			Mod:   "failpoint",
+			Param: testcase.Param,
+		})
+		h := New(msg.Type())
+		h.InitHandler(mockStore, nil, nil)
+		var err error
+		if err = h.SetRequestMsg(msg.Data()); err != nil {
+			t.Fatal(err)
+		}
+		res, err := h.Process()
+		assert.NoError(t, err)
+		assert.Equal(t, res.(*message.SendSysCtrlToMetaResponse).Err, testcase.ExpectErr)
+	}
+}

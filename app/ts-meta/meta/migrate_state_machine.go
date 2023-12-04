@@ -294,6 +294,7 @@ func (m *MigrateStateMachine) processEvent(e MigrateEvent) {
 	// ActionError, err == nil
 	//means the event finished, but execute failed, for example, assign failed, go to assign failed handler
 	if actionState == ActionError {
+		m.logger.Error("migrate state machine handle dbpt event occurs ActionError")
 		statistics.MetaDBPTStepDuration(e.getEventType().String(), e.getOpId(), e.getCurrStateString(), e.getSrc(), e.getDst(), time.Since(e.getStartTime()).Nanoseconds(), statistics.DBPTLoadErr, "assign failed")
 	}
 

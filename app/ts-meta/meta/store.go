@@ -379,7 +379,7 @@ type Store struct {
 		DeleteRetentionPolicy(node *meta.DataNode, db string, rp string, pt uint32) error
 		DeleteMeasurement(node *meta.DataNode, db string, rp string, name string, shardIds []uint64) error
 		MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
-		SendSegregateNodeCmds(nodeIDs []uint64) (int, error)
+		SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 	}
 
 	statMu       sync.RWMutex
@@ -1302,10 +1302,11 @@ func (s *Store) UpdateLoad(b []byte) error {
 	return nil
 }
 
-func (s *Store) createDataNode(writeHost, queryHost string) ([]byte, error) {
+func (s *Store) createDataNode(writeHost, queryHost, role string) ([]byte, error) {
 	val := &mproto.CreateDataNodeCommand{
 		HTTPAddr: proto.String(writeHost),
 		TCPAddr:  proto.String(queryHost),
+		Role:     proto.String(role),
 	}
 
 	t := mproto.Command_CreateDataNodeCommand
@@ -1831,19 +1832,19 @@ func (s *Store) SpecialCtlData(cmd string) error {
 	nodeLst := strings.Split(infos[1], ",")
 	switch cmdKey {
 	case "limit":
-		nodeIds, err := s.data.GetNodeIdsByNodeLst(nodeLst)
+		nodeIds, address, err := s.data.GetNodeIdsByNodeLst(nodeLst)
 		if err != nil {
 			return err
 		}
-		return s.segregateNode(nodeIds, false)
+		return s.segregateNode(nodeIds, address, false)
 	case "unlimit":
 		return s.cancelSegregateNode(nodeLst)
 	case "delete":
-		nodeIds, err := s.data.GetNodeIdsByNodeLst(nodeLst)
+		nodeIds, address, err := s.data.GetNodeIdsByNodeLst(nodeLst)
 		if err != nil {
 			return err
 		}
-		return s.segregateNode(nodeIds, true)
+		return s.segregateNode(nodeIds, address, true)
 	default:
 		return fmt.Errorf("unknown command: %s", cmdKey)
 	}
@@ -1943,8 +1944,8 @@ func (s *Store) forceNodeToTakeOverPts(nodeIds []uint64, preSegregateStatus []ui
 	return nil
 }
 
-func (s *Store) WaitNodeTakeOverDone(nodeIds []uint64, preSegregateStatus []uint64) error {
-	failNodeLoc, err := globalService.store.NetStore.SendSegregateNodeCmds(nodeIds)
+func (s *Store) WaitNodeTakeOverDone(nodeIds []uint64, address []string, preSegregateStatus []uint64) error {
+	failNodeLoc, err := globalService.store.NetStore.SendSegregateNodeCmds(nodeIds, address)
 	if err != nil {
 		if err1 := s.SetSegregateNodeStatus(preSegregateStatus[failNodeLoc:], nodeIds[failNodeLoc:]); err1 != nil {
 			err = fmt.Errorf("set preSegregateStatus fail %v when %v", err1.Error(), err.Error())
@@ -1988,8 +1989,8 @@ func (s *Store) setNodeToSegregatedOrDelete(nodeIds []uint64, preSegregateStatus
 	return nil
 }
 
-func (s *Store) segregateNode(nodeIds []uint64, delete bool) error {
-	if config.GetHaPolicy() == config.WriteAvailableFirst {
+func (s *Store) segregateNode(nodeIds []uint64, address []string, delete bool) error {
+	if config.GetHaPolicy() != config.SharedStorage {
 		return s.segregateNodeSimple(nodeIds, delete)
 	}
 	// 1.set Node SegregateStatus to Segregating
@@ -2010,7 +2011,7 @@ func (s *Store) segregateNode(nodeIds []uint64, delete bool) error {
 		return err
 	}
 	// 4.send Segregate cmds to ts-store and wait ts-store Segregate cmds all done
-	if err := s.WaitNodeTakeOverDone(nodeIds, preSegregateStatus); err != nil {
+	if err := s.WaitNodeTakeOverDone(nodeIds, address, preSegregateStatus); err != nil {
 		return err
 	}
 	// 5.wait force assign tasks done
@@ -2037,7 +2038,7 @@ func (s *Store) cancelSegregateNode(nodeLst []string) error {
 		// unlimit|all
 		nodeIds = s.data.GetNodeIDs()
 	} else {
-		nodeIds, err = s.data.GetNodeIdsByNodeLst(nodeLst)
+		nodeIds, _, err = s.data.GetNodeIdsByNodeLst(nodeLst)
 		if err != nil {
 			return err
 		}
@@ -2078,9 +2079,9 @@ func (s *Store) RemoveNode(nodeIds []uint64) error {
 	return nil
 }
 
-// The check is performed every 500 ms. The check times out after 5s.
+// The check is performed every 500 ms. The check times out after 60s.
 func (s *Store) checkSegregateNodeTaskDone(nodeIds []uint64) error {
-	timer := time.NewTimer(5 * time.Second)
+	timer := time.NewTimer(60 * time.Second)
 	for {
 		select {
 		case <-timer.C:

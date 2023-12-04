@@ -67,7 +67,7 @@ type Storage interface {
 
 	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
 	KillQueryOnNode(nodeID, queryID uint64) error
-	SendSegregateNodeCmds(nodeIDs []uint64) (int, error)
+	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 }
 
 type NetStorage struct {
@@ -396,24 +396,23 @@ func (s *NetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport
 		return err
 	}
 	trans.SetTimeout(migrateTimeout)
-	if err := trans.Send(data); err != nil {
+	if err = trans.Send(data); err != nil {
 		return err
 	}
 	mcb := cb.(*MigratePtCallback)
 	go func() {
-		err := trans.Wait()
-		if err != nil {
+		if err := trans.Wait(); err != nil {
 			mcb.fn(err)
 		}
 	}()
 	return nil
 }
 
-func (s *NetStorage) SendSegregateNodeCmds(nodeIDs []uint64) (int, error) {
+func (s *NetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error) {
 	for i, nodeId := range nodeIDs {
 		segregateNodeReq := NewSegregateNodeRequest()
 		segregateNodeReq.NodeId = &nodeId
-		trans, err := transport.NewTransport(nodeId, spdy.SegregateNodeRequest, nil)
+		trans, err := transport.NewTransportByAddress(nodeId, address[i], spdy.SegregateNodeRequest, nil)
 		if err != nil {
 			return i, err
 		}

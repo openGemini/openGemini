@@ -63,6 +63,8 @@ func New(typ uint8) RPCHandler {
 		return &GetContinuousQueryLease{}
 	case message.VerifyDataNodeStatusRequestMessage:
 		return &VerifyDataNodeStatus{}
+	case message.SendSysCtrlToMetaRequestMessage:
+		return &SendSysCtrlToMeta{}
 	default:
 		return nil
 	}
@@ -389,4 +391,23 @@ func (h *VerifyDataNodeStatus) SetRequestMsg(data transport.Codec) error {
 
 func (h *VerifyDataNodeStatus) Instance() RPCHandler {
 	return &VerifyDataNodeStatus{}
+}
+
+type SendSysCtrlToMeta struct {
+	BaseHandler
+
+	req *message.SendSysCtrlToMetaRequest
+}
+
+func (h *SendSysCtrlToMeta) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.SendSysCtrlToMetaRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.SendSysCtrlToMetaRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *SendSysCtrlToMeta) Instance() RPCHandler {
+	return &SendSysCtrlToMeta{}
 }

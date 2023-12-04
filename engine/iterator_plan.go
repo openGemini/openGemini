@@ -403,7 +403,7 @@ func initTransColAuxFun() {
 			return
 		}
 		if recColumn.NilCount > 0 {
-			recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
+			recColumn.Offset = recColumn.RemoveNilOffset()
 		}
 		column.AppendStringBytes(recColumn.Val, recColumn.Offset)
 	}
@@ -411,7 +411,7 @@ func initTransColAuxFun() {
 	transColAuxFun[influxql.Tag] = func(recColumn *record.ColVal, column executor.Column) {
 		if recColumn.Length() > recColumn.NilCount {
 			if recColumn.NilCount > 0 {
-				recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
+				recColumn.Offset = recColumn.RemoveNilOffset()
 			}
 			column.AppendStringBytes(recColumn.Val, recColumn.Offset)
 		}
@@ -438,7 +438,7 @@ func initTransColumnFun() {
 	transColumnFun[influxql.String] = func(recColumn *record.ColVal, column executor.Column) {
 		if recColumn.Length() > recColumn.NilCount {
 			if recColumn.NilCount > 0 {
-				recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
+				recColumn.Offset = recColumn.RemoveNilOffset()
 			}
 			column.SetStringValues(recColumn.Val, recColumn.Offset)
 		}
@@ -447,7 +447,7 @@ func initTransColumnFun() {
 	transColumnFun[influxql.Tag] = func(recColumn *record.ColVal, column executor.Column) {
 		if recColumn.Length() > recColumn.NilCount {
 			if recColumn.NilCount > 0 {
-				recColumn.Offset = util.RemoveDuplicationInt(recColumn.Offset)
+				recColumn.Offset = recColumn.RemoveNilOffset()
 			}
 			column.SetStringValues(recColumn.Val, recColumn.Offset)
 		}

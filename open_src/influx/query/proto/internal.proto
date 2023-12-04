@@ -47,6 +47,32 @@ message Measurement {
     bool   IsTarget = 5;
     string SystemIterator = 6;
     uint32 EngineType = 7;
+    optional IndexRelation indexRelation = 8;
+}
+
+message IndexRelation {
+    uint32 Rid = 1;
+    repeated uint32 Oids = 2;
+    repeated string IndexNames = 3;
+    repeated IndexList IndexLists = 4;
+    map<string, IndexOptions> IndexOptions = 5;
+}
+
+message IndexList {
+    repeated string IList = 1;
+}
+
+message IndexOptions {
+	repeated IndexOption Infos = 1;
+}
+
+message IndexOption {
+    string FieldName  = 1;
+    string Tokens     = 2;
+    string Tokenizers = 3;
+    string IndexName  = 4;
+    string IndexType  = 5;
+    int64  Segment    = 6;
 }
 
 message Interval {
@@ -125,6 +151,18 @@ message RemoteQuery {
     uint64 NodeID   = 5;
     bool analyze    = 6;
     bytes QueryNode = 7;
+}
+
+message LogPath {
+  string DatabaseName = 1;
+  string MeasurementName = 2;
+  string SegmentPath = 3;
+  string Ak = 4;
+  string Sk = 5;
+  string BucketName = 6;
+  string Endpoint = 7;
+  string BasePath = 8;
+  uint32 version = 12;
 }
 
 enum AggType

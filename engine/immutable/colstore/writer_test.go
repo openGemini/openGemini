@@ -38,7 +38,7 @@ func TestPrimaryKeyWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := ""
-	fw := newPrimaryKeyWriter(fd, &lockPath)
+	fw := newIndexWriter(fd, &lockPath)
 	if fn != fw.Name() {
 		t.Fatalf("invalid writer name")
 	}
@@ -73,10 +73,10 @@ func TestPrimaryKeyWriterWriteChunkMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := ""
-	fw := newPrimaryKeyWriter(fd, &lockPath)
+	fw := newIndexWriter(fd, &lockPath)
 	defer func() {
 		err := recover()
-		require.Equal(t, err, "WriteChunkMeta not implement for primaryKeyWriter")
+		require.Equal(t, err, "WriteChunkMeta not implement for indexWriter")
 	}()
 	_, err = fw.WriteChunkMeta(nil)
 	assert.NoError(t, err)
@@ -94,10 +94,10 @@ func TestPrimaryKeyWriterChunkMetaSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := ""
-	fw := newPrimaryKeyWriter(fd, &lockPath)
+	fw := newIndexWriter(fd, &lockPath)
 	defer func() {
 		err := recover()
-		require.Equal(t, err, "ChunkMetaSize not implement for primaryKeyWriter")
+		require.Equal(t, err, "ChunkMetaSize not implement for indexWriter")
 	}()
 	fw.ChunkMetaSize()
 }
@@ -114,10 +114,10 @@ func TestPrimaryKeyWriterAppendChunkMetaToData(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := ""
-	fw := newPrimaryKeyWriter(fd, &lockPath)
+	fw := newIndexWriter(fd, &lockPath)
 	defer func() {
 		err := recover()
-		require.Equal(t, err, "AppendChunkMetaToData not implement for primaryKeyWriter")
+		require.Equal(t, err, "AppendChunkMetaToData not implement for indexWriter")
 	}()
 	err = fw.AppendChunkMetaToData()
 	assert.NoError(t, err)
@@ -135,10 +135,10 @@ func TestPrimaryKeyWriterSwitchMetaBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := ""
-	fw := newPrimaryKeyWriter(fd, &lockPath)
+	fw := newIndexWriter(fd, &lockPath)
 	defer func() {
 		err := recover()
-		require.Equal(t, err, "SwitchMetaBuffer not implement for primaryKeyWriter")
+		require.Equal(t, err, "SwitchMetaBuffer not implement for indexWriter")
 	}()
 	fw.SwitchMetaBuffer()
 }
@@ -155,10 +155,10 @@ func TestPrimaryKeyWriterMetaDataBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	lockPath := ""
-	fw := newPrimaryKeyWriter(fd, &lockPath)
+	fw := newIndexWriter(fd, &lockPath)
 	defer func() {
 		err := recover()
-		require.Equal(t, err, "MetaDataBlocks not implement for primaryKeyWriter")
+		require.Equal(t, err, "MetaDataBlocks not implement for indexWriter")
 	}()
 	fw.MetaDataBlocks(nil)
 }

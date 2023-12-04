@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
@@ -281,6 +282,27 @@ func TestUnCachedPlan(t *testing.T) {
 }
 
 func TestCachePlan(t *testing.T) {
+	for _, planType := range executor.PlanTypes {
+		executor.GetPlanType = executor.NilGetPlanType
+		unCacheSqlPlan, _ := executor.NewSqlPlanTypePool(planType)
+		executor.GetPlanType = executor.NormalGetPlanType
+		CachedSqlPlan, _ := executor.NewSqlPlanTypePool(planType)
+		if len(unCacheSqlPlan) != len(CachedSqlPlan) {
+			t.Error("cache plan error")
+		} else {
+			for i, unCacheNode := range unCacheSqlPlan {
+				if unCacheNode.Type() != CachedSqlPlan[i].Type() {
+					t.Error("cache plan error")
+					return
+				}
+			}
+		}
+	}
+}
+
+func TestCachePlan02(t *testing.T) {
+	sysconfig.SetEnablePrintLogicalPlan(1)
+	defer sysconfig.SetEnablePrintLogicalPlan(0)
 	for _, planType := range executor.PlanTypes {
 		executor.GetPlanType = executor.NilGetPlanType
 		unCacheSqlPlan, _ := executor.NewSqlPlanTypePool(planType)

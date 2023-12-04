@@ -104,6 +104,7 @@ const (
 	ErrQueryNotFound             = 1122
 	ErrQueryKilled               = 1123
 	DirectBucketLacks            = 1124
+	OBSClientRead                = 1125
 )
 
 // store engine error codes
@@ -161,6 +162,7 @@ const (
 	SortTransformRunningErr        = 3005
 	HashMergeTransformRunningErr   = 3006
 	HashAggTransformRunningErr     = 3007
+	InvalidIncQueryScrollID        = 3008
 )
 
 // meta
@@ -265,6 +267,24 @@ const (
 	WritePointHasInvalidField    = 5032
 	WritePointSchemaInvalid      = 5033
 	WritePointPrimaryKeyErr      = 5034
+)
+
+// write interface
+const (
+	InvalidLogDataType                 = 5501
+	InvalidMappingTimeKey              = 5502
+	InvalidMappingContentKeyMissing    = 5503
+	InvalidMappingTimeKeyType          = 5504
+	InvalidMappingTimeKeyVal           = 5505
+	InvalidMappingContentKeyType       = 5506
+	InvalidMappingContentKeySubType    = 5507
+	InvalidMappingContentKeyValMissing = 5508
+	InvalidMappingTagsKeyType          = 5509
+	InvalidMappingTagsKeySubType       = 5510
+	InvalidRequestBodyLength           = 5511
+	InvalidMappingDefaultType          = 5512
+	InvalidRetryPara                   = 5513
+	InvalidXLogCompressType            = 5514
 )
 
 // index

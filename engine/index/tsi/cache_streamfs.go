@@ -19,8 +19,8 @@ limitations under the License.
 
 package tsi
 
-func NewIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize int, path string) *IndexCache {
-	return newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, path, false)
+func NewIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize int, path string) *IndexCache {
+	return newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize, path, false)
 }
 
 func (ic *IndexCache) close() error {

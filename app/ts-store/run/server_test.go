@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -238,6 +239,15 @@ func TestNewServer(t *testing.T) {
 	NewServer(config, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
 }
 
+func TestNewServerErrRole(t *testing.T) {
+	config := config.NewTSStore(true)
+	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
+	config.Common.NodeRole = "xx"
+
+	_, err := NewServer(config, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	assert.NoError(t, err)
+}
+
 type MockMetaClient struct {
 	metaclient.MetaClient
 }
@@ -293,13 +303,14 @@ func (client *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint3
 	panic("implement me")
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *meta2.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) (*meta2.MeasurementInfo, error) {
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {

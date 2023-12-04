@@ -275,8 +275,7 @@ func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query2.
 
 	var qDuration *statistics.SQLSlowQueryStatistics
 	if !isInternalDatabase(cq.database) {
-		qDuration = statistics.NewSqlSlowQueryStatistics()
-		qDuration.SetDatabase(cq.database)
+		qDuration = statistics.NewSqlSlowQueryStatistics(cq.database)
 		startTime := time.Now()
 		defer func() {
 			d := time.Since(startTime)

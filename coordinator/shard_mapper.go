@@ -39,6 +39,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -542,6 +543,11 @@ func (csm *ClusterShardMapping) makeRemoteQuery(ctx context.Context, src influxq
 		return nil, fmt.Errorf("invalid sources, exp: *influxql.Measurement, got: %s", reflect.TypeOf(src[0]))
 	}
 
+	mstInfo, err := csm.MetaClient.Measurement(m.Database, m.RetentionPolicy, influx.GetOriginMstName(m.Name))
+	if err != nil {
+		return nil, fmt.Errorf("makeRemoteQuery error: %s", err.Error())
+	}
+	m.IndexRelation = &mstInfo.IndexRelation
 	opt.Sources = src
 
 	analyze := false

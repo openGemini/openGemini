@@ -144,16 +144,17 @@ func (b *ColumnBuilder) encIntegerColumn(timeCols []record.ColVal, segCols []rec
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, encoding.BlockInteger)
-		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		b.data, err = encoding.EncodeIntegerBlock(segCol.Val, b.data, b.coder)
-		if err != nil {
-			b.log.Error("encode integer value fail", zap.Error(err))
-			return err
+
+		if CanEncodeOneRowMode(segCol) {
+			b.data = append(b.data, encoding.BlockIntegerOne)
+			b.data = append(b.data, segCol.Val...)
+		} else {
+			b.data = EncodeColumnHeader(segCol, b.data, encoding.BlockInteger)
+			b.data, err = encoding.EncodeIntegerBlock(segCol.Val, b.data, b.coder)
+			if err != nil {
+				b.log.Error("encode integer value fail", zap.Error(err))
+				return err
+			}
 		}
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
@@ -187,17 +188,19 @@ func (b *ColumnBuilder) encFloatColumn(timeCols []record.ColVal, segCols []recor
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, encoding.BlockFloat64)
-		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		b.data, err = encoding.EncodeFloatBlock(segCol.Val, b.data, b.coder)
-		if err != nil {
-			b.log.Error("encode float value fail", zap.Error(err))
-			return err
+
+		if CanEncodeOneRowMode(segCol) {
+			b.data = append(b.data, encoding.BlockFloat64One)
+			b.data = append(b.data, segCol.Val...)
+		} else {
+			b.data = EncodeColumnHeader(segCol, b.data, encoding.BlockFloat64)
+			b.data, err = encoding.EncodeFloatBlock(segCol.Val, b.data, b.coder)
+			if err != nil {
+				b.log.Error("encode float value fail", zap.Error(err))
+				return err
+			}
 		}
+
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
 
@@ -231,17 +234,19 @@ func (b *ColumnBuilder) encStringColumn(timeCols []record.ColVal, segCols []reco
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, encoding.BlockString)
-		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
-		b.data, err = encoding.EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
-		if err != nil {
-			b.log.Error("encode string value fail", zap.Error(err))
-			return err
+
+		if CanEncodeOneRowMode(segCol) {
+			b.data = append(b.data, encoding.BlockStringOne)
+			b.data = append(b.data, segCol.Val...)
+		} else {
+			b.data = EncodeColumnHeader(segCol, b.data, encoding.BlockString)
+			b.data, err = encoding.EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)
+			if err != nil {
+				b.log.Error("encode string value fail", zap.Error(err))
+				return err
+			}
 		}
+
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
 
@@ -274,22 +279,21 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, encoding.BlockBoolean)
-		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
 
-		b.data, err = encoding.EncodeBooleanBlock(segCol.Val, b.data, b.coder)
-		if err != nil {
-			b.log.Error("encode boolean value fail", zap.Error(err))
-			return err
+		if CanEncodeOneRowMode(segCol) {
+			b.data = append(b.data, encoding.BlockBooleanOne)
+			b.data = append(b.data, segCol.Val...)
+		} else {
+			b.data = EncodeColumnHeader(segCol, b.data, encoding.BlockBoolean)
+			b.data, err = encoding.EncodeBooleanBlock(segCol.Val, b.data, b.coder)
+			if err != nil {
+				b.log.Error("encode boolean value fail", zap.Error(err))
+				return err
+			}
 		}
 
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
-
 		offset += int64(size)
 	}
 
@@ -298,11 +302,20 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 }
 
 func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeCols []record.ColVal, segRowsLimit int, dataOffset int64) ([]byte, error) {
-	var err error
-	b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
+	b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type) // []slice
+	return b.encode(ref, timeCols, dataOffset)
+}
+
+func (b *ColumnBuilder) EncodeColumnBySize(ref record.Field, col *record.ColVal, timeCols []record.ColVal, rowPerSegment []int, dataOffset int64) ([]byte, error) {
+	b.segCol = col.SplitColBySize(b.segCol[:0], rowPerSegment, ref.Type) // []slice
+	return b.encode(ref, timeCols, dataOffset)
+}
+
+func (b *ColumnBuilder) encode(ref record.Field, timeCols []record.ColVal, dataOffset int64) ([]byte, error) {
 	b.colMeta.name = ref.Name
 	b.colMeta.ty = byte(ref.Type)
 
+	var err error
 	if len(b.segCol) != len(timeCols) {
 		err = fmt.Errorf("%v segment not equal time segment, %v != %v", ref.Name, len(b.segCol), len(timeCols))
 		b.log.Error(err.Error())
@@ -323,7 +336,6 @@ func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeC
 	if err != nil {
 		return nil, err
 	}
-
 	return b.data, nil
 }
 
@@ -359,4 +371,80 @@ func (b *ColumnBuilder) BuildPreAgg() {
 	}
 
 	b.colMeta.preAgg = builder.marshal(b.colMeta.preAgg[:0])
+}
+
+func EncodeColumnHeader(col *record.ColVal, dst []byte, typ uint8) []byte {
+	newTyp := rewriteType(col, typ)
+	if newTyp != typ {
+		// col.NilCount == 0 || col.Len == col.NilCount
+		dst = append(dst, newTyp)
+		dst = numberenc.MarshalUint32Append(dst, uint32(col.Len))
+		return dst
+	}
+
+	dst = append(dst, typ)
+	nilBitMap, bitmapOffset := col.SubBitmapBytes()
+	dst = numberenc.MarshalUint32Append(dst, uint32(len(nilBitMap)))
+	dst = append(dst, nilBitMap...)
+	dst = numberenc.MarshalUint32Append(dst, uint32(bitmapOffset))
+	dst = numberenc.MarshalUint32Append(dst, uint32(col.NullN()))
+	return dst
+}
+
+func DecodeColumnHeader(col *record.ColVal, data []byte, colType uint8) ([]byte, []byte, error) {
+	typ := data[0]
+	if encoding.IsBlockFull(data[0]) {
+		col.Len = int(numberenc.UnmarshalUint32(data[1:]))
+		col.NilCount = 0
+		col.BitMapOffset = 0
+		col.FillBitmap(255)
+		col.RepairBitmap()
+		return data[5:], col.Bitmap, nil
+	}
+
+	if encoding.IsBlockEmpty(data[0]) {
+		col.Len = int(numberenc.UnmarshalUint32(data[1:]))
+		col.NilCount = col.Len
+		col.BitMapOffset = 0
+		col.FillBitmap(0)
+		return data[5:], col.Bitmap, nil
+	}
+
+	if typ != colType {
+		return data, nil, fmt.Errorf("type(%v) in table not eq select type(%v)", typ, colType)
+	}
+
+	pos := 1
+	nilBitmapLen := int(numberenc.UnmarshalUint32(data[pos:]))
+	if len(data[pos:]) < nilBitmapLen+8 {
+		return data, nil, fmt.Errorf("column data len(%d) smaller than nilBitmap len(%d)", len(data[pos:]), nilBitmapLen+8)
+	}
+	pos += 4
+
+	bitmap := data[pos : pos+nilBitmapLen]
+	pos += nilBitmapLen
+
+	col.BitMapOffset = int(numberenc.UnmarshalUint32(data[pos:]))
+	pos += 4
+
+	col.NilCount = int(numberenc.UnmarshalUint32(data[pos:]))
+	pos += 4
+
+	return data[pos:], bitmap, nil
+}
+
+func CanEncodeOneRowMode(col *record.ColVal) bool {
+	return col.Len == 1 && len(col.Val) < 16
+}
+
+func rewriteType(col *record.ColVal, typ uint8) uint8 {
+	if col.NilCount == 0 {
+		return encoding.RewriteTypeToFull(typ)
+	}
+
+	if col.NilCount == col.Len {
+		return encoding.RewriteTypeToEmpty(typ)
+	}
+
+	return typ
 }

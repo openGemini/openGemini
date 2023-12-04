@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -59,7 +61,8 @@ func (h *CreateNode) Process() (transport.Codec, error) {
 
 	httpAddr := h.req.WriteHost
 	tcpAddr := h.req.QueryHost
-	b, err := h.store.createDataNode(httpAddr, tcpAddr)
+	role := h.req.Role
+	b, err := h.store.createDataNode(httpAddr, tcpAddr, role)
 	if err != nil {
 		h.logger.Error("createNode fail", zap.Error(err))
 		rsp.Err = err.Error()
@@ -410,6 +413,44 @@ func (h *VerifyDataNodeStatus) Process() (transport.Codec, error) {
 	if err != nil {
 		rsp.Err = err.Error()
 		return rsp, nil
+	}
+	return rsp, nil
+}
+
+func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
+	rsp := &message.SendSysCtrlToMetaResponse{}
+
+	var inner = func() (bool, string, string, error) {
+		switchStr, ok := h.req.Param["switchon"]
+		if !ok {
+			return false, "", "", fmt.Errorf("missing the required parameter 'switchon' for failpoint")
+		}
+		switchon, err := strconv.ParseBool(switchStr)
+		if err != nil {
+			return false, "", "", err
+		}
+		point, ok := h.req.Param["point"]
+		if !ok {
+			return false, "", "", fmt.Errorf("missing the required parameter 'point' for failpoint")
+		}
+		if !switchon {
+			return false, point, "", nil
+		}
+		term, ok := h.req.Param["term"]
+		if !ok {
+			return false, "", "", fmt.Errorf("missing the required parameter 'term' for failpoint")
+		}
+		return switchon, point, term, nil
+	}
+
+	switchon, point, term, err := inner()
+	if err == nil && !switchon {
+		err = failpoint.Disable(point)
+	} else if err == nil {
+		err = failpoint.Enable(point, term)
+	}
+	if err != nil {
+		rsp.Err = err.Error()
 	}
 	return rsp, nil
 }

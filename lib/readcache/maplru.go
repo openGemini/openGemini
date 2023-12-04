@@ -20,29 +20,79 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
 )
 
 // mapLruCache Cache is the interface for all cache algorithm.
 type mapLruCache interface {
-	add(key string, value []byte, size int64) (evict bool)
+	add(key string, value []byte, size int64)
+	addPageCache(key string, cachePage *CachePage, size int64)
 
 	get(key string) (interface{}, bool)
+	getPageCache(key string) (value interface{}, isGet bool)
 
 	purge()
+	purgeAndUnrefCachePage()
 
 	// contains Checks if a key exists in cache without updating the recent-ness.
 	contains(key string) (ok bool)
 
 	removeFile(key string) bool
+	removePageCache(key string) bool
 
 	pageLen() int
 
 	refreshOldBuffer()
+	refreshOldBufferAndUnrefCachePage()
 
 	getUseSize() int64
+}
+
+const maxCacheLen = 32
+
+var defaultSize uint64 = 32 * 1024 // default 32k
+
+type PagePool struct {
+	pool  sync.Pool
+	cache chan *CachePage
+}
+
+var CachePagePool = NewPagePool()
+
+func NewPagePool() *PagePool {
+	n := cpu.GetCpuNum() * 2
+	if n > maxCacheLen {
+		n = maxCacheLen
+	}
+	return &PagePool{cache: make(chan *CachePage, n)}
+}
+
+func (p *PagePool) Get() *CachePage {
+	select {
+	case pp := <-p.cache:
+		return pp
+	default:
+		v := p.pool.Get()
+		if v != nil {
+			return v.(*CachePage)
+		}
+		return &CachePage{Value: make([]byte, 0, defaultSize)}
+	}
+}
+
+func (p *PagePool) Put(pp *CachePage) {
+	pp.Value = pp.Value[:0]
+	pp.ref = 0
+	pp.Size = 0
+	select {
+	case p.cache <- pp:
+	default:
+		p.pool.Put(pp)
+	}
 }
 
 // lruCache Cache is a thread-safe fixed size LRU cache.
@@ -65,6 +115,28 @@ type buffer struct {
 type CachePage struct {
 	Value []byte
 	Size  int64
+	ref   int32
+}
+
+func (cp *CachePage) Ref() {
+	atomic.AddInt32(&cp.ref, 1)
+}
+
+func (cp *CachePage) Unref() {
+	if atomic.AddInt32(&cp.ref, -1) == 0 {
+		CachePagePool.Put(cp)
+	}
+}
+
+func UnrefCachePage(cp *CachePage) {
+	cp.Unref()
+}
+
+func RefCachePage(cp *CachePage) {
+	cp.Ref()
+}
+
+func NoRefOrUnrefCachePage(cp *CachePage) {
 }
 
 func newLRUCache(size int64) mapLruCache {
@@ -90,17 +162,27 @@ func newLRUCache(size int64) mapLruCache {
 	return c
 }
 
-func (L *lruCache) add(key string, value []byte, size int64) (evict bool) {
+func (L *lruCache) addPageCache(key string, cachePage *CachePage, size int64) {
 	L.lock.Lock()
-	evict = false
+	if L.currBuffer.byteSize+size >= L.bufferSize {
+		L.refreshBufferAndUnrefCachePage()
+	}
+	L.addNormal(key, cachePage.Value, size, cachePage, L.noCopyFn)
+}
+
+func (L *lruCache) add(key string, value []byte, size int64) {
+	L.lock.Lock()
 	if L.currBuffer.byteSize+size >= L.bufferSize {
 		L.refreshBuffer()
-		evict = true
 	}
+	L.addNormal(key, value, size, nil, L.copyFn)
+}
+
+func (L *lruCache) addNormal(key string, value []byte, size int64, cp *CachePage, addFn func(string, string, int64, []byte, *CachePage)) {
 	filePath, err := parseFilePathFromKey(key)
 	if err != nil {
-		logger.GetLogger().Warn("add cache failed, file path is illegal", zap.Error(err))
 		L.lock.Unlock()
+		logger.GetLogger().Warn("add cache Page failed, file path is illegal", zap.String("key", key), zap.Error(err))
 		return
 	}
 	if element, has := L.currBuffer.kvMap[key]; has {
@@ -111,18 +193,29 @@ func (L *lruCache) add(key string, value []byte, size int64) (evict bool) {
 			element.Size = size
 		}
 	} else {
-		L.currBuffer.pathMap[filePath] = append(L.currBuffer.pathMap[filePath], key)
-		pageValue := make([]byte, size)
-		copy(pageValue, value)
-		L.currBuffer.kvMap[key] = &CachePage{
-			Value: pageValue,
-			Size:  size,
-		}
-		L.currBuffer.byteSize += size
-		L.currBuffer.pageSize += 1
+		addFn(filePath, key, size, value, cp)
 	}
 	L.lock.Unlock()
-	return
+}
+
+func (L *lruCache) copyFn(filePath string, key string, size int64, value []byte, cachePage *CachePage) {
+	L.currBuffer.pathMap[filePath] = append(L.currBuffer.pathMap[filePath], key)
+	pageValue := make([]byte, size)
+	copy(pageValue, value)
+	L.currBuffer.kvMap[key] = &CachePage{
+		Value: pageValue,
+		Size:  size,
+	}
+	L.currBuffer.byteSize += size
+	L.currBuffer.pageSize += 1
+}
+
+func (L *lruCache) noCopyFn(filePath string, key string, size int64, value []byte, cachePage *CachePage) {
+	L.currBuffer.pathMap[filePath] = append(L.currBuffer.pathMap[filePath], key)
+	cachePage.Ref()
+	L.currBuffer.kvMap[key] = cachePage
+	L.currBuffer.byteSize += size
+	L.currBuffer.pageSize += 1
 }
 
 func (B *buffer) clearBuffer() {
@@ -132,28 +225,56 @@ func (B *buffer) clearBuffer() {
 	B.pageSize = 0
 }
 
+func (B *buffer) clearBufferAndUnrefCachePage() {
+	for _, page := range B.kvMap {
+		page.Unref()
+	}
+	B.clearBuffer()
+}
+
+func (L *lruCache) getPageCache(key string) (value interface{}, isGet bool) {
+	L.lock.RLock()
+	if value, has := L.currBuffer.kvMap[key]; has {
+		if atomic.LoadInt32(&value.ref) <= 0 {
+			L.lock.RUnlock()
+			return nil, false
+		}
+		value.Ref()
+		L.lock.RUnlock()
+		return value, true
+	}
+	return L.getOld(key, RefCachePage)
+}
+
 func (L *lruCache) get(key string) (value interface{}, isGet bool) {
 	L.lock.RLock()
 	if value, has := L.currBuffer.kvMap[key]; has {
 		L.lock.RUnlock()
 		return value, true
 	}
+	return L.getOld(key, NoRefOrUnrefCachePage)
+}
+
+func (L *lruCache) getOld(key string, refFn func(cp *CachePage)) (value interface{}, isGet bool) {
 	L.lock.RUnlock()
 	L.lock.Lock()
 	defer L.lock.Unlock()
 	if value, has := L.oldBuffer.kvMap[key]; has {
 		if _, has = L.currBuffer.kvMap[key]; has {
+			refFn(value)
 			return value, true
 		}
 		filePath, err := parseFilePathFromKey(key)
 		if err != nil {
-			logger.GetLogger().Warn("get cache failed, file path is illegal", zap.Error(err))
+			logger.GetLogger().Warn("get cache failed, file path is illegal", zap.String("key", key), zap.Error(err))
 			return nil, false
 		}
 		L.currBuffer.pathMap[filePath] = append(L.currBuffer.pathMap[filePath], key)
 		L.currBuffer.kvMap[key] = value
+		refFn(value)
 		L.currBuffer.byteSize += value.Size
 		L.currBuffer.pageSize += 1
+		refFn(value)
 		return value, true
 	}
 	return nil, false
@@ -163,6 +284,13 @@ func (L *lruCache) purge() {
 	L.lock.Lock()
 	L.oldBuffer.clearBuffer()
 	L.currBuffer.clearBuffer()
+	L.lock.Unlock()
+}
+
+func (L *lruCache) purgeAndUnrefCachePage() {
+	L.lock.Lock()
+	L.oldBuffer.clearBufferAndUnrefCachePage()
+	L.currBuffer.clearBufferAndUnrefCachePage()
 	L.lock.Unlock()
 }
 
@@ -181,23 +309,31 @@ func (L *lruCache) contains(key string) (has bool) {
 func (L *lruCache) removeFile(filePath string) bool {
 	L.lock.Lock()
 	defer L.lock.Unlock()
-	currHas := L.currBuffer.removeFilePath(filePath)
-	oldHas := L.oldBuffer.removeFilePath(filePath)
+	currHas := L.currBuffer.removeFilePath(filePath, NoRefOrUnrefCachePage)
+	oldHas := L.oldBuffer.removeFilePath(filePath, NoRefOrUnrefCachePage)
 	return currHas || oldHas
 }
 
-func (B *buffer) removeFilePath(filePath string) bool {
+func (L *lruCache) removePageCache(filePath string) bool {
+	L.lock.Lock()
+	defer L.lock.Unlock()
+	currHas := L.currBuffer.removeFilePath(filePath, UnrefCachePage)
+	oldHas := L.oldBuffer.removeFilePath(filePath, UnrefCachePage)
+	return currHas || oldHas
+}
+
+func (B *buffer) removeFilePath(filePath string, unRefFn func(cp *CachePage)) bool {
 	if keys, isGet := B.pathMap[filePath]; isGet {
 		var cutSize int64 = 0
 		for _, key := range keys {
 			page, has := B.kvMap[key]
 			if !has {
-				logger.GetLogger().Error("kvMap should has key ,and there is only one in pathMap")
-				return false
+				continue
 			}
 			cutSize += page.Size
 			B.pageSize -= 1
 			delete(B.kvMap, key)
+			unRefFn(page)
 		}
 		B.byteSize -= cutSize
 		delete(B.pathMap, filePath)
@@ -220,11 +356,34 @@ func (L *lruCache) refreshOldBuffer() {
 	L.lock.Unlock()
 }
 
+func (L *lruCache) refreshOldBufferAndUnrefCachePage() {
+	L.lock.Lock()
+	L.refreshBufferAndUnrefCachePage()
+	L.lock.Unlock()
+}
+
 func (L *lruCache) refreshBuffer() {
 	L.oldBuffer.clearBuffer()
+	L.refresh()
+}
+
+func (L *lruCache) refreshBufferAndUnrefCachePage() {
+	L.oldBuffer.clearBufferAndUnrefCachePage()
+	L.refresh()
+}
+
+func (L *lruCache) refresh() {
 	L.bufPool.Put(L.oldBuffer)
 	L.oldBuffer = L.currBuffer
-	L.currBuffer = L.bufPool.Get().(*buffer)
+	var ok bool
+	if L.currBuffer, ok = L.bufPool.Get().(*buffer); !ok {
+		L.currBuffer = &buffer{
+			kvMap:    make(map[string]*CachePage),
+			pathMap:  make(map[string][]string),
+			byteSize: 0,
+			pageSize: 0,
+		}
+	}
 }
 
 func parseFilePathFromKey(key string) (string, error) {
