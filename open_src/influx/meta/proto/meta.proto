@@ -92,6 +92,7 @@ message NodeInfo {
 	required uint64 LTime = 6;
 	required string GossipAddr = 7;
 	optional uint64 SegregateStatus = 8;
+	optional string Role = 10;
 }
 
 message DataNode {
@@ -109,6 +110,7 @@ message DatabaseInfo {
 	optional ShardKeyInfo ShardKey = 6;
 	optional bool EnableTagArray = 7;
 	optional int64 ReplicaN = 8;
+	optional ObsOptions Options = 21;
 }
 
 message RetentionPolicySpec {
@@ -126,6 +128,7 @@ message MeasurementInfo {
     optional IndexRelation indexRelation = 5;
     optional uint32 EngineType = 6;
     optional ColStoreInfo ColStoreInfo = 7;
+	optional Options Options = 21;
 }
 
 message RetentionPolicyInfo {
@@ -159,6 +162,7 @@ message ShardGroupInfo {
 	repeated ShardInfo Shards = 5;
 	optional int64 TruncatedAt = 6;
 	optional uint32 EngineType = 7;
+	optional uint32 version = 12;
 }
 
 message ShardInfo {
@@ -261,6 +265,7 @@ message ColStoreInfo {
     repeated string PropertyKey   = 3;
     repeated string PropertyValue = 4;
     optional int64  TimeClusterDuration = 5;
+	optional int32  CompactionType = 6;
 }
 
 message IndexOption {
@@ -352,6 +357,7 @@ message Command {
 		SetNodeSegregateStatusCommand              = 92;
 		RemoveNodeCommand                          = 93;
 		UpdateReplicationCommand                   = 94;
+		UpdateMeasurementCommand                   = 101;
 	}
 
 	required Type type = 1;
@@ -366,6 +372,7 @@ message CreateDatabaseCommand {
 	optional uint32 ReplicaNum = 3;
 	optional ShardKeyInfo Ski = 4;
 	optional bool EnableTagArray = 5;
+	optional ObsOptions Options = 21;
 }
 
 message DropDatabaseCommand {
@@ -425,6 +432,7 @@ message CreateShardGroupCommand {
 	required int64 Timestamp = 3;
 	required uint64 ShardTier = 4;
 	optional uint32 EngineType = 5;
+	optional uint32 Version = 11;
 }
 
 message DeleteShardGroupCommand {
@@ -434,6 +442,8 @@ message DeleteShardGroupCommand {
 	required string Database = 1;
 	required string Policy = 2;
 	required uint64 ShardGroupID = 3;
+	optional int64 DeletedAt = 6;
+	optional int32 DeleteType = 7;
 }
 
 message CreateUserCommand {
@@ -522,6 +532,7 @@ message CreateDataNodeCommand {
 	}
 	required string HTTPAddr = 1;
 	required string TCPAddr = 2;
+	optional string Role = 10;
 }
 
 message DataNodeEvent {
@@ -605,6 +616,7 @@ message CreateMeasurementCommand {
 	optional uint32 EngineType = 6;
 	optional ColStoreInfo ColStoreInfo = 7;
     repeated FieldSchema SchemaInfo = 8;
+	optional Options Options = 9;
 }
 
 message AlterShardKeyCmd {
@@ -1122,4 +1134,33 @@ message UpdateReplicationCommand{
 	optional uint32 masterId = 3;
 	repeated Peer Peers = 4;
 	optional uint32 rgStatus = 5;
+}
+
+message ObsOptions {
+	optional bool Enabled = 1;
+	optional string BucketName = 2;
+	optional string Ak = 3;
+	optional string Sk = 4;
+	optional string Endpoint = 5;
+	optional string BasePath = 6;
+}
+
+message Options {
+	optional bool CaseInSensitive = 1;
+	optional bool AppendMeta = 2;
+	optional int32 WriteThreshold = 3;
+	optional int32 ReadThreshold = 4;
+	optional int32 StorageCapacity = 5;
+	optional string SplitChar = 6;
+	optional int64 Ttl = 7;
+}
+
+message UpdateMeasurementCommand {
+ 	extend Command {
+ 		optional UpdateMeasurementCommand command = 194;
+ 	}
+ 	required string Db = 1;
+ 	required string Rp = 2;
+ 	required string Mst = 3;
+ 	required Options Options = 4;
 }

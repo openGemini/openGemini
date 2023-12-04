@@ -22,6 +22,7 @@ limitations under the License.
 package executor
 
 import (
+	"container/heap"
 	"errors"
 	"fmt"
 	"math"
@@ -42,6 +43,7 @@ const (
 	minFunc
 	maxFunc
 	percentileFunc
+	heapFunc
 )
 
 const DefaultTime = 0
@@ -52,16 +54,16 @@ type aggFunc struct {
 	newAggOperatorFn NewAggOperator
 	inIdx            int
 	outIdx           int
-	percentile       float64
+	input            any
 }
 
-func NewAggFunc(aggType AggFuncType, fn NewAggOperator, inIdx int, outIdx int, p float64) *aggFunc {
+func NewAggFunc(aggType AggFuncType, fn NewAggOperator, inIdx int, outIdx int, p any) *aggFunc {
 	return &aggFunc{
 		funcType:         aggType,
 		newAggOperatorFn: fn,
 		inIdx:            inIdx,
 		outIdx:           outIdx,
-		percentile:       p,
+		input:            p,
 	}
 }
 
@@ -70,7 +72,7 @@ func (af *aggFunc) NewAggOperator() aggOperator {
 }
 
 type aggOperator interface {
-	Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error
+	Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, para any) error
 	SetOutVal(c Chunk, colLoc int, para any)
 	SetNullFill(oc Chunk, colLoc int, time int64)
 	SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64)
@@ -169,6 +171,8 @@ func NewMinFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp
 		return NewAggFunc(minFunc, NewMinIntegerOperator, inOrdinal, outOrdinal, 0), nil
 	case influxql.Float:
 		return NewAggFunc(minFunc, NewMinFloatOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Boolean:
+		return NewAggFunc(minFunc, NewMinBooleanOperator, inOrdinal, outOrdinal, 0), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "min", dataType.String())
 	}
@@ -186,6 +190,8 @@ func NewMaxFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp
 		return NewAggFunc(maxFunc, NewMaxIntegerOperator, inOrdinal, outOrdinal, 0), nil
 	case influxql.Float:
 		return NewAggFunc(maxFunc, NewMaxFloatOperator, inOrdinal, outOrdinal, 0), nil
+	case influxql.Boolean:
+		return NewAggFunc(maxFunc, NewMaxBooleanOperator, inOrdinal, outOrdinal, 0), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "max", dataType.String())
 	}
@@ -220,6 +226,83 @@ func NewPercentileFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt h
 	}
 }
 
+type heapParam struct {
+	topN           int64
+	sortFuncs      []func() sortEleMsg
+	sortKeyIdx     []int
+	sortAsc        []bool
+	inOutColIdxMap map[int]int
+}
+
+func NewHeapParam(topN int64, sortFuncs []func() sortEleMsg, sorKeyIdx []int, sortAsc []bool, m map[int]int) *heapParam {
+	return &heapParam{topN: topN, sortFuncs: sortFuncs, sortKeyIdx: sorKeyIdx, sortAsc: sortAsc, inOutColIdxMap: m}
+}
+
+func NewHeapFunc(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, sortIdx int, sortAsc bool) (*aggFunc, error) {
+	opt := exprOpt[sortIdx]
+	expr, ok := opt.Expr.(*influxql.Call)
+	if !ok {
+		return nil, fmt.Errorf("top/bottom input illegal, opt.Expr is not influxql.Call")
+	}
+	if len(expr.Args) < 2 {
+		return nil, fmt.Errorf("top/bottom requires 2 or more arguments, got %d", len(expr.Args))
+	}
+
+	n, ok := expr.Args[len(expr.Args)-1].(*influxql.IntegerLiteral)
+	if !ok {
+		return nil, fmt.Errorf("top/bottom input illegal, opt.Args element is not influxql.IntegerLiteral")
+	}
+
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for top/bottom iterator")
+	}
+
+	var m = map[int]int{inOrdinal: outOrdinal}
+	for i, op := range exprOpt {
+		if i == sortIdx {
+			continue
+		}
+		inIdx := inRowDataType.FieldIndex(op.Expr.(*influxql.VarRef).Val)
+		outIdx := outRowDataType.FieldIndex(op.Ref.Val)
+		if inIdx < 0 || outIdx < 0 {
+			return nil, fmt.Errorf("input and output schemas are not aligned for top/bottom iterator")
+		}
+		m[inIdx] = outIdx
+	}
+
+	var sortFuncs []func() sortEleMsg
+	// init a column-pass row func for each column of data.
+	for _, f := range inRowDataType.Fields() {
+		dt := f.Expr.(*influxql.VarRef).Type
+		switch dt {
+		case influxql.Float:
+			sortFuncs = append(sortFuncs, NewFloatSortEle)
+		case influxql.Integer:
+			sortFuncs = append(sortFuncs, NewIntegerSortEle)
+		case influxql.Boolean:
+			sortFuncs = append(sortFuncs, NewBoolSortEle)
+		case influxql.String, influxql.Tag:
+			sortFuncs = append(sortFuncs, NewStringSortEle)
+		default:
+			return nil, errno.NewError(errno.SortTransformRunningErr)
+		}
+	}
+	// init a column-pass row func for time.
+	sortFuncs = append(sortFuncs, NewIntegerSortEle)
+	input := NewHeapParam(n.Val, sortFuncs, []int{inOrdinal}, []bool{sortAsc}, m)
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Integer:
+		return NewAggFunc(heapFunc, NewHeapIntegerOperator, inOrdinal, outOrdinal, input), nil
+	case influxql.Float:
+		return NewAggFunc(heapFunc, NewHeapFloatOperator, inOrdinal, outOrdinal, input), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "top/bottom", dataType.String())
+	}
+}
+
 type countOperator struct {
 	val int64 // count
 }
@@ -231,7 +314,7 @@ func NewCountOperator() aggOperator {
 	return result
 }
 
-func (s *countOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *countOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -268,7 +351,7 @@ func NewSumFloatOperator() aggOperator {
 	}
 }
 
-func (s *sumFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *sumFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -307,7 +390,7 @@ func NewSumIntegerOperator() aggOperator {
 	}
 }
 
-func (s *sumIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *sumIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -348,7 +431,7 @@ func NewMinFloatOperator() aggOperator {
 	}
 }
 
-func (s *minFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *minFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -397,7 +480,7 @@ func NewMinIntegerOperator() aggOperator {
 	}
 }
 
-func (s *minIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *minIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -434,6 +517,55 @@ func (s *minIntegerOperator) GetTime() int64 {
 	return DefaultTime
 }
 
+type minBooleanOperator struct {
+	val     bool
+	nilFlag bool
+}
+
+func NewMinBooleanOperator() aggOperator {
+	return &minBooleanOperator{
+		val:     true,
+		nilFlag: true,
+	}
+}
+
+func (s *minBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		val := c.Column(colLoc).BooleanValue(startRowLoc)
+		if (s.val && !val) || (s.val && val && s.nilFlag) {
+			s.val = val
+			s.nilFlag = false
+		}
+	}
+	return nil
+}
+
+func (s *minBooleanOperator) SetOutVal(c Chunk, colLoc int, _ any) {
+	if s.nilFlag {
+		c.Column(colLoc).AppendNil()
+		return
+	}
+	c.Column(colLoc).AppendBooleanValue(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *minBooleanOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *minBooleanOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransToBoolean(fillVal)
+	oc.Column(colLoc).AppendBooleanValue(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *minBooleanOperator) GetTime() int64 {
+	return DefaultTime
+}
+
 type maxFloatOperator struct {
 	val     float64
 	nilFlag bool
@@ -446,7 +578,7 @@ func NewMaxFloatOperator() aggOperator {
 	}
 }
 
-func (s *maxFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *maxFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -495,7 +627,7 @@ func NewMaxIntegerOperator() aggOperator {
 	}
 }
 
-func (s *maxIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *maxIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -532,6 +664,55 @@ func (s *maxIntegerOperator) GetTime() int64 {
 	return DefaultTime
 }
 
+type maxBooleanOperator struct {
+	val     bool
+	nilFlag bool
+}
+
+func NewMaxBooleanOperator() aggOperator {
+	return &maxBooleanOperator{
+		val:     false,
+		nilFlag: true,
+	}
+}
+
+func (s *maxBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	for ; startRowLoc < endRowLoc; startRowLoc++ {
+		val := c.Column(colLoc).BooleanValue(startRowLoc)
+		if (!s.val && val) || (!s.val && !val && true) {
+			s.val = val
+			s.nilFlag = false
+		}
+	}
+	return nil
+}
+
+func (s *maxBooleanOperator) SetOutVal(c Chunk, colLoc int, _ any) {
+	if s.nilFlag {
+		c.Column(colLoc).AppendNil()
+		return
+	}
+	c.Column(colLoc).AppendBooleanValue(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+func (s *maxBooleanOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *maxBooleanOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransToBoolean(fillVal)
+	oc.Column(colLoc).AppendBooleanValue(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *maxBooleanOperator) GetTime() int64 {
+	return DefaultTime
+}
+
 type firstFloatOperator struct {
 	val     float64 // first
 	time    int64
@@ -548,7 +729,7 @@ func NewFirstFloatOperator() aggOperator {
 	}
 }
 
-func (s *firstFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *firstFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
@@ -612,7 +793,7 @@ func NewFirstIntegerOperator() aggOperator {
 	}
 }
 
-func (s *firstIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *firstIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
@@ -675,7 +856,7 @@ func NewFirstStringOperator() aggOperator {
 	}
 }
 
-func (s *firstStringOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *firstStringOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
@@ -746,7 +927,7 @@ func NewFirstBooleanOperator() aggOperator {
 	}
 }
 
-func (s *firstBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *firstBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newFirst := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) < s.time {
@@ -810,7 +991,7 @@ func NewLastFloatOperator() aggOperator {
 	}
 }
 
-func (s *lastFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *lastFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
@@ -874,7 +1055,7 @@ func NewLastIntegerOperator() aggOperator {
 	}
 }
 
-func (s *lastIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *lastIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
@@ -937,7 +1118,7 @@ func NewLastStringOperator() aggOperator {
 	}
 }
 
-func (s *lastStringOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *lastStringOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
@@ -1008,7 +1189,7 @@ func NewLastBooleanOperator() aggOperator {
 	}
 }
 
-func (s *lastBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *lastBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	newLast := false
 	for ; startRowLoc < endRowLoc; startRowLoc++ {
 		if c.TimeByIndex(startRowLoc) > s.time {
@@ -1078,7 +1259,7 @@ func (s *percentileFloatOperator) Swap(i, j int) {
 	s.val[i], s.val[j] = s.val[j], s.val[i]
 }
 
-func (s *percentileFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *percentileFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -1137,7 +1318,7 @@ func (s *percentileIntegerOperator) Swap(i, j int) {
 	s.val[i], s.val[j] = s.val[j], s.val[i]
 }
 
-func (s *percentileIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int) error {
+func (s *percentileIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
@@ -1171,5 +1352,129 @@ func (s *percentileIntegerOperator) SetNumFill(oc Chunk, colLoc int, fillVal int
 }
 
 func (s *percentileIntegerOperator) GetTime() int64 {
+	return DefaultTime
+}
+
+type heapFloatOperator struct {
+	init    bool
+	sorPart *sortPartition
+}
+
+func NewHeapFloatOperator() aggOperator {
+	return &heapFloatOperator{}
+}
+
+func (s *heapFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, input any) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	param := input.(*heapParam)
+	if !s.init {
+		s.sorPart = NewSortPartition(0, param.sortKeyIdx, param.sortAsc)
+		s.sorPart.rows = make([]*sortRowMsg, 0, param.topN)
+		s.init = true
+	}
+	for i := startRowLoc; i < endRowLoc; i++ {
+		sortElems := make([]sortEleMsg, len(param.sortFuncs))
+		for j, f := range param.sortFuncs {
+			sortElems[j] = f()
+		}
+		row := NewSortRowMsg(sortElems)
+		row.SetVals(c, i, nil)
+		if len(s.sorPart.rows) == cap(s.sorPart.rows) {
+			if !s.sorPart.rows[0].LessThan(row, s.sorPart.sortKeysIdxs, s.sorPart.ascending) {
+				continue
+			}
+			s.sorPart.rows[0] = row
+			heap.Fix(s.sorPart, 0)
+		} else {
+			heap.Push(s.sorPart, row)
+		}
+	}
+	return nil
+}
+
+func (s *heapFloatOperator) SetOutVal(c Chunk, colLoc int, input any) {
+	sort.Sort(s.sorPart)
+	n := len(s.sorPart.rows) - 1
+	for i := n; i >= 0; i-- {
+		s.sorPart.rows[i].AppendToChunkByColIdx(c, input.(*heapParam).inOutColIdxMap)
+	}
+	s.sorPart.rows = s.sorPart.rows[:0]
+}
+
+func (s *heapFloatOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *heapFloatOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransToInteger(fillVal)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *heapFloatOperator) GetTime() int64 {
+	return DefaultTime
+}
+
+type heapIntegerOperator struct {
+	init    bool
+	sorPart *sortPartition
+}
+
+func NewHeapIntegerOperator() aggOperator {
+	return &heapIntegerOperator{}
+}
+
+func (s *heapIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, input any) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	param := input.(*heapParam)
+	if !s.init {
+		s.sorPart = NewSortPartition(0, param.sortKeyIdx, param.sortAsc)
+		s.sorPart.rows = make([]*sortRowMsg, 0, param.topN)
+		s.init = true
+	}
+	for i := startRowLoc; i < endRowLoc; i++ {
+		sortElems := make([]sortEleMsg, len(param.sortFuncs))
+		for j, f := range param.sortFuncs {
+			sortElems[j] = f()
+		}
+		row := NewSortRowMsg(sortElems)
+		row.SetVals(c, i, nil)
+		if len(s.sorPart.rows) == cap(s.sorPart.rows) {
+			if !s.sorPart.rows[0].LessThan(row, s.sorPart.sortKeysIdxs, s.sorPart.ascending) {
+				continue
+			}
+			s.sorPart.rows[0] = row
+			heap.Fix(s.sorPart, 0)
+		} else {
+			heap.Push(s.sorPart, row)
+		}
+	}
+	return nil
+}
+
+func (s *heapIntegerOperator) SetOutVal(c Chunk, colLoc int, input any) {
+	sort.Sort(s.sorPart)
+	n := len(s.sorPart.rows) - 1
+	for i := n; i >= 0; i-- {
+		s.sorPart.rows[i].AppendToChunkByColIdx(c, input.(*heapParam).inOutColIdxMap)
+	}
+	s.sorPart.rows = s.sorPart.rows[:0]
+}
+
+func (s *heapIntegerOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *heapIntegerOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransToInteger(fillVal)
+	oc.Column(colLoc).AppendIntegerValue(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *heapIntegerOperator) GetTime() int64 {
 	return DefaultTime
 }

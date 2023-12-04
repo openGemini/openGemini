@@ -17,7 +17,6 @@ limitations under the License.
 package immutable
 
 import (
-	"fmt"
 	"hash/crc32"
 
 	"github.com/openGemini/openGemini/lib/encoding"
@@ -81,16 +80,17 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 		m := &tm.entries[i+b.position]
 
 		pos := len(b.chunk)
-		b.chunk = append(b.chunk, encoding.BlockInteger)
-		nilBitMap, bitmapOffset := col.SubBitmapBytes()
-		b.chunk = numberenc.MarshalUint32Append(b.chunk, uint32(len(nilBitMap)))
-		b.chunk = append(b.chunk, nilBitMap...)
-		b.chunk = numberenc.MarshalUint32Append(b.chunk, uint32(bitmapOffset))
-		b.chunk = numberenc.MarshalUint32Append(b.chunk, uint32(col.NilCount))
-		b.chunk, err = encoding.EncodeTimestampBlock(col.Val, b.chunk, b.colBuilder.coder)
-		if err != nil {
-			b.log.Error("encode integer value fail", zap.Error(err))
-			return err
+
+		if CanEncodeOneRowMode(&col) {
+			b.chunk = append(b.chunk, encoding.BlockIntegerOne)
+			b.chunk = append(b.chunk, col.Val...)
+		} else {
+			b.chunk = EncodeColumnHeader(&col, b.chunk, encoding.BlockInteger)
+			b.chunk, err = encoding.EncodeTimestampBlock(col.Val, b.chunk, b.colBuilder.coder)
+			if err != nil {
+				b.log.Error("encode integer value fail", zap.Error(err))
+				return err
+			}
 		}
 
 		m.setOffset(offset)
@@ -106,55 +106,7 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 	return nil
 }
 
-func (b *ChunkDataBuilder) EncodeChunk(id uint64, offset int64, rec *record.Record, dst []byte) ([]byte, error) {
-	var err error
-	b.reset(dst)
-	b.chunkMeta.sid = id
-	b.chunkMeta.offset = offset
-	b.chunkMeta.columnCount = uint32(rec.ColNums())
-	if rec.RowNums() > b.maxRowsLimit*b.segmentLimit {
-		return nil, fmt.Errorf("max rows %v for record greater than %v", rec.RowNums(), b.maxRowsLimit*b.segmentLimit)
-	}
-	timeCol := rec.TimeColumn()
-	b.timeCols = timeCol.Split(b.timeCols[:0], b.maxRowsLimit, influx.Field_Type_Int)
-	b.chunkMeta.segCount = uint32(len(b.timeCols))
-	b.chunkMeta.resize(int(b.chunkMeta.columnCount), len(b.timeCols))
-
-	for i := range rec.Schema[:len(rec.Schema)-1] {
-		ref := rec.Schema[i]
-		col := rec.Column(i)
-		cm := &b.chunkMeta.colMeta[i]
-		pos := len(b.chunk)
-		b.chunk = numberenc.MarshalUint32Append(b.chunk, 0) // reserve crc32
-		b.colBuilder.set(b.chunk, cm)
-		offset += crcSize
-		b.chunkMeta.size += crcSize
-		if b.chunk, err = b.colBuilder.EncodeColumn(ref, col, b.timeCols, b.maxRowsLimit, offset); err != nil {
-			b.log.Error("encode column fail", zap.Error(err))
-			return nil, err
-		}
-		crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
-		numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
-
-		size := uint32(len(b.chunk) - pos - crcSize)
-		b.chunkMeta.size += size
-		offset += int64(size)
-	}
-
-	pos := len(b.chunk)
-	b.chunk = numberenc.MarshalUint32Append(b.chunk, 0)
-	offset += crcSize
-	b.chunkMeta.size += crcSize
-	if err = b.EncodeTime(offset); err != nil {
-		return nil, err
-	}
-	crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
-	numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
-
-	return b.chunk, nil
-}
-
-func (b *ChunkDataBuilder) EncodeChunkForColumnStore(offset int64, rec *record.Record, dst []byte) ([]byte, error) {
+func (b *ChunkDataBuilder) EncodeChunkForCompaction(offset int64, rec *record.Record, dst []byte) ([]byte, error) {
 	var err error
 	b.chunk = dst
 	timeCol := rec.TimeColumn()

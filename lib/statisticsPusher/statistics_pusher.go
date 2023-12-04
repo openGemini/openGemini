@@ -125,6 +125,11 @@ func (sp *StatisticsPusher) push() {
 	buf := bufferPool.Get()
 	var err error
 	for _, collect := range sp.collects {
+		select {
+		case <-sp.stopping:
+			return
+		default:
+		}
 		// collect statistics data
 		buf, err = collect(buf[0:])
 		if err != nil {

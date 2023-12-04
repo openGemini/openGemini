@@ -292,6 +292,54 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 	return eng, nil
 }
 
+func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine, error) {
+	dataPath := filepath.Join(dir, dPath)
+	eng := &Engine{
+		closed:       interruptsignal.NewInterruptSignal(),
+		dataPath:     dataPath + "/data",
+		walPath:      dataPath + "/wal",
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:   make(map[string]string),
+		droppingRP:   make(map[string]string),
+		droppingMst:  make(map[string]string),
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+	loadCtx := getLoadCtx()
+	lockPath := ""
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx)
+	dbPTInfo.lockPath = &lockPath
+	dbPTInfo.logger = eng.log
+	eng.addDBPTInfo(dbPTInfo)
+	reportLoadFrequency = time.Millisecond // 1ms
+	dbPTInfo.enableReportShardLoad()
+
+	indexPath := path.Join(dbPTInfo.path, "rp0", config.IndexFileDirectory,
+		"659_946252800000000000_946857600000000000", "mergeset")
+	_ = fileops.MkdirAll(indexPath, 0755)
+
+	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
+
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE)
+
+	indexBuilder := dbPTInfo.indexBuilder[659]
+	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
+	shardDuration := &meta.DurationDescriptor{Tier: util.Hot, TierDuration: time.Hour}
+	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
+		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
+	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
+	shard.indexBuilder = indexBuilder
+	//shard.wal.logger = eng.log
+	//shard.wal.traceLogger = eng.log
+	err := shard.OpenAndEnable(nil)
+	if err != nil {
+		_ = shard.Close()
+		return nil, err
+	}
+	dbPTInfo.shards[shard.ident.ShardID] = shard
+	return eng, nil
+}
+
 func Test_Engine_DropDatabase(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -1078,6 +1126,23 @@ func TestEngine_RowCount(t *testing.T) {
 	schema.AddTable(m, schema.MakeRefs())
 	count, err := eng.RowCount("db0", 0, []uint64{1}, schema)
 	assert2.Equal(t, count, int64(0))
+}
+
+func TestEngine_RowCount_ShardLockPath(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngineWithNoLockPath(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type mockShard struct {

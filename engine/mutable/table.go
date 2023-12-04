@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -262,29 +263,12 @@ func LoadMstRowCount(countFile string) (int, error) {
 	return rowCount, nil
 }
 
-func WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool, lastFlushTime int64, schema record.Schemas) *immutable.MsBuilder {
-	var err error
-
-	if !order && lastFlushTime == math.MaxInt64 {
-		msb.StoreTimes()
-	}
-
-	msb, err = msb.WriteRecord(id, rec, schema, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
-		return tbStore.NextSequence(), 0, 0, 0
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	return msb
-}
-
-func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string, dataPath string, msName string, totalChunks int, size int, conf *immutable.Config) *immutable.MsBuilder {
+func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string, dataPath string, msName string, totalChunks int, size int, conf *immutable.Config, engineType config.EngineType) *immutable.MsBuilder {
 	seq := tbStore.Sequencer()
 	defer seq.UnRef()
 
 	FileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, order, lockPath)
-	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size)
+	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size, engineType)
 	return msb
 }
 
@@ -363,6 +347,7 @@ func (t *MemTable) initMTable(engineType config.EngineType) {
 		t.MTable = &csMemTableImpl{
 			primaryKey:          make(map[string]record.Schemas),
 			timeClusterDuration: make(map[string]time.Duration),
+			indexRelation:       make(map[string]*index.Relation),
 		}
 	default:
 		panic("UnKnown engine type")

@@ -234,6 +234,10 @@ func (c *StreamIterators) Close() {
 	for _, itr := range c.itrs {
 		itr.Close()
 	}
+	c.col.Init()
+	c.tmpCol.Init()
+	c.timeCol.Init()
+	c.tmpTimeCol.Init()
 	c.itrs = c.itrs[:0]
 	c.chunkItrs = c.chunkItrs[:0]
 	c.chunkSegments = 0
@@ -1085,12 +1089,7 @@ func (b *ColumnBuilder) encodeTimeColumn(cols []record.ColVal, offset int64) err
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, encoding.BlockInteger)
-		nilBitMap, bitmapOffset := col.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(col.NilCount))
+		b.data = EncodeColumnHeader(&col, b.data, encoding.BlockInteger)
 		b.data, err = encoding.EncodeTimestampBlock(col.Val, b.data, b.coder)
 		if err != nil {
 			b.log.Error("encode integer value fail", zap.Error(err))
@@ -1116,12 +1115,8 @@ func (b *ColumnBuilder) encodeColumn(segCols []record.ColVal, tmCols []record.Co
 		m.setOffset(offset)
 
 		pos := len(b.data)
-		b.data = append(b.data, byte(ref.Type))
-		nilBitMap, bitmapOffset := segCol.SubBitmapBytes()
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(len(nilBitMap)))
-		b.data = append(b.data, nilBitMap...)
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(bitmapOffset))
-		b.data = numberenc.MarshalUint32Append(b.data, uint32(segCol.NullN()))
+		b.data = EncodeColumnHeader(segCol, b.data, uint8(ref.Type))
+
 		switch ref.Type {
 		case influx.Field_Type_String:
 			b.data, err = encoding.EncodeStringBlock(segCol.Val, segCol.Offset, b.data, b.coder)

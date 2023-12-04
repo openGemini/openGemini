@@ -403,3 +403,22 @@ func (c *VerifyDataNodeStatusCallback) Handle(data interface{}) error {
 	}
 	return nil
 }
+
+type SendSysCtrlToMetaCallback struct {
+	BaseCallback
+}
+
+func (c *SendSysCtrlToMetaCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.SendSysCtrlToMetaResponse)
+	if !ok {
+		return fmt.Errorf("data is not a SendSysCtrlToMetaCallback, got type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return fmt.Errorf("send sys ctrl to meta callback error: %s", msg.Err)
+	}
+	return nil
+}

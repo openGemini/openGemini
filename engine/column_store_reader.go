@@ -204,7 +204,6 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 }
 
 func (r *ColumnStoreReader) initReadCursor() (err error) {
-	var ok bool
 	var tr util.TimeRange
 	var readCtx *immutable.ReadContext
 	tr, readCtx, err = r.initQueryCtx()
@@ -219,12 +218,18 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 		for _, fileFrags := range shardFrags.FileMarks {
 			file := fileFrags.GetFile()
 			loc := immutable.NewLocation(file, readCtx)
-			ok, err = loc.Contains(0, tr, nil)
-			if err != nil {
-				return
-			}
-			if !ok {
-				continue
+			chunkMeta, ok := immutable.GetChunkMeta(file.Path())
+			if ok {
+				loc.SetChunkMeta(chunkMeta)
+			} else {
+				ok, err = loc.Contains(0, tr, nil)
+				if err != nil {
+					return
+				}
+				if !ok {
+					continue
+				}
+				immutable.PutChunkMeta(file.Path(), loc.GetChunkMeta())
 			}
 			loc.SetFragmentRanges(fileFrags.GetFragmentRanges())
 			locs = append(locs, loc)
@@ -244,11 +249,17 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	// init the input schema
 	useIdxMap := make(map[int]struct{})
 	r.inSchema = append(r.inSchema, r.queryCtx.schema[:len(r.queryCtx.schema)-1]...)
-	preSchemaLen := len(r.inSchema)
 	for i := range r.opt.GetOptDimension() {
-		r.inSchema = append(r.inSchema, record.Field{Name: r.opt.Dimensions[i], Type: influx.Field_Type_String})
-		useIdxMap[preSchemaLen+i] = struct{}{} // fields for group by
+		// the field grouped by may appear in the select and where fields.
+		if idx := r.inSchema.FieldIndex(r.opt.Dimensions[i]); idx < 0 {
+			r.inSchema = append(r.inSchema, record.Field{Name: r.opt.Dimensions[i], Type: influx.Field_Type_String})
+			useIdxMap[len(r.inSchema)-1] = struct{}{} // fields for group by
+		} else {
+			useIdxMap[idx] = struct{}{}
+		}
 	}
+	r.inSchema = append(r.inSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+
 	for i := range r.ops {
 		if in, ok := r.ops[i].Expr.(*influxql.VarRef); ok {
 			inIdx, outIdx := r.inSchema.FieldIndex(in.Val), r.outSchema.FieldIndex(r.ops[i].Ref.Val)
@@ -257,7 +268,6 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 			}
 		}
 	}
-	r.inSchema = append(r.inSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
 	useIdxMap[len(r.inSchema)-1] = struct{}{} // time field
 
 	// init the redundant columns, which are not required after filtering.

@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -29,15 +30,21 @@ import (
 	"github.com/influxdata/influxdb/pkg/bloom"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
+)
+
+const (
+	ExpectedSegmentSize uint32 = 1024 * 1024
 )
 
 type MsBuilder struct {
@@ -72,17 +79,19 @@ type MsBuilder struct {
 	tier              uint64
 	cm                *ChunkMeta
 
-	Files         []TSSPFile
-	FileName      TSSPFileName
-	log           *logger.Logger
-	pkIndexWriter sparseindex.IndexWriter
-	pkRec         []*record.Record
-	pkMark        []fragment.IndexFragment
-	tcLocation    int8 // time cluster
+	Files              []TSSPFile
+	FileName           TSSPFileName
+	log                *logger.Logger
+	pkIndexWriter      sparseindex.PKIndexWriter
+	pkRec              []*record.Record
+	pkMark             []fragment.IndexFragment
+	tcLocation         int8 // time cluster
+	skipIndexWriter    sparseindex.SkipIndexWriter
+	EncodeChunkDataImp EncodeChunkData
 }
 
 func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
-	tier uint64, sequencer *Sequencer, estimateSize int) *MsBuilder {
+	tier uint64, sequencer *Sequencer, estimateSize int, engineType config.EngineType) *MsBuilder {
 	msBuilder := &MsBuilder{}
 
 	if msBuilder.chunkBuilder == nil {
@@ -91,7 +100,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 		msBuilder.chunkBuilder.maxRowsLimit = conf.maxRowsPerSegment
 		msBuilder.chunkBuilder.colBuilder = NewColumnBuilder()
 	}
-
+	msBuilder.SetEncodeChunkDataImp(engineType)
 	if msBuilder.trailer == nil {
 		msBuilder.trailer = &Trailer{}
 	}
@@ -153,6 +162,18 @@ func (b *MsBuilder) StoreTimes() {
 
 func (b *MsBuilder) MaxRowsPerSegment() int {
 	return b.Conf.maxRowsPerSegment
+}
+
+func (b *MsBuilder) GetChunkBuilder() *ChunkDataBuilder {
+	return b.chunkBuilder
+}
+
+func (b *MsBuilder) SetEncodeChunkDataImp(engineType config.EngineType) {
+	if engineType == config.TSSTORE {
+		b.EncodeChunkDataImp = &TsChunkDataImp{}
+	} else if engineType == config.COLUMNSTORE {
+		b.EncodeChunkDataImp = &CsChunkDataImp{}
+	}
 }
 
 func (b *MsBuilder) WithLog(log *logger.Logger) {
@@ -255,7 +276,7 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 }
 
 func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int, fSize int64,
-	nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
+	nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16), engineType config.EngineType) (*MsBuilder, error) {
 	f, err := msb.NewTSSPFile(true)
 	if err != nil {
 		msb.log.Error("new file fail", zap.String("file", msb.fd.Name()), zap.Error(err))
@@ -277,7 +298,7 @@ func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int,
 	msb.FileName.SetExtend(ext)
 	msb.FileName.SetLevel(lv)
 
-	builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, msb.MaxIds, msb.FileName, msb.tier, msb.sequencer, rec.Len())
+	builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, msb.MaxIds, msb.FileName, msb.tier, msb.sequencer, rec.Len(), engineType)
 	builder.Files = append(builder.Files, msb.Files...)
 	builder.pkRec = append(builder.pkRec, msb.pkRec...)
 	builder.pkMark = append(builder.pkMark, msb.pkMark...)
@@ -287,16 +308,16 @@ func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int,
 }
 
 func (b *MsBuilder) NewPKIndexWriter() {
-	b.pkIndexWriter = sparseindex.NewIndexWriter()
+	b.pkIndexWriter = sparseindex.NewPKIndexWriter()
 }
 
 func (b *MsBuilder) SetTCLocation(tcLocation int8) {
 	b.tcLocation = tcLocation
 }
 
-func (b *MsBuilder) writeIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string, tcLocation int8) error {
+func (b *MsBuilder) writePrimaryIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string, tcLocation int8, rowsPerSegment []int, fixRowsPerSegment int) error {
 	// Generate the primary key record from the sorted chunk based on the primary key.
-	pkRec, pkMark, err := b.pkIndexWriter.CreatePrimaryIndex(writeRec, pkSchema, colstore.RowsNumPerFragment, tcLocation)
+	pkRec, pkMark, err := b.pkIndexWriter.Build(writeRec, pkSchema, rowsPerSegment, tcLocation, fixRowsPerSegment)
 	if err != nil {
 		return err
 	}
@@ -312,28 +333,208 @@ func (b *MsBuilder) writeIndex(writeRec *record.Record, pkSchema record.Schemas,
 	return nil
 }
 
+func (b *MsBuilder) NewSkipIndexWriter() {
+	b.skipIndexWriter = sparseindex.NewSkipIndexWriter(index.BloomFilterIndex)
+}
+
+func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, schemaIndex []int, dataFilePath, lockpath string, rowsPerSegment []int) error {
+	var skipIndexFilePath string
+	for _, i := range schemaIndex {
+		skipIndexFilePath = path.Join(b.Path, b.msName, colstore.AppendSKIndexSuffix(dataFilePath, writeRec.Schema[i].Name, index.BloomFilterIndex)+tmpFileSuffix)
+		data, err := b.skipIndexWriter.CreateSkipIndex(&writeRec.ColVals[i], rowsPerSegment, writeRec.Schema[i].Type)
+		if err != nil {
+			return err
+		}
+		indexBuilder := colstore.NewSkipIndexBuilder(&lockpath, skipIndexFilePath)
+		err = indexBuilder.WriteData(data)
+		if err != nil {
+			return err
+		}
+		indexBuilder.Reset()
+	}
+	return nil
+}
+
+func (b *MsBuilder) genAccumulateRowsIndex(data *record.Record, skipIndexRelation *index.Relation) ([]int, []int) {
+	schemaIdx := genSchemaIdx(data.Schema, skipIndexRelation)
+	accumulateRowsIndex := b.splitRecord(data, schemaIdx)
+	if len(accumulateRowsIndex) == 0 {
+		accumulateRowsIndex = append(accumulateRowsIndex, data.RowNums()-1)
+	}
+	return accumulateRowsIndex, schemaIdx
+}
+
+func (b *MsBuilder) splitRecord(data *record.Record, skipIndexSchema []int) []int {
+	res := make([]int, 0)
+	var idx, minIdx int
+	start, targetCount := 0, uint32(1)
+	for start < data.RowNums()-1 { // final start = data.RowNums()-1, then should break
+		minIdx = math.MaxInt
+		for _, i := range skipIndexSchema {
+			idx = leftBound(data.ColVals[i].Offset, ExpectedSegmentSize*targetCount, start)
+			if idx < minIdx {
+				minIdx = idx
+			}
+		}
+		res = append(res, minIdx)
+		start = minIdx
+		targetCount++
+	}
+	return res
+}
+
+func leftBound(nums []uint32, target uint32, left int) int {
+	right := len(nums)
+	for left < right {
+		mid := left + (right-left)/2
+		if nums[mid] >= target {
+			right = mid
+		} else {
+			left = mid + 1
+		}
+	}
+	if left >= len(nums) {
+		left = len(nums) - 1
+	}
+	return left
+}
+
+func genSchemaIdx(schema record.Schemas, skipIndexRelation *index.Relation) []int {
+	var res []int
+	for i := range skipIndexRelation.IndexNames {
+		if skipIndexRelation.IndexNames[i] == index.BloomFilterIndex {
+			res = make([]int, len(skipIndexRelation.IndexList[i].Columns))
+			for idx := range skipIndexRelation.IndexList[i].Columns {
+				for j := range schema {
+					if skipIndexRelation.IndexList[i].Columns[idx] == schema[j].Name {
+						res[idx] = j
+					}
+				}
+			}
+			return res
+		}
+	}
+	return nil
+}
+
 func removeClusteredTimeCol(data *record.Record) {
 	data.ColVals = data.ColVals[1:]
 	data.Schema = data.Schema[1:]
 }
 
-func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Schemas, nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
+func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema record.Schemas, skipIndexRelation *index.Relation,
+	nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
+	rowsLimit := b.Conf.maxRowsPerSegment * b.Conf.maxSegmentLimit
+	var accumulateRowsIndex, schemaIdx []int
+	fixRowsPerSegment := b.Conf.maxRowsPerSegment
+	// fast path, most data does not reach the threshold for splitting files.
+	if data.RowNums() <= rowsLimit {
+		accumulateRowsIndex, schemaIdx, fixRowsPerSegment = b.getAccumulateRowsIndex(data, skipIndexRelation, fixRowsPerSegment)
+		err := b.writeIndex(data, schema, skipIndexRelation, accumulateRowsIndex, schemaIdx, fixRowsPerSegment)
+		if err != nil {
+			return b, err
+		}
+
+		if err = b.WriteData(id, data); err != nil {
+			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
+			return b, err
+		}
+
+		fSize := b.Size()
+		if fSize < b.Conf.fileSizeLimit || nextFile == nil {
+			return b, nil
+		}
+
+		return switchTsspFile(b, data, data, rowsLimit, fSize, nextFile, config.COLUMNSTORE)
+	}
+
+	// slow path
+	recs := data.Split(nil, rowsLimit)
+
+	for i := range recs {
+		accumulateRowsIndex, schemaIdx, fixRowsPerSegment = b.getAccumulateRowsIndex(&recs[i], skipIndexRelation, fixRowsPerSegment)
+		err := b.writeIndex(&recs[i], schema, skipIndexRelation, accumulateRowsIndex, schemaIdx, fixRowsPerSegment)
+		if err != nil {
+			return b, err
+		}
+		err = b.WriteData(id, &recs[i])
+		if err != nil {
+			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
+			return b, err
+		}
+
+		fSize := b.Size()
+		if (i < len(recs)-1 || fSize >= b.Conf.fileSizeLimit) && nextFile != nil {
+			b, err = switchTsspFile(b, &recs[i], data, rowsLimit, fSize, nextFile, config.COLUMNSTORE)
+			if err != nil {
+				return b, err
+			}
+			if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // need to init indexwriter after switch tssp file, i.e. new b
+				b.NewPKIndexWriter()
+			}
+			if skipIndexRelation != nil && len(skipIndexRelation.Oids) != 0 {
+				b.NewSkipIndexWriter()
+			}
+		}
+	}
+	return b, nil
+}
+
+func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas, skipIndexRelation *index.Relation,
+	rowsPerSegment, schemaIdx []int, fixRowsPerSegment int) error {
+	if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // write index, works for colstore
+		dataFilePath := b.FileName.String()
+		indexFilePath := path.Join(b.Path, b.msName, colstore.AppendPKIndexSuffix(dataFilePath)+tmpFileSuffix)
+		if err := b.writePrimaryIndex(writeRecord, schema, indexFilePath, *b.lock, b.tcLocation, rowsPerSegment, fixRowsPerSegment); err != nil {
+			logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
+			return err
+		}
+	}
+
+	if skipIndexRelation != nil && len(skipIndexRelation.IndexNames) != 0 { // write skip index, works for colStore
+		dataFilePath := b.FileName.String()
+		if err := b.writeSkipIndex(writeRecord, schemaIdx, dataFilePath, *b.lock, rowsPerSegment); err != nil {
+			logger.GetLogger().Error("write skip index file failed", zap.String("mstName", b.msName), zap.Error(err))
+			return err
+		}
+	}
+
+	if b.tcLocation > colstore.DefaultTCLocation {
+		removeClusteredTimeCol(writeRecord)
+	}
+	return nil
+}
+
+func (b *MsBuilder) getAccumulateRowsIndex(data *record.Record, skipIndexRelation *index.Relation, fixRowsPerSegment int) ([]int, []int, int) {
+	var accumulateRowsIndex, schemaIdx []int
+	if skipIndexRelation != nil && len(skipIndexRelation.IndexNames) != 0 {
+		accumulateRowsIndex, schemaIdx = b.genAccumulateRowsIndex(data, skipIndexRelation)
+		fixRowsPerSegment = 0
+	} else {
+		accumulateRowsIndex = GenFixRowsPerSegment(data, b.Conf.maxRowsPerSegment)
+	}
+	b.EncodeChunkDataImp.SetAccumulateRowsIndex(accumulateRowsIndex)
+	return accumulateRowsIndex, schemaIdx, fixRowsPerSegment
+}
+
+func GenFixRowsPerSegment(data *record.Record, rowNumPerSegment int) []int {
+	rowNum := data.RowNums()
+	numFragment, remainFragment := rowNum/rowNumPerSegment, rowNum%rowNumPerSegment
+	if remainFragment > 0 {
+		numFragment += 1
+	}
+	res := make([]int, numFragment)
+	for i := 0; i < numFragment-1; i++ {
+		res[i] = rowNumPerSegment * (i + 1)
+	}
+	res[numFragment-1] = rowNum - 1
+	return res
+}
+
+func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
 	rowsLimit := b.Conf.maxRowsPerSegment * b.Conf.maxSegmentLimit
 	// fast path, most data does not reach the threshold for splitting files.
 	if data.RowNums() <= rowsLimit {
-		if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // write index, works for colstore
-			dataFilePath := b.FileName.String()
-			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
-			if err := b.writeIndex(data, schema, indexFilePath, *b.lock, b.tcLocation); err != nil {
-				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
-				return b, err
-			}
-		}
-
-		if b.tcLocation > colstore.DefaultTCLocation {
-			removeClusteredTimeCol(data)
-		}
-
 		if err := b.WriteData(id, data); err != nil {
 			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
 			return b, err
@@ -344,26 +545,12 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Sc
 			return b, nil
 		}
 
-		return switchTsspFile(b, data, data, rowsLimit, fSize, nextFile)
+		return switchTsspFile(b, data, data, rowsLimit, fSize, nextFile, config.TSSTORE)
 	}
 
 	// slow path
 	recs := data.Split(nil, rowsLimit)
-
 	for i := range recs {
-		if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // write index, works for colstore
-			dataFilePath := b.FileName.String()
-			indexFilePath := path.Join(b.Path, b.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
-			if err := b.writeIndex(&recs[i], schema, indexFilePath, *b.lock, b.tcLocation); err != nil {
-				logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
-				return b, err
-			}
-		}
-
-		if b.tcLocation > colstore.DefaultTCLocation {
-			removeClusteredTimeCol(&recs[i])
-		}
-
 		err := b.WriteData(id, &recs[i])
 		if err != nil {
 			b.log.Error("write data record fail", zap.String("file", b.fd.Name()), zap.Error(err))
@@ -372,12 +559,9 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, schema record.Sc
 
 		fSize := b.Size()
 		if (i < len(recs)-1 || fSize >= b.Conf.fileSizeLimit) && nextFile != nil {
-			b, err = switchTsspFile(b, &recs[i], data, rowsLimit, fSize, nextFile)
+			b, err = switchTsspFile(b, &recs[i], data, rowsLimit, fSize, nextFile, config.TSSTORE)
 			if err != nil {
 				return b, err
-			}
-			if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // need to init indexwriter after switch tssp file, i.e. new b
-				b.NewPKIndexWriter()
 			}
 		}
 	}
@@ -472,7 +656,7 @@ func (b *MsBuilder) WriteData(id uint64, data *record.Record) error {
 	}
 
 	b.chunkBuilder.setChunkMeta(b.cm)
-	b.encodeChunk, err = b.chunkBuilder.EncodeChunk(id, b.dataOffset, data, b.encodeChunk)
+	b.encodeChunk, err = b.EncodeChunkDataImp.EncodeChunk(b.chunkBuilder, id, b.dataOffset, data, b.encodeChunk)
 	if err != nil {
 		b.log.Error("encode chunk fail", zap.Error(err))
 		return err

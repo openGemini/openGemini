@@ -147,7 +147,7 @@ func (csIdx *CsIndexImpl) run(idx *MergeSetIndex) {
 	for i := 0; i < len(idx.labelStoreQueues); i++ {
 		go func(index int) {
 			for col := range idx.labelStoreQueues[index] {
-				col.Err = csIdx.CreateIndexIfNotExistsForArrowFlight(idx, col)
+				col.Err = csIdx.CreateIndexIfNotExistsByCol(idx, col)
 				col.Wg.Done()
 			}
 		}(i)
@@ -162,7 +162,7 @@ func (csIdx *CsIndexImpl) initQueues(idx *MergeSetIndex) {
 
 	idx.labelStoreQueues = make([]chan *TagCol, queueSize)
 	for i := 0; i < len(idx.labelStoreQueues); i++ {
-		idx.labelStoreQueues[i] = make(chan *TagCol, 1024)
+		idx.labelStoreQueues[i] = make(chan *TagCol, 2048)
 	}
 }
 
@@ -176,25 +176,23 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 
 	ii := idxItemsPool.Get()
 	compositeKey := kbPool.Get()
-	is := idx.getIndexSearch()
 
 	defer func() {
 		kbPool.Put(vkey)
 		kbPool.Put(vname)
 		idxItemsPool.Put(ii)
 		kbPool.Put(compositeKey)
-		idx.putIndexSearch(is)
 	}()
 
 	var exist bool
 	var err error
+	vname.B = append(vname.B[:0], row.Name...)
+	vkey.B = append(vkey.B[:0], row.Name...)
+	length := len(vname.B)
 	for i := range row.Tags {
-		vname.B = append(vname.B[:0], row.Name...)
-		vkey.B = append(vkey.B[:0], row.Name...)
-		vkey.B = append(vkey.B, row.Tags[i].Key...)
-		vkey.B = append(vkey.B, row.Tags[i].Value...)
-
-		exist, err = idx.isTagKeyExist(vkey.B, []byte(row.Tags[i].Key), []byte(row.Tags[i].Value), vname.B, is)
+		vkey.B = append(vkey.B[:length], row.Tags[i].Key...)
+		vkey.B = append(vkey.B[:length], row.Tags[i].Value...)
+		exist, err = idx.isTagKeyExist(vkey.B, vname.B, row.Tags[i].Key, row.Tags[i].Value)
 		if err != nil {
 			return err
 		}
@@ -209,20 +207,13 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 	return idx.tb.AddItems(ii.Items)
 }
 
-func (csIdx *CsIndexImpl) CreateIndexIfNotExistsForArrowFlight(idx *MergeSetIndex, col *TagCol) error {
+func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByCol(idx *MergeSetIndex, col *TagCol) error {
 	vkey := kbPool.Get()
 	vname := kbPool.Get()
-
-	ii := idxItemsPool.Get()
-	compositeKey := kbPool.Get()
-	is := idx.getIndexSearch()
 
 	defer func() {
 		kbPool.Put(vkey)
 		kbPool.Put(vname)
-		idxItemsPool.Put(ii)
-		kbPool.Put(compositeKey)
-		idx.putIndexSearch(is)
 	}()
 
 	var exist bool
@@ -235,18 +226,25 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsForArrowFlight(idx *MergeSetInde
 		return nil
 	}
 	csIdx.prev = vkey.B
-	exist, err = idx.isTagKeyExist(vkey.B, col.Key, col.Val, col.Mst, is)
+	exist, err = idx.isTagKeyExistByCol(vkey.B, col.Key, col.Val, col.Mst)
 	if err != nil {
 		return err
 	}
 
 	if !exist {
+		compositeKey := kbPool.Get()
+		ii := idxItemsPool.Get()
+		defer func() {
+			kbPool.Put(compositeKey)
+			idxItemsPool.Put(ii)
+		}()
 		ii.B = idx.marshalTagToTagValues(compositeKey.B, ii.B, vname.B, col.Key, col.Val)
 		ii.Next()
 		idx.cache.PutTagValuesToTagKeysCache([]byte{1}, vkey.B)
+		return idx.tb.AddItems(ii.Items)
 	}
 
-	return idx.tb.AddItems(ii.Items)
+	return nil
 }
 
 type MergeSetIndex struct {
@@ -297,7 +295,7 @@ func (idx *MergeSetIndex) Open() error {
 	idx.tb = tb
 
 	mem := memory.Allowed()
-	idx.cache = NewIndexCache(mem/32, mem/32, mem/16, idx.path)
+	idx.cache = NewIndexCache(mem/32, mem/32, mem/16, mem/128, idx.path)
 
 	if err := idx.loadDeletedTSIDs(); err != nil {
 		return err
@@ -334,6 +332,7 @@ func (idx *MergeSetIndex) getIndexSearch() *indexSearch {
 	if v == nil {
 		v = &indexSearch{
 			idx: idx,
+			tfs: make([]tagFilter, 0, 1),
 		}
 	}
 
@@ -350,6 +349,7 @@ func (idx *MergeSetIndex) putIndexSearch(is *indexSearch) {
 	is.mp.Reset()
 	is.vrp.Reset()
 	is.idx = nil
+	is.tfs = is.tfs[:0]
 	indexSearchPool.Put(is)
 }
 
@@ -366,13 +366,11 @@ func (idx *MergeSetIndex) IsTagKeyExist(row influx.Row) (bool, error) {
 	vkey := kbPool.Get()
 	vname := kbPool.Get()
 	idx.mu.RLock()
-	is := idx.getIndexSearch()
 
 	defer func() {
 		kbPool.Put(vkey)
 		kbPool.Put(vname)
 		idx.mu.RUnlock()
-		idx.putIndexSearch(is)
 	}()
 
 	var exist bool
@@ -382,7 +380,7 @@ func (idx *MergeSetIndex) IsTagKeyExist(row influx.Row) (bool, error) {
 		vkey.B = append(vkey.B[:0], tag.Key...)
 		vkey.B = append(vkey.B, tag.Value...)
 
-		exist, err = idx.isTagKeyExist(vkey.B, []byte(tag.Key), []byte(tag.Value), vname.B, is)
+		exist, err = idx.isTagKeyExist(vkey.B, vname.B, tag.Key, tag.Value)
 		if err != nil {
 			return false, err
 		}
@@ -399,13 +397,10 @@ func (idx *MergeSetIndex) IsTagKeyExistByArrowFlight(col *TagCol) (bool, error) 
 	vname := kbPool.Get()
 
 	compositeKey := kbPool.Get()
-	is := idx.getIndexSearch()
-
 	defer func() {
 		kbPool.Put(vkey)
 		kbPool.Put(vname)
 		kbPool.Put(compositeKey)
-		idx.putIndexSearch(is)
 	}()
 
 	var exist bool
@@ -414,17 +409,39 @@ func (idx *MergeSetIndex) IsTagKeyExistByArrowFlight(col *TagCol) (bool, error) 
 	vkey.B = append(vkey.B[:0], col.Mst...)
 	vkey.B = append(vkey.B, col.Key...)
 	vkey.B = append(vkey.B, col.Val...)
-
-	exist, err = idx.isTagKeyExist(vkey.B, col.Key, col.Val, col.Mst, is)
+	exist, err = idx.isTagKeyExistByCol(vkey.B, col.Key, col.Val, col.Mst)
 	return exist, err
 }
 
-func (idx *MergeSetIndex) isTagKeyExist(key, tagKey, tagValue, name []byte, is *indexSearch) (bool, error) {
+func (idx *MergeSetIndex) isTagKeyExist(key, name []byte, tagKey, tagValue string) (bool, error) {
 	exist := idx.cache.isTagKeyExist(key)
 	if exist {
 		return exist, nil
 	}
 
+	is := idx.getIndexSearch()
+	defer idx.putIndexSearch(is)
+
+	exist, err := is.isTagKeyExist([]byte(tagKey), []byte(tagValue), name)
+	if exist {
+		idx.cache.PutTagValuesToTagKeysCache([]byte{1}, key)
+		return true, nil
+	}
+
+	if err != io.EOF {
+		return false, err
+	}
+	return false, nil
+}
+
+func (idx *MergeSetIndex) isTagKeyExistByCol(key, tagKey, tagValue, name []byte) (bool, error) {
+	exist := idx.cache.isTagKeyExist(key)
+	if exist {
+		return exist, nil
+	}
+
+	is := idx.getIndexSearch()
+	defer idx.putIndexSearch(is)
 	exist, err := is.isTagKeyExist(tagKey, tagValue, name)
 	if exist {
 		idx.cache.PutTagValuesToTagKeysCache([]byte{1}, key)

@@ -45,6 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -395,7 +396,7 @@ func (data *Data) CreateShardGroupWithBounds(db string, rp *RetentionPolicyInfo,
 // createVersionMeasurement create new measurement
 func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo,
 	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32, engineType config.EngineType,
-	colStoreInfo *ColStoreInfo, schemaInfo []*proto2.FieldSchema) error {
+	colStoreInfo *ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *proto2.Options) error {
 	sgLen := len(rp.ShardGroups)
 	if sgLen == 0 {
 		ski.ShardGroup = data.MaxShardGroupID + 1
@@ -414,19 +415,24 @@ func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, s
 	}
 
 	if indexR != nil {
-		newIndexR := IndexRelation{
+		newIndexR := influxql.IndexRelation{
 			Rid:        indexR.GetRid(),
 			Oids:       indexR.GetOid(),
 			IndexNames: indexR.GetIndexName(),
 		}
 		indexLists := indexR.GetIndexLists()
-		newIndexR.IndexList = make([]*IndexList, len(indexLists))
+		newIndexR.IndexList = make([]*influxql.IndexList, len(indexLists))
 		for i, iList := range indexLists {
-			newIndexR.IndexList[i] = &IndexList{
+			newIndexR.IndexList[i] = &influxql.IndexList{
 				IList: iList.GetIList(),
 			}
 		}
 		msti.IndexRelation = newIndexR
+	}
+
+	if options != nil {
+		msti.Options = &Options{}
+		msti.Options.Unmarshal(options)
 	}
 
 	if rp.Measurements == nil {
@@ -444,7 +450,7 @@ func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, s
 
 func (data *Data) CreateMeasurement(database string, rpName string, mst string,
 	shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation, engineType config.EngineType,
-	colStoreInfo *proto2.ColStoreInfo, schemaInfo []*proto2.FieldSchema) error {
+	colStoreInfo *proto2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *proto2.Options) error {
 	rp, err := data.RetentionPolicy(database, rpName)
 	if err != nil {
 		return err
@@ -480,7 +486,7 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string,
 		if len(rp.MstVersions) == 0 {
 			rp.MstVersions = make(map[string]MeasurementVer)
 		}
-		return data.createVersionMeasurement(database, rp, shardKey, indexR, ski, mst, ver, engineType, hInfo, schemaInfo)
+		return data.createVersionMeasurement(database, rp, shardKey, indexR, ski, mst, ver, engineType, hInfo, schemaInfo, options)
 	}
 
 	n := len(msti.ShardKeys)
@@ -610,7 +616,7 @@ func (data *Data) ClusterChangeState(nodeID uint64, newState serf.MemberStatus) 
 }
 
 // CreateDataNode adds a node to the metadata.
-func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
+func (data *Data) CreateDataNode(host, tcpHost, role string) (error, uint64) {
 	data.MaxConnID++
 	// Ensure a node with the same host doesn't already exist.
 	for i := range data.DataNodes {
@@ -640,6 +646,7 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 		NodeInfo: NodeInfo{
 			ID:      existingID,
 			Host:    host,
+			Role:    role,
 			TCPHost: tcpHost},
 		ConnID: data.MaxConnID}
 	// Append new node.
@@ -647,8 +654,11 @@ func (data *Data) CreateDataNode(host, tcpHost string) (error, uint64) {
 
 	sort.Sort(DataNodeInfos(data.DataNodes))
 	data.initDataNodePtView(data.GetClusterPtNum())
+	if role == NodeReader {
+		return nil, existingID
+	}
 	for db := range data.Databases {
-		data.expendDBPtView(db, data.GetClusterPtNum())
+		data.expandDBPtView(db, data.GetClusterPtNum(), &dn)
 	}
 	if data.ExpandShardsEnable {
 		data.ExpandGroups()
@@ -883,15 +893,49 @@ func init() {
 	dbPtAssigner[config.Replication] = assignPtForWAF
 }
 
+func (data *Data) GetWriteNodeNum() uint32 {
+	var writeNodeNum uint32
+	for i := 0; i < len(data.DataNodes); i++ {
+		if IsNodeWriter(data.DataNodes[i].Role) {
+			writeNodeNum++
+		}
+	}
+	return writeNodeNum
+}
+
+func (data *Data) GetWriteNode() []DataNode {
+	var writeNodes []DataNode
+	for i := 0; i < len(data.DataNodes); i++ {
+		if IsNodeWriter(data.DataNodes[i].Role) {
+			writeNodes = append(writeNodes, data.DataNodes[i])
+		}
+	}
+	return writeNodes
+}
+
+func (data *Data) GetAliveWriteNode() []DataNode {
+	var writeNodes []DataNode
+	for i := 0; i < len(data.DataNodes); i++ {
+		if IsNodeWriter(data.DataNodes[i].Role) &&
+			data.DataNodes[i].Status == serf.StatusAlive &&
+			data.DataNodes[i].SegregateStatus == Normal {
+			writeNodes = append(writeNodes, data.DataNodes[i])
+		}
+	}
+	return writeNodes
+}
+
 // assign pts to all datanodes, because move db pt is not permitted in write-available-first policy and replication policy
 func assignPtForWAF(data *Data, name string) error {
-	if len(data.DataNodes) == 0 {
+	writeNodes := data.GetWriteNode()
+	if len(writeNodes) == 0 {
 		return errno.NewError(errno.DataNoAlive)
 	}
+
 	ptNum := data.GetClusterPtNum()
 	for ptId := 0; ptId < int(ptNum); ptId++ {
-		pos := ptId % len(data.DataNodes)
-		data.updatePtStatus(name, uint32(ptId), data.DataNodes[pos].ID, Offline)
+		pos := ptId % len(writeNodes)
+		data.updatePtStatus(name, uint32(ptId), writeNodes[pos].ID, Offline)
 	}
 
 	return nil
@@ -899,20 +943,14 @@ func assignPtForWAF(data *Data, name string) error {
 
 // assign pts to alive datanodes in shared-storage policy due to pts can balance by background balancer
 func assignPtForSS(data *Data, name string) error {
-	var aliveDataNodeIds []uint64
-	for i := range data.DataNodes {
-		if data.DataNodes[i].SegregateStatus == Normal && data.DataNodes[i].Status == serf.StatusAlive {
-			aliveDataNodeIds = append(aliveDataNodeIds, data.DataNodes[i].ID)
-		}
-	}
-
-	if len(aliveDataNodeIds) == 0 {
+	aliveDataNodes := data.GetAliveWriteNode()
+	if len(aliveDataNodes) == 0 {
 		return errno.NewError(errno.DataNoAlive)
 	}
 	ptNum := data.GetClusterPtNum()
 	for ptId := 0; ptId < int(ptNum); ptId++ {
-		pos := ptId % len(aliveDataNodeIds)
-		data.updatePtStatus(name, uint32(ptId), aliveDataNodeIds[pos], Offline)
+		pos := ptId % len(aliveDataNodes)
+		data.updatePtStatus(name, uint32(ptId), aliveDataNodes[pos].ID, Offline)
 	}
 	return nil
 }
@@ -947,7 +985,7 @@ func (data *Data) CloneDBPtView() map[string]DBPtInfos {
 }
 
 func (data *Data) initDataNodePtView(ptNum uint32) {
-	newPtNum := data.PtNumPerNode * uint32(len(data.DataNodes))
+	newPtNum := data.PtNumPerNode * data.GetWriteNodeNum()
 	if ptNum < newPtNum {
 		data.SetClusterPtNum(newPtNum)
 	}
@@ -981,7 +1019,8 @@ func (data *Data) CheckCanCreateDatabase(name string) error {
 
 // CreateDatabase creates a new database.
 // It returns an error if name is blank or if a database with the same name already exists.
-func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo, enableTagArray bool, replicaN uint32) error {
+func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo, enableTagArray bool, replicaN uint32,
+	options *proto2.ObsOptions) error {
 	err := data.CheckCanCreateDatabase(dbName)
 	if err != nil {
 		if err == ErrDatabaseExists {
@@ -1006,6 +1045,10 @@ func (data *Data) CreateDatabase(dbName string, rpi *RetentionPolicyInfo, shardK
 
 	dbi.EnableTagArray = enableTagArray
 	dbi.ReplicaN = int(replicaN)
+	if options != nil {
+		dbi.Options = &ObsOptions{}
+		dbi.Options.Unmarshal(options)
+	}
 	err = data.SetDatabase(dbi)
 	return err
 }
@@ -1545,7 +1588,7 @@ func (data *Data) createShards(database string, sgi *ShardGroupInfo, igi *IndexG
 	}
 }
 
-func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType) *ShardGroupInfo {
+func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, engineType config.EngineType, version uint32) *ShardGroupInfo {
 	startTime := timestamp.Truncate(rpi.ShardGroupDuration)
 	data.MaxShardGroupID++
 	sgi := ShardGroupInfo{
@@ -1553,6 +1596,7 @@ func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, e
 		StartTime:  startTime.UTC(),
 		EndTime:    startTime.Add(rpi.ShardGroupDuration).UTC(),
 		EngineType: engineType,
+		Version:    version,
 	}
 	if sgi.EndTime.After(time.Unix(0, models.MaxNanoTime)) {
 		// Shard group range is [start, end) so add one to the max time.
@@ -1562,7 +1606,7 @@ func (data *Data) newShardGroup(rpi *RetentionPolicyInfo, timestamp time.Time, e
 }
 
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
-func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64, engineType config.EngineType) error {
+func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time, tier uint64, engineType config.EngineType, version uint32) error {
 	if err := data.checkStoreReady(); err != nil {
 		return err
 	}
@@ -1587,20 +1631,12 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 		return fmt.Errorf("there is no measurement in database %s policy %s", database, policy)
 	}
 
-	// Require at least one replica but no more replicas than nodes.
-	replicaN := rpi.ReplicaN
-	if replicaN == 0 {
-		replicaN = 1
-	} else if replicaN > len(data.DataNodes) {
-		replicaN = len(data.DataNodes)
-	}
-
 	//check index group contain this shard group
 	ptNum := data.GetEffectivePtNum(database)
 	igi := data.createIndexGroupIfNeeded(rpi, timestamp, engineType, ptNum)
 
 	// Create the shard group.
-	sgi := data.newShardGroup(rpi, timestamp, engineType)
+	sgi := data.newShardGroup(rpi, timestamp, engineType, version)
 
 	// Create shards on the group.
 	data.createShards(database, sgi, igi, rpi, msti, tier)
@@ -1651,24 +1687,30 @@ func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp t
 	return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum)
 }
 
-func (data *Data) expendDBPtView(database string, ptNum uint32) {
+func (data *Data) expandDBPtView(database string, ptNum uint32, newNode *DataNode) {
 	dbPtInfos := data.DBPtView(database)
 	oldDBPtNums := uint32(len(dbPtInfos))
 	if ptNum == oldDBPtNums {
 		return
 	} else if ptNum < oldDBPtNums {
-		assert(false, fmt.Sprintf("expend dbPT db:%s from %d to %d", database, oldDBPtNums, ptNum))
+		assert(false, fmt.Sprintf("expand dbPT db:%s from %d to %d", database, oldDBPtNums, ptNum))
 	}
 
 	replicaN := uint32(data.DBReplicaN(database))
 	dataNodeNum := uint32(len(data.DataNodes))
-	DataLogger.Info("expend db ptview", zap.String("db", database), zap.Uint32("from", oldDBPtNums), zap.Uint32("to", ptNum),
+	DataLogger.Info("expand db ptview", zap.String("db", database), zap.Uint32("from", oldDBPtNums), zap.Uint32("to", ptNum),
 		zap.Uint32("replicaN", replicaN), zap.Uint32("total node num", dataNodeNum))
 
+	isRemoteStore := data.Database(database).Options != nil
 	for ptId := oldDBPtNums; ptId < ptNum; ptId++ {
-		pos := ptId % dataNodeNum
-		// set pt status offline, and set it online when assigned successfully
-		data.updatePtStatus(database, ptId, data.DataNodes[pos].ID, Offline)
+		if isRemoteStore {
+			// set pt status offline, and set it online when assigned successfully
+			data.updatePtStatus(database, ptId, newNode.ID, Offline)
+		} else {
+			pos := ptId % dataNodeNum
+			// set pt status offline, and set it online when assigned successfully
+			data.updatePtStatus(database, ptId, data.DataNodes[pos].ID, Offline)
+		}
 	}
 
 	if replicaN > 1 && (dataNodeNum%replicaN == 0) {
@@ -2321,7 +2363,7 @@ func (data *Data) importOneDB(other Data, backupDBName, restoreDBName, backupRPN
 		return "", errors.New("database already exists")
 	}
 	// change the names if we want/need to
-	err := data.CreateDatabase(restoreDBName, nil, nil, false, 1)
+	err := data.CreateDatabase(restoreDBName, nil, nil, false, 1, nil)
 	if err != nil {
 		return "", err
 	}
@@ -2970,23 +3012,25 @@ func (data *Data) GetPtInfosByNodeId(id uint64) []*DbPtInfo {
 	return resPtInfos
 }
 
-func (data *Data) GetNodeIdsByNodeLst(nodeLst []string) ([]uint64, error) {
+func (data *Data) GetNodeIdsByNodeLst(nodeLst []string) ([]uint64, []string, error) {
 	nodeids := make([]uint64, 0, len(nodeLst))
+	address := make([]string, 0, len(nodeLst))
 	for _, host := range nodeLst {
 		findNodeId := false
 		for _, node := range data.DataNodes {
 			nodeAddr := strings.Split(node.TCPHost, ":")[0]
 			if host == nodeAddr {
 				nodeids = append(nodeids, node.ID)
+				address = append(address, node.TCPHost)
 				findNodeId = true
 				break
 			}
 		}
 		if !findNodeId {
-			return nil, fmt.Errorf("some limit node ip is not correct: %s", host)
+			return nil, nil, fmt.Errorf("some limit node ip is not correct: %s", host)
 		}
 	}
-	return nodeids, nil
+	return nodeids, address, nil
 }
 
 func (data *Data) GetNodeSegregateStatus(nodeIds []uint64) ([]uint64, error) {
@@ -3068,6 +3112,35 @@ func (data *Data) UpdateReplication(database string, rgId, masterId uint32, peer
 	}
 	rg.Status = RGStatus(status)
 
+	return nil
+}
+
+func (data *Data) UpdateMeasurement(db, rp, mst string, options *proto2.Options) error {
+	rpi, err := data.RetentionPolicy(db, rp)
+	if err != nil {
+		return err
+	}
+	msti, err := rpi.GetMeasurement(mst)
+	if err != nil {
+		return err
+	}
+
+	if msti.Options != nil {
+		msti.Options = &Options{}
+		msti.Options.Unmarshal(options)
+	}
+
+	// perform upgrade compatibility judgment
+	var newDuration int64
+	ttl := options.GetTtl()
+	if ttl >= int64(time.Hour)*24 {
+		newDuration = ttl // old version value
+	} else {
+		newDuration = options.GetTtl() * int64(time.Hour) * 24 // new version value
+	}
+	if newDuration != *GetInt64Duration(&rpi.Duration) {
+		rpi.Duration = *GetDuration(&newDuration)
+	}
 	return nil
 }
 

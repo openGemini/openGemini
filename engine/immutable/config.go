@@ -53,6 +53,7 @@ var colStoreConf = Config{
 	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
 	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
 	fileSizeLimit:         defaultFileSizeLimit,
+	compactionEnabled:     false,
 	cacheDataBlock:        false,
 	cacheMetaData:         false,
 	streamingCompact:      AutoCompact,
@@ -87,6 +88,7 @@ type Config struct {
 	maxChunkMetaItemCount int
 	SnapshotTblNum        int
 	FragmentsNumPerFlush  int
+	compactionEnabled     bool
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
@@ -140,6 +142,10 @@ func (c *Config) GetMaxSegmentLimit() int {
 	return c.maxSegmentLimit
 }
 
+func (c *Config) GetCompactionEnabled() bool {
+	return c.compactionEnabled
+}
+
 func SetSnapshotTblNum(snapshotTblNum int) {
 	if snapshotTblNum < 1 {
 		snapshotTblNum = 1
@@ -154,6 +160,10 @@ func SetFragmentsNumPerFlush(fragmentsNumPerFlush int) {
 	}
 	colStoreConf.FragmentsNumPerFlush = fragmentsNumPerFlush
 	log.Info("Set FragmentsNumPerFlush", zap.Int("FragmentsNumPerFlush", fragmentsNumPerFlush))
+}
+
+func SetCompactionEnabled(compactionEnabled bool) {
+	colStoreConf.compactionEnabled = compactionEnabled
 }
 
 func SetCacheDataBlock(en bool) {

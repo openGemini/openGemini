@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/openGemini/openGemini/lib/request"
 )
 
 type mockFile struct {
@@ -39,18 +41,18 @@ type mockFile struct {
 	FdFn               func() uintptr
 }
 
-func (f *mockFile) Close() error                                  { return f.CloseFn() }
-func (f *mockFile) Read(p []byte) (n int, err error)              { return f.ReadFn(p) }
-func (f *mockFile) Seek(offset int64, whence int) (int64, error)  { return f.SeekFn(offset, whence) }
-func (f *mockFile) Write(p []byte) (n int, err error)             { return f.WriteFn(p) }
-func (f *mockFile) ReadAt(p []byte, off int64) (n int, err error) { return f.ReadAtFn(p, off) }
-func (f *mockFile) Name() string                                  { return f.NameFn() }
-func (f *mockFile) Truncate(size int64) error                     { return f.TruncateFn(size) }
-func (f *mockFile) Stat() (os.FileInfo, error)                    { return f.StatFn() }
-func (f *mockFile) Sync() error                                   { return f.SyncFn() }
-func (f *mockFile) SyncUpdateLength() error                       { return f.SyncUpdateLengthFn() }
-func (f *mockFile) Fd() uintptr                                   { return f.FdFn() }
-
+func (f *mockFile) Close() error                                                             { return f.CloseFn() }
+func (f *mockFile) Read(p []byte) (n int, err error)                                         { return f.ReadFn(p) }
+func (f *mockFile) Seek(offset int64, whence int) (int64, error)                             { return f.SeekFn(offset, whence) }
+func (f *mockFile) Write(p []byte) (n int, err error)                                        { return f.WriteFn(p) }
+func (f *mockFile) ReadAt(p []byte, off int64) (n int, err error)                            { return f.ReadAtFn(p, off) }
+func (f *mockFile) Name() string                                                             { return f.NameFn() }
+func (f *mockFile) Truncate(size int64) error                                                { return f.TruncateFn(size) }
+func (f *mockFile) Stat() (os.FileInfo, error)                                               { return f.StatFn() }
+func (f *mockFile) Sync() error                                                              { return f.SyncFn() }
+func (f *mockFile) SyncUpdateLength() error                                                  { return f.SyncUpdateLengthFn() }
+func (f *mockFile) Fd() uintptr                                                              { return f.FdFn() }
+func (f *mockFile) StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int) {}
 func TestDiskWriter(t *testing.T) {
 	dir := t.TempDir()
 	name := filepath.Join(dir, "TestDiskWriter")

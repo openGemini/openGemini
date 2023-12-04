@@ -22,6 +22,7 @@ import (
 func (o *CreateNodeRequest) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendString(buf, o.WriteHost)
 	buf = codec.AppendString(buf, o.QueryHost)
+	buf = codec.AppendString(buf, o.Role)
 
 	return buf, nil
 }
@@ -34,6 +35,7 @@ func (o *CreateNodeRequest) Unmarshal(buf []byte) error {
 	dec := codec.NewBinaryDecoder(buf)
 	o.WriteHost = dec.String()
 	o.QueryHost = dec.String()
+	o.Role = dec.String()
 
 	return nil
 }
@@ -42,6 +44,7 @@ func (o *CreateNodeRequest) Size() int {
 	size := 0
 	size += codec.SizeOfString(o.WriteHost)
 	size += codec.SizeOfString(o.QueryHost)
+	size += codec.SizeOfString(o.Role)
 
 	return size
 }
@@ -1032,4 +1035,55 @@ func (resp *VerifyDataNodeStatusResponse) Size() int {
 
 func (resp *VerifyDataNodeStatusResponse) Instance() transport.Codec {
 	return &VerifyDataNodeStatusResponse{}
+}
+
+func (req *SendSysCtrlToMetaRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendString(buf, req.Mod)
+	buf = codec.AppendMapStringString(buf, req.Param)
+	return buf, nil
+}
+
+func (req *SendSysCtrlToMetaRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	req.Mod = dec.String()
+	req.Param = dec.MapStringString()
+	return nil
+}
+
+func (req *SendSysCtrlToMetaRequest) Size() int {
+	size := codec.SizeOfString(req.Mod)
+	size += codec.SizeOfMapStringString(req.Param)
+	return size
+}
+
+func (req *SendSysCtrlToMetaRequest) Instance() transport.Codec {
+	return &SendSysCtrlToMetaRequest{}
+}
+
+func (resp *SendSysCtrlToMetaResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendString(buf, resp.Err)
+
+	return buf, err
+}
+
+func (resp *SendSysCtrlToMetaResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+
+	dec := codec.NewBinaryDecoder(buf)
+	resp.Err = dec.String()
+	return nil
+}
+
+func (resp *SendSysCtrlToMetaResponse) Size() int {
+	return codec.SizeOfString(resp.Err)
+}
+
+func (resp *SendSysCtrlToMetaResponse) Instance() transport.Codec {
+	return &SendSysCtrlToMetaResponse{}
 }

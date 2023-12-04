@@ -568,6 +568,16 @@ func (opt *ProcessorOptions) GetSourcesNames() []string {
 	return names
 }
 
+func (opt *ProcessorOptions) GetMeasurements() []*influxql.Measurement {
+	msts := make([]*influxql.Measurement, 0, len(opt.Sources))
+	for _, source := range opt.Sources {
+		if mst, ok := source.(*influxql.Measurement); ok {
+			msts = append(msts, mst)
+		}
+	}
+	return msts
+}
+
 func (opt *ProcessorOptions) HaveOnlyCSStore() bool {
 	for _, source := range opt.Sources {
 		if s, ok := source.(*influxql.Measurement); ok && s.EngineType == config.COLUMNSTORE {

@@ -93,6 +93,7 @@ type PeersResponse struct {
 type CreateNodeRequest struct {
 	WriteHost string
 	QueryHost string
+	Role      string
 }
 
 type CreateNodeResponse struct {
@@ -240,5 +241,14 @@ type VerifyDataNodeStatusRequest struct {
 }
 
 type VerifyDataNodeStatusResponse struct {
+	Err string
+}
+
+type SendSysCtrlToMetaRequest struct {
+	Mod   string
+	Param map[string]string
+}
+
+type SendSysCtrlToMetaResponse struct {
 	Err string
 }

@@ -55,6 +55,7 @@ func (b *BalanceManager) Start() {
 }
 
 func (b *BalanceManager) balanceIfNeeded() {
+	logger.GetLogger().Info("[balancer] 1.0 algo start")
 	defer b.wg.Done()
 	for {
 		if atomic.LoadInt32(&b.stopped) == 1 || config.GetHaPolicy() != config.SharedStorage {
@@ -73,6 +74,7 @@ func (b *BalanceManager) balanceIfNeeded() {
 }
 
 func (b *BalanceManager) balanceIfNeededEx() {
+	logger.GetLogger().Info("[balancer] 1.1 algo start")
 	defer b.wg.Done()
 	for {
 		if atomic.LoadInt32(&b.stopped) == 1 || config.GetHaPolicy() != config.SharedStorage {

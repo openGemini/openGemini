@@ -69,7 +69,7 @@ func Test_Data_CreateMeasurement(t *testing.T) {
 		Name:     rpName,
 		ReplicaN: 1,
 		Duration: 24 * time.Hour,
-	}, nil, false, 1)
+	}, nil, false, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,21 +85,21 @@ func Test_Data_CreateMeasurement(t *testing.T) {
 
 	mstName := "cpu"
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// try to recreate measurement with same shardKey, should success
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// try to recreate measurement with same shardKey, should fail
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "region"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "region"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
 	if err == nil || err != ErrMeasurementExists {
 		t.Fatalf("unexpected error.  got: %v, exp: %s", err, ErrMeasurementExists)
 	}
@@ -114,7 +114,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 		Name:     rpName,
 		ReplicaN: 1,
 		Duration: 24 * time.Hour,
-	}, nil, false, 1)
+	}, nil, false, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 
 	mstName := "cpu"
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 		t.Fatalf("got shardKey %v, expected %v", got, exp)
 	}
 
-	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, 0)
+	err = data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,13 +190,13 @@ func Test_Data_ReSharding(t *testing.T) {
 	}
 
 	data.CreateDBPtView("foo")
-	must(data.CreateDatabase("foo", nil, nil, false, 1))
+	must(data.CreateDatabase("foo", nil, nil, false, 1, nil))
 	rp := NewRetentionPolicyInfo("bar")
 	rp.ShardGroupDuration = 24 * time.Hour
 	must(data.CreateRetentionPolicy("foo", rp, false))
 	must(data.CreateMeasurement("foo", "bar", "cpu",
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil))
-	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot, config.TSSTORE))
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil))
+	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot, config.TSSTORE, 0))
 
 	sg0, err := data.ShardGroupByTimestampAndEngineType("foo", "bar", time.Unix(0, 0), config.TSSTORE)
 	if err != nil {
@@ -220,11 +220,11 @@ func Test_Data_ReSharding(t *testing.T) {
 	shardgroups, err := data.ShardGroups("foo", "bar")
 	shards1 := []ShardInfo{{1, []uint32{0}, "", "", util.Hot, 1, 0, 0, false, false}}
 	sg1 := ShardGroupInfo{1, sg0.StartTime, sg0.EndTime,
-		sg0.DeletedAt, shards1, sg0.TruncatedAt, config.TSSTORE}
+		sg0.DeletedAt, shards1, sg0.TruncatedAt, config.TSSTORE, 0}
 	shards2 := []ShardInfo{{2, []uint32{0}, "", "cpu,hostname=host_5", util.Hot, 3, 0, 0, false, false},
 		{3, []uint32{1}, "cpu,hostname=host_5", "", util.Hot, 4, 0, 0, false, false}}
 	sg2 := ShardGroupInfo{2, time.Unix(0, splitTime.UnixNano()+1).UTC(), sg0.EndTime,
-		sg0.DeletedAt, shards2, sg0.TruncatedAt, config.TSSTORE}
+		sg0.DeletedAt, shards2, sg0.TruncatedAt, config.TSSTORE, 0}
 	expSgs := []ShardGroupInfo{sg1, sg2}
 	if got, exp := shardgroups, expSgs; !reflect.DeepEqual(got, exp) {
 		t.Fatalf("got %v, expected %v", got, exp)
@@ -313,13 +313,13 @@ func TestData_PruneGroups(t *testing.T) {
 func initData() *Data {
 	data := &Data{PtNumPerNode: 1}
 	DataLogger = logger.New(os.Stderr)
-	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188")
-	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188")
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
 	return data
 }
 
 func generateMeasurement(data *Data, dbName, rpName, mstName string) error {
-	err := data.CreateDatabase(dbName, nil, nil, false, 1)
+	err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 	if err != nil {
 		return err
 	}
@@ -330,7 +330,7 @@ func generateMeasurement(data *Data, dbName, rpName, mstName string) error {
 		return err
 	}
 	return data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
 }
 
 func Test_Data_DeleteCmd(t *testing.T) {
@@ -345,7 +345,7 @@ func Test_Data_DeleteCmd(t *testing.T) {
 	rpName := "bar"
 	mstName := "cpu"
 	must(generateMeasurement(data, dbName, rpName, mstName))
-	must(data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, config.TSSTORE))
+	must(data.CreateShardGroup(dbName, rpName, time.Unix(0, 0), util.Hot, config.TSSTORE, 0))
 
 	must(data.MarkDatabaseDelete(dbName))
 
@@ -544,17 +544,17 @@ func TestData_CreateRetentionPolicy(t *testing.T) {
 		ReplicaN:           1,
 		ShardGroupDuration: 12 * time.Hour,
 		IndexGroupDuration: 30 * 365 * 24 * time.Hour}
-	err := data.CreateDatabase(dbName, rpi, nil, false, 1)
+	err := data.CreateDatabase(dbName, rpi, nil, false, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2022-06-14T10:20:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,14 +573,14 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	data := Data{}
 	data.PtNumPerNode = 1
 	DataLogger = logger.New(os.Stderr)
-	err, _ := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401")
+	err, _ := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dbName := "test"
 	rpName := "default"
 	mstName := "foo"
-	err = data.CreateDatabase(dbName, nil, nil, false, 1)
+	err = data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,12 +594,12 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2021-11-26T13:00:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,7 +617,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	sg, err = data.ShardGroupByTimestampAndEngineType(dbName, rpName, insertTime, config.TSSTORE)
 	require.NoError(t, err)
 	assert(sg == nil, "shard group contain time %v should not exist", insertTime)
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +635,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 	dbName := "test"
 	rpName := "default"
 	mstName := "foo"
-	err := data.CreateDatabase(dbName, nil, nil, false, 1)
+	err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,12 +653,12 @@ func TestData_CreateShardGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	insertTime := mustParseTime(time.RFC3339Nano, "2022-06-08T09:00:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,12 +673,12 @@ func TestData_CreateShardGroup(t *testing.T) {
 	assert(igs[0].StartTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T08:00:00Z")), "index group startTime error")
 	assert(igs[0].EndTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T10:00:00Z")), "index group endTime error")
 	data.ExpandShardsEnable = true
-	err, _ = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401")
+	err, _ = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	insertTime = mustParseTime(time.RFC3339Nano, "2022-06-08T08:30:00Z")
-	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE)
+	err = data.CreateShardGroup(dbName, rpName, insertTime, util.Hot, config.TSSTORE, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +688,7 @@ func TestDatabase_Clone(t *testing.T) {
 	data := initDataWithDataNode()
 	dbName := "testDb"
 	rpName := "cloneRp"
-	if err := data.CreateDatabase(dbName, nil, nil, false, 1); err != nil {
+	if err := data.CreateDatabase(dbName, nil, nil, false, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	rpi := &RetentionPolicyInfo{Name: rpName, ReplicaN: 1, ShardGroupDuration: 24 * time.Hour, Duration: 7 * 24 * time.Hour}
@@ -714,7 +714,7 @@ func TestDatabase_Clone(t *testing.T) {
 func TestData_MarkRetentionPolicyDelete(t *testing.T) {
 	data := initData()
 	dbName := "testDb"
-	err := data.CreateDatabase(dbName, nil, nil, false, 1)
+	err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +794,7 @@ func initDataWithDataNode() *Data {
 
 	for i := 1; i <= 40; i++ {
 		nodeIp := prefix + fmt.Sprint(i)
-		err, _ := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort))
+		err, _ := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "")
 		if err != nil {
 			panic(err)
 		}
@@ -816,7 +816,7 @@ func BenchmarkData_CreateDatabase(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateDatabase(databases[i%n], nil, nil, false, 1)
+		_ = data.CreateDatabase(databases[i%n], nil, nil, false, 1, nil)
 	}
 	b.StopTimer()
 }
@@ -830,7 +830,7 @@ func BenchmarkData_CreateRetentionPolicy(b *testing.B) {
 	rps := make([]*RetentionPolicyInfo, n)
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -855,7 +855,7 @@ func BenchmarkData_CreateMeasurement(b *testing.B) {
 	mstName := "testMst"
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -869,7 +869,7 @@ func BenchmarkData_CreateMeasurement(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil, nil)
+		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil, nil, nil)
 	}
 	b.StopTimer()
 }
@@ -885,7 +885,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 	currentTime := time.Now()
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -894,7 +894,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 
@@ -905,7 +905,7 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot, config.TSSTORE)
+		_ = data.CreateShardGroup(databases[i%n], rpName, times[i%n], util.Hot, config.TSSTORE, 0)
 	}
 	b.StopTimer()
 }
@@ -921,7 +921,7 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 	currentTime := time.Now()
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -930,11 +930,11 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 
-		if err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE); err != nil {
+		if err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0); err != nil {
 			b.Fatal(err)
 		}
 		var sg *ShardGroupInfo
@@ -1004,7 +1004,7 @@ func BenchmarkData_UpdateSchema(b *testing.B) {
 	schemas := make([][]*proto2.FieldSchema, n)
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1013,7 +1013,7 @@ func BenchmarkData_UpdateSchema(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 		tags := make([]*proto2.FieldSchema, fieldNum)
@@ -1045,7 +1045,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 	databases := make([]string, n)
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1054,7 +1054,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
+		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1064,7 +1064,7 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 		startTimes[i-1] = currentTime
 		endTimes[i-1] = currentTime.Add(3 * 24 * time.Hour)
 		for j := 0; j < retainSgNum; j++ {
-			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE)
+			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -1096,7 +1096,7 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 	currentTime := time.Now()
 	for i := 1; i <= n; i++ {
 		dbName := dbPrefix + fmt.Sprint(i)
-		err := data.CreateDatabase(dbName, nil, nil, false, 1)
+		err := data.CreateDatabase(dbName, nil, nil, false, 1, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1105,14 +1105,14 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil)
+		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		currentTime = time.Now()
 		for j := 0; j < retainSgNum; j++ {
-			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE)
+			err = data.CreateShardGroup(dbName, rpName, currentTime, util.Hot, config.TSSTORE, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1446,5 +1446,77 @@ func TestExpandGroups(t *testing.T) {
 	lastShardId := data.Databases["database2"].RetentionPolicies["rp1"].ShardGroups[1].Shards[2].ID
 	if lastShardId != 24 {
 		t.Fatalf("the shard id is wrong, expect: %d, real: %d", 24, lastShardId)
+	}
+}
+
+func TestUpdateMeasurement(t *testing.T) {
+	data := initData()
+	dbName := "testDb"
+	logStream := "testLogstream"
+	if err := data.CreateDatabase(dbName, nil, nil, false, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	var ttl int64 = 1
+	options := &proto2.Options{Ttl: &ttl}
+	rp := NewRetentionPolicyInfo(logStream)
+	if err := data.CreateRetentionPolicy(dbName, rp, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.CreateMeasurement(dbName, logStream, logStream, nil, nil, 0, nil, nil, options); err != nil {
+		t.Fatal(err)
+	}
+
+	// 0 day
+	ttl = 0
+	options.Ttl = &ttl
+	if err := data.UpdateMeasurement(dbName, logStream, logStream, options); err != nil {
+		t.Fatal(err)
+	}
+	rpInfo, err := data.RetentionPolicy(dbName, logStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(rpInfo.Duration) != ttl*int64(time.Hour)*24 {
+		t.Fatalf("duration update failed")
+	}
+
+	// 1 day
+	ttl = int64(time.Hour) * 24
+	options.Ttl = &ttl
+	if err := data.UpdateMeasurement(dbName, logStream, logStream, options); err != nil {
+		t.Fatal(err)
+	}
+	rpInfo, err = data.RetentionPolicy(dbName, logStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(rpInfo.Duration) != ttl {
+		t.Fatalf("duration update failed")
+	}
+
+	// 3000 day
+	ttl = 3000
+	options.Ttl = &ttl
+	if err := data.UpdateMeasurement(dbName, logStream, logStream, options); err != nil {
+		t.Fatal(err)
+	}
+	rpInfo, err = data.RetentionPolicy(dbName, logStream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(rpInfo.Duration) != ttl*int64(time.Hour)*24 {
+		t.Fatalf("duration set failed")
+	}
+}
+
+func TestInitDataNodePtView(t *testing.T) {
+	data := &Data{}
+	data.PtNumPerNode = 1
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 5, Role: NodeWriter}, 0, 0})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 6, Role: NodeDefault}, 0, 0})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 7, Role: NodeReader}, 0, 0})
+	data.initDataNodePtView(data.GetClusterPtNum())
+	if data.ClusterPtNum != 2 {
+		t.Fatalf("calculate ClusterPtNum failed")
 	}
 }

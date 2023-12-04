@@ -269,11 +269,11 @@ func TestHandleSpecialCtlDataSetNodeStatusFailNoHa(t *testing.T) {
 	}
 	config.SetHaPolicy(config.WAFPolicy)
 	defer config.SetHaPolicy(config.SSPolicy)
-	err := s.segregateNode([]uint64{1}, false)
+	err := s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, false)
 	if err.Error() != "set preSegregateStatus fail node is not the leader when node is not the leader" {
 		t.Fatal("TestHandleSpecialCtlDataSetNodeStatusFailNoHa error")
 	}
-	err = s.segregateNode([]uint64{1}, true)
+	err = s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, true)
 	if err.Error() != "set preSegregateStatus fail node is not the leader when node is not the leader" {
 		t.Fatal("TestHandleSpecialCtlDataSetNodeStatusFailNoHa error")
 	}
@@ -289,7 +289,7 @@ func TestHandleSpecialCtlDataSetNodeStatusFail(t *testing.T) {
 		},
 	}
 	config.SetHaPolicy(config.SSPolicy)
-	err := s.segregateNode([]uint64{1}, false)
+	err := s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, false)
 	if err.Error() != "set preSegregateStatus fail node is not the leader when node is not the leader" {
 		t.Fatal("TestHandleSpecialCtlDataSetNodeStatusFailNoHa error")
 	}
@@ -313,7 +313,7 @@ func TestHandleSpecialCtlDataCheckTaskDoneFail(t *testing.T) {
 	globalService.msm.addToEventMap(event)
 	defer globalService.msm.removeFromEventMap(event)
 
-	err := s.segregateNode([]uint64{1}, false)
+	err := s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, false)
 	if err.Error() != "segregate timeout because of too many pt migrations or pt migrations error" {
 		t.Fatal("TestHandleSpecialCtlDataCheckTaskDoneFail error")
 	}
@@ -335,7 +335,7 @@ func TestHandleSpecialCtlDataForceTakeOverFail1(t *testing.T) {
 	globalService.store = s
 	globalService.msm.eventMap = make(map[string]MigrateEvent)
 
-	err := s.segregateNode([]uint64{1}, false)
+	err := s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, false)
 	if err.Error() != "no alive node to takeover segregate node pts" {
 		t.Fatal("TestHandleSpecialCtlDataForceTakeOverFail1 error")
 	}
@@ -360,7 +360,7 @@ func TestHandleSpecialCtlDataForceTakeOverFail2(t *testing.T) {
 	globalService.clusterManager = &ClusterManager{}
 	globalService.clusterManager.getTakeOverNode = takeOverNodeChoose[config.GetHaPolicy()]
 	globalService.clusterManager.Stop()
-	err := s.segregateNode([]uint64{1}, false)
+	err := s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, false)
 	if err.Error() != "cluster manager is stopped" {
 		t.Fatal("TestHandleSpecialCtlDataForceTakeOverFail2 error")
 	}
@@ -384,8 +384,8 @@ func TestHandleSpecialCtlDataForceTakeOverFail3(t *testing.T) {
 	globalService.clusterManager = &ClusterManager{}
 	globalService.clusterManager.getTakeOverNode = takeOverNodeChoose[config.GetHaPolicy()]
 	globalService.clusterManager.memberIds = make(map[uint64]struct{})
-	globalService.clusterManager.addClusterMember(1)
-	err := s.segregateNode([]uint64{1}, false)
+	globalService.clusterManager.handleClusterMember(1, &serf.MemberEvent{Type: serf.EventMemberJoin, Members: nil, EventTime: 1})
+	err := s.segregateNode([]uint64{1}, []string{"127.0.0.1"}, false)
 	if err.Error() != "no alive node to takeover segregate node pts" {
 		t.Fatal("TestHandleSpecialCtlDataForceTakeOverFail3 error")
 	}
@@ -431,12 +431,12 @@ func TestHandleSpecialCtlDataWaitNodeTakeOverDoneFail(t *testing.T) {
 	globalService = &Service{}
 	globalService.store = s
 	globalService.store.NetStore = netStore
-	err := s.WaitNodeTakeOverDone([]uint64{10}, []uint64{meta.Normal})
+	err := s.WaitNodeTakeOverDone([]uint64{10}, []string{"127.0.0.2"}, []uint64{meta.Normal})
 	if err.Error() != "set preSegregateStatus fail node is not the leader when first node segregate error" {
 		t.Fatal("TestHandleSpecialCtlDataWaitNodeTakeOverDoneFail error")
 	}
 	s.raft.(*MockRaftForSG).SetLeader(true)
-	err = s.WaitNodeTakeOverDone([]uint64{10}, []uint64{meta.Normal})
+	err = s.WaitNodeTakeOverDone([]uint64{10}, []string{"127.0.0.10"}, []uint64{meta.Normal})
 	if err.Error() != "first fail node loc: 0 when first node segregate error" {
 		t.Fatal("TestHandleSpecialCtlDataWaitNodeTakeOverDoneFail error")
 	}

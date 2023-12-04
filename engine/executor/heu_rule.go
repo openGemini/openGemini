@@ -19,6 +19,7 @@ package executor
 import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -391,7 +392,7 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && GetEnableSlidingWindowPushUp() != OnSlidingWindowPushUp
+	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && sysconfig.GetEnableSlidingWindowPushUp() != sysconfig.OnSlidingWindowPushUp
 	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown) {
 		return
 	}

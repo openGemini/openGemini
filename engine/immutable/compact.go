@@ -33,6 +33,7 @@ import (
 	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -291,10 +292,10 @@ func (c *csImmTableImpl) prepare(m *MmsTables, group FilesInfo, lcLog *Log.Logge
 	compItrs.WithLog(lcLog)
 	_, seq := group.oldFiles[0].LevelAndSequence()
 	fileName := NewTSSPFileName(seq, group.toLevel, 0, 0, true, m.lock)
-	compItrs.builder = NewMsBuilder(m.path, compItrs.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1)
+	compItrs.builder = NewMsBuilder(m.path, compItrs.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.TSSTORE)
 	compItrs.builder.NewPKIndexWriter()
 	dataFilePath := fileName.String()
-	compItrs.indexFilePath = path.Join(compItrs.builder.Path, compItrs.name, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
+	compItrs.indexFilePath = path.Join(compItrs.builder.Path, compItrs.name, colstore.AppendPKIndexSuffix(dataFilePath)+tmpFileSuffix)
 	compItrs.PkRec = append(compItrs.PkRec, record.NewRecordBuilder(c.primaryKey[group.name]))
 	compItrs.pkRecPosition = 0
 	compItrs.recordResultNum = 0
@@ -452,7 +453,7 @@ func (c *csImmTableImpl) ReplaceFiles(m *MmsTables, name string, oldFiles, newFi
 func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16, isOrder bool, cLog *Log.Logger) ([]TSSPFile, error) {
 	_, seq := files[0].LevelAndSequence()
 	fileName := NewTSSPFileName(seq, level, 0, 0, isOrder, m.lock)
-	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize)
+	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize, config.TSSTORE)
 	tableBuilder.WithLog(cLog)
 	for {
 		select {
@@ -474,7 +475,7 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 		}
 
 		record.CheckRecord(rec)
-		tableBuilder, err = tableBuilder.WriteRecord(id, rec, nil, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
+		tableBuilder, err = tableBuilder.WriteRecord(id, rec, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
 			ext := fn.extent
 			ext++
 			return fn.seq, fn.level, 0, ext

@@ -313,7 +313,7 @@ func TestClusterManager_PassiveTakeOver(t *testing.T) {
 	// do not take over when takeoverEnabled is false
 	globalService.store.data.TakeOverEnabled = false
 	globalService.clusterManager.enableTakeover(false)
-	e = *generateMemberEvent(serf.EventMemberFailed, "2", 1, serf.StatusFailed)
+	e = *generateMemberEvent(serf.EventMemberFailed, "2", 2, serf.StatusFailed)
 	globalService.clusterManager.eventCh <- e
 	time.Sleep(time.Second)
 	assert.Equal(t, serf.StatusAlive, globalService.store.data.DataNode(2).Status)
@@ -468,13 +468,13 @@ func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
 			BalancerEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402")
+	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
-	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1))
+	assert.NoError(t, store.data.CreateDatabase("db0", nil, nil, false, 1, nil))
 	c.store = store
 
 	dbPt := &meta.DbPtInfo{

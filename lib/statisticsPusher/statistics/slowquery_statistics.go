@@ -50,8 +50,10 @@ var SlowQueryTagMap map[string]string
 var SqlSlowQueryStatisticsName = "sql_slow_queries"
 var SlowQueries = make(chan *SQLSlowQueryStatistics, 256)
 
-func NewSqlSlowQueryStatistics() *SQLSlowQueryStatistics {
-	return &SQLSlowQueryStatistics{}
+func NewSqlSlowQueryStatistics(db string) *SQLSlowQueryStatistics {
+	return &SQLSlowQueryStatistics{
+		DB: db,
+	}
 }
 
 func InitSlowQueryStatistics(tags map[string]string) {

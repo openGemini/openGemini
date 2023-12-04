@@ -270,7 +270,10 @@ func (cm *ClusterManager) processEvent(event serf.Event) {
 
 func (cm *ClusterManager) addEventMap(name string, event *serf.MemberEvent) {
 	cm.mu.Lock()
-	cm.eventMap[name] = event
+	e, ok := cm.eventMap[name]
+	if !ok || e.EventTime < event.EventTime {
+		cm.eventMap[name] = event
+	}
 	cm.mu.Unlock()
 }
 
@@ -281,17 +284,19 @@ func (cm *ClusterManager) isNodeAlive(id uint64) bool {
 	return ok
 }
 
-// addClusterMember adds ts-store node id to memberIds
-func (cm *ClusterManager) addClusterMember(id uint64) {
+// handleClusterMember adds or removes ts-store node id to memberIds
+func (cm *ClusterManager) handleClusterMember(id uint64, e *serf.MemberEvent) {
 	cm.mu.Lock()
-	cm.memberIds[id] = struct{}{}
-	cm.mu.Unlock()
-}
-
-func (cm *ClusterManager) removeClusterMember(id uint64) {
-	cm.mu.Lock()
-	delete(cm.memberIds, id)
-	cm.mu.Unlock()
+	defer cm.mu.Unlock()
+	gotEvent, ok := cm.eventMap[strconv.FormatUint(id, 10)]
+	if ok && e.EventTime < gotEvent.EventTime {
+		return
+	}
+	if e.EventType() == serf.EventMemberJoin {
+		cm.memberIds[id] = struct{}{}
+	} else if e.EventType() == serf.EventMemberFailed {
+		delete(cm.memberIds, id)
+	}
 }
 
 // only choose the pt owner as the dest node in write-available-first policy
@@ -447,18 +452,22 @@ func (cm *ClusterManager) processReplication(dbPt *meta.DbPtInfo) error {
 	rgId := dbPt.Pti.RGID
 	rg := &rgs[rgId]
 	if rg.MasterPtID == dbPt.Pti.PtId {
-		masterId, peers, success := electRgMaster(rg, ptInfos)
-		logger.NewLogger(errno.ModuleHA).Info("master failed, elect rg new master", zap.Uint32("oldMaster", rg.MasterPtID),
-			zap.Uint32("newMaster", masterId), zap.Any("old peers", rg.Peers), zap.Any("new peers", peers), zap.Bool("success", success))
+		masterId, newPeers, success := electRgMaster(rg, ptInfos)
 		if success {
-			return globalService.store.updateReplication(dbPt.Db, rgId, masterId, peers, uint32(meta.SubHealth))
+			logger.NewLogger(errno.ModuleHA).Info("master failed, elect rg new master success", zap.String("db", dbPt.Db),
+				zap.Uint32("oldMaster", rg.MasterPtID), zap.Uint32("newMaster", masterId),
+				zap.Any("old peers", rg.Peers), zap.Any("new peers", newPeers))
+			return globalService.store.updateReplication(dbPt.Db, rgId, masterId, newPeers, uint32(meta.SubHealth))
 		}
+		logger.NewLogger(errno.ModuleHA).Info("master failed, elect rg new master failed", zap.String("db", dbPt.Db),
+			zap.Uint32("oldMaster", rg.MasterPtID), zap.Any("old peers", rg.Peers))
 		return nil
 	}
 
-	peers := generatePeers(rg, dbPt)
-	logger.NewLogger(errno.ModuleHA).Info("slave failed, update peers", zap.Any("old peers", rg.Peers), zap.Any("new peers", peers))
-	return globalService.store.updateReplication(dbPt.Db, rgId, rg.MasterPtID, peers, uint32(meta.SubHealth))
+	newPeers := generatePeers(rg, dbPt)
+	logger.NewLogger(errno.ModuleHA).Info("slave failed, update peers", zap.String("db", dbPt.Db),
+		zap.Any("old peers", rg.Peers), zap.Any("new peers", newPeers))
+	return globalService.store.updateReplication(dbPt.Db, rgId, rg.MasterPtID, newPeers, uint32(meta.SubHealth))
 }
 
 func (cm *ClusterManager) enableTakeover(enable bool) {

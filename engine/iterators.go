@@ -534,6 +534,7 @@ type idKeyCursorContext struct {
 	tmsMergePool *record.RecordPool
 	querySchema  *executor.QuerySchema
 	decs         *immutable.ReadContext
+	colAux       *immutable.ColAux
 }
 
 func (i *idKeyCursorContext) hasAuxTags() bool {
@@ -681,16 +682,14 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		mapSize = memtableInitMapSize
 	}
 	memItrs := make(map[uint64][]*SeriesIter, mapSize)
-
 	for i := start; i < tagSetNum; i += step {
 		sid := tagSet.IDs[i]
 		ptTags := &(tagSet.TagsVec[i])
 		filter := tagSet.Filters[i]
 		rowFilter := tagSet.GetRowFilter(i)
-
 		nameWithVer := schema.Options().OptionsName()
 		memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
-		memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilter, ptTags, nil)
+		memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilter, ptTags, nil, &ctx.colAux)
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
 			continue
 		}
@@ -910,8 +909,7 @@ func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 	// get record from mem table which match the select cond
 	nameWithVer := schema.Options().OptionsName()
 	memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
-
-	memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilters, ptTags, nil)
+	memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilters, ptTags, nil, &ctx.colAux)
 
 	if span != nil {
 		span.Count(memTableDuration, int64(time.Since(tm)))

@@ -48,6 +48,7 @@ var (
 const (
 	psStore = "ps -ef | grep -iE \"ts-store.*-config\" | grep -v grep"
 	psSql   = "ps -ef | grep -iE \"ts-sql.*-config\" | grep -v grep"
+	psData  = "ps -ef | grep -iE \"ts-data.*-config\" | grep -v grep"
 	psMeta  = "ps -ef | grep -iE \"ts-meta.*-config\" | grep -v grep"
 
 	DuIndex = "du -al --max-depth=1 %s/data/*/*/*/index | grep index$"
@@ -85,6 +86,8 @@ type nodeMetrics struct {
 	StoreStatus int64 // store process status, seek running or killed
 	SqlPid      int64
 	SqlStatus   int64
+	DataPid     int64
+	DataStatus  int64
 	MetaPid     int64
 	MetaStatus  int64
 
@@ -233,6 +236,20 @@ func (nc *NodeCollector) collectBasic(ctx context.Context) error {
 		nc.nodeMetric.SqlStatus = status
 		nc.nodeMetric.mu.Unlock()
 	}
+	if strings.Contains(nc.conf.Process, "ts-data") {
+		res, err := exec.Command("/bin/sh", "-c", psData).Output()
+		var DataPid int
+		if err != nil {
+			status = killed
+		} else {
+			status = running
+			DataPid, _ = strconv.Atoi(strings.Fields(strings.TrimSpace(string(res)))[1])
+		}
+		nc.nodeMetric.mu.Lock()
+		nc.nodeMetric.DataPid = int64(DataPid)
+		nc.nodeMetric.DataStatus = status
+		nc.nodeMetric.mu.Unlock()
+	}
 	if strings.Contains(nc.conf.Process, "ts-meta") {
 		res, err := exec.Command("/bin/sh", "-c", psMeta).Output()
 		var MetaPid int
@@ -313,6 +330,8 @@ var metricFields = []string{
 	"StoreStatus=%d",
 	"SqlPid=%d",
 	"SqlStatus=%d",
+	"DataPid=%d",
+	"DataStatus=%d",
 	"MetaPid=%d",
 	"MetaStatus=%d",
 	"DiskSize=%d",
@@ -342,6 +361,8 @@ func (nc *NodeCollector) formatPoint() string {
 		nc.nodeMetric.StoreStatus,
 		nc.nodeMetric.SqlPid,
 		nc.nodeMetric.SqlStatus,
+		nc.nodeMetric.DataPid,
+		nc.nodeMetric.DataStatus,
 		nc.nodeMetric.MetaPid,
 		nc.nodeMetric.MetaStatus,
 		nc.nodeMetric.DiskSize,

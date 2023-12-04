@@ -205,8 +205,56 @@ func encodeMeasurement(mm *influxql.Measurement) *internal.Measurement {
 		IsTarget:        mm.IsTarget,
 		EngineType:      uint32(mm.EngineType),
 	}
+
+	if mm.IndexRelation != nil {
+		pb.IndexRelation = encodeIndexRelation(mm.IndexRelation)
+	}
+
 	if mm.Regex != nil {
 		pb.Regex = mm.Regex.Val.String()
+	}
+	return pb
+}
+
+func encodeIndexOption(io *influxql.IndexOption) *internal.IndexOption {
+	pb := &internal.IndexOption{
+		FieldName:  io.FieldName,
+		Tokens:     io.Tokens,
+		Tokenizers: io.Tokenizers,
+		IndexName:  io.IndexName,
+		IndexType:  io.IndexType,
+		Segment:    io.Segment,
+	}
+	return pb
+}
+
+func encodeIndexRelation(indexR *influxql.IndexRelation) *internal.IndexRelation {
+	pb := &internal.IndexRelation{
+		Rid:        indexR.Rid,
+		Oids:       indexR.Oids,
+		IndexNames: indexR.IndexNames,
+	}
+
+	pb.IndexLists = make([]*internal.IndexList, len(indexR.IndexList))
+	for i, IList := range indexR.IndexList {
+		indexList := &internal.IndexList{
+			IList: IList.IList,
+		}
+		pb.IndexLists[i] = indexList
+	}
+
+	if indexR.IndexOptions != nil {
+		pb.IndexOptions = make(map[string]*internal.IndexOptions, len(indexR.IndexOptions))
+		for i, indexOptions := range indexR.IndexOptions {
+			if indexOptions != nil {
+				pb.IndexOptions[i] = &internal.IndexOptions{
+					Infos: make([]*internal.IndexOption, len(indexOptions)),
+				}
+				for _, o := range indexOptions {
+					pb.IndexOptions[i].Infos = append(pb.IndexOptions[i].Infos, encodeIndexOption(o))
+				}
+			}
+		}
 	}
 	return pb
 }
@@ -221,6 +269,10 @@ func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) 
 		EngineType:      config.EngineType(pb.GetEngineType()),
 	}
 
+	if pb.GetIndexRelation() != nil {
+		mm.IndexRelation = decodeIndexRelation(pb.GetIndexRelation())
+	}
+
 	if pb.Regex != "" {
 		regex, err := regexp.Compile(pb.GetRegex())
 		if err != nil {
@@ -230,6 +282,47 @@ func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) 
 	}
 
 	return mm, nil
+}
+
+func decodeIndexOption(pb *internal.IndexOption) *influxql.IndexOption {
+	io := &influxql.IndexOption{
+		FieldName:  pb.GetFieldName(),
+		Tokens:     pb.GetTokens(),
+		Tokenizers: pb.GetTokenizers(),
+		IndexName:  pb.GetIndexName(),
+		IndexType:  pb.GetIndexType(),
+		Segment:    pb.GetSegment(),
+	}
+	return io
+}
+
+func decodeIndexRelation(pb *internal.IndexRelation) *influxql.IndexRelation {
+	indexR := &influxql.IndexRelation{}
+	indexR.Rid = pb.GetRid()
+	indexR.Oids = pb.GetOids()
+	indexR.IndexNames = pb.GetIndexNames()
+	indexLists := pb.GetIndexLists()
+	indexR.IndexList = make([]*influxql.IndexList, len(indexLists))
+	for i, iList := range indexLists {
+		indexR.IndexList[i] = &influxql.IndexList{
+			IList: iList.GetIList(),
+		}
+	}
+	indexOptions := pb.GetIndexOptions()
+	if indexOptions != nil {
+		indexR.IndexOptions = make(map[string][]*influxql.IndexOption, len(indexOptions))
+		for i, idxOptions := range indexOptions {
+			infos := idxOptions.GetInfos()
+			if infos != nil {
+				indexR.IndexOptions[i] = make([]*influxql.IndexOption, len(infos))
+				for j, o := range infos {
+					indexR.IndexOptions[i][j] = decodeIndexOption(o)
+				}
+			}
+		}
+	}
+
+	return indexR
 }
 
 func encodeInterval(i hybridqp.Interval) *internal.Interval {

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package executor
+package sysconfig
 
 import (
 	"sync/atomic"
@@ -29,7 +29,7 @@ var (
 	OnPrintLogicalPlan        int64 = 1
 	OnForceBroadcastQuery     int64 = 1
 
-	querySeriesLimit int = 0 // query schema upper bound
+	querySchemaLimit int = 0 // query schema upper bound
 )
 
 func SetEnableBinaryTreeMerge(enabled int64) {
@@ -65,9 +65,9 @@ func GetEnableForceBroadcastQuery() int64 {
 }
 
 func SetQuerySchemaLimit(limit int) {
-	querySeriesLimit = limit
+	querySchemaLimit = limit
 }
 
 func GetQuerySchemaLimit() int {
-	return querySeriesLimit
+	return querySchemaLimit
 }

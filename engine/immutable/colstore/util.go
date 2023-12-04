@@ -17,25 +17,52 @@ limitations under the License.
 package colstore
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
 const (
-	primaryKeyMagic     string = "COLX"
-	fileMagicSize       int    = len(primaryKeyMagic)
-	version             uint32 = 0
-	headerSize          int    = fileMagicSize + util.Uint32SizeBytes
-	RowsNumPerFragment  int    = util.RowsNumPerFragment
-	CoarseIndexFragment int    = 8
-	MinRowsForSeek      int    = 0
-	IndexFileSuffix     string = ".idx"
-	DefaultTCLocation   int8   = -1
+	primaryKeyMagic            string = "COLX"
+	fileMagicSize              int    = len(primaryKeyMagic)
+	version                    uint32 = 0
+	headerSize                 int    = fileMagicSize + util.Uint32SizeBytes
+	RowsNumPerFragment         int    = util.RowsNumPerFragment
+	CoarseIndexFragment        int    = 8
+	MinRowsForSeek             int    = 0
+	IndexFileSuffix            string = ".idx"
+	MinMaxIndexFileSuffix      string = ".mm"
+	SetIndexFileSuffix         string = ".set"
+	BloomFilterIndexFileSuffix string = ".bf"
+	DefaultTCLocation          int8   = -1
 )
 
-func AppendIndexSuffix(dataPath string) string {
+var (
+	MinMaxIndex      = "minmax"
+	SetIndex         = "set"
+	BloomFilterIndex = "bloomfilter"
+)
+
+func AppendPKIndexSuffix(dataPath string) string {
 	indexPath := dataPath + IndexFileSuffix
+	return indexPath
+}
+
+func AppendSKIndexSuffix(dataPath string, fieldName string, indexName string) string {
+	var indexFileSuffix string
+	switch indexName {
+	case MinMaxIndex:
+		indexFileSuffix = MinMaxIndexFileSuffix
+	case SetIndex:
+		indexFileSuffix = SetIndexFileSuffix
+	case BloomFilterIndex:
+		indexFileSuffix = BloomFilterIndexFileSuffix
+	default:
+		panic(fmt.Sprintf("unsupported the skip index: %s", indexName))
+	}
+	indexPath := dataPath + "." + fieldName + indexFileSuffix
 	return indexPath
 }
 

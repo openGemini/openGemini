@@ -62,7 +62,7 @@ func MockMetaData() (meta.Data, error) {
 	data.DataNodes = dataNodes
 
 	exec.Add(func() {
-		exec.err = data.CreateDatabase("foo", nil, nil, false, 1)
+		exec.err = data.CreateDatabase("foo", nil, nil, false, 1, nil)
 	})
 
 	exec.Add(func() {
@@ -85,12 +85,12 @@ func MockMetaData() (meta.Data, error) {
 
 	exec.Add(func() {
 		exec.err = data.CreateMeasurement("foo", "bar", "cpu",
-			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil, nil)
+			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil, nil, nil)
 	})
 
 	exec.Add(func() {
 		exec.err = data.CreateMeasurement("foo", "bar", "cpu",
-			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil, nil)
+			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil, nil, nil)
 	})
 
 	exec.Add(func() {

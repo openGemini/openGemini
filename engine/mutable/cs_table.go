@@ -26,6 +26,8 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -41,8 +43,9 @@ const defaultWriteRecNum = 8
 
 type csMemTableImpl struct {
 	mu                  sync.RWMutex
-	primaryKey          map[string]record.Schemas // mst -> primary key
-	timeClusterDuration map[string]time.Duration  // mst -> time cluster duration
+	primaryKey          map[string]record.Schemas  // mst -> primary key
+	timeClusterDuration map[string]time.Duration   // mst -> time cluster duration
+	indexRelation       map[string]*index.Relation // mst -> skip index info
 }
 
 func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
@@ -75,11 +78,11 @@ func (c *csMemTableImpl) ApplyConcurrency(table *MemTable, f func(msName string)
 func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string, tbStore immutable.TablesStore,
 	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) *immutable.MsBuilder {
 	writeRec := chunk.WriteRec.GetRecord()
-	writeMs = WriteRecordForFlush(writeRec, writeMs, tbStore, 0, true, math.MinInt64, c.primaryKey[msName])
+	writeMs = c.WriteRecordForFlush(writeRec, writeMs, tbStore, 0, true, math.MinInt64, c.primaryKey[msName], c.indexRelation[msName])
 	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
 
 	if writeMs != nil {
-		if err := immutable.WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0); err != nil {
+		if err := immutable.WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0, c.indexRelation[msName]); err != nil {
 			writeMs = nil
 			logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
 			return writeMs
@@ -89,7 +92,7 @@ func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 		if writeMs.GetPKInfoNum() != 0 {
 			for i, file := range writeMs.Files {
 				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendIndexSuffix(immutable.RemoveTsspSuffix(dataFilePath))
+				indexFilePath := colstore.AppendPKIndexSuffix(immutable.RemoveTsspSuffix(dataFilePath))
 				tbStore.AddPKFile(writeMs.Name(), indexFilePath, writeMs.GetPKRecord(i), writeMs.GetPKMark(i), tcLocation)
 			}
 		}
@@ -100,12 +103,31 @@ func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 	return nil
 }
 
-func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration time.Duration) {
+func (c *csMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
+	lastFlushTime int64, schema record.Schemas, skipIndexRelation *index.Relation) *immutable.MsBuilder {
+	var err error
+
+	if !order && lastFlushTime == math.MaxInt64 {
+		msb.StoreTimes()
+	}
+
+	msb, err = msb.WriteRecordByCol(id, rec, schema, skipIndexRelation, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
+		return tbStore.NextSequence(), 0, 0, 0
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return msb
+}
+
+func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration time.Duration, indexRelation *index.Relation) {
 	c.mu.RLock()
 	_, okPrimary := c.primaryKey[mst]
 	_, okTC := c.timeClusterDuration[mst]
+	_, okSkip := c.indexRelation[mst]
 	c.mu.RUnlock()
-	if !okPrimary || !okTC {
+	if !okPrimary || !okTC || !okSkip {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if _, ok := c.primaryKey[mst]; !ok {
@@ -113,6 +135,9 @@ func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration t
 		}
 		if _, ok := c.timeClusterDuration[mst]; !ok {
 			c.timeClusterDuration[mst] = duration
+		}
+		if _, ok := c.indexRelation[mst]; !ok {
+			c.indexRelation[mst] = indexRelation
 		}
 	}
 }
@@ -136,9 +161,10 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 		return
 	}
 	conf := immutable.GetColStoreConfig()
-	writeMs := createMsBuilder(tbStore, true, lock, dataPath, msName, 1, rec.Len(), conf)
+	writeMs := createMsBuilder(tbStore, true, lock, dataPath, msName, 1, rec.Len(), conf, config.COLUMNSTORE)
 	writeMs.SetTCLocation(tcLocation)
 	writeMs.NewPKIndexWriter()
+	writeMs.NewSkipIndexWriter()
 	c.flushChunkImp(dataPath, msName, lock, tbStore, chunk, writeMs, tcLocation)
 }
 
@@ -331,6 +357,7 @@ func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo
 	if err != nil {
 		return err
 	}
+
 	start = time.Now()
 	msInfo.CreateWriteChunkForColumnStore(mstsInfo[mst].ColStoreInfo.SortKey)
 	msInfo.writeChunk.Mu.Lock()
@@ -393,8 +420,9 @@ func (c *csMemTableImpl) UpdateMstInfo(msName string, mstsInfo map[string]*meta.
 	c.mu.RLock()
 	_, okPrimary := c.primaryKey[msName]
 	_, okTC := c.timeClusterDuration[msName]
+	_, okSkip := c.indexRelation[msName]
 	c.mu.RUnlock()
-	if okPrimary && okTC {
+	if okPrimary && okTC && okSkip {
 		return nil
 	}
 
@@ -403,15 +431,30 @@ func (c *csMemTableImpl) UpdateMstInfo(msName string, mstsInfo map[string]*meta.
 		return errors.New("measurements info not found")
 	}
 
-	primaryKey := make(record.Schemas, len(mstInfo.ColStoreInfo.PrimaryKey))
-	for i, pk := range mstInfo.ColStoreInfo.PrimaryKey {
-		if pk == record.TimeField {
-			primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
-		} else {
-			primaryKey[i] = record.Field{Name: pk, Type: record.ToPrimitiveType(mstInfo.Schema[pk])}
+	var primaryKey record.Schemas
+	if !okPrimary {
+		primaryKey = make(record.Schemas, len(mstInfo.ColStoreInfo.PrimaryKey))
+		for i, pk := range mstInfo.ColStoreInfo.PrimaryKey {
+			if pk == record.TimeField {
+				primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
+			} else {
+				primaryKey[i] = record.Field{Name: pk, Type: record.ToPrimitiveType(mstInfo.Schema[pk])}
+			}
 		}
 	}
-	c.updateMstInfo(msName, primaryKey, mstInfo.ColStoreInfo.TimeClusterDuration)
+
+	var indexRelation *index.Relation
+	if !okSkip {
+		indexRelation = &index.Relation{
+			Oids:       mstInfo.IndexRelation.Oids,
+			IndexNames: mstInfo.IndexRelation.IndexNames,
+			IndexList:  make([]index.ColumnList, len(mstInfo.IndexRelation.IndexList)),
+		}
+		for i := range mstInfo.IndexRelation.IndexList {
+			indexRelation.IndexList[i].Columns = mstInfo.IndexRelation.IndexList[i].IList
+		}
+	}
+	c.updateMstInfo(msName, primaryKey, mstInfo.ColStoreInfo.TimeClusterDuration, indexRelation)
 
 	return nil
 }

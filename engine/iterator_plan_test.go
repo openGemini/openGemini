@@ -8882,3 +8882,131 @@ func Test_CreateLogicalPlan(t *testing.T) {
 		})
 	}
 }
+
+func TestRecTransToChunk2(t *testing.T) {
+	ck := ChunkReader{
+		transColumnFun: &transColAuxFun,
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Boolean, Name: "tag"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	fields := []influxql.VarRef{
+		influxql.VarRef{Val: "tag", Type: influxql.Tag},
+		influxql.VarRef{Val: "string", Type: influxql.String},
+	}
+	rt := hybridqp.NewRowDataTypeImpl(fields...)
+	rec := record.NewRecord(schema, true)
+	rec.RecMeta.ColMeta = nil
+	for i := 0; i < len(rec.ColVals)-1; i++ {
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendString("abcd")
+		rec.ColVals[i].AppendString("ef")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("g")
+		rec.ColVals[i].AppendString("h")
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendString("ij")
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("k")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+	}
+	for i := 0; i < 22; i++ {
+		rec.ColVals[len(rec.ColVals)-1].AppendInteger(int64(i))
+	}
+	chunk := executor.NewChunkBuilder(rt).NewChunk("mst")
+	fieldItemIndex := make([]item, 0)
+	for i := 0; i < 3; i++ {
+		fieldItemIndex = append(fieldItemIndex, item{index: i})
+	}
+	ck.fieldItemIndex = fieldItemIndex
+	if ck.transToChunk(rec, chunk) != nil {
+		t.Error("transToChunk error")
+	}
+	_, newOffset := chunk.Column(0).GetStringBytes()
+	exp := []uint32{0, 0, 0, 4, 6, 7, 8, 8, 8, 10, 10, 10, 11}
+	if len(newOffset) != len(exp) {
+		t.Fatal("TestRecTransToChunk2 error1")
+	}
+	for i := range exp {
+		if exp[i] != newOffset[i] {
+			t.Fatal("TestRecTransToChunk2 error2")
+		}
+	}
+}
+
+func TestRecTransToChunk3(t *testing.T) {
+	ck := ChunkReader{
+		transColumnFun: &transColumnFun,
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Boolean, Name: "tag"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	fields := []influxql.VarRef{
+		influxql.VarRef{Val: "tag", Type: influxql.Tag},
+		influxql.VarRef{Val: "string", Type: influxql.String},
+	}
+	rt := hybridqp.NewRowDataTypeImpl(fields...)
+	rec := record.NewRecord(schema, true)
+	rec.RecMeta.ColMeta = nil
+	for i := 0; i < len(rec.ColVals)-1; i++ {
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendString("abcd")
+		rec.ColVals[i].AppendString("ef")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("g")
+		rec.ColVals[i].AppendString("h")
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendString("ij")
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("k")
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendStringNull()
+		rec.ColVals[i].AppendString("")
+	}
+	for i := 0; i < 22; i++ {
+		rec.ColVals[len(rec.ColVals)-1].AppendInteger(int64(i))
+	}
+	chunk := executor.NewChunkBuilder(rt).NewChunk("mst")
+	fieldItemIndex := make([]item, 0)
+	for i := 0; i < 3; i++ {
+		fieldItemIndex = append(fieldItemIndex, item{index: i})
+	}
+	ck.fieldItemIndex = fieldItemIndex
+	if ck.transToChunk(rec, chunk) != nil {
+		t.Error("transToChunk error")
+	}
+	_, newOffset := chunk.Column(0).GetStringBytes()
+	exp := []uint32{0, 0, 0, 4, 6, 7, 8, 8, 8, 10, 10, 10, 11}
+	if len(newOffset) != len(exp) {
+		t.Fatal("TestRecTransToChunk2 error1")
+	}
+	for i := range exp {
+		if exp[i] != newOffset[i] {
+			t.Fatal("TestRecTransToChunk2 error2")
+		}
+	}
+}

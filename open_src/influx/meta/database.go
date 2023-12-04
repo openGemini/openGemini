@@ -26,6 +26,7 @@ type DatabaseInfo struct {
 	EnableTagArray         bool
 	ReplicaN               int
 	ContinuousQueries      map[string]*ContinuousQueryInfo // {"cqName": *ContinuousQueryInfo}
+	Options                *ObsOptions
 }
 
 func NewDatabase(name string) *DatabaseInfo {
@@ -111,6 +112,11 @@ func (di DatabaseInfo) clone() *DatabaseInfo {
 		}
 	}
 
+	if di.Options != nil {
+		options := *di.Options
+		other.Options = &options
+	}
+
 	return &other
 }
 
@@ -140,6 +146,9 @@ func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 	}
 	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
 	pb.ReplicaN = proto.Int64(int64(di.ReplicaN))
+	if di.Options != nil {
+		pb.Options = di.Options.Marshal()
+	}
 
 	return pb
 }
@@ -175,6 +184,10 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 	di.ReplicaN = int(pb.GetReplicaN())
 	if di.ReplicaN == 0 {
 		di.ReplicaN = 1
+	}
+	if pb.GetOptions() != nil {
+		di.Options = &ObsOptions{}
+		di.Options.Unmarshal(pb.GetOptions())
 	}
 }
 

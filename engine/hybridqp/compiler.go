@@ -46,6 +46,7 @@ type Options interface {
 	GetInterval() time.Duration
 	IsGroupByAllDims() bool
 	GetSourcesNames() []string
+	GetMeasurements() []*influxql.Measurement
 	HaveOnlyCSStore() bool
 	GetDimensions() []string
 	SetFill(influxql.FillOption)

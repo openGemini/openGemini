@@ -39,15 +39,15 @@ data:
   - col data: data encoded as chunk@tssp file.
 */
 
-type primaryKeyWriter struct {
+type indexWriter struct {
 	num        int64 // byte written
 	fd         fileops.File
 	fileWriter fileops.BasicFileWriter // disk writer
 }
 
-func newPrimaryKeyWriter(fd fileops.File, lockPath *string) fileops.FileWriter {
+func newIndexWriter(fd fileops.File, lockPath *string) fileops.FileWriter {
 	lw := fileops.NewLimitWriter(fd, snapshotWriteLimiter)
-	w := &primaryKeyWriter{
+	w := &indexWriter{
 		fd:         fd,
 		fileWriter: fileops.NewFileWriter(lw, defaultWriterBufferSize, lockPath),
 	}
@@ -55,7 +55,7 @@ func newPrimaryKeyWriter(fd fileops.File, lockPath *string) fileops.FileWriter {
 	return w
 }
 
-func (c *primaryKeyWriter) WriteData(b []byte) (int, error) {
+func (c *indexWriter) WriteData(b []byte) (int, error) {
 	n, err := c.fileWriter.Write(b)
 	if err != nil {
 		return 0, err
@@ -64,10 +64,10 @@ func (c *primaryKeyWriter) WriteData(b []byte) (int, error) {
 
 	return n, nil
 }
-func (c *primaryKeyWriter) WriteChunkMeta(b []byte) (int, error) {
-	panic("WriteChunkMeta not implement for primaryKeyWriter") // no chunk meta for colStore
+func (c *indexWriter) WriteChunkMeta(b []byte) (int, error) {
+	panic("WriteChunkMeta not implement for indexWriter") // no chunk meta for colStore
 }
-func (c *primaryKeyWriter) Close() error {
+func (c *indexWriter) Close() error {
 	if c.fileWriter != nil {
 		if err := c.fileWriter.Close(); err != nil {
 			log.Error("close data writer fail", zap.Error(err))
@@ -84,24 +84,24 @@ func (c *primaryKeyWriter) Close() error {
 
 	return nil
 }
-func (c *primaryKeyWriter) DataSize() int64 {
+func (c *indexWriter) DataSize() int64 {
 	return c.num
 }
-func (c *primaryKeyWriter) ChunkMetaSize() int64 {
-	panic("ChunkMetaSize not implement for primaryKeyWriter")
+func (c *indexWriter) ChunkMetaSize() int64 {
+	panic("ChunkMetaSize not implement for indexWriter")
 }
-func (c *primaryKeyWriter) GetFileWriter() fileops.BasicFileWriter {
+func (c *indexWriter) GetFileWriter() fileops.BasicFileWriter {
 	return c.fileWriter
 }
-func (c *primaryKeyWriter) AppendChunkMetaToData() error {
-	panic("AppendChunkMetaToData not implement for primaryKeyWriter")
+func (c *indexWriter) AppendChunkMetaToData() error {
+	panic("AppendChunkMetaToData not implement for indexWriter")
 }
-func (c *primaryKeyWriter) SwitchMetaBuffer() {
-	panic("SwitchMetaBuffer not implement for primaryKeyWriter")
+func (c *indexWriter) SwitchMetaBuffer() {
+	panic("SwitchMetaBuffer not implement for indexWriter")
 }
-func (c *primaryKeyWriter) MetaDataBlocks(dst [][]byte) [][]byte {
-	panic("MetaDataBlocks not implement for primaryKeyWriter")
+func (c *indexWriter) MetaDataBlocks(dst [][]byte) [][]byte {
+	panic("MetaDataBlocks not implement for indexWriter")
 }
-func (c *primaryKeyWriter) Name() string {
+func (c *indexWriter) Name() string {
 	return c.fd.Name()
 }

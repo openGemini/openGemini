@@ -88,6 +88,11 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 		return nil, err
 	}
 
+	if err := conf.Common.ValidateRole(); err != nil {
+		fmt.Printf("validata node role failed, err:%v, default role will be used.\n", err)
+		conf.Common.NodeRole = ""
+	}
+
 	mutable.NewMemTablePoolManager().Init()
 	mutable.SetSizeLimit(int64(conf.Data.ShardMutableSizeLimit))
 	mutable.InitConcurLimiter(cpu.GetCpuNum())
@@ -155,7 +160,7 @@ func (s *Server) Open() error {
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")
-	nid, clock, connId, err := commHttpHandler.MetaClient.InitMetaClient(s.metaNodes, false, &storageNodeInfo)
+	nid, clock, connId, err := commHttpHandler.MetaClient.InitMetaClient(s.metaNodes, false, &storageNodeInfo, s.config.Common.NodeRole)
 	if err != nil {
 		panic(err)
 	}
@@ -237,10 +242,6 @@ func (s *Server) Close() error {
 	startTime = time.Now()
 	s.storage.MustClose()
 	log.Info("successfully closed the storage", zap.Float64("in seconds", time.Since(startTime).Seconds()))
-
-	if s.statisticsPusher != nil {
-		s.statisticsPusher.Stop()
-	}
 
 	if s.StoreService != nil {
 		if err := s.StoreService.Close(); err != nil {

@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
@@ -276,7 +277,7 @@ func (f *FragmentIterators) Flush(tbStore *MmsTables, pkSchema record.Schemas, f
 			}
 		}
 
-		if err = WriteIntoFile(f.builder, true, f.builder.GetPKInfoNum() != 0); err != nil {
+		if err = WriteIntoFile(f.builder, true, f.builder.GetPKInfoNum() != 0, nil); err != nil {
 			f.builder.log.Error("rename init file failed", zap.String("mstName", f.name), zap.Error(err))
 			f.builder = nil
 			return err
@@ -287,7 +288,7 @@ func (f *FragmentIterators) Flush(tbStore *MmsTables, pkSchema record.Schemas, f
 		if f.builder.GetPKInfoNum() != 0 {
 			for i, file := range f.builder.Files {
 				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
 				if err = tbStore.ReplacePKFile(f.builder.msName, indexFilePath, f.builder.GetPKRecord(i), f.builder.GetPKMark(i), f.oldIndexFiles); err != nil {
 					return err
 				}
@@ -344,10 +345,10 @@ func (f *FragmentIterators) writeRecord(nextFile func(fn TSSPFileName) (seq uint
 		return f.builder, err
 	}
 
-	f.builder, err = switchTsspFile(f.builder, f.RecordResult, f.RecordResult, rowsLimit, fSize, nextFile)
+	f.builder, err = switchTsspFile(f.builder, f.RecordResult, f.RecordResult, rowsLimit, fSize, nextFile, config.COLUMNSTORE)
 	f.builder.NewPKIndexWriter()
 	dataFilePath := f.builder.FileName.String()
-	f.indexFilePath = path.Join(f.builder.Path, f.builder.msName, colstore.AppendIndexSuffix(dataFilePath)+tmpFileSuffix)
+	f.indexFilePath = path.Join(f.builder.Path, f.builder.msName, colstore.AppendPKIndexSuffix(dataFilePath)+tmpFileSuffix)
 	f.PkRec = append(f.PkRec, record.NewRecordBuilder(pkSchema))
 	f.pkRecPosition++
 	return f.builder, err
@@ -449,7 +450,7 @@ func (f *FragmentIterators) initBuilder(columnCount int) {
 func (f *FragmentIterators) encodeData(data *record.Record) error {
 	var err error
 	// encode data
-	f.builder.encodeChunk, err = f.builder.chunkBuilder.EncodeChunkForColumnStore(f.builder.dataOffset, data, f.builder.encodeChunk)
+	f.builder.encodeChunk, err = f.builder.chunkBuilder.EncodeChunkForCompaction(f.builder.dataOffset, data, f.builder.encodeChunk)
 	if err != nil {
 		f.log.Error("encode chunk fail", zap.Error(err))
 		return err

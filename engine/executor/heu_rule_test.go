@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
@@ -847,7 +848,7 @@ func TestSlideWindowPushDownToExchange(t *testing.T) {
 	columnsName := []string{"value"}
 	opt := query.ProcessorOptions{}
 	opt.Interval.Duration = 1000
-	executor.OnSlidingWindowPushUp = 1
+	sysconfig.OnSlidingWindowPushUp = 1
 	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 

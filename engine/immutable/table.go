@@ -20,6 +20,7 @@ import (
 	"sync"
 	"unsafe"
 
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
 )
@@ -133,7 +134,7 @@ func EstimateBufferSize(recSize int, rows int) int {
 	return rows * recSize
 }
 
-func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool) error {
+func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *index.Relation) error {
 	f, err := msb.NewTSSPFile(tmp)
 	if err != nil {
 		panic(err)
@@ -145,7 +146,17 @@ func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool) error {
 	if !withPKIndex {
 		err = RenameTmpFiles(msb.Files)
 	} else {
-		err = RenameTmpFilesWithPKIndex(msb.Files)
+		var indexList []string
+		if skipIndex != nil && len(skipIndex.IndexNames) != 0 {
+			for i := range skipIndex.IndexNames {
+				if skipIndex.IndexNames[i] == "bloomfilter" || skipIndex.IndexNames[i] == "minmax" {
+					for j := range skipIndex.IndexList[i].Columns {
+						indexList = append(indexList, skipIndex.IndexList[j].Columns...)
+					}
+				}
+			}
+		}
+		err = RenameTmpFilesWithPKIndex(msb.Files, indexList)
 	}
 
 	if err != nil {
