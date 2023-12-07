@@ -56,6 +56,9 @@ const (
 
 	KillQueryRequestMessage
 	KillQueryResponseMessage
+
+	ShowTagKeysRequestMessage
+	ShowTagKeysResponseMessage
 )
 
 var MessageBinaryCodec = make(map[uint8]func() codec.BinaryCodec, 20)
@@ -84,6 +87,8 @@ func init() {
 	MessageBinaryCodec[ShowQueriesResponseMessage] = func() codec.BinaryCodec { return &ShowQueriesResponse{} }
 	MessageBinaryCodec[KillQueryRequestMessage] = func() codec.BinaryCodec { return &KillQueryRequest{} }
 	MessageBinaryCodec[KillQueryResponseMessage] = func() codec.BinaryCodec { return &KillQueryResponse{} }
+	MessageBinaryCodec[ShowTagKeysRequestMessage] = func() codec.BinaryCodec { return &ShowTagKeysRequest{} }
+	MessageBinaryCodec[ShowTagKeysResponseMessage] = func() codec.BinaryCodec { return &ShowTagKeysResponse{} }
 
 	MessageResponseTyp = map[uint8]uint8{
 		SeriesKeysRequestMessage:               SeriesKeysResponseMessage,
@@ -96,5 +101,6 @@ func init() {
 		CreateDataBaseRequestMessage:           CreateDatabaseResponseMessage,
 		ShowQueriesRequestMessage:              ShowQueriesResponseMessage,
 		KillQueryRequestMessage:                KillQueryResponseMessage,
+		ShowTagKeysRequestMessage:              ShowTagKeysResponseMessage,
 	}
 }

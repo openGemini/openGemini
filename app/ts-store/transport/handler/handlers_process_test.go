@@ -83,6 +83,10 @@ type MockEngine struct {
 	netstorage.Engine
 }
 
+func (e *MockEngine) TagKeys(_ string, _ []uint32, _ [][]byte, _ influxql.Expr, _ influxql.TimeRange) ([]string, error) {
+	return []string{"mst,tag1,tag2,tag3", "mst2,tag1,tag2,tag3"}, nil
+}
+
 func (e *MockEngine) SeriesKeys(_ string, _ []uint32, _ [][]byte, _ influxql.Expr, _ influxql.TimeRange) ([]string, error) {
 	return nil, nil
 }

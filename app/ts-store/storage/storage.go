@@ -69,6 +69,7 @@ type StoreEngine interface {
 	GetShardSplitPoints(string, uint32, uint64, []int64) ([]string, error)
 	SeriesCardinality(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error)
 	SeriesExactCardinality(string, []uint32, []string, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
+	TagKeys(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]string, error)
 	SeriesKeys(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]string, error)
 	TagValues(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (netstorage.TablesTagSets, error)
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
@@ -487,6 +488,12 @@ func (s *Storage) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]by
 
 func (s *Storage) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
 	return s.engine.TagValuesCardinality(db, ptIDs, tagKeys, condition, tr)
+}
+
+func (s *Storage) TagKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+	ms := stringSlice2BytesSlice(measurements)
+
+	return s.engine.TagKeys(db, ptIDs, ms, condition, tr)
 }
 
 func (s *Storage) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {

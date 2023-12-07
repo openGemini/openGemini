@@ -118,6 +118,34 @@ func (dr *DeleteResponse) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+type ShowTagKeysRequest struct {
+	internal2.ShowTagKeysRequest
+}
+
+func (r *ShowTagKeysRequest) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.ShowTagKeysRequest)
+}
+
+func (r *ShowTagKeysRequest) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.ShowTagKeysRequest)
+}
+
+type ShowTagKeysResponse struct {
+	internal2.ShowTagKeysResponse
+}
+
+func (r *ShowTagKeysResponse) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.ShowTagKeysResponse)
+}
+
+func (r *ShowTagKeysResponse) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.ShowTagKeysResponse)
+}
+
+func (r *ShowTagKeysResponse) Error() error {
+	return NormalizeError(r.Err)
+}
+
 type SeriesKeysRequest struct {
 	internal2.SeriesKeysRequest
 }

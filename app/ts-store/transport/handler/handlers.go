@@ -49,6 +49,8 @@ func newHandler(typ uint8) RPCHandler {
 		return &ShowQueries{}
 	case netstorage.KillQueryRequestMessage:
 		return &KillQuery{}
+	case netstorage.ShowTagKeysRequestMessage:
+		return &ShowTagKeys{}
 	default:
 		return nil
 	}
@@ -219,6 +221,23 @@ func (h *KillQuery) SetMessage(msg codec.BinaryCodec) error {
 	req, ok := msg.(*netstorage.KillQueryRequest)
 	if !ok {
 		return executor.NewInvalidTypeError("*netstorage.KillQueryRequest", msg)
+	}
+	h.req = req
+	return nil
+}
+
+type ShowTagKeys struct {
+	BaseHandler
+
+	req *netstorage.ShowTagKeysRequest
+	rsp *netstorage.ShowTagKeysResponse
+}
+
+func (h *ShowTagKeys) SetMessage(msg codec.BinaryCodec) error {
+	h.rsp = &netstorage.ShowTagKeysResponse{}
+	req, ok := msg.(*netstorage.ShowTagKeysRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.ShowTagKeysRequest", msg)
 	}
 	h.req = req
 	return nil

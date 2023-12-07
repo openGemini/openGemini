@@ -20,11 +20,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -976,7 +978,7 @@ func (e *Engine) deleteOneIndex(dbPTInfo *DBPTInfo, indexId uint64) error {
 }
 
 func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
-	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition, tr)
+	keysMap, err := e.searchIndex(db, ptIDs, measurements, condition, tr, e.handleSeries)
 	if err != nil {
 		return nil, err
 	}
@@ -990,7 +992,7 @@ func (e *Engine) SeriesExactCardinality(db string, ptIDs []uint32, measurements 
 	return result, nil
 }
 
-func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]map[string]struct{}, error) {
+func (e *Engine) searchIndex(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange, fn func(key []byte, keysMap map[string]map[string]struct{}, mstName string)) (map[string]map[string]struct{}, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -1032,7 +1034,10 @@ func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, 
 			for _, nameWithVer := range measurements {
 				mstName := influx.GetOriginMstName(util.Bytes2str(nameWithVer))
 				stime := time.Now()
-				idx := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
+				idx, ok := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
+				if !ok {
+					return nil, errors.New("idx nil, some thing wrong with GetPrimaryIndex")
+				}
 				series, err = idx.SearchSeriesKeys(series[:0], nameWithVer, condition)
 				if len(series) > seriesLen {
 					seriesLen = len(series)
@@ -1046,7 +1051,7 @@ func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, 
 				stime = time.Now()
 				for _, key := range series {
 					key = bytes.Replace(key, nameWithVer, []byte(mstName), 1)
-					keysMap[mstName][string(key)] = struct{}{}
+					fn(key, keysMap, mstName)
 				}
 				log.Info("remove dupicate key", zap.String("nameWithVer", string(nameWithVer)),
 					zap.Duration("cost", time.Since(stime)))
@@ -1055,6 +1060,18 @@ func (e *Engine) searchSeries(db string, ptIDs []uint32, measurements [][]byte, 
 		pt.mu.RUnlock()
 	}
 	return keysMap, nil
+}
+func (e *Engine) handleSeries(key []byte, keysMap map[string]map[string]struct{}, mstName string) {
+	keysMap[mstName][string(key)] = struct{}{}
+}
+
+func (e *Engine) handleTagKeys(key []byte, keysMap map[string]map[string]struct{}, mstName string) {
+	arr := strings.Split(string(key), ",")
+
+	for _, item := range arr[1:] {
+		kv := strings.Split(item, "=")
+		keysMap[mstName][kv[0]] = struct{}{}
+	}
 }
 
 func (e *Engine) DbPTRef(db string, ptId uint32) error {

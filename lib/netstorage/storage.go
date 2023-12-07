@@ -51,6 +51,8 @@ type Storage interface {
 	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (TablesTagSets, error)
 	TagValuesCardinality(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (map[string]uint64, error)
 
+	ShowTagKeys(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error)
+
 	ShowSeries(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error)
 	SeriesCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) ([]meta2.MeasurementCardinalityInfo, error)
 	SeriesExactCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) (map[string]uint64, error)
@@ -318,6 +320,28 @@ func (s *NetStorage) SeriesExactCardinality(nodeID uint64, db string, dbPts []ui
 	}
 
 	return resp.Cardinality, resp.Error()
+}
+
+func (s *NetStorage) ShowTagKeys(nodeID uint64, db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]string, error) {
+	req := &ShowTagKeysRequest{}
+	req.Db = proto.String(db)
+	req.PtIDs = ptIDs
+	req.Measurements = measurements
+	if condition != nil {
+		req.Condition = proto.String(condition.String())
+	}
+
+	v, err := s.ddlRequestWithNodeId(nodeID, ShowTagKeysRequestMessage, req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := v.(*ShowTagKeysResponse)
+	if !ok {
+		return nil, executor.NewInvalidTypeError("*netstorage.ShowTagKeysResponse", v)
+	}
+
+	return resp.TagKeys, resp.Error()
 }
 
 func (s *NetStorage) ShowSeries(nodeID uint64, db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]string, error) {

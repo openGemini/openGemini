@@ -17,6 +17,18 @@ message SeriesKeysResponse {
     optional string Err    = 2;
 }
 
+message ShowTagKeysRequest {
+    required string Db           = 1;
+    repeated uint32 PtIDs        = 2;
+    repeated string Measurements = 3;
+    optional string condition    = 4;
+}
+
+message ShowTagKeysResponse {
+    repeated string TagKeys = 1;
+    optional string Err     = 2;
+}
+
 message CreateDataBaseRequest {
     required string Db = 1;
     required uint32 pt = 2;
