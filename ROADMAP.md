@@ -21,17 +21,37 @@
 - [x] Time series data prediction.
 - [x] Time series data anomaly detection.
 
-**v1.1.0rc0 (2023.07)**
+**v1.1.0 (2023.09)**
+
 - [x] Full-text indexing
 - [x] High series cardinality engine (kernel)
+- [x] Support windows platform
+- [x] Support data subscription
+- [x] Support query manager
+- [x] Support continuous query
+- [x] Support show configs command
 
-**v1.1.0rc1 (2023.08)**
-- [ ] High series cardinality engine (aggregate)
-- [ ] openGemini operator
+**v1.2.0 (2024.01)**
 
-**v1.1.0 （2023.09）**
-- [ ] Reliability(data replication)
-- [ ] High series cardinality engine (full)
-- [ ] Continuous query
-- [ ] Export Data
-- [ ] Python SDK
+- [ ] Query performance optimization for IoT scenarios
+
+**v.1.3.0 (2024.03)**
+
+- [ ] Data delete
+
+**v.1.4.0 (2024.05)**
+
+- [ ] Data replication
+- [ ] Refactor AI-based data analysis
+
+
+
+# SDK (Java/C++/Go/Python/Rust/TypeScript)
+
+v0.1.0 (2024.01)
+
+- [ ] Basic API for reading and writing (Line Protocl)
+
+v0.2.0 (2024.02)
+
+- [ ] Support Arrow flight 

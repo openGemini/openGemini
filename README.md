@@ -10,29 +10,37 @@
 
 ## About openGemini
 
-openGemini is an open-source,cloud-native time-series database(TSDB) that can be widely used in IoT, Internet of Vehicles(IoV), O&M monitoring, and industrial Internet scenarios.It developed by HUAWEI CLOUD and it has excellent read/write performance and efficient data analysis capabilities. It uses an SQL-like query language, does not rely on third-party software, and is easy to install, deploy, and maintain. We encourage contribution and collaboration to the community.
+openGemini is a cloud-native distributed time series database, mainly for the Internet of Things and operation and maintenance monitoring scenarios. It focuses on the storage and analysis of massive telemetry data. It can be widely used in logistics, Internet of Vehicles, Internet, intelligent manufacturing, modern agriculture, transportation, and energy, electric power, medicine and other industries, it has excellent reading and writing performance and efficient data analysis capabilities. It uses SQL-like query language, easy to install, and convenient in operation and maintenance.
+
+If you have used openGemini, please let us know and [click Submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
 
 ## Why openGemini
 
-- High-performance read and write
-  - 10-million-scale concurrent writes of metrics per second
-  - Millisecond-level response for querying tens of thousands of sensors data
-- Supports time-series data analysis
-  - Built-in AI data analysis algorithm
-  - Supports real-time abnormality detection and prediction of time-series data
-- Ecosystem compatibility
-  - Compatible with InfluxDB line protocol and Influxql
-  - Compatible with existing InfluxDB toolchain
-  - Supports promethus remote read/write API
-- Efficient management  of massive time series data
-  - Supports 100-million-scale time series management
-  - Built-in efficient data compression algorithm, with a storage cost of only 1/20 compared to traditional databases
-- Distributed
-  - Provides horizontal scalability and supports hundreds of nodes in a cluster
-- Flexible deployment
-  - Runs the executable binary files without external dependencies
-  - All the configuration is done with reasonable defaults
-  - Supports single-node and cluster deployment
+Compared with other time series database, openGemini has the following advantages:
+
+- #### High Performance
+
+  Store and query data quickly and efficiently with automatic partitioning, LSM-based storage techniques,  and better data process engineering, see[performance reports](https://docs.opengemini.org/guide/introduction/performance.html)
+
+- #### High Scalability
+
+  Adopting MPP architecture, support distributed cluster deployment and can be flexibly expanded as business grows to meet higher load requirements, see [Architecture](https://docs.opengemini.org/guide/introduction/structure.html)
+
+- #### High Cardinality
+
+  A new high cardinality storage engine solves problems such as excessive index memory usage and low read and write performance, see [high cardinality storage engine](https://docs.opengemini.org/guide/features/high_series_cardinality.html)
+
+- #### Data Compression
+
+  Data is stored in column format, and different data types use dedicated data compression algorithms. The data compression ratio is as high as 15:1 or higher, see [Data compression algorithm](https://docs.opengemini.org/guide/kernel/data_compress.html)
+
+- #### Flexible Deployment
+
+  Supports stand-alone and cluster deployment, and supports various forms of deployment such as virtual machines, physical machines, containers, and clouds. Provides one-click container deployment tool ([openGemini-operator](https://github.com/openGemini/openGemini-operator)) and one-click normal installation and deployment tool ([gemix](https://github.com/openGemini/gemix))
+
+- #### Ecosystem compatibility
+
+  Compatible with InfluxDB v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing InfluxDB toolchain, supports promethus remote read/write API
 
 ## Third-party supports
 
@@ -52,7 +60,7 @@ Big data and data analysis systems: Zeppelin, Flink, Spark, Kapacitor, etc.
 
 ## Quick Start
 
-For a more detailed introduction, please visit our official website [User Guide](http://www.openGemini.org/docs)
+For a more detailed introduction, please visit our official website [User Guide](https://docs.opengemini.org/guide/quick_start/get_started.html)
 
 This section mainly contains the following:
 
@@ -61,11 +69,11 @@ This section mainly contains the following:
 
 ### Compiling environment information
 
-[GO](https://golang.org/dl/) version v1.18+
+[GO](https://golang.org/dl/) version v1.19+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 
-**How to set GO environment variables**
+#### How to set GO environment variables
 
 Open ~/.profile configuration file and add the following configurations to the end of the file:
 
@@ -111,7 +119,7 @@ ts-cli ts-meta ts-monitor ts-server  ts-sql  ts-store
 
 ### Configuration
 
-The configuration file is in the conf directory. For more information about the configuration items, please refer to [User Guide --> Configuration Files](http://opengemini.org/docs)
+The configuration file is in the conf directory. For more information about the configuration items, please refer to [User Guide --> Reference --> Configuration Files](https://docs.opengemini.org/guide/reference/configurations.html)
 
 ### Run openGemini
 
@@ -123,7 +131,7 @@ Standalone operation
 > sh scripts/install.sh
 ```
 
-Refer to cluster deployments in [User Guide](http://opengemini.org/docs)
+Refer to cluster deployments in [User Guide](https://docs.opengemini.org/guide/quick_start/get_started.html)
 
 #### Using openGemini
 
@@ -194,7 +202,13 @@ Elapsed: 7.723332ms
 
 2. [Twitter](https://twitter.com/openGemini)
 
+3. [Email](mailto:community.ts@opengemini.org)
+
+4. [mailing list](https://groups.google.com/g/openGemini)
+
+
 ## License
 
 openGemini is licensed under the Apache License 2.0. Refer to [LICENSE](https://github.com/openGemini/openGemini/blob/main/LICENSE) for more details.
 
+For third-party software usage notice, see [Open_Source_Software_Notice](Open_Source_Software_Notice.md)
