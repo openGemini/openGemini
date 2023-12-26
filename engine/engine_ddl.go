@@ -21,6 +21,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
+	sysString "strings"
 	"sync/atomic"
 	"time"
 
@@ -229,8 +230,31 @@ func (e *Engine) DropSeries(database string, sources []influxql.Source, ptId []u
 	panic("implement me")
 }
 
+func (e *Engine) TagKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+	keysMap, err := e.searchIndex(db, ptIDs, measurements, condition, tr, e.handleTagKeys)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(keysMap))
+	for k, v := range keysMap {
+		var builder sysString.Builder
+		builder.WriteString(k)
+		hastag := false
+		for tag := range v {
+			builder.WriteString(",")
+			builder.WriteString(tag)
+			hastag = true
+		}
+		if !hastag {
+			continue
+		}
+		result = append(result, builder.String())
+	}
+	return result, nil
+}
+
 func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
-	keysMap, err := e.searchSeries(db, ptIDs, measurements, condition, tr)
+	keysMap, err := e.searchIndex(db, ptIDs, measurements, condition, tr, e.handleSeries)
 	if err != nil {
 		return nil, err
 	}

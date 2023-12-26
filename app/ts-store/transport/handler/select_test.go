@@ -80,6 +80,10 @@ func (s *MockStoreEngine) SeriesExactCardinality(db string, ptIDs []uint32, meas
 	return nil, nil
 }
 
+func (s *MockStoreEngine) TagKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+	return nil, nil
+}
+
 func (s *MockStoreEngine) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	return nil, nil
 }

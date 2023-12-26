@@ -8,5 +8,6 @@
     "Delete",
     "CreateDataBase",
     "ShowQueries",
-    "KillQuery"
+    "KillQuery",
+    "ShowTagKeys"
 ]

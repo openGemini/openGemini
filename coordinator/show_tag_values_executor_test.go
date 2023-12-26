@@ -159,6 +159,13 @@ type mockMC struct {
 	metaclient.MetaClient
 }
 
+func (m *mockMC) MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error) {
+	mst := &meta2.MeasurementInfo{Name: "mst_0000"}
+	mst_map := make(map[string]*meta2.MeasurementInfo)
+	mst_map["autogen.mst_0000"] = mst
+	return mst_map, nil
+}
+
 func (m *mockMC) NewDownSamplePolicy(string, string, *meta2.DownSamplePolicyInfo) error {
 	return nil
 }
@@ -180,6 +187,37 @@ func (m *mockMC) QueryTagKeys(database string, ms influxql.Measurements, cond in
 
 type mockNS struct {
 	netstorage.NetStorage
+}
+
+func (m *mockNS) ShowTagKeys(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error) {
+	if nodeID == 1 {
+		arr := []string{
+			"mst,tag1,tag2,tag3,tag4",
+			"mst,tag2,tag4,tag6",
+		}
+		return arr, nil
+	}
+	if nodeID == 2 {
+		arr := []string{
+			"mst,tag1,tag2,tag3,tag4",
+			"mst,tag2,tag4,tag5",
+		}
+		return arr, nil
+	}
+	if nodeID == 3 {
+		arr := []string{
+			"mst,tag1,tag2,tag3,tag4",
+			"mst,tag2,tag4,tag6",
+		}
+		return arr, nil
+	}
+	arr := []string{
+		"mst,tag1,tag2,tag3,tag4",
+		"mst,tag2,tag4,tag6",
+		"mst,tk1,tk2,tk3",
+		"mst,tk1,tk2,tk10",
+	}
+	return arr, nil
 }
 
 func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (netstorage.TablesTagSets, error) {

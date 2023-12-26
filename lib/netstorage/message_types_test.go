@@ -43,6 +43,7 @@ func TestMessageTypes(t *testing.T) {
 		store.CreateDataBaseRequestMessage:           {&store.CreateDataBaseRequest{}, &store.CreateDataBaseResponse{}},
 		store.ShowQueriesRequestMessage:              {&store.ShowQueriesRequest{}, &store.ShowQueriesResponse{}},
 		store.KillQueryRequestMessage:                {&store.KillQueryRequest{}, &store.KillQueryResponse{}},
+		store.ShowTagKeysRequestMessage:              {&store.ShowTagKeysRequest{}, &store.ShowTagKeysResponse{}},
 	}
 
 	for typ, items := range data {

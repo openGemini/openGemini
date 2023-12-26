@@ -9001,6 +9001,85 @@ func TestServer_Query_ShowSeries(t *testing.T) {
 	ReleaseHaTestEnv(t)
 }
 
+func TestServer_Query_ShowTagKeysWithCondition(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		fmt.Sprintf(`mst,region=bj4,cluster=gemini,server=hostA cpu=10 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,region=bj4,label=test cpu=20 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,region=bj5,others=good cpu=30 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst2,region=bj4,others=good cpu=30 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	/*
+		these queries are all special mst, because more mst make the results no order, exp not match actual
+	*/
+	test.addQueries([]*Query{
+		&Query{
+			name:    `show tag keys from mst and condition`,
+			command: "SHOW TAG KEYS FROM mst WHERE region=bj4",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["cluster"],["label"],["region"],["server"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag keys with condition and special mst`,
+			command: "SHOW TAG KEYS FROM mst WHERE region=bj4 and time > 0",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["cluster"],["label"],["region"],["server"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag keys with condition`,
+			command: "SHOW TAG KEYS FROM mst WHERE time > 0",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["cluster"],["label"],["others"],["region"],["server"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag keys with condition and limit`,
+			command: "SHOW TAG KEYS FROM mst WHERE time > 0 limit 1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["cluster"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag keys with condition and limit and offset`,
+			command: "SHOW TAG KEYS FROM mst WHERE time > 0 limit 1 offset 1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["label"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+	}...)
+
+	InitHaTestEnv(t)
+
+	var initialized bool
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if !initialized {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				initialized = true
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+
+	ReleaseHaTestEnv(t)
+}
+
 func TestServer_Query_ShowTagKeys(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())

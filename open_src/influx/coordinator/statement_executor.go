@@ -1524,21 +1524,23 @@ func (e *StatementExecutor) TagKeys(database string, measurements influxql.Measu
 }
 
 func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement, ctx *query2.ExecutionContext, seq int) error {
-	if q.Condition != nil {
-		return meta2.ErrUnsupportCommand
-	}
+	var tagKeys netstorage.TableTagKeys
+	var err error
 	if q.Database == "" {
 		return coordinator.ErrDatabaseNameRequired
 	}
-
-	tagKeys, err := e.TagKeys(q.Database, q.Sources.Measurements(), q.Condition)
+	if q.Condition != nil {
+		exec := coordinator.NewShowTagKeysExecutor(e.StmtExecLogger, e.MetaClient, e.MetaExecutor, e.NetStorage)
+		tagKeys, err = exec.Execute(q)
+	} else {
+		tagKeys, err = e.TagKeys(q.Database, q.Sources.Measurements(), q.Condition)
+	}
 	if err != nil {
 		return err
 	}
 	emitted := false
 	for _, m := range tagKeys {
 		keys := m.Keys
-
 		if q.Offset > 0 {
 			if q.Offset >= len(keys) {
 				keys = nil

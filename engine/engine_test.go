@@ -17,6 +17,7 @@ limitations under the License.
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -633,6 +634,75 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	}
 }
 
+func TestEngine_handleTagKeys(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	keysMap := make(map[string]map[string]struct{}, 0)
+	keysMap["mst"] = make(map[string]struct{})
+	key := []byte("mst,tag1=key1,tag2=key2,tag3=key3")
+	eng.handleTagKeys(key, keysMap, "mst")
+	for _, subMap := range keysMap {
+		for k := range subMap {
+			if k == "tag1" {
+				continue
+			} else if k == "tag2" {
+				continue
+			} else if k == "tag3" {
+				continue
+			} else {
+				t.Fatal(errors.New("result wrong"))
+			}
+		}
+	}
+}
+
+func TestEngine_TagKeys(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	dbInfo := eng.DBPartitions["db0"][0]
+	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx.DebugFlush()
+
+	keys, err := eng.TagKeys("db0", []uint32{0xff}, [][]byte{[]byte(msNames[0])}, nil, globalTime)
+	assert(len(keys) == 0, "Tag keys expect 0")
+	require.Equal(t, true, errno.Equal(err, errno.PtNotFound))
+
+	// measurement not exist
+	keys, err = eng.TagKeys("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil, globalTime)
+	assert(len(keys) == 0, "tag keys expect 0")
+	assert(err == nil, "err should be nil")
+
+	// no intersection of time
+	keys, err = eng.TagKeys("db0", []uint32{0}, [][]byte{[]byte("cpu")}, nil, influxql.TimeRange{
+		Min: time.Now().Add(7 * 24 * time.Hour),
+		Max: time.Now().Add(8 * 24 * time.Hour),
+	})
+	assert(len(keys) == 0, "tag keys expect 0")
+	assert(err == nil, "err should be nil")
+
+	// normal
+	keys, err = eng.TagKeys("db0", []uint32{0}, [][]byte{[]byte("cpu")}, nil, globalTime)
+	assert(len(keys) == 1, "tag keys expect 1 (cpu,tagkey1,tagkey2,tagkey3,tagkey4)")
+	assert(err == nil, "err should be nil")
+}
+
 func TestEngine_SeriesKeys(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine1(dir, config.TSSTORE)
@@ -660,7 +730,7 @@ func TestEngine_SeriesKeys(t *testing.T) {
 	// measurement not exist
 	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("not_exist_measurement")}, nil, globalTime)
 	assert(len(keys) == 0, "series keys expect 0")
-	assert(err == nil, "err should bu nil")
+	assert(err == nil, "err should be nil")
 
 	// no intersection of time
 	keys, err = eng.SeriesKeys("db0", []uint32{0}, [][]byte{[]byte("cpu")}, nil, influxql.TimeRange{
@@ -668,7 +738,7 @@ func TestEngine_SeriesKeys(t *testing.T) {
 		Max: time.Now().Add(8 * 24 * time.Hour),
 	})
 	assert(len(keys) == 0, "series keys expect 0")
-	assert(err == nil, "err should bu nil")
+	assert(err == nil, "err should be nil")
 }
 
 func TestEngine_SeriesCardinality(t *testing.T) {
