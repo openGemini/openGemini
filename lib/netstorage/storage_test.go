@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -113,4 +114,11 @@ func TestNetStorage_KillQueryOnNode(t *testing.T) {
 
 	err = store.KillQueryOnNode(notExitNodeID, uint64(100001))
 	require.EqualError(t, err, "no data node")
+}
+
+func TestNetStorage_ShowTagKeys(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	arr, err := store.ShowTagKeys(exitNodeID, "db0", []uint32{0}, []string{"cpu"}, nil)
+	assert.Equal(t, 0, len(arr))
+	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
 }

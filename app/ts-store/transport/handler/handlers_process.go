@@ -86,6 +86,16 @@ func (h *SeriesKeys) Process() (codec.BinaryCodec, error) {
 	return h.rsp, nil
 }
 
+func (h *ShowTagKeys) Process() (codec.BinaryCodec, error) {
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
+		var err error
+		h.rsp.TagKeys, err = h.store.TagKeys(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr, tr)
+		return err
+	})
+
+	return h.rsp, nil
+}
+
 func (h *CreateDataBase) Process() (codec.BinaryCodec, error) {
 	if err := createDir(h.store.GetPath(), h.req.GetDb(), h.req.GetPt(), h.req.GetRp()); err != nil {
 		h.rsp.Err = proto.String(err.Error())

@@ -86,6 +86,10 @@ func TestBaseHandler_SetMessage(t *testing.T) {
 			typ: netstorage.CreateDataBaseRequestMessage,
 			msg: &netstorage.CreateDataBaseRequest{},
 		},
+		{
+			typ: netstorage.ShowTagKeysRequestMessage,
+			msg: &netstorage.ShowTagKeysRequest{},
+		},
 	}
 
 	for _, item := range items {
@@ -250,4 +254,31 @@ func TestKillQuery_Process(t *testing.T) {
 	}
 	assert.NoError(t, response.Error())
 	assert.Equal(t, true, query.NewManager(clientIDs[0]).Aborted(abortedQID))
+}
+
+func TestShowTagKeys_Process(t *testing.T) {
+	db := path.Join(dataPath, "db0")
+	condition := "tag1=tagkey"
+
+	h := newHandler(netstorage.ShowTagKeysRequestMessage)
+	req := netstorage.ShowTagKeysRequest{}
+	req.Db = &db
+	req.Condition = &condition
+	req.PtIDs = []uint32{1}
+	req.Measurements = []string{"mst"}
+	if err := h.SetMessage(&req); err != nil {
+		t.Fatal(err)
+	}
+	st := storage.Storage{}
+	st.SetEngine(&MockEngine{})
+	h.SetStore(&st)
+	rsp, err := h.Process()
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, ok := rsp.(*netstorage.ShowTagKeysResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	assert.NoError(t, response.Error())
 }
