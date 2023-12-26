@@ -10,30 +10,38 @@
 
 ## 关于openGemini
 
-openGemini是华为云开源的一款云原生分布式时序数据库，可广泛应用于物联网、车联网、运维监控、工业互联网等业务场景，具备卓越的读写性能和高效的数据分析能力，采用类SQL查询语言，无第三方软件依赖、安装简单、部署灵活、运维便捷，鼓励社区贡献、合作。
+openGemini是一款云原生分布式时序数据库，主要面向物联网和运维监控场景，专注海量遥测数据的存储与分析，可广泛应用于物流、车联网、互联网、智能制造、现代农业、交通、能源、电力和医药等行业，具备卓越的读写性能和高效的数据分析能力，采用类SQL查询语言，无第三方软件依赖、安装简单、部署灵活、运维便捷。
+
+如果您使用了openGemini，请让我们知道，[点击提交使用信息](https://github.com/openGemini/openGemini/issues/62)
 
 ## 特性
 
-- 高性能读写
-  - 每秒千万级指标数据并发写入
-  - 万级传感器数据毫秒级响应
-- 支持时序数据分析
-  - 内置AI数据分析算法
-  - 实时异常检测和预测
-- 时序生态兼容
-  - 完全兼容InfluxDB line protocol 和 Influxql
-  - 兼容现有InfluxDB工具链
-  - 支持Prometheus远程数据存储
-- 分布式  
-  - 提供了水平扩展能力，支持数百节点集群规模
-- 海量时序数据高效管理
-  - 支持亿级时间线管理
-  - 内置高效数据压缩算法，存储成本只有传统数据库的1/20
-- 灵活部署
-  - 部署时只需运行编译生成的可执行文件，无需外部依赖
-  - 所有数据库配置参数均有合理的默认值，无需手动设置
-  - 支持单机和集群部署
-  
+与其他开源时序数据库相比，openGemini 具有以下优势：
+
+- #### 高性能
+
+  高吞吐、高并发、低时延。支持数据高速写入，能够快速响应大量查询请求，参考[性能报告](https://docs.opengemini.org/zh/guide/introduction/performance.html)
+
+- #### 高扩展
+
+  采用MPP架构，支持分布式集群部署，集群组件可以随着业务的增长而灵活扩展，以满足更高的负载需求, 支持100+节点，参考[架构设计](https://docs.opengemini.org/zh/guide/introduction/structure.html)
+
+- #### 高基数
+
+  全新存储引擎，不受时间线数量限制，解决时序数据高基数带来的索引膨胀、内存资源占用过高、读写性能下降等问题，参考[高基数存储引擎](https://docs.opengemini.org/zh/guide/features/high_series_cardinality.html)
+
+- #### 灵活部署
+
+  支持单机和集群部署，支持虚拟机、物理机、容器、云等多种形态部署。提供一键容器化部署工具（[openGemini-operator](https://github.com/openGemini/openGemini-operator)）和一键化普通安装部署工具（[gemix](https://github.com/openGemini/gemix)）
+
+- #### 高数据压缩率
+
+  数据采用列式存储，不同数据类型采用专用数据压缩算法，数据压缩比高达15:1或者更高，参考[数据压缩算法](https://docs.opengemini.org/zh/guide/kernel/data_compress.html)
+
+- #### 时序生态兼容
+
+  兼容InfluxDB 1.x 版本的Line Protocol 、Influxql和API接口，兼容现有InfluxDB工具链（如SDK/telegraf..)，支持Prometheus远程数据存储
+
 ## 第三方支持
 
 ![image-20220927211159737](images/image-20220927211159737.png)
@@ -52,12 +60,9 @@ openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工
 
 ## 快速开始
 
-如需更详细的介绍，请访问官网[用户指南](http://www.openGemini.org/docs)
+如需更详细的介绍，请访问官网[用户指南](https://docs.opengemini.org/zh/guide/quick_start/get_started.html)
 
-安装部署、扩节点等相关详细介绍见[openGemini安装部署指南](https://github.com/openGemini/community)
-
-openGemini内部提供了时序异常检测的分析框架、分析算子castor和UDF接口，见官网[用户指南 -> Data Analysis](http://www.openGemini.org/docs)。
-openGemini提供了基于AI的时序数据异常检测库，详细可见[openGemini-castor](https://github.com/openGemini/openGemini-castor)
+集群安装部署、扩节点等相关详细介绍见[openGemini安装部署指南](https://github.com/openGemini/community/blob/main/openGemini%20Install%20Guide.md)
 
 本章节主要包含以下内容：
 
@@ -66,7 +71,7 @@ openGemini提供了基于AI的时序数据异常检测库，详细可见[openGem
 
 ### 编译环境信息
 
-[GO](https://golang.org/dl/) version v1.18+
+[GO](https://golang.org/dl/) version v1.19+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 
@@ -116,11 +121,11 @@ ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store
 
 ### 配置
 
-配置文件放置在conf目录下，有关配置项的详细信息，请参见[用户指南-->配置文件](http://opengemini.org/docs)
+配置文件放置在conf目录下，有关配置项的详细信息，请参见[用户指南-->参考指南-->配置文件](https://docs.opengemini.org/zh/guide/reference/configurations.html)
 
 ### 运行openGemini
 
-单机运行，数据目录默认为/tmp/openGemini，使用时请修改单机版的配置文件openGemini.single.conf，更换目录。
+单机运行，数据目录默认为/tmp/openGemini，使用时请修改单机版的配置文件openGemini.single.conf，更换目录，**否则可能产生有数据文件丢失的风险**。
 
 ```
 > cd openGemini
@@ -128,7 +133,7 @@ ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store
 > sh scripts/install.sh
 ```
 
-集群部署见[用户指南](http://opengemini.org/docs)
+集群部署见[用户指南](https://docs.opengemini.org/zh/guide/quick_start/get_started.html)
 
 #### 使用openGemini
 
@@ -196,7 +201,7 @@ Elapsed: 7.723332ms
 
 ## 联系我们
 
-1. 加入WeChat（微信）用户组
+1. 加入微信交流群
 
    微信添加好友 xiangyu5632, 备注openGemini，我们会邀请您进群
 
@@ -217,4 +222,6 @@ Elapsed: 7.723332ms
 ## License
 
 openGemini采用 Apache 2.0 license. 详细见 [LICENSE](https://github.com/openGemini/openGemini/blob/main/LICENSE) .
+
+第三方软件使用声明，见[Open_Source_Software_Notice](./Open_Source_Software_Notice.md)
 
