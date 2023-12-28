@@ -140,13 +140,13 @@ ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store
 使用客户端ts-cli连接openGemini
 
 ```
-> ts-cli -host 127.0.0.1 -port 8086
+> ts-cli --host 127.0.0.1 --port 8086
 ```
 
 登陆成功后显示如下信息
 
 ```sh
-> ts-cli -host 127.0.0.1 -port 8086
+> ts-cli --host 127.0.0.1 --port 8086
 openGemini CLI 0.1.0 (rev-revision)
 Please use 'quit', 'exit' or 'Ctrl-D' to exit this program
 >
