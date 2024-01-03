@@ -138,13 +138,13 @@ Refer to cluster deployments in [User Guide](https://docs.opengemini.org/guide/q
 Use the client to connect to openGemini
 
 ```shell
-> ts-cli -host 127.0.0.1 -port 8086
+> ts-cli --host 127.0.0.1 --port 8086
 ```
 
 After successful login, the following message will be displayed
 
 ```sh
-> ts-cli -host 127.0.0.1 -port 8086
+> ts-cli --host 127.0.0.1 --port 8086
 openGemini CLI 0.1.0 (rev-revision)
 Please use 'quit', 'exit' or 'Ctrl-D' to exit this program
 > 
