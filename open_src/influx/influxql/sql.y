@@ -112,7 +112,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
-                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS
+                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER
                 REPLICAS DETAIL DESTINATIONS
                 SCHEMA INDEXES
 %token <bool>   DESC ASC
@@ -145,7 +145,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     CREATE_CONTINUOUS_QUERY_STATEMENT SHOW_CONTINUOUS_QUERIES_STATEMENT DROP_CONTINUOUS_QUERY_STATEMENT
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
                                     CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
-                                    SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SHOW_CONFIGS_STATEMENT SET_CONFIG_STATEMENT
+                                    SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SHOW_CONFIGS_STATEMENT SET_CONFIG_STATEMENT SHOW_CLUSTER_STATEMENT
                                     CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT
 %type <fields>                      COLUMN_CLAUSES IDENTS
 %type <field>                       COLUMN_CLAUSE
@@ -420,6 +420,10 @@ STATEMENT:
     	$$ = $1
     }
     |SET_CONFIG_STATEMENT
+    {
+    	$$ = $1
+    }
+    |SHOW_CLUSTER_STATEMENT
     {
     	$$ = $1
     }
@@ -3283,5 +3287,64 @@ SET_CONFIG_STATEMENT:
         stmt.Value = $6
         $$ = stmt
     }
+
+SHOW_CLUSTER_STATEMENT:
+    SHOW CLUSTER
+     {
+          stmt := &ShowClusterStatement{}
+          stmt.NodeID = 0
+          $$ = stmt
+     }
+     |SHOW CLUSTER WHERE IDENT EQ IDENT
+     {
+          stmt := &ShowClusterStatement{}
+          stmt.NodeID = 0
+	  if strings.ToLower($4) == "nodetype"{
+	      stmt.NodeType = $6
+	  } else {
+	      yylex.Error("Invalid where clause")
+	  }
+	  $$ = stmt
+     }
+     |SHOW CLUSTER WHERE IDENT EQ INTEGER
+     {
+         stmt := &ShowClusterStatement{}
+         if strings.ToLower($4) == "nodeid"{
+	     stmt.NodeID = $6
+	 } else {
+	     yylex.Error("Invalid where clause")
+	 }
+	 $$ = stmt
+     }
+     |SHOW CLUSTER WHERE IDENT EQ INTEGER AND IDENT EQ IDENT
+     {
+         stmt := &ShowClusterStatement{}
+         if strings.ToLower($4) == "nodeid"{
+             stmt.NodeID = $6
+         } else {
+             yylex.Error("Invalid where clause")
+         }
+         if strings.ToLower($8) == "nodetype"{
+             stmt.NodeType = $10
+	 } else {
+	     yylex.Error("Invalid where clause")
+	 }
+	 $$ = stmt
+     }
+     |SHOW CLUSTER WHERE IDENT EQ IDENT AND IDENT EQ INTEGER
+     {
+         stmt := &ShowClusterStatement{}
+         if strings.ToLower($4) == "nodetype"{
+             stmt.NodeType = $6
+         } else {
+             yylex.Error("Invalid where clause")
+         }
+         if strings.ToLower($8) == "nodeid"{
+             stmt.NodeID = $10
+	 } else {
+	     yylex.Error("Invalid where clause")
+	 }
+	 $$ = stmt
+      }
 
 %%

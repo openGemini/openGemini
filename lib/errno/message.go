@@ -274,6 +274,8 @@ var messageMap = map[Errno]*Message{
 	UpdateShardIdentFail:               newWarnMessage("update shard ident fail", ModuleDownSample),
 	EventSrcNodeSegregating:            newWarnMessage("event srcNode %d is Segregating", ModuleMeta),
 	EventDstNodeSegregating:            newWarnMessage("event dstNode %d is Segregating", ModuleMeta),
+	InValidNodeID:                      newWarnMessage("invalid node id: %d", ModuleMeta),
+	InValidNodeType:                    newWarnMessage("invalid node type: %s", ModuleMeta),
 
 	// http error codes
 	HttpUnauthorized:          newWarnMessage("authorization failed", ModuleHTTP),

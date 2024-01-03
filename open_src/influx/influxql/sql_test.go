@@ -174,6 +174,14 @@ func init() {
 		`SET CONFIG meta logging.level = info`,
 		`SET CONFIG store "data.compact-recovery" = false`,
 		`SET CONFIG store "data.compact-recovery" = true`,
+
+		// show cluster
+		"SHOW CLUSTER",
+		"SHOW CLUSTER WHERE nodeID = 2",
+		"SHOW CLUSTER WHERE nodeID = 2 AND nodeType = data",
+		"SHOW CLUSTER WHERE nodeType = data",
+		"SHOW CLUSTER WHERE nodeType = data AND nodeID = 2",
+		"SHOW CLUSTER WHERE nodeID = 2 AND nodeType = \"data\"",
 	}
 
 	benchCases = []string{
