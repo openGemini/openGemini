@@ -26,7 +26,17 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-func createAndGetFileInfo(filePath string, dumpType configureType) (*os.File, string, error) {
+const (
+	profileSuffix = ".pb.gz"
+)
+
+var (
+	allCpuProfiles = fmt.Sprintf("*.%s.*%s", CPU.string(), profileSuffix)
+	allMemProfiles = fmt.Sprintf("*.%s.*%s", Memory.string(), profileSuffix)
+	allGrtProfiles = fmt.Sprintf("*.%s.*%s", Goroutine.string(), profileSuffix)
+)
+
+func createAndGetFileInfo(dumpOpt *dumpOptions, dumpType configureType) (*os.File, string, error) {
 	pn, err := process.NewProcess(int32(os.Getpid()))
 	if err != nil {
 		return nil, "", err
@@ -35,10 +45,11 @@ func createAndGetFileInfo(filePath string, dumpType configureType) (*os.File, st
 	if err != nil {
 		return nil, "", err
 	}
-	filepath := formatFilename(filePath, dumpType, pName)
+	var directory = dumpOpt.dumpPath
+	filepath := formatFilename(directory, dumpType, pName)
 	f, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0640)
 	if err != nil && os.IsNotExist(err) {
-		if err = os.MkdirAll(filePath, 0750); err != nil {
+		if err = os.MkdirAll(directory, 0750); err != nil {
 			return nil, filepath, err
 		}
 		f, err = os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0640)
@@ -46,18 +57,20 @@ func createAndGetFileInfo(filePath string, dumpType configureType) (*os.File, st
 			return nil, filepath, err
 		}
 	}
+
+	err = rotateProfilesFiles(directory, dumpType, dumpOpt.maxNum, time.Duration(int64(24*time.Hour)*int64(dumpOpt.maxAge)))
 	return f, filepath, err
 }
 
 func formatFilename(filePath string, dumpType configureType, pName string) string {
-	suffix := time.Now().Format("20060102150405.000") + ".pb.gz"
-	return path.Join(filePath, fmt.Sprintf("%s.%s.%s", pName, check2name[dumpType], suffix))
+	suffix := time.Now().Format("20060102150405.000") + profileSuffix
+	return path.Join(filePath, fmt.Sprintf("%s.%s.%s", pName, dumpType.string(), suffix))
 }
 
 func writeFile(data bytes.Buffer, dumpType configureType, dumpOpts *dumpOptions) (string, error) {
 	buf := data.Bytes()
 
-	file, filename, err := createAndGetFileInfo(dumpOpts.dumpPath, dumpType)
+	file, filename, err := createAndGetFileInfo(dumpOpts, dumpType)
 	if err != nil {
 		return filename, fmt.Errorf("pprof %v open file failed : %w", type2name[dumpType], err)
 	}

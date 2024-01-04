@@ -30,16 +30,22 @@ const (
 	Goroutine
 )
 
+func (t configureType) string() string {
+	switch t {
+	case CPU:
+		return "cpu"
+	case Memory:
+		return "mem"
+	case Goroutine:
+		return "goroutine"
+	default:
+		return "unknown"
+	}
+}
+
 // check type to profile name, just align to pprof
 var type2name = map[configureType]string{
 	Memory:    "heap",
-	CPU:       "cpu",
-	Goroutine: "goroutine",
-}
-
-// check type to check name
-var check2name = map[configureType]string{
-	Memory:    "mem",
 	CPU:       "cpu",
 	Goroutine: "goroutine",
 }
@@ -62,6 +68,8 @@ type options struct {
 const (
 	defaultInterval = 10 * time.Second
 	defaultDumpPath = "/tmp"
+	defaultMaxNum   = 32
+	defaultMaxAge   = 7
 )
 
 func newOptions() *options {
@@ -73,6 +81,8 @@ func newOptions() *options {
 		MonitorInterval: defaultInterval,
 		dumpOptions: &dumpOptions{
 			dumpPath: defaultDumpPath,
+			maxNum:   defaultMaxNum,
+			maxAge:   defaultMaxAge,
 		},
 	}
 	return opts
@@ -101,6 +111,21 @@ func WithSavePath(dumpPath string) Option {
 	}
 }
 
+// WithMaxNum set the maximum number of old profile files to retain
+func WithMaxNum(num int) Option {
+	return func(opts *options) {
+		opts.maxNum = num
+	}
+}
+
+// WithMaxAge set the maximum number of days to retain old profile files based on the
+// timestamp encoded in their filename
+func WithMaxAge(age int) Option {
+	return func(opts *options) {
+		opts.maxAge = age
+	}
+}
+
 func WithLogger(log *logger.Logger) Option {
 	return func(opts *options) {
 		opts.logger = log
@@ -110,6 +135,8 @@ func WithLogger(log *logger.Logger) Option {
 // dumpOptions contains configuration about dump file.
 type dumpOptions struct {
 	dumpPath string
+	maxNum   int
+	maxAge   int
 }
 
 type commonOption struct {
