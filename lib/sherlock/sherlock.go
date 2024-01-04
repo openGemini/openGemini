@@ -250,7 +250,7 @@ func (s *Sherlock) cpuProfile(curCPUUsage int, c commonOption) bool {
 	match, _ := matchRule(s.cpuStats, curCPUUsage, c.TriggerMin, c.TriggerDiff, c.TriggerAbs)
 	if !match {
 		// let user know why this should not dump
-		s.opts.logger.Info("[Sherlock] not match cpu dump rule",
+		s.opts.logger.Debug("[Sherlock] not match cpu dump rule",
 			zap.Int("config_min", c.TriggerMin), zap.Int("config_diff", c.TriggerDiff), zap.Int("config_abs", c.TriggerAbs),
 			zap.Int("current", curCPUUsage), zap.Ints("previous", s.cpuStats.sequentialData()))
 		return false
@@ -260,7 +260,7 @@ func (s *Sherlock) cpuProfile(curCPUUsage int, c commonOption) bool {
 		zap.Int("config_min", c.TriggerMin), zap.Int("config_diff", c.TriggerDiff), zap.Int("config_abs", c.TriggerAbs),
 		zap.Int("current", curCPUUsage), zap.Ints("previous", s.cpuStats.sequentialData()))
 
-	bf, filename, err := createAndGetFileInfo(s.opts.dumpPath, CPU)
+	bf, filename, err := createAndGetFileInfo(s.opts.dumpOptions, CPU)
 	if err != nil {
 		s.opts.logger.Error("[Sherlock] failed to create cpu profile file", zap.Error(err))
 		return false
@@ -335,7 +335,7 @@ func (s *Sherlock) writeProfileDataToFile(data bytes.Buffer, dumpType configureT
 		s.opts.logger.Error("[Sherlock] failed to write profile to file", zap.String("filename", filename), zap.Error(err))
 		return
 	}
-	s.opts.logger.Info("[Sherlock] profile write to file successfully", zap.String("type", check2name[dumpType]), zap.String("filename", filename))
+	s.opts.logger.Info("[Sherlock] profile write to file successfully", zap.String("type", dumpType.string()), zap.String("filename", filename))
 }
 
 func (s *Sherlock) getMemoryLimit() (uint64, error) {

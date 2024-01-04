@@ -53,6 +53,8 @@ func newService(c *config.SherlockConfig) *Service {
 		sl.WithMonitorInterval(time.Duration(c.CollectInterval)),
 		sl.WithCPUMax(int(c.CPUMaxPercent)),
 		sl.WithSavePath(c.DumpPath),
+		sl.WithMaxNum(c.MaxNum),
+		sl.WithMaxAge(c.MaxAge),
 		sl.WithCPURule(int(c.CPUConfig.Min), int(c.CPUConfig.Diff), int(c.CPUConfig.Abs), time.Duration(c.CPUConfig.CoolDown)),
 		sl.WithMemRule(int(c.MemoryConfig.Min), int(c.MemoryConfig.Diff), int(c.MemoryConfig.Abs), time.Duration(c.MemoryConfig.CoolDown)),
 		sl.WithGrtRule(int(c.GoroutineConfig.Min), int(c.GoroutineConfig.Diff), int(c.GoroutineConfig.Abs), int(c.GoroutineConfig.Max), time.Duration(c.GoroutineConfig.CoolDown)),
