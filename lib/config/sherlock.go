@@ -19,13 +19,16 @@ package config
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 	"time"
 
 	"github.com/influxdata/influxdb/toml"
 )
 
 const (
-	DefaultCollectInterval = time.Minute
+	DefaultCollectInterval = 10 * time.Second
+	DefaultSherlockMaxNum  = 32
+	DefaultSherlockMaxAge  = 7 // 7 days
 
 	defaultCPUTriggerMin  = 10 // 10%
 	defaultCPUTriggerDiff = 25 // 25% diff
@@ -46,6 +49,8 @@ type SherlockConfig struct {
 	CollectInterval toml.Duration `toml:"collect-interval"`
 	CPUMaxPercent   toml.Size     `toml:"cpu-max-percent"`
 	DumpPath        string        `toml:"dump-path"`
+	MaxNum          int           `toml:"max-num"`
+	MaxAge          int           `toml:"max-age"`
 
 	CPUConfig       typeConfig `toml:"cpu"`
 	MemoryConfig    typeConfig `toml:"memory"`
@@ -66,7 +71,9 @@ func NewSherlockConfig() *SherlockConfig {
 		SherlockEnable:  false,
 		CollectInterval: toml.Duration(DefaultCollectInterval),
 		CPUMaxPercent:   0,
-		DumpPath:        openGeminiDir(),
+		DumpPath:        filepath.Join(openGeminiDir(), "sherlock"),
+		MaxNum:          DefaultSherlockMaxNum,
+		MaxAge:          DefaultSherlockMaxAge,
 		CPUConfig: typeConfig{
 			Enable:   false,
 			Min:      defaultCPUTriggerMin,
