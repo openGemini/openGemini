@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -331,7 +332,8 @@ func TestArrowFlightServiceErr(t *testing.T) {
 	_, err = auth.IsValid("token")
 	assert.Equal(t, err, status.Error(codes.PermissionDenied, "auth token time out"))
 
-	writer := arrowflight.NewWriteServer(logger.NewLogger(errno.ModuleHTTP))
+	writer := arrowflight.NewWriteServer()
+	writer.WithLogger(logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()))
 	err = writer.DoPut(NewDoPutServer())
 	assert.Equal(t, strings.Contains(err.Error(), "arrow/flight: could not create flight reader"), true)
 }
