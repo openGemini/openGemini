@@ -72,6 +72,8 @@ const (
 	HASH          = "hash"
 	RANGE         = "range"
 	seperatorChar = "$"
+	DATANODE      = "data"
+	METANODE      = "meta"
 )
 
 var dropStreamFirstError = errors.New("stream task exists, drop it first")
@@ -175,6 +177,18 @@ func (data *Data) WalkDatabasesOrderly(fn func(db *DatabaseInfo)) {
 	sort.Strings(dbNames)
 	for i := 0; i < len(dbNames); i++ {
 		fn(data.Databases[dbNames[i]])
+	}
+}
+
+func (data *Data) WalkDataNodes(fn func(node *DataNode)) {
+	for i := range data.DataNodes {
+		fn(&data.DataNodes[i])
+	}
+}
+
+func (data *Data) WalkMetaNodes(fn func(node *NodeInfo)) {
+	for i := range data.MetaNodes {
+		fn(&data.MetaNodes[i])
 	}
 }
 
@@ -1367,6 +1381,56 @@ func (data *Data) ShowRetentionPolicies(database string) (models.Rows, error) {
 	sort.Slice(row.Values, func(i, j int) bool {
 		return row.Values[i][0].(string) < row.Values[j][0].(string)
 	})
+	return []*models.Row{row}, nil
+}
+
+func (data *Data) ShowCluster() models.Rows {
+	row := &models.Row{Columns: []string{"time", "status", "hostname", "nodeID", "nodeType"}}
+	timestamp := time.Now().UTC().UnixNano()
+
+	data.WalkMetaNodes(func(node *NodeInfo) {
+		row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, METANODE})
+	})
+	data.WalkDataNodes(func(node *DataNode) {
+		row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, DATANODE})
+	})
+
+	return []*models.Row{row}
+}
+
+func (data *Data) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
+	row := &models.Row{Columns: []string{"time", "status", "hostname", "nodeID", "nodeType"}}
+	timestamp := time.Now().UTC().UnixNano()
+
+	switch nodeType {
+	case METANODE:
+		data.WalkMetaNodes(func(node *NodeInfo) {
+			if ID == 0 || node.ID == ID {
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, METANODE})
+			}
+		})
+	case DATANODE:
+		data.WalkDataNodes(func(node *DataNode) {
+			if ID == 0 || node.ID == ID {
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, DATANODE})
+			}
+		})
+	default:
+		data.WalkMetaNodes(func(node *NodeInfo) {
+			if ID == 0 || node.ID == ID {
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, METANODE})
+			}
+		})
+		data.WalkDataNodes(func(node *DataNode) {
+			if ID == 0 || node.ID == ID {
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, DATANODE})
+			}
+		})
+	}
+	if len(row.Values) == 0 {
+		return nil, errno.NewError(errno.InValidNodeID, ID)
+	}
+
 	return []*models.Row{row}, nil
 }
 

@@ -1637,3 +1637,101 @@ func TestGetAliveReadNode(t *testing.T) {
 		t.Fatalf("get alive readNodes failed")
 	}
 }
+
+func TestClient_ShowCluster(t *testing.T) {
+	m1 := meta2.NodeInfo{
+		ID:     1,
+		Host:   "127.0.0.2:8091",
+		Status: serf.MemberStatus(meta2.StatusAlive),
+	}
+	m2 := meta2.NodeInfo{
+		ID:     2,
+		Host:   "127.0.0.2:8091",
+		Status: serf.MemberStatus(meta2.StatusAlive),
+	}
+	m3 := meta2.NodeInfo{
+		ID:     3,
+		Host:   "127.0.0.2:8091",
+		Status: serf.MemberStatus(meta2.StatusAlive),
+	}
+	d1 := meta2.DataNode{
+		NodeInfo: meta2.NodeInfo{
+			ID:     4,
+			Host:   "127.0.0.2:8400",
+			Status: serf.MemberStatus(meta2.StatusAlive),
+		},
+	}
+	d2 := meta2.DataNode{
+		NodeInfo: meta2.NodeInfo{
+			ID:     5,
+			Host:   "127.0.0.2:8400",
+			Status: serf.MemberStatus(meta2.StatusAlive),
+		},
+	}
+	d3 := meta2.DataNode{
+		NodeInfo: meta2.NodeInfo{
+			ID:     6,
+			Host:   "127.0.0.2:8400",
+			Status: serf.MemberStatus(meta2.StatusAlive),
+		},
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			MetaNodes: []meta2.NodeInfo{m1, m2, m3},
+			DataNodes: []meta2.DataNode{d1, d2, d3},
+		},
+	}
+
+	names := []string{"time", "status", "hostname", "nodeID", "nodeType"}
+	value1 := []interface{}{m1.Status, m1.Host, m1.ID, "meta"}
+	value2 := []interface{}{m2.Status, m2.Host, m2.ID, "meta"}
+	value3 := []interface{}{m3.Status, m3.Host, m3.ID, "meta"}
+	value4 := []interface{}{d1.Status, d1.Host, d1.ID, "data"}
+	value5 := []interface{}{d2.Status, d2.Host, d2.ID, "data"}
+	value6 := []interface{}{d3.Status, d3.Host, d3.ID, "data"}
+
+	row1 := c.ShowCluster()
+	values1 := [][]interface{}{value1, value2, value3, value4, value5, value6}
+	for i := range row1[0].Columns {
+		if row1[0].Columns[i] != names[i] {
+			t.Fatalf("wrong column names")
+		}
+		for j := range row1[0].Values {
+			if i != 0 && row1[0].Values[j][i] != values1[j][i-1] {
+				t.Fatalf("wrong column values %s %s", row1[0].Values[j][i], values1[j][i-1])
+			}
+		}
+	}
+
+	row2, err := c.ShowClusterWithCondition("meta", 0)
+	if err != nil {
+		t.Fatalf("get cluster info failed")
+	}
+	values2 := [][]interface{}{value1, value2, value3}
+	for i := range row2[0].Columns {
+		if row2[0].Columns[i] != names[i] {
+			t.Fatalf("wrong column names")
+		}
+		for j := range row2[0].Values {
+			if i != 0 && row2[0].Values[j][i] != values2[j][i-1] {
+				t.Fatalf("wrong column values %s %s", row2[0].Values[j][i], values2[j][i-1])
+			}
+		}
+	}
+
+	row3, err := c.ShowClusterWithCondition("data", 5)
+	if err != nil {
+		t.Fatalf("get cluster info failed")
+	}
+	values3 := [][]interface{}{value5}
+	for i := range row3[0].Columns {
+		if row3[0].Columns[i] != names[i] {
+			t.Fatalf("wrong column names")
+		}
+		for j := range row3[0].Values {
+			if i != 0 && row3[0].Values[j][i] != values3[j][i-1] {
+				t.Fatalf("wrong column values %s %s", row3[0].Values[j][i], values3[j][i-1])
+			}
+		}
+	}
+}

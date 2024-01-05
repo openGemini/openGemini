@@ -196,6 +196,8 @@ type MetaClient interface {
 	ShowShardGroups() models.Rows
 	ShowSubscriptions() models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
+	ShowCluster() models.Rows
+	ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
 	DropDownSamplePolicy(database, name string, dropAll bool) error
@@ -884,6 +886,18 @@ func (c *Client) ShowRetentionPolicies(database string) (models.Rows, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.ShowRetentionPolicies(database)
+}
+
+func (c *Client) ShowCluster() models.Rows {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.ShowCluster()
+}
+
+func (c *Client) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.ShowClusterWithCondition(nodeType, ID)
 }
 
 func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,

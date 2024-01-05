@@ -84,6 +84,7 @@ const (
 	//CARDINALITY
 	//CREATE
 	//CONTINUOUS // ContinuousQueries
+	//CLUSTER
 	//DATABASE
 	//DATABASES
 	//DEFAULT
@@ -232,6 +233,7 @@ var tokens = [...]string{
 	CARDINALITY:    "CARDINALITY",
 	CREATE:         "CREATE",
 	CONTINUOUS:     "CONTINUOUS",
+	CLUSTER:        "CLUSTER",
 	DATABASE:       "DATABASE",
 	DATABASES:      "DATABASES",
 	DEFAULT:        "DEFAULT",

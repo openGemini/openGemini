@@ -1498,6 +1498,13 @@ func (p *Parser) parseShowTagValuesCardinalityStatement(exact bool) (Statement, 
 	return stmt, nil
 }
 
+// parseShowClusterStatement parses a string and returns a ShowClusterStatement.
+// This function assumes the "SHOW CLUSTER" tokens have been consumed.
+func (p *Parser) parseShowClusterStatement() (*ShowClusterStatement, error) {
+	stmt := &ShowClusterStatement{}
+	return stmt, nil
+}
+
 // parseTagKeys parses a string and returns a list of tag keys.
 func (p *Parser) parseTagKeyExpr() (Token, Literal, error) {
 	var err error

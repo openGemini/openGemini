@@ -147,6 +147,9 @@ func init() {
 		show.Handle(QUERIES, func(p *Parser) (Statement, error) {
 			return p.parseShowQueriesStatement()
 		})
+		show.Handle(CLUSTER, func(p *Parser) (Statement, error) {
+			return p.parseShowClusterStatement()
+		})
 		show.Group(RETENTION).Handle(POLICIES, func(p *Parser) (Statement, error) {
 			return p.parseShowRetentionPoliciesStatement()
 		})

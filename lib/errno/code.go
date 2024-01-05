@@ -218,6 +218,8 @@ const (
 	ReplicaNodeNumIncorrect            = 4049
 	EventSrcNodeSegregating            = 4050
 	EventDstNodeSegregating            = 4051
+	InValidNodeID                      = 4052
+	InValidNodeType                    = 4053
 )
 
 // meta-client process

@@ -466,24 +466,25 @@ type Expr interface {
 	RewriteNameSpace(alias, mst string)
 }
 
-func (*InCondition) expr()     {}
-func (*BinaryExpr) expr()      {}
-func (*BooleanLiteral) expr()  {}
-func (*BoundParameter) expr()  {}
-func (*Call) expr()            {}
-func (*Distinct) expr()        {}
-func (*DurationLiteral) expr() {}
-func (*IntegerLiteral) expr()  {}
-func (*UnsignedLiteral) expr() {}
-func (*NilLiteral) expr()      {}
-func (*NumberLiteral) expr()   {}
-func (*ParenExpr) expr()       {}
-func (*RegexLiteral) expr()    {}
-func (*ListLiteral) expr()     {}
-func (*StringLiteral) expr()   {}
-func (*TimeLiteral) expr()     {}
-func (*VarRef) expr()          {}
-func (*Wildcard) expr()        {}
+func (*InCondition) expr()          {}
+func (*BinaryExpr) expr()           {}
+func (*BooleanLiteral) expr()       {}
+func (*BoundParameter) expr()       {}
+func (*Call) expr()                 {}
+func (*Distinct) expr()             {}
+func (*DurationLiteral) expr()      {}
+func (*IntegerLiteral) expr()       {}
+func (*UnsignedLiteral) expr()      {}
+func (*NilLiteral) expr()           {}
+func (*NumberLiteral) expr()        {}
+func (*ParenExpr) expr()            {}
+func (*RegexLiteral) expr()         {}
+func (*ListLiteral) expr()          {}
+func (*StringLiteral) expr()        {}
+func (*TimeLiteral) expr()          {}
+func (*VarRef) expr()               {}
+func (*Wildcard) expr()             {}
+func (*ShowClusterStatement) expr() {}
 
 // Literal represents a static literal.
 type Literal interface {
@@ -7389,6 +7390,35 @@ func (s *SetConfigStatement) String() string {
 	} else {
 		_, _ = buf.WriteString(fmt.Sprintf(`SET CONFIG %s "%s" = %v`, s.Component, s.Key, s.Value))
 
+	}
+	return buf.String()
+}
+
+type ShowClusterStatement struct {
+	NodeType string
+	NodeID   int64
+}
+
+func (s *ShowClusterStatement) RewriteNameSpace(alias, mst string) {}
+
+func (s *ShowClusterStatement) stmt() {}
+
+func (s *ShowClusterStatement) node() {}
+
+func (s *ShowClusterStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *ShowClusterStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString(fmt.Sprintf(`SHOW CLUSTER`))
+
+	if s.NodeType != "" && s.NodeID == 0 {
+		_, _ = buf.WriteString(fmt.Sprintf(` WHERE nodeType = %s`, s.NodeType))
+	} else if s.NodeID != 0 && s.NodeType == "" {
+		_, _ = buf.WriteString(fmt.Sprintf(` WHERE nodeID = %s`, strconv.FormatInt(s.NodeID, 10)))
+	} else if s.NodeID != 0 && s.NodeType != "" {
+		_, _ = buf.WriteString(fmt.Sprintf(` WHERE nodeType = %s AND nodeID = %s`, s.NodeType, strconv.FormatInt(s.NodeID, 10)))
 	}
 	return buf.String()
 }
