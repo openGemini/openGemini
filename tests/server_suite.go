@@ -1154,6 +1154,37 @@ func init() {
 			},
 		},
 	}
+
+	tests["cluster_status"] = Test{
+		db: "db0",
+		rp: "rp0",
+		queries: []*Query{
+			&Query{
+				name:    "show cluster",
+				command: `SHOW CLUSTER`,
+				skip:    true,
+				exp:     ``,
+			},
+			&Query{
+				name:    "show cluster where nodeID=1",
+				command: `SHOW CLUSTER where nodeID=1`,
+				skip:    true,
+				exp:     ``,
+			},
+			&Query{
+				name:    "show cluster where nodeType=data",
+				command: `SHOW CLUSTER where nodeType=data`,
+				skip:    true,
+				exp:     ``,
+			},
+			&Query{
+				name:    "show cluster where nodeType=meta and nodeID = 1",
+				command: `SHOW CLUSTER where nodeType=meta and nodeID = 1`,
+				skip:    true,
+				exp:     ``,
+			},
+		},
+	}
 }
 
 func (tests Tests) load(t *testing.T, key string) Test {

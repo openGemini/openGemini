@@ -425,6 +425,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		rows, err = e.executeShowConfigs(stmt)
 	case *influxql.SetConfigStatement:
 		err = e.executeSetConfig(stmt)
+	case *influxql.ShowClusterStatement:
+		rows, err = e.executeShowCluster(stmt)
 	default:
 		return query2.ErrInvalidQuery
 	}
@@ -2286,6 +2288,22 @@ func sortConfigs(configs map[string]interface{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func (e *StatementExecutor) executeShowCluster(stmt *influxql.ShowClusterStatement) (models.Rows, error) {
+	if stmt.NodeID != 0 || stmt.NodeType != "" {
+		return e.executeShowClusterWithCondition(stmt)
+	}
+	return e.MetaClient.ShowCluster(), nil
+}
+
+func (e *StatementExecutor) executeShowClusterWithCondition(stmt *influxql.ShowClusterStatement) (models.Rows, error) {
+	ID := uint64(stmt.NodeID)
+	if stmt.NodeType != "data" && stmt.NodeType != "meta" && stmt.NodeType != "" {
+		e.StmtExecLogger.Error("fail to show cluster with condition")
+		return nil, errno.NewError(errno.InValidNodeType, stmt.NodeType)
+	}
+	return e.MetaClient.ShowClusterWithCondition(stmt.NodeType, ID)
 }
 
 type ByteStringSlice [][]byte
