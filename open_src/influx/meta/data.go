@@ -1409,10 +1409,10 @@ func (data *Data) ShowCluster() models.Rows {
 	timestamp := time.Now().UTC().UnixNano()
 
 	data.WalkMetaNodes(func(node *NodeInfo) {
-		row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, METANODE})
+		row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
 	})
 	data.WalkDataNodes(func(node *DataNode) {
-		row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, DATANODE})
+		row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
 	})
 
 	return []*models.Row{row}
@@ -1426,24 +1426,24 @@ func (data *Data) ShowClusterWithCondition(nodeType string, ID uint64) (models.R
 	case METANODE:
 		data.WalkMetaNodes(func(node *NodeInfo) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, METANODE})
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
 			}
 		})
 	case DATANODE:
 		data.WalkDataNodes(func(node *DataNode) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, DATANODE})
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
 			}
 		})
 	default:
 		data.WalkMetaNodes(func(node *NodeInfo) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, METANODE})
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
 			}
 		})
 		data.WalkDataNodes(func(node *DataNode) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status, node.Host, node.ID, DATANODE})
+				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
 			}
 		})
 	}

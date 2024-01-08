@@ -1785,12 +1785,12 @@ func TestClient_ShowCluster(t *testing.T) {
 	}
 
 	names := []string{"time", "status", "hostname", "nodeID", "nodeType"}
-	value1 := []interface{}{m1.Status, m1.Host, m1.ID, "meta"}
-	value2 := []interface{}{m2.Status, m2.Host, m2.ID, "meta"}
-	value3 := []interface{}{m3.Status, m3.Host, m3.ID, "meta"}
-	value4 := []interface{}{d1.Status, d1.Host, d1.ID, "data"}
-	value5 := []interface{}{d2.Status, d2.Host, d2.ID, "data"}
-	value6 := []interface{}{d3.Status, d3.Host, d3.ID, "data"}
+	value1 := []interface{}{m1.Status.String(), m1.Host, m1.ID, "meta"}
+	value2 := []interface{}{m2.Status.String(), m2.Host, m2.ID, "meta"}
+	value3 := []interface{}{m3.Status.String(), m3.Host, m3.ID, "meta"}
+	value4 := []interface{}{d1.Status.String(), d1.Host, d1.ID, "data"}
+	value5 := []interface{}{d2.Status.String(), d2.Host, d2.ID, "data"}
+	value6 := []interface{}{d3.Status.String(), d3.Host, d3.ID, "data"}
 
 	row1 := c.ShowCluster()
 	values1 := [][]interface{}{value1, value2, value3, value4, value5, value6}
