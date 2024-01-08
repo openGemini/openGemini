@@ -486,7 +486,7 @@ LOOP:
 			newStmt, err := RewriteStatement(stmt)
 			if err != nil {
 				results <- &query2.Result{Err: err}
-				e.Logger.Error("Rewrite Statement", zap.Stringer("query", stmt), zap.Error(err))
+				e.Logger.Error("Rewrite Statement", zap.String("query", stmt.String()), zap.Error(err))
 				return
 			}
 			stmt = newStmt
@@ -495,20 +495,20 @@ LOOP:
 			if normalizer, ok := e.StatementExecutor.(StatementNormalizer); ok {
 				if err := normalizer.NormalizeStatement(stmt, defaultDB, opt.RetentionPolicy); err != nil {
 					if err := ctx.send(&query2.Result{Err: err}, seq); err == ErrQueryAborted {
-						e.Logger.Error("Normalize Statement ErrQueryAborted", zap.Stringer("query", stmt))
+						e.Logger.Error("Normalize Statement ErrQueryAborted", zap.String("query", stmt.String()))
 						return
 					}
-					e.Logger.Error("Normalize Statement", zap.Stringer("query", stmt), zap.Error(err))
+					e.Logger.Error("Normalize Statement", zap.String("query", stmt.String()), zap.Error(err))
 					return
 				}
 			}
 
 			// Log each normalized statement.
 			if !ctx.Quiet {
-				e.Logger.Info("Executing query", zap.Stringer("query", stmt))
+				e.Logger.Info("Executing query", zap.String("query", stmt.String()))
 			} else {
 				if seq == 0 {
-					e.Logger.Info("Executing query", zap.Stringer("query", stmt), zap.Int("batch", len(query.Statements)))
+					e.Logger.Info("Executing query", zap.String("query", stmt.String()), zap.Int("batch", len(query.Statements)))
 				}
 			}
 
@@ -528,11 +528,11 @@ LOOP:
 					StatementID: i,
 					Err:         err,
 				}, seq); err == ErrQueryAborted {
-					e.Logger.Error("ctx send fail, ErrQueryAborted", zap.Stringer("query", stmt))
+					e.Logger.Error("ctx send fail, ErrQueryAborted", zap.String("query", stmt.String()))
 					return
 				}
 
-				e.Logger.Error("ctx send fail", zap.Stringer("query", stmt), zap.Error(err))
+				e.Logger.Error("ctx send fail", zap.String("query", stmt.String()), zap.Error(err))
 			}
 		}(stmt, i)
 
