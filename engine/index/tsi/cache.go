@@ -17,6 +17,7 @@ limitations under the License.
 package tsi
 
 import (
+	"path/filepath"
 	"time"
 	"unsafe"
 
@@ -50,6 +51,8 @@ type IndexCache struct {
 	metrics *IndexMetrics
 
 	path string
+
+	store bool
 }
 
 type IndexMetrics struct {
@@ -165,5 +168,28 @@ func newIndexCache(tsidCacheSize, skeyCacheSize, tagCacheSize, tagFilterCostSize
 		ic.TagKeyValueCache = workingsetcache.New(skeyCacheSize, time.Hour)
 	}
 	ic.TagFilterCostCache = workingsetcache.New(tagFilterCostSize, time.Hour)
+	ic.store = store
 	return ic
+}
+
+func (ic *IndexCache) close() error {
+	if ic.store {
+		if err := ic.SeriesKeyToTSIDCache.Save(filepath.Join(ic.path, SeriesKeyToTSIDCacheName)); err != nil {
+			return err
+		}
+		if err := ic.TSIDToSeriesKeyCache.Save(filepath.Join(ic.path, TSIDToSeriesKeyCacheName)); err != nil {
+			return err
+		}
+		if err := ic.TagKeyValueCache.Save(filepath.Join(ic.path, TagKeyToTagValueCacheName)); err != nil {
+			return err
+		}
+	}
+
+	ic.SeriesKeyToTSIDCache.Stop()
+	ic.TSIDToSeriesKeyCache.Stop()
+	ic.tagCache.Stop()
+	ic.TagKeyValueCache.Stop()
+	ic.TagFilterCostCache.Stop()
+
+	return nil
 }

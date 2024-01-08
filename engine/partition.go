@@ -306,12 +306,10 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 		}
 		return err
 	}
-	type res struct {
-		i   *tsi.IndexBuilder
-		err error
-	}
+
 	resC := make(chan *res)
 	n := 0
+
 	for indexIdx := range indexDirs {
 		if !indexDirs[indexIdx].IsDir() {
 			dbPT.logger.Warn("skip load index because it's not a dir", zap.String("dir", indexDirs[indexIdx].Name()))
@@ -319,86 +317,9 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 		}
 		n++
 
-		go func(indexDirName string) {
-			indexID, tr, err := parseIndexDir(indexDirName)
-			if err != nil {
-				dbPT.logger.Error("parse index dir failed", zap.Error(err))
-				resC <- &res{}
-				return
-			}
-			ipath := path.Join(indexPath, indexDirName)
-			// FIXME reload index
-
-			// todo:is it necessary to mkdir again??
-			lock := fileops.FileLockOption(*dbPT.lockPath)
-			if err := fileops.MkdirAll(ipath, 0750, lock); err != nil {
-				resC <- &res{err: err}
-				return
-			}
-
-			allIndexDirs, err := fileops.ReadDir(ipath)
-			if err != nil {
-				resC <- &res{err: err}
-				return
-			}
-
-			indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
-			indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID, TimeRange: *tr}
-			opts := new(tsi.Options).
-				OpId(opId).
-				Ident(indexIdent).
-				Path(ipath).
-				IndexType(tsi.MergeSet).
-				EngineType(engineType).
-				StartTime(tr.StartTime).
-				EndTime(tr.EndTime).
-				LogicalClock(dbPT.logicClock).
-				SequenceId(&dbPT.sequenceID).
-				Lock(dbPT.lockPath)
-
-			dbPT.mu.Lock()
-			// init indexBuilder and default indexRelation
-			indexBuilder := tsi.NewIndexBuilder(opts)
-			indexBuilder.EnableTagArray = dbPT.enableTagArray
-			// init primary Index
-			primaryIndex, err := tsi.NewIndex(opts)
-			if err != nil {
-				resC <- &res{err: err}
-				dbPT.mu.Unlock()
-				return
-			}
-			primaryIndex.SetIndexBuilder(indexBuilder)
-			indexRelation, err := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-			if err != nil {
-				resC <- &res{err: err}
-				dbPT.mu.Unlock()
-				return
-			}
-			indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
-
-			// init other indexRelations if exist
-			for idx := range allIndexDirs {
-				if containOtherIndexes(allIndexDirs[idx].Name()) {
-					idxType := tsi.GetIndexTypeByName(allIndexDirs[idx].Name())
-					opts := new(tsi.Options).
-						Ident(indexIdent).
-						Path(ipath).
-						IndexType(idxType).
-						EndTime(tr.EndTime).
-						Lock(dbPT.lockPath)
-					indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-					indexBuilder.Relations[uint32(idxType)] = indexRelation
-				}
-			}
-			err = indexBuilder.Open()
-			dbPT.mu.Unlock()
-
-			if err != nil {
-				resC <- &res{err: err}
-				return
-			}
-			resC <- &res{i: indexBuilder}
-		}(indexDirs[indexIdx].Name())
+		openShardsLimit <- struct{}{}
+		indexDirName := indexDirs[indexIdx].Name()
+		go dbPT.openIndex(opId, indexPath, indexDirName, rp, engineType, resC)
 	}
 
 	for i := 0; i < n; i++ {
@@ -462,6 +383,7 @@ func (dbPT *DBPTInfo) thermalShards(client metaclient.MetaClient) map[uint64]str
 
 type res struct {
 	s   Shard
+	i   *tsi.IndexBuilder
 	err error
 }
 
@@ -491,6 +413,90 @@ func (dbPT *DBPTInfo) OpenShards(opId uint64, rp string, durationInfos map[uint6
 	err = dbPT.ptReceiveShard(resC, n, rp)
 	close(resC)
 	return err
+}
+
+func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string, engineType config.EngineType, resC chan<- *res) {
+	defer func() {
+		openShardsLimit.Release()
+	}()
+	indexID, tr, err := parseIndexDir(indexDirName)
+	if err != nil {
+		dbPT.logger.Error("parse index dir failed", zap.Error(err))
+		resC <- &res{}
+		return
+	}
+	ipath := path.Join(indexPath, indexDirName)
+	// FIXME reload index
+
+	// todo:is it necessary to mkdir again??
+	lock := fileops.FileLockOption(*dbPT.lockPath)
+	if err := fileops.MkdirAll(ipath, 0750, lock); err != nil {
+		resC <- &res{err: err}
+		return
+	}
+
+	allIndexDirs, err := fileops.ReadDir(ipath)
+	if err != nil {
+		resC <- &res{err: err}
+		return
+	}
+
+	indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID, TimeRange: *tr}
+	opts := new(tsi.Options).
+		OpId(opId).
+		Ident(indexIdent).
+		Path(ipath).
+		IndexType(tsi.MergeSet).
+		EngineType(engineType).
+		StartTime(tr.StartTime).
+		EndTime(tr.EndTime).
+		LogicalClock(dbPT.logicClock).
+		SequenceId(&dbPT.sequenceID).
+		Lock(dbPT.lockPath)
+
+	dbPT.mu.Lock()
+	// init indexBuilder and default indexRelation
+	indexBuilder := tsi.NewIndexBuilder(opts)
+	indexBuilder.EnableTagArray = dbPT.enableTagArray
+	// init primary Index
+	primaryIndex, err := tsi.NewIndex(opts)
+	if err != nil {
+		resC <- &res{err: err}
+		dbPT.mu.Unlock()
+		return
+	}
+	primaryIndex.SetIndexBuilder(indexBuilder)
+	indexRelation, err := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+	if err != nil {
+		resC <- &res{err: err}
+		dbPT.mu.Unlock()
+		return
+	}
+	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
+
+	// init other indexRelations if exist
+	for idx := range allIndexDirs {
+		if containOtherIndexes(allIndexDirs[idx].Name()) {
+			idxType := tsi.GetIndexTypeByName(allIndexDirs[idx].Name())
+			opts := new(tsi.Options).
+				Ident(indexIdent).
+				Path(ipath).
+				IndexType(idxType).
+				EndTime(tr.EndTime).
+				Lock(dbPT.lockPath)
+			indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+			indexBuilder.Relations[uint32(idxType)] = indexRelation
+		}
+	}
+	err = indexBuilder.Open()
+	dbPT.mu.Unlock()
+
+	if err != nil {
+		resC <- &res{err: err}
+		return
+	}
+	resC <- &res{i: indexBuilder}
 }
 
 func (dbPT *DBPTInfo) openShard(opId uint64, thermalShards map[uint64]struct{}, shardDirName, rp string, durationInfos map[uint64]*meta.ShardDurationInfo,
@@ -806,11 +812,6 @@ func (dbPT *DBPTInfo) Shard(id uint64) Shard {
 	}
 
 	return sh
-}
-
-func (dbPT *DBPTInfo) LoadAllShards(rp string, shardIDs []uint64) error {
-	// TODO mjq load shard from wal
-	return nil
 }
 
 func (dbPT *DBPTInfo) closeDBPt() error {

@@ -130,6 +130,8 @@ var (
 	Readonly = false
 
 	HierarchicalStorageEnabled int32 = 0
+
+	indexReadCachePersistent bool = true
 )
 
 func UpdateInterruptQuery(switchOn bool) {
@@ -193,6 +195,15 @@ func SetParallelQueryInBatch(en bool) {
 		atomic.StoreInt32(&ParallelQueryInBatch, 0)
 	}
 	fmt.Println("ParallelQueryInBatch:", ParallelQueryInBatch)
+}
+
+func SetIndexReadCachePersistent(persist bool) {
+	indexReadCachePersistent = persist
+	fmt.Println("indexReadCachePersistent:", persist)
+}
+
+func IsIndexReadCachePersistent() bool {
+	return indexReadCachePersistent
 }
 
 type LogRowsRule struct {

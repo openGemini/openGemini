@@ -298,7 +298,7 @@ func (idx *MergeSetIndex) Open() error {
 	idx.tb = tb
 
 	mem := memory.Allowed()
-	idx.cache = NewIndexCache(mem/32, mem/32, mem/16, mem/128, idx.path)
+	idx.cache = newIndexCache(mem/32, mem/32, mem/16, mem/128, idx.path, syscontrol.IsIndexReadCachePersistent())
 
 	if err := idx.loadDeletedTSIDs(); err != nil {
 		return err

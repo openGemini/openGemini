@@ -59,8 +59,6 @@ const (
 	DefaultWalReplayBatchSize       = 1 * MB // 1MB
 	DefaultReadMetaCachePercent     = 3
 	DefaultReadDataCachePercent     = 10
-	MinFlavorMemory                 = 8 * GB
-	MaxFlavorMemory                 = 512 * GB
 
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
@@ -280,8 +278,9 @@ type Store struct {
 	InterruptSqlMemPct   int           `toml:"interrupt-sql-mem-pct"`
 	ProactiveMgrInterval toml.Duration `toml:"proactive-manager-interval"`
 
-	TemporaryIndexCompressMode int `toml:"temporary-index-compress-mode"`
-	ChunkMetaCompressMode      int `toml:"chunk-meta-compress-mode"`
+	TemporaryIndexCompressMode int  `toml:"temporary-index-compress-mode"`
+	ChunkMetaCompressMode      int  `toml:"chunk-meta-compress-mode"`
+	IndexReadCachePersistent   bool `toml:"index-read-cache-persistent"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -324,6 +323,7 @@ func NewStore() Store {
 		LazyLoadShardEnable:          true,
 		InterruptQuery:               true,
 		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
+		IndexReadCachePersistent:     true,
 	}
 }
 
