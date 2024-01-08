@@ -144,6 +144,10 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 // Err returns an error channel that multiplexes all out of band errors received from all services.
 func (s *Server) Err() <-chan error { return s.err }
 
+func (s *Server) GetStore() *storage.Storage {
+	return s.storage
+}
+
 // Open opens the meta and data store and all services.
 func (s *Server) Open() error {
 	// Mark start-up in log.

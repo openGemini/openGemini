@@ -1177,3 +1177,59 @@ func TestPointsWriter_WritePointRows_TimeOutsideRange(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestName(t *testing.T) {
+	localStore := &MockLocalStore{}
+
+	pw := NewPointsWriter(time.Second * 10)
+	pw.SetStore(localStore)
+	pw.MetaClient = &MockMetaClient{
+		DBPtViewFn: func(database string) (meta2.DBPtInfos, error) {
+			return meta2.DBPtInfos{
+				meta2.PtInfo{
+					Owner:  meta2.PtOwner{},
+					Status: 0,
+					PtId:   0,
+					Ver:    0,
+					RGID:   0,
+				},
+			}, nil
+		},
+	}
+
+	ctx := &netstorage.WriteContext{}
+	ctx.Shard = &meta2.ShardInfo{
+		Owners: []uint32{0},
+	}
+	ctx.Rows = append(ctx.Rows, influx.Row{
+		Timestamp: 100,
+		Name:      "mst",
+		Tags: influx.PointTags{
+			influx.Tag{
+				Key:   "tid",
+				Value: "t1",
+			},
+		},
+		Fields: influx.Fields{
+			influx.Field{
+				Key:      "value",
+				NumValue: 1,
+				StrValue: "",
+				Type:     influx.Field_Type_Float,
+			},
+		},
+	})
+
+	require.NoError(t, pw.writeRowToShard(ctx, "db", "rp"))
+
+	localStore.err = errors.New("some error")
+	require.EqualError(t, pw.writeRowToShard(ctx, "db", "rp"), localStore.err.Error())
+}
+
+type MockLocalStore struct {
+	err error
+}
+
+func (s *MockLocalStore) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+	return s.err
+}

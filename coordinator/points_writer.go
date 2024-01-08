@@ -777,6 +777,10 @@ RETRY:
 	return err
 }
 
+func (w *PointsWriter) SetStore(store Storage) {
+	w.TSDBStore = NewLocalStore(store)
+}
+
 func (w *PointsWriter) inTimeRange(ts int64) bool {
 	if w.timeRange == nil {
 		return true
@@ -858,4 +862,40 @@ func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16
 	}
 
 	return index, true
+}
+
+type Storage interface {
+	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
+}
+
+type LocalStore struct {
+	store Storage
+}
+
+func NewLocalStore(store Storage) *LocalStore {
+	return &LocalStore{
+		store: store,
+	}
+}
+
+func (s *LocalStore) WriteRows(ctx *netstorage.WriteContext, _ uint64, _ uint32, database, rp string, _ time.Duration) error {
+	buf := ctx.Buf
+	for _, ptId := range ctx.Shard.Owners {
+		rows := ctx.Rows
+
+		buf, _ = influx.FastMarshalMultiRows(buf[:0], rows) // for wal
+		pos := len(buf)
+
+		for i := range rows {
+			buf = rows[i].UnmarshalIndexKeys(buf)
+		}
+		ctx.Buf = buf
+
+		err := s.store.WriteRows(database, rp, ptId, ctx.Shard.ID, rows, buf[:pos])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

@@ -80,7 +80,7 @@ type NetStorage struct {
 type WriteContext struct {
 	Rows         []influx.Row
 	Shard        *meta2.ShardInfo
-	buf          []byte
+	Buf          []byte
 	StreamShards []uint64
 }
 
@@ -453,7 +453,7 @@ func (s *NetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []string) (
 }
 
 func MarshalRows(ctx *WriteContext, db, rp string, pt uint32) ([]byte, error) {
-	pBuf := append(ctx.buf[:0], PackageTypeFast)
+	pBuf := append(ctx.Buf[:0], PackageTypeFast)
 	// db
 	pBuf = append(pBuf, uint8(len(db)))
 	pBuf = append(pBuf, db...)
@@ -473,7 +473,7 @@ func MarshalRows(ctx *WriteContext, db, rp string, pt uint32) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx.buf = pBuf
+	ctx.Buf = pBuf
 	return pBuf, err
 }
 
