@@ -19,12 +19,12 @@ package immutable
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
@@ -48,9 +48,9 @@ type StreamWriteFile struct {
 	maxChunkRows int64
 	maxN         int
 	fileSize     int64
-	preCmOff     int64
-	dir          string
-	name         string // measurement name with version
+	//preCmOff     int64
+	dir  string
+	name string // measurement name with version
 	TableData
 	mIndex MetaIndex
 	keys   map[uint64]struct{}
@@ -70,13 +70,15 @@ type StreamWriteFile struct {
 	encChunkIndexMeta []byte
 	encIdTime         []byte
 	cmOffset          []uint32
-	file              TSSPFile
-	schema            record.Schemas
-	colSegs           []record.ColVal
-	timeCols          []record.ColVal
-	newFile           TSSPFile
-	log               *Log.Logger
-	lock              *string
+	currentCMOffset   int
+
+	file     TSSPFile
+	schema   record.Schemas
+	colSegs  []record.ColVal
+	timeCols []record.ColVal
+	newFile  TSSPFile
+	log      *Log.Logger
+	lock     *string
 
 	// count the number of rows in each column
 	// used only for data verification
@@ -311,6 +313,7 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 		c.mIndex.minTime = minT
 		c.mIndex.maxTime = maxT
 		c.mIndex.offset = c.writer.ChunkMetaSize()
+		c.currentCMOffset = 0
 	}
 
 	c.updateChunkStat(cm.sid, maxT, int64(cm.Rows(c.colBuilder.timePreAggBuilder)))
@@ -319,18 +322,10 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 	if c.enableValidate {
 		cm.validation()
 	}
-	c.encChunkMeta = cm.marshal(c.encChunkMeta[:0])
-	cmOff := c.writer.ChunkMetaSize()
-	c.cmOffset = append(c.cmOffset, uint32(cmOff-c.preCmOff))
-	wn, err := c.writer.WriteChunkMeta(c.encChunkMeta)
+
+	_, err := c.WriteChunkMeta(cm)
 	if err != nil {
-		err = errWriteFail(c.writer.Name(), err)
-		c.log.Error("write chunk meta fail", zap.Error(err))
 		return err
-	}
-	if wn != len(c.encChunkMeta) {
-		c.log.Error("write chunk meta fail", zap.String("file", c.fd.Name()), zap.Ints("size", []int{len(c.encChunkMeta), wn}))
-		return io.ErrShortWrite
 	}
 
 	if c.trailer.idCount == 0 {
@@ -348,7 +343,6 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 		c.trailer.maxTime = maxT
 	}
 
-	c.mIndex.size += uint32(wn) + 4
 	c.mIndex.count++
 	if c.mIndex.minTime > minT {
 		c.mIndex.minTime = minT
@@ -358,21 +352,51 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 	}
 
 	if c.mIndex.size >= uint32(c.Conf.maxChunkMetaItemSize) || c.mIndex.count >= uint32(c.Conf.maxChunkMetaItemCount) {
-		offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
-		_, err = c.writer.WriteChunkMeta(offBytes)
-		if err != nil {
-			err = errWriteFail(c.writer.Name(), err)
-			c.log.Error("write chunk meta fail", zap.Error(err))
+		if err := c.SwitchChunkMeta(); err != nil {
 			return err
 		}
-		c.metaIndexItems = append(c.metaIndexItems, c.mIndex)
-		c.mIndex.reset()
-		c.cmOffset = c.cmOffset[:0]
-		c.preCmOff = c.writer.ChunkMetaSize()
-		c.writer.SwitchMetaBuffer()
 	}
 
 	return nil
+}
+
+func (c *StreamWriteFile) SwitchChunkMeta() error {
+	offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
+	_, err := c.writer.WriteChunkMeta(offBytes)
+	if err != nil {
+		err = errWriteFail(c.writer.Name(), err)
+		c.log.Error("write chunk meta fail", zap.Error(err))
+		return err
+	}
+
+	size, err := c.writer.SwitchMetaBuffer()
+	if err != nil {
+		return err
+	}
+
+	c.mIndex.size = uint32(size)
+	c.metaIndexItems = append(c.metaIndexItems, c.mIndex)
+	c.mIndex.reset()
+	c.cmOffset = c.cmOffset[:0]
+	return nil
+}
+
+func (c *StreamWriteFile) WriteChunkMeta(cm *ChunkMeta) (int, error) {
+	c.encChunkMeta = cm.marshal(c.encChunkMeta[:0])
+	c.cmOffset = append(c.cmOffset, uint32(c.currentCMOffset))
+	c.currentCMOffset += len(c.encChunkMeta)
+
+	wn, err := c.writer.WriteChunkMeta(c.encChunkMeta)
+	if err != nil {
+		err = errWriteFail(c.writer.Name(), err)
+		c.log.Error("write chunk meta fail", zap.Error(err))
+		return 0, err
+	}
+	if wn != len(c.encChunkMeta) {
+		err = errno.NewError(errno.ShortWrite, wn, len(c.encChunkMeta))
+		c.log.Error("write chunk meta fail", zap.String("file", c.fd.Name()), zap.Error(err))
+	}
+	return wn, err
 }
 
 func (c *StreamWriteFile) WriteData(id uint64, ref record.Field, col record.ColVal, timeCol *record.ColVal) error {
@@ -453,13 +477,9 @@ func (c *StreamWriteFile) Flush() error {
 	}
 
 	if c.mIndex.count > 0 {
-		offBytes := numberenc.MarshalUint32SliceAppend(nil, c.cmOffset)
-		_, err := c.writer.WriteChunkMeta(offBytes)
-		if err != nil {
-			c.log.Error("write chunk meta fail", zap.String("name", c.fd.Name()), zap.Error(err))
+		if err := c.SwitchChunkMeta(); err != nil {
 			return err
 		}
-		c.metaIndexItems = append(c.metaIndexItems, c.mIndex)
 	}
 
 	c.genBloomFilter()
@@ -500,6 +520,7 @@ func (c *StreamWriteFile) Flush() error {
 		c.log.Error("write id time data fail", zap.String("name", c.fd.Name()), zap.Error(err))
 		return err
 	}
+	c.trailer.SetChunkMetaCompressFlag()
 	c.trailerData = c.trailer.marshal(c.trailerData[:0])
 
 	trailerOffset := c.writer.DataSize()

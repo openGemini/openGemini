@@ -28,6 +28,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
@@ -199,7 +200,11 @@ func (wh *writeHelper) reset() {
 // Therefore, there is a high probability that the data is written to the same shard.
 // Caches the shard information of the previous row of data to accelerate the query of shard information.
 func (wh *writeHelper) createShardGroup(database, retentionPolicy string, ts time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
-	return createShardGroup(database, retentionPolicy, wh.pw.MetaClient, &wh.preSg, ts, engineType)
+	var version uint32
+	if engineType == config.COLUMNSTORE {
+		version = logstore.CurrentLogTokenizerVersion
+	}
+	return createShardGroup(database, retentionPolicy, wh.pw.MetaClient, &wh.preSg, ts, version, engineType)
 }
 
 func appendField(fields []*proto2.FieldSchema, name string, typ int32) []*proto2.FieldSchema {
@@ -232,7 +237,8 @@ func newRecordWriterHelper(metaClient RWMetaClient, nodeId uint64) *recordWriter
 	}
 }
 
-func (wh *recordWriterHelper) createShardGroupsByTimeRange(database, retentionPolicy string, start, end time.Time, engineType config.EngineType) ([]*meta2.ShardGroupInfo, error) {
+func (wh *recordWriterHelper) createShardGroupsByTimeRange(database, retentionPolicy string, start, end time.Time,
+	version uint32, engineType config.EngineType) ([]*meta2.ShardGroupInfo, error) {
 	rpi, err := wh.metaClient.RetentionPolicy(database, retentionPolicy)
 	if err != nil {
 		return nil, err
@@ -244,7 +250,7 @@ func (wh *recordWriterHelper) createShardGroupsByTimeRange(database, retentionPo
 	for i := 0; i < int(num); i++ {
 		sg := rpi.ShardGroupByTimestampAndEngineType(startTime, engineType)
 		if sg == nil {
-			sg, _, err = wh.createShardGroup(database, retentionPolicy, startTime, engineType)
+			sg, _, err = wh.createShardGroup(database, retentionPolicy, startTime, version, engineType)
 			if err != nil {
 				return nil, err
 			}
@@ -255,8 +261,8 @@ func (wh *recordWriterHelper) createShardGroupsByTimeRange(database, retentionPo
 	return sgis, nil
 }
 
-func (wh *recordWriterHelper) createShardGroup(database, retentionPolicy string, ts time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
-	return createShardGroup(database, retentionPolicy, wh.metaClient, &wh.preSg, ts, engineType)
+func (wh *recordWriterHelper) createShardGroup(database, retentionPolicy string, ts time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
+	return createShardGroup(database, retentionPolicy, wh.metaClient, &wh.preSg, ts, version, engineType)
 }
 
 func (wh *recordWriterHelper) GetShardByTime(sg *meta2.ShardGroupInfo, db, rp string, ts time.Time, ptIdx int, engineType config.EngineType) (*meta2.ShardInfo, error) {
@@ -280,6 +286,72 @@ func (wh *recordWriterHelper) GetShardByTime(sg *meta2.ShardGroupInfo, db, rp st
 
 func (wh *recordWriterHelper) createMeasurement(database, retentionPolicy, name string) (*meta2.MeasurementInfo, error) {
 	return createMeasurement(database, retentionPolicy, name, wh.metaClient, &wh.preMst, &wh.sameSchema, config.COLUMNSTORE)
+}
+
+func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName string, rec *record.Record) (startTime, endTime int64, err error) {
+	wh.fieldToCreatePool = wh.fieldToCreatePool[:0]
+	// check the number of columns
+	if rec.ColNums() <= 1 {
+		err = errno.NewError(errno.ColumnStoreColNumErr, db, rp, mst)
+		return
+	}
+
+	// check the mst info and schema
+	if wh.preMst == nil || wh.preMst.Name != mst || len(wh.preMst.Schema) == 0 {
+		err = errno.NewError(errno.ColumnStoreSchemaNullErr, db, rp, mst)
+		return
+	}
+
+	// check the column store info and primary key
+	if wh.preMst.ColStoreInfo == nil || len(wh.preMst.ColStoreInfo.PrimaryKey) == 0 {
+		err = errno.NewError(errno.ColumnStorePrimaryKeyNullErr, db, rp, mst)
+		return
+	}
+	for _, key := range wh.preMst.ColStoreInfo.PrimaryKey {
+		if rec.Schema.FieldIndex(key) == -1 {
+			err = errno.NewError(errno.ColumnStorePrimaryKeyLackErr, mst, key)
+			return
+		}
+	}
+
+	// check the time field
+	colNum := int(rec.ColNums() - 1)
+	if nil == rec.Schema.Field(colNum) || rec.Schema.Field(colNum).Name != record.TimeField {
+		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
+		return
+	}
+	timeCol := &rec.ColVals[colNum]
+
+	// check the field name and type
+	samePreSchema := wh.sameSchema && wh.preSchema != nil && len(*wh.preSchema) == int(rec.ColNums())
+	if !samePreSchema {
+		schema := make([]record.Field, 0, rec.ColNums())
+		wh.preSchema = &schema
+	}
+	for i := 0; i < colNum; i++ {
+		_, ok := wh.preMst.Schema[rec.Schema.Field(i).Name]
+		if !ok {
+			wh.fieldToCreatePool = appendField(wh.fieldToCreatePool, rec.Schema.Field(i).Name, int32(rec.Schema.Field(i).Type))
+		}
+		if !samePreSchema {
+			*wh.preSchema = append(*wh.preSchema, *rec.Schema.Field(i))
+		}
+	}
+
+	if len(timeCol.IntegerValues()) == 0 {
+		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
+		return
+	}
+	startTime, endTime = timeCol.IntegerValues()[0], timeCol.IntegerValues()[timeCol.Len-1]
+	if !samePreSchema {
+		*wh.preSchema = append(*wh.preSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
+	}
+	if len(wh.fieldToCreatePool) > 0 {
+		if err = wh.metaClient.UpdateSchema(db, rp, originName, wh.fieldToCreatePool); err != nil {
+			return
+		}
+	}
+	return
 }
 
 func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName string, rec array.Record) (startTime, endTime int64, r *record.Record, err error) {
@@ -433,7 +505,7 @@ type ComMetaClient interface {
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
-	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
+	CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 }
 
 func createMeasurement(database, retentionPolicy, name string, client ComMetaClient, preMst **meta2.MeasurementInfo, sameSchema *bool, engineType config.EngineType) (*meta2.MeasurementInfo, error) {
@@ -462,13 +534,14 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 	return mst, err
 }
 
-func createShardGroup(database, retentionPolicy string, client ComMetaClient, preSg **meta2.ShardGroupInfo, ts time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
+func createShardGroup(database, retentionPolicy string, client ComMetaClient, preSg **meta2.ShardGroupInfo, ts time.Time,
+	version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
 	// fast path, time is contained
 	if *preSg != nil && (*preSg).Contains(ts) {
 		return *preSg, true, nil
 	}
 
-	sg, err := client.CreateShardGroup(database, retentionPolicy, ts, engineType)
+	sg, err := client.CreateShardGroup(database, retentionPolicy, ts, version, engineType)
 	if err != nil {
 		return sg, false, err
 	}

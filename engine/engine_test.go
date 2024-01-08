@@ -523,7 +523,7 @@ func TestEngine_Statistics_Engine(t *testing.T) {
 	}
 	defer eng.Close()
 
-	var bufferPool = bufferpool.NewByteBufferPool(0)
+	var bufferPool = bufferpool.NewByteBufferPool(0, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 	buf := bufferPool.Get()
 	eng.Statistics(buf)
 }

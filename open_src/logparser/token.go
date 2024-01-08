@@ -39,18 +39,27 @@ var tokens = [...]string{
 	AS:      "AS",
 	AND:     "AND",
 	OR:      "OR",
+	IN:      "IN",
 
-	LPAREN: "(",
-	RPAREN: ")",
-	COMMA:  ",",
-	COLON:  ":",
+	LPAREN:  "(",
+	RPAREN:  ")",
+	LSQUARE: "[",
+	RSQUARE: "]",
+
+	COMMA: ",",
+	COLON: ":",
+	EQ:    "=",
+	LT:    "<",
+	LTE:   "<=",
+	GT:    ">",
+	GTE:   ">=",
 }
 
 var keywords map[string]int
 
 func init() {
 	keywords = make(map[string]int)
-	for _, tok := range []int{AND, OR, EXTRACT, AS} {
+	for _, tok := range []int{EXTRACT, AS, AND, OR, IN} {
 		keywords[strings.ToLower(tokens[tok])] = tok
 	}
 }

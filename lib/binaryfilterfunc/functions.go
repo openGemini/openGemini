@@ -247,6 +247,7 @@ func initIdxTypeFun() {
 		{GetStringLTEConditionBitMap, GetFloatLTEConditionBitMap, GetIntegerLTEConditionBitMap, nilFunc},
 		{GetStringEQConditionBitMap, GetFloatEQConditionBitMap, GetIntegerEQConditionBitMap, GetBooleanEQConditionBitMap},
 		{GetStringNEQConditionBitMap, GetFloatNEQConditionBitMap, GetIntegerNEQConditionBitMap, GetBooleanNEQConditionBitMap},
+		{GetStringMatchPhraseConditionBitMap, nilFunc, nilFunc, nilFunc},
 	}
 }
 

@@ -55,6 +55,7 @@ type EngineOptions struct {
 	CompactThroughputBurst   int64
 	CompactRecovery          bool
 	CsCompactionEnabled      bool
+	CsDetachedFlushEnabled   bool
 	SnapshotThroughput       int64
 	SnapshotThroughputBurst  int64
 	SnapshotTblNum           int
@@ -62,10 +63,11 @@ type EngineOptions struct {
 	BackgroundReadThroughput int
 
 	// WalSyncInterval is the interval of wal file sync
-	WalEnabled        bool
-	WalSyncInterval   time.Duration
-	WalReplayParallel bool
-	WalReplayAsync    bool
+	WalEnabled         bool
+	WalSyncInterval    time.Duration
+	WalReplayParallel  bool
+	WalReplayAsync     bool
+	WalReplayBatchSize int
 
 	// Immutable config
 	ReadPageSize       string

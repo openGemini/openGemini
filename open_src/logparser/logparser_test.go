@@ -27,7 +27,7 @@ type logTest struct {
 	expr influxql.BinaryExpr
 }
 
-func TestLogParserFoSpecialType(t *testing.T) {
+func TestLogParserForSpecialType(t *testing.T) {
 	parser := &YyParser{Query: influxql.Query{}}
 	testLogs := []logTest{
 		{
@@ -244,23 +244,23 @@ func TestLogParserForExtract(t *testing.T) {
 	testLogs := []logTermTest{
 		{
 			log:    "get iamges|EXTRACT(tags:\"([a-z]+):([a-z]+)\") AS(key1,   value1)|key1:http",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND key1::string MATCHPHRASE 'http'| cast(match_all(\"([a-z]+):([a-z]+)\", tags::string) AS array(varchar, varchar)) AS(key1, value1)",
+			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND key1::string MATCHPHRASE 'http'|UNNEST(match_all(\"([a-z]+):([a-z]+)\", tags::string)) AS(key1, value1)",
 		},
 		{
 			log:    "get iamges|EXTRACT(\"([a-z]+):([a-z]+)\") AS(key1,   value1)|key1:http",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND key1::string MATCHPHRASE 'http'| cast(match_all(\"([a-z]+):([a-z]+)\", content::string) AS array(varchar, varchar)) AS(key1, value1)",
+			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND key1::string MATCHPHRASE 'http'|UNNEST(match_all(\"([a-z]+):([a-z]+)\", content::string)) AS(key1, value1)",
 		},
 		{
 			log:    "get|EXTRACT(\"([a-z]+)\") AS(key1)",
-			expect: "content::string MATCHPHRASE 'get'| cast(match_all(\"([a-z]+)\", content::string) AS array(varchar)) AS(key1)",
+			expect: "content::string MATCHPHRASE 'get'|UNNEST(match_all(\"([a-z]+)\", content::string)) AS(key1)",
 		},
 		{
 			log:    "*|EXTRACT(\"([a-z]+)\") AS(key1)",
-			expect: "content::string != ''| cast(match_all(\"([a-z]+)\", content::string) AS array(varchar)) AS(key1)",
+			expect: "content::string != ''|UNNEST(match_all(\"([a-z]+)\", content::string)) AS(key1)",
 		},
 		{
 			log:    "EXTRACT(\"([a-z]+)\") AS(key1)",
-			expect: "| cast(match_all(\"([a-z]+)\", content::string) AS array(varchar)) AS(key1)",
+			expect: "|UNNEST(match_all(\"([a-z]+)\", content::string)) AS(key1)",
 		},
 	}
 
@@ -290,6 +290,51 @@ func TestLogParserForWildCard(t *testing.T) {
 		{
 			log:    "content: *",
 			expect: "content::string != ''",
+		},
+	}
+
+	for i, testLog := range testLogs {
+		parser.Scanner = NewScanner(strings.NewReader(testLog.log))
+		parser.ParseTokens()
+		q, err := parser.GetQuery()
+		if err != nil {
+			t.Errorf(err.Error(), "parse %d with sql: %s, fai", i, q.String())
+			break
+		}
+		_, ok := q.Statements[i].(*influxql.LogPipeStatement)
+		if !ok {
+			t.Fatal()
+		}
+		get := q.Statements[i].String()
+		if testLog.expect != get {
+			t.Fatalf("[%s] result err, \nexpect:%s, \nreal: %s", testLog.log, testLog.expect, get)
+		}
+		fmt.Println(testLog.log, " : ", q.Statements[i].String())
+	}
+}
+
+func TestLogParserForRangeExpr(t *testing.T) {
+	parser := &YyParser{Query: influxql.Query{}}
+	testLogs := []logTermTest{
+		{
+			log:    "field in (10 100)",
+			expect: "\"field\" > '10' AND \"field\" < '100'",
+		},
+		{
+			log:    "field in (10 100]",
+			expect: "\"field\" > '10' AND \"field\" <= '100'",
+		},
+		{
+			log:    "field in [10 100)",
+			expect: "\"field\" >= '10' AND \"field\" < '100'",
+		},
+		{
+			log:    "field in [10 100]",
+			expect: "\"field\" >= '10' AND \"field\" <= '100'",
+		},
+		{
+			log:    "field in [10 100] and a<100",
+			expect: "\"field\" >= '10' AND \"field\" <= '100' AND a::string < '100'",
 		},
 	}
 

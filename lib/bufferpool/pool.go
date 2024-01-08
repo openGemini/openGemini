@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	maxDefaultSize    = 1024 * 1024 // 1M
-	minDefaultSize    = 64
-	maxLocalCacheLen  = 8
-	maxLocalCacheSize = 32 * 1024 * 1024 // 32M
+	maxDefaultSize               = 1024 * 1024 // 1M
+	minDefaultSize               = 64
+	MaxLocalCacheLen             = 8
+	MaxChunkMetaBufLocalCacheLen = 1024
+	maxLocalCacheSize            = 32 * 1024 * 1024 // 32M
 )
 
 type Pool struct {
@@ -36,19 +37,23 @@ type Pool struct {
 	localCache  chan []byte
 }
 
-var defaultPool = NewByteBufferPool(0)
+var defaultPool = NewByteBufferPool(0, cpu.GetCpuNum(), MaxLocalCacheLen)
 
-func NewByteBufferPool(defaultSize uint64) *Pool {
+func NewByteBufferPool(defaultSize uint64, localCacheNum int, maxCacheLen int) *Pool {
 	if defaultSize > maxDefaultSize {
 		defaultSize = maxDefaultSize
 	}
 	if defaultSize < minDefaultSize {
 		defaultSize = minDefaultSize
 	}
-
-	n := cpu.GetCpuNum()
-	if n > maxLocalCacheLen {
-		n = maxLocalCacheLen
+	var n int
+	if localCacheNum == 0 {
+		n = cpu.GetCpuNum()
+	} else {
+		n = localCacheNum
+	}
+	if n > maxCacheLen {
+		n = maxCacheLen
 	}
 	return &Pool{defaultSize: defaultSize, localCache: make(chan []byte, n)}
 }

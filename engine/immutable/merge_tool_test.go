@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -782,4 +783,82 @@ func TestMergeTool_writeHistory(t *testing.T) {
 
 	assert.NoError(t, mh.mergeAndCompact(true))
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestCompressChunkMeta(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+	immutable.InitWriterPool(8)
+
+	defer func() {
+		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressNone)
+		immutable.InitWriterPool(8)
+	}()
+
+	var run = func(seriesNum int) {
+		mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+		defer mh.store.Close()
+		rg := newRecordGenerator(begin, defaultInterval, true)
+
+		for i := 0; i < seriesNum; i++ {
+			rg.incrBegin(15)
+			mh.addRecord(uint64(100+i), rg.generate(getDefaultSchemas(), 10))
+		}
+
+		require.NoError(t, mh.saveToOrder())
+		total := 0
+		itrTSSPFile(mh.store.Order["mst"].Files()[0], func(sid uint64, rec *record.Record) {
+			record.CheckRecord(rec)
+			total++
+		})
+		require.Equal(t, seriesNum, total)
+	}
+
+	for _, v := range []int{immutable.ChunkMetaCompressZSTD, immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
+		immutable.SetChunkMetaCompressMode(v)
+		run(20)
+	}
+
+	for _, v := range []int{immutable.ChunkMetaCompressZSTD, immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
+		immutable.SetChunkMetaCompressMode(v)
+		run(2000)
+	}
+}
+
+func TestChunkMeta(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	files, ok := mh.store.Order["mst"]
+	require.True(t, ok)
+	require.True(t, len(files.Files()) == 1)
+
+	file := files.Files()[0]
+	tr := file.FileStat()
+	require.True(t, tr.DataSize() > 0)
+	require.True(t, tr.IndexSize() > 0)
+	require.True(t, tr.MetaIndexSize() > 0)
+
+	mi, err := file.MetaIndexAt(0)
+	require.NoError(t, err)
+
+	metas, err := file.ReadChunkMetaData(0, mi, nil, fileops.IO_PRIORITY_HIGH)
+	require.NoError(t, err)
+
+	chunkMeta := &metas[0]
+	require.True(t, len(chunkMeta.GetColMeta()) > 0)
+	cm := chunkMeta.GetColMeta()[0]
+	require.NotEmpty(t, cm.GetPreAgg())
+	ofs, size := cm.GetSegment(0)
+	require.True(t, ofs > 0)
+	require.True(t, size > 0)
+	require.Equal(t, uint8(5), cm.Type())
 }

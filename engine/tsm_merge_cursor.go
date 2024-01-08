@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -97,10 +98,13 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 }
 
 func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64) error {
+	buf := pool.GetChunkMetaBuffer()
+	defer pool.PutChunkMetaBuffer(buf)
+
 	for _, r := range files {
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
-		contains, err := loc.Contains(sid, ctx.tr, nil)
+		contains, err := loc.Contains(sid, ctx.tr, buf)
 		if err != nil {
 			r.UnrefFileReader()
 			return err
@@ -126,6 +130,9 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 	option := ctx.querySchema.Options()
 	schema := ctx.schema
 
+	buf := pool.GetChunkMetaBuffer()
+	defer pool.PutChunkMetaBuffer(buf)
+
 	for i := range files {
 		if !option.IsAscending() {
 			filesIndex = len(files) - i - 1
@@ -136,7 +143,7 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 		r := files[filesIndex]
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
-		contains, err := loc.Contains(sid, ctx.tr, nil)
+		contains, err := loc.Contains(sid, ctx.tr, buf)
 		if err != nil {
 			r.UnrefFileReader()
 			return 0, err
@@ -177,10 +184,13 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 	ascending := ctx.querySchema.Options().IsAscending()
 	var firstTime int64
 	firstTime = -1
+	buf := pool.GetChunkMetaBuffer()
+	defer pool.PutChunkMetaBuffer(buf)
+
 	for _, r := range files {
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
-		contains, err := loc.Contains(sid, ctx.tr, nil)
+		contains, err := loc.Contains(sid, ctx.tr, buf)
 		if err != nil {
 			r.UnrefFileReader()
 			return -1, err

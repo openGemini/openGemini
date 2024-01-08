@@ -325,3 +325,25 @@ func TestHasRowCount(t *testing.T) {
 	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
 	assert.Equal(t, schema.HasRowCount(), false)
 }
+
+func TestMeanAsSubCall(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(influxql.Fields{&influxql.Field{
+		Expr: &influxql.Call{
+			Name: "floor",
+			Args: []influxql.Expr{&influxql.Call{Name: "mean", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Integer}}}},
+		},
+	}}, []string{"floor_val"}, &opt, nil)
+	hasSum := false
+	for k, _ := range schema.Mapping() {
+		if c, ok := k.(*influxql.Call); ok {
+			if c.Name == "sum" {
+				hasSum = true
+				break
+			}
+		}
+	}
+	if !hasSum {
+		t.Fatal("TestMeanAsSubCall fail")
+	}
+}

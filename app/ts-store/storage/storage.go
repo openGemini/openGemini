@@ -129,12 +129,12 @@ func (s *Storage) appendRetentionPolicyService(c retention2.Config) {
 	s.Services = append(s.Services, srv)
 }
 
-func (s *Storage) appendHierarchicalService(c retention2.Config) {
+func (s *Storage) appendHierarchicalService(c config.HierarchicalConfig) {
 	if !c.Enabled {
 		return
 	}
 
-	srv := hierarchical.NewService(time.Duration(c.CheckInterval))
+	srv := hierarchical.NewService(c)
 	srv.Engine = s.engine
 	srv.MetaClient = s.metaClient
 	s.Services = append(s.Services, srv)
@@ -204,6 +204,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.WalEnabled = conf.Data.WalEnabled
 	opt.WalReplayParallel = conf.Data.WalReplayParallel
 	opt.WalReplayAsync = conf.Data.WalReplayAsync
+	opt.WalReplayBatchSize = int(conf.Data.WalReplayBatchSize)
 	opt.CompactionMethod = conf.Data.CompactionMethod
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
 	opt.LazyLoadShardEnable = conf.Data.LazyLoadShardEnable
@@ -215,6 +216,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.SnapshotTblNum = conf.Data.SnapshotTblNum
 	opt.FragmentsNumPerFlush = conf.Data.FragmentsNumPerFlush
 	opt.CsCompactionEnabled = conf.Data.CsCompactionEnabled
+	opt.CsDetachedFlushEnabled = conf.Data.CsDetachedFlushEnabled
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)
@@ -474,6 +476,10 @@ func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, s
 func (s *Storage) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (hybridqp.IShardsFragments, error) {
 	filesFragments, err := s.engine.ScanWithSparseIndex(ctx, db, ptId, shardIDS, schema.(*executor.QuerySchema))
 	return filesFragments, err
+}
+
+func (s *Storage) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hybridqp.Catalog) (interface{}, error) {
+	return s.engine.GetIndexInfo(db, ptId, shardID, schema.(*executor.QuerySchema))
 }
 
 func (s *Storage) RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error) {

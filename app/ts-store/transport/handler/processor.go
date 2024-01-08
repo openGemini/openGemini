@@ -19,16 +19,20 @@ package handler
 import (
 	"fmt"
 	"reflect"
+	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
+	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
 
@@ -156,7 +160,13 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		_ = w.Response(executor.NewFinishMessage(), true)
 		return nil
 	}
-
+	atomic.AddInt64(&statistics.StoreQueryStat.StoreQueryRequests, 1)
+	atomic.AddInt64(&statistics.StoreQueryStat.StoreActiveQueryRequests, 1)
+	start := time.Now()
+	defer func() {
+		atomic.AddInt64(&statistics.StoreQueryStat.StoreActiveQueryRequests, -1)
+		atomic.AddInt64(&statistics.StoreQueryStat.StoreQueryRequestDuration, time.Since(start).Nanoseconds())
+	}()
 	s := NewSelect(p.store, w, req)
 	qm.Add(req.Opt.QueryId, s)
 
@@ -184,13 +194,24 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		_ = w.Response(executor.NewErrorMessage(errno.ErrQueryKilled, err.Error()), true)
 		return nil
 	}
-
+	if req.Opt.IncQuery {
+		iterMaxNum, ok := cache.GetNodeIterNum(req.Opt.GetLogQueryCurrId())
+		if !ok {
+			logger.GetLogger().Error("failed to process the query request", zap.Error(errno.NewError(errno.FailedGetNodeMaxIterNum, req.Opt.LogQueryCurrId)))
+			return p.HandleIncQuery(w, req, true, 0, 0)
+		}
+		return p.HandleIncQuery(w, req, false, iterMaxNum, 0)
+	}
 	err = w.Response(executor.NewFinishMessage(), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
 	}
 
 	return nil
+}
+
+func (p *SelectProcessor) HandleIncQuery(w spdy.Responser, req *executor.RemoteQuery, getFailed bool, iterMaxNum int32, rowCount int64) error {
+	return w.Response(executor.NewIncQueryFinishMessage(req.Opt.IncQuery, getFailed, req.Opt.LogQueryCurrId, iterMaxNum, rowCount), true)
 }
 
 type AbortProcessor struct {

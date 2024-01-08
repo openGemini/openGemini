@@ -100,6 +100,7 @@ func (p *YyParser) Lex(lval *yySymType) int {
 	lval.str = val
 	return int(typ)
 }
+
 func (p *YyParser) Error(err string) {
 	p.error = YyParserError(err)
 }

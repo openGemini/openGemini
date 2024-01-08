@@ -30,6 +30,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
@@ -149,7 +150,7 @@ func NewMultiplexedConnection(cfg config.Spdy, underlying io.ReadWriteCloser, cl
 		input:       bufio.NewReader(underlying),
 		output:      bufio.NewWriter(underlying),
 		handlers:    make([]handlerFunc, UNKNOWN_TYPE),
-		dataBp:      *bufferpool.NewByteBufferPool(cfg.ByteBufferPoolDefaultSize),
+		dataBp:      *bufferpool.NewByteBufferPool(cfg.ByteBufferPoolDefaultSize, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen),
 		accept:      make(chan *MultiplexedSession, cfg.ConcurrentAcceptSession),
 		client:      client,
 		openTimeout: cfg.GetOpenSessionTimeout(),

@@ -1067,7 +1067,7 @@ func (r *FileSequenceAggregator) AggregateSameSchema() error {
 			newRecord = r.recordPool.GetBySchema(r.outSchema)
 			continue
 		}
-		kr := inRecord.GetRec().KickNilRow()
+		kr := inRecord.GetRec().KickNilRow(nil)
 		if kr.RowNums() == 0 {
 			continue
 		}

@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"fmt"
 	"reflect"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
@@ -25,10 +26,13 @@ import (
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/query/proto"
 	"google.golang.org/protobuf/proto"
 )
+
+const IncQueryFinishLength = util.BooleanSizeBytes*2 + util.Int32SizeBytes + util.Int64SizeBytes
 
 func NewRPCMessage(typ uint8) transport.Codec {
 	var data transport.Codec
@@ -44,6 +48,8 @@ func NewRPCMessage(typ uint8) transport.Codec {
 		data = &RemoteQuery{}
 	case FinishMessage:
 		data = &Finish{}
+	case IncQueryFinishMessage:
+		data = &IncQueryFinish{}
 	default:
 		return nil
 	}
@@ -100,6 +106,48 @@ func (e *Finish) Size() int {
 
 func (e *Finish) Instance() transport.Codec {
 	return &Finish{}
+}
+
+type IncQueryFinish struct {
+	isIncQuery bool
+	getFailed  bool
+	queryID    string
+	iterMaxNum int32
+	rowCount   int64
+}
+
+func NewIncQueryFinishMessage(isIncQuery, getFailed bool, queryID string, iterMaxNum int32, rowCount int64) *rpc.Message {
+	return rpc.NewMessage(IncQueryFinishMessage, &IncQueryFinish{isIncQuery: isIncQuery, getFailed: getFailed, queryID: queryID, iterMaxNum: iterMaxNum, rowCount: rowCount})
+}
+
+func (e *IncQueryFinish) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBool(buf, e.isIncQuery)
+	buf = codec.AppendBool(buf, e.getFailed)
+	buf = codec.AppendString(buf, e.queryID)
+	buf = codec.AppendInt32(buf, e.iterMaxNum)
+	buf = codec.AppendInt64(buf, e.rowCount)
+	return buf, nil
+}
+
+func (e *IncQueryFinish) Unmarshal(buf []byte) error {
+	if len(buf) < IncQueryFinishLength {
+		return fmt.Errorf("invalid the IncQueryFinish length")
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	e.isIncQuery = dec.Bool()
+	e.getFailed = dec.Bool()
+	e.queryID = dec.String()
+	e.iterMaxNum = dec.Int32()
+	e.rowCount = dec.Int64()
+	return nil
+}
+
+func (e *IncQueryFinish) Size() int {
+	return util.BooleanSizeBytes*2 + util.Int32SizeBytes + util.Int64SizeBytes + len(e.queryID) // isIncQuery + getFailed + iterMaxNum + rowCount + queryID
+}
+
+func (e *IncQueryFinish) Instance() transport.Codec {
+	return &IncQueryFinish{}
 }
 
 type Abort struct {
@@ -169,11 +217,69 @@ func NewChunkResponse(chunk Chunk) *rpc.Message {
 	return rpc.NewMessage(ChunkResponseMessage, chunk)
 }
 
+type ShardInfo struct {
+	ID      uint64
+	Path    string // used for remote storage
+	Version uint32 // identify data from different layouts
+}
+
+func MarshalShardInfos(shardInfos []ShardInfo) []*proto2.ShardInfo {
+	ret := make([]*proto2.ShardInfo, 0, len(shardInfos))
+	for _, shardInfo := range shardInfos {
+		ret = append(ret, &proto2.ShardInfo{
+			ID:      shardInfo.ID,
+			Path:    shardInfo.Path,
+			Version: shardInfo.Version,
+		})
+	}
+	return ret
+}
+
+func UnmarshalShardInfos(shardInfos []*proto2.ShardInfo) []ShardInfo {
+	ret := make([]ShardInfo, 0, len(shardInfos))
+	for _, shardInfo := range shardInfos {
+		ret = append(ret, ShardInfo{
+			ID:      shardInfo.GetID(),
+			Path:    shardInfo.GetPath(),
+			Version: shardInfo.GetVersion(),
+		})
+	}
+	return ret
+}
+
+type PtQuery struct {
+	PtID       uint32
+	ShardInfos []ShardInfo
+}
+
+func MarshalPtQuerys(ptQuerys []PtQuery) []*proto2.PtQuery {
+	ret := make([]*proto2.PtQuery, 0, len(ptQuerys))
+	for _, ptQuery := range ptQuerys {
+		ret = append(ret, &proto2.PtQuery{
+			PtID:       ptQuery.PtID,
+			ShardInfos: MarshalShardInfos(ptQuery.ShardInfos),
+		})
+	}
+	return ret
+}
+
+func UnmarshalPtQuerys(ptQuerys []*proto2.PtQuery) []PtQuery {
+	ret := make([]PtQuery, 0, len(ptQuerys))
+	for _, ptQuery := range ptQuerys {
+		ret = append(ret, PtQuery{
+			PtID:       ptQuery.GetPtID(),
+			ShardInfos: UnmarshalShardInfos(ptQuery.GetShardInfos()),
+		})
+	}
+	return ret
+}
+
 type RemoteQuery struct {
 	Database string
-	PtID     uint32
+	PtID     uint32 // for tsstore
 	NodeID   uint64
-	ShardIDs []uint64
+	ShardIDs []uint64  // for tsstore
+	PtQuerys []PtQuery // for csstore
 	Opt      query.ProcessorOptions
 	Analyze  bool
 	Node     []byte
@@ -193,6 +299,7 @@ func (c *RemoteQuery) Marshal(buf []byte) ([]byte, error) {
 		Opt:       opt,
 		Analyze:   c.Analyze,
 		QueryNode: c.Node,
+		PtQuerys:  MarshalPtQuerys(c.PtQuerys),
 	})
 
 	ret := make([]byte, len(buf)+len(msg))
@@ -214,6 +321,7 @@ func (c *RemoteQuery) Unmarshal(buf []byte) error {
 	c.Analyze = pb.GetAnalyze()
 	c.NodeID = pb.GetNodeID()
 	c.Node = pb.QueryNode
+	c.PtQuerys = UnmarshalPtQuerys(pb.GetPtQuerys())
 	if err := c.Opt.UnmarshalBinary(pb.GetOpt()); err != nil {
 		return err
 	}
@@ -226,6 +334,22 @@ func (c *RemoteQuery) Size() int {
 
 func (c *RemoteQuery) Instance() transport.Codec {
 	return &RemoteQuery{}
+}
+
+func (c *RemoteQuery) Empty() bool {
+	return len(c.ShardIDs) == 0 && len(c.PtQuerys) == 0
+}
+
+func (c *RemoteQuery) HaveLocalMst() bool {
+	return c.Opt.HaveLocalMst()
+}
+
+func (c *RemoteQuery) Len() int {
+	if len(c.ShardIDs) != 0 {
+		return len(c.ShardIDs)
+	} else {
+		return len(c.PtQuerys)
+	}
 }
 
 func NewInvalidTypeError(exp string, data interface{}) error {

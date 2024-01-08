@@ -21,7 +21,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
-	sysString "strings"
+	sysStrings "strings"
 	"sync/atomic"
 	"time"
 
@@ -237,7 +237,7 @@ func (e *Engine) TagKeys(db string, ptIDs []uint32, measurements [][]byte, condi
 	}
 	result := make([]string, 0, len(keysMap))
 	for k, v := range keysMap {
-		var builder sysString.Builder
+		var builder sysStrings.Builder
 		builder.WriteString(k)
 		hastag := false
 		for tag := range v {

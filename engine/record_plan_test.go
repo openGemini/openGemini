@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -1215,7 +1216,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2))
+				trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2), 0)
 				s := trans.BuildDownSampleSchema(querySchema)
 				if s.GetQueryFields()[0].Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val == "min_field4_float" {
 					t.Fatal("build down sample query schema failed")
@@ -1237,7 +1238,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 					ShardID: uint64(10),
 					Req:     req,
 				}
-				a := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, sInfo, make(chan struct{}, 2))
+				a := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, sInfo, make(chan struct{}, 2), 0)
 				_, _, err = a.BuildPlan(1)
 				if err != nil {
 					t.Fatal(err)
@@ -1531,9 +1532,9 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
-			trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2))
+			trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2), 0)
 			p, _ := trans.BuildDownSamplePlan(querySchema)
-			newTrans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, nil, make(chan struct{}, 2))
+			newTrans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, nil, make(chan struct{}, 2), 0)
 			check := newTrans.CanDownSampleRewrite(0)
 			if !check {
 				t.Fatal("DownSample rewrite check failed")
@@ -1547,7 +1548,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			stmt.OmitTime = true
 			querySchema2 := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			p, _ = trans.BuildDownSamplePlan(querySchema2)
-			newTrans = executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema2, p, nil, make(chan struct{}, 2))
+			newTrans = executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema2, p, nil, make(chan struct{}, 2), 0)
 			check = newTrans.CanDownSampleRewrite(1)
 			if check {
 				t.Fatal("DownSample rewrite check failed")
@@ -1920,7 +1921,7 @@ func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.Me
 	return 0, nil, nil
 }
 
-func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *immutable.ChunkMeta, buffer *[]byte, ioPriority int) (*immutable.ChunkMeta, error) {
+func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *immutable.ChunkMeta, buf *pool.Buffer, ioPriority int) (*immutable.ChunkMeta, error) {
 	return nil, nil
 }
 

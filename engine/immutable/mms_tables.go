@@ -37,6 +37,7 @@ import (
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
 )
 
@@ -81,7 +82,9 @@ type TablesStore interface {
 	EnableCompAndMerge()
 	FreeSequencer() bool
 	SetImmTableType(engineType config.EngineType)
-	SetMstInfo(name string, mstInfo *MeasurementInfo)
+	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
+	SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex)
+	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
 	SeriesTotal() uint64
 	SetLockPath(lock *string)
 }
@@ -91,19 +94,16 @@ type ImmTable interface {
 	unrefMmsTable(m *MmsTables, orderWg, outOfOrderWg *sync.WaitGroup)
 	addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nameWithVer string)
 	getTSSPFiles(m *MmsTables, mstName string, isOrder bool) (*TSSPFiles, bool)
+	GetEngineType() config.EngineType
+	GetCompactionType(name string) config.CompactionType
 	getFiles(m *MmsTables, isOrder bool) map[string]*TSSPFiles
 	compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error
 	NewFileIterators(m *MmsTables, group *CompactGroup) (FilesInfo, error)
 	AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile)
 	LevelPlan(m *MmsTables, level uint16) []*CompactGroup
-	SetMstInfo(name string, mstInfo *MeasurementInfo)
-}
-
-type MeasurementInfo struct {
-	Name       string // measurement name with version
-	Schema     map[string]int32
-	PrimaryKey []string
-	SortKey    []string
+	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
+	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
+	UpdateAccumulateMetaIndexInfo(name string, index *AccumulateMetaIndex)
 }
 
 type MmsTables struct {
@@ -127,13 +127,13 @@ type MmsTables struct {
 	mergeEn         int32
 	inCompLock      sync.RWMutex
 	inCompact       map[string]struct{}
-	inMerge         *InMerge
+	inMerge         *MeasurementInProcess
+	inBlockCompact  *MeasurementInProcess
 	lmt             *lastMergeTime
 	sequencer       *Sequencer
 	compactRecovery bool
 	logger          *logger.Logger
 	ImmTable        ImmTable
-	engineType      config.EngineType
 
 	Conf *Config
 
@@ -153,7 +153,8 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 		PKFiles:         make(map[string]*colstore.PKFiles, defaultCap),
 		tier:            tier,
 		inCompact:       make(map[string]struct{}, defaultCap),
-		inMerge:         NewInMerge(),
+		inMerge:         NewMeasurementInProcess(),
+		inBlockCompact:  NewMeasurementInProcess(),
 		lmt:             NewLastMergeTime(),
 		mergeEn:         1,
 		compactionEn:    1,
@@ -177,19 +178,22 @@ func addMemSize(levelName string, memSize, memOrderSize, memUnOrderSize int64) {
 
 func (m *MmsTables) SetImmTableType(engineType config.EngineType) {
 	if engineType == config.TSSTORE {
-		m.ImmTable = &tsImmTableImpl{}
-		m.engineType = config.TSSTORE
+		m.ImmTable = NewTsImmTable()
 	} else if engineType == config.COLUMNSTORE {
-		m.ImmTable = &csImmTableImpl{
-			mstsInfo:   make(map[string]*MeasurementInfo),
-			primaryKey: make(map[string]record.Schemas),
-		}
-		m.engineType = config.COLUMNSTORE
+		m.ImmTable = NewCsImmTableImpl()
 	}
 }
 
-func (m *MmsTables) SetMstInfo(name string, mstInfo *MeasurementInfo) {
+func (m *MmsTables) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
 	m.ImmTable.SetMstInfo(name, mstInfo)
+}
+
+func (m *MmsTables) SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex) {
+	m.ImmTable.UpdateAccumulateMetaIndexInfo(name, aMetaIndex)
+}
+
+func (m *MmsTables) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
+	return m.ImmTable.GetMstInfo(name)
 }
 
 func (m *MmsTables) Tier() uint64 {
@@ -283,7 +287,7 @@ func (m *MmsTables) Open() (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := recoverFile(shardDir, m.lock, m.engineType); err != nil {
+	if err := recoverFile(shardDir, m.lock, m.ImmTable.GetEngineType()); err != nil {
 		errInfo := errno.NewError(errno.RecoverFileFailed, shardDir)
 		lg.Error("", zap.Error(errInfo))
 		return 0, errInfo
@@ -936,6 +940,11 @@ var (
 )
 
 func (m *MmsTables) genCompactGroup(seqMap *dictpool.Dict, name string, level uint16) *CompactGroup {
+	if m.ImmTable.GetCompactionType(name) == config.BLOCK && !m.inBlockCompact.Add(name) {
+		log.Debug("block compact in process", zap.String("name", name))
+		return nil
+	}
+
 	group := NewCompactGroup(name, level+1, seqMap.Len())
 	for i, kv := range seqMap.D {
 		f := kv.Value.(TSSPFile)

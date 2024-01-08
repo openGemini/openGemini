@@ -27,6 +27,7 @@ import (
 
 var MinMaxTimeRange = util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
 var typeSize = make([]int, influx.Field_Type_Last)
+var zeroBuf = make([]byte, 1024)
 
 func init() {
 	typeSize[influx.Field_Type_Int] = util.Int64SizeBytes
@@ -148,4 +149,22 @@ func GetTimeRangeEndIndexDescend(times []int64, startPos int, endTime int64) int
 
 func Uint64ToBytesUnsafe(id uint64) []byte {
 	return (*(*[8]byte)(unsafe.Pointer(&id)))[:]
+}
+
+func reserveBytes(b []byte, size int) []byte {
+	valCap := cap(b)
+	if valCap == 0 {
+		return make([]byte, size)
+	}
+
+	valLen := len(b)
+	remain := valCap - valLen
+	if delta := size - remain; delta > 0 {
+		if delta <= len(zeroBuf) {
+			b = append(b[:valCap], zeroBuf[:delta]...)
+		} else {
+			b = append(b[:valCap], make([]byte, delta)...)
+		}
+	}
+	return b[:valLen+size]
 }

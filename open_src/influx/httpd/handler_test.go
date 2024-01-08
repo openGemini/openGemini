@@ -1,16 +1,23 @@
 package httpd
 
 import (
+	"bufio"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/bmizerany/pat"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/stretchr/testify/assert"
 )
@@ -405,5 +412,47 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 				t.Fatalf("%d-expect ppl:%s,\n  real Ppl:%s", i, testStr[i][2], ppl)
 			}
 		}
+	}
+}
+
+func TestParseJsonVV2(t *testing.T) {
+	h := &Handler{
+		mux: pat.New(),
+		Config: &config.Config{
+			AuthEnabled: false,
+		},
+		requestTracker: httpd.NewRequestTracker(),
+		Logger:         logger.NewLogger(errno.ModuleLogStore),
+	}
+	// {"time":%v, "http":"127.0.0.1", "cnt":4}
+	now := time.Now().UnixMilli()
+	s := fmt.Sprintf("{\"time\":%v, \"http\":\"127.0.0.1\", \"cnt\":4}", now)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(s))
+	q := req.URL.Query()
+	q.Add(":repository", "test")
+	q.Add(":logStream", "test")
+	q.Add("type", "json")
+	q.Add("mapping", `{"timestamp":"time", "default_type":"tags","content": ["http", "cnt"]}`)
+	req.URL.RawQuery = q.Encode()
+
+	req2, err := h.getLogWriteRequest(req)
+	if err != nil {
+		t.Fatal(req2, err)
+	}
+	scanner := bufio.NewScanner(strings.NewReader(s))
+	scanBuf := byteBufferPool.Get()
+	defer byteBufferPool.Put(scanBuf)
+	scanner.Buffer(scanBuf, ScannerBufferSize)
+	scanner.Split(bufio.ScanLines)
+
+	ld := 7 * 24 * time.Hour
+	expiredEarliestTime := time.Now().UnixMilli() - ld.Milliseconds()
+	rows := &record.Record{}
+	failRows := record.NewRecord(schema, false)
+	_ = h.parseJsonV2(scanner, req2, rows, failRows, expiredEarliestTime)
+	expect := fmt.Sprintf("field(tags):[]string(nil)\nfield(time):[]int64{%v}\nfield(http):[]string{\"127.0.0.1\"}\nfield(cnt):[]float64{4}\n", now*1e6)
+	res := rows.String()
+	if expect != res {
+		t.Fatal("unexpect", res)
 	}
 }

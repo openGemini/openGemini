@@ -66,67 +66,15 @@ type Record struct {
 	Schema  Schemas
 }
 
-type SortAux struct {
-	RowIds  []int32
-	Times   []int64
-	SortRec *Record
-}
-
-func (aux *SortAux) Len() int {
-	return len(aux.RowIds)
-}
-
-func (aux *SortAux) Less(i, j int) bool {
-	return aux.Times[i] < aux.Times[j]
-}
-
-func (aux *SortAux) Swap(i, j int) {
-	aux.Times[i], aux.Times[j] = aux.Times[j], aux.Times[i]
-	aux.RowIds[i], aux.RowIds[j] = aux.RowIds[j], aux.RowIds[i]
-}
-
-func (aux *SortAux) Init(times []int64) {
-	aux.init(times)
-}
-
-func (aux *SortAux) init(times []int64) {
-	size := len(times)
-	if cap(aux.Times) < size {
-		aux.Times = make([]int64, size)
-	}
-	aux.Times = aux.Times[:size]
-
-	if cap(aux.RowIds) < size {
-		aux.RowIds = make([]int32, size)
-	}
-	aux.RowIds = aux.RowIds[:size]
-
-	for i := 0; i < size; i++ {
-		aux.RowIds[i] = int32(i)
-		aux.Times[i] = times[i]
-	}
-}
-
-func (aux *SortAux) InitRecord(schemas Schemas) {
-	if aux.SortRec == nil {
-		aux.SortRec = NewRecordBuilder(schemas)
-	} else {
-		aux.SortRec.ResetWithSchema(schemas)
-	}
-}
-
 func NewRecord(schema Schemas, initColMeta bool) *Record {
 	schemaLen := schema.Len()
 	record := &Record{}
-	record.Schema = append(record.Schema, make([]Field, schemaLen)...)
-	record.Schema = record.Schema[:schemaLen]
-	record.ColVals = append(record.ColVals, make([]ColVal, schemaLen)...)
-	record.ColVals = record.ColVals[:schemaLen]
+	record.Schema = make([]Field, schemaLen)
+	record.ColVals = make([]ColVal, schemaLen)
 	copy(record.Schema, schema)
 	if initColMeta {
 		record.RecMeta = &RecMeta{}
-		record.ColMeta = append(record.ColMeta, make([]ColMeta, schemaLen)...)
-		record.ColMeta = record.ColMeta[:schemaLen]
+		record.ColMeta = make([]ColMeta, schemaLen)
 	}
 	return record
 }
@@ -1221,7 +1169,7 @@ func (rec *Record) IsNilRow(row int) bool {
 	return true
 }
 
-func (rec *Record) KickNilRow() *Record {
+func (rec *Record) KickNilRow(dst *Record) *Record {
 	// fast path, no need to kick
 	colNum := rec.ColNums() - 1
 	for i := 0; i < colNum; i++ {
@@ -1249,8 +1197,12 @@ func (rec *Record) KickNilRow() *Record {
 				return rec
 			}
 			if isFirst {
-				newRec = NewRecordBuilder(rec.Schema)
-				isFirst = false
+				if dst != nil {
+					newRec = dst
+				} else {
+					newRec = NewRecordBuilder(rec.Schema)
+					isFirst = false
+				}
 			}
 			newRec.AppendRec(rec, startRow, endRow)
 			rowIdx = endRow

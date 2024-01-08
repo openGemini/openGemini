@@ -27,6 +27,79 @@ func setParseTree(yylex interface{}, stmts influxql.Statements) {
     }
 }
 
+func transCondOpToInflux(op int) int {
+    switch op {
+        case EQ: 
+            return influxql.MATCHPHRASE
+        case LT:
+            return influxql.LT
+        case LTE:
+            return influxql.LTE
+        case GT:
+            return influxql.GT
+        case GTE:
+            return influxql.GTE
+        case NEQ:
+            return influxql.NEQ
+        default:
+            return influxql.NEQ
+    }
+}
+
+func buildCondExpr(first influxql.Expr, op int, right influxql.Expr) influxql.Expr {
+	var field influxql.Expr
+	if first != nil {
+		if strVal, ok := first.(*influxql.StringLiteral); ok {
+			field = &influxql.VarRef{Val: strVal.Val, Type: influxql.String}
+		} else {
+			field = first
+		}
+	} else {
+		field = &influxql.VarRef{Val: "content", Type: influxql.String}
+	}
+
+	newOp := transCondOpToInflux(op)
+	var expr influxql.Expr
+	switch right.(type) {
+	case *influxql.Wildcard:
+		expr = &influxql.BinaryExpr{
+			Op:  influxql.NEQ,
+			LHS: field,
+			RHS: &influxql.StringLiteral{Val: ""},
+		}
+	default:
+		expr = &influxql.BinaryExpr{
+			Op:  influxql.Token(newOp),
+			LHS: field,
+			RHS: right,
+		}
+	}
+	return expr
+}
+
+func buildRangeExpr(first influxql.Expr, lop int, left influxql.Expr, rop int, right influxql.Expr) influxql.Expr {
+	var field influxql.Expr
+	if strVal, ok := first.(*influxql.StringLiteral); ok {
+		field = &influxql.VarRef{Val: strVal.Val}
+	} else {
+		field = first
+	}
+	res := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.Token(lop),
+			LHS: field,
+			RHS: left,
+		},
+		RHS: &influxql.BinaryExpr{
+			Op:  influxql.Token(rop),
+			LHS: field,
+			RHS: right,
+		},
+	}
+	return res
+}
+
 %}
 
 %union{
@@ -43,7 +116,9 @@ func setParseTree(yylex interface{}, stmts influxql.Statements) {
     strSlice            []string
 }
 
-%token <str>    EXTRACT AS LPAREN RPAREN
+%token <str>    EXTRACT AS LPAREN RPAREN LSQUARE RSQUARE IN
+%token <int>    EQ LT LTE GT GTE NEQ
+
 %token <str>    IDENT
 %token <str>    STRING
 
@@ -51,6 +126,7 @@ func setParseTree(yylex interface{}, stmts influxql.Statements) {
 %left  <int>    AND  BITWISE_OR
 %left  <int>    COLON COMMA
 
+%type <int>             CONDITION_OPERATOR
 %type <stmt>            STATEMENT BITWISE_OR_CONDITION
 %type <stmts>           ALL_QUERIES ALL_QUERY
 %type <expr>            CONDITION  CONDITION_COLUMN COLUMN COLUMN_VAREF COLUMN_SEMI CONDTION_CLAUSE BAND
@@ -178,68 +254,24 @@ EXTRACT_CLAUSE:
     EXTRACT LPAREN COLUMN_SEMI RPAREN AS LPAREN COLUMN_VAREFS RPAREN
     {
         unnest := &influxql.Unnest{}
-        unnest.Mst = &influxql.Measurement{}
-        unnest.CastFunc = "cast"
 
         columnsemi, ok := $3.(*influxql.BinaryExpr)
         if !ok {
             yylex.Error("expexted BinaryExpr")
         }
-        unnest.ParseFunc = &influxql.Call{
+        unnest.Expr = &influxql.Call{
             Name: "match_all",
             Args: []influxql.Expr{
                 &influxql.VarRef{Val:columnsemi.RHS.(*influxql.StringLiteral).Val},
                 columnsemi.LHS},
         }
-
-        unnest.DstColumns = []string{}
-        dstFunc := &influxql.Call{
-            Name: "array",
-            Args: []influxql.Expr{},
+        unnest.Aliases = []string{}
+        for _, alias := range $7 {
+            unnest.Aliases = append(unnest.Aliases, alias)
+            unnest.DstType = append(unnest.DstType, influxql.String)
         }
-        for _, f := range $7 {
-            unnest.DstColumns = append(unnest.DstColumns, f)
-            dstFunc.Args = append(dstFunc.Args, &influxql.VarRef{Val:"varchar"})
-        }
-        unnest.DstFunc =dstFunc
 
         $$ = unnest
-    }
-
-COLUMN_SEMI:
-    COLUMN_VAREF
-    {
-        var expr influxql.Expr
-        switch $1.(type) {
-        case *influxql.Wildcard:
-            expr = &influxql.BinaryExpr{Op:influxql.Token(influxql.NEQ),LHS:&influxql.VarRef{Val:"content", Type:influxql.String},RHS:&influxql.StringLiteral{Val:""}}
-        case *influxql.VarRef:
-            expr = &influxql.BinaryExpr{Op:influxql.Token(influxql.MATCHPHRASE),LHS:&influxql.VarRef{Val:"content", Type:influxql.String},RHS:&influxql.StringLiteral{Val:$1.(*influxql.VarRef).Val}}
-        default:
-           expr = &influxql.BinaryExpr{Op:influxql.Token(influxql.MATCHPHRASE),LHS:&influxql.VarRef{Val:"content", Type:influxql.String},RHS: $1}
-        }
-        $$ = expr
-    }
-    |
-    COLUMN_VAREF COLON COLUMN_VAREF
-    {
-        var field influxql.Expr
-        if strVal, ok := $1.(*influxql.StringLiteral); ok {
-            field = &influxql.VarRef{Val:strVal.Val}
-        } else {
-            field = $1
-        }
-
-        var expr influxql.Expr
-        switch $3.(type) {
-        case *influxql.Wildcard:
-            expr = &influxql.BinaryExpr{Op:influxql.Token(influxql.NEQ), LHS:field, RHS:&influxql.StringLiteral{Val:""}}
-        case *influxql.VarRef:
-            expr = &influxql.BinaryExpr{Op:influxql.Token(influxql.MATCHPHRASE), LHS:field, RHS:&influxql.StringLiteral{Val:$3.(*influxql.VarRef).Val}}
-        default:
-           expr = &influxql.BinaryExpr{Op:influxql.Token(influxql.MATCHPHRASE), LHS:field, RHS: $3}
-        }
-        $$ = expr
     }
 
 COLUMN_VAREFS:
@@ -260,16 +292,76 @@ COLUMN_VAREFS:
        }
    }
 
+
+COLUMN_SEMI:
+    COLUMN_VAREF
+    {
+       expr := buildCondExpr(nil, EQ, $1)
+        $$ = expr
+    }
+    | COLUMN_VAREF COLON COLUMN_VAREF
+    {
+        expr := buildCondExpr($1, EQ, $3)
+        $$ = expr
+    }
+    | COLUMN_VAREF CONDITION_OPERATOR COLUMN_VAREF
+    {
+        expr := buildCondExpr($1, $2, $3)
+        $$ = expr
+    }
+    | COLUMN_VAREF IN LPAREN COLUMN_VAREF COLUMN_VAREF RPAREN
+    {
+        expr := buildRangeExpr($1, influxql.GT, $4, influxql.LT, $5)
+        $$ = expr
+    }
+    | COLUMN_VAREF IN LPAREN COLUMN_VAREF COLUMN_VAREF RSQUARE
+    {
+        expr := buildRangeExpr($1, influxql.GT, $4, influxql.LTE, $5)
+        $$ = expr
+    }
+    | COLUMN_VAREF IN LSQUARE COLUMN_VAREF COLUMN_VAREF RPAREN
+    {
+        expr := buildRangeExpr($1, influxql.GTE, $4, influxql.LT, $5)
+        $$ = expr
+    }
+    | COLUMN_VAREF IN LSQUARE COLUMN_VAREF COLUMN_VAREF RSQUARE
+    {
+        expr := buildRangeExpr($1, influxql.GTE, $4, influxql.LTE, $5)
+        $$ = expr
+    }
+
 COLUMN_VAREF:
     IDENT
     {
         if $1 == "*" {
-	        $$ = &influxql.Wildcard{Type:influxql.MUL}
-	    }else{
-            $$ = &influxql.VarRef{Val:$1, Type:influxql.String}
+            $$ = &influxql.Wildcard{Type:influxql.MUL}
+        }else{
+            $$ = &influxql.StringLiteral{Val:$1}
         }
     }
     |STRING
     {
         $$ = &influxql.StringLiteral{Val:$1}
+    }
+
+CONDITION_OPERATOR:
+    EQ
+    {
+        $$ = EQ
+    }
+    |LT
+    {
+        $$ = LT
+    }
+    |LTE
+    {
+        $$ = LTE
+    }
+    |GT
+    {
+        $$ = GT
+    }
+    |GTE
+    {
+        $$ = GTE
     }

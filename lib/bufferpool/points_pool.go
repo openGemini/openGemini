@@ -16,7 +16,9 @@ limitations under the License.
 
 package bufferpool
 
-var pointsPool = NewByteBufferPool(0)
+import "github.com/openGemini/openGemini/lib/cpu"
+
+var pointsPool = NewByteBufferPool(0, cpu.GetCpuNum(), MaxLocalCacheLen)
 
 func GetPoints() []byte {
 	return pointsPool.Get()

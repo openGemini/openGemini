@@ -56,6 +56,7 @@ const (
 	DefaultBackGroundReadThroughput = 64 * MB
 	DefaultMaxWriteHangTime         = 15 * time.Second
 	DefaultWALSyncInterval          = 100 * time.Millisecond
+	DefaultWalReplayBatchSize       = 1 * MB // 1MB
 	DefaultReadMetaCachePercent     = 3
 	DefaultReadDataCachePercent     = 10
 	MinFlavorMemory                 = 8 * GB
@@ -85,11 +86,11 @@ type TSStore struct {
 	Gossip      *Gossip     `toml:"gossip"`
 	Spdy        Spdy        `toml:"spdy"`
 
-	HTTPD             httpdConf.Config `toml:"http"`
-	Retention         retention.Config `toml:"retention"`
-	DownSample        retention.Config `toml:"downsample"`
-	HierarchicalStore retention.Config `toml:"hierarchical-storage"`
-	Stream            stream.Config    `toml:"stream"`
+	HTTPD             httpdConf.Config   `toml:"http"`
+	Retention         retention.Config   `toml:"retention"`
+	DownSample        retention.Config   `toml:"downsample"`
+	HierarchicalStore HierarchicalConfig `toml:"hierarchical-storage"`
+	Stream            stream.Config      `toml:"stream"`
 
 	// TLS provides configuration options for all https endpoints.
 	TLS        tlsconfig.Config   `toml:"tls"`
@@ -116,7 +117,7 @@ func NewTSStore(enableGossip bool) *TSStore {
 
 	c.Retention = retention.NewConfig()
 	c.DownSample = retention.NewConfig()
-	c.HierarchicalStore = retention.NewConfig()
+	c.HierarchicalStore = NewHierarchicalConfig()
 	c.Gossip = NewGossip(enableGossip)
 
 	c.Analysis = NewCastor()
@@ -225,24 +226,26 @@ type Store struct {
 	CompactionMethod             int           `toml:"compaction-method"` // 0:auto, 1: streaming, 2: non-streaming
 
 	// Configs for snapshot
-	WriteColdDuration     toml.Duration `toml:"write-cold-duration"`
-	ShardMutableSizeLimit toml.Size     `toml:"shard-mutable-size-limit"`
-	NodeMutableSizeLimit  toml.Size     `toml:"node-mutable-size-limit"`
-	MaxWriteHangTime      toml.Duration `toml:"max-write-hang-time"`
-	MemDataReadEnabled    bool          `toml:"mem-data-read-enabled"`
-	CsCompactionEnabled   bool          `toml:"column-store-compact-enabled"`
-	SnapshotTblNum        int           `toml:"snapshot-table-number"`
-	FragmentsNumPerFlush  int           `toml:"fragments-num-per-flush"`
+	WriteColdDuration      toml.Duration `toml:"write-cold-duration"`
+	ShardMutableSizeLimit  toml.Size     `toml:"shard-mutable-size-limit"`
+	NodeMutableSizeLimit   toml.Size     `toml:"node-mutable-size-limit"`
+	MaxWriteHangTime       toml.Duration `toml:"max-write-hang-time"`
+	MemDataReadEnabled     bool          `toml:"mem-data-read-enabled"`
+	CsCompactionEnabled    bool          `toml:"column-store-compact-enabled"`
+	CsDetachedFlushEnabled bool          `toml:"column-store-detached-flush-enabled"`
+	SnapshotTblNum         int           `toml:"snapshot-table-number"`
+	FragmentsNumPerFlush   int           `toml:"fragments-num-per-flush"`
 
-	WalSyncInterval   toml.Duration `toml:"wal-sync-interval"`
-	WalEnabled        bool          `toml:"wal-enabled"`
-	WalReplayParallel bool          `toml:"wal-replay-parallel"`
-	WalReplayAsync    bool          `toml:"wal-replay-async"`
-	CacheDataBlock    bool          `toml:"cache-table-data-block"`
-	CacheMetaBlock    bool          `toml:"cache-table-meta-block"`
-	EnableMmapRead    bool          `toml:"enable-mmap-read"`
-	Readonly          bool          `toml:"readonly"`
-	CompactRecovery   bool          `toml:"compact-recovery"`
+	WalSyncInterval    toml.Duration `toml:"wal-sync-interval"`
+	WalEnabled         bool          `toml:"wal-enabled"`
+	WalReplayParallel  bool          `toml:"wal-replay-parallel"`
+	WalReplayAsync     bool          `toml:"wal-replay-async"`
+	WalReplayBatchSize toml.Size     `toml:"wal-replay-batch-size"`
+	CacheDataBlock     bool          `toml:"cache-table-data-block"`
+	CacheMetaBlock     bool          `toml:"cache-table-meta-block"`
+	EnableMmapRead     bool          `toml:"enable-mmap-read"`
+	Readonly           bool          `toml:"readonly"`
+	CompactRecovery    bool          `toml:"compact-recovery"`
 
 	ReadPageSize         string    `toml:"read-page-size"`
 	ReadMetaCacheEn      toml.Size `toml:"enable-meta-cache"`
@@ -276,6 +279,9 @@ type Store struct {
 	InterruptQuery       bool          `toml:"interrupt-query"`
 	InterruptSqlMemPct   int           `toml:"interrupt-sql-mem-pct"`
 	ProactiveMgrInterval toml.Duration `toml:"proactive-manager-interval"`
+
+	TemporaryIndexCompressMode int `toml:"temporary-index-compress-mode"`
+	ChunkMetaCompressMode      int `toml:"chunk-meta-compress-mode"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -308,6 +314,7 @@ func NewStore() Store {
 		WalEnabled:                   true,
 		WalReplayParallel:            false,
 		WalReplayAsync:               false,
+		WalReplayBatchSize:           DefaultWalReplayBatchSize,
 		CompactRecovery:              true,
 		CompactionMethod:             0,
 		OpsMonitor:                   NewOpsMonitorConfig(),

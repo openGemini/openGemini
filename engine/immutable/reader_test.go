@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
@@ -188,7 +189,7 @@ func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, e
 	return 0, nil, nil
 }
 
-func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
+func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
 	return nil, nil
 }
 
@@ -324,7 +325,6 @@ func TestDecodeColumnData(t *testing.T) {
 		builder := ColumnBuilder{}
 		builder.colMeta = &ColumnMeta{name: "foo", ty: uint8(typ), entries: make([]Segment, 1)}
 		builder.coder = &encoding.CoderContext{}
-
 		switch typ {
 		case influx.Field_Type_Int:
 			col.AppendIntegers(1, 2, 3)
@@ -360,7 +360,6 @@ func TestDecodeStringColumnDataOfTimeDesc1(t *testing.T) {
 		builder := ColumnBuilder{}
 		builder.colMeta = &ColumnMeta{name: "foo", ty: uint8(typ), entries: make([]Segment, 1)}
 		builder.coder = &encoding.CoderContext{}
-
 		switch typ {
 		case influx.Field_Type_String:
 			col.AppendStringNull()
@@ -705,4 +704,76 @@ func TestDecodeColumnHeader_error(t *testing.T) {
 
 	exp := fmt.Sprintf("type(%d) in table not eq select type(%d)", invalidTyp, encoding.BlockInteger)
 	require.EqualError(t, err, exp)
+}
+func preparePreAggBaseRec1() *record.Record {
+	s := []record.Field{
+		{Name: "bps", Type: influx.Field_Type_Int},
+		{Name: "direction", Type: influx.Field_Type_String},
+		{Name: "isgood", Type: influx.Field_Type_Boolean},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	rec := record.NewRecord(s, false)
+	for i := 0; i < rec.ColNums(); i++ {
+
+		switch rec.Schema.Field(i).Name {
+		case "bps":
+			rec.Column(i).AppendIntegerNull()
+			for j := 0; j < 10; j++ {
+				rec.Column(i).AppendInteger(int64(j))
+			}
+		case "direction":
+			rec.Column(i).AppendStringNull()
+			for j := 0; j < 10; j++ {
+				if j < 5 {
+					rec.Column(i).AppendString("out")
+				} else {
+					rec.Column(i).AppendString("in")
+				}
+			}
+		case "isgood":
+			rec.Column(i).AppendBooleanNull()
+			for j := 0; j < 10; j++ {
+				if j < 5 {
+					rec.Column(i).AppendBoolean(false)
+				} else {
+					rec.Column(i).AppendBoolean(true)
+				}
+			}
+		case "time":
+			for j := 0; j < 10; j++ {
+				if j < 5 {
+					rec.Column(i).AppendInteger(int64(1695461186000000000))
+				} else {
+					rec.Column(i).AppendInteger(int64(1695461486000000000))
+				}
+			}
+		}
+	}
+	return rec
+}
+func TestFilterByField(t *testing.T) {
+	rec := preparePreAggBaseRec1()
+	filterRec := record.NewRecord(rec.Schema, false)
+	filterOption := &BaseFilterOptions{
+		CondFunctions: &binaryfilterfunc.ConditionImpl{},
+		FieldsIdx:     []int{0, 1, 2},
+		RedIdxMap:     map[int]struct{}{},
+		FiltersMap:    make(map[string]*influxql.FilterMapValue),
+	}
+	filterBitMap := bitmap.NewFilterBitmap(filterOption.CondFunctions.NumFilter())
+	condition := &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "bps"}, RHS: &influxql.IntegerLiteral{Val: 5}}
+	result := FilterByField(rec, filterRec, filterOption, condition, nil, nil, filterBitMap, nil)
+	condition = &influxql.BinaryExpr{Op: influxql.NEQ, LHS: &influxql.VarRef{Val: "bps"}, RHS: &influxql.IntegerLiteral{Val: 5}}
+	result = FilterByField(rec, filterRec, filterOption, condition, nil, nil, filterBitMap, nil)
+	condition = &influxql.BinaryExpr{Op: influxql.LT, LHS: &influxql.VarRef{Val: "bps"}, RHS: &influxql.IntegerLiteral{Val: 5}}
+	result = FilterByField(rec, filterRec, filterOption, condition, nil, nil, filterBitMap, nil)
+	condition = &influxql.BinaryExpr{Op: influxql.LTE, LHS: &influxql.VarRef{Val: "bps"}, RHS: &influxql.IntegerLiteral{Val: 5}}
+	result = FilterByField(rec, filterRec, filterOption, condition, nil, nil, filterBitMap, nil)
+	condition = &influxql.BinaryExpr{Op: influxql.GT, LHS: &influxql.VarRef{Val: "bps"}, RHS: &influxql.IntegerLiteral{Val: 5}}
+	result = FilterByField(rec, filterRec, filterOption, condition, nil, nil, filterBitMap, nil)
+	condition = &influxql.BinaryExpr{Op: influxql.GTE, LHS: &influxql.VarRef{Val: "bps"}, RHS: &influxql.IntegerLiteral{Val: 5}}
+	result = FilterByField(rec, filterRec, filterOption, condition, nil, nil, filterBitMap, nil)
+	result.Reset()
+	filterBitMap.Reset()
+	filterRec.Reuse()
 }

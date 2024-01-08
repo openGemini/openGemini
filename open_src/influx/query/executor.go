@@ -65,6 +65,8 @@ const (
 	QueryDurationKey qCtxKey = iota
 
 	QueryIDKey
+
+	IndexScanDagStartTimeKey
 )
 
 var batchQueryConcurrenceLimiter limiter.Fixed
@@ -308,7 +310,7 @@ func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, clo
 	defer e.recover(query, results)
 	if qStat != nil && len(query.Statements) > 0 {
 		qStat.SetQueryBatch(len(query.Statements))
-		qStat.SetQuery(query.String())
+		qStat.SetQueryAndLocs(query.StringAndLocs())
 	}
 	ctx, detach, err := e.TaskManager.AttachQuery(query, opt, closing, qStat)
 	if err != nil {
@@ -331,7 +333,9 @@ LOOP:
 	for ; i < len(query.Statements); i++ {
 		ctx.statementID = i
 		stmt := query.Statements[i]
-
+		if s, ok := stmt.(*influxql.SelectStatement); ok {
+			s.SetStmtId(i)
+		}
 		// If a default database wasn't passed in by the caller, check the statement.
 		defaultDB := opt.Database
 		if defaultDB == "" {
@@ -423,7 +427,7 @@ func (e *Executor) executeParallelQuery(query *influxql.Query, opt ExecutionOpti
 	defer e.recover(query, results)
 	if qStat != nil && len(query.Statements) > 0 {
 		qStat.SetQueryBatch(len(query.Statements))
-		qStat.SetQuery(query.String())
+		qStat.SetQueryAndLocs(query.StringAndLocs())
 	}
 
 	ctx, detach, err := e.TaskManager.AttachQuery(query, opt, closing, qStat)
@@ -449,7 +453,9 @@ LOOP:
 	for ; i < len(query.Statements); i++ {
 		ctx.statementID = i
 		stmt := query.Statements[i]
-
+		if s, ok := stmt.(*influxql.SelectStatement); ok {
+			s.SetStmtId(i)
+		}
 		// If a default database wasn't passed in by the caller, check the statement.
 		defaultDB := opt.Database
 		if defaultDB == "" {

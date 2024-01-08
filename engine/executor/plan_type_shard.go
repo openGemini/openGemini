@@ -223,10 +223,9 @@ func NewStorePlanTypePool(planType PlanType) []hybridqp.QueryNode {
 	storePlan := make([]hybridqp.QueryNode, 0)
 	for _, node := range sqlPlan {
 		if exchange, exOk := node.(*LogicalExchange); exOk {
-			if exchange.ExchangeType() == NODE_EXCHANGE {
+			if exchange.EType() == NODE_EXCHANGE {
 				storeExchange := &LogicalExchange{
-					eType: NODE_EXCHANGE,
-					eRole: PRODUCER_ROLE,
+					LogicalExchangeBase: LogicalExchangeBase{eType: NODE_EXCHANGE, eRole: PRODUCER_ROLE},
 				}
 				storePlan = append(storePlan, storeExchange)
 				break
@@ -242,14 +241,13 @@ func NewOneShardStorePlanTypePool(planType PlanType) []hybridqp.QueryNode {
 	oneShardStorePlan := make([]hybridqp.QueryNode, 0)
 	for i := 0; i < len(sqlPlan); i++ {
 		if exchange, exOk := sqlPlan[i].(*LogicalExchange); exOk {
-			if exchange.ExchangeType() == NODE_EXCHANGE {
+			if exchange.EType() == NODE_EXCHANGE {
 				storeExchange := &LogicalExchange{
-					eType: NODE_EXCHANGE,
-					eRole: PRODUCER_ROLE,
+					LogicalExchangeBase: LogicalExchangeBase{eType: NODE_EXCHANGE, eRole: PRODUCER_ROLE},
 				}
 				oneShardStorePlan = append(oneShardStorePlan, storeExchange)
 				break
-			} else if exchange.ExchangeType() == SHARD_EXCHANGE {
+			} else if exchange.EType() == SHARD_EXCHANGE {
 				if i+1 < len(sqlPlan) {
 					_, ok := sqlPlan[i+1].(*LogicalAggregate)
 					if ok {

@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
@@ -433,6 +434,7 @@ func TestNewScannerStoreExecutorBuilder(t *testing.T) {
 
 func TestNewIndexScanTransform(t *testing.T) {
 	opt := query.ProcessorOptions{
+		Sources: []influxql.Source{&influxql.Measurement{Name: "mst", EngineType: config.TSSTORE}},
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},
@@ -449,7 +451,7 @@ func TestNewIndexScanTransform(t *testing.T) {
 		Req:     req,
 	}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
-	indexScan := executor.NewIndexScanTransform(buildRowDataType(), nil, schema, nil, info, make(chan struct{}, 2))
+	indexScan := executor.NewIndexScanTransform(buildRowDataType(), nil, schema, nil, info, make(chan struct{}, 2), 0)
 	assert.Equal(t, "IndexScanTransform", indexScan.Name())
 	assert.Equal(t, 1, len(indexScan.GetOutputs()))
 	assert.Equal(t, 1, len(indexScan.GetInputs()))
@@ -573,6 +575,7 @@ func TestOneShardExchangeExecutorBuilder(t *testing.T) {
 	w := &transport.Responser{}
 	traits := executor.NewStoreExchangeTraits(w, m)
 	opt := query.ProcessorOptions{
+		Sources: []influxql.Source{&influxql.Measurement{Name: "mst", EngineType: config.TSSTORE}},
 		Interval: hybridqp.Interval{
 			Duration: 10 * time.Nanosecond,
 		},

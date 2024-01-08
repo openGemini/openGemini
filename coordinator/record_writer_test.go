@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,6 +213,7 @@ func TestRetryWriteRecord(t *testing.T) {
 var rpInfo = NewRetentionPolicy("rp0", time.Hour, engineType)
 
 type MockRWMetaClient struct {
+	Rp                    *meta.RetentionPolicyInfo
 	DatabaseErr           error
 	RetentionPolicyErr    error
 	CreateShardGroupErr   error
@@ -232,10 +235,13 @@ func (c *MockRWMetaClient) Database(_ string) (di *meta.DatabaseInfo, err error)
 }
 
 func (c *MockRWMetaClient) RetentionPolicy(_, _ string) (*meta.RetentionPolicyInfo, error) {
+	if c.Rp != nil {
+		return c.Rp, nil
+	}
 	return nil, c.RetentionPolicyErr
 }
 
-func (c *MockRWMetaClient) CreateShardGroup(_, _ string, _ time.Time, _ config.EngineType) (*meta.ShardGroupInfo, error) {
+func (c *MockRWMetaClient) CreateShardGroup(_, _ string, _ time.Time, version uint32, _ config.EngineType) (*meta.ShardGroupInfo, error) {
 	return nil, c.CreateShardGroupErr
 }
 
@@ -285,15 +291,21 @@ func TestRetryWriteRecordErr(t *testing.T) {
 	assert.Equal(t, err, io.EOF)
 
 	preSg := &rpInfo.ShardGroups[0]
-	sg, _, _ := createShardGroup(db, rp, &MockRWMetaClient{}, &preSg, time.Now(), config.COLUMNSTORE)
+	sg, _, _ := createShardGroup(db, rp, &MockRWMetaClient{}, &preSg, time.Now(), 0, config.COLUMNSTORE)
 	assert.Equal(t, sg, &rpInfo.ShardGroups[0])
 
 	wh := newRecordWriterHelper(&MockRWMetaClient{RetentionPolicyErr: io.EOF}, 0)
-	_, err = wh.createShardGroupsByTimeRange(db, rp, time.Now(), time.Now().Add(time.Hour), config.ENGINETYPEEND)
+	_, err = wh.createShardGroupsByTimeRange(db, rp, time.Now(), time.Now().Add(time.Hour), 0, config.ENGINETYPEEND)
 	assert.Equal(t, err, io.EOF)
 
+	rpm := meta2.NewRetentionPolicyInfo("rp")
+	rpm.ShardGroupDuration = 24 * time.Hour
+	wh = newRecordWriterHelper(&MockRWMetaClient{RetentionPolicyErr: io.EOF, Rp: rpm}, 0)
+	_, err = wh.createShardGroupsByTimeRange(db, rp, time.Now(), time.Now().Add(48*time.Hour), 0, config.ENGINETYPEEND)
+	assert.Equal(t, errno.Equal(err, errno.WriteNoShardGroup), true)
+
 	wh = newRecordWriterHelper(&MockRWMetaClient{CreateShardGroupErr: io.EOF}, 0)
-	_, _, err = wh.createShardGroup(db, rp, time.Now(), config.COLUMNSTORE)
+	_, _, err = wh.createShardGroup(db, rp, time.Now(), 0, config.COLUMNSTORE)
 	assert.Equal(t, err, io.EOF)
 
 	wh = newRecordWriterHelper(&MockRWMetaClient{GetShardInfoByTimeErr: io.EOF}, 0)
@@ -417,6 +429,15 @@ func TestWriteLogRecord(t *testing.T) {
 	if err = rw.writeLogRecord(db, rp, mst, rec, 0); err != nil {
 		t.Fatal(err)
 	}
+
+	schema1 := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec1 := record.NewRecord(schema1, true)
+	rec1.AppendTime([]int64{unixNano, unixNano, unixNano, unixNano, unixNano}...)
+	if err = rw.writeLogRecord(db, rp, mst, rec1, 0); err == nil || !strings.Contains(err.Error(), "checkSchema") {
+		t.Fatal("unexpect err", err)
+	}
 }
 
 func TestSplitAndWriteByShardErr(t *testing.T) {
@@ -431,6 +452,10 @@ func TestSplitAndWriteByShardErr(t *testing.T) {
 	sgi[0] = &meta.ShardGroupInfo{}
 	sgi[0].StartTime = time.Unix(0, 0)
 	sgi[0].EndTime = time.Unix(0, 1)
+	sort.Sort(rec)
+	err = rw.splitAndWriteByShard(sgi, db, rp, mst, rec, 0, config.COLUMNSTORE)
+	assert.Equal(t, rec.Schema[0].Name < rec.Schema[1].Name, true)
+
 	err = rw.splitAndWriteByShard(sgi, db, rp, mst, rec, 0, config.COLUMNSTORE)
 	assert.Equal(t, errno.Equal(err, errno.ArrowFlightGetShardGroupErr), true)
 }
@@ -453,6 +478,26 @@ func MockArrowRecord3() array.Record {
 func MockArrowRecord4() array.Record {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "int", Type: arrow.PrimitiveTypes.Float64}, {Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
 	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
+}
+
+func MockRecord1() *record.Record {
+	schema := record.Schemas{record.Field{Name: "time", Type: influx.Field_Type_Int}}
+	return record.NewRecord(schema, false)
+}
+
+func MockRecord2() *record.Record {
+	schema := record.Schemas{record.Field{Name: "int1", Type: influx.Field_Type_Int}, record.Field{Name: "time", Type: influx.Field_Type_Int}}
+	return record.NewRecord(schema, false)
+}
+
+func MockRecord3() *record.Record {
+	schema := record.Schemas{record.Field{Name: "time", Type: influx.Field_Type_Float}, record.Field{Name: "int", Type: influx.Field_Type_Int}}
+	return record.NewRecord(schema, false)
+}
+
+func MockRecord4() *record.Record {
+	schema := record.Schemas{record.Field{Name: "int", Type: influx.Field_Type_Float}, record.Field{Name: "time", Type: influx.Field_Type_Int}}
+	return record.NewRecord(schema, false)
 }
 
 func TestCheckAndUpdateSchema(t *testing.T) {
@@ -478,4 +523,29 @@ func TestCheckAndUpdateSchema(t *testing.T) {
 
 	_, _, _, err = rw.checkAndUpdateSchema("db0", "rp0", "rtt", "mst0", MockArrowRecord4())
 	assert.Equal(t, errno.Equal(err, errno.ColumnStoreFieldTypeErr), true)
+}
+
+func TestCheckAndUpdateRecordSchema(t *testing.T) {
+	rw := newRecordWriterHelper(NewMockMetaClient(), 0)
+	_, _, err := rw.checkAndUpdateRecordSchema("db0", "rp0", "mst0", "mst0", MockRecord1())
+	assert.Equal(t, errno.Equal(err, errno.ColumnStoreColNumErr), true)
+
+	_, _, err = rw.checkAndUpdateRecordSchema("db0", "rp0", "mst0", "mst0", MockRecord2())
+	assert.Equal(t, errno.Equal(err, errno.ColumnStoreSchemaNullErr), true)
+
+	rw.preMst = NewMeasurement("rtt", config.COLUMNSTORE)
+	rw.preMst.ColStoreInfo = nil
+	_, _, err = rw.checkAndUpdateRecordSchema("db0", "rp0", "rtt", "mst0", MockRecord2())
+	assert.Equal(t, errno.Equal(err, errno.ColumnStorePrimaryKeyNullErr), true)
+
+	rw.preMst.ColStoreInfo = &meta.ColStoreInfo{PrimaryKey: []string{"int1"}}
+	_, _, err = rw.checkAndUpdateRecordSchema("db0", "rp0", "rtt", "mst0", MockRecord4())
+	assert.Equal(t, errno.Equal(err, errno.ColumnStorePrimaryKeyLackErr), true)
+
+	rw.preMst.ColStoreInfo = &meta.ColStoreInfo{PrimaryKey: []string{"time"}}
+	_, _, err = rw.checkAndUpdateRecordSchema("db0", "rp0", "rtt", "mst0", MockRecord3())
+	assert.Equal(t, errno.Equal(err, errno.ArrowRecordTimeFieldErr), true)
+
+	_, _, err = rw.checkAndUpdateRecordSchema("db0", "rp0", "rtt", "mst0", MockRecord4())
+	assert.Equal(t, errno.Equal(err, errno.ArrowRecordTimeFieldErr), true)
 }

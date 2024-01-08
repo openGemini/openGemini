@@ -58,6 +58,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
@@ -92,6 +93,7 @@ type Storage interface {
 	shouldSnapshot(s *shard) bool
 	SetClient(client metaclient.MetaClient)
 	SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo)
+	SetAccumulateMetaIndex(name string, detachedMetaInfo *immutable.AccumulateMetaIndex)
 	ForceFlush(s *shard)
 }
 
@@ -136,14 +138,72 @@ func (storage *tsstoreImpl) WriteCols(s *shard, cols *record.Record, mst string,
 	return errors.New("not implement yet")
 }
 
-func (storage *tsstoreImpl) WriteIndex(s *shard, rows *influx.Rows, mw *mstWriteCtx) error {
-	err := s.writeIndex(*rows, mw, mw.getMstMap())
-	return err
+func (storage *tsstoreImpl) WriteIndex(s *shard, rowsPointer *influx.Rows, mw *mstWriteCtx) error {
+	rows := *rowsPointer
+	mmPoints := mw.getMstMap()
+	var err error
+
+	start := time.Now()
+	if !sort.IsSorted(&rows) {
+		sort.Stable(&rows)
+	}
+	atomic.AddInt64(&statistics.PerfStat.WriteSortIndexDurationNs, time.Since(start).Nanoseconds())
+
+	var writeIndexRequired bool
+	start = time.Now()
+	tm := int64(math.MinInt64)
+	primaryIndex := s.indexBuilder.GetPrimaryIndex()
+	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
+	for i := 0; i < len(rows); i++ {
+		if s.closed.Closed() {
+			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
+		}
+		//skip StreamOnly data
+		if rows[i].StreamOnly {
+			continue
+		}
+
+		ri := cloneRowToDict(mmPoints, mw, &rows[i])
+		if ri.Timestamp > tm {
+			tm = ri.Timestamp
+		}
+		if !writeIndexRequired {
+			ri.SeriesId, err = idx.GetSeriesIdBySeriesKey(rows[i].IndexKey, util.Str2bytes(rows[i].Name))
+			if err != nil {
+				return err
+			}
+			// PrimaryId is equal to SeriesId by default.
+			ri.PrimaryId = ri.SeriesId
+
+			if ri.SeriesId == 0 {
+				writeIndexRequired = true
+			}
+		}
+		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len()))
+	}
+
+	s.setMaxTime(tm)
+
+	failpoint.Inject("SlowDownCreateIndex", nil)
+	if writeIndexRequired {
+		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
+			return err
+		}
+	} else {
+		if err = s.indexBuilder.CreateSecondaryIndexIfNotExist(mmPoints); err != nil {
+			return err
+		}
+	}
+	atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(start).Nanoseconds())
+	return nil
 }
 
 func (storage *tsstoreImpl) SetClient(client metaclient.MetaClient) {}
 
 func (storage *tsstoreImpl) SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo) {}
+
+func (storage *tsstoreImpl) SetAccumulateMetaIndex(name string, detachedMetaInfo *immutable.AccumulateMetaIndex) {
+}
 
 func (storage *tsstoreImpl) shouldSnapshot(s *shard) bool {
 	if s.activeTbl == nil || s.snapshotTbl != nil || s.forceFlushing() {
@@ -210,18 +270,22 @@ func (storage *tsstoreImpl) writeSnapshot(s *shard) {
 }
 
 type columnstoreImpl struct {
-	mu                sync.RWMutex
-	client            metaclient.MetaClient
-	snapshotContainer []*mutable.MemTable
-	snapshotStatus    []int
-	mstsInfo          map[string]*meta.MeasurementInfo // map[cpu-001]meta.MeasurementInfo
+	mu                  sync.RWMutex
+	client              metaclient.MetaClient
+	snapshotContainer   []*mutable.MemTable
+	snapshotStatus      []int
+	flushManager        map[string]mutable.FlushManager // mst -> flush detached or attached
+	accumulateMetaIndex *sync.Map                       //mst -> immutable.AccumulateMetaIndex, record metaIndex for detached store
+	mstsInfo            *sync.Map                       // map[cpu-001]meta.MeasurementInfo
 }
 
 func newColumnstoreImpl(snapshotTblNum int) *columnstoreImpl {
 	return &columnstoreImpl{
-		mstsInfo:          make(map[string]*meta.MeasurementInfo),
-		snapshotContainer: make([]*mutable.MemTable, snapshotTblNum),
-		snapshotStatus:    make([]int, snapshotTblNum),
+		snapshotContainer:   make([]*mutable.MemTable, snapshotTblNum),
+		snapshotStatus:      make([]int, snapshotTblNum),
+		mstsInfo:            &sync.Map{},
+		flushManager:        make(map[string]mutable.FlushManager),
+		accumulateMetaIndex: &sync.Map{},
 	}
 }
 
@@ -242,6 +306,8 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 		s.snapshotLock.Unlock()
 		panic("error: there is not free snapShotTbl")
 	}
+	//set flushManager and accumulateMetaIndex
+	s.activeTbl.MTable.SetFlushManagerInfo(storage.flushManager, storage.accumulateMetaIndex)
 	storage.snapshotContainer[idx] = s.activeTbl
 	storage.snapshotStatus[idx] = 1
 	curSize := storage.snapshotContainer[idx].GetMemSize()
@@ -322,24 +388,19 @@ func (storage *columnstoreImpl) WriteRowsToTable(s *shard, rows influx.Rows, mw 
 	return indexErr
 }
 
-func (storage *columnstoreImpl) UpdateMstsInfo(s *shard, mst, db, rp string) error {
-	storage.mu.RLock()
-	_, ok := storage.mstsInfo[mst]
-	storage.mu.RUnlock()
+func (storage *columnstoreImpl) UpdateMstsInfo(s *shard, msName, db, rp string) error {
+	mst := stringinterner.InternSafe(msName)
+	_, ok := storage.mstsInfo.Load(mst)
 	if !ok {
-		storage.mu.Lock()
-		defer storage.mu.Unlock()
-		if _, ok := storage.mstsInfo[mst]; !ok {
-			mstInfo, err := storage.client.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
-			if err != nil {
-				return err
-			}
-			err = storage.checkMstInfo(mstInfo)
-			if err != nil {
-				return err
-			}
-			storage.SetMstInfo(s, mst, mstInfo)
+		mInfo, err := storage.client.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
+		if err != nil {
+			return err
 		}
+		err = storage.checkMstInfo(mInfo)
+		if err != nil {
+			return err
+		}
+		storage.SetMstInfo(s, mst, mInfo)
 	}
 	return nil
 }
@@ -372,14 +433,12 @@ func (storage *columnstoreImpl) updateMstMap(s *shard, rows influx.Rows, mw *mst
 }
 
 func (storage *columnstoreImpl) SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo) {
-	storage.mstsInfo[name] = mstInfo
-	info := &immutable.MeasurementInfo{
-		Name:       name,
-		PrimaryKey: mstInfo.ColStoreInfo.PrimaryKey,
-		SortKey:    mstInfo.ColStoreInfo.SortKey,
-		Schema:     mstInfo.Schema,
-	}
-	s.immTables.SetMstInfo(name, info)
+	storage.mstsInfo.Store(name, mstInfo)
+	s.immTables.SetMstInfo(name, mstInfo)
+}
+
+func (storage *columnstoreImpl) SetAccumulateMetaIndex(name string, aMetaIndex *immutable.AccumulateMetaIndex) {
+	storage.accumulateMetaIndex.Store(name, aMetaIndex)
 }
 
 func (storage *columnstoreImpl) shouldSnapshot(s *shard) bool {
@@ -503,7 +562,13 @@ func (storage *columnstoreImpl) WriteIndexForCols(s *shard, cols *record.Record,
 	if s.closed.Closed() {
 		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
 	}
-	tagIndex := findTagIndex(cols.Schemas(), storage.mstsInfo[mst].Schema)
+	mst = stringinterner.InternSafe(mst)
+	msInfo, ok := mutable.GetMsInfo(mst, storage.mstsInfo)
+	if !ok {
+		s.log.Info("mstInfo is nil", zap.String("mst name", mst))
+		return errors.New("measurement info is not found")
+	}
+	tagIndex := findTagIndex(cols.Schemas(), msInfo.Schema)
 
 	// write index
 	return s.indexBuilder.CreateIndexIfNotExistsByCol(cols, tagIndex, mst)
@@ -540,6 +605,7 @@ type Shard interface {
 	CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error)
 	Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error)
 	ScanWithSparseIndex(ctx context.Context, schema *executor.QuerySchema, callBack func(num int64) error) (*executor.FileFragments, error)
+	GetIndexInfo(schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error)
 	RowCount(schema *executor.QuerySchema) (int64, error)
 	NewShardKeyIdx(shardType, dataPath string, lockPath *string) error
 
@@ -578,7 +644,7 @@ type Shard interface {
 	IsOutOfOrderFilesExist() bool
 	NewDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger)
 	SetShardDownSampleLevel(i int)
-	SetMstInfo(name string, mstsInfo *meta.MeasurementInfo)
+	SetMstInfo(mstsInfo *meta.MeasurementInfo)
 	StartDownSample(taskID uint64, level int, sdsp *meta.ShardDownSamplePolicyInfo, meta interface {
 		UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
 	}) error
@@ -740,7 +806,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 		lock:               lockPath,
 		ident:              ident,
 		isAsyncReplayWal:   options.WalReplayAsync,
-		wal:                NewWAL(walPath, lockPath, options.WalSyncInterval, options.WalEnabled, options.WalReplayParallel, getWalPartitionNum()),
+		wal:                NewWAL(walPath, lockPath, ident.ShardID, options.WalSyncInterval, options.WalEnabled, options.WalReplayParallel, getWalPartitionNum(), options.WalReplayBatchSize),
 		activeTbl:          mutable.NewMemTable(engineType),
 		memDataReadEnabled: options.MemDataReadEnabled,
 		maxTime:            0,
@@ -1052,7 +1118,7 @@ func (mw *mstWriteCtx) getRowsPool() *[]influx.Row {
 }
 
 func (mw *mstWriteCtx) initWriteRowsCtx(getLastFlushTime func(msName string, sid uint64) int64, addRowCountsBySid func(msName string, sid uint64, rowCounts int64),
-	mstsInfo map[string]*meta.MeasurementInfo) {
+	mstsInfo *sync.Map) {
 	mw.writeRowsCtx.GetLastFlushTime = getLastFlushTime
 	mw.writeRowsCtx.AddRowCountsBySid = addRowCountsBySid
 	mw.writeRowsCtx.MstsInfo = mstsInfo
@@ -1068,9 +1134,6 @@ func (mw *mstWriteCtx) putRowsPool(rp *[]influx.Row) {
 
 func (mw *mstWriteCtx) Reset() {
 	mw.mstMap.Reset()
-	if mw.engineType == config.COLUMNSTORE {
-		mw.writeRowsCtx.MstsInfo = make(map[string]*meta.MeasurementInfo)
-	}
 }
 
 var mstWriteCtxPool sync.Pool
@@ -1209,64 +1272,6 @@ func cloneRowToDict(mmPoints *dictpool.Dict, mw *mstWriteCtx, row *influx.Row) *
 	return ri
 }
 
-func (s *shard) writeIndex(rows influx.Rows, mw *mstWriteCtx, mmPoints *dictpool.Dict) error {
-	var err error
-
-	start := time.Now()
-	if !sort.IsSorted(rows) {
-		sort.Stable(rows)
-	}
-	atomic.AddInt64(&statistics.PerfStat.WriteSortIndexDurationNs, time.Since(start).Nanoseconds())
-
-	var writeIndexRequired bool
-	start = time.Now()
-	tm := int64(math.MinInt64)
-	primaryIndex := s.indexBuilder.GetPrimaryIndex()
-	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
-	for i := 0; i < len(rows); i++ {
-		if s.closed.Closed() {
-			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
-		}
-		//skip StreamOnly data
-		if rows[i].StreamOnly {
-			continue
-		}
-
-		ri := cloneRowToDict(mmPoints, mw, &rows[i])
-		if ri.Timestamp > tm {
-			tm = ri.Timestamp
-		}
-		if !writeIndexRequired {
-			ri.SeriesId, err = idx.GetSeriesIdBySeriesKey(rows[i].IndexKey, util.Str2bytes(rows[i].Name))
-			if err != nil {
-				return err
-			}
-			// PrimaryId is equal to SeriesId by default.
-			ri.PrimaryId = ri.SeriesId
-
-			if ri.SeriesId == 0 {
-				writeIndexRequired = true
-			}
-		}
-		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len()))
-	}
-
-	s.setMaxTime(tm)
-
-	failpoint.Inject("SlowDownCreateIndex", nil)
-	if writeIndexRequired {
-		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
-			return err
-		}
-	} else {
-		if err = s.indexBuilder.CreateSecondaryIndexIfNotExist(mmPoints); err != nil {
-			return err
-		}
-	}
-	atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(start).Nanoseconds())
-	return nil
-}
-
 func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	s.wg.Add(1)
 	s.writeWg.Add(1)
@@ -1315,7 +1320,7 @@ func (s *shard) ForceFlush() {
 }
 
 func (s *shard) commitSnapshot(snapshot *mutable.MemTable) {
-	snapshot.MTable.ApplyConcurrency(snapshot, func(msName string) {
+	snapshot.ApplyConcurrency(func(msName string) {
 		// do not flush measurement that is deleting
 		if s.checkMstDeleting(msName) {
 			return
@@ -1445,10 +1450,10 @@ func (s *shard) setMaxTime(tm int64) {
 	s.tmLock.Unlock()
 }
 
-func (s *shard) writeWalBuffer(binary []byte, writeWalType WalRecordType) error {
+func (s *shard) writeWalBuffer(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error {
 	switch writeWalType {
 	case WriteWalLineProtocol:
-		return s.writeWalForLineProtocol(binary)
+		return s.writeWalForLineProtocol(rowsCtx)
 	case WriteWalArrowFlight:
 		return s.writeWalForArrowFlight(binary)
 	default:
@@ -1456,22 +1461,12 @@ func (s *shard) writeWalBuffer(binary []byte, writeWalType WalRecordType) error 
 	}
 }
 
-func (s *shard) writeWalForLineProtocol(binary []byte) error {
-	var rows []influx.Row
-	var tagPools []influx.Tag
-	var fieldPools []influx.Field
-	var indexKeyPools []byte
-	var indexOptionPools []influx.IndexOption
-	var err error
+func (s *shard) writeWalForLineProtocol(rowsCtx *walRowsObjects) error {
+	defer func() {
+		putWalRowsObjects(rowsCtx)
+	}()
 
-	rows, _, _, _, _, err = influx.FastUnmarshalMultiRows(binary, rows, tagPools, fieldPools, indexOptionPools, indexKeyPools)
-	if err != nil {
-		e := errno.NewError(errno.WalRecordUnmarshalFailed, s.ident.ShardID, err.Error())
-		s.log.Error("unmarshal rows fail", zap.Error(e))
-		return nil
-	}
-
-	return s.writeRowsToTable(rows, nil)
+	return s.writeRowsToTable(rowsCtx.rows, nil)
 }
 
 func (s *shard) writeWalForArrowFlight(binary []byte) error {
@@ -1522,8 +1517,8 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 	wStart := time.Now()
 
 	walFileNames, err := s.wal.Replay(ctx,
-		func(binary []byte, writeWalType WalRecordType) error {
-			err := s.writeWalBuffer(binary, writeWalType)
+		func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error {
+			err := s.writeWalBuffer(binary, rowsCtx, writeWalType)
 			// SeriesLimited error is ignored in the wal playback process
 			if errno.Equal(err, errno.SeriesLimited) {
 				err = nil
@@ -1534,7 +1529,7 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	s.log.Info("replay wal files ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId))
+	s.log.Info("replay wal files ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Duration("time used", time.Since(wStart)))
 
 	s.ForceFlush()
 	s.log.Info("force flush shard ok", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Int("wal filename number", len(walFileNames)))
@@ -2162,7 +2157,8 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 	return nil
 }
 
-func (s *shard) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
+func (s *shard) SetMstInfo(mstInfo *meta.MeasurementInfo) {
+	name := stringinterner.InternSafe(mstInfo.Name)
 	s.storage.SetMstInfo(s, name, mstInfo)
 }
 
@@ -2324,6 +2320,35 @@ func (s *shard) checkMstDeleting(mst string) bool {
 	return ok
 }
 
+func (s *shard) GetIndexInfo(schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error) {
+	// get the source measurement.
+	mst := schema.Options().GetSourcesNames()[0]
+
+	// get the data files by the measurement
+	dataFileRes, ok := s.immTables.GetCSFiles(mst)
+	if !ok {
+		s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have not data file. mst: %s, shardID: %d", mst, s.GetID()))
+		return executor.NewAttachedIndexInfo(nil, nil), nil
+	}
+	dataFiles := dataFileRes.Files()
+
+	// get the pk infos by the measurement
+	pkInfos := make([]*colstore.PKInfo, 0, len(dataFiles))
+	files := make([]immutable.TSSPFile, 0, len(dataFiles))
+	for i := range dataFiles {
+		dataFileName := dataFiles[i].Path()
+		pkFileName := colstore.AppendPKIndexSuffix(immutable.RemoveTsspSuffix(dataFileName))
+		if pkInfo, ok := s.immTables.GetPKFile(mst, pkFileName); ok {
+			pkInfos = append(pkInfos, pkInfo)
+			files = append(files, dataFiles[i])
+		} else {
+			dataFiles[i].UnrefFileReader()
+			dataFiles[i].Unref()
+		}
+	}
+	return executor.NewAttachedIndexInfo(files, pkInfos), nil
+}
+
 func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QuerySchema, callBack func(num int64) error) (*executor.FileFragments, error) {
 	if len(schema.Options().GetSourcesNames()) != 1 {
 		return nil, fmt.Errorf("currently, Only a single table is supported")
@@ -2387,16 +2412,13 @@ func (s *shard) scanWithSparseIndex(dataFiles []immutable.TSSPFile, schema *exec
 			if err != nil {
 				return nil, nil, err
 			}
-			if tIdx == 0 {
-				schema.Options().SetTimeFirstKey()
-			}
 			SKFileReader, err = s.skIndexReader.CreateSKFileReaders(schema.Options(), mstInfo, true)
 			if err != nil {
 				return nil, nil, err
 			}
 			initCondition = true
 		}
-		if schema.Options().GetTimeFirstKey() {
+		if schema.Options().IsTimeSorted() {
 			ok, err = dataFile.ContainsByTime(tr)
 			if err != nil {
 				return nil, nil, fmt.Errorf("data file contain by time error")

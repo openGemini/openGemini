@@ -987,3 +987,72 @@ func TestUpdateReplicationCommand(t *testing.T) {
 	err = mms.GetStore().ApplyCmd(cmd)
 	require.Equal(t, nil, err)
 }
+
+func createUpdateRetentionPolicyCmd(db, rp string, rgId, masterId uint32, peers []meta2.Peer, rgStatus uint32) *proto2.Command {
+	mPeers := make([]*proto2.Peer, len(peers))
+	for i := range peers {
+		role := uint32(peers[i].PtRole)
+		mPeers[i] = &proto2.Peer{
+			ID:   &peers[i].ID,
+			Role: &role,
+		}
+	}
+
+	var i int64
+	val := &proto2.UpdateRetentionPolicyCommand{
+		Database:     proto.String(db),
+		Name:         proto.String(rp),
+		NewName:      proto.String(rp),
+		WarmDuration: &i,
+		MakeDefault:  proto.Bool(true),
+	}
+
+	t1 := proto2.Command_UpdateRetentionPolicyCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_UpdateRetentionPolicyCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func TestUpdateRetentionPolicyCommand(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "test"
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 2), mms.GetConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// abnormal branch, database does not exist
+	cmd = createUpdateReplicationCmd("db not exist", 0, 0, nil, uint32(meta2.SubHealth))
+	err = mms.GetStore().ApplyCmd(cmd)
+	require.Error(t, errno.NewError(errno.DatabaseNotFound, "db not exist"))
+
+	// normal branch, database exist
+	cmd = createUpdateRetentionPolicyCmd(db, "autogen", 0, 0, nil, uint32(meta2.SubHealth))
+	err = mms.GetStore().ApplyCmd(cmd)
+	require.Equal(t, nil, err)
+}

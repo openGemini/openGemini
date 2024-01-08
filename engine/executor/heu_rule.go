@@ -96,7 +96,7 @@ func (r *LimitPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	exchangeType := exchange.ExchangeType()
+	exchangeType := exchange.EType()
 	if exchangeType == NODE_EXCHANGE || exchangeType == SERIES_EXCHANGE {
 		return
 	}
@@ -314,7 +314,7 @@ func (r *AggPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	switch exchange.ExchangeType() {
+	switch exchange.EType() {
 	case NODE_EXCHANGE, SERIES_EXCHANGE:
 		return
 	default:
@@ -1427,4 +1427,140 @@ func (r *CastorAggCutRule) OnMatch(call *OptRuleCall) {
 
 	call.planner.(*HeuPlannerImpl).dag.RemoveEdge(agg.Children()[0].(*HeuVertex), aggVertex)
 	call.TransformTo(aggSonChild)
+}
+
+type IncAggRule struct {
+	OptRuleBase
+}
+
+func NewIncAggRule(description string) *IncAggRule {
+	mr := &IncAggRule{}
+	if description == "" {
+		description = GetType(mr)
+	}
+
+	builder := NewOptRuleOperandBuilderBase()
+	builder.AnyInput((&LogicalIncAgg{}).Type())
+
+	mr.Initialize(mr, builder.Operand(), description)
+	return mr
+}
+
+func (r *IncAggRule) Catagory() OptRuleCatagory {
+	return RULE_SPREAD_AGG
+}
+
+func (r *IncAggRule) ToString() string {
+	return GetTypeName(r)
+}
+
+func (r *IncAggRule) Equals(rhs OptRule) bool {
+	rr, ok := rhs.(*IncAggRule)
+
+	if !ok {
+		return false
+	}
+
+	if r == rr {
+		return true
+	}
+
+	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+		return true
+	}
+
+	return false
+}
+
+func (r *IncAggRule) OnMatch(call *OptRuleCall) {
+	incAgg, ok := call.Node(0).(*LogicalIncAgg)
+	if !ok {
+		logger.GetLogger().Warn("IncAggRule OnMatch failed, OptRuleCall Node 0 isn't *IncAgg")
+		return
+	}
+
+	if !incAgg.Schema().CanCallsPushdown() {
+		return
+	}
+
+	if incAgg.schema.HasSubQuery() {
+		return
+	}
+
+	clone, ok := incAgg.Clone().(*LogicalIncAgg)
+	if !ok {
+		logger.GetLogger().Warn("IncAggRule OnMatch failed, after clone isn't *IncAgg")
+		return
+	}
+	clone.ForwardCallArgs()
+	clone.CountToSum()
+	call.TransformTo(clone)
+}
+
+type IncHashAggRule struct {
+	OptRuleBase
+}
+
+func NewIncHashAggRule(description string) *IncHashAggRule {
+	mr := &IncHashAggRule{}
+	if description == "" {
+		description = GetType(mr)
+	}
+
+	builder := NewOptRuleOperandBuilderBase()
+	builder.AnyInput((&LogicalIncHashAgg{}).Type())
+
+	mr.Initialize(mr, builder.Operand(), description)
+	return mr
+}
+
+func (r *IncHashAggRule) Catagory() OptRuleCatagory {
+	return RULE_SPREAD_AGG
+}
+
+func (r *IncHashAggRule) ToString() string {
+	return GetTypeName(r)
+}
+
+func (r *IncHashAggRule) Equals(rhs OptRule) bool {
+	rr, ok := rhs.(*IncHashAggRule)
+
+	if !ok {
+		return false
+	}
+
+	if r == rr {
+		return true
+	}
+
+	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+		return true
+	}
+
+	return false
+}
+
+func (r *IncHashAggRule) OnMatch(call *OptRuleCall) {
+	incAgg, ok := call.Node(0).(*LogicalIncHashAgg)
+	if !ok {
+		logger.GetLogger().Warn("IncHashAggRule OnMatch failed, OptRuleCall Node 0 isn't *IncAgg")
+		return
+	}
+
+	if !incAgg.Schema().CanCallsPushdown() {
+		return
+	}
+
+	if incAgg.schema.HasSubQuery() {
+		return
+	}
+
+	clone, ok := incAgg.Clone().(*LogicalIncHashAgg)
+	if !ok {
+		logger.GetLogger().Warn("IncHashAggRule OnMatch failed, after clone isn't *IncAgg")
+		return
+	}
+	clone.ForwardCallArgs()
+	clone.CountToSum()
+	call.TransformTo(clone)
 }

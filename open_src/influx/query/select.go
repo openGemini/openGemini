@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -65,6 +64,10 @@ type SelectOptions struct {
 	RowsChan  chan RowsChan
 
 	HintType hybridqp.HintType
+
+	IncQuery bool
+	QueryID  string
+	IterID   int32
 }
 
 type LogicalPlanCreator interface {
@@ -222,6 +225,18 @@ type ProcessorOptions struct {
 	isTimeFirstKey bool
 
 	SortFields influxql.SortFields
+
+	HasFieldWildcard bool
+	// useful for topQuery/subQuery, modify by out-query opt.stmtId in newSubOpt
+	StmtId int
+
+	LogQueryCurrId string
+
+	// IncQuery indicates whether the query is a incremental query.
+	IncQuery bool
+
+	// IterID indicates the number of iteration in incremental query, starting from 0.
+	IterID int32
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
@@ -285,8 +300,13 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.AbortChan = sopt.AbortChan
 	opt.RowsChan = sopt.RowsChan
 	opt.GroupByAllDims = stmt.GroupByAllDims
-
+	opt.HasFieldWildcard = stmt.HasWildcardField
+	opt.StmtId = stmt.StmtId
 	return opt, nil
+}
+
+func (opt *ProcessorOptions) GetStmtId() int {
+	return opt.StmtId
 }
 
 func (opt *ProcessorOptions) UpdateSources(sources influxql.Sources) {
@@ -508,12 +528,25 @@ func (opt *ProcessorOptions) GetLocation() *time.Location {
 	return opt.Location
 }
 
-func (opt *ProcessorOptions) SetTimeFirstKey() {
-	opt.isTimeFirstKey = true
+func (opt *ProcessorOptions) IsUnifyPlan() bool {
+	msts := opt.GetMeasurements()
+	for i := range msts {
+		if msts[i].IndexRelation != nil && len(msts[i].IndexRelation.Oids) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
-func (opt *ProcessorOptions) GetTimeFirstKey() bool {
-	return opt.isTimeFirstKey
+func (opt *ProcessorOptions) IsTimeSorted() bool {
+	for _, source := range opt.Sources {
+		if mst, ok := source.(*influxql.Measurement); ok {
+			if !mst.IsTimeSorted {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (opt *ProcessorOptions) SetSortFields(sortFields influxql.SortFields) {
@@ -579,8 +612,25 @@ func (opt *ProcessorOptions) GetMeasurements() []*influxql.Measurement {
 }
 
 func (opt *ProcessorOptions) HaveOnlyCSStore() bool {
-	for _, source := range opt.Sources {
-		if s, ok := source.(*influxql.Measurement); ok && s.EngineType == config.COLUMNSTORE {
+	msts := opt.GetMeasurements()
+	if len(msts) == 0 {
+		return false
+	}
+	for i := range msts {
+		if !msts[i].IsCSStore() {
+			return false
+		}
+	}
+	return true
+}
+
+func (opt *ProcessorOptions) HaveLocalMst() bool {
+	msts := opt.GetMeasurements()
+	if len(msts) == 0 {
+		return true
+	}
+	for i := range msts {
+		if !msts[i].IsRWSplit() {
 			return true
 		}
 	}
@@ -591,6 +641,10 @@ func (opt *ProcessorOptions) SetFill(fill influxql.FillOption) {
 	opt.Fill = fill
 }
 
+func (opt *ProcessorOptions) FieldWildcard() bool {
+	return opt.HasFieldWildcard
+}
+
 func ContainDim(des []string, src string) bool {
 	for i := range des {
 		if src == des[i] {
@@ -598,6 +652,18 @@ func ContainDim(des []string, src string) bool {
 		}
 	}
 	return true
+}
+
+func (opt *ProcessorOptions) GetLogQueryCurrId() string {
+	return opt.LogQueryCurrId
+}
+
+func (opt *ProcessorOptions) GetIterId() int32 {
+	return opt.IterID
+}
+
+func (opt *ProcessorOptions) IsIncQuery() bool {
+	return opt.IncQuery
 }
 
 func validateTypes(stmt *influxql.SelectStatement) error {

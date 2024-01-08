@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +45,11 @@ var (
 	FlushParallelMinRowNum = 10000
 )
 
+const (
+	EmptyGroupKey = ""
+	EmptyTagValue = ""
+)
+
 type Task struct {
 	//compress dict
 	//corpus        map[string]uint64
@@ -59,6 +63,7 @@ type Task struct {
 	values sync.Map
 	//store startWindow id, for ring store structure
 	startWindowID int64
+	offset        int
 	//current window start time
 	start time.Time
 	//current window end time
@@ -71,6 +76,7 @@ type Task struct {
 	//metadata, not change
 	src        *meta2.StreamMeasurementInfo
 	des        *meta2.StreamMeasurementInfo
+	info       *meta2.MeasurementInfo
 	groupKeys  []string
 	fieldCalls []FieldCall
 	fieldsDims map[string]int32
@@ -79,7 +85,7 @@ type Task struct {
 	innerCache     chan *WindowCache
 	innerRes       chan error
 	abort          chan struct{}
-	err            chan error
+	err            error
 	updateWindow   chan struct{}
 	cleanPreWindow chan struct{}
 
@@ -87,19 +93,20 @@ type Task struct {
 	bp              *BuilderPool
 	windowCachePool *WindowCachePool
 	*WindowDataPool
+	indexKeyPool []byte
 
 	//config
-	id                 uint64
-	name               string
-	concurrency        int
-	windowNum          int
-	window             time.Duration
-	enableCompressDict bool
-	maxDelay           time.Duration
+	id          uint64
+	name        string
+	concurrency int
+	windowNum   int
+	window      time.Duration
+	maxDelay    time.Duration
 
 	//tmp data, reuse
 	fieldCallsLen int
 	rows          []influx.Row
+	validNum      int
 	maxDuration   int64
 
 	//tools
@@ -120,13 +127,18 @@ type WindowCache struct {
 
 func (s *Task) stop() error {
 	close(s.abort)
-	err := <-s.err
-	return err
+	return s.err
 }
 
 func (s *Task) run() error {
 	err := s.initVar()
 	if err != nil {
+		s.err = err
+		return err
+	}
+	s.info, err = s.cli.GetMeasurementInfoStore(s.des.Database, s.des.RetentionPolicy, s.des.Name)
+	if err != nil {
+		s.err = err
 		return err
 	}
 	err = s.buildFieldCalls()
@@ -143,7 +155,6 @@ func (s *Task) run() error {
 func (s *Task) initVar() error {
 	s.maxDuration = int64(s.windowNum) * s.window.Nanoseconds()
 	s.abort = make(chan struct{})
-	s.err = make(chan error, 1)
 	//chan len zero, make updateWindow cannot parallel execute with flush
 	s.updateWindow = make(chan struct{})
 	s.cleanPreWindow = make(chan struct{})
@@ -153,7 +164,7 @@ func (s *Task) initVar() error {
 	}
 
 	s.corpus = sync.Map{}
-	s.corpusIndexes = []string{""}
+	s.corpusIndexes = []string{EmptyGroupKey}
 
 	s.innerCache = make(chan *WindowCache, s.concurrency)
 	s.innerRes = make(chan error, s.concurrency)
@@ -197,7 +208,7 @@ func (s *Task) cycleFlush() {
 			s.Logger.Error(err.Error())
 		}
 
-		s.err <- err
+		s.err = err
 	}()
 	reset := false
 	now := time.Now()
@@ -357,11 +368,7 @@ func (s *Task) calculate(cache *WindowCache) error {
 			s.stats.AddWindowSkip(1)
 			continue
 		}
-		key := s.generateGroupKey(s.groupKeys, &row)
-		if key == "" {
-			//group key is incomplete, skip the point
-			continue
-		}
+		key := s.generateGroupKeyUint(s.groupKeys, &row)
 		vv, exist := s.values.Load(key)
 		var vs []*float64
 		if !exist {
@@ -405,105 +412,122 @@ func (s *Task) calculate(cache *WindowCache) error {
 	return nil
 }
 
-func (s *Task) flushRows(indexKeyPool []byte) (int, []byte, error) {
-	var err error
+// generateRows generate rows from map cache, prepare data for flush
+func (s *Task) generateRows() {
+	s.offset = int(atomic.LoadInt64(&s.startWindowID)) * s.fieldCallsLen
+	s.values.Range(s.buildRow)
+}
+
+func (s *Task) buildRow(k any, vv any) bool {
+	key, _ := k.(string)
+	//window values only store float64 pointer type, no need to check
+	v, _ := vv.([]*float64)
+	if s.validNum >= len(s.rows) {
+		s.rows = append(s.rows, influx.Row{Name: s.info.Name})
+	}
+	s.rows[s.validNum].ReFill()
+	// reuse rows body
+	fields := &s.rows[s.validNum].Fields
+	// once make, reuse every flush
+	if fields.Len() < len(s.fieldCalls) {
+		*fields = make([]influx.Field, len(s.fieldCalls))
+		for i := 0; i < fields.Len(); i++ {
+			(*fields)[i] = influx.Field{
+				Key:  s.fieldCalls[i].alias,
+				Type: s.fieldCalls[i].outFieldType,
+			}
+		}
+	}
 	validNum := 0
-	offset := int(atomic.LoadInt64(&s.startWindowID)) * s.fieldCallsLen
-	getMeasurementInfo := false
-	var info *meta2.MeasurementInfo
-	walk := func(k, vv interface{}) bool {
-		key, _ := k.(string)
-		//window values only store float64 pointer type, no need to check
-		v, _ := vv.([]*float64)
+	for i := range s.fieldCalls {
+		if v[s.offset+i] == nil {
+			continue
+		}
+		(*fields)[validNum].NumValue = atomic2.LoadFloat64(v[s.offset+i])
+		validNum++
+	}
+	if validNum == 0 {
+		return true
+	}
+	*fields = (*fields)[:validNum]
+	tags := &s.rows[s.validNum].Tags
+	if key == EmptyGroupKey {
+		if len(s.groupKeys) != 0 {
+			s.Logger.Error("buildRow fail", zap.Error(fmt.Errorf("cannot occur this groupkeys %v key %v", key, s.groupKeys)))
+			return true
+		}
+	} else {
+		var err error
 		values := strings.Split(key, config.StreamGroupValueStrSeparator)
 		if len(values) != len(s.groupKeys) {
-			panic(fmt.Sprintf("cannot occur this values %v len %v groupkeys %v key %v", values, len(values), s.groupKeys, key))
-		}
-		var fields []influx.Field
-		var tags []influx.Tag
-		empty := true
-		for i := range s.fieldCalls {
-			if v[offset+i] == nil {
-				continue
-			}
-			fields = append(fields, influx.Field{
-				Key:      s.fieldCalls[i].alias,
-				NumValue: atomic2.LoadFloat64(v[offset+i]),
-				StrValue: "",
-				Type:     s.fieldCalls[i].outFieldType,
-			})
-			empty = false
-		}
-		if empty {
+			s.Logger.Error("buildRow fail", zap.Error(fmt.Errorf("cannot occur this values %v len %v groupkeys %v key %v", values, len(values), s.groupKeys, key)))
 			return true
+		}
+		validNum = 0
+		// once make, reuse every flush
+		if tags.Len() < len(s.groupKeys) {
+			*tags = make([]influx.Tag, len(s.groupKeys))
+			for i := 0; i < tags.Len(); i++ {
+				(*tags)[i] = influx.Tag{}
+			}
 		}
 		for i := range s.groupKeys {
 			value := values[i]
-			if s.enableCompressDict {
-				//if src measurement groupKey is field, not compressed, so should not uncompress
-				_, isField := s.fieldsDims[s.groupKeys[i]]
-				if !isField {
-					value, err = s.unCompressDictKey(value)
-					if err != nil {
-						return false
-					}
-				}
+			value, err = s.unCompressDictKey(value)
+			if err != nil {
+				s.Logger.Error("unCompressDictKey fail", zap.Error(err))
+				return true
 			}
-			tags = append(tags, influx.Tag{
-				Key:   s.groupKeys[i],
-				Value: value,
-			})
-			// TODO: to adapt to the field index
-		}
-		if validNum >= len(s.rows) {
-			a := make([]influx.Row, validNum-len(s.rows)+1)
-			s.rows = append(s.rows, a...)
-		}
-		if !getMeasurementInfo {
-			info, err = s.cli.GetMeasurementInfoStore(s.des.Database, s.des.RetentionPolicy, s.des.Name)
-			if err != nil || info == nil {
-				if err != nil {
-					s.Logger.Error(fmt.Sprintf("streamName: %s, get dst measurement info failed and raise error (%s)", s.name, err.Error()))
-				} else {
-					s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst exist: %v, get dst measurement info failed ", s.name, info != nil))
-				}
-				return false
+			// empty value, skip
+			if value == EmptyTagValue {
+				continue
 			}
-			getMeasurementInfo = true
+			(*tags)[validNum].Value = value
+			(*tags)[validNum].Key = s.groupKeys[i]
+			validNum++
 		}
-		s.rows[validNum] = influx.Row{Name: info.Name, Tags: tags,
-			Fields: fields, Timestamp: s.start.UnixNano()}
-		indexKeyPool = s.rows[validNum].UnmarshalIndexKeys(indexKeyPool)
-		validNum++
-		return true
+		*tags = (*tags)[:validNum]
 	}
-	s.values.Range(walk)
-	return validNum, indexKeyPool, err
+	s.rows[s.validNum].Timestamp = s.start.UnixNano()
+	s.indexKeyPool = s.rows[s.validNum].UnmarshalIndexKeys(s.indexKeyPool)
+	s.validNum++
+	return true
 }
 
 // corpusIndexes array not need lock
 func (s *Task) unCompressDictKey(key string) (string, error) {
+	if key == EmptyTagValue {
+		return EmptyTagValue, nil
+	}
 	intV, err := strconv.Atoi(key)
 	if err != nil {
 		s.Logger.Error(fmt.Sprintf("invalid corpus key %v", key))
 		return "", err
 	}
 	if len(s.corpusIndexes) < intV-1 {
-		err = fmt.Errorf("corpusIndexes len is less than %v", intV-1)
+		s.Logger.Error(fmt.Sprintf("corpusIndexes len is less than %v", intV-1))
 		return "", err
 	}
 	return s.corpusIndexes[intV], nil
 }
 
-// no lock to compress dict key
-func (s *Task) compressDictKey(key string) (string, error) {
+// UnCompressDictKeyUint corpusIndexes array not need lock
+func (s *Task) UnCompressDictKeyUint(key uint64) (string, error) {
+	if uint64(len(s.corpusIndexes)) < key-1 {
+		return "", fmt.Errorf("corpusIndexes len is less than %v", key-1)
+	}
+	return s.corpusIndexes[key], nil
+}
+
+// no lock to compress dict key, compress string to int64
+func (s *Task) compressDictKeyUint(key string) (uint64, error) {
 	vv, ok := s.corpus.Load(key)
 	if ok {
 		index, _ := vv.(uint64)
 		if uint64(len(s.corpusIndexes))+1 < index {
-			return "", errors.New("compressDict index out of range")
+			return 0, errors.New("compressDict index out of range")
 		}
-		return fmt.Sprint(vv), nil
+		return index, nil
 	}
 	index := atomic.AddUint64(&s.corpusIndex, 1)
 	for uint64(len(s.corpusIndexes)) <= index {
@@ -520,16 +544,17 @@ func (s *Task) compressDictKey(key string) (string, error) {
 	s.corpusIndexes[index] = key
 	s.corpus.Store(key, index)
 	//conflict situation, may overwrite kv, but do not difference for uncompress, because corpusIndexes not overwrite
-	return fmt.Sprint(index), nil
+	return index, nil
 }
 
 func (s *Task) flush() error {
 	var err error
 	s.Logger.Info("stream start flush")
 	t := time.Now()
-	indexKeyPool := bufferpool.GetPoints()
+	s.indexKeyPool = bufferpool.GetPoints()
 	defer func() {
-		bufferpool.PutPoints(indexKeyPool)
+		bufferpool.Put(s.indexKeyPool)
+		s.indexKeyPool = nil
 		s.stats.StatWindowFlushCost(int64(time.Since(t)))
 		s.stats.Push()
 		select {
@@ -540,31 +565,28 @@ func (s *Task) flush() error {
 		}
 	}()
 
-	validNum, _, err := s.flushRows(indexKeyPool)
-	if err != nil {
-		return err
-	}
-
-	if validNum == 0 {
+	s.generateRows()
+	if s.validNum == 0 {
 		return err
 	}
 
 	// if the number of rows is not greater than the FlushParallelMinRowNum, the rows will be flushed serially.
-	if validNum <= FlushParallelMinRowNum {
-		err = s.WriteRowsToShard(0, validNum)
+	if s.validNum <= FlushParallelMinRowNum {
+		err = s.WriteRowsToShard(0, s.validNum)
 		s.Logger.Info("stream flush over")
 		s.rows = s.rows[0:]
+		s.validNum = 0
 		return err
 	}
 
 	// if the number of rows is greater than the FlushParallelMinRowNum, the rows will be flushed in parallel.
-	conNum := validNum / s.concurrency
+	conNum := s.validNum / s.concurrency
 	for i := 0; i < s.concurrency; i++ {
 		start, end := i*conNum, 0
 		if i < s.concurrency-1 {
 			end = (i + 1) * conNum
 		} else {
-			end = validNum
+			end = s.validNum
 		}
 		s.flushWG.Add(1)
 		_ = s.goPool.Submit(func() {
@@ -579,6 +601,7 @@ func (s *Task) flush() error {
 
 	s.Logger.Info("stream flush over")
 	s.rows = s.rows[0:]
+	s.validNum = 0
 	return err
 }
 
@@ -625,48 +648,51 @@ func (s *Task) Drain() {
 	}
 }
 
-func (s *Task) generateGroupKey(keys []string, value *influx.Row) string {
+// generateGroupKeyUint not support fieldIndex
+func (s *Task) generateGroupKeyUint(keys []string, value *influx.Row) string {
+	if len(keys) == 0 {
+		return EmptyGroupKey
+	}
 	builder := s.bp.Get()
 	defer func() {
 		builder.Reset()
 		s.bp.Put(builder)
 	}()
 
-	haveFieldIndex := len(value.IndexOptions) > 0
+	tagIndex := 0
 	for i := range keys {
-		idx := sort.Search(len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
+		idx := Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
 		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
-			if s.enableCompressDict {
-				v, err := s.compressDictKey(value.Tags[idx].Value)
-				if err != nil {
-					panic(fmt.Sprintf("compressDictKey fail : %v", err))
-				}
-				builder.WriteString(v)
-			} else {
-				builder.WriteString(value.Tags[idx].Value)
+			v, err := s.compressDictKeyUint(value.Tags[idx].Value)
+			if err != nil {
+				panic(fmt.Sprintf("CompressDictKey fail : %v", err))
 			}
+			builder.AppendString(strconv.FormatUint(v, 10))
 			if i < len(keys)-1 {
-				builder.WriteByte(config.StreamGroupValueSeparator)
+				builder.AppendByte(config.StreamGroupValueSeparator)
 			}
+			tagIndex = idx + 1
 			continue
-		} else if !haveFieldIndex {
-			s.Logger.Error(fmt.Sprintf("the group key is incomplete, tag key %v", keys[i]))
-			return ""
-		}
-		fIdx := sort.Search(len(value.Fields), func(j int) bool { return value.Fields[j].Key >= keys[i] })
-		if fIdx < len(value.Fields) && value.Fields[fIdx].Key == keys[i] {
-			if value.Fields[fIdx].Type == influx.Field_Type_String {
-				builder.WriteString(value.Fields[fIdx].StrValue)
-			} else {
-				builder.WriteString(fmt.Sprint(value.Fields[fIdx].NumValue))
-			}
-			if i < len(keys)-1 {
-				builder.WriteByte(config.StreamGroupValueSeparator)
-			}
 		} else {
-			s.Logger.Error(fmt.Sprintf("the group key is incomplete, field key %v", keys[i]))
-			return ""
+			if i < len(keys)-1 {
+				builder.AppendByte(config.StreamGroupValueSeparator)
+			}
+			tagIndex = idx + 1
+			continue
 		}
 	}
-	return builder.String()
+	return builder.NewString()
+}
+
+func Search(begin, n int, f func(int) bool) int {
+	i, j := begin, n
+	for i < j {
+		h := int(uint(i+j) >> 1) // avoid overflow when computing h
+		if !f(h) {
+			i = h + 1 // preserves f(i-1) == false
+		} else {
+			j = h // preserves f(j) == true
+		}
+	}
+	return i
 }

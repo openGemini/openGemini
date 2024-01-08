@@ -16,6 +16,7 @@ limitations under the License.
 package engine
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -29,12 +30,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/docker/go-units"
 	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
@@ -57,33 +61,85 @@ const (
 )
 
 var (
-	walCompBufPool = bufferpool.NewByteBufferPool(WalCompBufSize)
+	walCompBufPool = bufferpool.NewByteBufferPool(WalCompBufSize, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 )
 
-type WAL struct {
-	log            *logger.Logger
-	mu             sync.RWMutex
-	replayWG       sync.WaitGroup // wait for replay wal finish
-	logPath        string
-	lock           *string
-	partitionNum   int
-	writeReq       uint64
-	logWriter      LogWriters
-	logReplay      LogReplays
-	walEnabled     bool
-	replayParallel bool
+var walRowsObjectsPool sync.Pool
+
+type walRowsObjects struct {
+	rowsDataBuff []byte // the snappy decoded data for unmarshal Rows
+
+	rows   influx.Rows         // the unmarshal rows
+	tags   influx.PointTags    // the unmarshal tags
+	fields influx.Fields       // the unmarshal fields
+	opts   influx.IndexOptions // the unmarshal IndexOptions
+	keys   []byte              // the unmarshal IndexKeys
 }
 
-func NewWAL(path string, lockPath *string, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int) *WAL {
+func getWalRowsObjects() *walRowsObjects {
+	v := walRowsObjectsPool.Get()
+	if v == nil {
+		return &walRowsObjects{}
+	}
+	return v.(*walRowsObjects)
+}
+
+// putWalRowsObjects puts the *walRowsObjects to sync.Pool. The reuse object MUST be a point-like param. DO NOT CHANGE ME!
+func putWalRowsObjects(objs *walRowsObjects) {
+	if len(objs.rowsDataBuff) > 0 {
+		objs.rowsDataBuff = objs.rowsDataBuff[:0]
+	}
+
+	if len(objs.rows) > 0 {
+		objs.rows = objs.rows[:0]
+	}
+	if len(objs.tags) > 0 {
+		objs.tags = objs.tags[:0]
+	}
+	if len(objs.fields) > 0 {
+		objs.fields = objs.fields[:0]
+	}
+	if len(objs.opts) > 0 {
+		objs.opts = objs.opts[:0]
+	}
+	if len(objs.keys) > 0 {
+		objs.keys = objs.keys[:0]
+	}
+	walRowsObjectsPool.Put(objs)
+}
+
+type WAL struct {
+	log             *logger.Logger
+	mu              sync.RWMutex
+	replayWG        sync.WaitGroup // wait for replay wal finish
+	shardID         uint64
+	logPath         string
+	lock            *string
+	partitionNum    int
+	writeReq        uint64
+	logWriter       LogWriters
+	logReplay       LogReplays
+	walEnabled      bool
+	replayParallel  bool
+	replayBatchSize int
+}
+
+func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int, walReplayBatchSize int) *WAL {
+	if walReplayBatchSize < 256*units.KiB {
+		walReplayBatchSize = 256 * units.KiB // at least 256 KiB
+	}
+
 	wal := &WAL{
-		logPath:        path,
-		partitionNum:   partitionNum,
-		logWriter:      make(LogWriters, partitionNum),
-		logReplay:      make(LogReplays, partitionNum),
-		walEnabled:     walEnabled,
-		replayParallel: replayParallel,
-		log:            logger.NewLogger(errno.ModuleWal),
-		lock:           lockPath,
+		logPath:         path,
+		partitionNum:    partitionNum,
+		shardID:         shardID,
+		logWriter:       make(LogWriters, partitionNum),
+		logReplay:       make(LogReplays, partitionNum),
+		walEnabled:      walEnabled,
+		replayParallel:  replayParallel,
+		replayBatchSize: walReplayBatchSize,
+		log:             logger.NewLogger(errno.ModuleWal),
+		lock:            lockPath,
 	}
 
 	lock := fileops.FileLockOption(*lockPath)
@@ -239,59 +295,85 @@ func (l *WAL) Remove(files []string) error {
 	return nil
 }
 
-func (l *WAL) replayPhysicRecord(fd fileops.File, offset, fileSize int64, recordCompBuff []byte,
-	callBack func(pc *walRecord) error) (int64, []byte, error) {
-	// check file is all replayed
-	if offset >= fileSize {
-		return offset, recordCompBuff, io.EOF
-	}
-
+func (l *WAL) replayPhysicRecord(fr *bufio.Reader, walFileName string, recordCompBuff []byte, callBack func(pc *walRecord) error) ([]byte, error) {
 	// read record header
 	var recordHeader [WalRecordHeadSize]byte
-	n, err := fd.ReadAt(recordHeader[:], offset)
+	n, err := io.ReadFull(fr, recordHeader[:])
 	if err != nil {
-		l.log.Warn(errno.NewError(errno.ReadWalFileFailed, fd.Name(), offset, "record header").Error())
-		return offset, recordCompBuff, io.EOF
+		l.log.Error(errno.NewError(errno.ReadWalFileFailed).Error(), zap.Error(err))
+		return recordCompBuff, io.EOF
 	}
 	if n != WalRecordHeadSize {
-		l.log.Warn(errno.NewError(errno.WalRecordHeaderCorrupted, fd.Name(), offset).Error())
-		return offset, recordCompBuff, io.EOF
+		l.log.Warn(errno.NewError(errno.WalRecordHeaderCorrupted).Error(), zap.Error(err))
+		return recordCompBuff, io.EOF
 	}
 
 	writeWalType := WalRecordType(recordHeader[0])
 	if writeWalType <= WriteWalUnKnownType || writeWalType >= WriteWalEnd {
-		l.log.Warn("unKnown write wal type", zap.Int("writeWalType", int(writeWalType)))
-		return offset, recordCompBuff, io.EOF
+		l.log.Error("unKnown write wal type", zap.Int("writeWalType", int(writeWalType)))
+		return recordCompBuff, io.EOF
 	}
-	offset += int64(len(recordHeader))
 
 	// prepare record memory
 	compBinaryLen := binary.BigEndian.Uint32(recordHeader[1:WalRecordHeadSize])
 	recordCompBuff = bufferpool.Resize(recordCompBuff, int(compBinaryLen))
 
-	// read record body
-	var recordBuff []byte
-	pc := &walRecord{}
-	n, err = fd.ReadAt(recordCompBuff, offset)
+	// read wal binary body
+	var rowsObjects = getWalRowsObjects()
+	var binaryBuff = rowsObjects.rowsDataBuff[:cap(rowsObjects.rowsDataBuff)]
+
+	wr := &walRecord{
+		writeWalType: writeWalType,
+	}
+	_, err = io.ReadFull(fr, recordCompBuff)
 	if err == nil || err == io.EOF {
-		offset += int64(n)
 		var innerErr error
-		recordBuff, innerErr = snappy.Decode(recordBuff, recordCompBuff)
+		binaryBuff, innerErr = snappy.Decode(binaryBuff, recordCompBuff)
 		if innerErr != nil {
-			l.log.Warn(errno.NewError(errno.DecompressWalRecordFailed, fd.Name(), offset, innerErr.Error()).Error())
-			return offset, recordCompBuff, io.EOF
+			l.log.Error(errno.NewError(errno.DecompressWalRecordFailed, walFileName, innerErr.Error()).Error())
+			return recordCompBuff, io.EOF
 		}
-		pc.binary = recordBuff
-		pc.writeWalType = writeWalType
-		innerErr = callBack(pc)
-		if innerErr == nil {
-			return offset, recordCompBuff, err
+		if writeWalType == WriteWalLineProtocol {
+			rowsObjects, err = l.unmarshalRows(binaryBuff, rowsObjects)
+			if err != nil {
+				err = io.EOF
+				return recordCompBuff, err
+			}
+			rowsObjects.rowsDataBuff = binaryBuff
+			wr.rowsObjs = rowsObjects
+		} else {
+			wr.binary = binaryBuff
 		}
 
-		return offset, recordCompBuff, innerErr
+		innerErr = callBack(wr)
+		return recordCompBuff, innerErr
 	}
-	l.log.Warn(errno.NewError(errno.ReadWalFileFailed, fd.Name(), offset, "record body").Error())
-	return offset, recordCompBuff, io.EOF
+	l.log.Error(errno.NewError(errno.ReadWalFileFailed).Error())
+	return recordCompBuff, io.EOF
+}
+
+func (l *WAL) unmarshalRows(binary []byte, ctx *walRowsObjects) (*walRowsObjects, error) {
+	rows := ctx.rows
+	tagPools := ctx.tags
+	fieldPools := ctx.fields
+	indexOptionPools := ctx.opts
+	indexKeyPools := ctx.keys
+
+	var err error
+
+	rows, tagPools, fieldPools, indexOptionPools, indexKeyPools, err = influx.FastUnmarshalMultiRows(binary, rows, tagPools, fieldPools, indexOptionPools, indexKeyPools)
+	if err != nil {
+		err = errno.NewError(errno.WalRecordUnmarshalFailed, l.shardID, err.Error())
+		l.log.Error("wal unmarshal rows fail", zap.Error(err))
+	}
+
+	// set the reuse objects to ctx
+	ctx.rows = rows
+	ctx.tags = tagPools
+	ctx.fields = fieldPools
+	ctx.opts = indexOptionPools
+	ctx.keys = indexKeyPools
+	return ctx, err
 }
 
 func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack func(pc *walRecord) error) error {
@@ -317,7 +399,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 	if fileSize == 0 {
 		return nil
 	}
-
+	logger.GetLogger().Info("start to replay wal file", zap.Uint64("shardID", l.shardID), zap.String("filename", walFileName), zap.String("file size", units.HumanSize(float64(fileSize))))
 	recordCompBuff := walCompBufPool.Get()
 	defer func() {
 		if len(recordCompBuff) <= WalCompMaxBufSize {
@@ -326,7 +408,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 		util.MustClose(fd)
 	}()
 
-	offset := int64(0)
+	fr := bufio.NewReaderSize(fd, l.replayBatchSize)
 	for {
 		select {
 		case <-ctx.Done():
@@ -334,7 +416,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 			return nil
 		default:
 		}
-		offset, recordCompBuff, err = l.replayPhysicRecord(fd, offset, fileSize, recordCompBuff, callBack)
+		recordCompBuff, err = l.replayPhysicRecord(fr, walFileName, recordCompBuff, callBack)
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -360,7 +442,8 @@ func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(pc 
 	return nil
 }
 
-func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{}, callBack func(binary []byte, writeWalType WalRecordType) error) {
+func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{},
+	callBack func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error) {
 	// consume wal data according to partition order from channel
 	ptFinish := make([]bool, len(ptChs))
 	ptFinishNum := 0
@@ -376,7 +459,7 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walR
 				return
 			case pc = <-ptChs[i]:
 			}
-			if len(pc.binary) == 0 {
+			if len(pc.binary) == 0 && (pc.rowsObjs == nil || len(pc.rowsObjs.rows) == 0) {
 				ptFinishNum++
 				ptFinish[i] = true
 				if ptFinishNum == len(ptChs) {
@@ -385,7 +468,8 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walR
 				}
 				continue
 			}
-			err := callBack(pc.binary, pc.writeWalType)
+
+			err := callBack(pc.binary, pc.rowsObjs, pc.writeWalType)
 			if err != nil {
 				mu.Lock()
 				*errs = append(*errs, err)
@@ -396,7 +480,7 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walR
 }
 
 func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{},
-	callBack func(binary []byte, writeWalType WalRecordType) error) {
+	callBack func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error) {
 	var wg sync.WaitGroup
 	wg.Add(len(ptChs))
 	for i := 0; i < len(ptChs); i++ {
@@ -407,10 +491,10 @@ func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *wa
 				case <-ctx.Done():
 					return
 				case pc := <-ptChs[idx]:
-					if len(pc.binary) == 0 {
+					if len(pc.binary) == 0 && (pc.rowsObjs == nil || len(pc.rowsObjs.rows) == 0) {
 						return
 					}
-					err := callBack(pc.binary, pc.writeWalType)
+					err := callBack(pc.binary, pc.rowsObjs, pc.writeWalType)
 					if err != nil {
 						mu.Lock()
 						*errs = append(*errs, err)
@@ -470,11 +554,12 @@ func (l *WAL) wait() {
 }
 
 type walRecord struct {
-	binary       []byte
+	binary       []byte          // write wal for both type and replay wal for arrowFlight type
+	rowsObjs     *walRowsObjects // replay wal for lineProtocol type for Rows unmarshalled
 	writeWalType WalRecordType
 }
 
-func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte, writeWalType WalRecordType) error) ([]string, error) {
+func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error) ([]string, error) {
 	if !l.walEnabled {
 		return nil, nil
 	}

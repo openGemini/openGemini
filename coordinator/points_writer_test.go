@@ -57,7 +57,7 @@ var engineType = config.TSSTORE
 type MockMetaClient struct {
 	DatabaseFn           func(database string) (*meta2.DatabaseInfo, error)
 	RetentionPolicyFn    func(database, rp string) (*meta2.RetentionPolicyInfo, error)
-	CreateShardGroupFn   func(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
+	CreateShardGroupFn   func(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 	DBPtViewFn           func(database string) (meta2.DBPtInfos, error)
 	MeasurementFn        func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchemaFn       func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
@@ -76,8 +76,8 @@ func (mmc *MockMetaClient) RetentionPolicy(database, policy string) (*meta2.Rete
 	return mmc.RetentionPolicyFn(database, policy)
 }
 
-func (mmc *MockMetaClient) CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
-	return mmc.CreateShardGroupFn(database, policy, timestamp, engineType)
+func (mmc *MockMetaClient) CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
+	return mmc.CreateShardGroupFn(database, policy, timestamp, 0, engineType)
 }
 
 func (mmc *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
@@ -260,7 +260,7 @@ func NewMockMetaClient() *MockMetaClient {
 		return rpInfo, nil
 	}
 
-	mc.CreateShardGroupFn = func(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
+	mc.CreateShardGroupFn = func(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
 		for i := range rpInfo.ShardGroups {
 			if timestamp.Equal(rpInfo.ShardGroups[i].StartTime) || timestamp.After(rpInfo.ShardGroups[i].StartTime) && timestamp.Before(rpInfo.ShardGroups[i].EndTime) {
 				return &rpInfo.ShardGroups[i], nil

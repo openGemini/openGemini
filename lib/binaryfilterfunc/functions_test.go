@@ -82,6 +82,27 @@ func TestRotate(t *testing.T) {
 
 }
 
+func TestGetStringMatchPhraseConditionBitMap(t *testing.T) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	results := GetStringMatchPhraseConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	emptyCount := 0
+	for _, v := range results {
+		if v == 0 {
+			emptyCount += 1
+		}
+	}
+	assert.Equal(t, 1023, emptyCount)
+
+	results = GetStringMatchPhraseConditionBitMapWithNull(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	emptyCount = 0
+	for _, v := range results {
+		if v == 0 {
+			emptyCount += 1
+		}
+	}
+	assert.Equal(t, 1023, emptyCount)
+}
+
 func TestRotateRewriteTimeCompareVal(t *testing.T) {
 	root := &influxql.BinaryExpr{
 		Op: influxql.AND,

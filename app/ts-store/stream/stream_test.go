@@ -17,6 +17,7 @@ limitations under the License.
 package stream
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -62,7 +63,7 @@ func (m *MockStorage) TimeStamp() time.Time {
 	return m.timestamp
 }
 
-func buildRow(tagValue, eipValue string) influx.Row {
+func buildRow(tagValue, eipValue string, fieldIndex bool) influx.Row {
 	tags := &[]influx.Tag{}
 	if len(*tags) == 26 {
 		for i := 0; i < 26; i++ {
@@ -102,13 +103,22 @@ func buildRow(tagValue, eipValue string) influx.Row {
 	r.Fields = fields
 	r.Timestamp = time.Now().UnixNano()
 	r.StreamId = append(r.StreamId, 1)
+	if fieldIndex {
+		tmpOpt := influx.IndexOption{
+			IndexList: []uint16{0},
+			Oid:       uint32(0),
+		}
+		tmpIndexOptions := make([]influx.IndexOption, 0)
+		tmpIndexOptions = append(tmpIndexOptions, tmpOpt)
+		r.IndexOptions = tmpIndexOptions
+	}
 	return *r
 }
 
 func buildRows(length int) []influx.Row {
 	fieldRows := &[]influx.Row{}
 	for j := 0; j < length; j++ {
-		r := buildRow("'贵阳''西南''公有云'", "")
+		r := buildRow("'贵阳''西南''公有云'", "", false)
 		if j%2 == 0 {
 			r.Name = fmt.Sprintf("%v1", r.Name)
 		}
@@ -117,19 +127,34 @@ func buildRows(length int) []influx.Row {
 	return *fieldRows
 }
 
-type MockLogger struct {
+type TestLogger interface {
+	Log(args ...any)
 }
 
-func (m MockLogger) Info(msg string, fields ...zap.Field) {}
+type MockLogger struct {
+	t TestLogger
+}
 
-func (m MockLogger) Debug(msg string, fields ...zap.Field) {}
+func (m MockLogger) Info(msg string, fields ...zap.Field) {
+	m.t.Log(msg)
+}
 
-func (m MockLogger) Error(msg string, fields ...zap.Field) {}
+func (m MockLogger) Debug(msg string, fields ...zap.Field) {
+	m.t.Log(msg)
+}
+
+func (m MockLogger) Error(msg string, fields ...zap.Field) {
+	m.t.Log(msg)
+}
 
 type MockMetaclient struct {
+	getInfoFail bool
 }
 
 func (m MockMetaclient) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+	if m.getInfoFail {
+		return nil, errors.New("get info fail")
+	}
 	schema := map[string]int32{}
 	schema["bps"] = influx.Field_Type_Float
 	for i := 0; i < 8; i++ {
@@ -191,10 +216,9 @@ func (ww *MockWritePointsWork) reset() {
 
 func Test_Call(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{}
+	l := &MockLogger{t}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
-	conf.EnableCompressDict = true
 	stream, err := NewStream(m, l, metaClient, conf)
 	if err != nil {
 		t.Fatal(err)
@@ -256,9 +280,49 @@ func Test_Call(t *testing.T) {
 	time.Sleep(time.Second * 3)
 }
 
+func Test_RegisterFail(t *testing.T) {
+	m := &MockStorage{}
+	l := &MockLogger{t}
+	metaClient := &MockMetaclient{getInfoFail: true}
+	conf := stream2.NewConfig()
+	stream, err := NewStream(m, l, metaClient, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go stream.Run()
+	groupKeys := []string{}
+	for i := 0; i < 8; i++ {
+		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
+	}
+	fieldCalls := []FieldCall{}
+	fieldCalls = append(fieldCalls, FieldCall{
+		name:         "bps",
+		alias:        "bps",
+		call:         "sum",
+		f:            nil,
+		inFieldType:  influx.Field_Type_Float,
+		outFieldType: influx.Field_Type_Float,
+	})
+	window := time.Second * 3
+	maxDelay := time.Second * 10
+	calls := []string{"sum"}
+	streamInfos := buildStreamInfo(window, maxDelay, calls)
+	now := time.Now()
+	t.Log("now", now)
+	stream.RegisterTask(streamInfos["tt"], fieldCalls, map[string]int32{})
+	//Truncate time
+	next := now.Truncate(window).Add(window)
+	after := time.NewTicker(next.Sub(now))
+	select {
+	case <-after.C:
+		after.Reset(window)
+	}
+	stream.Close()
+}
+
 func Test_MaxDelay(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{}
+	l := &MockLogger{t}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf)
@@ -373,7 +437,7 @@ func buildStreamInfo(window, maxDelay time.Duration, calls []string) map[string]
 
 func Bench_Stream_POINT(t *testing.B, pointNum int) {
 	m := &MockStorage{}
-	l := &MockLogger{}
+	l := &MockLogger{t}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	conf.FilterConcurrency = 1

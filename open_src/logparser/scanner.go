@@ -62,19 +62,37 @@ func (s *Scanner) Scan() (tok Token, pos Pos, lit string) {
 		return LPAREN, pos, ""
 	case ')':
 		return RPAREN, pos, ""
+	case '[':
+		return LSQUARE, pos, ""
+	case ']':
+		return RSQUARE, pos, ""
+	case '>':
+		if ch1, _ := s.r.read(); ch1 == '=' {
+			return GTE, pos, ""
+		}
+		s.r.unread()
+		return GT, pos, ""
+	case '<':
+		if ch1, _ := s.r.read(); ch1 == '=' {
+			return LTE, pos, ""
+		}
+		s.r.unread()
+		return LT, pos, ""
+	case '=':
+		return EQ, pos, ""
 	case ':':
 		return COLON, pos, ""
 	case ',':
 		return COMMA, pos, ""
 	}
 
-	// digit number
+	// deal the time "10:10:10"
 	if isDigit(ch0) {
 		s.r.unread()
 		return s.scanNumber()
 	}
 
-	// ident
+	// ident string
 	s.r.unread()
 	return s.scanIdent(true)
 }
@@ -109,7 +127,6 @@ func (s *Scanner) scanIdent(lookup bool) (tok Token, pos Pos, lit string) {
 	s.r.unread()
 
 	var buf bytes.Buffer
-	var regex bool
 	for {
 		ch, _ := s.r.read()
 		if ch == eof {
@@ -117,8 +134,6 @@ func (s *Scanner) scanIdent(lookup bool) (tok Token, pos Pos, lit string) {
 		} else if isTerminator(ch) {
 			s.r.unread()
 			break
-		} else if isRegex(ch) {
-			regex = true
 		}
 		_, _ = buf.WriteRune(ch)
 	}
@@ -129,9 +144,6 @@ func (s *Scanner) scanIdent(lookup bool) (tok Token, pos Pos, lit string) {
 		if tok = Lookup(lit); tok != IDENT {
 			return tok, pos, ""
 		}
-	}
-	if regex {
-		return IDENT, pos, lit
 	}
 	return IDENT, pos, lit
 }
@@ -223,10 +235,13 @@ func isRegex(ch rune) bool { return (ch == '*' || ch == '?') }
 
 // isNumTerminator returns ture if the run is a terminator symbols
 func isNumTerminator(ch rune) bool {
-	return (ch == '|' || ch == '(' || ch == ')' || ch == ' ' || ch == eof)
+	return (ch == '|' || ch == '(' || ch == ')' || ch == '[' || ch == ']' ||
+		ch == '<' || ch == '>' || ch == '=' || ch == ' ' || ch == eof)
 }
 
-func isTerminator(ch rune) bool { return isNumTerminator(ch) || ch == ':' || ch == ',' }
+func isTerminator(ch rune) bool {
+	return (isNumTerminator(ch) || ch == ':' || ch == ',')
+}
 
 // bufScanner represents a wrapper for scanner to add a buffer.
 // It provides a fixed-length circular buffer that can be unread.

@@ -36,22 +36,22 @@ import (
 
 func forwardIntegerColumn(dst executor.Column, src executor.Column) {
 	dst.AppendIntegerValues(src.IntegerValues())
-	executor.AdjustNils(dst, src)
+	executor.AdjustNils(dst, src, 0, src.Length())
 }
 
 func forwardFloatColumn(dst executor.Column, src executor.Column) {
 	dst.AppendFloatValues(src.FloatValues())
-	executor.AdjustNils(dst, src)
+	executor.AdjustNils(dst, src, 0, src.Length())
 }
 
 func forwardBooleanColumn(dst executor.Column, src executor.Column) {
 	dst.AppendBooleanValues(src.BooleanValues())
-	executor.AdjustNils(dst, src)
+	executor.AdjustNils(dst, src, 0, src.Length())
 }
 
 func forwardStringColumn(dst executor.Column, src executor.Column) {
 	dst.CloneStringValues(src.GetStringBytes())
-	executor.AdjustNils(dst, src)
+	executor.AdjustNils(dst, src, 0, src.Length())
 }
 
 func createTransforms(ops []hybridqp.ExprOptions) []func(dst executor.Column, src executor.Column) {
@@ -967,7 +967,7 @@ func (s *TSDBSystem) ExecSQL(sql string,
 			mapShard2Reader[uint64(i)] = [][]interface{}{nil}
 		}
 		traits := executor.NewStoreExchangeTraits(nil, mapShard2Reader)
-		executorBuilder := executor.NewMocStoreExecutorBuilder(traits, 0)
+		executorBuilder := executor.NewMocStoreExecutorBuilder(traits, nil, nil, 0)
 		return executorBuilder
 	})
 	preparedStmt.ChangeOptimizer(func() hybridqp.Planner {

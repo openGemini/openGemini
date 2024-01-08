@@ -12,6 +12,8 @@ Huawei Cloud Computing Technologies Co., Ltd.
 import (
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 // CompileOptions are the customization options for the compiler.
@@ -212,6 +215,10 @@ func (c *compiledStatement) compile(stmt *influxql.SelectStatement) error {
 		return err
 	}
 
+	if err := c.validateUnnestSource(); err != nil {
+		return err
+	}
+
 	// Look through the sources and compile each of the subqueries (if they exist).
 	// We do this after compiling the outside because subqueries may require
 	// inherited state.
@@ -222,17 +229,22 @@ func (c *compiledStatement) compile(stmt *influxql.SelectStatement) error {
 			if err := c.subquery(source.Statement); err != nil {
 				return err
 			}
+			stmt.SubQueryHasDifferentAscending = source.Statement.SubQueryHasDifferentAscending
 		case *influxql.Join:
 			if lsrc, ok := source.LSrc.(*influxql.SubQuery); ok {
 				lsrc.Statement.OmitTime = true
 				if err := c.subquery(lsrc.Statement); err != nil {
 					return err
 				}
+				stmt.SubQueryHasDifferentAscending = lsrc.Statement.SubQueryHasDifferentAscending
 			}
 			if rsrc, ok := source.RSrc.(*influxql.SubQuery); ok {
 				rsrc.Statement.OmitTime = true
 				if err := c.subquery(rsrc.Statement); err != nil {
 					return err
+				}
+				if !stmt.SubQueryHasDifferentAscending {
+					stmt.SubQueryHasDifferentAscending = rsrc.Statement.SubQueryHasDifferentAscending
 				}
 			}
 		}
@@ -1360,6 +1372,50 @@ func (c *compiledStatement) validateCondition(expr influxql.Expr) error {
 	}
 }
 
+func (c *compiledStatement) validateUnnestFunc(u *influxql.Unnest, call *influxql.Call) error {
+	switch call.Name {
+	case "match_all":
+		if len(call.Args) != 2 {
+			return fmt.Errorf("unnest match_all need 2 param")
+		}
+		if _, ok := call.Args[0].(*influxql.VarRef); !ok {
+			return fmt.Errorf("the argument of extract function must be pattern")
+		}
+		r := regexp.MustCompile(call.Args[0].(*influxql.VarRef).Val)
+		if r == nil {
+			return fmt.Errorf("the argument of extract function must be pattern")
+		}
+		n := r.NumSubexp()
+		if len(u.Aliases) != n {
+			return fmt.Errorf("the number of regular matching fields is not equal to the number of alias fields")
+		}
+		if len(u.Aliases) != len(u.DstType) {
+			return fmt.Errorf("the number of DstType is not equal to the number of alias fields")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unnest not support %s", call.Name)
+	}
+}
+
+func (c *compiledStatement) validateUnnestSource() error {
+	if c.stmt == nil {
+		return nil
+	}
+	if len(c.stmt.UnnestSource) > 0 {
+		for _, v := range c.stmt.UnnestSource {
+			if call, ok := v.Expr.(*influxql.Call); ok {
+				if err := c.validateUnnestFunc(v, call); err != nil {
+					return err
+				}
+			} else {
+				return fmt.Errorf("parse func is not call")
+			}
+		}
+	}
+	return nil
+}
+
 // subquery compiles and validates a compiled statement for the subquery using
 // this compiledStatement as the parent.
 func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
@@ -1379,10 +1435,11 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 
 	// If the ordering is different and the sort field was specified for the subquery,
 	// throw an error.
-	/*if len(stmt.SortFields) != 0 && subquery.Ascending != c.Ascending {
-		return errors.New("subqueries must be ordered in the same direction as the query itself")
+	if len(stmt.SortFields) != 0 && subquery.Ascending != c.Ascending {
+		// return errors.New("subqueries must be ordered in the same direction as the query itself")
+		stmt.SubQueryHasDifferentAscending = true
 	}
-	subquery.Ascending = c.Ascending*/
+	subquery.Ascending = c.Ascending
 
 	// Find the intersection between this time range and the parent.
 	// If the subquery doesn't have a time range, this causes it to
@@ -1551,5 +1608,98 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	}
 
 	columns := stmt.ColumnNames()
+	opt.IncQuery, opt.LogQueryCurrId, opt.IterID = sopt.IncQuery, sopt.QueryID, sopt.IterID
 	return NewPreparedStatement(stmt, &opt, shards, columns, sopt.MaxPointN, c.Options.Now), nil
+}
+
+func rewriteDataTypeForPipeSyntax(expr *influxql.BinaryExpr, schema map[string]int32, change *bool) error {
+	leftVar, ok := expr.LHS.(*influxql.VarRef)
+	if !ok {
+		return nil
+	}
+	rightVal, ok := expr.RHS.(*influxql.StringLiteral)
+	if !ok {
+		return nil
+	}
+	dataType, ok := schema[leftVar.Val]
+	if !ok {
+		return nil
+	}
+
+	switch dataType {
+	case influx.Field_Type_Float:
+		val, err := strconv.ParseFloat(rightVal.Val, 64)
+		if err != nil {
+			return err
+		}
+		leftVar.Type = influxql.Float
+		expr.RHS = &influxql.NumberLiteral{Val: val}
+		*change = true
+	case influx.Field_Type_Int:
+		val, err := strconv.ParseInt(rightVal.Val, 10, 64)
+		if err != nil {
+			return err
+		}
+		leftVar.Type = influxql.Integer
+		expr.RHS = &influxql.IntegerLiteral{Val: val}
+		*change = true
+	case influx.Field_Type_UInt:
+		val, err := strconv.ParseUint(rightVal.Val, 10, 64)
+		if err != nil {
+			return err
+		}
+		leftVar.Type = influxql.Unsigned
+		expr.RHS = &influxql.UnsignedLiteral{Val: val}
+		*change = true
+	case influx.Field_Type_Boolean:
+		val, err := strconv.ParseBool(rightVal.Val)
+		if err != nil {
+			return err
+		}
+		leftVar.Type = influxql.Boolean
+		expr.RHS = &influxql.BooleanLiteral{Val: val}
+		*change = true
+	}
+	return nil
+}
+
+func RewriteCondForPipeSyntax(condition influxql.Expr, schema map[string]int32) error {
+	if condition == nil {
+		return nil
+	}
+	var change bool
+	switch expr := condition.(type) {
+	case *influxql.BinaryExpr:
+		switch expr.Op {
+		case influxql.AND:
+			err := RewriteCondForPipeSyntax(expr.LHS, schema)
+			if err != nil {
+				return err
+			}
+			return RewriteCondForPipeSyntax(expr.RHS, schema)
+		case influxql.OR:
+			err := RewriteCondForPipeSyntax(expr.LHS, schema)
+			if err != nil {
+				return err
+			}
+			return RewriteCondForPipeSyntax(expr.RHS, schema)
+		case influxql.MATCHPHRASE:
+			err := rewriteDataTypeForPipeSyntax(expr, schema, &change)
+			if change {
+				expr.Op = influxql.EQ
+			}
+			return err
+		case influxql.LT:
+			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
+		case influxql.LTE:
+			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
+		case influxql.GT:
+			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
+		case influxql.GTE:
+			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
+		}
+	case *influxql.ParenExpr:
+		return RewriteCondForPipeSyntax(expr.Expr, schema)
+	}
+	return nil
 }

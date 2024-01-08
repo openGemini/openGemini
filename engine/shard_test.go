@@ -51,6 +51,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -278,7 +279,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 		EndTime: mustParseTime(time.RFC3339Nano, "2099-01-01T01:00:00Z")}
 	shardIdent := &meta.ShardIdentifier{ShardID: defaultShardId, ShardGroupID: 1, OwnerDb: db, OwnerPt: ptId, Policy: rp}
 	if engineType == config.COLUMNSTORE {
-		immutable.SetSnapshotTblNum(1)
+		immutable.SetSnapshotTblNum(8)
 		immutable.SetCompactionEnabled(false)
 	}
 	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
@@ -536,7 +537,10 @@ func genExpectRecordsMap(rs []influx.Row, querySchema *executor.QuerySchema) *sy
 		filterOption := immutable.BaseFilterOptions{}
 		for k, v := range mm {
 			rec := v.rec
-			filterOption.FiltersMap = valueMap
+			filterOption.FiltersMap = make(map[string]*influxql.FilterMapValue)
+			for key, value := range valueMap {
+				filterOption.FiltersMap.SetFilterMapValue(key, value)
+			}
 			filterOption.FieldsIdx = idFields
 			filterOption.FilterTags = idTags
 			filterRec := immutable.FilterByField(rec, nil, &filterOption, opt.GetCondition(), nil, &v.tags, nil, nil)
@@ -982,7 +986,7 @@ func TestShard_NewColStoreShard(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1010,7 +1014,7 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1085,7 +1089,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTC(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1160,7 +1164,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKey(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1235,7 +1239,7 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1317,7 +1321,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1399,7 +1403,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1482,7 +1486,7 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 			IndexList: list},
 	}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1493,7 +1497,8 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 	require.Equal(t, err, nil)
 	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
 	mstsInfo["cpu1"] = mstsInfo[defaultMeasurementName]
-	sh.SetMstInfo("cpu1", mstsInfo["cpu1"])
+	mstsInfo["cpu1"].Name = "cpu1"
+	sh.SetMstInfo(mstsInfo["cpu1"])
 	err = sh.WriteCols("cpu1", rec, nil)
 	require.Equal(t, err, nil)
 	sh.ForceFlush()
@@ -1529,7 +1534,7 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 			IndexList: list},
 	}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1540,7 +1545,8 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 	require.Equal(t, err, nil)
 	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
 	mstsInfo["cpu1"] = mstsInfo[defaultMeasurementName]
-	sh.SetMstInfo("cpu1", mstsInfo["cpu1"])
+	mstsInfo["cpu1"].Name = "cpu1"
+	sh.SetMstInfo(mstsInfo["cpu1"])
 	err = sh.WriteCols("cpu1", rec, nil)
 	require.Equal(t, err, nil)
 	sh.ForceFlush()
@@ -1651,7 +1657,7 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	rec := genRecord()
 	err = writeRec(sh, rec, false)
@@ -1673,7 +1679,7 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
 	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
 	newSh.indexBuilder = sh.indexBuilder
-	newSh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	newSh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1718,7 +1724,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	rec := genRecord()
 	err = writeRec(sh, rec, false)
@@ -1741,7 +1747,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
 	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
 	newSh.indexBuilder = sh.indexBuilder
-	newSh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	newSh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
@@ -1778,7 +1784,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	rec := genRecord()
 	err = writeRec(sh, rec, false)
@@ -1801,7 +1807,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
 	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
 	newSh.indexBuilder = sh.indexBuilder
-	newSh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	newSh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
@@ -1893,6 +1899,62 @@ func TestShardTierToDownSampleShard(t *testing.T) {
 		}
 	}
 
+}
+
+func TestWriteIndexForColsError(t *testing.T) {
+	testDir := t.TempDir()
+
+	// step1: clean env
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := genRecord()
+	storage := sh.storage.(*columnstoreImpl)
+	err = storage.WriteIndexForCols(sh, record, "cpu")
+	require.Equal(t, err, errors.New("measurement info is not found"))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteRowsToColumnStoreError(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{"field1_string", "field2_int"}},
+		Schema: map[string]int32{
+			"field1_string": influx.Field_Type_String,
+			"field2_int":    influx.Field_Type_Int}}
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	ctx := getMstWriteCtx(time.Millisecond*10, config.TSSTORE)
+	putMstWriteCtx(ctx)
+	storage := sh.storage.(*columnstoreImpl)
+	err = storage.updateMstMap(sh, rows, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mmPoints := ctx.getMstMap()
+	ctx.initWriteRowsCtx(sh.getLastFlushTime, sh.addRowCountsBySid, storage.mstsInfo)
+	ctx.writeRowsCtx.MstsInfo.Delete(defaultMeasurementName)
+	err = sh.activeTbl.MTable.WriteRows(sh.activeTbl, mmPoints, ctx.writeRowsCtx)
+	require.Equal(t, err, errors.New("measurement info is not found"))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestWriteExceptionError(t *testing.T) {
@@ -3549,7 +3611,7 @@ func TestDropMeasurementForColStore(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -3735,7 +3797,7 @@ func TestEngine_Statistics_Shard(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		var bufferPool = bufferpool.NewByteBufferPool(0)
+		var bufferPool = bufferpool.NewByteBufferPool(0, 0, bufferpool.MaxLocalCacheLen)
 		buf := bufferPool.Get()
 		buf, err = sh.GetStatistics(buf)
 		if err != nil {
@@ -4354,7 +4416,7 @@ func TestWriteRecByColumnStore(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 
 	record := genRecord()
 
@@ -4386,7 +4448,7 @@ func TestWriteRecByColumnStoreWithSchemaLess(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 
 	oldRec := genRecord()
 	sort.Sort(oldRec)
@@ -4439,7 +4501,7 @@ func TestWriteDataByNewEngine(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
 	time.Sleep(time.Second * 1)
@@ -4495,7 +4557,7 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4507,6 +4569,130 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 	require.NoError(t, err)
 	// wait mem table flush
 	sh.commitSnapshot(sh.activeTbl)
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLeftBound(t *testing.T) {
+	nums := []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	target := uint32(8)
+	left := 8
+	res := immutable.LeftBound(nums, target, left)
+	require.Equal(t, res, 9)
+
+	target = 11
+	left = 9
+	res = immutable.LeftBound(nums, target, left)
+	require.Equal(t, res, 9)
+}
+
+// TestWriteDetachedData local bf is not exist
+func TestWriteDetachedData(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(102)
+	immutable.SetDetachedFlushEnabled(true)
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"field1_string"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
+		Name:       defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:        sortKey,
+			PrimaryKey:     primaryKey,
+			CompactionType: config.BLOCK,
+		},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mutable.SetWriteChunk(msInfo, rec)
+	// wait mem table flush
+	sh.commitSnapshot(sh.activeTbl)
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWriteDetachedDataV2 local bf exist, and flush multi times
+func TestWriteDetachedDataV2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	immutable.SetDetachedFlushEnabled(true)
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(102)
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"field1_string"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
+		Name:       defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:    sortKey,
+			PrimaryKey: primaryKey,
+		},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second * 1)
+	flushTimes := 3
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	for i := 0; i < flushTimes; i++ {
+		mutable.SetWriteChunk(msInfo, rec)
+		sh.commitSnapshot(sh.activeTbl)
+	}
 
 	require.Equal(t, 4*100, int(sh.rowCount))
 	err = closeShard(sh)
@@ -4534,7 +4720,7 @@ func TestWriteDataByNewEngineWithSchemaLess(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4573,7 +4759,7 @@ func TestWriteDataByNewEngineWithTag(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
 
@@ -4613,7 +4799,7 @@ func TestWriteDataByNewEngineWithTag2(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
 
@@ -4648,7 +4834,7 @@ func TestAppendTagsFieldsToRecord(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 
 	begin := time.Now().UnixNano()
 	rows := []influx.Row{{
@@ -5199,7 +5385,7 @@ func TestWriteColsForColstore(t *testing.T) {
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
 
-	sh.SetMstInfo(defaultMeasurementName, mstsInfo[defaultMeasurementName])
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 
 	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		t.Fatal(err)
@@ -5467,6 +5653,63 @@ func TestWriteIndexFail(t *testing.T) {
 	}
 }
 
+func TestWriteIndexForRow(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 20, 100, time.Second, st, true, true, false, 1)
+	primaryIndex := sh.indexBuilder.GetPrimaryIndex()
+	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
+	var isWriteIndexNeeded bool
+	var exist bool
+
+	for i := 0; i < len(rows); i++ {
+		if !isWriteIndexNeeded {
+			exist, err = idx.IsTagKeyExist(rows[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !exist {
+				isWriteIndexNeeded = true
+			}
+		}
+	}
+	csIndexImpl, _ := idx.StorageIndex.(*tsi.CsIndexImpl)
+
+	if isWriteIndexNeeded {
+		for i := 0; i < len(rows); i++ {
+			err = csIndexImpl.CreateIndexIfNotExistsByRow(idx, &rows[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	sh.indexBuilder.Flush()
+
+	for i := 0; i < len(rows); i++ {
+		if sh.closed.Closed() {
+			t.Fatal("shard closed")
+		}
+
+		exist, err = idx.IsTagKeyExist(rows[i])
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInitDownSampleTaskNum(t *testing.T) {
 	initMaxDownSampleParallelism(0)
 	if maxDownSampleTaskNum != 1 {
@@ -5559,7 +5802,7 @@ func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {

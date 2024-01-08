@@ -33,7 +33,80 @@ func setParseTree(yylex interface{}, stmts influxql.Statements) {
 	}
 }
 
-//line sql.y:32
+func transCondOpToInflux(op int) int {
+	switch op {
+	case EQ:
+		return influxql.MATCHPHRASE
+	case LT:
+		return influxql.LT
+	case LTE:
+		return influxql.LTE
+	case GT:
+		return influxql.GT
+	case GTE:
+		return influxql.GTE
+	case NEQ:
+		return influxql.NEQ
+	default:
+		return influxql.NEQ
+	}
+}
+
+func buildCondExpr(first influxql.Expr, op int, right influxql.Expr) influxql.Expr {
+	var field influxql.Expr
+	if first != nil {
+		if strVal, ok := first.(*influxql.StringLiteral); ok {
+			field = &influxql.VarRef{Val: strVal.Val, Type: influxql.String}
+		} else {
+			field = first
+		}
+	} else {
+		field = &influxql.VarRef{Val: "content", Type: influxql.String}
+	}
+
+	newOp := transCondOpToInflux(op)
+	var expr influxql.Expr
+	switch right.(type) {
+	case *influxql.Wildcard:
+		expr = &influxql.BinaryExpr{
+			Op:  influxql.NEQ,
+			LHS: field,
+			RHS: &influxql.StringLiteral{Val: ""},
+		}
+	default:
+		expr = &influxql.BinaryExpr{
+			Op:  influxql.Token(newOp),
+			LHS: field,
+			RHS: right,
+		}
+	}
+	return expr
+}
+
+func buildRangeExpr(first influxql.Expr, lop int, left influxql.Expr, rop int, right influxql.Expr) influxql.Expr {
+	var field influxql.Expr
+	if strVal, ok := first.(*influxql.StringLiteral); ok {
+		field = &influxql.VarRef{Val: strVal.Val}
+	} else {
+		field = first
+	}
+	res := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.Token(lop),
+			LHS: field,
+			RHS: left,
+		},
+		RHS: &influxql.BinaryExpr{
+			Op:  influxql.Token(rop),
+			LHS: field,
+			RHS: right,
+		},
+	}
+	return res
+}
+
+//line sql.y:105
 type yySymType struct {
 	yys      int
 	stmt     influxql.Statement
@@ -53,13 +126,22 @@ const EXTRACT = 57346
 const AS = 57347
 const LPAREN = 57348
 const RPAREN = 57349
-const IDENT = 57350
-const STRING = 57351
-const OR = 57352
-const AND = 57353
-const BITWISE_OR = 57354
-const COLON = 57355
-const COMMA = 57356
+const LSQUARE = 57350
+const RSQUARE = 57351
+const IN = 57352
+const EQ = 57353
+const LT = 57354
+const LTE = 57355
+const GT = 57356
+const GTE = 57357
+const NEQ = 57358
+const IDENT = 57359
+const STRING = 57360
+const OR = 57361
+const AND = 57362
+const BITWISE_OR = 57363
+const COLON = 57364
+const COMMA = 57365
 
 var yyToknames = [...]string{
 	"$end",
@@ -69,6 +151,15 @@ var yyToknames = [...]string{
 	"AS",
 	"LPAREN",
 	"RPAREN",
+	"LSQUARE",
+	"RSQUARE",
+	"IN",
+	"EQ",
+	"LT",
+	"LTE",
+	"GT",
+	"GTE",
+	"NEQ",
 	"IDENT",
 	"STRING",
 	"OR",
@@ -93,52 +184,62 @@ var yyExca = [...]int8{
 
 const yyPrivate = 57344
 
-const yyLast = 47
+const yyLast = 65
 
 var yyAct = [...]int8{
-	14, 34, 8, 4, 37, 13, 29, 24, 17, 20,
-	19, 19, 7, 21, 10, 33, 15, 16, 22, 23,
-	36, 25, 27, 28, 26, 30, 20, 19, 10, 18,
-	15, 16, 15, 16, 35, 31, 32, 5, 35, 38,
-	12, 6, 11, 9, 2, 1, 3,
+	14, 52, 26, 27, 28, 29, 30, 31, 55, 8,
+	36, 17, 20, 19, 24, 19, 10, 15, 16, 7,
+	21, 10, 20, 19, 4, 37, 38, 15, 16, 34,
+	35, 54, 15, 16, 41, 50, 13, 51, 47, 18,
+	42, 43, 32, 45, 46, 48, 44, 49, 53, 22,
+	23, 39, 5, 40, 12, 33, 53, 56, 6, 11,
+	9, 2, 1, 3, 25,
 }
 
 var yyPact = [...]int16{
-	8, -1000, -1000, -1000, -4, -1000, -1000, 23, 16, -1000,
-	22, -1000, 24, 24, -6, -1000, -1000, 8, 24, 22,
-	22, -1, -1000, -1000, 24, -1000, 28, -1000, 0, -1000,
-	-1000, 31, 9, 24, 13, -10, -1000, 24, -1000,
+	15, -1000, -1000, -1000, -10, -1000, -1000, 33, -7, -1000,
+	10, -1000, 0, 0, -8, -1000, -1000, 15, 0, 10,
+	10, 3, -1000, -1000, 0, 0, 45, -1000, -1000, -1000,
+	-1000, -1000, -1000, 27, -1000, -5, -1000, -1000, -1000, 0,
+	0, 41, 0, 0, 32, 38, 28, 0, -1000, -1000,
+	-1000, -1000, 24, -15, -1000, 0, -1000,
 }
 
 var yyPgo = [...]int8{
-	0, 46, 3, 45, 44, 2, 43, 42, 0, 5,
-	41, 40, 1, 37,
+	0, 64, 63, 24, 62, 61, 9, 60, 59, 0,
+	36, 58, 54, 1, 52,
 }
 
 var yyR1 = [...]int8{
-	0, 3, 4, 1, 2, 2, 2, 10, 5, 5,
-	5, 5, 6, 6, 7, 11, 11, 13, 9, 9,
-	12, 12, 8, 8,
+	0, 4, 5, 2, 3, 3, 3, 11, 6, 6,
+	6, 6, 7, 7, 8, 12, 12, 14, 13, 13,
+	10, 10, 10, 10, 10, 10, 10, 9, 9, 1,
+	1, 1, 1, 1,
 }
 
 var yyR2 = [...]int8{
 	0, 1, 1, 1, 3, 1, 1, 1, 1, 3,
 	3, 3, 1, 1, 1, 2, 2, 8, 1, 3,
-	1, 3, 1, 1,
+	1, 3, 3, 6, 6, 6, 6, 1, 1, 1,
+	1, 1, 1, 1,
 }
 
 var yyChk = [...]int16{
-	-1000, -3, -4, -1, -2, -13, -10, 4, -5, -6,
-	6, -7, -11, -9, -8, 8, 9, 12, 6, 11,
-	10, -5, -9, -9, 13, -2, -9, -5, -5, 7,
-	-8, 7, 5, 6, -12, -8, 7, 14, -12,
+	-1000, -4, -5, -2, -3, -14, -11, 4, -6, -7,
+	6, -8, -12, -10, -9, 17, 18, 21, 6, 20,
+	19, -6, -10, -10, 22, -1, 10, 11, 12, 13,
+	14, 15, -3, -10, -6, -6, 7, -9, -9, 6,
+	8, 7, -9, -9, 5, -9, -9, 6, 7, 9,
+	7, 9, -13, -9, 7, 23, -13,
 }
 
 var yyDef = [...]int8{
 	0, -2, 1, 2, 3, 5, 6, 0, 7, 8,
-	0, 12, 13, 14, 18, 22, 23, 0, 0, 0,
-	0, 0, 16, 15, 0, 4, 0, 10, 11, 9,
-	19, 0, 0, 0, 0, 20, 17, 0, 21,
+	0, 12, 13, 14, 20, 27, 28, 0, 0, 0,
+	0, 0, 16, 15, 0, 0, 0, 29, 30, 31,
+	32, 33, 4, 0, 10, 11, 9, 21, 22, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 23, 24,
+	25, 26, 0, 18, 17, 0, 19,
 }
 
 var yyTok1 = [...]int8{
@@ -147,7 +248,8 @@ var yyTok1 = [...]int8{
 
 var yyTok2 = [...]int8{
 	2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-	12, 13, 14,
+	12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+	22, 23,
 }
 
 var yyTok3 = [...]int8{
@@ -493,25 +595,25 @@ yydefault:
 
 	case 1:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:64
+//line sql.y:140
 		{
 			setParseTree(yylex, yyDollar[1].stmts)
 		}
 	case 2:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:70
+//line sql.y:146
 		{
 			yyVAL.stmts = []influxql.Statement{yyDollar[1].stmt}
 		}
 	case 3:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:76
+//line sql.y:152
 		{
 			yyVAL.stmt = yyDollar[1].stmt
 		}
 	case 4:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line sql.y:82
+//line sql.y:158
 		{
 			cond1, ok := yyDollar[1].stmt.(*influxql.LogPipeStatement)
 			if !ok {
@@ -550,148 +652,103 @@ yydefault:
 		}
 	case 5:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:119
+//line sql.y:195
 		{
 			yyVAL.stmt = &influxql.LogPipeStatement{Unnest: yyDollar[1].unnest}
 		}
 	case 6:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:123
+//line sql.y:199
 		{
 			yyVAL.stmt = &influxql.LogPipeStatement{Cond: yyDollar[1].expr}
 		}
 	case 7:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:129
+//line sql.y:205
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 8:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:135
+//line sql.y:211
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 9:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line sql.y:139
+//line sql.y:215
 		{
 			yyVAL.expr = &influxql.ParenExpr{Expr: yyDollar[2].expr}
 		}
 	case 10:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line sql.y:143
+//line sql.y:219
 		{
 			yyVAL.expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.AND), LHS: yyDollar[1].expr, RHS: yyDollar[3].expr}
 		}
 	case 11:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line sql.y:147
+//line sql.y:223
 		{
 			yyVAL.expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.OR), LHS: yyDollar[1].expr, RHS: yyDollar[3].expr}
 		}
 	case 12:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:153
+//line sql.y:229
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 13:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:157
+//line sql.y:233
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 14:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:163
+//line sql.y:239
 		{
 			yyVAL.expr = yyDollar[1].expr
 		}
 	case 15:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line sql.y:169
+//line sql.y:245
 		{
 			yyVAL.expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.AND), LHS: yyDollar[1].expr, RHS: yyDollar[2].expr}
 		}
 	case 16:
 		yyDollar = yyS[yypt-2 : yypt+1]
-//line sql.y:173
+//line sql.y:249
 		{
 			yyVAL.expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.AND), LHS: yyDollar[1].expr, RHS: yyDollar[2].expr}
 		}
 	case 17:
 		yyDollar = yyS[yypt-8 : yypt+1]
-//line sql.y:179
+//line sql.y:255
 		{
 			unnest := &influxql.Unnest{}
-			unnest.Mst = &influxql.Measurement{}
-			unnest.CastFunc = "cast"
 
 			columnsemi, ok := yyDollar[3].expr.(*influxql.BinaryExpr)
 			if !ok {
 				yylex.Error("expexted BinaryExpr")
 			}
-			unnest.ParseFunc = &influxql.Call{
+			unnest.Expr = &influxql.Call{
 				Name: "match_all",
 				Args: []influxql.Expr{
 					&influxql.VarRef{Val: columnsemi.RHS.(*influxql.StringLiteral).Val},
 					columnsemi.LHS},
 			}
-
-			unnest.DstColumns = []string{}
-			dstFunc := &influxql.Call{
-				Name: "array",
-				Args: []influxql.Expr{},
+			unnest.Aliases = []string{}
+			for _, alias := range yyDollar[7].strSlice {
+				unnest.Aliases = append(unnest.Aliases, alias)
+				unnest.DstType = append(unnest.DstType, influxql.String)
 			}
-			for _, f := range yyDollar[7].strSlice {
-				unnest.DstColumns = append(unnest.DstColumns, f)
-				dstFunc.Args = append(dstFunc.Args, &influxql.VarRef{Val: "varchar"})
-			}
-			unnest.DstFunc = dstFunc
 
 			yyVAL.unnest = unnest
 		}
 	case 18:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:211
-		{
-			var expr influxql.Expr
-			switch yyDollar[1].expr.(type) {
-			case *influxql.Wildcard:
-				expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.NEQ), LHS: &influxql.VarRef{Val: "content", Type: influxql.String}, RHS: &influxql.StringLiteral{Val: ""}}
-			case *influxql.VarRef:
-				expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.MATCHPHRASE), LHS: &influxql.VarRef{Val: "content", Type: influxql.String}, RHS: &influxql.StringLiteral{Val: yyDollar[1].expr.(*influxql.VarRef).Val}}
-			default:
-				expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.MATCHPHRASE), LHS: &influxql.VarRef{Val: "content", Type: influxql.String}, RHS: yyDollar[1].expr}
-			}
-			yyVAL.expr = expr
-		}
-	case 19:
-		yyDollar = yyS[yypt-3 : yypt+1]
-//line sql.y:225
-		{
-			var field influxql.Expr
-			if strVal, ok := yyDollar[1].expr.(*influxql.StringLiteral); ok {
-				field = &influxql.VarRef{Val: strVal.Val}
-			} else {
-				field = yyDollar[1].expr
-			}
-
-			var expr influxql.Expr
-			switch yyDollar[3].expr.(type) {
-			case *influxql.Wildcard:
-				expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.NEQ), LHS: field, RHS: &influxql.StringLiteral{Val: ""}}
-			case *influxql.VarRef:
-				expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.MATCHPHRASE), LHS: field, RHS: &influxql.StringLiteral{Val: yyDollar[3].expr.(*influxql.VarRef).Val}}
-			default:
-				expr = &influxql.BinaryExpr{Op: influxql.Token(influxql.MATCHPHRASE), LHS: field, RHS: yyDollar[3].expr}
-			}
-			yyVAL.expr = expr
-		}
-	case 20:
-		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:247
+//line sql.y:279
 		{
 			if _, ok := yyDollar[1].expr.(*influxql.VarRef); ok {
 				yyVAL.strSlice = []string{yyDollar[1].expr.(*influxql.VarRef).Val}
@@ -699,9 +756,9 @@ yydefault:
 				yyVAL.strSlice = []string{yyDollar[1].expr.(*influxql.StringLiteral).Val}
 			}
 		}
-	case 21:
+	case 19:
 		yyDollar = yyS[yypt-3 : yypt+1]
-//line sql.y:255
+//line sql.y:287
 		{
 			if _, ok := yyDollar[1].expr.(*influxql.VarRef); ok {
 				yyVAL.strSlice = append([]string{yyDollar[1].expr.(*influxql.VarRef).Val}, yyDollar[3].strSlice...)
@@ -709,21 +766,100 @@ yydefault:
 				yyVAL.strSlice = append([]string{yyDollar[1].expr.(*influxql.StringLiteral).Val}, yyDollar[3].strSlice...)
 			}
 		}
-	case 22:
+	case 20:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:265
+//line sql.y:298
+		{
+			expr := buildCondExpr(nil, EQ, yyDollar[1].expr)
+			yyVAL.expr = expr
+		}
+	case 21:
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line sql.y:303
+		{
+			expr := buildCondExpr(yyDollar[1].expr, EQ, yyDollar[3].expr)
+			yyVAL.expr = expr
+		}
+	case 22:
+		yyDollar = yyS[yypt-3 : yypt+1]
+//line sql.y:308
+		{
+			expr := buildCondExpr(yyDollar[1].expr, yyDollar[2].int, yyDollar[3].expr)
+			yyVAL.expr = expr
+		}
+	case 23:
+		yyDollar = yyS[yypt-6 : yypt+1]
+//line sql.y:313
+		{
+			expr := buildRangeExpr(yyDollar[1].expr, influxql.GT, yyDollar[4].expr, influxql.LT, yyDollar[5].expr)
+			yyVAL.expr = expr
+		}
+	case 24:
+		yyDollar = yyS[yypt-6 : yypt+1]
+//line sql.y:318
+		{
+			expr := buildRangeExpr(yyDollar[1].expr, influxql.GT, yyDollar[4].expr, influxql.LTE, yyDollar[5].expr)
+			yyVAL.expr = expr
+		}
+	case 25:
+		yyDollar = yyS[yypt-6 : yypt+1]
+//line sql.y:323
+		{
+			expr := buildRangeExpr(yyDollar[1].expr, influxql.GTE, yyDollar[4].expr, influxql.LT, yyDollar[5].expr)
+			yyVAL.expr = expr
+		}
+	case 26:
+		yyDollar = yyS[yypt-6 : yypt+1]
+//line sql.y:328
+		{
+			expr := buildRangeExpr(yyDollar[1].expr, influxql.GTE, yyDollar[4].expr, influxql.LTE, yyDollar[5].expr)
+			yyVAL.expr = expr
+		}
+	case 27:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line sql.y:335
 		{
 			if yyDollar[1].str == "*" {
 				yyVAL.expr = &influxql.Wildcard{Type: influxql.MUL}
 			} else {
-				yyVAL.expr = &influxql.VarRef{Val: yyDollar[1].str, Type: influxql.String}
+				yyVAL.expr = &influxql.StringLiteral{Val: yyDollar[1].str}
 			}
 		}
-	case 23:
+	case 28:
 		yyDollar = yyS[yypt-1 : yypt+1]
-//line sql.y:273
+//line sql.y:343
 		{
 			yyVAL.expr = &influxql.StringLiteral{Val: yyDollar[1].str}
+		}
+	case 29:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line sql.y:349
+		{
+			yyVAL.int = EQ
+		}
+	case 30:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line sql.y:353
+		{
+			yyVAL.int = LT
+		}
+	case 31:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line sql.y:357
+		{
+			yyVAL.int = LTE
+		}
+	case 32:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line sql.y:361
+		{
+			yyVAL.int = GT
+		}
+	case 33:
+		yyDollar = yyS[yypt-1 : yypt+1]
+//line sql.y:365
+		{
+			yyVAL.int = GTE
 		}
 	}
 	goto yystack /* stack new state and value */

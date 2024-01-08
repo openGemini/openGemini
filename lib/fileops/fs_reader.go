@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/readcache"
+	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
@@ -74,6 +75,7 @@ func EnableReadDataCache(en uint64) {
 type BasicFileReader interface {
 	Name() string
 	ReadAt(off int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	StreamReadBatch(off, length []int64, c chan *request.StreamReader, limit int)
 	Rename(newName string) error
 	ReOpen() error
 	IsMmapRead() bool
@@ -117,8 +119,20 @@ func (r *fileReader) IsMmapRead() bool {
 	return len(r.mmapData) > 0
 }
 
+func (r *fileReader) Size() (int64, error) {
+	stat, err := r.fd.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return stat.Size(), nil
+}
+
 func (r *fileReader) IsOpen() bool {
 	return r.fd != nil
+}
+
+func (r *fileReader) StreamReadBatch(off, length []int64, c chan *request.StreamReader, limitNum int) {
+	go r.fd.StreamReadBatch(off, length, -1, c, limitNum)
 }
 
 func (r *fileReader) ReadAt(off int64, size uint32, dstPtr *[]byte, ioPriority int) ([]byte, error) {

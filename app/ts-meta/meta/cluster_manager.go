@@ -271,7 +271,7 @@ func (cm *ClusterManager) processEvent(event serf.Event) {
 func (cm *ClusterManager) addEventMap(name string, event *serf.MemberEvent) {
 	cm.mu.Lock()
 	e, ok := cm.eventMap[name]
-	if !ok || e.EventTime < event.EventTime {
+	if !ok || e.EventTime <= event.EventTime {
 		cm.eventMap[name] = event
 	}
 	cm.mu.Unlock()

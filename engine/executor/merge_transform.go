@@ -268,7 +268,8 @@ func (trans *MergeTransform) runnable(in int, ctx context.Context, errs *errno.E
 	defer func() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
-			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"), zap.Uint64("query_id", trans.opt.QueryId))
+			trans.mergeLogger.Error(err.Error(), zap.String("query", "MergeTransform"),
+				zap.Uint64("query_id", trans.opt.QueryId), zap.String("stack", string(debug.Stack())))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -441,10 +442,9 @@ func (trans *MergeTransform) GetMstName() string {
 
 	return trans.currItem.ChunkBuf.Name()
 }
-
-func (trans *MergeTransform) AddTagAndIndexes(tag ChunkTags, i int) {
+func (trans *MergeTransform) AddTagAndIndexes(tag ChunkTags, iLen int, i int, flag bool) {
 	c, chunk := trans.NewChunk, trans.currItem.ChunkBuf
-	opt := *trans.HeapItems.GetOption()
+	opt := trans.HeapItems.GetOption()
 	if c.Name() == "" {
 		c.SetName(trans.GetMstName())
 	}
@@ -452,34 +452,41 @@ func (trans *MergeTransform) AddTagAndIndexes(tag ChunkTags, i int) {
 		c.AddTagAndIndex(tag, 0)
 		c.AddIntervalIndex(0)
 		return
-	} else if !bytes.Equal(tag.Subset(opt.Dimensions), c.Tags()[len(c.Tags())-1].Subset(opt.Dimensions)) {
-		c.AddTagAndIndex(tag, c.Len())
-		c.AddIntervalIndex(c.Len())
+	}
+	if !bytes.Equal(tag.Subset(opt.Dimensions), c.Tags()[len(c.Tags())-1].Subset(opt.Dimensions)) {
+		c.AddTagAndIndex(tag, iLen)
+		c.AddIntervalIndex(iLen)
 		return
-	} else if !opt.Interval.IsZero() {
-		if trans.AddIntervalIndex(chunk, i, opt) {
-			c.AddIntervalIndex(c.Len())
+	}
+	if !opt.Interval.IsZero() {
+		if trans.AddIntervalIndex(chunk, i, opt, flag) {
+			c.AddIntervalIndex(iLen)
 		}
 		return
 	}
 }
 
-func (trans *MergeTransform) AddIntervalIndex(chunk Chunk, i int, opt query.ProcessorOptions) bool {
-	TimeStart, TimeEnd := opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
+func (trans *MergeTransform) AddIntervalIndex(chunk Chunk, i int, opt *query.ProcessorOptions, flag bool) bool {
+	var timeStart, timeEnd int64
+	//If flag is true, the last line of newchunk is used to calculate timeStart and timeEnd.
+	//If flag is false, the last inserted time is used to calculate timeStart and timeEnd.
+	if flag {
+		timeStart, timeEnd = opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
+	} else {
+		timeStart, timeEnd = opt.Window(chunk.Time()[i-1])
+	}
 	mergeType := trans.mergeType.GetType()
 	if mergeType == MergeTrans {
-		if TimeStart <= chunk.Time()[chunk.IntervalIndex()[i-1]] && TimeEnd > chunk.Time()[chunk.IntervalIndex()[i-1]] {
+		if timeStart <= chunk.Time()[chunk.IntervalIndex()[i]] && timeEnd > chunk.Time()[chunk.IntervalIndex()[i]] {
 			return false
 		}
 	} else if mergeType == SortMergeTrans || mergeType == SortAppendTrans {
-		if TimeStart <= chunk.Time()[i-1] && TimeEnd > chunk.Time()[i-1] {
+		if timeStart <= chunk.Time()[i] && timeEnd > chunk.Time()[i] {
 			return false
 		}
 	}
-
 	return true
 }
-
 func (trans *MergeTransform) initReflectionTable(children []hybridqp.QueryNode, schema *QuerySchema, rt hybridqp.RowDataType) {
 	if trans.mergeType.GetType() != SortAppendTrans {
 		return
@@ -536,7 +543,7 @@ type MergeType interface {
 	InitHeapItems(inRowDataLen int, rt hybridqp.RowDataType, schema *QuerySchema) BaseHeapItems
 	InitColumnsIteratorHelper(rt hybridqp.RowDataType) CoProcessor
 	isItemEmpty(currItem *Item) bool
-	appendMergeTimeAndColumns(trans *MergeTransform, i int)
+	appendMergeTimeAndColumns(trans *MergeTransform, i int, j int)
 	updateWithSingleChunk(trans *MergeTransform)
 	updateWithBreakPoint(trans *MergeTransform)
 }
@@ -573,17 +580,17 @@ func (t *MergeTransf) isItemEmpty(currItem *Item) bool {
 	return currItem.IsEmpty()
 }
 
-func (t *MergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int) {
+func (t *MergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int, j int) {
 	chunk := trans.currItem.ChunkBuf
 	var start, end int
 
 	if chunk.IntervalLen() == 1 {
 		start = 0
 		end = chunk.Len()
-	} else if i == chunk.IntervalLen() {
-		start, end = chunk.IntervalIndex()[i-1], chunk.Len()
+	} else if j == chunk.IntervalLen() {
+		start, end = chunk.IntervalIndex()[i], chunk.Len()
 	} else {
-		start, end = chunk.IntervalIndex()[i-1], chunk.IntervalIndex()[i]
+		start, end = chunk.IntervalIndex()[i], chunk.IntervalIndex()[j]
 	}
 
 	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
@@ -600,8 +607,8 @@ func (t *MergeTransf) updateWithSingleChunk(trans *MergeTransform) {
 	curr := trans.currItem
 	for i := curr.IntervalIndex; i < curr.ChunkBuf.IntervalLen(); i++ {
 		_, tag, switchTag := curr.GetTimeAndTag(i)
-		trans.AddTagAndIndexes(tag, i+1)
-		t.appendMergeTimeAndColumns(trans, i+1)
+		trans.AddTagAndIndexes(tag, trans.NewChunk.Len(), i, true)
+		t.appendMergeTimeAndColumns(trans, i, i+1)
 		curr.IntervalIndex += 1
 		if switchTag {
 			curr.TagIndex += 1
@@ -622,8 +629,8 @@ func (t *MergeTransf) updateWithBreakPoint(trans *MergeTransform) {
 			*trans.HeapItems.GetOption()) {
 			return
 		}
-		trans.AddTagAndIndexes(tag, i+1)
-		t.appendMergeTimeAndColumns(trans, i+1)
+		trans.AddTagAndIndexes(tag, trans.NewChunk.Len(), i, true)
+		t.appendMergeTimeAndColumns(trans, i, i+1)
 		curr.IntervalIndex += 1
 		if switchTag {
 			curr.TagIndex += 1
@@ -847,13 +854,7 @@ func (f *Float64MergeIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	f.output.AppendFloatValues(f.input.FloatValues()[startValue:endValue])
 	if endValue-startValue != params.end-params.start {
-		for i := params.start; i < params.end; i++ {
-			if f.input.IsNilV2(i) {
-				f.output.AppendNil()
-			} else {
-				f.output.AppendNotNil()
-			}
-		}
+		AdjustNils(f.output, f.input, params.start, params.end)
 	} else {
 		f.output.AppendManyNotNil(endValue - startValue)
 	}
@@ -880,13 +881,7 @@ func (f *FloatTupleMergeIterator) Next(endpoint *IteratorEndpoint, params *Itera
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	f.output.AppendFloatTuples(f.input.FloatTuples()[startValue:endValue])
 	if endValue-startValue != params.end-params.start {
-		for i := params.start; i < params.end; i++ {
-			if f.input.IsNilV2(i) {
-				f.output.AppendNil()
-			} else {
-				f.output.AppendNotNil()
-			}
-		}
+		AdjustNils(f.output, f.input, params.start, params.end)
 	} else {
 		f.output.AppendManyNotNil(endValue - startValue)
 	}
@@ -921,13 +916,7 @@ func (f *StringMergeIterator) Next(endpoint *IteratorEndpoint, params *IteratorP
 	stringBytes, f.stringOffsets = f.input.StringValuesWithOffset(startValue, endValue, f.stringOffsets[:0])
 	f.output.AppendStringBytes(stringBytes, f.stringOffsets)
 	if endValue-startValue != params.end-params.start {
-		for i := params.start; i < params.end; i++ {
-			if f.input.IsNilV2(i) {
-				f.output.AppendNil()
-			} else {
-				f.output.AppendNotNil()
-			}
-		}
+		AdjustNils(f.output, f.input, params.start, params.end)
 	} else {
 		f.output.AppendManyNotNil(endValue - startValue)
 	}
@@ -953,13 +942,7 @@ func (f *BooleanMergeIterator) Next(endpoint *IteratorEndpoint, params *Iterator
 	startValue, endValue := f.input.GetRangeValueIndexV2(params.start, params.end)
 	f.output.AppendBooleanValues(f.input.BooleanValues()[startValue:endValue])
 	if endValue-startValue != params.end-params.start {
-		for i := params.start; i < params.end; i++ {
-			if f.input.IsNilV2(i) {
-				f.output.AppendNil()
-			} else {
-				f.output.AppendNotNil()
-			}
-		}
+		AdjustNils(f.output, f.input, params.start, params.end)
 	} else {
 		f.output.AppendManyNotNil(endValue - startValue)
 	}

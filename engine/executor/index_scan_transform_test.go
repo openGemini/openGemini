@@ -20,17 +20,22 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func init() {
@@ -99,6 +104,7 @@ func BuildIChunk(name string) executor.Chunk {
 func buildISchema() *executor.QuerySchema {
 	outPutRowsChan := make(chan query.RowsChan)
 	opt := query.ProcessorOptions{
+		Sources:     []influxql.Source{&influxql.Measurement{Name: "mst", EngineType: config.TSSTORE}},
 		ChunkSize:   1024,
 		ChunkedSize: 10000,
 		RowsChan:    outPutRowsChan,
@@ -115,7 +121,7 @@ func TestIndexScanTransformDemo(t *testing.T) {
 	outputRowDataType := buildIRowDataType()
 	schema := buildISchema()
 
-	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1))
+	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1), 0)
 	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
@@ -150,7 +156,7 @@ func TestIndexScanTransform_Abort(t *testing.T) {
 	schema := buildISchema()
 
 	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema,
-		nil, &executor.IndexScanExtraInfo{}, make(chan struct{}, 1))
+		nil, &executor.IndexScanExtraInfo{}, make(chan struct{}, 1), 0)
 
 	trans.Abort()
 	trans.Abort()
@@ -170,4 +176,206 @@ func TestIndexScanCursorClose(t *testing.T) {
 	trans1.SetIndexScanErr(true)
 	trans1.CursorsClose(plan)
 	trans1.CursorsClose(nil)
+}
+
+func buildColStoreSchema(initSKIndex bool) *executor.QuerySchema {
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		Sources:     []influxql.Source{&influxql.Measurement{Name: "m", EngineType: config.COLUMNSTORE}},
+		ChunkSize:   1024,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Dimensions:  make([]string, 0),
+	}
+	opt.Dimensions = append(opt.Dimensions, "tag1")
+	if initSKIndex {
+		opt.Sources[0].(*influxql.Measurement).IndexRelation = &influxql.IndexRelation{Oids: []uint32{4}}
+	}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	return schema
+}
+
+func buildTsStoreSchema(initSKIndex bool) *executor.QuerySchema {
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		Sources:     []influxql.Source{&influxql.Measurement{Name: "m", EngineType: config.TSSTORE}},
+		ChunkSize:   1024,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Dimensions:  make([]string, 0),
+	}
+	opt.Dimensions = append(opt.Dimensions, "tag1")
+	if initSKIndex {
+		opt.Sources[0].(*influxql.Measurement).IndexRelation = &influxql.IndexRelation{Oids: []uint32{4}}
+	}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	return schema
+}
+
+func testIndexScanTransform_SparseIndex(t *testing.T, index *executor.LogicalIndexScan, info *executor.IndexScanExtraInfo) {
+	// init the chunk and schema
+	ctx := context.Background()
+	chunk1 := buildInputChunk("m")
+	outputRowDataType := buildInputRowDataType()
+	if info == nil {
+		info = buildIndexScanExtraInfo()
+	}
+
+	// build the pipeline executor
+	var process []executor.Processor
+	logger.InitLogger(config.Logger{Level: zap.DebugLevel})
+	trans := executor.NewIndexScanTransform(outputRowDataType, index.RowExprOptions(), index.Schema(), index.Children()[0], info, make(chan struct{}, 1), 0)
+	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
+		return nil
+	})
+	if err := executor.Connect(source.GetOutputs()[0], trans.GetInputs()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.Connect(trans.GetOutputs()[0], sink.Input); err != nil {
+		t.Fatal(err)
+	}
+	process = append(process, source)
+	process = append(process, trans)
+	process = append(process, sink)
+	exec := executor.NewPipelineExecutor(process)
+
+	// build the sub pipeline executor
+	var childProcess []executor.Processor
+	childSource := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	childSink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
+		return nil
+	})
+	childProcess = append(childProcess, childSource)
+	childProcess = append(childProcess, childSink)
+	childExec := executor.NewPipelineExecutor(childProcess)
+	childDag := executor.NewTransformDag()
+	root := executor.NewTransformVertex(index, childSink)
+	childDag.AddVertex(root)
+	childExec.SetRoot(root)
+	childExec.SetDag(childDag)
+
+	var wg sync.WaitGroup
+	// make the pipeline executor work
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := trans.Work(ctx); err != nil {
+			t.Error(err)
+			return
+		}
+	}()
+	wg.Wait()
+	exec.Release()
+	childExec.Release()
+	trans.Close()
+}
+func testIndexScanTransformTsIndex(t *testing.T, index *executor.LogicalIndexScan, info *executor.IndexScanExtraInfo) {
+	// init the chunk and schema
+	ctx := context.WithValue(context.Background(), query.IndexScanDagStartTimeKey, time.Now())
+	chunk1 := buildInputChunk("m")
+	outputRowDataType := buildInputRowDataType()
+
+	// build the pipeline executor
+	var process []executor.Processor
+	logger.InitLogger(config.Logger{Level: zap.DebugLevel})
+	trans := executor.NewIndexScanTransform(outputRowDataType, index.RowExprOptions(), index.Schema(), index.Children()[0], info, make(chan struct{}, 1), 0)
+	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
+		return nil
+	})
+	if err := executor.Connect(source.GetOutputs()[0], trans.GetInputs()[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.Connect(trans.GetOutputs()[0], sink.Input); err != nil {
+		t.Fatal(err)
+	}
+	process = append(process, source)
+	process = append(process, trans)
+	process = append(process, sink)
+	exec := executor.NewPipelineExecutor(process)
+
+	// build the sub pipeline executor
+	var childProcess []executor.Processor
+	childSource := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	childSink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
+		return nil
+	})
+	childProcess = append(childProcess, childSource)
+	childProcess = append(childProcess, childSink)
+	childExec := executor.NewPipelineExecutor(childProcess)
+	childDag := executor.NewTransformDag()
+	root := executor.NewTransformVertex(index, childSink)
+	childDag.AddVertex(root)
+	childExec.SetRoot(root)
+	childExec.SetDag(childDag)
+
+	var wg sync.WaitGroup
+	// make the pipeline executor work
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := trans.Work(ctx); err != nil {
+			t.Error(err)
+			return
+		}
+	}()
+	wg.Wait()
+	exec.Release()
+	childExec.Release()
+	trans.Close()
+}
+
+func TestIndexScanTransform_SparseIndex(t *testing.T) {
+	// build the logical plan
+	schema := buildColStoreSchema(false)
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	index := executor.NewLogicalIndexScan(reader, schema)
+	testIndexScanTransform_SparseIndex(t, index, nil)
+}
+
+func TestIndexScanTransform_SparseIndex_HashAgg_Unknown(t *testing.T) {
+	// build the logical plan
+	schema := buildColStoreSchema(true)
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	agg := executor.NewLogicalHashAgg(reader, schema, executor.UNKNOWN_EXCHANGE, nil)
+	index := executor.NewLogicalIndexScan(agg, schema)
+	testIndexScanTransform_SparseIndex(t, index, nil)
+}
+
+func TestIndexScanTransform_SparseIndex_HashAgg(t *testing.T) {
+	// build the logical plan
+	schema := buildColStoreSchema(true)
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	agg := executor.NewLogicalHashAgg(reader, schema, executor.READER_EXCHANGE, nil)
+	index := executor.NewLogicalIndexScan(agg, schema)
+	testIndexScanTransform_SparseIndex(t, index, nil)
+}
+
+func TestIndexScanTransform_SparseIndex_HashMerge(t *testing.T) {
+	// build the logical plan
+	schema := buildColStoreSchema(true)
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	merge := executor.NewLogicalHashMerge(reader, schema, executor.READER_EXCHANGE, nil)
+	index := executor.NewLogicalIndexScan(merge, schema)
+	testIndexScanTransform_SparseIndex(t, index, nil)
+}
+
+func TestIndexScanTransform_PtQuerys_HashMerge(t *testing.T) {
+	// build the logical plan
+	schema := buildColStoreSchema(true)
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	merge := executor.NewLogicalHashMerge(reader, schema, executor.READER_EXCHANGE, nil)
+	index := executor.NewLogicalIndexScan(merge, schema)
+	info := buildIndexScanExtraInfoForPtQuerys()
+	testIndexScanTransform_SparseIndex(t, index, info)
+}
+
+func TestIndexScanTransform(t *testing.T) {
+	// build the logical plan
+	schema := buildTsStoreSchema(true)
+	reader := executor.NewLogicalReader(nil, schema)
+	index := executor.NewLogicalIndexScan(reader, schema)
+	info := buildIndexScanExtraInfo1()
+	testIndexScanTransformTsIndex(t, index, info)
 }

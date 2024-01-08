@@ -9,7 +9,6 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -48,10 +47,11 @@ type RetentionPolicyInfo struct {
 // with default replication and duration.
 func NewRetentionPolicyInfo(name string) *RetentionPolicyInfo {
 	return &RetentionPolicyInfo{
-		Name:        name,
-		ReplicaN:    DefaultRetentionPolicyReplicaN,
-		Duration:    DefaultRetentionPolicyDuration,
-		MarkDeleted: false,
+		Name:         name,
+		ReplicaN:     DefaultRetentionPolicyReplicaN,
+		Duration:     DefaultRetentionPolicyDuration,
+		WarmDuration: DefaultRetentionPolicyWarmDuration,
+		MarkDeleted:  false,
 	}
 }
 
@@ -117,7 +117,7 @@ func (rpi *RetentionPolicyInfo) checkGeqThanMinDuration() error {
 		return ErrRetentionPolicyDurationTooLow
 	}
 
-	if rpi.WarmDuration != 0 && rpi.WarmDuration < MinRetentionPolicyDuration {
+	if rpi.WarmDuration != 0 && rpi.WarmDuration < MinRetentionPolicyWarmDuration {
 		return ErrRetentionPolicyDurationTooLow
 	}
 	return nil
@@ -134,6 +134,10 @@ func (rpi *RetentionPolicyInfo) checkGeqThanShardGroupDuration() error {
 
 	if rpi.WarmDuration != 0 && rpi.WarmDuration < rpi.ShardGroupDuration {
 		return ErrIncompatibleWarmDurations
+	}
+
+	if rpi.WarmDuration != rpi.Duration && rpi.WarmDuration%rpi.ShardGroupDuration != 0 {
+		return ErrIncompatibleShardGroupDurations
 	}
 	return nil
 }
@@ -157,6 +161,7 @@ func (rpi *RetentionPolicyInfo) Apply(spec *RetentionPolicySpec) *RetentionPolic
 		Name:               rpi.Name,
 		ReplicaN:           rpi.ReplicaN,
 		Duration:           rpi.Duration,
+		WarmDuration:       rpi.WarmDuration,
 		ShardGroupDuration: rpi.ShardGroupDuration,
 	}
 	if spec.Name != "" {
@@ -347,6 +352,17 @@ func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 	}
 
 	return pb
+}
+
+func (rpi *RetentionPolicyInfo) ShardGroupsByTimeRange(tmin, tmax time.Time) []*ShardGroupInfo {
+	groups := make([]*ShardGroupInfo, 0, len(rpi.ShardGroups))
+	for i, g := range rpi.ShardGroups {
+		if g.Deleted() || !g.Overlaps(tmin, tmax) {
+			continue
+		}
+		groups = append(groups, &rpi.ShardGroups[i])
+	}
+	return groups
 }
 
 // unmarshal deserializes from a protobuf representation.
@@ -590,6 +606,8 @@ func (s *RetentionPolicySpec) Matches(rpi *RetentionPolicyInfo) bool {
 		return false
 	} else if s.Duration != nil && *s.Duration != rpi.Duration {
 		return false
+	} else if s.WarmDuration != nil && *s.WarmDuration != rpi.WarmDuration {
+		return false
 	} else if s.ReplicaN != nil && *s.ReplicaN != rpi.ReplicaN {
 		return false
 	}
@@ -609,6 +627,9 @@ func (s *RetentionPolicySpec) marshal() *proto2.RetentionPolicySpec {
 	}
 	if s.Duration != nil {
 		pb.Duration = proto.Int64(int64(*s.Duration))
+	}
+	if s.WarmDuration != nil {
+		pb.WarmDuration = proto.Int64(int64(*s.WarmDuration))
 	}
 	if s.ShardGroupDuration > 0 {
 		pb.ShardGroupDuration = proto.Int64(int64(s.ShardGroupDuration))
@@ -630,6 +651,10 @@ func (s *RetentionPolicySpec) unmarshal(pb *proto2.RetentionPolicySpec) {
 	}
 	if pb.ShardGroupDuration != nil {
 		s.ShardGroupDuration = time.Duration(pb.GetShardGroupDuration())
+	}
+	if pb.WarmDuration != nil {
+		duration := time.Duration(pb.GetWarmDuration())
+		s.WarmDuration = &duration
 	}
 	if pb.ReplicaN != nil {
 		replicaN := int(pb.GetReplicaN())
@@ -675,66 +700,5 @@ func (rpu *RetentionPolicyUpdate) SetReplicaN(v int) { rpu.ReplicaN = &v }
 // SetShardGroupDuration sets the RetentionPolicyUpdate.ShardGroupDuration.
 func (rpu *RetentionPolicyUpdate) SetShardGroupDuration(v time.Duration) { rpu.ShardGroupDuration = &v }
 
-type ObsOptions struct {
-	Enabled    bool   `json:"enabled"`
-	BucketName string `json:"bucket_name"`
-	Endpoint   string `json:"endpoint"`
-	Ak         string `json:"ak"`
-	Sk         string `json:"sk"`
-	BasePath   string `json:"path"`
-}
-
-func (cro *ObsOptions) GetObsPath() string {
-	if cro.Ak == "" || cro.Sk == "" {
-		return ""
-	}
-	path := fmt.Sprintf("obs://%v?bucket=%v&ak=%v&sk=%v/%v/", cro.Endpoint, cro.BucketName, cro.Ak, cro.Sk, cro.BasePath)
-	return path
-}
-
-func (cro *ObsOptions) Marshal() *proto2.ObsOptions {
-	if cro == nil {
-		cro = &ObsOptions{}
-	}
-	return &proto2.ObsOptions{
-		Enabled:    proto.Bool(cro.Enabled),
-		BucketName: proto.String(cro.BucketName),
-		Ak:         proto.String(cro.Ak),
-		Sk:         proto.String(cro.Sk),
-		Endpoint:   proto.String(cro.Endpoint),
-		BasePath:   proto.String(cro.BasePath),
-	}
-}
-
-func (cro *ObsOptions) Unmarshal(pb *proto2.ObsOptions) {
-	cro.Enabled = pb.GetEnabled()
-	cro.BucketName = pb.GetBucketName()
-	cro.Ak = pb.GetAk()
-	cro.Sk = pb.GetSk()
-	cro.Endpoint = pb.GetEndpoint()
-	cro.BasePath = pb.GetBasePath()
-}
-
-func (cro *ObsOptions) GetObsBucketName() string {
-	return cro.BucketName
-}
-
-func (cro *ObsOptions) GetObsEndpoint() string {
-	return cro.Endpoint
-}
-
-func (cro *ObsOptions) GetObsAk() string {
-	return cro.Ak
-}
-
-func (cro *ObsOptions) GetObsSk() string {
-	return cro.Sk
-}
-
-func (cro *ObsOptions) GetObsBasePath() string {
-	return cro.BasePath
-}
-
-func (cro *ObsOptions) Validate() bool {
-	return cro.BucketName != "" && cro.Ak != "" && cro.Sk != "" && cro.Endpoint != "" && cro.BasePath != ""
-}
+// SetWarmDuration sets the RetentionPolicyUpdate.WarmDuration.
+func (rpu *RetentionPolicyUpdate) SetWarmDuration(v time.Duration) { rpu.WarmDuration = &v }

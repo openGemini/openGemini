@@ -17,11 +17,10 @@ limitations under the License.
 package immutable
 
 import (
-	"hash/crc32"
+	"math"
 
 	"github.com/openGemini/openGemini/lib/encoding"
 	Log "github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -36,6 +35,7 @@ type ChunkDataBuilder struct {
 	chunk            []byte
 	chunkMeta        *ChunkMeta
 	preChunkMetaSize uint32
+	minT, maxT       int64
 
 	colBuilder *ColumnBuilder
 	timeCols   []record.ColVal
@@ -44,14 +44,12 @@ type ChunkDataBuilder struct {
 
 func NewChunkDataBuilder(maxRowsPerSegment, maxSegmentLimit int) *ChunkDataBuilder {
 	return &ChunkDataBuilder{
+		minT:         math.MaxInt64,
+		maxT:         math.MinInt64,
 		segmentLimit: maxSegmentLimit,
 		maxRowsLimit: maxRowsPerSegment,
 		colBuilder:   NewColumnBuilder(),
 	}
-}
-
-func (b *ChunkDataBuilder) setChunkMeta(cm *ChunkMeta) {
-	b.chunkMeta = cm
 }
 
 func (b *ChunkDataBuilder) reset(dst []byte) {
@@ -59,7 +57,14 @@ func (b *ChunkDataBuilder) reset(dst []byte) {
 	b.chunk = dst
 }
 
-func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
+func (b *ChunkDataBuilder) getMinMaxTime(timeSorted bool) (int64, int64) {
+	if timeSorted {
+		return b.chunkMeta.MinMaxTime()
+	}
+	return b.minT, b.maxT
+}
+
+func (b *ChunkDataBuilder) EncodeTime(offset int64, timeSorted bool) error {
 	var err error
 	if b.colBuilder.coder.GetTimeCoder() == nil {
 		b.colBuilder.coder.SetTimeCoder(encoding.GetTimeCoder())
@@ -78,8 +83,11 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 		values := col.IntegerValues()
 		tb.addValues(nil, values)
 		m := &tm.entries[i+b.position]
-
 		pos := len(b.chunk)
+		m.setOffset(offset)
+		if b.colBuilder.encodeMode != nil {
+			b.chunk = b.colBuilder.encodeMode.reserveCrc(b.chunk)
+		}
 
 		if CanEncodeOneRowMode(&col) {
 			b.chunk = append(b.chunk, encoding.BlockIntegerOne)
@@ -93,11 +101,12 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 			}
 		}
 
-		m.setOffset(offset)
+		if b.colBuilder.encodeMode != nil {
+			b.chunk = b.colBuilder.encodeMode.setCrc(b.chunk, pos)
+		}
 		size := uint32(len(b.chunk) - pos)
 		m.setSize(size)
-		b.chunkMeta.timeRange[i].setMinTime(values[0])
-		b.chunkMeta.timeRange[i].setMaxTime(values[len(values)-1])
+		b.updateTimeRange(i, values, timeSorted)
 		offset += int64(size)
 		b.chunkMeta.size += size
 	}
@@ -106,50 +115,27 @@ func (b *ChunkDataBuilder) EncodeTime(offset int64) error {
 	return nil
 }
 
-func (b *ChunkDataBuilder) EncodeChunkForCompaction(offset int64, rec *record.Record, dst []byte) ([]byte, error) {
-	var err error
-	b.chunk = dst
-	timeCol := rec.TimeColumn()
-	b.timeCols = timeCol.Split(b.timeCols[:0], b.maxRowsLimit, influx.Field_Type_Int)
-	b.chunkMeta.segCount += uint32(len(b.timeCols))
-	var entriesCount int
-	if len(b.chunkMeta.colMeta) != 0 {
-		entriesCount = len(b.chunkMeta.timeMeta().entries)
-	}
-	b.chunkMeta.resize(int(b.chunkMeta.columnCount), len(b.timeCols)+entriesCount)
-	b.colBuilder.position = b.position
-	b.preChunkMetaSize = b.chunkMeta.size
+func (b *ChunkDataBuilder) updateTimeRange(idx int, values []int64, timeSorted bool) {
+	minT, maxT := values[0], values[len(values)-1]
+	if !timeSorted {
+		for i := range values {
+			if maxT < values[i] {
+				maxT = values[i]
+			}
 
-	for i := range rec.Schema[:len(rec.Schema)-1] {
-		ref := rec.Schema[i]
-		col := rec.Column(i)
-		cm := &b.chunkMeta.colMeta[i]
-		pos := len(b.chunk)
-		b.chunk = numberenc.MarshalUint32Append(b.chunk, 0) // reserve crc32
-		b.colBuilder.set(b.chunk, cm)
-		offset += crcSize
-		b.chunkMeta.size += crcSize
-		if b.chunk, err = b.colBuilder.EncodeColumn(ref, col, b.timeCols, b.maxRowsLimit, offset); err != nil {
-			b.log.Error("encode column fail", zap.Error(err))
-			return nil, err
+			if minT > values[i] {
+				minT = values[i]
+			}
 		}
-		crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
-		numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
-
-		size := uint32(len(b.chunk) - pos - crcSize)
-		b.chunkMeta.size += size
-		offset += int64(size)
 	}
 
-	pos := len(b.chunk)
-	b.chunk = numberenc.MarshalUint32Append(b.chunk, 0)
-	offset += crcSize
-	b.chunkMeta.size += crcSize
-	if err = b.EncodeTime(offset); err != nil {
-		return nil, err
+	if b.maxT < maxT {
+		b.maxT = maxT
 	}
-	crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
-	numberenc.MarshalUint32Copy(b.chunk[pos:pos+crcSize], crc)
-	b.position += len(b.timeCols)
-	return b.chunk, nil
+	if b.minT > minT {
+		b.minT = minT
+	}
+
+	b.chunkMeta.timeRange[idx+b.position].setMinTime(minT)
+	b.chunkMeta.timeRange[idx+b.position].setMaxTime(maxT)
 }

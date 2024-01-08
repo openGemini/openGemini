@@ -50,8 +50,9 @@ import (
 
 // Retention policy settings.
 const (
-	autoCreateRetentionPolicyName   = "autogen"
-	autoCreateRetentionPolicyPeriod = 0
+	autoCreateRetentionPolicyName       = "autogen"
+	autoCreateRetentionPolicyPeriod     = 0
+	autoCreateRetentionPolicyWarmPeriod = 0
 
 	reportTimeSpan = 10 * time.Second
 

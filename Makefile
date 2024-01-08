@@ -68,7 +68,7 @@ go-vet-check:
 static-check: install-staticcheck
 	bash ./scripts/ci/static_check.sh
 
-go-generate: install-tmpl install-goyacc install-protoc install-protoc-gen-gogo
+go-generate: install-tmpl install-goyacc install-protoc install-protoc-gen-gogo install-protoc-gen-go
 	bash ./scripts/ci/go_generate.sh
 
 golangci-lint-check: install-golangci-lint

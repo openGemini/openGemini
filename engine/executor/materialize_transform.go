@@ -43,38 +43,74 @@ func (w *StdoutChunkWriter) Close() {
 
 }
 
-func AdjustNils(dst Column, src Column) {
+func AdjustNils(dst Column, src Column, low int, high int) {
+	if high > src.Length() || high <= 0 || low < 0 || low >= high {
+		return
+	}
+	if dst.Length() == 0 && low == 0 && high == src.Length() {
+		src.BitMap().CopyTo(dst.BitMap())
+		return
+	}
 	if src.NilCount() == 0 {
 		dst.AppendManyNotNil(src.Length())
 	} else {
-		for i := 0; i < src.Length(); i++ {
-			if src.IsNilV2(i) {
-				dst.AppendNil()
-			} else {
-				dst.AppendNotNil()
+		if cap(dst.BitMap().bits) < len(dst.BitMap().bits)+high-low {
+			s := make([]byte, len(dst.BitMap().bits), len(dst.BitMap().bits)+high-low)
+			copy(s, dst.BitMap().bits)
+			dst.BitMap().bits = s
+		}
+		if cap(dst.BitMap().array) < len(dst.BitMap().array)+high-low {
+			s := make([]uint16, len(dst.BitMap().array), len(dst.BitMap().array)+high-low)
+			copy(s, dst.BitMap().array)
+			dst.BitMap().array = s
+		}
+		l, h := src.GetRangeValueIndexV2(low, high)
+		a := src.BitMap().array
+		num := 0
+		iRange := l
+		for i := low; i < high; {
+			if iRange == h {
+				dst.AppendManyNil(high - i)
+				return
 			}
+			//Calculate the distance from the next non-null value to i
+			num = int(a[iRange]) - i
+			dst.AppendManyNil(num)
+			i = int(a[iRange])
+			if h-iRange == high-i {
+				dst.AppendManyNotNil(high - i)
+				return
+			}
+			//Calculate the number of non-null values. If i=a[l], i is a non-null value.
+			num = 0
+			for i < high && iRange < h && i == int(a[iRange]) {
+				num += 1
+				i += 1
+				iRange += 1
+			}
+			dst.AppendManyNotNil(num)
 		}
 	}
 }
 
 func TransparentForwardIntegerColumn(dst Column, src Column) {
 	dst.AppendIntegerValues(src.IntegerValues())
-	AdjustNils(dst, src)
+	AdjustNils(dst, src, 0, src.Length())
 }
 
 func TransparentForwardFloatColumn(dst Column, src Column) {
 	dst.AppendFloatValues(src.FloatValues())
-	AdjustNils(dst, src)
+	AdjustNils(dst, src, 0, src.Length())
 }
 
 func TransparentForwardBooleanColumn(dst Column, src Column) {
 	dst.AppendBooleanValues(src.BooleanValues())
-	AdjustNils(dst, src)
+	AdjustNils(dst, src, 0, src.Length())
 }
 
 func TransparentForwardStringColumn(dst Column, src Column) {
 	dst.CloneStringValues(src.GetStringBytes())
-	AdjustNils(dst, src)
+	AdjustNils(dst, src, 0, src.Length())
 }
 
 func TransparentForwardInteger(dst Column, src Chunk, index []int) {
@@ -302,6 +338,7 @@ type MaterializeTransform struct {
 	ColumnMap [][]int
 
 	ppMaterializeCost *tracing.Span
+	rp                *ResultEvalPool
 }
 
 func createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk, index []int) {
@@ -346,6 +383,7 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		transparents:    nil,
 		ColumnMap:       make([][]int, len(outRowDataType.Fields())),
 		ResetTime:       false,
+		rp:              NewResultEvalPool(1),
 	}
 
 	trans.valuer = influxql.ValuerEval{
@@ -431,6 +469,782 @@ func maxTime(x, y int64) int64 {
 	return y
 }
 
+func (trans *MaterializeTransform) ResetTransparents() {
+	for i := range trans.ops {
+		trans.transparents[i] = nil
+	}
+}
+
+type ResultEval struct {
+	dataType     influxql.DataType
+	floatValue   []float64
+	integerValue []int64
+	booleanValue []bool
+	uintValue    []uint64
+	isNil        []bool
+	isLiteral    bool
+	intLiteral   int64
+	floatLiteral float64
+	boolLiteral  bool
+	uintLiteral  uint64
+}
+
+type ResultEvalPool struct {
+	resultEvals []*ResultEval
+	index       int
+}
+
+func NewResultEvalPool(len int) *ResultEvalPool {
+	return &ResultEvalPool{}
+}
+
+func (rp *ResultEvalPool) getResultEval(dataType influxql.DataType) *ResultEval {
+	if rp.index >= len(rp.resultEvals) {
+		rp.resultEvals = append(rp.resultEvals, &ResultEval{})
+	}
+	res := rp.resultEvals[rp.index]
+	rp.index += 1
+	res.dataType = dataType
+	res.isLiteral = false
+	return res
+}
+
+func (re *ResultEval) appendIntLen(l int) {
+	if cap(re.integerValue) < l {
+		re.integerValue = make([]int64, l)
+	} else {
+		for i := len(re.integerValue); i < l; i++ {
+			re.integerValue = append(re.integerValue, 0)
+		}
+	}
+	re.appendNilLen(l)
+}
+
+func (re *ResultEval) appendFloatLen(l int) {
+	if cap(re.floatValue) < l {
+		re.floatValue = make([]float64, l)
+	} else {
+		for i := len(re.floatValue); i < l; i++ {
+			re.floatValue = append(re.floatValue, 0)
+		}
+	}
+	re.appendNilLen(l)
+}
+
+func (re *ResultEval) appendBoolLen(l int) {
+	if cap(re.booleanValue) < l {
+		re.booleanValue = make([]bool, l)
+	} else {
+		for i := len(re.booleanValue); i < l; i++ {
+			re.booleanValue = append(re.booleanValue, false)
+		}
+	}
+	re.appendNilLen(l)
+}
+
+func (re *ResultEval) appendUintLen(l int) {
+	if cap(re.uintValue) < l {
+		re.uintValue = make([]uint64, l)
+	} else {
+		for i := len(re.uintValue); i < l; i++ {
+			re.uintValue = append(re.uintValue, 0)
+		}
+	}
+	re.appendNilLen(l)
+}
+
+func (re *ResultEval) appendNilLen(l int) {
+	if cap(re.isNil) < l {
+		re.isNil = make([]bool, l)
+	} else {
+		for i := len(re.isNil); i < l; i++ {
+			re.isNil = append(re.isNil, false)
+		}
+	}
+}
+
+func (re *ResultEval) IsNil(i int) bool {
+	if re.isLiteral {
+		return false
+	}
+	return re.isNil[i]
+}
+
+func (re *ResultEval) appendLen(l int, dataType influxql.DataType) {
+	switch dataType {
+	case influxql.Float:
+		re.appendFloatLen(l)
+	case influxql.Integer:
+		re.appendIntLen(l)
+	case influxql.Boolean:
+		re.appendBoolLen(l)
+	}
+}
+
+func (re *ResultEval) copy(column *ColumnImpl) {
+	if column.NilCount() == 0 {
+		for i := 0; i < column.Length(); i++ {
+			re.isNil[i] = false
+		}
+		switch column.DataType() {
+		case influxql.Float:
+			copy(re.floatValue, column.floatValues)
+		case influxql.Integer:
+			copy(re.integerValue, column.integerValues)
+		case influxql.Boolean:
+			copy(re.booleanValue, column.booleanValues)
+		}
+		return
+	}
+	k := 0
+	switch column.DataType() {
+	case influxql.Float:
+		for i := 0; i < column.Length(); i++ {
+			if column.IsNilV2(i) {
+				re.isNil[i] = true
+				continue
+			}
+			re.isNil[i] = false
+			re.floatValue[i] = column.FloatValue(k)
+			k = k + 1
+		}
+	case influxql.Integer:
+		for i := 0; i < column.Length(); i++ {
+			if column.IsNilV2(i) {
+				re.isNil[i] = true
+				continue
+			}
+			re.isNil[i] = false
+			re.integerValue[i] = column.IntegerValue(k)
+			k = k + 1
+		}
+	case influxql.Boolean:
+		for i := 0; i < column.Length(); i++ {
+			if column.IsNilV2(i) {
+				re.isNil[i] = true
+				continue
+			}
+			re.isNil[i] = false
+			re.booleanValue[i] = column.BooleanValue(k)
+			k = k + 1
+		}
+	}
+}
+
+func (res *ResultEval) copyTo(l int, dst *ColumnImpl) {
+	switch res.dataType {
+	case influxql.Float:
+		res.copyToForFloat(l, dst)
+	case influxql.Integer:
+		res.copyToForInteger(l, dst)
+	case influxql.Boolean:
+		res.copyToForBoolean(l, dst)
+	}
+}
+
+func (res *ResultEval) copyToForFloat(l int, dst *ColumnImpl) {
+	for index := 0; index < l; {
+		num := 0
+		for index < l && res.IsNil(index) {
+			index += 1
+			num += 1
+		}
+		dst.AppendManyNil(num)
+		num = 0
+		for index < l && !res.IsNil(index) {
+			value := res.getFloat64(index)
+			if math.IsNaN(value) {
+				dst.AppendManyNotNil(num)
+				dst.AppendNil()
+				num = 0
+			} else {
+				dst.AppendFloatValue(value)
+				num += 1
+			}
+			index += 1
+		}
+		dst.AppendManyNotNil(num)
+	}
+}
+
+func (res *ResultEval) copyToForInteger(l int, dst *ColumnImpl) {
+	for index := 0; index < l; {
+		num := 0
+		for index < l && res.IsNil(index) {
+			index += 1
+			num += 1
+		}
+		dst.AppendManyNil(num)
+		num = 0
+		for index < l && !res.IsNil(index) {
+			dst.AppendIntegerValue(res.getInteger(index))
+			index += 1
+			num += 1
+		}
+		dst.AppendManyNotNil(num)
+	}
+}
+
+func (res *ResultEval) copyToForBoolean(l int, dst *ColumnImpl) {
+	for index := 0; index < l; {
+		num := 0
+		for index < l && res.IsNil(index) {
+			index += 1
+			num += 1
+		}
+		dst.AppendManyNil(num)
+		num = 0
+		for index < l && !res.IsNil(index) {
+			dst.AppendBooleanValue(res.getBoolean(index))
+			index += 1
+			num += 1
+		}
+		dst.AppendManyNotNil(num)
+	}
+}
+
+// Eval evaluates an expression and returns a value.
+func eval(expr influxql.Expr, v *influxql.ValuerEval, columnMap map[string]*ColumnImpl, l int, rp *ResultEvalPool) *ResultEval {
+	if expr == nil {
+		columnResult := rp.getResultEval(influxql.Float)
+		columnResult.appendNilLen(l)
+		for i := 0; i < l; i++ {
+			columnResult.isNil[i] = true
+		}
+		columnResult.isLiteral = false
+		return columnResult
+	}
+	switch expr := expr.(type) {
+	case *influxql.BinaryExpr:
+		return evalBinaryExpr(expr, v, columnMap, l, rp)
+	case *influxql.BooleanLiteral:
+		columnResult := rp.getResultEval(influxql.Boolean)
+		columnResult.boolLiteral = expr.Val
+		columnResult.isLiteral = true
+		return columnResult
+	case *influxql.IntegerLiteral:
+		columnResult := rp.getResultEval(influxql.Integer)
+		columnResult.intLiteral = expr.Val
+		columnResult.isLiteral = true
+		return columnResult
+	case *influxql.NumberLiteral:
+		columnResult := rp.getResultEval(influxql.Float)
+		columnResult.floatLiteral = expr.Val
+		columnResult.isLiteral = true
+		return columnResult
+	case *influxql.UnsignedLiteral:
+		columnResult := rp.getResultEval(influxql.Unsigned)
+		columnResult.uintLiteral = expr.Val
+		columnResult.isLiteral = true
+		return columnResult
+	case *influxql.VarRef:
+		column := columnMap[expr.Val]
+		columnResult := rp.getResultEval(column.DataType())
+		columnResult.appendLen(l, column.DataType())
+		columnResult.copy(column)
+		return columnResult
+	default:
+		return nil
+	}
+}
+
+func isSwitchToFloat64(lhs *ResultEval, l int) bool {
+	if lhs.dataType == influxql.Float || lhs.dataType == influxql.Integer || lhs.dataType == influxql.Unsigned {
+		return true
+	}
+	return false
+}
+
+func isSwitchToUint64(lhs *ResultEval, l int) bool {
+	if lhs.dataType == influxql.Unsigned || lhs.dataType == influxql.Integer {
+		return true
+	}
+	return false
+}
+
+func (re *ResultEval) getFloat64(i int) float64 {
+	if re.isLiteral {
+		switch re.dataType {
+		case influxql.Float:
+			return re.floatLiteral
+		case influxql.Integer:
+			return float64(re.intLiteral)
+		case influxql.Unsigned:
+			return float64(re.uintLiteral)
+		}
+	} else {
+		switch re.dataType {
+		case influxql.Float:
+			return re.floatValue[i]
+		case influxql.Integer:
+			return float64(re.integerValue[i])
+		case influxql.Unsigned:
+			return float64(re.uintValue[i])
+		}
+	}
+	return 0
+}
+
+func (re *ResultEval) getUint64(i int) uint64 {
+	if re.isLiteral {
+		switch re.dataType {
+		case influxql.Unsigned:
+			return re.uintLiteral
+		case influxql.Integer:
+			return uint64(re.intLiteral)
+		}
+	} else {
+		switch re.dataType {
+		case influxql.Unsigned:
+			return re.uintValue[i]
+		case influxql.Integer:
+			return uint64(re.integerValue[i])
+		}
+	}
+	return 0
+}
+
+func (re *ResultEval) getInteger(i int) int64 {
+	if re.isLiteral {
+		if re.dataType == influxql.Integer {
+			return re.intLiteral
+		}
+	} else {
+		if re.dataType == influxql.Integer {
+			return re.integerValue[i]
+		}
+	}
+	return 0
+}
+
+func (re *ResultEval) getBoolean(i int) bool {
+	if re.isLiteral {
+		if re.dataType == influxql.Boolean {
+			return re.boolLiteral
+		}
+	} else {
+		if re.dataType == influxql.Boolean {
+			return re.booleanValue[i]
+		}
+	}
+	return false
+}
+
+// Calculate && and || for bool types. If both of them are nil, the result is nil.
+// If one of them is bool and the other is nil, nil is equivalent to false.
+func resultEvalANDAndOR(lhs *ResultEval, rhs *ResultEval, l int, op influxql.Token) {
+	if lhs.dataType == influxql.Boolean && rhs.dataType == influxql.Boolean {
+		lhs.appendBoolLen(l)
+		rhs.appendBoolLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) && rhs.IsNil(i) {
+				continue
+			}
+			if lhs.IsNil(i) && !rhs.IsNil(i) {
+				lhs.isNil[i] = false
+				lhs.booleanValue[i] = false
+			}
+			if !lhs.IsNil(i) && rhs.IsNil(i) {
+				rhs.isNil[i] = false
+				rhs.booleanValue[i] = false
+			}
+			switch op {
+			case influxql.AND:
+				lhs.booleanValue[i] = lhs.getBoolean(i) && rhs.getBoolean(i)
+			case influxql.OR:
+				lhs.booleanValue[i] = lhs.getBoolean(i) || rhs.getBoolean(i)
+			}
+		}
+		return
+	}
+	lhs.appendNilLen(l)
+	for i := 0; i < l; i++ {
+		lhs.isNil[i] = true
+	}
+}
+
+func resultEvalBITWISE(lhs *ResultEval, rhs *ResultEval, l int, op influxql.Token) {
+	if lhs.dataType == influxql.Boolean && rhs.dataType == influxql.Boolean {
+		lhs.appendBoolLen(l)
+		rhs.appendBoolLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) && rhs.IsNil(i) {
+				continue
+			}
+			if lhs.IsNil(i) && !rhs.IsNil(i) {
+				lhs.isNil[i] = false
+				lhs.booleanValue[i] = false
+			}
+			if !lhs.IsNil(i) && rhs.IsNil(i) {
+				rhs.isNil[i] = false
+				rhs.booleanValue[i] = false
+			}
+			switch op {
+			case influxql.BITWISE_AND:
+				lhs.booleanValue[i] = lhs.getBoolean(i) && rhs.getBoolean(i)
+			case influxql.BITWISE_OR:
+				lhs.booleanValue[i] = lhs.getBoolean(i) || rhs.getBoolean(i)
+			case influxql.BITWISE_XOR:
+				lhs.booleanValue[i] = lhs.getBoolean(i) != rhs.getBoolean(i)
+			}
+		}
+		return
+	} else if lhs.dataType == influxql.Float || rhs.dataType == influxql.Float {
+		lhs.appendNilLen(l)
+		for i := 0; i < l; i++ {
+			lhs.isNil[i] = true
+		}
+		return
+	} else if lhs.dataType == influxql.Unsigned || rhs.dataType == influxql.Unsigned {
+		if isSwitchToUint64(lhs, l) && isSwitchToUint64(rhs, l) {
+			lhs.appendUintLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				switch op {
+				case influxql.BITWISE_AND:
+					lhs.uintValue[i] = lhs.getUint64(i) & rhs.getUint64(i)
+				case influxql.BITWISE_OR:
+					lhs.uintValue[i] = lhs.getUint64(i) | rhs.getUint64(i)
+				case influxql.BITWISE_XOR:
+					lhs.uintValue[i] = lhs.getUint64(i) ^ rhs.getUint64(i)
+				}
+			}
+			lhs.dataType = influxql.Unsigned
+			return
+		}
+	} else if lhs.dataType == influxql.Integer && rhs.dataType == influxql.Integer {
+		lhs.appendIntLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) || rhs.IsNil(i) {
+				lhs.isNil[i] = true
+				continue
+			}
+			switch op {
+			case influxql.BITWISE_AND:
+				lhs.integerValue[i] = lhs.getInteger(i) & rhs.getInteger(i)
+			case influxql.BITWISE_OR:
+				lhs.integerValue[i] = lhs.getInteger(i) | rhs.getInteger(i)
+			case influxql.BITWISE_XOR:
+				lhs.integerValue[i] = lhs.getInteger(i) ^ rhs.getInteger(i)
+			}
+		}
+		return
+	}
+	lhs.appendNilLen(l)
+	for i := 0; i < l; i++ {
+		lhs.isNil[i] = true
+	}
+}
+
+func resultEvalCompare(lhs *ResultEval, rhs *ResultEval, l int, op influxql.Token) {
+	if lhs.dataType == influxql.Boolean && rhs.dataType == influxql.Boolean {
+		lhs.appendBoolLen(l)
+		rhs.appendBoolLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) && rhs.IsNil(i) {
+				continue
+			}
+			if lhs.IsNil(i) && !rhs.IsNil(i) {
+				lhs.isNil[i] = false
+				lhs.booleanValue[i] = false
+			}
+			if !lhs.IsNil(i) && rhs.IsNil(i) {
+				rhs.isNil[i] = false
+				rhs.booleanValue[i] = false
+			}
+			switch op {
+			case influxql.EQ:
+				lhs.booleanValue[i] = lhs.getBoolean(i) == rhs.getBoolean(i)
+			case influxql.NEQ:
+				lhs.booleanValue[i] = lhs.getBoolean(i) != rhs.getBoolean(i)
+			default:
+				lhs.booleanValue[i] = false
+			}
+		}
+		return
+	} else if isSwitchToFloat64(lhs, l) && isSwitchToFloat64(rhs, l) {
+		lhs.appendBoolLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) || rhs.IsNil(i) {
+				lhs.booleanValue[i] = false
+				continue
+			}
+			switch op {
+			case influxql.EQ:
+				lhs.booleanValue[i] = lhs.getFloat64(i) == rhs.getFloat64(i)
+			case influxql.NEQ:
+				lhs.booleanValue[i] = lhs.getFloat64(i) != rhs.getFloat64(i)
+			case influxql.LT:
+				lhs.booleanValue[i] = lhs.getFloat64(i) < rhs.getFloat64(i)
+			case influxql.LTE:
+				lhs.booleanValue[i] = lhs.getFloat64(i) <= rhs.getFloat64(i)
+			case influxql.GT:
+				lhs.booleanValue[i] = lhs.getFloat64(i) > rhs.getFloat64(i)
+			case influxql.GTE:
+				lhs.booleanValue[i] = lhs.getFloat64(i) >= rhs.getFloat64(i)
+			}
+		}
+		lhs.dataType = influxql.Boolean
+		return
+	}
+	lhs.dataType = influxql.Boolean
+	lhs.appendNilLen(l)
+	for i := 0; i < l; i++ {
+		lhs.booleanValue[i] = false
+	}
+}
+
+func resultEvalASM(lhs *ResultEval, rhs *ResultEval, l int, op influxql.Token) {
+	if lhs.dataType == influxql.Float || rhs.dataType == influxql.Float {
+		if isSwitchToFloat64(lhs, l) && isSwitchToFloat64(rhs, l) {
+			lhs.appendFloatLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				switch op {
+				case influxql.ADD:
+					lhs.floatValue[i] = lhs.getFloat64(i) + rhs.getFloat64(i)
+				case influxql.SUB:
+					lhs.floatValue[i] = lhs.getFloat64(i) - rhs.getFloat64(i)
+				case influxql.MUL:
+					lhs.floatValue[i] = lhs.getFloat64(i) * rhs.getFloat64(i)
+				}
+			}
+			lhs.dataType = influxql.Float
+			return
+		}
+	} else if lhs.dataType == influxql.Unsigned || rhs.dataType == influxql.Unsigned {
+		if isSwitchToUint64(lhs, l) && isSwitchToUint64(rhs, l) {
+			lhs.appendUintLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				switch op {
+				case influxql.ADD:
+					lhs.uintValue[i] = lhs.getUint64(i) + rhs.getUint64(i)
+				case influxql.SUB:
+					lhs.uintValue[i] = lhs.getUint64(i) - rhs.getUint64(i)
+				case influxql.MUL:
+					lhs.uintValue[i] = lhs.getUint64(i) * rhs.getUint64(i)
+				}
+			}
+			lhs.dataType = influxql.Unsigned
+			return
+		}
+	} else if lhs.dataType == influxql.Integer && rhs.dataType == influxql.Integer {
+		lhs.appendIntLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) || rhs.IsNil(i) {
+				lhs.isNil[i] = true
+				continue
+			}
+			switch op {
+			case influxql.ADD:
+				lhs.integerValue[i] = lhs.getInteger(i) + rhs.getInteger(i)
+			case influxql.SUB:
+				lhs.integerValue[i] = lhs.getInteger(i) - rhs.getInteger(i)
+			case influxql.MUL:
+				lhs.integerValue[i] = lhs.getInteger(i) * rhs.getInteger(i)
+			}
+		}
+		return
+	}
+	lhs.appendNilLen(l)
+	for i := 0; i < l; i++ {
+		lhs.isNil[i] = true
+	}
+}
+
+func resultEvalDIV(lhs *ResultEval, rhs *ResultEval, l int, IntegerFloatDivision bool) {
+	if lhs.dataType == influxql.Float || rhs.dataType == influxql.Float || (IntegerFloatDivision && lhs.dataType == influxql.Integer && rhs.dataType == influxql.Integer) {
+		if IntegerFloatDivision && lhs.dataType == influxql.Integer && rhs.dataType == influxql.Integer {
+			lhs.appendFloatLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				if rhs.getInteger(i) == 0 {
+					lhs.floatValue[i] = float64(0)
+				} else {
+					lhs.floatValue[i] = float64(lhs.getInteger(i)) / float64(rhs.getInteger(i))
+				}
+			}
+
+			lhs.dataType = influxql.Float
+			return
+		}
+		if isSwitchToFloat64(lhs, l) && isSwitchToFloat64(rhs, l) {
+			lhs.appendFloatLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				if rhs.getFloat64(i) == 0 {
+					lhs.floatValue[i] = float64(0)
+				} else {
+					lhs.floatValue[i] = lhs.getFloat64(i) / rhs.getFloat64(i)
+				}
+			}
+			lhs.dataType = influxql.Float
+			return
+		}
+	} else if lhs.dataType == influxql.Unsigned || rhs.dataType == influxql.Unsigned {
+		if isSwitchToUint64(lhs, l) && isSwitchToUint64(rhs, l) {
+			lhs.appendUintLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				if rhs.getUint64(i) == 0 {
+					lhs.uintValue[i] = uint64(0)
+				} else {
+					lhs.uintValue[i] = lhs.getUint64(i) / rhs.getUint64(i)
+				}
+			}
+			lhs.dataType = influxql.Unsigned
+			return
+		}
+	} else if lhs.dataType == influxql.Integer && rhs.dataType == influxql.Integer {
+		lhs.appendIntLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) || rhs.IsNil(i) {
+				lhs.isNil[i] = true
+				continue
+			}
+			if rhs.getInteger(i) == 0 {
+				lhs.integerValue[i] = int64(0)
+			} else {
+				lhs.integerValue[i] = lhs.getInteger(i) / rhs.getInteger(i)
+			}
+		}
+		return
+	}
+	lhs.appendNilLen(l)
+	for i := 0; i < l; i++ {
+		lhs.isNil[i] = true
+	}
+}
+
+func resultEvalMOD(lhs *ResultEval, rhs *ResultEval, l int) {
+	if lhs.dataType == influxql.Float || rhs.dataType == influxql.Float {
+		if isSwitchToFloat64(lhs, l) && isSwitchToFloat64(rhs, l) {
+			lhs.appendFloatLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				lhs.floatValue[i] = math.Mod(lhs.getFloat64(i), rhs.getFloat64(i))
+			}
+			lhs.dataType = influxql.Float
+			return
+		}
+	} else if lhs.dataType == influxql.Unsigned || rhs.dataType == influxql.Unsigned {
+		if isSwitchToUint64(lhs, l) && isSwitchToUint64(rhs, l) {
+			lhs.appendUintLen(l)
+			for i := 0; i < l; i++ {
+				if lhs.IsNil(i) || rhs.IsNil(i) {
+					lhs.isNil[i] = true
+					continue
+				}
+				if rhs.getUint64(i) == 0 {
+					lhs.uintValue[i] = uint64(0)
+				} else {
+					lhs.uintValue[i] = lhs.getUint64(i) % rhs.getUint64(i)
+				}
+			}
+			lhs.dataType = influxql.Unsigned
+			return
+		}
+	} else if lhs.dataType == influxql.Integer && rhs.dataType == influxql.Integer {
+		lhs.appendIntLen(l)
+		for i := 0; i < l; i++ {
+			if lhs.IsNil(i) || rhs.IsNil(i) {
+				lhs.isNil[i] = true
+				continue
+			}
+			if rhs.getInteger(i) == 0 {
+				lhs.integerValue[i] = int64(0)
+			} else {
+				lhs.integerValue[i] = lhs.getInteger(i) % rhs.getInteger(i)
+			}
+		}
+		return
+	}
+
+	lhs.appendNilLen(l)
+	for i := 0; i < l; i++ {
+		lhs.isNil[i] = true
+	}
+}
+
+func f(lhs *ResultEval, rhs *ResultEval, l int, op influxql.Token, v *influxql.ValuerEval) {
+	switch op {
+	case influxql.AND, influxql.OR:
+		resultEvalANDAndOR(lhs, rhs, l, op)
+	case influxql.EQ, influxql.NEQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE:
+		resultEvalCompare(lhs, rhs, l, op)
+	case influxql.ADD, influxql.SUB, influxql.MUL:
+		resultEvalASM(lhs, rhs, l, op)
+	case influxql.DIV:
+		resultEvalDIV(lhs, rhs, l, v.IntegerFloatDivision)
+	case influxql.MOD:
+		resultEvalMOD(lhs, rhs, l)
+	case influxql.BITWISE_AND, influxql.BITWISE_OR, influxql.BITWISE_XOR:
+		resultEvalBITWISE(lhs, rhs, l, op)
+	default:
+		lhs.appendNilLen(l)
+		for i := 0; i < l; i++ {
+			lhs.isNil[i] = true
+		}
+	}
+}
+
+func evalBinaryExpr(expr *influxql.BinaryExpr, v *influxql.ValuerEval, columnMap map[string]*ColumnImpl, l int, rp *ResultEvalPool) *ResultEval {
+	lhs := eval(expr.LHS, v, columnMap, l, rp)
+	rhs := eval(expr.RHS, v, columnMap, l, rp)
+	f(lhs, rhs, l, expr.Op, v)
+	lhs.isLiteral = false
+	return lhs
+
+}
+func initByType(expr influxql.Expr, chunkValuer *ChunkValuer, columnMap map[string]*ColumnImpl) bool {
+	switch expr := expr.(type) {
+	case *influxql.BinaryExpr:
+		lhs := initByType(expr.LHS, chunkValuer, columnMap)
+		rhs := initByType(expr.RHS, chunkValuer, columnMap)
+		return lhs && rhs
+	case *influxql.BooleanLiteral:
+		return true
+	case *influxql.IntegerLiteral:
+		return true
+	case *influxql.NumberLiteral:
+		return true
+	case *influxql.UnsignedLiteral:
+		return true
+	case *influxql.VarRef:
+		fieldIndex := chunkValuer.ref.RowDataType().FieldIndex(expr.Val)
+		if (chunkValuer.ref.Columns()[fieldIndex]).DataType() != influxql.Float && (chunkValuer.ref.Columns()[fieldIndex]).DataType() != influxql.Integer && (chunkValuer.ref.Columns()[fieldIndex]).DataType() != influxql.Boolean {
+			return false
+		}
+		if _, ok := columnMap[expr.Val]; !ok {
+			columnMap[expr.Val] = chunkValuer.ref.Columns()[fieldIndex].(*ColumnImpl)
+		}
+		return true
+	default:
+		return false
+	}
+}
 func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	oChunk := trans.resultChunkPool.GetChunk()
 	oChunk.SetName(chunk.Name())
@@ -446,25 +1260,35 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	}
 	oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
 	oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
-
+	columnMap := make(map[string]*ColumnImpl)
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)
 		if f != nil {
 			f(dst, chunk, trans.ColumnMap[i])
 		} else {
-			for index := 0; index < chunk.NumberOfRows(); index++ {
-				trans.chunkValuer.AtChunkRow(chunk, index)
-				value := trans.valuer.Eval(trans.ops[i].Expr)
-				if value == nil {
-					dst.AppendNil()
-					continue
+			trans.chunkValuer.AtChunkRow(chunk, 0)
+			isFast := initByType(trans.ops[i].Expr, trans.chunkValuer, columnMap)
+			if isFast {
+				trans.rp.index = 0
+				res := eval(trans.ops[i].Expr, &trans.valuer, columnMap, chunk.NumberOfRows(), trans.rp)
+				res.copyTo(chunk.NumberOfRows(), dst.(*ColumnImpl))
+			} else {
+				for index := 0; index < chunk.NumberOfRows(); index++ {
+					trans.chunkValuer.index = index
+
+					value := trans.valuer.Eval(trans.ops[i].Expr)
+					if value == nil {
+						dst.AppendNil()
+						continue
+					}
+					if val, ok := value.(float64); ok && math.IsNaN(val) {
+						dst.AppendNil()
+						continue
+					}
+					AppendRowValue(dst, value)
+					dst.AppendNotNil()
+
 				}
-				if val, ok := value.(float64); ok && math.IsNaN(val) {
-					dst.AppendNil()
-					continue
-				}
-				AppendRowValue(dst, value)
-				dst.AppendNotNil()
 			}
 		}
 	}

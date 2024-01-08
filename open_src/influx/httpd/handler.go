@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -132,8 +133,9 @@ type Handler struct {
 		ShowShards() models.Rows
 		TagArrayEnabled(db string) bool
 		DataNode(id uint64) (*meta2.DataNode, error)
+		DataNodes() ([]meta2.DataNode, error)
 
-		CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error)
+		CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error)
 		Databases() map[string]*meta2.DatabaseInfo
 		MarkDatabaseDelete(name string) error
 		Measurements(database string, ms influxql.Measurements) ([]string, error)
@@ -144,6 +146,7 @@ type Handler struct {
 		CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config2.EngineType,
 			colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 		UpdateMeasurement(db, rp, mst string, options *meta2.Options) error
+		GetShardGroupByTimeRange(repoName, streamName string, min, max time.Time) ([]*meta2.ShardGroupInfo, error)
 	}
 
 	QueryAuthorizer interface {
@@ -315,6 +318,50 @@ func NewHandler(c config.Config) *Handler {
 		Route{
 			"write-log", // Data-ingest route.
 			"POST", "/repo/:repository/logstreams/:logStream/records", false, true, h.serveRecord,
+		},
+		Route{
+			"upload", // Data-upload route.
+			"POST", "/repo/:repository/logstreams/:logStream/upload", false, true, h.serveUpload,
+		},
+		Route{
+			"log-list", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/logs", true, true, h.serveQueryLog,
+		},
+		Route{
+			"log-by-cursor", // Query for Log by cursor.
+			"GET", "/repo/:repository/logstreams/:logStream/logbycursor", true, true, h.serveQueryLogByCursor,
+		},
+		Route{
+			"log-consume", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/consume/logs", true, true, h.serveConsumeLogs,
+		},
+		Route{
+			"log-consume-cursor-time", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/consume/cursor-time", true, true, h.serveConsumeCursorTime,
+		},
+		Route{
+			"log-consume-cursors", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/consume/cursors", true, true, h.serveGetConsumeCursors,
+		},
+		Route{
+			"log-context", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/context", true, true, h.serveContextQueryLog,
+		},
+		Route{
+			"log-agg", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/histogram", true, true, h.serveAggLogQuery,
+		},
+		Route{
+			"log-agg", // Query for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/analytics", true, true, h.serveAnalytics,
+		},
+		Route{
+			"log-cursor", // Get Cursor for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/cursor", true, true, h.serveGetCursor,
+		},
+		Route{
+			"log-pull-cursor", // Pull data for Log.
+			"GET", "/repo/:repository/logstreams/:logStream/cursor/:cursor", true, true, h.servePullLog,
 		},
 	}...)
 

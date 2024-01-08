@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -36,9 +37,13 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	Log "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
@@ -298,12 +303,17 @@ func TestFullCompactForColumnStore(t *testing.T) {
 			}
 		}
 	}
-	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &MeasurementInfo{
+
+	mstinfo := meta.MeasurementInfo{
 		Name:       "mst",
-		PrimaryKey: primaryKey,
-		SortKey:    sortKey,
-		Schema:     schema,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey: primaryKey,
+			SortKey:    sortKey,
+		},
+		Schema: schema,
 	}
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
 	sortKeyMap := genSortedKeyMap(sort)
 	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
@@ -399,19 +409,24 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	oldRec.ReserveColumnRows(recRows * filesN)
 
 	recs := make([]*record.Record, 0, filesN)
-	err := store.ImmTable.(*csImmTableImpl).UpdatePrimaryKey("mst", store.ImmTable.(*csImmTableImpl).mstsInfo)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	needMerge := false
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
-		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
-		if err = writeIntoFile(msb, false); err != nil {
+		if err := writeIntoFile(msb, false); err != nil {
 			t.Fatal(err)
 		}
 		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
@@ -429,9 +444,6 @@ func TestFullCompactForColumnStore(t *testing.T) {
 
 	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
 	files := store.CSFiles
-	if len(files) != 1 {
-		t.Fatalf("exp 8 file, but:%v", len(files))
-	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
 		t.Fatalf("mst not find")
@@ -450,7 +462,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	msb.NewPKIndexWriter()
 
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,12 +528,16 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 			}
 		}
 	}
-	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &MeasurementInfo{
+	mstinfo := meta.MeasurementInfo{
 		Name:       "mst",
-		PrimaryKey: primaryKey,
-		SortKey:    sortKey,
-		Schema:     schema,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey: primaryKey,
+			SortKey:    sortKey,
+		},
+		Schema: schema,
 	}
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
 	sortKeyMap := genSortedKeyMap(sort)
 	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
@@ -617,9 +633,13 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	oldRec.ReserveColumnRows(recRows * filesN)
 
 	recs := make([]*record.Record, 0, filesN)
-	err := store.ImmTable.(*csImmTableImpl).UpdatePrimaryKey("mst", store.ImmTable.(*csImmTableImpl).mstsInfo)
-	if err != nil {
-		t.Fatal(err)
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
 	}
 	needMerge := false
 	for i := 0; i < filesN; i++ {
@@ -627,9 +647,9 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
-		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
-		if err = writeIntoFile(msb, false); err != nil {
+		if err := writeIntoFile(msb, false); err != nil {
 			t.Fatal(err)
 		}
 		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
@@ -647,9 +667,6 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 
 	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
 	files := store.CSFiles
-	if len(files) != 1 {
-		t.Fatalf("exp 8 file, but:%v", len(files))
-	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
 		t.Fatalf("mst not find")
@@ -667,7 +684,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -694,6 +711,230 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 		t.Fatal("FragmentCount is not equal")
 	}
 	if equal := checkPkRecord(pkRec, newPkInfos[indexFilePath].GetRec()); !equal {
+		t.Fatal("pkRec is not equal")
+	}
+	check("mst", fids.files[0].Path(), oldRec)
+}
+
+func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	var idMinMax, tmMinMax MinMax
+	var startValue = 1.1
+
+	conf := NewColumnStoreConfig()
+	conf.maxRowsPerSegment = 8192
+	conf.FragmentsNumPerFlush = 1
+	tier := uint64(util.Hot)
+	recRows := 10000
+	lockPath := ""
+	var tcDuration time.Duration = 60000000000
+
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+	store.SetImmTableType(config.COLUMNSTORE)
+	store.CompactionEnable()
+	primaryKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "field3_bool", "field2_int", "time"}
+	sortKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int", "time"}
+	sort := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int", "time"}
+	schema := make(map[string]int32)
+	for i := range primaryKey {
+		for j := range schemaForColumnStore {
+			if primaryKey[i] == schemaForColumnStore[j].Name {
+				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+			}
+		}
+	}
+	mstinfo := meta.MeasurementInfo{
+		Name:       "mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey:          primaryKey,
+			SortKey:             sortKey,
+			TimeClusterDuration: tcDuration,
+		},
+		Schema: schema,
+	}
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
+
+	sortKeyMap := genSortedKeyMap(sort)
+	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
+		sortKeyMap map[string]int, primaryKey, sortKey []string, needMerge bool, pkSchema record.Schemas) *record.Record {
+		rec := data[ids]
+		err := msb.WriteData(ids, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pkSchema) != 0 {
+			dataFilePath := msb.FileName.String()
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if needMerge {
+			merge = mergeForColumnStore(sort, sortKeyMap, rec, merge)
+			return merge
+		}
+		return rec
+	}
+
+	check := func(name string, fn string, orig *record.Record) {
+		f := store.File(name, fn, true)
+		contains, err := f.Contains(idMinMax.min)
+		if err != nil || !contains {
+			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
+		}
+
+		midx, _ := f.MetaIndexAt(0)
+		if midx == nil {
+			t.Fatalf("meta index not find")
+		}
+
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decs := NewReadContext(true)
+		readRec := record.NewRecordBuilder(schemaForColumnStore)
+		readRec.ReserveColumnRows(recRows * 4)
+		rec := record.NewRecordBuilder(schemaForColumnStore)
+		rec.ReserveColumnRows(conf.maxRowsPerSegment)
+		for i := range cm.timeMeta().entries {
+			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readRec.Merge(rec)
+		}
+
+		oldV0 := orig.Column(0).FloatValues()
+		oldV1 := orig.Column(1).IntegerValues()
+		oldV2 := orig.Column(2).BooleanValues()
+		oldV3 := orig.Column(3).StringValues(nil)
+		oldTimes := orig.Times()
+		v0 := readRec.Column(0).FloatValues()
+		v1 := readRec.Column(1).IntegerValues()
+		v2 := readRec.Column(2).BooleanValues()
+		v3 := readRec.Column(3).StringValues(nil)
+		times := readRec.Times()
+
+		if !reflect.DeepEqual(oldTimes, times) {
+			t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
+		}
+
+		if !reflect.DeepEqual(oldV0, v0) {
+			t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
+		}
+
+		if !reflect.DeepEqual(oldV1, v1) {
+			t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
+		}
+
+		if !reflect.DeepEqual(oldV2, v2) {
+			t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
+		}
+
+		if !reflect.DeepEqual(oldV3, v3) {
+			t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
+		}
+	}
+
+	tm := testTimeStart
+	tmMinMax.min = uint64(tm.UnixNano())
+	idMinMax.min = 0
+
+	filesN := LeveLMinGroupFiles[0]
+	oldRec := record.NewRecordBuilder(schemaForColumnStore)
+	oldRec.ReserveColumnRows(recRows * filesN)
+
+	recs := make([]*record.Record, 0, filesN)
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
+	needMerge := false
+	for i := 0; i < filesN; i++ {
+		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb.NewPKIndexWriter()
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
+		needMerge = true
+		if err := writeIntoFile(msb, false); err != nil {
+			t.Fatal(err)
+		}
+		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
+		for _, v := range data {
+			recs = append(recs, v)
+		}
+		if msb.GetPKInfoNum() != 0 {
+			for i, file := range msb.Files {
+				dataFilePath := file.Path()
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
+			}
+		}
+	}
+
+	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+	files := store.CSFiles
+	fids, ok := files["mst"]
+	if !ok || fids.Len() != filesN {
+		t.Fatalf("mst not find")
+	}
+
+	for i, f := range fids.files {
+		check("mst", f.Path(), recs[i])
+		fr := f.(*tsspFile).reader.(*tsspFileReader)
+		if fr.ref != 0 {
+			t.Fatal("ref error")
+		}
+	}
+	// get origin pkRec
+	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+	msb.NewPKIndexWriter()
+	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = store.LevelCompact(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	store.Wait()
+	files = store.CSFiles
+	fids, ok = files["mst"]
+	if !ok {
+		t.Fatalf("mst not find")
+	}
+
+	if fids.Len() != 1 {
+		t.Fatalf("exp 1 file after compact, but got len:%d,fids:%v", fids.Len(), fids)
+	}
+
+	dataFilePath := store.CSFiles["mst"].files[0].FileName()
+	dataFileName := dataFilePath.String()
+	indexFilePath := path.Join(store.path, "mst", colstore.AppendPKIndexSuffix(dataFileName))
+	newPkInfos := store.PKFiles["mst"].GetPKInfos()
+	if pkMark.GetFragmentCount() != newPkInfos[indexFilePath].GetMark().GetFragmentCount() {
+		t.Fatal("FragmentCount is not equal")
+	}
+	if equal := checkPkRecordWithTimeCluster(pkRec, newPkInfos[indexFilePath].GetRec(), tcDuration); !equal {
 		t.Fatal("pkRec is not equal")
 	}
 	check("mst", fids.files[0].Path(), oldRec)
@@ -733,12 +974,17 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 			}
 		}
 	}
-	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &MeasurementInfo{
+
+	mstinfo := meta.MeasurementInfo{
 		Name:       "mst",
-		PrimaryKey: primaryKey,
-		SortKey:    sortKey,
-		Schema:     schema,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey: primaryKey,
+			SortKey:    sortKey,
+		},
+		Schema: schema,
 	}
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
 	sortKeyMap := genSortedKeyMap(sort)
 	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
@@ -834,13 +1080,18 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 	oldRec.ReserveColumnRows(recRows * filesN)
 
 	recs := make([]*record.Record, 0, filesN)
-	err := store.ImmTable.(*csImmTableImpl).UpdatePrimaryKey("mst", store.ImmTable.(*csImmTableImpl).mstsInfo)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	needMerge := false
 	var ids uint64
 	var data map[uint64]*record.Record
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
 	for i := 0; i < filesN; i++ {
 		if i == filesN-1 {
 			_, data = genTestData(0, 1, recRows, &startValue, &tm)
@@ -851,9 +1102,9 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
-		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
-		if err = writeIntoFile(msb, false); err != nil {
+		if err := writeIntoFile(msb, false); err != nil {
 			t.Fatal(err)
 		}
 		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
@@ -871,9 +1122,6 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 
 	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
 	files := store.CSFiles
-	if len(files) != 1 {
-		t.Fatalf("exp 8 file, but:%v", len(files))
-	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
 		t.Fatalf("mst not find")
@@ -891,11 +1139,11 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	_, _, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
-
+	conf.SetFilesLimit(1024)
 	if err = store.LevelCompact(0, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -906,21 +1154,10 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 		t.Fatalf("mst not find")
 	}
 
-	if fids.Len() != 1 {
-		t.Fatalf("exp 1 file after compact, but got len:%d,fids:%v", fids.Len(), fids)
+	//expect split file
+	if fids.Len() != 2 {
+		t.Fatalf("exp 2 file after compact, but got len:%d,fids:%v", fids.Len(), fids)
 	}
-
-	dataFilePath := store.CSFiles["mst"].files[0].FileName()
-	dataFileName := dataFilePath.String()
-	indexFilePath := path.Join(store.path, "mst", colstore.AppendPKIndexSuffix(dataFileName))
-	newPkInfos := store.PKFiles["mst"].GetPKInfos()
-	if pkMark.GetFragmentCount() != newPkInfos[indexFilePath].GetMark().GetFragmentCount() {
-		t.Fatal("FragmentCount is not equal")
-	}
-	if equal := checkPkRecordWithSchemaLess(pkRec, newPkInfos[indexFilePath].GetRec()); !equal {
-		t.Fatal("pkRec is not equal")
-	}
-	check("mst", fids.files[0].Path(), oldRec)
 }
 
 func TestCompactSwitchFilesForColumnStore(t *testing.T) {
@@ -938,7 +1175,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	conf := NewColumnStoreConfig()
 	conf.maxRowsPerSegment = 8192
 	conf.FragmentsNumPerFlush = 1
-	conf.fileSizeLimit = 1 * 1024 * 1024
+	conf.fileSizeLimit = 1 * 1024
 	tier := uint64(util.Hot)
 	recRows := 8192
 	lockPath := ""
@@ -958,11 +1195,14 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 			}
 		}
 	}
-	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &MeasurementInfo{
+	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &meta.MeasurementInfo{
 		Name:       "mst",
-		PrimaryKey: primaryKey,
-		SortKey:    sortKey,
-		Schema:     schema,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey: primaryKey,
+			SortKey:    sortKey,
+		},
+		Schema: schema,
 	}
 
 	sortKeyMap := genSortedKeyMap(sort)
@@ -1059,19 +1299,24 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	oldRec.ReserveColumnRows(recRows * filesN)
 
 	recs := make([]*record.Record, 0, filesN)
-	err := store.ImmTable.(*csImmTableImpl).UpdatePrimaryKey("mst", store.ImmTable.(*csImmTableImpl).mstsInfo)
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	needMerge := false
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
-		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, store.ImmTable.(*csImmTableImpl).primaryKey["mst"])
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
-		if err = writeIntoFile(msb, false); err != nil {
+		if err := writeIntoFile(msb, false); err != nil {
 			t.Fatal(err)
 		}
 		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
@@ -1089,9 +1334,6 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 
 	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
 	files := store.CSFiles
-	if len(files) != 1 {
-		t.Fatalf("exp 8 file, but:%v", len(files))
-	}
 	fids, ok := files["mst"]
 	if !ok || fids.Len() != filesN {
 		t.Fatalf("mst not find")
@@ -1109,7 +1351,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	_, _, err = msb.pkIndexWriter.Build(oldRec, store.ImmTable.(*csImmTableImpl).primaryKey["mst"], fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	_, _, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1142,6 +1384,39 @@ func checkPkRecord(oldRec, newRec *record.Record) bool {
 	v1 := newRec.Column(1).StringValues(nil)
 	v2 := newRec.Column(2).FloatValues()
 
+	if !reflect.DeepEqual(oldV0, v0) {
+		return false
+	}
+
+	if !reflect.DeepEqual(oldV1, v1) {
+		return false
+	}
+
+	if !reflect.DeepEqual(oldV2, v2) {
+		return false
+	}
+	return true
+}
+
+func checkPkRecordWithTimeCluster(oldRec, newRec *record.Record, tcDuration time.Duration) bool {
+	oldvt := oldRec.TimeColumn()
+	oldV0 := oldRec.Column(0).StringValues(nil)
+	oldV1 := oldRec.Column(1).StringValues(nil)
+	oldV2 := oldRec.Column(2).FloatValues()
+
+	oldvtValues := oldvt.IntegerValues()
+	for k, v := range oldvtValues {
+		oldvtValues[k] = int64(time.Duration(v).Truncate(tcDuration))
+	}
+
+	vt := newRec.Column(0).IntegerValues()
+	v0 := newRec.Column(1).StringValues(nil)
+	v1 := newRec.Column(2).StringValues(nil)
+	v2 := newRec.Column(3).FloatValues()
+
+	if !reflect.DeepEqual(oldvtValues, vt) {
+		return false
+	}
 	if !reflect.DeepEqual(oldV0, v0) {
 		return false
 	}
@@ -1189,16 +1464,21 @@ func TestWriteMetaIndexForColumnStore(t *testing.T) {
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 	f := &FragmentIterators{}
 	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
+	defer func() {
+		f.builder.diskFileWriter.Close()
+		f.builder.fd.Close()
+	}()
 	f.builder.Conf = conf
 	f.builder.Conf.maxChunkMetaItemSize = 0
 	f.builder.trailer.idCount = 1
 	f.builder.trailer.minTime = 1
 	f.builder.trailer.maxTime = -1
-	f.builder.cm.timeRange = []SegmentRange{{0, 0}}
+	f.builder.chunkBuilder.chunkMeta.timeRange = []SegmentRange{{0, 0}}
 	err := f.writeMetaIndex(10, -999, 999)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 }
 
 func TestNewFragmentIteratorsPool(t *testing.T) {
@@ -1218,11 +1498,13 @@ func TestNewFragmentIteratorsPool(t *testing.T) {
 func TestPutFragmentIterators(t *testing.T) {
 	for i := 0; i < cpu.GetCpuNum()+1; i++ {
 		itr := FragmentIterators{
-			ctx:           NewReadContext(true),
-			colBuilder:    NewColumnBuilder(),
-			itrs:          make([]*SortKeyIterator, 0, 8),
-			SortKeyFileds: make([]record.Field, 0, 16),
-			RecordResult:  &record.Record{}}
+			ctx:               NewReadContext(true),
+			colBuilder:        NewColumnBuilder(),
+			itrs:              make([]*SortKeyIterator, 0, 8),
+			SortKeyFileds:     make([]record.Field, 0, 16),
+			RecordResult:      &record.Record{},
+			TimeClusterResult: &record.Record{},
+		}
 		putFragmentIterators(&itr)
 	}
 }
@@ -1243,9 +1525,12 @@ func TestCompactionWriteMetaErr(t *testing.T) {
 	defer store.Close()
 	store.SetImmTableType(config.COLUMNSTORE)
 	sortKey := []string{"primaryKey_string1", "primaryKey_string2", "primaryKey_float1", "sortKey_int1"}
-	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &MeasurementInfo{
-		Name:    "mst",
-		SortKey: sortKey,
+	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &meta.MeasurementInfo{
+		Name:       "mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey: sortKey,
+		},
 	}
 	cm := make([]ColumnMeta, 1)
 	cm[0] = ColumnMeta{name: "a", ty: influx.Field_Type_Int}
@@ -1257,20 +1542,27 @@ func TestCompactionWriteMetaErr(t *testing.T) {
 	fileName := NewTSSPFileName(uint64(1), group.toLevel, 0, 0, true, store.lock)
 	compItrs.builder = NewMsBuilder(store.path, compItrs.name, store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
 	indexName := compItrs.builder.fd.Name()[:len(compItrs.builder.fd.Name())-len(tmpFileSuffix)] + ".index.init"
-	_, err := fileops.OpenFile(indexName, os.O_CREATE|os.O_RDWR, 0640)
+	fd, err := fileops.OpenFile(indexName, os.O_CREATE|os.O_RDWR, 0640)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		fd.Close()
+		compItrs.builder.fd.Close()
+	}()
 	tsspFileWriter := compItrs.builder.diskFileWriter.(*tsspFileWriter)
-	tsspFileWriter.cmw.buf = tsspFileWriter.cmw.buf[:1]
-	tsspFileWriter.cmw.name = "/"
+	cmw, ok := tsspFileWriter.cmw.(*indexWriter)
+	require.True(t, ok)
+
+	cmw.buf = cmw.buf[:1]
+	cmw.name = "/"
 	err = compItrs.writeMeta(&ChunkMeta{colMeta: cm}, 0, 1)
 	if err == nil {
 		t.Fatalf("writeMeta should open file error")
 	}
 }
 
-func TestCompactionPrepareErrorForColumnStore(t *testing.T) {
+func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
@@ -1278,32 +1570,606 @@ func TestCompactionPrepareErrorForColumnStore(t *testing.T) {
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
+
+	var idMinMax, tmMinMax MinMax
+	var startValue = 1.1
+
 	conf := NewColumnStoreConfig()
+	conf.maxRowsPerSegment = 8192
+	conf.FragmentsNumPerFlush = 1
 	tier := uint64(util.Hot)
+	recRows := 10000
 	lockPath := ""
+
 	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
 	store.SetImmTableType(config.COLUMNSTORE)
-	cs := store.ImmTable.(*csImmTableImpl)
-	sortKey := []string{"primaryKey_string1", "primaryKey_string2", "primaryKey_float1", "sortKey_int1"}
-	store.ImmTable.(*csImmTableImpl).mstsInfo["mst"] = &MeasurementInfo{
-		Name:    "mst",
-		SortKey: sortKey,
+	store.CompactionEnable()
+	primaryKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "field3_bool", "field2_int"}
+	sortKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int"}
+	sort := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "time", "sortKey_int1", "field3_bool", "field2_int"}
+	schema := make(map[string]int32)
+	for i := range primaryKey {
+		for j := range schemaForColumnStore {
+			if primaryKey[i] == schemaForColumnStore[j].Name {
+				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+			}
+		}
 	}
-	cm := make([]ColumnMeta, 1)
-	cm[0] = ColumnMeta{name: "a", ty: influx.Field_Type_Int}
-	fileItr := FileIterator{curtChunkMeta: &ChunkMeta{colMeta: cm}}
-	filesItr := make(FileIterators, 0, 1)
-	filesItr = append(filesItr, &fileItr)
-	group := FilesInfo{name: "cpu", compIts: filesItr}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstinfo := meta.MeasurementInfo{
+		Name:       "mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey:     primaryKey,
+			SortKey:        sortKey,
+			CompactionType: config.BLOCK,
+		},
+		Schema: schema,
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+	indexRelation := &influxql.IndexRelation{
+		Oids:       []uint32{4},
+		IndexNames: []string{"bloomfilter"},
+	}
+
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
+	sortKeyMap := genSortedKeyMap(sort)
+	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
+		sortKeyMap map[string]int, primaryKey, sortKey []string, needMerge bool, pkSchema record.Schemas, indexRelation *influxql.IndexRelation) *record.Record {
+		rec := data[ids]
+		err := msb.WriteData(ids, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pkSchema) != 0 {
+			dataFilePath := msb.FileName.String()
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
+			dataFilePath := msb.FileName.String()
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if needMerge {
+			merge = mergeForColumnStore(sort, sortKeyMap, rec, merge)
+			return merge
+		}
+		return rec
+	}
+
+	tm := testTimeStart
+	tmMinMax.min = uint64(tm.UnixNano())
+	idMinMax.min = 0
+
+	filesN := LeveLMinGroupFiles[0]
+	oldRec := record.NewRecordBuilder(schemaForColumnStore)
+	oldRec.ReserveColumnRows(recRows * filesN)
+
+	recs := make([]*record.Record, 0, filesN)
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
+	needMerge := false
+	for i := 0; i < filesN; i++ {
+		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb.NewPKIndexWriter()
+		msb.NewSkipIndexWriter()
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, indexRelation)
+		needMerge = true
+		if err := writeIntoFile(msb, false); err != nil {
+			t.Fatal(err)
+		}
+		fn := msb.Files[len(msb.Files)-1].Path()
+		if err := RenameIndexFiles(fn, bfColumn); err != nil {
+			t.Fatal(err)
+		}
+		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
+		for _, v := range data {
+			recs = append(recs, v)
+		}
+		if msb.GetPKInfoNum() != 0 {
+			for i, file := range msb.Files {
+				dataFilePath := file.Path()
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
+			}
+		}
+	}
+
+	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+	files := store.CSFiles
+	fids, ok := files["mst"]
+	if !ok || fids.Len() != filesN {
+		t.Fatalf("mst not find")
+	}
+	group := store.ImmTable.LevelPlan(store, 0)[0]
+	//group := FilesInfo{name: "mst", compIts: filesItr, oldFiles: fids.files}
 	cLog, logEnd := logger.NewOperation(log, "Compaction test for column store", group.name)
 	defer logEnd()
 	lcLog := Log.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
-	_, err := cs.prepare(store, group, lcLog)
-	require.Equal(t, fmt.Errorf("measurements info not found"), err)
-	group = FilesInfo{name: "mst", compIts: filesItr}
-	_, err = cs.prepare(store, group, lcLog)
-	require.Equal(t, fmt.Errorf("failed to get sort key colVal"), err)
+	cs := store.ImmTable.(*csImmTableImpl)
+	fi, err := store.ImmTable.NewFileIterators(store, group)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi.totalSegmentCount = uint64(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
+	_, err = cs.NewFragmentIterators(store, fi, lcLog, &mstinfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLevelBlockCompactForColumnStore total block count < limit(128)
+func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	var idMinMax, tmMinMax MinMax
+	var startValue = 1.1
+
+	conf := NewColumnStoreConfig()
+	conf.maxRowsPerSegment = 20
+	conf.FragmentsNumPerFlush = 1
+	tier := uint64(util.Hot)
+	recRows := 1000
+	lockPath := ""
+
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+	store.SetImmTableType(config.COLUMNSTORE)
+	store.CompactionEnable()
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	sort := []string{"time"}
+	schema := make(map[string]int32)
+	for i := range primaryKey {
+		for j := range schemaForColumnStore {
+			if primaryKey[i] == schemaForColumnStore[j].Name {
+				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+			}
+		}
+	}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstinfo := meta.MeasurementInfo{
+		Name:       "mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey:     primaryKey,
+			SortKey:        sortKey,
+			CompactionType: config.BLOCK,
+		},
+		Schema: schema,
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+	indexRelation := &influxql.IndexRelation{
+		Oids:       []uint32{4},
+		IndexNames: []string{"bloomfilter"},
+	}
+
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
+	sortKeyMap := genSortedKeyMap(sort)
+	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
+		sortKeyMap map[string]int, primaryKey, sortKey []string, needMerge bool, pkSchema record.Schemas, indexRelation *influxql.IndexRelation) *record.Record {
+		rec := data[ids]
+		err := msb.WriteData(ids, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pkSchema) != 0 {
+			dataFilePath := msb.FileName.String()
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
+			dataFilePath := msb.FileName.String()
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if needMerge {
+			merge = mergeForColumnStore(sort, sortKeyMap, rec, merge)
+			return merge
+		}
+		return rec
+	}
+
+	check := func(name string, fn string, orig *record.Record) {
+		f := store.File(name, fn, true)
+		contains, err := f.Contains(idMinMax.min)
+		if err != nil || !contains {
+			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
+		}
+
+		midx, _ := f.MetaIndexAt(0)
+		if midx == nil {
+			t.Fatalf("meta index not find")
+		}
+
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decs := NewReadContext(true)
+		readRec := record.NewRecordBuilder(schemaForColumnStore)
+		readRec.ReserveColumnRows(recRows * 4)
+		rec := record.NewRecordBuilder(schemaForColumnStore)
+		rec.ReserveColumnRows(conf.maxRowsPerSegment)
+		for i := range cm.timeMeta().entries {
+			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readRec.Merge(rec)
+		}
+
+		oldV0 := orig.Column(0).FloatValues()
+		oldV1 := orig.Column(1).IntegerValues()
+		oldV2 := orig.Column(2).BooleanValues()
+		oldV3 := orig.Column(3).StringValues(nil)
+		oldTimes := orig.Times()
+		v0 := readRec.Column(0).FloatValues()
+		v1 := readRec.Column(1).IntegerValues()
+		v2 := readRec.Column(2).BooleanValues()
+		v3 := readRec.Column(3).StringValues(nil)
+		times := readRec.Times()
+
+		if !reflect.DeepEqual(oldTimes, times) {
+			t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
+		}
+
+		if !reflect.DeepEqual(oldV0, v0) {
+			t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
+		}
+
+		if !reflect.DeepEqual(oldV1, v1) {
+			t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
+		}
+
+		if !reflect.DeepEqual(oldV2, v2) {
+			t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
+		}
+
+		if !reflect.DeepEqual(oldV3, v3) {
+			t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
+		}
+	}
+
+	tm := testTimeStart
+	tmMinMax.min = uint64(tm.UnixNano())
+	idMinMax.min = 0
+
+	filesN := LeveLMinGroupFiles[0]
+	oldRec := record.NewRecordBuilder(schemaForColumnStore)
+	oldRec.ReserveColumnRows(recRows * filesN)
+
+	recs := make([]*record.Record, 0, filesN)
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
+	needMerge := false
+	for i := 0; i < filesN; i++ {
+		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb.NewPKIndexWriter()
+		msb.NewSkipIndexWriter()
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, indexRelation)
+		needMerge = true
+		if err := writeIntoFile(msb, false); err != nil {
+			t.Fatal(err)
+		}
+		fn := msb.Files[len(msb.Files)-1].Path()
+		if err := RenameIndexFiles(fn, bfColumn); err != nil {
+			t.Fatal(err)
+		}
+		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
+		for _, v := range data {
+			recs = append(recs, v)
+		}
+		if msb.GetPKInfoNum() != 0 {
+			for i, file := range msb.Files {
+				dataFilePath := file.Path()
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
+			}
+		}
+	}
+
+	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+	files := store.CSFiles
+	fids, ok := files["mst"]
+	if !ok || fids.Len() != filesN {
+		t.Fatalf("mst not find")
+	}
+
+	for i, f := range fids.files {
+		check("mst", f.Path(), recs[i])
+		fr := f.(*tsspFile).reader.(*tsspFileReader)
+		if fr.ref != 0 {
+			t.Fatal("ref error")
+		}
+	}
+
+	if err := store.LevelCompact(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	store.Wait()
+	files = store.CSFiles
+	fids, ok = files["mst"]
+	if !ok {
+		t.Fatalf("mst not find")
+	}
+
+	if fids.Len() != 1 {
+		t.Fatalf("exp 1 file after compact, but got len:%d,fids:%v", fids.Len(), fids)
+	}
+}
+
+// TestLevelBlockCompactForColumnStoreV2 total block count > limit(128) and continue executing 2 times compact
+func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	var idMinMax, tmMinMax MinMax
+	var startValue = 999999.0
+
+	conf := NewColumnStoreConfig()
+	conf.maxRowsPerSegment = 20
+	conf.FragmentsNumPerFlush = 1
+	tier := uint64(util.Hot)
+	recRows := 1000
+	lockPath := ""
+
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+	store.SetImmTableType(config.COLUMNSTORE)
+	store.CompactionEnable()
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	sort := []string{"time"}
+	schema := make(map[string]int32)
+	for i := range primaryKey {
+		for j := range schemaForColumnStore {
+			if primaryKey[i] == schemaForColumnStore[j].Name {
+				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+			}
+		}
+	}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstinfo := meta.MeasurementInfo{
+		Name:       "mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey:     primaryKey,
+			SortKey:        sortKey,
+			CompactionType: config.BLOCK,
+		},
+		Schema: schema,
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
+			Oids:      []uint32{4},
+			IndexList: list},
+	}
+	indexRelation := &influxql.IndexRelation{
+		Oids:       []uint32{4},
+		IndexNames: []string{"bloomfilter"},
+	}
+
+	store.ImmTable.SetMstInfo("mst", &mstinfo)
+	sortKeyMap := genSortedKeyMap(sort)
+	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
+		sortKeyMap map[string]int, primaryKey, sortKey []string, needMerge bool, pkSchema record.Schemas, indexRelation *influxql.IndexRelation) *record.Record {
+		rec := data[ids]
+		err := msb.WriteData(ids, rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pkSchema) != 0 {
+			dataFilePath := msb.FileName.String()
+			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
+			dataFilePath := msb.FileName.String()
+			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if needMerge {
+			merge = mergeForColumnStore(sort, sortKeyMap, rec, merge)
+			return merge
+		}
+		return rec
+	}
+
+	check := func(name string, fn string, orig *record.Record) {
+		f := store.File(name, fn, true)
+		contains, err := f.Contains(idMinMax.min)
+		if err != nil || !contains {
+			t.Fatalf("show contain series id:%v, but not find, error:%v", idMinMax.min, err)
+		}
+
+		midx, _ := f.MetaIndexAt(0)
+		if midx == nil {
+			t.Fatalf("meta index not find")
+		}
+
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		decs := NewReadContext(true)
+		readRec := record.NewRecordBuilder(schemaForColumnStore)
+		readRec.ReserveColumnRows(recRows * 4)
+		rec := record.NewRecordBuilder(schemaForColumnStore)
+		rec.ReserveColumnRows(conf.maxRowsPerSegment)
+		for i := range cm.timeMeta().entries {
+			rec, err = f.ReadAt(cm, i, rec, decs, fileops.IO_PRIORITY_LOW_READ)
+			if err != nil {
+				t.Fatal(err)
+			}
+			readRec.Merge(rec)
+		}
+
+		oldV0 := orig.Column(0).FloatValues()
+		oldV1 := orig.Column(1).IntegerValues()
+		oldV2 := orig.Column(2).BooleanValues()
+		oldV3 := orig.Column(3).StringValues(nil)
+		oldTimes := orig.Times()
+		v0 := readRec.Column(0).FloatValues()
+		v1 := readRec.Column(1).IntegerValues()
+		v2 := readRec.Column(2).BooleanValues()
+		v3 := readRec.Column(3).StringValues(nil)
+		times := readRec.Times()
+
+		if !reflect.DeepEqual(oldTimes, times) {
+			t.Fatalf("time not eq, \nexp:%v \nget:%v", oldTimes, times)
+		}
+
+		if !reflect.DeepEqual(oldV0, v0) {
+			t.Fatalf("flaot value not eq, \nexp:%v \nget:%v", oldV0, v0)
+		}
+
+		if !reflect.DeepEqual(oldV1, v1) {
+			t.Fatalf("int value not eq, \nexp:%v \nget:%v", oldV1, v1)
+		}
+
+		if !reflect.DeepEqual(oldV2, v2) {
+			t.Fatalf("bool value not eq, \nexp:%v \nget:%v", oldV2, v2)
+		}
+
+		if !reflect.DeepEqual(oldV3, v3) {
+			t.Fatalf("string value not eq, \nexp:%v \nget:%v", oldV3, v3)
+		}
+	}
+
+	tm := testTimeStart
+	tmMinMax.min = uint64(tm.UnixNano())
+	idMinMax.min = 0
+	compactionTimes := 2
+	filesN := LeveLMinGroupFiles[0] * compactionTimes
+	oldRec := record.NewRecordBuilder(schemaForColumnStore)
+	oldRec.ReserveColumnRows(recRows * filesN)
+
+	recs := make([]*record.Record, 0, filesN)
+	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
+	pkSchema := make([]record.Field, len(pk))
+	for i := range pk {
+		pkSchema[i] = record.Field{
+			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Name: pk[i],
+		}
+	}
+	needMerge := false
+	for i := 0; i < filesN; i++ {
+		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
+		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb.NewPKIndexWriter()
+		msb.NewSkipIndexWriter()
+		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, indexRelation)
+		needMerge = true
+		if err := writeIntoFile(msb, false); err != nil {
+			t.Fatal(err)
+		}
+		fn := msb.Files[len(msb.Files)-1].Path()
+		if err := RenameIndexFiles(fn, bfColumn); err != nil {
+			t.Fatal(err)
+		}
+		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
+		for _, v := range data {
+			recs = append(recs, v)
+		}
+		if msb.GetPKInfoNum() != 0 {
+			for i, file := range msb.Files {
+				dataFilePath := file.Path()
+				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
+				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
+			}
+		}
+	}
+
+	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
+	files := store.CSFiles
+	fids, ok := files["mst"]
+	if !ok || fids.Len() != filesN {
+		t.Fatalf("mst not find")
+	}
+
+	for i, f := range fids.files {
+		check("mst", f.Path(), recs[i])
+
+		fr := f.(*tsspFile).reader.(*tsspFileReader)
+		if fr.ref != 0 {
+			t.Fatal("ref error")
+		}
+	}
+
+	for i := 0; i < compactionTimes; i++ {
+		if err := store.LevelCompact(0, 1); err != nil {
+			t.Fatal(err)
+		}
+		store.Wait()
+	}
+	files = store.CSFiles
+	fids, ok = files["mst"]
+	if !ok {
+		t.Fatalf("mst not find")
+	}
 }
 
 func TestNextSingleFragmentError(t *testing.T) {
@@ -1324,7 +2190,7 @@ func TestNextSingleFragmentError(t *testing.T) {
 	cm := make([]ColumnMeta, 1)
 	curItrs.curtChunkMeta = &ChunkMeta{colMeta: cm}
 	f := &FragmentIterators{}
-	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
+	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE)
 	f.builder.Conf = conf
 	f.builder.Conf.maxRowsPerSegment = 1
 	f.Conf = f.builder.Conf
@@ -1333,12 +2199,34 @@ func TestNextSingleFragmentError(t *testing.T) {
 	tm := testTimeStart
 	_, data := genTestData(1, 1, 10, &startValue, &tm)
 	f.RecordResult = data[1]
+	f.TimeClusterResult = data[1]
 	curItrs.curRec = data[1]
+	curItrs.sortKeyColums = []*record.ColVal{&data[1].ColVals[0]}
 	var err error
-	f.RecordResult, err = curItrs.NextSingleFragment(store, f, pkSchema)
+	impl := &IteratorByRow{f: f}
+	f.RecordResult, err = curItrs.NextSingleFragment(store, impl, pkSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestNewDetachedMsBuilderError(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+	conf := NewColumnStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+	obsOpts := &obs.ObsOptions{}
+	_, err := NewDetachedMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE, obsOpts, nil)
+	require.Equal(t, err, errors.New("endpoint is not set"))
 }
 
 var schema = []record.Field{

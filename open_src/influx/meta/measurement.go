@@ -17,14 +17,58 @@ limitations under the License.
 package meta
 
 import (
+	"bytes"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
+
+var escapeTable [256]byte
+
+func init() {
+	initEscapeTable()
+}
+
+func initEscapeTable() {
+	escape := [][2]byte{
+		{'a', '\a'}, {'b', '\b'}, {'f', '\f'}, {'n', '\n'}, {'r', '\r'}, {'t', '\t'}, {'v', '\v'},
+		{'"', '"'}, {'\'', '\''}, {'\\', '\\'},
+	}
+	for i := 0; i < len(escape); i++ {
+		escapeTable[escape[i][0]] = escape[i][1]
+	}
+}
+
+func TransSplitChar(splitChar string) string {
+	var buf bytes.Buffer
+	i := 0
+	inEscape := false
+	for i < len(splitChar) {
+		ch := splitChar[i]
+		i++
+		if ch == '\\' {
+			inEscape = true
+			continue
+		}
+
+		if !inEscape {
+			buf.WriteByte(ch)
+		} else {
+			if escapeTable[ch] != 0 {
+				buf.WriteByte(escapeTable[ch])
+			}
+			inEscape = false
+		}
+	}
+	return buf.String()
+}
 
 type Options struct {
 	CaseInSensitive bool   `json:"case_insensitive"`
@@ -33,6 +77,7 @@ type Options struct {
 	ReadThreshold   int    `json:"read_threshold"`
 	StorageCapacity int    `json:"storage_capacity"`
 	SplitChar       string `json:"split_char"`
+	TagsSplit       string `json:"tag_split_char"`
 	Ttl             int64  `json:"ttl"`
 }
 
@@ -43,6 +88,7 @@ func (mo *Options) InitDefault() {
 	mo.ReadThreshold = 1
 	mo.StorageCapacity = 1
 	mo.SplitChar = ""
+	mo.TagsSplit = ""
 	mo.AppendMeta = false
 }
 
@@ -57,6 +103,7 @@ func (mo *Options) Marshal() *proto2.Options {
 		ReadThreshold:   proto.Int(mo.ReadThreshold),
 		StorageCapacity: proto.Int(mo.StorageCapacity),
 		SplitChar:       proto.String(mo.SplitChar),
+		TagsSplit:       proto.String(mo.TagsSplit),
 		Ttl:             proto.Int64(mo.Ttl),
 	}
 }
@@ -67,8 +114,17 @@ func (mo *Options) Unmarshal(pb *proto2.Options) {
 	mo.ReadThreshold = int(pb.GetReadThreshold())
 	mo.StorageCapacity = int(pb.GetStorageCapacity())
 	mo.SplitChar = pb.GetSplitChar()
+	mo.TagsSplit = pb.GetTagsSplit()
 	mo.AppendMeta = pb.GetAppendMeta()
 	mo.Ttl = pb.GetTtl()
+}
+
+func (mo *Options) GetSplitChar() string {
+	return TransSplitChar(mo.SplitChar)
+}
+
+func (mo *Options) GetTagSplitChar() string {
+	return TransSplitChar(mo.TagsSplit)
 }
 
 type MeasurementInfo struct {
@@ -81,6 +137,7 @@ type MeasurementInfo struct {
 	MarkDeleted   bool
 	EngineType    config.EngineType
 	Options       *Options
+	ObsOptions    *obs.ObsOptions // assign DatabaseInfo's ObsOptions to it when obatining MeasurementInfo
 	tagKeysTotal  int
 }
 
@@ -92,12 +149,32 @@ func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
 	}
 }
 
+func (msti *MeasurementInfo) IsBlockCompact() bool {
+	if msti.ColStoreInfo == nil {
+		return false
+	}
+	return msti.ColStoreInfo.IsBlockCompact()
+}
+
+func (msti *MeasurementInfo) IsTimeSorted() bool {
+	if msti.ColStoreInfo == nil || len(msti.ColStoreInfo.SortKey) == 0 {
+		return false
+	}
+	return msti.ColStoreInfo.SortKey[0] == record.TimeField
+}
+
+func (msti *MeasurementInfo) IsDetachedWrite() bool {
+	return msti.ObsOptions != nil
+}
+
 func (msti *MeasurementInfo) OriginName() string {
 	return msti.originName
 }
+
 func (msti *MeasurementInfo) SetoriginName(originName string) {
 	msti.originName = originName
 }
+
 func (msti *MeasurementInfo) walkSchema(fn func(fieldName string, fieldType int32)) {
 	for fieldName := range msti.Schema {
 		fn(fieldName, msti.Schema[fieldName])
@@ -142,6 +219,10 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 	if msti.Options != nil {
 		pb.Options = msti.Options.Marshal()
 	}
+	if msti.ObsOptions != nil {
+		pb.ObsOptions = MarshalObsOptions(msti.ObsOptions)
+	}
+
 	return pb
 }
 
@@ -178,6 +259,10 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 	if pb.GetOptions() != nil {
 		msti.Options = &Options{}
 		msti.Options.Unmarshal(pb.GetOptions())
+		msti.CompatibleForLogkeeper()
+	}
+	if pb.GetObsOptions() != nil {
+		msti.ObsOptions = UnmarshalObsOptions(pb.GetObsOptions())
 	}
 }
 
@@ -212,6 +297,10 @@ func (msti MeasurementInfo) clone() *MeasurementInfo {
 	if msti.Options != nil {
 		options := *msti.Options
 		other.Options = &options
+	}
+	if msti.ObsOptions != nil {
+		ObsOptions := *msti.ObsOptions
+		other.ObsOptions = &ObsOptions
 	}
 	return &other
 }
@@ -291,6 +380,40 @@ func (mstsi *MeasurementsInfo) UnmarshalBinary(buf []byte) error {
 	}
 	mstsi.unmarshal(pb)
 	return nil
+}
+
+// only useful in the logkeeper products
+func (msti *MeasurementInfo) CompatibleForLogkeeper() {
+	if !config.IsLogKeeper() || msti.Options == nil {
+		return
+	}
+	contentSplit := msti.Options.GetSplitChar()
+	if contentSplit == "" {
+		contentSplit = tokenizer.CONTENT_SPLITTER
+	}
+	tagsSplitChar := msti.Options.GetTagSplitChar()
+	if tagsSplitChar == "" {
+		tagsSplitChar = tokenizer.TAGS_SPLITTER_BEFORE
+	}
+
+	msti.IndexRelation = influxql.IndexRelation{
+		Rid:        0,
+		Oids:       []uint32{4}, // bloomfilter oid
+		IndexNames: []string{"bloomfilter"},
+		IndexList: []*influxql.IndexList{
+			{
+				IList: []string{"tags", "content"},
+			},
+		},
+		IndexOptions: map[string][]*influxql.IndexOption{
+			"tags": {
+				{Tokens: tagsSplitChar, Tokenizers: "standard"},
+			},
+			"content": {
+				{Tokens: contentSplit, Tokenizers: "standard"},
+			},
+		},
+	}
 }
 
 type ShardKeyInfo struct {
@@ -399,9 +522,9 @@ func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeF
 
 func EncodeIndexOption(o *influxql.IndexOption) *proto2.IndexOption {
 	pb := &proto2.IndexOption{
-		Tokens:     proto.String(o.Tokens),
-		Tokenizers: proto.String(o.Tokenizers),
-		Segment:    proto.Int64(o.Segment),
+		Tokens:              proto.String(o.Tokens),
+		Tokenizers:          proto.String(o.Tokenizers),
+		TimeClusterDuration: proto.Int64(int64(o.TimeClusterDuration)),
 	}
 
 	return pb
@@ -409,9 +532,9 @@ func EncodeIndexOption(o *influxql.IndexOption) *proto2.IndexOption {
 
 func DecodeIndexOption(pb *proto2.IndexOption) *influxql.IndexOption {
 	o := &influxql.IndexOption{
-		Tokens:     pb.GetTokens(),
-		Tokenizers: pb.GetTokenizers(),
-		Segment:    pb.GetSegment(),
+		Tokens:              pb.GetTokens(),
+		Tokenizers:          pb.GetTokenizers(),
+		TimeClusterDuration: time.Duration(pb.GetTimeClusterDuration()),
 	}
 	return o
 }
@@ -435,8 +558,8 @@ func EncodeIndexRelation(indexR *influxql.IndexRelation) *proto2.IndexRelation {
 				pb.IndexOptions[i] = &proto2.IndexOptions{
 					Infos: make([]*proto2.IndexOption, len(indexOptions)),
 				}
-				for _, o := range indexOptions {
-					pb.IndexOptions[i].Infos = append(pb.IndexOptions[i].Infos, EncodeIndexOption(o))
+				for j, o := range indexOptions {
+					pb.IndexOptions[i].Infos[j] = EncodeIndexOption(o)
 				}
 			}
 		}
@@ -495,6 +618,10 @@ func NewColStoreInfo(PrimaryKey []string, SortKey []string, Property [][]string,
 		h.PropertyValue = Property[1]
 	}
 	return h
+}
+
+func (h *ColStoreInfo) IsBlockCompact() bool {
+	return h.CompactionType == config.BLOCK
 }
 
 func (h *ColStoreInfo) Marshal() *proto2.ColStoreInfo {

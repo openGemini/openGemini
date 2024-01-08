@@ -55,6 +55,7 @@ func (e *ShowTagKeysExecutor) Execute(stmt *influxql.ShowTagKeysStatement) (nets
 	}
 
 	lock := new(sync.Mutex)
+
 	mapMstMap := make(map[string]map[string]struct{})
 	err = e.me.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
 		if *hasErr {

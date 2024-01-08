@@ -19,6 +19,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -29,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -51,44 +53,45 @@ type ColumnStoreReader struct {
 	initReaderSpan *tracing.Span
 	filterSpan     *tracing.Span
 
-	logger      *logger.Logger
-	chunkPool   *executor.CircularChunkPool
-	recordPool  *record.CircularRecordPool
-	readCursor  *immutable.LocationCursor
-	queryCtx    *idKeyCursorContext
-	filterOpt   *immutable.FilterOptions
-	output      *executor.ChunkPort
-	inSchema    record.Schemas
-	outSchema   hybridqp.RowDataType
-	schema      hybridqp.Catalog
-	opt         query.ProcessorOptions
-	frags       executor.ShardsFragments
-	database    string
-	ptID        uint32
+	logger     *logger.Logger
+	chunkPool  *executor.CircularChunkPool
+	recordPool *record.CircularRecordPool
+	readCursor *immutable.LocationCursor
+	queryCtx   *idKeyCursorContext
+	filterOpt  *immutable.FilterOptions
+	output     *executor.ChunkPort
+	inSchema   record.Schemas
+	outSchema  hybridqp.RowDataType
+	schema     hybridqp.Catalog
+	opt        query.ProcessorOptions
+	frags      executor.ShardsFragments
+	plan       hybridqp.QueryNode
+
 	limit       int
 	ops         []hybridqp.ExprOptions
 	rowBitmap   []bool
 	dimVals     []string
 	outInIdxMap map[int]int
-	closed      chan struct{}
+	closedCh    chan struct{}
+	closedCount int64
 }
 
-func NewColumnStoreReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog, frags executor.ShardsFragments, database string, ptID uint32) *ColumnStoreReader {
+func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragments) *ColumnStoreReader {
 	r := &ColumnStoreReader{
-		output:      executor.NewChunkPort(outSchema),
-		outSchema:   outSchema,
-		ops:         ops,
-		opt:         *schema.Options().(*query.ProcessorOptions),
-		schema:      schema,
+		output:      executor.NewChunkPort(plan.RowDataType()),
+		outSchema:   plan.RowDataType(),
+		ops:         plan.RowExprOptions(),
+		opt:         *plan.Schema().Options().(*query.ProcessorOptions),
+		schema:      plan.Schema(),
 		frags:       frags,
-		database:    database,
-		ptID:        ptID,
+		plan:        plan,
 		outInIdxMap: make(map[int]int),
-		dimVals:     make([]string, len(schema.Options().GetOptDimension())),
+		dimVals:     make([]string, len(plan.Schema().Options().GetOptDimension())),
 		logger:      logger.NewLogger(errno.ModuleQueryEngine),
+		closedCh:    make(chan struct{}, 2),
 	}
 	if len(r.schema.GetSortFields()) == 0 && !r.schema.HasCall() {
-		r.limit = schema.Options().GetLimit() + schema.Options().GetOffset()
+		r.limit = plan.Schema().Options().GetLimit() + plan.Schema().Options().GetOffset()
 	}
 	return r
 }
@@ -97,13 +100,19 @@ type ColumnStoreReaderCreator struct {
 }
 
 func (c *ColumnStoreReaderCreator) Create(plan executor.LogicalPlan, _ *query.ProcessorOptions) (executor.Processor, error) {
-	p := NewColumnStoreReader(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, "", 0)
+	p := NewColumnStoreReader(plan, nil)
 	return p, nil
 }
 
-func (c *ColumnStoreReaderCreator) CreateReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog, frags executor.ShardsFragments, database string, ptID uint32) (executor.Processor, error) {
-	p := NewColumnStoreReader(outSchema, ops, schema, frags, database, ptID)
-	return p, nil
+func (c *ColumnStoreReaderCreator) CreateReader(plan hybridqp.QueryNode, indexInfo interface{}) (executor.Processor, error) {
+	switch info := indexInfo.(type) {
+	case executor.ShardsFragments:
+		return NewColumnStoreReader(plan, info), nil
+	case *executor.CSIndexInfo:
+		return NewHybridStoreReader(plan, info), nil
+	default:
+		return nil, fmt.Errorf("unsupported index info type for the colstore: %v", indexInfo)
+	}
 }
 
 var _ = executor.RegistryTransformCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
@@ -143,6 +152,7 @@ func (r *ColumnStoreReader) initSpan() {
 
 func (r *ColumnStoreReader) Close() {
 	r.Once(func() {
+		atomic.AddInt64(&r.closedCount, 1)
 		r.output.Close()
 	})
 }
@@ -156,10 +166,14 @@ func (r *ColumnStoreReader) Release() error {
 		r.chunkPool.Release()
 	}
 	if r.recordPool != nil {
-		r.recordPool.PutRecordInCircularPool()
+		r.recordPool.Put()
+	}
+	if r.readCursor != nil {
+		r.readCursor.Close()
 	}
 	r.rowBitmap = r.rowBitmap[:0]
 	r.dimVals = r.dimVals[:0]
+	r.Close()
 	return nil
 }
 
@@ -184,9 +198,10 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 	if err != nil {
 		return
 	}
-	r.queryCtx.filterOption.FiltersMap = make(map[string]interface{})
+	r.queryCtx.filterOption.FiltersMap = make(map[string]*influxql.FilterMapValue)
 	for _, id := range r.queryCtx.filterOption.FieldsIdx {
-		r.queryCtx.filterOption.FiltersMap[r.queryCtx.schema[id].Name], _ = influx.FieldType2Val(r.queryCtx.schema[id].Type)
+		val, _ := influx.FieldType2Val(r.queryCtx.schema[id].Type)
+		r.queryCtx.filterOption.FiltersMap.SetFilterMapValue(r.queryCtx.schema[id].Name, val)
 	}
 
 	// init the filter opt
@@ -196,7 +211,7 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 	readCtx = immutable.NewReadContext(r.schema.Options().IsAscending())
 	tr = util.TimeRange{Min: querySchema.Options().GetStartTime(), Max: querySchema.Options().GetEndTime()}
 	// TODO: General solution of the first sort key to be adapted
-	if querySchema.Options().GetTimeFirstKey() {
+	if querySchema.Options().IsTimeSorted() {
 		readCtx.SetTr(tr)
 	}
 	readCtx.SetSpan(r.readSpan, r.filterSpan)
@@ -210,10 +225,14 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 	if err != nil {
 		return
 	}
-	if !r.schema.Options().GetTimeFirstKey() {
+	if !r.schema.Options().IsTimeSorted() {
 		tr = util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
 	}
 	var locs []*immutable.Location
+
+	buf := pool.GetChunkMetaBuffer()
+	defer pool.PutChunkMetaBuffer(buf)
+
 	for _, shardFrags := range r.frags {
 		for _, fileFrags := range shardFrags.FileMarks {
 			file := fileFrags.GetFile()
@@ -222,7 +241,7 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 			if ok {
 				loc.SetChunkMeta(chunkMeta)
 			} else {
-				ok, err = loc.Contains(0, tr, nil)
+				ok, err = loc.Contains(0, tr, buf)
 				if err != nil {
 					return
 				}
@@ -279,7 +298,7 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	}
 
 	// if TIME column is the first column of the sort KEY, it would be filter by binary search by FilterByTime
-	if !r.schema.Options().GetTimeFirstKey() {
+	if !r.schema.Options().IsTimeSorted() {
 		startTime, endTime := r.schema.Options().GetStartTime(), r.schema.Options().GetEndTime()
 		timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: startTime, Max: endTime}, r.inSchema, len(r.inSchema)-1)
 		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(timeCond, r.schema.Options().GetCondition(), r.inSchema)
@@ -368,7 +387,6 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 			r.span.SetNameValue(fmt.Sprintf("iter_count=%d", iterCount))
 			tracing.Finish(r.span, r.initReaderSpan, r.readSpan, r.filterSpan, r.recToChunkSpan, r.outputSpan)
 		}
-		r.readCursor.Close()
 		r.Close()
 	}()
 
@@ -384,7 +402,7 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 	for {
 		filterBitmap.Reset()
 		select {
-		case <-r.closed:
+		case <-r.closedCh:
 			return
 		case <-ctx.Done():
 			return
@@ -397,7 +415,7 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 			if rec == nil {
 				return
 			}
-			rec.KickNilRow()
+			rec.KickNilRow(nil)
 			if rec.RowNums() == 0 {
 				continue
 			}
@@ -517,11 +535,15 @@ func (r *ColumnStoreReader) tranFieldToDim(rec *record.Record, chunk executor.Ch
 func (r *ColumnStoreReader) sendChunk(chunk executor.Chunk) {
 	defer func() {
 		if e := recover(); e != nil {
-			r.closed <- struct{}{}
+			r.closedCh <- struct{}{}
 		}
 	}()
-	statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
-	r.output.State <- chunk
+	if atomic.LoadInt64(&r.closedCount) == 0 {
+		statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
+		r.output.State <- chunk
+	} else {
+		r.closedCh <- struct{}{}
+	}
 }
 
 func (r *ColumnStoreReader) GetOutputs() executor.Ports {

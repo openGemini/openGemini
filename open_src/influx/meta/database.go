@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/obs"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
 
@@ -26,7 +27,7 @@ type DatabaseInfo struct {
 	EnableTagArray         bool
 	ReplicaN               int
 	ContinuousQueries      map[string]*ContinuousQueryInfo // {"cqName": *ContinuousQueryInfo}
-	Options                *ObsOptions
+	Options                *obs.ObsOptions
 }
 
 func NewDatabase(name string) *DatabaseInfo {
@@ -147,7 +148,7 @@ func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 	pb.EnableTagArray = proto.Bool(di.EnableTagArray)
 	pb.ReplicaN = proto.Int64(int64(di.ReplicaN))
 	if di.Options != nil {
-		pb.Options = di.Options.Marshal()
+		pb.Options = MarshalObsOptions(di.Options)
 	}
 
 	return pb
@@ -186,8 +187,7 @@ func (di *DatabaseInfo) unmarshal(pb *proto2.DatabaseInfo) {
 		di.ReplicaN = 1
 	}
 	if pb.GetOptions() != nil {
-		di.Options = &ObsOptions{}
-		di.Options.Unmarshal(pb.GetOptions())
+		di.Options = UnmarshalObsOptions(pb.GetOptions())
 	}
 }
 
@@ -296,5 +296,27 @@ func (di *DatabaseInfo) WalkRetentionPolicyOrderly(fn func(rp *RetentionPolicyIn
 	sort.Strings(rpNames)
 	for i := 0; i < len(rpNames); i++ {
 		fn(di.RetentionPolicies[rpNames[i]])
+	}
+}
+
+func MarshalObsOptions(cro *obs.ObsOptions) *proto2.ObsOptions {
+	return &proto2.ObsOptions{
+		Enabled:    proto.Bool(cro.Enabled),
+		BucketName: proto.String(cro.BucketName),
+		Ak:         proto.String(cro.Ak),
+		Sk:         proto.String(cro.Sk),
+		Endpoint:   proto.String(cro.Endpoint),
+		BasePath:   proto.String(cro.BasePath),
+	}
+}
+
+func UnmarshalObsOptions(pb *proto2.ObsOptions) *obs.ObsOptions {
+	return &obs.ObsOptions{
+		Enabled:    pb.GetEnabled(),
+		BucketName: pb.GetBucketName(),
+		Ak:         pb.GetAk(),
+		Sk:         pb.GetSk(),
+		Endpoint:   pb.GetEndpoint(),
+		BasePath:   pb.GetBasePath(),
 	}
 }

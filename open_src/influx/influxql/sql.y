@@ -27,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
-const DefaultQueryTimeout = time.Duration(0)
+const DefaultQueryTimeout = time.Duration(0) 
 
 func setParseTree(yylex interface{}, stmts Statements) {
     for _,stmt :=range stmts{
@@ -510,7 +510,33 @@ SELECT_STATEMENT:
         }
         $$ = stmt
     }
+    |SELECT COLUMN_CLAUSES WHERE_CLAUSE GROUP_BY_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    {
+        stmt := &SelectStatement{}
+        stmt.Fields = $2
+        stmt.Dimensions = $4
+        stmt.Condition = $3
+        stmt.SortFields = $6
+        stmt.Limit = $7[0]
+        stmt.Offset = $7[1]
+        stmt.SLimit = $7[2]
+        stmt.SOffset = $7[3]
 
+        tempfill,tempfillvalue,fillflag := deal_Fill($5)
+        if fillflag==false{
+            yylex.Error("Invalid characters in fill")
+        }else{
+            stmt.Fill,stmt.FillValue = tempfill,tempfillvalue
+        }
+        stmt.IsRawQuery = true
+	WalkFunc(stmt.Fields, func(n Node) {
+		if _, ok := n.(*Call); ok {
+			stmt.IsRawQuery = false
+		}
+	})
+        stmt.Location = $8
+        $$ = stmt
+    }
 
 
 COLUMN_CLAUSES:
@@ -2413,14 +2439,18 @@ CREATE_MEASUREMENT_STATEMENT:
         }
         // check if indexlist of secondary is IN Tags/Fields
         for i := range $5.IndexType {
-            _, indexlist := $5.IndexType[i], $5.IndexList[i]
-                for _, col := range indexlist {
-                    _, inTag := stmt.Tags[col]
-                    _, inField := stmt.Fields[col]
-                    if !inTag && !inField {
-                        yylex.Error("Invalid indexlist")
-                    }
+            indextype := $5.IndexType[i]
+            if indextype == "timecluster" {
+                continue
+            }
+            indexlist := $5.IndexList[i]
+            for _, col := range indexlist {
+                _, inTag := stmt.Tags[col]
+                _, inField := stmt.Fields[col]
+                if !inTag && !inField {
+                    yylex.Error("Invalid indexlist")
                 }
+            }
         }
         stmt.EngineType = $5.EngineType
         stmt.IndexType = $5.IndexType
@@ -2528,6 +2558,34 @@ CMOPTION_INDEXTYPE_CS:
                 }
             }
             $$ = $2
+        }
+    }
+    | INDEXTYPE IDENT LPAREN DURATIONVAL RPAREN INDEX_TYPES
+    {
+        indexType := strings.ToLower($2)
+        if indexType != "timecluster" {
+            yylex.Error("expect TIMECLUSTER for INDEXTYPE")
+            return 1
+        }
+        indextype := &IndexType{
+            types: []string{indexType},
+            lists: [][]string{{"time"}},
+            timeClusterDuration: $4,
+        }
+        validIndexType := map[string]struct{}{}
+        validIndexType["bloomfilter"] = struct{}{}
+        validIndexType["minmax"] = struct{}{}
+        if $6 == nil {
+            $$ = indextype
+        } else {
+            for _, indexType := range $6.types {
+                if _, ok := validIndexType[strings.ToLower(indexType)]; !ok {
+                    yylex.Error("Invalid index type for COLUMNSTORE")
+                }
+            }
+            indextype.types = append(indextype.types, $6.types...)
+            indextype.lists = append(indextype.lists, $6.lists...)
+            $$ = indextype
         }
     }
 

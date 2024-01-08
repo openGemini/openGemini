@@ -23,6 +23,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
@@ -159,6 +160,8 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		s.log.Debug("get index result empty")
 		return nil, nil
 	}
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanRunTimeTotal, time.Since(start).Nanoseconds())
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanSeriesNumTotal, seriesNum)
 
 	qDuration, _ := ctx.Value(query.QueryDurationKey).(*statistics.StoreSlowQueryStatistics)
 	if qDuration != nil {
@@ -231,7 +234,6 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 
 	cursors := make(comm.KeyCursors, 0, parallelism)
 	for groupIdx := 0; groupIdx < parallelism; groupIdx++ {
-		var err error
 		c := &groupCursor{
 			id:   groupIdx,
 			name: querySchema.Options().OptionsName(),
@@ -271,19 +273,22 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 		}
 
 		// init map
-		c.ctx.filterOption.FiltersMap = make(map[string]interface{})
+		c.ctx.filterOption.FiltersMap = make(map[string]*influxql.FilterMapValue)
 		for _, id := range c.ctx.filterOption.FieldsIdx {
-			if c.ctx.filterOption.FiltersMap[schema[id].Name], err = influx.FieldType2Val(schema[id].Type); err != nil {
+			if val, err := influx.FieldType2Val(schema[id].Type); err != nil {
+				c.ctx.filterOption.FiltersMap.SetFilterMapValue(schema[id].Name, val)
 				if executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg() {
 					for _, v := range cursors {
 						v.(*groupCursor).ctx.UnRef()
 					}
 				}
 				return nil, err
+			} else {
+				c.ctx.filterOption.FiltersMap.SetFilterMapValue(schema[id].Name, val)
 			}
 		}
 		for _, tagName := range c.ctx.filterOption.FilterTags {
-			c.ctx.filterOption.FiltersMap[tagName] = (*string)(nil)
+			c.ctx.filterOption.FiltersMap.SetFilterMapValue(tagName, (*string)(nil))
 		}
 		c.ctx.tr.Min = querySchema.Options().GetStartTime()
 		c.ctx.tr.Max = querySchema.Options().GetEndTime()
@@ -693,7 +698,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
 			continue
 		}
-		memTableRecord = memTableRecord.KickNilRow()
+		memTableRecord = memTableRecord.KickNilRow(nil)
 		if memTableRecord.RowNums() == 0 {
 			continue
 		}

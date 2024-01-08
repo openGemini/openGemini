@@ -50,8 +50,13 @@ type Options interface {
 	HaveOnlyCSStore() bool
 	GetDimensions() []string
 	SetFill(influxql.FillOption)
-	SetTimeFirstKey()
-	GetTimeFirstKey() bool
+	IsTimeSorted() bool
+	IsUnifyPlan() bool
 	SetSortFields(influxql.SortFields)
 	GetSortFields() influxql.SortFields
+	FieldWildcard() bool
+	GetStmtId() int
+	GetLogQueryCurrId() string
+	GetIterId() int32
+	IsIncQuery() bool
 }

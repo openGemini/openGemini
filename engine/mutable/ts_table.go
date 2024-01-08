@@ -31,7 +31,6 @@ import (
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -103,7 +102,7 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 	var orderMs, unOrderMs *immutable.MsBuilder
 	sidLen := len(sids)
 
-	hlp := record.NewSortHelper()
+	hlp := record.NewColumnSortHelper()
 	defer hlp.Release()
 
 	for i := range sids {
@@ -214,7 +213,7 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 	return table.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
-func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error {
+func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
 	return nil
 }
 
@@ -227,16 +226,5 @@ func (t *tsMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record
 	return msInfo
 }
 
-func (t *tsMemTableImpl) ApplyConcurrency(table *MemTable, f func(msName string)) {
-	var wg sync.WaitGroup
-	wg.Add(len(table.msInfoMap))
-	for k := range table.msInfoMap {
-		concurLimiter <- struct{}{}
-		go func(msName string) {
-			f(msName)
-			concurLimiter.Release()
-			wg.Done()
-		}(k)
-	}
-	wg.Wait()
+func (t *tsMemTableImpl) SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map) {
 }

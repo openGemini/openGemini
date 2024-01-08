@@ -21,12 +21,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"go.uber.org/zap"
@@ -47,7 +49,7 @@ type IndexScanTransform struct {
 	info             *IndexScanExtraInfo
 	wg               sync.WaitGroup
 	aborted          bool
-	mutex            sync.Mutex
+	mutex            sync.RWMutex
 
 	inputPort             *ChunkPort
 	downSampleRowDataType *hybridqp.RowDataTypeImpl
@@ -56,10 +58,16 @@ type IndexScanTransform struct {
 
 	chunkReaderNum int64
 	limiter        chan struct{}
+	limit          int
+	rowCnt         int
+
+	frags     ShardsFragments
+	schema    hybridqp.Catalog
+	indexInfo *CSIndexInfo
 }
 
-func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions,
-	schema hybridqp.Catalog, input hybridqp.QueryNode, info *IndexScanExtraInfo, limiter chan struct{}) *IndexScanTransform {
+func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog,
+	input hybridqp.QueryNode, info *IndexScanExtraInfo, limiter chan struct{}, limit int) *IndexScanTransform {
 	trans := &IndexScanTransform{
 		outRowDataType: outRowDataType,
 		output:         NewChunkPort(outRowDataType),
@@ -67,13 +75,14 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 		builder:        NewChunkBuilder(outRowDataType),
 		ops:            ops,
 		opt:            *schema.Options().(*query.ProcessorOptions),
+		schema:         schema,
 		node:           input,
 		info:           info,
 		limiter:        limiter,
 		aborted:        false,
 		indexScanErr:   true,
+		limit:          limit,
 	}
-
 	return trans
 }
 
@@ -81,7 +90,7 @@ type IndexScanTransformCreator struct {
 }
 
 func (c *IndexScanTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
-	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil, nil)
+	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil, nil, 0)
 	return p, nil
 }
 
@@ -193,7 +202,59 @@ func (trans *IndexScanTransform) FreeResFromAllocator() {
 	}
 }
 
-func (trans *IndexScanTransform) indexScan() error {
+func (trans *IndexScanTransform) sparseIndexScan() error {
+	if trans.info == nil {
+		return fmt.Errorf("nil index scan transform extra info")
+	}
+	if trans.aborted {
+		return errors.New("nil plan")
+	}
+
+	shardInfo := trans.info.Next()
+	if shardInfo == nil {
+		return errors.New("nil plan")
+	}
+
+	trans.mutex.RLock()
+	defer trans.mutex.RUnlock()
+	info, err := trans.info.Store.GetIndexInfo(trans.info.Req.Database, trans.info.Req.PtID, shardInfo.ID, trans.schema.(*QuerySchema))
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		return errors.New("nil plan")
+	}
+	attachedInfo, ok := info.(*AttachedIndexInfo)
+	if !ok {
+		return fmt.Errorf("invalid the index info")
+	}
+	trans.indexInfo = NewCSIndexInfo(shardInfo.Path, attachedInfo, shardInfo.Version)
+
+	traits := &StoreExchangeTraits{
+		mapShardsToReaders: make(map[uint64][][]interface{}),
+		shards:             []uint64{shardInfo.ID},
+		shardIndex:         0,
+		readerIndex:        0,
+	}
+	traits.mapShardsToReaders[shardInfo.ID] = [][]interface{}{}
+	traits.mapShardsToReaders[shardInfo.ID] = append(traits.mapShardsToReaders[shardInfo.ID], []interface{}{trans.indexInfo})
+
+	trans.executorBuilder = NewColStoreScanExecutorBuilder(traits, trans.indexInfo, trans.info)
+	trans.executorBuilder.Analyze(trans.span)
+	p, err := trans.executorBuilder.Build(trans.node)
+	if err != nil {
+		return err
+	}
+
+	trans.pipelineExecutor, ok = p.(*PipelineExecutor)
+	if !ok {
+		return errors.New("the PipelineExecutor is invalid for hybridIndexScan")
+	}
+	trans.indexScanErr = false
+	return nil
+}
+
+func (trans *IndexScanTransform) tsIndexScan() error {
 	if trans.info == nil {
 		return fmt.Errorf("nil index scan transform extra info")
 	}
@@ -202,8 +263,14 @@ func (trans *IndexScanTransform) indexScan() error {
 	if trans.aborted {
 		return errors.New("nil plan")
 	}
+
 	info := trans.info
-	downSampleLevel := trans.info.Store.GetShardDownSampleLevel(info.Req.Database, info.Req.PtID, info.ShardID)
+	shardInfo := trans.info.Next()
+	if shardInfo == nil {
+		return errors.New("nil plan")
+	}
+
+	downSampleLevel := trans.info.Store.GetShardDownSampleLevel(info.Req.Database, info.Req.PtID, shardInfo.ID)
 	if !trans.CanDownSampleRewrite(downSampleLevel) {
 		return fmt.Errorf("nil plan")
 	}
@@ -213,7 +280,7 @@ func (trans *IndexScanTransform) indexScan() error {
 		return err
 	}
 	trans.GetResFromAllocator()
-	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, info.ShardID,
+	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, shardInfo.ID,
 		info.Req.Opt.Sources, subPlanSchema)
 	trans.FreeResFromAllocator()
 	defer trans.CursorsClose(plan)
@@ -233,12 +300,13 @@ func (trans *IndexScanTransform) indexScan() error {
 	}
 	traits := &StoreExchangeTraits{
 		mapShardsToReaders: make(map[uint64][][]interface{}),
-		shards:             []uint64{trans.info.ShardID},
+		shards:             []uint64{shardInfo.ID},
 		shardIndex:         0,
 		readerIndex:        0,
 	}
-	traits.mapShardsToReaders[trans.info.ShardID] = keyCursors
+	traits.mapShardsToReaders[shardInfo.ID] = keyCursors
 
+	startTime := time.Now()
 	trans.executorBuilder = NewIndexScanExecutorBuilder(traits, trans.opt.EnableBinaryTreeMerge)
 	trans.executorBuilder.Analyze(trans.span)
 
@@ -246,7 +314,13 @@ func (trans *IndexScanTransform) indexScan() error {
 	if pipeError != nil {
 		return pipeError
 	}
-	trans.pipelineExecutor = p.(*PipelineExecutor)
+
+	var ok bool
+	trans.pipelineExecutor, ok = p.(*PipelineExecutor)
+	if !ok {
+		return errors.New("the PipelineExecutor is invalid for IndexScanTransform")
+	}
+	defer atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
 	output := trans.pipelineExecutor.root.transform.GetOutputs()
 	if len(output) > 1 {
 		return errors.New("the output should be 1")
@@ -312,64 +386,101 @@ func (trans *IndexScanTransform) Close() {
 }
 
 func (trans *IndexScanTransform) Release() error {
+	trans.Once(func() {
+		if trans.frags != nil {
+			for _, shardFrags := range trans.frags {
+				for _, fileFrags := range shardFrags.FileMarks {
+					file := fileFrags.GetFile()
+					file.UnrefFileReader()
+					file.Unref()
+				}
+			}
+		}
+		if trans.indexInfo != nil {
+			files := trans.indexInfo.Files()
+			for i := range files {
+				files[i].UnrefFileReader()
+				files[i].Unref()
+			}
+		}
+	})
 	return resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, trans.chunkReaderNum, trans.chunkReaderNum)
+}
+
+func (trans *IndexScanTransform) indexScan() error {
+	mst := trans.schema.Options().GetMeasurements()
+	if mst[0].IsCSStore() {
+		return trans.sparseIndexScan()
+	} else {
+		return trans.tsIndexScan()
+	}
 }
 
 func (trans *IndexScanTransform) Work(ctx context.Context) error {
 	defer trans.output.Close()
-	if e := trans.indexScan(); e != nil {
-		if e.Error() != "nil plan" {
-			return e
+	for {
+		// build pipelineExecutor for indexScan
+		if err := trans.indexScan(); err != nil {
+			if err.Error() == "nil plan" {
+				return nil
+			}
+			return err
 		}
-		return nil
+		// execute sub-pipeline
+		err, done := trans.WorkHelper(ctx)
+		if err != nil || done {
+			return err
+		}
+
+		if trans.limit != 0 && trans.rowCnt >= trans.limit {
+			return nil
+		}
 	}
-	return trans.WorkHelper(ctx)
 }
 
-func (trans *IndexScanTransform) WorkHelper(ctx context.Context) error {
+func (trans *IndexScanTransform) WorkHelper(ctx context.Context) (error, bool) {
 	var pipError error
 	output := trans.pipelineExecutor.root.transform.GetOutputs()
 	if len(output) != 1 {
-		return errors.New("the output should be 1")
+		return errors.New("the output should be 1"), false
 	}
 	trans.inputPort.ConnectNoneCache(output[0])
 
 	var wgChild sync.WaitGroup
 	wgChild.Add(1)
-
+	startTime := ctx.Value(query.IndexScanDagStartTimeKey)
+	if startTime, ok := startTime.(time.Time); ok {
+		atomic.AddInt64(&statistics.StoreQueryStat.IndexScanDagRunTimeTotal, time.Since(startTime).Nanoseconds())
+	}
 	go func() {
 		defer wgChild.Done()
-		if pipError = trans.pipelineExecutor.ExecuteExecutor(ctx); pipError != nil {
-			if errno.Equal(pipError, errno.DirectBucketLacks) {
-				output[0].Close()
-			}
-			if trans.pipelineExecutor.Aborted() {
-				return
-			}
-			return
-		}
+		startTime := time.Now()
+		pipError = trans.pipelineExecutor.ExecuteExecutor(ctx)
+		atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagRunTimeTotal, time.Since(startTime).Nanoseconds())
 	}()
-	trans.Running(ctx)
+
+	done := trans.Running(ctx)
 	wgChild.Wait()
 	trans.wg.Wait()
-	return pipError
+	return pipError, done
 }
 
-func (trans *IndexScanTransform) Running(ctx context.Context) {
+func (trans *IndexScanTransform) Running(ctx context.Context) bool {
 	trans.wg.Add(1)
 	defer trans.wg.Done()
 	for {
 		select {
 		case c, ok := <-trans.inputPort.State:
 			if !ok {
-				return
+				return false
 			}
 			if trans.downSampleLevel != 0 {
 				c = trans.RewriteChunk(c)
 			}
+			trans.rowCnt += c.Len()
 			trans.output.State <- c
 		case <-ctx.Done():
-			return
+			return true
 		}
 	}
 }

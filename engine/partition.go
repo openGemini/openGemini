@@ -601,8 +601,18 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 		if err != nil {
 			return nil, err
 		}
+		d := NewDetachedMetaInfo()
 		for _, mstInfo := range mstsInfo.MstsInfo {
-			sh.SetMstInfo(mstInfo.Name, mstInfo)
+			if mstInfo.EngineType != config.COLUMNSTORE {
+				continue
+			}
+			if mstInfo.IsDetachedWrite() {
+				err = checkAndTruncateDetachedFiles(d, mstInfo, sh)
+				if err != nil {
+					return nil, err
+				}
+			}
+			sh.SetMstInfo(mstInfo)
 		}
 		sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 		sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
@@ -632,6 +642,26 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 	return sh, nil
 }
 
+func checkAndTruncateDetachedFiles(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, sh *shard) error {
+	d.obsOpt = mstInfo.ObsOptions
+	err := d.checkAndTruncateDetachedFiles(sh.filesPath, mstInfo.Name, mstInfo.IndexRelation.GetBloomFilterColumns())
+	if err != nil {
+		return err
+	}
+
+	setAccumulateMetaIndex(d, mstInfo, sh)
+	return nil
+}
+
+func setAccumulateMetaIndex(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, sh *shard) {
+	//update accumulate metaIndex after check detached files
+	aMetaIndex := &immutable.AccumulateMetaIndex{}
+	aMetaIndex.SetAccumulateMetaIndex(d.lastPkMetaOff+d.lastPkMetaSize, d.lastPkMetaEndBlockId,
+		d.lastChunkMetaOff+int64(d.lastChunkMetaSize), d.lastMetaIdxOff+int64(d.lastMetaIdxSize))
+	sh.storage.SetAccumulateMetaIndex(mstInfo.Name, aMetaIndex)
+	sh.immTables.SetAccumulateMetaIndex(mstInfo.Name, aMetaIndex)
+}
+
 func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration) (*tsi.IndexBuilder, error) {
 	dbPT.mu.RLock()
 	indexBuilder, ok := dbPT.indexBuilder[indexID]
@@ -641,6 +671,13 @@ func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration) (*ts
 	}
 	indexBuilder.SetDuration(duration)
 	return indexBuilder, nil
+}
+
+func (dbPT *DBPTInfo) getIndexBuilder(indexID uint64) (*tsi.IndexBuilder, bool) {
+	dbPT.mu.RLock()
+	indexBuilder, ok := dbPT.indexBuilder[indexID]
+	dbPT.mu.RUnlock()
+	return indexBuilder, ok
 }
 
 func (dbPT *DBPTInfo) ptReceiveShard(resC chan *res, n int, rp string) error {
@@ -889,12 +926,7 @@ func (dbPT *DBPTInfo) disableDBPtBgr() error {
 }
 
 func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
-	var shardIds []uint64
-	dbPT.mu.RLock()
-	for id := range dbPT.shards {
-		shardIds = append(shardIds, id)
-	}
-	dbPT.mu.RUnlock()
+	shardIds := dbPT.ShardIds()
 
 	for _, id := range shardIds {
 		dbPT.mu.RLock()
@@ -911,4 +943,14 @@ func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
 			sh.DisableDownSample()
 		}
 	}
+}
+
+func (dbPT *DBPTInfo) ShardIds() []uint64 {
+	var shardIds []uint64
+	dbPT.mu.RLock()
+	for id := range dbPT.shards {
+		shardIds = append(shardIds, id)
+	}
+	dbPT.mu.RUnlock()
+	return shardIds
 }

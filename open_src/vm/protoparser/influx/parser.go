@@ -142,16 +142,22 @@ type WritePointsIn struct {
 	Prs []Row
 }
 
-func (rs Rows) Len() int {
-	return len(rs)
+func (rs *Rows) Len() int {
+	return len(*rs)
 }
 
-func (rs Rows) Less(i, j int) bool {
-	return rs[i].Timestamp < rs[j].Timestamp
+func (rs *Rows) Less(i, j int) bool {
+	return (*rs)[i].Timestamp < (*rs)[j].Timestamp
 }
 
-func (rs Rows) Swap(i, j int) {
-	rs[i], rs[j] = rs[j], rs[i]
+func (rs *Rows) Swap(i, j int) {
+	(*rs)[i], (*rs)[j] = (*rs)[j], (*rs)[i]
+}
+
+func (rs *Rows) Reset() {
+	for i := range *rs {
+		(*rs)[i].Reset()
+	}
 }
 
 // Row is a single influx row.
@@ -450,14 +456,18 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 	src = src[4:]
 	//version := src[0]
 	src = src[1:]
+
+	if pointsN > cap(rows) {
+		rows = make([]Row, pointsN)
+	}
+	rows = rows[:pointsN]
+
 	var err error
+	var decodeN int
 	for len(src) > 0 {
-		if len(rows) < cap(rows) {
-			rows = rows[:len(rows)+1]
-		} else {
-			rows = append(rows, Row{})
-		}
-		row := &rows[len(rows)-1]
+		row := &rows[decodeN]
+		decodeN++
+
 		row.StreamOnly = false
 		src, tagPool, fieldPool, indexOptionPool, indexKeyPool, err =
 			row.FastUnmarshalBinary(src, tagPool, fieldPool, indexOptionPool, indexKeyPool)
@@ -466,7 +476,7 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 		}
 	}
 
-	if len(rows) != pointsN {
+	if decodeN != pointsN {
 		return rows[:0], tagPool, fieldPool, indexOptionPool, indexKeyPool, errors.New("unmarshal error len(rows) != pointsN")
 	}
 	return rows, tagPool, fieldPool, indexOptionPool, indexKeyPool, nil
@@ -544,6 +554,12 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 	tagN := int(encoding.UnmarshalUint32(src[:4]))
 	src = src[4:]
 	start := len(tagpool)
+
+	if len(tagpool)+tagN > cap(tagpool) {
+		tagpool = append(tagpool[:cap(tagpool)], make([]Tag, start+tagN-cap(tagpool))...)
+	}
+	tagpool = tagpool[:start+tagN]
+
 	for i := 0; i < tagN; i++ {
 		if len(src) < 1 {
 			return nil, tagpool, errors.New("too small bytes for row tag key len")
@@ -553,12 +569,9 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 		if len(src) < tl+1 {
 			return nil, tagpool, errors.New("too small bytes for row tag key")
 		}
-		if len(tagpool) < cap(tagpool) {
-			tagpool = tagpool[:len(tagpool)+1]
-		} else {
-			tagpool = append(tagpool, Tag{})
-		}
-		tg := &tagpool[len(tagpool)-1]
+
+		tg := &tagpool[start+i]
+
 		tg.Key = bytesutil.ToUnsafeString(src[:tl])
 		src = src[tl:]
 		vl := int(encoding.UnmarshalUint16(src[:2])) //int(src[0])
@@ -606,6 +619,12 @@ func (r *Row) unmarshalFields(src []byte, fieldpool []Field) ([]byte, []Field, e
 	fieldN := int(encoding.UnmarshalUint32(src[:4]))
 	src = src[4:]
 	start := len(fieldpool)
+
+	if len(fieldpool)+fieldN > cap(fieldpool) {
+		fieldpool = append(fieldpool[:cap(fieldpool)], make([]Field, start+fieldN-cap(fieldpool))...)
+	}
+	fieldpool = fieldpool[:start+fieldN]
+
 	for i := 0; i < fieldN; i++ {
 		if len(src) < 1 {
 			return nil, fieldpool, errors.New("too small for field key length")
@@ -615,12 +634,9 @@ func (r *Row) unmarshalFields(src []byte, fieldpool []Field) ([]byte, []Field, e
 		if len(src) < l+1 {
 			return nil, fieldpool, errors.New("too small for field key")
 		}
-		if len(fieldpool) < cap(fieldpool) {
-			fieldpool = fieldpool[:len(fieldpool)+1]
-		} else {
-			fieldpool = append(fieldpool, Field{})
-		}
-		fd := &fieldpool[len(fieldpool)-1]
+
+		fd := &fieldpool[start+i]
+
 		fd.Key = bytesutil.ToUnsafeString(src[:l])
 		src = src[l:]
 
@@ -687,17 +703,19 @@ func (r *Row) unmarshalIndexOptions(src []byte, indexOptionPool []IndexOption) (
 	indexN := int(encoding.UnmarshalUint32(src[:4]))
 	src = src[4:]
 	start := len(indexOptionPool)
+
+	if len(indexOptionPool)+indexN > cap(indexOptionPool) {
+		indexOptionPool = append(indexOptionPool[:cap(indexOptionPool)], make([]IndexOption, start+indexN-cap(indexOptionPool))...)
+	}
+	indexOptionPool = indexOptionPool[:start+indexN]
+
 	for i := 0; i < indexN; i++ {
 		if len(src) < 1 {
 			return nil, indexOptionPool, errors.New("too small for indexOption key length")
 		}
 
-		if len(indexOptionPool) < cap(indexOptionPool) {
-			indexOptionPool = indexOptionPool[:len(indexOptionPool)+1]
-		} else {
-			indexOptionPool = append(indexOptionPool, IndexOption{})
-		}
-		indexOpt := &indexOptionPool[len(indexOptionPool)-1]
+		indexOpt := &indexOptionPool[start+i]
+
 		indexOpt.Oid = encoding.UnmarshalUint32(src[:4])
 		src = src[4:]
 		indexListLen := encoding.UnmarshalUint16(src[:2])
@@ -808,6 +826,11 @@ func (r *Row) UnmarshalIndexKeys(indexkeypool []byte) []byte {
 
 	r.IndexKey = indexkeypool[start:]
 	return indexkeypool
+}
+
+func (r *Row) ReFill() {
+	r.Fields = r.Fields[:cap(r.Fields)]
+	r.Tags = r.Tags[:cap(r.Tags)]
 }
 
 func IndexKeyToTags(src []byte, isCopy bool, dst *PointTags) (*PointTags, error) {
@@ -1125,10 +1148,10 @@ func (pts *PointTags) FindPointTag(tagName string) *Tag {
 	return nil
 }
 
-func (pts PointTags) TagsSize() int {
+func (pts *PointTags) TagsSize() int {
 	var total int
-	for i := range pts {
-		total += pts[i].Size()
+	for i := range *pts {
+		total += (*pts)[i].Size()
 	}
 	return total
 }
@@ -1215,6 +1238,12 @@ func (fs *Fields) Len() int {
 
 func (fs *Fields) Swap(i, j int) {
 	(*fs)[i], (*fs)[j] = (*fs)[j], (*fs)[i]
+}
+
+func (fs *Fields) Reset() {
+	for i := range *fs {
+		(*fs)[i].Reset()
+	}
 }
 
 func (f *Field) Reset() {
@@ -1604,16 +1633,27 @@ type IndexOption struct {
 	Oid       uint32
 }
 
+func (opt *IndexOption) Reset() {
+	opt.IndexList = opt.IndexList[:0]
+	opt.Oid = 0
+}
+
 type IndexOptions []IndexOption
 
-func (opt IndexOptions) Less(i, j int) bool {
-	return opt[i].Oid < opt[j].Oid
+func (opts *IndexOptions) Less(i, j int) bool {
+	return (*opts)[i].Oid < (*opts)[j].Oid
 }
 
-func (opt IndexOptions) Len() int {
-	return len(opt)
+func (opts *IndexOptions) Len() int {
+	return len(*opts)
 }
 
-func (opt IndexOptions) Swap(i, j int) {
-	opt[i], opt[j] = opt[j], opt[i]
+func (opts *IndexOptions) Swap(i, j int) {
+	(*opts)[i], (*opts)[j] = (*opts)[j], (*opts)[i]
+}
+
+func (opts *IndexOptions) Reset() {
+	for i := range *opts {
+		(*opts)[i].Reset()
+	}
 }

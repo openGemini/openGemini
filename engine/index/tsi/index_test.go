@@ -1342,6 +1342,20 @@ func TestSeriesByAllAndExprIterator(t *testing.T) {
 			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
 		})
 	})
+
+	maxIndexMetrics = 0
+	pruneThreshold = math.MaxInt64 - 1
+	defer func() {
+		maxIndexMetrics = 1500 * 10000
+		pruneThreshold = 10
+	}()
+	// all AND tag, one varRef break
+	opt.Condition = MustParseExpr(`tag1='1' AND tag2='1' AND tag3='1'`)
+	t.Run("all AND tag, one varRef break", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
+		})
+	})
 }
 
 func CreateIndexByPtsOfAllAndExprFilterBreak(idx Index, keys ...string) {

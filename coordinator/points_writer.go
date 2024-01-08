@@ -71,7 +71,7 @@ func putInjestionCtx(s *injestionCtx) {
 type PWMetaClient interface {
 	Database(name string) (di *meta2.DatabaseInfo, err error)
 	RetentionPolicy(database, policy string) (*meta2.RetentionPolicyInfo, error)
-	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
+	CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error

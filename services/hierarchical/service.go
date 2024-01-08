@@ -17,31 +17,105 @@ limitations under the License.
 package hierarchical
 
 import (
+	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
 )
 
-type Service struct {
-	services.Base
+type metaClient interface {
+	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
+}
 
-	MetaClient interface {
-		UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
-	}
+type engine interface {
+	FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
+	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
+	HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool
+}
 
-	Engine interface {
-		FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
-		ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
+type WaitGroup struct {
+	workChan chan int
+	wg       *sync.WaitGroup
+}
+
+func NewWaitGroup(maxN int) *WaitGroup {
+	return &WaitGroup{
+		workChan: make(chan int, maxN),
+		wg:       &sync.WaitGroup{},
 	}
 }
 
-func NewService(interval time.Duration) *Service {
-	s := &Service{}
-	s.Init("hierarchical", interval, s.handle)
+func (wg *WaitGroup) Add(num int) {
+	wg.workChan <- num
+	wg.wg.Add(1)
+}
+
+func (wg *WaitGroup) Done() {
+	_, ok := <-wg.workChan
+	if !ok { //channel closed
+		return
+	}
+	wg.wg.Done()
+}
+
+func (wg *WaitGroup) Wait() {
+	wg.wg.Wait()
+}
+
+func (wg *WaitGroup) Close() {
+	close(wg.workChan)
+	wg.wg = nil
+}
+
+type Service struct {
+	MetaClient metaClient
+
+	Logger *logger.Logger
+
+	Config *config.HierarchicalConfig
+
+	base services.Base
+
+	Engine engine
+
+	// max concurrency number for move shards
+	HsWaitGroup *WaitGroup
+}
+
+func NewService(c config.HierarchicalConfig) *Service {
+	s := &Service{
+		Logger:      logger.NewLogger(errno.ModuleHierarchical),
+		Config:      &c,
+		HsWaitGroup: NewWaitGroup(c.MaxProcessN),
+	}
+	s.base.Init("hierarchical", time.Duration(c.RunInterval), s.handle)
 	return s
+}
+
+func (s *Service) Open() error {
+	s.Logger.Info("service open", zap.Duration("RunInterval", time.Duration(s.Config.RunInterval)),
+		zap.Int("MaxProcessN", s.Config.MaxProcessN))
+	if err := s.base.Open(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) Close() error {
+	if err := s.base.Close(); err != nil {
+		return err
+	}
+
+	s.HsWaitGroup.Close()
+	s.HsWaitGroup = nil
+	return nil
 }
 
 func (s *Service) handle() {
@@ -58,11 +132,47 @@ func (s *Service) handle() {
 		}
 	}
 
-	for _, sh := range shardsToCold {
-		// change shard from warm to hot
+	if syscontrol.IsHierarchicalStorageEnabled() {
+		s.runShardHierarchicalStorage(shardsToCold)
+		s.HsWaitGroup.Wait()
+	}
+}
 
-		if err := s.MetaClient.UpdateShardInfoTier(sh.ShardID, util.Cold, sh.OwnerDb, sh.Policy); err != nil {
-			s.Logger.Error("fail to update shard tier to cold", zap.Uint64("shardID", sh.ShardID), zap.Error(err))
-		}
+func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifier) {
+	for _, shard := range shardsToCold {
+		s.HsWaitGroup.Add(1)
+		go func(s *Service, shard *meta.ShardIdentifier) {
+			resCh := make(chan int64)
+			defer func() {
+				s.HsWaitGroup.Done()
+				close(resCh)
+			}()
+
+			if ok := s.Engine.HierarchicalStorage(shard.ShardID, shard.OwnerPt, shard.OwnerDb, resCh); !ok {
+				return
+			}
+
+			// update tier status to moving
+			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, util.Moving, shard.OwnerDb, shard.Policy); err != nil {
+				s.Logger.Error("update shard info tier err",
+					zap.Int64("shard id", int64(shard.ShardID)),
+					zap.Int64("tier", int64(util.Moving)), zap.Error(err))
+				tier := <-resCh
+				s.Logger.Error("UpdateShardInfoTier. tier received", zap.Int64("tier", tier))
+				return
+			}
+
+			// wait until shard move done or stop by shard.close or compact
+			tier := <-resCh
+			s.Logger.Info("shard move done. tier received", zap.Int64("tier", tier))
+			if tier != util.Cold {
+				return
+			}
+			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, uint64(tier), shard.OwnerDb, shard.Policy); err != nil {
+				s.Logger.Error("update shard info tier err",
+					zap.Int64("shard id", int64(shard.ShardID)),
+					zap.Int64("tier", tier), zap.Error(err))
+			}
+		}(s, shard)
 	}
 }

@@ -118,6 +118,7 @@ message RetentionPolicySpec {
 	optional int64  Duration           = 2;
 	optional int64  ShardGroupDuration = 3;
 	optional uint32 ReplicaN           = 4;
+	optional int64  WarmDuration       = 5;
 }
 
 message MeasurementInfo {
@@ -128,7 +129,8 @@ message MeasurementInfo {
     optional IndexRelation indexRelation = 5;
     optional uint32 EngineType = 6;
     optional ColStoreInfo ColStoreInfo = 7;
-	optional Options Options = 21;
+    optional ObsOptions ObsOptions = 8;
+    optional Options Options = 21;
 }
 
 message RetentionPolicyInfo {
@@ -271,7 +273,7 @@ message ColStoreInfo {
 message IndexOption {
     optional string Tokens     = 1;
     optional string Tokenizers = 2;
-    optional int64  Segment    = 3;
+    optional int64  TimeClusterDuration = 3;
 }
 
 message IndexOptions {
@@ -1153,6 +1155,7 @@ message Options {
 	optional int32 StorageCapacity = 5;
 	optional string SplitChar = 6;
 	optional int64 Ttl = 7;
+	optional string TagsSplit = 10;
 }
 
 message UpdateMeasurementCommand {

@@ -66,6 +66,9 @@ const (
 	ModuleCastor         = 19
 	ModuleStream         = 20
 	ModuleWriteInterface = 21
+	ModuleQueryInterface = 22
+	ModuleLogStore       = 23
+	ModuleHierarchical   = 24
 )
 
 const (

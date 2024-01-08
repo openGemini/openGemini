@@ -128,6 +128,8 @@ var (
 	ParallelQueryInBatch int32 = 0 // this determines whether to use parallel query when a query is combined with multi queries
 
 	Readonly = false
+
+	HierarchicalStorageEnabled int32 = 0
 )
 
 func UpdateInterruptQuery(switchOn bool) {
@@ -238,6 +240,20 @@ func UpdateNodeReadonly(switchOn bool) {
 
 func IsReadonly() bool {
 	return Readonly
+}
+
+func IsHierarchicalStorageEnabled() bool {
+	enabled := atomic.LoadInt32(&HierarchicalStorageEnabled)
+	return enabled == 1
+}
+
+func SetHierarchicalStorageEnabled(en bool) {
+	if en {
+		atomic.StoreInt32(&HierarchicalStorageEnabled, 1)
+	} else {
+		atomic.StoreInt32(&HierarchicalStorageEnabled, -1)
+	}
+	fmt.Println(time.Now().Format(time.RFC3339Nano), "HierarchicalStorageEnabled:", en)
 }
 
 var handlerOnQueryRequest = make(map[queryRequestMod]func(req netstorage.SysCtrlRequest) (string, error), 1)

@@ -18,6 +18,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,9 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/fragment"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
@@ -269,40 +268,6 @@ func buildCountChunk() []executor.Chunk {
 	return dstChunks
 }
 
-func buildDimRowDataType() hybridqp.RowDataType {
-	return hybridqp.NewRowDataTypeImpl(
-		influxql.VarRef{Val: "field1_string", Type: influxql.String})
-}
-
-func buildDstChunkTimeFilterGroupBy() []executor.Chunk {
-	dstChunks := make([]executor.Chunk, 0, 1)
-	rowDataType := buildComRowDataType()
-
-	b := executor.NewChunkBuilder(rowDataType)
-	b.SetDim(buildDimRowDataType())
-
-	inCk1 := b.NewChunk("cpu")
-	inCk1.AppendTimes([]int64{1609459200000000000, 1609459200100000000})
-
-	inCk1.Column(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"})
-	inCk1.Column(0).AppendNilsV2(true, true)
-
-	inCk1.Column(1).AppendIntegerValues([]int64{1, 1})
-	inCk1.Column(1).AppendNilsV2(true, true)
-
-	inCk1.Column(2).AppendBooleanValues([]bool{true, true})
-	inCk1.Column(2).AppendNilsV2(true, true)
-
-	inCk1.Column(3).AppendFloatValues([]float64{1.1, 1.1})
-	inCk1.Column(3).AppendNilsV2(true, true)
-
-	inCk1.Dim(0).AppendStringValues([]string{"test-test-test-test-0", "test-test-test-test-0"})
-	inCk1.Dim(0).AppendNilsV2(true, true)
-
-	dstChunks = append(dstChunks, inCk1)
-	return dstChunks
-}
-
 func buildDstChunkTimeFilter() []executor.Chunk {
 	dstChunks := make([]executor.Chunk, 0, 1)
 	rowDataType := buildComRowDataType()
@@ -329,179 +294,14 @@ func buildDstChunkTimeFilter() []executor.Chunk {
 	return dstChunks
 }
 
-func TestColumnStoreReaderV1(t *testing.T) {
-	testDir := t.TempDir()
-	db := "db0"
-	rp := "rp0"
-	mst := "cpu"
-	ptId := uint32(1)
-	executor.RegistryTransformCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
-	msNames := []string{"cpu"}
-	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
-	pts, _, _ := GenDataRecord(msNames, 1, 16384, time.Millisecond*100, startTime, true, false, true)
-
-	fields := map[string]influxql.DataType{
-		"field2_int":    influxql.Integer,
-		"field3_bool":   influxql.Boolean,
-		"field4_float":  influxql.Float,
-		"field1_string": influxql.String,
-	}
-
-	var err error
-	// start write data to the shard.
-	sh, err := createShard(db, rp, ptId, testDir, config.COLUMNSTORE)
-	if err != nil {
-		panic(err)
-	}
-
-	sh.SetMstInfo(mst, NewMockColumnStoreMstInfo())
-	if err := sh.WriteRows(pts, nil); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Second * 1)
-	sh.ForceFlush()
-	time.Sleep(time.Second * 3)
-
-	shardId := sh.GetID()
-	dataFiles, ok := sh.immTables.GetCSFiles(mst)
-	if !ok {
-		t.Fatal("get data file failed")
-	}
-	shardFrags := executor.NewShardsFragments()
-	fileFrags := executor.NewFileFragments()
-
-	//var chunkMeta *immutable.ChunkMeta
-	for _, file := range dataFiles.Files() {
-		ok, err = file.Contains(0)
-		if !ok {
-			continue
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		segCount := uint32(2)
-		fileFrag := executor.NewFileFragment(file, fragment.FragmentRanges{fragment.NewFragmentRange(0, segCount)}, int64(segCount))
-		fileFrags.AddFileFragment(file.Path(), fileFrag, int64(segCount))
-	}
-	shardFrags[shardId] = fileFrags
-
-	shardGroup := &mockShardGroup{
-		sh:     sh,
-		Fields: fields,
-	}
-
-	for _, tt := range []struct {
-		skip      bool
-		name      string
-		q         string
-		tr        util.TimeRange
-		out       hybridqp.RowDataType
-		frags     executor.ShardsFragments
-		expected  []executor.Chunk
-		readerOps []hybridqp.ExprOptions
-		fields    map[string]influxql.DataType
-		expect    func(t *testing.T, outChunks, dstChunks []executor.Chunk) bool
-	}{
-		{
-			name:      "select * from cpu limit 1",
-			q:         `select field1_string,field2_int,field3_bool,field4_float from cpu limit 1`,
-			tr:        util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
-			out:       buildComRowDataType(),
-			frags:     shardFrags,
-			readerOps: buildComReaderOps(),
-			fields:    fields,
-			expected:  buildDstChunk(),
-			expect:    testEqualChunks,
-		},
-		{
-			name: "select * from cpu where timeFilter group by field1_string",
-			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where
-		time >= 1609459200000000000 and time <= 1609459201000000000 group by field1_string`,
-			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200100000000},
-			out:       buildComRowDataType(),
-			frags:     shardFrags,
-			readerOps: buildComReaderOps(),
-			fields:    fields,
-			expected:  buildDstChunkTimeFilterGroupBy(),
-			expect:    testEqualChunks,
-		},
-		{
-			name: "select * from cpu where timeFilter and fieldFilter",
-			q: `select field1_string,field2_int,field3_bool,field4_float from cpu where 
-time = 1609459200000000000 and field2_int = 1`,
-			tr:        util.TimeRange{Min: 1609459200000000000, Max: 1609459200000000000},
-			out:       buildComRowDataType(),
-			frags:     shardFrags,
-			readerOps: buildComReaderOps(),
-			fields:    fields,
-			expected:  buildDstChunk(),
-			expect:    testEqualChunks,
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.skip {
-				t.Skipf("SKIP:: %s", tt.name)
-			}
-			// step1: parse stmt and opt
-			sctx := context.Background()
-			ctx := context.WithValue(sctx, query.QueryDurationKey, statistics.NewStoreSlowQueryStatistics())
-			_, span := tracing.NewTrace("SELECT")
-			span.AppendNameValue("statement", tt.q)
-
-			stmt := MustParseSelectStatement(tt.q)
-			stmt, _ = stmt.RewriteFields(shardGroup, true, false)
-			stmt.OmitTime = true
-			sopt := query.SelectOptions{ChunkSize: 1024}
-			RemoveTimeCondition(stmt)
-			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
-			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
-			opt.Name = msNames[0]
-			opt.Sources = source
-			opt.StartTime = tt.tr.Min
-			opt.EndTime = tt.tr.Max
-			opt.Condition = stmt.Condition
-			opt.SetTimeFirstKey()
-			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
-
-			// step2: build the column store reader
-			reader := NewColumnStoreReader(tt.out, tt.readerOps, querySchema, tt.frags, db, ptId)
-			reader.Analyze(span)
-			sink := NewNilSink(tt.out)
-			err = executor.Connect(reader.output, sink.Input)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var processors executor.Processors
-			processors = append(processors, reader)
-			processors = append(processors, sink)
-
-			// step3: build the pipeline executor from the dag
-			executors := executor.NewPipelineExecutor(processors)
-			err = executors.Execute(ctx)
-			if err != nil {
-				t.Fatalf("connect error")
-			}
-			executors.Release()
-
-			if !tt.expect(t, sink.Chunks, tt.expected) {
-				t.Errorf("`%s` failed", tt.name)
-			}
-		})
-	}
-	err = closeShard(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func createMeasurement() *influxql.Measurement {
 	return &influxql.Measurement{Name: "students"}
 }
 
 func createSortQuerySchema() *executor.QuerySchema {
-	opt := query.ProcessorOptions{}
 	var fields influxql.Fields
+	m := createMeasurement()
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}}
 	fields = append(fields, &influxql.Field{
 		Expr: &influxql.VarRef{
 			Val:   "f1",
@@ -512,34 +312,38 @@ func createSortQuerySchema() *executor.QuerySchema {
 	var names []string
 	names = append(names, "f1")
 	schema := executor.NewQuerySchema(fields, names, &opt, nil)
-	m := createMeasurement()
 	schema.AddTable(m, schema.MakeRefs())
 	return schema
 }
 
-func TestColStoreReaderFunctions(t *testing.T) {
+func TestColumnStoreReaderFunctions(t *testing.T) {
 	schema := createSortQuerySchema()
 	node := executor.NewLogicalSeries(schema)
-	indexScan := executor.NewLogicalColumnStoreReader(node, schema)
+	readerPlan := executor.NewLogicalColumnStoreReader(node, schema)
 
 	creator := &ColumnStoreReaderCreator{}
-	if _, err := creator.Create(indexScan, &query.ProcessorOptions{}); err != nil {
+	if _, err := creator.Create(readerPlan, &query.ProcessorOptions{}); err != nil {
 		assert2.Equal(t, err.Error(), "")
 	}
 	executor.RegistryReaderCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
-	if _, err := creator.CreateReader(buildComRowDataType(), buildComReaderOps(), schema, nil, "db0", uint32(1)); err != nil {
+	if _, err := creator.CreateReader(readerPlan, executor.NewShardsFragments()); err != nil {
 		assert2.Equal(t, err.Error(), "")
 	}
+	if _, err := creator.CreateReader(readerPlan, nil); err != nil {
+		assert2.Equal(t, strings.Contains(err.Error(), "unsupported index info type for the colstore"), true)
+	}
 
-	reader := NewColumnStoreReader(buildComRowDataType(), buildComReaderOps(), schema, nil, "db0", uint32(1))
+	reader := NewColumnStoreReader(readerPlan, nil)
 	assert2.Equal(t, reader.Name(), "ColumnStoreReader")
-	assert2.Equal(t, len(reader.Explain()), 4)
+	assert2.Equal(t, len(reader.Explain()), 1)
 	reader.Abort()
 	assert2.Equal(t, reader.IsSink(), true)
 	assert2.Equal(t, len(reader.GetOutputs()), 1)
 	assert2.Equal(t, len(reader.GetInputs()), 0)
 	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
 	assert2.Equal(t, reader.GetInputNumber(nil), 0)
+	reader.sendChunk(nil)
+	assert2.Equal(t, reader.closedCount, int64(1))
 }
 
 type MockStoreEngine struct {
@@ -555,6 +359,10 @@ func (s *MockStoreEngine) ReportLoad() {
 
 func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	return nil, nil
+}
+
+func (s *MockStoreEngine) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hybridqp.Catalog) (interface{}, error) {
+	return s.shard.GetIndexInfo(schema.(*executor.QuerySchema))
 }
 
 func (s *MockStoreEngine) ScanWithSparseIndex(ctx context.Context, _ string, _ uint32, _ []uint64, schema hybridqp.Catalog) (hybridqp.IShardsFragments, error) {
@@ -593,7 +401,7 @@ func (s *MockStoreEngine) SetShard(shard Shard) {
 	s.shard = shard
 }
 
-func buildIndexScanExtraInfo(engine hybridqp.StoreEngine, db string, ptId uint32, shardIDs []uint64) *executor.IndexScanExtraInfo {
+func buildIndexScanExtraInfo(engine hybridqp.StoreEngine, db string, ptId uint32, shardIDs []uint64, shardVersions []uint32, shardPath string) *executor.IndexScanExtraInfo {
 	info := &executor.IndexScanExtraInfo{
 		Store: engine,
 		Req: &executor.RemoteQuery{
@@ -601,6 +409,7 @@ func buildIndexScanExtraInfo(engine hybridqp.StoreEngine, db string, ptId uint32
 			PtID:     ptId,
 			ShardIDs: shardIDs,
 		},
+		PtQuery: &executor.PtQuery{PtID: ptId, ShardInfos: []executor.ShardInfo{{ID: shardIDs[0], Path: shardPath, Version: shardVersions[0]}}},
 	}
 	return info
 }
@@ -609,7 +418,6 @@ func TestColumnStoreReader(t *testing.T) {
 	testDir := t.TempDir()
 	db := "db0"
 	rp := "rp0"
-	mst := "cpu"
 	ptId := uint32(1)
 	executor.RegistryTransformCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
 	msNames := []string{"cpu"}
@@ -639,7 +447,7 @@ func TestColumnStoreReader(t *testing.T) {
 		}
 	}()
 
-	sh.SetMstInfo(mst, NewMockColumnStoreMstInfo())
+	sh.SetMstInfo(NewMockColumnStoreMstInfo())
 	if err = sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -834,7 +642,7 @@ func TestColumnStoreReader(t *testing.T) {
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
 			// step2: build the store executor
-			info := buildIndexScanExtraInfo(storeEngine, db, ptId, []uint64{sh.GetID()})
+			info := buildIndexScanExtraInfo(storeEngine, db, ptId, []uint64{sh.GetID()}, []uint32{logstore.CurrentLogTokenizerVersion}, "")
 			reader := executor.NewLogicalColumnStoreReader(nil, querySchema)
 			var input hybridqp.QueryNode
 			if querySchema.HasCall() {
@@ -844,7 +652,7 @@ func TestColumnStoreReader(t *testing.T) {
 				input = executor.NewLogicalHashMerge(reader, querySchema, executor.READER_EXCHANGE, nil)
 			}
 			indexScan := executor.NewLogicalSparseIndexScan(input, querySchema)
-			executor.ReWriteArgs(indexScan)
+			executor.ReWriteArgs(indexScan, false)
 			scan := executor.NewSparseIndexScanTransform(tt.out, indexScan.Children()[0], indexScan.RowExprOptions(), info, querySchema)
 			sink := NewNilSink(tt.out)
 			err = executor.Connect(scan.GetOutputs()[0], sink.Input)

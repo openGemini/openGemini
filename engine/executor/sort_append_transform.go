@@ -104,10 +104,9 @@ func (t *SortAppendTransf) isItemEmpty(currItem *Item) bool {
 	return currItem.IsSortedEmpty()
 }
 
-func (t *SortAppendTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int) {
+func (t *SortAppendTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int, j int) {
 	chunk := trans.currItem.ChunkBuf
-	var start, end int = i - 1, i
-
+	start, end := i, j
 	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
 	trans.param.Table = trans.ReflectionTables[trans.currItem.Input]
 	trans.NewChunk.AppendTimes(chunk.Time()[start:end])
@@ -122,8 +121,8 @@ func (t *SortAppendTransf) updateWithSingleChunk(trans *MergeTransform) {
 
 	curr := trans.currItem
 	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
-		trans.AddTagAndIndexes(curr.ChunkBuf.Tags()[curr.TagIndex], i+1)
-		t.appendMergeTimeAndColumns(trans, i+1)
+		trans.AddTagAndIndexes(curr.ChunkBuf.Tags()[curr.TagIndex], trans.NewChunk.Len(), i, true)
+		t.appendMergeTimeAndColumns(trans, i, i+1)
 		if curr.TagSwitch(i) {
 			curr.TagIndex += 1
 		}
@@ -146,8 +145,8 @@ func (t *SortAppendTransf) updateWithBreakPoint(trans *MergeTransform) {
 		if !CompareSortedAppendBreakPoint(*curr, curr.Index, tag, trans.BreakPoint.(*SortedBreakPoint), *trans.HeapItems.GetOption()) {
 			return
 		}
-		trans.AddTagAndIndexes(tag, i+1)
-		t.appendMergeTimeAndColumns(trans, i+1)
+		trans.AddTagAndIndexes(tag, trans.NewChunk.Len(), i, true)
+		t.appendMergeTimeAndColumns(trans, i, i+1)
 		if curr.TagSwitch(i) {
 			curr.TagIndex += 1
 		}

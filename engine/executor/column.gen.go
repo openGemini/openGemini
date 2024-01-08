@@ -71,12 +71,14 @@ type Column interface {
 	AppendFloatValue(float64)
 	AppendFloatValues([]float64)
 	SetFloatValues([]float64)
+	UpdateFloatValueFast(v float64, row int)
 
 	IntegerValue(int) int64
 	IntegerValues() []int64
 	AppendIntegerValue(int64)
 	AppendIntegerValues([]int64)
 	SetIntegerValues([]int64)
+	UpdateIntegerValueFast(v int64, row int)
 
 	StringValue(int) string
 	StringValuesV2(dst []string) []string
@@ -222,9 +224,7 @@ func (c *ColumnImpl) StringValuesRangeV2(dst []string, start, end int) []string 
 }
 
 func (c *ColumnImpl) AppendManyNotNil(num int) {
-	for i := 0; i < num; i++ {
-		c.AppendNotNil()
-	}
+	c.nilsV2.appendManyV2NotNil(num)
 }
 
 func (c *ColumnImpl) AppendManyNil(num int) {
@@ -238,9 +238,7 @@ func (c *ColumnImpl) AppendManyNil(num int) {
 		c.nilsV2.nilCount += num
 		return
 	}
-	for i := 0; i < num; i++ {
-		c.AppendNil()
-	}
+	c.nilsV2.appendManyV2Nil(num)
 }
 
 func (c *ColumnImpl) GetTimeIndex(valIdx int) int {
@@ -297,6 +295,9 @@ func (c *ColumnImpl) AppendFloatValues(values []float64) {
 func (c *ColumnImpl) SetFloatValues(values []float64) {
 	c.floatValues = values
 }
+func (c *ColumnImpl) UpdateFloatValueFast(v float64, row int) {
+	c.floatValues[row] = v
+}
 
 func (c *ColumnImpl) IntegerValue(idx int) int64 {
 	return c.integerValues[idx]
@@ -316,6 +317,9 @@ func (c *ColumnImpl) AppendIntegerValues(values []int64) {
 
 func (c *ColumnImpl) SetIntegerValues(values []int64) {
 	c.integerValues = values
+}
+func (c *ColumnImpl) UpdateIntegerValueFast(v int64, row int) {
+	c.integerValues[row] = v
 }
 
 // String type
@@ -568,7 +572,9 @@ func (b *Bitmap) fixArray() {
 		return
 	}
 	// all not nil
-	b.array = make([]uint16, 0, b.length)
+	if cap(b.array) < b.length {
+		b.array = make([]uint16, 0, b.length)
+	}
 	for i := 0; i < b.length; i++ {
 		b.array = append(b.array, uint16(i))
 	}
@@ -725,6 +731,83 @@ func (b *Bitmap) appendManyV2(dat []bool) {
 		bt = bt << (bitSize - offset)
 		b.bits = append(b.bits, bt)
 	}
+}
+
+func (b *Bitmap) appendManyV2NotNil(num int) {
+	if offset := b.length % bitSize; offset != 0 {
+		slot := bitSize - offset
+		var bt = b.bits[len(b.bits)-1]
+		bt = bt >> slot
+		for i := 0; i < slot; i++ {
+			if num > 0 {
+				bt = bt<<1 + 1
+				if b.nilCount > 0 {
+					b.array = append(b.array, uint16(b.length))
+				}
+				b.length++
+				num -= 1
+			} else {
+				bt = bt << (slot - i)
+				break
+			}
+		}
+		b.bits[len(b.bits)-1] = bt
+	}
+
+	byteN := num / bitSize
+	for i := 0; i < byteN; i++ {
+		var bt byte
+		for j := 0; j < bitSize; j++ {
+			bt = bt<<1 + 1
+			if b.nilCount > 0 {
+				b.array = append(b.array, uint16(b.length))
+			}
+			b.length++
+		}
+		b.bits = append(b.bits, bt)
+	}
+	// the last byte
+	if offset := num % bitSize; offset > 0 {
+		var bt byte
+		for k := 0; k < offset; k++ {
+			bt = bt<<1 + 1
+			if b.nilCount > 0 {
+				b.array = append(b.array, uint16(b.length))
+			}
+			b.length++
+		}
+		bt = bt << (bitSize - offset)
+		b.bits = append(b.bits, bt)
+	}
+}
+
+func (b *Bitmap) appendManyV2Nil(num int) {
+	if len(b.array) == 0 && num != 0 {
+		b.fixArray()
+	}
+	tmp := num
+	if offset := b.length % bitSize; offset != 0 {
+		slot := bitSize - offset
+		var bt = b.bits[len(b.bits)-1]
+		bt = bt >> slot
+		bt = bt << slot
+		b.bits[len(b.bits)-1] = bt
+		if slot >= num {
+			num = 0
+		} else {
+			num -= slot
+		}
+	}
+	byteN := num / bitSize
+	for i := 0; i < byteN; i++ {
+		b.bits = append(b.bits, 0)
+	}
+	// the last byte
+	if offset := num % bitSize; offset > 0 {
+		b.bits = append(b.bits, 0)
+	}
+	b.nilCount += tmp
+	b.length += tmp
 }
 
 func (b *Bitmap) containsInt(x int) bool {

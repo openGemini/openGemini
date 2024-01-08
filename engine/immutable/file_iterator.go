@@ -92,6 +92,10 @@ func (itr *FileIterator) reset() {
 	itr.log = nil
 }
 
+func (itr *FileIterator) ReadData(offset int64, size uint32) ([]byte, error) {
+	return itr.dataReader.Read(offset, size)
+}
+
 func (itr *FileIterator) readData(offset int64, size uint32) ([]byte, error) {
 	return itr.dataReader.Read(offset, size)
 }

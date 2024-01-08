@@ -19,6 +19,7 @@ package record_test
 import (
 	"fmt"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -330,7 +331,9 @@ func BenchmarkWriteRowsToColumnStore(t *testing.B) {
 	for i := 0; i < len(s); i++ {
 		mstSchema[s[i].Name] = int32(s[i].Type)
 	}
-	mstsInfo := map[string]*meta.MeasurementInfo{mstName: {Name: mstName, Schema: mstSchema}}
+	mstsInfo := &sync.Map{}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)
 	t.ReportAllocs()
@@ -355,7 +358,9 @@ func BenchmarkWriteRecsToColumnStore(t *testing.B) {
 	for i := 0; i < len(s); i++ {
 		mstSchema[s[i].Name] = int32(s[i].Type)
 	}
-	mstsInfo := map[string]*meta.MeasurementInfo{mstName: {Name: mstName, Schema: mstSchema}}
+	mstsInfo := &sync.Map{}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)
 	t.ReportAllocs()

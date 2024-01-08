@@ -18,6 +18,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
 	"google.golang.org/protobuf/proto"
@@ -73,6 +74,10 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 		QueryId:               opt.QueryId,
 		SeriesKey:             opt.SeriesKey,
 		GroupByAllDims:        opt.GroupByAllDims,
+		HasFieldWildcard:      opt.HasFieldWildcard,
+		LogQueryCurrId:        opt.LogQueryCurrId,
+		IncQuery:              opt.IncQuery,
+		IterID:                opt.IterID,
 	}
 
 	// Set expression, if set.
@@ -141,6 +146,10 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 		QueryId:               pb.GetQueryId(),
 		SeriesKey:             pb.GetSeriesKey(),
 		GroupByAllDims:        pb.GetGroupByAllDims(),
+		HasFieldWildcard:      pb.HasFieldWildcard,
+		LogQueryCurrId:        pb.LogQueryCurrId,
+		IncQuery:              pb.IncQuery,
+		IterID:                pb.IterID,
 	}
 
 	// Set expression, if set.
@@ -204,10 +213,15 @@ func encodeMeasurement(mm *influxql.Measurement) *internal.Measurement {
 		SystemIterator:  mm.SystemIterator,
 		IsTarget:        mm.IsTarget,
 		EngineType:      uint32(mm.EngineType),
+		IsTimeSorted:    mm.IsTimeSorted,
 	}
 
 	if mm.IndexRelation != nil {
 		pb.IndexRelation = encodeIndexRelation(mm.IndexRelation)
+	}
+
+	if mm.ObsOptions != nil {
+		pb.ObsOptions = encodeObsOptions(mm.ObsOptions)
 	}
 
 	if mm.Regex != nil {
@@ -218,12 +232,9 @@ func encodeMeasurement(mm *influxql.Measurement) *internal.Measurement {
 
 func encodeIndexOption(io *influxql.IndexOption) *internal.IndexOption {
 	pb := &internal.IndexOption{
-		FieldName:  io.FieldName,
-		Tokens:     io.Tokens,
-		Tokenizers: io.Tokenizers,
-		IndexName:  io.IndexName,
-		IndexType:  io.IndexType,
-		Segment:    io.Segment,
+		Tokens:              io.Tokens,
+		Tokenizers:          io.Tokenizers,
+		TimeClusterDuration: int64(io.TimeClusterDuration),
 	}
 	return pb
 }
@@ -250,13 +261,24 @@ func encodeIndexRelation(indexR *influxql.IndexRelation) *internal.IndexRelation
 				pb.IndexOptions[i] = &internal.IndexOptions{
 					Infos: make([]*internal.IndexOption, len(indexOptions)),
 				}
-				for _, o := range indexOptions {
-					pb.IndexOptions[i].Infos = append(pb.IndexOptions[i].Infos, encodeIndexOption(o))
+				for j, o := range indexOptions {
+					pb.IndexOptions[i].Infos[j] = encodeIndexOption(o)
 				}
 			}
 		}
 	}
 	return pb
+}
+
+func encodeObsOptions(opt *obs.ObsOptions) *internal.ObsOptions {
+	return &internal.ObsOptions{
+		Enabled:    opt.Enabled,
+		BucketName: opt.BucketName,
+		Ak:         opt.Ak,
+		Sk:         opt.Sk,
+		Endpoint:   opt.Endpoint,
+		BasePath:   opt.BasePath,
+	}
 }
 
 func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) {
@@ -267,10 +289,15 @@ func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) 
 		SystemIterator:  pb.GetSystemIterator(),
 		IsTarget:        pb.GetIsTarget(),
 		EngineType:      config.EngineType(pb.GetEngineType()),
+		IsTimeSorted:    pb.GetIsTimeSorted(),
 	}
 
 	if pb.GetIndexRelation() != nil {
 		mm.IndexRelation = decodeIndexRelation(pb.GetIndexRelation())
+	}
+
+	if pb.GetObsOptions() != nil {
+		mm.ObsOptions = decodeObsOptions(pb.GetObsOptions())
 	}
 
 	if pb.Regex != "" {
@@ -286,12 +313,9 @@ func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) 
 
 func decodeIndexOption(pb *internal.IndexOption) *influxql.IndexOption {
 	io := &influxql.IndexOption{
-		FieldName:  pb.GetFieldName(),
-		Tokens:     pb.GetTokens(),
-		Tokenizers: pb.GetTokenizers(),
-		IndexName:  pb.GetIndexName(),
-		IndexType:  pb.GetIndexType(),
-		Segment:    pb.GetSegment(),
+		Tokens:              pb.GetTokens(),
+		Tokenizers:          pb.GetTokenizers(),
+		TimeClusterDuration: time.Duration(pb.GetTimeClusterDuration()),
 	}
 	return io
 }
@@ -323,6 +347,17 @@ func decodeIndexRelation(pb *internal.IndexRelation) *influxql.IndexRelation {
 	}
 
 	return indexR
+}
+
+func decodeObsOptions(pb *internal.ObsOptions) *obs.ObsOptions {
+	return &obs.ObsOptions{
+		Enabled:    pb.GetEnabled(),
+		BucketName: pb.GetBucketName(),
+		Endpoint:   pb.GetEndpoint(),
+		Ak:         pb.GetAk(),
+		Sk:         pb.GetSk(),
+		BasePath:   pb.GetBasePath(),
+	}
 }
 
 func encodeInterval(i hybridqp.Interval) *internal.Interval {
@@ -369,6 +404,22 @@ func decodeVarRef(pb *internal.VarRef) influxql.VarRef {
 	}
 }
 
+func encodeUnnests(iUnnests influxql.Unnests) []*internal.Unnest {
+	unnests := make([]*internal.Unnest, len(iUnnests))
+	for i, u := range iUnnests {
+		unnest := &internal.Unnest{
+			Expr:    u.Expr.String(),
+			Aliases: u.Aliases,
+		}
+		unnest.DstType = make([]int32, len(u.DstType))
+		for j, t := range u.DstType {
+			unnest.DstType[j] = int32(t)
+		}
+		unnests[i] = unnest
+	}
+	return unnests
+}
+
 func EncodeQuerySchema(schema hybridqp.Catalog) *internal.QuerySchema {
 	if schema == nil {
 		return nil
@@ -377,9 +428,33 @@ func EncodeQuerySchema(schema hybridqp.Catalog) *internal.QuerySchema {
 	pb := &internal.QuerySchema{
 		ColumnNames: schema.GetColumnNames(),
 		QueryFields: schema.GetQueryFields().String(),
+		Unnests:     encodeUnnests(schema.GetUnnests()),
 	}
 
 	return pb
+}
+
+func decodeUnnests(iUnnests []*internal.Unnest) ([]*influxql.Unnest, error) {
+	unnests := make([]*influxql.Unnest, len(iUnnests))
+	for i, u := range iUnnests {
+		unnest := &influxql.Unnest{
+			Aliases: u.GetAliases(),
+		}
+
+		expr, err := influxql.ParseExpr(u.Expr)
+		if err != nil {
+			return nil, err
+		}
+		unnest.Expr = expr
+
+		dstType := u.GetDstType()
+		unnest.DstType = make([]influxql.DataType, len(dstType))
+		for j, t := range dstType {
+			unnest.DstType[j] = influxql.DataType(t)
+		}
+		unnests[i] = unnest
+	}
+	return unnests, nil
 }
 
 func DecodeQuerySchema(pb *internal.QuerySchema, opt hybridqp.Options) (hybridqp.Catalog, error) {
@@ -392,7 +467,13 @@ func DecodeQuerySchema(pb *internal.QuerySchema, opt hybridqp.Options) (hybridqp
 		return nil, err
 	}
 
+	unnests, err := decodeUnnests(pb.Unnests)
+	if err != nil {
+		return nil, err
+	}
+
 	schema := hybridqp.GetCatalogFactoryInstance().Create(queryFields, pb.ColumnNames, opt)
+	schema.SetUnnests(unnests)
 
 	return schema, nil
 }

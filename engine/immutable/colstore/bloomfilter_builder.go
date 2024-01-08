@@ -38,7 +38,7 @@ func NewSkipIndexBuilder(lockPath *string, filePath string) *SkipIndexBuilder {
 	var err error
 	lock := fileops.FileLockOption(*lockPath)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	indexBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	indexBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640, lock, pri)
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		panic(err)
@@ -49,7 +49,6 @@ func NewSkipIndexBuilder(lockPath *string, filePath string) *SkipIndexBuilder {
 }
 
 func (b *SkipIndexBuilder) WriteData(data []byte) error {
-	// todo logStore flush?
 	var num int
 	var err error
 	if num, err = b.writer.WriteData(data); err != nil {

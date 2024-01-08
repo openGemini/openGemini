@@ -185,6 +185,7 @@ type QuerySchema struct {
 	opt hybridqp.Options
 
 	joinCases         []*influxql.Join
+	unnestCases       []*influxql.Unnest
 	hasFieldCondition bool
 	planType          PlanType
 }
@@ -227,9 +228,11 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 	return schema
 }
 
-func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, joinCases []*influxql.Join, sortFields influxql.SortFields) *QuerySchema {
+func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options,
+	joinCases []*influxql.Join, unnest []*influxql.Unnest, sortFields influxql.SortFields) *QuerySchema {
 	q := NewQuerySchemaWithSources(fields, sources, columnNames, opt, sortFields)
 	q.joinCases = joinCases
+	q.SetUnnests(unnest)
 	return q
 }
 
@@ -262,6 +265,7 @@ func (qs *QuerySchema) reset(fields influxql.Fields, column []string) {
 	qs.strings = make(map[string]*influxql.Call)
 	qs.slidingWindow = make(map[string]*influxql.Call)
 	qs.holtWinters = qs.holtWinters[0:0]
+	qs.unnestCases = qs.unnestCases[:0]
 	qs.i = 0
 	qs.init()
 }
@@ -338,6 +342,10 @@ func (qs *QuerySchema) rewriteBaseCallTransformExprCall(expr influxql.Expr) infl
 			}
 			qs.mapDeriveType[replacement] = typ
 			return replacement
+		} else {
+			for i, arg := range expr.Args {
+				expr.Args[i] = qs.rewriteBaseCallTransformExprCall(arg)
+			}
 		}
 		return influxql.CloneExpr(expr)
 	default:
@@ -406,6 +414,10 @@ func (qs *QuerySchema) HasOptimizeAgg() bool {
 		return false
 	}
 	return qs.HasOptimizeCall()
+}
+
+func (qs *QuerySchema) CanSeqAggPushDown() bool {
+	return qs.HasCall() && qs.HasOptimizeCall() && len(qs.opt.GetDimensions()) == 0 && qs.opt.IsTimeSorted()
 }
 
 func (qs *QuerySchema) HasOptimizeCall() bool {
@@ -481,7 +493,7 @@ func (qs *QuerySchema) HasNonPreCall() bool {
 }
 
 func (qs *QuerySchema) CanLimitCut() bool {
-	return qs.HasLimit() && !qs.HasCall() && !qs.HasFieldCondition()
+	return qs.HasLimit() && !qs.HasCall() && !qs.HasFieldCondition() && qs.Options().FieldWildcard()
 }
 
 func (qs *QuerySchema) CountField() map[int]bool {
@@ -1164,6 +1176,7 @@ func (qs *QuerySchema) BuildDownSampleSchema(addPrefix bool) record.Schemas {
 func (qs *QuerySchema) HasExcatLimit() bool {
 	return qs.Options().GetHintType() == hybridqp.ExactStatisticQuery && qs.HasLimit() && !qs.HasOptimizeAgg()
 }
+
 func (qs *QuerySchema) GetSourcesNames() []string {
 	return qs.opt.GetSourcesNames()
 }
@@ -1197,4 +1210,16 @@ func (qs *QuerySchema) SetPlanType(planType PlanType) {
 
 func (qs *QuerySchema) GetPlanType() PlanType {
 	return qs.planType
+}
+
+func (qs *QuerySchema) SetUnnests(unnests []*influxql.Unnest) {
+	qs.unnestCases = unnests
+}
+
+func (qs *QuerySchema) GetUnnests() influxql.Unnests {
+	return qs.unnestCases
+}
+
+func (qs *QuerySchema) HasUnnests() bool {
+	return len(qs.unnestCases) > 0
 }

@@ -61,12 +61,13 @@ var (
 	stringPreAggPool  = sync.Pool{}
 	timePreAggPool    = sync.Pool{}
 
-	MinMaxTimeLen    = int(unsafe.Sizeof(SegmentRange{}))
-	SegmentLen       = (Segment{}).bytes()
-	ColumnMetaLenMin = (ColumnMeta{}).bytes(1)
-	ChunkMetaLen     = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
-	ChunkMetaMinLen  = ChunkMetaLen + ColumnMetaLenMin*2
-	MetaIndexLen     = int(unsafe.Sizeof(MetaIndex{}))
+	MinMaxTimeLen        = int(unsafe.Sizeof(SegmentRange{}))
+	SegmentLen           = (Segment{}).bytes()
+	ColumnMetaLenMin     = (ColumnMeta{}).bytes(1)
+	ChunkMetaLen         = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
+	ChunkMetaMinLen      = ChunkMetaLen + ColumnMetaLenMin*2
+	MetaIndexLen         = int(unsafe.Sizeof(MetaIndex{}))
+	DetachedMetaIndexLen = int(unsafe.Sizeof(MetaIndex{}) - 4) //count not use
 )
 
 type PreAggBuilders struct {

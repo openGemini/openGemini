@@ -90,6 +90,9 @@ install-protoc-windows:
 install-protoc-gen-gogo:
 	@$(GO) install github.com/gogo/protobuf/protoc-gen-gogo@latest
 
+install-protoc-gen-go:
+	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
+
 failpoint-enable:
 	@$(FAILPOINT_ENABLE)
 

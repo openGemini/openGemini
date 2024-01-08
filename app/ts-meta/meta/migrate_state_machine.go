@@ -372,8 +372,12 @@ func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 	m.removeFromEventMap(e)
 	res := e.getEventRes()
 	if errno.Equal(res.err, errno.PtNotFound) || errno.Equal(res.err, errno.DatabaseIsBeingDelete) { // delete database is execute before this event
+		m.logger.Info("do not process this dbpt cause database is deleting", zap.Error(res.err))
 		return
 	}
+	m.logger.Debug("try to judge whether process this dbpt", zap.Error(res.err),
+		zap.Bool("canExecuteEvent", m.canExecuteEvent(false)),
+		zap.Bool("isReassignNeeded", e.isReassignNeeded()))
 	if res.err != nil && m.canExecuteEvent(false) && e.isReassignNeeded() {
 		time.Sleep(100 * time.Millisecond)
 		nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()

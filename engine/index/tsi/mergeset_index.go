@@ -187,11 +187,10 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 	var exist bool
 	var err error
 	vname.B = append(vname.B[:0], row.Name...)
-	vkey.B = append(vkey.B[:0], row.Name...)
-	length := len(vname.B)
 	for i := range row.Tags {
-		vkey.B = append(vkey.B[:length], row.Tags[i].Key...)
-		vkey.B = append(vkey.B[:length], row.Tags[i].Value...)
+		vkey.B = append(vkey.B[:0], row.Name...)
+		vkey.B = append(vkey.B, row.Tags[i].Key...)
+		vkey.B = append(vkey.B, row.Tags[i].Value...)
 		exist, err = idx.isTagKeyExist(vkey.B, vname.B, row.Tags[i].Key, row.Tags[i].Value)
 		if err != nil {
 			return err
@@ -201,10 +200,14 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 			ii.B = idx.marshalTagToTagValues(compositeKey.B, ii.B, vname.B, []byte(row.Tags[i].Key), []byte(row.Tags[i].Value))
 			ii.Next()
 			idx.cache.PutTagValuesToTagKeysCache([]byte{1}, vkey.B)
+			err = idx.tb.AddItems(ii.Items)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	return idx.tb.AddItems(ii.Items)
+	return nil
 }
 
 func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByCol(idx *MergeSetIndex, col *TagCol) error {

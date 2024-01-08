@@ -539,6 +539,8 @@ func TierToString(tier uint64) string {
 		return "warm"
 	case util.Cold:
 		return "cold"
+	case util.Moving:
+		return "moving"
 	}
 	return "unknown"
 }
@@ -551,6 +553,8 @@ func StringToTier(tier string) uint64 {
 		return util.Warm
 	case "COLD":
 		return util.Cold
+	case "MOVING":
+		return util.Moving
 	default:
 		return util.TierBegin
 	}

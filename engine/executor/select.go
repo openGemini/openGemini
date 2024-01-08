@@ -60,7 +60,9 @@ func Select(ctx context.Context, stmt *influxql.SelectStatement, shardMapper que
 	}
 	// Must be deferred so it runs after Select.
 	defer util.MustClose(s)
-
+	if s.Statement().SubQueryHasDifferentAscending && s.Statement().Sources.HaveOnlyTSStore() {
+		return nil, errors.New("subqueries must be ordered in the same direction as the query itself")
+	}
 	return s.Select(ctx)
 }
 
@@ -127,7 +129,8 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 
 	rewriteVarfName(p.stmt.Fields)
 
-	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource, p.stmt.SortFields)
+	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource,
+		p.stmt.UnnestSource, p.stmt.SortFields)
 
 	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	planType := GetPlanType(schema, p.stmt)
@@ -158,9 +161,20 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	best := planner.FindBestExp()
 
 	if HaveOnlyCSStore {
-		best = RebuildColumnStorePlan(best)[0]
-		RebuildAggNodes(best)
-		best = ReplaceSortAggWithHashAgg(best)[0]
+		if schema.Options().IsUnifyPlan() {
+			if best.Schema().HasCall() {
+				if !best.Schema().CanSeqAggPushDown() {
+					best = ReplaceSortAggMergeWithHashAgg(best)[0]
+					best = ReplaceSortMergeWithHashMerge(best)[0]
+				}
+			} else {
+				best = ReplaceSortMergeWithHashMerge(best)[0]
+			}
+		} else {
+			best = RebuildColumnStorePlan(best)[0]
+			RebuildAggNodes(best)
+			best = ReplaceSortAggWithHashAgg(best)[0]
+		}
 	}
 
 	if sysconfig.GetEnablePrintLogicalPlan() == sysconfig.OnPrintLogicalPlan {
@@ -235,7 +249,8 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 		optSource := influxql.Sources{source.(influxql.Source)}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
-		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource, stmt.SortFields)
+		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource,
+			stmt.UnnestSource, stmt.SortFields)
 		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
 		if err != nil {
 			return nil, err
@@ -269,7 +284,8 @@ func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt
 	c.Stmt.Sources = qc.GetSources(c.Stmt.Sources)
 	stmt.Sources = qc.GetSources(stmt.Sources)
 	rightOpt, _ := query.NewProcessorOptionsStmt(c.Stmt, sopt)
-	sRight := NewQuerySchemaWithJoinCase(c.Stmt.Fields, c.Stmt.Sources, c.Stmt.ColumnNames(), &rightOpt, c.Stmt.JoinSource, c.Stmt.SortFields)
+	sRight := NewQuerySchemaWithJoinCase(c.Stmt.Fields, c.Stmt.Sources, c.Stmt.ColumnNames(), &rightOpt, c.Stmt.JoinSource,
+		c.Stmt.UnnestSource, c.Stmt.SortFields)
 	right, err := buildSources(ctx, qc, c.Stmt.Sources, sRight)
 	if err != nil {
 		return nil, nil, err
@@ -278,7 +294,8 @@ func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt
 		joinNodes = append(joinNodes, right)
 	}
 	leftOpt := opt.Clone()
-	sLeft := NewQuerySchemaWithJoinCase(stmt.Fields, stmt.Sources, stmt.ColumnNames(), leftOpt, stmt.JoinSource, stmt.SortFields)
+	sLeft := NewQuerySchemaWithJoinCase(stmt.Fields, stmt.Sources, stmt.ColumnNames(), leftOpt, stmt.JoinSource,
+		stmt.UnnestSource, stmt.SortFields)
 	left, err := buildSources(ctx, qc, stmt.Sources, sLeft)
 	if err != nil {
 		return nil, nil, err
@@ -286,7 +303,8 @@ func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt
 	if left != nil {
 		joinNodes = append(joinNodes, left)
 	}
-	joinSchema := NewQuerySchemaWithJoinCase(append(c.Stmt.Fields, stmt.Fields...), c.Stmt.Sources, append(c.Stmt.ColumnNames(), stmt.ColumnNames()...), opt, c.Stmt.JoinSource, c.Stmt.SortFields)
+	joinSchema := NewQuerySchemaWithJoinCase(append(c.Stmt.Fields, stmt.Fields...), c.Stmt.Sources, append(c.Stmt.ColumnNames(), stmt.ColumnNames()...), opt,
+		c.Stmt.JoinSource, c.Stmt.UnnestSource, c.Stmt.SortFields)
 	return NewLogicalJoin(joinNodes, joinSchema), joinSchema, nil
 }
 
@@ -346,6 +364,10 @@ func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasS
 	}
 }
 
+func buildIncAggNode(builder *LogicalPlanBuilderImpl) {
+	builder.IncHashAgg()
+}
+
 func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *QuerySchema) {
 	hasDistinct, hasSelector := hasDistinctSelectorCall(s)
 	hasSlidingWindow := schema.HasSlidingWindowCall()
@@ -356,6 +378,10 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 
 	if len(schema.Calls()) > 0 {
 		buildAggNode(builder, schema, hasSlidingWindow)
+	}
+
+	if len(schema.Calls()) > 0 && schema.Options().IsIncQuery() {
+		buildIncAggNode(builder)
 	}
 
 	if schema.CountDistinct() != nil {
@@ -528,6 +554,8 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 				eTraits = n.eTraits
 			} else if n.eType == READER_EXCHANGE {
 				eType = READER_EXCHANGE
+			} else if n.eType == PARTITION_EXCHANGE {
+				eType = PARTITION_EXCHANGE
 			}
 			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE) {
 				node := NewLogicalHashAgg(p[0], plan.Schema(), eType, eTraits)
@@ -571,6 +599,14 @@ func findChildAggNode(plan hybridqp.QueryNode) hybridqp.QueryNode {
 	return nil
 }
 
+func replaceChildAggNode(plan hybridqp.QueryNode, node *LogicalHashAgg, p []hybridqp.QueryNode) {
+	aggNode := findChildAggNode(plan)
+	if aggNode != nil {
+		node.LogicalPlanBase = aggNode.(*LogicalAggregate).LogicalPlanBase
+		node.inputs = p
+	}
+}
+
 func RebuildAggNodes(plan hybridqp.QueryNode) {
 	if len(plan.Children()) == 0 {
 		return
@@ -610,6 +646,74 @@ func ReplaceSortAggWithHashAgg(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 					node.LogicalPlanBase = n1.(*LogicalAggregate).LogicalPlanBase
 					node.inputs = p
 				}
+			}
+			nodes = append(nodes, node)
+		default:
+			nodes = append(nodes, p...)
+			replace = true
+		}
+	}
+	if replace {
+		plan.ReplaceChildren(nodes)
+		return []hybridqp.QueryNode{plan}
+	}
+	return nodes
+}
+
+func ReplaceSortMergeWithHashMerge(plan hybridqp.QueryNode) []hybridqp.QueryNode {
+	if plan.Children() == nil || len(plan.Schema().Sources()) > 1 {
+		return []hybridqp.QueryNode{plan}
+	}
+	var replace bool
+	var nodes []hybridqp.QueryNode
+	for _, child := range plan.Children() {
+		if child == nil {
+			continue
+		}
+		p := ReplaceSortMergeWithHashMerge(child)
+		switch n := plan.(type) {
+		case *LogicalExchange:
+			node := NewLogicalHashMerge(p[0], plan.Schema(), n.eType, n.eTraits)
+			nodes = append(nodes, node)
+		default:
+			nodes = append(nodes, p...)
+			replace = true
+		}
+	}
+	if replace {
+		plan.ReplaceChildren(nodes)
+		return []hybridqp.QueryNode{plan}
+	}
+	return nodes
+}
+
+func ReplaceSortAggMergeWithHashAgg(plan hybridqp.QueryNode) []hybridqp.QueryNode {
+	if plan.Children() == nil || len(plan.Schema().Sources()) > 1 {
+		return []hybridqp.QueryNode{plan}
+	}
+	var replace bool
+	var nodes []hybridqp.QueryNode
+	for _, child := range plan.Children() {
+		if child == nil {
+			continue
+		}
+		p := ReplaceSortAggMergeWithHashAgg(child)
+		if len(p) == 0 {
+			continue
+		}
+		switch n := plan.(type) {
+		case *LogicalAggregate:
+			if len(n.Children()) != 1 {
+				panic("agg node should have a child node")
+			}
+			var node *LogicalHashAgg
+			if exchange, ok := n.Children()[0].(*LogicalExchange); ok {
+				node = NewLogicalHashAgg(p[0], plan.Schema(), exchange.eType, exchange.eTraits)
+				replaceChildAggNode(plan, node, p)
+				node.SetInputs(node.Children()[0].Children())
+			} else {
+				node = NewLogicalHashAgg(p[0], plan.Schema(), UNKNOWN_EXCHANGE, nil)
+				replaceChildAggNode(plan, node, p)
 			}
 			nodes = append(nodes, node)
 		default:

@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
@@ -95,7 +96,7 @@ func (l *Location) SetFragmentRanges(frs []*fragment.FragmentRange) {
 	l.segPos = int(l.fragRgs[l.fragPos].End - 1)
 }
 
-func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buffer *[]byte) error {
+func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buf *pool.Buffer) error {
 	idx, m, err := l.r.MetaIndex(id, tr)
 	if err != nil {
 		return err
@@ -105,7 +106,7 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buffer *[]byte) e
 		return nil
 	}
 
-	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta, buffer, fileops.IO_PRIORITY_ULTRA_HIGH)
+	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta, buf, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		return err
 	}
@@ -165,7 +166,7 @@ func (l *Location) DescendingDone() {
 	l.segPos = int(l.fragRgs[0].Start) - 1
 }
 
-func (l *Location) Contains(sid uint64, tr util.TimeRange, buffer *[]byte) (bool, error) {
+func (l *Location) Contains(sid uint64, tr util.TimeRange, buf *pool.Buffer) (bool, error) {
 	// use bloom filter and file time range to filter generally
 	contains, err := l.r.ContainsValue(sid, tr)
 	if err != nil {
@@ -176,7 +177,7 @@ func (l *Location) Contains(sid uint64, tr util.TimeRange, buffer *[]byte) (bool
 	}
 
 	// read file meta to judge whether file has data, chunk meta will also init
-	err = l.readChunkMeta(sid, tr, buffer)
+	err = l.readChunkMeta(sid, tr, buf)
 	if err != nil {
 		return false, err
 	}
@@ -244,8 +245,8 @@ func (l *Location) overlapsForRowFilter(rowFilters *[]clv.RowFilter) bool {
 	return true
 }
 
-func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record) (*record.Record, error) {
-	rec, _, err := l.readData(filterOpts, dst, nil, nil)
+func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record, filterDst *record.Record) (*record.Record, error) {
+	rec, _, err := l.readData(filterOpts, dst, filterDst, nil)
 	return rec, err
 }
 

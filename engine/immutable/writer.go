@@ -20,10 +20,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
@@ -34,8 +37,7 @@ type tsspFileWriter struct {
 	fileWriter fileops.BasicFileWriter // data chunk writer
 	dataN      int64
 
-	cmw *indexWriter // chunkmeta writer
-	cmN int64
+	cmw IndexWriter // chunkmeta writer
 }
 
 func newWriteLimiter(fd fileops.File, limitCompact bool) fileops.NameReadWriterCloser {
@@ -75,7 +77,7 @@ func (w *tsspFileWriter) DataSize() int64 {
 }
 
 func (w *tsspFileWriter) ChunkMetaSize() int64 {
-	return w.cmN
+	return int64(w.cmw.Size())
 }
 
 func (w *tsspFileWriter) WriteData(b []byte) (int, error) {
@@ -93,13 +95,7 @@ func (w *tsspFileWriter) Name() string {
 }
 
 func (w *tsspFileWriter) WriteChunkMeta(b []byte) (int, error) {
-	n, err := w.cmw.Write(b)
-	if err != nil {
-		return 0, err
-	}
-	w.cmN += int64(n)
-
-	return n, nil
+	return w.cmw.Write(b)
 }
 
 func (w *tsspFileWriter) Close() error {
@@ -146,8 +142,8 @@ func (w *tsspFileWriter) AppendChunkMetaToData() error {
 	return err
 }
 
-func (w *tsspFileWriter) SwitchMetaBuffer() {
-	w.cmw.SwitchMetaBuffer()
+func (w *tsspFileWriter) SwitchMetaBuffer() (int, error) {
+	return w.cmw.SwitchMetaBuffer()
 }
 
 func (w *tsspFileWriter) MetaDataBlocks(dst [][]byte) [][]byte {
@@ -162,7 +158,7 @@ var (
 func InitWriterPool(size int) {
 	stat := statistics.NewHitRatioStatistics()
 	indexWriterPool.Reset(size, func() interface{} {
-		return &indexWriter{}
+		return newIndexWriter()
 	}, pool.NewHitRatioHook(stat.AddIndexWriterGetTotal, stat.AddIndexWriterHitTotal))
 
 	fileops.InitWriterPool(size)
@@ -201,24 +197,25 @@ type indexWriter struct {
 	buf  []byte
 	n    int
 	wn   int
-	lw   fileops.NameReadWriterCloser
-	tmp  []byte
+
+	swapper *FileSwapper
+	tmp     []byte
 
 	blockSize    int
 	cacheMeta    bool
 	limitCompact bool
 	metas        [][]byte
+
+	indexBlockSize int
 }
 
-func NewPKIndexWriter(indexName string, cacheMeta bool, limitCompact bool, lockPath *string) *indexWriter {
-	w, ok := indexWriterPool.Get().(*indexWriter)
-	if !ok || w == nil {
-		w = &indexWriter{}
-	}
-
+func (w *indexWriter) Init(name string, lock *string, cacheMeta bool, limitCompact bool) {
 	w.limitCompact = limitCompact
-	w.lock = lockPath
-	w.reset(indexName, cacheMeta)
+	w.name = name
+	w.lock = lock
+	w.cacheMeta = cacheMeta
+	w.reset()
+
 	if w.cacheMeta {
 		w.buf = getMetaBlockBuffer(w.blockSize)
 	} else {
@@ -228,23 +225,20 @@ func NewPKIndexWriter(indexName string, cacheMeta bool, limitCompact bool, lockP
 			w.buf = make([]byte, w.blockSize)
 		}
 	}
-
-	return w
 }
 
-func (w *indexWriter) reset(name string, cacheMeta bool) {
-	if w.lw != nil {
-		_ = w.lw.Close()
+func (w *indexWriter) reset() {
+	if w.swapper != nil {
+		w.swapper.MustClose()
+		w.swapper = nil
 	}
 
-	w.cacheMeta = cacheMeta
 	w.blockSize = fileops.DefaultWriterBufferSize
-	w.name = name
 	w.metas = w.metas[:0]
 	w.buf = w.buf[:0]
 	w.n = 0
 	w.wn = 0
-	w.lw = nil
+	w.indexBlockSize = 0
 }
 
 func (w *indexWriter) flush() error {
@@ -252,7 +246,7 @@ func (w *indexWriter) flush() error {
 		return nil
 	}
 
-	n, err := w.lw.Write(w.buf[0:w.n])
+	n, err := w.swapper.Write(w.buf[0:w.n])
 	if err != nil || n < w.n {
 		return io.ErrShortWrite
 	}
@@ -268,20 +262,17 @@ func (w *indexWriter) writeBuffer(p []byte) (int, error) {
 	var wn int
 	var err error
 	for len(p) > w.available() && err == nil {
-		if w.lw == nil {
-			lock := fileops.FileLockOption(*w.lock)
-			fd, err := fileops.OpenFile(w.name, os.O_CREATE|os.O_RDWR, 0640, lock)
+		if w.swapper == nil {
+			w.swapper, err = NewFileSwapper(w.name, *w.lock, w.limitCompact, indexCompressMode)
 			if err != nil {
-				log.Error("create file fail", zap.String("file", w.name), zap.Error(err))
 				return 0, err
 			}
-			w.lw = newWriteLimiter(fd, w.limitCompact)
 		}
 
 		var n int
 		if w.buffered() == 0 {
 			// Big data block, write directly from p to avoid copy
-			n, err = w.lw.Write(p)
+			n, err = w.swapper.Write(p)
 		} else {
 			n = copy(w.buf[w.n:], p)
 			w.n += n
@@ -300,6 +291,7 @@ func (w *indexWriter) writeBuffer(p []byte) (int, error) {
 
 	wn += n
 	w.wn += wn
+	w.indexBlockSize += wn
 
 	return wn, nil
 }
@@ -307,6 +299,7 @@ func (w *indexWriter) writeBuffer(p []byte) (int, error) {
 func (w *indexWriter) writeCacheBlocks(p []byte) (int, error) {
 	w.buf = append(w.buf, p...)
 	w.wn += len(p)
+	w.indexBlockSize += len(p)
 	return len(p), nil
 }
 
@@ -319,11 +312,11 @@ func (w *indexWriter) Write(p []byte) (nn int, err error) {
 }
 
 func (w *indexWriter) Close() error {
-	if w.lw != nil {
-		_ = w.lw.Close()
+	if w.swapper != nil {
+		w.swapper.MustClose()
 		lock := fileops.FileLockOption(*w.lock)
 		_ = fileops.Remove(w.name, lock)
-		w.lw = nil
+		w.swapper = nil
 	}
 
 	if w.cacheMeta {
@@ -336,7 +329,7 @@ func (w *indexWriter) Close() error {
 		w.buf = nil
 	}
 
-	w.reset("", false)
+	w.reset()
 	indexWriterPool.Put(w)
 
 	return nil
@@ -373,19 +366,7 @@ func (w *indexWriter) copyFromCacheTo(to io.Writer) (int, error) {
 }
 
 func (w *indexWriter) allInBuffer() bool {
-	return w.lw == nil && w.n <= w.wn
-}
-
-func (w *indexWriter) seekStart() error {
-	err := w.lw.Close()
-	if err != nil {
-		return err
-	}
-	if w.lw, err = fileops.OpenFile(w.name, os.O_RDONLY, 0640); err != nil {
-		return err
-	}
-
-	return nil
+	return w.swapper == nil && w.n <= w.wn
 }
 
 func (w *indexWriter) CopyTo(to io.Writer) (int, error) {
@@ -402,27 +383,23 @@ func (w *indexWriter) CopyTo(to io.Writer) (int, error) {
 		return 0, err
 	}
 
-	// Seek file pos to start
-	if err := w.seekStart(); err != nil {
-		return 0, err
-	}
-
 	if len(w.tmp) <= 0 {
 		w.tmp = bufferpool.Resize(w.tmp, fileops.DefaultBufferSize)
 	}
-	n, err := io.CopyBuffer(to, w.lw, w.tmp)
-	if err != nil {
-		return 0, err
-	}
 
-	return int(n), nil
+	n, err := w.swapper.CopyTo(to, w.tmp)
+
+	return int(n), err
 }
 
-func (w *indexWriter) SwitchMetaBuffer() {
+func (w *indexWriter) SwitchMetaBuffer() (int, error) {
 	if w.cacheMeta {
 		w.metas = append(w.metas, w.buf)
 		w.buf = getMetaBlockBuffer(w.blockSize)
 	}
+	size := w.indexBlockSize
+	w.indexBlockSize = 0
+	return size, nil
 }
 
 func (w *indexWriter) MetaDataBlocks(dst [][]byte) [][]byte {
@@ -440,4 +417,318 @@ func (w *indexWriter) MetaDataBlocks(dst [][]byte) [][]byte {
 		w.metas = w.metas[:0]
 	}
 	return dst
+}
+
+const (
+	DataFile        = "segment.bin"
+	ChunkMetaFile   = "segment.meta"
+	MetaIndexFile   = "segment.idx"
+	PrimaryKeyFile  = "primary.idx"
+	PrimaryMetaFile = "primary.meta"
+)
+
+func OpenObsFile(path, fileName string, obsOpts *obs.ObsOptions) (fileops.File, error) {
+	var obsPath string
+	if obsOpts != nil {
+		path = filepath.Join(obsOpts.BasePath, path, fileName)
+		obsPath = fileops.EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
+	} else {
+		obsPath = filepath.Join(path, fileName)
+	}
+	fd, err := fileops.OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+	if err != nil {
+		log.Error("create file fail", zap.String("name", obsPath), zap.Error(err))
+		return nil, err
+	}
+	return fd, nil
+}
+
+const (
+	FD_OUTSIDE uint32 = 0x00001
+)
+
+type obsWriter struct {
+	fd         fileops.File
+	fileWriter fileops.BasicFileWriter // meta index writer with buffer
+	fileSize   int64
+	flag       uint32
+}
+
+func NewObsWriter(path, fileName string, obsOpts *obs.ObsOptions) (*obsWriter, error) {
+	w := &obsWriter{}
+	fd, err := OpenObsFile(path, fileName, obsOpts)
+	if err != nil {
+		return nil, err
+	}
+	lockPath := ""
+	w.fd = fd
+	w.fileWriter = fileops.NewFileWriter(w.fd, fileops.DefaultWriterBufferSize, &lockPath)
+
+	fileInfo, err := w.fd.Stat()
+	if err != nil {
+		log.Error("execute stat() failed", zap.String("path", path), zap.Error(err))
+		return nil, err
+	}
+	w.fileSize = fileInfo.Size()
+
+	return w, nil
+}
+
+func NewObsWriterByFd(fd fileops.File, obsOpts *obs.ObsOptions) (*obsWriter, error) {
+	w := &obsWriter{}
+	lockPath := ""
+	w.fd = fd
+	w.fileWriter = fileops.NewFileWriter(w.fd, fileops.DefaultWriterBufferSize, &lockPath)
+
+	fileInfo, err := w.fd.Stat()
+	if err != nil {
+		log.Error("execute stat() failed", zap.Error(err))
+		return nil, err
+	}
+	w.fileSize = fileInfo.Size()
+	w.flag = w.flag | FD_OUTSIDE
+
+	return w, nil
+}
+
+func (w *obsWriter) Write(b []byte) (int, error) {
+	n, err := w.fileWriter.Write(b)
+	if err != nil {
+		return 0, err
+	}
+	w.fileSize += int64(n)
+
+	return n, nil
+}
+
+func (w *obsWriter) GetFd() fileops.File {
+	return w.fd
+}
+
+func (w *obsWriter) GetFileWriter() fileops.BasicFileWriter {
+	return w.fileWriter
+}
+
+func (w *obsWriter) Size() int64 {
+	return w.fileSize
+}
+
+func (w *obsWriter) Name() string {
+	return w.fd.Name()
+}
+
+func (w *obsWriter) Close() error {
+	if w.fileWriter != nil {
+		if err := w.fileWriter.Close(); err != nil {
+			log.Error("close data writer fail", zap.Error(err))
+			return err
+		}
+		w.fileWriter = nil
+		if w.flag&FD_OUTSIDE > 0 {
+			return nil
+		}
+		return w.fd.Close()
+	}
+	return nil
+}
+
+// data and trunkdata in obs file
+type obsFileWriter struct {
+	dataWriter *obsWriter
+	metaWriter *obsWriter
+}
+
+func newObsFileWriter(fd fileops.File, path string, obsOpts *obs.ObsOptions) (fileops.FileWriter, error) {
+	dataWriter, err := NewObsWriterByFd(fd, obsOpts)
+	if err != nil {
+		log.Error("create obs writer for data file failed", zap.String("path", path), zap.Error(err))
+		return nil, err
+	}
+	metaWriter, err := NewObsWriter(path, ChunkMetaFile, obsOpts)
+	if err != nil {
+		log.Error("create obs writer for chunk data file failed", zap.String("path", path), zap.Error(err))
+		return nil, err
+	}
+
+	w := &obsFileWriter{
+		dataWriter: dataWriter,
+		metaWriter: metaWriter,
+	}
+
+	return w, nil
+}
+
+func (w *obsFileWriter) GetFileWriter() fileops.BasicFileWriter {
+	return w.dataWriter.GetFileWriter()
+}
+
+func (w *obsFileWriter) DataSize() int64 {
+	return w.dataWriter.Size()
+}
+
+func (w *obsFileWriter) ChunkMetaSize() int64 {
+	return w.metaWriter.Size()
+}
+
+func (w *obsFileWriter) WriteData(b []byte) (int, error) {
+	return w.dataWriter.Write(b)
+}
+
+func (w *obsFileWriter) WriteChunkMeta(b []byte) (int, error) {
+	return w.metaWriter.Write(b)
+}
+
+func (w *obsFileWriter) Close() error {
+	if w.dataWriter != nil {
+		err := w.dataWriter.Close()
+		if err != nil {
+			log.Error("close metaIndexWriter fail", zap.Error(err))
+			return err
+		}
+		w.dataWriter = nil
+	}
+
+	if w.metaWriter != nil {
+		err := w.metaWriter.Close()
+		if err != nil {
+			log.Error("close metaIndexWriter fail", zap.Error(err))
+			return err
+		}
+		w.metaWriter = nil
+	}
+	return nil
+}
+
+func (w *obsFileWriter) AppendChunkMetaToData() error {
+	return nil
+}
+
+func (w *obsFileWriter) SwitchMetaBuffer() (int, error) {
+	return 0, nil
+}
+
+func (w *obsFileWriter) MetaDataBlocks(dst [][]byte) [][]byte {
+	return nil
+}
+
+func (w *obsFileWriter) Name() string {
+	return w.dataWriter.Name()
+}
+
+type obsIndexWriter struct {
+	metaIndexWriter      *obsWriter
+	primaryKeyWriter     *obsWriter
+	PrimaryKeyMetaWriter *obsWriter
+	bloomfilterWriters   []*obsWriter
+}
+
+func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string) (fileops.MetaWriter, error) {
+	w := &obsIndexWriter{
+		bloomfilterWriters: make([]*obsWriter, len(bfCols)),
+	}
+
+	var err error
+	// metaindex
+	w.metaIndexWriter, err = NewObsWriter(path, MetaIndexFile, obsOpts)
+	if err != nil {
+		log.Error("NewObsWriter for metaIndex failed", zap.String("path", path), zap.Error(err))
+		return nil, err
+	}
+
+	// primary key
+	w.primaryKeyWriter, err = NewObsWriter(path, PrimaryKeyFile, obsOpts)
+	if err != nil {
+		log.Error("NewObsWriter for primary key failed", zap.String("path", path), zap.Error(err))
+		return nil, err
+	}
+
+	// primary key meta
+	w.PrimaryKeyMetaWriter, err = NewObsWriter(path, PrimaryMetaFile, obsOpts)
+	if err != nil {
+		log.Error("NewObsWriter for primary key meta failed", zap.String("path", path), zap.Error(err))
+		return nil, err
+	}
+
+	// bloomfilter writer
+	for i := 0; i < len(bfCols); i++ {
+		w.bloomfilterWriters[i], err = NewObsWriter(path, sparseindex.BloomFilterFilePrefix+bfCols[i]+sparseindex.BloomFilterFileSuffix, obsOpts)
+		if err != nil {
+			log.Error("NewObsWriter for bloomfilter failed", zap.String("path", path), zap.String("path", bfCols[i]), zap.Error(err))
+			return nil, err
+		}
+	}
+	return w, nil
+}
+
+func (w *obsIndexWriter) WriteMetaIndex(b []byte) (int, error) {
+	return w.metaIndexWriter.Write(b)
+}
+
+func (w *obsIndexWriter) WritePrimaryKey(b []byte) (int, error) {
+	return w.primaryKeyWriter.Write(b)
+}
+
+func (w *obsIndexWriter) WritePrimaryKeyMeta(b []byte) (int, error) {
+	return w.PrimaryKeyMetaWriter.Write(b)
+}
+
+func (w *obsIndexWriter) WriteBloomFilter(bfIdx int, b []byte) (int, error) {
+	return w.bloomfilterWriters[bfIdx].Write(b)
+}
+
+func (w *obsIndexWriter) GetMetaIndexSize() int64 {
+	return w.metaIndexWriter.Size()
+}
+
+func (w *obsIndexWriter) GetPrimaryKeySize() int64 {
+	return w.primaryKeyWriter.Size()
+}
+
+func (w *obsIndexWriter) GetPrimaryKeyMetaSize() int64 {
+	return w.PrimaryKeyMetaWriter.Size()
+}
+
+func (w *obsIndexWriter) GetBloomFilterSize(bfIdx int) int64 {
+	return w.bloomfilterWriters[bfIdx].Size()
+}
+
+func (w *obsIndexWriter) GetPrimaryKeyHandler() fileops.File {
+	return w.primaryKeyWriter.GetFd()
+}
+
+func (w *obsIndexWriter) GetPrimaryKeyMetaHandler() fileops.File {
+	return w.PrimaryKeyMetaWriter.GetFd()
+}
+
+func (w *obsIndexWriter) Close() error {
+	if w.metaIndexWriter != nil {
+		err := w.metaIndexWriter.Close()
+		if err != nil {
+			log.Error("close metaIndexWriter fail", zap.Error(err))
+			return err
+		}
+		w.metaIndexWriter = nil
+	}
+
+	if w.PrimaryKeyMetaWriter != nil {
+		err := w.PrimaryKeyMetaWriter.Close()
+		if err != nil {
+			log.Error("close PrimaryKeyMetaWriter fail", zap.Error(err))
+			return err
+		}
+		w.PrimaryKeyMetaWriter = nil
+	}
+
+	for i := range w.bloomfilterWriters {
+		if w.bloomfilterWriters[i] != nil {
+			err := w.bloomfilterWriters[i].Close()
+			if err != nil {
+				log.Error("close PrimaryKeyMetaWriter fail", zap.Error(err))
+				return err
+			}
+			w.bloomfilterWriters[i] = nil
+		}
+	}
+	w.bloomfilterWriters = w.bloomfilterWriters[:0]
+	return nil
 }

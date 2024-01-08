@@ -301,7 +301,7 @@ func TestInsertProcessor(t *testing.T) {
 		t.Fatal("WritePointsRequest failed")
 	}
 
-	req4 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(false, false),
+	req4 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
 		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
 	if err := processor.Handle(w, req4); err != nil {
 		t.Fatal("WritePointsRequest failed")

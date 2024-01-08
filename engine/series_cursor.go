@@ -201,7 +201,7 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 		return rec, info, err
 	}
 
-	rec = rec.KickNilRow()
+	rec = rec.KickNilRow(nil)
 
 	for rec.RowNums() == 0 {
 		rec, info, err = s.nextInner()
@@ -212,7 +212,7 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 		if rec == nil {
 			return rec, info, err
 		}
-		rec = rec.KickNilRow()
+		rec = rec.KickNilRow(nil)
 	}
 	newRec := s.recordPool.Get()
 	newRec.AppendRecForSeries(rec, 0, rec.RowNums(), s.ridIdx)

@@ -21,11 +21,103 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/influxdata/influxdb/logger"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	Log "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"go.uber.org/zap"
 )
 
 type tsImmTableImpl struct {
+}
+
+func NewTsImmTable() *tsImmTableImpl {
+	return &tsImmTableImpl{}
+}
+
+func (c *tsImmTableImpl) GetEngineType() config.EngineType {
+	return config.TSSTORE
+}
+
+func (c *tsImmTableImpl) GetCompactionType(name string) config.CompactionType {
+	return config.ROW
+}
+
+func (c *tsImmTableImpl) UpdateAccumulateMetaIndexInfo(name string, index *AccumulateMetaIndex) {
+}
+
+func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error {
+	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
+	compactStatItem.Full = full
+	compactStatItem.Level = group.toLevel - 1
+	compactStat.AddActive(1)
+	defer func() {
+		compactStat.AddActive(-1)
+		compactStat.PushCompaction(compactStatItem)
+	}()
+
+	var cLog *zap.Logger
+	var logEnd func()
+	if isNonStream {
+		cLog, logEnd = logger.NewOperation(log, "Compaction", group.name)
+	} else {
+		cLog, logEnd = logger.NewOperation(log, "StreamCompaction", group.name)
+	}
+	defer logEnd()
+	lcLog := Log.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
+	start := time.Now()
+	lcLog.Debug("start compact file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
+	lcLog.Debug(fmt.Sprintf("compactionGroup: name=%v, groups=%v", group.name, group.oldFids))
+
+	var oldFilesSize int
+	var newFiles []TSSPFile
+	var compactErr error
+	if isNonStream {
+		compItrs, err := m.NewChunkIterators(group)
+		if err != nil {
+			lcLog.Error("new chunk iterators fail", zap.Error(err))
+			return err
+		}
+		compItrs.WithLog(lcLog)
+		oldFilesSize = compItrs.estimateSize
+		newFiles, compactErr = m.compact(compItrs, group.oldFiles, group.toLevel, true, lcLog)
+		compItrs.Close()
+	} else {
+		compItrs, err := m.NewStreamIterators(group)
+		if err != nil {
+			lcLog.Error("new stream iterators fail", zap.Error(err))
+			return err
+		}
+		compItrs.WithLog(lcLog)
+		oldFilesSize = compItrs.estimateSize
+		newFiles, compactErr = compItrs.compact(group.oldFiles, group.toLevel, true)
+		compItrs.Close()
+	}
+
+	if compactErr != nil {
+		lcLog.Error("compact fail", zap.Error(compactErr))
+		return compactErr
+	}
+
+	if err := m.ReplaceFiles(group.name, group.oldFiles, newFiles, true); err != nil {
+		lcLog.Error("replace compacted file error", zap.Error(err))
+		return err
+	}
+
+	end := time.Now()
+	lcLog.Debug("compact file done", zap.Any("files", group.oldFids), zap.Time("end", end), zap.Duration("time used", end.Sub(start)))
+
+	if oldFilesSize != 0 {
+		compactStatItem.OriginalFileCount = int64(len(group.oldFiles))
+		compactStatItem.CompactedFileCount = int64(len(newFiles))
+		compactStatItem.OriginalFileSize = int64(oldFilesSize)
+		compactStatItem.CompactedFileSize = SumFilesSize(newFiles)
+	}
+	return nil
 }
 
 func (t *tsImmTableImpl) LevelPlan(m *MmsTables, level uint16) []*CompactGroup {
@@ -63,7 +155,7 @@ func (t *tsImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, f
 	}
 
 	for _, f := range files {
-		stats.IOStat.AddIOSnapshotBytes(f.FileSize())
+		statistics.IOStat.AddIOSnapshotBytes(f.FileSize())
 	}
 
 	fs.lock.Lock()
@@ -159,6 +251,9 @@ func (t *tsImmTableImpl) NewFileIterators(m *MmsTables, group *CompactGroup) (Fi
 
 		fi.updatingFilesInfo(f, itr)
 	}
+	if len(fi.compIts) < 2 {
+		return fi, fmt.Errorf("no enough files to do compact, iterator size: %d", len(fi.compIts))
+	}
 	fi.updateFinalFilesInfo(group)
 	return fi, nil
 }
@@ -171,4 +266,8 @@ func (t *tsImmTableImpl) getFiles(m *MmsTables, isOrder bool) map[string]*TSSPFi
 	return mmsTables
 }
 
-func (t *tsImmTableImpl) SetMstInfo(name string, mstInfo *MeasurementInfo) {}
+func (t *tsImmTableImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {}
+
+func (t *tsImmTableImpl) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
+	return nil, false
+}

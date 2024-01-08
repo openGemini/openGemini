@@ -249,7 +249,9 @@ func compareColVal(expect, got *record.ColVal, ref *record.Field) error {
 		return fmt.Errorf("different col.Val: %s", ref.String())
 	}
 
-	if !bytes.Equal(expect.Bitmap, got.Bitmap) {
+	expect.RepairBitmap()
+	got.RepairBitmap()
+	if !reflect.DeepEqual(expect.Bitmap, got.Bitmap) {
 		return fmt.Errorf("different col.Bitmap: %s", ref.String())
 	}
 

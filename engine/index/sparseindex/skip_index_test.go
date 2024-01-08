@@ -17,14 +17,21 @@ limitations under the License.
 package sparseindex_test
 
 import (
+	"encoding/binary"
+	"hash/crc32"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/logstore"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -55,4 +62,28 @@ func TestSKIndexReader(t *testing.T) {
 	}
 	assert.Equal(t, len(frs), 1)
 	assert.Equal(t, reader.Close(), nil)
+}
+
+func TestCreateSkipIndex(t *testing.T) {
+	var colVal record.ColVal
+	colVal.AppendStrings("hello", "world", "hello", "test")
+	index := &sparseindex.BloomFilterImpl{}
+	bytes, err := index.CreateSkipIndex(&colVal, []int{2, 2}, influx.Field_Type_String)
+
+	segBfSize := int(logstore.GetConstant(2).FilterDataDiskSize)
+	assert.Nil(t, err)
+	assert.Equal(t, 2*segBfSize, len(bytes))
+
+	crc := crc32.Checksum(bytes[0:segBfSize-4], crc32.MakeTable(crc32.Castagnoli))
+	assert.Equal(t, crc, binary.LittleEndian.Uint32(bytes[segBfSize-4:segBfSize]))
+
+	bf := bloomfilter.NewOneHitBloomFilter(bytes[0:segBfSize-4], 3)
+	assert.True(t, bf.Hit(tokenizer.Hash([]byte("hello"))))
+	assert.True(t, bf.Hit(tokenizer.Hash([]byte("world"))))
+	assert.False(t, bf.Hit(tokenizer.Hash([]byte("test"))))
+
+	bf = bloomfilter.NewOneHitBloomFilter(bytes[segBfSize:2*segBfSize-4], 3)
+	assert.True(t, bf.Hit(tokenizer.Hash([]byte("hello"))))
+	assert.True(t, bf.Hit(tokenizer.Hash([]byte("test"))))
+	assert.False(t, bf.Hit(tokenizer.Hash([]byte("world"))))
 }

@@ -469,7 +469,7 @@ func GetTransformFactoryInstance() *TransformCreatorFactory {
 }
 
 type ReaderCreator interface {
-	CreateReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog, frags ShardsFragments, database string, ptID uint32) (Processor, error)
+	CreateReader(plan hybridqp.QueryNode, frags interface{}) (Processor, error)
 }
 
 func RegistryReaderCreator(plan LogicalPlan, creator ReaderCreator) bool {

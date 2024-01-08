@@ -2,7 +2,7 @@
 syntax = "proto3";
 package executor;
 
-option go_package = ".;executor";
+option go_package = "./;executor";
 
 message ProcessorOptions {
     string               Name = 23;
@@ -37,6 +37,10 @@ message ProcessorOptions {
     bool        GroupByAllDims = 32;
     uint32      EngineType = 33;
     string      SortFields = 34;
+    bool        HasFieldWildcard = 35;
+    string      LogQueryCurrId   = 36;
+    bool        IncQuery = 37;
+    int32       IterID = 38;
 }
 
 message Measurement {
@@ -47,7 +51,9 @@ message Measurement {
     bool   IsTarget = 5;
     string SystemIterator = 6;
     uint32 EngineType = 7;
-    optional IndexRelation indexRelation = 8;
+    IndexRelation indexRelation = 8;
+    ObsOptions ObsOptions = 9;
+    bool IsTimeSorted = 10;
 }
 
 message IndexRelation {
@@ -67,12 +73,18 @@ message IndexOptions {
 }
 
 message IndexOption {
-    string FieldName  = 1;
-    string Tokens     = 2;
-    string Tokenizers = 3;
-    string IndexName  = 4;
-    string IndexType  = 5;
-    int64  Segment    = 6;
+    string Tokens     = 1;
+    string Tokenizers = 2;
+    int64  TimeClusterDuration = 3;
+}
+
+message ObsOptions {
+	bool Enabled = 1;
+	string BucketName = 2;
+	string Ak = 3;
+	string Sk = 4;
+	string Endpoint = 5;
+	string BasePath = 6;
 }
 
 message Interval {
@@ -97,9 +109,16 @@ message QueryParam {
     float  QueryPct = 4;
 }
 
+message Unnest {
+    string Expr = 1;
+    repeated string Aliases = 2;
+    repeated int32 DstType = 3;
+}
+
 message QuerySchema {
     string          QueryFields = 2;
     repeated string ColumnNames = 3;
+    repeated Unnest Unnests = 5;
 }
 
 
@@ -151,25 +170,24 @@ message RemoteQuery {
     uint64 NodeID   = 5;
     bool analyze    = 6;
     bytes QueryNode = 7;
+    repeated PtQuery PtQuerys = 8;
 }
 
-message LogPath {
-  string DatabaseName = 1;
-  string MeasurementName = 2;
-  string SegmentPath = 3;
-  string Ak = 4;
-  string Sk = 5;
-  string BucketName = 6;
-  string Endpoint = 7;
-  string BasePath = 8;
-  uint32 version = 12;
-}
-
-enum AggType
-{
+enum AggType {
     TagSet = 0;
 	CountDistinct = 1;
 	Normal = 2;
+}
+
+message ShardInfo {
+    uint64 ID = 1;
+    string Path = 2;
+    uint32 Version = 3;
+}
+
+message PtQuery {
+    uint32 PtID  = 1;
+    repeated ShardInfo ShardInfos = 2;
 }
 
 enum LogicPlanType

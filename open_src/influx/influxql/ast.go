@@ -32,6 +32,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/open_src/influx/influxql/internal"
 )
 
@@ -357,6 +358,8 @@ type Query struct {
 // String returns a string representation of the query.
 func (q *Query) String() string { return q.Statements.String() }
 
+func (q *Query) StringAndLocs() (string, [][2]int) { return q.Statements.StringAndLocs() }
+
 // Statements represents a list of statements.
 type Statements []Statement
 
@@ -367,6 +370,21 @@ func (a Statements) String() string {
 		str = append(str, stmt.String())
 	}
 	return strings.Join(str, ";\n")
+}
+
+func (a Statements) StringAndLocs() (string, [][2]int) {
+	var str []string
+	locs := make([][2]int, len(a))
+	loc := 0
+	for i, stmt := range a {
+		locs[i][0] = loc
+		tmpStr := stmt.String()
+		str = append(str, tmpStr)
+		loc += len(tmpStr)
+		locs[i][1] = loc
+		loc += 2
+	}
+	return strings.Join(str, ";\n"), locs
 }
 
 // Statement represents a single command in InfluxQL.
@@ -584,6 +602,16 @@ func (a Sources) HaveOnlyCSStore() bool {
 		}
 	}
 	return true
+}
+
+func (a Sources) IsUnifyPlan() bool {
+	msts := a.Measurements()
+	for i := range msts {
+		if msts[i].IndexRelation != nil && len(msts[i].IndexRelation.Oids) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (a Sources) IsSubQuery() bool {
@@ -813,12 +841,14 @@ type CreateMeasurementStatementOption struct {
 }
 
 type IndexOption struct {
-	FieldName  string
-	Tokens     string
-	Tokenizers string
-	IndexName  string
-	IndexType  string
-	Segment    int64
+	Tokens              string
+	Tokenizers          string
+	TimeClusterDuration time.Duration
+}
+
+func (io *IndexOption) Clone() *IndexOption {
+	clone := *io
+	return &clone
 }
 
 func (s *CreateMeasurementStatement) String() string {
@@ -1441,6 +1471,16 @@ type SelectStatement struct {
 	UnnestSource []*Unnest
 
 	Scroll Scroll
+
+	HasWildcardField bool
+
+	SubQueryHasDifferentAscending bool
+	// only useful for topQuery
+	StmtId int
+}
+
+func (s *SelectStatement) SetStmtId(id int) {
+	s.StmtId = id
 }
 
 func (s *SelectStatement) CheckUnnest() error {
@@ -1448,24 +1488,12 @@ func (s *SelectStatement) CheckUnnest() error {
 		return nil
 	}
 	for _, unnest := range s.UnnestSource {
-		if dstCall, ok := unnest.DstFunc.(*Call); ok {
-			if len(dstCall.Args) != len(unnest.DstColumns) {
-				return fmt.Errorf("unnest dstFunc is not length equ to dstColumns")
-			}
-			unnest.DstType = make([]DataType, len(dstCall.Args))
-			for j, t := range dstCall.Args {
-				if val, ok := t.(*VarRef); ok {
-					if t, err := s.GetUnnestDataType(val.Val); err == nil {
-						unnest.DstType[j] = t
-					} else {
-						return err
-					}
-				} else {
-					return fmt.Errorf("unnest dstFunc args error")
-				}
+		if unnestExpr, ok := unnest.Expr.(*Call); ok {
+			if len(unnestExpr.Args) != len(unnest.Aliases) {
+				return fmt.Errorf("the length of unnest expr is not equal to length of aliases")
 			}
 		} else {
-			return fmt.Errorf("unnest dstFunc error")
+			return fmt.Errorf("unnest expr type error")
 		}
 	}
 	return nil
@@ -1476,41 +1504,11 @@ func (s *SelectStatement) GetUnnestSchema(unnestSchema map[string]DataType) {
 		return
 	}
 	for _, unnest := range s.UnnestSource {
-		for i := range unnest.DstFunc.(*Call).Args {
-			dstVar := unnest.DstColumns[i]
+		for i, dstVar := range unnest.Aliases {
 			if _, ok := unnestSchema[dstVar]; !ok {
 				unnestSchema[dstVar] = unnest.DstType[i]
 			}
 		}
-	}
-}
-
-func (s *SelectStatement) UnnestGetValType(val string) (DataType, error) {
-	if len(s.UnnestSource) == 0 {
-		return Unknown, fmt.Errorf("not find field datatype")
-	}
-	for _, unnest := range s.UnnestSource {
-		for i := range unnest.DstFunc.(*Call).Args {
-			if unnest.DstColumns[i] == val {
-				return unnest.DstType[i], nil
-			}
-		}
-	}
-	return Unknown, fmt.Errorf("not find field datatype")
-}
-
-func (s *SelectStatement) GetUnnestDataType(t string) (DataType, error) {
-	switch t {
-	case "varchar":
-		return String, nil
-	case "integer":
-		return Integer, nil
-	case "float":
-		return Float, nil
-	case "bool":
-		return Boolean, nil
-	default:
-		return Unknown, fmt.Errorf("error unnest datatype")
 	}
 }
 
@@ -1606,6 +1604,12 @@ func cloneSource(s Source) Source {
 		c.LSrc = cloneSource(s.LSrc)
 		c.RSrc = cloneSource(s.RSrc)
 		c.Condition = CloneExpr(s.Condition)
+		return c
+	case *Unnest:
+		c := &Unnest{}
+		c.Expr = s.Expr
+		c.Aliases = s.Aliases
+		c.DstType = s.DstType
 		return c
 	default:
 		panic("unreachable")
@@ -2057,6 +2061,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 			}
 		}
 		other.Fields = rwFields
+		other.HasWildcardField = hasFieldWildcard
 	}
 
 	// Rewrite all wildcard GROUP BY fields
@@ -4215,6 +4220,18 @@ func (a Measurements) String() string {
 	return strings.Join(str, ", ")
 }
 
+type IndexList struct {
+	IList []string
+}
+
+func (il *IndexList) Clone() *IndexList {
+	clone := &IndexList{
+		IList: make([]string, len(il.IList)),
+	}
+	copy(clone.IList, il.IList)
+	return clone
+}
+
 type IndexRelation struct {
 	Rid          uint32
 	Oids         []uint32
@@ -4223,8 +4240,44 @@ type IndexRelation struct {
 	IndexOptions map[string][]*IndexOption // columnName to index option (all index options for columnName)
 }
 
-type IndexList struct {
-	IList []string
+// Clone returns a deep clone of the IndexRelation.
+func (ir *IndexRelation) Clone() *IndexRelation {
+	if ir == nil {
+		return nil
+	}
+	clone := &IndexRelation{
+		Rid:          ir.Rid,
+		Oids:         make([]uint32, len(ir.Oids)),
+		IndexNames:   make([]string, len(ir.IndexNames)),
+		IndexList:    make([]*IndexList, 0, len(ir.IndexList)),
+		IndexOptions: make(map[string][]*IndexOption),
+	}
+	copy(clone.Oids, ir.Oids)
+	copy(clone.IndexNames, ir.IndexNames)
+	for _, src := range ir.IndexList {
+		clone.IndexList = append(clone.IndexList, src.Clone())
+	}
+	for col, opts := range ir.IndexOptions {
+		indexOpts := make([]*IndexOption, 0, len(opts))
+		for _, opt := range opts {
+			indexOpts = append(indexOpts, opt.Clone())
+		}
+		clone.IndexOptions[col] = indexOpts
+	}
+
+	return clone
+}
+
+func (ir *IndexRelation) GetBloomFilterColumns() []string {
+	if ir == nil {
+		return nil
+	}
+	for i := range ir.IndexNames {
+		if ir.IndexNames[i] == "bloomfilter" {
+			return ir.IndexList[i].IList
+		}
+	}
+	return nil
 }
 
 // Measurement represents a single measurement used as a datasource.
@@ -4241,9 +4294,10 @@ type Measurement struct {
 	IsSystemStatement bool
 	Alias             string
 
+	IsTimeSorted  bool
 	IndexRelation *IndexRelation
-
-	EngineType config.EngineType
+	ObsOptions    *obs.ObsOptions
+	EngineType    config.EngineType
 }
 
 // Clone returns a deep clone of the Measurement.
@@ -4252,6 +4306,17 @@ func (m *Measurement) Clone() *Measurement {
 	if m.Regex != nil && m.Regex.Val != nil {
 		regexp = &RegexLiteral{Val: m.Regex.Val.Copy()}
 	}
+
+	var indexRelation *IndexRelation
+	if m.IndexRelation != nil {
+		indexRelation = m.IndexRelation.Clone()
+	}
+
+	var obsOpts *obs.ObsOptions
+	if m.ObsOptions != nil {
+		obsOpts = m.ObsOptions.Clone()
+	}
+
 	return &Measurement{
 		Database:          m.Database,
 		RetentionPolicy:   m.RetentionPolicy,
@@ -4261,8 +4326,25 @@ func (m *Measurement) Clone() *Measurement {
 		SystemIterator:    m.SystemIterator,
 		IsSystemStatement: m.IsSystemStatement,
 		Alias:             m.Alias,
+		IndexRelation:     indexRelation,
+		ObsOptions:        obsOpts,
 		EngineType:        m.EngineType,
 	}
+}
+
+// Read/Write Splitting
+func (m *Measurement) IsRWSplit() bool {
+	if m == nil {
+		return false
+	}
+	return m.ObsOptions != nil
+}
+
+func (m *Measurement) IsCSStore() bool {
+	if m == nil {
+		return false
+	}
+	return m.EngineType == config.COLUMNSTORE
 }
 
 // String returns a string representation of the measurement.
@@ -7434,44 +7516,31 @@ func (us Unnests) String() string {
 }
 
 type Unnest struct {
-	Mst        *Measurement
-	CastFunc   string
-	ParseFunc  Expr
-	DstFunc    Expr
-	DstColumns []string
-	DstType    []DataType
+	Expr    Expr
+	Aliases []string
+	DstType []DataType
 }
 
-// output example: cast(match_all(\"([a-z]+)\", content::string) AS array(varchar)) AS(key1)
+// output example: UNNEST(Expr) AS(key1, value1)
 func (u *Unnest) String() string {
 	var buf bytes.Buffer
-	if u.Mst != nil {
-		buf.WriteString(u.Mst.String())
+	if u.Expr != nil {
+		buf.WriteString("UNNEST(")
+		buf.WriteString(u.Expr.String())
+		buf.WriteString(") ")
 	}
-	buf.WriteString(" ")
-	buf.WriteString(u.CastFunc)
-	buf.WriteString("(")
-	if u.ParseFunc != nil {
-		buf.WriteString(u.ParseFunc.String())
-	}
-	buf.WriteString(" AS ")
-	if u.DstFunc != nil {
-		buf.WriteString(u.DstFunc.String())
-	}
-	buf.WriteString(") AS(")
-	for i, t := range u.DstColumns {
-		buf.WriteString(t)
-		if i+1 != len(u.DstColumns) {
-			buf.WriteString(", ")
+
+	if len(u.Aliases) != 0 {
+		buf.WriteString("AS(")
+		for i, t := range u.Aliases {
+			buf.WriteString(t)
+			if i+1 != len(u.Aliases) {
+				buf.WriteString(", ")
+			}
 		}
+		buf.WriteString(")")
 	}
-	buf.WriteString(")")
-	for i, t := range u.DstType {
-		buf.WriteString(t.String())
-		if i+1 != len(u.DstColumns) {
-			buf.WriteString(", ")
-		}
-	}
+
 	return buf.String()
 }
 

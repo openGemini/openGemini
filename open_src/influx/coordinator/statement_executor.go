@@ -43,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -635,6 +636,13 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	}
 	indexR.IndexList = indexLists
 	// TODO: init indexR with stat.IndexOption
+	if stmt.TimeClusterDuration > 0 {
+		indexR.IndexOptions = map[string][]*influxql.IndexOption{
+			record.TimeField: []*influxql.IndexOption{
+				{TimeClusterDuration: stmt.TimeClusterDuration},
+			},
+		}
+	}
 	engineType, ok := config.String2EngineType[stmt.EngineType]
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
@@ -711,6 +719,11 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 		e.StmtExecLogger.Error("exceeds the rp limit", zap.String("db", stmt.Name))
 		return errors.New("THE TOTAL NUMBER OF RPs EXCEEDS THE LIMIT")
 	}
+
+	e.StmtExecLogger.Info("RetentionPolicySpec", zap.String("name", stmt.Name),
+		zap.String("Duration", stmt.Duration.String()),
+		zap.String("WarmDuration", stmt.WarmDuration.String()),
+		zap.String("ShardGroupDuration", stmt.ShardGroupDuration.String()))
 
 	spec := meta2.RetentionPolicySpec{
 		Name:               stmt.Name,
@@ -1126,6 +1139,9 @@ func (e *StatementExecutor) GetOptions(opt query2.ExecutionOptions, rowsChan cha
 		RowsChan:                rowsChan,
 		ChunkSize:               opt.InnerChunkSize,
 		AbortChan:               opt.AbortCh,
+		QueryID:                 opt.QueryID,
+		IncQuery:                opt.IncQuery,
+		IterID:                  opt.IterID,
 	}
 }
 
@@ -1528,21 +1544,20 @@ func (e *StatementExecutor) TagKeys(database string, measurements influxql.Measu
 func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement, ctx *query2.ExecutionContext, seq int) error {
 	var tagKeys netstorage.TableTagKeys
 	var err error
-	if q.Database == "" {
-		return coordinator.ErrDatabaseNameRequired
-	}
 	if q.Condition != nil {
 		exec := coordinator.NewShowTagKeysExecutor(e.StmtExecLogger, e.MetaClient, e.MetaExecutor, e.NetStorage)
 		tagKeys, err = exec.Execute(q)
 	} else {
 		tagKeys, err = e.TagKeys(q.Database, q.Sources.Measurements(), q.Condition)
 	}
+
 	if err != nil {
 		return err
 	}
 	emitted := false
 	for _, m := range tagKeys {
 		keys := m.Keys
+
 		if q.Offset > 0 {
 			if q.Offset >= len(keys) {
 				keys = nil

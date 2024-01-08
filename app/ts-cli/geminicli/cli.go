@@ -32,7 +32,7 @@ import (
 	"github.com/c-bata/go-prompt"
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/models"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/olekukonko/tablewriter"
 	"github.com/openGemini/openGemini/app/ts-cli/geminiql"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"golang.org/x/term"
@@ -428,30 +428,25 @@ func (c *CommandLine) prettyResult(result client.Result, w io.Writer) {
 			fmt.Fprintf(w, "tags: %s\n", strings.Join(tags, ", "))
 		}
 
-		writer := table.NewWriter()
-		writer.SetOutputMirror(w)
+		writer := tablewriter.NewWriter(w)
 		c.prettyTable(serie, writer)
 		writer.Render()
+		caption := fmt.Sprintf("%d columns, %d rows in set", len(serie.Columns), len(serie.Values))
+		fmt.Println(caption)
 		fmt.Println("")
 	}
 }
 
-func (c *CommandLine) prettyTable(serie models.Row, w table.Writer) {
-	columnNames := table.Row{}
-	for _, col := range serie.Columns {
-		columnNames = append(columnNames, col)
-	}
-	w.AppendRow(columnNames)
-	w.AppendSeparator()
-
+func (c *CommandLine) prettyTable(serie models.Row, w *tablewriter.Table) {
+	w.SetAutoFormatHeaders(false)
+	w.SetHeader(serie.Columns)
 	for _, value := range serie.Values {
-		tuple := table.Row{}
-		for _, v := range value {
-			tuple = append(tuple, v)
+		tuple := make([]string, len(value))
+		for i, val := range value {
+			tuple[i] = fmt.Sprintf("%v", val)
 		}
-		w.AppendRow(tuple)
+		w.Append(tuple)
 	}
-	w.SetCaption("%d columns, %d rows in set", len(serie.Columns), len(serie.Values))
 }
 
 func (c *CommandLine) clientQuery(query string) client.Query {

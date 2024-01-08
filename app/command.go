@@ -122,6 +122,7 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 			return err
 		}
 		crypto.Initialize(common.CryptoConfig)
+		config.SetProductType(common.ProductType)
 	}
 
 	if err := conf.Validate(); err != nil {
