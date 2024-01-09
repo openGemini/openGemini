@@ -6,7 +6,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/memberlist"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/go-msgpack/codec"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
 	coordinate2 "github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/coordinate"
 )
 

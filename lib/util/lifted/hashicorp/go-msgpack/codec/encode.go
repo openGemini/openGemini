@@ -651,15 +651,15 @@ func NewEncoderBytes(out *[]byte, h Handle) *Encoder {
 // can create a field called _struct, and set flags on it.
 //
 // Struct values "usually" encode as maps. Each exported struct field is encoded unless:
-//    - the field's codec tag is "-", OR
-//    - the field is empty and its codec tag specifies the "omitempty" option.
+//   - the field's codec tag is "-", OR
+//   - the field is empty and its codec tag specifies the "omitempty" option.
 //
 // When encoding as a map, the first string in the tag (before the comma)
 // is the map key string to use when encoding.
 //
 // However, struct values may encode as arrays. This happens when:
-//    - StructToArray Encode option is set, OR
-//    - the codec tag on the _struct field sets the "toarray" option
+//   - StructToArray Encode option is set, OR
+//   - the codec tag on the _struct field sets the "toarray" option
 //
 // Values with types that implement MapBySlice are encoded as stream maps.
 //
@@ -671,19 +671,19 @@ func NewEncoderBytes(out *[]byte, h Handle) *Encoder {
 //
 // Examples:
 //
-//      type MyStruct struct {
-//          _struct bool    `codec:",omitempty"`   //set omitempty for every field
-//          Field1 string   `codec:"-"`            //skip this field
-//          Field2 int      `codec:"myName"`       //Use key "myName" in encode stream
-//          Field3 int32    `codec:",omitempty"`   //use key "Field3". Omit if empty.
-//          Field4 bool     `codec:"f4,omitempty"` //use key "f4". Omit if empty.
-//          ...
-//      }
+//	type MyStruct struct {
+//	    _struct bool    `codec:",omitempty"`   //set omitempty for every field
+//	    Field1 string   `codec:"-"`            //skip this field
+//	    Field2 int      `codec:"myName"`       //Use key "myName" in encode stream
+//	    Field3 int32    `codec:",omitempty"`   //use key "Field3". Omit if empty.
+//	    Field4 bool     `codec:"f4,omitempty"` //use key "f4". Omit if empty.
+//	    ...
+//	}
 //
-//      type MyStruct struct {
-//          _struct bool    `codec:",omitempty,toarray"`   //set omitempty for every field
-//                                                         //and encode struct as an array
-//      }
+//	type MyStruct struct {
+//	    _struct bool    `codec:",omitempty,toarray"`   //set omitempty for every field
+//	                                                   //and encode struct as an array
+//	}
 //
 // The mode of encoding is based on the type of the value. When a value is seen:
 //   - If an extension is registered for it, call that extension function

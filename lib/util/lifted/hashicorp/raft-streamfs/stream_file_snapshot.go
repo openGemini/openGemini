@@ -36,7 +36,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/go-msgpack/codec"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
 )
 
 const (

@@ -22,7 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/lib/util/lifted/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"

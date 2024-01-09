@@ -3,7 +3,7 @@ package dictpool
 import (
 	"sort"
 
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/gotils/strconv"
+	"github.com/openGemini/openGemini/lib/util/lifted/gotils/strconv"
 )
 
 func (d *Dict) allocKV() *KV {

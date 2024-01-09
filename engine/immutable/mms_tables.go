@@ -36,7 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/lib/util/lifted/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"go.uber.org/zap"
 )

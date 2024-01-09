@@ -30,7 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
+	"github.com/openGemini/openGemini/lib/util/lifted/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )

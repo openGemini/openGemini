@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/cpu"
-	"github.com/openGemini/openGemini/open_src/github.com/valyala/bytebufferpool"
+	"github.com/openGemini/openGemini/lib/util/lifted/bytebufferpool"
 )
 
 const (

@@ -583,14 +583,15 @@ func NewDecoderBytes(in []byte, h Handle) *Decoder {
 // We will decode and store a value in that nil interface.
 //
 // Sample usages:
-//   // Decoding into a non-nil typed value
-//   var f float32
-//   err = codec.NewDecoder(r, handle).Decode(&f)
 //
-//   // Decoding into nil interface
-//   var v interface{}
-//   dec := codec.NewDecoder(r, handle)
-//   err = dec.Decode(&v)
+//	// Decoding into a non-nil typed value
+//	var f float32
+//	err = codec.NewDecoder(r, handle).Decode(&f)
+//
+//	// Decoding into nil interface
+//	var v interface{}
+//	dec := codec.NewDecoder(r, handle)
+//	err = dec.Decode(&v)
 //
 // When decoding into a nil interface{}, we will decode into an appropriate value based
 // on the contents of the stream:
@@ -598,6 +599,7 @@ func NewDecoderBytes(in []byte, h Handle) *Decoder {
 //   - Other values are decoded appropriately depending on the type:
 //     bool, string, []byte, time.Time, etc
 //   - Extensions are decoded as RawExt (if no ext function registered for the tag)
+//
 // Configurations exist on the Handle to override defaults
 // (e.g. for MapType, SliceType and how to decode raw bytes).
 //
@@ -623,7 +625,6 @@ func NewDecoderBytes(in []byte, h Handle) *Decoder {
 //
 // However, when decoding a stream nil, we reset the destination container
 // to its "zero" value (e.g. nil for slice/map, etc).
-//
 func (d *Decoder) Decode(v interface{}) (err error) {
 	defer panicToErr(&err)
 	d.decode(v)

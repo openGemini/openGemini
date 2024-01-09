@@ -18,7 +18,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/memberlist"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/go-msgpack/codec"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
 	coordinate2 "github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/coordinate"
 )
 
@@ -1538,7 +1538,7 @@ func (s *Serf) resolveNodeConflict() {
 	}
 }
 
-//eraseNode takes a node completely out of the member list
+// eraseNode takes a node completely out of the member list
 func (s *Serf) eraseNode(m *memberState) {
 	// Delete from members
 	delete(s.members, m.Name)
