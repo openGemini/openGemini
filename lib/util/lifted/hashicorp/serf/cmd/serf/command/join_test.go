@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/mitchellh/cli"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/testutil"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/testutil"
 )
 
 func TestJoinCommandRun(t *testing.T) {

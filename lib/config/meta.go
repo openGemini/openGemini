@@ -25,7 +25,7 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/iodetector"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 )
 
 const (

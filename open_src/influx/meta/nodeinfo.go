@@ -10,7 +10,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 
 import (
 	"github.com/gogo/protobuf/proto"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 )
 
