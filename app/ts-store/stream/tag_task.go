@@ -50,38 +50,36 @@ const (
 	EmptyTagValue = ""
 )
 
-type Task struct {
-	//compress dict
-	//corpus        map[string]uint64
+type TagTask struct {
+	// compress dict
+	// corpus        map[string]uint64
 	corpus        sync.Map
 	corpusIndexes []string
 	corpusIndex   uint64
 	corpusLock    sync.Mutex
 
-	//metadata, will change by time
-	//key tag values
+	// key tag values
 	values sync.Map
-	//store startWindow id, for ring store structure
+	// store startWindow id, for ring store structure
 	startWindowID int64
 	offset        int
-	//current window start time
+	// current window start time
 	start time.Time
-	//current window end time
+	// current window end time
 	end time.Time
-	//store all ptIds for all window
+	// store all ptIds for all window
 	ptIds []*uint32
-	//store all shardIds for all window
+	// store all shardIds for all window
 	shardIds []*uint64
 
-	//metadata, not change
+	// metadata, not change
 	src        *meta2.StreamMeasurementInfo
 	des        *meta2.StreamMeasurementInfo
 	info       *meta2.MeasurementInfo
 	groupKeys  []string
-	fieldCalls []FieldCall
-	fieldsDims map[string]int32
+	fieldCalls []*FieldCall
 
-	//chan for process
+	// chan for process
 	innerCache     chan *WindowCache
 	innerRes       chan error
 	abort          chan struct{}
@@ -89,13 +87,13 @@ type Task struct {
 	updateWindow   chan struct{}
 	cleanPreWindow chan struct{}
 
-	//pool
+	// pool
 	bp              *BuilderPool
 	windowCachePool *WindowCachePool
 	*WindowDataPool
 	indexKeyPool []byte
 
-	//config
+	// config
 	id          uint64
 	name        string
 	concurrency int
@@ -103,13 +101,13 @@ type Task struct {
 	window      time.Duration
 	maxDelay    time.Duration
 
-	//tmp data, reuse
+	// tmp data, reuse
 	fieldCallsLen int
 	rows          []influx.Row
 	validNum      int
 	maxDuration   int64
 
-	//tools
+	// tools
 	flushWG sync.WaitGroup
 	goPool  *ants.Pool
 	stats   *statistics.StreamWindowStatItem
@@ -125,12 +123,28 @@ type WindowCache struct {
 	release func() bool
 }
 
-func (s *Task) stop() error {
+func (s *TagTask) Put(r *WindowCache) {
+	s.WindowDataPool.Put(r)
+}
+
+func (s *TagTask) stop() error {
 	close(s.abort)
 	return s.err
 }
 
-func (s *Task) run() error {
+func (s *TagTask) getSrcInfo() *meta2.StreamMeasurementInfo {
+	return s.src
+}
+
+func (s *TagTask) getDesInfo() *meta2.StreamMeasurementInfo {
+	return s.des
+}
+
+func (s *TagTask) getName() string {
+	return s.name
+}
+
+func (s *TagTask) run() error {
 	err := s.initVar()
 	if err != nil {
 		s.err = err
@@ -152,10 +166,10 @@ func (s *Task) run() error {
 	return nil
 }
 
-func (s *Task) initVar() error {
+func (s *TagTask) initVar() error {
 	s.maxDuration = int64(s.windowNum) * s.window.Nanoseconds()
 	s.abort = make(chan struct{})
-	//chan len zero, make updateWindow cannot parallel execute with flush
+	// chan len zero, make updateWindow cannot parallel execute with flush
 	s.updateWindow = make(chan struct{})
 	s.cleanPreWindow = make(chan struct{})
 	s.fieldCallsLen = len(s.fieldCalls)
@@ -180,17 +194,17 @@ func (s *Task) initVar() error {
 	return nil
 }
 
-func (s *Task) buildFieldCalls() error {
+func (s *TagTask) buildFieldCalls() error {
 	for c := range s.fieldCalls {
 		switch s.fieldCalls[c].call {
 		case "min":
-			s.fieldCalls[c].f = atomic2.CompareAndSwapMinFloat64
+			s.fieldCalls[c].tagFunc = atomic2.CompareAndSwapMinFloat64
 		case "max":
-			s.fieldCalls[c].f = atomic2.CompareAndSwapMaxFloat64
+			s.fieldCalls[c].tagFunc = atomic2.CompareAndSwapMaxFloat64
 		case "sum":
-			s.fieldCalls[c].f = atomic2.AddFloat64
+			s.fieldCalls[c].tagFunc = atomic2.AddFloat64
 		case "count":
-			s.fieldCalls[c].f = atomic2.AddFloat64
+			s.fieldCalls[c].tagFunc = atomic2.AddFloat64
 		default:
 			return fmt.Errorf("not support stream func %v", s.fieldCalls[c].call)
 		}
@@ -200,7 +214,7 @@ func (s *Task) buildFieldCalls() error {
 
 // cycle flush data form cache, period is group time
 // TODO support stream not contain group time
-func (s *Task) cycleFlush() {
+func (s *TagTask) cycleFlush() {
 	var err error
 	defer func() {
 		if r := recover(); r != nil {
@@ -234,7 +248,7 @@ func (s *Task) cycleFlush() {
 
 // consume data from inner cache, inner cache size equal to concurrency
 // TODO share calculate goroutine with other stream task
-func (s *Task) parallelCalculate() {
+func (s *TagTask) parallelCalculate() {
 	for i := 0; i < s.concurrency; i++ {
 		go func() {
 			for {
@@ -259,7 +273,7 @@ func (s *Task) parallelCalculate() {
 
 // clean old window values, set value nil
 // TODO clean window unused key
-func (s *Task) cleanWindow() {
+func (s *TagTask) cleanWindow() {
 	for {
 		select {
 		case _, open := <-s.cleanPreWindow:
@@ -276,7 +290,7 @@ func (s *Task) cleanWindow() {
 }
 
 // consume data from window cache, and update window metadata, calculate cannot parallel with update window
-func (s *Task) consumeDataAndUpdateMeta() {
+func (s *TagTask) consumeDataAndUpdateMeta() {
 	defer func() {
 		if r := recover(); r != nil {
 			err := errno.NewError(errno.RecoverPanic, r)
@@ -320,7 +334,7 @@ func (s *Task) consumeDataAndUpdateMeta() {
 							loop = false
 						}
 					default:
-						//currently no new data to calculate
+						// currently no new data to calculate
 						loop = false
 					}
 				}
@@ -332,9 +346,9 @@ func (s *Task) consumeDataAndUpdateMeta() {
 	}
 }
 
-func (s *Task) walkUpdate(k, vv interface{}) bool {
+func (s *TagTask) walkUpdate(k, vv interface{}) bool {
 	offset := atomic2.LoadModInt64AndADD(&s.startWindowID, -1, int64(s.windowNum))
-	//window values only store float64 pointer type, no need to check
+	// window values only store float64 pointer type, no need to check
 	v, _ := vv.([]*float64)
 	vs := v[int(offset)*s.fieldCallsLen : int(offset)*s.fieldCallsLen+s.fieldCallsLen]
 	for i := range vs {
@@ -343,8 +357,8 @@ func (s *Task) walkUpdate(k, vv interface{}) bool {
 	return true
 }
 
-func (s *Task) calculate(cache *WindowCache) error {
-	//occur release func
+func (s *TagTask) calculate(cache *WindowCache) error {
+	// occur release func
 	if cache == nil {
 		panic("cannot be here")
 	}
@@ -378,9 +392,10 @@ func (s *Task) calculate(cache *WindowCache) error {
 		} else {
 			vs, _ = vv.([]*float64)
 		}
+		windowId := int((row.Timestamp-s.start.UnixNano())/s.window.Nanoseconds()+atomic.LoadInt64(&s.startWindowID)) % s.windowNum
 		for c := range s.fieldCalls {
 			var curVal float64
-			//count op, if streamOnly, add value, else add 1
+			// count op, if streamOnly, add value, else add 1
 			if s.fieldCalls[c].call == "count" && !row.StreamOnly {
 				curVal = 1
 			} else {
@@ -391,7 +406,6 @@ func (s *Task) calculate(cache *WindowCache) error {
 					}
 				}
 			}
-			windowId := int((row.Timestamp-s.start.UnixNano())/s.window.Nanoseconds()+atomic.LoadInt64(&s.startWindowID)) % s.windowNum
 			id := s.fieldCallsLen*windowId + c
 			if vs[id] == nil {
 				var t float64
@@ -402,10 +416,10 @@ func (s *Task) calculate(cache *WindowCache) error {
 				}
 				atomic2.SetAndSwapPointerFloat64(&vs[id], &t)
 			}
-			s.fieldCalls[c].f(vs[id], curVal)
-			atomic.SwapUint64(s.shardIds[windowId], cache.shardId)
-			atomic.StoreUint32(s.ptIds[windowId], cache.ptId)
+			s.fieldCalls[c].tagFunc(vs[id], curVal)
 		}
+		atomic.SwapUint64(s.shardIds[windowId], cache.shardId)
+		atomic.StoreUint32(s.ptIds[windowId], cache.ptId)
 		s.stats.AddWindowProcess(1)
 	}
 
@@ -413,14 +427,14 @@ func (s *Task) calculate(cache *WindowCache) error {
 }
 
 // generateRows generate rows from map cache, prepare data for flush
-func (s *Task) generateRows() {
+func (s *TagTask) generateRows() {
 	s.offset = int(atomic.LoadInt64(&s.startWindowID)) * s.fieldCallsLen
 	s.values.Range(s.buildRow)
 }
 
-func (s *Task) buildRow(k any, vv any) bool {
+func (s *TagTask) buildRow(k any, vv any) bool {
 	key, _ := k.(string)
-	//window values only store float64 pointer type, no need to check
+	// window values only store float64 pointer type, no need to check
 	v, _ := vv.([]*float64)
 	if s.validNum >= len(s.rows) {
 		s.rows = append(s.rows, influx.Row{Name: s.info.Name})
@@ -495,7 +509,7 @@ func (s *Task) buildRow(k any, vv any) bool {
 }
 
 // corpusIndexes array not need lock
-func (s *Task) unCompressDictKey(key string) (string, error) {
+func (s *TagTask) unCompressDictKey(key string) (string, error) {
 	if key == EmptyTagValue {
 		return EmptyTagValue, nil
 	}
@@ -512,7 +526,7 @@ func (s *Task) unCompressDictKey(key string) (string, error) {
 }
 
 // UnCompressDictKeyUint corpusIndexes array not need lock
-func (s *Task) UnCompressDictKeyUint(key uint64) (string, error) {
+func (s *TagTask) UnCompressDictKeyUint(key uint64) (string, error) {
 	if uint64(len(s.corpusIndexes)) < key-1 {
 		return "", fmt.Errorf("corpusIndexes len is less than %v", key-1)
 	}
@@ -520,7 +534,7 @@ func (s *Task) UnCompressDictKeyUint(key uint64) (string, error) {
 }
 
 // no lock to compress dict key, compress string to int64
-func (s *Task) compressDictKeyUint(key string) (uint64, error) {
+func (s *TagTask) compressDictKeyUint(key string) (uint64, error) {
 	vv, ok := s.corpus.Load(key)
 	if ok {
 		index, _ := vv.(uint64)
@@ -543,11 +557,11 @@ func (s *Task) compressDictKeyUint(key string) (uint64, error) {
 	key = stringinterner.InternTagValue(key)
 	s.corpusIndexes[index] = key
 	s.corpus.Store(key, index)
-	//conflict situation, may overwrite kv, but do not difference for uncompress, because corpusIndexes not overwrite
+	// conflict situation, may overwrite kv, but do not difference for uncompress, because corpusIndexes not overwrite
 	return index, nil
 }
 
-func (s *Task) flush() error {
+func (s *TagTask) flush() error {
 	var err error
 	s.Logger.Info("stream start flush")
 	t := time.Now()
@@ -605,7 +619,7 @@ func (s *Task) flush() error {
 	return err
 }
 
-func (s *Task) WriteRowsToShard(start, end int) error {
+func (s *TagTask) WriteRowsToShard(start, end int) error {
 	pBuf := bufferpool.GetPoints()
 	defer func() {
 		bufferpool.PutPoints(pBuf)
@@ -641,7 +655,7 @@ func (s *Task) WriteRowsToShard(start, end int) error {
 	return nil
 }
 
-func (s *Task) Drain() {
+func (s *TagTask) Drain() {
 	for s.bp.Len() != s.bp.Size() {
 	}
 	for s.Len() != 0 {
@@ -649,7 +663,7 @@ func (s *Task) Drain() {
 }
 
 // generateGroupKeyUint not support fieldIndex
-func (s *Task) generateGroupKeyUint(keys []string, value *influx.Row) string {
+func (s *TagTask) generateGroupKeyUint(keys []string, value *influx.Row) string {
 	if len(keys) == 0 {
 		return EmptyGroupKey
 	}

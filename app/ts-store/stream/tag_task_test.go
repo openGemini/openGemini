@@ -50,7 +50,7 @@ func Test_WindowDataPool(t *testing.T) {
 }
 
 func Test_CompressDictKey(t *testing.T) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -72,7 +72,7 @@ func Test_CompressDictKey(t *testing.T) {
 }
 
 func Test_CompressDictKeyUint(t *testing.T) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -93,7 +93,7 @@ func Test_CompressDictKeyUint(t *testing.T) {
 }
 
 func Benchmark_CompressDictKey(t *testing.B) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -119,7 +119,7 @@ func Benchmark_CompressDictKey(t *testing.B) {
 }
 
 func Benchmark_CompressDictKeyUint(t *testing.B) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -144,7 +144,7 @@ func Benchmark_CompressDictKeyUint(t *testing.B) {
 }
 
 func Test_ConsumeDataAbort(t *testing.T) {
-	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}
 	go task.consumeDataAndUpdateMeta()
 	// wait run
@@ -156,7 +156,7 @@ func Test_ConsumeDataAbort(t *testing.T) {
 }
 
 func Test_ConsumeDataClean(t *testing.T) {
-	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		cleanPreWindow: make(chan struct{})}
 	go task.consumeDataAndUpdateMeta()
@@ -169,7 +169,7 @@ func Test_ConsumeDataClean(t *testing.T) {
 }
 
 func Test_FlushAbort(t *testing.T) {
-	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		cleanPreWindow: make(chan struct{}), Logger: MockLogger{t}}
 	go task.flush()
@@ -179,7 +179,7 @@ func Test_FlushAbort(t *testing.T) {
 }
 
 func Test_FlushUpdate(t *testing.T) {
-	task := &Task{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		cleanPreWindow: make(chan struct{}), Logger: MockLogger{t}}
 	go task.flush()
@@ -189,7 +189,7 @@ func Test_FlushUpdate(t *testing.T) {
 }
 
 func Test_GenerateGroupKey(t *testing.T) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -216,7 +216,7 @@ func Test_GenerateGroupKey(t *testing.T) {
 }
 
 func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -256,7 +256,7 @@ func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
 }
 
 func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -273,7 +273,7 @@ func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
 }
 
 func Benchmark_GenerateGroupKeyUint(t *testing.B) {
-	task := &Task{
+	task := &TagTask{
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
@@ -342,7 +342,7 @@ func Benchmark_Atomic_Count(t *testing.B) {
 }
 
 func Benchmark_FlushRow(t *testing.B) {
-	task := &Task{
+	task := &TagTask{
 		values:        sync.Map{},
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
@@ -367,12 +367,12 @@ func Benchmark_FlushRow(t *testing.B) {
 		})
 	}
 	task.groupKeys = keys
-	fieldCalls := []FieldCall{}
-	fieldCalls = append(fieldCalls, FieldCall{
+	fieldCalls := []*FieldCall{}
+	fieldCalls = append(fieldCalls, &FieldCall{
 		name:         "bps",
 		alias:        "bps",
 		call:         "sum",
-		f:            nil,
+		tagFunc:      nil,
 		inFieldType:  influx.Field_Type_Float,
 		outFieldType: influx.Field_Type_Float,
 	})

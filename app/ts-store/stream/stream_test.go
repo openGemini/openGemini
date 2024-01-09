@@ -294,12 +294,12 @@ func Test_RegisterFail(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
-	fieldCalls := []FieldCall{}
-	fieldCalls = append(fieldCalls, FieldCall{
+	fieldCalls := []*FieldCall{}
+	fieldCalls = append(fieldCalls, &FieldCall{
 		name:         "bps",
 		alias:        "bps",
 		call:         "sum",
-		f:            nil,
+		tagFunc:      nil,
 		inFieldType:  influx.Field_Type_Float,
 		outFieldType: influx.Field_Type_Float,
 	})
@@ -309,7 +309,47 @@ func Test_RegisterFail(t *testing.T) {
 	streamInfos := buildStreamInfo(window, maxDelay, calls)
 	now := time.Now()
 	t.Log("now", now)
-	stream.RegisterTask(streamInfos["tt"], fieldCalls, map[string]int32{})
+	stream.RegisterTask(streamInfos["tt"], fieldCalls)
+	//Truncate time
+	next := now.Truncate(window).Add(window)
+	after := time.NewTicker(next.Sub(now))
+	select {
+	case <-after.C:
+		after.Reset(window)
+	}
+	stream.Close()
+}
+
+func Test_RegisterTimeTask(t *testing.T) {
+	m := &MockStorage{}
+	l := &MockLogger{t}
+	metaClient := &MockMetaclient{getInfoFail: true}
+	conf := stream2.NewConfig()
+	stream, err := NewStream(m, l, metaClient, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go stream.Run()
+	groupKeys := []string{}
+	for i := 0; i < 8; i++ {
+		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
+	}
+	fieldCalls := []*FieldCall{}
+	fieldCalls = append(fieldCalls, &FieldCall{
+		name:         "bps",
+		alias:        "bps",
+		call:         "sum",
+		tagFunc:      nil,
+		inFieldType:  influx.Field_Type_Float,
+		outFieldType: influx.Field_Type_Float,
+	})
+	window := time.Second * 3
+	maxDelay := time.Second * 10
+	calls := []string{"sum"}
+	streamInfos := buildStreamInfoGroup(window, maxDelay, calls, 0)
+	now := time.Now()
+	t.Log("now", now)
+	stream.RegisterTask(streamInfos["tt"], fieldCalls)
 	//Truncate time
 	next := now.Truncate(window).Add(window)
 	after := time.NewTicker(next.Sub(now))
@@ -333,12 +373,12 @@ func Test_MaxDelay(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
-	fieldCalls := []FieldCall{}
-	fieldCalls = append(fieldCalls, FieldCall{
+	fieldCalls := []*FieldCall{}
+	fieldCalls = append(fieldCalls, &FieldCall{
 		name:         "bps",
 		alias:        "bps",
 		call:         "sum",
-		f:            nil,
+		tagFunc:      nil,
 		inFieldType:  influx.Field_Type_Float,
 		outFieldType: influx.Field_Type_Float,
 	})
@@ -349,7 +389,7 @@ func Test_MaxDelay(t *testing.T) {
 	streamInfos := buildStreamInfo(window, maxDelay, calls)
 	now := time.Now()
 	t.Log("now", now)
-	stream.RegisterTask(streamInfos["tt"], fieldCalls, map[string]int32{})
+	stream.RegisterTask(streamInfos["tt"], fieldCalls)
 	//Truncate time
 	next := now.Truncate(window).Add(window)
 	after := time.NewTicker(next.Sub(now))
@@ -399,8 +439,12 @@ func Test_MaxDelay(t *testing.T) {
 }
 
 func buildStreamInfo(window, maxDelay time.Duration, calls []string) map[string]*meta.StreamInfo {
+	return buildStreamInfoGroup(window, maxDelay, calls, 8)
+}
+
+func buildStreamInfoGroup(window, maxDelay time.Duration, calls []string, groupNum int) map[string]*meta.StreamInfo {
 	groupKeys := []string{}
-	for i := 0; i < 8; i++ {
+	for i := 0; i < groupNum; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
 	src := meta.StreamMeasurementInfo{
@@ -452,19 +496,19 @@ func Bench_Stream_POINT(t *testing.B, pointNum int) {
 	window := time.Second * 10
 	maxDelay := time.Second * 1
 
-	fieldCalls := []FieldCall{}
-	fieldCalls = append(fieldCalls, FieldCall{
+	fieldCalls := []*FieldCall{}
+	fieldCalls = append(fieldCalls, &FieldCall{
 		name:         "bps",
 		alias:        "bps",
 		call:         "sum",
-		f:            nil,
+		tagFunc:      nil,
 		inFieldType:  influx.Field_Type_Float,
 		outFieldType: influx.Field_Type_Float,
 	})
 
 	calls := []string{"sum"}
 	streamInfos := buildStreamInfo(window, maxDelay, calls)
-	stream.RegisterTask(streamInfos["tt"], fieldCalls, map[string]int32{})
+	stream.RegisterTask(streamInfos["tt"], fieldCalls)
 	now := time.Now()
 	next := now.Truncate(window).Add(window)
 	after := time.NewTicker(next.Sub(now))

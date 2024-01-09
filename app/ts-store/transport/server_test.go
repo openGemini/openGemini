@@ -211,7 +211,7 @@ func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, stream
 	panic("implement me")
 }
 
-func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []stream.FieldCall, fieldsDims map[string]int32) error {
+func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []*stream.FieldCall) error {
 	panic("implement me")
 }
 
