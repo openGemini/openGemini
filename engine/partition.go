@@ -307,7 +307,7 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 		return err
 	}
 
-	resC := make(chan *res)
+	resC := make(chan *res, len(indexDirs))
 	n := 0
 
 	for indexIdx := range indexDirs {

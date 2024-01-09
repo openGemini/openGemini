@@ -38,7 +38,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/lib/util/lifted/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -705,7 +704,7 @@ type FragmentIterators struct {
 	Conf              *Config
 	ctx               *ReadContext
 	colBuilder        *ColumnBuilder
-	schemaMap         dictpool.Dict
+	schemaMap         map[string]struct{}
 	breakPoint        *breakPoint
 	files             []TSSPFile
 	builder           *MsBuilder
@@ -893,7 +892,7 @@ func (f *FragmentIterators) Close() {
 	f.chunkSegments = 0
 	f.ctx.preAggBuilders.reset()
 	f.files = f.files[:0]
-	f.schemaMap.Reset()
+	f.resetSchemaMap()
 	f.colBuilder.resetPreAgg()
 	putFragmentIterators(f)
 }
@@ -912,6 +911,7 @@ func getFragmentIterators() *FragmentIterators {
 				SortKeyFileds:     make([]record.Field, 0, 16),
 				RecordResult:      &record.Record{},
 				TimeClusterResult: &record.Record{},
+				schemaMap:         make(map[string]struct{}),
 			}
 		}
 		return v.(*FragmentIterators)
@@ -1202,9 +1202,15 @@ func (f *FragmentIterators) writeMetaIndex(wn int, minT, maxT int64) error {
 	return nil
 }
 
+func (f *FragmentIterators) resetSchemaMap() {
+	for k := range f.schemaMap {
+		delete(f.schemaMap, k)
+	}
+}
+
 func (f *FragmentIterators) genFragmentSchema(group FilesInfo, sortKey []string) {
 	f.fields = f.fields[:0]
-	f.schemaMap.Reset()
+	f.resetSchemaMap()
 	for _, iter := range group.compIts {
 		f.mergeSchema(iter.curtChunkMeta)
 		f.chunkSegments += len(iter.curtChunkMeta.timeRange)
@@ -1244,11 +1250,18 @@ func (f *FragmentIterators) genSortKeyFields(sortKey []string) {
 
 func (f *FragmentIterators) mergeSchema(m *ChunkMeta) {
 	for i := 0; i < len(m.colMeta)-1; i++ {
-		cm := m.colMeta[i]
-		ref := record.Field{Name: cm.name, Type: int(cm.ty)}
-		if !f.schemaMap.Has(ref.Name) {
-			f.schemaMap.Set(ref.Name, ref)
-			f.fields = append(f.fields, ref)
+		cm := &m.colMeta[i]
+		if _, ok := f.schemaMap[cm.Name()]; !ok {
+			size := f.fields.Len()
+			if cap(f.fields) <= size {
+				f.fields = append(f.fields, record.Field{})
+			} else {
+				f.fields = f.fields[:size+1]
+			}
+
+			f.fields[size].Name = cm.Name()
+			f.fields[size].Type = int(cm.ty)
+			f.schemaMap[cm.Name()] = struct{}{}
 		}
 	}
 }

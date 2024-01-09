@@ -1504,6 +1504,7 @@ func TestPutFragmentIterators(t *testing.T) {
 			SortKeyFileds:     make([]record.Field, 0, 16),
 			RecordResult:      &record.Record{},
 			TimeClusterResult: &record.Record{},
+			schemaMap:         make(map[string]struct{}),
 		}
 		putFragmentIterators(&itr)
 	}
