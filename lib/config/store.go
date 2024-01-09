@@ -323,7 +323,7 @@ func NewStore() Store {
 		LazyLoadShardEnable:          true,
 		InterruptQuery:               true,
 		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
-		IndexReadCachePersistent:     true,
+		IndexReadCachePersistent:     false,
 	}
 }
 
