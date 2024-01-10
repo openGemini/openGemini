@@ -79,6 +79,28 @@ func NewRecord(schema Schemas, initColMeta bool) *Record {
 	return record
 }
 
+type ColAux struct {
+	colPos           []int
+	colPosValidCount []int
+}
+
+func (c *ColAux) appendLen(size int) {
+	if len(c.colPos) < size {
+		c.colPos = make([]int, size)
+	} else {
+		for i := 0; i < size; i++ {
+			c.colPos[i] = 0
+		}
+	}
+	if len(c.colPosValidCount) < size {
+		c.colPosValidCount = make([]int, size)
+	} else {
+		for i := 0; i < size; i++ {
+			c.colPosValidCount[i] = 0
+		}
+	}
+}
+
 func (rec Record) Len() int {
 	return len(rec.Schema)
 }
@@ -1169,7 +1191,7 @@ func (rec *Record) IsNilRow(row int) bool {
 	return true
 }
 
-func (rec *Record) KickNilRow(dst *Record) *Record {
+func (rec *Record) KickNilRow(dst *Record, colAux *ColAux) *Record {
 	// fast path, no need to kick
 	colNum := rec.ColNums() - 1
 	for i := 0; i < colNum; i++ {
@@ -1185,6 +1207,10 @@ func (rec *Record) KickNilRow(dst *Record) *Record {
 	rowNum := rec.RowNums()
 	isFirst := true
 	var newRec *Record
+	if colAux == nil {
+		colAux = &ColAux{}
+	}
+	colAux.appendLen(len(rec.Schemas()))
 	for rowIdx := 0; rowIdx < rowNum; {
 		startRow := rowIdx
 		endRow := rowIdx
@@ -1204,7 +1230,7 @@ func (rec *Record) KickNilRow(dst *Record) *Record {
 					isFirst = false
 				}
 			}
-			newRec.AppendRec(rec, startRow, endRow)
+			newRec.AppendRecFast(rec, startRow, endRow, colAux.colPos, colAux.colPosValidCount)
 			rowIdx = endRow
 		} else {
 			rowIdx++

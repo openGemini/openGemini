@@ -69,6 +69,7 @@ type seriesCursor struct {
 	memRecIter     recordIter
 	tsmRecIter     recordIter
 	limitFirstTime int64
+	colAux         *record.ColAux
 }
 
 func (s *seriesCursor) SetFirstLimitTime(memTableRecord *record.Record, tsmCursor *tsmMergeCursor, schema *executor.QuerySchema) {
@@ -200,8 +201,10 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	if rec == nil {
 		return rec, info, err
 	}
-
-	rec = rec.KickNilRow(nil)
+	if s.colAux == nil {
+		s.colAux = &record.ColAux{}
+	}
+	rec = rec.KickNilRow(nil, s.colAux)
 
 	for rec.RowNums() == 0 {
 		rec, info, err = s.nextInner()
@@ -212,7 +215,7 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 		if rec == nil {
 			return rec, info, err
 		}
-		rec = rec.KickNilRow(nil)
+		rec = rec.KickNilRow(nil, s.colAux)
 	}
 	newRec := s.recordPool.Get()
 	newRec.AppendRecForSeries(rec, 0, rec.RowNums(), s.ridIdx)

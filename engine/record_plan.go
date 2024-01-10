@@ -862,6 +862,7 @@ type FileSequenceAggregator struct {
 	appendTail    bool
 
 	shardTr *util.TimeRange
+	colAux  *record.ColAux
 }
 
 func NewFileSequenceAggregator(schema hybridqp.Catalog, addPrefix bool, shardStartTime, shardEndTime int64) executor.Processor {
@@ -877,6 +878,7 @@ func NewFileSequenceAggregator(schema hybridqp.Catalog, addPrefix bool, shardSta
 		tr:         &util.TimeRange{},
 
 		shardTr: &util.TimeRange{Min: shardStartTime, Max: shardEndTime},
+		colAux:  &record.ColAux{},
 	}
 	return r
 }
@@ -1067,7 +1069,7 @@ func (r *FileSequenceAggregator) AggregateSameSchema() error {
 			newRecord = r.recordPool.GetBySchema(r.outSchema)
 			continue
 		}
-		kr := inRecord.GetRec().KickNilRow(nil)
+		kr := inRecord.GetRec().KickNilRow(nil, r.colAux)
 		if kr.RowNums() == 0 {
 			continue
 		}

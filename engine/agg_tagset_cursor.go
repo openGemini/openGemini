@@ -187,7 +187,7 @@ func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, cond influxql.Ex
 	if re == nil {
 		return nil, nil
 	}
-	r := re.KickNilRow(nil)
+	r := re.KickNilRow(nil, &record.ColAux{})
 	if r == nil || r.RowNums() == 0 {
 		return nil, nil
 	}

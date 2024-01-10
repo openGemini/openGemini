@@ -432,6 +432,7 @@ func (r *HybridStoreReader) Work(ctx context.Context) error {
 func (r *HybridStoreReader) run(ctx context.Context, reader comm.KeyCursor) (err error) {
 	var ch executor.Chunk
 	var rec *record.Record
+	colAux := record.ColAux{}
 	for {
 		r.filterBitmap.Reset()
 		select {
@@ -447,7 +448,7 @@ func (r *HybridStoreReader) run(ctx context.Context, reader comm.KeyCursor) (err
 			if rec == nil {
 				return
 			}
-			rec.KickNilRow(nil)
+			rec.KickNilRow(nil, &colAux)
 			if rec.RowNums() == 0 {
 				continue
 			}

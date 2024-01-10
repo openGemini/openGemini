@@ -107,6 +107,7 @@ func (t *TSSPFileDetachedReader) Next() (*record.Record, comm.SeriesInfoIntf, er
 
 func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 	r := t.recordPool.Get()
+	colAux := record.ColAux{}
 	for {
 		result, err := t.dataReader.ReadBatch(r, t.ctx.readCtx)
 		if err != nil {
@@ -116,7 +117,7 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 			t.recordPool.PutRecordInCircularPool()
 			return nil, nil
 		}
-		result.KickNilRow(nil)
+		result.KickNilRow(nil, &colAux)
 		if result.RowNums() == 0 {
 			t.recordPool.PutRecordInCircularPool()
 			continue

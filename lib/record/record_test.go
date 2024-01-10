@@ -2729,7 +2729,7 @@ func TestKickNilRecord1(t *testing.T) {
 		[]int64{31, 33, 34, 45, 46, 47})
 	sort.Sort(rec)
 	sort.Sort(expRec)
-	newRec := rec.KickNilRow(nil)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
 
 	if !testRecsEqual(newRec, expRec) {
 		t.Fatal("error result")
@@ -2758,7 +2758,7 @@ func TestKickNilRecord2(t *testing.T) {
 		[]int64{31, 32, 33, 34, 45, 46, 47})
 	sort.Sort(rec)
 	sort.Sort(expRec)
-	newRec := rec.KickNilRow(nil)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
 
 	if !testRecsEqual(newRec, expRec) {
 		t.Fatal("error result")
@@ -2787,7 +2787,7 @@ func TestKickNilRecord3(t *testing.T) {
 		[]int64{31, 34, 45, 62, 64, 65})
 	sort.Sort(rec)
 	sort.Sort(expRec)
-	newRec := rec.KickNilRow(nil)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
 
 	if !testRecsEqual(newRec, expRec) {
 		t.Fatal("error result")
@@ -2809,7 +2809,7 @@ func TestKickNilRecord4(t *testing.T) {
 		[]int{0, 0, 0, 0, 0, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
 	sort.Sort(rec)
-	newRec := rec.KickNilRow(nil)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
 
 	if newRec.RowNums() != 0 {
 		t.Fatal("error result")

@@ -687,6 +687,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		mapSize = memtableInitMapSize
 	}
 	memItrs := make(map[uint64][]*SeriesIter, mapSize)
+	colAux := record.ColAux{}
 	for i := start; i < tagSetNum; i += step {
 		sid := tagSet.IDs[i]
 		ptTags := &(tagSet.TagsVec[i])
@@ -698,7 +699,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
 			continue
 		}
-		memTableRecord = memTableRecord.KickNilRow(nil)
+		memTableRecord = memTableRecord.KickNilRow(nil, &colAux)
 		if memTableRecord.RowNums() == 0 {
 			continue
 		}

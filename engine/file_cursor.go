@@ -70,6 +70,7 @@ type fileCursor struct {
 	filterRecordPool   *record.CircularRecordPool
 	validRowRecordPool *record.CircularRecordPool
 	memRecIters        map[uint64][]*SeriesIter
+	colAux             *record.ColAux
 }
 
 type SeriesIter struct {
@@ -125,6 +126,7 @@ func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor
 		ascending:   schema.Options().IsAscending(),
 		memRecIters: memRecIters,
 		isPreAgg:    ctx.decs.MatchPreAgg(),
+		colAux:      &record.ColAux{},
 	}
 	c.buf = pool.GetChunkMetaBuffer()
 	c.seriesIter = &SeriesIter{iter: &recordIter{}}
@@ -279,7 +281,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
 		if f.seriesIter.iter.hasRemainData() {
 			orderRec := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
-			orderRec = orderRec.KickNilRow(f.validRowRecordPool.Get())
+			orderRec = orderRec.KickNilRow(f.validRowRecordPool.Get(), f.colAux)
 			return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: sid, index: idx, tagSetIndex: i}, nil
 		}
 		m := f.loc.GetChunkMeta()
@@ -320,7 +322,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 		if rec == nil {
 			if f.memIter.hasRemainData() {
 				orderRec = mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
-				orderRec = orderRec.KickNilRow(f.validRowRecordPool.Get())
+				orderRec = orderRec.KickNilRow(f.validRowRecordPool.Get(), f.colAux)
 				return &DataBlockInfo{sInfo: sInfo, record: orderRec, sid: sid, index: idx, tagSetIndex: i}, nil
 			}
 			f.loc.ResetMeta()
@@ -335,7 +337,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 		}
 		f.seriesIter.iter.init(rec)
 		r := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
-		r = r.KickNilRow(f.validRowRecordPool.Get())
+		r = r.KickNilRow(f.validRowRecordPool.Get(), f.colAux)
 		if r.RowNums() == 0 {
 			f.recordPool.PutRecordInCircularPool()
 			f.validRowRecordPool.PutRecordInCircularPool()
@@ -356,7 +358,7 @@ func (f *fileCursor) GetMemData(tagSetIdx, i int, sInfo *seriesInfo) *DataBlockI
 	sid := sInfo.GetSid()
 	endIndex := f.getMemEndIndex(sid, i)
 	r := f.memRecIters[sid][i].iter.cutRecord(endIndex - f.memRecIters[sid][i].iter.pos)
-	r = r.KickNilRow(f.validRowRecordPool.Get())
+	r = r.KickNilRow(f.validRowRecordPool.Get(), f.colAux)
 	return &DataBlockInfo{sInfo: sInfo, record: r, sid: sInfo.sid, index: i, tagSetIndex: tagSetIdx}
 }
 

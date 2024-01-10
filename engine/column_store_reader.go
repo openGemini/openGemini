@@ -399,6 +399,7 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFilter int, err error) {
 	var ch executor.Chunk
 	filterBitmap := bitmap.NewFilterBitmap(r.queryCtx.filterOption.CondFunctions.NumFilter())
+	colAux := record.ColAux{}
 	for {
 		filterBitmap.Reset()
 		select {
@@ -415,7 +416,7 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 			if rec == nil {
 				return
 			}
-			rec.KickNilRow(nil)
+			rec.KickNilRow(nil, &colAux)
 			if rec.RowNums() == 0 {
 				continue
 			}
