@@ -60,12 +60,14 @@ var (
 	boolPreAggPool    = sync.Pool{}
 	stringPreAggPool  = sync.Pool{}
 	timePreAggPool    = sync.Pool{}
+	SegmentLen        = (Segment{}).bytes()
+	ColumnMetaLenMin  = (ColumnMeta{}).bytes(1)
+	ChunkMetaMinLen   = ChunkMetaLen + ColumnMetaLenMin*2
+)
 
+const (
 	MinMaxTimeLen        = int(unsafe.Sizeof(SegmentRange{}))
-	SegmentLen           = (Segment{}).bytes()
-	ColumnMetaLenMin     = (ColumnMeta{}).bytes(1)
 	ChunkMetaLen         = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
-	ChunkMetaMinLen      = ChunkMetaLen + ColumnMetaLenMin*2
 	MetaIndexLen         = int(unsafe.Sizeof(MetaIndex{}))
 	DetachedMetaIndexLen = int(unsafe.Sizeof(MetaIndex{}) - 4) //count not use
 )

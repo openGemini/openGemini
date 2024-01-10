@@ -140,6 +140,13 @@ func NewQueryPara(query string, ascending bool, highlight bool, timeout, limit i
 	}
 }
 
+func (p *QueryParam) reInitForInc() {
+	queryId := time.Now().UnixNano()
+	p.Scroll_id = strconv.FormatInt(queryId, 10) + "-0"
+	p.IterID = 0
+	p.QueryID = strconv.FormatInt(queryId, 10)
+}
+
 func (p *QueryParam) initQueryIDAndIterID() error {
 	if p != nil && p.IncQuery && len(p.Scroll_id) > 0 {
 		if ids := strings.Split(p.Scroll_id, "-"); len(ids) == 2 {
@@ -646,12 +653,11 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 	var count int64
 	var sql *influxql.Query
 	var resp *Response
+	incQueryTimeOut := time.Duration(para.Timeout) * time.Millisecond
+	incQueryStart := time.Now()
 	for i := 0; i < IncAggLogQueryRetryCount; i++ {
-		resp, sql, err, _ = h.serveLogQuery(w, r, para, user)
-		if err != nil && isIncAggLogQueryRetryErr(err) {
-			para.Scroll_id = strconv.FormatInt(time.Now().UnixNano(), 10) + "-0"
-			continue
-		} else {
+		resp, sql, err = h.queryAggLog(w, r, user, incQueryStart, incQueryTimeOut, para)
+		if err == nil {
 			break
 		}
 	}
@@ -899,12 +905,11 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 	var hist []Histograms
 	var resp *Response
 	// If the error is caused by the cache or network, run the query repeatedly.
+	incQueryTimeOut := time.Duration(para.Timeout) * time.Millisecond
+	incQueryStart := time.Now()
 	for i := 0; i < IncAggLogQueryRetryCount; i++ {
-		resp, _, err, _ = h.serveLogQuery(w, r, para, user)
-		if err != nil && isIncAggLogQueryRetryErr(err) {
-			para.Scroll_id = strconv.FormatInt(time.Now().UnixNano(), 10) + "-0"
-			continue
-		} else {
+		resp, _, err = h.queryAggLog(w, r, user, incQueryStart, incQueryTimeOut, para)
+		if err == nil {
 			break
 		}
 	}
@@ -984,6 +989,43 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 	entry := NewQueryLogAggResponse(para.QueryID)
 	entry.SetValue(b)
 	QueryAggResultCache.Put(para.QueryID, entry, cache.UpdateMetaData)
+}
+
+func (h *Handler) queryAggLog(w http.ResponseWriter, r *http.Request, user meta2.User,
+	incQueryStart time.Time, incQueryTimeOut time.Duration, para *QueryParam) (*Response, *influxql.Query, error) {
+	var err error
+	var resp *Response
+	var sql *influxql.Query
+	for {
+		resp, sql, err, _ = h.serveLogQuery(w, r, para, user)
+		if err != nil {
+			if isIncAggLogQueryRetryErr(err) {
+				para.reInitForInc()
+				return nil, nil, err
+			}
+			break
+		}
+		iterMaxNum, ok := cache.GetGlobalIterNum(para.QueryID)
+		if !ok {
+			err = errno.NewError(errno.FailedGetGlobalMaxIterNum, para.QueryID)
+			h.Logger.Error(err.Error())
+			para.reInitForInc()
+			return nil, nil, err
+		}
+		var process float64
+		if iterMaxNum == 0 {
+			process = 1
+		} else {
+			process = float64(para.IterID) / float64(iterMaxNum)
+		}
+		para.Process = process
+		if time.Since(incQueryStart) < incQueryTimeOut && para.IterID < iterMaxNum {
+			para.Scroll_id = fmt.Sprintf("%s-%d", para.QueryID, para.IterID)
+		} else {
+			break
+		}
+	}
+	return resp, sql, err
 }
 
 func (h *Handler) getHistogramsForAggLog(resp *Response, para *QueryParam) ([]Histograms, int64) {

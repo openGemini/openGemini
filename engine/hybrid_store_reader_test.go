@@ -19,6 +19,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +175,8 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
 	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
 	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
+	frag := executor.NewBaseFrags("", 3)
+	assert2.Equal(t, 72, frag.Size())
 	err = reader.initSchema()
 	assert2.Equal(t, err, nil)
 	schema1 := createSortQuerySchema()
@@ -198,7 +201,7 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 }
 
 func TestHybridIndexReaderFunctions(t *testing.T) {
-	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{})
+	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{}, query.ProcessorOptions{})
 	err := indexReader.Init()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	_, err = indexReader.Next()
@@ -228,7 +231,7 @@ func TestHybridIndexReaderFunctions(t *testing.T) {
 	_, err = sh.GetIndexInfo(querySchema)
 	assert2.Equal(t, err, nil)
 	immutable.SetDetachedFlushEnabled(true)
-	indexReader = NewDetachedIndexReader(NewIndexContext(false, 0, querySchema, ""), &obs.ObsOptions{})
+	indexReader = NewDetachedIndexReader(NewIndexContext(false, 0, querySchema, ""), &obs.ObsOptions{}, query.ProcessorOptions{})
 	err = indexReader.Init()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	immutable.SetDetachedFlushEnabled(false)
@@ -381,7 +384,7 @@ func TestHybridStoreReader(t *testing.T) {
 			stmt := MustParseSelectStatementByYacc(tt.q)
 			stmt, err = stmt.RewriteFields(shardGroup, true, false)
 			stmt.OmitTime = true
-			sopt := query.SelectOptions{ChunkSize: 1024}
+			sopt := query.SelectOptions{ChunkSize: 1024, IncQuery: false}
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			list := make([]*influxql.IndexList, 1)
 			bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
@@ -475,5 +478,110 @@ func TestHybridStoreReaderByLogStore(t *testing.T) {
 	cursor, _ := reader.CreateLogStoreCursor()
 	if _, ok := cursor.(*AggTagSetCursor); !ok {
 		t.Errorf("get wrong cursor")
+	}
+}
+
+func TestHybridStoreReaderForInc(t *testing.T) {
+	testDir := t.TempDir()
+	defer func() {
+		_ = fileops.RemoveAll(testDir)
+	}()
+	db, rp, mst := "db0", "rp0", "mst"
+	ptId := uint32(1)
+	executor.RegistryTransformCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
+	fields := make(map[string]influxql.DataType)
+	for _, field := range schemaForColumnStore {
+		fields[field.Name] = record.ToInfluxqlTypes(field.Type)
+	}
+
+	// create the shard.
+	var err error
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(1024)
+	sh, err := createShard(db, rp, ptId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compWorker.UnregisterShard(sh.GetID())
+	immutable.SetMaxCompactor(8)
+	defer func() {
+		if err = sh.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err = sh.indexBuilder.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// write data to the shard.
+	startValue := 999999.0
+	tm := testTimeStart
+	recRows := 1000
+	filesN := 8
+	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	for i := 0; i < filesN; i++ {
+		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
+		if err = sh.WriteCols(mst, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		sh.ForceFlush()
+		time.Sleep(time.Second * 1)
+	}
+
+	// start to compact
+	time.Sleep(time.Second * 3)
+	err = sh.immTables.LevelCompact(0, sh.GetID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.immTables.(*immutable.MmsTables).Wait()
+
+	// set the primary index reader
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	// set the skip index reader
+	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	var fields2 influxql.Fields
+	m := &influxql.Measurement{Name: mst}
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}, EndTime: math.MaxInt64}
+	fields2 = append(fields2, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:   "f1",
+			Type:  influxql.Integer,
+			Alias: "",
+		},
+	})
+	var names []string
+	names = append(names, "f1")
+	schema := executor.NewQuerySchema(fields2, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+	iterId := int32(0)
+	queryID := t.Name()
+	for {
+		indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil, query.ProcessorOptions{IncQuery: true, IterID: iterId, LogQueryCurrId: queryID})
+		iterId += 1
+		indexReader.Init()
+		frag, err := indexReader.Next()
+		if err != nil {
+			t.Errorf("index reader fail")
+		}
+		if frag == nil || frag.FragCount() == 0 {
+			break
+		}
+		frag, _ = indexReader.Next()
+	}
+	opt.EndTime = 0
+	schema = executor.NewQuerySchema(fields2, names, &opt, nil)
+	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil, query.ProcessorOptions{IncQuery: true, IterID: iterId})
+	iterId += 1
+	indexReader.Init()
+	_, ok := immutable.GetDetachedSegmentTask(queryID)
+	if !ok {
+		t.Error("get wrong cache")
+	}
+	_, ok = immutable.GetDetachedSegmentTask(queryID + "wrong")
+	if ok {
+		t.Error("get cache")
 	}
 }

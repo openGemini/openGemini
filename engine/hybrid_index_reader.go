@@ -17,6 +17,8 @@ limitations under the License.
 package engine
 
 import (
+	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -25,12 +27,18 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
+	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/query"
+)
+
+const (
+	IncDataSegmentNum = 16
 )
 
 type IndexReader interface {
@@ -156,12 +164,14 @@ type detachedIndexReader struct {
 	ctx          *indexContext
 	skFileReader []sparseindex.SKFileReader
 	obsOptions   *obs.ObsOptions
+	opt          query.ProcessorOptions
 }
 
-func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions) *detachedIndexReader {
+func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, opt query.ProcessorOptions) *detachedIndexReader {
 	return &detachedIndexReader{
 		obsOptions: obsOption,
 		ctx:        ctx,
+		opt:        opt,
 	}
 }
 
@@ -234,6 +244,10 @@ func (r *detachedIndexReader) Init() (err error) {
 		}
 	}
 
+	if len(miFiltered) == 0 {
+		return nil
+	}
+
 	// step2: init the pk items
 	offsets, lengths = offsets[:0], lengths[:0]
 	for _, chunkId := range miChunkIds {
@@ -271,7 +285,107 @@ func (r *detachedIndexReader) Init() (err error) {
 	return
 }
 
+func (r *detachedIndexReader) InitInc(frag executor.IndexFrags) (executor.IndexFrags, error) {
+	queryId := r.opt.GetLogQueryCurrId()
+	currIter := r.opt.GetIterId()
+	totalCount := frag.FragCount()
+	iterNum := int32(math.Ceil(float64(totalCount) / float64(IncDataSegmentNum)))
+	cache.PutNodeIterNum(queryId, iterNum)
+	if currIter >= iterNum {
+		return nil, nil
+	}
+	newFrag := executor.NewDetachedFrags(frag.BasePath(), 0)
+	fragR := frag.FragRanges()
+	fragIndex, ok := frag.Indexes().([]*immutable.MetaIndex)
+	if !ok {
+		return nil, fmt.Errorf("get wrong Index frag to init increase agg query")
+	}
+	start := uint32((currIter) * IncDataSegmentNum)
+	end := uint32(0)
+	if int64((currIter+1)*IncDataSegmentNum) > totalCount {
+		end = uint32(totalCount)
+	} else {
+		end = uint32((currIter + 1) * IncDataSegmentNum)
+	}
+	readCount := uint32(0)
+	for ik, index := range fragIndex {
+		if readCount >= end {
+			break
+		}
+		currFrs := make([]*fragment.FragmentRange, 0)
+		for _, fragRange := range fragR[ik] {
+			if readCount >= end {
+				break
+			}
+			currCount := fragRange.End - fragRange.Start
+			if readCount+currCount <= start {
+				readCount += currCount
+				continue
+			}
+			currStart := fragRange.Start
+			if readCount < start {
+				currStart = start - readCount + fragRange.Start
+			}
+			if readCount+currCount <= end {
+				currFrs = append(currFrs, fragment.NewFragmentRange(currStart, fragRange.End))
+				readCount += currCount
+				continue
+			} else {
+				if readCount < start {
+					readCount = start
+				}
+				currEnd := end - readCount + currStart
+				currFrs = append(currFrs, fragment.NewFragmentRange(currStart, currEnd))
+				readCount = end
+				break
+			}
+		}
+		if len(currFrs) == 0 {
+			continue
+		}
+		newFrag.AppendIndexes(index)
+		newFrag.AppendFragRanges(currFrs)
+	}
+	newFrag.AddFragCount(int64(end - start))
+	return newFrag, nil
+}
+
 func (r *detachedIndexReader) Next() (executor.IndexFrags, error) {
+	if r.opt.IsIncQuery() {
+		currIter := r.opt.GetIterId()
+		queryId := r.opt.GetLogQueryCurrId()
+		if r.init {
+			return nil, nil
+		}
+		var err error
+		if currIter == 0 {
+			frag, err := r.GetBatchFrag()
+			if err != nil {
+				return nil, err
+			} else {
+				immutable.PutDetachedSegmentTask(queryId, frag)
+				return r.InitInc(frag)
+			}
+		} else {
+			frag, ok := immutable.GetDetachedSegmentTask(queryId)
+			if !ok {
+				frag, err = r.GetBatchFrag()
+				if err != nil {
+					return nil, err
+				} else {
+					immutable.PutDetachedSegmentTask(queryId, frag)
+					return r.InitInc(frag.(executor.IndexFrags))
+				}
+			}
+			r.init = true
+			return r.InitInc(frag.(executor.IndexFrags))
+		}
+	} else {
+		return r.GetBatchFrag()
+	}
+}
+
+func (r *detachedIndexReader) GetBatchFrag() (executor.IndexFrags, error) {
 	if !r.init {
 		if err := r.Init(); err != nil {
 			return nil, err

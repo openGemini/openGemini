@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
-	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -247,9 +246,11 @@ func (r *HybridStoreReader) initFileReader(frags executor.IndexFrags) (comm.KeyC
 }
 
 func (r *HybridStoreReader) initIndexReader() {
-	ctx := NewIndexContext(true, SegmentBatchCount, r.schema, r.indexInfo.ShardPath())
-	r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo))
-	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions))
+	ctx := NewIndexContext(!r.opt.IsIncQuery(), SegmentBatchCount, r.schema, r.indexInfo.ShardPath())
+	if !r.opt.IsIncQuery() || r.opt.IterID == 0 {
+		r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo))
+	}
+	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions, r.opt))
 }
 
 func (r *HybridStoreReader) initSchema() (err error) {
@@ -348,10 +349,6 @@ func (r *HybridStoreReader) CreateLogStoreCursor() (comm.KeyCursor, error) {
 }
 
 func (r *HybridStoreReader) CreateCursors() ([]comm.KeyCursor, error) {
-	if r.schema.Options().IsIncQuery() {
-		// TODO: the cursor to provide the maximum number of iterations.
-		cache.PutNodeIterNum(r.schema.Options().GetLogQueryCurrId(), 1)
-	}
 	cursors := make([]comm.KeyCursor, 0)
 	if r.indexInfo.Version() <= tokenizer.VersionLatest {
 		cursor, err := r.CreateLogStoreCursor()

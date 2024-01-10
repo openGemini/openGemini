@@ -313,7 +313,7 @@ func NewHashAggTransform(
 		mapIntervalKeysHash:  make([]uint64, 1),
 		mapIntervalValue:     make([]uint64, 1),
 		hashAggType:          t,
-		outputChunkPool:      NewCircularChunkPool(5, NewChunkBuilder(outRowDataType[0])),
+		outputChunkPool:      NewCircularChunkPool(CircularChunkNum+4, NewChunkBuilder(outRowDataType[0])),
 		timeFuncState:        unKnown,
 	}
 	var err error

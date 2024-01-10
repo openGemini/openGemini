@@ -37,7 +37,6 @@ import (
 	immutable "github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bufferpool"
-	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
@@ -1666,10 +1665,8 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	async := r.FormValue("async") == "true"
 	opts := *query2.NewExecutionOptions(db, r.FormValue("rp"), nodeID, chunkSize, innerChunkSize, false, r.Method == "GET", true,
 		atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1)
-	var incQueryTimeOut time.Duration
 	if param != nil {
 		opts.IncQuery, opts.QueryID, opts.IterID = param.IncQuery, param.QueryID, param.IterID
-		incQueryTimeOut = time.Duration(param.Timeout) * time.Millisecond
 	}
 
 	opts.Authorizer = h.getAuthorizer(user)
@@ -1692,9 +1689,6 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 		}()
 	}
 
-	var iterMaxNum int32
-	incQueryStart := time.Now()
-LOOP:
 	// Execute query
 	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
 
@@ -1758,44 +1752,25 @@ LOOP:
 	}
 
 	resp := h.getStmtResult(stmtID2Result)
-	if opts.IncQuery {
-		iterMaxNum, ok = cache.GetGlobalIterNum(opts.QueryID)
-		if !ok {
-			err = errno.NewError(errno.FailedGetGlobalMaxIterNum, opts.QueryID)
-			h.Logger.Error(err.Error())
-			return nil, nil, err, http.StatusNoContent
-		}
-	}
 	opts.IterID++
 	// If it's not chunked we buffered everything in memory, so write it out
 	if !chunked {
-		if opts.IncQuery && time.Since(incQueryStart) < incQueryTimeOut && opts.IterID < iterMaxNum {
-			goto LOOP
+		if param == nil {
+			n, _ := rw.WriteResponse(resp)
+			atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 		} else {
-			if param == nil {
-				n, _ := rw.WriteResponse(resp)
-				atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
-			} else {
-				var process float64
-				if iterMaxNum == 0 {
-					process = 1
-				} else {
-					process = float64(opts.IterID) / float64(iterMaxNum)
-				}
-				param.IterID = opts.IterID
-				param.Process = process
-				if !param.Explain && q.Statements != nil && len(q.Statements) > 0 && len(q.Statements[0].(*influxql.SelectStatement).UnnestSource) > 0 {
-					if q.Statements[0].(*influxql.SelectStatement).Fields != nil {
-						for _, v := range q.Statements[0].(*influxql.SelectStatement).Fields {
-							if _, ok := v.Expr.(*influxql.Call); ok {
-								return &resp, q, nil, http.StatusOK
-							}
+			param.IterID = opts.IterID
+			if !param.Explain && q.Statements != nil && len(q.Statements) > 0 && len(q.Statements[0].(*influxql.SelectStatement).UnnestSource) > 0 {
+				if q.Statements[0].(*influxql.SelectStatement).Fields != nil {
+					for _, v := range q.Statements[0].(*influxql.SelectStatement).Fields {
+						if _, ok := v.Expr.(*influxql.Call); ok {
+							return &resp, q, nil, http.StatusOK
 						}
 					}
-					return &resp, pplQuery, nil, http.StatusOK
 				}
 				return &resp, pplQuery, nil, http.StatusOK
 			}
+			return &resp, pplQuery, nil, http.StatusOK
 		}
 	}
 	if !chunked {

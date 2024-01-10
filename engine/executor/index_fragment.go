@@ -17,6 +17,8 @@ limitations under the License.
 package executor
 
 import (
+	"unsafe"
+
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/fragment"
@@ -46,6 +48,7 @@ type IndexFrags interface {
 	FileMode() FileMode
 	SetErr(error)
 	GetErr() error
+	Size() int
 }
 
 type BaseFrags struct {
@@ -92,6 +95,14 @@ func (s *BaseFrags) FileMode() FileMode {
 	return s.fileMode
 }
 
+func (s *BaseFrags) Size() int {
+	count := 0
+	for _, k := range s.fragRanges {
+		count += len(k)
+	}
+	return int(unsafe.Sizeof(BaseFrags{})) + len(s.BasePath()) + count*int(unsafe.Sizeof(fragment.FragmentRange{}))
+}
+
 type DetachedFrags struct {
 	BaseFrags
 	metaIndexes []*immutable.MetaIndex
@@ -118,6 +129,14 @@ func (s *DetachedFrags) AppendIndexes(metaIndexes ...interface{}) {
 	for i := range metaIndexes {
 		s.metaIndexes = append(s.metaIndexes, metaIndexes[i].(*immutable.MetaIndex))
 	}
+}
+
+func (s *DetachedFrags) Size() int {
+	count := 0
+	for _, k := range s.fragRanges {
+		count += len(k)
+	}
+	return int(unsafe.Sizeof(BaseFrags{})) + len(s.BasePath()) + count*int(unsafe.Sizeof(fragment.FragmentRange{})) + len(s.metaIndexes)*immutable.MetaIndexLen
 }
 
 type AttachedFrags struct {
