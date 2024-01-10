@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 type Item struct {

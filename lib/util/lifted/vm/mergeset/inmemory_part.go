@@ -5,7 +5,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
 type inmemoryPart struct {

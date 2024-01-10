@@ -42,9 +42,9 @@ import (
 	"github.com/openGemini/openGemini/lib/rand"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	mproto "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

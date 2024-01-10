@@ -25,9 +25,9 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 type pointerWriter interface {

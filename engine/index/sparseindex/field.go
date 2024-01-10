@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"math"
 
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 var NEGATIVE_INFINITY = &FieldRef{row: math.MinInt64}

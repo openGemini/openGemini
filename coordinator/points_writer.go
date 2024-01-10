@@ -36,10 +36,10 @@ import (
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

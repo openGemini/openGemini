@@ -22,9 +22,9 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 // ShardMapping contains a mapping of shards to points.

@@ -10,8 +10,8 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/filestream"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
 func getMaxCachedIndexBlocksPerPart() int {

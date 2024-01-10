@@ -26,10 +26,10 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	qry "github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 

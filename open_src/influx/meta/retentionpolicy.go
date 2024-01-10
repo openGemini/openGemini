@@ -14,9 +14,9 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 type MeasurementVer struct {

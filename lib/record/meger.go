@@ -17,7 +17,7 @@ limitations under the License.
 package record
 
 import (
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 type MergeColVal struct {

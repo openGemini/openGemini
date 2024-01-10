@@ -35,11 +35,11 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 

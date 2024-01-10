@@ -9,8 +9,8 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/filestream"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
 type blockStreamReader struct {

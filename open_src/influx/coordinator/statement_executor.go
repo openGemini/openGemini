@@ -47,10 +47,10 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	query2 "github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

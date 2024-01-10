@@ -32,8 +32,8 @@ import (
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util/lifted/dictpool"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
 )
 

@@ -31,8 +31,8 @@ import (
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

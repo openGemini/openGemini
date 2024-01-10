@@ -11,8 +11,8 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/uint64set"
 )
 
 type SeriesIDElem struct {

@@ -29,7 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

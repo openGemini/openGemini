@@ -19,7 +19,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storagepacelimiter"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
 // These are global counters for cache requests and misses for parts

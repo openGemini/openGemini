@@ -25,7 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func SortAndDedup(table *mutable.MemTable, msName string) {

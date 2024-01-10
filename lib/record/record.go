@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 const (

@@ -20,8 +20,8 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 // CompileOptions are the customization options for the compiler.

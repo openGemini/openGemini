@@ -7,10 +7,10 @@ import (
 	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/coordinator"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

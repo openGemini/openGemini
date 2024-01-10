@@ -57,12 +57,12 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

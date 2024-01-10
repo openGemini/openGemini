@@ -22,7 +22,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func TestAppendDataBlock(t *testing.T) {

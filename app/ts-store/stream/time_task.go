@@ -28,8 +28,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

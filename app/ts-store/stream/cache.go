@@ -22,7 +22,7 @@ import (
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/cpu"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func NewCacheRowPool() *CacheRowPool {

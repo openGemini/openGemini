@@ -24,7 +24,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatValBitmap []int, floatVal []float64,

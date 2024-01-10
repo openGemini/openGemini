@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 )
 
 func Test_Time_ConsumeData(t *testing.T) {

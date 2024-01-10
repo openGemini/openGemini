@@ -52,12 +52,12 @@ import (
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
 	query2 "github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/openGemini/openGemini/open_src/logparser"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"github.com/valyala/fastjson"
 	"go.uber.org/zap"
 )

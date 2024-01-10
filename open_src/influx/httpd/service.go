@@ -15,8 +15,8 @@ import (
 	"github.com/openGemini/openGemini/lib/crypto"
 	httpdListener "github.com/openGemini/openGemini/lib/listener"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/httpd/config"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 

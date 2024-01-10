@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
 type partHeader struct {

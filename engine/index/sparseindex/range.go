@@ -19,7 +19,7 @@ package sparseindex
 import (
 	"math"
 
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 // Range means that the range with open or closed ends, possibly unbounded.

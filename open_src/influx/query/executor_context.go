@@ -11,7 +11,7 @@ import (
 
 	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 // ExecutionContext contains state that the query is currently executing with.
