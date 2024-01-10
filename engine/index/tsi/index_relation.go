@@ -20,9 +20,9 @@ import (
 	"fmt"
 
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/lib/util/lifted/dictpool"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/savsgio/dictpool"
 )
 
 // IndexRelation define functions of a specific index
