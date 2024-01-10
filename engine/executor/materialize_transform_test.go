@@ -105,6 +105,10 @@ func buildMaterializeInRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "score", Type: influxql.Float},
 		influxql.VarRef{Val: "alive", Type: influxql.Boolean},
 		influxql.VarRef{Val: "value3", Type: influxql.Float},
+		influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+		influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+		influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+		influxql.VarRef{Val: "name_cast", Type: influxql.String},
 	)
 
 	return rowDataType
@@ -129,6 +133,18 @@ func buildMaterializeOutRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "mark1%0", Type: influxql.Integer},
 		influxql.VarRef{Val: "mark1%uint(0)", Type: influxql.Unsigned},
 		influxql.VarRef{Val: "val1/val3", Type: influxql.Float},
+		influxql.VarRef{Val: "int_float", Type: influxql.Float},
+		influxql.VarRef{Val: "bool_float", Type: influxql.Float},
+		influxql.VarRef{Val: "string_float", Type: influxql.Float},
+		influxql.VarRef{Val: "float_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "bool_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "string_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "float_bool", Type: influxql.Boolean},
+		influxql.VarRef{Val: "int_bool", Type: influxql.Boolean},
+		influxql.VarRef{Val: "string_bool", Type: influxql.Boolean},
+		influxql.VarRef{Val: "float_string", Type: influxql.String},
+		influxql.VarRef{Val: "int_string", Type: influxql.String},
+		influxql.VarRef{Val: "bool_string", Type: influxql.String},
 	)
 
 	return rowDataType
@@ -177,6 +193,17 @@ func buildMaterializeChunk() executor.Chunk {
 	chunk.Column(10).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
 	chunk.Column(10).AppendNilsV2(true, true, true, true, true)
 
+	chunk.Column(11).AppendFloatValues([]float64{0, 1.1, 2.2})
+	chunk.Column(11).AppendNilsV2(true, true, true, false, false)
+
+	chunk.Column(12).AppendIntegerValues([]int64{0, 1, 2})
+	chunk.Column(12).AppendNilsV2(true, true, true, false, false)
+
+	chunk.Column(13).AppendBooleanValues([]bool{false, true, true})
+	chunk.Column(13).AppendNilsV2(true, true, true, false, false)
+
+	chunk.Column(14).AppendStringValues([]string{"", "1.1", "1.1", "other"})
+	chunk.Column(14).AppendNilsV2(true, false, true, true, false)
 	return chunk
 }
 
@@ -355,6 +382,102 @@ func createMaterializeOps() []hybridqp.ExprOptions {
 				},
 			},
 		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_float64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_float64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_float64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "name_cast", Type: influxql.String},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_int64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_int64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_int64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "name_cast", Type: influxql.String},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_bool",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_bool",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_bool",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "name_cast", Type: influxql.String},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_string",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_string",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_string",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
 	}
 }
 
@@ -406,6 +529,7 @@ func TestMaterializeTransform(t *testing.T) {
 	executor.Execute(context.Background())
 	executor.Release()
 }
+
 func TestMaterializeTransform1(t *testing.T) {
 	chunk := buildMaterializeChunk()
 	ops := createMaterializeOps()
@@ -444,6 +568,42 @@ func TestMaterializeTransform1(t *testing.T) {
 			t.Fatal()
 		}
 		if !reflect.DeepEqual(chunk.Column(12).FloatValues(), expectMaxFloatValues3) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(17).FloatValues(), []float64{0, 1, 2}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(18).FloatValues(), []float64{0, 1, 1}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(19).FloatValues(), []float64{1.1, 1.1}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(20).IntegerValues(), []int64{0, 1, 2}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(21).IntegerValues(), []int64{0, 1, 1}) {
+			t.Fatal()
+		}
+		if chunk.Column(22).IntegerValues() != nil {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(23).BooleanValues(), []bool{false, true, true, false, false}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(24).BooleanValues(), []bool{false, true, true, false, false}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(25).BooleanValues(), []bool{false, false, true, true, false}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(26).StringValue(2), "2.2") {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(27).StringValue(2), "2") {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(28).StringValue(2), "true") {
 			t.Fatal()
 		}
 		return nil

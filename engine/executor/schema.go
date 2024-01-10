@@ -770,7 +770,7 @@ func (qs *QuerySchema) HasCastorCall() bool {
 
 func (qs *QuerySchema) isMathFunction(call *influxql.Call) bool {
 	switch call.Name {
-	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max":
+	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max", "cast_int64", "cast_bool", "cast_float64", "cast_string":
 		return true
 	}
 	return false

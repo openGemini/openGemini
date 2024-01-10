@@ -11,13 +11,15 @@ Huawei Cloud Computing Technologies Co., Ltd.
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
 func isMathFunction(call *influxql.Call) bool {
 	switch call.Name {
-	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max":
+	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max", "cast_int64", "cast_bool", "cast_float64", "cast_string":
 		return true
 	}
 	return false
@@ -204,6 +206,94 @@ func (v MathValuer) Call(name string, args []interface{}) (interface{}, bool) {
 				return math.Sqrt(arg0), true
 			}
 			return nil, true
+		case "cast_int64":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return int64(arg0), true
+			case int64:
+				return int64(arg0), true
+			case uint64:
+				return int64(arg0), true
+			case bool:
+				if arg0 == true {
+					return int64(1), true
+				} else {
+					return int64(0), true
+				}
+			case string:
+				result, err := strconv.Atoi(arg0)
+				if err != nil {
+					return nil, false
+				}
+				return result, true
+			default:
+				return nil, false
+			}
+		case "cast_float64":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return float64(arg0), true
+			case int64:
+				return float64(arg0), true
+			case uint64:
+				return float64(arg0), true
+			case bool:
+				if arg0 == true {
+					return float64(1), true
+				} else {
+					return float64(0), true
+				}
+			case string:
+				result, err := strconv.ParseFloat(arg0, 64)
+				if err != nil {
+					return nil, false
+				}
+				return result, true
+			default:
+				return nil, false
+			}
+		case "cast_bool":
+			if arg0 == nil {
+				return false, true
+			}
+			if arg0, ok := asFloat(arg0); ok {
+				if arg0 == 0 {
+					return false, true
+				} else {
+					return true, true
+				}
+			}
+			switch arg0 := arg0.(type) {
+			case bool:
+				return arg0, true
+			case string:
+				if strings.ToLower(arg0) == "0" || strings.ToLower(arg0) == "" {
+					return false, true
+				}
+				return true, true
+			default:
+				return nil, false
+			}
+		case "cast_string":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return strconv.FormatFloat(arg0, 'f', -1, 64), true
+			case int64:
+				return strconv.FormatInt(arg0, 10), true
+			case uint64:
+				return strconv.FormatUint(arg0, 10), true
+			case bool:
+				if arg0 == false {
+					return "false", true
+				} else {
+					return "true", true
+				}
+			case string:
+				return arg0, true
+			default:
+				return nil, false
+			}
+
 		}
 	} else if len(args) == 2 {
 		arg0, arg1 := args[0], args[1]

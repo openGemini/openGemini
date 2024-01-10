@@ -110,6 +110,14 @@ func (m FunctionTypeMapper) CallType(name string, args []influxql.DataType) (inf
 		return influxql.Float, nil
 	case "abs", "round", "ceil", "floor", "row_max":
 		return args[0], nil
+	case "cast_int64":
+		return influxql.Integer, nil
+	case "cast_float64":
+		return influxql.Float, nil
+	case "cast_bool":
+		return influxql.Boolean, nil
+	case "cast_string":
+		return influxql.String, nil
 	case "str":
 		return StrCallType(name, args)
 	case "strlen":

@@ -646,11 +646,34 @@ COLUMN:
     }
     |IDENT LPAREN COLUMN_CLAUSES RPAREN
     {
-        cols := &Call{Name: strings.ToLower($1), Args: []Expr{}}
-        for i := range $3{
-            cols.Args = append(cols.Args, $3[i].Expr)
+        if strings.ToLower($1) == "cast" {
+            if len($3)!=1 {
+                 yylex.Error("The cast format is incorrect.")
+            } else {
+                name := "Unknown"
+                if strings.ToLower($3[0].Alias) == "bool" {
+                    name = "cast_bool"
+                }
+                if strings.ToLower($3[0].Alias) == "float" {
+                    name = "cast_float64"
+                }
+                if strings.ToLower($3[0].Alias) == "int" {
+                    name = "cast_int64"
+                }
+                if strings.ToLower($3[0].Alias) == "string" {
+                    name = "cast_string"
+                }
+                cols := &Call{Name: strings.ToLower(name), Args: []Expr{}}
+                cols.Args = append(cols.Args, $3[0].Expr)
+                $$ = cols
+            }
+        } else {
+            cols := &Call{Name: strings.ToLower($1), Args: []Expr{}}
+            for i := range $3 {
+                cols.Args = append(cols.Args, $3[i].Expr)
+            }
+            $$ = cols
         }
-        $$ = cols
     }
     |IDENT LPAREN RPAREN
     {
