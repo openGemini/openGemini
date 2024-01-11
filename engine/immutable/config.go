@@ -29,7 +29,7 @@ const (
 	DefaultMaxSegmentLimit4ColStore   = 256 * 1024
 	DefaultMaxChunkMetaItemSize       = 256 * 1024
 	DefaultMaxChunkMetaItemCount      = 512
-	DefaultSnapshotTblNum             = 8
+	CompressModMaxChunkMetaItemCount  = 16
 
 	NonStreamingCompact               = 2
 	StreamingCompact                  = 1

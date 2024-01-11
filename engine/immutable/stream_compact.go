@@ -563,7 +563,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 		c.mIndex.maxTime = maxT
 	}
 
-	if c.mIndex.size >= uint32(c.Conf.maxChunkMetaItemSize) || c.mIndex.count >= uint32(c.Conf.maxChunkMetaItemCount) {
+	if needSwitchChunkMeta(c.Conf, int(c.writer.ChunkMetaSize()), int(c.mIndex.count)) {
 		if err := c.SwitchChunkMeta(); err != nil {
 			return err
 		}

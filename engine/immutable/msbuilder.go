@@ -291,13 +291,22 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 		b.mIndex.maxTime = maxT
 	}
 
-	if b.mIndex.size >= uint32(b.Conf.maxChunkMetaItemSize) || b.mIndex.count >= uint32(b.Conf.maxChunkMetaItemCount) {
+	if needSwitchChunkMeta(b.Conf, int(b.diskFileWriter.ChunkMetaSize()), int(b.mIndex.count)) {
 		if err := b.SwitchChunkMeta(); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func needSwitchChunkMeta(conf *Config, size int, count int) bool {
+	maxCount := conf.maxChunkMetaItemCount
+	if GetChunkMetaCompressMode() != ChunkMetaCompressNone {
+		maxCount = CompressModMaxChunkMetaItemCount
+	}
+
+	return size >= conf.maxChunkMetaItemSize || count >= maxCount
 }
 
 func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int, fSize int64,
@@ -1367,6 +1376,7 @@ func (b *MsBuilder) WriteChunkMeta(cm *ChunkMeta) (int, error) {
 		err = errno.NewError(errno.ShortWrite, wn, len(b.encChunkMeta))
 		b.log.Error("write chunk meta fail", zap.String("file", b.fd.Name()), zap.Error(err))
 	}
+	b.mIndex.size = uint32(b.diskFileWriter.ChunkMetaSize())
 	return wn, err
 }
 
