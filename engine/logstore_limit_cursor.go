@@ -58,6 +58,7 @@ type LogStoreLimitCursor struct {
 	segmentReader *logstore.SegmentReader
 	scrollID      string
 	tokenFilter   *tokenizer.TokenFilter
+	unnestMatch   logstore.UnnestMatch
 }
 
 func NewLogStoreLimitCursor(option *obs.ObsOptions, path string, version uint32, ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema) (*LogStoreLimitCursor, error) {
@@ -80,6 +81,10 @@ func NewLogStoreLimitCursor(option *obs.ObsOptions, path string, version uint32,
 		option:        option,
 		segmentReader: m,
 		curTr:         util.TimeRange{Min: ctx.tr.Min, Max: ctx.tr.Max},
+	}
+
+	if schema.HasUnnests() {
+		l.unnestMatch, _ = logstore.GetUnnestFunc(schema.GetUnnests()[0], ctx.schema)
 	}
 
 	// 1. is query cursor 2. has read time 3. query id
@@ -226,6 +231,12 @@ func (s *LogStoreLimitCursor) Next() (*record.Record, comm.SeriesInfoIntf, error
 				filterData = [][]byte{b[i][0], b[i][1]}
 			} else {
 				filterData = s.rewriteBytes(b[i][0], b[i][1])
+			}
+			if s.schema.HasUnnests() {
+				filterData = s.unnestMatch.Get(b[i])
+				if filterData == nil {
+					continue
+				}
 			}
 			if con != nil && !s.tokenFilter.Filter(filterData) {
 				continue

@@ -245,9 +245,9 @@ func (c *tsmMergeCursor) readData(orderLoc bool, dst *record.Record) (*record.Re
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
 	filterOpts := immutable.NewFilterOpts(c.filter, &c.ctx.filterOption, c.tags, c.rowFilters)
 	if orderLoc {
-		return c.locations.ReadData(filterOpts, dst, nil)
+		return c.locations.ReadData(filterOpts, dst, nil, nil)
 	}
-	return c.outOfOrderLocations.ReadData(filterOpts, dst, nil)
+	return c.outOfOrderLocations.ReadData(filterOpts, dst, nil, nil)
 }
 
 func (c *tsmMergeCursor) SetOps(ops []*comm.CallOption) {

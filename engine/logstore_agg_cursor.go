@@ -96,9 +96,12 @@ func (s *LogStoreAggCursor) init() (int32, error) {
 		length = append(length, int64(metaData[i].GetContentBlockLength()))
 	}
 	var unnest *influxql.Unnest
-
+	if s.ctx.querySchema.HasUnnests() {
+		unnest = s.ctx.querySchema.GetUnnests()[0]
+	}
 	s.metaInfo = metaData
-	s.dataReader, err = logstore.NewDataReader(s.option, s.logStoreSegmentPrefix, s.version, s.ctx.tr, s.ctx.querySchema.GetOptions(), offsets, length, s.ctx.schema.Copy(), currIter == 0, unnest, maxBlockID)
+	s.dataReader, err = logstore.NewDataReader(s.option, s.logStoreSegmentPrefix, s.version, s.ctx.tr, s.ctx.querySchema.GetOptions(),
+		offsets, length, s.ctx.schema.Copy(), currIter == 0, unnest, maxBlockID)
 	if err != nil {
 		return 0, err
 	}

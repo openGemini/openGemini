@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/rand"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/open_src/influx/query"
 	"github.com/stretchr/testify/assert"
@@ -2539,4 +2541,40 @@ func TestIntervalKeysMPool(t *testing.T) {
 	}
 	mpool.FreeValues(values)
 	mpool.FreeIntervalKeys(itervalKeys)
+}
+
+func TestNilValueInChunk(t *testing.T) {
+	var strbyte []byte
+	str := []string{"aa", "ab", "ac", "abc"}
+	for _, s := range str {
+		strbyte = append(strbyte, util.Str2bytes(s)...)
+	}
+	off := []uint32{0, 2, 4, 6}
+	c := executor.NewColumnImpl(influxql.Float)
+	c.AppendStringBytes(strbyte, off)
+	c.AppendColumnTimes([]int64{1, 2, 3, 4, 5, 6})
+	nils := []bool{false, true, false, true, true, true}
+	c.AppendNilsV2(nils...)
+
+	stringBytes, offset := c.GetStringBytes()
+	_, newOffset := executor.ExpandColumnOffsets(c, stringBytes, offset)
+	expectedOffset := []uint32{0, 0, 2, 2, 4, 6}
+	if !reflect.DeepEqual(newOffset, expectedOffset) {
+		t.Fatalf("get wrong offset, expect:%+v, real:%+v", expectedOffset, newOffset)
+	}
+
+	i := 0
+	for rowId, isDat := range nils {
+		val := executor.ColumnStringValue(c, rowId)
+		if isDat {
+			if val != str[i] {
+				t.Fatalf("get wrong value, expect:%s, real:%s", str[i], val)
+			}
+			i++
+		} else {
+			if val != "" {
+				t.Fatalf("expect blank str, real:%s", val)
+			}
+		}
+	}
 }

@@ -205,8 +205,14 @@ func (r *HybridStoreReader) initAttachedFileReader(frags executor.IndexFrags) (c
 	if !ok {
 		return nil, fmt.Errorf("invalid index info for attached file reader")
 	}
+
+	var unnest *influxql.Unnest
+	if r.schema.HasUnnests() {
+		unnest = r.schema.GetUnnests()[0]
+	}
+
 	fragRanges := frags.FragRanges()
-	fileReader, err := immutable.NewTSSPFileAttachedReader(files, fragRanges, r.readerCtx, r.schema.Options())
+	fileReader, err := immutable.NewTSSPFileAttachedReader(files, fragRanges, r.readerCtx, r.schema.Options(), unnest)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +233,14 @@ func (r *HybridStoreReader) initDetachedFileReader(frags executor.IndexFrags) (c
 			}
 		}
 	}
-	fileReader, err := immutable.NewTSSPFileDetachedReader(metaIndexes, blocks, r.readerCtx, sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), true)
+
+	var unnest *influxql.Unnest
+	if r.schema.HasUnnests() {
+		unnest = r.schema.GetUnnests()[0]
+	}
+
+	fileReader, err := immutable.NewTSSPFileDetachedReader(metaIndexes, blocks, r.readerCtx,
+		sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), unnest, true)
 	if err != nil {
 		return nil, err
 	}

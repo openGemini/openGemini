@@ -13,14 +13,12 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
@@ -1610,96 +1608,4 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	columns := stmt.ColumnNames()
 	opt.IncQuery, opt.LogQueryCurrId, opt.IterID = sopt.IncQuery, sopt.QueryID, sopt.IterID
 	return NewPreparedStatement(stmt, &opt, shards, columns, sopt.MaxPointN, c.Options.Now), nil
-}
-
-func rewriteDataTypeForPipeSyntax(expr *influxql.BinaryExpr, schema map[string]int32, change *bool) error {
-	leftVar, ok := expr.LHS.(*influxql.VarRef)
-	if !ok {
-		return nil
-	}
-	rightVal, ok := expr.RHS.(*influxql.StringLiteral)
-	if !ok {
-		return nil
-	}
-	dataType, ok := schema[leftVar.Val]
-	if !ok {
-		return nil
-	}
-
-	switch dataType {
-	case influx.Field_Type_Float:
-		val, err := strconv.ParseFloat(rightVal.Val, 64)
-		if err != nil {
-			return err
-		}
-		leftVar.Type = influxql.Float
-		expr.RHS = &influxql.NumberLiteral{Val: val}
-		*change = true
-	case influx.Field_Type_Int:
-		val, err := strconv.ParseInt(rightVal.Val, 10, 64)
-		if err != nil {
-			return err
-		}
-		leftVar.Type = influxql.Integer
-		expr.RHS = &influxql.IntegerLiteral{Val: val}
-		*change = true
-	case influx.Field_Type_UInt:
-		val, err := strconv.ParseUint(rightVal.Val, 10, 64)
-		if err != nil {
-			return err
-		}
-		leftVar.Type = influxql.Unsigned
-		expr.RHS = &influxql.UnsignedLiteral{Val: val}
-		*change = true
-	case influx.Field_Type_Boolean:
-		val, err := strconv.ParseBool(rightVal.Val)
-		if err != nil {
-			return err
-		}
-		leftVar.Type = influxql.Boolean
-		expr.RHS = &influxql.BooleanLiteral{Val: val}
-		*change = true
-	}
-	return nil
-}
-
-func RewriteCondForPipeSyntax(condition influxql.Expr, schema map[string]int32) error {
-	if condition == nil {
-		return nil
-	}
-	var change bool
-	switch expr := condition.(type) {
-	case *influxql.BinaryExpr:
-		switch expr.Op {
-		case influxql.AND:
-			err := RewriteCondForPipeSyntax(expr.LHS, schema)
-			if err != nil {
-				return err
-			}
-			return RewriteCondForPipeSyntax(expr.RHS, schema)
-		case influxql.OR:
-			err := RewriteCondForPipeSyntax(expr.LHS, schema)
-			if err != nil {
-				return err
-			}
-			return RewriteCondForPipeSyntax(expr.RHS, schema)
-		case influxql.MATCHPHRASE:
-			err := rewriteDataTypeForPipeSyntax(expr, schema, &change)
-			if change {
-				expr.Op = influxql.EQ
-			}
-			return err
-		case influxql.LT:
-			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
-		case influxql.LTE:
-			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
-		case influxql.GT:
-			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
-		case influxql.GTE:
-			return rewriteDataTypeForPipeSyntax(expr, schema, &change)
-		}
-	case *influxql.ParenExpr:
-		return RewriteCondForPipeSyntax(expr.Expr, schema)
-	}
-	return nil
 }

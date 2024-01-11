@@ -53,7 +53,7 @@ func TransSplitChar(splitChar string) string {
 	for i < len(splitChar) {
 		ch := splitChar[i]
 		i++
-		if ch == '\\' {
+		if !inEscape && ch == '\\' {
 			inEscape = true
 			continue
 		}
@@ -63,6 +63,8 @@ func TransSplitChar(splitChar string) string {
 		} else {
 			if escapeTable[ch] != 0 {
 				buf.WriteByte(escapeTable[ch])
+			} else {
+				buf.WriteByte(ch)
 			}
 			inEscape = false
 		}

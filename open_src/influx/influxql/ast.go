@@ -1483,35 +1483,6 @@ func (s *SelectStatement) SetStmtId(id int) {
 	s.StmtId = id
 }
 
-func (s *SelectStatement) CheckUnnest() error {
-	if len(s.UnnestSource) == 0 {
-		return nil
-	}
-	for _, unnest := range s.UnnestSource {
-		if unnestExpr, ok := unnest.Expr.(*Call); ok {
-			if len(unnestExpr.Args) != len(unnest.Aliases) {
-				return fmt.Errorf("the length of unnest expr is not equal to length of aliases")
-			}
-		} else {
-			return fmt.Errorf("unnest expr type error")
-		}
-	}
-	return nil
-}
-
-func (s *SelectStatement) GetUnnestSchema(unnestSchema map[string]DataType) {
-	if len(s.UnnestSource) == 0 {
-		return
-	}
-	for _, unnest := range s.UnnestSource {
-		for i, dstVar := range unnest.Aliases {
-			if _, ok := unnestSchema[dstVar]; !ok {
-				unnestSchema[dstVar] = unnest.DstType[i]
-			}
-		}
-	}
-}
-
 func (s *SelectStatement) RewriteUnnestSource() {
 	sources := make([]*Unnest, 0, 8)
 	s.RewriteUnnestSourceDFS(&sources, s.Sources)
@@ -1606,11 +1577,7 @@ func cloneSource(s Source) Source {
 		c.Condition = CloneExpr(s.Condition)
 		return c
 	case *Unnest:
-		c := &Unnest{}
-		c.Expr = s.Expr
-		c.Aliases = s.Aliases
-		c.DstType = s.DstType
-		return c
+		return s.Clone()
 	default:
 		panic("unreachable")
 	}
@@ -1687,6 +1654,120 @@ func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn boo
 		return nil, nil
 	}
 	return nil, nil
+}
+
+// for the pipe-systax parser of logkeeper
+func rewriteVarType(expr *BinaryExpr, allVarRef map[string]Expr, change *bool) error {
+	leftVar, ok := expr.LHS.(*VarRef)
+	if !ok || leftVar.Type == String {
+		return nil
+	}
+	rightVal, ok := expr.RHS.(*StringLiteral)
+	if !ok {
+		return nil
+	}
+	ref, ok := allVarRef[leftVar.Val]
+	if !ok {
+		return nil
+	}
+	e := ref.(*VarRef)
+
+	switch e.Type {
+	case Float:
+		val, err := strconv.ParseFloat(rightVal.Val, 64)
+		if err != nil {
+			return err
+		}
+		expr.RHS = &NumberLiteral{Val: val}
+		*change = true
+	case Integer:
+		val, err := strconv.ParseInt(rightVal.Val, 10, 64)
+		if err != nil {
+			return err
+		}
+		expr.RHS = &IntegerLiteral{Val: val}
+		*change = true
+	case Unsigned:
+		val, err := strconv.ParseUint(rightVal.Val, 10, 64)
+		if err != nil {
+			return err
+		}
+		expr.RHS = &UnsignedLiteral{Val: val}
+		*change = true
+	case Boolean:
+		val, err := strconv.ParseBool(rightVal.Val)
+		if err != nil {
+			return err
+		}
+		expr.RHS = &BooleanLiteral{Val: val}
+		*change = true
+	}
+	return nil
+}
+
+// for the pipe-systax parser of logkeeper
+func RewriteCondVarRef(condition Expr, allVarRef map[string]Expr) error {
+	if !config.IsLogKeeper() || condition == nil {
+		return nil
+	}
+	var change bool
+	switch expr := condition.(type) {
+	case *BinaryExpr:
+		if expr.Op == AND || expr.Op == OR {
+			err := RewriteCondVarRef(expr.LHS, allVarRef)
+			if err != nil {
+				return err
+			}
+			return RewriteCondVarRef(expr.RHS, allVarRef)
+		}
+		if expr.Op == LT || expr.Op == LTE || expr.Op == GT || expr.Op == GTE {
+			return rewriteVarType(expr, allVarRef, &change)
+		}
+		if expr.Op == MATCHPHRASE {
+			err := rewriteVarType(expr, allVarRef, &change)
+			if change {
+				expr.Op = EQ
+			}
+			return err
+		}
+	case *ParenExpr:
+		return RewriteCondVarRef(expr.Expr, allVarRef)
+	}
+	return nil
+}
+
+func (s *SelectStatement) GetUnnestVarRef(allVarRef map[string]Expr) {
+	if len(s.UnnestSource) == 0 {
+		return
+	}
+	for _, unnest := range s.UnnestSource {
+		for i, alias := range unnest.Aliases {
+			expr, ok := allVarRef[alias]
+			if ok {
+				e, ok := expr.(*VarRef)
+				if !ok {
+					return
+				}
+				e.Type = unnest.DstType[i]
+			} else {
+				allVarRef[alias] = &VarRef{
+					Val:  alias,
+					Type: unnest.DstType[i],
+				}
+			}
+		}
+	}
+}
+
+func (s *SelectStatement) GetUnnestSchema(fields map[string]DataType) {
+	if len(s.UnnestSource) == 0 {
+		return
+	}
+	for _, unnest := range s.UnnestSource {
+		for i, alias := range unnest.Aliases {
+			fields[alias] = unnest.DstType[i]
+		}
+	}
 }
 
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
@@ -1834,6 +1915,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	WalkFunc(other.Condition, getCondVarRef)
 
 	if len(allVarRef) > 0 {
+		s.GetUnnestVarRef(allVarRef)
 		err := EvalTypeBatch(allVarRef, other.Sources, m, &other.Schema, batchEn)
 		if err != nil {
 			if err == ErrUnsupportBatchMap {
@@ -1845,6 +1927,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		} else {
 			WalkFunc(other.Fields, rewrite)
 			WalkFunc(other.Condition, rewrite)
+			RewriteCondVarRef(other.Condition, allVarRef)
 		}
 	}
 
@@ -1908,6 +1991,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	if err != nil {
 		return nil, err
 	}
+	s.GetUnnestSchema(fieldSet)
 
 	// If there are no dimension wildcards then merge dimensions to fields.
 	if !hasDimensionWildcard {
@@ -7542,6 +7626,22 @@ func (u *Unnest) String() string {
 	}
 
 	return buf.String()
+}
+
+func (u *Unnest) Clone() *Unnest {
+	expr, err := ParseExpr(u.Expr.String())
+	if err != nil {
+		return nil
+	}
+	clone := &Unnest{
+		Expr: expr,
+	}
+	clone.Aliases = make([]string, 0, len(u.Aliases))
+	clone.Aliases = append(clone.Aliases, u.Aliases...)
+	clone.DstType = make([]DataType, 0, len(u.DstType))
+	clone.DstType = append(clone.DstType, u.DstType...)
+
+	return clone
 }
 
 func (u *Unnest) GetName() string {

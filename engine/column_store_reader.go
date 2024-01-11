@@ -409,7 +409,7 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 			return
 		default:
 			rec := r.recordPool.Get()
-			rec, err = r.readCursor.ReadData(r.filterOpt, rec, filterBitmap)
+			rec, err = r.readCursor.ReadData(r.filterOpt, rec, filterBitmap, nil)
 			if err != nil {
 				return
 			}

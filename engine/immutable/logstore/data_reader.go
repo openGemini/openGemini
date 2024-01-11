@@ -54,11 +54,13 @@ type DataReader struct {
 	option             *obs.ObsOptions
 	tokenFilter        *tokenizer.TokenFilter
 	unnest             *influxql.Unnest
+	unnestMatch        UnnestMatch
 	span               *tracing.Span
 	path               string
 }
 
-func NewDataReader(option *obs.ObsOptions, path string, version uint32, tr util.TimeRange, opt hybridqp.Options, offset []int64, length []int64, recordSchema record.Schemas, isFirstIter bool, unnest *influxql.Unnest, maxBlockID int64) (*DataReader, error) {
+func NewDataReader(option *obs.ObsOptions, path string, version uint32, tr util.TimeRange, opt hybridqp.Options, offset []int64, length []int64,
+	recordSchema record.Schemas, isFirstIter bool, unnest *influxql.Unnest, maxBlockID int64) (*DataReader, error) {
 	d := &DataReader{
 		isFirstIter:  isFirstIter,
 		recordSchema: recordSchema,
@@ -87,6 +89,10 @@ func NewDataReader(option *obs.ObsOptions, path string, version uint32, tr util.
 			d.contentRecordIndex = k
 		}
 	}
+	if unnest != nil {
+		d.unnestMatch, _ = GetUnnestFunc(unnest, recordSchema)
+	}
+
 	var err error
 	d.contentReader, err = NewContentReader(d.option, d.path, d.offset, d.length, d.recordSchema, d.isFirstIter, d.maxBlockID, true)
 	return d, err
@@ -106,7 +112,68 @@ func (s *DataReader) StartSpan(span *tracing.Span) {
 	}
 }
 
+func (s *DataReader) UnnestNext() (*record.Record, error) {
+	var tm time.Time
+	if s.span != nil {
+		tm = time.Now()
+	}
+	b, _, err := s.contentReader.Next()
+	if err != nil {
+		return nil, err
+	}
+	if len(b) == 0 {
+		return nil, nil
+	}
+	r := s.recordPool.GetBySchema(s.recordSchema)
+	r.RecMeta = &record.RecMeta{}
+	r.AddTagIndexAndKey(&[]byte{}, 0)
+	con := s.opt.GetCondition()
+	for i := 0; i < len(s.bufs); i++ {
+		s.bufs[i].Reset()
+	}
+
+	rowNum := len(b)
+	colValOffset := make([][]uint32, len(s.recordSchema))
+	offset := make([]uint32, len(s.recordSchema))
+	for i := 0; i < rowNum; i++ {
+		curtT := int64(binary.LittleEndian.Uint64(b[i][2]))
+		if curtT > s.tr.Max || curtT < s.tr.Min {
+			continue
+		}
+		tempData := s.unnestMatch.Get(b[i])
+		if tempData == nil || (con != nil && !s.tokenFilter.Filter(tempData)) {
+			continue
+		}
+		for j := 0; j < len(tempData); j += 1 {
+			s.bufs[j].Write(tempData[j])
+			colValOffset[j] = append(colValOffset[j], offset[j])
+			offset[j] += uint32(len(tempData[j]))
+		}
+	}
+
+	for i := 0; i < len(s.recordSchema); i += 1 {
+		num := int(math.Ceil(float64(len(colValOffset[i])) / float64(8)))
+		bits := make([]byte, num)
+		for j := 0; j < len(bits); j++ {
+			bits[j] = 255
+		}
+		by := s.bufs[i].Bytes()
+		r.ColVals[i].Append(by, colValOffset[i], bits, 0, len(colValOffset[i]), 0, s.recordSchema[i].Type, 0, len(colValOffset[i]), 0, 0)
+	}
+	if s.span != nil {
+		s.span.Count(ContentFilterDurationSpan, int64(time.Since(tm)))
+	}
+	if r.RowNums() == 0 {
+		s.recordPool.PutRecordInCircularPool()
+		return s.Next()
+	}
+	return r, nil
+}
+
 func (s *DataReader) Next() (*record.Record, error) {
+	if s.unnest != nil {
+		return s.UnnestNext()
+	}
 	var tm time.Time
 	if s.span != nil {
 		tm = time.Now()

@@ -491,9 +491,6 @@ func TestMapMstShards(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"height": influx.Field_Type_Int,
-								},
 								EngineType: config.COLUMNSTORE,
 							},
 							"mst2": {
@@ -592,18 +589,6 @@ func TestMapMstShards(t *testing.T) {
 	}
 	seriesKey = seriesKey[:0]
 	csm.mapShards(shardMapping2, []influxql.Source{subquery}, timeStart, timeEnd, nil, opt1)
-
-	config.SetProductType("logkeeper")
-	csm.mapShards(shardMapping, []influxql.Source{source}, timeStart, timeEnd, nil, opt1)
-	cond := &influxql.BinaryExpr{
-		Op:  influxql.GT,
-		LHS: &influxql.VarRef{Val: "height"},
-		RHS: &influxql.StringLiteral{Val: "120.5"},
-	}
-	err := csm.mapShards(shardMapping, []influxql.Source{source}, timeStart, timeEnd, cond, opt1)
-	if err == nil {
-		t.Fatal("rewirte for logkeeper will failed, but not")
-	}
 }
 
 func TestShardMapperExprRewriter(t *testing.T) {

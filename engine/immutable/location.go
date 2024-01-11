@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -246,11 +247,12 @@ func (l *Location) overlapsForRowFilter(rowFilters *[]clv.RowFilter) bool {
 }
 
 func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record, filterDst *record.Record) (*record.Record, error) {
-	rec, _, err := l.readData(filterOpts, dst, filterDst, nil)
+	rec, _, err := l.readData(filterOpts, dst, filterDst, nil, nil)
 	return rec, err
 }
 
-func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Record, filterBitmap *bitmap.FilterBitmap) (*record.Record, int, error) {
+func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Record, filterBitmap *bitmap.FilterBitmap,
+	unnestOperator logstore.UnnestOperator) (*record.Record, int, error) {
 	var rec *record.Record
 	var err error
 	var oriRowCount int
@@ -279,6 +281,9 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 		}
 		tracing.EndPP(l.ctx.readSpan)
 
+		if unnestOperator != nil {
+			unnestOperator.Compute(rec)
+		}
 		tracing.SpanElapsed(l.ctx.filterSpan, func() {
 			if rec != nil {
 				oriRowCount += rec.RowNums()
@@ -304,7 +309,7 @@ func (l *Location) readMeta(filterOpts *FilterOptions, dst *record.Record, filte
 		l.ctx.preAggBuilders = newPreAggBuilders()
 	}
 
-	rec, _, err := l.readData(filterOpts, dst, nil, filterBitmap)
+	rec, _, err := l.readData(filterOpts, dst, nil, filterBitmap, nil)
 	return rec, err
 }
 

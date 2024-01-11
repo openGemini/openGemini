@@ -34,7 +34,7 @@ import (
 
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/uuid"
-	immutable "github.com/openGemini/openGemini/engine/immutable"
+	logstore2 "github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
@@ -1991,7 +1991,7 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 	if logCond != nil {
 		unnest = logCond.Statements[0].(*influxql.LogPipeStatement).Unnest
 	}
-	var unnestFunc *immutable.UnnestMatchAll
+	var unnestFunc *logstore2.UnnestMatchAll
 	if unnest != nil {
 		unnestExpr, ok := unnest.Expr.(*influxql.Call)
 		if ok {
@@ -2002,7 +2002,7 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 			unnestField = Tag
 		}
 		var err error
-		unnestFunc, err = immutable.NewUnnestMatchAll(unnest)
+		unnestFunc, err = logstore2.NewUnnestMatchAll(unnest)
 		if err != nil {
 			return 0, nil, err
 		}

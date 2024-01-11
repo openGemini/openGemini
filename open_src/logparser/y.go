@@ -56,12 +56,12 @@ func buildCondExpr(first influxql.Expr, op int, right influxql.Expr) influxql.Ex
 	var field influxql.Expr
 	if first != nil {
 		if strVal, ok := first.(*influxql.StringLiteral); ok {
-			field = &influxql.VarRef{Val: strVal.Val, Type: influxql.String}
+			field = &influxql.VarRef{Val: strVal.Val}
 		} else {
 			field = first
 		}
 	} else {
-		field = &influxql.VarRef{Val: "content", Type: influxql.String}
+		field = &influxql.VarRef{Val: "content"}
 	}
 
 	newOp := transCondOpToInflux(op)

@@ -371,11 +371,11 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 	req.URL.RawQuery = "%3Arepository=repo0&%3AlogStream=log0&"
 	testStr := [][3]string{
 		{"content: abc and efg | select count(*) from log0",
-			"SELECT count(*) FROM repo0.log0.log0 WHERE content::string MATCHPHRASE 'abc' AND content::string MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
-			"content::string MATCHPHRASE 'abc' AND content::string MATCHPHRASE 'efg'"},
+			"SELECT count(*) FROM repo0.log0.log0 WHERE content MATCHPHRASE 'abc' AND content MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content MATCHPHRASE 'abc' AND content MATCHPHRASE 'efg'"},
 		{"content: abc or content: efg | select count(*) from log0 where status > 200",
-			"SELECT count(*) FROM repo0.log0.log0 WHERE status > 200 AND content::string MATCHPHRASE 'abc' OR content::string MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
-			"content::string MATCHPHRASE 'abc' OR content::string MATCHPHRASE 'efg'"},
+			"SELECT count(*) FROM repo0.log0.log0 WHERE status > 200 AND content MATCHPHRASE 'abc' OR content MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content MATCHPHRASE 'abc' OR content MATCHPHRASE 'efg'"},
 		{"* | select count(*) from log0",
 			"SELECT count(*) FROM repo0.log0.log0 WHERE time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
 			""},
@@ -383,11 +383,11 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 			"SELECT count(*) FROM repo0.log0.log0 WHERE time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
 			""},
 		{"* | content: * | tag: host123 | select count(*) from log0",
-			"SELECT count(*) FROM repo0.log0.log0 WHERE \"tag\"::string MATCHPHRASE 'host123' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
-			"\"tag\"::string MATCHPHRASE 'host123'"},
+			"SELECT count(*) FROM repo0.log0.log0 WHERE \"tag\" MATCHPHRASE 'host123' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"\"tag\" MATCHPHRASE 'host123'"},
 		{"content: abc | tag: host123 | tag: host456",
-			"SELECT * FROM repo0.log0.log0 WHERE content::string MATCHPHRASE 'abc' AND \"tag\"::string MATCHPHRASE 'host123' AND \"tag\"::string MATCHPHRASE 'host456' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
-			"content::string MATCHPHRASE 'abc' AND \"tag\"::string MATCHPHRASE 'host123' AND \"tag\"::string MATCHPHRASE 'host456'"},
+			"SELECT * FROM repo0.log0.log0 WHERE content MATCHPHRASE 'abc' AND \"tag\" MATCHPHRASE 'host123' AND \"tag\" MATCHPHRASE 'host456' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content MATCHPHRASE 'abc' AND \"tag\" MATCHPHRASE 'host123' AND \"tag\" MATCHPHRASE 'host456'"},
 	}
 
 	var user meta.User

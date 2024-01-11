@@ -79,12 +79,6 @@ func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, csming *Clu
 		return err
 	}
 
-	if config.IsLogKeeper() {
-		err := query.RewriteCondForPipeSyntax(condition, measurements[0].Schema)
-		if err != nil {
-			return err
-		}
-	}
 	// Retrieve the list of shards for this database. This list of
 	// shards is always the same regardless of which measurement we are
 	// using.

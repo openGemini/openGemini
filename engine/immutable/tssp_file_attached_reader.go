@@ -19,6 +19,7 @@ package immutable
 import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
@@ -35,11 +36,14 @@ type TSSPFileAttachedReader struct {
 	recordPool *record.CircularRecordPool
 	ctx        *FileReaderContext
 
-	reader *LocationCursor
+	reader         *LocationCursor
+	unnest         *influxql.Unnest
+	unnestOperator logstore.UnnestOperator
 }
 
-func NewTSSPFileAttachedReader(files []TSSPFile, fragRanges []fragment.FragmentRanges, ctx *FileReaderContext, schema hybridqp.Options) (*TSSPFileAttachedReader, error) {
-	r := &TSSPFileAttachedReader{files: files, fragRanges: fragRanges, ctx: ctx, schema: schema}
+func NewTSSPFileAttachedReader(files []TSSPFile, fragRanges []fragment.FragmentRanges, ctx *FileReaderContext, schema hybridqp.Options,
+	unnest *influxql.Unnest) (*TSSPFileAttachedReader, error) {
+	r := &TSSPFileAttachedReader{files: files, fragRanges: fragRanges, ctx: ctx, schema: schema, unnest: unnest}
 	if err := r.initReader(files, fragRanges); err != nil {
 		return nil, err
 	}
@@ -49,9 +53,16 @@ func NewTSSPFileAttachedReader(files []TSSPFile, fragRanges []fragment.FragmentR
 	if r.ctx.filterOpts.options.CondFunctions.HaveFilter() {
 		r.reader.AddFilterRecPool(filterPool)
 	}
-
 	// init the data record pool
 	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), BatchReaderRecordNum, r.ctx.schemas, false)
+
+	if r.unnest != nil {
+		var err error
+		r.unnestOperator, err = logstore.GetUnnestFuncOperator(unnest, r.ctx.schemas)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return r, nil
 }
 
@@ -112,7 +123,7 @@ func (t *TSSPFileAttachedReader) GetSchema() record.Schemas {
 func (t *TSSPFileAttachedReader) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	var err error
 	rec := t.recordPool.Get()
-	rec, err = t.reader.ReadData(t.ctx.filterOpts, rec, t.ctx.filterBitmap)
+	rec, err = t.reader.ReadData(t.ctx.filterOpts, rec, t.ctx.filterBitmap, t.unnestOperator)
 	return rec, nil, err
 }
 

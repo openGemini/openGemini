@@ -17,6 +17,7 @@ limitations under the License.
 package immutable
 
 import (
+	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/record"
 )
@@ -196,7 +197,8 @@ func (l *LocationCursor) ReadOutOfOrderMeta(filterOpts *FilterOptions, dst *reco
 	return rec, nil
 }
 
-func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record, filterBitmap *bitmap.FilterBitmap) (*record.Record, error) {
+func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record, filterBitmap *bitmap.FilterBitmap,
+	unnestOperator logstore.UnnestOperator) (*record.Record, error) {
 	if len(l.lcs) == 0 {
 		return nil, nil
 	}
@@ -224,7 +226,7 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 			continue
 		}
 
-		rec, rowNum, err = loc.readData(filterOpts, dst, filterRec, filterBitmap)
+		rec, rowNum, err = loc.readData(filterOpts, dst, filterRec, filterBitmap, unnestOperator)
 		if err != nil {
 			return nil, err
 		}

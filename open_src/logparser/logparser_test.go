@@ -34,7 +34,7 @@ func TestLogParserForSpecialType(t *testing.T) {
 			log: "127.0.0.10",
 			expr: influxql.BinaryExpr{
 				Op:  influxql.MATCHPHRASE,
-				LHS: &influxql.VarRef{Val: "content", Type: influxql.String, Alias: ""},
+				LHS: &influxql.VarRef{Val: "content"},
 				RHS: &influxql.StringLiteral{Val: "127.0.0.10"},
 			},
 		},
@@ -42,7 +42,7 @@ func TestLogParserForSpecialType(t *testing.T) {
 			log: "2023-06-13",
 			expr: influxql.BinaryExpr{
 				Op:  influxql.MATCHPHRASE,
-				LHS: &influxql.VarRef{Val: "content", Type: influxql.String, Alias: ""},
+				LHS: &influxql.VarRef{Val: "content"},
 				RHS: &influxql.StringLiteral{Val: "2023-06-13"},
 			},
 		},
@@ -50,7 +50,7 @@ func TestLogParserForSpecialType(t *testing.T) {
 			log: "10:00:00",
 			expr: influxql.BinaryExpr{
 				Op:  influxql.MATCHPHRASE,
-				LHS: &influxql.VarRef{Val: "content", Type: influxql.String, Alias: ""},
+				LHS: &influxql.VarRef{Val: "content"},
 				RHS: &influxql.StringLiteral{Val: "10:00:00"},
 			},
 		},
@@ -82,7 +82,7 @@ func TestLogParserForFieldAndType(t *testing.T) {
 			log: "host: 127.0.0.10",
 			expr: influxql.BinaryExpr{
 				Op:  influxql.MATCHPHRASE,
-				LHS: &influxql.VarRef{Val: "host", Type: influxql.String, Alias: ""},
+				LHS: &influxql.VarRef{Val: "host"},
 				RHS: &influxql.StringLiteral{Val: "127.0.0.10"},
 			},
 		},
@@ -91,7 +91,7 @@ func TestLogParserForFieldAndType(t *testing.T) {
 			log: "date: 2023-06-13",
 			expr: influxql.BinaryExpr{
 				Op:  influxql.MATCHPHRASE,
-				LHS: &influxql.VarRef{Val: "date", Type: influxql.String, Alias: ""},
+				LHS: &influxql.VarRef{Val: "date"},
 				RHS: &influxql.StringLiteral{Val: "2023-06-13"},
 			},
 		},
@@ -99,7 +99,7 @@ func TestLogParserForFieldAndType(t *testing.T) {
 			log: "path:/var/log/messages/",
 			expr: influxql.BinaryExpr{
 				Op:  influxql.MATCHPHRASE,
-				LHS: &influxql.VarRef{Val: "path", Type: influxql.String, Alias: ""},
+				LHS: &influxql.VarRef{Val: "path"},
 				RHS: &influxql.StringLiteral{Val: "/var/log/messages/"},
 			},
 		},
@@ -134,27 +134,27 @@ func TestLogParserForMultiSpecialType(t *testing.T) {
 	testLogs := []logTermTest{
 		{
 			log:    "(2023-06-13 OR 127.0.0.10) AND time:10:00:00",
-			expect: "(content::string MATCHPHRASE '2023-06-13' OR content::string MATCHPHRASE '127.0.0.10') AND time::string MATCHPHRASE '10:00:00'",
+			expect: "(content MATCHPHRASE '2023-06-13' OR content MATCHPHRASE '127.0.0.10') AND time MATCHPHRASE '10:00:00'",
 		},
 		{
 			log:    "time AND host:127.0.0.10 AND host:127.0.0.11",
-			expect: "content::string MATCHPHRASE 'time' AND host::string MATCHPHRASE '127.0.0.10' AND host::string MATCHPHRASE '127.0.0.11'",
+			expect: "content MATCHPHRASE 'time' AND host MATCHPHRASE '127.0.0.10' AND host MATCHPHRASE '127.0.0.11'",
 		},
 		{
 			log:    "(/var/log/messages OR path:/var/log/messages) AND ip:127.0.0.10",
-			expect: "(content::string MATCHPHRASE '/var/log/messages' OR path::string MATCHPHRASE '/var/log/messages') AND ip::string MATCHPHRASE '127.0.0.10'",
+			expect: "(content MATCHPHRASE '/var/log/messages' OR path MATCHPHRASE '/var/log/messages') AND ip MATCHPHRASE '127.0.0.10'",
 		},
 		{
 			log:    "123456789",
-			expect: "content::string MATCHPHRASE '123456789'",
+			expect: "content MATCHPHRASE '123456789'",
 		},
 		{
 			log:    "request:123456789",
-			expect: "request::string MATCHPHRASE '123456789'",
+			expect: "request MATCHPHRASE '123456789'",
 		},
 		{
 			log:    "get iamges or request:process",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' OR request::string MATCHPHRASE 'process'",
+			expect: "content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges' OR request MATCHPHRASE 'process'",
 		},
 	}
 
@@ -183,39 +183,39 @@ func TestLogParserForMultiTerm(t *testing.T) {
 	testLogs := []logTermTest{
 		{
 			log:    "get iamges and process",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND content::string MATCHPHRASE 'process'",
+			expect: "content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges' AND content MATCHPHRASE 'process'",
 		},
 		{
 			log:    "iamges OR simulating process",
-			expect: "content::string MATCHPHRASE 'iamges' OR content::string MATCHPHRASE 'simulating' AND content::string MATCHPHRASE 'process'",
+			expect: "content MATCHPHRASE 'iamges' OR content MATCHPHRASE 'simulating' AND content MATCHPHRASE 'process'",
 		},
 		{
 			log:    "get iamges or request:process",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' OR request::string MATCHPHRASE 'process'",
+			expect: "content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges' OR request MATCHPHRASE 'process'",
 		},
 		{
 			log:    "\"get iamges\" or request:process",
-			expect: "content::string MATCHPHRASE 'get iamges' OR request::string MATCHPHRASE 'process'",
+			expect: "content MATCHPHRASE 'get iamges' OR request MATCHPHRASE 'process'",
 		},
 		{
 			log:    "request:process AND \"get iamges\"",
-			expect: "request::string MATCHPHRASE 'process' AND content::string MATCHPHRASE 'get iamges'",
+			expect: "request MATCHPHRASE 'process' AND content MATCHPHRASE 'get iamges'",
 		},
 		{
 			log:    "request:process OR get iamges",
-			expect: "request::string MATCHPHRASE 'process' OR content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges'",
+			expect: "request MATCHPHRASE 'process' OR content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges'",
 		},
 		{
 			log:    "request:process OR request:iamges",
-			expect: "request::string MATCHPHRASE 'process' OR request::string MATCHPHRASE 'iamges'",
+			expect: "request MATCHPHRASE 'process' OR request MATCHPHRASE 'iamges'",
 		},
 		{
 			log:    "get iamges \"HTTP 1.0\"",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND content::string MATCHPHRASE 'HTTP 1.0'",
+			expect: "content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges' AND content MATCHPHRASE 'HTTP 1.0'",
 		},
 		{
 			log:    "request:simulating process OR get iamges",
-			expect: "request::string MATCHPHRASE 'simulating' AND content::string MATCHPHRASE 'process' OR content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges'",
+			expect: "request MATCHPHRASE 'simulating' AND content MATCHPHRASE 'process' OR content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges'",
 		},
 	}
 
@@ -244,23 +244,23 @@ func TestLogParserForExtract(t *testing.T) {
 	testLogs := []logTermTest{
 		{
 			log:    "get iamges|EXTRACT(tags:\"([a-z]+):([a-z]+)\") AS(key1,   value1)|key1:http",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND key1::string MATCHPHRASE 'http'|UNNEST(match_all(\"([a-z]+):([a-z]+)\", tags::string)) AS(key1, value1)",
+			expect: "content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges' AND key1 MATCHPHRASE 'http'|UNNEST(match_all(\"([a-z]+):([a-z]+)\", tags)) AS(key1, value1)",
 		},
 		{
 			log:    "get iamges|EXTRACT(\"([a-z]+):([a-z]+)\") AS(key1,   value1)|key1:http",
-			expect: "content::string MATCHPHRASE 'get' AND content::string MATCHPHRASE 'iamges' AND key1::string MATCHPHRASE 'http'|UNNEST(match_all(\"([a-z]+):([a-z]+)\", content::string)) AS(key1, value1)",
+			expect: "content MATCHPHRASE 'get' AND content MATCHPHRASE 'iamges' AND key1 MATCHPHRASE 'http'|UNNEST(match_all(\"([a-z]+):([a-z]+)\", content)) AS(key1, value1)",
 		},
 		{
 			log:    "get|EXTRACT(\"([a-z]+)\") AS(key1)",
-			expect: "content::string MATCHPHRASE 'get'|UNNEST(match_all(\"([a-z]+)\", content::string)) AS(key1)",
+			expect: "content MATCHPHRASE 'get'|UNNEST(match_all(\"([a-z]+)\", content)) AS(key1)",
 		},
 		{
 			log:    "*|EXTRACT(\"([a-z]+)\") AS(key1)",
-			expect: "content::string != ''|UNNEST(match_all(\"([a-z]+)\", content::string)) AS(key1)",
+			expect: "content != ''|UNNEST(match_all(\"([a-z]+)\", content)) AS(key1)",
 		},
 		{
 			log:    "EXTRACT(\"([a-z]+)\") AS(key1)",
-			expect: "|UNNEST(match_all(\"([a-z]+)\", content::string)) AS(key1)",
+			expect: "|UNNEST(match_all(\"([a-z]+)\", content)) AS(key1)",
 		},
 	}
 
@@ -289,7 +289,7 @@ func TestLogParserForWildCard(t *testing.T) {
 	testLogs := []logTermTest{
 		{
 			log:    "content: *",
-			expect: "content::string != ''",
+			expect: "content != ''",
 		},
 	}
 
@@ -334,7 +334,7 @@ func TestLogParserForRangeExpr(t *testing.T) {
 		},
 		{
 			log:    "field in [10 100] and a<100",
-			expect: "\"field\" >= '10' AND \"field\" <= '100' AND a::string < '100'",
+			expect: "\"field\" >= '10' AND \"field\" <= '100' AND a < '100'",
 		},
 	}
 

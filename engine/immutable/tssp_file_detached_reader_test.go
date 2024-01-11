@@ -277,7 +277,7 @@ func TestDetachedTSSPReader(t *testing.T) {
 	reader, _ := NewDetachedMetaIndexReader(p, nil)
 	metaIndex, _ := reader.ReadMetaIndex([]int64{16, 56}, []int64{40, 40})
 	decs := NewFileReaderContext(util.TimeRange{Min: 0, Max: 1635732519000000000}, schema, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
-	treader, _ := NewTSSPFileDetachedReader(metaIndex, [][]int{[]int{0, 1, 2, 4, 30, 50, 200}, []int{0, 1, 2, 4, 30, 50, 200}}, decs, sparseindex.NewOBSFilterPath("", p, nil), true)
+	treader, _ := NewTSSPFileDetachedReader(metaIndex, [][]int{[]int{0, 1, 2, 4, 30, 50, 200}, []int{0, 1, 2, 4, 30, 50, 200}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true)
 	totalRow := 0
 	for {
 		data, _, _ := treader.Next()

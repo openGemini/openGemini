@@ -26,11 +26,12 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
 const (
 	chunkMetaReadNum     = 16
-	BatchReaderRecordNum = 7
+	BatchReaderRecordNum = 8
 	chunkReadNum         = 16
 )
 
@@ -50,10 +51,13 @@ type TSSPFileDetachedReader struct {
 	recordPool      *record.CircularRecordPool
 	filterPool      *record.CircularRecordPool
 	currChunkMeta   []*ChunkMeta
+	unnest          *influxql.Unnest
+	unnestOperator  logstore.UnnestOperator
 	ctx             *FileReaderContext
 }
 
-func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *FileReaderContext, path *sparseindex.OBSFilterPath, isSort bool) (*TSSPFileDetachedReader, error) {
+func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *FileReaderContext, path *sparseindex.OBSFilterPath, unnest *influxql.Unnest,
+	isSort bool) (*TSSPFileDetachedReader, error) {
 	r := &TSSPFileDetachedReader{
 		isSort:        isSort,
 		metaIndex:     metaIndex,
@@ -61,6 +65,7 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		obsOpts:       path.Option(),
 		ctx:           ctx,
 		metaDataQueue: logstore.NewMetaControl(true, chunkMetaReadNum),
+		unnest:        unnest,
 	}
 	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), BatchReaderRecordNum, ctx.schemas, false)
 	r.filterPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), BatchReaderRecordNum, ctx.schemas, false)
@@ -70,6 +75,13 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		return nil, err
 	}
 	r.dataReader, err = NewDetachedMetaDataReader(path.RemotePath(), path.Option(), isSort)
+	if r.unnest != nil {
+		var err error
+		r.unnestOperator, err = logstore.GetUnnestFuncOperator(unnest, r.ctx.schemas)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return r, err
 }
 
@@ -121,6 +133,9 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 		if result.RowNums() == 0 {
 			t.recordPool.PutRecordInCircularPool()
 			continue
+		}
+		if t.unnest != nil {
+			t.unnestOperator.Compute(result)
 		}
 		return t.filterData(result), nil
 	}

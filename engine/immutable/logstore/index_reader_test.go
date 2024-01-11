@@ -148,3 +148,59 @@ func TestIndexDataReaderByCache(t *testing.T) {
 		indexReader.Close()
 	}
 }
+
+func TestIndexDataReaderByCacheForUnnest(t *testing.T) {
+	tmpDir := t.TempDir()
+	config.SetSFSConfig(tmpDir)
+	contents := []string{"shenzhen,1", "shanghai,2"}
+	err := WriteSfsData(tmpDir, contents)
+	if err != nil {
+		t.Fatal("write data failed")
+	}
+	opt := &query.ProcessorOptions{
+		Condition: &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: "key1", Type: influxql.String},
+			RHS: &influxql.StringLiteral{Val: "shenzhen"},
+		},
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "tag"},
+		record.Field{Type: influx.Field_Type_String, Name: "content"},
+		record.Field{Type: influx.Field_Type_String, Name: "key1"},
+		record.Field{Type: influx.Field_Type_String, Name: "value1"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	unnest := &influxql.Unnest{
+		Expr: &influxql.Call{
+			Name: "match_all",
+			Args: []influxql.Expr{
+				&influxql.VarRef{Val: "([a-z]+),([0-9]+)", Type: influxql.String},
+				&influxql.VarRef{Val: "content", Type: influxql.String},
+			},
+		},
+		Aliases: []string{"key1", "value1"},
+		DstType: []influxql.DataType{influxql.String, influxql.String},
+	}
+	for i := 0; i < 2; i++ {
+		indexReader, err := NewIndexReader(nil, 4, tmpDir, util.TimeRange{Min: int64(0), Max: int64(100)}, opt)
+		assert.Equal(t, nil, err)
+		m, _ := indexReader.Get()
+		assert.Equal(t, 0, int(m[0].minSeq))
+		assert.Equal(t, len(contents), int(m[0].maxSeq))
+		offsets := make([]int64, 0)
+		lengths := make([]int64, 0)
+		for _, v := range m {
+			offsets = append(offsets, v.contentBlockOffset)
+			lengths = append(lengths, int64(v.contentBlockLength))
+		}
+		dataR, _ := NewDataReader(nil, tmpDir, 4, util.TimeRange{Min: int64(0), Max: int64(100)}, opt, offsets, lengths, schema, true, unnest, -1)
+		r, err := dataR.Next()
+		assert.Equal(t, nil, err)
+		assert.Equal(t, 1, r.RowNums())
+		min, max := indexReader.GetMinMaxTime()
+		assert.Equal(t, 0, int(min))
+		assert.Equal(t, 2, int(max))
+		indexReader.Close()
+	}
+}
