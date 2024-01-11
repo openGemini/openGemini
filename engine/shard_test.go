@@ -4504,9 +4504,9 @@ func TestWriteDataByNewEngine(t *testing.T) {
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
-	time.Sleep(time.Second * 1)
 	// wait mem table flush
 	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
 
 	require.Equal(t, 4*100, int(sh.rowCount))
 	err = closeShard(sh)
