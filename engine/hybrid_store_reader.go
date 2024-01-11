@@ -263,7 +263,7 @@ func (r *HybridStoreReader) initIndexReader() {
 	if !r.opt.IsIncQuery() || r.opt.IterID == 0 {
 		r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo))
 	}
-	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions, r.opt))
+	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions))
 }
 
 func (r *HybridStoreReader) initSchema() (err error) {

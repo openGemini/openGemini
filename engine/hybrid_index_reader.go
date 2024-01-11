@@ -34,7 +34,6 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/query"
 )
 
 const (
@@ -164,14 +163,12 @@ type detachedIndexReader struct {
 	ctx          *indexContext
 	skFileReader []sparseindex.SKFileReader
 	obsOptions   *obs.ObsOptions
-	opt          query.ProcessorOptions
 }
 
-func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, opt query.ProcessorOptions) *detachedIndexReader {
+func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions) *detachedIndexReader {
 	return &detachedIndexReader{
 		obsOptions: obsOption,
 		ctx:        ctx,
-		opt:        opt,
 	}
 }
 
@@ -286,8 +283,8 @@ func (r *detachedIndexReader) Init() (err error) {
 }
 
 func (r *detachedIndexReader) InitInc(frag executor.IndexFrags) (executor.IndexFrags, error) {
-	queryId := r.opt.GetLogQueryCurrId()
-	currIter := r.opt.GetIterId()
+	queryId := r.ctx.schema.Options().GetLogQueryCurrId()
+	currIter := r.ctx.schema.Options().GetIterId()
 	totalCount := frag.FragCount()
 	iterNum := int32(math.Ceil(float64(totalCount) / float64(IncDataSegmentNum)))
 	cache.PutNodeIterNum(queryId, iterNum)
@@ -351,9 +348,9 @@ func (r *detachedIndexReader) InitInc(frag executor.IndexFrags) (executor.IndexF
 }
 
 func (r *detachedIndexReader) Next() (executor.IndexFrags, error) {
-	if r.opt.IsIncQuery() {
-		currIter := r.opt.GetIterId()
-		queryId := r.opt.GetLogQueryCurrId()
+	if r.ctx.schema.Options().IsIncQuery() {
+		currIter := r.ctx.schema.Options().GetIterId()
+		queryId := r.ctx.schema.Options().GetLogQueryCurrId()
 		if r.init {
 			return nil, nil
 		}
@@ -362,20 +359,26 @@ func (r *detachedIndexReader) Next() (executor.IndexFrags, error) {
 			frag, err := r.GetBatchFrag()
 			if err != nil {
 				return nil, err
-			} else {
-				immutable.PutDetachedSegmentTask(queryId, frag)
-				return r.InitInc(frag)
 			}
+			if frag == nil {
+				cache.PutNodeIterNum(queryId, 1)
+				return nil, nil
+			}
+			immutable.PutDetachedSegmentTask(queryId, frag)
+			return r.InitInc(frag)
 		} else {
 			frag, ok := immutable.GetDetachedSegmentTask(queryId)
 			if !ok {
 				frag, err = r.GetBatchFrag()
 				if err != nil {
 					return nil, err
-				} else {
-					immutable.PutDetachedSegmentTask(queryId, frag)
-					return r.InitInc(frag.(executor.IndexFrags))
 				}
+				if frag == nil {
+					cache.PutNodeIterNum(queryId, 1)
+					return nil, nil
+				}
+				immutable.PutDetachedSegmentTask(queryId, frag)
+				return r.InitInc(frag.(executor.IndexFrags))
 			}
 			r.init = true
 			return r.InitInc(frag.(executor.IndexFrags))
