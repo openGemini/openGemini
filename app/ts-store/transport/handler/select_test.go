@@ -103,7 +103,7 @@ func (s *MockStoreEngine) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map
 	return nil, nil
 }
 
-func (s *MockStoreEngine) PreOffload(*meta.DbPtInfo) error {
+func (s *MockStoreEngine) PreOffload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 

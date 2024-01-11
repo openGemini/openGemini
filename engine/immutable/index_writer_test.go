@@ -85,8 +85,7 @@ func TestStreamIterators_SwitchChunkMeta_error(t *testing.T) {
 	fi, err := mh.store.ImmTable.NewFileIterators(mh.store, plans[0])
 	require.NoError(t, err)
 
-	itrs, err := mh.store.NewStreamIterators(fi)
-	require.NoError(t, err)
+	itrs := mh.store.NewStreamIterators(fi)
 
 	writer := &mockFileWriter{n: 10}
 	itrs.WithLog(logger.NewLogger(errno.ModuleCompact))

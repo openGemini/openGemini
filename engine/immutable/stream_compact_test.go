@@ -580,7 +580,7 @@ func readOrderChunks(mst string, store *MmsTables, chunks map[uint64]*record.Rec
 		fi.estimateSize += int(f.FileSize())
 	}
 
-	itr, _ := store.NewChunkIterators(fi)
+	itr := store.NewChunkIterators(fi)
 	for itr.Len() > 0 {
 		id, rec, err := itr.Next()
 		if err != nil {

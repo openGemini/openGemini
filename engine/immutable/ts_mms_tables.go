@@ -77,20 +77,20 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 	var newFiles []TSSPFile
 	var compactErr error
 	if isNonStream {
-		compItrs, err := m.NewChunkIterators(group)
-		if err != nil {
-			lcLog.Error("new chunk iterators fail", zap.Error(err))
-			return err
+		compItrs := m.NewChunkIterators(group)
+		if compItrs == nil {
+			group.compIts.Close()
+			return nil
 		}
 		compItrs.WithLog(lcLog)
 		oldFilesSize = compItrs.estimateSize
 		newFiles, compactErr = m.compact(compItrs, group.oldFiles, group.toLevel, true, lcLog)
 		compItrs.Close()
 	} else {
-		compItrs, err := m.NewStreamIterators(group)
-		if err != nil {
-			lcLog.Error("new stream iterators fail", zap.Error(err))
-			return err
+		compItrs := m.NewStreamIterators(group)
+		if compItrs == nil {
+			group.compIts.Close()
+			return nil
 		}
 		compItrs.WithLog(lcLog)
 		oldFilesSize = compItrs.estimateSize
@@ -129,6 +129,9 @@ func (t *tsImmTableImpl) LevelPlan(m *MmsTables, level uint16) []*CompactGroup {
 
 	m.mu.RLock()
 	for k, v := range m.Order {
+		if m.isClosed() || m.isCompMergeStopped() {
+			break
+		}
 		plans = m.getMmsPlan(k, v, level, minGroupFileN, plans)
 	}
 	m.mu.RUnlock()

@@ -179,16 +179,20 @@ func (m *MmsTables) blockCompactStop(name string) {
 	}
 }
 
-func (m *MmsTables) NewChunkIterators(group FilesInfo) (*ChunkIterators, error) {
+func (m *MmsTables) NewChunkIterators(group FilesInfo) *ChunkIterators {
 	compItrs := &ChunkIterators{
-		closed:   m.closed,
-		dropping: group.dropping,
-		name:     group.name,
-		itrs:     make([]*ChunkIterator, 0, len(group.compIts)),
-		merged:   &record.Record{},
+		closed:        m.closed,
+		stopCompMerge: m.stopCompMerge,
+		dropping:      group.dropping,
+		name:          group.name,
+		itrs:          make([]*ChunkIterator, 0, len(group.compIts)),
+		merged:        &record.Record{},
 	}
 
 	for _, i := range group.compIts {
+		if m.isClosed() || m.isCompMergeStopped() {
+			return nil
+		}
 		itr := NewChunkIterator(i)
 		itr.WithLog(CLog)
 		if !itr.Next() {
@@ -202,7 +206,7 @@ func (m *MmsTables) NewChunkIterators(group FilesInfo) (*ChunkIterators, error) 
 
 	heap.Init(compItrs)
 
-	return compItrs, nil
+	return compItrs
 }
 
 func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16, isOrder bool, cLog *Log.Logger) ([]TSSPFile, error) {
@@ -361,6 +365,9 @@ func (m *MmsTables) mmsFiles(n int64) []*CompactGroup {
 		}
 
 		for _, f := range v.files {
+			if m.isClosed() || m.isCompMergeStopped() {
+				return nil
+			}
 			if f.(*tsspFile).ref == 0 {
 				panic("file closed")
 			}

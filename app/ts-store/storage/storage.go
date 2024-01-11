@@ -75,7 +75,7 @@ type StoreEngine interface {
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
 	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) (map[string]string, error)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
-	PreOffload(*meta.DbPtInfo) error
+	PreOffload(uint64, *meta.DbPtInfo) error
 	RollbackPreOffload(*meta.DbPtInfo) error
 	PreAssign(uint64, *meta.DbPtInfo) error
 	Offload(*meta.DbPtInfo) error
@@ -527,8 +527,8 @@ func (s *Storage) GetEngine() netstorage.Engine {
 	return s.engine
 }
 
-func (s *Storage) PreOffload(ptInfo *meta.DbPtInfo) error {
-	return s.engine.PreOffload(ptInfo.Db, ptInfo.Pti.PtId)
+func (s *Storage) PreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {
+	return s.engine.PreOffload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
 func (s *Storage) RollbackPreOffload(ptInfo *meta.DbPtInfo) error {

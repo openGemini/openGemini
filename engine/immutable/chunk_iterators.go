@@ -37,14 +37,15 @@ type ChunkIterator struct {
 }
 
 type ChunkIterators struct {
-	closed       chan struct{}
-	dropping     *int64
-	name         string // measurement name with version
-	itrs         []*ChunkIterator
-	id           uint64
-	merged       *record.Record
-	estimateSize int
-	maxN         int
+	closed        chan struct{}
+	stopCompMerge chan struct{}
+	dropping      *int64
+	name          string // measurement name with version
+	itrs          []*ChunkIterator
+	id            uint64
+	merged        *record.Record
+	estimateSize  int
+	maxN          int
 
 	log *Log.Logger
 }
@@ -92,6 +93,8 @@ func (c *ChunkIterators) stopCompact() bool {
 
 	select {
 	case <-c.closed:
+		return true
+	case <-c.stopCompMerge:
 		return true
 	default:
 		return false

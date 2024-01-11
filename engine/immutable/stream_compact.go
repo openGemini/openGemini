@@ -140,6 +140,7 @@ func putStreamIterators(itr *StreamIterators) {
 
 type StreamIterators struct {
 	closed        chan struct{}
+	stopCompMerge chan struct{}
 	dropping      *int64
 	dir           string
 	name          string // measurement name with version
@@ -376,9 +377,10 @@ func (c *StreamIterators) Init(id uint64, chunkDataOffset int64, schema record.S
 	c.colBuilder.resetPreAgg()
 }
 
-func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error) {
+func (m *MmsTables) NewStreamIterators(group FilesInfo) *StreamIterators {
 	compItrs := getStreamIterators()
 	compItrs.closed = m.closed
+	compItrs.stopCompMerge = m.stopCompMerge
 	compItrs.dropping = group.dropping
 	compItrs.name = group.name
 	compItrs.dir = m.path
@@ -387,6 +389,9 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error
 	compItrs.Conf = m.Conf
 	compItrs.itrs = compItrs.itrs[:0]
 	for _, fi := range group.compIts {
+		if m.isClosed() || m.isCompMergeStopped() {
+			return nil
+		}
 		itr := NewStreamStreamIterator(fi)
 		compItrs.itrs = append(compItrs.itrs, itr)
 	}
@@ -397,7 +402,7 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) (*StreamIterators, error
 
 	heap.Init(compItrs)
 
-	return compItrs, nil
+	return compItrs
 }
 
 func (c *StreamIterators) cacheMetaInMemory() bool {
@@ -766,6 +771,8 @@ func (c *StreamIterators) isClosed() bool {
 	}
 	select {
 	case <-c.closed:
+		return true
+	case <-c.stopCompMerge:
 		return true
 	default:
 		return false

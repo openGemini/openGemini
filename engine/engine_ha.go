@@ -30,12 +30,12 @@ import (
 	"go.uber.org/zap"
 )
 
-func (e *Engine) PreOffload(db string, ptId uint32) error {
+func (e *Engine) PreOffload(opId uint64, db string, ptId uint32) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
-	e.log.Info("prepare offload pt start", zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("prepare offload pt start", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	dbPt, err := e.getPartition(db, ptId, true)
 	if err != nil {
 		if errno.Equal(err, errno.PtNotFound) || errno.Equal(err, errno.DatabaseNotFound) {
@@ -47,9 +47,10 @@ func (e *Engine) PreOffload(db string, ptId uint32) error {
 		dbPt.unref()
 		return err
 	}
+	start := time.Now()
 	dbPt.setEnableShardsBgr(false)
 	dbPt.unref()
-	e.log.Info("prepare offload pt success", zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("prepare offload pt success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
 	return nil
 }
 

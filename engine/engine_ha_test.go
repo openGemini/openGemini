@@ -67,7 +67,7 @@ func TestPreOffLoadPts001(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
-		err := eng.PreOffload(defaultDb, defaultPtId)
+		err := eng.PreOffload(0, defaultDb, defaultPtId)
 		if err != nil && (!errno.Equal(err, errno.DBPTClosed) && !errno.Equal(err, errno.PtNotFound)) {
 			t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 		}
@@ -90,7 +90,7 @@ func TestPreOffLoadPts002(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.PreOffload(defaultDb, defaultPtId)
+	err := eng.PreOffload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, should prepare off load success", zap.Error(err))
 	}
@@ -117,7 +117,7 @@ func TestPreOffLoadPts003(t *testing.T) {
 		t.Error("PreOffLoadPt but Pt not found", zap.Error(err))
 	}
 	delete(eng.DBPartitions[defaultDb], defaultPtId)
-	err = eng.PreOffload(defaultDb, defaultPtId)
+	err = eng.PreOffload(0, defaultDb, defaultPtId)
 	eng.DBPartitions[defaultDb][defaultPtId] = pt
 	require.NoError(t, err)
 }
@@ -134,7 +134,7 @@ func TestPreOffLoadPts004(t *testing.T) {
 		t.Error("PreOffLoadPt but Pt not found", zap.Error(err))
 	}
 	pt.pendingShardDeletes[defaultShardId] = struct{}{}
-	err = eng.PreOffload(defaultDb, defaultPtId)
+	err = eng.PreOffload(0, defaultDb, defaultPtId)
 	require.Error(t, err)
 }
 
@@ -201,7 +201,7 @@ func TestOffloadPts003(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.PreOffload(defaultDb, defaultPtId)
+	err := eng.PreOffload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, should prepare off load success", zap.Error(err))
 	}
@@ -425,7 +425,7 @@ func TestRollPreOffload001(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.PreOffload(defaultDb, defaultPtId)
+	err := eng.PreOffload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, should prepare off load success", zap.Error(err))
 	}
@@ -449,7 +449,7 @@ func TestRollPreOffload002(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.PreOffload(defaultDb, defaultPtId)
+	err := eng.PreOffload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, should prepare off load success", zap.Error(err))
 	}
