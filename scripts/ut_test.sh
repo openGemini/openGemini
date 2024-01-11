@@ -76,20 +76,15 @@ mkdir /tmp/openGemini/logs -p
 
 ########################### test build for multi platform ###############################################
 splittingLine "start: test build for multi platform"
-python build.py  --version v1.0.0 --clean --platform windows --arch amd64
 
-python build.py  --version v1.0.0 --clean --platform windows --arch arm64
-
-python build.py  --version v1.0.0 --clean --platform darwin --arch amd64
-
-python build.py  --version v1.0.0 --clean --platform darwin --arch arm64
-
-python build.py  --version v1.0.0 --clean --platform linux --arch arm64
-
-python build.py  --version v1.0.0 --clean --platform linux --arch amd64
+make build-check
+build_check_status=$?
 
 splittingLine "end: test build for multi platform"
 
+if [[ $build_check_status -ne 0 ]]; then
+    exit 1
+fi
 
 ########################### integration test ###############################################
 
@@ -127,6 +122,7 @@ do
 
     FAIL_COUNT=`grep 'FAIL' /tmp/openGemini/logs/test_at_hot_*.log | wc -l`
     if [ $FAIL_COUNT -ne 0 ]; then
+        git restore config/openGemini.conf
         exit 1
     fi
 done
@@ -166,6 +162,7 @@ do
 
     FAIL_COUNT=`grep 'FAIL' /tmp/openGemini/logs/test_at_warm_*.log | wc -l`
     if [ $FAIL_COUNT -ne 0 ]; then
+        git restore config/openGemini.conf
         exit 1
     fi
 done
@@ -182,3 +179,5 @@ sed -i "s/pushers = \"file\"/# pushers = \"\"/g" config/openGemini.conf
 sed -i "s/store-enabled = true/# store-enabled = false/g" config/openGemini.conf
 sed -i "s~store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~# store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~g" config/openGemini.conf
 sed -i -e "/subscriber/{n;d}" config/openGemini.conf
+
+git restore config/openGemini.conf

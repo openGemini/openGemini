@@ -25,7 +25,6 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/valyala/gozstd"
 )
 
 type IndexWriter interface {
@@ -178,8 +177,6 @@ func (w *IndexCompressWriter) compress(dst []byte, src []byte) []byte {
 	switch GetChunkMetaCompressMode() {
 	case ChunkMetaCompressSnappy:
 		dst = snappy.Encode(dst[:cap(dst)], src)
-	case ChunkMetaCompressZSTD:
-		dst = gozstd.CompressLevel(dst[:0], src, 0)
 	default:
 		dst = append(dst[:0], src...)
 	}

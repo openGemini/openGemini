@@ -43,7 +43,6 @@ require (
 	github.com/stretchr/testify v1.8.4
 	github.com/tinylib/msgp v1.1.7-0.20220719154719-f3635b96e483
 	github.com/valyala/fastjson v1.6.4
-	github.com/valyala/gozstd v1.17.0
 	github.com/xlab/treeprint v1.2.0
 	go.etcd.io/bbolt v1.3.6
 	go.uber.org/zap v1.19.1
@@ -149,6 +148,7 @@ require (
 	github.com/uber/jaeger-client-go v2.28.0+incompatible // indirect
 	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
+	github.com/valyala/gozstd v1.13.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/willf/bitset v1.1.9 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect

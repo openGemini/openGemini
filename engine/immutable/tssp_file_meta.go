@@ -30,13 +30,12 @@ import (
 const (
 	ChunkMetaCompressNone   = 0
 	ChunkMetaCompressSnappy = 1
-	ChunkMetaCompressZSTD   = 2
 )
 
 var chunkMetaCompressMode = ChunkMetaCompressNone
 
 func SetChunkMetaCompressMode(mode int) {
-	if mode < ChunkMetaCompressNone || mode > ChunkMetaCompressZSTD {
+	if mode < ChunkMetaCompressNone || mode > ChunkMetaCompressSnappy {
 		return
 	}
 	chunkMetaCompressMode = mode

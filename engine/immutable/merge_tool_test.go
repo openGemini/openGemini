@@ -814,12 +814,12 @@ func TestCompressChunkMeta(t *testing.T) {
 		require.Equal(t, seriesNum, total)
 	}
 
-	for _, v := range []int{immutable.ChunkMetaCompressZSTD, immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
+	for _, v := range []int{immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
 		run(20)
 	}
 
-	for _, v := range []int{immutable.ChunkMetaCompressZSTD, immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
+	for _, v := range []int{immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
 		run(2000)
 	}

@@ -36,7 +36,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/pingcap/failpoint"
-	"github.com/valyala/gozstd"
 	"go.uber.org/zap"
 )
 
@@ -513,8 +512,6 @@ func decompressChunkMeta(mode uint8, dst *pool.Buffer, src []byte) ([]byte, erro
 	switch mode {
 	case ChunkMetaCompressSnappy:
 		dst.Swap, err = snappy.Decode(dst.Swap[:cap(dst.Swap)], src)
-	case ChunkMetaCompressZSTD:
-		dst.Swap, err = gozstd.Decompress(dst.Swap[:0], src)
 	default:
 		return nil, fmt.Errorf("unsupported compress mode: %d", mode)
 	}
