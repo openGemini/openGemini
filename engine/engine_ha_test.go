@@ -148,7 +148,7 @@ func TestOffloadPts001(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
-		err := eng.Offload(defaultDb, defaultPtId)
+		err := eng.Offload(0, defaultDb, defaultPtId)
 		if err != nil && (!errno.Equal(err, errno.DBPTClosed) && !errno.Equal(err, errno.PtNotFound)) {
 			t.Error("OffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 		}
@@ -186,7 +186,7 @@ func TestOffloadPts002(t *testing.T) {
 		}
 	}()
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
@@ -215,7 +215,7 @@ func TestOffloadPts003(t *testing.T) {
 			t.Fatal("shardsMaxFileNum map content in migrate instance is wrong")
 		}
 	}
-	err = eng.Offload(defaultDb, defaultPtId)
+	err = eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
@@ -228,13 +228,13 @@ func TestOffloadPts004(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
 	checkShard(t, eng, 0, defaultShardId, false, defaultDb, defaultPtId, false)
 
-	err = eng.Offload(defaultDb, defaultPtId)
+	err = eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
@@ -249,7 +249,7 @@ func TestPrepareLoadPts001(t *testing.T) {
 	defer eng.Close()
 	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, true)
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
@@ -275,7 +275,7 @@ func TestPrepareLoadPts002(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	durationInfos := getDurationInfo(defaultShardId)
 	dbBriefInfo := &meta.DatabaseBriefInfo{
 		Name:           defaultDb,
@@ -296,7 +296,7 @@ func TestPrepareLoadPts003(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	durationInfos := getDurationInfo(defaultShardId)
 	dbBriefInfo := &meta.DatabaseBriefInfo{
 		Name:           defaultDb,
@@ -317,7 +317,7 @@ func TestPrepareLoadPts004(t *testing.T) {
 	eng := getEngineBeforeTest(t, dir)
 	defer eng.Close()
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	durationInfos := getDurationInfo(defaultShardId)
 	dbBriefInfo := &meta.DatabaseBriefInfo{
 		Name:           defaultDb,
@@ -350,7 +350,7 @@ func TestLoadPts001(t *testing.T) {
 	defer eng.Close()
 	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, true)
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
@@ -377,7 +377,7 @@ func TestLoadPts002(t *testing.T) {
 	defer eng.Close()
 	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, true)
 
-	err := eng.Offload(defaultDb, defaultPtId)
+	err := eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
@@ -430,7 +430,7 @@ func TestRollPreOffload001(t *testing.T) {
 		t.Error("PrepareOffLoadPts failed, should prepare off load success", zap.Error(err))
 	}
 	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, false)
-	err = eng.RollbackPreOffload(defaultDb, defaultPtId)
+	err = eng.RollbackPreOffload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Fatal("RollbackPrepareOffload failed", zap.Error(err))
 	}
@@ -455,13 +455,13 @@ func TestRollPreOffload002(t *testing.T) {
 	}
 	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, false)
 
-	err = eng.Offload(defaultDb, defaultPtId)
+	err = eng.Offload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 	}
 	checkShard(t, eng, 0, defaultShardId, true, defaultDb, defaultPtId, false)
 
-	err = eng.RollbackPreOffload(defaultDb, defaultPtId)
+	err = eng.RollbackPreOffload(0, defaultDb, defaultPtId)
 	if err != nil {
 		t.Fatal("RollbackPrepareOffload failed", zap.Error(err))
 	}

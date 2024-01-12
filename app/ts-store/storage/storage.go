@@ -76,9 +76,9 @@ type StoreEngine interface {
 	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) (map[string]string, error)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 	PreOffload(uint64, *meta.DbPtInfo) error
-	RollbackPreOffload(*meta.DbPtInfo) error
+	RollbackPreOffload(uint64, *meta.DbPtInfo) error
 	PreAssign(uint64, *meta.DbPtInfo) error
-	Offload(*meta.DbPtInfo) error
+	Offload(uint64, *meta.DbPtInfo) error
 	Assign(uint64, *meta.DbPtInfo) error
 	GetConnId() uint64
 	CheckPtsRemovedDone() error
@@ -531,16 +531,16 @@ func (s *Storage) PreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {
 	return s.engine.PreOffload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
-func (s *Storage) RollbackPreOffload(ptInfo *meta.DbPtInfo) error {
-	return s.engine.RollbackPreOffload(ptInfo.Db, ptInfo.Pti.PtId)
+func (s *Storage) RollbackPreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {
+	return s.engine.RollbackPreOffload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
 func (s *Storage) PreAssign(opId uint64, ptInfo *meta.DbPtInfo) error {
 	return s.engine.PreAssign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Shards, ptInfo.DBBriefInfo, s.metaClient)
 }
 
-func (s *Storage) Offload(ptInfo *meta.DbPtInfo) error {
-	return s.engine.Offload(ptInfo.Db, ptInfo.Pti.PtId)
+func (s *Storage) Offload(opId uint64, ptInfo *meta.DbPtInfo) error {
+	return s.engine.Offload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
 func (s *Storage) Assign(opId uint64, ptInfo *meta.DbPtInfo) error {

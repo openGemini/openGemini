@@ -64,14 +64,14 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 	case meta.MovePreOffload:
 		err = mp.store.PreOffload(req.GetOpId(), ptInfo)
 	case meta.MoveRollbackPreOffload:
-		err = mp.store.RollbackPreOffload(ptInfo)
+		err = mp.store.RollbackPreOffload(req.GetOpId(), ptInfo)
 	case meta.MovePreAssign:
 		err = errno.NewError(errno.DataNoAlive)
 		if connId == aliveConnId {
 			err = mp.store.PreAssign(req.GetOpId(), ptInfo)
 		}
 	case meta.MoveOffload:
-		err = mp.store.Offload(ptInfo)
+		err = mp.store.Offload(req.GetOpId(), ptInfo)
 	case meta.MoveAssign:
 		err = errno.NewError(errno.DataNoAlive)
 		if connId == aliveConnId {

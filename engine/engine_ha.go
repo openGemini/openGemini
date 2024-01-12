@@ -54,12 +54,13 @@ func (e *Engine) PreOffload(opId uint64, db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) RollbackPreOffload(db string, ptId uint32) error {
+func (e *Engine) RollbackPreOffload(opId uint64, db string, ptId uint32) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
-	e.log.Info("rollback prepare offload pt start", zap.String("db", db), zap.Uint32("pt", ptId))
+	start := time.Now()
+	e.log.Info("rollback prepare offload pt start", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	dbPt, err := e.getPartition(db, ptId, true)
 	if err != nil {
 		// src node reset
@@ -71,7 +72,7 @@ func (e *Engine) RollbackPreOffload(db string, ptId uint32) error {
 	dbPt.enableDBPtBgr()
 	dbPt.setEnableShardsBgr(true)
 	dbPt.unref()
-	e.log.Info("rollback prepare offload pt success", zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("rollback prepare offload pt success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
 	return nil
 }
 
@@ -95,28 +96,29 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
 	dbPt.SetOption(e.engOpt)
 	dbPt.SetParams(true, &lockPath, dbBriefInfo.EnableTagArray)
+	start := time.Now()
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.PRELOAD, client); err != nil {
 		if rbErr := e.offloadDbPT(dbPt); rbErr != nil {
-			e.log.Error("both preload pt and rollback failed", zap.String("db", db), zap.Uint32("pt", ptId))
+			e.log.Error("both preload pt and rollback failed", zap.Uint32("pt", ptId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(rbErr))
 			panic(rbErr.Error())
 		}
-		e.log.Info("preload pt failed and rollback success", zap.String("db", db), zap.Uint32("pt", ptId))
+		e.log.Error("preload pt failed and rollback success", zap.Uint32("pt", ptId), zap.Uint64("opId", opId), zap.String("db", db), zap.Error(err))
 		return err
 	}
 
 	e.mu.Lock()
 	e.addDBPTInfo(dbPt)
 	e.mu.Unlock()
-	e.log.Info("prepare load pt success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+	e.log.Info("prepare load pt success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
 	return nil
 }
 
-func (e *Engine) Offload(db string, ptId uint32) error {
+func (e *Engine) Offload(opId uint64, db string, ptId uint32) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
-	e.log.Info("offload pt start", zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("offload pt start", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	dbPt, err := e.getPartition(db, ptId, false)
 	if err != nil {
 		if errno.Equal(err, errno.PtNotFound) || errno.Equal(err, errno.DatabaseNotFound) {
@@ -124,12 +126,13 @@ func (e *Engine) Offload(db string, ptId uint32) error {
 		}
 		return err
 	}
+	start := time.Now()
 	err = e.offloadDbPT(dbPt)
 	if err != nil {
-		e.log.Info("offload pt failed", zap.String("db", db), zap.Uint32("pt", ptId))
+		e.log.Error("offload pt failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)), zap.Error(err))
 		return err
 	}
-	e.log.Info("offload pt success", zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("offload pt success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
 	return nil
 }
 
@@ -139,7 +142,7 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	}
 	defer e.clearDbPtMigrating(db, ptId)
 	e.setMetaClient(client)
-	e.log.Info("engine start to load all shards", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+	e.log.Info("engine start to load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	start := time.Now()
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
@@ -151,7 +154,7 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 		}
 		dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
 	} else if !dbPt.preload {
-		e.log.Info("engine already load all shards", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+		e.log.Info("engine already load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 		return nil
 	}
 	if !dbPt.preload && IsMemUsageExceeded() {
@@ -161,9 +164,9 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	// Fence to prevent split-brain.
 	fc := NewFencer(e.dataPath, e.walPath, db, ptId)
 	if err = fc.Fence(); err != nil {
-		e.log.Error("fence failed", zap.Error(err), zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+		e.log.Error("fence failed", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId), zap.Error(err))
 		if err1 := fc.ReleaseFence(); err1 != nil {
-			e.log.Error("release fence failed", zap.Error(err1))
+			e.log.Error("release fence failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err1))
 		}
 		statistics.DBPTStepDuration(opId, "DBPTFenceError", time.Since(start).Nanoseconds(), statistics.DBPTLoadErr, err.Error())
 		return err
@@ -179,13 +182,13 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	dbPt.SetParams(dbPt.preload, &lockPath, dbBriefInfo.EnableTagArray)
 
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.LOAD, client); err != nil {
-		e.log.Error("engine load all shards failed", zap.Error(err), zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+		e.log.Error("engine load all shards failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
 		if rbErr := e.offloadDbPT(dbPt); rbErr != nil {
-			e.log.Error("both load pt and rollback failed", zap.String("db", db), zap.Uint32("pt", ptId))
+			e.log.Error("both load pt and rollback failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(rbErr))
 			panic(rbErr.Error())
 		}
 		if err1 := fc.ReleaseFence(); err1 != nil {
-			e.log.Error("release fence failed", zap.Error(err1))
+			e.log.Error("release fence failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err1))
 		}
 		statistics.DBPTStepDuration(opId, "DBPTLoadError", time.Since(start).Nanoseconds(), statistics.DBPTLoadErr, err.Error())
 		return err
@@ -197,7 +200,7 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 	e.mu.Unlock()
 	dbPt.enableReportShardLoad()
 	dbPt.preload = false
-	e.log.Info("engine load all shards success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId))
+	e.log.Info("engine load all shards success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	statistics.DBPTStepDuration(opId, "DBPTLoadFinishDuration", time.Since(start).Nanoseconds(), statistics.DBPTLoaded, "")
 	return nil
 }

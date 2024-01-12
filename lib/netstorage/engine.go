@@ -109,9 +109,9 @@ type Engine interface {
 	UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
 
 	PreOffload(opId uint64, db string, ptId uint32) error
-	RollbackPreOffload(db string, ptId uint32) error
+	RollbackPreOffload(opId uint64, db string, ptId uint32) error
 	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
-	Offload(db string, ptId uint32) error
+	Offload(opId uint64, db string, ptId uint32) error
 	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 
 	SysCtrl(req *SysCtrlRequest) (map[string]string, error)

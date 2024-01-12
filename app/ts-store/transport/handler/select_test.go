@@ -107,7 +107,7 @@ func (s *MockStoreEngine) PreOffload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
-func (s *MockStoreEngine) RollbackPreOffload(*meta.DbPtInfo) error {
+func (s *MockStoreEngine) RollbackPreOffload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
@@ -115,7 +115,7 @@ func (s *MockStoreEngine) PreAssign(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
-func (s *MockStoreEngine) Offload(*meta.DbPtInfo) error {
+func (s *MockStoreEngine) Offload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
