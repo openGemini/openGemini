@@ -80,6 +80,10 @@ func (w *tsspFileWriter) ChunkMetaSize() int64 {
 	return int64(w.cmw.Size())
 }
 
+func (w *tsspFileWriter) ChunkMetaBlockSize() int64 {
+	return int64(w.cmw.BlockSize())
+}
+
 func (w *tsspFileWriter) WriteData(b []byte) (int, error) {
 	n, err := w.fileWriter.Write(b)
 	if err != nil {
@@ -339,6 +343,10 @@ func (w *indexWriter) Size() int {
 	return w.wn
 }
 
+func (w *indexWriter) BlockSize() int {
+	return w.indexBlockSize
+}
+
 func (w *indexWriter) bytes() []byte {
 	return w.buf[:w.n]
 }
@@ -395,7 +403,7 @@ func (w *indexWriter) CopyTo(to io.Writer) (int, error) {
 func (w *indexWriter) SwitchMetaBuffer() (int, error) {
 	if w.cacheMeta {
 		w.metas = append(w.metas, w.buf)
-		w.buf = getMetaBlockBuffer(w.blockSize)
+		w.buf = getMetaBlockBuffer(len(w.buf))
 	}
 	size := w.indexBlockSize
 	w.indexBlockSize = 0
@@ -568,6 +576,10 @@ func (w *obsFileWriter) DataSize() int64 {
 
 func (w *obsFileWriter) ChunkMetaSize() int64 {
 	return w.metaWriter.Size()
+}
+
+func (w *obsFileWriter) ChunkMetaBlockSize() int64 {
+	return 0
 }
 
 func (w *obsFileWriter) WriteData(b []byte) (int, error) {

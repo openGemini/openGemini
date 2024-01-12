@@ -100,6 +100,7 @@ func TestPrimaryKeyWriterChunkMetaSize(t *testing.T) {
 		require.Equal(t, err, "ChunkMetaSize not implement for indexWriter")
 	}()
 	fw.ChunkMetaSize()
+	require.Equal(t, int64(0), fw.ChunkMetaBlockSize())
 }
 
 func TestPrimaryKeyWriterAppendChunkMetaToData(t *testing.T) {

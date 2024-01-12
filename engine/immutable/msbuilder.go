@@ -291,7 +291,7 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 		b.mIndex.maxTime = maxT
 	}
 
-	if needSwitchChunkMeta(b.Conf, int(b.diskFileWriter.ChunkMetaSize()), int(b.mIndex.count)) {
+	if needSwitchChunkMeta(b.Conf, int(b.diskFileWriter.ChunkMetaBlockSize()), int(b.mIndex.count)) {
 		if err := b.SwitchChunkMeta(); err != nil {
 			return err
 		}
@@ -1376,7 +1376,6 @@ func (b *MsBuilder) WriteChunkMeta(cm *ChunkMeta) (int, error) {
 		err = errno.NewError(errno.ShortWrite, wn, len(b.encChunkMeta))
 		b.log.Error("write chunk meta fail", zap.String("file", b.fd.Name()), zap.Error(err))
 	}
-	b.mIndex.size = uint32(b.diskFileWriter.ChunkMetaSize())
 	return wn, err
 }
 
