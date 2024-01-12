@@ -111,11 +111,11 @@ func (s *RRCServer) Run() {
 
 func (s *RRCServer) openListener() error {
 	if s.cfg.TLSEnable {
-		config, err := s.cfg.NewTLSConfig()
+		tlsCfg, err := s.cfg.NewTLSConfig()
 		if err != nil {
 			return err
 		}
-		s.listener, err = tls.Listen(s.network, s.address, config)
+		s.listener, err = tls.Listen(s.network, s.address, tlsCfg)
 		return err
 	}
 
