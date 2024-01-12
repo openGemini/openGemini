@@ -121,7 +121,7 @@ func TestIndexScanTransformDemo(t *testing.T) {
 	outputRowDataType := buildIRowDataType()
 	schema := buildISchema()
 
-	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1), 0)
+	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1), 0, false)
 	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
 		return nil
 	})
@@ -156,7 +156,7 @@ func TestIndexScanTransform_Abort(t *testing.T) {
 	schema := buildISchema()
 
 	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema,
-		nil, &executor.IndexScanExtraInfo{}, make(chan struct{}, 1), 0)
+		nil, &executor.IndexScanExtraInfo{}, make(chan struct{}, 1), 0, false)
 
 	trans.Abort()
 	trans.Abort()
@@ -224,7 +224,7 @@ func testIndexScanTransform_SparseIndex(t *testing.T, index *executor.LogicalInd
 	// build the pipeline executor
 	var process []executor.Processor
 	logger.InitLogger(config.Logger{Level: zap.DebugLevel})
-	trans := executor.NewIndexScanTransform(outputRowDataType, index.RowExprOptions(), index.Schema(), index.Children()[0], info, make(chan struct{}, 1), 0)
+	trans := executor.NewIndexScanTransform(outputRowDataType, index.RowExprOptions(), index.Schema(), index.Children()[0], info, make(chan struct{}, 1), 0, false)
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
 	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
 		return nil
@@ -279,7 +279,7 @@ func testIndexScanTransformTsIndex(t *testing.T, index *executor.LogicalIndexSca
 	// build the pipeline executor
 	var process []executor.Processor
 	logger.InitLogger(config.Logger{Level: zap.DebugLevel})
-	trans := executor.NewIndexScanTransform(outputRowDataType, index.RowExprOptions(), index.Schema(), index.Children()[0], info, make(chan struct{}, 1), 0)
+	trans := executor.NewIndexScanTransform(outputRowDataType, index.RowExprOptions(), index.Schema(), index.Children()[0], info, make(chan struct{}, 1), 0, false)
 	source := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
 	sink := NewSinkFromFunction(outputRowDataType, func(chunk executor.Chunk) error {
 		return nil

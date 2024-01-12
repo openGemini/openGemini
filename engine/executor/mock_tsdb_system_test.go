@@ -417,7 +417,8 @@ func RegistryMockTransformCreator() {
 }
 
 type MockShardGroup struct {
-	shards map[string]*Table
+	shards           map[string]*Table
+	needNodeExchange bool
 }
 
 func (mock *MockShardGroup) FieldDimensions(
@@ -450,6 +451,9 @@ func (mock *MockShardGroup) CreateLogicalPlan(
 	ctx context.Context,
 	sources influxql.Sources,
 	schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	if mock.needNodeExchange {
+		return mock.CreateLogicalPlanOfNodeExchange(ctx, sources, schema)
+	}
 	if createPlanErr {
 		if _, ok := schema.Refs()["\"name\""]; ok && inSubQuery {
 			return nil, fmt.Errorf("CreateLogicalPlan failed")
@@ -465,6 +469,30 @@ func (mock *MockShardGroup) CreateLogicalPlan(
 	builder.Reader(config.TSSTORE)
 	builder.Exchange(executor.READER_EXCHANGE, nil)
 	builder.Exchange(executor.SINGLE_SHARD_EXCHANGE, nil)
+	return builder.Build()
+}
+
+func (mock *MockShardGroup) CreateLogicalPlanOfNodeExchange(
+	ctx context.Context,
+	sources influxql.Sources,
+	schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	if createPlanErr {
+		if _, ok := schema.Refs()["\"name\""]; ok && inSubQuery {
+			return nil, fmt.Errorf("CreateLogicalPlan failed")
+		}
+		if _, ok := schema.Refs()["id"]; ok {
+			return nil, fmt.Errorf("CreateLogicalPlan failed")
+		}
+	}
+
+	builder := executor.NewLogicalPlanBuilderImpl(schema)
+	builder.Series()
+	builder.Exchange(executor.SERIES_EXCHANGE, nil)
+	builder.Reader(config.TSSTORE)
+	builder.Exchange(executor.READER_EXCHANGE, nil)
+	builder.Exchange(executor.SHARD_EXCHANGE, nil)
+	builder.IndexScan()
+	builder.Exchange(executor.NODE_EXCHANGE, []hybridqp.Trait{&executor.RemoteQuery{}})
 	return builder.Build()
 }
 
@@ -490,6 +518,10 @@ func (mock *MockShardGroup) AddShard(table *Table) {
 
 func (mock *MockShardGroup) GetSeriesKey() []byte {
 	return nil
+}
+
+func (mock *MockShardGroup) SetNeedNodeExchange(enable bool) {
+	mock.needNodeExchange = enable
 }
 
 func NewMockShardGroup() *MockShardGroup {
@@ -629,7 +661,12 @@ func (c *Catalog) CreateDatabase(name string, rp string) (*Database, error) {
 }
 
 type MockShardMapper struct {
-	catalog *Catalog
+	catalog          *Catalog
+	needNodeExchange bool
+}
+
+func (mock *MockShardMapper) SetNeedNodeExchange(enable bool) {
+	mock.needNodeExchange = enable
 }
 
 func (mock *MockShardMapper) MapShards(
@@ -638,6 +675,7 @@ func (mock *MockShardMapper) MapShards(
 	opt qry.SelectOptions,
 	condition influxql.Expr) (qry.ShardGroup, error) {
 	shardGroup := NewMockShardGroup()
+	shardGroup.SetNeedNodeExchange(mock.needNodeExchange)
 	for _, s := range sources {
 		switch s := s.(type) {
 		case *influxql.Measurement:
@@ -793,6 +831,33 @@ func NewStorage(catalog *Catalog) *Storage {
 	}
 }
 
+func (s *Storage) ReportLoad() {
+
+}
+func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	return nil, nil
+}
+
+func (s *Storage) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (hybridqp.IShardsFragments, error) {
+	return nil, nil
+}
+
+func (s *Storage) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hybridqp.Catalog) (interface{}, error) {
+	return nil, nil
+}
+
+func (s *Storage) RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error) {
+	return 0, nil
+}
+
+func (s *Storage) UnrefEngineDbPt(db string, ptId uint32) {
+	return
+}
+
+func (s *Storage) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
+	return 0
+}
+
 func (s *Storage) MemStore(path string) (*MemStore, error) {
 	defer s.rwm.RUnlock()
 	s.rwm.RLock()
@@ -903,7 +968,7 @@ func NilGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) exe
 
 func (s *TSDBSystem) ExecSQL(sql string,
 	validator func([]executor.Chunk),
-	intoValidator func(database, retentionPolicy string, points []influx.Row)) error {
+	intoValidator func(database, retentionPolicy string, points []influx.Row), needNodeExchange bool) error {
 	sqlReader := strings.NewReader(sql)
 	parser := influxql.NewParser(sqlReader)
 	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
@@ -950,6 +1015,7 @@ func (s *TSDBSystem) ExecSQL(sql string,
 	}
 
 	shardMapper := NewMockShardMapper(s.catalog)
+	shardMapper.SetNeedNodeExchange(needNodeExchange)
 	selectStmt, ok := stmt.(*influxql.SelectStatement)
 	if !ok {
 		return fmt.Errorf("not select statement(%v)", stmt)

@@ -451,7 +451,7 @@ func TestNewIndexScanTransform(t *testing.T) {
 		Req:     req,
 	}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
-	indexScan := executor.NewIndexScanTransform(buildRowDataType(), nil, schema, nil, info, make(chan struct{}, 2), 0)
+	indexScan := executor.NewIndexScanTransform(buildRowDataType(), nil, schema, nil, info, make(chan struct{}, 2), 0, false)
 	assert.Equal(t, "IndexScanTransform", indexScan.Name())
 	assert.Equal(t, 1, len(indexScan.GetOutputs()))
 	assert.Equal(t, 1, len(indexScan.GetInputs()))

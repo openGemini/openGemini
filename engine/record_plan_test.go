@@ -1216,7 +1216,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2), 0)
+				trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2), 0, influx.ErrInvalidPoint.SetToFatal().SetToNotice().Level().LogStack())
 				s := trans.BuildDownSampleSchema(querySchema)
 				if s.GetQueryFields()[0].Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val == "min_field4_float" {
 					t.Fatal("build down sample query schema failed")
@@ -1238,7 +1238,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 					ShardID: uint64(10),
 					Req:     req,
 				}
-				a := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, sInfo, make(chan struct{}, 2), 0)
+				a := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, sInfo, make(chan struct{}, 2), 0, false)
 				_, _, err = a.BuildPlan(1)
 				if err != nil {
 					t.Fatal(err)
@@ -1532,9 +1532,9 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
-			trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2), 0)
+			trans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, nil, nil, make(chan struct{}, 2), 0, false)
 			p, _ := trans.BuildDownSamplePlan(querySchema)
-			newTrans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, nil, make(chan struct{}, 2), 0)
+			newTrans := executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema, p, nil, make(chan struct{}, 2), 0, false)
 			check := newTrans.CanDownSampleRewrite(0)
 			if !check {
 				t.Fatal("DownSample rewrite check failed")
@@ -1548,7 +1548,7 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 			stmt.OmitTime = true
 			querySchema2 := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 			p, _ = trans.BuildDownSamplePlan(querySchema2)
-			newTrans = executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema2, p, nil, make(chan struct{}, 2), 0)
+			newTrans = executor.NewIndexScanTransform(tt.outputRowDataType, nil, querySchema2, p, nil, make(chan struct{}, 2), 0, false)
 			check = newTrans.CanDownSampleRewrite(1)
 			if check {
 				t.Fatal("DownSample rewrite check failed")
