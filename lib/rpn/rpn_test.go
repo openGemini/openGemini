@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/rpn"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
 

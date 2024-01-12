@@ -22,7 +22,7 @@ import (
 
 	log "github.com/influxdata/influxdb/logger"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
 )

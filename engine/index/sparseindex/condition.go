@@ -22,8 +22,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
 )
 
 type checkInRangeFunc func(rgs []*Range) (Mark, error)

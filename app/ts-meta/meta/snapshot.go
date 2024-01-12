@@ -7,7 +7,7 @@ This code is originally from: https://github.com/influxdata/influxdb/blob/v0.10.
 
 import (
 	"github.com/hashicorp/raft"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 
 type storeFSMSnapshot struct {

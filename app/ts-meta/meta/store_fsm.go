@@ -27,8 +27,8 @@ import (
 	"github.com/hashicorp/raft"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"go.uber.org/zap"
 )
 

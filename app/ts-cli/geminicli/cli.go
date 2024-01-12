@@ -34,7 +34,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/olekukonko/tablewriter"
 	"github.com/openGemini/openGemini/app/ts-cli/geminiql"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"golang.org/x/term"
 )
 

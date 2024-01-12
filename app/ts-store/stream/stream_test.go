@@ -25,9 +25,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
 	stream2 "github.com/openGemini/openGemini/services/stream"
 	"go.uber.org/zap"
 )

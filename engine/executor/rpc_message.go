@@ -27,8 +27,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/query/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query/proto"
 	"google.golang.org/protobuf/proto"
 )
 

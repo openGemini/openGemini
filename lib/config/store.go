@@ -30,7 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	"github.com/openGemini/openGemini/lib/memory"
-	httpdConf "github.com/openGemini/openGemini/open_src/influx/httpd/config"
+	httpdConf "github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"github.com/openGemini/openGemini/services/stream"
 )
 

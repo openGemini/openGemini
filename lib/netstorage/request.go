@@ -25,7 +25,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/errno"
 	internal2 "github.com/openGemini/openGemini/lib/netstorage/data"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 
 type DeleteType int

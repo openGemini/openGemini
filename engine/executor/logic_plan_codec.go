@@ -24,8 +24,8 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/query/proto"
 	"google.golang.org/protobuf/proto"
 )
 

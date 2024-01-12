@@ -26,7 +26,7 @@ STATICCHECK := staticcheck
 FAILPOINT_ENABLE  := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl enable
 FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl disable
 
-PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|open_src\/github.com\/hashicorp"
+PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|lifted\/hashicorp"
 PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
 
 COPYRIGHT_EXCEPT  := "open_src|lifted|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go|lib/config/openGemini_dir.go"

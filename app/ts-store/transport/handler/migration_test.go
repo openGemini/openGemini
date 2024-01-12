@@ -27,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/tracing"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/stretchr/testify/require"
 )
 

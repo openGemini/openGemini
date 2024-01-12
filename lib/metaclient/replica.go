@@ -20,7 +20,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 
 func (c *Client) GetReplicaInfo(db string, pt uint32) *message.ReplicaInfo {

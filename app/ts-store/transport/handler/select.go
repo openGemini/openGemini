@@ -34,7 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
-	query2 "github.com/openGemini/openGemini/open_src/influx/query"
+	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"go.uber.org/zap"
 )
 

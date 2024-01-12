@@ -33,8 +33,8 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	logstore2 "github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/pierrec/lz4/v4"
 )
 

@@ -25,8 +25,8 @@ import (
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"github.com/openGemini/openGemini/services/castor"
 )
 

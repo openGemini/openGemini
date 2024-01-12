@@ -19,7 +19,7 @@ package hybridqp
 import (
 	"time"
 
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 type HintType int64

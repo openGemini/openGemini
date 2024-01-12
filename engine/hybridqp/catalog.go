@@ -20,7 +20,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 type LimitType int

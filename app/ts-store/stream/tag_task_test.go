@@ -30,8 +30,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )

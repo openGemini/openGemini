@@ -25,9 +25,9 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
 	"go.uber.org/zap"
 )
 
