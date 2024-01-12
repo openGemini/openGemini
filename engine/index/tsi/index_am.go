@@ -39,15 +39,17 @@ var IndexAms = []indexAm{
 	{2, Field, "field", FieldIndexHandler},
 	{3, TimeCluster, "timecluster", nil},
 	{4, BloomFilter, "bloomfilter", nil},
+	{5, BloomFilterFullText, "bloomfilter_fulltext", nil},
 }
 
 var (
 	IndexNameToID = map[string]uint32{
-		"mergeset":    0,
-		"text":        1,
-		"field":       2,
-		"timecluster": 3,
-		"bloomfilter": 4,
+		"mergeset":             0,
+		"text":                 1,
+		"field":                2,
+		"timecluster":          3,
+		"bloomfilter":          4,
+		"bloomfilter_fulltext": 5,
 	}
 	IndexIDToName = map[uint32]string{
 		0: "mergeset",
@@ -55,6 +57,7 @@ var (
 		2: "field",
 		3: "timecluster",
 		4: "bloomfilter",
+		5: "bloomfilter_fulltext",
 	}
 )
 

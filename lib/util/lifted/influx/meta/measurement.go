@@ -407,12 +407,12 @@ func (msti *MeasurementInfo) CompatibleForLogkeeper() {
 				IList: []string{"tags", "content"},
 			},
 		},
-		IndexOptions: map[string][]*influxql.IndexOption{
-			"tags": {
-				{Tokens: tagsSplitChar, Tokenizers: "standard"},
-			},
-			"content": {
-				{Tokens: contentSplit, Tokenizers: "standard"},
+		IndexOptions: []*influxql.IndexOptions{
+			{
+				Options: []*influxql.IndexOption{
+					{Tokens: tagsSplitChar, Tokenizers: "standard"},
+					{Tokens: contentSplit, Tokenizers: "standard"},
+				},
 			},
 		},
 	}
@@ -553,16 +553,15 @@ func EncodeIndexRelation(indexR *influxql.IndexRelation) *proto2.IndexRelation {
 		}
 		pb.IndexLists[i] = indexList
 	}
-	if indexR.IndexOptions != nil {
-		pb.IndexOptions = make(map[string]*proto2.IndexOptions, len(indexR.IndexOptions))
-		for i, indexOptions := range indexR.IndexOptions {
-			if indexOptions != nil {
-				pb.IndexOptions[i] = &proto2.IndexOptions{
-					Infos: make([]*proto2.IndexOption, len(indexOptions)),
-				}
-				for j, o := range indexOptions {
-					pb.IndexOptions[i].Infos[j] = EncodeIndexOption(o)
-				}
+
+	pb.IndexOptions = make([]*proto2.IndexOptions, len(indexR.IndexOptions))
+	for i, indexOptions := range indexR.IndexOptions {
+		if indexOptions != nil {
+			pb.IndexOptions[i] = &proto2.IndexOptions{
+				Infos: make([]*proto2.IndexOption, len(indexOptions.Options)),
+			}
+			for j, o := range indexOptions.Options {
+				pb.IndexOptions[i].Infos[j] = EncodeIndexOption(o)
 			}
 		}
 	}
@@ -583,15 +582,15 @@ func DecodeIndexRelation(pb *proto2.IndexRelation) *influxql.IndexRelation {
 		}
 	}
 	indexOptions := pb.GetIndexOptions()
-	if indexOptions != nil {
-		indexR.IndexOptions = make(map[string][]*influxql.IndexOption, len(indexOptions))
-		for i, idxOptions := range indexOptions {
+	indexR.IndexOptions = make([]*influxql.IndexOptions, len(indexOptions))
+	for i, idxOptions := range indexOptions {
+		if idxOptions != nil {
 			infos := idxOptions.GetInfos()
-			if infos != nil {
-				indexR.IndexOptions[i] = make([]*influxql.IndexOption, len(infos))
-				for j, o := range infos {
-					indexR.IndexOptions[i][j] = DecodeIndexOption(o)
-				}
+			indexR.IndexOptions[i] = &influxql.IndexOptions{
+				Options: make([]*influxql.IndexOption, len(infos)),
+			}
+			for j, o := range infos {
+				indexR.IndexOptions[i].Options[j] = DecodeIndexOption(o)
 			}
 		}
 	}

@@ -61,7 +61,7 @@ message IndexRelation {
     repeated uint32 Oids = 2;
     repeated string IndexNames = 3;
     repeated IndexList IndexLists = 4;
-    map<string, IndexOptions> IndexOptions = 5;
+    repeated IndexOptions IndexOptions = 5;
 }
 
 message IndexList {

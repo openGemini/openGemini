@@ -214,7 +214,7 @@ message IndexRelation {
     repeated uint32 Oid = 2;
     repeated string IndexName = 3;
     repeated IndexList IndexLists = 4;
-    map<string, IndexOptions> IndexOptions = 5;
+    repeated IndexOptions IndexOptions = 5;
 }
 
 message IndexList {
