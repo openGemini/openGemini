@@ -96,7 +96,7 @@ func (c *indexWriter) GetFileWriter() fileops.BasicFileWriter {
 func (c *indexWriter) AppendChunkMetaToData() error {
 	panic("AppendChunkMetaToData not implement for indexWriter")
 }
-func (c *indexWriter) SwitchMetaBuffer() {
+func (c *indexWriter) SwitchMetaBuffer() (int, error) {
 	panic("SwitchMetaBuffer not implement for indexWriter")
 }
 func (c *indexWriter) MetaDataBlocks(dst [][]byte) [][]byte {

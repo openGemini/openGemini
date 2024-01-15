@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/jwilder/encoding/simple8b"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding/simple8b"
 )
 
 func TestTimeEncoder_simple8b(t *testing.T) {

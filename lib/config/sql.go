@@ -23,7 +23,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
 	"github.com/influxdata/influxdb/toml"
-	httpdConfig "github.com/openGemini/openGemini/open_src/influx/httpd/config"
+	httpdConfig "github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 )
 
 const (

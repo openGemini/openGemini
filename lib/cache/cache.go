@@ -25,7 +25,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -34,13 +34,12 @@ var log = logger.NewLogger(errno.ModuleQueryEngine)
 const (
 	IncIterNumCacheSize int64 = 1 * 1024 * 1024
 	IncIterNumCacheTTL        = 10 * time.Minute
-	QueryMetaCacheSize  int64 = 100 * 1024 * 1024
-	QueryMetaCacheTTL         = 10 * time.Minute
 )
+
+const TimeSizeBytes = int(unsafe.Sizeof(time.Time{}))
 
 var NodeIncIterNumCache = NewCache(IncIterNumCacheSize, IncIterNumCacheTTL)
 var GlobalIncIterNumCache = NewCache(IncIterNumCacheSize, IncIterNumCacheTTL)
-var QueryMetaCache = NewCache(QueryMetaCacheSize, QueryMetaCacheTTL)
 
 type Entry interface {
 	SetTime(time time.Time)
@@ -218,58 +217,13 @@ func (e *IncIterNumEntry) GetKey() string {
 
 func (e *IncIterNumEntry) Size() int64 {
 	var size int64
-	size += 8  // queryID
-	size += 4  // iterNum
-	size += 24 // time
+	size += int64(len(e.queryID))      // queryID
+	size += int64(util.Int32SizeBytes) // iterNum
+	size += int64(TimeSizeBytes)       // time
 	return size
 }
 
-type QueryMetaEntry struct {
-	queryID string
-	value   map[uint64]map[uint32][]*obs.LogPath
-	time    time.Time
-}
-
-func NewQueryMetaEntry(queryID string) *QueryMetaEntry {
-	return &QueryMetaEntry{
-		queryID: queryID,
-		value:   make(map[uint64]map[uint32][]*obs.LogPath),
-	}
-}
-
-func (e *QueryMetaEntry) SetTime(time time.Time) {
-	e.time = time
-}
-
-func (e *QueryMetaEntry) GetTime() time.Time {
-	return e.time
-}
-
-func (e *QueryMetaEntry) SetValue(value interface{}) {
-	v, ok := value.(map[uint64]map[uint32][]*obs.LogPath)
-	if !ok {
-		log.Error("QueryMetaEntry", zap.Error(fmt.Errorf("invalid element type")))
-	}
-	e.value = v
-}
-
-func (e *QueryMetaEntry) GetValue() interface{} {
-	return e.value
-}
-
-func (e *QueryMetaEntry) GetKey() string {
-	return e.queryID
-}
-
-func (e *QueryMetaEntry) Size() int64 {
-	var size int64
-	size += int64(len(e.queryID))         // queryID)
-	size += 24                            // time
-	size += int64(unsafe.Sizeof(e.value)) // value
-	return size
-}
-
-func UpdateQueryMetaFunc(_, _ Entry) bool {
+func UpdateMetaData(_, _ Entry) bool {
 	return true
 }
 
@@ -283,21 +237,6 @@ func UpdateIterNumFunc(old, new Entry) bool {
 		return false
 	}
 	return oldVal < newVal
-}
-
-func PutQueryMeta(queryID string, queryMetaInfo map[uint64]map[uint32][]*obs.LogPath) {
-	entry := NewQueryMetaEntry(queryID)
-	entry.SetValue(queryMetaInfo)
-	QueryMetaCache.Put(queryID, entry, UpdateQueryMetaFunc)
-}
-
-func GetQueryMeta(queryID string) (map[uint64]map[uint32][]*obs.LogPath, bool) {
-	entry, ok := QueryMetaCache.Get(queryID)
-	if !ok {
-		return nil, false
-	}
-	queryMetaInfo, ok := entry.GetValue().(map[uint64]map[uint32][]*obs.LogPath)
-	return queryMetaInfo, ok
 }
 
 func PutNodeIterNum(queryID string, iterCount int32) {

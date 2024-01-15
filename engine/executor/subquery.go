@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 type SubQueryBuilder struct {
@@ -86,7 +86,7 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 
 	subOpt.Ordered = opt.Ordered
 	subOpt.HintType = opt.HintType
-
+	subOpt.StmtId = opt.StmtId
 	return subOpt, nil
 }
 
@@ -95,7 +95,8 @@ func (b *SubQueryBuilder) Build(ctx context.Context, opt query.ProcessorOptions)
 	if err != nil {
 		return nil, err
 	}
-	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource, b.stmt.SortFields)
+	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource,
+		b.stmt.UnnestSource, b.stmt.SortFields)
 
 	return buildQueryPlan(ctx, b.stmt, b.qc, schema)
 }

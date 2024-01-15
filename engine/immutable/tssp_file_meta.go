@@ -27,6 +27,24 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	ChunkMetaCompressNone   = 0
+	ChunkMetaCompressSnappy = 1
+)
+
+var chunkMetaCompressMode = ChunkMetaCompressNone
+
+func SetChunkMetaCompressMode(mode int) {
+	if mode < ChunkMetaCompressNone || mode > ChunkMetaCompressSnappy {
+		return
+	}
+	chunkMetaCompressMode = mode
+}
+
+func GetChunkMetaCompressMode() uint8 {
+	return uint8(chunkMetaCompressMode)
+}
+
 // Segment offset/size/minT/maxT
 type Segment struct {
 	offset int64
@@ -120,6 +138,14 @@ type ColumnMeta struct {
 	entries []Segment
 }
 
+func (m *ColumnMeta) GetPreAgg() []byte {
+	return m.preAgg
+}
+
+func (m *ColumnMeta) GetSegment(i int) (int64, uint32) {
+	return m.entries[i].offset, m.entries[i].size
+}
+
 func (m *ColumnMeta) Equal(name string, ty int) bool {
 	return m.name == name && int(m.ty) == ty
 }
@@ -130,6 +156,10 @@ func (m *ColumnMeta) IsTime() bool {
 
 func (m *ColumnMeta) Name() string {
 	return m.name
+}
+
+func (m *ColumnMeta) Type() uint8 {
+	return m.ty
 }
 
 func (m *ColumnMeta) Clone() ColumnMeta {
@@ -489,6 +519,15 @@ func (m *ChunkMeta) columnIndex(ref *record.Field) int {
 	return -1
 }
 
+func (m *ChunkMeta) columnIndexFastPath(ref *record.Field, itrFieldIndex int) int {
+	for i := itrFieldIndex; i < len(m.colMeta); i++ {
+		if m.colMeta[i].Equal(ref.Name, ref.Type) {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m *ChunkMeta) allRowsInRange(tr util.TimeRange) bool {
 	min, max := m.MinMaxTime()
 	return tr.Min <= min && tr.Max >= max
@@ -546,6 +585,15 @@ func (m *MetaIndex) marshal(dst []byte) []byte {
 	return dst
 }
 
+func (m *MetaIndex) marshalDetached(dst []byte) []byte {
+	dst = numberenc.MarshalUint64Append(dst, m.id)
+	dst = numberenc.MarshalInt64Append(dst, m.minTime)
+	dst = numberenc.MarshalInt64Append(dst, m.maxTime)
+	dst = numberenc.MarshalInt64Append(dst, m.offset)
+	dst = numberenc.MarshalUint32Append(dst, m.size)
+	return dst
+}
+
 func (m *MetaIndex) unmarshal(src []byte) ([]byte, error) {
 	if len(src) < MetaIndexLen {
 		return nil, fmt.Errorf("too small data (%v) for MetaIndex", len(src))
@@ -561,6 +609,19 @@ func (m *MetaIndex) unmarshal(src []byte) ([]byte, error) {
 	return src, nil
 }
 
+func (m *MetaIndex) unmarshalDetached(src []byte) ([]byte, error) {
+	if len(src) < DetachedMetaIndexLen {
+		return nil, fmt.Errorf("too small data (%v) for MetaIndex", len(src))
+	}
+
+	m.id, src = numberenc.UnmarshalUint64(src), src[8:]
+	m.minTime, src = numberenc.UnmarshalInt64(src), src[8:]
+	m.maxTime, src = numberenc.UnmarshalInt64(src), src[8:]
+	m.offset, src = numberenc.UnmarshalInt64(src), src[8:]
+	m.size, src = numberenc.UnmarshalUint32(src), src[4:]
+	return src, nil
+}
+
 func (m *MetaIndex) reset() {
 	m.id = 0
 	m.minTime = math.MaxInt64
@@ -568,4 +629,8 @@ func (m *MetaIndex) reset() {
 	m.offset = 0
 	m.size = 0
 	m.count = 0
+}
+
+func (m *MetaIndex) IsExist(tr util.TimeRange) bool {
+	return !(m.minTime > tr.Max || m.maxTime < tr.Min)
 }

@@ -32,7 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -204,7 +204,7 @@ func TestFileIterator(t *testing.T) {
 	for _, itr := range fi.compIts {
 		cm := itr.curtChunkMeta
 		seg := cm.colMeta[0].entries[0]
-		_, err = itr.readData(seg.offset, seg.size)
+		_, err = itr.ReadData(seg.offset, seg.size)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -580,7 +580,7 @@ func readOrderChunks(mst string, store *MmsTables, chunks map[uint64]*record.Rec
 		fi.estimateSize += int(f.FileSize())
 	}
 
-	itr, _ := store.NewChunkIterators(fi)
+	itr := store.NewChunkIterators(fi)
 	for itr.Len() > 0 {
 		id, rec, err := itr.Next()
 		if err != nil {
@@ -839,4 +839,32 @@ func TestStreamWriteFile_WriteData_panic(t *testing.T) {
 	}
 	write()
 	require.Equal(t, "col.Len=20 is greater than MaxRowsPerSegment=16", err)
+}
+
+func TestFileIterator_lessGroup(t *testing.T) {
+	testCompDir := t.TempDir()
+	conf := NewTsStoreConfig()
+	conf.maxRowsPerSegment = 100
+	conf.maxSegmentLimit = 65535
+	tier := uint64(util.Hot)
+	lockPath := ""
+
+	var run = func(typ config.EngineType) {
+		store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+		store.SetImmTableType(typ)
+		defer store.Close()
+
+		dropping := int64(0)
+		group := CompactGroup{
+			name:     "mst",
+			shardId:  1,
+			toLevel:  1,
+			group:    []string{},
+			dropping: &dropping,
+		}
+		_, err := store.ImmTable.NewFileIterators(store, &group)
+		require.EqualError(t, err, "no enough files to do compact, iterator size: 0")
+	}
+	run(config.TSSTORE)
+	run(config.COLUMNSTORE)
 }

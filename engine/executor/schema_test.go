@@ -23,8 +23,8 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func createRowDataType() hybridqp.RowDataType {
@@ -324,4 +324,26 @@ func TestHasRowCount(t *testing.T) {
 	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint, Dimensions: []string{"a", "b"}}
 	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
 	assert.Equal(t, schema.HasRowCount(), false)
+}
+
+func TestMeanAsSubCall(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(influxql.Fields{&influxql.Field{
+		Expr: &influxql.Call{
+			Name: "floor",
+			Args: []influxql.Expr{&influxql.Call{Name: "mean", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Integer}}}},
+		},
+	}}, []string{"floor_val"}, &opt, nil)
+	hasSum := false
+	for k, _ := range schema.Mapping() {
+		if c, ok := k.(*influxql.Call); ok {
+			if c.Name == "sum" {
+				hasSum = true
+				break
+			}
+		}
+	}
+	if !hasSum {
+		t.Fatal("TestMeanAsSubCall fail")
+	}
 }

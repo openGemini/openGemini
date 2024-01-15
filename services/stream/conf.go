@@ -21,16 +21,14 @@ import (
 )
 
 type Config struct {
-	WindowConcurrency  int  `toml:"windowConcurrency"`
-	FilterConcurrency  int  `toml:"filterConcurrency"`
-	FilterCache        int  `toml:"filterCache"`
-	EnableCompressDict bool `toml:"enableCompressDict"`
+	WindowConcurrency int `toml:"windowConcurrency"`
+	FilterConcurrency int `toml:"filterConcurrency"`
+	FilterCache       int `toml:"filterCache"`
 }
 
 func NewConfig() Config {
 	//default use cpu num
 	concurrency := cpu.GetCpuNum() / 2
 	//FilterConcurrency may block write, so set it bigger
-	return Config{FilterConcurrency: concurrency, WindowConcurrency: concurrency, FilterCache: 4 * concurrency,
-		EnableCompressDict: true}
+	return Config{FilterConcurrency: concurrency, WindowConcurrency: concurrency, FilterCache: 4 * concurrency}
 }

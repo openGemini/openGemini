@@ -40,9 +40,9 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -3390,6 +3390,179 @@ func Test_PreAggregation_MemTableMissingData_SingleCall(t *testing.T) {
 
 func Test_PreAggregation_OutOfOrderMissingData_SingleCall(t *testing.T) {
 	Run_MissingData_SingCall(t, true)
+}
+
+func Test_FieldFilter_NoPreAgg_SingleCall(t *testing.T) {
+	testDir := t.TempDir()
+	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
+	msNames := []string{"cpu"}
+	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 1, 100, time.Millisecond*100, startTime, true, true, true)
+
+	fields := map[string]influxql.DataType{
+		"field2_int":    influxql.Integer,
+		"field3_bool":   influxql.Boolean,
+		"field4_float":  influxql.Float,
+		"field1_string": influxql.String,
+	}
+
+	// **** start write data to the shard.
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	sh.SetWriteColdDuration(100000 * time.Second)
+	mutable.SetSizeLimit(10 * 1024 * 1024 * 1024)
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2020-01-01T00:00:00Z")
+	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
+	if err := sh.WriteRows(ptsOut, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	var minFalseVOut int
+	first := true
+	for _, value := range ptsOut {
+		state := false
+		for _, field := range value.Fields {
+			if first && field.Key == "field3_bool" {
+				minFalseVOut = int(field.NumValue)
+				first = false
+				if minFalseVOut == 0 {
+					state = true
+				}
+				break
+			}
+
+			if field.Key == "field3_bool" && field.NumValue == 0 {
+				state = true
+				minFalseVOut = int(field.NumValue)
+			}
+		}
+		if state {
+			break
+		}
+	}
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+	// end ****
+
+	for _, tt := range []struct {
+		name              string
+		q                 string
+		tr                util.TimeRange
+		fields            map[string]influxql.DataType
+		skip              bool
+		outputRowDataType *hybridqp.RowDataTypeImpl
+		readerOps         []hybridqp.ExprOptions
+		aggOps            []hybridqp.ExprOptions
+		expect            func(chunks []executor.Chunk) bool
+	}{
+		/* min */
+		// select min[int]
+		{
+			name:   "select min[float]",
+			q:      fmt.Sprintf(`SELECT min(field2_int) from cpu WHERE time>=%v AND time<=%v AND field2_int > 50 group by time(1s)`, minTOut, maxTOut),
+			tr:     util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+			fields: fields,
+			outputRowDataType: hybridqp.NewRowDataTypeImpl(
+				influxql.VarRef{Val: "val0", Type: influxql.Integer},
+			),
+			readerOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.VarRef{Val: "val0", Type: influxql.Integer},
+					Ref:  influxql.VarRef{Val: "val0", Type: influxql.Integer},
+				},
+			},
+			aggOps: []hybridqp.ExprOptions{
+				{
+					Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{&influxql.VarRef{Val: "val4", Type: influxql.Integer}}},
+					Ref:  influxql.VarRef{Val: "val4", Type: influxql.Integer},
+				},
+			},
+			expect: func(chunks []executor.Chunk) bool {
+				if len(chunks) != 1 {
+					t.Errorf("The result should be 1 chunk")
+				}
+				ck := chunks[0]
+				success := true
+				success = ast.Equal(t, ck.Time()[0], int64(1609459205000000000)) && success
+				success = ast.Equal(t, len(ck.Columns()), 1) && success
+				success = ast.Equal(t, ck.Column(0).IntegerValue(0), int64(51)) && success
+				return success
+			},
+		},
+	} {
+		enableStates := []bool{true}
+		for _, v := range enableStates {
+			executor.EnableFileCursor(v)
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.skip {
+					t.Skipf("SKIP:: %s", tt.name)
+				}
+				ctx := context.Background()
+				// parse stmt and opt
+				stmt := MustParseSelectStatement(tt.q)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
+				stmt.OmitTime = true
+				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
+				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+				opt.Name = msNames[0]
+				opt.Sources = source
+				opt.StartTime = tt.tr.Min
+				opt.EndTime = tt.tr.Max
+				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+
+				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				var keyCursors []interface{}
+				for _, cur := range cursors {
+					keyCursors = append(keyCursors, cur)
+				}
+
+				seriesPlan := executor.NewLogicalSeries(querySchema)
+				aggPlan1 := executor.NewLogicalAggregate(seriesPlan, querySchema)
+				aggPlan2 := executor.NewLogicalAggregate(aggPlan1, querySchema)
+				ex := executor.NewLogicalExchange(aggPlan2, executor.SERIES_EXCHANGE, nil, querySchema)
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, ex, querySchema, keyCursors, false)
+				defer chunkReader.Release()
+
+				// this is the output for this stmt
+				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
+
+				chunkReader.GetOutputs()[0].Connect(outPutPort)
+
+				go func() {
+					chunkReader.Work(ctx)
+				}()
+				var closed bool
+				chunks := make([]executor.Chunk, 0, 1)
+				for {
+					select {
+					case v, ok := <-outPutPort.State:
+						if !ok {
+							closed = true
+							break
+						}
+						chunks = append(chunks, v)
+					}
+					if closed {
+						break
+					}
+				}
+				if !tt.expect(chunks) {
+					t.Errorf("`%s` failed", tt.name)
+				}
+			})
+		}
+	}
 }
 
 func Run_MissingData_SingCall(t *testing.T, isFlush bool) {

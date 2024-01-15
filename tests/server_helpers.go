@@ -28,7 +28,7 @@ import (
 	tssql "github.com/openGemini/openGemini/app/ts-sql/sql"
 	"github.com/openGemini/openGemini/lib/config"
 	_ "github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 
 var verboseServerLogs bool

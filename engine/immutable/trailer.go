@@ -24,7 +24,8 @@ import (
 )
 
 const (
-	IndexOfTimeStoreFlag = 0
+	IndexOfTimeStoreFlag         = 0
+	IndexOfChunkMetaCompressFlag = 1
 
 	TimeStoreFlag = 1
 )
@@ -59,6 +60,13 @@ func (t *Trailer) reset() {
 	t.name = t.name[:0]
 }
 
+func (t *Trailer) SetChunkMetaCompressFlag() {
+	mode := GetChunkMetaCompressMode()
+	if mode != ChunkMetaCompressNone {
+		t.SetData(IndexOfChunkMetaCompressFlag, mode)
+	}
+}
+
 func (t *Trailer) SetData(idx int, v byte) {
 	if cap(t.data) < (idx + 1) {
 		t.data = append(t.data[:cap(t.data)], make([]byte, idx+1-cap(t.data))...)
@@ -72,6 +80,13 @@ func (t *Trailer) EqualData(idx int, v byte) bool {
 		return false
 	}
 	return t.data[idx] == v
+}
+
+func (t *Trailer) GetData(idx int, def uint8) uint8 {
+	if len(t.data) < idx+1 {
+		return def
+	}
+	return t.data[idx]
 }
 
 func (t *Trailer) marshal(dst []byte) []byte {
@@ -152,4 +167,16 @@ func (t *Trailer) metaIndexOffsetSize() (int64, int64) {
 func (t *Trailer) idTimeOffsetSize() (int64, int64) {
 	idTimeOff := t.dataOffset + t.dataSize + t.indexSize + t.metaIndexSize + t.bloomSize
 	return idTimeOff, t.idTimeSize
+}
+
+func (t *Trailer) DataSize() int64 {
+	return t.dataSize
+}
+
+func (t *Trailer) IndexSize() int64 {
+	return t.indexSize
+}
+
+func (t *Trailer) MetaIndexSize() int64 {
+	return t.metaIndexSize
 }

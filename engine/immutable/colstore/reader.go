@@ -17,13 +17,10 @@ limitations under the License.
 package colstore
 
 import (
-	"errors"
 	"fmt"
-	"hash/crc32"
 	"sync"
 	"sync/atomic"
 
-	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
@@ -157,31 +154,13 @@ func (r *PrimaryKeyReader) ReadData() (*record.Record, int8, error) {
 	if err != nil {
 		return nil, DefaultTCLocation, err
 	}
-	version := numberenc.UnmarshalUint32(data[fileMagicSize : fileMagicSize+util.Uint32SizeBytes])
 	metaSize := int(numberenc.UnmarshalUint32(data[headerSize : headerSize+util.Uint32SizeBytes]))
 	schema, offset, rowNum, tcLocation := unmarshalMeta(data[headerSize:headerSize+metaSize], version)
 	dst := record.NewRecord(schema, false)
-	coder := encoding.NewCoderContext()
-	for i := range offset {
-		ref := &schema[i]
-		colBuilder := dst.Column(i)
-		if i < len(offset)-1 {
-			err = decodeColumnData(ref, data[offset[i]+4:offset[i+1]], colBuilder, coder)
-		} else {
-			err = decodeColumnData(ref, data[offset[i]+4:], colBuilder, coder)
-		}
-		colBuilder.Len = rowNum
-		colBuilder.InitBitMap(rowNum)
-		if err != nil {
-			log.Error("decode column fail", zap.Error(err))
-			return nil, DefaultTCLocation, err
-		}
-		crc := crc32.ChecksumIEEE(colBuilder.Val)
-		crcWritten := numberenc.UnmarshalUint32(data[offset[i] : offset[i]+4])
-		if crc != crcWritten { // check crc
-			return nil, DefaultTCLocation, errors.New("failed to verify checksum")
-		}
-	}
 
+	_, err = decodePKData(data, dst, offset, rowNum)
+	if err != nil {
+		return nil, DefaultTCLocation, err
+	}
 	return dst, tcLocation, nil
 }

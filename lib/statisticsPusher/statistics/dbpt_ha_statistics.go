@@ -135,7 +135,7 @@ func DBPTStepDuration(opId uint64, step string, d int64, status LoadStatus, errM
 	StoreTaskInstance.dbptTasks[opId].totalCost += d
 	StoreTaskInstance.dbptTasks[opId].status = status
 	StoreTaskInstance.dbptTasks[opId].err = errMsg
-	StoreTaskInstance.dbptTasks[opId].time = time.Now()
+	StoreTaskInstance.dbptTasks[opId].time = time.Now().UTC()
 
 	task := StoreTaskInstance.dbptTasks[opId]
 	tagMap := map[string]string{
@@ -245,7 +245,7 @@ func IndexStepDuration(indexId uint64, opId uint64, step string, cost int64, isO
 	StoreTaskInstance.indexTasks[indexId].step = step
 	StoreTaskInstance.indexTasks[indexId].cost = cost
 	StoreTaskInstance.indexTasks[indexId].totalCost += cost
-	StoreTaskInstance.indexTasks[indexId].time = time.Now()
+	StoreTaskInstance.indexTasks[indexId].time = time.Now().UTC()
 
 	task := StoreTaskInstance.indexTasks[indexId]
 	tagMap := map[string]string{
@@ -361,7 +361,7 @@ func ShardStepDuration(sid uint64, opId uint64, step string, cost int64, isOver 
 	StoreTaskInstance.shardTasks[sid].step = step
 	StoreTaskInstance.shardTasks[sid].cost = cost
 	StoreTaskInstance.shardTasks[sid].totalCost += cost
-	StoreTaskInstance.shardTasks[sid].time = time.Now()
+	StoreTaskInstance.shardTasks[sid].time = time.Now().UTC()
 
 	task := StoreTaskInstance.shardTasks[sid]
 	tagMap := map[string]string{

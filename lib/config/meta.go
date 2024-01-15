@@ -25,7 +25,7 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/iodetector"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 )
 
 const (
@@ -47,7 +47,7 @@ const (
 	DefaultImbalanceFactor      = 0.3
 	DefaultHostname             = "localhost"
 	DefaultSuspicionMult        = 4
-	DefaultProbInterval         = toml.Duration(time.Second)
+	DefaultProbInterval         = toml.Duration(400 * time.Millisecond)
 	DefaultPtNumPerNode         = 1
 	DefaultHashAlgo             = "ver03"
 	DefaultHaPolicy             = "write-available-first"

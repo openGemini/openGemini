@@ -23,6 +23,7 @@ import (
 
 	parse "github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/app"
+	"github.com/openGemini/openGemini/app/ts-cli/analyzer"
 	"github.com/openGemini/openGemini/app/ts-cli/cmd"
 )
 
@@ -38,8 +39,14 @@ func main() {
 
 func doRun(args ...string) {
 	name, _ := parse.ParseCommandName(args)
-	if name == "version" {
+	switch name {
+	case "version":
 		fmt.Printf(app.VERSION, cmd.TsCli, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
+	case "analyze":
+		az := analyzer.NewAnalyzer()
+		az.Analyze(args[1])
+		return
 	}
+
 	cmd.Execute()
 }

@@ -24,7 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
 )
 
@@ -55,6 +55,7 @@ func (e *ShowTagKeysExecutor) Execute(stmt *influxql.ShowTagKeysStatement) (nets
 	}
 
 	lock := new(sync.Mutex)
+
 	mapMstMap := make(map[string]map[string]struct{})
 	err = e.me.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
 		if *hasErr {

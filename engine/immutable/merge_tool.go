@@ -106,7 +106,7 @@ func (mt *mergeTool) mergePrepare(ctx *mergeContext, force bool) bool {
 
 	mt.mts.matchOrderFiles(ctx)
 	if ctx.order.Len() == 0 {
-		mt.zlg.Error("no order file is matched")
+		mt.zlg.Warn("no order file is matched")
 		return false
 	}
 
@@ -286,7 +286,7 @@ func (mt *mergeTool) readUnorderedRecords(files *TSSPFiles) (map[uint64]*record.
 func (mt *mergeTool) saveRecords(ctx *mergeContext, fileName TSSPFileName,
 	data map[uint64]*record.Record, ids []uint64) (TSSPFile, error) {
 
-	sh := record.NewSortHelper()
+	sh := record.NewColumnSortHelper()
 	defer sh.Release()
 
 	fileName.merge++

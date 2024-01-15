@@ -17,8 +17,10 @@ limitations under the License.
 package fileops
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -136,103 +138,118 @@ type VFS interface {
 	Truncate(name string, size int64, opt ...FSOption) error
 }
 
-var targetFS = NewFS()
-
 // Open opens the named file with specified options.
 // the optional opt is: (FileLockOption,FilePriorityOption)
 func Open(name string, opt ...FSOption) (File, error) {
-	return targetFS.Open(name, opt...)
+	t := GetFsType(name)
+	return GetFs(t).Open(name, opt...)
 }
 
 // OpenFile opens the named file with specified flag and other options.
 // the optional opt is: (FileLockOption,FilePriorityOption)
 func OpenFile(name string, flag int, perm os.FileMode, opt ...FSOption) (File, error) {
-	return targetFS.OpenFile(name, flag, perm, opt...)
+	t := GetFsType(name)
+	return GetFs(t).OpenFile(name, flag, perm, opt...)
 }
 
 // Create creates or truncates the named file. If the file already exists, it is truncated.
 // If the file does not exist, it is created with mode 0666
 // the optional opt is: (FileLockOption,FilePriorityOption)
 func Create(name string, opt ...FSOption) (File, error) {
-	return targetFS.Create(name, opt...)
+	t := GetFsType(name)
+	return GetFs(t).Create(name, opt...)
 }
 
 func CreateV1(name string, opt ...FSOption) (File, error) {
-	return targetFS.CreateV1(name, opt...)
+	t := GetFsType(name)
+	return GetFs(t).CreateV1(name, opt...)
 }
 
 // Remove removes the named file or (empty) directory.
 // the optional opt is: FileLockOption
 func Remove(name string, opt ...FSOption) error {
-	return targetFS.Remove(name, opt...)
+	t := GetFsType(name)
+	return GetFs(t).Remove(name, opt...)
 }
 
 // RemoveAll removes path and any children it contains.
 // the optional opt is: FileLockOption
 func RemoveAll(path string, opt ...FSOption) error {
-	return targetFS.RemoveAll(path, opt...)
+	t := GetFsType(path)
+	return GetFs(t).RemoveAll(path, opt...)
 }
 
 // Mkdir creates a directory named path, it's parents directory must exist.
 // the optional opt is: FileLockOption
 func Mkdir(path string, perm os.FileMode, opt ...FSOption) error {
-	return targetFS.Mkdir(path, perm)
+	t := GetFsType(path)
+	return GetFs(t).Mkdir(path, perm)
 }
 
 // MkdirAll creates a directory named path, along with any necessary parents
 // the optional opt is: FileLockOption
 func MkdirAll(path string, perm os.FileMode, opt ...FSOption) error {
-	return targetFS.MkdirAll(path, perm, opt...)
+	t := GetFsType(path)
+	return GetFs(t).MkdirAll(path, perm, opt...)
 }
 
 // ReadDir reads the directory named by dirname and returns
 // a list of fs.FileInfo for the directory's contents, sorted by filename.
 func ReadDir(dirname string) ([]os.FileInfo, error) {
-	return targetFS.ReadDir(dirname)
+	t := GetFsType(dirname)
+	return GetFs(t).ReadDir(dirname)
 }
 
 // Glob returns the names of all files matching pattern or nil if there is no matching file.
 func Glob(pattern string) ([]string, error) {
-	return targetFS.Glob(pattern)
+	t := GetFsType(pattern)
+	return GetFs(t).Glob(pattern)
 }
 
 // RenameFile renames (moves) oldPath to newPath.
 // If newPath already exists and is not a directory, Rename replaces it.
 // the optional opt is: FileLockOption
 func RenameFile(oldPath, newPath string, opt ...FSOption) error {
-	return targetFS.RenameFile(oldPath, newPath, opt...)
+	t := GetFsType(oldPath)
+	return GetFs(t).RenameFile(oldPath, newPath, opt...)
 }
 
 // Stat returns a FileInfo describing the named file.
 func Stat(name string) (os.FileInfo, error) {
-	return targetFS.Stat(name)
+	t := GetFsType(name)
+	return GetFs(t).Stat(name)
 }
 
 // WriteFile writes data to a file named by filename.
 // If the file does not exist, WriteFile creates it with permissions perm
 // the optional opt is: (FileLockOption,FilePriorityOption)
 func WriteFile(filename string, data []byte, perm os.FileMode, opt ...FSOption) error {
-	return targetFS.WriteFile(filename, data, perm, opt...)
+	t := GetFsType(filename)
+	return GetFs(t).WriteFile(filename, data, perm, opt...)
 }
 
 // ReadFile reads the file named by filename and returns the contents.
 // the optional opt is: FilePriorityOption
 func ReadFile(filename string, opt ...FSOption) ([]byte, error) {
-	return targetFS.ReadFile(filename, opt...)
+	t := GetFsType(filename)
+	return GetFs(t).ReadFile(filename, opt...)
 }
 
 // CopyFile copys file content from srcFile to dstFile until either EOF is reached on srcFile or an errors accurs.
 // the optional opt is: (FileLockOption,FilePriorityOption)
 func CopyFile(srcFile, dstFile string, opt ...FSOption) (written int64, err error) {
-	return targetFS.CopyFile(srcFile, dstFile, opt...)
+	t := GetFsType(srcFile)
+	return GetFs(t).CopyFile(srcFile, dstFile, opt...)
 }
 
 func CreateTime(name string) (*time.Time, error) {
-	return targetFS.CreateTime(name)
+	t := GetFsType(name)
+	return GetFs(t).CreateTime(name)
 }
 
 func Truncate(name string, size int64) error {
-	return targetFS.Truncate(name, size)
+	t := GetFsType(name)
+	return GetFs(t).Truncate(name, size)
 }
 
 func opsStatEnd(startTime int64, opsType int, bytes int64) {
@@ -251,4 +268,81 @@ func opsStatEnd(startTime int64, opsType int, bytes int64) {
 		atomic.AddInt64(&statistics.IOStat.IOSyncDuration, t)
 		atomic.AddInt64(&statistics.IOStat.IOSyncOkCount, 1)
 	}
+}
+
+func EncodeObsPath(endpoint, bucket, path, ak, sk string) string {
+	return fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, endpoint, ak, sk, bucket, path)
+}
+
+func decodeObsPath(path string) (endpoint string, ak string, sk string, bucket string, basePath string, err error) {
+	path = path[len(ObsPrefix):]
+	index := strings.Index(path, "/")
+	if index == -1 {
+		return "", "", "", "", "", fmt.Errorf("decode obs path failed")
+	}
+	endpoint = path[:index]
+	path = path[index+1:]
+	index = strings.Index(path, "/")
+	if index == -1 {
+		return "", "", "", "", "", fmt.Errorf("decode obs path failed")
+	}
+	ak = path[:index]
+	path = path[index+1:]
+	index = strings.Index(path, "/")
+	if index == -1 {
+		return "", "", "", "", "", fmt.Errorf("decode obs path failed")
+	}
+	sk = path[:index]
+	path = path[index+1:]
+	index = strings.Index(path, "/")
+	if index == -1 {
+		return "", "", "", "", "", fmt.Errorf("decode obs path failed")
+	}
+	bucket = path[:index]
+	basePath = path[index+1:]
+	return endpoint, ak, sk, bucket, basePath, nil
+}
+
+type FsType uint32
+
+const (
+	Unknown FsType = 0
+	Local   FsType = 1
+	Obs     FsType = 2
+	Hdfs    FsType = 3
+
+	ObsPrefix  = "obs://"
+	HdfsPrefix = "hdfs://"
+)
+
+var localFS = NewFS()
+var obsFS = NewObsFs()
+
+func GetFsType(path string) FsType {
+	if len(path) == 0 {
+		return Unknown
+	}
+	switch path[0] {
+	case 'o':
+		if strings.HasPrefix(path, ObsPrefix) {
+			return Obs
+		}
+	case 'h':
+		if strings.HasPrefix(path, HdfsPrefix) {
+			return Hdfs
+		}
+	}
+	return Local
+}
+
+func GetFs(t FsType) VFS {
+	switch t {
+	case Local:
+		return localFS
+	case Obs:
+		return obsFS
+	case Hdfs: // unimplemented yet
+		return nil
+	}
+	return localFS
 }

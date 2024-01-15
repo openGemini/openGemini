@@ -29,8 +29,8 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
 
@@ -271,7 +271,7 @@ func (cm *ClusterManager) processEvent(event serf.Event) {
 func (cm *ClusterManager) addEventMap(name string, event *serf.MemberEvent) {
 	cm.mu.Lock()
 	e, ok := cm.eventMap[name]
-	if !ok || e.EventTime < event.EventTime {
+	if !ok || e.EventTime <= event.EventTime {
 		cm.eventMap[name] = event
 	}
 	cm.mu.Unlock()

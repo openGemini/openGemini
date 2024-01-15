@@ -28,8 +28,8 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 const (
@@ -187,7 +187,7 @@ func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, cond influxql.Ex
 	if re == nil {
 		return nil, nil
 	}
-	r := re.KickNilRow()
+	r := re.KickNilRow(nil, &record.ColAux{})
 	if r == nil || r.RowNums() == 0 {
 		return nil, nil
 	}
@@ -289,10 +289,7 @@ func (s *fileLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
 
 func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, error) {
 	if s.currAggCursor != nil && s.newCursor {
-		if s.index == len(s.ctx.readers.Orders) {
-			s.currAggCursor.Close()
-			s.currAggCursor = nil
-		} else {
+		if s.index < len(s.ctx.readers.Orders) {
 			s.currAggCursor.reset()
 		}
 	}
@@ -373,6 +370,10 @@ func (s *fileLoopCursor) Close() error {
 		s.recPool = nil
 	}
 	s.tagSetInfo.Unref()
+	if s.currAggCursor != nil {
+		s.currAggCursor.Close()
+		s.currAggCursor = nil
+	}
 	return nil
 }
 

@@ -1,0 +1,352 @@
+package query
+
+/*
+Copyright (c) 2018 InfluxData
+This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/query/math.go
+
+2022.01.23 It has been modified to compatible files in influx/influxql and influx/query.
+Huawei Cloud Computing Technologies Co., Ltd.
+*/
+
+import (
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+)
+
+func isMathFunction(call *influxql.Call) bool {
+	switch call.Name {
+	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max", "cast_int64", "cast_bool", "cast_float64", "cast_string":
+		return true
+	}
+	return false
+}
+
+type MathTypeMapper struct{}
+
+func (MathTypeMapper) MapType(measurement *influxql.Measurement, field string) influxql.DataType {
+	return influxql.Unknown
+}
+
+func (MathTypeMapper) MapTypeBatch(measurement *influxql.Measurement, field map[string]*influxql.FieldNameSpace, schema *influxql.Schema) error {
+	return nil
+}
+
+func (MathTypeMapper) CallType(name string, args []influxql.DataType) (influxql.DataType, error) {
+	switch name {
+	case "sin", "cos", "tan", "atan", "exp", "log", "ln", "log2", "log10", "sqrt":
+		var arg0 influxql.DataType
+		if len(args) > 0 {
+			arg0 = args[0]
+		}
+		switch arg0 {
+		case influxql.Float, influxql.Integer, influxql.Unsigned, influxql.Unknown:
+			return influxql.Float, nil
+		default:
+			return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, arg0)
+		}
+	case "asin", "acos":
+		var arg0 influxql.DataType
+		if len(args) > 0 {
+			arg0 = args[0]
+		}
+		switch arg0 {
+		case influxql.Float, influxql.Unknown, influxql.Integer:
+			return influxql.Float, nil
+		default:
+			return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, arg0)
+		}
+	case "atan2", "pow":
+		var arg0, arg1 influxql.DataType
+		if len(args) > 0 {
+			arg0 = args[0]
+		}
+		if len(args) > 1 {
+			arg1 = args[1]
+		}
+
+		switch arg0 {
+		case influxql.Float, influxql.Integer, influxql.Unsigned, influxql.Unknown:
+			// Pass through to verify the second argument.
+		default:
+			return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, arg0)
+		}
+
+		switch arg1 {
+		case influxql.Float, influxql.Integer, influxql.Unsigned, influxql.Unknown:
+			return influxql.Float, nil
+		default:
+			return influxql.Unknown, fmt.Errorf("invalid argument type for the second argument in %s(): %s", name, arg1)
+		}
+	case "abs", "floor", "ceil", "round", "row_max":
+		var arg0 influxql.DataType
+		if len(args) > 0 {
+			arg0 = args[0]
+		}
+		switch arg0 {
+		case influxql.Float, influxql.Integer, influxql.Unsigned, influxql.Unknown:
+			return args[0], nil
+		default:
+			return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, arg0)
+		}
+	}
+	return influxql.Unknown, nil
+}
+
+type MathValuer struct{}
+
+var _ influxql.CallValuer = MathValuer{}
+
+func (MathValuer) Value(key string) (interface{}, bool) {
+	return nil, false
+}
+
+func (MathValuer) SetValuer(v influxql.Valuer, index int) {
+
+}
+
+func (v MathValuer) Call(name string, args []interface{}) (interface{}, bool) {
+	if len(args) == 1 {
+		arg0 := args[0]
+		switch name {
+		case "abs":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return math.Abs(arg0), true
+			case int64:
+				sign := arg0 >> 63
+				return (arg0 ^ sign) - sign, true
+			case uint64:
+				return arg0, true
+			default:
+				return nil, true
+			}
+		case "sin":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Sin(arg0), true
+			}
+			return nil, true
+		case "cos":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Cos(arg0), true
+			}
+			return nil, true
+		case "tan":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Tan(arg0), true
+			}
+			return nil, true
+		case "floor":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return math.Floor(arg0), true
+			case int64, uint64:
+				return arg0, true
+			default:
+				return nil, true
+			}
+		case "ceil":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return math.Ceil(arg0), true
+			case int64, uint64:
+				return arg0, true
+			default:
+				return nil, true
+			}
+		case "round":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return round(arg0), true
+			case int64, uint64:
+				return arg0, true
+			default:
+				return nil, true
+			}
+		case "asin":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Asin(arg0), true
+			}
+			return nil, true
+		case "acos":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Acos(arg0), true
+			}
+			return nil, true
+		case "atan":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Atan(arg0), true
+			}
+			return nil, true
+		case "exp":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Exp(arg0), true
+			}
+			return nil, true
+		case "ln":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Log(arg0), true
+			}
+			return nil, true
+		case "log2":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Log2(arg0), true
+			}
+			return nil, true
+		case "log10":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Log10(arg0), true
+			}
+			return nil, true
+		case "sqrt":
+			if arg0, ok := asFloat(arg0); ok {
+				return math.Sqrt(arg0), true
+			}
+			return nil, true
+		case "cast_int64":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return int64(arg0), true
+			case int64:
+				return int64(arg0), true
+			case uint64:
+				return int64(arg0), true
+			case bool:
+				if arg0 == true {
+					return int64(1), true
+				} else {
+					return int64(0), true
+				}
+			case string:
+				result, err := strconv.Atoi(arg0)
+				if err != nil {
+					return nil, false
+				}
+				return result, true
+			default:
+				return nil, false
+			}
+		case "cast_float64":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return float64(arg0), true
+			case int64:
+				return float64(arg0), true
+			case uint64:
+				return float64(arg0), true
+			case bool:
+				if arg0 == true {
+					return float64(1), true
+				} else {
+					return float64(0), true
+				}
+			case string:
+				result, err := strconv.ParseFloat(arg0, 64)
+				if err != nil {
+					return nil, false
+				}
+				return result, true
+			default:
+				return nil, false
+			}
+		case "cast_bool":
+			if arg0 == nil {
+				return false, true
+			}
+			if arg0, ok := asFloat(arg0); ok {
+				if arg0 == 0 {
+					return false, true
+				} else {
+					return true, true
+				}
+			}
+			switch arg0 := arg0.(type) {
+			case bool:
+				return arg0, true
+			case string:
+				if strings.ToLower(arg0) == "0" || strings.ToLower(arg0) == "" {
+					return false, true
+				}
+				return true, true
+			default:
+				return nil, false
+			}
+		case "cast_string":
+			switch arg0 := arg0.(type) {
+			case float64:
+				return strconv.FormatFloat(arg0, 'f', -1, 64), true
+			case int64:
+				return strconv.FormatInt(arg0, 10), true
+			case uint64:
+				return strconv.FormatUint(arg0, 10), true
+			case bool:
+				if arg0 == false {
+					return "false", true
+				} else {
+					return "true", true
+				}
+			case string:
+				return arg0, true
+			default:
+				return nil, false
+			}
+
+		}
+	} else if len(args) == 2 {
+		arg0, arg1 := args[0], args[1]
+		switch name {
+		case "atan2":
+			if arg0, arg1, ok := asFloats(arg0, arg1); ok {
+				return math.Atan2(arg0, arg1), true
+			}
+			return nil, true
+		case "log":
+			if arg0, arg1, ok := asFloats(arg0, arg1); ok {
+				return math.Log(arg0) / math.Log(arg1), true
+			}
+			return nil, true
+		case "pow":
+			if arg0, arg1, ok := asFloats(arg0, arg1); ok {
+				return math.Pow(arg0, arg1), true
+			}
+			return nil, true
+		}
+	}
+	return nil, false
+}
+
+func asFloat(x interface{}) (float64, bool) {
+	switch arg0 := x.(type) {
+	case float64:
+		return arg0, true
+	case int64:
+		return float64(arg0), true
+	case uint64:
+		return float64(arg0), true
+	default:
+		return 0, false
+	}
+}
+
+func asFloats(x, y interface{}) (float64, float64, bool) {
+	arg0, ok := asFloat(x)
+	if !ok {
+		return 0, 0, false
+	}
+	arg1, ok := asFloat(y)
+	if !ok {
+		return 0, 0, false
+	}
+	return arg0, arg1, true
+}
+
+func round(x float64) float64 {
+	t := math.Trunc(x)
+	if math.Abs(x-t) >= 0.5 {
+		return t + math.Copysign(1, x)
+	}
+	return t
+}

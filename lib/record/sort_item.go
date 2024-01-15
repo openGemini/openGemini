@@ -176,6 +176,13 @@ func (sli *BooleanSlice) PadBoolSlice(cv *ColVal) {
 	}
 }
 
+func (sli *BooleanSlice) PadBoolSliceWithLimit(cv *ColVal, compareLength int) {
+	for i := 0; i < compareLength; i++ {
+		v, _ := cv.BooleanValue(i)
+		sli.V = append(sli.V, v)
+	}
+}
+
 func (sli *StringSlice) PadStringSlice(cv *ColVal) {
 	sli.V = make([]string, 0, cv.Len)
 	if cv.NilCount == 0 {
@@ -190,6 +197,13 @@ func (sli *StringSlice) PadStringSlice(cv *ColVal) {
 			continue
 		}
 		v, _ = cv.StringValueSafe(i)
+		sli.V = append(sli.V, v)
+	}
+}
+
+func (sli *StringSlice) PadStringSliceWithLimit(cv *ColVal, compareLength int) {
+	for i := 0; i < compareLength; i++ {
+		v, _ := cv.StringValueSafe(i)
 		sli.V = append(sli.V, v)
 	}
 }
@@ -213,6 +227,13 @@ func (sli *FloatSlice) PadFloatSlice(cv *ColVal) {
 	}
 }
 
+func (sli *FloatSlice) PadFloatSliceWithLimit(cv *ColVal, compareLength int) {
+	for i := 0; i < compareLength; i++ {
+		v, _ := cv.FloatValue(i)
+		sli.V = append(sli.V, v)
+	}
+}
+
 func (sli *IntegerSlice) PadIntSlice(cv *ColVal) {
 	if cv.NilCount == 0 {
 		sli.V = append(sli.V, cv.IntegerValues()...)
@@ -229,5 +250,12 @@ func (sli *IntegerSlice) PadIntSlice(cv *ColVal) {
 			continue
 		}
 		sli.V = append(sli.V, value[i-nilCount])
+	}
+}
+
+func (sli *IntegerSlice) PadIntSliceWithLimit(cv *ColVal, compareLength int) {
+	for i := 0; i < compareLength; i++ {
+		v, _ := cv.IntegerValue(i)
+		sli.V = append(sli.V, v)
 	}
 }

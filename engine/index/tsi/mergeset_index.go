@@ -40,14 +40,14 @@ import (
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
-	"github.com/openGemini/openGemini/open_src/influx/index"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/open_src/vm/uint64set"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/index"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
+	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
 
@@ -187,11 +187,10 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 	var exist bool
 	var err error
 	vname.B = append(vname.B[:0], row.Name...)
-	vkey.B = append(vkey.B[:0], row.Name...)
-	length := len(vname.B)
 	for i := range row.Tags {
-		vkey.B = append(vkey.B[:length], row.Tags[i].Key...)
-		vkey.B = append(vkey.B[:length], row.Tags[i].Value...)
+		vkey.B = append(vkey.B[:0], row.Name...)
+		vkey.B = append(vkey.B, row.Tags[i].Key...)
+		vkey.B = append(vkey.B, row.Tags[i].Value...)
 		exist, err = idx.isTagKeyExist(vkey.B, vname.B, row.Tags[i].Key, row.Tags[i].Value)
 		if err != nil {
 			return err
@@ -201,10 +200,14 @@ func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByRow(idx *MergeSetIndex, row *i
 			ii.B = idx.marshalTagToTagValues(compositeKey.B, ii.B, vname.B, []byte(row.Tags[i].Key), []byte(row.Tags[i].Value))
 			ii.Next()
 			idx.cache.PutTagValuesToTagKeysCache([]byte{1}, vkey.B)
+			err = idx.tb.AddItems(ii.Items)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
-	return idx.tb.AddItems(ii.Items)
+	return nil
 }
 
 func (csIdx *CsIndexImpl) CreateIndexIfNotExistsByCol(idx *MergeSetIndex, col *TagCol) error {
@@ -295,7 +298,7 @@ func (idx *MergeSetIndex) Open() error {
 	idx.tb = tb
 
 	mem := memory.Allowed()
-	idx.cache = NewIndexCache(mem/32, mem/32, mem/16, mem/128, idx.path)
+	idx.cache = newIndexCache(mem/32, mem/32, mem/16, mem/128, idx.path, syscontrol.IsIndexReadCachePersistent())
 
 	if err := idx.loadDeletedTSIDs(); err != nil {
 		return err

@@ -23,6 +23,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
@@ -40,9 +41,9 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -159,6 +160,8 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		s.log.Debug("get index result empty")
 		return nil, nil
 	}
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanRunTimeTotal, time.Since(start).Nanoseconds())
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanSeriesNumTotal, seriesNum)
 
 	qDuration, _ := ctx.Value(query.QueryDurationKey).(*statistics.StoreSlowQueryStatistics)
 	if qDuration != nil {
@@ -231,7 +234,6 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 
 	cursors := make(comm.KeyCursors, 0, parallelism)
 	for groupIdx := 0; groupIdx < parallelism; groupIdx++ {
-		var err error
 		c := &groupCursor{
 			id:   groupIdx,
 			name: querySchema.Options().OptionsName(),
@@ -271,19 +273,22 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 		}
 
 		// init map
-		c.ctx.filterOption.FiltersMap = make(map[string]interface{})
+		c.ctx.filterOption.FiltersMap = make(map[string]*influxql.FilterMapValue)
 		for _, id := range c.ctx.filterOption.FieldsIdx {
-			if c.ctx.filterOption.FiltersMap[schema[id].Name], err = influx.FieldType2Val(schema[id].Type); err != nil {
+			if val, err := influx.FieldType2Val(schema[id].Type); err != nil {
+				c.ctx.filterOption.FiltersMap.SetFilterMapValue(schema[id].Name, val)
 				if executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg() {
 					for _, v := range cursors {
 						v.(*groupCursor).ctx.UnRef()
 					}
 				}
 				return nil, err
+			} else {
+				c.ctx.filterOption.FiltersMap.SetFilterMapValue(schema[id].Name, val)
 			}
 		}
 		for _, tagName := range c.ctx.filterOption.FilterTags {
-			c.ctx.filterOption.FiltersMap[tagName] = (*string)(nil)
+			c.ctx.filterOption.FiltersMap.SetFilterMapValue(tagName, (*string)(nil))
 		}
 		c.ctx.tr.Min = querySchema.Options().GetStartTime()
 		c.ctx.tr.Max = querySchema.Options().GetEndTime()
@@ -682,6 +687,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		mapSize = memtableInitMapSize
 	}
 	memItrs := make(map[uint64][]*SeriesIter, mapSize)
+	colAux := record.ColAux{}
 	for i := start; i < tagSetNum; i += step {
 		sid := tagSet.IDs[i]
 		ptTags := &(tagSet.TagsVec[i])
@@ -693,7 +699,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
 			continue
 		}
-		memTableRecord = memTableRecord.KickNilRow()
+		memTableRecord = memTableRecord.KickNilRow(nil, &colAux)
 		if memTableRecord.RowNums() == 0 {
 			continue
 		}

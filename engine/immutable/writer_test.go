@@ -19,13 +19,14 @@ package immutable
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -157,7 +158,7 @@ func TestIndexWriterWithoutCacheMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	if n != written {
-		t.Fatalf("exp copy size:%v, get:%v", wr.wn, n)
+		t.Fatalf("exp copy size:%v, get:%v", wr.Size(), n)
 	}
 
 	if written != wr.Size() {
@@ -181,7 +182,7 @@ func TestIndexWriterWithCacheMeta(t *testing.T) {
 	fn := filepath.Join(testDir, "index.data")
 	lockPath := ""
 	InitWriterPool(8)
-	wr := NewPKIndexWriter(fn, true, true, &lockPath)
+	wr := NewPKIndexWriter(fn, true, true, &lockPath).(*indexWriter)
 	cm := getChunkMeta()
 
 	meta := cm.marshal(nil)
@@ -295,4 +296,143 @@ func TestDelEmptyColMeta(t *testing.T) {
 	require.Equal(t, 2, len(cm.colMeta[0].entries))
 	require.Equal(t, 3, len(cm.colMeta[1].entries))
 	require.Equal(t, 4, len(cm.colMeta[2].entries))
+}
+
+func TestIndexWriterWithCompress(t *testing.T) {
+	dir := t.TempDir()
+	fn := filepath.Join(dir, "index.data")
+	lockPath := ""
+	InitWriterPool(8)
+	cm := getChunkMeta()
+	meta := cm.marshal(nil)
+
+	var run = func() {
+		_ = os.Remove(fn)
+		wr := NewPKIndexWriter(fn, false, true, &lockPath)
+		size := 0
+		for i := 0; i < 15000; i++ {
+			n, err := wr.Write(meta)
+			require.NoError(t, err)
+			size += n
+		}
+
+		buf := bytes.NewBuffer(nil)
+		copySize, err := wr.CopyTo(buf)
+		require.NoError(t, err)
+		require.Equal(t, copySize, size)
+		require.NoError(t, wr.Close())
+		require.Equal(t, meta, buf.Bytes()[:len(meta)])
+	}
+
+	for _, v := range []int{0, 1, 2} {
+		SetIndexCompressMode(v)
+		run()
+	}
+}
+
+func TestIndexWriterWithCompress_reset_big(t *testing.T) {
+	dir := t.TempDir()
+	fn := filepath.Join(dir, "index.data")
+	lockPath := ""
+	InitWriterPool(8)
+	cm := getChunkMeta()
+	meta := cm.marshal(nil)
+
+	for i := 0; i < 13; i++ {
+		meta = append(meta, meta...)
+	}
+
+	wr := NewPKIndexWriter(fn, false, true, &lockPath).(*indexWriter)
+	var run = func() {
+		_ = os.Remove(fn)
+		size, err := wr.Write(meta)
+		require.NoError(t, err)
+
+		buf := bytes.NewBuffer(nil)
+		copySize, err := wr.CopyTo(buf)
+		require.NoError(t, err)
+		require.Equal(t, copySize, size)
+		require.Equal(t, meta, buf.Bytes()[:len(meta)])
+		wr.reset()
+	}
+
+	for _, v := range []int{110, 1, 2} {
+		SetIndexCompressMode(v)
+		run()
+	}
+}
+
+func TestFileSwapper_error(t *testing.T) {
+	file := t.TempDir() + "/index.data"
+
+	var run = func(writeBuf bool) {
+		fs, err := NewFileSwapper(file, "", true, SwapperCompressZSTD)
+		require.NoError(t, err)
+
+		buf := bytes.NewBuffer(nil)
+
+		if writeBuf {
+			_, err = fs.Write([]byte{1, 1, 1, 1, 1})
+			require.NoError(t, err)
+		}
+
+		fs.MustClose()
+		fs.MustClose()
+		_, err = fs.CopyTo(buf, make([]byte, 1024))
+		require.NotNil(t, err)
+	}
+
+	run(true)
+	run(false)
+}
+
+func TestGetObsFileWriterInfo(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "TestDiskWriter")
+	fd := &mockFile{
+		NameFn: func() string {
+			return name
+		},
+		CloseFn: func() error {
+			return nil
+		},
+		WriteFn: func(p []byte) (n int, err error) {
+			return 0, fmt.Errorf("write fail")
+		},
+	}
+	w := &obsFileWriter{
+		dataWriter: &obsWriter{fd: fd},
+		metaWriter: &obsWriter{},
+	}
+
+	_ = w.GetFileWriter()
+	_ = w.DataSize()
+	_ = w.ChunkMetaSize()
+	_ = w.AppendChunkMetaToData()
+	_, _ = w.SwitchMetaBuffer()
+	_ = w.MetaDataBlocks(nil)
+
+	_ = w.Name()
+}
+
+func TestGetObsIndexWriterInfo(t *testing.T) {
+	w := &obsIndexWriter{
+		metaIndexWriter:      &obsWriter{},
+		primaryKeyWriter:     &obsWriter{},
+		PrimaryKeyMetaWriter: &obsWriter{},
+		bloomfilterWriters:   make([]*obsWriter, 1),
+	}
+	w.bloomfilterWriters[0] = &obsWriter{}
+
+	_ = w.GetMetaIndexSize()
+	_ = w.GetPrimaryKeySize()
+	_ = w.GetPrimaryKeyMetaSize()
+	_ = w.GetBloomFilterSize(0)
+}
+
+func TestGetObsWriterInfo(t *testing.T) {
+	w := &obsWriter{}
+
+	_ = w.GetFileWriter()
+	_ = w.Size()
 }

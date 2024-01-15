@@ -21,7 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/dgryski/go-bitstream"
+	"github.com/openGemini/openGemini/lib/util/lifted/go-bitstream"
 )
 
 const (

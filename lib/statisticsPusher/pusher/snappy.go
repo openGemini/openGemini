@@ -27,6 +27,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -37,7 +38,7 @@ const (
 	maxRetry      = 10
 )
 
-var pool = bufferpool.NewByteBufferPool(0)
+var pool = bufferpool.NewByteBufferPool(0, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 
 func GetBuffer(size int) []byte {
 	buf := pool.Get()

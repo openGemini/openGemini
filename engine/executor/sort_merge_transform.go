@@ -23,8 +23,8 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func NewSortedMergeTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, _ []hybridqp.ExprOptions, schema *QuerySchema) *MergeTransform {
@@ -69,13 +69,61 @@ func (t *SortMergeTransf) isItemEmpty(currItem *Item) bool {
 	return currItem.IsSortedEmpty()
 }
 
-func (t *SortMergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int) {
+func (t *SortMergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int, j int) {
+	if i == j {
+		return
+	}
 	chunk := trans.currItem.ChunkBuf
-	var start, end int = i - 1, i
+	start, end := i, j
 
 	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
 	trans.NewChunk.AppendTimes(chunk.Time()[start:end])
 	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
+}
+
+func (t *SortMergeTransf) updateWithIndexByIntervalAndTag(trans *MergeTransform, end int) {
+	if trans.currItem.Index >= end {
+		return
+	}
+	//flag indicates whether the loop is entered for the first time.
+	flag := true
+	curr := trans.currItem
+	iLen := trans.NewChunk.Len()
+	idx := curr.Index
+	currChunk := trans.currItem.ChunkBuf
+	var nextGroupIdx int
+	for i := curr.Index; i < end; {
+		tag := currChunk.Tags()[curr.TagIndex]
+		trans.AddTagAndIndexes(tag, iLen, i, flag)
+		if curr.IntervalIndex < curr.IntervalLen()-1 && i == curr.ChunkBuf.IntervalIndex()[curr.IntervalIndex+1] {
+			curr.IntervalIndex += 1
+		}
+		if curr.IntervalIndex == curr.IntervalLen()-1 {
+			nextGroupIdx = currChunk.Len()
+		} else {
+			nextGroupIdx = curr.ChunkBuf.IntervalIndex()[curr.IntervalIndex+1]
+		}
+		if nextGroupIdx > end {
+			nextGroupIdx = end
+		}
+		if curr.TagIndex < currChunk.TagLen()-1 && nextGroupIdx >= currChunk.TagIndex()[curr.TagIndex+1] {
+			nextGroupIdx = currChunk.TagIndex()[curr.TagIndex+1]
+			curr.TagIndex += 1
+		}
+		curr.Index = nextGroupIdx
+		iLen += nextGroupIdx - i
+		i = nextGroupIdx
+		flag = false
+	}
+	t.appendMergeTimeAndColumns(trans, idx, end)
+}
+
+func binarySearch(item Item, low int, high int, b *SortedBreakPoint, opt *query.ProcessorOptions) int {
+	return sort.Search(high-low, func(i int) bool {
+		tagIndex := sort.Search(len(item.ChunkBuf.TagIndex()), func(j int) bool { return item.ChunkBuf.TagIndex()[j] > i+low }) - 1
+		tag := item.ChunkBuf.Tags()[tagIndex]
+		return !CompareSortedMergeBreakPoint(item, i+low, tag, b, opt)
+	}) + low
 }
 
 func (t *SortMergeTransf) updateWithSingleChunk(trans *MergeTransform) {
@@ -84,18 +132,15 @@ func (t *SortMergeTransf) updateWithSingleChunk(trans *MergeTransform) {
 		tracing.EndPP(trans.ppForCalculate)
 	}()
 
-	curr := trans.currItem
-	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
-		trans.AddTagAndIndexes(curr.ChunkBuf.Tags()[curr.TagIndex], i+1)
-		t.appendMergeTimeAndColumns(trans, i+1)
-		if curr.TagSwitch(i) {
-			curr.TagIndex += 1
-		}
-		if curr.IntervalIndex < curr.IntervalLen()-1 && i == curr.ChunkBuf.IntervalIndex()[curr.IntervalIndex+1] {
-			curr.IntervalIndex += 1
-		}
-		curr.Index += 1
+	if trans.currItem.Index == 0 && trans.NewChunk.Len() == 0 {
+		trans.currItem.ChunkBuf.CopyTo(trans.NewChunk)
+		trans.NewChunk.SetName(trans.GetMstName())
+		trans.currItem.Index = trans.currItem.ChunkBuf.Len()
+		trans.currItem.TagIndex = trans.currItem.ChunkBuf.TagLen() - 1
+		trans.currItem.IntervalIndex = trans.currItem.ChunkBuf.IntervalLen() - 1
+		return
 	}
+	t.updateWithIndexByIntervalAndTag(trans, trans.currItem.ChunkBuf.Len())
 }
 
 func (t *SortMergeTransf) updateWithBreakPoint(trans *MergeTransform) {
@@ -105,22 +150,14 @@ func (t *SortMergeTransf) updateWithBreakPoint(trans *MergeTransform) {
 	}()
 
 	curr := trans.currItem
-	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
-		tag := curr.ChunkBuf.Tags()[curr.TagIndex]
-		if !CompareSortedMergeBreakPoint(*curr, curr.Index, tag, trans.BreakPoint.(*SortedBreakPoint),
-			*trans.HeapItems.GetOption()) {
-			return
-		}
-		trans.AddTagAndIndexes(tag, i+1)
-		t.appendMergeTimeAndColumns(trans, i+1)
-		if curr.TagSwitch(i) {
-			curr.TagIndex += 1
-		}
-		if curr.IntervalIndex < curr.IntervalLen()-1 && i == curr.ChunkBuf.IntervalIndex()[curr.IntervalIndex+1] {
-			curr.IntervalIndex += 1
-		}
-		curr.Index += 1
+	chunk := trans.currItem.ChunkBuf
+	opt := trans.HeapItems.GetOption()
+	if CompareSortedMergeBreakPoint(*curr, chunk.Len()-1, chunk.Tags()[chunk.TagLen()-1], trans.BreakPoint.(*SortedBreakPoint), opt) {
+		trans.UpdateWithSingleChunk()
+		return
 	}
+	end := binarySearch(*curr, curr.Index, chunk.Len(), trans.BreakPoint.(*SortedBreakPoint), opt)
+	t.updateWithIndexByIntervalAndTag(trans, end)
 }
 
 type SortMergeTransformCreator struct {
@@ -362,7 +399,7 @@ func (h *SortedHeapItems) GetBreakPoint() BaseBreakPoint {
 	return b
 }
 
-func CompareSortedMergeBreakPoint(item Item, in int, tag ChunkTags, b *SortedBreakPoint, opt query.ProcessorOptions) bool {
+func CompareSortedMergeBreakPoint(item Item, in int, tag ChunkTags, b *SortedBreakPoint, opt *query.ProcessorOptions) bool {
 	c := item.ChunkBuf
 	t := c.Time()[in]
 	if opt.Ascending {
@@ -379,14 +416,14 @@ func CompareSortedMergeBreakPoint(item Item, in int, tag ChunkTags, b *SortedBre
 		}
 		for i := range b.AuxCompareHelpers {
 			colIndex := b.AuxCompareHelpers[i].colIndex
-			xNil := item.ChunkBuf.Column(colIndex).IsNilV2(item.Index)
+			xNil := item.ChunkBuf.Column(colIndex).IsNilV2(in)
 			if xNil != b.chunk.Column(colIndex).IsNilV2(b.ValuePosition) {
 				return xNil
 			}
 			if xNil {
 				continue
 			}
-			if equal, less := b.AuxCompareHelpers[i].auxHelper(item.ChunkBuf.Column(colIndex), b.chunk.Column(colIndex), item.Index, b.ValuePosition); equal {
+			if equal, less := b.AuxCompareHelpers[i].auxHelper(item.ChunkBuf.Column(colIndex), b.chunk.Column(colIndex), in, b.ValuePosition); equal {
 				continue
 			} else {
 				return less
@@ -408,14 +445,14 @@ func CompareSortedMergeBreakPoint(item Item, in int, tag ChunkTags, b *SortedBre
 	}
 	for i := range b.AuxCompareHelpers {
 		colIndex := b.AuxCompareHelpers[i].colIndex
-		xNil := item.ChunkBuf.Column(colIndex).IsNilV2(item.Index)
+		xNil := item.ChunkBuf.Column(colIndex).IsNilV2(in)
 		if xNil != b.chunk.Column(colIndex).IsNilV2(b.ValuePosition) {
 			return !xNil
 		}
 		if xNil {
 			continue
 		}
-		if equal, less := b.AuxCompareHelpers[i].auxHelper(item.ChunkBuf.Column(colIndex), b.chunk.Column(colIndex), item.Index, b.ValuePosition); equal {
+		if equal, less := b.AuxCompareHelpers[i].auxHelper(item.ChunkBuf.Column(colIndex), b.chunk.Column(colIndex), in, b.ValuePosition); equal {
 			continue
 		} else {
 			return less

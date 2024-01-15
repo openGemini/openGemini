@@ -26,8 +26,8 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -80,6 +80,27 @@ func TestRotate(t *testing.T) {
 		t.Fatal()
 	}
 
+}
+
+func TestGetStringMatchPhraseConditionBitMap(t *testing.T) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	results := GetStringMatchPhraseConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	emptyCount := 0
+	for _, v := range results {
+		if v == 0 {
+			emptyCount += 1
+		}
+	}
+	assert.Equal(t, 1023, emptyCount)
+
+	results = GetStringMatchPhraseConditionBitMapWithNull(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	emptyCount = 0
+	for _, v := range results {
+		if v == 0 {
+			emptyCount += 1
+		}
+	}
+	assert.Equal(t, 1023, emptyCount)
 }
 
 func TestRotateRewriteTimeCompareVal(t *testing.T) {

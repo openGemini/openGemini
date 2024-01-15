@@ -26,6 +26,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -1047,6 +1048,63 @@ func GetBooleanNEQConditionBitMapWithNull(col *record.ColVal, compare interface{
 			bitmap.SetBitMap(pos, idx)
 		}
 		index++
+	}
+	return pos
+}
+
+func GetStringMatchPhraseConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	if col.NilCount == 0 {
+		return GetStringMatchPhraseConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+	}
+	return GetStringMatchPhraseConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+}
+
+func GetStringMatchPhraseConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var idx int
+	goal := util.Str2bytes(compare.(string))
+	var content []byte
+	tokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if i == col.Len-1 {
+			content = col.Val[col.Offset[i]:]
+		} else {
+			content = col.Val[col.Offset[i]:col.Offset[i+1]]
+		}
+		tokenFinder.InitInput(content, goal)
+		if !tokenFinder.Next() {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	return pos
+}
+
+func GetStringMatchPhraseConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	var idx int
+	goal := util.Str2bytes(compare.(string))
+	var content []byte
+	tokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, idx)
+			continue
+		}
+		if i == col.Len-1 {
+			content = col.Val[col.Offset[i]:]
+		} else {
+			content = col.Val[col.Offset[i]:col.Offset[i+1]]
+		}
+		tokenFinder.InitInput(content, goal)
+		if !tokenFinder.Next() {
+			bitmap.SetBitMap(pos, idx)
+		}
 	}
 	return pos
 }

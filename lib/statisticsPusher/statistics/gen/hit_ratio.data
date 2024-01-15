@@ -7,7 +7,9 @@
         "MergeColValGetTotal",
         "MergeColValHitTotal",
         "FileOpenTotal",
-        "QueryFileUnHitTotal"
+        "QueryFileUnHitTotal",
+        "ChunkMetaGetTotal",
+        "ChunkMetaHitTotal"
     ],
     "SetItems":[],
     "EnablePush":"N",

@@ -31,18 +31,20 @@ import (
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
 const (
 	BALANCED_DIFF = 5
+	Aborted       = "aborted"
 )
 
 type SparseIndexScanTransform struct {
 	BaseProcessor
 
+	aborted      bool
 	hasRowCount  bool
 	span         *tracing.Span
 	indexSpan    *tracing.Span
@@ -61,6 +63,7 @@ type SparseIndexScanTransform struct {
 	rowCount         int64
 	schema           hybridqp.Catalog
 	node             hybridqp.QueryNode
+	mutex            sync.RWMutex
 	wg               sync.WaitGroup
 	opt              query.ProcessorOptions
 	ops              []hybridqp.ExprOptions
@@ -108,11 +111,14 @@ func (trans *SparseIndexScanTransform) Explain() []ValuePair {
 func (trans *SparseIndexScanTransform) Close() {
 	trans.Once(func() {
 		trans.output.Close()
+		trans.mutex.Lock()
+		trans.aborted = true
 		if trans.pipelineExecutor != nil {
-			// When the indexScanTransform is closed, the pipelineExecutor must be closed at the same time.
+			// When the SparseIndexScanTransform is closed, the pipelineExecutor must be closed at the same time.
 			// Otherwise, which increases the memory usage.
 			trans.pipelineExecutor.Crash()
 		}
+		trans.mutex.Unlock()
 	})
 }
 
@@ -146,6 +152,9 @@ func (trans *SparseIndexScanTransform) Work(ctx context.Context) error {
 		trans.output.Close()
 	}()
 	if err := trans.scanWithSparseIndex(ctx); err != nil {
+		if err.Error() == Aborted {
+			return nil
+		}
 		return err
 	}
 	return trans.WorkHelper(ctx)
@@ -155,11 +164,16 @@ func (trans *SparseIndexScanTransform) scanWithSparseIndex(ctx context.Context) 
 	if trans.info == nil {
 		return errors.New("SparseIndexScanTransform get the info failed")
 	}
+	if trans.aborted {
+		return errors.New(Aborted)
+	}
 	schema, ok := trans.schema.(*QuerySchema)
 	if !ok {
 		return errors.New("the schema is invalid for SparseIndexScanTransform")
 	}
 
+	trans.mutex.RLock()
+	defer trans.mutex.RUnlock()
 	tracing.StartPP(trans.indexSpan)
 	if trans.hasRowCount {
 		rowCount, err := trans.info.Store.RowCount(trans.info.Req.Database, trans.info.Req.PtID, trans.info.Req.ShardIDs, schema)
@@ -313,6 +327,23 @@ func (trans *SparseIndexScanTransform) GetOutputNumber(_ Port) int {
 
 func (trans *SparseIndexScanTransform) GetInputNumber(_ Port) int {
 	return 0
+}
+
+func (trans *SparseIndexScanTransform) IsSink() bool {
+	// SparseIndexScanTransform will create new pipelineExecutor, it is sink node.
+	return true
+}
+
+func (trans *SparseIndexScanTransform) Abort() {
+	trans.mutex.Lock()
+	defer trans.mutex.Unlock()
+	if trans.aborted {
+		return
+	}
+	trans.aborted = true
+	if trans.pipelineExecutor != nil {
+		trans.pipelineExecutor.Abort()
+	}
 }
 
 type ShardsFragments map[uint64]*FileFragments
@@ -522,7 +553,8 @@ func NewShardFileFragment(shardId uint64, item FileFragment) *ShardFileFragment 
 }
 
 type ShardsFragmentsGroups struct {
-	Items []*ShardsFragmentsGroup
+	Items       []*ShardsFragmentsGroup
+	readerIndex int
 }
 
 func NewShardsFragmentsGroups(parallel int) *ShardsFragmentsGroups {
@@ -577,6 +609,20 @@ func (fgs *ShardsFragmentsGroups) Balance() {
 		to++
 	}
 	fgs.Balance()
+}
+
+func (fgs *ShardsFragmentsGroups) HasGroup() bool {
+	return fgs.readerIndex < len(fgs.Items)
+}
+
+func (fgs *ShardsFragmentsGroups) PeekGroup() *ShardsFragmentsGroup {
+	return fgs.Items[fgs.readerIndex]
+}
+
+func (fgs *ShardsFragmentsGroups) NextGroup() *ShardsFragmentsGroup {
+	group := fgs.Items[fgs.readerIndex]
+	fgs.readerIndex++
+	return group
 }
 
 func (fgs *ShardsFragmentsGroups) String() string {

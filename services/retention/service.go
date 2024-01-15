@@ -22,7 +22,7 @@ import (
 	log "github.com/influxdata/influxdb/logger"
 	_ "github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
 )

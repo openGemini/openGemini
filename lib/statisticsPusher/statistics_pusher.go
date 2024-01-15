@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/pusher"
@@ -49,7 +50,7 @@ type StatisticsPusher struct {
 	wg        sync.WaitGroup
 }
 
-var bufferPool = bufferpool.NewByteBufferPool(0)
+var bufferPool = bufferpool.NewByteBufferPool(0, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 var sp *StatisticsPusher
 var once sync.Once
 
@@ -131,7 +132,7 @@ func (sp *StatisticsPusher) push() {
 		default:
 		}
 		// collect statistics data
-		buf, err = collect(buf[0:])
+		buf, err = collect(buf[:0])
 		if err != nil {
 			sp.logger.Error("collect statistics data error", zap.Error(err))
 			return

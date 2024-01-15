@@ -45,3 +45,8 @@ func TestBufferPool(t *testing.T) {
 		t.Fatalf("failed, exp: %+v; got: %+v", cap(b3), cap(b4))
 	}
 }
+
+func TestNewBufferPool(t *testing.T) {
+	bufferpool.NewByteBufferPool(0, 128, bufferpool.MaxChunkMetaBufLocalCacheLen)
+	bufferpool.NewByteBufferPool(0, 128, bufferpool.MaxChunkMetaBufLocalCacheLen)
+}

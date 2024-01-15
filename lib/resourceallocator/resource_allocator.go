@@ -23,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bucket"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 const (
@@ -81,7 +82,7 @@ func (s *ShardParallelismAllocator) Alloc(num int64) (int64, int64, error) {
 	n, _, _ := s.maxParallelismAllocator.Alloc(num)
 	if e := s.sharedParallelismPool.GetResource(num); e != nil {
 		s.maxParallelismAllocator.Free(n, n)
-		return 0, 0, e
+		return 0, 0, errno.NewError(errno.ShardBucketLacks)
 	}
 	return n, num, nil
 }
@@ -112,7 +113,11 @@ func NewSeriesParallelismAllocator(maxTime time.Duration, maxSeriesParallelism i
 }
 
 func (s *SeriesResAllocator) Alloc(num int64) (int64, int64, error) {
-	return num, num, s.seriesParallelismPool.GetResource(num)
+	err := s.seriesParallelismPool.GetResource(num)
+	if err != nil {
+		return num, num, errno.NewError(errno.SeriesBucketLacks)
+	}
+	return num, num, nil
 }
 
 // not use

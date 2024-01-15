@@ -36,10 +36,10 @@ import (
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -71,7 +71,7 @@ func putInjestionCtx(s *injestionCtx) {
 type PWMetaClient interface {
 	Database(name string) (di *meta2.DatabaseInfo, err error)
 	RetentionPolicy(database, policy string) (*meta2.RetentionPolicyInfo, error)
-	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
+	CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
@@ -777,6 +777,10 @@ RETRY:
 	return err
 }
 
+func (w *PointsWriter) SetStore(store Storage) {
+	w.TSDBStore = NewLocalStore(store)
+}
+
 func (w *PointsWriter) inTimeRange(ts int64) bool {
 	if w.timeRange == nil {
 		return true
@@ -858,4 +862,40 @@ func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16
 	}
 
 	return index, true
+}
+
+type Storage interface {
+	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
+}
+
+type LocalStore struct {
+	store Storage
+}
+
+func NewLocalStore(store Storage) *LocalStore {
+	return &LocalStore{
+		store: store,
+	}
+}
+
+func (s *LocalStore) WriteRows(ctx *netstorage.WriteContext, _ uint64, _ uint32, database, rp string, _ time.Duration) error {
+	buf := ctx.Buf
+	for _, ptId := range ctx.Shard.Owners {
+		rows := ctx.Rows
+
+		buf, _ = influx.FastMarshalMultiRows(buf[:0], rows) // for wal
+		pos := len(buf)
+
+		for i := range rows {
+			buf = rows[i].UnmarshalIndexKeys(buf)
+		}
+		ctx.Buf = buf
+
+		err := s.store.WriteRows(database, rp, ptId, ctx.Shard.ID, rows, buf[:pos])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

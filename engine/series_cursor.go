@@ -28,8 +28,8 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 var seriesKeyCursorPool = &sync.Pool{}
@@ -69,6 +69,7 @@ type seriesCursor struct {
 	memRecIter     recordIter
 	tsmRecIter     recordIter
 	limitFirstTime int64
+	colAux         *record.ColAux
 }
 
 func (s *seriesCursor) SetFirstLimitTime(memTableRecord *record.Record, tsmCursor *tsmMergeCursor, schema *executor.QuerySchema) {
@@ -200,8 +201,10 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	if rec == nil {
 		return rec, info, err
 	}
-
-	rec = rec.KickNilRow()
+	if s.colAux == nil {
+		s.colAux = &record.ColAux{}
+	}
+	rec = rec.KickNilRow(nil, s.colAux)
 
 	for rec.RowNums() == 0 {
 		rec, info, err = s.nextInner()
@@ -212,7 +215,7 @@ func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 		if rec == nil {
 			return rec, info, err
 		}
-		rec = rec.KickNilRow()
+		rec = rec.KickNilRow(nil, s.colAux)
 	}
 	newRec := s.recordPool.Get()
 	newRec.AppendRecForSeries(rec, 0, rec.RowNums(), s.ridIdx)

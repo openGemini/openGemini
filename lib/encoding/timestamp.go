@@ -23,7 +23,7 @@ import (
 	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/jwilder/encoding/simple8b"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding/simple8b"
 )
 
 const (

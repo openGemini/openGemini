@@ -161,12 +161,12 @@ func (lmt *lastMergeTime) Nearly(mst string, d time.Duration) bool {
 	return time.Since(v) <= d
 }
 
-type InMerge struct {
+type MeasurementInProcess struct {
 	mu     sync.Mutex
 	tables map[string]struct{}
 }
 
-func (m *InMerge) Add(name string) bool {
+func (m *MeasurementInProcess) Add(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -178,15 +178,15 @@ func (m *InMerge) Add(name string) bool {
 	return true
 }
 
-func (m *InMerge) Del(name string) {
+func (m *MeasurementInProcess) Del(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	delete(m.tables, name)
 }
 
-func NewInMerge() *InMerge {
-	return &InMerge{tables: make(map[string]struct{}, defaultCap)}
+func NewMeasurementInProcess() *MeasurementInProcess {
+	return &MeasurementInProcess{tables: make(map[string]struct{}, defaultCap)}
 }
 
 func MergeRecovery(path string, name string, ctx *mergeContext) {

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,15 +31,17 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	qry "github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	qry "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,11 +83,11 @@ func (s *MockStoreEngine) SeriesExactCardinality(db string, ptIDs []uint32, meas
 	return nil, nil
 }
 
-func (s *MockStoreEngine) TagKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+func (s *MockStoreEngine) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	return nil, nil
 }
 
-func (s *MockStoreEngine) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+func (s *MockStoreEngine) TagKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	return nil, nil
 }
 
@@ -100,11 +103,11 @@ func (s *MockStoreEngine) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map
 	return nil, nil
 }
 
-func (s *MockStoreEngine) PreOffload(*meta.DbPtInfo) error {
+func (s *MockStoreEngine) PreOffload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
-func (s *MockStoreEngine) RollbackPreOffload(*meta.DbPtInfo) error {
+func (s *MockStoreEngine) RollbackPreOffload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
@@ -112,7 +115,7 @@ func (s *MockStoreEngine) PreAssign(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
-func (s *MockStoreEngine) Offload(*meta.DbPtInfo) error {
+func (s *MockStoreEngine) Offload(uint64, *meta.DbPtInfo) error {
 	return nil
 }
 
@@ -290,6 +293,12 @@ func TestSelectProcessor(t *testing.T) {
 	msg3 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1}, Analyze: true})
 	msg3.SetClientID(100)
 
+	msg4 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Opt: qry.ProcessorOptions{IncQuery: true, LogQueryCurrId: "1", IterID: 0}})
+	msg4.SetClientID(100)
+
+	msg5 := rpc.NewMessage(executor.FinishMessage, &executor.IncQueryFinish{})
+	msg5.SetClientID(100)
+
 	e := resourceallocator.InitResAllocator(2, 0, 2, 0, resourceallocator.ShardsParallelismRes, time.Second, 0)
 	if e != nil {
 		t.Fatal(e)
@@ -304,6 +313,14 @@ func TestSelectProcessor(t *testing.T) {
 
 	query.NewManager(100).Abort(resp.Sequence())
 	require.NoError(t, p.Handle(resp, msg3))
+
+	cache.PutNodeIterNum("2", 0)
+	require.NoError(t, p.Handle(resp, msg4))
+
+	cache.PutNodeIterNum("1", 0)
+	require.NoError(t, p.Handle(resp, msg4))
+	err := p.Handle(resp, msg5)
+	require.Equal(t, strings.Contains(err.Error(), "executor.RemoteQuery"), true)
 }
 
 func mockStorage(dir string) *storage.Storage {
@@ -354,4 +371,38 @@ func TestSelect_GetQueryExeInfo(t *testing.T) {
 	require.Equal(t, rq.Opt.QueryId, info.QueryID)
 	require.Equal(t, rq.Opt.Query, info.Stmt)
 	require.Equal(t, rq.Database, info.Database)
+}
+
+func TestSelectForCsstore(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+	ptQuerys := make([]executor.PtQuery, 0)
+	ptQuerys = append(ptQuerys, executor.PtQuery{PtID: 1, ShardInfos: []executor.ShardInfo{{ID: 1, Path: "/obs/db0/log1/seg0", Version: 4}}})
+	ptQuerys = append(ptQuerys, executor.PtQuery{PtID: 2, ShardInfos: []executor.ShardInfo{{ID: 2, Path: "/obs/db0/log1/seg1", Version: 4}}})
+	q := &executor.RemoteQuery{
+		Database: "db0",
+		PtID:     0,
+		Opt: qry.ProcessorOptions{
+			QueryId: 1,
+			Query:   "SELECT * FROM mst1",
+			Sources: influxql.Sources{
+				&influxql.Measurement{
+					ObsOptions: &obs.ObsOptions{},
+				},
+			},
+		},
+		Node:     []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		PtQuerys: ptQuerys}
+
+	msg := rpc.NewMessage(executor.QueryMessage, q)
+	req, _ := msg.Data().(*executor.RemoteQuery)
+	store := mockStorage(t.TempDir())
+	p := NewSelectProcessor(store)
+	s := NewSelect(p.store, resp, req)
+
+	s.aborted = false
+	err := s.process(s.w, nil, s.req)
+	if err == nil {
+		t.Fatal()
+	}
 }

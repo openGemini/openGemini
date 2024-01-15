@@ -19,6 +19,7 @@ package record_test
 import (
 	"fmt"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,9 +30,9 @@ import (
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/savsgio/dictpool"
 )
 
 func MockArrowRecord(size int) array.Record {
@@ -330,7 +331,9 @@ func BenchmarkWriteRowsToColumnStore(t *testing.B) {
 	for i := 0; i < len(s); i++ {
 		mstSchema[s[i].Name] = int32(s[i].Type)
 	}
-	mstsInfo := map[string]*meta.MeasurementInfo{mstName: {Name: mstName, Schema: mstSchema}}
+	mstsInfo := &sync.Map{}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)
 	t.ReportAllocs()
@@ -355,7 +358,9 @@ func BenchmarkWriteRecsToColumnStore(t *testing.B) {
 	for i := 0; i < len(s); i++ {
 		mstSchema[s[i].Name] = int32(s[i].Type)
 	}
-	mstsInfo := map[string]*meta.MeasurementInfo{mstName: {Name: mstName, Schema: mstSchema}}
+	mstsInfo := &sync.Map{}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)
 	t.ReportAllocs()

@@ -28,7 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	raftrocksdb "github.com/openGemini/openGemini/lib/rocksdb"
-	raftstreamfs "github.com/openGemini/openGemini/open_src/github.com/hashicorp/raft-streamfs"
+	raftstreamfs "github.com/openGemini/openGemini/lib/util/lifted/hashicorp/raft-streamfs"
 	"go.uber.org/zap"
 )
 

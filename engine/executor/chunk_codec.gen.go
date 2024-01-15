@@ -19,7 +19,7 @@ package executor
 import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 func (b *Bitmap) Marshal(buf []byte) ([]byte, error) {

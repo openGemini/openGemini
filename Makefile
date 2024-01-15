@@ -68,7 +68,7 @@ go-vet-check:
 static-check: install-staticcheck
 	bash ./scripts/ci/static_check.sh
 
-go-generate: install-tmpl install-goyacc install-protoc install-protoc-gen-gogo
+go-generate: install-tmpl install-goyacc install-protoc install-protoc-gen-gogo install-protoc-gen-go
 	bash ./scripts/ci/go_generate.sh
 
 golangci-lint-check: install-golangci-lint
@@ -81,11 +81,10 @@ gotest: install-failpoint failpoint-enable
 
 build-check:
 	@$(PYTHON) build.py --clean --platform windows --arch amd64
-	@$(PYTHON) build.py --clean --platform windows --arch arm64
 	@$(PYTHON) build.py --clean --platform darwin --arch amd64
 	@$(PYTHON) build.py --clean --platform darwin --arch arm64
-	@$(PYTHON) build.py --clean --platform linux --arch amd64
 	@$(PYTHON) build.py --clean --platform linux --arch arm64
+	@$(PYTHON) build.py --clean --platform linux --arch amd64
 
 integration-test:
 	@echo "running integration test begin."

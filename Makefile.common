@@ -26,14 +26,14 @@ STATICCHECK := staticcheck
 FAILPOINT_ENABLE  := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl enable
 FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl disable
 
-PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|open_src\/github.com\/hashicorp"
+PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|lifted\/hashicorp"
 PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
 
-COPYRIGHT_EXCEPT  := "open_src|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go|lib/config/openGemini_dir.go"
+COPYRIGHT_EXCEPT  := "open_src|lifted|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go|lib/config/openGemini_dir.go"
 COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
 COPYRIGHT_HEADER  := "Copyright 2022|2023|2024 Huawei Cloud Computing Technologies Co., Ltd."
 
-STYLE_CHECK_EXCEPT :=  "open_src/github.com/hashicorp"
+STYLE_CHECK_EXCEPT :=  "lifted/hashicorp"
 STYLE_CHECK_GOFILE  := $$(find . -name '*.go' | grep -vE $(STYLE_CHECK_EXCEPT))
 
 PROTOC_ZIP_LINUX=protoc-3.14.0-linux-x86_64.zip
@@ -89,6 +89,9 @@ install-protoc-windows:
 
 install-protoc-gen-gogo:
 	@$(GO) install github.com/gogo/protobuf/protoc-gen-gogo@latest
+
+install-protoc-gen-go:
+	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
 
 failpoint-enable:
 	@$(FAILPOINT_ENABLE)

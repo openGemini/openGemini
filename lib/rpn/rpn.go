@@ -16,7 +16,7 @@ limitations under the License.
 
 package rpn
 
-import "github.com/openGemini/openGemini/open_src/influx/influxql"
+import "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 
 type Op uint8
 

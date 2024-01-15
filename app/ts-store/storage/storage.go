@@ -44,10 +44,10 @@ import (
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/downsample"
 	"github.com/openGemini/openGemini/services/hierarchical"
@@ -75,10 +75,10 @@ type StoreEngine interface {
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
 	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) (map[string]string, error)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
-	PreOffload(*meta.DbPtInfo) error
-	RollbackPreOffload(*meta.DbPtInfo) error
+	PreOffload(uint64, *meta.DbPtInfo) error
+	RollbackPreOffload(uint64, *meta.DbPtInfo) error
 	PreAssign(uint64, *meta.DbPtInfo) error
-	Offload(*meta.DbPtInfo) error
+	Offload(uint64, *meta.DbPtInfo) error
 	Assign(uint64, *meta.DbPtInfo) error
 	GetConnId() uint64
 	CheckPtsRemovedDone() error
@@ -129,12 +129,12 @@ func (s *Storage) appendRetentionPolicyService(c retention2.Config) {
 	s.Services = append(s.Services, srv)
 }
 
-func (s *Storage) appendHierarchicalService(c retention2.Config) {
+func (s *Storage) appendHierarchicalService(c config.HierarchicalConfig) {
 	if !c.Enabled {
 		return
 	}
 
-	srv := hierarchical.NewService(time.Duration(c.CheckInterval))
+	srv := hierarchical.NewService(c)
 	srv.Engine = s.engine
 	srv.MetaClient = s.metaClient
 	s.Services = append(s.Services, srv)
@@ -204,6 +204,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.WalEnabled = conf.Data.WalEnabled
 	opt.WalReplayParallel = conf.Data.WalReplayParallel
 	opt.WalReplayAsync = conf.Data.WalReplayAsync
+	opt.WalReplayBatchSize = int(conf.Data.WalReplayBatchSize)
 	opt.CompactionMethod = conf.Data.CompactionMethod
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
 	opt.LazyLoadShardEnable = conf.Data.LazyLoadShardEnable
@@ -215,6 +216,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.SnapshotTblNum = conf.Data.SnapshotTblNum
 	opt.FragmentsNumPerFlush = conf.Data.FragmentsNumPerFlush
 	opt.CsCompactionEnabled = conf.Data.CsCompactionEnabled
+	opt.CsDetachedFlushEnabled = conf.Data.CsDetachedFlushEnabled
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)
@@ -476,6 +478,10 @@ func (s *Storage) ScanWithSparseIndex(ctx context.Context, db string, ptId uint3
 	return filesFragments, err
 }
 
+func (s *Storage) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hybridqp.Catalog) (interface{}, error) {
+	return s.engine.GetIndexInfo(db, ptId, shardID, schema.(*executor.QuerySchema))
+}
+
 func (s *Storage) RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error) {
 	rowCount, err := s.engine.RowCount(db, ptId, shardIDS, schema.(*executor.QuerySchema))
 	return rowCount, err
@@ -521,20 +527,20 @@ func (s *Storage) GetEngine() netstorage.Engine {
 	return s.engine
 }
 
-func (s *Storage) PreOffload(ptInfo *meta.DbPtInfo) error {
-	return s.engine.PreOffload(ptInfo.Db, ptInfo.Pti.PtId)
+func (s *Storage) PreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {
+	return s.engine.PreOffload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
-func (s *Storage) RollbackPreOffload(ptInfo *meta.DbPtInfo) error {
-	return s.engine.RollbackPreOffload(ptInfo.Db, ptInfo.Pti.PtId)
+func (s *Storage) RollbackPreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {
+	return s.engine.RollbackPreOffload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
 func (s *Storage) PreAssign(opId uint64, ptInfo *meta.DbPtInfo) error {
 	return s.engine.PreAssign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Shards, ptInfo.DBBriefInfo, s.metaClient)
 }
 
-func (s *Storage) Offload(ptInfo *meta.DbPtInfo) error {
-	return s.engine.Offload(ptInfo.Db, ptInfo.Pti.PtId)
+func (s *Storage) Offload(opId uint64, ptInfo *meta.DbPtInfo) error {
+	return s.engine.Offload(opId, ptInfo.Db, ptInfo.Pti.PtId)
 }
 
 func (s *Storage) Assign(opId uint64, ptInfo *meta.DbPtInfo) error {

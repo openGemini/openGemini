@@ -21,22 +21,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path"
-	"path/filepath"
 	"runtime/debug"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/pkg/limiter"
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -137,11 +130,13 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 			return ErrCompStopped
 		case <-m.stopCompMerge:
 			log.Info("stop LevelCompact", zap.Uint64("id", shid))
+			m.blockCompactStop(plan.name)
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
 			if !m.CompactionEnabled() {
 				m.wg.Done()
+				m.blockCompactStop(plan.name)
 				return nil
 			}
 			go func(group *CompactGroup) {
@@ -155,6 +150,7 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 					m.ImmTable.unrefMmsTable(m, orderWg, inorderWg)
 					compLimiter.Release()
 					m.CompactDone(group.group)
+					m.blockCompactStop(group.name)
 					group.release()
 				}()
 
@@ -177,16 +173,26 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 	return nil
 }
 
-func (m *MmsTables) NewChunkIterators(group FilesInfo) (*ChunkIterators, error) {
+func (m *MmsTables) blockCompactStop(name string) {
+	if m.ImmTable.GetCompactionType(name) == config.BLOCK {
+		m.inBlockCompact.Del(name)
+	}
+}
+
+func (m *MmsTables) NewChunkIterators(group FilesInfo) *ChunkIterators {
 	compItrs := &ChunkIterators{
-		closed:   m.closed,
-		dropping: group.dropping,
-		name:     group.name,
-		itrs:     make([]*ChunkIterator, 0, len(group.compIts)),
-		merged:   &record.Record{},
+		closed:        m.closed,
+		stopCompMerge: m.stopCompMerge,
+		dropping:      group.dropping,
+		name:          group.name,
+		itrs:          make([]*ChunkIterator, 0, len(group.compIts)),
+		merged:        &record.Record{},
 	}
 
 	for _, i := range group.compIts {
+		if m.isClosed() || m.isCompMergeStopped() {
+			return nil
+		}
 		itr := NewChunkIterator(i)
 		itr.WithLog(CLog)
 		if !itr.Next() {
@@ -200,254 +206,7 @@ func (m *MmsTables) NewChunkIterators(group FilesInfo) (*ChunkIterators, error) 
 
 	heap.Init(compItrs)
 
-	return compItrs, nil
-}
-
-func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error {
-	return m.compactToLevel(group, full, isNonStream)
-}
-
-func (m *MmsTables) compactToLevel(group FilesInfo, full, isNonStream bool) error {
-	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
-	compactStatItem.Full = full
-	compactStatItem.Level = group.toLevel - 1
-	compactStat.AddActive(1)
-	defer func() {
-		compactStat.AddActive(-1)
-		compactStat.PushCompaction(compactStatItem)
-	}()
-
-	var cLog *zap.Logger
-	var logEnd func()
-	if isNonStream {
-		cLog, logEnd = logger.NewOperation(log, "Compaction", group.name)
-	} else {
-		cLog, logEnd = logger.NewOperation(log, "StreamCompaction", group.name)
-	}
-	defer logEnd()
-	lcLog := Log.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
-	start := time.Now()
-	lcLog.Debug("start compact file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
-	lcLog.Debug(fmt.Sprintf("compactionGroup: name=%v, groups=%v", group.name, group.oldFids))
-
-	var oldFilesSize int
-	var newFiles []TSSPFile
-	var compactErr error
-	if isNonStream {
-		compItrs, err := m.NewChunkIterators(group)
-		if err != nil {
-			lcLog.Error("new chunk iterators fail", zap.Error(err))
-			return err
-		}
-		compItrs.WithLog(lcLog)
-		oldFilesSize = compItrs.estimateSize
-		newFiles, compactErr = m.compact(compItrs, group.oldFiles, group.toLevel, true, lcLog)
-		compItrs.Close()
-	} else {
-		compItrs, err := m.NewStreamIterators(group)
-		if err != nil {
-			lcLog.Error("new stream iterators fail", zap.Error(err))
-			return err
-		}
-		compItrs.WithLog(lcLog)
-		oldFilesSize = compItrs.estimateSize
-		newFiles, compactErr = compItrs.compact(group.oldFiles, group.toLevel, true)
-		compItrs.Close()
-	}
-
-	if compactErr != nil {
-		lcLog.Error("compact fail", zap.Error(compactErr))
-		return compactErr
-	}
-
-	if err := m.ReplaceFiles(group.name, group.oldFiles, newFiles, true); err != nil {
-		lcLog.Error("replace compacted file error", zap.Error(err))
-		return err
-	}
-
-	end := time.Now()
-	lcLog.Debug("compact file done", zap.Any("files", group.oldFids), zap.Time("end", end), zap.Duration("time used", end.Sub(start)))
-
-	if oldFilesSize != 0 {
-		compactStatItem.OriginalFileCount = int64(len(group.oldFiles))
-		compactStatItem.CompactedFileCount = int64(len(newFiles))
-		compactStatItem.OriginalFileSize = int64(oldFilesSize)
-		compactStatItem.CompactedFileSize = SumFilesSize(newFiles)
-	}
-	return nil
-}
-
-func (c *csImmTableImpl) prepare(m *MmsTables, group FilesInfo, lcLog *Log.Logger) (*FragmentIterators, error) {
-	//index prepare
-	err := c.UpdatePrimaryKey(group.name, c.mstsInfo)
-	if err != nil {
-		return nil, err
-	}
-	sk := c.mstsInfo[group.name].SortKey
-	compItrs, err := c.NewFragmentIterators(m, group, sk)
-	if err != nil {
-		lcLog.Error("new fragment iterators fail", zap.Error(err))
-		return nil, err
-	}
-	compItrs.WithLog(lcLog)
-	_, seq := group.oldFiles[0].LevelAndSequence()
-	fileName := NewTSSPFileName(seq, group.toLevel, 0, 0, true, m.lock)
-	compItrs.builder = NewMsBuilder(m.path, compItrs.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.TSSTORE)
-	compItrs.builder.NewPKIndexWriter()
-	dataFilePath := fileName.String()
-	compItrs.indexFilePath = path.Join(compItrs.builder.Path, compItrs.name, colstore.AppendPKIndexSuffix(dataFilePath)+tmpFileSuffix)
-	compItrs.PkRec = append(compItrs.PkRec, record.NewRecordBuilder(c.primaryKey[group.name]))
-	compItrs.pkRecPosition = 0
-	compItrs.recordResultNum = 0
-	compItrs.oldIndexFiles = group.oldIndexFiles
-	return compItrs, nil
-}
-
-func (c *csImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error {
-	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
-	compactStatItem.Full = full
-	compactStatItem.Level = group.toLevel - 1
-	compactStat.AddActive(1)
-	defer func() {
-		compactStat.AddActive(-1)
-		compactStat.PushCompaction(compactStatItem)
-	}()
-
-	cLog, logEnd := logger.NewOperation(log, "Compaction for column store", group.name)
-	defer logEnd()
-	lcLog := Log.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
-	start := time.Now()
-	lcLog.Debug("start compact column store file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
-	lcLog.Debug(fmt.Sprintf("compactionGroup for column store: name=%v, groups=%v", group.name, group.oldFids))
-
-	compItrs, err := c.prepare(m, group, lcLog)
-	if err != nil {
-		return err
-	}
-	oldFilesSize := compItrs.estimateSize
-
-	newFiles, compactErr := compItrs.compact(c.primaryKey[group.name], m)
-	compItrs.Close()
-	if compactErr != nil {
-		lcLog.Error("compact fail", zap.Error(compactErr))
-		return compactErr
-	}
-
-	if err = c.replaceIndexFiles(m, group.name, group.oldIndexFiles); err != nil {
-		lcLog.Error("replace index file error", zap.Error(err))
-		return err
-	}
-
-	if err = c.ReplaceFiles(m, group.name, group.oldFiles, newFiles, true); err != nil {
-		lcLog.Error("replace compacted file error", zap.Error(err))
-		return err
-	}
-
-	end := time.Now()
-	lcLog.Debug("column store compact files done", zap.Any("files", group.oldFids), zap.Time("end", end), zap.Duration("time used", end.Sub(start)))
-
-	if oldFilesSize != 0 {
-		compactStatItem.OriginalFileCount = int64(len(group.oldFiles))
-		compactStatItem.CompactedFileCount = int64(len(newFiles))
-		compactStatItem.OriginalFileSize = int64(oldFilesSize)
-		compactStatItem.CompactedFileSize = SumFilesSize(newFiles)
-	}
-	return nil
-}
-
-func (c *csImmTableImpl) replaceIndexFiles(m *MmsTables, name string, oldIndexFiles []string) error {
-	if len(oldIndexFiles) == 0 {
-		return nil
-	}
-	var err error
-	defer func() {
-		if e := recover(); e != nil {
-			err = errno.NewError(errno.RecoverPanic, e)
-			log.Error("replace index file fail", zap.Error(err))
-		}
-	}()
-
-	mmsTables := m.PKFiles
-	m.mu.RLock()
-	indexFiles, ok := mmsTables[name]
-	m.mu.RUnlock()
-	if !ok || indexFiles == nil {
-		return errors.New("get index files from mmsTables error")
-	}
-
-	for _, f := range oldIndexFiles {
-		if m.isClosed() || m.isCompMergeStopped() {
-			return ErrCompStopped
-		}
-		lock := fileops.FileLockOption("")
-		err = fileops.Remove(f, lock)
-		if err != nil && !os.IsNotExist(err) {
-			err = errRemoveFail(f, err)
-			log.Error("remove index file fail ", zap.String("file name", f), zap.Error(err))
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *csImmTableImpl) ReplaceFiles(m *MmsTables, name string, oldFiles, newFiles []TSSPFile, isOrder bool) (err error) {
-	if len(newFiles) == 0 || len(oldFiles) == 0 {
-		return nil
-	}
-
-	defer func() {
-		if e := recover(); e != nil {
-			err = errno.NewError(errno.RecoverPanic, e)
-			log.Error("replace file fail", zap.Error(err))
-		}
-	}()
-
-	var logFile string
-	shardDir := filepath.Dir(m.path)
-	logFile, err = m.writeCompactedFileInfo(name, oldFiles, newFiles, shardDir, isOrder)
-	if err != nil {
-		if len(logFile) > 0 {
-			lock := fileops.FileLockOption(*m.lock)
-			_ = fileops.Remove(logFile, lock)
-		}
-		m.logger.Error("write compact log fail", zap.String("name", name), zap.String("dir", shardDir))
-		return
-	}
-
-	if err := RenameTmpFiles(newFiles); err != nil {
-		m.logger.Error("rename new file fail", zap.String("name", name), zap.String("dir", shardDir), zap.Error(err))
-		return err
-	}
-
-	mmsTables := m.ImmTable.getFiles(m, isOrder)
-	m.mu.RLock()
-	fs, ok := mmsTables[name]
-	m.mu.RUnlock()
-	if !ok || fs == nil {
-		return ErrCompStopped
-	}
-
-	fs.lock.Lock()
-	defer fs.lock.Unlock()
-	// remove old files
-	for _, f := range oldFiles {
-		if m.isClosed() || m.isCompMergeStopped() {
-			return ErrCompStopped
-		}
-		fs.deleteFile(f)
-		if err = m.deleteFiles(f); err != nil {
-			return
-		}
-	}
-	sort.Sort(fs)
-
-	lock := fileops.FileLockOption(*m.lock)
-	if err = fileops.Remove(logFile, lock); err != nil {
-		m.logger.Error("remove compact log file error", zap.String("name", name), zap.String("dir", shardDir),
-			zap.String("log", logFile), zap.Error(err))
-	}
-
-	return
+	return compItrs
 }
 
 func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16, isOrder bool, cLog *Log.Logger) ([]TSSPFile, error) {
@@ -606,6 +365,9 @@ func (m *MmsTables) mmsFiles(n int64) []*CompactGroup {
 		}
 
 		for _, f := range v.files {
+			if m.isClosed() || m.isCompMergeStopped() {
+				return nil
+			}
 			if f.(*tsspFile).ref == 0 {
 				panic("file closed")
 			}

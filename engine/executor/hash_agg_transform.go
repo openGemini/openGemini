@@ -28,8 +28,8 @@ import (
 	"github.com/openGemini/openGemini/lib/hashtable"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"go.uber.org/zap"
 )
 
@@ -313,8 +313,9 @@ func NewHashAggTransform(
 		mapIntervalKeysHash:  make([]uint64, 1),
 		mapIntervalValue:     make([]uint64, 1),
 		hashAggType:          t,
-		outputChunkPool:      NewCircularChunkPool(5, NewChunkBuilder(outRowDataType[0])),
-		timeFuncState:        unKnown,
+		// HashAgg and IncHashAgg have chunk caches，it need 4 more chunks.
+		outputChunkPool: NewCircularChunkPool(CircularChunkNum+4, NewChunkBuilder(outRowDataType[0])),
+		timeFuncState:   unKnown,
 	}
 	var err error
 	trans.chunkBuilder = NewChunkBuilder(trans.output.RowDataType)
@@ -421,7 +422,7 @@ func (trans *HashAggTransform) runnable(ctx context.Context, errs *errno.Errs, i
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.hashAggLogger.Error(err.Error(), zap.String("query", "HashAggTransform"),
-				zap.Uint64("query_id", trans.opt.QueryId))
+				zap.Uint64("query_id", trans.opt.QueryId), zap.String("stack", string(debug.Stack())))
 			errs.Dispatch(err)
 		} else {
 			errs.Dispatch(nil)
@@ -591,6 +592,7 @@ func (trans *HashAggTransform) hashAggHelper(ctx context.Context, errs *errno.Er
 		tracing.EndPP(trans.computeSpan)
 	}
 }
+
 func (trans *HashAggTransform) computeBatchLocsByDims() {
 	trans.batchEndLocs = trans.batchMPool.AllocBatchEndLocs()
 	strings, offsets := trans.getDimStringValues()
@@ -608,8 +610,7 @@ func (trans *HashAggTransform) getDimStringValues() ([][]byte, [][]uint32) {
 	for dimColId := range trans.opt.Dimensions {
 		col := trans.bufChunk.Dim(dimColId)
 		stringBytes, offset := col.GetStringBytes()
-		strings[dimColId] = stringBytes
-		offsets[dimColId] = offset
+		strings[dimColId], offsets[dimColId] = ExpandColumnOffsets(col, stringBytes, offset)
 	}
 	return strings, offsets
 }
@@ -794,7 +795,7 @@ func (trans *HashAggTransform) updateResult(groupIds []uint64, intervalIds []uin
 			if trans.bufGroupTags[i] == nil {
 				var dimsVals []string
 				for _, col := range trans.bufChunk.Dims() {
-					dimsVals = append(dimsVals, col.StringValue(trans.batchEndLocs[i]-1))
+					dimsVals = append(dimsVals, ColumnStringValue(col, trans.batchEndLocs[i]-1))
 				}
 				trans.bufGroupTags[i] = NewChunkTagsByTagKVs(trans.opt.Dimensions, dimsVals)
 			}
@@ -1127,4 +1128,45 @@ func (trans *HashAggTransform) GetInputNumber(_ Port) int {
 
 func (trans *HashAggTransform) GetFuncs() []aggFunc {
 	return trans.funcs
+}
+
+func ColumnStringValue(c Column, rowLoc int) string {
+	// fast path
+	if c.NilCount() == 0 {
+		return c.StringValue(rowLoc)
+	}
+
+	// slow path
+	if c.IsNilV2(rowLoc) {
+		return ""
+	}
+	return c.StringValue(c.GetValueIndexV2(rowLoc))
+}
+
+func ExpandColumnOffsets(col Column, stringBytes []byte, offsets []uint32) ([]byte, []uint32) {
+	// no nil values
+	if col.NilCount() == 0 {
+		return stringBytes, offsets
+	}
+	// all of values is nil
+	rowsNum := col.Length()
+	newOffsets := make([]uint32, rowsNum)
+	if len(offsets) == 0 {
+		return []byte{0}, newOffsets
+	}
+
+	// part of values is nil
+	j := 0
+	for i := 0; i < rowsNum; i++ {
+		if col.IsNilV2(i) {
+			newOffsets[i] = offsets[j]
+			continue
+		}
+		newOffsets[i] = offsets[j]
+		if j < len(offsets)-1 {
+			j++
+		}
+	}
+
+	return stringBytes, newOffsets
 }

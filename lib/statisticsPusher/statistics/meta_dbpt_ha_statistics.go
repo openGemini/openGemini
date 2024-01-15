@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
@@ -31,7 +32,7 @@ const (
 	metaDbptTasks = "meta_dbpt_tasks"
 )
 
-var statBufPool = bufferpool.NewByteBufferPool(0)
+var statBufPool = bufferpool.NewByteBufferPool(0, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 var MetaTaskInstance *MetaTaskDuration
 
 func init() {
@@ -109,7 +110,7 @@ func MetaDBPTStepDuration(event string, opId uint64, step string, src, dst uint6
 	MetaTaskInstance.dbptTasks[opId].totalCost += d
 	MetaTaskInstance.dbptTasks[opId].status = status
 	MetaTaskInstance.dbptTasks[opId].err = errMsg
-	MetaTaskInstance.dbptTasks[opId].time = time.Now()
+	MetaTaskInstance.dbptTasks[opId].time = time.Now().UTC()
 
 	task := MetaTaskInstance.dbptTasks[opId]
 	tagMap := map[string]string{

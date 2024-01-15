@@ -18,12 +18,14 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/machine"
@@ -38,6 +40,7 @@ const (
 	ChunkResponseMessage
 	AnalyzeResponseMessage
 	QueryMessage
+	IncQueryFinishMessage
 	MessageEof
 )
 
@@ -76,6 +79,7 @@ func (c *RPCClient) Init(ctx context.Context, queryNode []byte) {
 	c.AddHandler(AnalyzeResponseMessage, c.analyzeResponse)
 	c.AddHandler(ErrorMessage, c.errorMessage)
 	c.AddHandler(FinishMessage, c.emptyMessage)
+	c.AddHandler(IncQueryFinishMessage, c.incQueryMessage)
 }
 
 func (c *RPCClient) StartAnalyze(span *tracing.Span) {
@@ -239,5 +243,21 @@ func (c *RPCClient) errorMessage(data interface{}) error {
 }
 
 func (c *RPCClient) emptyMessage(data interface{}) error {
+	return nil
+}
+
+func (c *RPCClient) incQueryMessage(data interface{}) error {
+	msg, ok := data.(*IncQueryFinish)
+	if !ok {
+		return errno.NewError(errno.RemoteError, zap.String("finish msg error", fmt.Sprintf("%v", data)))
+	}
+
+	if msg.isIncQuery {
+		if msg.getFailed {
+			logger.GetLogger().Error("finish msg error", zap.Error(errno.NewError(errno.FailedPutGlobalMaxIterNum, msg.queryID)))
+			return nil
+		}
+		cache.PutGlobalIterNum(msg.queryID, msg.iterMaxNum)
+	}
 	return nil
 }

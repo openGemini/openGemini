@@ -24,7 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
 
@@ -55,23 +55,23 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 	}
 	connId := mp.store.GetConnId()
 	aliveConnId := req.GetAliveConnId()
-	mp.log.Info("Start MigrationProcessor", zap.Int32("type", req.GetMigrateType()),
+	mp.log.Info("Start MigrationProcessor", zap.Uint64("opId", req.GetOpId()), zap.String("type", meta.MoveState(req.GetMigrateType()).String()),
 		zap.String("db", ptInfo.Db), zap.Uint32("pt", ptInfo.Pti.PtId), zap.Uint64("ver", ptInfo.Pti.Ver),
 		zap.Uint64("connId", connId), zap.Uint64("aliveConnId", aliveConnId))
 	var err error
 	rsp := netstorage.NewPtResponse()
 	switch meta.MoveState(req.GetMigrateType()) {
 	case meta.MovePreOffload:
-		err = mp.store.PreOffload(ptInfo)
+		err = mp.store.PreOffload(req.GetOpId(), ptInfo)
 	case meta.MoveRollbackPreOffload:
-		err = mp.store.RollbackPreOffload(ptInfo)
+		err = mp.store.RollbackPreOffload(req.GetOpId(), ptInfo)
 	case meta.MovePreAssign:
 		err = errno.NewError(errno.DataNoAlive)
 		if connId == aliveConnId {
 			err = mp.store.PreAssign(req.GetOpId(), ptInfo)
 		}
 	case meta.MoveOffload:
-		err = mp.store.Offload(ptInfo)
+		err = mp.store.Offload(req.GetOpId(), ptInfo)
 	case meta.MoveAssign:
 		err = errno.NewError(errno.DataNoAlive)
 		if connId == aliveConnId {

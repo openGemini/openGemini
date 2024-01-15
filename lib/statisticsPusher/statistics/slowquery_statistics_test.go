@@ -50,7 +50,7 @@ func TestCollectOpsStoreSlowQueryStatistics(t *testing.T) {
 		"hostname": "127.0.0.1:8866",
 		"mst":      "store_slow_queries",
 	}
-	statistics.InitStoreQueryStatistics(tags)
+	statistics.InitStoreSlowQueryStatistics(tags)
 
 	stats := statistics.NewStoreSlowQueryStatistics()
 	stats.Query = "select * from cpu"
@@ -65,4 +65,24 @@ func TestCollectOpsStoreSlowQueryStatistics(t *testing.T) {
 	opsStats := statistics.CollectOpsStoreSlowQueryStatistics()
 	assert.Equal(t, 1, len(opsStats))
 	assert.Equal(t, "store_slow_queries", opsStats[0].Name)
+}
+
+func TestSlowQueryStatistics(t *testing.T) {
+	ssqs := statistics.NewSqlSlowQueryStatistics("db0")
+	locs := make([][2]int, 0)
+	locs = append(locs, [2]int{0, 18})
+	locs = append(locs, [2]int{20, 38})
+	ssqs.SetQueryAndLocs("select f1 from mst;\nselect f2 from mst", locs)
+	q1 := ssqs.GetQueryByStmtId(0)
+	q2 := ssqs.GetQueryByStmtId(1)
+	if q1 != "select f1 from mst" {
+		t.Fatal("TestSlowQueryStatistics q1 error")
+	}
+	if q2 != "select f2 from mst" {
+		t.Fatal("TestSlowQueryStatistics q2 error")
+	}
+	q3 := ssqs.GetQueryByStmtId(3)
+	if q3 != "" {
+		t.Fatal("TestSlowQueryStatistics q3 error")
+	}
 }

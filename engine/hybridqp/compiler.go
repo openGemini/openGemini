@@ -19,7 +19,7 @@ package hybridqp
 import (
 	"time"
 
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 type HintType int64
@@ -50,8 +50,13 @@ type Options interface {
 	HaveOnlyCSStore() bool
 	GetDimensions() []string
 	SetFill(influxql.FillOption)
-	SetTimeFirstKey()
-	GetTimeFirstKey() bool
+	IsTimeSorted() bool
+	IsUnifyPlan() bool
 	SetSortFields(influxql.SortFields)
 	GetSortFields() influxql.SortFields
+	FieldWildcard() bool
+	GetStmtId() int
+	GetLogQueryCurrId() string
+	GetIterId() int32
+	IsIncQuery() bool
 }

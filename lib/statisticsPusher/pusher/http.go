@@ -22,19 +22,25 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 )
 
+var maxCreateInternalDatabaseCount int = 20
+var retryCreateInternalDatabaseInterval time.Duration = time.Second * 3
+
 type Http struct {
-	conf         *HttpConfig
-	logger       *logger.Logger
-	storeCreated bool
+	conf                        *HttpConfig
+	logger                      *logger.Logger
+	storeCreated                bool
+	createInternalDatabaseCount int
 }
 
 type HttpConfig struct {
@@ -83,10 +89,20 @@ func NewHttp(conf *HttpConfig, logger *logger.Logger) *Http {
 }
 
 func (p *Http) Push(data []byte) error {
-	if err := p.createInternalStorage(); err != nil {
-		return err
+	for {
+		retry, err := p.createInternalStorage()
+		if retry {
+			p.createInternalDatabaseCount++
+			if p.createInternalDatabaseCount >= maxCreateInternalDatabaseCount {
+				return fmt.Errorf("http Push createInternalStorage timeout: %v", err.Error())
+			}
+			time.Sleep(retryCreateInternalDatabaseInterval)
+		} else if err != nil {
+			return err
+		} else {
+			break
+		}
 	}
-
 	if p.conf.Gzipped {
 		buf := bytes.Buffer{}
 		zw := gzip.NewWriter(&buf)
@@ -126,7 +142,7 @@ func (p *Http) Push(data []byte) error {
 }
 
 func (p *Http) createInternalDatabase() error {
-	buffer := fmt.Sprintf("CREATE DATABASE %s", p.conf.Database)
+	buffer := fmt.Sprintf("CREATE DATABASE \"%s\"", p.conf.Database)
 	data := url.Values{}
 	data.Set("q", buffer)
 
@@ -134,7 +150,7 @@ func (p *Http) createInternalDatabase() error {
 }
 
 func (p *Http) createInternalRP() error {
-	buffer := fmt.Sprintf("CREATE retention policy %s on %s duration %dh replication %d default",
+	buffer := fmt.Sprintf("CREATE retention policy %s on \"%s\" duration %dh replication %d default",
 		p.conf.RP, p.conf.Database, int(p.conf.Duration.Hours()), p.conf.RepN)
 	data := url.Values{}
 	data.Set("q", buffer)
@@ -142,6 +158,7 @@ func (p *Http) createInternalRP() error {
 	return p.post(p.conf.CreateURL(), data)
 }
 
+// only use for p.createDB/RP
 func (p *Http) post(url string, data url.Values) error {
 	buf := data.Encode()
 	req, err := http.NewRequest("POST", url, strings.NewReader(buf))
@@ -156,36 +173,48 @@ func (p *Http) post(url string, data url.Values) error {
 	if err != nil {
 		return err
 	}
+	// make sure createdb/rp resp.StatusCode is ok/noContent when create success
+	if writeResp.StatusCode != http.StatusOK && writeResp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("create db/rp resp status err:%d", writeResp.StatusCode)
+	}
+	body, err2 := io.ReadAll(writeResp.Body)
+	if err2 != nil {
+		return fmt.Errorf("create db/rp resp Read body err:body:%s err:%v", string(body), err2)
+	}
+	// make sure createdb/rp result json marshal is <"error", xx> when create fail
+	if strings.Contains(string(body), "error") {
+		return fmt.Errorf("create db/rp return error:%s", string(body))
+	}
 	_ = writeResp.Body.Close()
 
 	return nil
 }
 
 // createInternalStorage ensures the internal storage has been created.
-func (p *Http) createInternalStorage() error {
+func (p *Http) createInternalStorage() (bool, error) {
 	if p.storeCreated {
-		return nil
+		return false, nil
 	}
 
 	if p.conf.Database == "" {
-		return errors.New("database must entered")
+		return false, errors.New("database must entered")
 	}
 
 	err := p.createInternalDatabase()
 	if err != nil {
-		return err
+		return true, err
 	}
 
-	if p.conf.RP != "" {
+	if p.conf.RP != "" && p.conf.RP != config.DefaultMonitorRP {
 		err := p.createInternalRP()
 		if err != nil {
-			return err
+			return true, err
 		}
 	}
 
 	// Mark storage creation complete.
 	p.storeCreated = true
-	return nil
+	return false, nil
 }
 
 func (p *Http) setBasicAuth(req *http.Request) {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/app"
 	meta "github.com/openGemini/openGemini/app/ts-meta/run"
+	"github.com/openGemini/openGemini/app/ts-server/run"
 	ingestserver "github.com/openGemini/openGemini/app/ts-sql/sql"
 	store "github.com/openGemini/openGemini/app/ts-store/run"
 	"github.com/openGemini/openGemini/lib/config"
@@ -53,5 +54,8 @@ func main() {
 	cmdSql.Logo = ""
 	cmdStore.Logo = ""
 
+	cmdSql.AfterOpen = func() {
+		run.InitStorage(cmdSql.Server, cmdStore.Server)
+	}
 	app.Run(os.Args[1:], cmdMeta, cmdStore, cmdSql)
 }

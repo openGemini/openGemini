@@ -23,7 +23,7 @@ import (
 	handler2 "github.com/openGemini/openGemini/app/ts-store/transport/handler"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor"
-	query2 "github.com/openGemini/openGemini/open_src/influx/query"
+	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func TestProactiveManager_ServiceStartandClose(t *testing.T) {

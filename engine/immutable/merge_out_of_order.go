@@ -238,7 +238,7 @@ func mergeFirst(outLen int, outSize, orderFileSize int64) bool {
 func (m *MmsTables) matchOrderFiles(ctx *mergeContext) {
 	files, ok := m.getTSSPFiles(ctx.mst, true)
 	if !ok {
-		log.Error("No order file is matched.", zap.String("measurement", ctx.mst))
+		log.Warn("No order file is matched.", zap.String("measurement", ctx.mst))
 		return
 	}
 

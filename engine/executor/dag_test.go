@@ -25,8 +25,8 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func verifyProcessors(processors executor.Processors) bool {
@@ -93,7 +93,7 @@ func TestFulljoinDagBuilder(t *testing.T) {
 	var joinCases []*influxql.Join
 	joinCases = append(joinCases, joinCase)
 	schema := buildFullJoinSchema()
-	schema = executor.NewQuerySchemaWithJoinCase(schema.Fields(), schema.Sources(), schema.GetColumnNames(), schema.Options(), joinCases, nil)
+	schema = executor.NewQuerySchemaWithJoinCase(schema.Fields(), schema.Sources(), schema.GetColumnNames(), schema.Options(), joinCases, nil, nil)
 	schema.Options().(*query.ProcessorOptions).Sources = influxql.Sources{createMeasurement()}
 	logicMst1 := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))
 	logicMst2 := executor.NewLogicalMst(hybridqp.NewRowDataTypeImpl(schema.MakeRefs()...))

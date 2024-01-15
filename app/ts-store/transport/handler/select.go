@@ -19,7 +19,9 @@ package handler
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
@@ -32,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
+	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"go.uber.org/zap"
 )
 
@@ -111,11 +114,13 @@ func (s *Select) Process() error {
 	var node hybridqp.QueryNode
 	var err error
 	if s.req.Node != nil {
+		start := time.Now()
 		node, err = executor.UnmarshalQueryNode(s.req.Node, len(s.req.ShardIDs), &s.req.Opt)
 		if err != nil {
 			s.logger().Error("failed to unmarshal QueryNode", zap.Error(err))
 			return err
 		}
+		atomic.AddInt64(&statistics.StoreQueryStat.UnmarshalQueryTimeTotal, time.Since(start).Nanoseconds())
 	}
 
 	return s.process(s.w, node, s.req)
@@ -129,8 +134,24 @@ func (s *Select) NewShardTraits(req *executor.RemoteQuery, w spdy.Responser) *ex
 	return executor.NewStoreExchangeTraits(w, m)
 }
 
+func (s *Select) NewPtQuerysTraits(req *executor.RemoteQuery, w spdy.Responser) *executor.CsStoreExchangeTraits {
+	return executor.NewCsStoreExchangeTraits(w, req.PtQuerys)
+}
+
+func (s *Select) NewExecutorBuilder(w spdy.Responser, req *executor.RemoteQuery, ctx context.Context, parallelism int) *executor.ExecutorBuilder {
+	var executorBuilder *executor.ExecutorBuilder
+	if len(req.PtQuerys) == 0 {
+		traits := s.NewShardTraits(req, w)
+		executorBuilder = executor.NewScannerStoreExecutorBuilder(traits, s.store, req, ctx, parallelism)
+	} else {
+		traits := s.NewPtQuerysTraits(req, w)
+		executorBuilder = executor.NewCsStoreExecutorBuilder(traits, s.store, req, ctx, parallelism)
+	}
+	return executorBuilder
+}
+
 func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executor.RemoteQuery) (err error) {
-	if len(req.ShardIDs) == 0 || s.aborted {
+	if req.Empty() || s.aborted {
 		return nil
 	}
 
@@ -141,10 +162,11 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 		defer s.finishDuration(qDuration, start)
 	}
 
-	shardsNum := int64(len(req.ShardIDs))
+	shardsNum := int64(req.Len())
 	var parallelism int64
 	var totalSource int64
 	var e error
+	start := time.Now()
 	if req.Database != "_internal" {
 		parallelism, totalSource, e = resourceallocator.AllocRes(resourceallocator.ShardsParallelismRes, shardsNum)
 		if e != nil {
@@ -162,7 +184,7 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 			_ = resourceallocator.FreeParallelismRes(resourceallocator.ShardsParallelismRes, parallelism, 0)
 		}()
 	}
-
+	atomic.AddInt64(&statistics.StoreQueryStat.GetShardResourceTimeTotal, time.Since(start).Nanoseconds())
 	ctx := context.WithValue(context.Background(), QueryDurationKey, qDuration)
 	if req.Analyze {
 		ctx = s.initTrace(ctx)
@@ -171,23 +193,25 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	defer func() {
 		if r := recover(); r != nil {
 			err = errno.NewError(errno.LogicalPlanBuildFail, "failed")
-			s.logger().Error(err.Error())
+			s.logger().Error(err.Error(), zap.String("process raise stack:", string(debug.Stack())))
 		}
 	}()
 
-	if err := s.store.RefEngineDbPt(req.Database, req.PtID); err != nil {
-		return err
+	if req.HaveLocalMst() {
+		if err := s.store.RefEngineDbPt(req.Database, req.PtID); err != nil {
+			return err
+		}
+		defer s.store.UnrefEngineDbPt(req.Database, req.PtID)
 	}
-	defer s.store.UnrefEngineDbPt(req.Database, req.PtID)
-
-	traits := s.NewShardTraits(req, w)
-	executorBuilder := executor.NewScannerStoreExecutorBuilder(traits, s.store, req, ctx, int(parallelism))
+	start = time.Now()
+	executorBuilder := s.NewExecutorBuilder(w, req, ctx, int(parallelism))
 	executorBuilder.Analyze(s.rootSpan)
 	p, err := executorBuilder.Build(node)
 	if err != nil {
 		return err
 	}
-
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanDagBuildTimeTotal, time.Since(start).Nanoseconds())
+	atomic.AddInt64(&statistics.StoreQueryStat.QueryShardNumTotal, shardsNum)
 	if err := s.execute(ctx, p); err != nil {
 		return err
 	}
@@ -209,7 +233,7 @@ func (s *Select) execute(ctx context.Context, p hybridqp.Executor) error {
 		// query aborted
 		return nil
 	}
-
+	ctx = context.WithValue(ctx, query2.IndexScanDagStartTimeKey, time.Now())
 	err := pe.ExecuteExecutor(ctx)
 	if err == nil || pe.Aborted() {
 		return nil

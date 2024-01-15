@@ -23,9 +23,9 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,7 +141,7 @@ func TestFilterRecInMemTable(t *testing.T) {
 	s.ctx = &idKeyCursorContext{
 		tr: util.TimeRange{Max: 100},
 	}
-	s.ctx.filterOption.FiltersMap = map[string]interface{}{}
+	s.ctx.filterOption.FiltersMap = map[string]*influxql.FilterMapValue{}
 	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true}, nil)
 	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
 	s.mergeRecIters[sInfo.sid] = nil

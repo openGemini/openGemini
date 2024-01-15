@@ -24,10 +24,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
@@ -44,7 +45,7 @@ const (
 	DownSampleLogDir  = "downsample_log"
 
 	TsspDirName        = "tssp"
-	ColumnStoreDirName = config.ColumnStoreDirName
+	ColumnStoreDirName = obs.ColumnStoreDirName
 	CountBinFile       = "count.txt"
 
 	defaultCap = 64
@@ -72,7 +73,7 @@ type TSSPFile interface {
 	Inuse() bool
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
+	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error)
 	ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error)
 	ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
@@ -438,13 +439,13 @@ func (f *tsspFile) MetaIndexAt(idx int) (*MetaIndex, error) {
 	return f.reader.MetaIndexAt(idx)
 }
 
-func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
+func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.stopped() {
 		return nil, errFileClosed
 	}
-	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, dst, buffer, ioPriority)
+	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, dst, buf, ioPriority)
 }
 
 func (f *tsspFile) ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
@@ -789,19 +790,20 @@ func (g *CompactGroup) release() {
 }
 
 type FilesInfo struct {
-	name          string // measurement name with version
-	shId          uint64
-	dropping      *int64
-	compIts       FileIterators
-	oldFiles      []TSSPFile
-	oldIndexFiles []string
-	oldFids       []string
-	maxColumns    int
-	maxChunkRows  int
-	avgChunkRows  int
-	estimateSize  int
-	maxChunkN     int
-	toLevel       uint16
+	name              string // measurement name with version
+	shId              uint64
+	totalSegmentCount uint64
+	dropping          *int64
+	compIts           FileIterators
+	oldFiles          []TSSPFile
+	oldIndexFiles     []string
+	oldFids           []string
+	maxColumns        int
+	maxChunkRows      int
+	avgChunkRows      int
+	estimateSize      int
+	maxChunkN         int
+	toLevel           uint16
 }
 
 func (fi *FilesInfo) updatingFilesInfo(f TSSPFile, itr *FileIterator) {

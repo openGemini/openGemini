@@ -21,7 +21,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
-	sysString "strings"
+	sysStrings "strings"
 	"sync/atomic"
 	"time"
 
@@ -32,9 +32,9 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -237,7 +237,7 @@ func (e *Engine) TagKeys(db string, ptIDs []uint32, measurements [][]byte, condi
 	}
 	result := make([]string, 0, len(keysMap))
 	for k, v := range keysMap {
-		var builder sysString.Builder
+		var builder sysStrings.Builder
 		builder.WriteString(k)
 		hastag := false
 		for tag := range v {

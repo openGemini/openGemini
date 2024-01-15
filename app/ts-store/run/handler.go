@@ -26,7 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
-	"github.com/openGemini/openGemini/open_src/influx/httpd"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"go.uber.org/zap"
 )
 

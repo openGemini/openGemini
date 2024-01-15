@@ -184,7 +184,21 @@ type FileWriter interface {
 	ChunkMetaSize() int64
 	GetFileWriter() BasicFileWriter
 	AppendChunkMetaToData() error
-	SwitchMetaBuffer()
+	SwitchMetaBuffer() (int, error)
 	MetaDataBlocks(dst [][]byte) [][]byte
 	Name() string
+}
+
+type MetaWriter interface {
+	WriteMetaIndex(b []byte) (int, error)
+	WritePrimaryKey(b []byte) (int, error)
+	WritePrimaryKeyMeta(b []byte) (int, error)
+	WriteBloomFilter(bfIdx int, b []byte) (int, error)
+	GetMetaIndexSize() int64
+	GetPrimaryKeySize() int64
+	GetPrimaryKeyMetaSize() int64
+	GetBloomFilterSize(bfIdx int) int64
+	GetPrimaryKeyHandler() File
+	GetPrimaryKeyMetaHandler() File
+	Close() error
 }

@@ -20,7 +20,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 type LimitType int
@@ -232,6 +232,7 @@ type Catalog interface {
 	LimitAndOffset() (int, int)
 	MatchPreAgg() bool
 	HasInSeriesAgg() bool
+	CanSeqAggPushDown() bool
 	CanCallsPushdown() bool
 	CanAggPushDown() bool
 	ContainSeriesIgnoreCall() bool
@@ -253,6 +254,9 @@ type Catalog interface {
 	GetJoinCases() []*influxql.Join
 	IsHoltWinters(val string) bool
 	GetSortFields() influxql.SortFields
+	SetUnnests(unnests []*influxql.Unnest)
+	GetUnnests() influxql.Unnests
+	HasUnnests() bool
 }
 
 type CatalogCreator interface {
@@ -300,6 +304,7 @@ type StoreEngine interface {
 	ReportLoad()
 	CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema Catalog) (IShardsFragments, error)
+	GetIndexInfo(db string, ptId uint32, shardID uint64, schema Catalog) (interface{}, error)
 	RowCount(db string, ptId uint32, shardIDS []uint64, schema Catalog) (int64, error)
 	UnrefEngineDbPt(db string, ptId uint32)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int

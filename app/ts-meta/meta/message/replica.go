@@ -17,7 +17,7 @@ limitations under the License.
 package message
 
 import (
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 
 type PeerInfo struct {

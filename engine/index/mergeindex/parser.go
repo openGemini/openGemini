@@ -22,8 +22,8 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
-	"github.com/openGemini/openGemini/open_src/vm/uint64set"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"go.uber.org/zap"
 )
 

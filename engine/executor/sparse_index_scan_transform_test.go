@@ -20,17 +20,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -97,6 +99,10 @@ func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32,
 	return nil, nil
 }
 
+func (s *MockStoreEngine) GetIndexInfo(_ string, _ uint32, _ uint64, _ hybridqp.Catalog) (interface{}, error) {
+	return nil, nil
+}
+
 func (s *MockStoreEngine) ScanWithSparseIndex(_ context.Context, _ string, _ uint32, _ []uint64, _ hybridqp.Catalog) (hybridqp.IShardsFragments, error) {
 	return buildShardsFragments1(), nil
 }
@@ -113,6 +119,44 @@ func (s *MockStoreEngine) GetShardDownSampleLevel(_ string, _ uint32, _ uint64) 
 	return 0
 }
 
+type MockStoreEngine1 struct {
+}
+
+func NewMockStoreEngine1() *MockStoreEngine1 {
+	return &MockStoreEngine1{}
+}
+
+func (s *MockStoreEngine1) ReportLoad() {
+}
+
+func (s *MockStoreEngine1) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	readers := make([][]interface{}, 1)
+	readers[0] = make([]interface{}, 1)
+	readers[0][0] = engine.NewTagSetCursorForTest(schema.(*executor.QuerySchema), 0)
+	plan := executor.NewLogicalDummyShard(readers)
+	return plan, nil
+}
+
+func (s *MockStoreEngine1) GetIndexInfo(_ string, _ uint32, _ uint64, _ hybridqp.Catalog) (interface{}, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine1) ScanWithSparseIndex(_ context.Context, _ string, _ uint32, _ []uint64, _ hybridqp.Catalog) (hybridqp.IShardsFragments, error) {
+	return buildShardsFragments1(), nil
+}
+
+func (s *MockStoreEngine1) RowCount(_ string, _ uint32, _ []uint64, _ hybridqp.Catalog) (int64, error) {
+	return 0, nil
+}
+
+func (s *MockStoreEngine1) UnrefEngineDbPt(_ string, _ uint32) {
+
+}
+
+func (s *MockStoreEngine1) GetShardDownSampleLevel(_ string, _ uint32, _ uint64) int {
+	return 0
+}
+
 func buildIndexScanExtraInfo() *executor.IndexScanExtraInfo {
 	info := &executor.IndexScanExtraInfo{
 		Store: NewMockStoreEngine(),
@@ -120,6 +164,55 @@ func buildIndexScanExtraInfo() *executor.IndexScanExtraInfo {
 			Database: "db0",
 			PtID:     uint32(0),
 			ShardIDs: []uint64{1, 2, 3},
+		},
+	}
+	return info
+}
+
+func buildIndexScanExtraInfo1() *executor.IndexScanExtraInfo {
+	info := &executor.IndexScanExtraInfo{
+		Store: NewMockStoreEngine1(),
+		Req: &executor.RemoteQuery{
+			Database: "db0",
+			PtID:     uint32(0),
+			ShardIDs: []uint64{1, 2, 3},
+		},
+	}
+	return info
+}
+
+func buildIndexScanExtraInfoForPtQuerys() *executor.IndexScanExtraInfo {
+	info := &executor.IndexScanExtraInfo{
+		Store: NewMockStoreEngine(),
+		Req: &executor.RemoteQuery{
+			Database: "db0",
+			PtID:     uint32(0),
+			PtQuerys: []executor.PtQuery{
+				{
+					PtID: 0,
+					ShardInfos: []executor.ShardInfo{
+						{ID: 1, Path: "data/db0/0/rp0/1_startime_endtime_1/columnstore", Version: 0},
+					},
+				},
+				{
+					PtID: 0,
+					ShardInfos: []executor.ShardInfo{
+						{ID: 2, Path: "data/db0/0/rp0/2_startime_endtime_2/columnstore", Version: 0},
+					},
+				},
+				{
+					PtID: 0,
+					ShardInfos: []executor.ShardInfo{
+						{ID: 3, Path: "data/db0/0/rp0/3_startime_endtime_3/columnstore", Version: 0},
+					},
+				},
+			},
+		},
+		PtQuery: &executor.PtQuery{
+			PtID: 0,
+			ShardInfos: []executor.ShardInfo{
+				{ID: 1, Path: "data/db0/0/rp0/1_startime_endtime_1/columnstore", Version: 0},
+			},
 		},
 	}
 	return info
@@ -620,9 +713,8 @@ func TestSparseIndexScanTransform(t *testing.T) {
 	info := buildIndexScanExtraInfo()
 
 	// build the logical plan
-	series := executor.NewLogicalMst(outputRowDataType)
-	agg := executor.NewLogicalAggregate(series, schema)
-	index := executor.NewLogicalSparseIndexScan(agg, schema)
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	index := executor.NewLogicalSparseIndexScan(reader, schema)
 
 	// build the pipeline executor
 	var process []executor.Processor
@@ -660,36 +752,49 @@ func TestSparseIndexScanTransform(t *testing.T) {
 
 	// make the pipeline executor work
 	assert.Equal(t, trans.Name(), "SparseIndexScanTransform")
-	assert.Equal(t, len(trans.Explain()), 1)
+	assert.Equal(t, len(trans.Explain()), 0)
 	assert.Equal(t, trans.GetInputNumber(executor.NewChunkPort(outputRowDataType)), 0)
 	assert.Equal(t, trans.GetOutputNumber(executor.NewChunkPort(outputRowDataType)), 0)
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		if err := trans.Work(ctx); err != nil {
 			t.Error(err)
 			return
 		}
 	}()
-
+	wg.Wait()
 	exec.Release()
 	childExec.Release()
 	trans.Close()
+}
 
-	// error check
-	scan := executor.NewSparseIndexScanTransform(outputRowDataType, index.Children()[0], index.RowExprOptions(), nil, index.Schema())
+func TestSparseIndexScanTransformFunction(t *testing.T) {
+	// init the chunk and schema
+	ctx := context.Background()
+	out := buildInputRowDataType()
+	schema := buildInputSchema()
+	info := buildIndexScanExtraInfo()
+
+	// build the logical plan
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	index := executor.NewLogicalSparseIndexScan(reader, schema)
+	scan := executor.NewSparseIndexScanTransform(out, index.Children()[0], index.RowExprOptions(), nil, index.Schema())
 	err := scan.Work(ctx)
-	if err != nil {
-		assert.Equal(t, err, errors.New("SparseIndexScanTransform get the info failed"))
-	}
+	assert.Equal(t, err, errors.New("SparseIndexScanTransform get the info failed"))
 	cancelCtx, cancelFunc := context.WithCancel(ctx)
-	scan = executor.NewSparseIndexScanTransform(outputRowDataType, index.Children()[0], index.RowExprOptions(), info, index.Schema())
+	scan = executor.NewSparseIndexScanTransform(out, index.Children()[0], index.RowExprOptions(), info, index.Schema())
 	go scan.Running(cancelCtx)
 	time.Sleep(1 * time.Second)
 	cancelFunc()
 	go scan.Running(cancelCtx)
 	time.Sleep(1 * time.Second)
-	trans.GetInputs().Close()
 	fileFrag := executor.NewFileFragment(getTSSPFiles(1)[0], fragment.FragmentRanges{{Start: 27, End: 60}}, 33)
 	newFileFrag := fileFrag.CutTo(44)
 	assert.Equal(t, fileFrag, newFileFrag)
+	assert.Equal(t, scan.IsSink(), true)
+	scan.Abort()
+	assert.Equal(t, scan.Work(context.Background()), nil)
 }

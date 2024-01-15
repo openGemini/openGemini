@@ -401,3 +401,40 @@ func TestStreamRead(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeObsPath(t *testing.T) {
+	obsPath := EncodeObsPath("mock_endpoint", "mock_bucket", "a/b/c", "mock_ak", "mock_sk")
+	endpoint, ak, sk, bucket, basePath, err := decodeObsPath(obsPath)
+	assert.Nil(t, err)
+	assert.Equal(t, "mock_endpoint", endpoint)
+	assert.Equal(t, "mock_ak", ak)
+	assert.Equal(t, "mock_sk", sk)
+	assert.Equal(t, "mock_bucket", bucket)
+	assert.Equal(t, "a/b/c", basePath)
+
+	obsPath = "xxxxxxxx"
+	_, _, _, _, _, err = decodeObsPath(obsPath)
+	assert.NotNil(t, err)
+	obsPath = "obs://"
+	_, _, _, _, _, err = decodeObsPath(obsPath)
+	assert.NotNil(t, err)
+	obsPath = "obs://mock_endpoint"
+	_, _, _, _, _, err = decodeObsPath(obsPath)
+	assert.NotNil(t, err)
+	obsPath = "obs://mock_endpoint/mock_ak"
+	_, _, _, _, _, err = decodeObsPath(obsPath)
+	assert.NotNil(t, err)
+	obsPath = "obs://mock_endpoint/mock_ak/mock_sk"
+	_, _, _, _, _, err = decodeObsPath(obsPath)
+	assert.NotNil(t, err)
+	obsPath = "obs://mock_endpoint/mock_ak/mock_sk/mock_bucket"
+	_, _, _, _, _, err = decodeObsPath(obsPath)
+	assert.NotNil(t, err)
+	obsPath = "obs://mock_endpoint/mock_ak//mock_bucket/a/b/c"
+	endpoint, ak, sk, bucket, basePath, err = decodeObsPath(obsPath)
+	assert.Equal(t, "mock_endpoint", endpoint)
+	assert.Equal(t, "mock_ak", ak)
+	assert.Equal(t, "", sk)
+	assert.Equal(t, "mock_bucket", bucket)
+	assert.Equal(t, "a/b/c", basePath)
+}

@@ -8,7 +8,7 @@ import (
 	math "math"
 
 	proto "github.com/gogo/protobuf/proto"
-	proto1 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	proto1 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.

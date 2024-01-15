@@ -27,12 +27,13 @@ import (
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -49,9 +50,9 @@ type FileReader interface {
 	Unref() int64
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
+	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error)
 
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, buf *pool.Buffer, ioPriority int) ([]byte, error)
 	ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error)
 	Read(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
@@ -686,7 +687,7 @@ func DecodeColumnOfOneValue(data []byte, col *record.ColVal, typ uint8) {
 }
 
 type BaseFilterOptions struct {
-	FiltersMap    map[string]interface{}
+	FiltersMap    influxql.FilterMapValuer
 	RedIdxMap     map[int]struct{} // redundant columns, which are not required after filtering.
 	FieldsIdx     []int            // field index in schema
 	FilterTags    []string         // filter tag name
@@ -859,9 +860,9 @@ func getValues(rec *record.Record, filterOption *BaseFilterOptions, validCountsL
 		}
 	}
 }
+
 func FilterByField(rec *record.Record, filterRec *record.Record, filterOption *BaseFilterOptions, con influxql.Expr, rowFilters *[]clv.RowFilter,
 	tags *influx.PointTags, filterBitmap *bitmap.FilterBitmap, colAux **ColAux) *record.Record {
-
 	haveFilter := filterOption.CondFunctions != nil && filterOption.CondFunctions.HaveFilter()
 	if rec == nil || (!haveFilter && con == nil && rowFilters == nil) {
 		return rec
@@ -878,16 +879,16 @@ func FilterByField(rec *record.Record, filterRec *record.Record, filterOption *B
 	for _, id := range filterOption.FilterTags {
 		tag := tags.FindPointTag(id)
 		if tag == nil {
-			filterOption.FiltersMap[id] = (*string)(nil)
+			filterOption.FiltersMap.SetFilterMapValue(id, (*string)(nil))
 		} else {
-			filterOption.FiltersMap[id] = tag.Value
+			filterOption.FiltersMap.SetFilterMapValue(id, tag.Value)
 		}
 	}
 
 	valuer := influxql.ValuerEval{
 		Valuer: influxql.MultiValuer(
 			query.MathValuer{},
-			influxql.MapValuer(filterOption.FiltersMap),
+			influxql.FilterMapValuer(filterOption.FiltersMap),
 		),
 	}
 
@@ -922,12 +923,12 @@ func FilterByField(rec *record.Record, filterRec *record.Record, filterOption *B
 			continue
 		}
 		for k, id := range filterOption.FieldsIdx {
-			filterOption.FiltersMap[rec.Schema[id].Name] = ignoreTypeFun[rec.Schema[id].Type](i, rec.ColVals[id], c.validCounts[k], c.integerValues[k], c.floatValues[k], c.booleanValues[k])
+			ignoreTypeFun[rec.Schema[id].Type](filterOption.FiltersMap, rec.Schema[id].Name, i, rec.ColVals[id], c.validCounts[k], c.integerValues[k], c.floatValues[k], c.booleanValues[k])
 			if !rec.ColVals[id].IsNil(i) {
 				c.validCounts[k]++
 			}
 		}
-		if valuer.EvalBool(rowCon) {
+		if filterOption.FiltersMap.FilterMapEvalBool(valuer, rowCon) {
 			reserveId = append(reserveId, i)
 		}
 	}
@@ -938,7 +939,7 @@ func FilterByField(rec *record.Record, filterRec *record.Record, filterOption *B
 		return nil
 	}
 
-	return genRecByRowNumbers(rec, nil, reserveId, c.colPos, c.colPosValidCount)
+	return genRecByRowNumbers(rec, filterRec, reserveId, c.colPos, c.colPosValidCount)
 }
 
 func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterOptions, filterBitmap *bitmap.FilterBitmap) *record.Record {
@@ -961,41 +962,44 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 	return genRecByReserveIds(rec, filterRec, filterBitmap.ReserveId, filterOption.RedIdxMap)
 }
 
-var ignoreTypeFun []func(i int, col record.ColVal, validCount int, Integervalues []int64, Floatvalues []float64, Boolvalues []bool) interface{}
+var ignoreTypeFun []func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalues []int64, Floatvalues []float64, Boolvalues []bool)
 
 func initIgnoreTypeFun() {
-	ignoreTypeFun = make([]func(i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) interface{}, influx.Field_Type_Last)
+	ignoreTypeFun = make([]func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool), influx.Field_Type_Last)
 
-	ignoreTypeFun[influx.Field_Type_Int] = func(i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) interface{} {
+	ignoreTypeFun[influx.Field_Type_Int] = func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) {
 		if col.IsNil(i) {
-			return (*int64)(nil)
+			filterMap.SetFilterMapValue(name, (*int64)(nil))
+			return
 		}
-		return Integervalue[validCount]
+		filterMap.SetFilterMapValue(name, Integervalue[validCount])
 	}
 
-	ignoreTypeFun[influx.Field_Type_Float] = func(i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) interface{} {
+	ignoreTypeFun[influx.Field_Type_Float] = func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) {
 		if col.IsNil(i) {
-			return (*float64)(nil)
+			filterMap.SetFilterMapValue(name, (*float64)(nil))
+			return
 		}
-		return Floatvalue[validCount]
+		filterMap.SetFilterMapValue(name, Floatvalue[validCount])
 	}
 
-	ignoreTypeFun[influx.Field_Type_String] = func(i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) interface{} {
+	ignoreTypeFun[influx.Field_Type_String] = func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) {
 		value, isNil := col.StringValueSafe(i)
 		if isNil {
-			return (*string)(nil)
+			filterMap.SetFilterMapValue(name, (*string)(nil))
+			return
 		}
-		return value
+		filterMap.SetFilterMapValue(name, value)
 	}
 
-	ignoreTypeFun[influx.Field_Type_Boolean] = func(i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) interface{} {
+	ignoreTypeFun[influx.Field_Type_Boolean] = func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalue []int64, Floatvalue []float64, Boolvalue []bool) {
 		if col.IsNil(i) {
-			return (*bool)(nil)
+			filterMap.SetFilterMapValue(name, (*bool)(nil))
+			return
 		}
-		return Boolvalue[validCount]
+		filterMap.SetFilterMapValue(name, Boolvalue[validCount])
 	}
 }
-
 func reverseIntegerValues(values []int64) []int64 {
 	for i, j := 0, len(values)-1; i < j; {
 		values[i], values[j] = values[j], values[i]
@@ -1051,7 +1055,7 @@ func reverseStringValues(val []byte, offs []uint32, col *record.ColVal, bmCol *r
 
 type ColumnReader interface {
 	ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error)
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, error)
 	UnrefCachePage(cachePage *readcache.CachePage)
 }
 

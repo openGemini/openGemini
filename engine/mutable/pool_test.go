@@ -44,7 +44,7 @@ func TestMemTablePool(t *testing.T) {
 	tbl.UnRef()
 
 	pool.SetExpire(1)
-	time.Sleep(time.Second * 2)
+	time.Sleep(time.Second * 3)
 	pm.Free()
 
 	require.Equal(t, 0, pm.Size())

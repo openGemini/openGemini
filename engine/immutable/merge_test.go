@@ -29,7 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func getDefaultSchemas() record.Schemas {
@@ -249,7 +249,9 @@ func compareColVal(expect, got *record.ColVal, ref *record.Field) error {
 		return fmt.Errorf("different col.Val: %s", ref.String())
 	}
 
-	if !bytes.Equal(expect.Bitmap, got.Bitmap) {
+	expect.RepairBitmap()
+	got.RepairBitmap()
+	if !reflect.DeepEqual(expect.Bitmap, got.Bitmap) {
 		return fmt.Errorf("different col.Bitmap: %s", ref.String())
 	}
 

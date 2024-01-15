@@ -47,6 +47,8 @@ type Command struct {
 	Server        Server
 	Config        config.Config
 	NewServerFunc func(config.Config, ServerInfo, *logger.Logger) (Server, error)
+
+	AfterOpen func()
 }
 
 func NewCommand() *Command {
@@ -84,7 +86,12 @@ func (cmd *Command) Run(args ...string) error {
 	if err := s.Open(); err != nil {
 		return fmt.Errorf("open server: %s", err)
 	}
+
 	cmd.Server = s
+	if cmd.AfterOpen != nil {
+		cmd.AfterOpen()
+	}
+
 	return nil
 }
 
@@ -122,6 +129,7 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 			return err
 		}
 		crypto.Initialize(common.CryptoConfig)
+		config.SetProductType(common.ProductType)
 	}
 
 	if err := conf.Validate(); err != nil {

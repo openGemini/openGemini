@@ -17,27 +17,28 @@ limitations under the License.
 package hashtable
 
 import (
-	"math/rand"
+	"crypto/rand"
+	"encoding/binary"
 	"testing"
 
-	"github.com/Masterminds/goutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestStringHashMap_SetGet(t *testing.T) {
 	m := DefaultStringHashMap()
 	for i := 1; i < 10000; i++ {
-		set, _ := goutils.RandomAlphaNumeric(i)
-		id := m.Set([]byte(set))
+		buf := make([]byte, i)
+		_ = binary.Read(rand.Reader, binary.LittleEndian, &buf)
+		id := m.Set(buf)
 		get := m.Get(id, nil)
-		assert.Equal(t, set, string(get))
+		assert.Equal(t, buf, get)
 	}
 }
 
 func TestIntHashMap_SetGet(t *testing.T) {
 	m := DefaultIntHashMap()
 	for i := 1; i < 1000000; i++ {
-		set := rand.Int63()
+		var set int64 = randInt63()
 		id := m.Set(set)
 		get := m.Get(id)
 		assert.Equal(t, set, get)
@@ -45,50 +46,47 @@ func TestIntHashMap_SetGet(t *testing.T) {
 }
 
 func BenchmarkStringHashMapSet(b *testing.B) {
-	bench := func(b *testing.B, count int) {
+	bench := func(b *testing.B, key []byte) {
 		m := DefaultStringHashMap()
 		b.ResetTimer()
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			b.StopTimer()
-			key, _ := goutils.RandomAlphaNumeric(count)
-			keySlice := []byte(key)
-			b.StartTimer()
-			m.Set(keySlice)
+			m.Set(key)
 		}
 	}
 
+	key := make([]byte, 100)
 	b.Run("100B", func(b *testing.B) {
-		bench(b, 100)
+		bench(b, key)
 	})
 
+	key = make([]byte, 1024)
 	b.Run("1KB", func(b *testing.B) {
-		bench(b, 1024)
+		bench(b, key)
 	})
 }
 
 func BenchmarkStringHashMapGet(b *testing.B) {
-	bench := func(b *testing.B, count int) {
+	bench := func(b *testing.B, key []byte) {
 		m := DefaultStringHashMap()
+		id := m.Set(key)
 		b.ResetTimer()
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			b.StopTimer()
-			key, _ := goutils.RandomAlphaNumeric(count)
-			id := m.Set([]byte(key))
-			b.StartTimer()
 			m.Get(id, nil)
 		}
 	}
 
+	key := make([]byte, 100)
 	b.Run("100B", func(b *testing.B) {
-		bench(b, 100)
+		bench(b, key)
 	})
 
+	key = make([]byte, 1024)
 	b.Run("1KB", func(b *testing.B) {
-		bench(b, 1024)
+		bench(b, key)
 	})
 }
 
@@ -97,10 +95,11 @@ func BenchmarkIntHashMapSet(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
+	b.StopTimer()
+	key := randInt63()
+	b.StartTimer()
+
 	for i := 0; i < b.N; i++ {
-		b.StopTimer()
-		key := rand.Int63()
-		b.StartTimer()
 		m.Set(key)
 	}
 }
@@ -108,7 +107,7 @@ func BenchmarkIntHashMapSet(b *testing.B) {
 func BenchmarkIntHashMapGet(b *testing.B) {
 	m := DefaultIntHashMap()
 	for i := 0; i < 1e7; i++ {
-		m.Set(rand.Int63())
+		m.Set(randInt63())
 	}
 
 	b.ResetTimer()
@@ -117,4 +116,10 @@ func BenchmarkIntHashMapGet(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		m.Get(uint64(i % 1e7))
 	}
+}
+
+func randInt63() int64 {
+	var i int64
+	_ = binary.Read(rand.Reader, binary.LittleEndian, &i)
+	return i
 }

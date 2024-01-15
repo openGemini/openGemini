@@ -2,4 +2,4 @@
 
 set -e
 
-go list ./... | grep -vE "tests|open_src|ts-cli" | xargs go vet -tests=false
+go list ./... | grep -vE "tests|open_src|lifted" | xargs go vet -tests=false

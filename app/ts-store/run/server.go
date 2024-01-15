@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
+	spdyTransport "github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -41,8 +42,8 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/fs"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/sherlock"
 	stream2 "github.com/openGemini/openGemini/services/stream"
@@ -99,6 +100,8 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	mutable.InitMutablePool(cpu.GetCpuNum())
 	mutable.InitWriteRecPool(cpu.GetCpuNum())
 	immutable.InitWriterPool(3 * cpu.GetCpuNum())
+	immutable.SetIndexCompressMode(conf.Data.TemporaryIndexCompressMode)
+	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
@@ -106,6 +109,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	// set query series limit
 	syscontrol.SetQuerySeriesLimit(conf.SelectSpec.QuerySeriesLimit)
 	syscontrol.SetQueryEnabledWhenExceedSeries(conf.SelectSpec.EnableWhenExceed)
+	syscontrol.SetIndexReadCachePersistent(conf.Data.IndexReadCachePersistent)
 
 	s.storageDataPath = conf.Data.DataDir
 	s.metaPath = conf.Data.MetaDir
@@ -139,6 +143,10 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 // Err returns an error channel that multiplexes all out of band errors received from all services.
 func (s *Server) Err() <-chan error { return s.err }
+
+func (s *Server) GetStore() *storage.Storage {
+	return s.storage
+}
 
 // Open opens the meta and data store and all services.
 func (s *Server) Open() error {
@@ -280,7 +288,7 @@ func (s *Server) initStatisticsPusher() {
 
 	stat.InitPerfStatistics(globalTags)
 	stat.InitImmutableStatistics(globalTags)
-	stat.InitStoreQueryStatistics(globalTags)
+	stat.InitStoreSlowQueryStatistics(globalTags)
 	stat.InitRuntimeStatistics(globalTags, int(time.Duration(s.config.Monitor.StoreInterval).Seconds()))
 	stat.InitIOStatistics(globalTags)
 	stat.NewMergeStatistics().Init(globalTags)
@@ -295,6 +303,9 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewRecordStatistics().Init(globalTags)
 	stat.NewHitRatioStatistics().Init(globalTags)
 	stat.InitDatabaseStatistics(globalTags)
+	stat.InitStoreQueryStatistics(globalTags)
+	stat.InitSpdyStatistics(globalTags)
+	spdyTransport.InitStatistics(spdyTransport.AppStore)
 
 	s.statisticsPusher.Register(
 		stat.CollectPerfStatistics,
@@ -314,6 +325,8 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewStreamWindowStatistics().Collect,
 		stat.NewRecordStatistics().Collect,
 		stat.NewHitRatioStatistics().Collect,
+		stat.CollectStoreQueryStatistics,
+		stat.CollectSpdyStatistics,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
@@ -325,5 +338,6 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
 	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
 	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreQueryStatistics)
 	s.statisticsPusher.Start()
 }

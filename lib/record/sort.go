@@ -20,7 +20,7 @@ import (
 	"time"
 
 	Logger "github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 type PrimaryKey struct {

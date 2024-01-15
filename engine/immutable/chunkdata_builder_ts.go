@@ -22,19 +22,21 @@ import (
 
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
 type EncodeChunkData interface {
-	EncodeChunk(b *ChunkDataBuilder, id uint64, offset int64, rec *record.Record, dst []byte) ([]byte, error)
+	EncodeChunk(b *ChunkDataBuilder, id uint64, offset int64, rec *record.Record, dst []byte, timeSorted bool) ([]byte, error)
+	EncodeChunkForCompaction(b *ChunkDataBuilder, offset int64, rec *record.Record, dst []byte, accumulateRowsIndex []int, timeSorted bool) ([]byte, error)
 	SetAccumulateRowsIndex(rowsPerSegment []int)
+	SetDetachedInfo(writeDetached bool)
 }
 
 type TsChunkDataImp struct {
 }
 
-func (t *TsChunkDataImp) EncodeChunk(b *ChunkDataBuilder, id uint64, offset int64, rec *record.Record, dst []byte) ([]byte, error) {
+func (t *TsChunkDataImp) EncodeChunk(b *ChunkDataBuilder, id uint64, offset int64, rec *record.Record, dst []byte, timeSorted bool) ([]byte, error) {
 	var err error
 	b.reset(dst)
 	b.chunkMeta.sid = id
@@ -47,7 +49,6 @@ func (t *TsChunkDataImp) EncodeChunk(b *ChunkDataBuilder, id uint64, offset int6
 	b.timeCols = timeCol.Split(b.timeCols[:0], b.maxRowsLimit, influx.Field_Type_Int)
 	b.chunkMeta.segCount = uint32(len(b.timeCols))
 	b.chunkMeta.resize(int(b.chunkMeta.columnCount), len(b.timeCols))
-
 	for i := range rec.Schema[:len(rec.Schema)-1] {
 		ref := rec.Schema[i]
 		col := rec.Column(i)
@@ -73,7 +74,7 @@ func (t *TsChunkDataImp) EncodeChunk(b *ChunkDataBuilder, id uint64, offset int6
 	b.chunk = numberenc.MarshalUint32Append(b.chunk, 0)
 	offset += crcSize
 	b.chunkMeta.size += crcSize
-	if err = b.EncodeTime(offset); err != nil {
+	if err = b.EncodeTime(offset, timeSorted); err != nil {
 		return nil, err
 	}
 	crc := crc32.ChecksumIEEE(b.chunk[pos+crcSize:])
@@ -82,6 +83,14 @@ func (t *TsChunkDataImp) EncodeChunk(b *ChunkDataBuilder, id uint64, offset int6
 	return b.chunk, nil
 }
 
+func (t *TsChunkDataImp) EncodeChunkForCompaction(b *ChunkDataBuilder, offset int64, rec *record.Record, dst []byte, accumulateRowsIndex []int, timeSorted bool) ([]byte, error) {
+	return nil, nil
+}
+
 func (t *TsChunkDataImp) SetAccumulateRowsIndex(accumulateRowsIndex []int) {
+
+}
+
+func (t *TsChunkDataImp) SetDetachedInfo(writeDetached bool) {
 
 }
