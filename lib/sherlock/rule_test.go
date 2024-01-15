@@ -27,17 +27,18 @@ func Test_matchRule(t *testing.T) {
 	for i := 20; i < 50; i += 5 {
 		metrics.push(i)
 	}
-	// < ruleMin
-	match, rule := matchRule(metrics, 2, 20, 25, 80)
-	require.Equal(t, false, match)
-	require.Equal(t, RuleCurLessMin, rule)
 
-	// > ruleAbs
+	// some historical record < ruleMin
+	match, rule := matchRule(metrics, 35, 30, 25, 80)
+	require.Equal(t, false, match)
+	require.Equal(t, RuleHistoryLessMin, rule)
+
+	// curVal > ruleAbs
 	match, rule = matchRule(metrics, 99, 20, 25, 80)
 	require.Equal(t, true, match)
 	require.Equal(t, RuleCurGreaterAbs, rule)
 
-	// > ruleDiff
+	// curVal > ruleDiff
 	match, rule = matchRule(metrics, 60, 20, 25, 80)
 	require.Equal(t, true, match)
 	require.Equal(t, RuleDiff, rule)
