@@ -470,17 +470,22 @@ func (trans *MergeTransform) AddIntervalIndex(chunk Chunk, i int, opt *query.Pro
 	var timeStart, timeEnd int64
 	//If flag is true, the last line of newchunk is used to calculate timeStart and timeEnd.
 	//If flag is false, the last inserted time is used to calculate timeStart and timeEnd.
-	if flag {
-		timeStart, timeEnd = opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
-	} else {
-		timeStart, timeEnd = opt.Window(chunk.Time()[i-1])
-	}
 	mergeType := trans.mergeType.GetType()
 	if mergeType == MergeTrans {
+		if flag {
+			timeStart, timeEnd = opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
+		} else {
+			return true
+		}
 		if timeStart <= chunk.Time()[chunk.IntervalIndex()[i]] && timeEnd > chunk.Time()[chunk.IntervalIndex()[i]] {
 			return false
 		}
 	} else if mergeType == SortMergeTrans || mergeType == SortAppendTrans {
+		if flag {
+			timeStart, timeEnd = opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
+		} else {
+			timeStart, timeEnd = opt.Window(chunk.Time()[i-1])
+		}
 		if timeStart <= chunk.Time()[i] && timeEnd > chunk.Time()[i] {
 			return false
 		}
