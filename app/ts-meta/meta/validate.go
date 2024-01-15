@@ -19,8 +19,8 @@ package meta
 import (
 	"fmt"
 
-	"github.com/gogo/protobuf/proto"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 func validateCommand(b []byte) (*proto2.Command, error) {

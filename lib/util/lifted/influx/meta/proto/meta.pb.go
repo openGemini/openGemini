@@ -5,7 +5,7 @@ package proto
 
 import (
 	fmt "fmt"
-	proto "github.com/gogo/protobuf/proto"
+	proto "github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	math "math"
 )
 

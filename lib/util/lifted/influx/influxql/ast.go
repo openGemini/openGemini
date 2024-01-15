@@ -30,10 +30,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 // DataType represents the primitive data types available in InfluxQL.
