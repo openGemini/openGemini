@@ -24,7 +24,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"go.uber.org/zap"
 )
 

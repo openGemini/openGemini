@@ -33,12 +33,13 @@ import (
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2004,12 +2005,12 @@ func (r *mockTableReader) MetaIndexAt(idx int) (*MetaIndex, error) { return r.Me
 func (r *mockTableReader) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error) {
 	return r.MetaIndexFn(id, tr)
 }
-func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
-	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst, buffer, ioPriority)
+func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
+	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst, nil, ioPriority)
 }
 
-func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error) {
-	return r.ReadMetaBlockFn(metaIdx, id, offset, size, count, dst, ioPriority)
+func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, error) {
+	return r.ReadMetaBlockFn(metaIdx, id, offset, size, count, &dst.B, ioPriority)
 }
 func (r *mockTableReader) ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error) {
 	return r.ReadDataBlockFn(offset, size, dst, ioPriority)

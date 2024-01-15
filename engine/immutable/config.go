@@ -29,11 +29,12 @@ const (
 	DefaultMaxSegmentLimit4ColStore   = 256 * 1024
 	DefaultMaxChunkMetaItemSize       = 256 * 1024
 	DefaultMaxChunkMetaItemCount      = 512
-	DefaultSnapshotTblNum             = 8
+	CompressModMaxChunkMetaItemCount  = 16
 
-	NonStreamingCompact = 2
-	StreamingCompact    = 1
-	AutoCompact         = 0
+	NonStreamingCompact               = 2
+	StreamingCompact                  = 1
+	AutoCompact                       = 0
+	DefaultExpectedSegmentSize uint32 = 1024 * 1024
 )
 
 var tsStoreConf = Config{
@@ -53,10 +54,12 @@ var colStoreConf = Config{
 	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
 	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
 	fileSizeLimit:         defaultFileSizeLimit,
+	detachedFlushEnabled:  false,
 	compactionEnabled:     false,
 	cacheDataBlock:        false,
 	cacheMetaData:         false,
 	streamingCompact:      AutoCompact,
+	expectedSegmentSize:   DefaultExpectedSegmentSize,
 }
 
 func SetMaxRowsPerSegment4TsStore(maxRowsPerSegmentLimit int) {
@@ -89,11 +92,13 @@ type Config struct {
 	SnapshotTblNum        int
 	FragmentsNumPerFlush  int
 	compactionEnabled     bool
+	detachedFlushEnabled  bool
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
-	cacheMetaData    bool
-	streamingCompact int32
+	cacheMetaData       bool
+	streamingCompact    int32
+	expectedSegmentSize uint32
 }
 
 func GetTsStoreConfig() *Config {
@@ -146,6 +151,14 @@ func (c *Config) GetCompactionEnabled() bool {
 	return c.compactionEnabled
 }
 
+func (c *Config) SetExpectedSegmentSize(n uint32) {
+	c.expectedSegmentSize = n
+}
+
+func (c *Config) GetDetachedFlushEnabled() bool {
+	return c.detachedFlushEnabled
+}
+
 func SetSnapshotTblNum(snapshotTblNum int) {
 	if snapshotTblNum < 1 {
 		snapshotTblNum = 1
@@ -164,6 +177,10 @@ func SetFragmentsNumPerFlush(fragmentsNumPerFlush int) {
 
 func SetCompactionEnabled(compactionEnabled bool) {
 	colStoreConf.compactionEnabled = compactionEnabled
+}
+
+func SetDetachedFlushEnabled(detachFlushEnabled bool) {
+	colStoreConf.detachedFlushEnabled = detachFlushEnabled
 }
 
 func SetCacheDataBlock(en bool) {

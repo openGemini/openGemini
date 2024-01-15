@@ -27,8 +27,8 @@ import (
 	"github.com/hashicorp/raft"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"go.uber.org/zap"
 )
 
@@ -477,13 +477,14 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 			Duration:           time.Duration(rpi.GetDuration()),
 			ShardGroupDuration: time.Duration(rpi.GetShardGroupDuration()),
 			HotDuration:        time.Duration(rpi.GetHotDuration()),
-			WarmDuration:       time.Duration(0), // FIXME DO NOT SUPPORT WARM DURATION
+			WarmDuration:       time.Duration(rpi.GetWarmDuration()),
 			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration())}
 	} else if s.config.RetentionAutoCreate {
 		// Create a retention policy.
 		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
 		rp.ReplicaN = int(repN)
 		rp.Duration = autoCreateRetentionPolicyPeriod
+		rp.WarmDuration = autoCreateRetentionPolicyWarmPeriod
 	}
 
 	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN, v.GetOptions())
@@ -639,7 +640,10 @@ func (fsm *storeFSM) applyUpdateRetentionPolicyCommand(cmd *proto2.Command) inte
 	rpu := meta2.RetentionPolicyUpdate{Name: v.NewName}
 	rpu.Duration = meta2.GetDuration(v.Duration)
 	rpu.HotDuration = meta2.GetDuration(v.HotDuration)
-	rpu.WarmDuration = nil // FIXME DO NOT SUPPORT WARM DURATION
+	if v.WarmDuration != nil {
+		value := time.Duration(v.GetWarmDuration())
+		rpu.WarmDuration = &value
+	}
 	rpu.IndexGroupDuration = meta2.GetDuration(v.IndexGroupDuration)
 	rpu.ShardGroupDuration = meta2.GetDuration(v.ShardGroupDuration)
 	if v.ReplicaN != nil {

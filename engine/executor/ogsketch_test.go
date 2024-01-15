@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
-	"github.com/influxdata/tdigest"
 	"github.com/openGemini/openGemini/engine/executor"
 )
 
@@ -190,18 +189,6 @@ func BenchmarkOGSketchInsertClusters(b *testing.B) {
 	}
 }
 
-func BenchmarkTdigestInsertClusters(b *testing.B) {
-	data := builddata(dataType, dataSize)
-	sort.Float64s(data)
-	for j := 0; j < b.N; j++ {
-		clusterSize := 1000.
-		Tdigest := tdigest.NewWithCompression(clusterSize)
-		for _, x := range data {
-			Tdigest.Add(x, 1)
-		}
-	}
-}
-
 func BenchmarkOGSketchPercentile(b *testing.B) {
 	data := builddata(dataType, dataSize)
 	sort.Float64s(data)
@@ -212,23 +199,6 @@ func BenchmarkOGSketchPercentile(b *testing.B) {
 		quantile := 0.
 		for quantile <= 1 {
 			ogsketch.Percentile(quantile)
-			quantile += 0.05
-		}
-	}
-}
-
-func BenchmarkTdigestPercentile(b *testing.B) {
-	data := builddata(dataType, dataSize)
-	sort.Float64s(data)
-	clusterSize := 1000.
-	Tdigest := tdigest.NewWithCompression(clusterSize)
-	for _, x := range data {
-		Tdigest.Add(x, 1)
-	}
-	for j := 0; j < b.N; j++ {
-		quantile := 0.
-		for quantile <= 1 {
-			Tdigest.Quantile(quantile)
 			quantile += 0.05
 		}
 	}

@@ -18,14 +18,34 @@ package immutable
 
 import (
 	"fmt"
+	"hash/crc32"
 
 	"github.com/openGemini/openGemini/lib/encoding"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
+
+type EncodeColumnMode interface {
+	reserveCrc(data []byte) []byte
+	setCrc(data []byte, pos int) []byte
+}
+
+type encodeDetached struct {
+}
+
+func (d *encodeDetached) reserveCrc(data []byte) []byte {
+	data = numberenc.MarshalUint32Append(data, 0) // reserve crc32
+	return data
+}
+
+func (d *encodeDetached) setCrc(data []byte, pos int) []byte {
+	crc := crc32.ChecksumIEEE(data[pos+crcSize:])
+	numberenc.MarshalUint32Copy(data[pos:pos+crcSize], crc)
+	return data
+}
 
 type ColumnBuilder struct {
 	data     []byte
@@ -40,12 +60,19 @@ type ColumnBuilder struct {
 	boolPreAggBuilder   PreAggBuilder
 	timePreAggBuilder   PreAggBuilder
 
-	coder *encoding.CoderContext
-	log   *Log.Logger
+	encodeMode EncodeColumnMode
+	coder      *encoding.CoderContext
+	log        *Log.Logger
 }
 
 func NewColumnBuilder() *ColumnBuilder {
 	return &ColumnBuilder{coder: encoding.NewCoderContext()}
+}
+
+func (b *ColumnBuilder) SetEncodeMode(detached bool) {
+	if detached {
+		b.encodeMode = &encodeDetached{}
+	}
 }
 
 func (b *ColumnBuilder) resetPreAgg() {
@@ -142,8 +169,10 @@ func (b *ColumnBuilder) encIntegerColumn(timeCols []record.ColVal, segCols []rec
 		b.intPreAggBuilder.addValues(segCol, times)
 		m := &b.colMeta.entries[i+b.position] // cur entry pos
 		m.setOffset(offset)
-
 		pos := len(b.data)
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.reserveCrc(b.data)
+		}
 
 		if CanEncodeOneRowMode(segCol) {
 			b.data = append(b.data, encoding.BlockIntegerOne)
@@ -155,6 +184,10 @@ func (b *ColumnBuilder) encIntegerColumn(timeCols []record.ColVal, segCols []rec
 				b.log.Error("encode integer value fail", zap.Error(err))
 				return err
 			}
+		}
+
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.setCrc(b.data, pos)
 		}
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
@@ -186,8 +219,10 @@ func (b *ColumnBuilder) encFloatColumn(timeCols []record.ColVal, segCols []recor
 		b.floatPreAggBuilder.addValues(segCol, times)
 		m := &b.colMeta.entries[i+b.position]
 		m.setOffset(offset)
-
 		pos := len(b.data)
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.reserveCrc(b.data)
+		}
 
 		if CanEncodeOneRowMode(segCol) {
 			b.data = append(b.data, encoding.BlockFloat64One)
@@ -201,6 +236,9 @@ func (b *ColumnBuilder) encFloatColumn(timeCols []record.ColVal, segCols []recor
 			}
 		}
 
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.setCrc(b.data, pos)
+		}
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
 
@@ -232,8 +270,10 @@ func (b *ColumnBuilder) encStringColumn(timeCols []record.ColVal, segCols []reco
 		b.stringPreAggBuilder.addValues(segCol, times)
 		m := &b.colMeta.entries[i+b.position]
 		m.setOffset(offset)
-
 		pos := len(b.data)
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.reserveCrc(b.data)
+		}
 
 		if CanEncodeOneRowMode(segCol) {
 			b.data = append(b.data, encoding.BlockStringOne)
@@ -247,6 +287,9 @@ func (b *ColumnBuilder) encStringColumn(timeCols []record.ColVal, segCols []reco
 			}
 		}
 
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.setCrc(b.data, pos)
+		}
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
 
@@ -277,8 +320,10 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 		b.boolPreAggBuilder.addValues(segCol, times)
 		m := &b.colMeta.entries[i+b.position]
 		m.setOffset(offset)
-
 		pos := len(b.data)
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.reserveCrc(b.data)
+		}
 
 		if CanEncodeOneRowMode(segCol) {
 			b.data = append(b.data, encoding.BlockBooleanOne)
@@ -292,6 +337,9 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 			}
 		}
 
+		if b.encodeMode != nil {
+			b.data = b.encodeMode.setCrc(b.data, pos)
+		}
 		size := uint32(len(b.data) - pos)
 		m.setSize(size)
 		offset += int64(size)
@@ -302,12 +350,12 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 }
 
 func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeCols []record.ColVal, segRowsLimit int, dataOffset int64) ([]byte, error) {
-	b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type) // []slice
+	b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
 	return b.encode(ref, timeCols, dataOffset)
 }
 
 func (b *ColumnBuilder) EncodeColumnBySize(ref record.Field, col *record.ColVal, timeCols []record.ColVal, rowPerSegment []int, dataOffset int64) ([]byte, error) {
-	b.segCol = col.SplitColBySize(b.segCol[:0], rowPerSegment, ref.Type) // []slice
+	b.segCol = col.SplitColBySize(b.segCol[:0], rowPerSegment, ref.Type)
 	return b.encode(ref, timeCols, dataOffset)
 }
 

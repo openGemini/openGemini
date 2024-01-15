@@ -60,3 +60,18 @@ func TestPool(t *testing.T) {
 	require.Equal(t, int64(4), foo.hit)
 	require.Equal(t, int64(10), foo.total)
 }
+
+func TestChunkMetaBuffer(t *testing.T) {
+	buf := pool.GetChunkMetaBuffer()
+	require.Equal(t, 0, len(buf.B))
+
+	pool.PutChunkMetaBuffer(&pool.Buffer{B: make([]byte, 10)})
+	buf = pool.GetChunkMetaBuffer()
+	require.Equal(t, 10, len(buf.B))
+
+	pool.PutChunkMetaBuffer(&pool.Buffer{B: make([]byte, 10)})
+	pool.PutChunkMetaBuffer(&pool.Buffer{B: make([]byte, 64*1024*1024)})
+
+	buf = pool.GetChunkMetaBuffer()
+	require.Equal(t, 10, len(buf.B))
+}

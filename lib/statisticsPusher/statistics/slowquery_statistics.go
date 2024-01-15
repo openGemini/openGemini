@@ -42,6 +42,7 @@ type SQLSlowQueryStatistics struct {
 	IteratorDuration int64
 	EmitDuration     int64
 	Query            string
+	QueryLocs        [][2]int // <stmtId, <startLoc, endLoc>>
 	DB               string
 	QueryBatch       int64
 }
@@ -52,12 +53,20 @@ var SlowQueries = make(chan *SQLSlowQueryStatistics, 256)
 
 func NewSqlSlowQueryStatistics(db string) *SQLSlowQueryStatistics {
 	return &SQLSlowQueryStatistics{
-		DB: db,
+		DB:        db,
+		QueryLocs: make([][2]int, 0),
 	}
 }
 
 func InitSlowQueryStatistics(tags map[string]string) {
 	SlowQueryTagMap = tags
+}
+
+func (s *SQLSlowQueryStatistics) GetQueryByStmtId(stmtId int) string {
+	if stmtId >= 0 && stmtId < len(s.QueryLocs) {
+		return s.Query[s.QueryLocs[stmtId][0]:s.QueryLocs[stmtId][1]]
+	}
+	return ""
 }
 
 func (s *SQLSlowQueryStatistics) AddDuration(durationName string, d int64) {
@@ -89,6 +98,17 @@ func (s *SQLSlowQueryStatistics) AddDuration(durationName string, d int64) {
 func (s *SQLSlowQueryStatistics) SetQuery(q string) {
 	if s != nil {
 		s.Query = q
+	}
+}
+
+func (s *SQLSlowQueryStatistics) SetQueryAndLocs(q string, locs [][2]int) {
+	s.SetQuery(q)
+	s.SetQueryLocs(locs)
+}
+
+func (s *SQLSlowQueryStatistics) SetQueryLocs(locs [][2]int) {
+	if s != nil {
+		s.QueryLocs = locs
 	}
 }
 
@@ -185,7 +205,7 @@ func NewStoreSlowQueryStatistics() *StoreSlowQueryStatistics {
 	return &StoreSlowQueryStatistics{}
 }
 
-func InitStoreQueryStatistics(tags map[string]string) {
+func InitStoreSlowQueryStatistics(tags map[string]string) {
 	StoreSlowQueryTagMap = tags
 }
 

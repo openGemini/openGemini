@@ -25,10 +25,10 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -101,16 +101,17 @@ type Engine interface {
 	DbPTUnref(db string, ptId uint32)
 	CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error)
+	GetIndexInfo(db string, ptId uint32, shardIDs uint64, schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error)
 	RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error)
 
 	LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
 	UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
 
-	PreOffload(db string, ptId uint32) error
-	RollbackPreOffload(db string, ptId uint32) error
+	PreOffload(opId uint64, db string, ptId uint32) error
+	RollbackPreOffload(opId uint64, db string, ptId uint32) error
 	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
-	Offload(db string, ptId uint32) error
+	Offload(opId uint64, db string, ptId uint32) error
 	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 
 	SysCtrl(req *SysCtrlRequest) (map[string]string, error)
@@ -127,4 +128,5 @@ type Engine interface {
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
 	CheckPtsRemovedDone() bool
+	HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool
 }

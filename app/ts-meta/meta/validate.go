@@ -20,7 +20,7 @@ import (
 	"fmt"
 
 	"github.com/gogo/protobuf/proto"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 )
 
 func validateCommand(b []byte) (*proto2.Command, error) {

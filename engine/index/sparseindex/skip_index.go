@@ -17,18 +17,23 @@ limitations under the License.
 package sparseindex
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
-	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
+
+var table = crc32.MakeTable(crc32.Castagnoli)
 
 // SKIndexReader as a skip index read interface.
 type SKIndexReader interface {
@@ -222,7 +227,7 @@ type SkipIndexWriter interface {
 
 func NewSkipIndexWriter(indexType string) SkipIndexWriter {
 	switch indexType {
-	case index.BloomFilterIndex:
+	case logstore.BloomFilterIndex:
 		return &BloomFilterImpl{
 			bloomFilter: make([]byte, 0),
 		}
@@ -248,5 +253,27 @@ func (b *BloomFilterImpl) Flush() error {
 }
 
 func (b *BloomFilterImpl) CreateSkipIndex(src *record.ColVal, rowsPerSegment []int, refType int) ([]byte, error) {
-	return nil, nil
+	//TODO:
+	// 1. use different splitter for different column
+	// 2. reusing the tokenizers
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, +3)
+
+	segCnt := len(rowsPerSegment)
+	segBfSize := int(logstore.GetConstant(2).FilterDataDiskSize)
+	res := make([]byte, segCnt*segBfSize)
+	var segCol []record.ColVal
+	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
+
+	start := 0
+	end := 0
+	for _, col := range segCol {
+		end = start + segBfSize
+		offs, lens := col.GetOffsAndLens()
+		tk.ProcessTokenizerBatch(col.Val, res[start:end-4], offs, lens)
+		crc := crc32.Checksum(res[start:end-4], table)
+		binary.LittleEndian.PutUint32(res[end-4:end], crc)
+		start = end
+	}
+	tokenizer.FreeSimpleGramTokenizer(tk)
+	return res, nil
 }

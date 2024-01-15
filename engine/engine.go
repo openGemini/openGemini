@@ -49,10 +49,10 @@ import (
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -149,7 +149,9 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
 	immutable.SetSnapshotTblNum(options.SnapshotTblNum)
 	immutable.SetCompactionEnabled(options.CsCompactionEnabled)
+	immutable.SetDetachedFlushEnabled(options.CsDetachedFlushEnabled)
 	immutable.SetFragmentsNumPerFlush(options.FragmentsNumPerFlush)
+	immutable.SetPrefixDataPath(dataPath)
 	immutable.Init()
 
 	return eng, nil
@@ -732,7 +734,7 @@ func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRan
 		if err != nil {
 			return err
 		}
-		sh.SetMstInfo(mstInfo.Name, mstInfo)
+		sh.SetMstInfo(mstInfo)
 		dbPTInfo.shards[shardID] = sh
 		newestShardID, ok := dbPTInfo.newestRpShard[rp]
 		if !ok || newestShardID < shardID {
@@ -915,13 +917,17 @@ func (e *Engine) deleteIndexes(db string, pt uint32, rp string, fn func(dbPTInfo
 	indexes := make(map[uint64]struct{})
 
 	dbPTInfo := e.getDBPTInfo(db, pt)
+	shardIDs := dbPTInfo.ShardIds()
+
 	var n int
-	for shardId := range dbPTInfo.shards {
-		if dbPTInfo.shards[shardId].GetRPName() != rp {
+	for _, shardId := range shardIDs {
+		sh := dbPTInfo.Shard(shardId)
+		if sh.GetRPName() != rp {
 			continue
 		}
-		indexID := dbPTInfo.shards[shardId].GetIndexBuilder().GetIndexID()
-		if _, ok := dbPTInfo.indexBuilder[indexID]; ok {
+
+		indexID := sh.GetIndexBuilder().GetIndexID()
+		if _, ok := dbPTInfo.getIndexBuilder(indexID); ok {
 			indexes[indexID] = struct{}{}
 		}
 		n++
@@ -933,7 +939,7 @@ func (e *Engine) deleteIndexes(db string, pt uint32, rp string, fn func(dbPTInfo
 				return
 			}
 			resC <- err
-		}(dbPTInfo, shardId, dbPTInfo.shards[shardId])
+		}(dbPTInfo, shardId, sh)
 	}
 
 	var err error
@@ -1036,7 +1042,7 @@ func (e *Engine) searchIndex(db string, ptIDs []uint32, measurements [][]byte, c
 				stime := time.Now()
 				idx, ok := iBuild.GetPrimaryIndex().(*tsi.MergeSetIndex)
 				if !ok {
-					return nil, errors.New("idx nil, some thing wrong with GetPrimaryIndex")
+					return nil, errors.New("idx nil,some thing wrong with GetPrimaryIndex")
 				}
 				series, err = idx.SearchSeriesKeys(series[:0], nameWithVer, condition)
 				if len(series) > seriesLen {
@@ -1061,6 +1067,7 @@ func (e *Engine) searchIndex(db string, ptIDs []uint32, measurements [][]byte, c
 	}
 	return keysMap, nil
 }
+
 func (e *Engine) handleSeries(key []byte, keysMap map[string]map[string]struct{}, mstName string) {
 	keysMap[mstName][string(key)] = struct{}{}
 }
@@ -1162,6 +1169,18 @@ func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32
 		shardFrags[shardId] = fileFrags
 	}
 	return shardFrags, nil
+}
+
+func (e *Engine) GetIndexInfo(db string, ptId uint32, shardID uint64, schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error) {
+	s, err := e.GetShard(db, ptId, shardID)
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		e.log.Warn(fmt.Sprintf("GetIndexInfo shard is null. db: %s, ptId: %d, shardId: %d", db, ptId, shardID))
+		return executor.NewAttachedIndexInfo(nil, nil), nil
+	}
+	return s.GetIndexInfo(schema)
 }
 
 func (e *Engine) RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error) {
@@ -1300,4 +1319,31 @@ func (e *Engine) Statistics(buffer []byte) ([]byte, error) {
 		}
 	}
 	return buffer, nil
+}
+
+func (s *Engine) InitLogStoreCtx(querySchema *executor.QuerySchema) (*idKeyCursorContext, error) {
+	ctx := &idKeyCursorContext{
+		decs:         immutable.NewReadContext(querySchema.Options().IsAscending()),
+		maxRowCnt:    querySchema.Options().ChunkSizeNum(),
+		aggPool:      AggPool,
+		seriesPool:   SeriesPool,
+		tmsMergePool: TsmMergePool,
+		querySchema:  querySchema,
+	}
+	err := newCursorSchema(ctx, querySchema)
+	if err != nil {
+		return nil, err
+	}
+
+	if ctx.schema.Len() <= 1 {
+		return nil, errno.NewError(errno.NoFieldSelected, "initCtx")
+	}
+	ctx.tr.Min = querySchema.Options().GetStartTime()
+	ctx.tr.Max = querySchema.Options().GetEndTime()
+	ctx.decs.SetTr(ctx.tr)
+	return ctx, nil
+}
+
+func (e *Engine) HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool {
+	return true
 }

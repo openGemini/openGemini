@@ -33,7 +33,8 @@ const (
 	Hot       = 1
 	Warm      = 2
 	Cold      = 3
-	TierEnd   = 4
+	Moving    = 4
+	TierEnd   = 5
 )
 
 const (

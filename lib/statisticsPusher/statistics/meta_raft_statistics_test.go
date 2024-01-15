@@ -28,7 +28,7 @@ func TestCollectOpsMetaRaftStatistics(t *testing.T) {
 		"hostname": "127.0.0.1:8866",
 		"mst":      "metaRaft",
 	}
-	statistics.InitStoreQueryStatistics(tags)
+	statistics.InitStoreSlowQueryStatistics(tags)
 
 	stats := statistics.NewMetaRaftStatistics()
 	stats.Init(tags)

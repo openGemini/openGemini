@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -254,16 +254,4 @@ func buildRecord(values Values) *record.Record {
 	}
 
 	return rec
-}
-
-func newAux(times []int64, schema record.Schemas) *record.SortAux {
-	aux := &record.SortAux{
-		RowIds:  nil,
-		Times:   nil,
-		SortRec: nil,
-	}
-	aux.InitRecord(schema)
-	aux.Init(times)
-
-	return aux
 }

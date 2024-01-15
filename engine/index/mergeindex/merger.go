@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 )
 
 const MaxTSIDsPerRow = 64

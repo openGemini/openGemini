@@ -1,0 +1,233 @@
+
+syntax = "proto3";
+package executor;
+
+option go_package = "./;executor";
+
+message ProcessorOptions {
+    string               Name = 23;
+    string               Expr = 1;
+    repeated VarRef      Aux = 2;
+    repeated Measurement Sources = 3;
+    Interval             Interval = 4;
+    repeated string      Dimensions = 5;
+    map<string, bool>    GroupBy = 19;
+    int32       Fill = 6;
+    double      FillValue = 7;
+    string      Condition = 8;
+    int64       StartTime = 9;
+    int64       EndTime = 10;
+    string      Location = 21;
+    bool        Ascending = 11;
+    int64       Limit = 12;
+    int64       Offset = 13;
+    int64       SLimit = 14;
+    int64       SOffset = 15;
+    bool        StripName = 22;
+    bool        Dedupe = 16;
+    int64       MaxSeriesN = 18;
+    bool        Ordered = 20;
+    int64       ChunkSize = 25;
+    int64       MaxParallel = 26;
+    string      Query = 27;
+    int64       HintType = 28;
+    int64       EnableBinaryTreeMerge = 29;
+    uint64      QueryId = 30;
+    bytes       SeriesKey = 31;
+    bool        GroupByAllDims = 32;
+    uint32      EngineType = 33;
+    string      SortFields = 34;
+    bool        HasFieldWildcard = 35;
+    string      LogQueryCurrId   = 36;
+    bool        IncQuery = 37;
+    int32       IterID = 38;
+}
+
+message Measurement {
+    string Database = 1;
+    string RetentionPolicy = 2;
+    string Name = 3;
+    string Regex = 4;
+    bool   IsTarget = 5;
+    string SystemIterator = 6;
+    uint32 EngineType = 7;
+    IndexRelation indexRelation = 8;
+    ObsOptions ObsOptions = 9;
+    bool IsTimeSorted = 10;
+}
+
+message IndexRelation {
+    uint32 Rid = 1;
+    repeated uint32 Oids = 2;
+    repeated string IndexNames = 3;
+    repeated IndexList IndexLists = 4;
+    map<string, IndexOptions> IndexOptions = 5;
+}
+
+message IndexList {
+    repeated string IList = 1;
+}
+
+message IndexOptions {
+	repeated IndexOption Infos = 1;
+}
+
+message IndexOption {
+    string Tokens     = 1;
+    string Tokenizers = 2;
+    int64  TimeClusterDuration = 3;
+}
+
+message ObsOptions {
+	bool Enabled = 1;
+	string BucketName = 2;
+	string Ak = 3;
+	string Sk = 4;
+	string Endpoint = 5;
+	string BasePath = 6;
+}
+
+message Interval {
+    int64 Duration = 1;
+    int64 Offset = 2;
+}
+
+message IteratorStats {
+    int64 SeriesN = 1;
+    int64 PointN = 2;
+}
+
+message VarRef {
+    string Val = 1;
+    int32  Type = 2;
+}
+
+message QueryParam {
+    string SeriesKey = 1;
+    string TagsAsKey = 2;
+    int32  QueryFields = 3;
+    float  QueryPct = 4;
+}
+
+message Unnest {
+    string Expr = 1;
+    repeated string Aliases = 2;
+    repeated int32 DstType = 3;
+}
+
+message QuerySchema {
+    string          QueryFields = 2;
+    repeated string ColumnNames = 3;
+    repeated Unnest Unnests = 5;
+}
+
+
+message Chunk {
+    string   Name = 1;
+    repeated ChunkTags   Tags = 2;
+    repeated int64       TagIndex = 3;
+    repeated int64       Time = 4;
+    repeated int64       IntervalIndex = 5;
+    repeated Column      Columns = 6;
+}
+
+message ChunkTags {
+	bytes  Subset = 1;
+}
+
+message Column {
+    int64  DataType = 1;
+    repeated double FloatValues   = 2;
+    repeated int64  IntegerValues = 3;
+    bytes  StringBytes = 4;
+    repeated uint32 Offset = 8;
+    repeated bool   BooleanValues  = 5;
+    repeated int64 Times = 6;
+    bytes  NilsV2 = 7;
+}
+
+message ExprOptions {
+    string Expr = 1;
+	string Ref  = 2;
+}
+
+message QueryNode {
+    LogicPlanType   Name      = 1;
+    repeated bytes  Inputs    = 3;
+    repeated ExprOptions Ops  = 6;
+    uint32   Exchange         = 7;
+    int64           limit     = 8;
+    int64           Offset    = 9;
+    int64           limitType = 10;
+    AggType  AggType = 11;
+}
+
+message RemoteQuery {
+    string Database = 1;
+    uint32 PtID     = 2;
+    repeated uint64 ShardIDs = 3;
+    bytes  Opt      = 4;
+    uint64 NodeID   = 5;
+    bool analyze    = 6;
+    bytes QueryNode = 7;
+    repeated PtQuery PtQuerys = 8;
+}
+
+enum AggType {
+    TagSet = 0;
+	CountDistinct = 1;
+	Normal = 2;
+}
+
+message ShardInfo {
+    uint64 ID = 1;
+    string Path = 2;
+    uint32 Version = 3;
+}
+
+message PtQuery {
+    uint32 PtID  = 1;
+    repeated ShardInfo ShardInfos = 2;
+}
+
+enum LogicPlanType
+{
+    LogicalExchange = 0;
+	LogicalLimit = 1;
+	LogicalIndexScan = 2;
+	LogicalAggregate = 3;
+	LogicalMerge = 4;
+	LogicalSortMerge = 5;
+	LogicalFilter = 6;
+	LogicalDedupe = 7;
+	LogicalInterval = 8;
+	LogicalSeries = 9;
+	LogicalReader = 10;
+	LogicalTagSubset = 11;
+	LogicalFill = 12;
+	LogicalAlign = 13;
+	LogicalMst = 14;
+	LogicalProject = 15;
+	LogicalSlidingWindow = 16;
+	LogicalFilterBlank = 17;
+	LogicalHttpSender = 18;
+	LogicalFullJoin = 19;
+	LogicalWriteIntoStorage = 20;
+	LogicalSequenceAggregate = 21;
+	LogicalSplitGroup = 22;
+	LogicalHoltWinters = 23;
+	LogicalSubQuery = 24;
+	LogicalGroupBy = 25;
+	LogicalOrderBy = 26;
+	LogicalHttpSenderHint = 27;
+	LogicalTarget = 28;
+	LogicalDummyShard = 29;
+	LogicalTSSPScan = 30;
+	LogicalSortAppend = 31;
+	LogicalSort = 32;
+	LogicalHashMerge = 33;
+	LogicalSparseIndexScan = 34;
+	LogicalColumnStoreReader = 35;
+	LogicalHashAgg = 36;
+    LogicalJoin = 37;
+}

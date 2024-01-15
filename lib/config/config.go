@@ -116,6 +116,7 @@ type Common struct {
 	CpuAllocationRatio int            `toml:"cpu-allocation-ratio"`
 	HaPolicy           string         `toml:"ha-policy"`
 	NodeRole           string         `toml:"node-role"`
+	ProductType        string         `toml:"product-type"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -173,6 +174,8 @@ func (c *Common) ShowConfigs() map[string]interface{} {
 		"common.select-hash-algorithm":      c.OptHashAlgo,
 		"common.cpu-allocation-ratio":       c.CpuAllocationRatio,
 		"common.ha-policy":                  c.HaPolicy,
+		"common.node-role":                  c.NodeRole,
+		"common.product-type":               c.ProductType,
 	}
 }
 
@@ -200,6 +203,7 @@ type CompactionType int32
 const (
 	ROW CompactionType = iota
 	BLOCK
+	COMPACTIONTYPEEND
 )
 
 func Str2CompactionType(compactStr string) CompactionType {
@@ -246,6 +250,28 @@ var EngineType2String map[EngineType]string = map[EngineType]string{
 	ENGINETYPEEND: "undefined",
 }
 
+type ProductType uint8
+
 const (
-	ColumnStoreDirName = "columnstore"
+	Basic     ProductType = iota
+	LogKeeper             // the log service of CSS
 )
+
+var productTypeOfService ProductType = Basic
+
+func SetProductType(productType string) {
+	switch strings.ToLower(productType) {
+	case "logkeeper":
+		productTypeOfService = LogKeeper
+	default:
+		productTypeOfService = Basic
+	}
+}
+
+func GetProductType() ProductType {
+	return productTypeOfService
+}
+
+func IsLogKeeper() bool {
+	return productTypeOfService == LogKeeper
+}

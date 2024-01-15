@@ -30,8 +30,8 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )

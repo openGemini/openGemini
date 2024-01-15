@@ -16,6 +16,12 @@ limitations under the License.
 
 package pool
 
+import (
+	"sync"
+
+	"github.com/openGemini/openGemini/lib/bufferpool"
+)
+
 type HitRatioHook struct {
 	IncrTotal func(int64)
 	IncrHit   func(int64)
@@ -68,5 +74,81 @@ func (p *FixedPool) Put(v interface{}) {
 	case p.pool <- v:
 	default:
 		break
+	}
+}
+
+type Object interface {
+	Instance() Object
+	MemSize() int
+}
+
+type ObjectPool struct {
+	pool  sync.Pool
+	local chan Object
+	obj   Object
+	hook  *HitRatioHook
+
+	maxLocalCacheSize int
+}
+
+func NewObjectPool(size int, obj Object, maxLocalCacheSize int) *ObjectPool {
+	if size <= 0 || size > bufferpool.MaxLocalCacheLen {
+		size = bufferpool.MaxLocalCacheLen
+	}
+
+	return &ObjectPool{
+		pool:              sync.Pool{},
+		local:             make(chan Object, size),
+		obj:               obj,
+		maxLocalCacheSize: maxLocalCacheSize,
+	}
+}
+
+func (p *ObjectPool) SetHitRatioHook(hook *HitRatioHook) {
+	p.hook = hook
+}
+
+func (p *ObjectPool) stat(hit bool) {
+	if p.hook == nil {
+		return
+	}
+
+	p.hook.IncrTotal(1)
+	if hit {
+		p.hook.IncrHit(1)
+	}
+}
+
+func (p *ObjectPool) Get() Object {
+	var obj Object = nil
+	select {
+	case obj = <-p.local:
+		break
+	default:
+		o, ok := p.pool.Get().(Object)
+		if ok {
+			obj = o
+		}
+	}
+
+	if obj == nil {
+		p.stat(false)
+		return p.obj.Instance()
+	}
+
+	p.stat(true)
+	return obj
+}
+
+func (p *ObjectPool) Put(v Object) {
+	if v.MemSize() > p.maxLocalCacheSize {
+		p.pool.Put(v)
+		return
+	}
+
+	select {
+	case p.local <- v:
+	default:
+		p.pool.Put(v)
 	}
 }

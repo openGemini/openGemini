@@ -24,7 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/syscontrol"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )

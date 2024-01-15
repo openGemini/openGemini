@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 )
 
 // dictonary version

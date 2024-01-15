@@ -18,7 +18,7 @@ package executor
 
 import (
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 const UDAFMaxRow = 10000

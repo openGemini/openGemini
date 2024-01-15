@@ -19,6 +19,7 @@ package binaryfilterfunc
 import (
     "bytes"
 
+    "github.com/openGemini/openGemini/lib/tokenizer"
     "github.com/openGemini/openGemini/lib/bitmap"
     "github.com/openGemini/openGemini/lib/record"
     "github.com/openGemini/openGemini/lib/util"
@@ -738,4 +739,88 @@ func Get{{.Name}}NEQConditionBitMapWithNull(col *record.ColVal, compare interfac
     {{- end}}
     return pos
 }
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "String")}}
+func Get{{.Name}}MatchPhraseConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	if col.NilCount == 0 {
+		return Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+	}
+	return Get{{.Name}}MatchPhraseConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "String")}}
+func Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+    var idx int
+    {{- if or (eq .Name "String")}}
+    goal := util.Str2bytes(compare.(string))
+    var content []byte
+    tokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+    {{- end}}
+
+    {{- if or (eq .Name "String")}}
+    for i := 0; i < col.Len; i++ {
+    {{- end}}
+        idx = offset + i
+        if bitmap.IsNil(pos, idx) {
+            continue
+        }
+
+        {{- if or (eq .Name "String")}}
+        if i == col.Len-1 {
+        	content = col.Val[col.Offset[i]:]
+        } else {
+        	content = col.Val[col.Offset[i]:col.Offset[i+1]]
+        }
+        tokenFinder.InitInput(content, goal)
+        if !tokenFinder.Next() {
+        	bitmap.SetBitMap(pos, idx)
+        }
+        {{- end}}
+    }
+    return pos
+}
+{{- end}}
+{{end}}
+
+{{range .}}
+{{- if or (eq .Name "String")}}
+func Get{{.Name}}MatchPhraseConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+    var idx int
+    {{- if or (eq .Name "String")}}
+    goal := util.Str2bytes(compare.(string))
+    var content []byte
+    tokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+    {{- end}}
+
+    {{- if or (eq .Name "String")}}
+    for i := 0; i < col.Len; i++ {
+    {{- end}}
+         idx = offset + i
+         if bitmap.IsNil(pos, idx) {
+             continue
+         }
+         if bitmap.IsNil(bitMap, idx) {
+            bitmap.SetBitMap(pos, idx)
+            continue
+         }
+         {{- if or (eq .Name "String")}}
+         if i == col.Len-1 {
+            content = col.Val[col.Offset[i]:]
+         } else {
+            content = col.Val[col.Offset[i]:col.Offset[i+1]]
+         }
+         tokenFinder.InitInput(content, goal)
+         if !tokenFinder.Next() {
+            bitmap.SetBitMap(pos, idx)
+         }
+         {{- end}}
+    }
+    return pos
+}
+{{- end}}
 {{end}}

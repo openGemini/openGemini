@@ -23,7 +23,7 @@ import (
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/assert"
 )
 

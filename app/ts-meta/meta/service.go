@@ -31,7 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/usage_client"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
 

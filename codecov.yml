@@ -1,5 +1,5 @@
 ignore:
-  - "open_src"
+  - "lib/util/lifted"
   - "tests"
   - "main.go"
   - "app/ts-meta/meta/handler.go"

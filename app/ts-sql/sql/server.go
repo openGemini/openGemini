@@ -41,9 +41,9 @@ import (
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
-	coordinator2 "github.com/openGemini/openGemini/open_src/influx/coordinator"
-	"github.com/openGemini/openGemini/open_src/influx/httpd"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	coordinator2 "github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/openGemini/openGemini/services/castor"
@@ -457,6 +457,7 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewMetaStatistics().Init(globalTags)
 	stat.InitExecutorStatistics(globalTags)
 	stat.NewErrnoStat().Init(globalTags)
+	stat.NewLogKeeperStatistics().Init(globalTags)
 
 	s.statisticsPusher.Register(
 		stat.CollectHandlerStatistics,
@@ -465,6 +466,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.CollectRuntimeStatistics,
 		stat.CollectExecutorStatistics,
 		stat.NewErrnoStat().Collect,
+		stat.NewLogKeeperStatistics().Collect,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsHandlerStatistics)

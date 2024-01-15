@@ -26,8 +26,8 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -56,6 +56,29 @@ func createQuerySchemaWithCalls() *executor.QuerySchema {
 	})
 	names := createColumnNames()
 	names = append(names, "mean")
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	m := createMeasurement()
+	schema.AddTable(m, schema.MakeRefs())
+
+	return schema
+}
+
+func createQuerySchemaWithCountCalls() *executor.QuerySchema {
+	opt := query.ProcessorOptions{}
+	fields := createFields()
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.Call{
+			Name: "count",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "id",
+					Type: influxql.Integer,
+				},
+			},
+		},
+	})
+	names := createColumnNames()
+	names = append(names, "count")
 	schema := executor.NewQuerySchema(fields, names, &opt, nil)
 	m := createMeasurement()
 	schema.AddTable(m, schema.MakeRefs())
@@ -351,6 +374,18 @@ func TestNewLogicalHashMerge(t *testing.T) {
 	} else {
 		fmt.Println(marStr)
 	}
+	newMerge1 := merge.New([]hybridqp.QueryNode{node}, schema, nil).(*executor.LogicalHashMerge)
+	assert.Equal(t, newMerge1.EType(), executor.NODE_EXCHANGE)
+	assert.Equal(t, newMerge1.ERole(), executor.CONSUMER_ROLE)
+	assert.Equal(t, newMerge1.ETraits(), []hybridqp.Trait(nil))
+	assert.Equal(t, newMerge1.Schema().GetColumnNames(), schema.GetColumnNames())
+
+	newMerge1.ToProducer()
+	assert.Equal(t, newMerge1.ERole(), executor.PRODUCER_ROLE)
+
+	merge1 := executor.NewLogicalHashMerge(node, schema, executor.SHARD_EXCHANGE, nil)
+	newMerge1 = merge1.New([]hybridqp.QueryNode{node}, schema, nil).(*executor.LogicalHashMerge)
+	assert.Equal(t, newMerge1.EType(), executor.SHARD_EXCHANGE)
 }
 
 func TestNewLogicalHashAgg(t *testing.T) {
@@ -375,6 +410,17 @@ func TestNewLogicalHashAgg(t *testing.T) {
 	} else {
 		fmt.Println(marStr)
 	}
+	newAgg1 := agg.New([]hybridqp.QueryNode{node}, schema, nil).(*executor.LogicalHashAgg)
+	assert.Equal(t, newAgg1.EType(), executor.NODE_EXCHANGE)
+	assert.Equal(t, newAgg1.ERole(), executor.CONSUMER_ROLE)
+	assert.Equal(t, newAgg1.ETraits(), []hybridqp.Trait(nil))
+	assert.Equal(t, newAgg1.Schema().GetColumnNames(), schema.GetColumnNames())
+	newAgg1.ToProducer()
+	assert.Equal(t, newAgg1.ERole(), executor.PRODUCER_ROLE)
+
+	agg1 := executor.NewLogicalHashAgg(node, schema, executor.SHARD_EXCHANGE, nil)
+	newAgg1 = agg1.New([]hybridqp.QueryNode{node}, schema, nil).(*executor.LogicalHashAgg)
+	assert.Equal(t, newAgg1.EType(), executor.SHARD_EXCHANGE)
 }
 
 func TestLogicalPlanNilNew(t *testing.T) {
@@ -383,7 +429,7 @@ func TestLogicalPlanNilNew(t *testing.T) {
 		&executor.LogicalTagSubset{}, &executor.LogicalGroupBy{}, &executor.LogicalOrderBy{}, &executor.LogicalHttpSenderHint{},
 		&executor.LogicalTarget{}, &executor.LogicalDummyShard{}, &executor.LogicalTSSPScan{}, &executor.LogicalWriteIntoStorage{},
 		&executor.LogicalSequenceAggregate{}, &executor.LogicalSplitGroup{}, &executor.LogicalFullJoin{}, &executor.LogicalHoltWinters{},
-		&executor.LogicalSort{}, &executor.LogicalHashMerge{}, &executor.LogicalMerge{}, &executor.LogicalSortMerge{}}
+		&executor.LogicalSort{}, &executor.LogicalMerge{}, &executor.LogicalSortMerge{}}
 	newResult := make([]hybridqp.QueryNode, len(logicalNode))
 	for i, node := range logicalNode {
 		if newResult[i] != node.New(nil, nil, nil) {
@@ -487,6 +533,30 @@ func TestRebuildColumnStorePlan(t *testing.T) {
 		t.Fatalf(" wrong result")
 	}
 	assert.Equal(t, executor.ReplaceSortAggWithHashAgg(reader)[0], reader)
+}
+
+func TestRebuildColumnStorePlan_UnifyPlan(t *testing.T) {
+	// query without agg
+	schema := createSortQuerySchema()
+	reader := executor.NewLogicalColumnStoreReader(nil, schema)
+	readerExchange := executor.NewLogicalExchange(reader, executor.READER_EXCHANGE, nil, reader.Schema())
+	shardExchange := executor.NewLogicalExchange(readerExchange, executor.SHARD_EXCHANGE, nil, readerExchange.Schema())
+	best := executor.ReplaceSortMergeWithHashMerge(shardExchange)[0]
+	if best == nil {
+		t.Fatalf(" wrong result")
+	}
+
+	// query with agg
+	readAgg := executor.NewLogicalAggregate(reader, reader.Schema())
+	readerExchange1 := executor.NewLogicalExchange(readAgg, executor.READER_EXCHANGE, nil, readAgg.Schema())
+	shardAgg := executor.NewLogicalAggregate(readerExchange1, readerExchange1.Schema())
+	shardExchange1 := executor.NewLogicalExchange(shardAgg, executor.SHARD_EXCHANGE, nil, shardAgg.Schema())
+	nodeAgg := executor.NewLogicalAggregate(shardExchange1, shardExchange1.Schema())
+	best = executor.ReplaceSortAggMergeWithHashAgg(nodeAgg)[0]
+	best = executor.ReplaceSortMergeWithHashMerge(best)[0]
+	if best == nil {
+		t.Fatalf(" wrong result")
+	}
 }
 
 func buildColumnStorePlan(t *testing.T, schema *executor.QuerySchema) hybridqp.QueryNode {
@@ -652,4 +722,45 @@ func TestBuildInConditionPlan(t *testing.T) {
 	schema.Options().(*query.ProcessorOptions).Condition = selectStmt2.Condition
 	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt2, schema)
 	assert.Equal(t, strings.Contains(err.Error(), "CreateLogicalPlan failed"), true)
+}
+
+func TestLogicalIncAgg(t *testing.T) {
+	schema := createQuerySchemaWithCalls()
+	node := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalIncAgg(node, schema)
+	_ = agg.Digest()
+	_ = agg.Schema()
+	_ = agg.RowDataType()
+	_ = agg.Dummy()
+	agg.DeriveOperations()
+	agg.ForwardCallArgs()
+	agg.CountToSum()
+	aggClone := agg.Clone()
+	if aggClone.Type() != agg.Type() {
+		t.Error("wrong result")
+	}
+}
+
+func TestLogicalIncHashAgg(t *testing.T) {
+	schema := createQuerySchemaWithCountCalls()
+	node := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalIncHashAgg(node, schema)
+	_ = agg.Digest()
+	_ = agg.Digest()
+	_ = agg.Schema()
+	_ = agg.RowDataType()
+	_ = agg.Dummy()
+	agg.DeriveOperations()
+	agg.ForwardCallArgs()
+	agg.CountToSum()
+	aggClone := agg.Clone()
+	if aggClone.Type() != agg.Type() {
+		t.Error("wrong result")
+	}
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	agg.Explain(planWriter)
+	newAgg := agg.New([]hybridqp.QueryNode{node}, schema, nil)
+	if newAgg.Type() != agg.Type() {
+		t.Error("wrong result")
+	}
 }

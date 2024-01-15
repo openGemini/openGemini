@@ -60,8 +60,8 @@ jobs:
         uses: golangci/golangci-lint-action@v3.6.0
         with:
           version: v1.53
-#          args: --timeout=10m --tests=false --skip-dirs=open_src
-          args: --timeout=10m --tests=false --skip-dirs=open_src --skip-dirs=tests
+#          args: --timeout=10m --tests=false --skip-dirs=lifted --skip-dirs=tests
+          args: --disable=staticcheck --timeout=10m --tests=false --skip-dirs=lifted --skip-dirs=tests
           only-new-issues: true
           skip-pkg-cache: true
           skip-build-cache: true

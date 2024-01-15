@@ -18,8 +18,8 @@ package mutable
 
 import (
 	"errors"
+	"io/ioutil"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -29,21 +29,29 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/savsgio/dictpool"
 )
 
 type WriteRowsCtx struct {
 	GetLastFlushTime  func(msName string, sid uint64) int64
 	AddRowCountsBySid func(msName string, sid uint64, rowCounts int64)
-	MstsInfo          map[string]*meta.MeasurementInfo
+	MstsInfo          *sync.Map
 	MsRowCount        *sync.Map
+}
+
+func GetMsInfo(name string, mstsInfo *sync.Map) (*meta.MeasurementInfo, bool) {
+	msInfo, ok := mstsInfo.Load(name)
+	if !ok {
+		return nil, false
+	}
+	return msInfo.(*meta.MeasurementInfo), true
 }
 
 type WriteRec struct {
@@ -68,12 +76,12 @@ func (chunk *WriteChunk) Init(sid uint64, schema []record.Field) {
 	chunk.UnOrderWriteRec.init(schema)
 }
 
-func (chunk *WriteChunk) SortRecordNoLock(hlp *record.SortHelper) {
+func (chunk *WriteChunk) SortRecordNoLock(hlp *record.ColumnSortHelper) {
 	chunk.OrderWriteRec.SortRecord(hlp)
 	chunk.UnOrderWriteRec.SortRecord(hlp)
 }
 
-func (chunk *WriteChunk) SortRecord(hlp *record.SortHelper) {
+func (chunk *WriteChunk) SortRecord(hlp *record.ColumnSortHelper) {
 	chunk.Mu.Lock()
 	chunk.SortRecordNoLock(hlp)
 	chunk.Mu.Unlock()
@@ -92,6 +100,13 @@ func (chunk *WriteChunkForColumnStore) SortRecord(tcDuration time.Duration) {
 	chunk.WriteRec.rec = hlp.SortForColumnStore(chunk.WriteRec.rec, chunk.sortKeys, false, tcDuration)
 	chunk.Mu.Unlock()
 	hlp.Release()
+}
+
+func (chunk *WriteChunkForColumnStore) TimeSorted() bool {
+	if len(chunk.sortKeys) == 0 {
+		return false
+	}
+	return chunk.sortKeys[0].Key == record.TimeField
 }
 
 var writeRecPool pool.FixedPool
@@ -138,7 +153,7 @@ func (writeRec *WriteRec) SetWriteRec(rec *record.Record) {
 	writeRec.rec = rec
 }
 
-func (writeRec *WriteRec) SortRecord(hlp *record.SortHelper) {
+func (writeRec *WriteRec) SortRecord(hlp *record.ColumnSortHelper) {
 	if !writeRec.timeAsd {
 		writeRec.rec = hlp.Sort(writeRec.rec)
 		writeRec.timeAsd = true
@@ -235,10 +250,10 @@ func GetPrimaryKeys(schema []record.Field, primaryKeys []string) []record.Primar
 
 type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
-	ApplyConcurrency(table *MemTable, f func(msName string))
 	FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore)
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
-	WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error
+	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error
+	SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map)
 	Reset(table *MemTable)
 }
 
@@ -246,12 +261,12 @@ type MTable interface {
 func StoreMstRowCount(countFile string, rowCount int) error {
 	str := strconv.Itoa(rowCount)
 
-	return os.WriteFile(countFile, []byte(str), 0640)
+	return ioutil.WriteFile(countFile, []byte(str), 0640)
 }
 
 // LoadMstRowCount is used to load the rowcount value for mst-level pre-aggregation.
 func LoadMstRowCount(countFile string) (int, error) {
-	data, err := os.ReadFile(countFile)
+	data, err := ioutil.ReadFile(countFile)
 	if err != nil {
 		return 0, err
 	}
@@ -347,11 +362,27 @@ func (t *MemTable) initMTable(engineType config.EngineType) {
 		t.MTable = &csMemTableImpl{
 			primaryKey:          make(map[string]record.Schemas),
 			timeClusterDuration: make(map[string]time.Duration),
-			indexRelation:       make(map[string]*index.Relation),
+			indexRelation:       make(map[string]influxql.IndexRelation),
+			flushManager:        make(map[string]FlushManager),
+			accumulateMetaIndex: &sync.Map{},
 		}
 	default:
 		panic("UnKnown engine type")
 	}
+}
+
+func (t *MemTable) ApplyConcurrency(f func(msName string)) {
+	var wg sync.WaitGroup
+	wg.Add(len(t.msInfoMap))
+	for k := range t.msInfoMap {
+		concurLimiter <- struct{}{}
+		go func(msName string) {
+			f(msName)
+			concurLimiter.Release()
+			wg.Done()
+		}(k)
+	}
+	wg.Wait()
 }
 
 func (t *MemTable) SetReleaseHook(hook MemTableReleaseHook) {
@@ -727,7 +758,7 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 		return nil
 	}
 
-	hlp := record.NewSortHelper()
+	hlp := record.NewColumnSortHelper()
 	defer hlp.Release()
 
 	var rec *record.Record

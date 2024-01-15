@@ -30,8 +30,8 @@ import (
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/sysconfig"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"go.uber.org/zap"
 )
 
@@ -128,6 +128,10 @@ var (
 	ParallelQueryInBatch int32 = 0 // this determines whether to use parallel query when a query is combined with multi queries
 
 	Readonly = false
+
+	HierarchicalStorageEnabled int32 = 0
+
+	indexReadCachePersistent bool = true
 )
 
 func UpdateInterruptQuery(switchOn bool) {
@@ -193,6 +197,15 @@ func SetParallelQueryInBatch(en bool) {
 	fmt.Println("ParallelQueryInBatch:", ParallelQueryInBatch)
 }
 
+func SetIndexReadCachePersistent(persist bool) {
+	indexReadCachePersistent = persist
+	fmt.Println("indexReadCachePersistent:", persist)
+}
+
+func IsIndexReadCachePersistent() bool {
+	return indexReadCachePersistent
+}
+
 type LogRowsRule struct {
 	Mst  string
 	Tags map[string]string
@@ -238,6 +251,20 @@ func UpdateNodeReadonly(switchOn bool) {
 
 func IsReadonly() bool {
 	return Readonly
+}
+
+func IsHierarchicalStorageEnabled() bool {
+	enabled := atomic.LoadInt32(&HierarchicalStorageEnabled)
+	return enabled == 1
+}
+
+func SetHierarchicalStorageEnabled(en bool) {
+	if en {
+		atomic.StoreInt32(&HierarchicalStorageEnabled, 1)
+	} else {
+		atomic.StoreInt32(&HierarchicalStorageEnabled, -1)
+	}
+	fmt.Println(time.Now().Format(time.RFC3339Nano), "HierarchicalStorageEnabled:", en)
 }
 
 var handlerOnQueryRequest = make(map[queryRequestMod]func(req netstorage.SysCtrlRequest) (string, error), 1)

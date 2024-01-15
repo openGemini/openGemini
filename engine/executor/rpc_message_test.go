@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,10 +30,11 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +46,6 @@ func makeRemoteQueryMsg(nodeID uint64) *executor.RemoteQuery {
 		Database: "db0",
 		PtID:     1,
 		NodeID:   nodeID,
-		ShardIDs: []uint64{1, 2, 3, 4},
 		Opt: query.ProcessorOptions{
 			Name:                  "test",
 			Expr:                  nil,
@@ -89,6 +90,46 @@ func makeRemoteQueryMsg(nodeID uint64) *executor.RemoteQuery {
 
 func TestRemoteQuery(t *testing.T) {
 	msg := makeRemoteQueryMsg(1)
+	msg.ShardIDs = []uint64{1, 2, 3, 4}
+	msg.PtQuerys = make([]executor.PtQuery, 0)
+
+	buf, err := msg.Marshal(nil)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	other := &executor.RemoteQuery{}
+	err = other.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	if !reflect.DeepEqual(msg, other) {
+		fmt.Printf("%+v \n%+v \n", msg, other)
+		t.Fatalf("failed to marshal or Unmarshal RemoteQuery")
+	}
+}
+
+func TestRemoteQueryForPtQuery(t *testing.T) {
+	msg := makeRemoteQueryMsg(1)
+	msg.PtQuerys = []executor.PtQuery{
+		{
+			PtID: 1,
+			ShardInfos: []executor.ShardInfo{
+				{ID: 1, Path: "data/db0/0/rp0/1_startime_endtime_1/columnstore", Version: 0},
+				{ID: 2, Path: "data/db0/0/rp0/2_startime_endtime_2/columnstore", Version: 1},
+				{ID: 3, Path: "data/db0/0/rp0/3_startime_endtime_3/columnstore", Version: 2},
+			},
+		},
+		{
+			PtID: 2,
+			ShardInfos: []executor.ShardInfo{
+				{ID: 3, Path: "data/db0/0/rp0/3_startime_endtime_3/columnstore", Version: 0},
+				{ID: 4, Path: "data/db0/0/rp0/4_startime_endtime_4/columnstore", Version: 1},
+				{ID: 5, Path: "data/db0/0/rp0/5_startime_endtime_5/columnstore", Version: 2},
+			},
+		},
+	}
 
 	buf, err := msg.Marshal(nil)
 	if err != nil {
@@ -248,4 +289,48 @@ func TestNewRPCReaderTransform_Abort(t *testing.T) {
 	trans.Abort()
 	err := trans.Work(ctx)
 	require.NoError(t, err)
+}
+
+func TestHandlerIncQueryMessage(t *testing.T) {
+	cache.PutGlobalIterNum("1", 0)
+	address := "127.0.0.11:18291"
+	var nodeID uint64 = 1
+
+	// Server
+	server := startServer(address, &RPCServer{})
+	defer server.Stop()
+
+	// Client
+	transport.NewNodeManager().Add(nodeID, address)
+	time.Sleep(time.Second)
+	rq := makeRemoteQueryMsg(nodeID)
+	rq.Analyze = true
+	client := executor.NewRPCClient(rq)
+
+	msg := executor.NewIncQueryFinishMessage(true, false, "1", 0, 0)
+	msg1 := executor.NewIncQueryFinishMessage(true, true, "1", 0, 0)
+	msg2 := rpc.NewMessage(executor.IncQueryFinishMessage, executor.NewErrorMessage(1, "test"))
+
+	client.Init(context.Background(), nil)
+
+	require.NoError(t, client.Handle(msg))
+	require.NoError(t, client.Handle(msg1))
+	err := client.Handle(msg2)
+	assert.Equal(t, strings.Contains(err.Error(), "finish msg error"), true)
+}
+
+func TestIncQueryMessage(t *testing.T) {
+	var data []byte
+	var inc2 = &executor.IncQueryFinish{}
+	msg := executor.NewIncQueryFinishMessage(true, false, "1", 0, 0)
+	inc1 := msg.Data().(*executor.IncQueryFinish)
+	data, _ = inc1.Marshal(data)
+	require.NoError(t, inc2.Unmarshal(data))
+	require.Equal(t, inc1, inc2)
+	require.Equal(t, inc1.Size(), inc2.Size())
+	var inc3 = &executor.IncQueryFinish{}
+	err := inc3.Unmarshal(nil)
+	require.Equal(t, err.Error(), "invalid the IncQueryFinish length")
+	msg1 := executor.NewRPCMessage(executor.IncQueryFinishMessage)
+	require.Equal(t, msg1, &executor.IncQueryFinish{})
 }

@@ -30,7 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec/gen"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 func TestChunkCodec(t *testing.T) {
@@ -220,7 +220,7 @@ func BenchmarkMarshal(b *testing.B) {
 	chunk := makeChunk()
 
 	b.ResetTimer()
-	pool := bufferpool.NewByteBufferPool(0)
+	pool := bufferpool.NewByteBufferPool(0, 0, bufferpool.MaxLocalCacheLen)
 	var err error
 
 	for i := 0; i < b.N; i++ {
@@ -257,7 +257,7 @@ func BenchmarkMarshalUnmarshal(b *testing.B) {
 	chunk := makeChunk()
 
 	b.ResetTimer()
-	pool := bufferpool.NewByteBufferPool(0)
+	pool := bufferpool.NewByteBufferPool(0, 0, bufferpool.MaxLocalCacheLen)
 
 	for i := 0; i < b.N; i++ {
 		buf := pool.Get()

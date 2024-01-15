@@ -20,8 +20,9 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
 )
 
@@ -134,7 +135,7 @@ func EstimateBufferSize(recSize int, rows int) int {
 	return rows * recSize
 }
 
-func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *index.Relation) error {
+func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *influxql.IndexRelation) error {
 	f, err := msb.NewTSSPFile(tmp)
 	if err != nil {
 		panic(err)
@@ -149,10 +150,8 @@ func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *index.
 		var indexList []string
 		if skipIndex != nil && len(skipIndex.IndexNames) != 0 {
 			for i := range skipIndex.IndexNames {
-				if skipIndex.IndexNames[i] == "bloomfilter" || skipIndex.IndexNames[i] == "minmax" {
-					for j := range skipIndex.IndexList[i].Columns {
-						indexList = append(indexList, skipIndex.IndexList[j].Columns...)
-					}
+				if skipIndex.IndexNames[i] == colstore.BloomFilterIndex || skipIndex.IndexNames[i] == colstore.MinMaxIndex {
+					indexList = append(indexList, skipIndex.IndexList[i].IList...)
 				}
 			}
 		}

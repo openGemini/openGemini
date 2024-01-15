@@ -24,8 +24,8 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/sysconfig"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -1177,4 +1177,50 @@ func TestAggPushDownToColumnStoreReaderRule(t *testing.T) {
 	sortFields := influxql.SortFields{{Name: "value"}}
 	s := executor.NewQuerySchemaWithSources(fields, sources, columnsName, &opt, sortFields)
 	assert.Equal(t, s.HasSort(), true)
+}
+
+func TestIncAggRule(t *testing.T) {
+	rule1 := executor.NewIncAggRule("IncAggRule")
+	schema := createQuerySchemaWithCountCalls()
+	node := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalIncAgg(node, schema)
+	ruleCall := executor.NewOptRuleCall(nil, rule1.GetOperand(), []hybridqp.QueryNode{agg})
+	rule1.OnMatch(ruleCall)
+	if rule1.ToString() != "IncAggRule" {
+		t.Errorf("IncAggRule has wrong name")
+	}
+	rule2 := executor.NewIncAggRule("IncAggRule")
+	if rule1.Equals(rule2) != true {
+		t.Errorf("IncAggRule match failed")
+	}
+	if rule1.Equals(rule1) != true {
+		t.Errorf("IncAggRule match failed")
+	}
+	rule3 := executor.NewIncHashAggRule("IncAggRule")
+	if rule1.Equals(rule3) == true {
+		t.Errorf("IncAggRule match failed")
+	}
+}
+
+func TestIncHashAggRule(t *testing.T) {
+	rule1 := executor.NewIncHashAggRule("IncHashAggRule")
+	schema := createQuerySchemaWithCountCalls()
+	node := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalIncHashAgg(node, schema)
+	ruleCall := executor.NewOptRuleCall(nil, rule1.GetOperand(), []hybridqp.QueryNode{agg})
+	rule1.OnMatch(ruleCall)
+	if rule1.ToString() != "IncHashAggRule" {
+		t.Errorf("IncHashAggRule has wrong name")
+	}
+	rule2 := executor.NewIncHashAggRule("IncHashAggRule")
+	if rule1.Equals(rule2) != true {
+		t.Errorf("IncHashAggRule match failed")
+	}
+	if rule1.Equals(rule1) != true {
+		t.Errorf("IncHashAggRule match failed")
+	}
+	rule3 := executor.NewIncAggRule("IncAggRule")
+	if rule1.Equals(rule3) == true {
+		t.Errorf("IncHashAggRule match failed")
+	}
 }

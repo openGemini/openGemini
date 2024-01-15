@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
 )
 

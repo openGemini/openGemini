@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"go.uber.org/zap"
 )
 

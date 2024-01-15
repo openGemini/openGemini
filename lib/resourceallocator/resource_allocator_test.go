@@ -69,6 +69,9 @@ func TestShardPipelineManager(t *testing.T) {
 		t.Fatal(e)
 	}
 	a2.Free(10, 20)
+	if _, _, e := a2.Alloc(100); e == nil {
+		t.Fatal(e)
+	}
 }
 
 func TestResourceAllocatorImpl(t *testing.T) {

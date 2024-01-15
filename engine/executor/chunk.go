@@ -28,9 +28,9 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 //go:generate tmpl -data=@./tmpldata column.gen.go.tmpl
@@ -163,6 +163,7 @@ type Chunk interface {
 	TagLen() int
 	AppendTagsAndIndex(ChunkTags, int)
 	AppendTagsAndIndexes([]ChunkTags, []int)
+	InitTimeWindow(minTime, maxTime, intervalTime int64, hasInterval, ascending bool, tag ChunkTags)
 	Time() []int64
 	TruncateTime(int)
 	SetTime(time []int64)
@@ -351,6 +352,42 @@ func (c *ChunkImpl) AppendIntervalIndexes(intervalIndex []int) {
 
 func (c *ChunkImpl) AppendIntervalIndex(intervalIndex int) {
 	c.intervalIndex = append(c.intervalIndex, intervalIndex)
+}
+
+func (c *ChunkImpl) InitTimeWindow(minTime, maxTime, intervalTime int64, hasInterval, ascending bool, tag ChunkTags) {
+	if !hasInterval {
+		c.AppendIntervalFullRows(0, intervalTime, 1, tag)
+		return
+	}
+	num := (maxTime - minTime) / intervalTime
+	if ascending {
+		c.AppendIntervalFullRows(minTime, intervalTime, int(num), tag)
+	} else {
+		c.AppendIntervalFullRows(maxTime-intervalTime, -intervalTime, int(num), tag)
+	}
+}
+
+func (c *ChunkImpl) AppendIntervalFullRows(start, step int64, num int, tag ChunkTags) {
+	// append time and interval index
+	endLoc := len(c.time)
+	for i := 0; i < num; i++ {
+		c.time = append(c.time, start+step*int64(i))
+		c.AppendIntervalIndex(endLoc + i)
+	}
+	// append data of column
+	for i := 0; i < c.NumberOfCols(); i++ {
+		switch c.rowDataType.Field(i).Expr.(*influxql.VarRef).Type {
+		case influxql.Integer:
+			c.Column(i).AppendIntegerValues(make([]int64, num))
+		case influxql.Float:
+			c.Column(i).AppendFloatValues(make([]float64, num))
+		default:
+			panic("unsupported the data type for AppendIntervalFullRows")
+		}
+		c.Column(i).AppendManyNotNil(int(num))
+	}
+	// append tags and tagIndex
+	c.AppendTagsAndIndex(tag, endLoc)
 }
 
 func (c *ChunkImpl) ResetIntervalIndex(intervalIndex ...int) {

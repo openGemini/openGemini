@@ -24,8 +24,8 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/query/proto"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -306,6 +306,14 @@ func (p *LogicalAggregate) String() string {
 	return "LogicalAggregate"
 }
 
+func (p *LogicalIncAgg) String() string {
+	return "LogicalIncAgg"
+}
+
+func (p *LogicalIncHashAgg) String() string {
+	return "LogicalIncHashAgg"
+}
+
 func (p *LogicalMerge) String() string {
 	return "LogicalMerge"
 }
@@ -491,7 +499,7 @@ func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 		return Marshal(p, nil, p.inputs...)
 	case *LogicalHashMerge:
 		return Marshal(p, func(pb *internal.QueryNode) {
-			pb.Exchange = uint32(p.eType) << 8
+			pb.Exchange = uint32(p.eType)<<8 | uint32(p.eRole)
 		}, p.inputs...)
 	case *LogicalSparseIndexScan:
 		return Marshal(p, nil, p.inputs...)
@@ -499,7 +507,7 @@ func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 		return Marshal(p, nil, p.inputs...)
 	case *LogicalHashAgg:
 		return Marshal(p, func(pb *internal.QueryNode) {
-			pb.Exchange = uint32(p.eType) << 8
+			pb.Exchange = uint32(p.eType)<<8 | uint32(p.eRole)
 		}, p.inputs...)
 	default:
 		panic(fmt.Sprintf("unsupoorted type %t", p))
@@ -601,7 +609,11 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 	case internal.LogicPlanType_LogicalHashMerge:
 		if len(nodes) == 1 {
 			eType := ExchangeType(pb.Exchange >> 8 & 0xff)
+			eRole := ExchangeRole(pb.Exchange & 0xff)
 			node := NewLogicalHashMerge(nodes[0], schema, eType, []hybridqp.Trait{})
+			if eRole == PRODUCER_ROLE {
+				node.ToProducer()
+			}
 			return node, nil
 		}
 	case internal.LogicPlanType_LogicalSparseIndexScan:
@@ -617,7 +629,11 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 	case internal.LogicPlanType_LogicalHashAgg:
 		if len(nodes) == 1 {
 			eType := ExchangeType(pb.Exchange >> 8 & 0xff)
+			eRole := ExchangeRole(pb.Exchange & 0xff)
 			node := NewLogicalHashAgg(nodes[0], schema, eType, []hybridqp.Trait{})
+			if eRole == PRODUCER_ROLE {
+				node.ToProducer()
+			}
 			return node, nil
 		}
 	default:
@@ -669,22 +685,30 @@ func UnmarshalQueryNode(buf []byte, shardNum int, opt hybridqp.Options) (hybridq
 	planner.SetRoot(node)
 	best := planner.FindBestExp()
 	if schema.Options().HaveOnlyCSStore() {
-		ReWriteArgs(best)
+		ReWriteArgs(best, schema.Options().IsUnifyPlan())
 	}
 	return best, nil
 }
 
-func ReWriteArgs(best hybridqp.QueryNode) {
+func ReWriteArgs(best hybridqp.QueryNode, isUnifyPlan bool) {
 	if best == nil || best.Children() == nil {
 		return
 	}
-	ReWriteArgs(best.Children()[0])
+	ReWriteArgs(best.Children()[0], isUnifyPlan)
 	node, ok := best.(*LogicalHashAgg)
 	if ok {
-		if node.eType != READER_EXCHANGE {
-			node.ForwardCallArgs()
-			node.CountToSum()
-			node.init()
+		if isUnifyPlan {
+			if node.eType != UNKNOWN_EXCHANGE {
+				node.ForwardCallArgs()
+				node.CountToSum()
+				node.init()
+			}
+		} else {
+			if node.eType != READER_EXCHANGE {
+				node.ForwardCallArgs()
+				node.CountToSum()
+				node.init()
+			}
 		}
 	}
 }

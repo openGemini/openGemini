@@ -26,7 +26,7 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
-	raftboltdb "github.com/openGemini/openGemini/open_src/github.com/hashicorp/raft-boltdb"
+	raftboltdb "github.com/openGemini/openGemini/lib/util/lifted/hashicorp/raft-boltdb"
 	"go.uber.org/zap"
 )
 

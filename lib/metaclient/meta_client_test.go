@@ -25,11 +25,12 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -415,7 +416,7 @@ func TestClient_CreateShardGroup(t *testing.T) {
 		SendRPCMessage: &RPCMessageSender{},
 	}
 
-	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), config.COLUMNSTORE)
+	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), 0, config.COLUMNSTORE)
 	require.EqualError(t, err, "execute command timeout")
 }
 
@@ -503,7 +504,7 @@ func TestClient_CreateDatabase(t *testing.T) {
 		logger:         logger.NewLogger(errno.ModuleMetaClient),
 		SendRPCMessage: &RPCMessageSender{},
 	}
-	options := &meta2.ObsOptions{Enabled: true}
+	options := &obs.ObsOptions{Enabled: true}
 	_, err := c.CreateDatabase("db0", false, 1, options)
 	require.EqualError(t, err, "execute command timeout")
 }
@@ -1547,7 +1548,7 @@ func TestClient_GetAliveShardsForReplication(t *testing.T) {
 					"rp0": {
 						Name:         "rp0",
 						Duration:     72 * time.Hour,
-						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}, "rp0": {Name: "rp0"}},
 						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
 					},
 				}},
@@ -1575,6 +1576,107 @@ func TestClient_GetAliveShardsForReplication(t *testing.T) {
 	defer config.SetHaPolicy(config.WAFPolicy)
 	shardIndexes := c.GetAliveShards("db0", &sgInfo1)
 	assert.Equal(t, shardIndexes, []int{0, 2})
+}
+
+func TestClient_GetShardGroupByTimeRange(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(3600)),
+		DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{
+			{ID: 1, Owners: []uint32{0}},
+			{ID: 2, Owners: []uint32{1}},
+			{ID: 3, Owners: []uint32{2}},
+			{ID: 4, Owners: []uint32{3}},
+		},
+		EngineType: config.TSSTORE,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name:     "db0",
+					ReplicaN: 2,
+					ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Name:         "rp0",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}, "rp0": {Name: "rp0"}},
+							ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+						},
+					},
+				},
+				"db1": {
+					Name:        "db1",
+					ReplicaN:    2,
+					MarkDeleted: true,
+					ShardKey:    meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Name:         "rp0",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}, "rp0": {Name: "rp0"}},
+							ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+						},
+					},
+				},
+				"db2": {
+					Name:        "db2",
+					ReplicaN:    2,
+					MarkDeleted: true,
+					ShardKey:    meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Name:         "rp0",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}, "rp0": {Name: "rp0"}},
+							ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+							MarkDeleted:  true,
+						},
+					},
+				},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{PtId: 0, Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, RGID: 0},
+					{PtId: 1, Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Online, RGID: 0},
+					{PtId: 2, Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, RGID: 1},
+					{PtId: 3, Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, RGID: 1},
+				},
+			},
+			ReplicaGroups: map[string][]meta2.ReplicaGroup{
+				"db0": {
+					{ID: 0, MasterPtID: 0, Peers: []meta2.Peer{{ID: 1, PtRole: meta2.Slave}}},
+					{ID: 1, MasterPtID: 2, Peers: []meta2.Peer{{ID: 3, PtRole: meta2.Slave}}},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	_, err := c.GetShardGroupByTimeRange("db0", "rp0", ts, ts.Add(time.Duration(3600)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.GetShardGroupByTimeRange("db1", "xx", ts, ts.Add(time.Duration(3600)))
+	if err == nil {
+		t.Fatal("unexpect")
+	}
+	_, err = c.GetShardGroupByTimeRange("db3", "xx", ts, ts.Add(time.Duration(3600)))
+	if err == nil {
+		t.Fatal("unexpect")
+	}
+	_, err = c.GetShardGroupByTimeRange("db0", "xx", ts, ts.Add(time.Duration(3600)))
+	if err == nil {
+		t.Fatal("unexpect")
+	}
+	_, err = c.GetShardGroupByTimeRange("db2", "rp0", ts, ts.Add(time.Duration(3600)))
+	if err == nil {
+		t.Fatal("unexpect")
+	}
 }
 
 func TestClient_UpdateMeasurement(t *testing.T) {
@@ -1683,12 +1785,12 @@ func TestClient_ShowCluster(t *testing.T) {
 	}
 
 	names := []string{"time", "status", "hostname", "nodeID", "nodeType"}
-	value1 := []interface{}{m1.Status, m1.Host, m1.ID, "meta"}
-	value2 := []interface{}{m2.Status, m2.Host, m2.ID, "meta"}
-	value3 := []interface{}{m3.Status, m3.Host, m3.ID, "meta"}
-	value4 := []interface{}{d1.Status, d1.Host, d1.ID, "data"}
-	value5 := []interface{}{d2.Status, d2.Host, d2.ID, "data"}
-	value6 := []interface{}{d3.Status, d3.Host, d3.ID, "data"}
+	value1 := []interface{}{m1.Status.String(), m1.Host, m1.ID, "meta"}
+	value2 := []interface{}{m2.Status.String(), m2.Host, m2.ID, "meta"}
+	value3 := []interface{}{m3.Status.String(), m3.Host, m3.ID, "meta"}
+	value4 := []interface{}{d1.Status.String(), d1.Host, d1.ID, "data"}
+	value5 := []interface{}{d2.Status.String(), d2.Host, d2.ID, "data"}
+	value6 := []interface{}{d3.Status.String(), d3.Host, d3.ID, "data"}
 
 	row1 := c.ShowCluster()
 	values1 := [][]interface{}{value1, value2, value3, value4, value5, value6}

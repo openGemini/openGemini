@@ -28,7 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
 )
 

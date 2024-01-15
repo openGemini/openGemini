@@ -9005,7 +9005,6 @@ func TestServer_Query_ShowTagKeysWithCondition(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
 	defer s.Close()
-
 	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
 		t.Fatal(err)
 	}
@@ -9020,7 +9019,7 @@ func TestServer_Query_ShowTagKeysWithCondition(t *testing.T) {
 		&Write{data: strings.Join(writes, "\n")},
 	}
 	/*
-		these queries are all special mst, because more mst make the results no order, exp not match actual
+	  these queries are all special mst, because more mst make the results no order, exp not match actual
 	*/
 	test.addQueries([]*Query{
 		&Query{
@@ -9036,19 +9035,19 @@ func TestServer_Query_ShowTagKeysWithCondition(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 		},
 		&Query{
-			name:    `show tag keys with condition`,
+			name:    `show tag keys with time condition`,
 			command: "SHOW TAG KEYS FROM mst WHERE time > 0",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["cluster"],["label"],["others"],["region"],["server"]]}]}]}`,
 			params:  url.Values{"db": []string{"db0"}},
 		},
 		&Query{
-			name:    `show tag keys with condition and limit`,
+			name:    `show tag keys with time condition and limit`,
 			command: "SHOW TAG KEYS FROM mst WHERE time > 0 limit 1",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["cluster"]]}]}]}`,
 			params:  url.Values{"db": []string{"db0"}},
 		},
 		&Query{
-			name:    `show tag keys with condition and limit and offset`,
+			name:    `show tag keys with time condition and limit and offset`,
 			command: "SHOW TAG KEYS FROM mst WHERE time > 0 limit 1 offset 1",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["tagKey"],"values":[["label"]]}]}]}`,
 			params:  url.Values{"db": []string{"db0"}},
@@ -12010,6 +12009,51 @@ func TestServer_ParallelQuery(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select value from "cpu" ORDER BY time DESC;select value from "power" ORDER BY time DESC;select used, free from "mem" ORDER BY time DESC`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2000-01-01T00:00:03Z",3],["2000-01-01T00:00:02Z",2],["2000-01-01T00:00:01Z",1]]}]},{"statement_id":1,"series":[{"name":"power","columns":["time","value"],"values":[["2000-01-01T00:00:04Z",4],["2000-01-01T00:00:03Z",3],["2000-01-01T00:00:02Z",2],["2000-01-01T00:00:01Z",1]]}]},{"statement_id":2,"series":[{"name":"mem","columns":["time","used","free"],"values":[["2000-01-01T00:00:02Z",null,2],["2000-01-01T00:00:02Z",4,null],["2000-01-01T00:00:01Z",null,1],["2000-01-01T00:00:01Z",3,null]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.Execute(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_TSSubQueryHasDifferentAscending(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mem,host=server1 f1=1 %d`, mustParseTime(time.RFC3339Nano, "2000-01-01T00:00:02Z").UnixNano()),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "different ascending",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select f1 from (select f1 from mem order by time asc) order by time desc`,
+			exp:     `{"results":[{"statement_id":0,"error":"subqueries must be ordered in the same direction as the query itself"}]}`,
 		},
 	}...)
 

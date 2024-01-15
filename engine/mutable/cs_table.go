@@ -19,6 +19,7 @@ package mutable
 import (
 	"errors"
 	"math"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -26,66 +27,52 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/savsgio/dictpool"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
 
 const defaultWriteRecNum = 8
 
-type csMemTableImpl struct {
-	mu                  sync.RWMutex
-	primaryKey          map[string]record.Schemas  // mst -> primary key
-	timeClusterDuration map[string]time.Duration   // mst -> time cluster duration
-	indexRelation       map[string]*index.Relation // mst -> skip index info
+type FlushManager interface {
+	flushChunk(primaryKey record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
+		chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8)
+	updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex)
+	getAccumulateMetaIndex() *immutable.AccumulateMetaIndex
 }
 
-func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
-	if rec != nil {
-		msInfo.Name = name
-		msInfo.Schema = rec.Schema
-		return msInfo
-	}
-	msInfo.Name = row.Name
-	msInfo.concurrencyChunks = &rowChunks{writeRowChunksToken: make(chan struct{}, defaultWriteRecNum),
-		rowChunksStatus: make([]int, defaultWriteRecNum)}
-	genMsSchemaForColumnStore(&msInfo.Schema, row.Fields, row.Tags)
-	return msInfo
+type writeAttached struct {
 }
 
-func (c *csMemTableImpl) ApplyConcurrency(table *MemTable, f func(msName string)) {
-	var wg sync.WaitGroup
-	wg.Add(len(table.msInfoMap))
-	for k := range table.msInfoMap {
-		concurLimiter <- struct{}{}
-		go func(msName string) {
-			f(msName)
-			concurLimiter.Release()
-			wg.Done()
-		}(k)
-	}
-	wg.Wait()
+func (w *writeAttached) updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex) {
+
 }
 
-func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string, tbStore immutable.TablesStore,
-	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) *immutable.MsBuilder {
+func (w *writeAttached) getAccumulateMetaIndex() *immutable.AccumulateMetaIndex {
+	return nil
+}
+
+func (w *writeAttached) flushChunk(primaryKey record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
+	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) {
 	writeRec := chunk.WriteRec.GetRecord()
-	writeMs = c.WriteRecordForFlush(writeRec, writeMs, tbStore, 0, true, math.MinInt64, c.primaryKey[msName], c.indexRelation[msName])
+	writeMs = w.WriteRecordForFlush(writeRec, writeMs, tbStore, 0, true, math.MinInt64, primaryKey, indexRelation)
 	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
 
 	if writeMs != nil {
-		if err := immutable.WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0, c.indexRelation[msName]); err != nil {
+		if err := immutable.WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0, indexRelation); err != nil {
 			writeMs = nil
 			logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
-			return writeMs
+			return
 		}
 
 		tbStore.AddTSSPFiles(writeMs.Name(), false, writeMs.Files...)
@@ -96,15 +83,11 @@ func (c *csMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 				tbStore.AddPKFile(writeMs.Name(), indexFilePath, writeMs.GetPKRecord(i), writeMs.GetPKMark(i), tcLocation)
 			}
 		}
-
-		writeMs = nil
 	}
-
-	return nil
 }
 
-func (c *csMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
-	lastFlushTime int64, schema record.Schemas, skipIndexRelation *index.Relation) *immutable.MsBuilder {
+func (w *writeAttached) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
+	lastFlushTime int64, schema record.Schemas, skipIndexRelation *influxql.IndexRelation) *immutable.MsBuilder {
 	var err error
 
 	if !order && lastFlushTime == math.MaxInt64 {
@@ -121,7 +104,104 @@ func (c *csMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.
 	return msb
 }
 
-func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration time.Duration, indexRelation *index.Relation) {
+type writeDetached struct {
+	accumulateMetaIndex *immutable.AccumulateMetaIndex
+	firstFlush          bool
+	localBFCount        int64 //the block count of a local bloomFilter file
+}
+
+func (w *writeDetached) updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex) {
+	w.accumulateMetaIndex = accumulateMetaIndex
+}
+
+func (w *writeDetached) getAccumulateMetaIndex() *immutable.AccumulateMetaIndex {
+	return w.accumulateMetaIndex
+}
+
+func (w *writeDetached) flushChunk(pkSchema record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
+	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) {
+	writeRec := chunk.WriteRec.GetRecord()
+	w.WriteDetached(writeRec, writeMs, 0, pkSchema, indexRelation)
+	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
+}
+
+func (w *writeDetached) WriteDetached(rec *record.Record, msb *immutable.MsBuilder, id uint64, pkSchema record.Schemas,
+	skipIndexRelation *influxql.IndexRelation) {
+	msb.SetLocalBfCount(w.localBFCount)
+	err := msb.WriteDetached(id, rec, pkSchema, skipIndexRelation, w.firstFlush, w.accumulateMetaIndex)
+	if err != nil {
+		panic(err)
+	}
+	w.localBFCount = msb.GetLocalBfCount()
+	w.firstFlush = false
+}
+
+type csMemTableImpl struct {
+	mu                  sync.RWMutex
+	primaryKey          map[string]record.Schemas         // mst -> primary key
+	timeClusterDuration map[string]time.Duration          // mst -> time cluster duration
+	indexRelation       map[string]influxql.IndexRelation //map[string]*index.Relation                // mst -> skip index info
+	flushManager        map[string]FlushManager           // mst -> flush detached or attached
+	accumulateMetaIndex *sync.Map                         //mst -> immutable.AccumulateMetaIndex, record metaIndex for detached store
+}
+
+func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
+	if rec != nil {
+		msInfo.Name = name
+		msInfo.Schema = rec.Schema
+		return msInfo
+	}
+	msInfo.Name = row.Name
+	msInfo.concurrencyChunks = &rowChunks{writeRowChunksToken: make(chan struct{}, defaultWriteRecNum),
+		rowChunksStatus: make([]int, defaultWriteRecNum)}
+	genMsSchemaForColumnStore(&msInfo.Schema, row.Fields, row.Tags)
+	return msInfo
+}
+
+func (c *csMemTableImpl) SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map) {
+	c.flushManager = manager
+	c.accumulateMetaIndex = accumulateMetaIndex
+}
+
+func (c *csMemTableImpl) getAccumulateMetaIndex(name string) *immutable.AccumulateMetaIndex {
+	aMetaIndex, ok := c.accumulateMetaIndex.Load(name)
+	if !ok {
+		return &immutable.AccumulateMetaIndex{}
+	}
+	return aMetaIndex.(*immutable.AccumulateMetaIndex)
+}
+
+func (c *csMemTableImpl) updateAccumulateMetaIndexInfo(name string, index *immutable.AccumulateMetaIndex) {
+	c.accumulateMetaIndex.Store(name, index)
+}
+
+func (c *csMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutable.MsBuilder, recSchema record.Schemas, msName,
+	lockPath string, indexRelation *influxql.IndexRelation) FlushManager {
+	c.mu.RLock()
+	fManager, ok := c.flushManager[msName]
+	c.mu.RUnlock()
+	aMetaIndex := c.getAccumulateMetaIndex(msName)
+	if !ok {
+		if detachedEnabled {
+			localBFCount := sparseindex.GetLocalBloomFilterBlockCnts(writeMs.Path, msName, lockPath, recSchema, indexRelation)
+			fManager = &writeDetached{
+				accumulateMetaIndex: aMetaIndex,
+				firstFlush:          aMetaIndex.GetBlockId() == 0,
+				localBFCount:        localBFCount,
+			}
+		} else {
+			fManager = &writeAttached{}
+		}
+		c.mu.Lock()
+		c.flushManager[msName] = fManager
+		c.mu.Unlock()
+		return fManager
+	}
+	fManager.updateAccumulateMetaIndex(aMetaIndex)
+	return fManager
+}
+
+func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration time.Duration, indexRelation influxql.IndexRelation) {
 	c.mu.RLock()
 	_, okPrimary := c.primaryKey[mst]
 	_, okTC := c.timeClusterDuration[mst]
@@ -142,6 +222,15 @@ func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration t
 	}
 }
 
+func (c *csMemTableImpl) getMstInfo(mst string) (record.Schemas, time.Duration, influxql.IndexRelation) {
+	c.mu.RLock()
+	primaryKey := c.primaryKey[mst]
+	timeClusterDuration := c.timeClusterDuration[mst]
+	indexRelation := c.indexRelation[mst]
+	c.mu.RUnlock()
+	return primaryKey, timeClusterDuration, indexRelation
+}
+
 func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore) {
 	msInfo, ok := table.msInfoMap[msName]
 	if !ok {
@@ -149,23 +238,65 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 	}
 	MergeSchema(table, msName)
 	JoinWriteRec(table, msName)
+	primaryKey, timeClusterDuration, indexRelation := c.getMstInfo(msName)
 	chunk := msInfo.writeChunk
-	chunk.SortRecord(c.timeClusterDuration[msName])
-	var tcLocation int8 = colstore.DefaultTCLocation
-	if c.timeClusterDuration[msName] > 0 {
-		tcLocation = 0
-	}
-
+	chunk.SortRecord(timeClusterDuration)
+	timeSorted := chunk.TimeSorted()
 	rec := chunk.WriteRec.GetRecord()
 	if rec.RowNums() == 0 {
 		return
 	}
+
 	conf := immutable.GetColStoreConfig()
-	writeMs := createMsBuilder(tbStore, true, lock, dataPath, msName, 1, rec.Len(), conf, config.COLUMNSTORE)
+	mstInfo, exist := tbStore.GetMstInfo(msName)
+	if !exist {
+		logger.GetLogger().Error("mstInfo is not exist", zap.String("msName", msName))
+		return
+	}
+
+	writeMs := c.createMsBuilder(tbStore, lock, dataPath, msName, 1, rec.Len(), conf, config.COLUMNSTORE, mstInfo)
+	if writeMs == nil {
+		return
+	}
+	var tcLocation = colstore.DefaultTCLocation
+	if timeClusterDuration > 0 {
+		tcLocation = 0
+	}
 	writeMs.SetTCLocation(tcLocation)
+	writeMs.SetTimeSorted(timeSorted)
 	writeMs.NewPKIndexWriter()
 	writeMs.NewSkipIndexWriter()
-	c.flushChunkImp(dataPath, msName, lock, tbStore, chunk, writeMs, tcLocation)
+
+	fManager := c.getFlushManager(conf.GetDetachedFlushEnabled(), writeMs, rec.Schema, msName, *lock, &indexRelation)
+	fManager.flushChunk(primaryKey, msName, &indexRelation, tbStore, chunk, writeMs, tcLocation) // column store flush one chunk each time
+
+	//after finishing flush update accumulate metaIndex info to csMemTableImpl
+	c.updateAccumulateMetaIndexInfo(msName, fManager.getAccumulateMetaIndex())
+}
+
+func (c *csMemTableImpl) createMsBuilder(tbStore immutable.TablesStore, lockPath *string, dataPath string,
+	msName string, totalChunks int, size int, conf *immutable.Config, engineType config.EngineType, mstInfo *meta.MeasurementInfo) *immutable.MsBuilder {
+	seq := tbStore.Sequencer()
+	defer seq.UnRef()
+
+	FileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, true, lockPath)
+	var msb *immutable.MsBuilder
+	var err error
+	if conf.GetDetachedFlushEnabled() {
+		lock := fileops.FileLockOption(*lockPath)
+		dir := filepath.Join(dataPath, msName)
+		_ = fileops.MkdirAll(dir, 0750, lock)
+		bfCols := mstInfo.IndexRelation.GetBloomFilterColumns()
+		msb, err = immutable.NewDetachedMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(),
+			seq, size, engineType, mstInfo.ObsOptions, bfCols)
+		if err != nil {
+			logger.GetLogger().Error("new detached msBuilder error", zap.Error(err))
+			return nil
+		}
+	} else {
+		msb = immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size, engineType)
+	}
+	return msb
 }
 
 func MergeSchema(table *MemTable, msName string) {
@@ -229,12 +360,17 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 
 		start = time.Now()
-		err = c.UpdateMstInfo(msName, wc.MstsInfo)
+		mstInfo, ok := GetMsInfo(msName, wc.MstsInfo)
+		if !ok {
+			logger.GetLogger().Info("mstInfo is nil", zap.String("mst name", msName))
+			return errors.New("measurement info is not found")
+		}
+
+		err = c.UpdateMstInfo(msName, mstInfo)
 		if err != nil {
 			return err
 		}
-
-		createRowChunks(msInfo, wc.MstsInfo[msName].ColStoreInfo.SortKey)
+		createRowChunks(msInfo, mstInfo.ColStoreInfo.SortKey)
 		msInfo.concurrencyChunks.writeRowChunksToken <- struct{}{}
 		writeChunk, idx = getFreeWriteChunk(msInfo)
 		for index := range rs {
@@ -348,18 +484,24 @@ func (c *csMemTableImpl) appendTagToCol(col *record.ColVal, tag *influx.Tag, siz
 	*size += int64(len(tag.Value))
 }
 
-func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo map[string]*meta.MeasurementInfo, mst string) error {
+func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
 	start := time.Now()
+	mst = stringinterner.InternSafe(mst)
 	msInfo := table.CreateMsInfo(mst, nil, rec)
 	atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 
-	err := c.UpdateMstInfo(mst, mstsInfo)
+	mstInfo, ok := GetMsInfo(mst, mstsInfo)
+	if !ok {
+		logger.GetLogger().Info("mstInfo is nil", zap.String("mst name", mst))
+		return errors.New("measurement info is not found")
+	}
+	err := c.UpdateMstInfo(mst, mstInfo)
 	if err != nil {
 		return err
 	}
 
 	start = time.Now()
-	msInfo.CreateWriteChunkForColumnStore(mstsInfo[mst].ColStoreInfo.SortKey)
+	msInfo.CreateWriteChunkForColumnStore(mstInfo.ColStoreInfo.SortKey)
 	msInfo.writeChunk.Mu.Lock()
 	defer msInfo.writeChunk.Mu.Unlock()
 	c.appendRec(msInfo, rec, &msInfo.writeChunk.WriteRec)
@@ -416,7 +558,7 @@ func checkSchemaIsSameForCol(msSchema, fields record.Schemas) (bool, []int) {
 	return true, nil
 }
 
-func (c *csMemTableImpl) UpdateMstInfo(msName string, mstsInfo map[string]*meta.MeasurementInfo) error {
+func (c *csMemTableImpl) UpdateMstInfo(msName string, mstInfo *meta.MeasurementInfo) error {
 	c.mu.RLock()
 	_, okPrimary := c.primaryKey[msName]
 	_, okTC := c.timeClusterDuration[msName]
@@ -424,11 +566,6 @@ func (c *csMemTableImpl) UpdateMstInfo(msName string, mstsInfo map[string]*meta.
 	c.mu.RUnlock()
 	if okPrimary && okTC && okSkip {
 		return nil
-	}
-
-	mstInfo, ok := mstsInfo[msName]
-	if !ok || mstInfo == nil {
-		return errors.New("measurements info not found")
 	}
 
 	var primaryKey record.Schemas
@@ -443,18 +580,7 @@ func (c *csMemTableImpl) UpdateMstInfo(msName string, mstsInfo map[string]*meta.
 		}
 	}
 
-	var indexRelation *index.Relation
-	if !okSkip {
-		indexRelation = &index.Relation{
-			Oids:       mstInfo.IndexRelation.Oids,
-			IndexNames: mstInfo.IndexRelation.IndexNames,
-			IndexList:  make([]index.ColumnList, len(mstInfo.IndexRelation.IndexList)),
-		}
-		for i := range mstInfo.IndexRelation.IndexList {
-			indexRelation.IndexList[i].Columns = mstInfo.IndexRelation.IndexList[i].IList
-		}
-	}
-	c.updateMstInfo(msName, primaryKey, mstInfo.ColStoreInfo.TimeClusterDuration, indexRelation)
+	c.updateMstInfo(msName, primaryKey, mstInfo.ColStoreInfo.TimeClusterDuration, mstInfo.IndexRelation)
 
 	return nil
 }

@@ -16,7 +16,7 @@ limitations under the License.
 
 package meta
 
-import "github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+import "github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 
 type memberEvent struct {
 	event   serf.MemberEvent

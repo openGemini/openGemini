@@ -41,16 +41,17 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/text/encoding/unicode"
@@ -153,7 +154,7 @@ type MetaClient interface {
 	CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
-	CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error)
+	CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error)
 	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
 	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
 	CreateSubscription(database, rp, name, mode string, destinations []string) error
@@ -227,6 +228,7 @@ type MetaClient interface {
 	CreateContinuousQuery(database, name, query string) error
 	ShowContinuousQueries() (models.Rows, error)
 	DropContinuousQuery(name string, database string) error
+	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
 
 	// sysctrl for admin
 	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
@@ -1009,7 +1011,7 @@ func (c *Client) AlterShardKey(database, retentionPolicy, mst string, shardKey *
 }
 
 // CreateDatabase creates a database or returns it if it already exists.
-func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error) {
+func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error) {
 	if strings.Count(name, "") > maxDbOrRpName {
 		return nil, ErrNameTooLong
 	}
@@ -1032,7 +1034,7 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint3
 	}
 
 	if options != nil {
-		cmd.Options = options.Marshal()
+		cmd.Options = meta2.MarshalObsOptions(options)
 	}
 
 	err = c.retryUntilExec(proto2.Command_CreateDatabaseCommand, proto2.E_CreateDatabaseCommand_Command, cmd)
@@ -2092,7 +2094,7 @@ func (c *Client) DropShard(id uint64) error {
 }
 
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
-func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
+func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
 	c.mu.RLock()
 	sg, tier, err := c.cacheData.GetTierOfShardGroup(database, policy, timestamp, c.ShardTier, engineType)
 	if err != nil {
@@ -2111,6 +2113,7 @@ func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, 
 		Timestamp:  proto.Int64(timestamp.UnixNano()),
 		ShardTier:  proto.Uint64(tier),
 		EngineType: proto.Uint32(uint32(engineType)),
+		Version:    proto.Uint32(version),
 	}
 
 	if err := c.retryUntilExec(proto2.Command_CreateShardGroupCommand, proto2.E_CreateShardGroupCommand_Command, cmd); err != nil {
@@ -3297,11 +3300,6 @@ flush may write older data to disk, compaction may choose file which has already
 stop flush and compaction , then clear memtable may solve this problem, but need replay new logs
 */
 func (c *Client) verifyDataNodeStatus() {
-	// only shared-storage policy suicide after network partition
-	if config.GetHaPolicy() != config.SharedStorage {
-		return
-	}
-
 	tries := 0
 	for {
 		select {
@@ -3504,6 +3502,28 @@ func (c *Client) UpdateMeasurement(db, rp, mst string, options *meta2.Options) e
 // this function is used for UT testing
 func (c *Client) SetCacheData(cacheData *meta2.Data) {
 	c.cacheData = cacheData
+}
+
+func (c *Client) GetShardGroupByTimeRange(repoName, streamName string, min, max time.Time) ([]*meta2.ShardGroupInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	db, err := c.cacheData.GetDatabase(repoName)
+	if err != nil {
+		return nil, err
+	}
+	if db.MarkDeleted {
+		return nil, nil
+	}
+	rp, err := db.GetRetentionPolicy(streamName)
+	if err != nil {
+		return nil, err
+	}
+	if rp.MarkDeleted {
+		return nil, nil
+	}
+	sg := rp.ShardGroupsByTimeRange(min, max)
+
+	return sg, nil
 }
 
 func refreshConnectedServer(currentServer int) {

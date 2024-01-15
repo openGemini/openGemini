@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 func TestSchemaOverLimit(t *testing.T) {

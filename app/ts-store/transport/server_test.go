@@ -31,8 +31,8 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/tracing"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -211,7 +211,7 @@ func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, stream
 	panic("implement me")
 }
 
-func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []stream.FieldCall, fieldsDims map[string]int32) error {
+func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []*stream.FieldCall) error {
 	panic("implement me")
 }
 
@@ -301,7 +301,7 @@ func TestInsertProcessor(t *testing.T) {
 		t.Fatal("WritePointsRequest failed")
 	}
 
-	req4 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(false, false),
+	req4 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
 		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
 	if err := processor.Handle(w, req4); err != nil {
 		t.Fatal("WritePointsRequest failed")

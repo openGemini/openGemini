@@ -103,8 +103,31 @@ const (
 	InvalidQueryStat             = 1121
 	ErrQueryNotFound             = 1122
 	ErrQueryKilled               = 1123
-	DirectBucketLacks            = 1124
-	OBSClientRead                = 1125
+	OBSClientRead                = 1124
+	ShardBucketLacks             = 1125
+	SeriesBucketLacks            = 1126
+)
+
+// query interface error codes
+const (
+	ReverseValueIllegal     = 1501
+	TimeoutMsValueIllegal   = 1502
+	TimeoutMsRangeIllegal   = 1503
+	FromValueIllegal        = 1504
+	ToValueIllegal          = 1505
+	FromValueLargerThanTo   = 1506
+	FromValueLowerThanMin   = 1507
+	ToValueLargerThanMax    = 1508
+	ScrollIdRangeInvalid    = 1509
+	LimitValueIllegal       = 1510
+	LimitValueLargerThanMax = 1511
+	LimitValueLowerThanMin  = 1512
+	HighlightValueIllegal   = 1513
+	SqlValueIllegal         = 1514
+	TooLongQuery            = 1515
+	WrongScrollId           = 1516
+	ScrollIdIllegal         = 1517
+	SetValueFailed          = 1518
 )
 
 // store engine error codes
@@ -163,6 +186,16 @@ const (
 	HashMergeTransformRunningErr   = 3006
 	HashAggTransformRunningErr     = 3007
 	InvalidIncQueryScrollID        = 3008
+	FailedGetNodeMaxIterNum        = 3009
+	FailedPutGlobalMaxIterNum      = 3010
+	FailedGetGlobalMaxIterNum      = 3011
+	FailedRetryInvalidCache        = 3012
+	FailedGetIncAggItem            = 3013
+	InvalidIncQueryTimeDuration    = 3015
+	InvalidIncAggItem              = 3016
+	ErrIncAggIterID                = 3017
+	ErrInputTimeExceedTimeRange    = 3018
+	FailedPutNodeMaxIterNum        = 3019
 )
 
 // meta

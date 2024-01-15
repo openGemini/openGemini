@@ -26,10 +26,10 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	qry "github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	qry "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,9 +65,10 @@ func MockNewExecutorBuilder() (hybridqp.PipelineExecutorBuilder, *executor.Query
 	}
 
 	traits := executor.NewStoreExchangeTraits(nil, mapShard2Reader)
-	schema := executor.NewQuerySchemaWithJoinCase(selectStmt.Fields, []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}, selectStmt.ColumnNames(), createQuerySchema().Options(), selectStmt.JoinSource, selectStmt.SortFields)
+	schema := executor.NewQuerySchemaWithJoinCase(selectStmt.Fields, []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}, selectStmt.ColumnNames(), createQuerySchema().Options(),
+		selectStmt.JoinSource, nil, selectStmt.SortFields)
 	schema.SetFill(influxql.NoFill)
-	var executorBuilder *executor.ExecutorBuilder = executor.NewMocStoreExecutorBuilder(traits, 0)
+	var executorBuilder *executor.ExecutorBuilder = executor.NewMocStoreExecutorBuilder(traits, nil, nil, 0)
 	return executorBuilder, schema, traits
 }
 func buildRowDataType() hybridqp.RowDataType {
@@ -1939,7 +1940,7 @@ func testBuildPipelineExecutor(t *testing.T, querySchema *executor.QuerySchema, 
 		}
 	}
 	indexScan := executor.NewLogicalSparseIndexScan(input, querySchema)
-	executor.ReWriteArgs(indexScan)
+	executor.ReWriteArgs(indexScan, false)
 	scan := executor.NewSparseIndexScanTransform(rowDataType, indexScan.Children()[0], indexScan.RowExprOptions(), info, querySchema)
 	sink := NewNilSink(rowDataType)
 	if err := executor.Connect(scan.GetOutputs()[0], sink.Input); err != nil {
@@ -1979,17 +1980,18 @@ func TestExecutorBuilder_addNodeExchange1(t *testing.T) {
 	Exchange := executor.NewLogicalExchange(inputLogicSeries1[0], executor.SERIES_EXCHANGE, []hybridqp.Trait{traits}, schema)
 	_, err := builder.Build(Exchange)
 	require.Contains(t, err.Error(), "unsupport logical plan, can't build processor from itr")
-	input := executor.NewLogicalColumnStoreReader(nil, schema)
+	input := executor.NewLogicalReader(nil, schema)
 	Exchange = executor.NewLogicalExchange(input, executor.SERIES_EXCHANGE, []hybridqp.Trait{traits}, schema)
 	p, _ := builder.Build(Exchange)
 	pipelineExecutor := p.(*executor.PipelineExecutor)
 	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
 }
+
 func TestExecutorBuilder_addNodeExchange2(t *testing.T) {
 	var schema *executor.QuerySchema
 	var builder hybridqp.PipelineExecutorBuilder
 	builder, schema, _ = MockNewExecutorBuilder()
-	input := executor.NewLogicalColumnStoreReader(nil, schema)
+	input := executor.NewLogicalReader(nil, schema)
 	rq := executor.RemoteQuery{
 		Database: "db0",
 		PtID:     1,
@@ -2040,4 +2042,70 @@ func TestExecutorBuilder_addNodeExchange2(t *testing.T) {
 	p, _ := builder.Build(Exchange)
 	pipelineExecutor := p.(*executor.PipelineExecutor)
 	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
+}
+
+func TestExecutorBuilder_addPartitionExchange1(t *testing.T) {
+	var schema *executor.QuerySchema
+	var builder hybridqp.PipelineExecutorBuilder
+	_, schema, _ = MockNewExecutorBuilder()
+	ptQuerys := make([]executor.PtQuery, 0)
+	ptQuerys = append(ptQuerys, executor.PtQuery{PtID: 1, ShardInfos: []executor.ShardInfo{{ID: 1, Path: "/obs/db0/log1/seg0", Version: 4}}})
+	ptQuerys = append(ptQuerys, executor.PtQuery{PtID: 2, ShardInfos: []executor.ShardInfo{{ID: 2, Path: "/obs/db0/log1/seg1", Version: 4}}})
+	rq := executor.RemoteQuery{
+		Database: "db0",
+		PtID:     1,
+		NodeID:   0,
+		PtQuerys: ptQuerys,
+		Opt: query.ProcessorOptions{
+			Name:                  "test",
+			Expr:                  nil,
+			Exprs:                 nil,
+			Aux:                   []influxql.VarRef{{Val: "key", Type: influxql.String}},
+			Sources:               []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}},
+			Interval:              hybridqp.Interval{Duration: time.Second, Offset: 101},
+			Dimensions:            []string{"a", "b", "c"},
+			GroupBy:               map[string]struct{}{"a": {}, "b": {}},
+			Location:              nil,
+			Fill:                  1,
+			FillValue:             1.11,
+			Condition:             nil,
+			StartTime:             1,
+			EndTime:               2,
+			Limit:                 3,
+			Offset:                4,
+			SLimit:                5,
+			SOffset:               6,
+			Ascending:             false,
+			StripName:             false,
+			Dedupe:                false,
+			Ordered:               false,
+			Parallel:              false,
+			MaxSeriesN:            0,
+			InterruptCh:           nil,
+			Authorizer:            nil,
+			ChunkedSize:           0,
+			Chunked:               false,
+			ChunkSize:             0,
+			MaxParallel:           0,
+			RowsChan:              nil,
+			QueryId:               100001,
+			Query:                 "SELECT * FROM mst1 limit 10",
+			EnableBinaryTreeMerge: 0,
+			HintType:              0,
+		},
+		Analyze: false,
+		Node:    []byte{1, 2, 3, 4, 5, 6, 7},
+	}
+	csTraits := executor.NewCsStoreExchangeTraits(nil, ptQuerys)
+	info := executor.IndexScanExtraInfo{
+		Req:     &rq,
+		PtQuery: &ptQuerys[0],
+	}
+	builder = executor.NewMocStoreExecutorBuilder(nil, csTraits, &info, 0)
+	input := executor.NewLogicalColumnStoreReader(nil, schema)
+	Exchange := executor.NewLogicalExchange(input, executor.PARTITION_EXCHANGE, []hybridqp.Trait{&rq}, schema)
+	builder.Build(Exchange)
+	p, _ := builder.Build(Exchange)
+	pipelineExecutor := p.(*executor.PipelineExecutor)
+	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), true)
 }

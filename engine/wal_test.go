@@ -17,6 +17,8 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -24,18 +26,37 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+}
+
+func Test_walRowsObjectsPool(t *testing.T) {
+	objs := getWalRowsObjects()
+	objs.rowsDataBuff = append(objs.rowsDataBuff, byte(0), byte(1))
+	objs.rows = append(objs.rows, influx.Row{}, influx.Row{})
+	objs.tags = append(objs.tags, influx.Tag{}, influx.Tag{})
+	objs.fields = append(objs.fields, influx.Field{}, influx.Field{})
+	objs.opts = append(objs.opts, influx.IndexOption{}, influx.IndexOption{})
+	objs.keys = append(objs.keys, byte(0), byte(1))
+	putWalRowsObjects(objs)
+	reuseCtx := getWalRowsObjects()
+	require.Equal(t, 8, cap(reuseCtx.rowsDataBuff))
+	require.Equal(t, 2, cap(reuseCtx.rows))
+	require.Equal(t, 2, cap(reuseCtx.tags))
+	require.Equal(t, 2, cap(reuseCtx.fields))
+	require.Equal(t, 2, cap(reuseCtx.opts))
+	require.Equal(t, 8, cap(reuseCtx.keys))
 }
 
 func TestWalReplayParallel(t *testing.T) {
@@ -382,4 +403,52 @@ func TestWalReplayWithUnKnowType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func Test_batchReadWalFile(t *testing.T) {
+	testDir := t.TempDir()
+
+	rows := influx.Rows{
+		{
+			Name: "mst_0000",
+			Tags: influx.PointTags{
+				{
+					Key:   "server",
+					Value: "host1",
+				},
+			},
+			Fields: influx.Fields{
+				{
+					Key:      "cpu",
+					NumValue: 12,
+					Type:     influx.Field_Type_Int,
+				},
+			},
+		},
+	}
+	rowsBinary, err := influx.FastMarshalMultiRows(nil, rows)
+	require.NoError(t, err)
+	rowsBinary = snappy.Encode(nil, rowsBinary)
+
+	walBinary := []byte{1}
+	walBinary = binary.BigEndian.AppendUint32(walBinary, uint32(len(rowsBinary)))
+	walBinary = append(walBinary, rowsBinary...)
+
+	wal := &WAL{
+		replayBatchSize: 256 * 1024,
+	}
+	cxt := context.Background()
+	tmpFile := filepath.Join(testDir, "my1.wal")
+	fd, err := os.Create(tmpFile)
+	require.NoError(t, err)
+	defer fd.Close()
+	_, err = fd.Write(walBinary)
+	require.NoError(t, err)
+
+	var callback = func(pc *walRecord) error {
+		return errors.New("mock callback error")
+	}
+
+	err = wal.replayWalFile(cxt, tmpFile, callback)
+	require.Errorf(t, err, "mock callback error")
 }

@@ -24,8 +24,8 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func createMaterializeExprOptions() []hybridqp.ExprOptions {
@@ -104,6 +104,11 @@ func buildMaterializeInRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "age", Type: influxql.Integer},
 		influxql.VarRef{Val: "score", Type: influxql.Float},
 		influxql.VarRef{Val: "alive", Type: influxql.Boolean},
+		influxql.VarRef{Val: "value3", Type: influxql.Float},
+		influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+		influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+		influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+		influxql.VarRef{Val: "name_cast", Type: influxql.String},
 	)
 
 	return rowDataType
@@ -118,6 +123,28 @@ func buildMaterializeOutRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "age", Type: influxql.Integer},
 		influxql.VarRef{Val: "score", Type: influxql.Float},
 		influxql.VarRef{Val: "alive", Type: influxql.Boolean},
+		influxql.VarRef{Val: "val1/val2", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/val2", Type: influxql.Float},
+		influxql.VarRef{Val: "val1/mark2", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/6", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/6.1", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/0", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/uint(0)", Type: influxql.Unsigned},
+		influxql.VarRef{Val: "mark1%0", Type: influxql.Integer},
+		influxql.VarRef{Val: "mark1%uint(0)", Type: influxql.Unsigned},
+		influxql.VarRef{Val: "val1/val3", Type: influxql.Float},
+		influxql.VarRef{Val: "int_float", Type: influxql.Float},
+		influxql.VarRef{Val: "bool_float", Type: influxql.Float},
+		influxql.VarRef{Val: "string_float", Type: influxql.Float},
+		influxql.VarRef{Val: "float_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "bool_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "string_int", Type: influxql.Integer},
+		influxql.VarRef{Val: "float_bool", Type: influxql.Boolean},
+		influxql.VarRef{Val: "int_bool", Type: influxql.Boolean},
+		influxql.VarRef{Val: "string_bool", Type: influxql.Boolean},
+		influxql.VarRef{Val: "float_string", Type: influxql.String},
+		influxql.VarRef{Val: "int_string", Type: influxql.String},
+		influxql.VarRef{Val: "bool_string", Type: influxql.String},
 	)
 
 	return rowDataType
@@ -163,6 +190,20 @@ func buildMaterializeChunk() executor.Chunk {
 	chunk.Column(9).AppendBooleanValues([]bool{false, true, true})
 	chunk.Column(9).AppendNilsV2(false, true, false, true, true)
 
+	chunk.Column(10).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4, 5.5})
+	chunk.Column(10).AppendNilsV2(true, true, true, true, true)
+
+	chunk.Column(11).AppendFloatValues([]float64{0, 1.1, 2.2})
+	chunk.Column(11).AppendNilsV2(true, true, true, false, false)
+
+	chunk.Column(12).AppendIntegerValues([]int64{0, 1, 2})
+	chunk.Column(12).AppendNilsV2(true, true, true, false, false)
+
+	chunk.Column(13).AppendBooleanValues([]bool{false, true, true})
+	chunk.Column(13).AppendNilsV2(true, true, true, false, false)
+
+	chunk.Column(14).AppendStringValues([]string{"", "1.1", "1.1", "other"})
+	chunk.Column(14).AppendNilsV2(true, false, true, true, false)
 	return chunk
 }
 
@@ -217,6 +258,226 @@ func createMaterializeOps() []hybridqp.ExprOptions {
 		{Expr: &influxql.VarRef{Val: "age", Type: influxql.Integer}},
 		{Expr: &influxql.VarRef{Val: "score", Type: influxql.Float}},
 		{Expr: &influxql.VarRef{Val: "alive", Type: influxql.Boolean}},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "value1",
+					Type: influxql.Float,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "value2",
+					Type: influxql.Float,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "value2",
+					Type: influxql.Float,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "value1",
+					Type: influxql.Float,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "mark2",
+					Type: influxql.Integer,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.IntegerLiteral{
+					Val: 6,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.NumberLiteral{
+					Val: 6.1,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.IntegerLiteral{
+					Val: 0,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.UnsignedLiteral{
+					Val: 0,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.MOD,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.IntegerLiteral{
+					Val: 0,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.MOD,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.UnsignedLiteral{
+					Val: 0,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "value1",
+					Type: influxql.Float,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "value3",
+					Type: influxql.Float,
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_float64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_float64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_float64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "name_cast", Type: influxql.String},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_int64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_int64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_int64",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "name_cast", Type: influxql.String},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_bool",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_bool",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_bool",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "name_cast", Type: influxql.String},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_string",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "score_cast", Type: influxql.Float},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_string",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "cast_string",
+				Args: []influxql.Expr{
+					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
 	}
 }
 
@@ -236,7 +497,6 @@ func TestMaterializeTransform(t *testing.T) {
 	expectMaxBooleanValues := []bool{true, false, true, true}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildMaterializeOutRowDataType(), ops, &opt, nil, schema)
-
 	source := NewSourceFromSingleChunk(buildMaterializeInRowDataType(), []executor.Chunk{chunk})
 	sink := NewSinkFromFunction(buildMaterializeOutRowDataType(), func(chunk executor.Chunk) error {
 		if !reflect.DeepEqual(chunk.Column(0).IntegerValues(), expectMaxIntValues) {
@@ -268,4 +528,245 @@ func TestMaterializeTransform(t *testing.T) {
 	executor := executor.NewPipelineExecutor(processors)
 	executor.Execute(context.Background())
 	executor.Release()
+}
+
+func TestMaterializeTransform1(t *testing.T) {
+	chunk := buildMaterializeChunk()
+	ops := createMaterializeOps()
+	opt := query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions: []string{"host"},
+		Ascending:  true,
+		ChunkSize:  100,
+	}
+	expectMaxIntValues := []int64{1, 2, 3}
+	expectMaxFloatValues := []float64{3.3, 4.4, 5.5}
+	expectMaxBooleanValues := []bool{false, true, true}
+	expectMaxFloatValues1 := []float64{float64(1) / float64(6), float64(2) / float64(6), float64(3) / float64(6)}
+	expectMaxFloatValues2 := []float64{float64(1) / float64(6.1), float64(2) / float64(6.1), float64(3) / float64(6.1)}
+	expectMaxFloatValues3 := []float64{0, 0, 0}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildMaterializeOutRowDataType(), ops, &opt, nil, schema)
+	trans.ResetTransparents()
+	source := NewSourceFromSingleChunk(buildMaterializeInRowDataType(), []executor.Chunk{chunk})
+	sink := NewSinkFromFunction(buildMaterializeOutRowDataType(), func(chunk executor.Chunk) error {
+		if !reflect.DeepEqual(chunk.Column(4).IntegerValues(), expectMaxIntValues) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(5).FloatValues(), expectMaxFloatValues) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(6).BooleanValues(), expectMaxBooleanValues) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(10).FloatValues(), expectMaxFloatValues1) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(11).FloatValues(), expectMaxFloatValues2) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(12).FloatValues(), expectMaxFloatValues3) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(17).FloatValues(), []float64{0, 1, 2}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(18).FloatValues(), []float64{0, 1, 1}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(19).FloatValues(), []float64{1.1, 1.1}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(20).IntegerValues(), []int64{0, 1, 2}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(21).IntegerValues(), []int64{0, 1, 1}) {
+			t.Fatal()
+		}
+		if chunk.Column(22).IntegerValues() != nil {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(23).BooleanValues(), []bool{false, true, true, false, false}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(24).BooleanValues(), []bool{false, true, true, false, false}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(25).BooleanValues(), []bool{false, false, true, true, false}) {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(26).StringValue(2), "2.2") {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(27).StringValue(2), "2") {
+			t.Fatal()
+		}
+		if !reflect.DeepEqual(chunk.Column(28).StringValue(2), "true") {
+			t.Fatal()
+		}
+		return nil
+	})
+
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+
+	dag := executor.NewDAG(processors)
+
+	if dag.CyclicGraph() == true {
+		t.Error("dag has circle")
+	}
+
+	executor := executor.NewPipelineExecutor(processors)
+	executor.Execute(context.Background())
+	executor.Release()
+}
+func buildBenchmarkCreateMaterializeOps() []hybridqp.ExprOptions {
+	return []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "value1",
+					Type: influxql.Float,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "value2",
+					Type: influxql.Float,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "value2",
+					Type: influxql.Float,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.ADD,
+				LHS: &influxql.VarRef{
+					Val:  "value1",
+					Type: influxql.Float,
+				},
+				RHS: &influxql.VarRef{
+					Val:  "mark2",
+					Type: influxql.Integer,
+				},
+			},
+		},
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.DIV,
+				LHS: &influxql.VarRef{
+					Val:  "mark1",
+					Type: influxql.Integer,
+				},
+				RHS: &influxql.IntegerLiteral{
+					Val: 6,
+				},
+			},
+		},
+	}
+}
+func buildBenchmarkMaterializeOutRowDataType() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val1/val2", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/val2", Type: influxql.Float},
+		influxql.VarRef{Val: "val1/mark2", Type: influxql.Float},
+		influxql.VarRef{Val: "mark1/6", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+func buildBenchmarkMaterializeChunk() executor.Chunk {
+
+	rp := buildMaterializeInRowDataType()
+
+	b := executor.NewChunkBuilder(rp)
+
+	chunk := b.NewChunk("materialize chunk")
+	for i := 0; i < 500; i++ {
+		chunk.AppendTimes([]int64{5*int64(i) + 1, 5*int64(i) + 2, 5*int64(i) + 3, 5*int64(i) + 4, 5*int64(i) + 5})
+		chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+		chunk.AddIntervalIndex(0)
+
+		chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3})
+		chunk.Column(0).AppendNilsV2(true, true, true, false, false)
+
+		chunk.Column(1).AppendIntegerValues([]int64{2, 1, 2})
+		chunk.Column(1).AppendNilsV2(true, true, false, true, false)
+
+		chunk.Column(2).AppendStringValues([]string{"ada", "jerry", "tom", "ashe"})
+		chunk.Column(2).AppendNilsV2(true, true, false, true, true)
+
+		chunk.Column(3).AppendFloatValues([]float64{3.3, 4.4, 5.5})
+		chunk.Column(3).AppendNilsV2(false, false, true, true, true)
+
+		chunk.Column(4).AppendFloatValues([]float64{1.1, 5.5, 4.4})
+		chunk.Column(4).AppendNilsV2(false, true, false, true, true)
+
+		chunk.Column(5).AppendBooleanValues([]bool{true, false, true})
+		chunk.Column(5).AppendNilsV2(true, true, false, true, false)
+
+		chunk.Column(6).AppendBooleanValues([]bool{false, true, true})
+		chunk.Column(6).AppendNilsV2(false, true, false, true, true)
+
+		chunk.Column(7).AppendIntegerValues([]int64{1, 2, 3})
+		chunk.Column(7).AppendNilsV2(true, true, true, false, false)
+
+		chunk.Column(8).AppendFloatValues([]float64{3.3, 4.4, 5.5})
+		chunk.Column(8).AppendNilsV2(false, false, true, true, true)
+
+		chunk.Column(9).AppendBooleanValues([]bool{false, true, true})
+		chunk.Column(9).AppendNilsV2(false, true, false, true, true)
+	}
+
+	return chunk
+}
+
+func BenchmarkMaterializeTransform(b *testing.B) {
+	chunk := buildBenchmarkMaterializeChunk()
+	ops := buildBenchmarkCreateMaterializeOps()
+	opt := query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions: []string{"host"},
+		Ascending:  true,
+		ChunkSize:  100,
+	}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildBenchmarkMaterializeOutRowDataType(), ops, &opt, nil, schema)
+	trans.ResetTransparents()
+	source := NewSourceFromSingleChunk(buildMaterializeInRowDataType(), []executor.Chunk{chunk})
+	sink := NewSinkFromFunction(buildBenchmarkMaterializeOutRowDataType(), nil)
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	dag := executor.NewDAG(processors)
+	if dag.CyclicGraph() == true {
+		b.Error("dag has circle")
+	}
+	executor := executor.NewPipelineExecutor(processors)
+	b.StartTimer()
+	executor.Execute(context.Background())
+	b.StopTimer()
+	executor.Release()
+
 }

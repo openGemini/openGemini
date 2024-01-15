@@ -36,11 +36,12 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	proto2 "github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -310,7 +311,7 @@ func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy
 func (client *MockMetaClient) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
 	return nil
 }
-func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta2.DatabaseInfo, error) {
+func (client *MockMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error) {

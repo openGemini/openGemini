@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,20 +31,21 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"go.uber.org/zap"
 )
 
 type RWMetaClient interface {
 	Database(name string) (di *meta.DatabaseInfo, err error)
 	RetentionPolicy(database, policy string) (*meta.RetentionPolicyInfo, error)
-	CreateShardGroup(database, policy string, timestamp time.Time, engineType config.EngineType) (*meta.ShardGroupInfo, error)
+	CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta.ShardGroupInfo, error)
 	DBPtView(database string) (meta.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error
@@ -260,8 +262,9 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx i
 		w.logger.Error("ArrowRecordToNativeRecord failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
 	}
+	sort.Sort(r)
 
-	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), ctx.ms.EngineType)
+	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), logstore.CurrentLogTokenizerVersion, ctx.ms.EngineType)
 	if err != nil {
 		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
@@ -275,6 +278,7 @@ func (w *RecordWriter) writeLogRecord(db, rp, mst string, rec *record.Record, pt
 	if colNum == 0 || rowNum == 0 {
 		return nil
 	}
+	sort.Sort(rec)
 
 	ctx := getWriteRecCtx()
 	defer putWriteRecCtx(ctx)
@@ -290,6 +294,7 @@ func (w *RecordWriter) writeLogRecord(db, rp, mst string, rec *record.Record, pt
 		rp = ctx.db.DefaultRetentionPolicy
 	}
 
+	originName := mst
 	ctx.ms, err = wh.createMeasurement(db, rp, mst)
 	if err != nil {
 		w.logger.Error("invalid measurement", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(errno.NewError(errno.InvalidMeasurement)))
@@ -297,9 +302,14 @@ func (w *RecordWriter) writeLogRecord(db, rp, mst string, rec *record.Record, pt
 	}
 	mst = ctx.ms.Name
 
-	timeCol := &rec.ColVals[rec.ColNums()-1]
-	startTime, endTime := timeCol.IntegerValues()[0], timeCol.IntegerValues()[timeCol.Len-1]
-	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), ctx.ms.EngineType)
+	startTime, endTime, err := wh.checkAndUpdateRecordSchema(db, rp, mst, originName, rec)
+	if err != nil {
+		wh.sameSchema = false
+		w.logger.Error("checkSchema err", zap.String("db", db), zap.String("rp", rp), zap.Error(err))
+		return err
+	}
+
+	sgis, err := wh.createShardGroupsByTimeRange(db, rp, time.Unix(0, startTime), time.Unix(0, endTime), logstore.CurrentLogTokenizerVersion, ctx.ms.EngineType)
 	if err != nil {
 		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err

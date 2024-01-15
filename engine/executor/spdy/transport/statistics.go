@@ -34,6 +34,7 @@ func InitStatistics(app int) {
 		NewNodeManager().SetJob(stat.NewSpdyJob(stat.Meta2Store))
 		NewMetaNodeManager().SetJob(stat.NewSpdyJob(stat.Meta2Meta))
 	case AppStore:
+		NewNodeManager().SetJob(stat.NewSpdyJob(stat.Store2Meta))
 		NewMetaNodeManager().SetJob(stat.NewSpdyJob(stat.Store2Meta))
 	}
 }

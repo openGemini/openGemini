@@ -25,7 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"go.uber.org/zap"
 )
 
@@ -469,7 +469,7 @@ func GetTransformFactoryInstance() *TransformCreatorFactory {
 }
 
 type ReaderCreator interface {
-	CreateReader(outSchema hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog, frags ShardsFragments, database string, ptID uint32) (Processor, error)
+	CreateReader(plan hybridqp.QueryNode, frags interface{}) (Processor, error)
 }
 
 func RegistryReaderCreator(plan LogicalPlan, creator ReaderCreator) bool {

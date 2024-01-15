@@ -41,17 +41,18 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/rand"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	mproto "github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	mproto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
 // Retention policy settings.
 const (
-	autoCreateRetentionPolicyName   = "autogen"
-	autoCreateRetentionPolicyPeriod = 0
+	autoCreateRetentionPolicyName       = "autogen"
+	autoCreateRetentionPolicyPeriod     = 0
+	autoCreateRetentionPolicyWarmPeriod = 0
 
 	reportTimeSpan = 10 * time.Second
 

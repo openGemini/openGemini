@@ -316,3 +316,22 @@ func TestCompactType(t *testing.T) {
 		}
 	}
 }
+
+func TestProductType(t *testing.T) {
+	type productType struct {
+		typeStr string
+		proType config.ProductType
+	}
+	compactList := []productType{{"logkeeper", config.LogKeeper}, {"LOGKEEPER", config.LogKeeper}, {"", config.Basic},
+		{"xxx", config.Basic}}
+	for i := 0; i < len(compactList); i++ {
+		config.SetProductType(compactList[i].typeStr)
+		if config.GetProductType() != compactList[i].proType {
+			t.Fatalf("GetProductType failed, expect:%d, real:%d", compactList[i].proType, config.GetProductType())
+		}
+	}
+	config.SetProductType("logKeeper")
+	if config.IsLogKeeper() != true {
+		t.Fatalf("GetProductType failed, expect: logkeeper, real:%d", config.GetProductType())
+	}
+}

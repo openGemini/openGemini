@@ -25,7 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 const (
@@ -60,13 +60,16 @@ var (
 	boolPreAggPool    = sync.Pool{}
 	stringPreAggPool  = sync.Pool{}
 	timePreAggPool    = sync.Pool{}
+	SegmentLen        = (Segment{}).bytes()
+	ColumnMetaLenMin  = (ColumnMeta{}).bytes(1)
+	ChunkMetaMinLen   = ChunkMetaLen + ColumnMetaLenMin*2
+)
 
-	MinMaxTimeLen    = int(unsafe.Sizeof(SegmentRange{}))
-	SegmentLen       = (Segment{}).bytes()
-	ColumnMetaLenMin = (ColumnMeta{}).bytes(1)
-	ChunkMetaLen     = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
-	ChunkMetaMinLen  = ChunkMetaLen + ColumnMetaLenMin*2
-	MetaIndexLen     = int(unsafe.Sizeof(MetaIndex{}))
+const (
+	MinMaxTimeLen        = int(unsafe.Sizeof(SegmentRange{}))
+	ChunkMetaLen         = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
+	MetaIndexLen         = int(unsafe.Sizeof(MetaIndex{}))
+	DetachedMetaIndexLen = int(unsafe.Sizeof(MetaIndex{}) - 4) //count not use
 )
 
 type PreAggBuilders struct {

@@ -28,7 +28,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -91,6 +92,21 @@ func BenchmarkMarshalBinary(t *testing.B) {
 
 		assert.NoError(t, ComparePlan(dag, other))
 	}
+}
+
+func TestMarshalBinary(t *testing.T) {
+	dag := buildDag()
+	dag.Schema().Options().(*query.ProcessorOptions).Dimensions = []string{"id", "name"}
+	hasAgg := executor.NewLogicalHashAgg(dag, dag.Schema(), executor.NODE_EXCHANGE, nil)
+	hasAgg.ToProducer()
+	hasMerge := executor.NewLogicalHashMerge(hasAgg, hasAgg.Schema(), executor.NODE_EXCHANGE, nil)
+	hasMerge.ToProducer()
+	node, err := executor.MarshalQueryNode(hasMerge)
+	if !assert.NoError(t, err) {
+		return
+	}
+	_, err = executor.UnmarshalQueryNode(node, 2, dag.Schema().Options())
+	assert.NoError(t, err)
 }
 
 func buildDag() hybridqp.QueryNode {
@@ -293,12 +309,12 @@ func ComparePlan(a, b hybridqp.QueryNode) error {
 	if exa, ok := a.(*executor.LogicalExchange); ok {
 		exb, _ := b.(*executor.LogicalExchange)
 
-		if exa.ExchangeType() != exb.ExchangeType() {
-			return fmt.Errorf("failed to marshal LogicalPlan.eType. exp: %d, got: %d", exa.ExchangeType(), exb.ExchangeType())
+		if exa.EType() != exb.EType() {
+			return fmt.Errorf("failed to marshal LogicalPlan.eType. exp: %d, got: %d", exa.EType(), exb.EType())
 		}
 
-		if exa.ExchangeRole() != exb.ExchangeRole() {
-			return fmt.Errorf("failed to marshal LogicalPlan.eRole. exp: %d, got: %d", exa.ExchangeRole(), exb.ExchangeRole())
+		if exa.ERole() != exb.ERole() {
+			return fmt.Errorf("failed to marshal LogicalPlan.eRole. exp: %d, got: %d", exa.ERole(), exb.ERole())
 		}
 	}
 
@@ -357,7 +373,7 @@ func TestReWriteArgs(t *testing.T) {
 	reader := executor.NewLogicalColumnStoreReader(nil, schema)
 	agg := executor.NewLogicalHashAgg(reader, schema, executor.READER_EXCHANGE, nil)
 	aggCp := agg.Clone()
-	executor.ReWriteArgs(agg)
+	executor.ReWriteArgs(agg, false)
 	assert.Equal(t, agg.Digest(), aggCp.Digest())
 }
 

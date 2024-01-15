@@ -36,14 +36,16 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/influx/meta"
-	meta2 "github.com/openGemini/openGemini/open_src/influx/meta"
-	"github.com/openGemini/openGemini/open_src/influx/meta/proto"
-	"github.com/openGemini/openGemini/open_src/influx/query"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,7 +120,7 @@ func (m mocShardMapperMetaClient) AlterShardKey(database, retentionPolicy, mst s
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *meta2.ObsOptions) (*meta.DatabaseInfo, error) {
+func (m mocShardMapperMetaClient) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta.DatabaseInfo, error) {
 	return m.databases[name], nil
 }
 
@@ -161,6 +163,22 @@ func (m mocShardMapperMetaClient) DataNodes() ([]meta.DataNode, error) {
 
 func (m mocShardMapperMetaClient) DeleteDataNode(id uint64) error {
 	return nil
+}
+
+func (m mocShardMapperMetaClient) AliveReadNodes() ([]meta2.DataNode, error) {
+	var aliveReaders []meta2.DataNode
+	for _, n := range m.cacheData.DataNodes {
+		if n.Role == meta2.NodeReader {
+			aliveReaders = append(aliveReaders, n)
+		}
+	}
+
+	if len(aliveReaders) == 0 {
+		return nil, fmt.Errorf("there is no data nodes for querying")
+	}
+
+	sort.Sort(meta2.DataNodeInfos(aliveReaders))
+	return aliveReaders, nil
 }
 
 func (m mocShardMapperMetaClient) DeleteMetaNode(id uint64) error {
@@ -535,7 +553,7 @@ func TestMapMstShards(t *testing.T) {
 		Condition: &influxql.BinaryExpr{},
 	}
 	shardMapping := &ClusterShardMapping{
-		ShardMap:  map[Source]map[uint32][]uint64{},
+		ShardMap:  map[Source]map[uint32][]executor.ShardInfo{},
 		seriesKey: make([]byte, 0),
 	}
 	seriesKey := make([]byte, 0)
@@ -551,14 +569,14 @@ func TestMapMstShards(t *testing.T) {
 		Database: "db0", RetentionPolicy: "rp0", Name: "mst2", EngineType: config.TSSTORE,
 	}
 	shardMapping1 := &ClusterShardMapping{
-		ShardMap:  map[Source]map[uint32][]uint64{},
+		ShardMap:  map[Source]map[uint32][]executor.ShardInfo{},
 		seriesKey: make([]byte, 0),
 	}
 	seriesKey = seriesKey[:0]
 	csm.mapMstShards(source1, shardMapping1, timeStart, timeEnd1, nil, opt)
 
 	shardMapping2 := &ClusterShardMapping{
-		ShardMap:  map[Source]map[uint32][]uint64{},
+		ShardMap:  map[Source]map[uint32][]executor.ShardInfo{},
 		seriesKey: make([]byte, 0),
 	}
 	subquery := &influxql.SubQuery{
@@ -742,7 +760,7 @@ func Test_FieldDimensions(t *testing.T) {
 		Condition: &influxql.BinaryExpr{},
 	}
 	shardMapping := &ClusterShardMapping{
-		ShardMap:  map[Source]map[uint32][]uint64{},
+		ShardMap:  map[Source]map[uint32][]executor.ShardInfo{},
 		seriesKey: make([]byte, 0),
 	}
 	seriesKey := make([]byte, 0)
@@ -900,7 +918,7 @@ func Test_CreateLogicalPlan(t *testing.T) {
 		Condition: &influxql.BinaryExpr{},
 	}
 	shardMapping := &ClusterShardMapping{
-		ShardMap:    map[Source]map[uint32][]uint64{},
+		ShardMap:    map[Source]map[uint32][]executor.ShardInfo{},
 		seriesKey:   make([]byte, 0),
 		ShardMapper: csm,
 	}
@@ -937,9 +955,37 @@ func Test_CreateLogicalPlan(t *testing.T) {
 	schema.SetFill(influxql.NoFill)
 	var key uint64 = 1
 	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
+	ssqs := statistics.NewSqlSlowQueryStatistics("db0")
+	locs := make([][2]int, 0)
+	locs = append(locs, [2]int{0, 31})
+	ssqs.SetQueryAndLocs("SELECT v1,u1 FROM mst1 limit 10", locs)
+	ctx = context.WithValue(ctx, query.QueryDurationKey, ssqs)
 	m.cacheData = data
+
+	// Querying the tsstore engine and colstore engine at the same time
 	plan, err := shardMapping.CreateLogicalPlan(ctx, []influxql.Source{source, sourceRegex}, schema)
 	if !reflect.DeepEqual(plan.Schema().GetSourcesNames(), []string{"mst1", "mst2"}) {
+		t.Fatal()
+	}
+	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
+		t.Fatal()
+	}
+	require.Equal(t, shardMapping.NodeNumbers(), 1)
+
+	// Querying the colstore engine
+	plan, err = shardMapping.CreateLogicalPlan(ctx, []influxql.Source{source}, schema)
+	if !reflect.DeepEqual(plan.Schema().GetSourcesNames(), []string{"mst1"}) {
+		t.Fatal()
+	}
+	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
+		t.Fatal()
+	}
+	require.Equal(t, shardMapping.NodeNumbers(), 1)
+
+	// Querying the colstore engine by the unified plan
+	source.IndexRelation.Oids = append(source.IndexRelation.Oids, 4)
+	plan, err = shardMapping.CreateLogicalPlan(ctx, []influxql.Source{source}, schema)
+	if !reflect.DeepEqual(plan.Schema().GetSourcesNames(), []string{"mst1"}) {
 		t.Fatal()
 	}
 	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
@@ -1148,17 +1194,166 @@ func Test_CreateRemoteQuery(t *testing.T) {
 	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
 	opt := query.ProcessorOptions{}
 	source := &influxql.Measurement{
-		Database: "db0", RetentionPolicy: "rp0", Name: "mst3", EngineType: config.COLUMNSTORE,
-	}
-	_, err := csm.makeRemoteQuery(ctx, influxql.Sources{source}, opt, 1, 1, []uint64{1, 2, 3, 4})
-	if err == nil {
-		t.Fatal("the measurement does not exist, but there is no error reported")
-	}
-	source = &influxql.Measurement{
 		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.COLUMNSTORE,
 	}
-	_, err = csm.makeRemoteQuery(ctx, influxql.Sources{source}, opt, 1, 1, []uint64{1, 2, 3, 4})
+	_, err := csm.makeRemoteQuery(ctx, influxql.Sources{source}, opt, 1, 1, []executor.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, nil)
 	if err != nil {
 		t.Fatalf("makeRemoteQuery failed: %v", err)
+	}
+}
+
+func Test_CreateLogicalPlanForRWSplit(t *testing.T) {
+	timeStart := time.Date(2023, 1, 0, 0, 0, 0, 0, time.UTC)
+	timeMid := time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC)
+	timeEnd := time.Date(2023, 2, 0, 0, 0, 0, 0, time.UTC)
+	timeMid1 := time.Date(2023, 2, 1, 0, 0, 0, 0, time.UTC)
+	timeEnd1 := time.Date(2023, 2, 16, 0, 0, 0, 0, time.UTC)
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards2 := []meta.ShardInfo{{ID: 2, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	shards3 := []meta.ShardInfo{{ID: 3, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	csm := &ClusterShardMapper{
+		Logger: logger.NewLogger(1),
+	}
+	obsOpts := &obs.ObsOptions{Enabled: true, BucketName: "test_bucket_name", Endpoint: "test_endpoint", Ak: "test_ak", Sk: "test_sk", BasePath: "test_basepath"}
+	csm.MetaClient = &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"v1", "u1"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"f1":   influx.Field_Type_String,
+									"tag1": influx.Field_Type_Tag,
+								},
+								ObsOptions: obsOpts,
+								EngineType: config.COLUMNSTORE,
+							},
+						},
+						ShardGroups: []meta.ShardGroupInfo{
+							{
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.COLUMNSTORE,
+							},
+							{
+								ID:         2,
+								StartTime:  timeMid,
+								EndTime:    timeEnd,
+								Shards:     shards2,
+								EngineType: config.COLUMNSTORE,
+							},
+							{
+								ID:         3,
+								StartTime:  timeMid1,
+								EndTime:    timeEnd1,
+								Shards:     shards3,
+								EngineType: config.COLUMNSTORE,
+							},
+						},
+					},
+				},
+				ShardKey: meta.ShardKeyInfo{
+					ShardKey:   []string{"1", "2", "3"},
+					Type:       "hash",
+					ShardGroup: 3,
+				},
+			},
+		},
+	}
+	m, _ := csm.MetaClient.(*mocShardMapperMetaClient)
+	db, _ := m.databases["db0"]
+	data := &meta.Data{
+		PtNumPerNode: 1,
+		ClusterPtNum: 1,
+		DataNodes: []meta.DataNode{
+			{
+				NodeInfo: meta.NodeInfo{
+					ID: 1,
+				},
+				ConnID:      1,
+				AliveConnID: 1,
+			},
+			{
+				NodeInfo: meta.NodeInfo{
+					ID:   2,
+					Role: "reader",
+				},
+				ConnID:      2,
+				AliveConnID: 2,
+			},
+		},
+	}
+	data.CreateDBPtView("db0")
+	data.SetDatabase(db)
+	opt := &query.SelectOptions{}
+	opt1 := &query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions: []string{"host"},
+		Ascending:  true,
+		ChunkSize:  100,
+	}
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", ObsOptions: obsOpts, EngineType: config.COLUMNSTORE,
+	}
+	join := &influxql.Join{
+		LSrc:      source,
+		RSrc:      source,
+		Condition: &influxql.BinaryExpr{},
+	}
+	shardMapping := &ClusterShardMapping{
+		ShardMap:    map[Source]map[uint32][]executor.ShardInfo{},
+		seriesKey:   make([]byte, 0),
+		ShardMapper: csm,
+	}
+	csm.mapShards(shardMapping, []influxql.Source{join}, timeStart, timeEnd, nil, opt)
+	shardMapping.MetaClient = m
+	sql := "SELECT v1,u1 FROM mst1 limit 10"
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	qry, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal()
+	}
+	stmt := qry.Statements[0]
+	stmt, err = query.RewriteStatement(stmt)
+	if err != nil {
+		t.Fatal()
+	}
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		t.Fatal()
+	}
+	selectStmt.OmitTime = true
+	schema := executor.NewQuerySchema(selectStmt.Fields, selectStmt.ColumnNames(), opt1, nil)
+	schema.SetFill(influxql.NoFill)
+	var key uint64 = 1
+	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
+	m.cacheData = data
+
+	// Querying the colstore engine
+	plan, err := shardMapping.CreateLogicalPlan(ctx, []influxql.Source{source}, schema)
+	if !reflect.DeepEqual(plan.Schema().GetSourcesNames(), []string{"mst1"}) {
+		t.Fatal()
+	}
+	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
+		t.Fatal()
 	}
 }

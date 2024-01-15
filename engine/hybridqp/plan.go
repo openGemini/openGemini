@@ -21,8 +21,8 @@ import (
 	"reflect"
 	"time"
 
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	internal "github.com/openGemini/openGemini/open_src/influx/query/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/query/proto"
 )
 
 type ExprOptions struct {

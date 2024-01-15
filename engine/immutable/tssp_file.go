@@ -23,16 +23,18 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/golang/snappy"
 	"github.com/influxdata/influxdb/pkg/bloom"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
@@ -68,6 +70,8 @@ type tsspFileReader struct {
 	inMemBlock MemoryReader
 	// datablock cached to pages reader
 	pageCacheReader *PageCacheReader
+
+	chunkMetaCompressMode uint8
 }
 
 func CreateTSSPFileReader(size int64, fd fileops.File, trailer *Trailer, tb *TableData, ver uint64, tmp bool, lockPath *string) (*tsspFileReader, error) {
@@ -458,7 +462,7 @@ func (r *tsspFileReader) decodeTimeColumn(cm *ChunkMeta, segment int, chunkData 
 }
 
 func (r *tsspFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32,
-	dst *[]byte, ioPriority int) (rb []byte, err error) {
+	dst *pool.Buffer, ioPriority int) (rb []byte, err error) {
 	if r.inMemBlock.MetaInMemory() {
 		rb = r.inMemBlock.ReadChunkMetaBlock(metaIdx, id, count)
 		if len(rb) == 0 {
@@ -475,21 +479,47 @@ func (r *tsspFileReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, siz
 		return nil, err
 	}
 
+	if dst == nil {
+		dst = &pool.Buffer{}
+	}
+
 	if fileops.ReadMetaCacheEn && ioPriority == fileops.IO_PRIORITY_ULTRA_HIGH {
 		rb, err = r.GetTSSPFileBytes(offset, size, dst, ioPriority)
 	} else {
-		rb, err = r.Read(offset, size, dst, ioPriority)
+		rb, err = r.Read(offset, size, &dst.B, ioPriority)
 	}
 	if err != nil {
 		log.Error("read file failed", zap.String("file", r.r.Name()), zap.Error(err))
 		return nil, err
 	}
+
+	rb, err = decompressChunkMeta(r.chunkMetaCompressMode, dst, rb)
+	if err != nil {
+		return nil, err
+	}
+
 	statistics.IOStat.AddReadMetaCount(size)
 	statistics.IOStat.AddReadMetaSize(size)
 	return rb, nil
 }
 
-func (r *tsspFileReader) GetTSSPFileBytes(offset int64, size uint32, buf *[]byte, ioPriority int) ([]byte, error) {
+func decompressChunkMeta(mode uint8, dst *pool.Buffer, src []byte) ([]byte, error) {
+	if mode == ChunkMetaCompressNone {
+		return src, nil
+	}
+
+	var err error
+	switch mode {
+	case ChunkMetaCompressSnappy:
+		dst.Swap, err = snappy.Decode(dst.Swap[:cap(dst.Swap)], src)
+	default:
+		return nil, fmt.Errorf("unsupported compress mode: %d", mode)
+	}
+
+	return dst.Swap, err
+}
+
+func (r *tsspFileReader) GetTSSPFileBytes(offset int64, size uint32, dst *pool.Buffer, ioPriority int) ([]byte, error) {
 	var err error
 	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheKey := cacheIns.CreateCacheKey(r.FileName(), offset)
@@ -503,7 +533,7 @@ func (r *tsspFileReader) GetTSSPFileBytes(offset int64, size uint32, buf *[]byte
 		}
 	}
 
-	b, err = r.Read(offset, size, buf, ioPriority)
+	b, err = r.Read(offset, size, &dst.B, ioPriority)
 	if err != nil {
 		log.Error("read TSSPFile failed", zap.Error(err))
 		return nil, err
@@ -599,6 +629,7 @@ func (r *tsspFileReader) unmarshalChunkMetas(src []byte, itemCount uint32, dst [
 			log.Error("failed to unmarshal chunk meta", zap.Error(err), zap.String("file", r.FileName()))
 			return nil, err
 		}
+
 		cmData = cmData[size:]
 		idx++
 	}
@@ -607,14 +638,10 @@ func (r *tsspFileReader) unmarshalChunkMetas(src []byte, itemCount uint32, dst [
 }
 
 func (r *tsspFileReader) ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error) {
-	var buf []byte
-	if !r.r.IsMmapRead() {
-		buf = bufferpool.Get()
-		buf = bufferpool.Resize(buf, int(m.size))
-		defer bufferpool.Put(buf)
-	}
+	buf := pool.GetChunkMetaBuffer()
+	defer pool.PutChunkMetaBuffer(buf)
 
-	rb, err := r.ReadMetaBlock(metaIdx, m.id, m.offset, m.size, m.count, &buf, ioPriority)
+	rb, err := r.ReadMetaBlock(metaIdx, m.id, m.offset, m.size, m.count, buf, ioPriority)
 	if err != nil {
 		log.Error("read chunk meta fail", zap.String("file", r.FileName()), zap.Error(err))
 		return nil, err
@@ -705,26 +732,8 @@ func searchChunkMeta(data []byte, offsets []uint32, sid uint64, dst *ChunkMeta) 
 	return nil, nil
 }
 
-func (r *tsspFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error) {
-	needCopy := !r.r.IsMmapRead()
-	if needCopy {
-		if buffer == nil {
-			buf := bufferpool.Get()
-			buf = bufferpool.Resize(buf, int(size))
-			buffer = &buf
-			defer bufferpool.Put(buf)
-		} else {
-			n := int(size)
-			bufferSize := cap(*buffer)
-			nn := n - bufferSize
-			if nn > 0 {
-				*buffer = append((*buffer)[:bufferSize], make([]byte, nn)...)
-			}
-			*buffer = (*buffer)[:n]
-		}
-	}
-
-	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, buffer, ioPriority)
+func (r *tsspFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
+	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, buf, ioPriority)
 	if err != nil {
 		log.Error("read chunk mata data fail", zap.Error(err))
 	}
@@ -907,6 +916,8 @@ func (r *tsspFileReader) LoadComponents() error {
 		log.Error("load metaindex fail", zap.Error(err))
 		return err
 	}
+
+	r.chunkMetaCompressMode = r.trailer.GetData(IndexOfChunkMetaCompressFlag, ChunkMetaCompressNone)
 
 	atomic.StoreInt32(&r.inited, 1)
 	return nil

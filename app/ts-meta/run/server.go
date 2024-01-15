@@ -29,6 +29,7 @@ import (
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
+	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/iodetector"
@@ -36,7 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/open_src/github.com/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"go.uber.org/zap"
 )
@@ -228,6 +229,9 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewMetaStatistics().Init(globalTags)
 	stat.NewMetaRaftStatistics().Init(globalTags)
 	stat.NewErrnoStat().Init(globalTags)
+	stat.NewLogKeeperStatistics().Init(globalTags)
+	stat.InitSpdyStatistics(globalTags)
+	transport.InitStatistics(transport.AppMeta)
 
 	s.statisticsPusher.Register(
 		stat.NewMetaStatistics().Collect,
@@ -235,6 +239,8 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewMetaRaftStatistics().Collect,
 		stat.MetaTaskInstance.Collect,
 		stat.MetadataInstance.Collect,
+		stat.NewLogKeeperStatistics().Collect,
+		stat.CollectSpdyStatistics,
 	)
 
 	s.statisticsPusher.RegisterOps(

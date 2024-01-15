@@ -36,11 +36,11 @@ import (
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/open_src/github.com/VictoriaMetrics/VictoriaMetrics/lib/mergeset"
-	"github.com/openGemini/openGemini/open_src/influx/index"
-	"github.com/openGemini/openGemini/open_src/influx/influxql"
-	"github.com/openGemini/openGemini/open_src/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/open_src/vm/uint64set"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/index"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"go.uber.org/zap"
 )
 
@@ -489,6 +489,7 @@ func (is *indexSearch) seriesByTagFilters(name []byte) (index.SeriesIDIterator, 
 	type tagFilterWithCost struct {
 		tf   *tagFilter
 		cost int64
+		set  *uint64set.Set
 	}
 	// 1.fast way: one tag filter
 	if len(is.tfs) == 1 {
@@ -514,6 +515,7 @@ func (is *indexSearch) seriesByTagFilters(name []byte) (index.SeriesIDIterator, 
 		isNegativeFilter = tfcost.tf.isNegative
 		this, cost, err := is.searchTSIDsByTagFilterAndDateRange(tfcost.tf)
 		tfcost.tf.isNegative = isNegativeFilter
+		tfcost.set = this
 		if err != nil {
 			// if one tagFilter err, must indexscan it in next time
 			is.storeTagFilterCost(name, tfcost.tf, math.MaxInt64)
@@ -564,6 +566,15 @@ func (is *indexSearch) seriesByTagFilters(name []byte) (index.SeriesIDIterator, 
 				return nil, err
 			}
 			break
+		}
+
+		if tfcost.set.Len() > 0 {
+			set.Intersect(tfcost.set)
+			// no need to continue
+			if set.Len() == 0 {
+				break
+			}
+			continue
 		}
 
 		isNegativeFilter = tfcost.tf.isNegative

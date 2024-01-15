@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -86,4 +87,71 @@ func Test_http_push(t *testing.T) {
 	p.storeCreated = true
 	err := p.Push([]byte{1})
 	assert.Errorf(t, err, "http push statistics failed, reason: 500 Internal Server Error")
+}
+
+func Test_http_push1(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(204)
+	}))
+	defer ts.Close()
+
+	p := &Http{
+		conf: &HttpConfig{
+			Database: "",
+			EndPoint: ts.URL[7:],
+		},
+	}
+	err := p.Push([]byte{1})
+	assert.Errorf(t, err, "database must entered")
+}
+
+func Test_http_push2(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer ts.Close()
+
+	p := &Http{
+		conf: &HttpConfig{
+			Database: "_internal",
+			EndPoint: ts.URL[7:],
+		},
+	}
+	perRetryCreateInternalDatabaseInterval := retryCreateInternalDatabaseInterval
+	retryCreateInternalDatabaseInterval = time.Second
+	perMaxCreateInternalDatabaseCount := maxCreateInternalDatabaseCount
+	maxCreateInternalDatabaseCount = 2
+	defer func() {
+		retryCreateInternalDatabaseInterval = perRetryCreateInternalDatabaseInterval
+		maxCreateInternalDatabaseCount = perMaxCreateInternalDatabaseCount
+	}()
+	err := p.Push([]byte{1})
+	assert.Errorf(t, err, "http Push createInternalStorage timeout: create db/rp resp status err:500")
+}
+
+func Test_http_push3(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		var msg []byte
+		msg = append(msg, "error: db is deleting"...)
+		w.Write(msg)
+	}))
+	defer ts.Close()
+
+	p := &Http{
+		conf: &HttpConfig{
+			Database: "_internal",
+			EndPoint: ts.URL[7:],
+		},
+	}
+	perRetryCreateInternalDatabaseInterval := retryCreateInternalDatabaseInterval
+	retryCreateInternalDatabaseInterval = time.Second
+	perMaxCreateInternalDatabaseCount := maxCreateInternalDatabaseCount
+	maxCreateInternalDatabaseCount = 2
+	defer func() {
+		retryCreateInternalDatabaseInterval = perRetryCreateInternalDatabaseInterval
+		maxCreateInternalDatabaseCount = perMaxCreateInternalDatabaseCount
+	}()
+	err := p.Push([]byte{1})
+	assert.Errorf(t, err, "http Push createInternalStorage timeout: create db/rp return error:error: db is deleting")
 }
