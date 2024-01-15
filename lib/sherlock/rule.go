@@ -19,15 +19,17 @@ package sherlock
 type RuleType uint8
 
 const (
-	RuleCurLessMin RuleType = iota
+	RuleHistoryLessMin RuleType = iota
 	RuleCurlGreaterMin
 	RuleCurGreaterAbs
 	RuleDiff
 )
 
 func matchRule(history *MetricCircle, curVal, ruleMin, ruleDiff, ruleAbs int) (bool, RuleType) {
-	if curVal < ruleMin {
-		return false, RuleCurLessMin
+	for i := range history.data {
+		if history.data[i] < ruleMin {
+			return false, RuleHistoryLessMin
+		}
 	}
 
 	if curVal > ruleAbs {
