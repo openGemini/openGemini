@@ -14,7 +14,6 @@ fi
 
 go generate -x ./...
 
-sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/netstorage/data/data.pb.go
 sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/influxql/internal/internal.pb.go
 sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/meta/proto/meta.pb.go
 sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/protobuf/proto/test_proto/test.pb.go
