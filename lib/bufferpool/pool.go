@@ -28,7 +28,7 @@ const (
 	minDefaultSize               = 64
 	MaxLocalCacheLen             = 8
 	MaxChunkMetaBufLocalCacheLen = 1024
-	maxLocalCacheSize            = 32 * 1024 * 1024 // 32M
+	MaxLocalCacheSize            = 32 * 1024 * 1024 // 32M
 )
 
 type Pool struct {
@@ -81,7 +81,7 @@ func (p *Pool) Get() []byte {
 
 func (p *Pool) Put(b []byte) {
 	b = b[:0]
-	if cap(b) > maxLocalCacheSize {
+	if cap(b) > MaxLocalCacheSize {
 		p.pool.Put(&bytebufferpool.ByteBuffer{B: b})
 		return
 	}

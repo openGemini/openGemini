@@ -732,8 +732,7 @@ func searchChunkMeta(data []byte, offsets []uint32, sid uint64, ctx *ChunkMetaCo
 
 func (r *tsspFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *ChunkMetaContext, ioPriority int) (*ChunkMeta, error) {
 	if ctx == nil {
-		ctx = NewChunkMetaContext()
-		ctx.buf = pool.GetChunkMetaBuffer()
+		ctx = NewChunkMetaContext(nil)
 	}
 
 	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, ctx.buf, ioPriority)
