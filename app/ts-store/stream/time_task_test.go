@@ -26,7 +26,6 @@ import (
 )
 
 func Test_Time_ConsumeData(t *testing.T) {
-	t.Skip()
 	l := &MockLogger{t}
 	m := &MockStorage{}
 	metaClient := &MockMetaclient{}
@@ -96,6 +95,10 @@ func Test_Time_ConsumeData(t *testing.T) {
 	time.Sleep(interval)
 	if m.count != 1 {
 		t.Fatal("unexpect flush count", m.count)
+	}
+	err := task.stop()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
