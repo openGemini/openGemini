@@ -1019,7 +1019,7 @@ func TestClosedTsspFile(t *testing.T) {
 	}
 
 	var cm ChunkMeta
-	_, err = f.ChunkMeta(ids[0], 0, 0, 0, 0, &cm, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	_, err = f.ChunkMeta(ids[0], 0, 0, 0, 0, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != errFileClosed {
 		t.Fatal("stop fail fail")
 	}
@@ -1170,7 +1170,7 @@ func TestReadTimeColumn(t *testing.T) {
 		return
 	}
 
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -1244,7 +1244,7 @@ func TestReadTimeColumnByCacheInOfSinglePage(t *testing.T) {
 	prePageSize := readcache.PageSize
 	readcache.SetPageSize(int64(pageSize))
 	defer readcache.SetPageSize(prePageSize)
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -1318,7 +1318,7 @@ func TestReadTimeColumnByCacheInOfMultiPage(t *testing.T) {
 	prePageSize := readcache.PageSize
 	readcache.SetPageSize(pageSize)
 	defer readcache.SetPageSize(prePageSize)
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -1399,7 +1399,7 @@ func TestReadTimeColumnByCacheInOfVariablePage(t *testing.T) {
 		return
 	}
 
-	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	cm, err = f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -2005,8 +2005,8 @@ func (r *mockTableReader) MetaIndexAt(idx int) (*MetaIndex, error) { return r.Me
 func (r *mockTableReader) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error) {
 	return r.MetaIndexFn(id, tr)
 }
-func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
-	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, dst, nil, ioPriority)
+func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *ChunkMetaContext, ioPriority int) (*ChunkMeta, error) {
+	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, nil, nil, ioPriority)
 }
 
 func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, error) {

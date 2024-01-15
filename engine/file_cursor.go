@@ -201,6 +201,7 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		ptTags := &(f.tagSet.TagsVec[i])
 		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
 		f.loc.ResetMeta()
+		f.loc.InitChunkMetaCtx(f.schema)
 		contains, err := f.loc.Contains(sid, f.ctx.tr, f.buf)
 		if err != nil {
 			return nil, err
@@ -270,6 +271,7 @@ func (f *fileCursor) getFilterRec() *record.Record {
 }
 
 func (f *fileCursor) readData() (*DataBlockInfo, error) {
+	f.loc.InitChunkMetaCtx(f.schema)
 	for {
 		idx := f.index
 		i := f.start + idx*f.step

@@ -125,7 +125,7 @@ func writeData(testCompDir, mstName string) error {
 			return fmt.Errorf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			return err
 		}

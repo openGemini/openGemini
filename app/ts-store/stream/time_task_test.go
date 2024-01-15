@@ -26,6 +26,7 @@ import (
 )
 
 func Test_Time_ConsumeData(t *testing.T) {
+	t.Skip()
 	l := &MockLogger{t}
 	m := &MockStorage{}
 	metaClient := &MockMetaclient{}

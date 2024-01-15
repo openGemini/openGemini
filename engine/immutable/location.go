@@ -32,6 +32,7 @@ type Location struct {
 	ctx     *ReadContext
 	r       TSSPFile
 	meta    *ChunkMeta
+	metaCtx *ChunkMetaContext
 	segPos  int
 	fragPos int // Indicates the sequence number of a fragment range.
 	fragRgs []*fragment.FragmentRange
@@ -107,7 +108,9 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buf *pool.Buffer)
 		return nil
 	}
 
-	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta, buf, fileops.IO_PRIORITY_ULTRA_HIGH)
+	l.InitChunkMetaCtx(nil)
+	l.metaCtx.buf = buf
+	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.metaCtx, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		return err
 	}
@@ -320,4 +323,43 @@ func (l *Location) ResetMeta() {
 	if len(l.fragRgs) > 0 {
 		l.fragRgs = l.fragRgs[:0]
 	}
+}
+
+func (l *Location) InitChunkMetaCtx(schema record.Schemas) {
+	if l.metaCtx == nil {
+		l.metaCtx = NewChunkMetaContext()
+	}
+
+	l.metaCtx.initColumns(schema)
+	l.metaCtx.meta = l.meta
+}
+
+type ChunkMetaContext struct {
+	meta    *ChunkMeta
+	buf     *pool.Buffer
+	columns []string
+}
+
+func NewChunkMetaContext() *ChunkMetaContext {
+	return &ChunkMetaContext{
+		meta: &ChunkMeta{},
+	}
+}
+
+func (ctx *ChunkMetaContext) initColumns(schema record.Schemas) {
+	ctx.columns = ctx.columns[:0]
+	if len(schema) == 0 {
+		return
+	}
+
+	for i := range schema {
+		ctx.columns = append(ctx.columns, schema[i].Name)
+	}
+}
+
+func (ctx *ChunkMetaContext) chunkMeta() *ChunkMeta {
+	if ctx.meta == nil {
+		ctx.meta = &ChunkMeta{}
+	}
+	return ctx.meta
 }

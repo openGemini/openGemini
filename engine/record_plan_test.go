@@ -34,7 +34,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -1921,7 +1920,7 @@ func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.Me
 	return 0, nil, nil
 }
 
-func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *immutable.ChunkMeta, buf *pool.Buffer, ioPriority int) (*immutable.ChunkMeta, error) {
+func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *immutable.ChunkMetaContext, ioPriority int) (*immutable.ChunkMeta, error) {
 	return nil, nil
 }
 

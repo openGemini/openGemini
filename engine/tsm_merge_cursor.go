@@ -104,6 +104,7 @@ func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableRead
 	for _, r := range files {
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
+		loc.InitChunkMetaCtx(ctx.schema)
 		contains, err := loc.Contains(sid, ctx.tr, buf)
 		if err != nil {
 			r.UnrefFileReader()
@@ -143,6 +144,7 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 		r := files[filesIndex]
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
+		loc.InitChunkMetaCtx(schema)
 		contains, err := loc.Contains(sid, ctx.tr, buf)
 		if err != nil {
 			r.UnrefFileReader()
@@ -190,6 +192,7 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 	for _, r := range files {
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
+		loc.InitChunkMetaCtx(ctx.schema)
 		contains, err := loc.Contains(sid, ctx.tr, buf)
 		if err != nil {
 			r.UnrefFileReader()
