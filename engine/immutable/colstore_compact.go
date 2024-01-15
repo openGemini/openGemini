@@ -786,7 +786,7 @@ func (f *FragmentIterators) updateIterators(m *MmsTables, group FilesInfo, sortK
 		if !IsFlushToFinalFile(group.totalSegmentCount, uint64(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)) {
 			f.builder = NewMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE)
 		} else {
-			f.builder, err = NewDetachedMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE, mstInfo.ObsOptions, bfCols)
+			f.builder, err = NewDetachedMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE, mstInfo.ObsOptions, bfCols, false)
 			if err != nil {
 				return err
 			}

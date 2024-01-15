@@ -634,10 +634,8 @@ type obsIndexWriter struct {
 	bloomfilterWriters   []*obsWriter
 }
 
-func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string) (fileops.MetaWriter, error) {
-	w := &obsIndexWriter{
-		bloomfilterWriters: make([]*obsWriter, len(bfCols)),
-	}
+func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string, fullTextIdx bool) (fileops.MetaWriter, error) {
+	w := newObsIndexWriter(bfCols, fullTextIdx)
 
 	var err error
 	// metaindex
@@ -661,11 +659,33 @@ func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string
 		return nil, err
 	}
 
-	// bloomfilter writer
-	for i := 0; i < len(bfCols); i++ {
-		w.bloomfilterWriters[i], err = NewObsWriter(path, sparseindex.BloomFilterFilePrefix+bfCols[i]+sparseindex.BloomFilterFileSuffix, obsOpts)
+	// new bloomfilter writer
+	return w.newBloomFilterWriter(path, bfCols, fullTextIdx, obsOpts)
+}
+
+func newObsIndexWriter(bfCols []string, fullTextIdx bool) *obsIndexWriter {
+	if fullTextIdx {
+		return &obsIndexWriter{
+			bloomfilterWriters: make([]*obsWriter, sparseindex.FullTextIdxColumnCnt),
+		}
+	}
+	return &obsIndexWriter{
+		bloomfilterWriters: make([]*obsWriter, len(bfCols)),
+	}
+}
+
+func (w *obsIndexWriter) newBloomFilterWriter(path string, bfCols []string, fullTextIdx bool, obsOpts *obs.ObsOptions) (fileops.MetaWriter, error) {
+	var err error
+	var fileName string
+	for i := 0; i < len(w.bloomfilterWriters); i++ {
+		if fullTextIdx {
+			fileName = sparseindex.BloomFilterFilePrefix + sparseindex.FullTextIndex + sparseindex.BloomFilterFileSuffix
+		} else {
+			fileName = sparseindex.BloomFilterFilePrefix + bfCols[i] + sparseindex.BloomFilterFileSuffix
+		}
+		w.bloomfilterWriters[i], err = NewObsWriter(path, fileName, obsOpts)
 		if err != nil {
-			log.Error("NewObsWriter for bloomfilter failed", zap.String("path", path), zap.String("path", bfCols[i]), zap.Error(err))
+			log.Error("NewObsWriter for bloomfilter failed", zap.String("path", path), zap.Bool("fullTextIndex", fullTextIdx), zap.String("path", bfCols[i]), zap.Error(err))
 			return nil, err
 		}
 	}

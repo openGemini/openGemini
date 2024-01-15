@@ -1639,7 +1639,7 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				t.Fatal(err)
 			}
@@ -1797,7 +1797,7 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				t.Fatal(err)
 			}
@@ -2024,7 +2024,7 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				t.Fatal(err)
 			}
@@ -2226,7 +2226,7 @@ func TestNewDetachedMsBuilderError(t *testing.T) {
 	defer store.Close()
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 	obsOpts := &obs.ObsOptions{}
-	_, err := NewDetachedMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE, obsOpts, nil)
+	_, err := NewDetachedMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE, obsOpts, nil, false)
 	require.Equal(t, err, errors.New("endpoint is not set"))
 }
 
