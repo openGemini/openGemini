@@ -9,6 +9,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 package metaclient
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -44,6 +45,7 @@ func init() {
 }
 
 type RPCServer struct {
+	err      error
 	metaData *meta2.Data
 }
 
@@ -64,18 +66,17 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 }
 
 func (c *RPCServer) HandleSnapshot(w spdy.Responser, msg *message.SnapshotRequest) error {
-	fmt.Printf("server Handle: %+v \n", msg)
-
 	c.metaData = &meta2.Data{
 		Index: msg.Index + 1,
 	}
 
-	buf, err := c.metaData.MarshalBinary()
+	buf, _ := c.metaData.MarshalBinary()
 	rsp := &message.SnapshotResponse{
 		Data: buf,
-		Err:  fmt.Sprintf("%v", err),
 	}
-
+	if server.err != nil {
+		rsp.Err = server.err.Error()
+	}
 	return w.Response(message.NewMetaMessage(message.SnapshotResponseMessage, rsp), true)
 }
 
@@ -120,12 +121,17 @@ func TestSnapshot(t *testing.T) {
 		SendRPCMessage: &RPCMessageSender{},
 	}
 	data, err := mc.getSnapshot(SQL, nodeId, 0)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
+	require.NoError(t, err)
 	if data.Index != server.metaData.Index {
 		t.Fatalf("error index; exp: %d; got: %d", server.metaData.Index, data.Index)
 	}
+
+	server.err = errors.New("mock error")
+	defer func() {
+		server.err = nil
+	}()
+	_, err = mc.getSnapshot(SQL, nodeId, 0)
+	require.NotEmpty(t, err)
 }
 
 func TestClient_compareHashAndPwdVerOne(t *testing.T) {

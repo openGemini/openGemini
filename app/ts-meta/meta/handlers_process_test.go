@@ -20,12 +20,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateDatabase(t *testing.T) {
@@ -292,4 +295,23 @@ func TestSendSysCtrlToMetaProcess(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, res.(*message.SendSysCtrlToMetaResponse).Err, testcase.ExpectErr)
 	}
+}
+
+func TestSnapshot(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	mockStore.stat = raft.Follower
+
+	msg := message.NewMetaMessage(message.SnapshotRequestMessage, &message.SnapshotRequest{
+		Index: 2,
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	require.NoError(t, h.SetRequestMsg(msg.Data()))
+
+	respMsg, err := h.Process()
+	require.NoError(t, err)
+
+	resp, ok := respMsg.(*message.SnapshotResponse)
+	require.True(t, ok)
+	require.Equal(t, resp.Err, errno.NewError(errno.MetaIsNotLeader).Error())
 }

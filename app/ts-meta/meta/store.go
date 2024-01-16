@@ -1010,16 +1010,6 @@ func (s *Store) IsLeader() bool {
 	return s.raft.IsLeader()
 }
 
-// isCandidate returns true if the Store is currently the Candidate.
-func (s *Store) isCandidate() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.raft == nil {
-		return false
-	}
-	return s.raft.IsCandidate()
-}
-
 // leader returns what the Store thinks is the current leader. An empty
 // string indicates no leader exists.
 func (s *Store) leader() string {

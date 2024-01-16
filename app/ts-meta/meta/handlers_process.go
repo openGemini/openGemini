@@ -79,9 +79,13 @@ func (h *Snapshot) Process() (transport.Codec, error) {
 		return rsp, nil
 	}
 
+	if !h.store.IsLeader() {
+		rsp.Err = errno.NewError(errno.MetaIsNotLeader).Error()
+		return rsp, nil
+	}
+
 	index := h.req.Index
-	checkRaft := time.After(2 * time.Second)
-	tries := 0
+	checkRaft := time.After(3 * time.Second)
 	for {
 		select {
 		case <-h.store.afterIndex(index):
@@ -92,16 +96,6 @@ func (h *Snapshot) Process() (transport.Codec, error) {
 			rsp.Err = "server closed"
 			return rsp, nil
 		case <-checkRaft:
-			checkRaft = time.After(2 * time.Second)
-			if h.store.isCandidate() {
-				tries++
-				if tries >= 3 {
-					rsp.Err = "server closed"
-					return rsp, nil
-				}
-				h.logger.Info("checkRaft failed", zap.Int("tries", tries))
-				continue
-			}
 			return rsp, nil
 		}
 	}
