@@ -299,3 +299,25 @@ func TestObsFile_StreamReadBatch(t *testing.T) {
 		_ = testObsFs.Remove(name)
 	})
 }
+
+func TestObsFile_IsObsStoragePolicy(t *testing.T) {
+	tmpFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
+	isObsStoragePolicy, _ := testObsFs.IsObsFile(tmpFile)
+	assert.Equal(t, false, isObsStoragePolicy)
+}
+
+func TestObsFile_CopyTSSPFromDFVToOBS(t *testing.T) {
+	srcFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
+	dstFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
+	lockFile := FileLockOption("/tmp/test_vfs/lock")
+	err := testObsFs.CopyFileFromDFVToOBS(srcFile, dstFile, lockFile)
+	assert.Nil(t, err)
+}
+
+func TestObsFile_CreateOBS(t *testing.T) {
+	srcFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
+	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
+	lockFile := FileLockOption("/tmp/test_vfs/lock")
+	_, err := testObsFs.CreateOBSFile(srcFile, lockFile, pri)
+	assert.Nil(t, err)
+}

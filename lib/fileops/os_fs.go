@@ -227,3 +227,15 @@ func (f vfs) CopyFile(srcFile, dstFile string, opt ...FSOption) (written int64, 
 
 	return io.Copy(dstFd, srcFd)
 }
+
+func (f vfs) IsObsFile(path string) (bool, error) {
+	return false, nil
+}
+
+func (f vfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
+	return nil
+}
+
+func (f vfs) CreateOBSFile(name string, opt ...FSOption) (File, error) {
+	return nil, nil
+}
