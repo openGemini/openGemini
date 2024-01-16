@@ -199,15 +199,12 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 
 func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, *mutable.MemTables) {
 	var immutableReader immutable.MmsReaders
-	orders, unOrder := s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr)
-	immutableReader.Orders = append(immutableReader.Orders, orders...)
-	immutableReader.OutOfOrders = append(immutableReader.OutOfOrders, unOrder...)
-	s.snapshotLock.RLock()
 	mutableReader := mutable.MemTables{}
+	s.snapshotLock.RLock()
+	immutableReader.Orders, immutableReader.OutOfOrders = s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr)
 	mutableReader.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
 	mutableReader.Ref()
 	s.snapshotLock.RUnlock()
-
 	return &immutableReader, &mutableReader
 }
 
