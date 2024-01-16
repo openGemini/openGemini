@@ -789,6 +789,7 @@ func (r *WriteIntoStorageTransform) writeTimeToFile() error {
 		}
 	}
 
+	r.currStreamWriteFile.SortColumns()
 	err = r.currStreamWriteFile.WriteCurrentMeta()
 	if err != nil {
 		r.log.Error("failed to write meta", zap.Error(err))
