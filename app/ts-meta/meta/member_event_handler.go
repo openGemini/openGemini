@@ -46,7 +46,8 @@ func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint6
 
 	bh.cm.addEventMap(m.Name, e)
 	logger.GetLogger().Info("handle event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
-		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)))
+		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)),
+		zap.String("from", m.Tags["from"]))
 	if bh.cm.isStopped() {
 		return nil
 	}

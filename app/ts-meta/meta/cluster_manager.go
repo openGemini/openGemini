@@ -19,6 +19,7 @@ package meta
 import (
 	"math"
 	"math/rand"
+	"net"
 	"sort"
 	"strconv"
 	"sync"
@@ -34,8 +35,14 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	fromSelfCheck = "selfCheck"
+	fromGossip    = "gossip"
+	fromRetryChan = "retryChan"
+)
+
 type storeInterface interface {
-	updateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error
+	updateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error
 	dataNodes() meta.DataNodeInfos
 }
 
@@ -169,7 +176,7 @@ func (cm *ClusterManager) resendPreviousEvent() {
 			}
 		}
 
-		logger.NewLogger(errno.ModuleHA).Error("resend event", zap.String("event", e.String()), zap.Any("members", e.Members))
+		logger.NewLogger(errno.ModuleHA).Error("resend event", zap.String("event", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)))
 		cm.eventWg.Add(1)
 		go cm.processEvent(*e)
 	}
@@ -208,11 +215,19 @@ func (cm *ClusterManager) checkEvents() {
 		case <-cm.closing: // meta node is closing
 			return
 		case event := <-cm.eventCh:
+			e := event.(serf.MemberEvent)
+			for i := range e.Members {
+				e.Members[i].Tags["from"] = fromGossip
+			}
 			cm.eventWg.Add(1)
-			go cm.processEvent(event)
+			go cm.processEvent(e)
 		case event := <-cm.retryEventCh:
+			e := event.(serf.MemberEvent)
+			for i := range e.Members {
+				e.Members[i].Tags["from"] = fromRetryChan
+			}
 			cm.eventWg.Add(1)
-			go cm.processEvent(event)
+			go cm.processEvent(e)
 		case <-check:
 			if !sendFailedEvent {
 				sendFailedEvent = true
@@ -236,13 +251,19 @@ func (cm *ClusterManager) checkFailedNode() {
 		}
 		e := cm.eventMap[strconv.FormatUint(dataNodes[i].ID, 10)]
 		if e == nil {
+			host, _, _ := net.SplitHostPort(dataNodes[i].Host)
 			e = &serf.MemberEvent{
 				Type:      serf.EventMemberFailed,
 				EventTime: serf.LamportTime(dataNodes[i].LTime),
-				Members: []serf.Member{serf.Member{Name: strconv.FormatUint(dataNodes[i].ID, 10), Tags: map[string]string{"role": "store"},
-					Status: serf.StatusFailed}}}
+				Members: []serf.Member{{
+					Name:   strconv.FormatUint(dataNodes[i].ID, 10),
+					Addr:   net.ParseIP(host),
+					Tags:   map[string]string{"role": "store", "from": fromSelfCheck},
+					Status: serf.StatusFailed,
+				}},
+			}
 			logger.GetLogger().Error("check failed node", zap.String("event", e.String()),
-				zap.Uint64("lTime", uint64(e.EventTime)), zap.Any("host", e.Members))
+				zap.Uint64("lTime", uint64(e.EventTime)), zap.Uint64("nodeId", dataNodes[i].ID))
 			cm.eventWg.Add(1)
 			go cm.processEvent(*e)
 		}
@@ -260,10 +281,11 @@ func (cm *ClusterManager) processEvent(event serf.Event) {
 	me := initMemberEvent(e, cm.handlerMap[event.EventType()])
 	err := me.handle()
 	if err == raft.ErrNotLeader {
+		logger.GetLogger().Error("not leader cannot handle event", zap.String("type", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)), zap.Error(err))
 		return
 	}
 	if err != nil {
-		logger.NewLogger(errno.ModuleHA).Error("fail to handle event", zap.Error(err), zap.Any("members", e.Members))
+		logger.GetLogger().Error("fail to handle event", zap.String("type", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)), zap.Error(err))
 		cm.retryEventCh <- event
 	}
 }

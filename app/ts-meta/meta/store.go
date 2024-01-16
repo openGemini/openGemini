@@ -1496,12 +1496,12 @@ func (s *Store) GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, error) 
 	return TransMeasurementInfos2Bytes(dataTypes, rpInfos)
 }
 
-func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error {
+func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
 	val := &mproto.UpdateNodeStatusCommand{
 		ID:         proto.Uint64(id),
 		Status:     proto.Int32(status),
 		Ltime:      proto.Uint64(lTime),
-		GossipAddr: proto.String(gossipAddr)}
+		GossipAddr: proto.String(gossipPort)}
 	t := mproto.Command_UpdateNodeStatusCommand
 	cmd := &mproto.Command{Type: &t}
 	if err := proto.SetExtension(cmd, mproto.E_UpdateNodeStatusCommand_Command, val); err != nil {

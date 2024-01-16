@@ -2506,7 +2506,7 @@ func (data *Data) UpdateShardInfoTier(shardID uint64, shardTier uint64, dbName, 
 	return fmt.Errorf("cannot find shard %d for rp %s on database %s", shardID, rpName, dbName)
 }
 
-func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error {
+func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
 	// do not take over
 	if !data.TakeOverEnabled {
 		return nil
@@ -2534,7 +2534,7 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 	}
 	if dn.GossipAddr == "" {
 		host, _, _ := net.SplitHostPort(dn.Host)
-		dn.GossipAddr = fmt.Sprintf("%s:%s", host, gossipAddr)
+		dn.GossipAddr = fmt.Sprintf("%s:%s", host, gossipPort)
 	}
 
 	data.updatePtViewStatus(id, Offline)
