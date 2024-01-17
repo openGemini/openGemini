@@ -626,6 +626,9 @@ func (f *tsspFile) Open() error {
 }
 
 func (f *tsspFile) LoadIdTimes(p *IdTimePairs) error {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
 	if f.reader == nil {
 		err := fmt.Errorf("disk file not init")
 		log.Error("disk file not init", zap.Uint64("seq", f.name.seq), zap.Uint16("leve", f.name.level))
