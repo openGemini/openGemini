@@ -475,7 +475,7 @@ func (trans *MergeTransform) AddIntervalIndex(chunk Chunk, i int, opt *query.Pro
 		if flag {
 			timeStart, timeEnd = opt.Window(trans.NewChunk.Time()[trans.NewChunk.Len()-1])
 		} else {
-			return true
+			timeStart, timeEnd = opt.Window(chunk.Time()[chunk.IntervalIndex()[i]-1])
 		}
 		if timeStart <= chunk.Time()[chunk.IntervalIndex()[i]] && timeEnd > chunk.Time()[chunk.IntervalIndex()[i]] {
 			return false
@@ -585,19 +585,20 @@ func (t *MergeTransf) isItemEmpty(currItem *Item) bool {
 	return currItem.IsEmpty()
 }
 
+func (t *MergeTransf) getIndexByIntervalIndex(trans *MergeTransform, i int, j int) (int, int) {
+	chunk := trans.currItem.ChunkBuf
+	if chunk.IntervalLen() == 1 {
+		return 0, chunk.Len()
+	} else if j == chunk.IntervalLen() {
+		return chunk.IntervalIndex()[i], chunk.Len()
+	} else {
+		return chunk.IntervalIndex()[i], chunk.IntervalIndex()[j]
+	}
+}
+
 func (t *MergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int, j int) {
 	chunk := trans.currItem.ChunkBuf
-	var start, end int
-
-	if chunk.IntervalLen() == 1 {
-		start = 0
-		end = chunk.Len()
-	} else if j == chunk.IntervalLen() {
-		start, end = chunk.IntervalIndex()[i], chunk.Len()
-	} else {
-		start, end = chunk.IntervalIndex()[i], chunk.IntervalIndex()[j]
-	}
-
+	start, end := t.getIndexByIntervalIndex(trans, i, j)
 	trans.param.chunkLen, trans.param.start, trans.param.end = trans.NewChunk.Len(), start, end
 	trans.NewChunk.AppendTimes(chunk.Time()[start:end])
 	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
@@ -608,17 +609,24 @@ func (t *MergeTransf) updateWithSingleChunk(trans *MergeTransform) {
 	defer func() {
 		tracing.EndPP(trans.ppForCalculate)
 	}()
-
+	//flag indicates whether the loop is entered for the first time.
+	flag := true
 	curr := trans.currItem
+	iLen := trans.NewChunk.Len()
+	idx := curr.IntervalIndex
+	var iStart, iEnd int
 	for i := curr.IntervalIndex; i < curr.ChunkBuf.IntervalLen(); i++ {
 		_, tag, switchTag := curr.GetTimeAndTag(i)
-		trans.AddTagAndIndexes(tag, trans.NewChunk.Len(), i, true)
-		t.appendMergeTimeAndColumns(trans, i, i+1)
+		trans.AddTagAndIndexes(tag, iLen, i, flag)
 		curr.IntervalIndex += 1
 		if switchTag {
 			curr.TagIndex += 1
 		}
+		iStart, iEnd = t.getIndexByIntervalIndex(trans, i, i+1)
+		iLen += iEnd - iStart
+		flag = false
 	}
+	t.appendMergeTimeAndColumns(trans, idx, curr.ChunkBuf.IntervalLen())
 }
 
 func (t *MergeTransf) updateWithBreakPoint(trans *MergeTransform) {
@@ -626,21 +634,29 @@ func (t *MergeTransf) updateWithBreakPoint(trans *MergeTransform) {
 	defer func() {
 		tracing.EndPP(trans.ppForCalculate)
 	}()
-
+	//flag indicates whether the loop is entered for the first time.
+	flag := true
 	curr := trans.currItem
+	iLen := trans.NewChunk.Len()
+	idx := curr.IntervalIndex
+	var iStart, iEnd int
 	for i := curr.IntervalIndex; i < curr.ChunkBuf.IntervalLen(); i++ {
 		ti, tag, switchTag := curr.GetTimeAndTag(i)
 		if !CompareBreakPoint(curr.ChunkBuf.Name(), ti, tag, trans.BreakPoint.(*BreakPoint),
 			*trans.HeapItems.GetOption()) {
+			t.appendMergeTimeAndColumns(trans, idx, i)
 			return
 		}
-		trans.AddTagAndIndexes(tag, trans.NewChunk.Len(), i, true)
-		t.appendMergeTimeAndColumns(trans, i, i+1)
+		trans.AddTagAndIndexes(tag, iLen, i, flag)
 		curr.IntervalIndex += 1
 		if switchTag {
 			curr.TagIndex += 1
 		}
+		iStart, iEnd = t.getIndexByIntervalIndex(trans, i, i+1)
+		iLen += iEnd - iStart
+		flag = false
 	}
+	t.appendMergeTimeAndColumns(trans, idx, curr.ChunkBuf.IntervalLen())
 }
 
 func NewMergeTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, _ []hybridqp.ExprOptions, schema *QuerySchema) *MergeTransform {
