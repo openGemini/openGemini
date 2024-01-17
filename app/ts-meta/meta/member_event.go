@@ -19,12 +19,14 @@ package meta
 import "github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 
 type memberEvent struct {
+	from    eventFrom
 	event   serf.MemberEvent
 	handler memberEventHandler
 }
 
-func initMemberEvent(e serf.MemberEvent, handler memberEventHandler) *memberEvent {
+func initMemberEvent(from eventFrom, e serf.MemberEvent, handler memberEventHandler) *memberEvent {
 	return &memberEvent{
+		from:    from,
 		event:   e,
 		handler: handler,
 	}

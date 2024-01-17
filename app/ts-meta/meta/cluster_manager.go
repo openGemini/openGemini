@@ -35,10 +35,15 @@ import (
 	"go.uber.org/zap"
 )
 
-var (
-	fromSelfCheck = "selfCheck"
-	fromGossip    = "gossip"
-	fromRetryChan = "retryChan"
+type eventFrom string
+
+const (
+	fromGossip        eventFrom = "gossip"
+	fromSelfCheck     eventFrom = "selfCheck"
+	fromRetryChan     eventFrom = "retryChan"
+	fromReopen        eventFrom = "reopen"
+	fromLeaderChanged eventFrom = "leaderChanged"
+	fromTakeover      eventFrom = "takeover"
 )
 
 type storeInterface interface {
@@ -131,7 +136,7 @@ func (cm *ClusterManager) Start() {
 	cm.reOpen = make(chan struct{})
 	globalService.msm.waitRecovery() // wait exist pt event execute first
 	atomic.CompareAndSwapInt32(&cm.stop, 1, 0)
-	cm.resendPreviousEvent()
+	cm.resendPreviousEvent(fromLeaderChanged)
 	cm.wg.Add(1)
 	go cm.checkEvents()
 }
@@ -154,7 +159,7 @@ func (cm *ClusterManager) isClosed() bool {
 }
 
 // resend previous event when transfer to leader to avoid some event do not handled when leader change
-func (cm *ClusterManager) resendPreviousEvent() {
+func (cm *ClusterManager) resendPreviousEvent(from eventFrom) {
 	dataNodes := globalService.store.dataNodes()
 	cm.mu.RLock()
 	for i := range dataNodes {
@@ -178,7 +183,7 @@ func (cm *ClusterManager) resendPreviousEvent() {
 
 		logger.NewLogger(errno.ModuleHA).Error("resend event", zap.String("event", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)))
 		cm.eventWg.Add(1)
-		go cm.processEvent(*e)
+		go cm.processEvent(*e, from)
 	}
 	cm.mu.RUnlock()
 }
@@ -209,25 +214,17 @@ func (cm *ClusterManager) checkEvents() {
 			for i := 0; i < len(cm.eventCh); i++ {
 				e := <-cm.eventCh
 				cm.eventWg.Add(1)
-				go cm.processEvent(e)
+				go cm.processEvent(e, fromReopen)
 			}
 			return
 		case <-cm.closing: // meta node is closing
 			return
 		case event := <-cm.eventCh:
-			e := event.(serf.MemberEvent)
-			for i := range e.Members {
-				e.Members[i].Tags["from"] = fromGossip
-			}
 			cm.eventWg.Add(1)
-			go cm.processEvent(e)
+			go cm.processEvent(event, fromGossip)
 		case event := <-cm.retryEventCh:
-			e := event.(serf.MemberEvent)
-			for i := range e.Members {
-				e.Members[i].Tags["from"] = fromRetryChan
-			}
 			cm.eventWg.Add(1)
-			go cm.processEvent(e)
+			go cm.processEvent(event, fromRetryChan)
 		case <-check:
 			if !sendFailedEvent {
 				sendFailedEvent = true
@@ -236,7 +233,7 @@ func (cm *ClusterManager) checkEvents() {
 		case takeoverEnable := <-cm.takeover:
 			if takeoverEnable {
 				cm.eventWg.Wait()
-				cm.resendPreviousEvent()
+				cm.resendPreviousEvent(fromTakeover)
 			}
 		}
 	}
@@ -258,27 +255,27 @@ func (cm *ClusterManager) checkFailedNode() {
 				Members: []serf.Member{{
 					Name:   strconv.FormatUint(dataNodes[i].ID, 10),
 					Addr:   net.ParseIP(host),
-					Tags:   map[string]string{"role": "store", "from": fromSelfCheck},
+					Tags:   map[string]string{"role": "store"},
 					Status: serf.StatusFailed,
 				}},
 			}
 			logger.GetLogger().Error("check failed node", zap.String("event", e.String()),
 				zap.Uint64("lTime", uint64(e.EventTime)), zap.Uint64("nodeId", dataNodes[i].ID))
 			cm.eventWg.Add(1)
-			go cm.processEvent(*e)
+			go cm.processEvent(*e, fromSelfCheck)
 		}
 	}
 	cm.mu.RUnlock()
 }
 
-func (cm *ClusterManager) processEvent(event serf.Event) {
+func (cm *ClusterManager) processEvent(event serf.Event, from eventFrom) {
 	defer cm.eventWg.Done()
 	// ignore handle update and reap event
 	if cm.handlerMap[event.EventType()] == nil {
 		return
 	}
 	e := event.(serf.MemberEvent)
-	me := initMemberEvent(e, cm.handlerMap[event.EventType()])
+	me := initMemberEvent(from, e, cm.handlerMap[event.EventType()])
 	err := me.handle()
 	if err == raft.ErrNotLeader {
 		logger.GetLogger().Error("not leader cannot handle event", zap.String("type", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)), zap.Error(err))
@@ -286,7 +283,7 @@ func (cm *ClusterManager) processEvent(event serf.Event) {
 	}
 	if err != nil {
 		logger.GetLogger().Error("fail to handle event", zap.String("type", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)), zap.Error(err))
-		cm.retryEventCh <- event
+		cm.retryEventCh <- e
 	}
 }
 
