@@ -30,7 +30,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
@@ -44,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	mproto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -1010,16 +1010,6 @@ func (s *Store) IsLeader() bool {
 	return s.raft.IsLeader()
 }
 
-// isCandidate returns true if the Store is currently the Candidate.
-func (s *Store) isCandidate() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.raft == nil {
-		return false
-	}
-	return s.raft.IsCandidate()
-}
-
 // leader returns what the Store thinks is the current leader. An empty
 // string indicates no leader exists.
 func (s *Store) leader() string {
@@ -1496,12 +1486,12 @@ func (s *Store) GetRpMstInfos(db, rp string, dataTypes []int64) ([]byte, error) 
 	return TransMeasurementInfos2Bytes(dataTypes, rpInfos)
 }
 
-func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error {
+func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
 	val := &mproto.UpdateNodeStatusCommand{
 		ID:         proto.Uint64(id),
 		Status:     proto.Int32(status),
 		Ltime:      proto.Uint64(lTime),
-		GossipAddr: proto.String(gossipAddr)}
+		GossipAddr: proto.String(gossipPort)}
 	t := mproto.Command_UpdateNodeStatusCommand
 	cmd := &mproto.Command{Type: &t}
 	if err := proto.SetExtension(cmd, mproto.E_UpdateNodeStatusCommand_Command, val); err != nil {

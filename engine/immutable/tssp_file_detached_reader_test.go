@@ -101,7 +101,7 @@ func writeData(testCompDir, mstName string) error {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				return nil, err
 			}
@@ -125,7 +125,7 @@ func writeData(testCompDir, mstName string) error {
 			return fmt.Errorf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			return err
 		}

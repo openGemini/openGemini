@@ -19,9 +19,9 @@ package meta
 import (
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 func normalisedIndexDuration(igd, sgd time.Duration) time.Duration {

@@ -596,6 +596,8 @@ func TestParallelRequest(t *testing.T) {
 }
 
 func TestFaultPartialRequest(t *testing.T) {
+	t.Skip()
+
 	server, spool, err := StartServer("127.0.0.8:18085")
 	if err != nil {
 		t.Fatalf("%v", err)

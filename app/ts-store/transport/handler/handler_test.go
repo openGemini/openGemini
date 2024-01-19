@@ -22,7 +22,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -30,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	internal "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

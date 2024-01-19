@@ -873,7 +873,7 @@ func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, indexList []string) error {
 			}
 
 			if len(indexList) != 0 {
-				// rename pk index file
+				// rename skip index file
 				for j := range indexList {
 					skipIndexFileName := fname[:len(fname)-tsspFileSuffixLen] + "." + indexList[j] + colstore.BloomFilterIndexFileSuffix
 					tmpSkipIndexFileName := skipIndexFileName + tmpFileSuffix
@@ -887,6 +887,21 @@ func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, indexList []string) error {
 		}
 	}
 
+	return nil
+}
+
+func RenameTmpFullTextIdxFile(msb *MsBuilder) error {
+	if !msb.fullTextIdx {
+		return nil
+	}
+	lock := fileops.FileLockOption("")
+	fullTextIdxName := msb.getFullTextIdxFilePath()[0]
+	tmpFullTextIdxName := fullTextIdxName + tmpFileSuffix
+	if err := fileops.RenameFile(tmpFullTextIdxName, fullTextIdxName, lock); err != nil {
+		err = errno.NewError(errno.RenameFileFailed, zap.String("old", tmpFullTextIdxName), zap.String("new", fullTextIdxName), err)
+		log.Error("rename file fail", zap.Error(err))
+		return err
+	}
 	return nil
 }
 

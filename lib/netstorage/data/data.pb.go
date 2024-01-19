@@ -7,7 +7,7 @@ import (
 	fmt "fmt"
 	math "math"
 
-	proto "github.com/gogo/protobuf/proto"
+	proto "github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	proto1 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 )
 

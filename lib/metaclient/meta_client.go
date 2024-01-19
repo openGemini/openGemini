@@ -31,7 +31,6 @@ import (
 	"time"
 
 	set "github.com/deckarep/golang-set"
-	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
@@ -51,6 +50,7 @@ import (
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/pbkdf2"

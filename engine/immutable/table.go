@@ -147,19 +147,26 @@ func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *influx
 	if !withPKIndex {
 		err = RenameTmpFiles(msb.Files)
 	} else {
-		var indexList []string
-		if skipIndex != nil && len(skipIndex.IndexNames) != 0 {
-			for i := range skipIndex.IndexNames {
-				if skipIndex.IndexNames[i] == colstore.BloomFilterIndex || skipIndex.IndexNames[i] == colstore.MinMaxIndex {
-					indexList = append(indexList, skipIndex.IndexList[i].IList...)
-				}
-			}
-		}
+		indexList := getSkipIndexList(skipIndex, msb.fullTextIdx)
 		err = RenameTmpFilesWithPKIndex(msb.Files, indexList)
 	}
 
 	if err != nil {
 		return err
 	}
-	return nil
+
+	return RenameTmpFullTextIdxFile(msb)
+}
+
+func getSkipIndexList(skipIndex *influxql.IndexRelation, isFullTextIdx bool) []string {
+	var indexList []string
+	if skipIndex != nil && len(skipIndex.IndexNames) != 0 {
+		for i := range skipIndex.IndexNames {
+			//If a full-text index is created, bf will not be created separately.
+			if (!isFullTextIdx && skipIndex.IndexNames[i] == colstore.BloomFilterIndex) || skipIndex.IndexNames[i] == colstore.MinMaxIndex {
+				indexList = append(indexList, skipIndex.IndexList[i].IList...)
+			}
+		}
+	}
+	return indexList
 }

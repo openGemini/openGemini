@@ -694,7 +694,7 @@ func (r *tsspFileReader) MetaIndex(id uint64, tr util.TimeRange) (int, *MetaInde
 	return idx, metaIndex, nil
 }
 
-func searchChunkMeta(data []byte, offsets []uint32, sid uint64, dst *ChunkMeta) (*ChunkMeta, error) {
+func searchChunkMeta(data []byte, offsets []uint32, sid uint64, ctx *ChunkMetaContext) (*ChunkMeta, error) {
 	var cmData []byte
 
 	left, right := 0, len(offsets)
@@ -717,23 +717,25 @@ func searchChunkMeta(data []byte, offsets []uint32, sid uint64, dst *ChunkMeta) 
 		}
 	}
 
-	if len(cmData) != 0 {
-		if dst == nil {
-			dst = &ChunkMeta{}
-		}
-		_, err := dst.unmarshal(cmData)
-		if err != nil {
-			log.Error("unmarshal chunkmeta fail", zap.Error(err))
-			return nil, err
-		}
-		return dst, nil
+	if len(cmData) == 0 {
+		return nil, nil
 	}
 
-	return nil, nil
+	dst := ctx.chunkMeta()
+	_, err := dst.UnmarshalWithColumns(cmData, ctx.columns)
+	if err != nil {
+		log.Error("unmarshal chunkmeta fail", zap.Error(err))
+		return nil, err
+	}
+	return dst, nil
 }
 
-func (r *tsspFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
-	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, buf, ioPriority)
+func (r *tsspFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *ChunkMetaContext, ioPriority int) (*ChunkMeta, error) {
+	if ctx == nil {
+		ctx = NewChunkMetaContext(nil)
+	}
+
+	rb, err := r.ReadMetaBlock(metaIdx, id, offset, size, itemCount, ctx.buf, ioPriority)
 	if err != nil {
 		log.Error("read chunk mata data fail", zap.Error(err))
 	}
@@ -743,7 +745,7 @@ func (r *tsspFileReader) ChunkMeta(id uint64, offset int64, size, itemCount uint
 		return nil, err
 	}
 
-	return searchChunkMeta(cmData, cmOffset, id, dst)
+	return searchChunkMeta(cmData, cmOffset, id, ctx)
 }
 
 func (r *tsspFileReader) Stat() *Trailer {

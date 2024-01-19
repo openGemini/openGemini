@@ -408,6 +408,7 @@ func TestGetObsFileWriterInfo(t *testing.T) {
 	_ = w.GetFileWriter()
 	_ = w.DataSize()
 	_ = w.ChunkMetaSize()
+	_ = w.ChunkMetaBlockSize()
 	_ = w.AppendChunkMetaToData()
 	_, _ = w.SwitchMetaBuffer()
 	_ = w.MetaDataBlocks(nil)

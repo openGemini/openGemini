@@ -418,7 +418,7 @@ func TestHybridStoreReader(t *testing.T) {
 			}
 			indexScan := executor.NewLogicalIndexScan(input, querySchema)
 			executor.ReWriteArgs(indexScan, false)
-			scan := executor.NewIndexScanTransform(tt.out, indexScan.RowExprOptions(), indexScan.Schema(), indexScan.Children()[0], info, make(chan struct{}, 1), 0)
+			scan := executor.NewIndexScanTransform(tt.out, indexScan.RowExprOptions(), indexScan.Schema(), indexScan.Children()[0], info, make(chan struct{}, 1), 0, false)
 			sink := NewNilSink(tt.out)
 			err = executor.Connect(scan.GetOutputs()[0], sink.Input)
 			if err != nil {

@@ -61,13 +61,14 @@ type IndexScanTransform struct {
 	limit          int
 	rowCnt         int
 
-	frags     ShardsFragments
-	schema    hybridqp.Catalog
-	indexInfo *CSIndexInfo
+	frags         ShardsFragments
+	schema        hybridqp.Catalog
+	indexInfo     *CSIndexInfo
+	oneShardState bool
 }
 
 func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog,
-	input hybridqp.QueryNode, info *IndexScanExtraInfo, limiter chan struct{}, limit int) *IndexScanTransform {
+	input hybridqp.QueryNode, info *IndexScanExtraInfo, limiter chan struct{}, limit int, oneShardState bool) *IndexScanTransform {
 	trans := &IndexScanTransform{
 		outRowDataType: outRowDataType,
 		output:         NewChunkPort(outRowDataType),
@@ -82,6 +83,7 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 		aborted:        false,
 		indexScanErr:   true,
 		limit:          limit,
+		oneShardState:  oneShardState,
 	}
 	return trans
 }
@@ -90,7 +92,7 @@ type IndexScanTransformCreator struct {
 }
 
 func (c *IndexScanTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
-	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil, nil, 0)
+	p := NewIndexScanTransform(plan.RowDataType(), plan.RowExprOptions(), plan.Schema(), nil, nil, nil, 0, false)
 	return p, nil
 }
 
@@ -478,6 +480,9 @@ func (trans *IndexScanTransform) Running(ctx context.Context) bool {
 				c = trans.RewriteChunk(c)
 			}
 			trans.rowCnt += c.Len()
+			if localStorageForQuery != nil && trans.schema.HasCall() && !trans.schema.Options().GetMeasurements()[0].IsCSStore() && trans.oneShardState {
+				c = c.Clone()
+			}
 			trans.output.State <- c
 		case <-ctx.Done():
 			return true

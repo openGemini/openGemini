@@ -81,7 +81,7 @@ func (t *SortMergeTransf) appendMergeTimeAndColumns(trans *MergeTransform, i int
 	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
 }
 
-func (t *SortMergeTransf) updateWithIndexByIntervalAndTag(trans *MergeTransform, end int) {
+func (trans *MergeTransform) updateWithIndexByIntervalAndTag(end int) {
 	if trans.currItem.Index >= end {
 		return
 	}
@@ -115,10 +115,10 @@ func (t *SortMergeTransf) updateWithIndexByIntervalAndTag(trans *MergeTransform,
 		i = nextGroupIdx
 		flag = false
 	}
-	t.appendMergeTimeAndColumns(trans, idx, end)
+	trans.mergeType.appendMergeTimeAndColumns(trans, idx, end)
 }
 
-func binarySearch(item Item, low int, high int, b *SortedBreakPoint, opt *query.ProcessorOptions) int {
+func (t *SortMergeTransf) binarySearch(item Item, low int, high int, b *SortedBreakPoint, opt *query.ProcessorOptions) int {
 	return sort.Search(high-low, func(i int) bool {
 		tagIndex := sort.Search(len(item.ChunkBuf.TagIndex()), func(j int) bool { return item.ChunkBuf.TagIndex()[j] > i+low }) - 1
 		tag := item.ChunkBuf.Tags()[tagIndex]
@@ -140,7 +140,7 @@ func (t *SortMergeTransf) updateWithSingleChunk(trans *MergeTransform) {
 		trans.currItem.IntervalIndex = trans.currItem.ChunkBuf.IntervalLen() - 1
 		return
 	}
-	t.updateWithIndexByIntervalAndTag(trans, trans.currItem.ChunkBuf.Len())
+	trans.updateWithIndexByIntervalAndTag(trans.currItem.ChunkBuf.Len())
 }
 
 func (t *SortMergeTransf) updateWithBreakPoint(trans *MergeTransform) {
@@ -156,8 +156,8 @@ func (t *SortMergeTransf) updateWithBreakPoint(trans *MergeTransform) {
 		trans.UpdateWithSingleChunk()
 		return
 	}
-	end := binarySearch(*curr, curr.Index, chunk.Len(), trans.BreakPoint.(*SortedBreakPoint), opt)
-	t.updateWithIndexByIntervalAndTag(trans, end)
+	end := t.binarySearch(*curr, curr.Index, chunk.Len(), trans.BreakPoint.(*SortedBreakPoint), opt)
+	trans.updateWithIndexByIntervalAndTag(end)
 }
 
 type SortMergeTransformCreator struct {

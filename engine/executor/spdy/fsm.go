@@ -17,6 +17,7 @@ limitations under the License.
 package spdy
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -149,6 +150,7 @@ type FSM struct {
 	transitionTable *TransitionTable
 	state           state
 	stateGuard      sync.Mutex
+	closed          bool
 }
 
 func NewFSM(state state) *FSM {
@@ -170,6 +172,11 @@ func (fsm *FSM) Build(start *FSMState, event event, next *FSMState, action FSMEv
 func (fsm *FSM) ProcessEvent(event event, data []byte) error {
 	fsm.stateGuard.Lock()
 	defer fsm.stateGuard.Unlock()
+
+	if fsm.closed {
+		return fmt.Errorf("session closed")
+	}
+
 	transition, ok := fsm.transitionTable.findTransition(fsm.state, event)
 	if !ok {
 		return NewFSMError(event, fsm.state)
@@ -206,4 +213,11 @@ func (fsm *FSM) ForceSetState(state state) {
 	fsm.stateGuard.Lock()
 	defer fsm.stateGuard.Unlock()
 	fsm.state = state
+}
+
+func (fsm *FSM) Close() {
+	fsm.stateGuard.Lock()
+	fsm.closed = true
+	fsm.transitionTable = nil
+	fsm.stateGuard.Unlock()
 }

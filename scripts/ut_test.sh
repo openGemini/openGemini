@@ -128,7 +128,7 @@ do
 done
 
 
-sed -i "s/DefaultInnerChunkSize = 1024/DefaultInnerChunkSize = 1/g" open_src/influx/httpd/handler.go
+sed -i "s/DefaultInnerChunkSize = 1024/DefaultInnerChunkSize = 1/g" lib/util/lifted/influx/httpd/handler.go
 
 python build.py  --clean
 
@@ -172,7 +172,7 @@ sed -i 's/time-range-limit = \["0s", "24h"\]/# time-range-limit = \["72h", "24h"
 sed -i "s/shard-tier = \"warm\"/# shard-tier = \"warm\"/g" config/openGemini.conf
 sed -i "s/read-cache-limit = 5368709120/read-cache-limit = 0/g" config/openGemini.conf
 
-sed -i "s/DefaultInnerChunkSize = 1/DefaultInnerChunkSize = 1024/g" open_src/influx/httpd/handler.go
+sed -i "s/DefaultInnerChunkSize = 1/DefaultInnerChunkSize = 1024/g" lib/util/lifted/influx/httpd/handler.go
 
 sed -i "s/ptnum-pernode = 2/# ptnum-pernode = 2/g" config/openGemini.conf
 sed -i "s/pushers = \"file\"/# pushers = \"\"/g" config/openGemini.conf

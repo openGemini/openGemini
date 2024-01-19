@@ -30,10 +30,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 // DataType represents the primitive data types available in InfluxQL.
@@ -848,6 +848,23 @@ type IndexOption struct {
 
 func (io *IndexOption) Clone() *IndexOption {
 	clone := *io
+	return &clone
+}
+
+type IndexOptions struct {
+	Options []*IndexOption
+}
+
+func (ios *IndexOptions) Clone() *IndexOptions {
+	if ios == nil {
+		return nil
+	}
+	clone := IndexOptions{
+		Options: make([]*IndexOption, len(ios.Options)),
+	}
+	for i := range ios.Options {
+		clone.Options[i] = ios.Options[i].Clone()
+	}
 	return &clone
 }
 
@@ -4320,8 +4337,17 @@ type IndexRelation struct {
 	Rid          uint32
 	Oids         []uint32
 	IndexNames   []string
-	IndexList    []*IndexList              // indexType to column name (all column indexed with indexType)
-	IndexOptions map[string][]*IndexOption // columnName to index option (all index options for columnName)
+	IndexList    []*IndexList    // indexType to column name (all column indexed with indexType)
+	IndexOptions []*IndexOptions // columnName to index option (all index options for columnName)
+}
+
+func NewIndexRelation() *IndexRelation {
+	return &IndexRelation{
+		Oids:         make([]uint32, 0),
+		IndexNames:   make([]string, 0),
+		IndexList:    make([]*IndexList, 0),
+		IndexOptions: make([]*IndexOptions, 0),
+	}
 }
 
 // Clone returns a deep clone of the IndexRelation.
@@ -4334,21 +4360,16 @@ func (ir *IndexRelation) Clone() *IndexRelation {
 		Oids:         make([]uint32, len(ir.Oids)),
 		IndexNames:   make([]string, len(ir.IndexNames)),
 		IndexList:    make([]*IndexList, 0, len(ir.IndexList)),
-		IndexOptions: make(map[string][]*IndexOption),
+		IndexOptions: make([]*IndexOptions, 0, len(ir.IndexOptions)),
 	}
 	copy(clone.Oids, ir.Oids)
 	copy(clone.IndexNames, ir.IndexNames)
 	for _, src := range ir.IndexList {
 		clone.IndexList = append(clone.IndexList, src.Clone())
 	}
-	for col, opts := range ir.IndexOptions {
-		indexOpts := make([]*IndexOption, 0, len(opts))
-		for _, opt := range opts {
-			indexOpts = append(indexOpts, opt.Clone())
-		}
-		clone.IndexOptions[col] = indexOpts
+	for _, opts := range ir.IndexOptions {
+		clone.IndexOptions = append(clone.IndexOptions, opts.Clone())
 	}
-
 	return clone
 }
 

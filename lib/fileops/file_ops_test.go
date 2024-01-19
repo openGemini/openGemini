@@ -438,3 +438,27 @@ func TestDecodeObsPath(t *testing.T) {
 	assert.Equal(t, "mock_bucket", bucket)
 	assert.Equal(t, "a/b/c", basePath)
 }
+
+func TestVFS2(t *testing.T) {
+	rootDir := "/tmp/test_vfs"
+	defer RemoveAll(rootDir)
+	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
+	lockFile := FileLockOption("/tmp/test_vfs/lock")
+
+	if err := MkdirAll(rootDir, 0750, lockFile); err != nil {
+		t.Fatalf("mkdir(%v) fail, err:%v", rootDir, err)
+	}
+	fileName := filepath.Join(rootDir, "file1")
+
+	if _, err := IsObsFile(fileName); err != nil {
+		t.Fatalf("writefile(%v) fail, err:%v", fileName, err)
+	}
+
+	dstPath := filepath.Join(rootDir, "file2")
+	if err := CopyFileFromDFVToOBS(fileName, dstPath, lockFile); err != nil {
+		t.Fatalf("CopyTSSPFromDFVToOBS(from %v to %v) fail, err:%v", fileName, dstPath, err)
+	}
+	if _, err := CreateOBSFile(fileName, lockFile, pri); err != nil {
+		t.Fatalf("CreateOBS(%v) fail, err:%v", fileName, err)
+	}
+}

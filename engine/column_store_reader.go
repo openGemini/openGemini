@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -230,8 +229,8 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 	}
 	var locs []*immutable.Location
 
-	buf := pool.GetChunkMetaBuffer()
-	defer pool.PutChunkMetaBuffer(buf)
+	ctx := immutable.NewChunkMetaContext(nil)
+	defer ctx.Release()
 
 	for _, shardFrags := range r.frags {
 		for _, fileFrags := range shardFrags.FileMarks {
@@ -241,7 +240,7 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 			if ok {
 				loc.SetChunkMeta(chunkMeta)
 			} else {
-				ok, err = loc.Contains(0, tr, buf)
+				ok, err = loc.Contains(0, tr, ctx)
 				if err != nil {
 					return
 				}

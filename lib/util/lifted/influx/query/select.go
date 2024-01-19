@@ -106,7 +106,7 @@ type ShardGroup interface {
 
 // PreparedStatement is a prepared statement that is ready to be executed.
 type PreparedStatement interface {
-	BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, error)
+	BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, hybridqp.Trait, error)
 	Select(ctx context.Context) (hybridqp.Executor, error)
 
 	ChangeCreator(hybridqp.ExecutorBuilderCreator)

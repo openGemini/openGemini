@@ -31,6 +31,7 @@ type IndexWriter interface {
 	Init(name string, lock *string, cacheMeta bool, limitCompact bool)
 	Write(p []byte) (int, error)
 	Size() int
+	BlockSize() int
 	CopyTo(to io.Writer) (int, error)
 	SwitchMetaBuffer() (int, error)
 	MetaDataBlocks(dst [][]byte) [][]byte
@@ -107,6 +108,10 @@ func (w *IndexCompressWriter) Close() error {
 
 func (w *IndexCompressWriter) Size() int {
 	return w.size
+}
+
+func (w *IndexCompressWriter) BlockSize() int {
+	return 0
 }
 
 func (w *IndexCompressWriter) CopyTo(to io.Writer) (int, error) {

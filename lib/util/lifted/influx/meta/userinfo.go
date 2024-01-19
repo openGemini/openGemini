@@ -6,12 +6,12 @@ This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/se
 */
 
 import (
-	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/query"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 var _ query.FineAuthorizer = (*UserInfo)(nil)

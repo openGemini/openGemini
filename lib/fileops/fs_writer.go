@@ -182,6 +182,7 @@ type FileWriter interface {
 	Close() error
 	DataSize() int64
 	ChunkMetaSize() int64
+	ChunkMetaBlockSize() int64
 	GetFileWriter() BasicFileWriter
 	AppendChunkMetaToData() error
 	SwitchMetaBuffer() (int, error)

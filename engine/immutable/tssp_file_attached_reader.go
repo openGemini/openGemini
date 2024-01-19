@@ -21,7 +21,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/lib/fragment"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
@@ -73,8 +72,8 @@ func (t *TSSPFileAttachedReader) initReader(files []TSSPFile, fragRanges []fragm
 	}
 	var err error
 	var locs []*Location
-	buf := pool.GetChunkMetaBuffer()
-	defer pool.PutChunkMetaBuffer(buf)
+	ctx := NewChunkMetaContext(nil)
+	defer ctx.Release()
 
 	for i, file := range files {
 		loc := NewLocation(file, t.ctx.readCtx)
@@ -82,7 +81,7 @@ func (t *TSSPFileAttachedReader) initReader(files []TSSPFile, fragRanges []fragm
 		if ok {
 			loc.SetChunkMeta(chunkMeta)
 		} else {
-			ok, err = loc.Contains(0, tr, buf)
+			ok, err = loc.Contains(0, tr, ctx)
 			if err != nil {
 				return err
 			}

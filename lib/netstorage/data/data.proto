@@ -1,7 +1,7 @@
 syntax = "proto2";
 package netstorage.data;
 
-import "open_src/influx/meta/proto/meta.proto";
+import "lib/util/lifted/influx/meta/proto/meta.proto";
 
 option go_package = ".;netstorage.data";
 

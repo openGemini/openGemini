@@ -456,7 +456,8 @@ func (s *MultiplexedSession) recvDataACK(event event, transition *FSMTransition,
 }
 
 func (s *MultiplexedSession) enterClosed(event event, transition *FSMTransition) error {
-	s.close()
+	s.conn.deleteSession(s)
+	s.closeOnly()
 	return nil
 }
 
@@ -471,12 +472,14 @@ func (s *MultiplexedSession) Close() error {
 	if err := s.SendFin(nil); err != nil {
 		return err
 	}
+	s.close()
 	return nil
 }
 
 func (s *MultiplexedSession) close() {
 	s.conn.deleteSession(s)
 	s.closeOnly()
+	s.fsm.Close()
 }
 
 func (s *MultiplexedSession) closeOnly() {
@@ -484,6 +487,7 @@ func (s *MultiplexedSession) closeOnly() {
 		s.TriggerOnClose()
 		close(s.closed)
 		s.dataAck.Close()
+		s.onClose = nil
 	})
 }
 

@@ -22,7 +22,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 )
@@ -49,13 +48,13 @@ func putRecordIterator(itr *recordIter) {
 }
 
 type fileCursor struct {
-	ascending          bool
-	isLastFile         bool
-	isPreAgg           bool
-	start              int
-	index              int
-	step               int
-	buf                *pool.Buffer
+	ascending  bool
+	isLastFile bool
+	isPreAgg   bool
+	start      int
+	index      int
+	step       int
+
 	minT, maxT         int64
 	schema             record.Schemas
 	file               immutable.TSSPFile
@@ -71,6 +70,7 @@ type fileCursor struct {
 	validRowRecordPool *record.CircularRecordPool
 	memRecIters        map[uint64][]*SeriesIter
 	colAux             *record.ColAux
+	metaContext        *immutable.ChunkMetaContext
 }
 
 type SeriesIter struct {
@@ -128,7 +128,7 @@ func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor
 		isPreAgg:    ctx.decs.MatchPreAgg(),
 		colAux:      &record.ColAux{},
 	}
-	c.buf = pool.GetChunkMetaBuffer()
+	c.metaContext = immutable.NewChunkMetaContext(c.schema)
 	c.seriesIter = &SeriesIter{iter: &recordIter{}}
 	c.seriesIter.iter.reset()
 	c.memIter = &recordIter{}
@@ -201,7 +201,8 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		ptTags := &(f.tagSet.TagsVec[i])
 		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
 		f.loc.ResetMeta()
-		contains, err := f.loc.Contains(sid, f.ctx.tr, f.buf)
+
+		contains, err := f.loc.Contains(sid, f.ctx.tr, f.metaContext)
 		if err != nil {
 			return nil, err
 		}
@@ -286,7 +287,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 		}
 		m := f.loc.GetChunkMeta()
 		if m == nil || m.GetSid() != sid {
-			contains, err := f.loc.Contains(sid, f.ctx.tr, f.buf)
+			contains, err := f.loc.Contains(sid, f.ctx.tr, f.metaContext)
 			if err != nil {
 				return nil, err
 			}
@@ -439,7 +440,8 @@ func (f *fileCursor) Close() error {
 	if f.filterRecordPool != nil {
 		f.filterRecordPool.Put()
 	}
-	pool.PutChunkMetaBuffer(f.buf)
+	f.metaContext.Release()
+	f.metaContext = nil
 	f.reset()
 	return nil
 }

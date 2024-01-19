@@ -24,7 +24,6 @@ openGemini
 ├── engine
 ├── images
 ├── lib
-├── open_src
 ├── python
 ├── scripts
 ├── services
@@ -40,7 +39,6 @@ openGemini
 | docker      | 存放Docker部署相关的文件，比如Dockerfile，启动脚本等         |
 | engine      | 存储引擎实现                                                 |
 | lib         | 各种通用工具和支持函数的实现                                 |
-| open_src    | 依赖的第三方开源组件代码（该目录后续会考虑删除）             |
 | python      | 基于AI的时序数据分析平台实现，支持时序数据异常检测           |
 | scripts     | 包含openGemini的自动部署脚本、单元测试脚本等                 |
 | services    | openGemini的后台服务，比如连续查询将采样(Continue Query), 多级将采样(Downsample)等 |

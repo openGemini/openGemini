@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {

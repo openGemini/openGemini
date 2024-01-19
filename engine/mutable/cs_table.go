@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -183,7 +184,7 @@ func (c *csMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutabl
 	aMetaIndex := c.getAccumulateMetaIndex(msName)
 	if !ok {
 		if detachedEnabled {
-			localBFCount := sparseindex.GetLocalBloomFilterBlockCnts(writeMs.Path, msName, lockPath, recSchema, indexRelation)
+			localBFCount := sparseindex.GetLocalBloomFilterBlockCnts(writeMs.Path, msName, lockPath, recSchema, indexRelation, writeMs.GetFullTextIdx())
 			fManager = &writeDetached{
 				accumulateMetaIndex: aMetaIndex,
 				firstFlush:          aMetaIndex.GetBlockId() == 0,
@@ -254,7 +255,7 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 		return
 	}
 
-	writeMs := c.createMsBuilder(tbStore, lock, dataPath, msName, 1, rec.Len(), conf, config.COLUMNSTORE, mstInfo)
+	writeMs := c.createMsBuilder(tbStore, lock, dataPath, msName, 1, rec.Len(), conf, config.COLUMNSTORE, mstInfo, logstore.IsFullTextIdx(&indexRelation))
 	if writeMs == nil {
 		return
 	}
@@ -275,7 +276,7 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 }
 
 func (c *csMemTableImpl) createMsBuilder(tbStore immutable.TablesStore, lockPath *string, dataPath string,
-	msName string, totalChunks int, size int, conf *immutable.Config, engineType config.EngineType, mstInfo *meta.MeasurementInfo) *immutable.MsBuilder {
+	msName string, totalChunks int, size int, conf *immutable.Config, engineType config.EngineType, mstInfo *meta.MeasurementInfo, fullTextIdx bool) *immutable.MsBuilder {
 	seq := tbStore.Sequencer()
 	defer seq.UnRef()
 
@@ -288,7 +289,7 @@ func (c *csMemTableImpl) createMsBuilder(tbStore immutable.TablesStore, lockPath
 		_ = fileops.MkdirAll(dir, 0750, lock)
 		bfCols := mstInfo.IndexRelation.GetBloomFilterColumns()
 		msb, err = immutable.NewDetachedMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(),
-			seq, size, engineType, mstInfo.ObsOptions, bfCols)
+			seq, size, engineType, mstInfo.ObsOptions, bfCols, fullTextIdx)
 		if err != nil {
 			logger.GetLogger().Error("new detached msBuilder error", zap.Error(err))
 			return nil
@@ -296,6 +297,7 @@ func (c *csMemTableImpl) createMsBuilder(tbStore immutable.TablesStore, lockPath
 	} else {
 		msb = immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size, engineType)
 	}
+	msb.SetFullTextIdx(fullTextIdx)
 	return msb
 }
 

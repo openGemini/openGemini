@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/mitchellh/copystructure"
@@ -42,6 +41,12 @@ type ContextKey string
 const (
 	NowKey ContextKey = "now"
 )
+
+var localStorageForQuery hybridqp.StoreEngine
+
+func SetLocalStorageForQuery(storage hybridqp.StoreEngine) {
+	localStorageForQuery = storage
+}
 
 // Select compiles, prepares, and then initiates execution of the query using the
 // default compile options.
@@ -105,25 +110,50 @@ func (p *preparedStatement) Statement() *influxql.SelectStatement {
 	return p.stmt
 }
 
-func (p *preparedStatement) buildPlanByCache(ctx context.Context, schema *QuerySchema, plan []hybridqp.QueryNode) (hybridqp.QueryNode, error) {
+func (p *preparedStatement) buildPlanByCache(ctx context.Context, schema *QuerySchema, plan []hybridqp.QueryNode, req *[]*RemoteQuery) (hybridqp.QueryNode, error) {
 	p.stmt.Sources = p.qc.GetSources(p.stmt.Sources)
 	eTraits, err := p.qc.GetETraits(ctx, p.stmt.Sources, schema)
 	if eTraits == nil || err != nil {
 		return nil, err
 	}
-	return NewPlanBySchemaAndSrcPlan(schema, plan, eTraits)
+	if len(eTraits) == 1 && localStorageForQuery != nil {
+		*req = append(*req, eTraits[0].(*RemoteQuery))
+		return NewPlanBySchemaAndSrcPlan(schema, plan, eTraits, true)
+	}
+	return NewPlanBySchemaAndSrcPlan(schema, plan, eTraits, false)
 }
 
-func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, error) {
-	if len(p.stmt.Fields) == 0 {
-		return nil, nil
+func (p *preparedStatement) removeNodeLogicalExchange(plan hybridqp.QueryNode, req *[]*RemoteQuery) hybridqp.QueryNode {
+	if len(plan.Children()) == 0 {
+		return plan
+	}
+	for i := range plan.Children() {
+		if nodeExchange, ok := plan.Children()[i].(*LogicalExchange); ok {
+			if nodeExchange.eType == NODE_EXCHANGE {
+				eTraits := nodeExchange.eTraits
+				if len(nodeExchange.Children()) == 1 && len(eTraits) == 1 {
+					plan.Children()[i] = nodeExchange.Children()[0]
+					*req = append(*req, eTraits[0].(*RemoteQuery))
+					continue
+				}
+			}
+		}
+		p.removeNodeLogicalExchange(plan.Children()[i], req)
 	}
 
+	return plan
+}
+
+func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, hybridqp.Trait, error) {
+	if len(p.stmt.Fields) == 0 {
+		return nil, nil, nil
+	}
+	var req []*RemoteQuery = make([]*RemoteQuery, 0)
 	ctx = context.WithValue(ctx, NowKey, p.now)
 
 	opt, ok := p.opt.(*query.ProcessorOptions)
 	if !ok {
-		return nil, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
+		return nil, req, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
 	}
 	opt.EnableBinaryTreeMerge = sysconfig.GetEnableBinaryTreeMerge()
 
@@ -135,25 +165,32 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	planType := GetPlanType(schema, p.stmt)
 	if planType != UNKNOWN {
-		templatePlan := SqlPlanTemplate[planType].GetPlan()
 		if p != nil && !HaveOnlyCSStore {
+			var templatePlan []hybridqp.QueryNode
+			if localStorageForQuery != nil {
+				templatePlan = SqlPlanTemplate[planType].GetLocalStorePlan()
+			} else {
+				templatePlan = SqlPlanTemplate[planType].GetPlan()
+			}
 			schema.SetPlanType(planType)
-			return p.buildPlanByCache(ctx, schema, templatePlan)
+			plan, err := p.buildPlanByCache(ctx, schema, templatePlan, &req)
+			PrintPlan("template plan", plan)
+			return plan, req, err
 		}
 	}
 	plan, err := buildExtendedPlan(ctx, p.stmt, p.qc, schema)
 
 	if err != nil {
-		return nil, err
+		return nil, req, err
 	}
 	if plan == nil {
-		return nil, nil
+		return nil, req, nil
 	}
 
-	if sysconfig.GetEnablePrintLogicalPlan() == sysconfig.OnPrintLogicalPlan {
-		planWriter := NewLogicalPlanWriterImpl(&strings.Builder{})
-		plan.(LogicalPlan).Explain(planWriter)
-		fmt.Println("origin plan\n", planWriter.String())
+	PrintPlan("origin plan", plan)
+	if localStorageForQuery != nil && !HaveOnlyCSStore {
+		p.removeNodeLogicalExchange(plan, &req)
+		PrintPlan("ts-server plan", plan)
 	}
 	planner := p.optimizer()
 
@@ -177,16 +214,12 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 		}
 	}
 
-	if sysconfig.GetEnablePrintLogicalPlan() == sysconfig.OnPrintLogicalPlan {
-		planWriter := NewLogicalPlanWriterImpl(&strings.Builder{})
-		best.(LogicalPlan).Explain(planWriter)
-		fmt.Println("optimized plan\n", planWriter.String())
-	}
-	return best, nil
+	PrintPlan("optimized plan", best)
+	return best, req, nil
 }
 
 func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, error) {
-	best, err := p.BuildLogicalPlan(ctx)
+	best, req, err := p.BuildLogicalPlan(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +230,10 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 	span := tracing.SpanFromContext(ctx)
 	if span != nil {
 		executorBuilder.Analyze(span)
+	}
+	// ts-server + tsEngine remove node_exchange
+	if localStorageForQuery != nil {
+		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(req.([]*RemoteQuery), ctx)
 	}
 	return executorBuilder.Build(best)
 }

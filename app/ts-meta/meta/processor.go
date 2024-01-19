@@ -39,7 +39,7 @@ type MetaStoreInterface interface {
 	createDataNode(httpAddr, tcpAddr, role string) ([]byte, error)
 	afterIndex(index uint64) <-chan struct{}
 	getSnapshot(role metaclient.Role) []byte
-	isCandidate() bool
+	IsLeader() bool
 	Join(n *meta.NodeInfo) (*meta.NodeInfo, error)
 	apply(b []byte) error
 	index() uint64

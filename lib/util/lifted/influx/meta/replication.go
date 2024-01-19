@@ -1,8 +1,8 @@
 package meta
 
 import (
-	"github.com/gogo/protobuf/proto"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 type Role uint8

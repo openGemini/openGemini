@@ -19,7 +19,6 @@ package handler
 import (
 	"testing"
 
-	"github.com/gogo/protobuf/proto"
 	meta2 "github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -28,6 +27,7 @@ import (
 	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/tracing"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/require"
 )
 

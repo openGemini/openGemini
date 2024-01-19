@@ -19,10 +19,10 @@ package metaclient
 import (
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
 )
 

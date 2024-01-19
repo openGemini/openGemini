@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
@@ -92,6 +93,17 @@ func EnableFileCursor(en bool) {
 
 func GetEnableFileCursor() bool {
 	return enableFileCursor
+}
+
+func PrintPlan(planName string, plan hybridqp.QueryNode) {
+	if plan == nil {
+		return
+	}
+	if sysconfig.GetEnablePrintLogicalPlan() == sysconfig.OnPrintLogicalPlan {
+		planWriter := NewLogicalPlanWriterImpl(&strings.Builder{})
+		plan.(LogicalPlan).Explain(planWriter)
+		fmt.Println(planName, "\n", planWriter.String())
+	}
 }
 
 func ValidateFieldsFromPlans(plans []hybridqp.QueryNode) bool {
@@ -1024,8 +1036,14 @@ func (p *LogicalLimit) Clone() hybridqp.QueryNode {
 	return clone
 }
 
+func (p *LogicalLimit) ExplainIterms(writer LogicalPlanWriter) {
+	writer.Item("limit", p.LimitPara.Limit)
+	writer.Item("offset", p.LimitPara.Offset)
+}
+
 func (p *LogicalLimit) Explain(writer LogicalPlanWriter) {
 	p.ExplainIterms(writer)
+	p.LogicalPlanBase.ExplainIterms(writer)
 	writer.Explain(p)
 }
 
@@ -3033,6 +3051,7 @@ func (p *LogicalDummyShard) Digest() string {
 
 type LogicalIndexScan struct {
 	LogicalPlanSingle
+	oneShardState bool
 }
 
 func NewLogicalIndexScan(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalIndexScan {
@@ -3043,6 +3062,14 @@ func NewLogicalIndexScan(input hybridqp.QueryNode, schema hybridqp.Catalog) *Log
 	project.init()
 
 	return project
+}
+
+func (p *LogicalIndexScan) SetOneShardState(enable bool) {
+	p.oneShardState = enable
+}
+
+func (p *LogicalIndexScan) GetOneShardState() bool {
+	return p.oneShardState
 }
 
 func (p *LogicalIndexScan) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
@@ -3977,9 +4004,10 @@ func (p *LogicalHashMerge) AddTrait(trait interface{}) {
 	p.eTraits = append(p.eTraits, trait)
 }
 
-func NewPlanBySchemaAndSrcPlan(schema hybridqp.Catalog, srcPlan []hybridqp.QueryNode, eTrait []hybridqp.Trait) (hybridqp.QueryNode, error) {
+func NewPlanBySchemaAndSrcPlan(schema hybridqp.Catalog, srcPlan []hybridqp.QueryNode, eTrait []hybridqp.Trait, localStore bool) (hybridqp.QueryNode, error) {
 	var inputs []hybridqp.QueryNode
 	hasScanReader := false
+	hasScanNodeExchange := false
 	for _, srcNode := range srcPlan {
 		newNode := srcNode.New(inputs, schema, eTrait)
 		if newNode == nil {
@@ -3988,12 +4016,30 @@ func NewPlanBySchemaAndSrcPlan(schema hybridqp.Catalog, srcPlan []hybridqp.Query
 		if _, ok := newNode.(*LogicalReader); ok {
 			hasScanReader = true
 		}
+		if localStore {
+			if _, ok := newNode.(*LogicalProject); ok {
+				hasScanNodeExchange = true
+			}
+		} else {
+			if e, ok := newNode.(*LogicalExchange); ok {
+				if e.EType() == NODE_EXCHANGE {
+					hasScanNodeExchange = true
+				}
+			}
+		}
+
 		if hasScanReader {
 			if agg, ok := newNode.(*LogicalAggregate); ok {
 				agg.ForwardCallArgs()
 				agg.CountToSum()
 			}
 			newNode.DeriveOperations()
+		}
+		if !hasScanNodeExchange {
+			if limit, ok := newNode.(*LogicalLimit); ok {
+				limit.LimitPara.Limit = limit.LimitPara.Limit + limit.LimitPara.Offset
+				limit.LimitPara.Offset = 0
+			}
 		}
 		inputs = inputs[:0]
 		inputs = append(inputs, newNode)

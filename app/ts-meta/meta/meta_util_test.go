@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -37,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
 )
 

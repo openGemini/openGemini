@@ -9,9 +9,9 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 type NodeStatus int64

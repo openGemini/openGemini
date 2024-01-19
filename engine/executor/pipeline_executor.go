@@ -482,13 +482,16 @@ func (t *StoreExchangeTraits) NextReader() []interface{} {
 }
 
 type ExecutorBuilder struct {
-	dag          *TransformDag
-	root         *TransformVertex
-	traits       *StoreExchangeTraits
-	csTraits     *CsStoreExchangeTraits // for csstore
-	frags        *ShardsFragmentsGroups
-	indexInfo    interface{}
-	currConsumer int
+	dag                         *TransformDag
+	root                        *TransformVertex
+	multiMstTraitsForLocalStore []*StoreExchangeTraits // traits of multiMst for ts-server
+	multiMstInfosForLocalStore  []*IndexScanExtraInfo  // infos of multiMst for ts-server
+	mstIndex                    int
+	traits                      *StoreExchangeTraits
+	csTraits                    *CsStoreExchangeTraits // for csstore
+	frags                       *ShardsFragmentsGroups
+	indexInfo                   interface{}
+	currConsumer                int
 
 	enableBinaryTreeMerge int64
 	info                  *IndexScanExtraInfo
@@ -497,6 +500,7 @@ type ExecutorBuilder struct {
 
 	span           *tracing.Span
 	oneReaderState bool
+	oneShardState  bool
 }
 
 func NewQueryExecutorBuilder(enableBinaryTreeMerge int64) *ExecutorBuilder {
@@ -636,6 +640,62 @@ func (builder *ExecutorBuilder) SetInfo(info *IndexScanExtraInfo) {
 	builder.info = info
 }
 
+func (builder *ExecutorBuilder) SetTraits(t *StoreExchangeTraits) {
+	builder.traits = t
+}
+
+func (builder *ExecutorBuilder) SetMultiMstTraitsForLocalStore(t []*StoreExchangeTraits) {
+	builder.multiMstTraitsForLocalStore = t
+}
+
+func (builder *ExecutorBuilder) SetMultiMstInfosForLocalStore(t []*IndexScanExtraInfo) {
+	builder.multiMstInfosForLocalStore = t
+}
+
+func (builder *ExecutorBuilder) SetInfosAndTraits(req []*RemoteQuery, ctx context.Context) {
+	if len(req) == 0 {
+		return
+	}
+	multiMstTraits := make([]*StoreExchangeTraits, 0)
+	for _, r := range req {
+		m := make(map[uint64][][]interface{})
+		for _, sid := range r.ShardIDs {
+			m[sid] = nil
+		}
+		traits := &StoreExchangeTraits{
+			mapShardsToReaders: m,
+			shards:             make([]uint64, 0, len(m)),
+			shardIndex:         0,
+			readerIndex:        0,
+		}
+		for shard := range m {
+			traits.shards = append(traits.shards, shard)
+		}
+		multiMstTraits = append(multiMstTraits, traits)
+	}
+	builder.SetMultiMstTraitsForLocalStore(multiMstTraits)
+	builder.SetTraits(multiMstTraits[0])
+	multiMstInfos := make([]*IndexScanExtraInfo, 0)
+	for _, r := range req {
+		info := &IndexScanExtraInfo{
+			Store: localStorageForQuery,
+			Req:   r,
+			ctx:   ctx,
+		}
+		multiMstInfos = append(multiMstInfos, info)
+	}
+	builder.SetMultiMstInfosForLocalStore(multiMstInfos)
+	builder.SetInfo(multiMstInfos[0])
+}
+
+func (builder *ExecutorBuilder) NextMst() {
+	if builder.mstIndex < len(builder.multiMstTraitsForLocalStore)-1 {
+		builder.mstIndex++
+		builder.traits = builder.multiMstTraitsForLocalStore[builder.mstIndex]
+		builder.info = builder.multiMstInfosForLocalStore[builder.mstIndex]
+	}
+}
+
 func (builder *ExecutorBuilder) buildAnalyze() {
 	if builder.span == nil {
 		return
@@ -684,7 +744,7 @@ func (builder *ExecutorBuilder) createIndexScanTransform(indexScan *LogicalIndex
 		limit = schema.Options().GetLimit()
 	}
 	p := NewIndexScanTransform(indexScan.RowDataType(), indexScan.RowExprOptions(), indexScan.Schema(), indexScan.inputs[0], info,
-		builder.parallelismLimiter, limit)
+		builder.parallelismLimiter, limit, indexScan.GetOneShardState())
 	return p
 }
 
@@ -821,9 +881,12 @@ func (builder *ExecutorBuilder) addShardExchange(exchange Exchange) (*TransformV
 	for _, shard := range builder.traits.shards {
 		exchange.AddTrait(shard)
 	}
-
+	// ts-server can also support oneShard optimization
 	if len(exchange.ETraits()) == 1 {
-		return builder.addOneShardExchange(exchange)
+		builder.oneShardState = true
+		vertex, err := builder.addOneShardExchange(exchange)
+		builder.oneShardState = false
+		return vertex, err
 	} else if builder.enableBinaryTreeMerge == 1 {
 		return builder.addBinaryTreeExchange(exchange, len(exchange.ETraits())), nil
 	} else {
@@ -900,7 +963,7 @@ func (builder *ExecutorBuilder) addIndexScan(indexScan *LogicalIndexScan) (*Tran
 	if builder.traits != nil && !builder.traits.HasShard() {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "no shard for reader exchange")
 	}
-
+	indexScan.SetOneShardState(builder.oneShardState)
 	indexScanProcessor := builder.createIndexScanTransform(indexScan)
 	vertex := NewTransformVertex(indexScan, indexScanProcessor)
 	builder.dag.AddVertex(vertex)
@@ -1284,6 +1347,16 @@ func (builder *ExecutorBuilder) addColStoreReader(node *LogicalColumnStoreReader
 	}
 }
 
+func (builder *ExecutorBuilder) isMultiMstPlanNode(node hybridqp.QueryNode) bool {
+	if _, ok := node.(*LogicalFullJoin); ok {
+		return true
+	}
+	if _, ok := node.(*LogicalSortAppend); ok {
+		return true
+	}
+	return false
+}
+
 func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*TransformVertex, error) {
 	nodeChildren := node.Children()
 	children := make([]*TransformVertex, 0, len(node.Children()))
@@ -1298,11 +1371,23 @@ func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*Transf
 			continue
 		}
 		children = append(children, child)
+		if builder.isMultiMstPlanNode(node) {
+			builder.NextMst()
+		}
 	}
 	if len(node.Children()) == 1 {
 		if exchange, ok := node.Children()[0].(Exchange); ok {
 			if exchange.EType() == SHARD_EXCHANGE && len(builder.traits.shards) == 1 {
-				return children[0], nil
+				// ts-server can also support oneShard optimization but must reserve top logicalAgg and logicalProject
+				if _, ok := node.(*LogicalProject); !ok {
+					if builder.multiMstInfosForLocalStore != nil {
+						if _, ok := node.(*LogicalAggregate); !ok {
+							return children[0], nil
+						}
+					} else {
+						return children[0], nil
+					}
+				}
 			} else if exchange.EType() == READER_EXCHANGE && len(builder.traits.mapShardsToReaders[builder.traits.shards[0]]) == 1 {
 				return children[0], nil
 			}

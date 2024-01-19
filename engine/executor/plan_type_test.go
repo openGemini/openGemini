@@ -56,7 +56,7 @@ func TestAggInterval(t *testing.T) {
 	if planType != executor.AGG_INTERVAL {
 		t.Errorf("error plan type")
 	} else {
-		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil)
+		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil, false)
 		if newPlan == nil || err != nil {
 			t.Error("nil result")
 		}
@@ -93,7 +93,7 @@ func TestAggIntervalLimit(t *testing.T) {
 	if planType != executor.AGG_INTERVAL_LIMIT {
 		t.Errorf("error plan type")
 	} else {
-		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil)
+		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil, false)
 		if newPlan == nil || err != nil {
 			t.Error("nil result")
 		}
@@ -121,7 +121,7 @@ func TestNoAggNoGroup(t *testing.T) {
 	if planType != executor.NO_AGG_NO_GROUP {
 		t.Errorf("error plan type")
 	} else {
-		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil)
+		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil, false)
 		if newPlan == nil || err != nil {
 			t.Error("nil result")
 		}
@@ -157,7 +157,7 @@ func TestAggGroup(t *testing.T) {
 	if planType != executor.AGG_GROUP {
 		t.Errorf("error plan type")
 	} else {
-		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil)
+		newPlan, err := executor.NewPlanBySchemaAndSrcPlan(schema, executor.SqlPlanTemplate[planType].GetPlan(), nil, false)
 		if newPlan == nil || err != nil {
 			t.Error("nil result")
 		}
@@ -275,7 +275,7 @@ func TestCachedPlanType(t *testing.T) {
 func TestUnCachedPlan(t *testing.T) {
 	schema := NewAggGroupSchema()
 	queryNode := []hybridqp.QueryNode{&executor.LogicalHttpSenderHint{}}
-	_, err := executor.NewPlanBySchemaAndSrcPlan(schema, queryNode, nil)
+	_, err := executor.NewPlanBySchemaAndSrcPlan(schema, queryNode, nil, false)
 	if err == nil {
 		t.Error("error plan result")
 	}

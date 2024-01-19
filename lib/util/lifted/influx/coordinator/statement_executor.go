@@ -600,6 +600,43 @@ func (e *StatementExecutor) getRpLimit() int {
 	return e.RetentionPolicyLimit
 }
 
+func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementStatement) (*influxql.IndexRelation, error) {
+	indexR := influxql.NewIndexRelation()
+	if len(stmt.IndexType) != len(stmt.IndexList) {
+		return nil, fmt.Errorf("the IndexType does not match the number of index fields")
+	}
+
+	for i, indexType := range stmt.IndexType {
+		oid, err := tsi.GetIndexIdByName(indexType)
+		if err != nil {
+			return nil, err
+		}
+		if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
+			return nil, fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
+		}
+		indexR.Oids = append(indexR.Oids, oid)
+		indexR.IndexNames = append(indexR.IndexNames, indexType)
+		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: stmt.IndexList[i]})
+		indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
+	}
+
+	if stmt.TimeClusterDuration > 0 {
+		indexR.Oids = append(indexR.Oids, uint32(tsi.TimeCluster))
+		indexName, err := tsi.GetIndexNameById(uint32(tsi.TimeCluster))
+		if err != nil {
+			return nil, err
+		}
+		indexR.IndexNames = append(indexR.IndexNames, indexName)
+		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: []string{record.TimeField}})
+		indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
+			Options: []*influxql.IndexOption{
+				{TimeClusterDuration: stmt.TimeClusterDuration},
+			},
+		})
+	}
+	return indexR, nil
+}
+
 func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.CreateMeasurementStatement) error {
 	if !meta2.ValidMeasurementName(stmt.Name) {
 		return meta2.ErrInvalidName
@@ -612,42 +649,15 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	colStoreInfo := meta2.NewColStoreInfo(stmt.PrimaryKey, stmt.SortKey, stmt.Property, stmt.TimeClusterDuration, stmt.CompactType)
 	schemaInfo := meta2.NewSchemaInfo(stmt.Tags, stmt.Fields)
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey, Type: stmt.Type}
-	indexR := &influxql.IndexRelation{}
-	if len(stmt.IndexList) > 0 {
-		for i, indexType := range stmt.IndexType {
-			oid, err := tsi.GetIndexIdByName(indexType)
-			if err != nil {
-				return err
-			}
-			if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
-				return fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
-			}
-			indexR.Oids = append(indexR.Oids, oid)
-			if oid == tsi.IndexNameToID["bloomfilter"] {
-				indexR.IndexNames = append(indexR.IndexNames, indexType)
-			}
-		}
-	}
-	indexLists := make([]*influxql.IndexList, len(stmt.IndexList))
-	for i, indexList := range stmt.IndexList {
-		indexLists[i] = &influxql.IndexList{
-			IList: indexList,
-		}
-	}
-	indexR.IndexList = indexLists
-	// TODO: init indexR with stat.IndexOption
-	if stmt.TimeClusterDuration > 0 {
-		indexR.IndexOptions = map[string][]*influxql.IndexOption{
-			record.TimeField: []*influxql.IndexOption{
-				{TimeClusterDuration: stmt.TimeClusterDuration},
-			},
-		}
+	indexR, err := e.getIndexRelation(stmt)
+	if err != nil {
+		return err
 	}
 	engineType, ok := config.String2EngineType[stmt.EngineType]
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
 	}
-	_, err := e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo, nil)
+	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo, nil)
 	return err
 }
 

@@ -20,10 +20,13 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -36,6 +39,7 @@ type Location struct {
 	fragPos int // Indicates the sequence number of a fragment range.
 	fragRgs []*fragment.FragmentRange
 }
+
 type ColAux struct {
 	colPos           []int
 	colPosValidCount []int
@@ -55,6 +59,7 @@ func NewColAux(rec *record.Record, filterOption *BaseFilterOptions) *ColAux {
 		booleanValues:    make([][]bool, len(filterOption.FieldsIdx)),
 	}
 }
+
 func NewLocation(r TSSPFile, ctx *ReadContext) *Location {
 	return &Location{
 		r:       r,
@@ -72,6 +77,7 @@ func NewLocationCursor(n int) *LocationCursor {
 		lcs: make([]*Location, 0, n),
 	}
 }
+
 func (c *ColAux) reset(rec *record.Record, filterOption *BaseFilterOptions) {
 	for i := 0; i < len(rec.ColVals); i++ {
 		c.colPos[i] = 0
@@ -81,6 +87,7 @@ func (c *ColAux) reset(rec *record.Record, filterOption *BaseFilterOptions) {
 		c.validCounts[i] = 0
 	}
 }
+
 func (l *Location) SetFragmentRanges(frs []*fragment.FragmentRange) {
 	if len(frs) == 0 {
 		return
@@ -97,7 +104,7 @@ func (l *Location) SetFragmentRanges(frs []*fragment.FragmentRange) {
 	l.segPos = int(l.fragRgs[l.fragPos].End - 1)
 }
 
-func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buf *pool.Buffer) error {
+func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, ctx *ChunkMetaContext) error {
 	idx, m, err := l.r.MetaIndex(id, tr)
 	if err != nil {
 		return err
@@ -107,7 +114,8 @@ func (l *Location) readChunkMeta(id uint64, tr util.TimeRange, buf *pool.Buffer)
 		return nil
 	}
 
-	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, l.meta, buf, fileops.IO_PRIORITY_ULTRA_HIGH)
+	ctx.meta = l.meta
+	meta, err := l.r.ChunkMeta(id, m.offset, m.size, m.count, idx, ctx, fileops.IO_PRIORITY_ULTRA_HIGH)
 	if err != nil {
 		return err
 	}
@@ -167,7 +175,7 @@ func (l *Location) DescendingDone() {
 	l.segPos = int(l.fragRgs[0].Start) - 1
 }
 
-func (l *Location) Contains(sid uint64, tr util.TimeRange, buf *pool.Buffer) (bool, error) {
+func (l *Location) Contains(sid uint64, tr util.TimeRange, ctx *ChunkMetaContext) (bool, error) {
 	// use bloom filter and file time range to filter generally
 	contains, err := l.r.ContainsValue(sid, tr)
 	if err != nil {
@@ -178,7 +186,7 @@ func (l *Location) Contains(sid uint64, tr util.TimeRange, buf *pool.Buffer) (bo
 	}
 
 	// read file meta to judge whether file has data, chunk meta will also init
-	err = l.readChunkMeta(sid, tr, buf)
+	err = l.readChunkMeta(sid, tr, ctx)
 	if err != nil {
 		return false, err
 	}
@@ -320,4 +328,67 @@ func (l *Location) ResetMeta() {
 	if len(l.fragRgs) > 0 {
 		l.fragRgs = l.fragRgs[:0]
 	}
+}
+
+type ChunkMetaContext struct {
+	meta    *ChunkMeta
+	buf     *pool.Buffer
+	columns []string
+}
+
+func (ctx *ChunkMetaContext) initColumns(schema record.Schemas) {
+	ctx.columns = ctx.columns[:0]
+	if len(schema) == 0 {
+		return
+	}
+
+	for i := range schema {
+		ctx.columns = append(ctx.columns, schema[i].Name)
+	}
+}
+
+func (ctx *ChunkMetaContext) chunkMeta() *ChunkMeta {
+	if ctx.meta == nil {
+		ctx.meta = &ChunkMeta{}
+	}
+	return ctx.meta
+}
+
+func (ctx *ChunkMetaContext) MemSize() int {
+	return ctx.buf.MemSize()
+}
+
+func (ctx *ChunkMetaContext) Instance() pool.Object {
+	return newChunkMetaContext()
+}
+
+func (ctx *ChunkMetaContext) Release() {
+	ctx.columns = ctx.columns[:0]
+	ctx.meta = nil
+	chunkMetaContextPool.Put(ctx)
+}
+
+func NewChunkMetaContext(schema record.Schemas) *ChunkMetaContext {
+	ctx, ok := chunkMetaContextPool.Get().(*ChunkMetaContext)
+	if !ok || ctx == nil {
+		ctx = newChunkMetaContext()
+	}
+	ctx.initColumns(schema)
+	return ctx
+}
+
+func newChunkMetaContext() *ChunkMetaContext {
+	return &ChunkMetaContext{
+		meta: &ChunkMeta{},
+		buf:  &pool.Buffer{},
+	}
+}
+
+var chunkMetaContextPool *pool.ObjectPool
+
+func init() {
+	s := stat.NewHitRatioStatistics()
+	hook := pool.NewHitRatioHook(s.AddChunkMetaGetTotal, s.AddChunkMetaHitTotal)
+	chunkMetaContextPool = pool.NewObjectPool(cpu.GetCpuNum()*2, &ChunkMetaContext{}, bufferpool.MaxLocalCacheSize)
+	chunkMetaContextPool.SetHitRatioHook(hook)
 }
