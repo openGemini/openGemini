@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -49,7 +50,8 @@ func TestMinMaxIndexReader(t *testing.T) {
 		LHS: &influxql.VarRef{Val: "value", Type: influxql.Integer},
 		RHS: &influxql.IntegerLiteral{Val: 2},
 	}}
-	reader, err := sparseindex.NewMinMaxIndexReader(schema, option, true)
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	reader, err := sparseindex.NewMinMaxIndexReader(rpnExpr, schema, option, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +78,8 @@ func TestMinMaxIndexReader_error(t *testing.T) {
 		LHS: &influxql.VarRef{Val: "value", Type: influxql.Integer},
 		RHS: &influxql.IntegerLiteral{Val: 2},
 	}}
-	reader, err := sparseindex.NewMinMaxIndexReader(schema, option, true)
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	reader, err := sparseindex.NewMinMaxIndexReader(rpnExpr, schema, option, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4373,6 +4373,18 @@ func (ir *IndexRelation) Clone() *IndexRelation {
 	return clone
 }
 
+func (ir *IndexRelation) GetIndexOidByName(indexName string) (uint32, bool) {
+	if ir == nil || len(ir.IndexNames) == 0 {
+		return 0, false
+	}
+	for i := range ir.IndexNames {
+		if ir.IndexNames[i] == indexName {
+			return ir.Oids[i], true
+		}
+	}
+	return 0, false
+}
+
 func (ir *IndexRelation) GetBloomFilterColumns() []string {
 	if ir == nil {
 		return nil

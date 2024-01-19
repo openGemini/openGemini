@@ -20,6 +20,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 )
 
 var _ = RegistrySKFileReaderCreator(colstore.SetIndex, &SetReaderCreator{})
@@ -27,8 +28,8 @@ var _ = RegistrySKFileReaderCreator(colstore.SetIndex, &SetReaderCreator{})
 type SetReaderCreator struct {
 }
 
-func (index *SetReaderCreator) CreateSKFileReader(schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error) {
-	return NewSetIndexReader(schema, option, isCache)
+func (index *SetReaderCreator) CreateSKFileReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error) {
+	return NewSetIndexReader(rpnExpr, schema, option, isCache)
 }
 
 type SetIndexReader struct {
@@ -36,10 +37,15 @@ type SetIndexReader struct {
 	isCache bool
 	schema  record.Schemas
 	option  hybridqp.Options
+	sk      SKCondition
 }
 
-func NewSetIndexReader(schema record.Schemas, option hybridqp.Options, isCache bool) (*SetIndexReader, error) {
-	return &SetIndexReader{schema: schema, option: option, isCache: isCache}, nil
+func NewSetIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*SetIndexReader, error) {
+	sk, err := NewSKCondition(rpnExpr, schema)
+	if err != nil {
+		return nil, err
+	}
+	return &SetIndexReader{schema: schema, option: option, isCache: isCache, sk: sk}, nil
 }
 
 func (r *SetIndexReader) MayBeInFragment(fragId uint32) (bool, error) {

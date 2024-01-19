@@ -20,6 +20,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 )
 
 var _ = RegistrySKFileReaderCreator(colstore.MinMaxIndex, &MinMaxReaderCreator{})
@@ -27,8 +28,8 @@ var _ = RegistrySKFileReaderCreator(colstore.MinMaxIndex, &MinMaxReaderCreator{}
 type MinMaxReaderCreator struct {
 }
 
-func (creator *MinMaxReaderCreator) CreateSKFileReader(schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error) {
-	return NewMinMaxIndexReader(schema, option, isCache)
+func (creator *MinMaxReaderCreator) CreateSKFileReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error) {
+	return NewMinMaxIndexReader(rpnExpr, schema, option, isCache)
 }
 
 // MinMaxIndexReader:
@@ -53,10 +54,15 @@ type MinMaxIndexReader struct {
 	schema     record.Schemas
 	// read the data of the index according to the file and index fields.
 	ReadFunc func(file interface{}, rec *record.Record, isCache bool) (*record.Record, error)
+	sk       SKCondition
 }
 
-func NewMinMaxIndexReader(schema record.Schemas, option hybridqp.Options, isCache bool) (*MinMaxIndexReader, error) {
-	return &MinMaxIndexReader{schema: schema, option: option, isCache: isCache}, nil
+func NewMinMaxIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*MinMaxIndexReader, error) {
+	sk, err := NewSKCondition(rpnExpr, schema)
+	if err != nil {
+		return nil, err
+	}
+	return &MinMaxIndexReader{schema: schema, option: option, isCache: isCache, sk: sk}, nil
 }
 
 func (r *MinMaxIndexReader) MayBeInFragment(fragId uint32) (bool, error) {

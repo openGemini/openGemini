@@ -28,10 +28,21 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
+
+var IndexIDToName = map[uint32]string{
+	0: "mergeset",
+	1: "text",
+	2: "field",
+	3: "timecluster",
+	4: "bloomfilter",
+	5: "bloomfilter_fulltext",
+	6: "minmax",
+}
 
 var table = crc32.MakeTable(crc32.Castagnoli)
 
@@ -110,61 +121,67 @@ func (r *SKIndexReaderImpl) Scan(
 }
 
 func (r *SKIndexReaderImpl) CreateSKFileReaders(option hybridqp.Options, mstInfo *influxql.Measurement, isCache bool) ([]SKFileReader, error) {
-	skInfo := mstInfo.IndexRelation
-	if mstInfo.IndexRelation == nil || len(skInfo.Oids) == 0 || option.GetCondition() == nil {
+	skIndexRelation := mstInfo.IndexRelation
+	if skIndexRelation == nil || len(skIndexRelation.Oids) == 0 || option.GetCondition() == nil {
 		return nil, nil
 	}
 
-	skInfoMap := make(map[string][]string)
-	for i, indexList := range skInfo.IndexList {
+	skFieldMap := make(map[string][]string)
+	for i, indexList := range skIndexRelation.IndexList {
 		for _, field := range indexList.IList {
-			if _, ok := skInfoMap[field]; !ok {
-				skInfoMap[field] = []string{skInfo.IndexNames[i]}
+			if _, ok := skFieldMap[field]; !ok {
+				skFieldMap[field] = []string{skIndexRelation.IndexNames[i]}
 			} else {
-				skInfoMap[field] = append(skInfoMap[field], skInfo.IndexNames[i])
+				skFieldMap[field] = append(skFieldMap[field], skIndexRelation.IndexNames[i])
 			}
 		}
 	}
-	return r.GenSKFileReaderByExpr(option.GetCondition(), option, skInfoMap, isCache)
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	skInfoMap, err := r.getSKInfoByExpr(rpnExpr, skIndexRelation, skFieldMap)
+	if err != nil {
+		return nil, err
+	}
+	return r.createSKFileReaders(skInfoMap, rpnExpr, option, isCache)
 }
 
-func (r *SKIndexReaderImpl) GenSKFileReaderByExpr(expr influxql.Expr, option hybridqp.Options, skInfoMap map[string][]string, isCache bool) ([]SKFileReader, error) {
-	var readers []SKFileReader
-	switch expr := expr.(type) {
-	case *influxql.BinaryExpr:
-		lReaders, err := r.GenSKFileReaderByExpr(expr.LHS, option, skInfoMap, isCache)
-		if err != nil {
-			return nil, err
+func (r *SKIndexReaderImpl) getSKInfoByExpr(rpnExpr *rpn.RPNExpr, skIndexRelation *influxql.IndexRelation, skFieldMap map[string][]string) (map[string]*SkInfo, error) {
+	skInfoMap := make(map[string]*SkInfo)
+	for _, expr := range rpnExpr.Val {
+		v, ok := expr.(*influxql.VarRef)
+		if !ok {
+			continue
 		}
-		rReaders, err := r.GenSKFileReaderByExpr(expr.RHS, option, skInfoMap, isCache)
-		if err != nil {
-			return nil, err
+		indexNames, ok := skFieldMap[v.Val]
+		if !ok {
+			continue
 		}
-		readers = append(readers, lReaders...)
-		readers = append(readers, rReaders...)
-	case *influxql.ParenExpr:
-		pReaders, err := r.GenSKFileReaderByExpr(expr.Expr, option, skInfoMap, isCache)
-		if err != nil {
-			return nil, err
-		}
-		readers = append(readers, pReaders...)
-	case *influxql.VarRef:
-		if sks, ok := skInfoMap[expr.Val]; ok {
-			for i := range sks {
-				creator, ok := GetSKFileReaderFactoryInstance().Find(sks[i])
+		for i := range indexNames {
+			if info, ok := skInfoMap[indexNames[i]]; ok {
+				info.fields = append(info.fields, record.Field{Name: v.Val, Type: record.ToModelTypes(v.Type)})
+			} else {
+				oid, ok := skIndexRelation.GetIndexOidByName(indexNames[i])
 				if !ok {
-					return nil, fmt.Errorf("unsupported the skip index type: %s", sks[i])
+					return nil, fmt.Errorf("invalid the index name %s", indexNames[i])
 				}
-				reader, err := creator.CreateSKFileReader([]record.Field{{Name: expr.Val, Type: record.ToModelTypes(expr.Type)}}, option, isCache)
-				if err != nil {
-					return nil, err
-				}
-				readers = append(readers, reader)
+				skInfoMap[indexNames[i]] = &SkInfo{fields: []record.Field{{Name: v.Val, Type: record.ToModelTypes(v.Type)}}, oid: oid}
 			}
 		}
-	case *influxql.StringLiteral, *influxql.IntegerLiteral, *influxql.NumberLiteral, *influxql.BooleanLiteral:
-	default:
-		return nil, fmt.Errorf("unsupported the expr type: %s", expr.String())
+	}
+	return skInfoMap, nil
+}
+
+func (r *SKIndexReaderImpl) createSKFileReaders(skInfoMap map[string]*SkInfo, rpnExpr *rpn.RPNExpr, option hybridqp.Options, isCache bool) ([]SKFileReader, error) {
+	var readers []SKFileReader
+	for _, v := range skInfoMap {
+		creator, ok := GetSKFileReaderFactoryInstance().Find(IndexIDToName[v.oid])
+		if !ok {
+			return nil, fmt.Errorf("unsupported the skip index type: %s", IndexIDToName[v.oid])
+		}
+		reader, err := creator.CreateSKFileReader(rpnExpr, v.fields, option, isCache)
+		if err != nil {
+			return nil, err
+		}
+		readers = append(readers, reader)
 	}
 	return readers, nil
 }
@@ -173,9 +190,14 @@ func (r *SKIndexReaderImpl) Close() error {
 	return nil
 }
 
+type SkInfo struct {
+	fields record.Schemas
+	oid    uint32
+}
+
 // SKFileReaderCreator is used to abstract SKFileReader implementation of multiple skip indexes in factory mode.
 type SKFileReaderCreator interface {
-	CreateSKFileReader(schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error)
+	CreateSKFileReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error)
 }
 
 // RegistrySKFileReaderCreator is used to registry the SKFileReaderCreator

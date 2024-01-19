@@ -137,7 +137,7 @@ func (s *IndexReader) Get() ([]*MetaData, error) {
 			}
 			continue
 		}
-		isExist, _ := s.filterReader.IsExist(currMetaData.blockIndex)
+		isExist, _ := s.filterReader.IsExist(currMetaData.blockIndex, nil)
 		if isExist {
 			if currMetaData.maxTimestamp > s.maxTime {
 				s.maxTime = currMetaData.maxTimestamp

@@ -21,6 +21,8 @@ import (
 
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
@@ -28,8 +30,13 @@ import (
 
 func TestSetIndexReader(t *testing.T) {
 	schema := record.Schemas{{Name: "region", Type: influx.Field_Type_String}}
-	option := &query.ProcessorOptions{}
-	reader, err := sparseindex.NewSetIndexReader(schema, option, true)
+	option := &query.ProcessorOptions{Condition: &influxql.BinaryExpr{
+		Op:  influxql.EQ,
+		LHS: &influxql.VarRef{Val: "value", Type: influxql.Integer},
+		RHS: &influxql.IntegerLiteral{Val: 2},
+	}}
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	reader, err := sparseindex.NewSetIndexReader(rpnExpr, schema, option, true)
 	if err != nil {
 		t.Fatal(err)
 	}
