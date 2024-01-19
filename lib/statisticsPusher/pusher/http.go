@@ -134,10 +134,10 @@ func (p *Http) Push(data []byte) error {
 	if err != nil {
 		return err
 	}
+	defer writeResp.Body.Close()
 	if writeResp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("http push statistics failed, reason: %s", writeResp.Status)
 	}
-	_ = writeResp.Body.Close()
 	return nil
 }
 
