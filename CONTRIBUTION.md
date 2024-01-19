@@ -22,7 +22,6 @@ openGemini
 ├── engine
 ├── images
 ├── lib
-├── open_src
 ├── python
 ├── scripts
 ├── services
@@ -38,7 +37,6 @@ openGemini
 | docker      | Store files related to Docker deployment, such as Dockerfile, startup scripts, etc. |
 | engine      | Storage engine implementation                                |
 | lib         | Implementation of various common tools and support functions |
-| open_src    | Dependent third-party open source component code (this directory will be considered for deletion later) |
 | python      | Implementation of AI-based time series data analysis platform, supporting time series data anomaly detection |
 | scripts     | Contains openGemini’s automatic deployment scripts, unit test scripts, etc. |
 | services    | openGemini's background services, such as Continue Query, Multi-level Downsample, etc. |

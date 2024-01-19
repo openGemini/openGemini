@@ -96,6 +96,10 @@ func Test_Time_ConsumeData(t *testing.T) {
 	if m.count != 1 {
 		t.Fatal("unexpect flush count", m.count)
 	}
+	err := task.stop()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func BenchmarkXX(b *testing.B) {

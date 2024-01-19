@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cespare/xxhash/v2"
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/sysconfig"
@@ -22,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 

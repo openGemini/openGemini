@@ -17,6 +17,8 @@ limitations under the License.
 package executor
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -31,9 +33,9 @@ var GetPlanType func(hybridqp.Catalog, *influxql.SelectStatement) PlanType
 
 func init() {
 	GetPlanType = NilGetPlanType
-	PlanTypes = []PlanType{AGG_INTERVAL, AGG_INTERVAL_LIMIT, NO_AGG_NO_GROUP, AGG_GROUP}
+	PlanTypes = []PlanType{AGG_INTERVAL, AGG_INTERVAL_LIMIT, NO_AGG_NO_GROUP, AGG_GROUP, NO_AGG_NO_GROUP_LIMIT}
 	for _, t := range PlanTypes {
-		SqlPlanTemplate = append(SqlPlanTemplate, NewSqlPlanTemplate(t)) // 0 1 2 3
+		SqlPlanTemplate = append(SqlPlanTemplate, NewSqlPlanTemplate(t)) // 0 1 2 3 4
 		StorePlanTemplate = append(StorePlanTemplate, NewStorePlanTemplate(t))
 		OneShardStorePlanTemplate = append(OneShardStorePlanTemplate, NewOneShardStorePlanTemplate(t))
 	}
@@ -41,6 +43,15 @@ func init() {
 	MatchPlanFunc = append(MatchPlanFunc, MatchAggIntervalLimit)
 	MatchPlanFunc = append(MatchPlanFunc, MatchNoAggNoGroup)
 	MatchPlanFunc = append(MatchPlanFunc, MatchAggGroup)
+	MatchPlanFunc = append(MatchPlanFunc, MatchNoAggNoGroupLimit)
+	GetPlanType = NormalGetPlanType
+}
+
+func InitLocalStoreTemplatePlan() {
+	GetPlanType = NilGetPlanType
+	for _, sqlPlan := range SqlPlanTemplate {
+		sqlPlan.NewLocalStoreSqlPlanTemplate()
+	}
 	GetPlanType = NormalGetPlanType
 }
 
@@ -62,23 +73,28 @@ func MatchAggInterval(schema hybridqp.Catalog) bool {
 func MatchAggIntervalLimit(schema hybridqp.Catalog) bool {
 	if GetEnableFileCursor() && schema.HasLimit() && schema.HasCall() && schema.HasOptimizeCall() &&
 		schema.CanCallsPushdown() && schema.HasInterval() && !schema.ContainSeriesIgnoreCall() &&
-		(schema.Options().GetDimensions() == nil || len(schema.Options().GetDimensions()) == 0) {
+		len(schema.Options().GetDimensions()) == 0 {
 		return true
 	}
 	return false
 }
 
 func MatchNoAggNoGroup(schema hybridqp.Catalog) bool {
-	if !schema.HasCall() && !schema.HasLimit() && !schema.HasInterval() &&
-		(schema.Options().GetDimensions() == nil || len(schema.Options().GetDimensions()) == 0) {
+	if !schema.HasCall() && !schema.HasLimit() && !schema.HasInterval() && len(schema.Options().GetDimensions()) == 0 {
 		return true
 	}
 	return false
 }
 
 func MatchAggGroup(schema hybridqp.Catalog) bool {
-	if schema.MatchPreAgg() && schema.Options().GetDimensions() != nil && len(schema.Options().GetDimensions()) > 0 &&
-		!schema.HasLimit() {
+	if schema.MatchPreAgg() && len(schema.Options().GetDimensions()) > 0 && !schema.HasLimit() {
+		return true
+	}
+	return false
+}
+
+func MatchNoAggNoGroupLimit(schema hybridqp.Catalog) bool {
+	if !schema.HasCall() && schema.HasLimit() && !schema.HasInterval() && len(schema.Options().GetDimensions()) == 0 {
 		return true
 	}
 	return false
@@ -91,25 +107,36 @@ const (
 	AGG_INTERVAL_LIMIT
 	NO_AGG_NO_GROUP
 	AGG_GROUP
+	NO_AGG_NO_GROUP_LIMIT
 	UNKNOWN
 )
 
 type PlanTemplate struct {
-	planType PlanType
-	plan     []hybridqp.QueryNode
+	planType       PlanType
+	plan           []hybridqp.QueryNode
+	localStorePlan []hybridqp.QueryNode
 }
 
 func NewSqlPlanTemplate(t PlanType) *PlanTemplate {
 	pp := &PlanTemplate{
-		planType: t,
-		plan:     nil,
+		planType:       t,
+		plan:           nil,
+		localStorePlan: nil,
 	}
 	var err error
 	pp.plan, err = NewSqlPlanTypePool(t)
 	if err != nil {
-		panic("sql plan type init error")
+		panic(fmt.Errorf("sql plan type init error: %v", err))
 	}
 	return pp
+}
+
+func (pp *PlanTemplate) NewLocalStoreSqlPlanTemplate() {
+	var err error
+	pp.localStorePlan, err = NewLocalStoreSqlPlanTypePool(pp.planType)
+	if err != nil {
+		panic(fmt.Errorf("local store sql plan type init error: %v", err))
+	}
 }
 
 func NewStorePlanTemplate(t PlanType) *PlanTemplate {
@@ -132,6 +159,10 @@ func NewOneShardStorePlanTemplate(t PlanType) *PlanTemplate {
 
 func (pp *PlanTemplate) GetPlan() []hybridqp.QueryNode {
 	return pp.plan
+}
+
+func (pp *PlanTemplate) GetLocalStorePlan() []hybridqp.QueryNode {
+	return pp.localStorePlan
 }
 
 func NilGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) PlanType {

@@ -22,12 +22,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	libStrings "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 var DownSampleSupportAgg = map[string]bool{"first": true, "last": true, "min": true, "max": true, "sum": true, "count": true, "mean": true}

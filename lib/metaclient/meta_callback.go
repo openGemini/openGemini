@@ -116,6 +116,9 @@ func (c *SnapshotCallback) Handle(data interface{}) error {
 	if !ok {
 		return errors.New("data is not a SnapshotResponse")
 	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
 	c.Data = msg.Data
 	return nil
 }

@@ -171,7 +171,7 @@ func (sc *StreamClient) OpenFileByStoragePolicy(name string, flag int, lockFileP
 	return nil, fmt.Errorf("OpenFileByStoragePolicy(%s) failed, flag(%d) lock(%s) storagePolicy(%s)", name, flag, lockFilePath, storagePolicy)
 }
 
-func (sc *StreamClient) CopyTSMFromDFVToOBS(srcPath, dstPath, lockPath string) error {
+func (sc *StreamClient) CopyFileFromDFVToOBS(srcPath, dstPath, lockPath string) error {
 	src := C.CString(srcPath)
 	defer C.free(unsafe.Pointer(src))
 
@@ -494,7 +494,7 @@ func (sc *StreamClient) CreateFileV2(name string, lockFilePath string, priority 
 	return fd, nil
 }
 
-func (sc *StreamClient) CreateOBS(name string, lockFilePath string, priority int) (*StreamFile, error) {
+func (sc *StreamClient) CreateOBSFile(name string, lockFilePath string, priority int) (*StreamFile, error) {
 	flags := os.O_WRONLY
 	if err := sc.FileExists(name); err == nil {
 		flags = os.O_RDWR
@@ -688,7 +688,7 @@ func (si *StreamFileInfo) Sys() interface{} {
 	return nil
 }
 
-func (sc *StreamClient) IsObsStoragePolicy(path string) (bool, error) {
+func (sc *StreamClient) IsObsFile(path string) (bool, error) {
 	err := sc.FileExists(path)
 	if err != nil {
 		return false, err
@@ -810,7 +810,7 @@ func (sc *StreamClient) WriteFileV2(filename string, data []byte, lockFilePath s
 
 func (sc *StreamClient) WriteFileV3(filename string, data []byte, lockFilePath string, priority int) error {
 	_ = sc.RemoveV2(filename, lockFilePath)
-	f, err := sc.CreateOBS(filename, lockFilePath, priority)
+	f, err := sc.CreateOBSFile(filename, lockFilePath, priority)
 	if err != nil {
 		sc.Logger.Error("CreateFileV2 failed: ", zap.String("filename", filename), zap.String("lockfile", lockFilePath))
 		return err
@@ -1442,6 +1442,27 @@ func (fs *streamVfs) CopyFile(srcFile, dstFile string, opts ...FSOption) (writte
 	defer dstFd.Close()
 
 	return io.Copy(dstFd, srcFd)
+}
+
+func (fs *streamVfs) IsObsFile(path string) (bool, error) {
+	return fs.sc.IsObsFile(path)
+}
+
+func (fs *streamVfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opts ...FSOption) error {
+	var lock string
+	if err := lockOpt(&lock, opts...); err != nil {
+		return err
+	}
+	return fs.sc.CopyFileFromDFVToOBS(srcPath, dstPath, lock)
+}
+
+func (fs *streamVfs) CreateOBSFile(name string, opts ...FSOption) (File, error) {
+	var lock string
+	var priority int
+	if err := lockAndPriorityOpt(&lock, &priority, opts...); err != nil {
+		return nil, err
+	}
+	return fs.sc.CreateOBSFile(name, lock, priority)
 }
 
 func Mmap(fd int, offset int64, length int) (data []byte, err error) {

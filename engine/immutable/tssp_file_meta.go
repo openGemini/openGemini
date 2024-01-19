@@ -229,37 +229,25 @@ func (m *ColumnMeta) marshal(dst []byte) []byte {
 }
 
 func (m *ColumnMeta) unmarshal(src []byte, segs int) ([]byte, error) {
-	var err error
-	if len(src) < 2 {
-		err = fmt.Errorf("too smaller data for column name length,  %v < 2 ", len(src))
-		log.Error(err.Error())
-		return nil, err
+	name, src, err := m.unmarshalName(src)
+	if err != nil {
+		return src, err
+	}
+	m.name = stringinterner.InternSafe(name)
+
+	m.ty = src[0]
+	src, err = m.unmarshalPreagg(src[1:])
+	if err != nil {
+		return src, err
 	}
 
-	l := int(numberenc.UnmarshalUint16(src))
-	src = src[2:]
-	if len(src) < l+5 {
-		err = fmt.Errorf("too smaller data for column name,  %v < %v", len(src), l+5)
-		log.Error(err.Error())
-		return nil, err
-	}
+	return m.unmarshalEntries(src, segs)
+}
 
-	m.name = stringinterner.InternSafe(util.Bytes2str(src[:l]))
-	src = src[l:]
-
-	m.ty, src = src[0], src[1:]
-	l, src = int(numberenc.UnmarshalUint16(src)), src[2:]
-	if len(src) < l {
-		err = fmt.Errorf("too smaller data for preagg,  %v < %v", len(src), l)
-		log.Error(err.Error())
-		return nil, err
-	}
-
-	m.preAgg = append(m.preAgg[:0], src[:l]...)
-	src = src[l:]
+func (m *ColumnMeta) unmarshalEntries(src []byte, segs int) ([]byte, error) {
 	segSize := segs * SegmentLen
 	if len(src) < segSize {
-		err = fmt.Errorf("too smaller data for segment meta,  %v < %v(%v)", len(src), segSize, segs)
+		err := fmt.Errorf("too smaller data for segment meta,  %v < %v(%v)", len(src), segSize, segs)
 		log.Error(err.Error())
 		return nil, err
 	}
@@ -271,14 +259,89 @@ func (m *ColumnMeta) unmarshal(src []byte, segs int) ([]byte, error) {
 	m.entries = m.entries[:segs]
 	for i := range m.entries {
 		segData := src[:SegmentLen]
-		_, err = m.entries[i].unmarshal(segData)
+		_, err := m.entries[i].unmarshal(segData)
 		if err != nil {
 			return nil, err
 		}
 		src = src[SegmentLen:]
 	}
-
 	return src, nil
+}
+
+func (m *ColumnMeta) unmarshalPreagg(src []byte) ([]byte, error) {
+	n, src := int(numberenc.UnmarshalUint16(src)), src[2:]
+	if len(src) < n {
+		err := fmt.Errorf("too smaller data for preagg,  %v < %v", len(src), n)
+		log.Error(err.Error())
+		return src, err
+	}
+
+	m.preAgg = append(m.preAgg[:0], src[:n]...)
+	return src[n:], nil
+}
+
+func (m *ColumnMeta) unmarshalName(src []byte) (string, []byte, error) {
+	var err error
+	if len(src) < 2 {
+		err = fmt.Errorf("too smaller data for column name length,  %v < 2 ", len(src))
+		log.Error(err.Error())
+		return "", nil, err
+	}
+
+	l := int(numberenc.UnmarshalUint16(src))
+	src = src[2:]
+	if len(src) < l+5 {
+		err = fmt.Errorf("too smaller data for column name,  %v < %v", len(src), l+5)
+		log.Error(err.Error())
+		return "", nil, err
+	}
+
+	return util.Bytes2str(src[:l]), src[l:], nil
+}
+
+// Decode the column specified by the third parameter.
+func (m *ColumnMeta) unmarshalSpecific(src []byte, segs int, column string) ([]byte, bool, error) {
+	var name string
+	var err error
+	orig := src
+
+	for {
+		name, src, err = m.unmarshalName(src)
+		if err != nil {
+			return src, false, err
+		}
+
+		if name == column {
+			break
+		}
+
+		if (name > column && column != record.TimeField) || name == record.TimeField {
+			return orig, false, nil
+		}
+
+		preAggSize := int(numberenc.UnmarshalUint16(src[1:]))
+		ofs := 1 + // type
+			2 + preAggSize + // preAgg length + preAggData
+			SegmentLen*segs // segment meta
+		if len(src) < ofs {
+			err = fmt.Errorf("too smaller data for column,  %d < %d ", len(src), ofs)
+			log.Error(err.Error())
+			return orig, false, err
+		}
+		src = src[ofs:]
+		orig = src
+	}
+
+	m.name = stringinterner.InternSafe(name)
+	m.ty = src[0]
+	src, err = m.unmarshalPreagg(src[1:])
+	if err != nil {
+		return nil, false, err
+	}
+
+	src, err = m.unmarshalEntries(src, segs)
+
+	return src, true, err
 }
 
 func (m *ColumnMeta) growEntry() {
@@ -477,6 +540,58 @@ func (m *ChunkMeta) validation() {
 
 func (m *ChunkMeta) unmarshal(src []byte) ([]byte, error) {
 	var err error
+	src, err = m.unmarshalBaseAttr(src, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range m.colMeta {
+		src, err = m.colMeta[i].unmarshal(src, int(m.segCount))
+		if err != nil {
+			log.Error(err.Error())
+			return nil, err
+		}
+	}
+
+	return src, nil
+}
+
+func (m *ChunkMeta) UnmarshalWithColumns(src []byte, columns []string) ([]byte, error) {
+	// All columns are time
+	// For example: SELECT count(time) FROM xxx
+	if len(columns) == 0 || columns[0] == record.TimeField {
+		return m.unmarshal(src)
+	}
+
+	var err error
+	src, err = m.unmarshalBaseAttr(src, len(columns))
+	if err != nil {
+		return nil, err
+	}
+
+	ok := false
+	j := 0
+	for i := range columns {
+		if i > 0 && columns[i] == columns[i-1] {
+			continue
+		}
+
+		src, ok, err = m.colMeta[j].unmarshalSpecific(src, int(m.segCount), columns[i])
+		if err != nil {
+			log.Error(err.Error())
+			return nil, err
+		}
+		if ok {
+			j++
+		}
+	}
+	m.colMeta = m.colMeta[:j]
+	m.columnCount = uint32(j)
+	return src, nil
+}
+
+func (m *ChunkMeta) unmarshalBaseAttr(src []byte, columnCount int) ([]byte, error) {
+	var err error
 	if len(src) < ChunkMetaMinLen {
 		err = fmt.Errorf("to smaller data for unmarshal %v < 24", len(src))
 		log.Error(err.Error())
@@ -489,18 +604,14 @@ func (m *ChunkMeta) unmarshal(src []byte) ([]byte, error) {
 	m.columnCount, src = numberenc.UnmarshalUint32(src), src[4:]
 	m.segCount, src = numberenc.UnmarshalUint32(src), src[4:]
 
-	m.resize(int(m.columnCount), int(m.segCount))
+	if columnCount == 0 {
+		columnCount = int(m.columnCount)
+	}
+
+	m.resize(columnCount, int(m.segCount))
 	for i := range m.timeRange {
 		tr := &m.timeRange[i]
 		src, err = tr.unmarshal(src)
-		if err != nil {
-			log.Error(err.Error())
-			return nil, err
-		}
-	}
-
-	for i := range m.colMeta {
-		src, err = m.colMeta[i].unmarshal(src, int(m.segCount))
 		if err != nil {
 			log.Error(err.Error())
 			return nil, err

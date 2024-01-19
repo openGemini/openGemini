@@ -668,10 +668,11 @@ func UnmarshalQueryNode(buf []byte, shardNum int, opt hybridqp.Options) (hybridq
 	if planType != UNKNOWN {
 		templatePlan := GetStorePlanTemplate(shardNum, planType)
 		if templatePlan != nil && !schema.Options().HaveOnlyCSStore() {
-			newPlan, err := NewPlanBySchemaAndSrcPlan(schema, templatePlan, nil)
+			newPlan, err := NewPlanBySchemaAndSrcPlan(schema, templatePlan, nil, false)
 			if err != nil {
 				return nil, err
 			}
+			PrintPlan("store template plan", newPlan)
 			return newPlan, nil
 		}
 	}
@@ -680,13 +681,14 @@ func UnmarshalQueryNode(buf []byte, shardNum int, opt hybridqp.Options) (hybridq
 	if err != nil {
 		return nil, err
 	}
-
+	PrintPlan("optimized plan", node)
 	planner := BuildHeuristicPlannerForStore()
 	planner.SetRoot(node)
 	best := planner.FindBestExp()
 	if schema.Options().HaveOnlyCSStore() {
 		ReWriteArgs(best, schema.Options().IsUnifyPlan())
 	}
+	PrintPlan("store optimize plan", best)
 	return best, nil
 }
 

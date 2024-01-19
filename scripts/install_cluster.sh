@@ -3,12 +3,6 @@
 #	Shell script to install openGemini as a cluster at one node.
 #
 
-declare -a nodes[3]
-for((i = 1; i < 4; i++))
-do
-    nodes[$i]=127.0.0.$i
-done
-
 if [ "$(uname -s)" == "Darwin" ]; then
   ps -ef | grep -v grep | grep ts-store | grep $USER > /dev/null
   if [ $? == 0 ];then
@@ -54,6 +48,12 @@ else
   echo "not support the platform": $(uname)
   exit 1
 fi
+
+declare -a nodes[3]
+for((i = 1; i < 4; i++))
+do
+    nodes[$i]=127.0.0.$i
+done
 
 # generate config
 for((i = 1; i <= 3; i++))

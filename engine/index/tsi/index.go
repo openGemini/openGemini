@@ -56,6 +56,7 @@ const (
 	Field
 	TimeCluster
 	BloomFilter
+	BloomFilterFullText
 	MinMax
 	Set
 	IndexTypeAll

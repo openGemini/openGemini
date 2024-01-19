@@ -350,7 +350,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -574,7 +574,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -798,7 +798,7 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1021,7 +1021,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1240,7 +1240,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1639,7 +1639,7 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				t.Fatal(err)
 			}
@@ -1797,7 +1797,7 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				t.Fatal(err)
 			}
@@ -1821,7 +1821,7 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2024,7 +2024,7 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
 			dataFilePath := msb.FileName.String()
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation)
+			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
 			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
 				t.Fatal(err)
 			}
@@ -2048,7 +2048,7 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2226,7 +2226,7 @@ func TestNewDetachedMsBuilderError(t *testing.T) {
 	defer store.Close()
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 	obsOpts := &obs.ObsOptions{}
-	_, err := NewDetachedMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE, obsOpts, nil)
+	_, err := NewDetachedMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE, obsOpts, nil, false)
 	require.Equal(t, err, errors.New("endpoint is not set"))
 }
 
@@ -2329,7 +2329,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2497,7 +2497,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2655,7 +2655,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 			t.Fatalf("meta index not find")
 		}
 
-		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, nil, fileops.IO_PRIORITY_LOW_READ)
+		cm, err := f.ChunkMeta(midx.id, midx.offset, midx.size, midx.count, 0, nil, fileops.IO_PRIORITY_LOW_READ)
 		if err != nil {
 			t.Fatal(err)
 		}

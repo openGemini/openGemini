@@ -22,12 +22,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

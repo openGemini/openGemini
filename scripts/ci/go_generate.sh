@@ -4,7 +4,20 @@
 
 set -e
 
+has_proto=$(grep "github.com/gogo/protobuf/proto" go.mod | grep -v "indirect" | wc -l)
+
+if [[ $has_proto -ne 0 ]]; then
+    echo "Don't import github.com/gogo/protobuf/proto"
+    echo "Please execute make go-generate"
+    exit 1
+fi
+
 go generate -x ./...
+
+sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/influxql/internal/internal.pb.go
+sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/meta/proto/meta.pb.go
+sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/protobuf/proto/test_proto/test.pb.go
+
 
 # for goyacc
 for i in `find . -name "*.y"`

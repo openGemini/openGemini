@@ -23,12 +23,12 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/hashicorp/raft"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
 )
 

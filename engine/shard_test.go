@@ -50,6 +50,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
@@ -4686,7 +4687,6 @@ func TestWriteDetachedDataV2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	flushTimes := 3
 	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
 	for i := 0; i < flushTimes; i++ {
@@ -4695,6 +4695,171 @@ func TestWriteDetachedDataV2(t *testing.T) {
 	}
 
 	require.Equal(t, 4*100, int(sh.rowCount))
+	time.Sleep(time.Second * 1)
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteFullTextIndexV1(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(102)
+	immutable.SetDetachedFlushEnabled(true)
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"field1_string"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
+		Name:       defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:        sortKey,
+			PrimaryKey:     primaryKey,
+			CompactionType: config.BLOCK,
+		},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
+			Oids:      []uint32{5},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mutable.SetWriteChunk(msInfo, rec)
+	// wait mem table flush
+	sh.commitSnapshot(sh.activeTbl)
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	time.Sleep(time.Second * 1)
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteFullTextIndexV2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(102)
+	immutable.SetDetachedFlushEnabled(true)
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"field1_string"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
+		Name:       defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:        sortKey,
+			PrimaryKey:     primaryKey,
+			CompactionType: config.BLOCK,
+		},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
+			Oids:      []uint32{5},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flushTimes := 2
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	for i := 0; i < flushTimes; i++ {
+		mutable.SetWriteChunk(msInfo, rec)
+		sh.commitSnapshot(sh.activeTbl)
+	}
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	time.Sleep(time.Second * 1)
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteFullTextIndexV3(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(102)
+	immutable.SetDetachedFlushEnabled(false)
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	list := make([]*influxql.IndexList, 1)
+	bfColumn := []string{"field1_string"}
+	iList := influxql.IndexList{IList: bfColumn}
+	list[0] = &iList
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
+		Name:       defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:        sortKey,
+			PrimaryKey:     primaryKey,
+			CompactionType: config.BLOCK,
+		},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
+			Oids:      []uint32{5},
+			IndexList: list},
+	}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mutable.SetWriteChunk(msInfo, rec)
+	// wait mem table flush
+	sh.commitSnapshot(sh.activeTbl)
+
+	require.Equal(t, 4*100, int(sh.rowCount))
+	time.Sleep(time.Second * 1)
 	err = closeShard(sh)
 	if err != nil {
 		t.Fatal(err)

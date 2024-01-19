@@ -32,6 +32,7 @@ var TemplateSql []string = []string{
 	"SELECT max(f1) from mst WHERE time < 2 group by time(1ns) limit 1",
 	"SELECT * from mst where f1 > 1 and (tag1 = 'tag1val') and time > 1 and time < 2",
 	"SELECT last(*) from mst group by tag1",
+	"SELECT f1 from mst where tag1 = 'tag1val' order by time limit 1",
 }
 
 type PlanTypeInitShardMapper struct {
@@ -148,7 +149,7 @@ func (pts *PlanTypeInitShard) CreateLogicalPlan(ctx context.Context, sources inf
 	return plan.(LogicalPlan), pErr
 }
 func (pts *PlanTypeInitShard) GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error) {
-	return []hybridqp.Trait{}, nil
+	return []hybridqp.Trait{&RemoteQuery{}}, nil
 }
 
 func (pts *PlanTypeInitShard) Close() error {
@@ -189,11 +190,15 @@ func NewSqlPlanTypePool(planType PlanType) ([]hybridqp.QueryNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan, err := preparedStmt.BuildLogicalPlan(context.Background())
+	plan, _, err := preparedStmt.BuildLogicalPlan(context.Background())
 	if err != nil {
 		return nil, err
 	}
 	return GetPlanSliceByTree(plan), nil
+}
+
+func NewLocalStoreSqlPlanTypePool(planType PlanType) ([]hybridqp.QueryNode, error) {
+	return NewSqlPlanTypePool(planType)
 }
 
 func GetPlanSliceByTreeDFS(plan hybridqp.QueryNode, dstPlan *[]hybridqp.QueryNode) error {

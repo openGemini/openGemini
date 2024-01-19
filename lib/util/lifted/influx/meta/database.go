@@ -12,9 +12,9 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 import (
 	"sort"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/obs"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 // DatabaseInfo represents information about a database in the system.

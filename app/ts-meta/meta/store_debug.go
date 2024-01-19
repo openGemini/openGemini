@@ -17,10 +17,10 @@ limitations under the License.
 package meta
 
 import (
-	"github.com/gogo/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	mproto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
 func (s *Store) markTakeOver(enable bool) error {

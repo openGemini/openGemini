@@ -15,7 +15,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/deckarep/golang-set v1.8.0
 	github.com/docker/go-units v0.5.0
-	github.com/gogo/protobuf v1.3.2
 	github.com/golang-jwt/jwt/v5 v5.0.0
 	github.com/golang/snappy v0.0.4
 	github.com/hashicorp/memberlist v0.3.1
@@ -84,6 +83,7 @@ require (
 	github.com/go-chi/chi v4.1.0+incompatible // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gofrs/uuid v3.3.0+incompatible // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/btree v1.0.0 // indirect
@@ -171,7 +171,7 @@ replace (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible => github.com/dgrijalva/jwt-go/v4 v4.0.0-preview1
 	github.com/labstack/echo/v4 v4.2.1 => github.com/labstack/echo/v4 v4.11.3
 	github.com/mattn/go-sqlite3 v1.11.0 => github.com/mattn/go-sqlite3 v1.14.18
-	github.com/openGemini/openGemini/open_src/influx/influxql => ./protocol/influxql
+	github.com/openGemini/openGemini/lib/util/lifted/influx/influxql => ./protocol/influxql
 	github.com/valyala/fasthttp v1.30.0 => github.com/valyala/fasthttp v1.51.0
 	go.etcd.io/etcd/api/v3 v3.5.0 => go.etcd.io/etcd/api/v3 v3.5.1
 )

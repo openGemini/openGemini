@@ -136,6 +136,15 @@ type VFS interface {
 	// Truncate changes the size of the file to size.
 	// the optional opt is: (FileLockOption)
 	Truncate(name string, size int64, opt ...FSOption) error
+
+	// IsObsFile determines whether a file is stored in OBS when use streamfs
+	IsObsFile(path string) (bool, error)
+
+	// CopyFileFromDFVToOBS copy a file from DFV TO OBS when use streamfs
+	CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error
+
+	// CreateOBSFile create a new file in OBS when use streamfs
+	CreateOBSFile(name string, opt ...FSOption) (File, error)
 }
 
 // Open opens the named file with specified options.
@@ -250,6 +259,24 @@ func CreateTime(name string) (*time.Time, error) {
 func Truncate(name string, size int64) error {
 	t := GetFsType(name)
 	return GetFs(t).Truncate(name, size)
+}
+
+// IsObsFile determines whether a file is stored in OBS when use streamfs
+func IsObsFile(path string) (bool, error) {
+	t := GetFsType(path)
+	return GetFs(t).IsObsFile(path)
+}
+
+// CopyFileFromDFVToOBS copy a file from DFV TO OBS when use streamfs
+func CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
+	t := GetFsType(srcPath)
+	return GetFs(t).CopyFileFromDFVToOBS(srcPath, dstPath, opt...)
+}
+
+// CreateOBSFile create a new file in OBS when use streamfs
+func CreateOBSFile(name string, opt ...FSOption) (File, error) {
+	t := GetFsType(name)
+	return GetFs(t).CreateOBSFile(name, opt...)
 }
 
 func opsStatEnd(startTime int64, opsType int, bytes int64) {

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
@@ -260,6 +261,13 @@ func (c *StreamWriteFile) ChangeColumn(ref record.Field) error {
 		return err
 	}
 	return nil
+}
+
+func (c *StreamWriteFile) SortColumns() {
+	cols := c.dstMeta.colMeta
+	sort.Slice(cols[:len(cols)-1], func(i, j int) bool {
+		return cols[i].name < cols[j].name
+	})
 }
 
 func (c *StreamWriteFile) WriteCurrentMeta() error {

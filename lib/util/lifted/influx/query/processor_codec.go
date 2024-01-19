@@ -254,19 +254,18 @@ func encodeIndexRelation(indexR *influxql.IndexRelation) *internal.IndexRelation
 		pb.IndexLists[i] = indexList
 	}
 
-	if indexR.IndexOptions != nil {
-		pb.IndexOptions = make(map[string]*internal.IndexOptions, len(indexR.IndexOptions))
-		for i, indexOptions := range indexR.IndexOptions {
-			if indexOptions != nil {
-				pb.IndexOptions[i] = &internal.IndexOptions{
-					Infos: make([]*internal.IndexOption, len(indexOptions)),
-				}
-				for j, o := range indexOptions {
-					pb.IndexOptions[i].Infos[j] = encodeIndexOption(o)
-				}
+	pb.IndexOptions = make([]*internal.IndexOptions, len(indexR.IndexOptions))
+	for i, indexOptions := range indexR.IndexOptions {
+		if indexOptions != nil {
+			pb.IndexOptions[i] = &internal.IndexOptions{
+				Infos: make([]*internal.IndexOption, len(indexOptions.Options)),
+			}
+			for j, o := range indexOptions.Options {
+				pb.IndexOptions[i].Infos[j] = encodeIndexOption(o)
 			}
 		}
 	}
+
 	return pb
 }
 
@@ -333,15 +332,15 @@ func decodeIndexRelation(pb *internal.IndexRelation) *influxql.IndexRelation {
 		}
 	}
 	indexOptions := pb.GetIndexOptions()
-	if indexOptions != nil {
-		indexR.IndexOptions = make(map[string][]*influxql.IndexOption, len(indexOptions))
-		for i, idxOptions := range indexOptions {
+	indexR.IndexOptions = make([]*influxql.IndexOptions, len(indexOptions))
+	for i, idxOptions := range indexOptions {
+		if idxOptions != nil {
 			infos := idxOptions.GetInfos()
-			if infos != nil {
-				indexR.IndexOptions[i] = make([]*influxql.IndexOption, len(infos))
-				for j, o := range infos {
-					indexR.IndexOptions[i][j] = decodeIndexOption(o)
-				}
+			indexR.IndexOptions[i] = &influxql.IndexOptions{
+				Options: make([]*influxql.IndexOption, len(infos)),
+			}
+			for j, o := range infos {
+				indexR.IndexOptions[i].Options[j] = decodeIndexOption(o)
 			}
 		}
 	}

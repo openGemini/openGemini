@@ -341,12 +341,12 @@ func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInf
 				IList: []string{"tags", "content"},
 			},
 		},
-		IndexOptions: map[string][]*influxql.IndexOption{
-			"tags": []*influxql.IndexOption{
-				{Tokens: opt.TagsSplit, Tokenizers: "standard"},
-			},
-			"content": []*influxql.IndexOption{
-				{Tokens: opt.SplitChar, Tokenizers: "standard"},
+		IndexOptions: []*influxql.IndexOptions{
+			{
+				Options: []*influxql.IndexOption{
+					{Tokens: opt.TagsSplit, Tokenizers: "standard"},
+					{Tokens: opt.SplitChar, Tokenizers: "standard"},
+				},
 			},
 		},
 	}

@@ -126,6 +126,7 @@ func (a *DataACK) Block() error {
 
 func (a *DataACK) Close() {
 	a.closeSignal()
+	a.handler = nil
 }
 
 func (a *DataACK) closeSignal() {

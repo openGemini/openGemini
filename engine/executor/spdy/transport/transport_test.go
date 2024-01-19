@@ -258,6 +258,7 @@ func TestTransport_Error2(t *testing.T) {
 	transport.NewNodeManager().Add(nodeID, address)
 	server, err := startServer(address, 1024)
 	require.NoError(t, err)
+	defer server.Stop()
 
 	client := &RPCClient{}
 	for i := 0; i < 10; i++ {
@@ -268,10 +269,7 @@ func TestTransport_Error2(t *testing.T) {
 	trans, err := transport.NewTransport(nodeID, spdy.SelectRequest, client)
 	require.NoError(t, err)
 
-	server.Stop()
-	node := transport.NewNodeManager().Get(nodeID)
-	node.Close()
-
+	require.NoError(t, trans.Requester().Session().SendFin(nil))
 	assert.NotEmpty(t, trans.Send(&Message{data: "12345678"}))
 }
 

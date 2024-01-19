@@ -38,7 +38,7 @@ type baseHandler struct {
 	cm *ClusterManager
 }
 
-func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint64) error {
+func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint64, from eventFrom) error {
 	// do not take over meta
 	if m.Tags["role"] == "meta" || uint64(e.EventTime) == 0 {
 		return nil
@@ -46,7 +46,8 @@ func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint6
 
 	bh.cm.addEventMap(m.Name, e)
 	logger.GetLogger().Info("handle event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
-		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)))
+		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)),
+		zap.Any("from", from))
 	if bh.cm.isStopped() {
 		return nil
 	}
@@ -107,7 +108,7 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 		if e.event.Members[i].Tags["role"] == "meta" {
 			continue
 		}
-		err = jh.handleEvent(&e.event.Members[i], &e.event, id)
+		err = jh.handleEvent(&e.event.Members[i], &e.event, id, e.from)
 		if err != nil {
 			return err
 		}
@@ -132,7 +133,7 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 	return nil
 }
 
-type failHandle func(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error
+type failHandle func(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error
 
 var failHandler []failHandle
 
@@ -147,10 +148,12 @@ type failedHandler struct {
 	baseHandler
 }
 
-func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error {
-	err := fh.handleEvent(member, event, id)
+func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+	err := fh.handleEvent(member, event, id, from)
 	if err != nil {
-		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()), zap.Error(err))
+		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()),
+			zap.Int("status", int(member.Status)), zap.Uint64("lTime", uint64(event.EventTime)),
+			zap.Any("from", from), zap.Error(err))
 		return err
 	}
 	failpoint.Label("retry")
@@ -172,10 +175,12 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 	return fh.failOverForRep(id)
 }
 
-func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member) error {
-	err := fh.handleEvent(member, event, id)
+func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+	err := fh.handleEvent(member, event, id, from)
 	if err != nil {
-		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()), zap.Error(err))
+		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()),
+			zap.Int("status", int(member.Status)), zap.Uint64("lTime", uint64(event.EventTime)),
+			zap.Any("from", from), zap.Error(err))
 		return err
 	}
 	failpoint.Label("retry")
@@ -204,7 +209,7 @@ func (fh *failedHandler) handle(e *memberEvent) error {
 		if err != nil {
 			panic(err)
 		}
-		err = failHandler[config.GetHaPolicy()](fh, id, &e.event, &e.event.Members[i])
+		err = failHandler[config.GetHaPolicy()](fh, id, &e.event, &e.event.Members[i], e.from)
 		if err != nil {
 			return err
 		}

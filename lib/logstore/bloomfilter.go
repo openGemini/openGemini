@@ -19,6 +19,7 @@ package logstore
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"sync"
 
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -28,8 +29,9 @@ import (
 const CurrentLogTokenizerVersion = 5
 
 var (
-	Table            = crc32.MakeTable(crc32.Castagnoli)
-	BloomFilterIndex = "bloomfilter"
+	Table               = crc32.MakeTable(crc32.Castagnoli)
+	BloomFilterIndex    = "bloomfilter"
+	BloomFilterFullText = "bloomfilter_fulltext"
 )
 
 func FlushVerticalFilter(filterVerBuffer, filterLogBuffer []byte) []byte {
@@ -49,8 +51,17 @@ func FlushVerticalFilter(filterVerBuffer, filterLogBuffer []byte) []byte {
 }
 
 // GenSchemaIdxs get bloom filter cols index in the schema
-func GenSchemaIdxs(schema record.Schemas, skipIndexRelation *influxql.IndexRelation) []int {
+func GenSchemaIdxs(schema record.Schemas, skipIndexRelation *influxql.IndexRelation, fullTextIdx bool) []int {
 	var res []int
+	if fullTextIdx {
+		for i := range schema {
+			if schema[i].IsString() {
+				res = append(res, i)
+			}
+		}
+		return res
+	}
+
 	for i := range skipIndexRelation.IndexNames {
 		if skipIndexRelation.IndexNames[i] != BloomFilterIndex {
 			continue
@@ -65,4 +76,37 @@ func GenSchemaIdxs(schema record.Schemas, skipIndexRelation *influxql.IndexRelat
 		}
 	}
 	return res
+}
+
+func IsFullTextIdx(indexRelation *influxql.IndexRelation) bool {
+	if indexRelation == nil {
+		return false
+	}
+
+	for i := range indexRelation.IndexNames {
+		if indexRelation.IndexNames[i] == BloomFilterFullText {
+			return true
+		}
+	}
+	return false
+}
+
+var BloomFilterBufferPool sync.Pool
+
+type multiCosBuf [][]byte
+
+func GetBloomFilterBuf(cols int) *multiCosBuf {
+	buf := BloomFilterBufferPool.Get()
+	if buf == nil {
+		multiBuf := make(multiCosBuf, cols)
+		return &multiBuf
+	}
+	return buf.(*multiCosBuf)
+}
+
+func PutBloomFilterBuf(buf *multiCosBuf) {
+	for i := range *buf {
+		(*buf)[i] = (*buf)[i][:0]
+	}
+	BloomFilterBufferPool.Put(buf)
 }

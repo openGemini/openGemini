@@ -717,3 +717,15 @@ func (o *obsFs) Truncate(name string, size int64, opt ...FSOption) error {
 	}
 	return fd.Close()
 }
+
+func (o *obsFs) IsObsFile(path string) (bool, error) {
+	return false, nil
+}
+
+func (o *obsFs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
+	return nil
+}
+
+func (o *obsFs) CreateOBSFile(name string, opt ...FSOption) (File, error) {
+	return nil, nil
+}

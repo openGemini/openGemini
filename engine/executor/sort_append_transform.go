@@ -113,24 +113,29 @@ func (t *SortAppendTransf) appendMergeTimeAndColumns(trans *MergeTransform, i in
 	trans.CoProcessor.WorkOnChunk(chunk, trans.NewChunk, trans.param)
 }
 
+func (t *SortAppendTransf) binarySearch(item Item, low int, high int, b *SortedBreakPoint, opt query.ProcessorOptions) int {
+	return sort.Search(high-low, func(i int) bool {
+		tagIndex := sort.Search(len(item.ChunkBuf.TagIndex()), func(j int) bool { return item.ChunkBuf.TagIndex()[j] > i+low }) - 1
+		tag := item.ChunkBuf.Tags()[tagIndex]
+		return !CompareSortedAppendBreakPoint(item, i+low, tag, b, opt)
+	}) + low
+}
+
 func (t *SortAppendTransf) updateWithSingleChunk(trans *MergeTransform) {
 	tracing.StartPP(trans.ppForCalculate)
 	defer func() {
 		tracing.EndPP(trans.ppForCalculate)
 	}()
 
-	curr := trans.currItem
-	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
-		trans.AddTagAndIndexes(curr.ChunkBuf.Tags()[curr.TagIndex], trans.NewChunk.Len(), i, true)
-		t.appendMergeTimeAndColumns(trans, i, i+1)
-		if curr.TagSwitch(i) {
-			curr.TagIndex += 1
-		}
-		if curr.IntervalIndex < curr.IntervalLen()-1 && i == curr.ChunkBuf.IntervalIndex()[curr.IntervalIndex+1] {
-			curr.IntervalIndex += 1
-		}
-		curr.Index += 1
+	if trans.currItem.Index == 0 && trans.NewChunk.Len() == 0 {
+		trans.currItem.ChunkBuf.CopyTo(trans.NewChunk)
+		trans.NewChunk.SetName(trans.GetMstName())
+		trans.currItem.Index = trans.currItem.ChunkBuf.Len()
+		trans.currItem.TagIndex = trans.currItem.ChunkBuf.TagLen() - 1
+		trans.currItem.IntervalIndex = trans.currItem.ChunkBuf.IntervalLen() - 1
+		return
 	}
+	trans.updateWithIndexByIntervalAndTag(trans.currItem.ChunkBuf.Len())
 }
 
 func (t *SortAppendTransf) updateWithBreakPoint(trans *MergeTransform) {
@@ -140,21 +145,14 @@ func (t *SortAppendTransf) updateWithBreakPoint(trans *MergeTransform) {
 	}()
 
 	curr := trans.currItem
-	for i := curr.Index; i < curr.ChunkBuf.Len(); i++ {
-		tag := curr.ChunkBuf.Tags()[curr.TagIndex]
-		if !CompareSortedAppendBreakPoint(*curr, curr.Index, tag, trans.BreakPoint.(*SortedBreakPoint), *trans.HeapItems.GetOption()) {
-			return
-		}
-		trans.AddTagAndIndexes(tag, trans.NewChunk.Len(), i, true)
-		t.appendMergeTimeAndColumns(trans, i, i+1)
-		if curr.TagSwitch(i) {
-			curr.TagIndex += 1
-		}
-		if curr.IntervalIndex < curr.IntervalLen()-1 && i == curr.ChunkBuf.IntervalIndex()[curr.IntervalIndex+1] {
-			curr.IntervalIndex += 1
-		}
-		curr.Index += 1
+	chunk := trans.currItem.ChunkBuf
+	opt := trans.HeapItems.GetOption()
+	if CompareSortedAppendBreakPoint(*curr, chunk.Len()-1, chunk.Tags()[chunk.TagLen()-1], trans.BreakPoint.(*SortedBreakPoint), *opt) {
+		trans.UpdateWithSingleChunk()
+		return
 	}
+	end := t.binarySearch(*curr, curr.Index, chunk.Len(), trans.BreakPoint.(*SortedBreakPoint), *opt)
+	trans.updateWithIndexByIntervalAndTag(end)
 }
 
 func CompareSortedAppendBreakPoint(item Item, in int, tag ChunkTags, b *SortedBreakPoint, opt query.ProcessorOptions) bool {

@@ -90,6 +90,9 @@ func (c *indexWriter) DataSize() int64 {
 func (c *indexWriter) ChunkMetaSize() int64 {
 	panic("ChunkMetaSize not implement for indexWriter")
 }
+func (c *indexWriter) ChunkMetaBlockSize() int64 {
+	return 0
+}
 func (c *indexWriter) GetFileWriter() fileops.BasicFileWriter {
 	return c.fileWriter
 }

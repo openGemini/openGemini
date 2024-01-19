@@ -37,7 +37,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/gogo/protobuf/proto"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
@@ -47,6 +46,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -2506,7 +2506,7 @@ func (data *Data) UpdateShardInfoTier(shardID uint64, shardTier uint64, dbName, 
 	return fmt.Errorf("cannot find shard %d for rp %s on database %s", shardID, rpName, dbName)
 }
 
-func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossipAddr string) error {
+func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
 	// do not take over
 	if !data.TakeOverEnabled {
 		return nil
@@ -2534,7 +2534,7 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 	}
 	if dn.GossipAddr == "" {
 		host, _, _ := net.SplitHostPort(dn.Host)
-		dn.GossipAddr = fmt.Sprintf("%s:%s", host, gossipAddr)
+		dn.GossipAddr = fmt.Sprintf("%s:%s", host, gossipPort)
 	}
 
 	data.updatePtViewStatus(id, Offline)

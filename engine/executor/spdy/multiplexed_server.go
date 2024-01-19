@@ -28,8 +28,9 @@ type MultiplexedServer struct {
 	cfg  config.Spdy
 	conn *MultiplexedConnection
 
-	reactors  map[uint64]*Reactor
-	factories []EventHandlerFactory
+	reactorsGuard sync.RWMutex
+	reactors      map[uint64]*Reactor
+	factories     []EventHandlerFactory
 
 	stopped    bool
 	stopGuard  sync.RWMutex
@@ -64,13 +65,29 @@ func (s *MultiplexedServer) run() {
 			s.stopWithErr(err)
 			return
 		}
-		reactor := newReactor(s.cfg, session, s.factories)
-		if _, ok := s.reactors[session.ID()]; ok {
+
+		s.reactorsGuard.RLock()
+		_, ok := s.reactors[session.ID()]
+		s.reactorsGuard.RUnlock()
+
+		if ok {
 			s.stopWithErr(errno.NewError(errno.DuplicateConnection))
 			return
 		}
+
+		reactor := newReactor(s.cfg, session, s.factories)
+		s.reactorsGuard.Lock()
 		s.reactors[session.ID()] = reactor
-		go reactor.HandleEvents()
+		s.reactorsGuard.Unlock()
+
+		go func(r *Reactor) {
+			defer func() {
+				s.reactorsGuard.Lock()
+				delete(s.reactors, r.session.ID())
+				s.reactorsGuard.Unlock()
+			}()
+			r.HandleEvents()
+		}(reactor)
 	}
 }
 
@@ -92,9 +109,11 @@ func (s *MultiplexedServer) Stop() {
 }
 
 func (s *MultiplexedServer) closeReactors() {
+	s.reactorsGuard.RLock()
 	for _, r := range s.reactors {
 		r.Close()
 	}
+	s.reactorsGuard.RUnlock()
 }
 
 func (s *MultiplexedServer) stopWithErr(err error) {

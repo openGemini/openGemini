@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hashicorp/raft"
 	ast "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -65,10 +66,14 @@ var mockAfterIndexFail bool = true
 
 type MockRPCStore struct {
 	MetaStoreInterface
+
+	stat raft.RaftState
 }
 
 func NewMockRPCStore() *MockRPCStore {
-	return &MockRPCStore{}
+	return &MockRPCStore{
+		stat: raft.Leader,
+	}
 }
 
 func (s *MockRPCStore) leader() string {
@@ -103,10 +108,8 @@ func (s *MockRPCStore) getSnapshot(role metaclient.Role) []byte {
 	return []byte{255, 128}
 }
 
-var isCandidateTrue bool = false
-
-func (s *MockRPCStore) isCandidate() bool {
-	return isCandidateTrue
+func (s *MockRPCStore) IsLeader() bool {
+	return s.stat == raft.Leader
 }
 
 func (s *MockRPCStore) apply(b []byte) error {

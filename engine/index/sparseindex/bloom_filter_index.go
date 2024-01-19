@@ -37,6 +37,8 @@ import (
 
 const (
 	BloomFilterFilePrefix = "bloomfilter_" // bloomfilter_${columnName}.idx
+	FullTextIndex         = "fullText"
+	FullTextIdxColumnCnt  = 1
 	BloomFilterFileSuffix = ".idx"
 )
 
@@ -128,16 +130,21 @@ func (r *BloomFilterIndexReader) Close() error {
 }
 
 // GetLocalBloomFilterBlockCnts get one local bloomFilter col's  block count,if not exist return 0
-func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record.Schemas,
-	indexRelation *influxql.IndexRelation) int64 {
-	schemaIdx := logstore.GenSchemaIdxs(recSchema, indexRelation)
-	if len(schemaIdx) == 0 {
-		logger.GetLogger().Error("bloom filter cols is not exist in the schema", zap.String("measurement name", msName))
-		return 0
+func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record.Schemas, indexRelation *influxql.IndexRelation,
+	fullTextIdx bool) int64 {
+	var localPath string
+	if fullTextIdx {
+		localPath = GetFullTextIdxFilePath(dir, msName)
+	} else {
+		schemaIdx := logstore.GenSchemaIdxs(recSchema, indexRelation, fullTextIdx)
+		if len(schemaIdx) == 0 {
+			logger.GetLogger().Error("bloom filter cols is not exist in the schema", zap.String("measurement name", msName))
+			return 0
+		}
+		fieldName := recSchema[schemaIdx[0]].Name
+		localPath = GetBloomFilterFilePath(dir, msName, fieldName)
 	}
-	fieldName := recSchema[schemaIdx[0]].Name
-	filterDataDiskSize := logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize
-	localPath := GetBloomFilterFilePath(dir, msName, fieldName)
+
 	lock := fileops.FileLockOption(lockPath)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 	fd, err := fileops.OpenFile(localPath, os.O_CREATE, 0640, lock, pri)
@@ -150,9 +157,14 @@ func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record
 	}
 
 	localFileInfo, _ := fd.Stat()
+	filterDataDiskSize := logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize
 	return localFileInfo.Size() / filterDataDiskSize
 }
 
 func GetBloomFilterFilePath(dir, msName, fieldName string) string {
 	return path.Join(dir, msName, BloomFilterFilePrefix+fieldName+BloomFilterFileSuffix)
+}
+
+func GetFullTextIdxFilePath(dir, msName string) string {
+	return path.Join(dir, msName, BloomFilterFilePrefix+FullTextIndex+BloomFilterFileSuffix)
 }

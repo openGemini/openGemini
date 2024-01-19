@@ -80,6 +80,10 @@ func (w *tsspFileWriter) ChunkMetaSize() int64 {
 	return int64(w.cmw.Size())
 }
 
+func (w *tsspFileWriter) ChunkMetaBlockSize() int64 {
+	return int64(w.cmw.BlockSize())
+}
+
 func (w *tsspFileWriter) WriteData(b []byte) (int, error) {
 	n, err := w.fileWriter.Write(b)
 	if err != nil {
@@ -339,6 +343,10 @@ func (w *indexWriter) Size() int {
 	return w.wn
 }
 
+func (w *indexWriter) BlockSize() int {
+	return w.indexBlockSize
+}
+
 func (w *indexWriter) bytes() []byte {
 	return w.buf[:w.n]
 }
@@ -395,7 +403,7 @@ func (w *indexWriter) CopyTo(to io.Writer) (int, error) {
 func (w *indexWriter) SwitchMetaBuffer() (int, error) {
 	if w.cacheMeta {
 		w.metas = append(w.metas, w.buf)
-		w.buf = getMetaBlockBuffer(w.blockSize)
+		w.buf = getMetaBlockBuffer(len(w.buf))
 	}
 	size := w.indexBlockSize
 	w.indexBlockSize = 0
@@ -570,6 +578,10 @@ func (w *obsFileWriter) ChunkMetaSize() int64 {
 	return w.metaWriter.Size()
 }
 
+func (w *obsFileWriter) ChunkMetaBlockSize() int64 {
+	return 0
+}
+
 func (w *obsFileWriter) WriteData(b []byte) (int, error) {
 	return w.dataWriter.Write(b)
 }
@@ -622,10 +634,8 @@ type obsIndexWriter struct {
 	bloomfilterWriters   []*obsWriter
 }
 
-func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string) (fileops.MetaWriter, error) {
-	w := &obsIndexWriter{
-		bloomfilterWriters: make([]*obsWriter, len(bfCols)),
-	}
+func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string, fullTextIdx bool) (fileops.MetaWriter, error) {
+	w := newObsIndexWriter(bfCols, fullTextIdx)
 
 	var err error
 	// metaindex
@@ -649,11 +659,33 @@ func newObsIndexFileWriter(path string, obsOpts *obs.ObsOptions, bfCols []string
 		return nil, err
 	}
 
-	// bloomfilter writer
-	for i := 0; i < len(bfCols); i++ {
-		w.bloomfilterWriters[i], err = NewObsWriter(path, sparseindex.BloomFilterFilePrefix+bfCols[i]+sparseindex.BloomFilterFileSuffix, obsOpts)
+	// new bloomfilter writer
+	return w.newBloomFilterWriter(path, bfCols, fullTextIdx, obsOpts)
+}
+
+func newObsIndexWriter(bfCols []string, fullTextIdx bool) *obsIndexWriter {
+	if fullTextIdx {
+		return &obsIndexWriter{
+			bloomfilterWriters: make([]*obsWriter, sparseindex.FullTextIdxColumnCnt),
+		}
+	}
+	return &obsIndexWriter{
+		bloomfilterWriters: make([]*obsWriter, len(bfCols)),
+	}
+}
+
+func (w *obsIndexWriter) newBloomFilterWriter(path string, bfCols []string, fullTextIdx bool, obsOpts *obs.ObsOptions) (fileops.MetaWriter, error) {
+	var err error
+	var fileName string
+	for i := 0; i < len(w.bloomfilterWriters); i++ {
+		if fullTextIdx {
+			fileName = sparseindex.BloomFilterFilePrefix + sparseindex.FullTextIndex + sparseindex.BloomFilterFileSuffix
+		} else {
+			fileName = sparseindex.BloomFilterFilePrefix + bfCols[i] + sparseindex.BloomFilterFileSuffix
+		}
+		w.bloomfilterWriters[i], err = NewObsWriter(path, fileName, obsOpts)
 		if err != nil {
-			log.Error("NewObsWriter for bloomfilter failed", zap.String("path", path), zap.String("path", bfCols[i]), zap.Error(err))
+			log.Error("NewObsWriter for bloomfilter failed", zap.String("path", path), zap.Bool("fullTextIndex", fullTextIdx), zap.String("path", bfCols[i]), zap.Error(err))
 			return nil, err
 		}
 	}

@@ -28,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
@@ -73,7 +72,7 @@ type TSSPFile interface {
 	Inuse() bool
 	MetaIndexAt(idx int) (*MetaIndex, error)
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
-	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error)
+	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *ChunkMetaContext, ioPriority int) (*ChunkMeta, error)
 	ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *ReadContext, ioPriority int) (*record.Record, error)
 	ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
@@ -439,13 +438,13 @@ func (f *tsspFile) MetaIndexAt(idx int) (*MetaIndex, error) {
 	return f.reader.MetaIndexAt(idx)
 }
 
-func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buf *pool.Buffer, ioPriority int) (*ChunkMeta, error) {
+func (f *tsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *ChunkMetaContext, ioPriority int) (*ChunkMeta, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	if f.stopped() {
 		return nil, errFileClosed
 	}
-	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, dst, buf, ioPriority)
+	return f.reader.ChunkMeta(id, offset, size, itemCount, metaIdx, ctx, ioPriority)
 }
 
 func (f *tsspFile) ReadData(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error) {
@@ -627,6 +626,9 @@ func (f *tsspFile) Open() error {
 }
 
 func (f *tsspFile) LoadIdTimes(p *IdTimePairs) error {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
 	if f.reader == nil {
 		err := fmt.Errorf("disk file not init")
 		log.Error("disk file not init", zap.Uint64("seq", f.name.seq), zap.Uint16("leve", f.name.level))
