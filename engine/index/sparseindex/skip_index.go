@@ -46,6 +46,8 @@ var IndexIDToName = map[uint32]string{
 
 var table = crc32.MakeTable(crc32.Castagnoli)
 
+const crcSize = 4
+
 // SKIndexReader as a skip index read interface.
 type SKIndexReader interface {
 	// CreateSKFileReaders generates SKFileReaders for each index field based on the skip index information and condition
@@ -245,6 +247,7 @@ type SkipIndexWriter interface {
 	Close() error
 	Flush() error
 	CreateSkipIndex(src *record.ColVal, rowsPerSegment []int, refType int) ([]byte, error)
+	CreateFullTextIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte
 }
 
 func NewSkipIndexWriter(indexType string) SkipIndexWriter {
@@ -278,10 +281,10 @@ func (b *BloomFilterImpl) CreateSkipIndex(src *record.ColVal, rowsPerSegment []i
 	//TODO:
 	// 1. use different splitter for different column
 	// 2. reusing the tokenizers
-	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, +3)
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
 
 	segCnt := len(rowsPerSegment)
-	segBfSize := int(logstore.GetConstant(2).FilterDataDiskSize)
+	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
 	res := make([]byte, segCnt*segBfSize)
 	var segCol []record.ColVal
 	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
@@ -291,11 +294,44 @@ func (b *BloomFilterImpl) CreateSkipIndex(src *record.ColVal, rowsPerSegment []i
 	for _, col := range segCol {
 		end = start + segBfSize
 		offs, lens := col.GetOffsAndLens()
-		tk.ProcessTokenizerBatch(col.Val, res[start:end-4], offs, lens)
-		crc := crc32.Checksum(res[start:end-4], table)
-		binary.LittleEndian.PutUint32(res[end-4:end], crc)
+		tk.ProcessTokenizerBatch(col.Val, res[start:end-crcSize], offs, lens)
+		crc := crc32.Checksum(res[start:end-crcSize], table)
+		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
 		start = end
 	}
 	tokenizer.FreeSimpleGramTokenizer(tk)
 	return res, nil
+}
+
+func (b *BloomFilterImpl) CreateFullTextIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte {
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
+	segCnt := len(rowsPerSegment)
+	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
+	res := make([]byte, segCnt*segBfSize)
+
+	start := 0
+	end := 0
+	colsData := b.getFullTextColsData(writeRec, schemaIdx, rowsPerSegment)
+	row, col := len(colsData), len(colsData[0])
+	for i := 0; i < col; i++ {
+		end = start + segBfSize
+		for j := 0; j < row; j++ {
+			offs, lens := colsData[j][i].GetOffsAndLens()
+			tk.ProcessTokenizerBatch(colsData[j][i].Val, res[start:end-crcSize], offs, lens)
+		}
+		crc := crc32.Checksum(res[start:end-crcSize], table)
+		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
+		start = end
+	}
+	return res
+}
+
+func (b *BloomFilterImpl) getFullTextColsData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) [][]record.ColVal {
+	colsData := make([][]record.ColVal, 0, len(schemaIdx))
+	for _, v := range schemaIdx {
+		var colData []record.ColVal
+		colData = writeRec.ColVals[v].SplitColBySize(colData, rowsPerSegment, writeRec.Schema[v].Type)
+		colsData = append(colsData, colData)
+	}
+	return colsData
 }

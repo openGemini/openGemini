@@ -26,7 +26,10 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
-const CurrentLogTokenizerVersion = 5
+const (
+	GramTokenizerVersion       = 3
+	CurrentLogTokenizerVersion = 5
+)
 
 var (
 	Table               = crc32.MakeTable(crc32.Castagnoli)

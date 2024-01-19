@@ -750,16 +750,14 @@ func (b *MsBuilder) writeDetachedBloomFilter(writeRec *record.Record, schemaIdx,
 			return err
 		}
 		skipIndexFilePaths = b.getFullTextIdxFilePath()
-		filterDetachedWriteTimes = (len(rowsPerSegment)*len(schemaIdx) + int(b.localBFCount)) / int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
 	} else {
 		*memBfData, err = b.getMemoryBloomFilterData(writeRec, schemaIdx, rowsPerSegment)
 		if err != nil {
 			return err
 		}
 		skipIndexFilePaths = b.getSkipIndexFilePaths(writeRec.Schema, schemaIdx, true, "")
-		filterDetachedWriteTimes = (len(rowsPerSegment) + int(b.localBFCount)) / int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
 	}
-
+	filterDetachedWriteTimes = (len(rowsPerSegment) + int(b.localBFCount)) / int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
 	if b.BloomFilterNeedDetached(filterDetachedWriteTimes) {
 		// local bf files and memory blocks satisfied the dump quantity,then write to remote
 		*memBfData, err = b.detachBloomFilter(*memBfData, skipIndexFilePaths, filterDetachedWriteTimes)
@@ -928,13 +926,8 @@ func (b *MsBuilder) getMemoryBloomFilterData(writeRec *record.Record, schemaIdx,
 }
 
 func (b *MsBuilder) getMemoryFullTextIdxData(memBfData [][]byte, writeRec *record.Record, schemaIdx, rowsPerSegment []int) ([][]byte, error) {
-	for _, v := range schemaIdx {
-		data, err := b.skipIndexWriter.CreateSkipIndex(&writeRec.ColVals[v], rowsPerSegment, writeRec.Schema[v].Type)
-		if err != nil {
-			return nil, err
-		}
-		memBfData[0] = append(memBfData[0], data...)
-	}
+	data := b.skipIndexWriter.CreateFullTextIndex(writeRec, schemaIdx, rowsPerSegment)
+	memBfData[0] = append(memBfData[0], data...)
 	return memBfData, nil
 }
 
