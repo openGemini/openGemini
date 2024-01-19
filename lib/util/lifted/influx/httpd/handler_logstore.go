@@ -668,6 +668,8 @@ func appendRowAll(rows *record.Record, tags []byte, time int64, schemasNil []boo
 		rows.ColVals[0].AppendByteSlice(tags)
 	}
 	rows.ColVals[1].AppendInteger(time)
+	rows.ColVals[1], rows.ColVals[rows.ColNums()-1] = rows.ColVals[rows.ColNums()-1], rows.ColVals[1]
+	rows.Schema[1], rows.Schema[rows.ColNums()-1] = rows.Schema[rows.ColNums()-1], rows.Schema[1]
 	for i := 2; i < len(schemasNil); i++ {
 		if schemasNil[i] {
 			schemasNil[i] = false
@@ -943,6 +945,7 @@ func (h *Handler) parseJsonV2(scanner *bufio.Scanner, req *LogWriteRequest, rows
 						schemasMap[string(key)] = fieldIndex
 						schemasNil = append(schemasNil, true)
 						rows.Schema = append(rows.Schema, record.Field{Type: fastJsonTypeToRecordType(vv.Type()), Name: string(key)})
+						rows.ColVals = append(rows.ColVals, record.ColVal{})
 						appendValueToRecordColumn(rows, fieldIndex, vv)
 						fieldIndex++
 					} else {

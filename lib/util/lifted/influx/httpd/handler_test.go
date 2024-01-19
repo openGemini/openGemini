@@ -450,7 +450,7 @@ func TestParseJsonVV2(t *testing.T) {
 	rows := &record.Record{}
 	failRows := record.NewRecord(schema, false)
 	_ = h.parseJsonV2(scanner, req2, rows, failRows, expiredEarliestTime)
-	expect := fmt.Sprintf("field(tags):[]string(nil)\nfield(time):[]int64{%v}\nfield(http):[]string{\"127.0.0.1\"}\nfield(cnt):[]float64{4}\n", now*1e6)
+	expect := fmt.Sprintf("field(tags):[]string(nil)\nfield(cnt):[]float64{4}\nfield(http):[]string{\"127.0.0.1\"}\nfield(time):[]int64{%v}\n", now*1e6)
 	res := rows.String()
 	if expect != res {
 		t.Fatal("unexpect", res)
