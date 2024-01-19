@@ -490,9 +490,11 @@ func (mock *MockShardGroup) CreateLogicalPlanOfNodeExchange(
 	builder.Exchange(executor.SERIES_EXCHANGE, nil)
 	builder.Reader(config.TSSTORE)
 	builder.Exchange(executor.READER_EXCHANGE, nil)
-	builder.Exchange(executor.SHARD_EXCHANGE, nil)
 	builder.IndexScan()
-	builder.Exchange(executor.NODE_EXCHANGE, []hybridqp.Trait{&executor.RemoteQuery{}})
+	builder.Exchange(executor.SHARD_EXCHANGE, nil)
+	builder.Exchange(executor.NODE_EXCHANGE, []hybridqp.Trait{
+		&executor.RemoteQuery{ShardIDs: []uint64{1}, PtID: 0},
+		&executor.RemoteQuery{ShardIDs: []uint64{2}, PtID: 1}})
 	return builder.Build()
 }
 
@@ -1065,6 +1067,12 @@ func (s *TSDBSystem) ExecSQL(sql string,
 	ctx := context.WithValue(context.Background(), MOCK_SENDER_HANDLER, validator)
 	ctx = context.WithValue(ctx, MOCK_SCANNER_STORAGE, s.storage)
 	ctx = context.WithValue(ctx, executor.WRITER_CONTEXT, &MockPointWriter{Validator: intoValidator})
+	if needNodeExchange {
+		if len(piplineExecutor.GetProcessors()) != 5 {
+			return fmt.Errorf("error processors len")
+		}
+		return nil
+	}
 	if err := piplineExecutor.ExecuteExecutor(ctx); err != nil {
 		return err
 	}

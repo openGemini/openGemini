@@ -487,6 +487,7 @@ type ExecutorBuilder struct {
 	multiMstTraitsForLocalStore []*StoreExchangeTraits // traits of multiMst for ts-server
 	multiMstInfosForLocalStore  []*IndexScanExtraInfo  // infos of multiMst for ts-server
 	mstIndex                    int
+	infoIndex                   int
 	traits                      *StoreExchangeTraits
 	csTraits                    *CsStoreExchangeTraits // for csstore
 	frags                       *ShardsFragmentsGroups
@@ -652,37 +653,40 @@ func (builder *ExecutorBuilder) SetMultiMstInfosForLocalStore(t []*IndexScanExtr
 	builder.multiMstInfosForLocalStore = t
 }
 
-func (builder *ExecutorBuilder) SetInfosAndTraits(req []*RemoteQuery, ctx context.Context) {
-	if len(req) == 0 {
+func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx context.Context) {
+	if len(mstsReqs) == 0 {
 		return
 	}
 	multiMstTraits := make([]*StoreExchangeTraits, 0)
-	for _, r := range req {
+	for _, mstReqs := range mstsReqs {
 		m := make(map[uint64][][]interface{})
-		for _, sid := range r.ShardIDs {
-			m[sid] = nil
-		}
-		traits := &StoreExchangeTraits{
+		singleMstTraits := &StoreExchangeTraits{
 			mapShardsToReaders: m,
-			shards:             make([]uint64, 0, len(m)),
+			shards:             make([]uint64, 0),
 			shardIndex:         0,
 			readerIndex:        0,
 		}
-		for shard := range m {
-			traits.shards = append(traits.shards, shard)
+		for _, r := range mstReqs.reqs {
+			for _, sid := range r.ShardIDs {
+				m[sid] = nil
+				singleMstTraits.shards = append(singleMstTraits.shards, sid)
+			}
 		}
-		multiMstTraits = append(multiMstTraits, traits)
+		multiMstTraits = append(multiMstTraits, singleMstTraits)
 	}
 	builder.SetMultiMstTraitsForLocalStore(multiMstTraits)
 	builder.SetTraits(multiMstTraits[0])
+
 	multiMstInfos := make([]*IndexScanExtraInfo, 0)
-	for _, r := range req {
-		info := &IndexScanExtraInfo{
-			Store: localStorageForQuery,
-			Req:   r,
-			ctx:   ctx,
+	for _, mstReqs := range mstsReqs {
+		for _, r := range mstReqs.reqs {
+			info := &IndexScanExtraInfo{
+				Store: localStorageForQuery,
+				Req:   r,
+				ctx:   ctx,
+			}
+			multiMstInfos = append(multiMstInfos, info)
 		}
-		multiMstInfos = append(multiMstInfos, info)
 	}
 	builder.SetMultiMstInfosForLocalStore(multiMstInfos)
 	builder.SetInfo(multiMstInfos[0])
@@ -692,7 +696,14 @@ func (builder *ExecutorBuilder) NextMst() {
 	if builder.mstIndex < len(builder.multiMstTraitsForLocalStore)-1 {
 		builder.mstIndex++
 		builder.traits = builder.multiMstTraitsForLocalStore[builder.mstIndex]
-		builder.info = builder.multiMstInfosForLocalStore[builder.mstIndex]
+	}
+}
+
+// ts-server + multiPt nextInfo is use for nextPt
+func (builder *ExecutorBuilder) NextInfo() {
+	if builder.infoIndex < len(builder.multiMstInfosForLocalStore)-1 {
+		builder.infoIndex++
+		builder.info = builder.multiMstInfosForLocalStore[builder.infoIndex]
 	}
 }
 
@@ -970,6 +981,9 @@ func (builder *ExecutorBuilder) addIndexScan(indexScan *LogicalIndexScan) (*Tran
 
 	if builder.traits != nil {
 		builder.traits.NextShard()
+		if len(builder.multiMstInfosForLocalStore) != 0 {
+			builder.NextInfo()
+		}
 	}
 	return vertex, nil
 }
