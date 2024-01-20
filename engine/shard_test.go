@@ -4110,7 +4110,7 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					}
 				}
 				timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}, queryCtx.schema, len(queryCtx.schema)-1)
-				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema)
+				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema, nil)
 
 				// with time condition
 				var newRecord *record.Record
@@ -4294,7 +4294,7 @@ func TestFilterByFiledWithFastPath2(t *testing.T) {
 					}
 				}
 				timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}, queryCtx.schema, len(queryCtx.schema)-1)
-				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema)
+				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema, nil)
 
 				// with time condition
 				var newRecord *record.Record

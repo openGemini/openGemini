@@ -459,7 +459,7 @@ func BenchmarkFilterByFieldFuncsForMemReuse(b *testing.B) {
 			LHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "campus"}, RHS: &influxql.StringLiteral{Val: "广州1"}}},
 		RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "net_export_name"}, RHS: &influxql.StringLiteral{Val: "华南-广州_PNI_广州移动"}},
 	}
-	condFunctions, _ := binaryfilterfunc.NewCondition(timeCond, condition, rec.Schema)
+	condFunctions, _ := binaryfilterfunc.NewCondition(timeCond, condition, rec.Schema, nil)
 	filterOption := &BaseFilterOptions{
 		CondFunctions: condFunctions,
 		RedIdxMap:     map[int]struct{}{},
@@ -486,7 +486,7 @@ func BenchmarkFilterByFieldFuncsForProjection(b *testing.B) {
 			LHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "campus"}, RHS: &influxql.StringLiteral{Val: "广州1"}}},
 		RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "net_export_name"}, RHS: &influxql.StringLiteral{Val: "华南-广州_PNI_广州移动"}},
 	}
-	condFunctions, _ := binaryfilterfunc.NewCondition(timeCond, condition, rec.Schema)
+	condFunctions, _ := binaryfilterfunc.NewCondition(timeCond, condition, rec.Schema, nil)
 	filterOption := &BaseFilterOptions{
 		CondFunctions: condFunctions,
 		RedIdxMap:     map[int]struct{}{1: {}, 2: {}, 3: {}},

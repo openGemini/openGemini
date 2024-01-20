@@ -19,6 +19,7 @@ package colstore
 import (
 	"fmt"
 
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -41,9 +42,10 @@ const (
 )
 
 var (
-	MinMaxIndex      = "minmax"
-	SetIndex         = "set"
-	BloomFilterIndex = "bloomfilter"
+	MinMaxIndex              = "minmax"
+	SetIndex                 = "set"
+	BloomFilterIndex         = "bloomfilter"
+	BloomFilterFullTextIndex = logstore.BloomFilterFullText
 )
 
 func AppendPKIndexSuffix(dataPath string) string {

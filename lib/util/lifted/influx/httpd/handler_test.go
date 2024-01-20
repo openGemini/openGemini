@@ -371,8 +371,8 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 	req.URL.RawQuery = "%3Arepository=repo0&%3AlogStream=log0&"
 	testStr := [][3]string{
 		{"content: abc and efg | select count(*) from log0",
-			"SELECT count(*) FROM repo0.log0.log0 WHERE content MATCHPHRASE 'abc' AND content MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
-			"content MATCHPHRASE 'abc' AND content MATCHPHRASE 'efg'"},
+			"SELECT count(*) FROM repo0.log0.log0 WHERE content MATCHPHRASE 'abc' AND __log___::string MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content MATCHPHRASE 'abc' AND __log___::string MATCHPHRASE 'efg'"},
 		{"content: abc or content: efg | select count(*) from log0 where status > 200",
 			"SELECT count(*) FROM repo0.log0.log0 WHERE status > 200 AND content MATCHPHRASE 'abc' OR content MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
 			"content MATCHPHRASE 'abc' OR content MATCHPHRASE 'efg'"},

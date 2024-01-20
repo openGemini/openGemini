@@ -18,13 +18,16 @@ package binaryfilterfunc
 
 import (
 	"errors"
+	"fmt"
 
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 )
 
 func init() {
@@ -439,11 +442,12 @@ type ConditionImpl struct {
 	schema       record.Schemas
 	rpn          []*RPNElement
 	rpnStack     []*RPNElement
+	opt          hybridqp.Options
 }
 
-func NewCondition(timeCondition, condition influxql.Expr, schema record.Schemas) (*ConditionImpl, error) {
+func NewCondition(timeCondition, condition influxql.Expr, schema record.Schemas, opt hybridqp.Options) (*ConditionImpl, error) {
 	var err error
-	c := &ConditionImpl{schema: schema, isSimpleExpr: true}
+	c := &ConditionImpl{schema: schema, isSimpleExpr: true, opt: opt}
 	// use "AND" to connect the time condition to other conditions.
 	combineCondition := CombineConditionWithAnd(timeCondition, condition)
 	rpnExpr := rpn.ConvertToRPNExpr(combineCondition)
@@ -471,6 +475,12 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
 		case *influxql.VarRef:
+			if v.Val == logparser.DefaultFieldForFullText {
+				if err := c.genRPNElementByFullText(rpnExpr.Val[i+1], influxql.MATCHPHRASE); err != nil {
+					return err
+				}
+				continue
+			}
 			idx := c.schema.FieldIndex(v.Val)
 			if idx < 0 {
 				return errno.NewError(errno.ErrRPNElemSchema)
@@ -489,6 +499,25 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral, *influxql.BooleanLiteral:
 		default:
 			return errno.NewError(errno.ErrRPNExpr, v)
+		}
+	}
+	return nil
+}
+
+func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.Token) error {
+	c.isSimpleExpr = false
+	fields := c.opt.GetMeasurements()[0].IndexRelation.GetFullTextColumns()
+	for i := range fields {
+		v, ok := value.(*influxql.StringLiteral)
+		if !ok {
+			return fmt.Errorf("")
+		}
+		elem := &RPNElement{op: rpn.InRange, rg: IdxFunction{Idx: c.schema.FieldIndex(fields[i]), Op: op}}
+		elem.rg.Compare = v.Val
+		elem.rg.Function = idxTypeFun[operationMap[op]][StringFunc]
+		c.rpn = append(c.rpn, elem)
+		if i > 0 {
+			c.rpn = append(c.rpn, &RPNElement{op: rpn.OR})
 		}
 	}
 	return nil

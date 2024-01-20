@@ -331,11 +331,11 @@ func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInf
 	tags := map[string]int32{"tags": influx.Field_Type_String}
 	fields := map[string]int32{"content": influx.Field_Type_String}
 	schemaInfo := meta2.NewSchemaInfo(tags, fields)
-	oid, _ := tsi.GetIndexIdByName("bloomfilter")
+	oid, _ := tsi.GetIndexIdByName(logstore.BloomFilterFullText)
 	indexR := &influxql.IndexRelation{
 		Rid:        0,
 		Oids:       []uint32{oid},
-		IndexNames: []string{"bloomfilter"},
+		IndexNames: []string{logstore.BloomFilterFullText},
 		IndexList: []*influxql.IndexList{
 			&influxql.IndexList{
 				IList: []string{"tags", "content"},

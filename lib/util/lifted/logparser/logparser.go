@@ -12,6 +12,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
+const DefaultFieldForFullText = "__log___"
+
 // Parser represents an InfluxQL parser.
 type Parser struct {
 	s *bufScanner

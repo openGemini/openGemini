@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -266,10 +267,45 @@ func (r *HybridStoreReader) initIndexReader() {
 	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions))
 }
 
+func (r *HybridStoreReader) initSchemaByFullTest() error {
+	mst := r.schema.Options().GetMeasurements()[0]
+	fields := mst.IndexRelation.GetFullTextColumns()
+	if len(fields) == 0 {
+		return fmt.Errorf("empty fields for full text index")
+	}
+	fieldMap := make(map[string]bool)
+	inSchema := make([]record.Field, 0, len(r.inSchema))
+	fieldNum := r.inSchema.Len()
+	idx := r.inSchema.FieldIndex(logparser.DefaultFieldForFullText)
+	for i := 0; i < fieldNum; i++ {
+		if i == idx {
+			for j := 0; j < len(fields); j++ {
+				if !fieldMap[fields[j]] {
+					inSchema = append(inSchema, record.Field{Name: fields[j], Type: influx.Field_Type_String})
+					fieldMap[fields[j]] = true
+				}
+			}
+		} else {
+			if !fieldMap[r.inSchema.Field(i).Name] {
+				inSchema = append(inSchema, *r.inSchema.Field(i))
+				fieldMap[r.inSchema.Field(i).Name] = true
+			}
+		}
+	}
+	r.inSchema = r.inSchema[:0]
+	r.inSchema = append(r.inSchema, inSchema...)
+	return nil
+}
+
 func (r *HybridStoreReader) initSchema() (err error) {
 	// init the input schema
-	useIdxMap := make(map[int]struct{})
 	r.inSchema = append(r.inSchema, r.queryCtx.schema[:len(r.queryCtx.schema)-1]...)
+	if r.inSchema.FieldIndex(logparser.DefaultFieldForFullText) >= 0 {
+		if err = r.initSchemaByFullTest(); err != nil {
+			return
+		}
+	}
+
 	for i := range r.opt.GetOptDimension() {
 		// the field grouped by may appear in the select and where fields.
 		if idx := r.inSchema.FieldIndex(r.opt.Dimensions[i]); idx < 0 {
@@ -277,6 +313,7 @@ func (r *HybridStoreReader) initSchema() (err error) {
 		}
 	}
 	sort.Sort(r.inSchema)
+	useIdxMap := make(map[int]struct{})
 	for i := range r.opt.GetOptDimension() {
 		useIdxMap[r.inSchema.FieldIndex(r.opt.Dimensions[i])] = struct{}{} // fields for group by
 	}
@@ -304,9 +341,9 @@ func (r *HybridStoreReader) initSchema() (err error) {
 	if !r.schema.Options().IsTimeSorted() {
 		startTime, endTime := r.schema.Options().GetStartTime(), r.schema.Options().GetEndTime()
 		timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: startTime, Max: endTime}, r.inSchema, len(r.inSchema)-1)
-		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(timeCond, r.schema.Options().GetCondition(), r.inSchema)
+		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(timeCond, r.schema.Options().GetCondition(), r.inSchema, &r.opt)
 	} else {
-		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(nil, r.schema.Options().GetCondition(), r.inSchema)
+		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(nil, r.schema.Options().GetCondition(), r.inSchema, &r.opt)
 	}
 	if err != nil {
 		return err

@@ -32,6 +32,8 @@ import (
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 var IndexIDToName = map[uint32]string{
@@ -151,6 +153,20 @@ func (r *SKIndexReaderImpl) getSKInfoByExpr(rpnExpr *rpn.RPNExpr, skIndexRelatio
 	for _, expr := range rpnExpr.Val {
 		v, ok := expr.(*influxql.VarRef)
 		if !ok {
+			continue
+		}
+		if v.Val == logparser.DefaultFieldForFullText {
+			fields := skIndexRelation.GetFullTextColumns()
+			if len(fields) == 0 {
+				return nil, fmt.Errorf("empty fields for full text index")
+			}
+			schemas := make([]record.Field, 0, len(fields))
+			for i := 0; i < len(fields); i++ {
+				schemas = append(schemas, record.Field{Name: fields[i], Type: influx.Field_Type_String})
+			}
+			// TODO: indexName is used to uniquely identify an index.
+			// 5, bloomfilter_fulltext oid. Due to module dependencies, temporarily write oid numbers.
+			skInfoMap[logstore.BloomFilterFullText] = &SkInfo{fields: schemas, oid: 5}
 			continue
 		}
 		indexNames, ok := skFieldMap[v.Val]

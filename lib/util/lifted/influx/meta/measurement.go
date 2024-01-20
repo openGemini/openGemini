@@ -389,6 +389,42 @@ func (msti *MeasurementInfo) CompatibleForLogkeeper() {
 	if !config.IsLogKeeper() || msti.Options == nil {
 		return
 	}
+	if len(msti.IndexRelation.Oids) != 0 {
+		msti.CompatibleForLogkeeperColstore()
+	} else {
+		msti.CompatibleForLogkeeperRowstore()
+	}
+}
+
+func (msti *MeasurementInfo) CompatibleForLogkeeperColstore() {
+	var IList []string
+	for name, ty := range msti.Schema {
+		if ty == influx.Field_Type_String {
+			IList = append(IList, name)
+		}
+	}
+	contentSplit := msti.Options.GetSplitChar()
+	if contentSplit == "" {
+		contentSplit = tokenizer.CONTENT_SPLITTER
+	}
+	tagsSplitChar := msti.Options.GetTagSplitChar()
+	if tagsSplitChar == "" {
+		tagsSplitChar = tokenizer.TAGS_SPLITTER_BEFORE
+	}
+	msti.IndexRelation.IndexOptions = make([]*influxql.IndexOptions, len(msti.IndexRelation.Oids))
+	for i, oid := range msti.IndexRelation.Oids {
+		if oid != 5 { // 5, bloomfilter_fulltext oid. Due to module dependencies, temporarily write oid numbers.
+			continue
+		}
+		msti.IndexRelation.IndexList[i] = &influxql.IndexList{IList: IList}
+		msti.IndexRelation.IndexOptions[i] = &influxql.IndexOptions{
+			Options: []*influxql.IndexOption{
+				{Tokens: contentSplit, Tokenizers: "standard"},
+			}}
+	}
+}
+
+func (msti *MeasurementInfo) CompatibleForLogkeeperRowstore() {
 	contentSplit := msti.Options.GetSplitChar()
 	if contentSplit == "" {
 		contentSplit = tokenizer.CONTENT_SPLITTER
@@ -400,8 +436,8 @@ func (msti *MeasurementInfo) CompatibleForLogkeeper() {
 
 	msti.IndexRelation = influxql.IndexRelation{
 		Rid:        0,
-		Oids:       []uint32{4}, // bloomfilter oid
-		IndexNames: []string{"bloomfilter"},
+		Oids:       []uint32{5}, // 5, bloomfilter_fulltext oid. Due to module dependencies, temporarily write oid numbers.
+		IndexNames: []string{"bloomfilter_fulltext"},
 		IndexList: []*influxql.IndexList{
 			{
 				IList: []string{"tags", "content"},

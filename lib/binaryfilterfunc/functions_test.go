@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
@@ -310,7 +312,18 @@ func TestConditionToRPN(t *testing.T) {
 		if len(condStr) > 0 {
 			condExpr = MustParseExpr(condStr)
 		}
-		condition, err := NewCondition(timeExpr, condExpr, inSchema)
+		opt := query.ProcessorOptions{
+			Sources: []influxql.Source{
+				&influxql.Measurement{
+					Name: "students",
+					IndexRelation: &influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
+						Oids:      []uint32{5},
+						IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"country"}}},
+					},
+				},
+			},
+		}
+		condition, err := NewCondition(timeExpr, condExpr, inSchema, &opt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -386,6 +399,14 @@ func TestConditionToRPN(t *testing.T) {
 			"",
 			"((country = 'china' and country  = 'american') and address = 'shenzhen') or address = 'shanghai'",
 			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | and | address::string = 'shanghai' | or",
+		)
+	})
+	t.Run("9", func(t *testing.T) {
+		// 1 and 2 and 3 and 4 => 1 2 3 4 and and and
+		f(
+			"",
+			"__log___ = 'shanghai'",
+			"country::string MATCHPHRASE 'shanghai'",
 		)
 	})
 }

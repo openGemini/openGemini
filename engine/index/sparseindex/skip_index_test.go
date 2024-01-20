@@ -64,6 +64,24 @@ func TestSKIndexReader(t *testing.T) {
 	assert.Equal(t, reader.Close(), nil)
 }
 
+func TestSKBFIndexReader(t *testing.T) {
+	reader := sparseindex.NewSKIndexReader(2, 2, 0)
+	option := &query.ProcessorOptions{Condition: &influxql.BinaryExpr{
+		Op:  influxql.EQ,
+		LHS: &influxql.VarRef{Val: "value", Type: influxql.Integer},
+		RHS: &influxql.IntegerLiteral{Val: 2},
+	}}
+	mstInfo := &influxql.Measurement{IndexRelation: &influxql.IndexRelation{
+		Oids:       []uint32{uint32(tsi.BloomFilterFullText)},
+		IndexNames: []string{colstore.BloomFilterFullTextIndex},
+		IndexList:  []*influxql.IndexList{{IList: []string{"value"}}},
+	}}
+	r, err := reader.CreateSKFileReaders(option, mstInfo, true)
+	assert.Equal(t, err, nil)
+	err = r[0].Close()
+	assert.Equal(t, err, nil)
+}
+
 func TestCreateSkipIndex(t *testing.T) {
 	var colVal record.ColVal
 	colVal.AppendStrings("hello", "world", "hello", "test")

@@ -4397,6 +4397,18 @@ func (ir *IndexRelation) GetBloomFilterColumns() []string {
 	return nil
 }
 
+func (ir *IndexRelation) GetFullTextColumns() []string {
+	if ir == nil || len(ir.Oids) == 0 {
+		return nil
+	}
+	for i := range ir.Oids {
+		if ir.Oids[i] == 5 { // bloomfilter_fulltext
+			return ir.IndexList[i].IList
+		}
+	}
+	return nil
+}
+
 // Measurement represents a single measurement used as a datasource.
 type Measurement struct {
 	Database        string

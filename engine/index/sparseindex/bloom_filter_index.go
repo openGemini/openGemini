@@ -170,7 +170,3 @@ func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record
 func GetBloomFilterFilePath(dir, msName, fieldName string) string {
 	return path.Join(dir, msName, BloomFilterFilePrefix+fieldName+BloomFilterFileSuffix)
 }
-
-func GetFullTextIdxFilePath(dir, msName string) string {
-	return path.Join(dir, msName, BloomFilterFilePrefix+FullTextIndex+BloomFilterFileSuffix)
-}

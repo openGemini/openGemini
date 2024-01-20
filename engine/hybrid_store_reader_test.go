@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
 )
@@ -198,6 +199,60 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	reader.Close()
 	reader.sendChunk(nil)
 	assert2.Equal(t, reader.closedCount, int64(1))
+}
+
+func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
+	var fields influxql.Fields
+	m := createMeasurement()
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}}
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:   logparser.DefaultFieldForFullText,
+			Type:  influxql.String,
+			Alias: "",
+		},
+	})
+	var names []string
+	names = append(names, "f1")
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	assert2.Equal(t, reader.Name(), "HybridStoreReader")
+	assert2.Equal(t, len(reader.Explain()), 1)
+	reader.Abort()
+	assert2.Equal(t, reader.IsSink(), true)
+	assert2.Equal(t, len(reader.GetOutputs()), 1)
+	assert2.Equal(t, len(reader.GetInputs()), 0)
+	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
+	assert2.Equal(t, reader.GetInputNumber(nil), 0)
+	reader.schema = nil
+	err := reader.initQueryCtx()
+	assert2.Equal(t, errno.Equal(err, errno.InvalidQuerySchema), true)
+	err = reader.Work(context.Background())
+	assert2.Equal(t, errno.Equal(err, errno.InvalidQuerySchema), true)
+	schema.Options().(*query.ProcessorOptions).Sources[0] = &influxql.Measurement{
+		Name:         "students",
+		IsTimeSorted: true,
+		IndexRelation: &influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
+			Oids:      []uint32{5},
+			IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"field1_string"}}},
+		},
+	}
+	reader.schema = schema
+	err = reader.initQueryCtx()
+	assert2.Equal(t, err, nil)
+	_, err = reader.initAttachedFileReader(executor.NewDetachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
+	_, err = reader.initDetachedFileReader(executor.NewAttachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
+	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
+	frag := executor.NewBaseFrags("", 3)
+	assert2.Equal(t, 72, frag.Size())
+	err = reader.initSchema()
+	assert2.Equal(t, err, nil)
 }
 
 func TestHybridIndexReaderFunctions(t *testing.T) {
