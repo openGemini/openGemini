@@ -22,12 +22,14 @@ import (
 	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 )
 
 const (
 	stringUncompressed     = 0
 	stringCompressedSnappy = 1
 	StringCompressedZstd   = 2
+	StringCompressedLz4    = 3
 
 	minCompReta = 0.85
 )
@@ -54,11 +56,14 @@ type String struct {
 }
 
 func (enc *String) MaxEncodedLen(size int) int {
-	if enc.encodingType == stringCompressedSnappy {
-		return snappy.MaxEncodedLen(size) + 9
-	} else if enc.encodingType == StringCompressedZstd {
+	switch enc.encodingType {
+	case StringCompressedZstd:
 		return ZSTDCompressBound(size) + 9
-	} else {
+	case StringCompressedLz4:
+		return lz4.CompressBlockBound(size) + 9
+	case stringCompressedSnappy:
+		return snappy.MaxEncodedLen(size) + 9
+	default:
 		panic("not supported compression type")
 	}
 }
@@ -72,11 +77,14 @@ func (enc *String) encInit(in []byte, out []byte) {
 	enc.srcLen = len(in)
 	maxOutLen := enc.MaxEncodedLen(enc.srcLen)
 	out = growBuffer(out, maxOutLen)
-
 	out = append(out, byte(enc.encodingType)<<4)
 	out = numberenc.MarshalUint32Append(out, uint32(enc.srcLen)) // source length
 	out = numberenc.MarshalUint32Append(out, uint32(0))          // preset compressed data length
-	enc.buf.Reset(out[len(out):])
+	length := len(out)
+	if enc.encodingType == StringCompressedLz4 {
+		out = out[:maxOutLen+length-9] // 9: uint8 + uint32*2, maxOutLen is already include
+	}
+	enc.buf.Reset(out[length:])
 	enc.out = out
 
 	if enc.encodingType == StringCompressedZstd {
@@ -90,6 +98,36 @@ func (enc *String) encInit(in []byte, out []byte) {
 			}
 		}
 	}
+}
+
+func (enc *String) encodingWithLz4(in []byte) ([]byte, error) {
+	out := enc.buf.Bytes()
+	n, err := lz4.CompressBlock(in, out)
+	if err != nil {
+		return nil, err
+	}
+	if n <= 0 {
+		return nil, nil
+	}
+	compLen := n + 9
+	if compressionRation(compLen, len(in)) < minCompReta {
+		numberenc.MarshalUint32Copy(enc.out[enc.outLen+1+4:], uint32(n))
+		return enc.out[:enc.outLen+compLen], nil
+	}
+	return enc.uncompressedData(in)
+}
+
+func (enc *String) decodingWithLz4() ([]byte, error) {
+	in := enc.buf.Bytes()
+	size, err := lz4.DecompressSafe(in, enc.out)
+	if err != nil {
+		return nil, err
+	}
+
+	if size != enc.srcLen {
+		return nil, fmt.Errorf("short uncompressed data length, %v != %v", size, enc.srcLen)
+	}
+	return enc.out[:enc.outLen+enc.srcLen], nil
 }
 
 func (enc *String) uncompressedData(in []byte) ([]byte, error) {
@@ -168,6 +206,8 @@ func (enc *String) Encoding(in []byte, out []byte) ([]byte, error) {
 		return enc.encodingWithSnappy(in)
 	} else if enc.encodingType == StringCompressedZstd {
 		return enc.encodingWithZSTD(in)
+	} else if enc.encodingType == StringCompressedLz4 {
+		return enc.encodingWithLz4(in)
 	} else {
 		panic(enc.encodingType)
 	}
@@ -175,7 +215,7 @@ func (enc *String) Encoding(in []byte, out []byte) ([]byte, error) {
 
 func (enc *String) validCompressedType() error {
 	switch enc.encodingType {
-	case stringUncompressed, stringCompressedSnappy, StringCompressedZstd:
+	case stringUncompressed, stringCompressedSnappy, StringCompressedZstd, StringCompressedLz4:
 		return nil
 	default:
 		return fmt.Errorf("invalid compressed data type: %v", enc.encodingType)
@@ -215,7 +255,11 @@ func (enc *String) decodingInit(in []byte, out []byte) error {
 	out = out[:enc.srcLen+enc.outLen]
 
 	enc.buf.Reset(in)
-	enc.out = out[:enc.outLen]
+	if enc.encodingType == StringCompressedLz4 {
+		enc.out = out
+	} else {
+		enc.out = out[:enc.outLen]
+	}
 
 	if enc.encodingType == StringCompressedZstd {
 		var err error
@@ -235,14 +279,15 @@ func (enc *String) Decoding(in []byte, out []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if enc.encodingType == stringUncompressed {
+	switch enc.encodingType {
+	case stringUncompressed:
 		enc.out = append(enc.out, enc.buf.Bytes()...)
 		return enc.out, nil
-	}
-
-	if enc.encodingType == stringCompressedSnappy {
+	case StringCompressedLz4:
+		return enc.decodingWithLz4()
+	case stringCompressedSnappy:
 		return enc.decodingWithSnappy()
-	} else {
+	default:
 		return enc.decodingWithZSTD()
 	}
 }

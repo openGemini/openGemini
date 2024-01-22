@@ -612,6 +612,100 @@ func TestStringEncodingVersion_Compatibility(t *testing.T) {
 	}
 }
 
+func TestStringEncodingVersion_CompatibilityV1(t *testing.T) {
+	var tmpBuf [4096]byte
+
+	testFun := func(valueCount int, alg int, prefix []byte) {
+		values := make([]byte, 0, valueCount*64)
+		offset := make([]uint32, 0, valueCount)
+		for i := 0; i < valueCount; i++ {
+			v := fmt.Sprintf("test string value %d", i)
+			offset = append(offset, uint32(len(values)))
+			values = append(values, v...)
+		}
+
+		if decs.stringCoder == nil {
+			decs.stringCoder = GetStringCoder()
+
+		}
+		decs.stringCoder.encodingType = alg
+
+		var err error
+		var buf [1024]byte
+		out := buf[:0]
+		out = append(out, prefix...)
+		prefixLen := len(prefix)
+		if len(values) == 0 {
+			return
+		}
+		// pack string by version V1
+		src := packStringV1(values, offset, decs)
+		out, err = decs.stringCoder.Encoding(src, out)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if prefixLen > 0 {
+			if !reflect.DeepEqual(out[:prefixLen], prefix) {
+				t.Fatalf("encode output prefix not eq, exp:%v, get:%v", prefix, out[:prefixLen])
+			}
+		}
+
+		var decOff []uint32
+		decOut := tmpBuf[:0]
+		decOut = append(decOut, prefix...)
+		// decode string with version
+		decOut, decOff, err = DecodeStringBlock(out[prefixLen:], &decOut, &decOff, decs)
+		if err != nil {
+			t.Fatalf("unexpected error decoding block: %v", err)
+		}
+
+		if len(offset) > 0 {
+			if !reflect.DeepEqual(decOff, offset) {
+				t.Fatalf("unexpected results:\n\tgot: %v\n\texp: %v\n", decOff, offset)
+			}
+		}
+
+		if prefixLen > 0 {
+			if !reflect.DeepEqual(decOut[:prefixLen], prefix) {
+				t.Fatalf("decode output prefix not eq, exp:%v, get:%v", prefix, decOut[:prefixLen])
+			}
+		}
+
+		if !reflect.DeepEqual(decOut[prefixLen:], values) {
+			t.Fatalf("unexpected results:\n\tgot: %v\n\texp: %v\n", decOut[prefixLen:], values)
+		}
+	}
+
+	items := []int{0, 1}
+	compAlg := []int{3}
+	prefixs := [][]byte{nil, []byte("test string compression data |")}
+	for _, alg := range compAlg {
+		for _, count := range items {
+			for _, prefix := range prefixs {
+				testFun(count, alg, prefix)
+			}
+		}
+	}
+}
+
+func TestDecodingWithLz4(t *testing.T) {
+	if decs.stringCoder == nil {
+		decs.stringCoder = GetStringCoder()
+
+	}
+	decs.stringCoder.encodingType = StringCompressedLz4
+	in := make([]byte, 0, 4)
+	in = append(in, byte(StringCompressedLz4)<<4)
+	buf := make([]byte, 4096)
+	in = append(in, buf...)
+	var out []byte
+	out, err := decs.stringCoder.Decoding(in, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestEncoding_Timestamp_Second(t *testing.T) {
 	valueCount := 1000
 	tmTest := func(precision time.Duration, readTm bool, prefix []byte) {
