@@ -299,4 +299,16 @@ func TestDetachedTSSPReader(t *testing.T) {
 	assert.Equal(t, 100, totalRow)
 	err = treader.Close()
 	assert.Equal(t, true, IsInterfaceNil(err))
+
+	decs = NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true)
+	totalRow = 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		totalRow += data.RowNums()
+	}
+	assert.Equal(t, 20, totalRow)
 }

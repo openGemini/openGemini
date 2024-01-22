@@ -137,7 +137,12 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 		if t.unnest != nil {
 			t.unnestOperator.Compute(result)
 		}
-		return t.filterData(result), nil
+		result = t.filterData(result)
+		if result.RowNums() == 0 {
+			t.recordPool.PutRecordInCircularPool()
+			continue
+		}
+		return result, nil
 	}
 }
 
