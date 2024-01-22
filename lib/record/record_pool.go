@@ -39,6 +39,9 @@ type RecordType uint8
 const (
 	IntervalRecordPool RecordType = iota
 	FileCursorPool
+	FileLoopCursorPool
+	FileCursorValidRowPool
+	FileCursorFilterRecordPool
 	AggPool
 	TsmMergePool
 	TsspSequencePool
@@ -73,6 +76,21 @@ func NewRecordPool(recordType RecordType) *RecordPool {
 		get = statistics.NewRecordStatistics().AddFileCursorPoolGet
 		reuse = statistics.NewRecordStatistics().AddFileCursorPoolGetReUse
 		abort = statistics.NewRecordStatistics().AddFileCursorPoolAbort
+	case FileLoopCursorPool:
+		inUse = statistics.NewRecordStatistics().AddFileLoopCursorPoolInUse
+		get = statistics.NewRecordStatistics().AddFileLoopCursorPoolGet
+		reuse = statistics.NewRecordStatistics().AddFileLoopCursorPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddFileLoopCursorPoolAbort
+	case FileCursorValidRowPool:
+		inUse = statistics.NewRecordStatistics().AddFileCursorValidRowPoolInUse
+		get = statistics.NewRecordStatistics().AddFileCursorValidRowPoolGet
+		reuse = statistics.NewRecordStatistics().AddFileCursorValidRowPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddFileCursorValidRowPoolAbort
+	case FileCursorFilterRecordPool:
+		inUse = statistics.NewRecordStatistics().AddFileCursorFilterRecordPoolInUse
+		get = statistics.NewRecordStatistics().AddFileCursorFilterRecordPoolGet
+		reuse = statistics.NewRecordStatistics().AddFileCursorFilterRecordPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddFileCursorFilterRecordPoolAbort
 	case AggPool:
 		inUse = statistics.NewRecordStatistics().AddAggPoolInUse
 		get = statistics.NewRecordStatistics().AddAggPoolGet
