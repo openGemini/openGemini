@@ -168,12 +168,17 @@ type MsInfo struct {
 	chunkBufs         []WriteChunk
 	writeChunk        *WriteChunkForColumnStore
 	concurrencyChunks *rowChunks
+	flushed           bool
 }
 
 func (msi *MsInfo) Init(row *influx.Row) {
 	msi.Name = row.Name
 	genMsSchema(&msi.Schema, row.Fields)
 	msi.sidMap = make(map[uint64]*WriteChunk)
+}
+
+func (msi *MsInfo) GetFlushed() *bool {
+	return &msi.flushed
 }
 
 func (msi *MsInfo) allocChunk() *WriteChunk {

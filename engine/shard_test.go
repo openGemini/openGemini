@@ -3555,7 +3555,7 @@ func TestDropMeasurement(t *testing.T) {
 	if store.GetOutOfOrderFileNum() != 2 {
 		t.Fatal("store.GetOutOfOrderFileNum() != 2")
 	}
-	orderFiles, unorderedFiles := store.GetBothFilesRef(msNames[0], false, util.TimeRange{})
+	orderFiles, unorderedFiles, _ := store.GetBothFilesRef(msNames[0], false, util.TimeRange{}, nil)
 	if len(unorderedFiles) != 1 {
 		t.Fatalf("len(unorderedFiles) != 1")
 	}
@@ -3569,7 +3569,7 @@ func TestDropMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orderFiles, unorderedFiles = store.GetBothFilesRef(msNames[1], false, util.TimeRange{})
+	orderFiles, unorderedFiles, _ = store.GetBothFilesRef(msNames[1], false, util.TimeRange{}, nil)
 	if len(unorderedFiles) != 1 {
 		t.Fatalf("len(unorderedFiles) != 1")
 	}
@@ -3847,7 +3847,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, _ := sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{})
+	files, _, _ := sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{}, nil)
 	if len(files) != 2 {
 		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
 	}
@@ -3860,7 +3860,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, files = sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{})
+	_, files, _ = sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{}, nil)
 	if len(files) != 2 {
 		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
 	}
