@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -525,6 +526,12 @@ func (c *SKConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
 		case *influxql.VarRef:
+			if v.Val == logparser.DefaultFieldForFullText {
+				if err := c.genRPNElementByFullText(v.Val, rpnExpr.Val[i+1], influxql.MATCHPHRASE); err != nil {
+					return err
+				}
+				continue
+			}
 			idx := c.schema.FieldIndex(v.Val)
 			if idx < 0 {
 				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.AlwaysTrue})
@@ -546,6 +553,18 @@ func (c *SKConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 			return errno.NewError(errno.ErrRPNExpr, v)
 		}
 	}
+	return nil
+}
+
+func (c *SKConditionImpl) genRPNElementByFullText(key string, value interface{}, op influxql.Token) error {
+	e := &rpn.SKRPNElement{RPNOp: rpn.InRange, Key: key, Op: op}
+	v, ok := value.(*influxql.StringLiteral)
+	if !ok {
+		return errno.NewError(errno.ErrValueTypeFullTextIndex)
+	}
+	e.Value = v.Val
+	e.Ty = influxql.String
+	c.rpn = append(c.rpn, e)
 	return nil
 }
 

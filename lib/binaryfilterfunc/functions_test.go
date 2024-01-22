@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
@@ -296,6 +297,25 @@ func getCondString(c *ConditionImpl) string {
 		}
 	}
 	return b.String()
+}
+
+func TestCondition(t *testing.T) {
+	condStr := "__log___ = 1"
+	fieldMap["__log__"] = influxql.Integer
+	condExpr := MustParseExpr(condStr)
+	opt := query.ProcessorOptions{
+		Sources: []influxql.Source{
+			&influxql.Measurement{
+				Name: "students",
+				IndexRelation: &influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
+					Oids:      []uint32{5},
+					IndexList: []*influxql.IndexList{{IList: []string{"country"}}},
+				},
+			},
+		},
+	}
+	_, err := NewCondition(nil, condExpr, inSchema, &opt)
+	assert.True(t, errno.Equal(err, errno.ErrValueTypeFullTextIndex))
 }
 
 func TestConditionToRPN(t *testing.T) {

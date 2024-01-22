@@ -344,6 +344,7 @@ const (
 	ErrRPNElement              = 6018
 	ErrCoarseIndexFragment     = 6019
 	ErrQuerySchemaUpperBound   = 6020
+	ErrValueTypeFullTextIndex  = 6021
 )
 
 const (

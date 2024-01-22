@@ -18,7 +18,6 @@ package binaryfilterfunc
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/bitmap"
@@ -510,7 +509,7 @@ func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.T
 	for i := range fields {
 		v, ok := value.(*influxql.StringLiteral)
 		if !ok {
-			return fmt.Errorf("")
+			return errno.NewError(errno.ErrValueTypeFullTextIndex)
 		}
 		elem := &RPNElement{op: rpn.InRange, rg: IdxFunction{Idx: c.schema.FieldIndex(fields[i]), Op: op}}
 		elem.rg.Compare = v.Val

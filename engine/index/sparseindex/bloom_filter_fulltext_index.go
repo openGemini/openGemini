@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 )
 
 var _ = RegistrySKFileReaderCreator(colstore.BloomFilterFullTextIndex, &BloomFilterFullTextReaderCreator{})
@@ -65,10 +66,11 @@ func (r *BloomFilterFullTextIndexReader) ReInit(file interface{}) (err error) {
 	splitMap[r.schema[0].Name] = tokenizer.CONTENT_SPLIT_TABLE
 	for _, v := range r.schema {
 		splitMap[v.Name] = tokenizer.CONTENT_SPLIT_TABLE
-		for _, rpn := range r.sk.(*SKConditionImpl).rpn {
-			if rpn.Key == v.Name {
-				expr = append(expr, bloomfilter.NewSKRPNElement(rpn.Key, rpn.Value.(string)))
-			}
+	}
+	splitMap[logparser.DefaultFieldForFullText] = tokenizer.CONTENT_SPLIT_TABLE
+	for _, elem := range r.sk.(*SKConditionImpl).rpn {
+		if elem.RPNOp == rpn.InRange || elem.RPNOp == rpn.NotInRange {
+			expr = append(expr, bloomfilter.NewSKRPNElement(elem.Key, elem.Value.(string)))
 		}
 	}
 	if f, ok := file.(*OBSFilterPath); ok {

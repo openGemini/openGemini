@@ -345,6 +345,7 @@ var messageMap = map[Errno]*Message{
 	ErrRPNElement:              newFatalMessage("unknown the rpn element: %v", ModuleIndex),
 	ErrCoarseIndexFragment:     newFatalMessage("property coarse_index_fragment should be greater than 1", ModuleIndex),
 	ErrQuerySchemaUpperBound:   newNoticeMessage("max-select-schema limit exceeded: %d/%d", ModuleQueryEngine),
+	ErrValueTypeFullTextIndex:  newNoticeMessage("compare value of full text index should be string", ModuleQueryEngine),
 
 	// monitoring and statistics
 	WatchFileTimeout: newWarnMessage("watch file timeout", ModuleStat),

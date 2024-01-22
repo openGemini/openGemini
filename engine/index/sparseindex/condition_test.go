@@ -178,4 +178,19 @@ func TestSKCondition(t *testing.T) {
 	skCondition, _ = sparseindex.NewSKCondition(rpnExpr, skSchema)
 	ok, _ := skCondition.IsExist(0, &MockSKBaseReader{})
 	assert.True(t, ok)
+
+	conStr = "__log___='W1'"
+	fieldMap["__log___"] = influxql.String
+	expr = MustParseExpr(conStr)
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	skCondition, _ = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	ok, _ = skCondition.IsExist(0, &MockSKBaseReader{})
+	assert.True(t, ok)
+
+	conStr = "__log___=1"
+	fieldMap["__log___"] = influxql.Integer
+	expr = MustParseExpr(conStr)
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	_, err = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	assert.True(t, errno.Equal(err, errno.ErrValueTypeFullTextIndex))
 }
