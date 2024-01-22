@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -182,7 +181,7 @@ func WritePIDFile(pidfile string) error {
 	}
 
 	pid := strconv.Itoa(os.Getpid())
-	if err := ioutil.WriteFile(pidfile, []byte(pid), 0600); err != nil {
+	if err := os.WriteFile(pidfile, []byte(pid), 0600); err != nil {
 		return fmt.Errorf("write pid file failed, error: %s", err)
 	}
 

@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package app
 
 import (
@@ -95,7 +96,7 @@ func (pm *ProactiveManager) Close() error {
 		return errors.New("proactive manager service is already closed")
 	}
 
-	pm.logger.Info("Closing preactive manager service")
+	pm.logger.Info("Closing proactive manager service")
 	close(pm.closing)
 	pm.wg.Wait()
 	return nil
