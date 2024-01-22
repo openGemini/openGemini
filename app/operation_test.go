@@ -26,21 +26,21 @@ import (
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
-func TestProactiveManager_ServiceStartandClose(t *testing.T) {
+func TestProactiveManager_ServiceStartAndClose(t *testing.T) {
 	obj := app.NewProactiveManager()
 	if obj.Open() != nil {
-		t.Error("TestProactiveManager_ServiceStartandClose error")
+		t.Error("TestProactiveManager_ServiceStartAndClose error")
 	}
 	if obj.Open() == nil {
-		t.Error("TestProactiveManager_ServiceStartandClose error")
+		t.Error("TestProactiveManager_ServiceStartAndClose error")
 	}
 	obj.SetInspectInterval(3 * time.Second)
 	time.Sleep(1 * time.Second)
 	if obj.Close() != nil {
-		t.Error("TestProactiveManager_ServiceStartandClose error")
+		t.Error("TestProactiveManager_ServiceStartAndClose error")
 	}
 	if obj.Close() == nil {
-		t.Error("TestProactiveManager_ServiceStartandClose error")
+		t.Error("TestProactiveManager_ServiceStartAndClose error")
 	}
 }
 
