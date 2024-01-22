@@ -1531,7 +1531,8 @@ func (h *Handler) rewriteStatementForLogStore(selectStmt *influxql.SelectStateme
 func getPplAndSqlFromQuery(query string) (string, string) {
 	lastPipeIndex := getLastPipeIndex(query)
 	if lastPipeIndex == -1 {
-		return query, ""
+		ppl := removeMulAndSpace(query)
+		return ppl, ""
 	}
 	if strings.HasPrefix(removePreSpace(strings.ToLower(query[lastPipeIndex+1:])), "select ") {
 		sql := strings.TrimSpace(query[lastPipeIndex+1:])
@@ -1539,7 +1540,8 @@ func getPplAndSqlFromQuery(query string) (string, string) {
 		ppl = removeMulAndSpace(ppl)
 		return ppl, sql
 	}
-	return query, ""
+	ppl := removeMulAndSpace(query)
+	return ppl, ""
 }
 
 // reutrn pplQuery for highlight
