@@ -1999,8 +1999,8 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 	var unnestFunc *logstore2.UnnestMatchAll
 	if unnest != nil {
 		unnestExpr, ok := unnest.Expr.(*influxql.Call)
-		if ok {
-			return 0, nil, fmt.Errorf("the type of unnest error")
+		if !ok {
+			return 0, nil, fmt.Errorf("the type of unnest expr error")
 		}
 		unnestField = unnestExpr.Args[1].(*influxql.VarRef).Val
 		if unnestField == TAGS {
