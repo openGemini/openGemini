@@ -35,21 +35,6 @@ const (
 var intervalRecAppendFunctions map[int]func(rec, iRec *Record, index, row int)
 var intervalRecUpdateFunctions map[int]func(rec, iRec *Record, index, row, recRow int)
 var recTransAppendFunctions map[int]func(rec, iRec *Record, index, row int)
-var bitNum []int
-
-func countOnes(num int) int {
-	count := 0
-	for num > 0 {
-		count += num & 1
-		num >>= 1
-	}
-	return count
-}
-func generateArray(array []int) {
-	for i := 0; i < 256; i++ {
-		array[i] = countOnes(i)
-	}
-}
 
 func init() {
 	intervalRecAppendFunctions = make(map[int]func(rec, iRec *Record, index, row int))
@@ -73,8 +58,6 @@ func init() {
 	recTransAppendFunctions[influx.Field_Type_Int] = recIntegerAppendFunction
 	recTransAppendFunctions[influx.Field_Type_Float] = recFloatAppendFunction
 	recTransAppendFunctions[influx.Field_Type_Boolean] = recBooleanAppendFunction
-	bitNum = make([]int, 256)
-	generateArray(bitNum)
 }
 
 type Record struct {
@@ -983,42 +966,6 @@ func subBitmapBytes(bitmap []byte, bitMapOffset int, length int) ([]byte, int) {
 	}
 
 	return bitmap[bitMapOffset>>3 : (bitMapOffset+length)>>3], bitMapOffset & 0x7
-}
-
-func valueIndexRangeWithSingle(bitMap []byte, bmStart int, pos int, posValidCount int) (valStart int) {
-	if (pos >> 3) < (bmStart >> 3) {
-		index := pos & 0x07
-		num := uint8(bitMap[pos>>3])
-		num = (num >> index) << index
-		pos = pos + 8 - index
-		posValidCount = posValidCount + bitNum[int(num)]
-		for i := (pos) >> 3; i < (bmStart)>>3; i++ {
-			posValidCount = posValidCount + bitNum[int(bitMap[i])]
-			pos = pos + 8
-		}
-	}
-	if pos == bmStart {
-		return posValidCount
-	}
-	leftIndex := pos & 0x07
-	rightIndex := 8 - bmStart&0x07
-	num := uint8(bitMap[bmStart>>3])
-	num = (((num >> leftIndex) << (leftIndex + rightIndex)) >> rightIndex)
-	posValidCount = posValidCount + bitNum[int(num)]
-	return posValidCount
-}
-
-func valueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, posValidCount int) (valStart, valEnd int) {
-	var start, end int
-	firstIndex := 0
-	if bmStart >= pos {
-		start = posValidCount
-		end = posValidCount
-		firstIndex = pos
-	}
-	start = valueIndexRangeWithSingle(bitMap, bitOffset+bmStart, bitOffset+firstIndex, start)
-	end = valueIndexRangeWithSingle(bitMap, bitOffset+bmEnd, bitOffset+bmStart, start)
-	return start, end
 }
 
 func (rec *Record) String() string {
