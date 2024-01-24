@@ -108,7 +108,11 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	if err == nil {
 		panic(fmt.Sprintf("file(%v) exist", filePath))
 	}
-	msBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	if tier == util.Cold {
+		msBuilder.fd, err = fileops.CreateOBSFile(filePath, lock, pri)
+	} else {
+		msBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	}
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		panic(err)

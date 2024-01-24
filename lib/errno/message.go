@@ -196,6 +196,8 @@ var messageMap = map[Errno]*Message{
 	FailedToDecodeFloatArray:           newFatalMessage("failed to decode float array. exp length: %d, got: %d", ModuleStorageEngine),
 	InvalidFloatBuffer:                 newFatalMessage("invalid input float encoded data, type = %v", ModuleStorageEngine),
 	MemUsageExceeded:                   newFatalMessage("mem usage exceeded threshold %d", ModuleStorageEngine),
+	ShardCannotMove:                    newFatalMessage("shard can not move %d", ModuleStorageEngine),
+	ShardIsMoving:                      newFatalMessage("shard is moving %d", ModuleStorageEngine),
 
 	// wal error codes
 	ReadWalFileFailed:         newWarnMessage("read wal file failed", ModuleWal),

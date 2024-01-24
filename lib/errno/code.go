@@ -166,6 +166,8 @@ const (
 	FailedToDecodeFloatArray           = 2132
 	InvalidFloatBuffer                 = 2133
 	MemUsageExceeded                   = 2134
+	ShardCannotMove                    = 2135
+	ShardIsMoving                      = 2136
 )
 
 // merge out of order

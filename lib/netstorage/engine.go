@@ -128,5 +128,5 @@ type Engine interface {
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
 	CheckPtsRemovedDone() bool
-	HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool
+	HierarchicalStorage(db string, ptId uint32, shardID uint64) error
 }

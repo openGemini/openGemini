@@ -59,6 +59,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -658,6 +659,11 @@ type Shard interface {
 	DisableCompAndMerge()
 	EnableCompAndMerge()
 	SetLockPath(lock *string)
+	IsColdShard() bool
+	CanDoShardMove() bool
+	ExecShardMove() error
+	DisableHierarchicalStorage()
+	SetEnableHierarchicalStorage()
 }
 
 type shard struct {
@@ -725,6 +731,16 @@ type shard struct {
 	summary *summaryInfo
 
 	memTablePool *mutable.MemTablePool
+
+	MoveShardStartTime time.Time // move shard start time
+
+	// hierarchical storage
+	// wait group for running tssp move
+	moveWG *sync.WaitGroup
+	// channel signal tssp move to stop
+	moveStop chan struct{}
+	// Number of "workers" that expect move to be in a disabled state
+	moveWorksCount int64
 }
 
 type shardDownSampleTaskInfo struct {
@@ -1043,6 +1059,9 @@ func (s *shard) Compact() error {
 		log.Info("closed", zap.Uint64("shardId", id))
 		return nil
 	default:
+		s.DisableHierarchicalStorage()
+		defer s.SetEnableHierarchicalStorage()
+
 		var rule []uint16
 		switch s.engineType {
 		case config.COLUMNSTORE:
@@ -1280,9 +1299,15 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	var err error
 
 	if s.ident.ReadOnly {
-		err = errors.New("can not write rows to downSampled shard")
-		log.Error("write into shard failed", zap.Error(err))
+		log.Error("write into shard failed")
 		if !getDownSampleWriteDrop() {
+			err = errors.New("forbid by downSample ")
+			log.Error("write into shard failed", zap.Error(err))
+			return err
+		}
+		if syscontrol.IsWriteColdShardEnabled() {
+			err = errors.New("forbid by shard moving")
+			log.Error("write into shard failed", zap.Error(err))
 			return err
 		}
 		return nil
@@ -1397,6 +1422,7 @@ func (s *shard) Close() error {
 	}
 
 	s.DisableDownSample()
+	s.DisableHierarchicalStorage()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2498,6 +2524,84 @@ func (s *shard) GetEngineType() config.EngineType {
 func (s *shard) SetLockPath(lock *string) {
 	s.lock = lock
 	s.immTables.SetLockPath(lock)
+}
+
+func (s *shard) IsColdShard() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// here tier = {warm,moving,cold} warm and moving we should exec move
+	return s.tier == util.Cold
+}
+
+func (s *shard) CanDoShardMove() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.isShardFullyCompact()
+}
+
+func (s *shard) isShardFullyCompact() bool {
+	return s.immTables.FullyCompacted()
+}
+
+func (s *shard) ExecShardMove() error {
+	s.log.Info("[hierarchical storage ExecShardMove] shard info",
+		zap.Uint64("shardID", s.GetID()), zap.Uint64("Tier", s.tier))
+	s.DisableDownSample()
+	defer s.EnableDownSample()
+
+	s.mu.Lock()
+	s.tier = util.Moving
+
+	if s.moveWorksCount != 0 {
+		s.mu.Unlock()
+		s.log.Error("[hierarchical storage] other operation is running",
+			zap.Int64("works counts", s.moveWorksCount),
+			zap.String("shard path", s.dataPath))
+		return errno.NewError(errno.ShardIsMoving)
+	}
+
+	if s.MoveShardStartTime.IsZero() {
+		s.MoveShardStartTime = time.Now()
+	}
+
+	// s.moveStop != nil is s.tsspMove exit by err not by disable
+	if s.moveStop == nil {
+		s.moveStop = make(chan struct{})
+	}
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	s.moveWG = wg
+	s.mu.Unlock()
+
+	defer wg.Done()
+	return s.doShardMove()
+}
+
+func (s *shard) doShardMove() error {
+	// all tssp copy success, update tier status
+	s.tier = util.Cold
+	s.immTables.SetTier(util.Cold)
+	return nil
+}
+
+func (s *shard) DisableHierarchicalStorage() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.moveWorksCount++
+
+	if s.moveStop == nil || s.moveWG == nil {
+		s.log.Debug("DisableHierarchicalStorage:", zap.String("chan or wait group is nil. shard path", s.dataPath))
+		return
+	}
+	close(s.moveStop)
+	s.moveWG.Wait()
+	s.moveStop = nil
+}
+
+func (s *shard) SetEnableHierarchicalStorage() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.moveWorksCount--
 }
 
 var (

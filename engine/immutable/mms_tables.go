@@ -59,6 +59,7 @@ type TablesStore interface {
 	GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool)
 	GetCSFiles(mm string) (*TSSPFiles, bool)
 	Tier() uint64
+	SetTier(tier uint64)
 	File(name string, namePath string, isOrder bool) TSSPFile
 	CompactDone(seq []string)
 	CompactionEnable()
@@ -88,6 +89,7 @@ type TablesStore interface {
 	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
 	SeriesTotal() uint64
 	SetLockPath(lock *string)
+	FullyCompacted() bool
 }
 
 type ImmTable interface {
@@ -201,6 +203,10 @@ func (m *MmsTables) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
 func (m *MmsTables) Tier() uint64 {
 	tier := *(m.tier)
 	return tier
+}
+
+func (m *MmsTables) SetTier(tier uint64) {
+	m.tier = &tier
 }
 
 func (m *MmsTables) GetFileSeq() uint64 {

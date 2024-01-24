@@ -400,6 +400,7 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) *StreamIterators {
 	compItrs.estimateSize = group.estimateSize
 	compItrs.chunkRows = 0
 	compItrs.maxChunkRows = 0
+	compItrs.tier = *m.tier
 
 	heap.Init(compItrs)
 
@@ -462,7 +463,12 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 		c.log.Error("file exist", zap.String("file", filePath))
 		return fmt.Errorf("file(%s) exist", filePath)
 	}
-	c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+
+	if c.tier == util.Cold {
+		c.fd, err = fileops.CreateOBSFile(filePath, lock, pri)
+	} else {
+		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	}
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		return err
