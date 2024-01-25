@@ -784,6 +784,61 @@ func (h *Handler) getStmtResult(stmtID2Result map[int]*query.Result) Response {
 	return resp
 }
 
+func transformRequestParams(r *http.Request) {
+	q := r.URL.Query()
+	q.Add(Repository, r.FormValue("db"))
+	q.Add(LogStream, r.FormValue("measurement"))
+	q.Add("query", r.FormValue("q"))
+	r.URL.RawQuery = q.Encode()
+	r.Form = nil
+}
+
+func (h *Handler) resolveLogQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	rw, ok := w.(ResponseWriter)
+	if !ok {
+		rw = NewResponseWriter(w, r)
+	}
+	transformRequestParams(r)
+	t := time.Now()
+	repository := r.URL.Query().Get(Repository)
+	logStream := r.URL.Query().Get(LogStream)
+
+	queryLogRequest, err := getQueryLogRequest(r)
+	if err != nil {
+		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.String("request params", r.URL.RawQuery))
+		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
+		return
+	}
+
+	para := NewQueryPara(queryLogRequest.Query, queryLogRequest.Reverse, queryLogRequest.Highlight,
+		queryLogRequest.Timeout, queryLogRequest.Limit, queryLogRequest.From*1e6, queryLogRequest.To*1e6,
+		queryLogRequest.Scroll, queryLogRequest.Scroll_id, false, queryLogRequest.Explain, queryLogRequest.IsTruncate)
+	if err := para.parseScrollID(); err != nil {
+		h.Logger.Error("query log scan request Scroll_id error! ", zap.Error(err), zap.String("Scroll_id", para.Scroll_id))
+		h.httpErrorRsp(w, ErrorResponse(errno.NewError(errno.ScrollIdIllegal).Error(), LogReqErr), http.StatusBadRequest)
+		return
+	}
+
+	resp, _, _, err := h.serveLogQuery(w, r, para, user)
+	if err != nil {
+		if !QuerySkippingError(err.Error()) {
+			h.serveQueryLogWhenErr(w, err, t, repository, logStream)
+			return
+		}
+	}
+
+	for i := range resp.Results {
+		for _, s := range resp.Results[i].Series {
+			if len(s.Values) > int(para.Limit) {
+				s.Values = s.Values[0:para.Limit]
+			}
+		}
+	}
+
+	n, _ := rw.WriteResponse(*resp)
+	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+}
+
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
@@ -794,6 +849,11 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}()
 	h.requestTracker.Add(r, user)
+
+	if r.FormValue("pipe") == "true" {
+		h.resolveLogQuery(w, r, user)
+		return
+	}
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)

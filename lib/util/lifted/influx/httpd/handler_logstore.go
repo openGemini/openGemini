@@ -1607,7 +1607,7 @@ func (h *Handler) ValidateAndCheckLogStreamExists(repoName, streamName string) e
 	return nil
 }
 
-func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *QueryParam, user meta2.User) (*Response, *influxql.Query, error, int) {
+func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *QueryParam, user meta2.User) (*Response, *influxql.Query, int, error) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, 1)
 	start := time.Now()
@@ -1625,7 +1625,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 
 	if syscontrol.DisableReads {
 		h.Logger.Error("read is forbidden!", zap.Bool("DisableReads", syscontrol.DisableReads))
-		return nil, nil, fmt.Errorf("disable read"), http.StatusForbidden
+		return nil, nil, http.StatusForbidden, fmt.Errorf("disable read")
 	}
 
 	// Retrieve the node id the query should be executed on.
@@ -1633,7 +1633,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	// new reader for sql statement
 	q, pplQuery, err, status := h.getSqlAndPplQuery(r, param, user)
 	if err != nil {
-		return nil, nil, err, status
+		return nil, nil, status, err
 	}
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
 	db := r.FormValue("db")
@@ -1658,13 +1658,13 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	// Check authorization.
 	err = h.checkAuthorization(user, q, db)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error authorizing query: " + err.Error()), http.StatusForbidden
+		return nil, nil, http.StatusForbidden, fmt.Errorf("error authorizing query: " + err.Error())
 	}
 
 	// Parse chunk size. Use default if not provided or unparsable.
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
 	if err != nil {
-		return nil, nil, err, http.StatusBadRequest
+		return nil, nil, http.StatusBadRequest, err
 	}
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
@@ -1702,7 +1702,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	if async {
 		go h.async(q, results)
 		h.writeHeader(w, http.StatusNoContent)
-		return nil, nil, err, http.StatusNoContent
+		return nil, nil, http.StatusNoContent, err
 	}
 
 	// if we're not chunking, this will be the in memory buffer for all results before sending to client
@@ -1718,7 +1718,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 
 		// Throws out errors during query execution
 		if r.Err != nil {
-			return nil, nil, r.Err, http.StatusNoContent
+			return nil, nil, http.StatusNoContent, r.Err
 		}
 
 		// if requested, convert result timestamps to epoch
@@ -1769,13 +1769,13 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 				if q.Statements[0].(*influxql.SelectStatement).Fields != nil {
 					for _, v := range q.Statements[0].(*influxql.SelectStatement).Fields {
 						if _, ok := v.Expr.(*influxql.Call); ok {
-							return &resp, q, nil, http.StatusOK
+							return &resp, q, http.StatusOK, nil
 						}
 					}
 				}
-				return &resp, pplQuery, nil, http.StatusOK
+				return &resp, pplQuery, http.StatusOK, nil
 			}
-			return &resp, pplQuery, nil, http.StatusOK
+			return &resp, pplQuery, http.StatusOK, nil
 		}
 	}
 	if !chunked {
@@ -1783,7 +1783,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 	}
 
-	return nil, nil, nil, http.StatusOK
+	return nil, nil, http.StatusOK, nil
 }
 
 func getQueryLogRequest(r *http.Request) (*QueryLogRequest, error) {

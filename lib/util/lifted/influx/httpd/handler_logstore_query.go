@@ -274,7 +274,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 		if sgs[i].EndTime.UnixNano() < currPara.TimeRange.end {
 			currPara.TimeRange.end = sgs[i].EndTime.UnixNano()
 		}
-		resp, logCond, err, _ := h.serveLogQuery(w, r, currPara, user)
+		resp, logCond, _, err := h.serveLogQuery(w, r, currPara, user)
 		if err != nil {
 			if QuerySkippingError(err.Error()) {
 				continue
@@ -999,7 +999,7 @@ func (h *Handler) queryAggLog(w http.ResponseWriter, r *http.Request, user meta2
 	var resp *Response
 	var sql *influxql.Query
 	for {
-		resp, sql, err, _ = h.serveLogQuery(w, r, para, user)
+		resp, sql, _, err = h.serveLogQuery(w, r, para, user)
 		if err != nil {
 			if isIncAggLogQueryRetryErr(err) {
 				para.reInitForInc()
