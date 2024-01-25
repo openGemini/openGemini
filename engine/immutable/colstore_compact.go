@@ -151,8 +151,8 @@ func (ir *IteratorByRow) compact(pkSchema record.Schemas, tbStore *MmsTables) ([
 				if err != nil {
 					return nil, err
 				}
-				f.RecordResult = resetResultRec(f.RecordResult)
-				f.TimeClusterResult = resetResultRec(f.TimeClusterResult)
+				resetResultRec(f.RecordResult)
+				resetResultRec(f.TimeClusterResult)
 				f.recordResultNum = 0
 			}
 
@@ -265,8 +265,8 @@ func (ir *IteratorByRow) flushIntoFiles(pkSchema record.Schemas, tbStore *MmsTab
 	if err := ir.Flush(tbStore, pkSchema, true); err != nil {
 		return nil, err
 	}
-	f.RecordResult = resetResultRec(f.RecordResult)
-	f.TimeClusterResult = resetResultRec(f.TimeClusterResult)
+	resetResultRec(f.RecordResult)
+	resetResultRec(f.TimeClusterResult)
 	f.recordResultNum = 0
 
 	newFiles := make([]TSSPFile, 0, len(f.builder.Files))
@@ -492,7 +492,7 @@ func (ib *IteratorByBlock) compact(pkSchema record.Schemas, tbStore *MmsTables) 
 			if err != nil {
 				return nil, err
 			}
-			f.RecordResult = resetResultRec(f.RecordResult)
+			resetResultRec(f.RecordResult)
 			//accumulateRowsIndex just for this batch of data
 			f.accumulateRowsIndex = f.accumulateRowsIndex[:0]
 			accumulateRowCount = 0
@@ -552,7 +552,7 @@ func (ib *IteratorByBlock) Flush(pkSchema record.Schemas, readFinal bool, tbStor
 			if err != nil {
 				return err
 			}
-			f.PkRec[f.pkRecPosition] = resetResultRec(f.PkRec[f.pkRecPosition])
+			resetResultRec(f.PkRec[f.pkRecPosition])
 			f.builder = ib.switchMsBuilder(tbStore)
 			f.builder.EncodeChunkDataImp.SetDetachedInfo(false)
 			tbStore.ImmTable.UpdateAccumulateMetaIndexInfo(ib.name, ib.accumulateMetaIndex)
@@ -668,7 +668,7 @@ func (ib *IteratorByBlock) flushIntoFiles(pkSchema record.Schemas, tbStore *MmsT
 	if err := ib.Flush(pkSchema, true, tbStore); err != nil {
 		return nil, err
 	}
-	ib.f.RecordResult = resetResultRec(ib.f.RecordResult)
+	resetResultRec(ib.f.RecordResult)
 	ib.f.recordResultNum = 0
 
 	newFiles := make([]TSSPFile, 0, len(ib.f.builder.Files))
@@ -927,11 +927,10 @@ func putFragmentIterators(itr *FragmentIterators) {
 	}
 }
 
-func resetResultRec(rec *record.Record) *record.Record {
+func resetResultRec(rec *record.Record) {
 	for i := range rec.ColVals {
 		rec.ColVals[i].Init()
 	}
-	return rec
 }
 
 func (f *FragmentIterators) writePrimaryIndex() error {
@@ -1019,8 +1018,8 @@ func (f *FragmentIterators) appendPkRec(pkSchema record.Schemas, final bool) err
 			if err != nil {
 				return err
 			}
-			f.RecordResult = resetResultRec(f.RecordResult)
-			f.TimeClusterResult = resetResultRec(f.TimeClusterResult)
+			resetResultRec(f.RecordResult)
+			resetResultRec(f.TimeClusterResult)
 			return nil
 		}
 		for i := 1; i <= count; i++ {
@@ -1064,7 +1063,7 @@ func (f *FragmentIterators) appendPkRecBySize(pkSchema record.Schemas, final boo
 			if err != nil {
 				return err
 			}
-			f.RecordResult = resetResultRec(f.RecordResult)
+			resetResultRec(f.RecordResult)
 			return nil
 		}
 		for i := 0; i < count-1; i++ {
@@ -1502,8 +1501,8 @@ func (s *SortKeyIterator) appendSingleFragment(tbStore *MmsTables, impl *Iterato
 				return err
 			}
 		}
-		f.RecordResult = resetResultRec(f.RecordResult)
-		f.TimeClusterResult = resetResultRec(f.TimeClusterResult)
+		resetResultRec(f.RecordResult)
+		resetResultRec(f.TimeClusterResult)
 		// if start == end,func will return
 		f.RecordResult.AppendRec(s.curRec, s.position+cutNum, s.curRec.RowNums())
 		if f.tcDuration > 0 {

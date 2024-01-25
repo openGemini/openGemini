@@ -315,7 +315,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 	}
 
 	// check the time field
-	colNum := int(rec.ColNums() - 1)
+	colNum := rec.ColNums() - 1
 	if nil == rec.Schema.Field(colNum) || rec.Schema.Field(colNum).Name != record.TimeField {
 		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
 		return
@@ -329,6 +329,12 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 		wh.preSchema = &schema
 	}
 	for i := 0; i < colNum; i++ {
+		// key field name protection
+		if rec.Schema.Field(i).Name == record.SeqIDField {
+			err = errno.NewError(errno.KeyWordConflictErr, mst, rec.Schema.Field(i).Name)
+			return
+		}
+
 		_, ok := wh.preMst.Schema[rec.Schema.Field(i).Name]
 		if !ok {
 			wh.fieldToCreatePool = appendField(wh.fieldToCreatePool, rec.Schema.Field(i).Name, int32(rec.Schema.Field(i).Type))

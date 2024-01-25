@@ -304,6 +304,7 @@ const (
 	WritePointHasInvalidField    = 5032
 	WritePointSchemaInvalid      = 5033
 	WritePointPrimaryKeyErr      = 5034
+	KeyWordConflictErr           = 5035
 )
 
 // write interface

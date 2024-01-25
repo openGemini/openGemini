@@ -257,7 +257,7 @@ type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
 	FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore)
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
-	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error
+	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string, startSeqId int64) error
 	SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map)
 	Reset(table *MemTable)
 }
@@ -814,10 +814,14 @@ func (t *MemTable) GetMaxTimeBySidNoLock(msName string, sid uint64) int64 {
 	return chunk.OrderWriteRec.lastAppendTime
 }
 
-func UpdateMstRowCount(msRowCount *sync.Map, mstName string, rowCount int64) {
+func UpdateMstRowCount(msRowCount *sync.Map, mstName string, rowCount int64) int64 {
+	var startSeqId *int64
 	if count, ok := msRowCount.Load(mstName); ok {
-		atomic.AddInt64(count.(*int64), rowCount)
+		startSeqId, _ = count.(*int64)
+		atomic.AddInt64(startSeqId, rowCount)
+		return *startSeqId
 	} else {
 		msRowCount.Store(mstName, &rowCount)
+		return 0
 	}
 }

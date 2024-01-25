@@ -28,6 +28,7 @@ import (
 
 const (
 	TimeField           = "time"
+	SeqIDField          = "seqId"
 	RecMaxLenForRuse    = 512
 	RecMaxRowNumForRuse = 2024
 )

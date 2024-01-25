@@ -221,7 +221,7 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 	return table.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
-func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
+func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string, startSeqId int64) error {
 	return nil
 }
 

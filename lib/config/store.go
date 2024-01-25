@@ -231,6 +231,7 @@ type Store struct {
 	MemDataReadEnabled     bool          `toml:"mem-data-read-enabled"`
 	CsCompactionEnabled    bool          `toml:"column-store-compact-enabled"`
 	CsDetachedFlushEnabled bool          `toml:"column-store-detached-flush-enabled"`
+	AddSeqIdColEnabled     bool          `toml:"add-seq-id-col-enabled"`
 	SnapshotTblNum         int           `toml:"snapshot-table-number"`
 	FragmentsNumPerFlush   int           `toml:"fragments-num-per-flush"`
 

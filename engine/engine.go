@@ -151,6 +151,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	immutable.SetSnapshotTblNum(options.SnapshotTblNum)
 	immutable.SetCompactionEnabled(options.CsCompactionEnabled)
 	immutable.SetDetachedFlushEnabled(options.CsDetachedFlushEnabled)
+	immutable.SetAddSeqIdColEnabled(options.AddSeqIdColEnabled)
 	immutable.SetFragmentsNumPerFlush(options.FragmentsNumPerFlush)
 	immutable.SetPrefixDataPath(dataPath)
 	immutable.Init()

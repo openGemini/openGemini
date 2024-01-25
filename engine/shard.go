@@ -546,12 +546,12 @@ func (storage *columnstoreImpl) WriteCols(s *shard, cols *record.Record, mst str
 	return indexErr
 }
 
-func (storage *columnstoreImpl) writecols(s *shard, cols *record.Record, mst string) error {
+func (storage *columnstoreImpl) writeCols(s *shard, cols *record.Record, mst string) error {
 	// update the row count for each mst
 	storage.mu.Lock()
-	mutable.UpdateMstRowCount(s.msRowCount, mst, int64(cols.RowNums()))
+	startSeqId := mutable.UpdateMstRowCount(s.msRowCount, mst, int64(cols.RowNums()))
 	storage.mu.Unlock()
-	return s.activeTbl.MTable.WriteCols(s.activeTbl, cols, storage.mstsInfo, mst)
+	return s.activeTbl.MTable.WriteCols(s.activeTbl, cols, storage.mstsInfo, mst, startSeqId)
 }
 
 func (storage *columnstoreImpl) WriteIndex(s *shard, rows *influx.Rows, mw *mstWriteCtx) error {
@@ -884,7 +884,7 @@ func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) er
 	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
 	start := time.Now()
 	failpoint.Inject("SlowDownActiveTblWrite", nil)
-	err := s.storage.(*columnstoreImpl).writecols(s, cols, mst)
+	err := s.storage.(*columnstoreImpl).writeCols(s, cols, mst)
 	if err != nil {
 		log.Error("write cols rec to memory table fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err

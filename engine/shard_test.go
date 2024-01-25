@@ -4578,6 +4578,68 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 	}
 }
 
+func TestAddSeqIDToCol(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+
+	immutable.SetAddSeqIdColEnabled(true)
+	sort.Sort(record)
+	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
+		t.Fatal(err)
+	}
+	immutable.SetAddSeqIdColEnabled(false)
+	record1 := genRecord()
+	sort.Sort(record1)
+	err = sh.WriteCols(defaultMeasurementName, record1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddSeqIDToColV1(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	record1 := genRecord()
+	sort.Sort(record1)
+	err = sh.WriteCols(defaultMeasurementName, record1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	immutable.SetAddSeqIdColEnabled(true)
+	sort.Sort(record)
+	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
+		t.Fatal(err)
+	}
+	immutable.SetAddSeqIdColEnabled(false)
+}
+
 func TestLeftBound(t *testing.T) {
 	nums := []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	target := uint32(8)

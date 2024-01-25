@@ -58,6 +58,7 @@ var colStoreConf = Config{
 	compactionEnabled:     false,
 	cacheDataBlock:        false,
 	cacheMetaData:         false,
+	addSeqIdColEnabled:    false,
 	streamingCompact:      AutoCompact,
 	expectedSegmentSize:   DefaultExpectedSegmentSize,
 }
@@ -93,6 +94,8 @@ type Config struct {
 	FragmentsNumPerFlush  int
 	compactionEnabled     bool
 	detachedFlushEnabled  bool
+	// Whether to add seqId Col to data
+	addSeqIdColEnabled bool
 	// Whether to cache data blocks in hot shard
 	cacheDataBlock bool
 	// Whether to cache meta blocks in hot shard
@@ -159,6 +162,10 @@ func (c *Config) GetDetachedFlushEnabled() bool {
 	return c.detachedFlushEnabled
 }
 
+func (c *Config) GetAddSeqIdColEnabled() bool {
+	return c.addSeqIdColEnabled
+}
+
 func SetSnapshotTblNum(snapshotTblNum int) {
 	if snapshotTblNum < 1 {
 		snapshotTblNum = 1
@@ -181,6 +188,10 @@ func SetCompactionEnabled(compactionEnabled bool) {
 
 func SetDetachedFlushEnabled(detachFlushEnabled bool) {
 	colStoreConf.detachedFlushEnabled = detachFlushEnabled
+}
+
+func SetAddSeqIdColEnabled(addSeqIdColEnabled bool) {
+	colStoreConf.addSeqIdColEnabled = addSeqIdColEnabled
 }
 
 func SetCacheDataBlock(en bool) {
