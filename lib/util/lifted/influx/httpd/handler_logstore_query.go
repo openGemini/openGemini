@@ -783,36 +783,38 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		}
 		return
 	}
-	var results [][]interface{}
-	groupInfo := make([]string, 0)
+	var tagKey string
+	mergeResults := make(map[string]int64)
 	for i := range resp.Results {
-		for k, s := range resp.Results[i].Series {
+		for _, s := range resp.Results[i].Series {
 			var tagName string
-			for _, n := range s.Tags {
+			// the analytics interface only support output one tags
+			for key, n := range s.Tags {
+				tagKey = key
 				tagName = n
 			}
-			groupInfo = append(groupInfo, tagName)
-			results = append(results, make([]interface{}, 2))
-			results[k][0] = tagName
-			currCount := int64(0)
+			var curCnt int64
 			for _, v := range s.Values {
-				var cnt int64
 				if v[len(v)-1] != nil {
-					var ok bool
-					cnt, ok = v[len(v)-1].(int64)
+					val, ok := v[len(v)-1].(int64)
 					if !ok {
 						h.Logger.Error("query log value parse fail! ")
 						h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
 						return
 					}
-				} else {
-					cnt = 0
+					curCnt += val
 				}
-				currCount += cnt
-				count += cnt
 			}
-			results[k][1] = currCount
+			count += curCnt
+			mergeResults[tagName] += curCnt
 		}
+	}
+	i := 0
+	results := make([][2]interface{}, len(mergeResults))
+	for k, v := range mergeResults {
+		results[i][0] = k
+		results[i][1] = v
+		i++
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i][1].(int64) > results[j][1].(int64)
@@ -821,7 +823,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		results = results[0:DefaultMaxLogStoreAnalyzeResponseNum]
 	}
 	var resultsLast [][]string
-	resultsLast = append(resultsLast, []string{unnest.Aliases[0], Count})
+	resultsLast = append(resultsLast, []string{tagKey, Count})
 	for k := range results {
 		resultsLast = append(resultsLast, []string{results[k][0].(string), strconv.FormatInt(results[k][1].(int64), 10)})
 	}

@@ -648,3 +648,33 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	frag, _ = indexReader.Next()
 	assert2.Equal(t, frag, nil)
 }
+
+func TestInitSchemaByUnnest(t *testing.T) {
+	field := "content"
+	unnest := &influxql.Unnest{
+		Expr: &influxql.Call{
+			Name: "match_all",
+			Args: []influxql.Expr{
+				&influxql.VarRef{Val: "([a-z]+),([0-9]+)", Type: influxql.String},
+				&influxql.VarRef{Val: field, Type: influxql.String},
+			},
+		},
+		Aliases: []string{"key1", "value1"},
+		DstType: []influxql.DataType{influxql.String, influxql.String},
+	}
+	schema := createSortQuerySchema()
+	schema.SetUnnests([]*influxql.Unnest{unnest})
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	err := reader.initSchemaByUnnest()
+	if err != nil {
+		t.Fatal("initSchemaByUnnest failed")
+	}
+	if reader.inSchema.FieldIndex(field) == -1 {
+		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
+	}
+	reader.initSchemaByUnnest()
+	if reader.inSchema.FieldIndex(field) == -1 {
+		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
+	}
+}

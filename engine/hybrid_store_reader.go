@@ -297,6 +297,25 @@ func (r *HybridStoreReader) initSchemaByFullTest() error {
 	return nil
 }
 
+func (r *HybridStoreReader) initSchemaByUnnest() error {
+	if !r.schema.HasUnnests() {
+		return nil
+	}
+	unnest := r.schema.GetUnnests()[0]
+	call, ok := unnest.Expr.(*influxql.Call)
+	if !ok {
+		return fmt.Errorf("the type of unnest expr error")
+	}
+	if call.Name == "match_all" {
+		field := call.Args[1].(*influxql.VarRef).Val
+		if r.inSchema.FieldIndex(field) != -1 {
+			return nil
+		}
+		r.inSchema = append(r.inSchema, record.Field{Name: field, Type: influx.Field_Type_String})
+	}
+	return nil
+}
+
 func (r *HybridStoreReader) initSchema() (err error) {
 	// init the input schema
 	r.inSchema = append(r.inSchema, r.queryCtx.schema[:len(r.queryCtx.schema)-1]...)
@@ -304,6 +323,10 @@ func (r *HybridStoreReader) initSchema() (err error) {
 		if err = r.initSchemaByFullTest(); err != nil {
 			return
 		}
+	}
+
+	if err = r.initSchemaByUnnest(); err != nil {
+		return
 	}
 
 	for i := range r.opt.GetOptDimension() {
