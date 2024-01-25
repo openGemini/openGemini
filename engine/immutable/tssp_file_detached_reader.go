@@ -118,9 +118,9 @@ func (t *TSSPFileDetachedReader) Next() (*record.Record, comm.SeriesInfoIntf, er
 }
 
 func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
-	r := t.recordPool.Get()
-	colAux := record.ColAux{}
 	for {
+		r := t.recordPool.Get()
+		colAux := record.ColAux{}
 		result, err := t.dataReader.ReadBatch(r, t.ctx.readCtx)
 		if err != nil {
 			return nil, err
