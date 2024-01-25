@@ -887,7 +887,7 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 	}
 	h.Logger.Info(fmt.Sprintf("queryAggRequest %v", queryAggRequest))
 	if !strings.Contains(queryAggRequest.Query, Select) {
-		queryAggRequest.Query = queryAggRequest.Query + " |select count(*)"
+		queryAggRequest.Query = queryAggRequest.Query + " |select count(time)"
 	}
 
 	para := NewQueryPara(queryAggRequest.Query, true, false, queryAggRequest.Timeout, 0,
