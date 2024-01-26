@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -320,6 +321,23 @@ func TestDetachedTSSPReader(t *testing.T) {
 		if data == nil {
 			break
 		}
+		totalRow += data.RowNums()
+	}
+	assert.Equal(t, 20, totalRow)
+
+	schema1 := []record.Field{
+		{Name: "time", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	decs = NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema1, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true)
+	totalRow = 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		assert.Equal(t, data.RowNums(), data.ColVals[0].Len)
 		totalRow += data.RowNums()
 	}
 	assert.Equal(t, 20, totalRow)

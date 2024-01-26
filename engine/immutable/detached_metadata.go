@@ -90,7 +90,7 @@ func (reader *DetachedMetaDataReader) InitReadBatch(s []*SegmentMeta, schema rec
 			for tmpIndex < endSegmentIndex {
 				tmpIndex += 1
 				currEntry := currChunkMeta.colMeta[idx].entries[s[tmpIndex].id]
-				if len(offset) == 0 || currEntry.offset != offset[len(offset)-1] {
+				if _, ok := reader.positionMap[currEntry.offset]; len(offset) == 0 || !ok {
 					offset = append(offset, currEntry.offset)
 					length = append(length, int64(currEntry.size))
 					reader.positionMap[currEntry.offset] = &position{schemaIndex: []int{schemaIndex}, segmentID: tmpIndex}
@@ -161,7 +161,7 @@ func (reader *DetachedMetaDataReader) ReadBatch(dst *record.Record, decs *ReadCo
 		var err error
 		for _, index := range schemaIndex {
 			col := &record.ColVal{}
-			if index == timeIndex {
+			if index == timeIndex || schema[index].Name == "time" {
 				err = reader.decodeTimeColumn(col, decs, v.Content)
 			} else {
 				err = decodeColumnData(&schema[index], v.Content, col, decs, false)
