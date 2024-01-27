@@ -52,6 +52,8 @@ const (
 
 const RowsNumPerFragment int = 8192
 
+const MaxMeasurementLength int = 255
+
 var logger *zap.Logger
 
 func SetLogger(lg *zap.Logger) {

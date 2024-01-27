@@ -1261,6 +1261,12 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			h.Logger.Error("write Partial Write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
 			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 			return
+		} else if errno.Equal(err, errno.MeasurementNameTooLong) {
+			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsParse))
+			h.httpError(w, werr.Error(), http.StatusBadRequest)
+			h.Logger.Error("write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return
 		} else if err != nil {
 			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsInsert))
 			h.httpError(w, err.Error(), http.StatusInternalServerError)

@@ -305,6 +305,7 @@ const (
 	WritePointSchemaInvalid      = 5033
 	WritePointPrimaryKeyErr      = 5034
 	KeyWordConflictErr           = 5035
+	MeasurementNameTooLong       = 5036
 )
 
 // write interface
