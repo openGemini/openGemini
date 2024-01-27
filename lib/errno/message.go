@@ -94,6 +94,7 @@ var messageMap = map[Errno]*Message{
 	WritePointHasInvalidField:    newFatalMessage("column store write point has Invalid field :%s", ModuleWrite),
 	WritePointSchemaInvalid:      newFatalMessage("point schema length does not match ddl schema length: %d != %d", ModuleWrite),
 	WritePointPrimaryKeyErr:      newFatalMessage("checkSchema: write point is not match the number of primary key. mst: %s,  expect:%d but:%d", ModuleWrite),
+	MeasurementNameTooLong:       newWarnMessage("measurement name is :%s. upper limit: %d; current: %d", ModuleWrite),
 
 	// write interface error codes
 	InvalidLogDataType:                 newWarnMessage("invalid log data type value", ModuleWriteInterface),

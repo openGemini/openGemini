@@ -71,7 +71,7 @@ func TestUnmarshalRows_error(t *testing.T) {
 	req := "cpu,hostname=,region=eu-west-1 usage_user=58i,usage_system=2i 1622851200000000000\ncpu,hostname,region usage_user=47i,usage_system=93i 1622851200000000000\n"
 	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], `missing tag value for "hostname"`)
 	req = "cpu,hostname=,region=eu-west-1 usage_user=58i,usage_system=2i 1622851200000000000\ncpu,hostname,region usage_user=47i,usage_system=93i 1622851200000000000\ncpu,hostname=host_2,region=eu-central-1  usage_user=93i,usage_system=39i 1622851200000000000\n"
-	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")
+	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], `missing tag value for "hostname"`)
 
 	req = `cpu,host=server01 value="disk mem" 1610467200000000000`
 	f(rows[:0], req, tagsPool[:0], fieldsPool[:0], "")

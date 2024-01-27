@@ -21,6 +21,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/valyala/fastjson/fastfloat"
 )
 
@@ -1040,6 +1041,9 @@ func (r *Row) unmarshal(s string, tagsPool []Tag, fieldsPool []Field, noEscapeCh
 		measurementTags = measurementTags[:n]
 	}
 	r.Name = unescapeTagValue(measurementTags, noEscapeChars)
+	if len(r.Name) > util.MaxMeasurementLength {
+		return tagsPool, fieldsPool, errno.NewError(errno.MeasurementNameTooLong, r.Name, util.MaxMeasurementLength, len(r.Name))
+	}
 	// Allow empty r.Name. In this case metric name is constructed directly from field keys.
 
 	// Parse fields
@@ -1291,6 +1295,9 @@ func unmarshalRows(dst []Row, s string, tagsPool []Tag, fieldsPool []Field, enab
 			return unmarshalRow(dst, s, tagsPool, fieldsPool, noEscapeChars, enableTagArray)
 		}
 		dst, tagsPool, fieldsPool, err = unmarshalRow(dst, s[:n], tagsPool, fieldsPool, noEscapeChars, enableTagArray)
+		if err != nil {
+			return dst, tagsPool, fieldsPool, err
+		}
 		s = s[n+1:]
 	}
 	return dst, tagsPool, fieldsPool, err
