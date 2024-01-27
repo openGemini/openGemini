@@ -431,7 +431,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 			return
 		}
 	}
-	r = record.NewRecord(*wh.preSchema, false)
+	r = record.NewRecord(cutPreSchema(*wh.preSchema), false)
 	return
 }
 
@@ -558,4 +558,19 @@ func createShardGroup(database, retentionPolicy string, client ComMetaClient, pr
 
 	*preSg = sg
 	return sg, false, nil
+}
+
+func cutPreSchema(preSchema []record.Field) []record.Field {
+	if !config.IsLogKeeper() {
+		return preSchema
+	}
+	// cut seqId field
+	schema := make([]record.Field, 0, len(preSchema)-1)
+	for i := range preSchema {
+		if preSchema[i].Name == record.SeqIDField {
+			continue
+		}
+		schema = append(schema, preSchema[i])
+	}
+	return schema
 }

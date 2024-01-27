@@ -217,7 +217,6 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.FragmentsNumPerFlush = conf.Data.FragmentsNumPerFlush
 	opt.CsCompactionEnabled = conf.Data.CsCompactionEnabled
 	opt.CsDetachedFlushEnabled = conf.Data.CsDetachedFlushEnabled
-	opt.AddSeqIdColEnabled = conf.Data.AddSeqIdColEnabled
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)

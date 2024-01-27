@@ -56,7 +56,6 @@ type EngineOptions struct {
 	CompactRecovery          bool
 	CsCompactionEnabled      bool
 	CsDetachedFlushEnabled   bool
-	AddSeqIdColEnabled       bool
 	SnapshotThroughput       int64
 	SnapshotThroughputBurst  int64
 	SnapshotTblNum           int

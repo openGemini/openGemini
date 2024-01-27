@@ -397,7 +397,7 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 }
 
 func (c *csMemTableImpl) addSeqIdColIfNeeded(startSeqId int64, rec *record.Record) {
-	if !immutable.GetColStoreConfig().GetAddSeqIdColEnabled() {
+	if !config.IsLogKeeper() {
 		return
 	}
 

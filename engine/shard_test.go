@@ -4595,12 +4595,13 @@ func TestAddSeqIDToCol(t *testing.T) {
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 
-	immutable.SetAddSeqIdColEnabled(true)
+	config.SetProductType("logkeeper")
 	sort.Sort(record)
 	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		t.Fatal(err)
 	}
-	immutable.SetAddSeqIdColEnabled(false)
+
+	config.SetProductType("csstore")
 	record1 := genRecord()
 	sort.Sort(record1)
 	err = sh.WriteCols(defaultMeasurementName, record1, nil)
@@ -4632,12 +4633,12 @@ func TestAddSeqIDToColV1(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	immutable.SetAddSeqIdColEnabled(true)
+	config.SetProductType("logkeeper")
 	sort.Sort(record)
 	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		t.Fatal(err)
 	}
-	immutable.SetAddSeqIdColEnabled(false)
+	config.SetProductType("csstore")
 }
 
 func TestLeftBound(t *testing.T) {
