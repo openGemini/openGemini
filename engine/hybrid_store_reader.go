@@ -83,7 +83,8 @@ type HybridStoreReader struct {
 	ops         []hybridqp.ExprOptions
 	rowBitmap   []bool
 	dimVals     []string
-	outInIdxMap map[int]int
+	outInIdxMap map[int]int // key: chunk column idx, value: record column idx
+	inOutIdxMap map[int]int // key: record column idx, value: chunk column idx
 	closedCh    chan struct{}
 	closedCount int64
 
@@ -106,6 +107,7 @@ func NewHybridStoreReader(plan hybridqp.QueryNode, indexInfo *executor.CSIndexIn
 		opt:         *plan.Schema().Options().(*query.ProcessorOptions),
 		schema:      plan.Schema(),
 		outInIdxMap: make(map[int]int),
+		inOutIdxMap: make(map[int]int),
 		dimVals:     make([]string, len(plan.Schema().Options().GetOptDimension())),
 		logger:      logger.NewLogger(errno.ModuleQueryEngine),
 		indexInfo:   indexInfo,
@@ -313,6 +315,13 @@ func (r *HybridStoreReader) initSchemaByUnnest() error {
 		}
 		r.inSchema = append(r.inSchema, record.Field{Name: field, Type: influx.Field_Type_String})
 	}
+
+	for i, alias := range unnest.Aliases {
+		if r.inSchema.FieldIndex(alias) != -1 {
+			continue
+		}
+		r.inSchema = append(r.inSchema, record.Field{Name: alias, Type: record.ToModelTypes(unnest.DstType[i])})
+	}
 	return nil
 }
 
@@ -347,6 +356,7 @@ func (r *HybridStoreReader) initSchema() (err error) {
 			inIdx, outIdx := r.inSchema.FieldIndex(in.Val), r.outSchema.FieldIndex(r.ops[i].Ref.Val)
 			if inIdx >= 0 && outIdx >= 0 {
 				r.outInIdxMap[outIdx], useIdxMap[inIdx] = inIdx, struct{}{} //  fields for select
+				r.inOutIdxMap[inIdx] = outIdx
 			}
 		}
 	}
@@ -621,13 +631,22 @@ func (r *HybridStoreReader) tranFieldToDim(rec *record.Record, chunk executor.Ch
 			return errno.NewError(errno.SchemaNotAligned)
 		}
 		colType := record.ToInfluxqlTypes(rec.Schema[idx].Type)
-		transFun, ok := transColumnFun[colType]
-		if !ok {
-			return errno.NewError(errno.NoColValToColumnFunc, colType)
-		}
-
 		recColumn, dimColumn := rec.Column(idx), chunk.Dim(i)
-		transFun(recColumn, dimColumn)
+		chunkColIdx, ok := r.inOutIdxMap[idx]
+		if !ok {
+			transFun, ok := transColumnFun[colType]
+			if !ok {
+				return errno.NewError(errno.NoColValToColumnFunc, colType)
+			}
+			transFun(recColumn, dimColumn)
+		} else {
+			copyFun, ok := copyColumnFun[colType]
+			if !ok {
+				return errno.NewError(errno.NoColValToColumnFunc, colType)
+			}
+			srcColumn := chunk.Column(chunkColIdx)
+			copyFun(srcColumn, dimColumn)
+		}
 		if recColumn.NilCount == recColumn.Length() {
 			dimColumn.AppendManyNil(len(times))
 		} else {

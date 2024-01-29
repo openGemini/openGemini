@@ -793,20 +793,19 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 				tagKey = key
 				tagName = n
 			}
-			var curCnt int64
+			var sum int64
 			for _, v := range s.Values {
-				if v[len(v)-1] != nil {
-					val, ok := v[len(v)-1].(int64)
-					if !ok {
-						h.Logger.Error("query log value parse fail! ")
-						h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-						return
+				var cnt int64
+				for k := 1; k < len(v); k++ {
+					val, ok := v[k].(int64)
+					if ok && val > cnt {
+						cnt = val
 					}
-					curCnt += val
 				}
+				sum += cnt
 			}
-			count += curCnt
-			mergeResults[tagName] += curCnt
+			count += sum
+			mergeResults[tagName] += sum
 		}
 	}
 	i := 0

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -677,4 +678,60 @@ func TestInitSchemaByUnnest(t *testing.T) {
 	if reader.inSchema.FieldIndex(field) == -1 {
 		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
 	}
+}
+
+func genRecordFortRranRec() *record.Record {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 1}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7})
+	return rec
+}
+
+func createQuerySchemaForTranRec() *executor.QuerySchema {
+	var fields influxql.Fields
+	m := &influxql.Measurement{Name: "tranRec"}
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}, Dimensions: []string{"string", "float"}}
+	fields = append(fields, influxql.Fields{
+		{Expr: &influxql.VarRef{Val: "int", Type: influxql.Integer, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "float", Type: influxql.Float, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "boolean", Type: influxql.Boolean, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "string", Type: influxql.String, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "time", Type: influxql.Integer, Alias: ""}},
+	}...)
+	names := []string{"int", "float", "boolean", "string", "time"}
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+	return schema
+}
+
+func TestHybridStoreReaderTranRecToChunk(t *testing.T) {
+	schema := createQuerySchemaForTranRec()
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	if err := reader.initQueryCtx(); err != nil {
+		t.Fatalf("HybridStoreReader initQueryCtx , err: %+v", err)
+	}
+	if err := reader.initSchema(); err != nil {
+		t.Fatalf("initSchema initQueryCtx , err: %+v", err)
+	}
+	rec := genRecordFortRranRec()
+	chk, err := reader.tranRecToChunk(rec)
+	if err != nil {
+		t.Fatalf("trans rec to chunk failed, err: %+v", err)
+	}
+	// compare column and dim for the filed "string"
+	if !reflect.DeepEqual(chk.Column(3), chk.Dim(0)) {
+		t.Fatal("trans rec to dim failed. The column[3] not equal to dim[0]")
+	}
+	fmt.Println(chk.Column(3).BitMap())
 }
