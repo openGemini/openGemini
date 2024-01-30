@@ -30,7 +30,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //go:build !purego && !appengine && !js
-// +build !purego,!appengine,!js
 
 // This file contains the implementation of the proto field accesses using package unsafe.
 
