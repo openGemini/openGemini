@@ -52,7 +52,13 @@ const (
 
 const RowsNumPerFragment int = 8192
 
-const MaxMeasurementLength int = 255
+const MaxMeasurementLengthWithVersion = 255
+
+// eg, version is:_0000
+const MeasurementVersionLength = 5
+
+// the measurement name length should consider MeasurementVersionLength
+const MaxMeasurementLength = MaxMeasurementLengthWithVersion - MeasurementVersionLength
 
 var logger *zap.Logger
 
