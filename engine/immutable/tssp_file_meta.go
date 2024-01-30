@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -33,6 +34,7 @@ const (
 )
 
 var chunkMetaCompressMode = ChunkMetaCompressNone
+var zeroPreAgg = make([]byte, 48)
 
 func SetChunkMetaCompressMode(mode int) {
 	if mode < ChunkMetaCompressNone || mode > ChunkMetaCompressSnappy {
@@ -218,8 +220,14 @@ func (m *ColumnMeta) marshal(dst []byte) []byte {
 	dst = numberenc.MarshalUint16Append(dst, uint16(len(m.name)))
 	dst = append(dst, m.name...)
 	dst = append(dst, m.ty)
-	dst = numberenc.MarshalUint16Append(dst, uint16(len(m.preAgg)))
-	dst = append(dst, m.preAgg...)
+
+	if config.GetStoreConfig().PreAggEnabled || m.name != record.TimeField {
+		dst = numberenc.MarshalUint16Append(dst, uint16(len(m.preAgg)))
+		dst = append(dst, m.preAgg...)
+	} else {
+		dst = numberenc.MarshalUint16Append(dst, 0)
+	}
+
 	for i := range m.entries {
 		seg := m.entries[i]
 		dst = seg.marshal(dst)
@@ -270,6 +278,11 @@ func (m *ColumnMeta) unmarshalEntries(src []byte, segs int) ([]byte, error) {
 
 func (m *ColumnMeta) unmarshalPreagg(src []byte) ([]byte, error) {
 	n, src := int(numberenc.UnmarshalUint16(src)), src[2:]
+	if n == 0 {
+		m.preAgg = append(m.preAgg[:0], zeroPreAgg...)
+		return src, nil
+	}
+
 	if len(src) < n {
 		err := fmt.Errorf("too smaller data for preagg,  %v < %v", len(src), n)
 		log.Error(err.Error())
@@ -487,6 +500,14 @@ func (m *ChunkMeta) reset() {
 		m.colMeta[i].reset()
 	}
 	m.colMeta = m.colMeta[:0]
+}
+
+func (m *ChunkMeta) minBytes() int {
+	// 8-byte attribute: m.sid, m.offset
+	// 8-byte attribute: m.size, m.columnCount, m.segCount
+	return 8*2 + 4*3 +
+		MinMaxTimeLen + // least 1 segment
+		ColumnMetaLenMin*2 // least two columns
 }
 
 func (m *ChunkMeta) Size() int {
