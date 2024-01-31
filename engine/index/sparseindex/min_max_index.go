@@ -18,12 +18,12 @@ package sparseindex
 
 import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 )
 
-var _ = RegistrySKFileReaderCreator(colstore.MinMaxIndex, &MinMaxReaderCreator{})
+var _ = RegistrySKFileReaderCreator(index.MinMaxIndex, &MinMaxReaderCreator{})
 
 type MinMaxReaderCreator struct {
 }

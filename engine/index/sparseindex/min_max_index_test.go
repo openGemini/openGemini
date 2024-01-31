@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -36,7 +37,7 @@ func MinMaxIndexDataRead(file interface{}, rec *record.Record, isCache bool) (*r
 	if !ok {
 		return nil, fmt.Errorf("unexpected the input file")
 	}
-	pkFile := colstore.AppendSKIndexSuffix(dataPath, rec.Schema[0].Name, colstore.MinMaxIndex)
+	pkFile := colstore.AppendSKIndexSuffix(dataPath, rec.Schema[0].Name, index.MinMaxIndex)
 	_ = pkFile
 	rec = record.NewRecord(record.Schemas{{Name: "value", Type: influx.Field_Type_Int}}, false)
 	rec.ColVals[0].AppendIntegers(1, 3, 2, 4)

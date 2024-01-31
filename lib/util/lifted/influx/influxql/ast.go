@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -4390,7 +4391,7 @@ func (ir *IndexRelation) GetBloomFilterColumns() []string {
 		return nil
 	}
 	for i := range ir.IndexNames {
-		if ir.IndexNames[i] == "bloomfilter" {
+		if ir.IndexNames[i] == index.BloomFilterIndex {
 			return ir.IndexList[i].IList
 		}
 	}
@@ -4402,7 +4403,7 @@ func (ir *IndexRelation) GetFullTextColumns() []string {
 		return nil
 	}
 	for i := range ir.Oids {
-		if ir.Oids[i] == 5 { // bloomfilter_fulltext
+		if ir.Oids[i] == uint32(index.BloomFilterFullText) {
 			return ir.IndexList[i].IList
 		}
 	}

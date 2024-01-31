@@ -27,6 +27,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/workingsetcache"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -118,7 +119,7 @@ func (idx *fieldIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *in
 	var field influx.Field
 	// Find the field need to be created index.
 	for _, opt := range row.IndexOptions {
-		if opt.Oid == uint32(Field) {
+		if opt.Oid == uint32(index.Field) {
 			if len(opt.IndexList) != 1 {
 				return 0, fmt.Errorf("just allow only one field to create FieldIndex")
 			}
@@ -467,12 +468,12 @@ func (idx *fieldIndex) DebugFlush() {
 }
 
 func FieldIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
-	index, err := NewFieldIndex(opt)
+	fieldIndex, err := NewFieldIndex(opt)
 	if err != nil {
 		return nil, err
 	}
 	return &IndexAmRoutine{
-		amKeyType:    Field,
+		amKeyType:    index.Field,
 		amOpen:       FieldOpen,
 		amBuild:      FieldBuild,
 		amInsert:     FieldInsert,
@@ -480,7 +481,7 @@ func FieldIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine
 		amScan:       FieldScan,
 		amClose:      FieldClose,
 		amFlush:      FieldFlush,
-		index:        index,
+		index:        fieldIndex,
 		primaryIndex: primaryIndex,
 	}, nil
 }

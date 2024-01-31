@@ -21,11 +21,10 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tokenizer"
@@ -44,8 +43,8 @@ func TestSKIndexReader(t *testing.T) {
 		RHS: &influxql.IntegerLiteral{Val: 2},
 	}}
 	mstInfo := &influxql.Measurement{IndexRelation: &influxql.IndexRelation{
-		Oids:       []uint32{uint32(tsi.MinMax)},
-		IndexNames: []string{colstore.MinMaxIndex},
+		Oids:       []uint32{uint32(index.MinMax)},
+		IndexNames: []string{index.MinMaxIndex},
 		IndexList:  []*influxql.IndexList{{IList: []string{"value"}}},
 	}}
 	readers, err := reader.CreateSKFileReaders(option, mstInfo, true)
@@ -72,8 +71,8 @@ func TestSKBFIndexReader(t *testing.T) {
 		RHS: &influxql.IntegerLiteral{Val: 2},
 	}}
 	mstInfo := &influxql.Measurement{IndexRelation: &influxql.IndexRelation{
-		Oids:       []uint32{uint32(tsi.BloomFilterFullText)},
-		IndexNames: []string{colstore.BloomFilterFullTextIndex},
+		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		IndexNames: []string{index.BloomFilterFullTextIndex},
 		IndexList:  []*influxql.IndexList{{IList: []string{"value"}}},
 	}}
 	r, err := reader.CreateSKFileReaders(option, mstInfo, true)

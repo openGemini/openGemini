@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tokenizer"
@@ -413,7 +414,7 @@ func (msti *MeasurementInfo) CompatibleForLogkeeperColstore() {
 	}
 	msti.IndexRelation.IndexOptions = make([]*influxql.IndexOptions, len(msti.IndexRelation.Oids))
 	for i, oid := range msti.IndexRelation.Oids {
-		if oid != 5 { // 5, bloomfilter_fulltext oid. Due to module dependencies, temporarily write oid numbers.
+		if oid != uint32(index.BloomFilterFullText) {
 			continue
 		}
 		msti.IndexRelation.IndexList[i] = &influxql.IndexList{IList: IList}
@@ -436,8 +437,8 @@ func (msti *MeasurementInfo) CompatibleForLogkeeperRowstore() {
 
 	msti.IndexRelation = influxql.IndexRelation{
 		Rid:        0,
-		Oids:       []uint32{5}, // 5, bloomfilter_fulltext oid. Due to module dependencies, temporarily write oid numbers.
-		IndexNames: []string{"bloomfilter_fulltext"},
+		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		IndexNames: []string{index.BloomFilterFullTextIndex},
 		IndexList: []*influxql.IndexList{
 			{
 				IList: []string{"tags", "content"},

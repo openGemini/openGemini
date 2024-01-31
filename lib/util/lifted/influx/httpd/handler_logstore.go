@@ -35,12 +35,12 @@ import (
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/uuid"
 	logstore2 "github.com/openGemini/openGemini/engine/immutable/logstore"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -331,11 +331,11 @@ func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInf
 	tags := map[string]int32{"tags": influx.Field_Type_String}
 	fields := map[string]int32{"content": influx.Field_Type_String}
 	schemaInfo := meta2.NewSchemaInfo(tags, fields)
-	oid, _ := tsi.GetIndexIdByName(logstore.BloomFilterFullText)
+	indexName, _ := index.GetIndexNameByType(index.BloomFilterFullText)
 	indexR := &influxql.IndexRelation{
 		Rid:        0,
-		Oids:       []uint32{oid},
-		IndexNames: []string{logstore.BloomFilterFullText},
+		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		IndexNames: []string{indexName},
 		IndexList: []*influxql.IndexList{
 			&influxql.IndexList{
 				IList: []string{"tags", "content"},

@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
@@ -35,16 +36,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
-
-var IndexIDToName = map[uint32]string{
-	0: "mergeset",
-	1: "text",
-	2: "field",
-	3: "timecluster",
-	4: "bloomfilter",
-	5: "bloomfilter_fulltext",
-	6: "minmax",
-}
 
 var table = crc32.MakeTable(crc32.Castagnoli)
 
@@ -165,8 +156,7 @@ func (r *SKIndexReaderImpl) getSKInfoByExpr(rpnExpr *rpn.RPNExpr, skIndexRelatio
 				schemas = append(schemas, record.Field{Name: fields[i], Type: influx.Field_Type_String})
 			}
 			// TODO: indexName is used to uniquely identify an index.
-			// 5, bloomfilter_fulltext oid. Due to module dependencies, temporarily write oid numbers.
-			skInfoMap[logstore.BloomFilterFullText] = &SkInfo{fields: schemas, oid: 5}
+			skInfoMap[index.BloomFilterFullTextIndex] = &SkInfo{fields: schemas, oid: uint32(index.BloomFilterFullText)}
 			continue
 		}
 		indexNames, ok := skFieldMap[v.Val]
@@ -191,9 +181,10 @@ func (r *SKIndexReaderImpl) getSKInfoByExpr(rpnExpr *rpn.RPNExpr, skIndexRelatio
 func (r *SKIndexReaderImpl) createSKFileReaders(skInfoMap map[string]*SkInfo, rpnExpr *rpn.RPNExpr, option hybridqp.Options, isCache bool) ([]SKFileReader, error) {
 	var readers []SKFileReader
 	for _, v := range skInfoMap {
-		creator, ok := GetSKFileReaderFactoryInstance().Find(IndexIDToName[v.oid])
+		indexName, _ := index.GetIndexNameByType(index.IndexType(v.oid))
+		creator, ok := GetSKFileReaderFactoryInstance().Find(indexName)
 		if !ok {
-			return nil, fmt.Errorf("unsupported the skip index type: %s", IndexIDToName[v.oid])
+			return nil, fmt.Errorf("unsupported the skip index type: %s", indexName)
 		}
 		reader, err := creator.CreateSKFileReader(rpnExpr, v.fields, option, isCache)
 		if err != nil {
@@ -268,7 +259,7 @@ type SkipIndexWriter interface {
 
 func NewSkipIndexWriter(indexType string) SkipIndexWriter {
 	switch indexType {
-	case logstore.BloomFilterIndex:
+	case index.BloomFilterIndex:
 		return &BloomFilterImpl{
 			bloomFilter: make([]byte, 0),
 		}

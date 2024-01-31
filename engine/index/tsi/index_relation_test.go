@@ -28,6 +28,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -51,7 +52,7 @@ func getTestIndexAndBuilder(path string, engineType config.EngineType) (Index, *
 	opts := new(Options).
 		Path(path).
 		Ident(indexIdent).
-		IndexType(MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(engineType).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
@@ -71,7 +72,7 @@ func getTestIndexAndBuilder(path string, engineType config.EngineType) (Index, *
 	if err != nil {
 		panic(err)
 	}
-	indexBuilder.Relations[uint32(MergeSet)] = indexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
 
 	config.NewLogger("test")
 	err = indexBuilder.Open()
@@ -91,7 +92,7 @@ func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	opts := new(Options).
 		Path(path).
 		Ident(indexIdent).
-		IndexType(Text).
+		IndexType(index.Text).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
@@ -103,7 +104,7 @@ func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
 
 	opt := new(Options).
 		Path(path).
-		IndexType(MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
@@ -119,8 +120,8 @@ func getTextIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	textIndexRelation, err := NewIndexRelation(opts, primaryIndex, indexBuilder)
 	invertedIndexRelation, err := NewIndexRelation(opt, primaryIndex, indexBuilder)
 
-	indexBuilder.Relations[uint32(Text)] = textIndexRelation
-	indexBuilder.Relations[uint32(MergeSet)] = invertedIndexRelation
+	indexBuilder.Relations[uint32(index.Text)] = textIndexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = invertedIndexRelation
 
 	err = indexBuilder.Open()
 
@@ -134,7 +135,7 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	ltime := uint64(time.Now().Unix())
 	opts := new(Options).
 		Path(path).
-		IndexType(Field).
+		IndexType(index.Field).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
@@ -149,7 +150,7 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	indexIdent.Index = &meta.IndexDescriptor{IndexID: 1, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
 	opt := new(Options).
 		Path(path).
-		IndexType(MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
@@ -169,8 +170,8 @@ func getFieldIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		panic(err)
 	}
 
-	indexBuilder.Relations[uint32(Field)] = fieldIndexRelation
-	indexBuilder.Relations[uint32(MergeSet)] = invertedIndexRelation
+	indexBuilder.Relations[uint32(index.Field)] = fieldIndexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = invertedIndexRelation
 
 	err = indexBuilder.Open()
 	if err != nil {
@@ -632,7 +633,7 @@ func TestWriteFieldIndex(t *testing.T) {
 
 	opt := influx.IndexOption{
 		IndexList: []uint16{0},
-		Oid:       uint32(Field),
+		Oid:       uint32(index.Field),
 	}
 	mmPoints := genRowsByOpt(opt, SeriesKeys)
 	err := CreateIndexByRows(idxBuilder, mmPoints)
@@ -673,7 +674,7 @@ func TestFieldIndexSearch(t *testing.T) {
 
 	opt := influx.IndexOption{
 		IndexList: []uint16{3},
-		Oid:       uint32(Field),
+		Oid:       uint32(index.Field),
 	}
 	mmPoints := genRowsByOpt(opt, SeriesKeys)
 	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
@@ -761,7 +762,7 @@ func TestPartialFieldIndexSearch(t *testing.T) {
 
 	opt := influx.IndexOption{
 		IndexList: []uint16{3},
-		Oid:       uint32(Field),
+		Oid:       uint32(index.Field),
 	}
 	mmPoints := genPartialRowsByOpt(opt, SeriesKeys)
 	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
@@ -830,7 +831,7 @@ func genPartialRowsByOpt(opt influx.IndexOption, seriesKeys []string) *dictpool.
 
 	tmpOpt := influx.IndexOption{
 		IndexList: []uint16{0},
-		Oid:       uint32(MergeSet),
+		Oid:       uint32(index.MergeSet),
 	}
 	tmpIndexOptions := make([]influx.IndexOption, 0)
 	tmpIndexOptions = append(tmpIndexOptions, tmpOpt)
@@ -1030,7 +1031,7 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	ltime := uint64(time.Now().Unix())
 	opts := new(Options).
 		Path(path).
-		IndexType(Field).
+		IndexType(index.Field).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
@@ -1045,7 +1046,7 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	indexIdent.Index = &meta.IndexDescriptor{IndexID: 1, IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
 	opt := new(Options).
 		Path(path).
-		IndexType(MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(config.TSSTORE).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour).
@@ -1061,7 +1062,7 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 		panic(err)
 	}
 
-	indexBuilder.Relations[uint32(MergeSet)] = invertedIndexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = invertedIndexRelation
 
 	err = indexBuilder.Open()
 	if err != nil {
@@ -1086,7 +1087,7 @@ func TestCreateFieldIndex(t *testing.T) {
 
 	opt := influx.IndexOption{
 		IndexList: []uint16{3},
-		Oid:       uint32(Field),
+		Oid:       uint32(index.Field),
 	}
 	mmPoints := genRowsByOpt(opt, SeriesKeys)
 	if err := CreateIndexByRows(idxBuilder, mmPoints); err != nil {
@@ -1166,18 +1167,18 @@ func TestCreateFieldIndexError1(t *testing.T) {
 	_, idxBuilder := getFieldIndexAndBuilder(path)
 	defer idxBuilder.Close()
 	for i := range idxBuilder.Relations {
-		if i == int(Field) {
+		if i == int(index.Field) {
 			break
 		}
 	}
 
 	opts := new(Options).
 		Path(path).
-		IndexType(Field).
+		IndexType(index.Field).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour)
 
-	err := idxBuilder.initRelation(uint32(Field), opts, nil)
+	err := idxBuilder.initRelation(uint32(index.Field), opts, nil)
 	if err != nil {
 		t.Fatal()
 	}
@@ -1190,11 +1191,11 @@ func TestCreateFieldIndexError2(t *testing.T) {
 
 	opts := new(Options).
 		Path(path).
-		IndexType(Field + 1).
+		IndexType(index.Field + 1).
 		EndTime(time.Now().Add(time.Hour)).
 		Duration(time.Hour)
 
-	err := idxBuilder.initRelation(uint32(Field), opts, nil)
+	err := idxBuilder.initRelation(uint32(index.Field), opts, nil)
 	if err == nil {
 		t.Fatal()
 	}
@@ -1204,7 +1205,7 @@ func TestMergeSetFlush(t *testing.T) {
 	path := t.TempDir()
 	opts := new(Options).
 		Path(path).
-		IndexType(Field)
+		IndexType(index.Field)
 
 	fi, err := NewFieldIndex(opts)
 	if err != nil {

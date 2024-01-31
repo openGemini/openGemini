@@ -24,7 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logstore"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util"
@@ -307,8 +307,8 @@ func TestCondition(t *testing.T) {
 		Sources: []influxql.Source{
 			&influxql.Measurement{
 				Name: "students",
-				IndexRelation: &influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-					Oids:      []uint32{5},
+				IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+					Oids:      []uint32{uint32(index.BloomFilterFullText)},
 					IndexList: []*influxql.IndexList{{IList: []string{"country"}}},
 				},
 			},
@@ -336,8 +336,8 @@ func TestConditionToRPN(t *testing.T) {
 			Sources: []influxql.Source{
 				&influxql.Measurement{
 					Name: "students",
-					IndexRelation: &influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-						Oids:      []uint32{5},
+					IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+						Oids:      []uint32{uint32(index.BloomFilterFullText)},
 						IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"country"}}},
 					},
 				},

@@ -24,13 +24,14 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/bloomfilter"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 )
 
-var _ = RegistrySKFileReaderCreator(colstore.BloomFilterFullTextIndex, &BloomFilterFullTextReaderCreator{})
+var _ = RegistrySKFileReaderCreator(index.BloomFilterFullTextIndex, &BloomFilterFullTextReaderCreator{})
 
 type BloomFilterFullTextReaderCreator struct {
 }

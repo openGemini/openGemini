@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
@@ -87,7 +88,7 @@ func createShard(db, rp string, ptId uint32, pathName string, duration ...time.D
 	opts := new(tsi.Options).
 		Ident(ident).
 		Path(indexPath).
-		IndexType(tsi.MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(config.TSSTORE).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
@@ -102,7 +103,7 @@ func createShard(db, rp string, ptId uint32, pathName string, duration ...time.D
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
 	indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
 	err = indexBuilder.Open()
 	if err != nil {
 		return nil, err

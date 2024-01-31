@@ -35,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/numberenc"
@@ -419,7 +420,7 @@ func (b *MsBuilder) writeDetachedPrimaryIndex(firstFlush bool, pkRec *record.Rec
 }
 
 func (b *MsBuilder) NewSkipIndexWriter() {
-	b.skipIndexWriter = sparseindex.NewSkipIndexWriter(colstore.BloomFilterIndex)
+	b.skipIndexWriter = sparseindex.NewSkipIndexWriter(index.BloomFilterIndex)
 }
 
 func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, schemaIndex []int, dataFilePath, lockpath string, rowsPerSegment []int, detached bool) error {
@@ -468,7 +469,7 @@ func (b *MsBuilder) getSkipIndexFilePath(dataFilePath, fieldName string, detache
 	if detached {
 		return sparseindex.GetBloomFilterFilePath(b.Path, b.msName, fieldName)
 	}
-	return path.Join(b.Path, b.msName, colstore.AppendSKIndexSuffix(dataFilePath, fieldName, colstore.BloomFilterIndex)+tmpFileSuffix)
+	return path.Join(b.Path, b.msName, colstore.AppendSKIndexSuffix(dataFilePath, fieldName, index.BloomFilterIndex)+tmpFileSuffix)
 }
 
 func (b *MsBuilder) genAccumulateRowsIndex(data *record.Record, skipIndexRelation *influxql.IndexRelation) ([]int, []int) {

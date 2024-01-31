@@ -37,9 +37,9 @@ import (
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -606,23 +606,23 @@ func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementSta
 		return nil, fmt.Errorf("the IndexType does not match the number of index fields")
 	}
 
-	for i, indexType := range stmt.IndexType {
-		oid, err := tsi.GetIndexIdByName(indexType)
+	for i, indexTypeName := range stmt.IndexType {
+		oid, err := index.GetIndexTypeByName(indexTypeName)
 		if err != nil {
 			return nil, err
 		}
-		if oid == uint32(tsi.Field) && len(stmt.IndexList[i]) > 1 {
+		if oid == index.Field && len(stmt.IndexList[i]) > 1 {
 			return nil, fmt.Errorf("cannot create field index for multiple columns: %v", stmt.IndexList[i])
 		}
-		indexR.Oids = append(indexR.Oids, oid)
-		indexR.IndexNames = append(indexR.IndexNames, indexType)
+		indexR.Oids = append(indexR.Oids, uint32(oid))
+		indexR.IndexNames = append(indexR.IndexNames, indexTypeName)
 		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: stmt.IndexList[i]})
 		indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
 	}
 
 	if stmt.TimeClusterDuration > 0 {
-		indexR.Oids = append(indexR.Oids, uint32(tsi.TimeCluster))
-		indexName, err := tsi.GetIndexNameById(uint32(tsi.TimeCluster))
+		indexR.Oids = append(indexR.Oids, uint32(index.TimeCluster))
+		indexName, err := index.GetIndexNameByType(index.TimeCluster)
 		if err != nil {
 			return nil, err
 		}
@@ -1274,13 +1274,13 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 	row := &models.Row{Columns: []string{"INDEXES"}}
 	res := make([][]interface{}, len(mst.IndexRelation.Oids))
 	for i, id := range mst.IndexRelation.Oids {
-		indexName, _ := tsi.GetIndexNameById(id)
+		indexName, _ := index.GetIndexNameByType(index.IndexType(id))
 		var indexList string
 		for _, col := range mst.IndexRelation.IndexList[i].IList {
 			indexList += col + ","
 		}
 		indexList = indexList[:len(indexList)-1]
-		if id == uint32(tsi.TimeCluster) {
+		if id == uint32(index.TimeCluster) {
 			indexList = mst.ColStoreInfo.TimeClusterDuration.String()
 		}
 		res[i] = []interface{}{strings.ToUpper(indexName) + "(" + indexList + ")"}

@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
@@ -312,7 +313,7 @@ func (bfi *BloomFilterIterator) updateBloomFilterPaths() {
 	bfi.bloomFilterPaths = make([]string, len(bfi.bloomFilterCols))
 	for i := range bfi.bloomFilterCols {
 		bfi.bloomFilterPaths[i] = path.Join(bfi.f.builder.Path, bfi.f.name,
-			colstore.AppendSKIndexSuffix(bfi.f.dataFilePath, bfi.bloomFilterCols[i], colstore.BloomFilterIndex)+tmpFileSuffix)
+			colstore.AppendSKIndexSuffix(bfi.f.dataFilePath, bfi.bloomFilterCols[i], index.BloomFilterIndex)+tmpFileSuffix)
 	}
 }
 
@@ -342,7 +343,7 @@ func (bfi *BloomFilterIterator) newBloomFilterReaders(oldFiles []TSSPFile) error
 		bfi.bloomFilterBlockPos[i] = make([]int64, len(bfi.bloomFilterCols))
 		for j := 0; j < len(bfi.bloomFilterCols); j++ {
 			fileName = path.Join(bfi.f.builder.Path, bfi.f.name,
-				colstore.AppendSKIndexSuffix(fn.String(), bfi.bloomFilterCols[j], colstore.BloomFilterIndex))
+				colstore.AppendSKIndexSuffix(fn.String(), bfi.bloomFilterCols[j], index.BloomFilterIndex))
 			dr, err = bfi.newBloomFilterReader(fileName)
 			if err != nil {
 				return err

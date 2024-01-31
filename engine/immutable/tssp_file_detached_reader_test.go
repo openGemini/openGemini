@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
@@ -74,11 +75,11 @@ func writeData(testCompDir, mstName string) error {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	indexRelation := &influxql.IndexRelation{
-		Oids:       []uint32{4},
+		Oids:       []uint32{uint32(index.BloomFilter)},
 		IndexNames: []string{"bloomfilter"},
 	}
 

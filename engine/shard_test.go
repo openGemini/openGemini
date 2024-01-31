@@ -49,8 +49,8 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
@@ -255,7 +255,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 	opts := new(tsi.Options).
 		Ident(ident).
 		Path(indexPath).
-		IndexType(tsi.MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(engineType).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
@@ -270,7 +270,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
 	indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
 	err = indexBuilder.Open()
 	if err != nil {
 		return nil, err
@@ -1483,7 +1483,7 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -1531,7 +1531,7 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -4686,7 +4686,7 @@ func TestWriteDetachedData(t *testing.T) {
 			CompactionType: config.BLOCK,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -4740,7 +4740,7 @@ func TestWriteDetachedDataV2(t *testing.T) {
 			PrimaryKey: primaryKey,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -4795,8 +4795,8 @@ func TestWriteFullTextIndexV1(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: list},
 	}
 
@@ -4849,8 +4849,8 @@ func TestWriteFullTextIndexV2(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: list},
 	}
 
@@ -4905,8 +4905,8 @@ func TestWriteFullTextIndexV3(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: list},
 	}
 

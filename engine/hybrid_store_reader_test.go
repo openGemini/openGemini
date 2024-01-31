@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
@@ -76,7 +77,7 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	return mstinfo
@@ -236,8 +237,8 @@ func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
 	schema.Options().(*query.ProcessorOptions).Sources[0] = &influxql.Measurement{
 		Name:         "students",
 		IsTimeSorted: true,
-		IndexRelation: &influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"field1_string"}}},
 		},
 	}
@@ -451,7 +452,7 @@ func TestHybridStoreReader(t *testing.T) {
 				RetentionPolicy: rp,
 				Name:            mst,
 				IndexRelation: &influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-					Oids:      []uint32{4},
+					Oids:      []uint32{uint32(index.BloomFilter)},
 					IndexList: list},
 				EngineType: config.COLUMNSTORE},
 			}
