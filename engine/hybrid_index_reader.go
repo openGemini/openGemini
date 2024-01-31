@@ -364,10 +364,10 @@ func (r *detachedIndexReader) Next() (executor.IndexFrags, error) {
 				cache.PutNodeIterNum(queryId, 1)
 				return nil, nil
 			}
-			immutable.PutDetachedSegmentTask(queryId, frag)
+			immutable.PutDetachedSegmentTask(r.ctx.shardPath+queryId, frag)
 			return r.InitInc(frag)
 		} else {
-			frag, ok := immutable.GetDetachedSegmentTask(queryId)
+			frag, ok := immutable.GetDetachedSegmentTask(r.ctx.shardPath + queryId)
 			if !ok {
 				frag, err = r.GetBatchFrag()
 				if err != nil {
@@ -377,7 +377,7 @@ func (r *detachedIndexReader) Next() (executor.IndexFrags, error) {
 					cache.PutNodeIterNum(queryId, 1)
 					return nil, nil
 				}
-				immutable.PutDetachedSegmentTask(queryId, frag)
+				immutable.PutDetachedSegmentTask(r.ctx.shardPath+queryId, frag)
 				return r.InitInc(frag.(executor.IndexFrags))
 			}
 			r.init = true

@@ -1477,7 +1477,11 @@ func (h *Handler) rewriteStatementForLogStore(selectStmt *influxql.SelectStateme
 		isIncQuery = param.IncQuery
 		selectStmt.Limit = param.Limit
 		if len(selectStmt.SortFields) == 0 {
-			selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}}
+			if param.Limit > 0 {
+				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}, {Name: record.SeqIDField, Ascending: param.Ascending}}
+			} else {
+				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}}
+			}
 		}
 		timeCond := &influxql.BinaryExpr{
 			LHS: &influxql.BinaryExpr{
@@ -2019,7 +2023,15 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 				recMore := map[string]interface{}{}
 				hasMore := false
 				rec[IsOverflow] = false
+				var currSeqID int64
+				var currT int64
 				for id, c := range s.Columns {
+					if c == record.SeqIDField {
+						if s.Values[j][id] != nil {
+							currSeqID = s.Values[j][id].(int64)
+						}
+						continue
+					}
 					if unnest != nil && c == unnestField {
 						unnestResult := unnestFunc.Get(s.Values[j][id].(string))
 						for k, v := range unnestResult {
@@ -2030,8 +2042,7 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 					case TIME:
 						v, _ := s.Values[j][id].(time.Time)
 						rec[Timestamp] = v.UnixMilli()
-						nano := v.UnixNano()
-						rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(nano, 10) + "|" + s.Tags[Scroll] + "^^"))
+						currT = v.UnixNano()
 					case TAGS:
 						tags, _ := s.Values[j][id].(string)
 						rec[TAGS] = strings.Split(tags, tokenizer.TAGS_SPLITTER)
@@ -2042,6 +2053,7 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 						h.setRecord(recMore, c, s.Values[j][id], para.Truncate)
 					}
 				}
+				rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(currT, 10) + "|" + strconv.FormatInt(currSeqID, 10) + "^^"))
 				if hasMore {
 					if content, ok := rec[CONTENT]; ok {
 						recMore[CONTENT] = content
@@ -2178,26 +2190,21 @@ func GetMSByScrollID(id string) (int64, error) {
 	id = string(scrollIDByte)
 	arrFirst := strings.SplitN(id, "^", 3)
 	if len(arrFirst) != 3 {
-		return 0, errno.NewError(errno.WrongScrollId)
+		return 0, fmt.Errorf("wrong scroll_id")
 	}
-
-	if arrFirst[0] == EmptyValue {
-		currT, err := strconv.ParseInt(arrFirst[1], 10, 64)
+	if arrFirst[0] == "" {
+		return 0, nil
+	}
+	arr := strings.Split(arrFirst[0], "|")
+	if len(arr) == 2 {
+		time, err := strconv.ParseInt(arr[0], 10, 64)
 		if err != nil {
 			return 0, err
 		}
-		return currT / 1e6, nil
+		return time / 1e6, nil
+	} else {
+		return 0, fmt.Errorf("Get wrong scroll_id")
 	}
-
-	arr := strings.Split(arrFirst[0], "|")
-	n, err := strconv.ParseInt(arr[0], 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	if len(arr) != 4 && len(arr) != 5 {
-		return 0, err
-	}
-	return n / 1e6, nil
 }
 
 type Histograms struct {

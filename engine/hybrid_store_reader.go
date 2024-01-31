@@ -243,7 +243,7 @@ func (r *HybridStoreReader) initDetachedFileReader(frags executor.IndexFrags) (c
 	}
 
 	fileReader, err := immutable.NewTSSPFileDetachedReader(metaIndexes, blocks, r.readerCtx,
-		sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), unnest, true)
+		sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), unnest, true, r.schema.Options())
 	if err != nil {
 		return nil, err
 	}

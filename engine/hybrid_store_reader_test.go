@@ -633,7 +633,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil)
 	schema.Options().(*query.ProcessorOptions).IterID += 1
 	indexReader.Init()
-	_, ok := immutable.GetDetachedSegmentTask(queryID)
+	_, ok := immutable.GetDetachedSegmentTask(sh.filesPath + queryID)
 	if !ok {
 		t.Error("get wrong cache")
 	}

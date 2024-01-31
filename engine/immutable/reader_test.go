@@ -532,7 +532,7 @@ func BenchmarkGenRecByReserveIds(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		genRecByReserveIds(rec, filterRec, reserveId, RedIdxMap)
+		GenRecByReserveIds(rec, filterRec, reserveId, RedIdxMap)
 		filterRec.Reuse()
 	}
 }

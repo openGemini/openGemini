@@ -114,6 +114,7 @@ type QueryParam struct {
 	IterID           int32
 	Timeout          int
 	Limit            int
+	SeqID            int64
 	Process          float64
 	Scroll           string
 	Query            string
@@ -137,6 +138,7 @@ func NewQueryPara(query string, ascending bool, highlight bool, timeout, limit i
 		Limit:     limit,
 		IncQuery:  isIncQuery,
 		Truncate:  isTruncate,
+		SeqID:     -1,
 	}
 }
 
@@ -193,8 +195,12 @@ func (para *QueryParam) parseScrollID() error {
 	if err != nil {
 		return err
 	}
-	if len(arr) != 4 && len(arr) != 5 {
+	seqId, err := strconv.ParseInt(arr[1], 10, 64)
+	if err != nil {
 		return err
+	}
+	if len(arr) != 2 {
+		return fmt.Errorf("scroll_id is not right")
 	}
 	if para.Ascending {
 		para.TimeRange.start = n - 1
@@ -203,6 +209,8 @@ func (para *QueryParam) parseScrollID() error {
 			para.TimeRange.end = n + 1
 		}
 	}
+	para.SeqID = seqId
+
 	return nil
 }
 
@@ -222,6 +230,7 @@ func (para *QueryParam) deepCopy() *QueryParam {
 		QueryID:          para.QueryID,
 		TimeRange:        para.TimeRange,
 		GroupBytInterval: para.GroupBytInterval,
+		SeqID:            para.SeqID,
 	}
 }
 
@@ -250,6 +259,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 		h.httpErrorRsp(w, ErrorResponse(errno.NewError(errno.ScrollIdIllegal).Error(), LogReqErr), http.StatusBadRequest)
 		return
 	}
+	para.QueryID = para.Scroll_id
 	sgsAll, err := h.MetaClient.GetShardGroupByTimeRange(repository, logStream, time.Unix(0, para.TimeRange.start), time.Unix(0, para.TimeRange.end))
 	if err != nil {
 		h.serveQueryLogWhenErr(w, err, t, repository, logStream)

@@ -242,7 +242,12 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 	}
 
 	if len(pb.GetSchema()) > 0 {
-		msti.Schema = make(map[string]int32, len(pb.GetSchema()))
+		if config.IsLogKeeper() {
+			msti.Schema = make(map[string]int32, len(pb.GetSchema())+1)
+			msti.Schema[record.SeqIDField] = influx.Field_Type_Int
+		} else {
+			msti.Schema = make(map[string]int32, len(pb.GetSchema()))
+		}
 	}
 
 	for name, t := range pb.GetSchema() {
