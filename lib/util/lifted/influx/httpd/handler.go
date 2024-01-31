@@ -788,26 +788,55 @@ func transformRequestParams(r *http.Request) {
 	q := r.URL.Query()
 	q.Add(Repository, r.FormValue("db"))
 	q.Add(LogStream, r.FormValue("measurement"))
+	q.Add(Sql, "true")
 	q.Add("query", r.FormValue("q"))
 	r.URL.RawQuery = q.Encode()
 	r.Form = nil
 }
 
-func (h *Handler) resolveLogQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	rw, ok := w.(ResponseWriter)
-	if !ok {
-		rw = NewResponseWriter(w, r)
+// rewritePipeStateForQuery is used to generate selectStmt based on the pipe state.
+func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam, r *http.Request) {
+	var selectStmt *influxql.SelectStatement
+	if stmt, currOk := q.Statements[0].(*influxql.ExplainStatement); currOk {
+		selectStmt = stmt.Statement
+	} else {
+		selectStmt, _ = q.Statements[0].(*influxql.SelectStatement)
 	}
-	transformRequestParams(r)
-	t := time.Now()
-	repository := r.URL.Query().Get(Repository)
-	logStream := r.URL.Query().Get(LogStream)
+	selectStmt.RewriteUnnestSource()
+	selectStmt.Sources = influxql.Sources{&influxql.Measurement{Name: r.URL.Query().Get(":logStream"), Database: r.URL.Query().Get(":repository"), RetentionPolicy: r.URL.Query().Get(":logStream")}}
+	if param != nil {
+		selectStmt.Limit = param.Limit
+		timeCond := &influxql.BinaryExpr{
+			LHS: &influxql.BinaryExpr{
+				LHS: &influxql.VarRef{Val: "time", Type: influxql.Time},
+				Op:  influxql.GTE,
+				RHS: &influxql.IntegerLiteral{Val: param.TimeRange.start},
+			},
+			Op: influxql.AND,
+			RHS: &influxql.BinaryExpr{
+				LHS: &influxql.VarRef{Val: "time", Type: influxql.Time},
+				Op:  influxql.LT,
+				RHS: &influxql.IntegerLiteral{Val: param.TimeRange.end},
+			},
+		}
+		if selectStmt.Condition == nil {
+			selectStmt.Condition = timeCond
+		} else {
+			selectStmt.Condition = &influxql.BinaryExpr{
+				LHS: selectStmt.Condition,
+				Op:  influxql.AND,
+				RHS: timeCond,
+			}
+		}
+	}
+}
 
+func (h *Handler) buildLogQueryParam(r *http.Request) (*QueryParam, error) {
+	transformRequestParams(r)
 	queryLogRequest, err := getQueryLogRequest(r)
 	if err != nil {
 		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.String("request params", r.URL.RawQuery))
-		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("query log scan request error! ")
 	}
 
 	para := NewQueryPara(queryLogRequest.Query, queryLogRequest.Reverse, queryLogRequest.Highlight,
@@ -815,28 +844,44 @@ func (h *Handler) resolveLogQuery(w http.ResponseWriter, r *http.Request, user m
 		queryLogRequest.Scroll, queryLogRequest.Scroll_id, false, queryLogRequest.Explain, queryLogRequest.IsTruncate)
 	if err := para.parseScrollID(); err != nil {
 		h.Logger.Error("query log scan request Scroll_id error! ", zap.Error(err), zap.String("Scroll_id", para.Scroll_id))
-		h.httpErrorRsp(w, ErrorResponse(errno.NewError(errno.ScrollIdIllegal).Error(), LogReqErr), http.StatusBadRequest)
-		return
+		return nil, fmt.Errorf("query log scan request Scroll_id error! ")
 	}
+	return para, nil
+}
 
-	resp, _, _, err := h.serveLogQuery(w, r, para, user)
+func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User) (*influxql.Query, int, error) {
+	para, err := h.buildLogQueryParam(r)
 	if err != nil {
-		if !QuerySkippingError(err.Error()) {
-			h.serveQueryLogWhenErr(w, err, t, repository, logStream)
-			return
+		return nil, http.StatusBadRequest, err
+	}
+
+	qp := h.getQueryFromRequest(r, para, user)
+	if qp == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf(`missing required parameter "q"`)
+	}
+	ppl, sql := getPplAndSqlFromQuery(qp)
+	// sql parser
+	var sqlQuery *influxql.Query
+	var status int
+	if sql != "" {
+		sqlQuery, err, status = h.getSqlQuery(r, strings.NewReader(sql))
+		if err != nil {
+			return nil, status, err
+		}
+	} else {
+		stmt := generateDefaultStatement()
+		sqlQuery = &influxql.Query{Statements: influxql.Statements{stmt}}
+	}
+	// ppl parser
+	if ppl != "" {
+		_, err, status := h.getPplQuery(r, strings.NewReader(ppl), sqlQuery)
+		if err != nil {
+			return nil, status, err
 		}
 	}
 
-	for i := range resp.Results {
-		for _, s := range resp.Results[i].Series {
-			if len(s.Values) > int(para.Limit) {
-				s.Values = s.Values[0:para.Limit]
-			}
-		}
-	}
-
-	n, _ := rw.WriteResponse(*resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	h.rewritePipeStateForQuery(sqlQuery, para, r)
+	return sqlQuery, http.StatusOK, nil
 }
 
 // serveQuery parses an incoming query and, if valid, executes the query
@@ -849,11 +894,6 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}()
 	h.requestTracker.Add(r, user)
-
-	if r.FormValue("pipe") == "true" {
-		h.resolveLogQuery(w, r, user)
-		return
-	}
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
@@ -869,20 +909,32 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 
 	// Retrieve the node id the query should be executed on.
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
-	// new reader for sql statement
-	qr, f, err := h.newQueryReader(r, nil, user)
-	if err != nil {
-		h.httpError(rw, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if f != nil {
-		defer util.MustClose(f)
-	}
 
-	q, err, status := h.getSqlQuery(r, qr)
-	if err != nil {
-		h.httpError(rw, err.Error(), status)
-		return
+	var q *influxql.Query
+	var err error
+	var status int
+	if r.FormValue("pipe") == "true" {
+		// new reader for sql statement
+		q, _, err = h.parsePipeAndSqlForQuery(r, user)
+		if err != nil {
+			h.httpError(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// new reader for sql statement
+		qr, f, err := h.newQueryReader(r, nil, user)
+		if err != nil {
+			h.httpError(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if f != nil {
+			defer util.MustClose(f)
+		}
+		q, err, status = h.getSqlQuery(r, qr)
+		if err != nil {
+			h.httpError(rw, err.Error(), status)
+			return
+		}
 	}
 
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
