@@ -1239,7 +1239,9 @@ func (s *shard) getLastFlushTime(msName string, sid uint64) int64 {
 }
 
 func (s *shard) addRowCountsBySid(msName string, sid uint64, rowCounts int64) {
-	s.immTables.AddRowCountsBySid(msName, sid, rowCounts)
+	if s.ident.ShardType == influxql.RANGE {
+		s.immTables.AddRowCountsBySid(msName, sid, rowCounts)
+	}
 }
 
 func (s *shard) getRowCountsBySid(msName string, sid uint64) (int64, error) {

@@ -3435,6 +3435,7 @@ func TestFreeSequencer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sh.ident.ShardType = influxql.RANGE
 	if err = sh.NewShardKeyIdx("range", sh.dataPath, &lockPath); err != nil {
 		t.Fatal(err)
 	}
@@ -3503,6 +3504,7 @@ func TestShard_GetSplitPoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sh.ident.ShardType = influxql.RANGE
 	if err = sh.NewShardKeyIdx("range", sh.dataPath, &lockPath); err != nil {
 		t.Fatal(err)
 	}
