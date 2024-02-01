@@ -365,6 +365,8 @@ func TestHybridStoreReader(t *testing.T) {
 	// build the storage engine
 	storeEngine := NewMockStoreEngine()
 	storeEngine.SetShard(sh)
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
 
 	for _, tt := range []struct {
 		skip      bool

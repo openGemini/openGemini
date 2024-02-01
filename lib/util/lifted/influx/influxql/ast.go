@@ -606,13 +606,7 @@ func (a Sources) HaveOnlyCSStore() bool {
 }
 
 func (a Sources) IsUnifyPlan() bool {
-	msts := a.Measurements()
-	for i := range msts {
-		if msts[i].IndexRelation != nil && len(msts[i].IndexRelation.Oids) > 0 {
-			return true
-		}
-	}
-	return false
+	return config.IsLogKeeper()
 }
 
 func (a Sources) IsSubQuery() bool {
@@ -4408,6 +4402,15 @@ func (ir *IndexRelation) GetFullTextColumns() []string {
 		}
 	}
 	return nil
+}
+
+func (ir *IndexRelation) GetTimeClusterDuration() int64 {
+	for i := range ir.Oids {
+		if ir.Oids[i] == uint32(index.TimeCluster) {
+			return int64(ir.IndexOptions[i].Options[0].TimeClusterDuration)
+		}
+	}
+	return 0
 }
 
 // Measurement represents a single measurement used as a datasource.

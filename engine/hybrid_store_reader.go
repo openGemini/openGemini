@@ -485,6 +485,7 @@ func (r *HybridStoreReader) Work(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	tracing.EndPP(r.initReaderSpan)
 
 	defer func() {
 		if r.span != nil {

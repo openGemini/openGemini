@@ -43,7 +43,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -617,22 +616,15 @@ func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementSta
 		indexR.Oids = append(indexR.Oids, uint32(oid))
 		indexR.IndexNames = append(indexR.IndexNames, indexTypeName)
 		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: stmt.IndexList[i]})
-		indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
-	}
-
-	if stmt.TimeClusterDuration > 0 {
-		indexR.Oids = append(indexR.Oids, uint32(index.TimeCluster))
-		indexName, err := index.GetIndexNameByType(index.TimeCluster)
-		if err != nil {
-			return nil, err
+		if oid != (index.TimeCluster) {
+			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
+		} else {
+			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
+				Options: []*influxql.IndexOption{
+					{TimeClusterDuration: stmt.TimeClusterDuration},
+				},
+			})
 		}
-		indexR.IndexNames = append(indexR.IndexNames, indexName)
-		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: []string{record.TimeField}})
-		indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
-			Options: []*influxql.IndexOption{
-				{TimeClusterDuration: stmt.TimeClusterDuration},
-			},
-		})
 	}
 	return indexR, nil
 }

@@ -2434,7 +2434,10 @@ func (s *shard) scanWithSparseIndex(dataFiles []immutable.TSSPFile, schema *exec
 			pkSchema := pkInfo.GetRec().Schema
 			tIdx := pkSchema.FieldIndex(record.TimeField)
 			timePrimaryCond := binaryfilterfunc.GetTimeCondition(tr, pkSchema, tIdx)
-			timeClusterCond := binaryfilterfunc.GetTimeCondition(tr, pkSchema, int(tcIdx))
+			var timeClusterCond influxql.Expr
+			if tcIdx > colstore.DefaultTCLocation {
+				timeClusterCond = binaryfilterfunc.GetTimeCondition(schema.GetTimeRangeByTC(), pkSchema, int(tcIdx))
+			}
 			timeCondition := binaryfilterfunc.CombineConditionWithAnd(timePrimaryCond, timeClusterCond)
 			keyCondition, err = sparseindex.NewKeyCondition(timeCondition, condition, pkSchema)
 			if err != nil {

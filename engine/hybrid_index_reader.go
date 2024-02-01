@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 const (
@@ -91,7 +92,7 @@ func (r *attachedIndexReader) Init() (err error) {
 	if err != nil {
 		return err
 	}
-	err = initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx)
+	err = initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx, r.info.Infos()[0].GetTCLocation())
 	return
 }
 
@@ -278,7 +279,7 @@ func (r *detachedIndexReader) Init() (err error) {
 		return
 	}
 
-	err = initKeyCondition(r.info.Infos()[0].Data.Schema, r.ctx)
+	err = initKeyCondition(r.info.Infos()[0].Data.Schema, r.ctx, pkMetaInfo.TCLocation)
 	return
 }
 
@@ -456,13 +457,16 @@ func (r *detachedIndexReader) GetBatchFrag() (executor.IndexFrags, error) {
 	return frags, nil
 }
 
-func initKeyCondition(pkSchema record.Schemas, ctx *indexContext) error {
+func initKeyCondition(pkSchema record.Schemas, ctx *indexContext, tcIdx int8) error {
+	var err error
 	tIdx := pkSchema.FieldIndex(record.TimeField)
 	condition := ctx.schema.Options().GetCondition()
 	timePrimaryCond := binaryfilterfunc.GetTimeCondition(ctx.tr, pkSchema, tIdx)
-	timeClusterCond := binaryfilterfunc.GetTimeCondition(ctx.tr, pkSchema, tIdx)
+	var timeClusterCond influxql.Expr
+	if tcIdx > colstore.DefaultTCLocation {
+		timeClusterCond = binaryfilterfunc.GetTimeCondition(ctx.schema.GetTimeRangeByTC(), pkSchema, int(tcIdx))
+	}
 	timeCondition := binaryfilterfunc.CombineConditionWithAnd(timePrimaryCond, timeClusterCond)
-	var err error
 	if ctx.keyCondition, err = sparseindex.NewKeyCondition(timeCondition, condition, pkSchema); err != nil {
 		return err
 	}

@@ -4309,6 +4309,81 @@ func TestServer_Query_ColumnStore(t *testing.T) {
 	}
 }
 
+func TestServer_Query_TimeCluster(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	// set infinite retention policy as we are inserting data in the past and don't want retention policy enforcement to make this test racy
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.CreateMeasurement("CREATE measurement db0.rp0.mst (country tag,  \"name\" tag, age int64,  height float64,  address string, alive bool) WITH  ENGINETYPE = columnstore  INDEXTYPE timecluster(5s) PRIMARYKEY country,address,time"); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,country=china,name=azhu age=12i,height=70,address="shenzhen",alive=TRUE 1629129600000000000`),
+		fmt.Sprintf(`mst,country=american,name=alan age=20i,height=80,address="shanghai",alive=FALSE 1629129601000000000`),
+		fmt.Sprintf(`mst,country=germany,name=alang age=3i,height=90,address="beijin",alive=TRUE 1629129602000000000`),
+		fmt.Sprintf(`mst,country=japan,name=ahui age=30i,height=121,address="guangzhou",alive=FALSE 1629129603000000000`),
+		fmt.Sprintf(`mst,country=canada,name=aqiu age=35i,height=138,address="chengdu",alive=TRUE 1629129604000000000`),
+		fmt.Sprintf(`mst,country=china,name=agang age=48i,height=149,address="wuhan",alive=TRUE 1629129605000000000`),
+		fmt.Sprintf(`mst,country=american,name=agan age=52i,height=153,address="wuhan",alive=TRUE 1629129606000000000`),
+		fmt.Sprintf(`mst,country=germany,name=alin age=28i,height=163,address="anhui",alive=FALSE 1629129607000000000`),
+		fmt.Sprintf(`mst,country=japan,name=ali age=32i,height=173,address="xian",alive=TRUE 1629129608000000000`),
+		fmt.Sprintf(`mst,country=canada,name=ali age=60i,height=180,address="hangzhou",alive=FALSE 1629129609000000000`),
+		fmt.Sprintf(`mst,country=canada,name=ahuang age=102i,height=191,address="nanjin",alive=TRUE 1629129610000000000`),
+		fmt.Sprintf(`mst,country=china,name=ayin age=123i,height=203,address="zhengzhou",alive=FALSE 1629129611000000000`),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "inner",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select sum(age) as sum_age, sum(height) as sum_height from db0.rp0.mst where time >= 1629129600000000000 and time <= 1629129604000000000 group by time(1s) fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_age","sum_height"],"values":[["2021-08-16T16:00:00Z",12,70],["2021-08-16T16:00:01Z",20,80],["2021-08-16T16:00:02Z",3,90],["2021-08-16T16:00:03Z",30,121],["2021-08-16T16:00:04Z",35,138]]}]}]}`,
+		},
+		&Query{
+			name:    "outer",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select sum(age) as sum_age, sum(height) as sum_height from db0.rp0.mst where time >= 1629129600000000000 and time <= 1629129606000000000 group by time(1s) fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_age","sum_height"],"values":[["2021-08-16T16:00:00Z",12,70],["2021-08-16T16:00:01Z",20,80],["2021-08-16T16:00:02Z",3,90],["2021-08-16T16:00:03Z",30,121],["2021-08-16T16:00:04Z",35,138],["2021-08-16T16:00:05Z",48,149],["2021-08-16T16:00:06Z",52,153]]}]}]}`,
+		},
+		&Query{
+			name:    "equal",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select sum(age) as sum_age, sum(height) as sum_height from db0.rp0.mst where time >= 1629129600000000000 and time <= 1629129605000000000 group by time(1s) fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","sum_age","sum_height"],"values":[["2021-08-16T16:00:00Z",12,70],["2021-08-16T16:00:01Z",20,80],["2021-08-16T16:00:02Z",3,90],["2021-08-16T16:00:03Z",30,121],["2021-08-16T16:00:04Z",35,138],["2021-08-16T16:00:05Z",48,149]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(5 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 // TODO:partial Compare
 func TestServer_Query_Complex_Aggregate(t *testing.T) {
 	t.Parallel()

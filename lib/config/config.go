@@ -257,11 +257,15 @@ const (
 	LogKeeper             // the log service of CSS
 )
 
+const (
+	LogKeeperService = "logkeeper"
+)
+
 var productTypeOfService ProductType = Basic
 
 func SetProductType(productType string) {
 	switch strings.ToLower(productType) {
-	case "logkeeper":
+	case LogKeeperService:
 		productTypeOfService = LogKeeper
 	default:
 		productTypeOfService = Basic

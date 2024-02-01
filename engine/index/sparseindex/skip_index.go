@@ -123,6 +123,10 @@ func (r *SKIndexReaderImpl) CreateSKFileReaders(option hybridqp.Options, mstInfo
 
 	skFieldMap := make(map[string][]string)
 	for i, indexList := range skIndexRelation.IndexList {
+		// time cluster takes effect on the primary key, not the skip index.
+		if skIndexRelation.Oids[i] == uint32(index.TimeCluster) {
+			continue
+		}
 		for _, field := range indexList.IList {
 			if _, ok := skFieldMap[field]; !ok {
 				skFieldMap[field] = []string{skIndexRelation.IndexNames[i]}
@@ -130,6 +134,9 @@ func (r *SKIndexReaderImpl) CreateSKFileReaders(option hybridqp.Options, mstInfo
 				skFieldMap[field] = append(skFieldMap[field], skIndexRelation.IndexNames[i])
 			}
 		}
+	}
+	if len(skFieldMap) == 0 {
+		return nil, nil
 	}
 	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
 	skInfoMap, err := r.getSKInfoByExpr(rpnExpr, skIndexRelation, skFieldMap)
