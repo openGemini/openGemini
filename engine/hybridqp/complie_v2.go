@@ -74,7 +74,7 @@ func FilterNullColumnQuery(stmt *influxql.SelectStatement) bool {
 
 // IsExactStatisticQuery Hint
 func IsExactStatisticQuery(stmt *influxql.SelectStatement) bool {
-	if !config.GetStoreConfig().PreAggEnabled {
+	if !config.GetCommon().PreAggEnabled {
 		return true
 	}
 

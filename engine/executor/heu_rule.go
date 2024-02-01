@@ -890,7 +890,7 @@ func (r *AggPushDownToSubQueryRule) canPush(agg *LogicalAggregate, project *Logi
 	if project.Schema().HasLimit() {
 		return false
 	}
-	if !config.GetStoreConfig().PreAggEnabled || project.schema.Options().GetHintType() == hybridqp.ExactStatisticQuery {
+	if !config.GetCommon().PreAggEnabled || project.schema.Options().GetHintType() == hybridqp.ExactStatisticQuery {
 		return false
 	}
 	return true

@@ -112,9 +112,9 @@ func buildChunkMeta() *ChunkMeta {
 }
 
 func TestPreAggEnable(t *testing.T) {
-	config.GetStoreConfig().PreAggEnabled = false
+	config.GetCommon().PreAggEnabled = false
 	defer func() {
-		config.GetStoreConfig().PreAggEnabled = true
+		config.GetCommon().PreAggEnabled = true
 	}()
 
 	cm := buildChunkMeta()

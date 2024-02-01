@@ -103,7 +103,7 @@ func TestVerifyHintStmt(t *testing.T) {
 }
 
 func TestIsExactStatisticQuery(t *testing.T) {
-	conf := config.GetStoreConfig()
+	conf := config.GetCommon()
 	conf.PreAggEnabled = false
 	defer func() {
 		conf.PreAggEnabled = true

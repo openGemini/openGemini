@@ -221,7 +221,7 @@ func (m *ColumnMeta) marshal(dst []byte) []byte {
 	dst = append(dst, m.name...)
 	dst = append(dst, m.ty)
 
-	if config.GetStoreConfig().PreAggEnabled || m.name == record.TimeField {
+	if config.GetCommon().PreAggEnabled || m.name == record.TimeField {
 		dst = numberenc.MarshalUint16Append(dst, uint16(len(m.preAgg)))
 		dst = append(dst, m.preAgg...)
 	} else {

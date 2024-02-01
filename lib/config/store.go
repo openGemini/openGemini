@@ -74,9 +74,7 @@ const (
 var ReadMetaCachePct = DefaultReadMetaCachePercent
 var ReadDataCachePct = DefaultReadDataCachePercent
 
-var storeConfig = Store{
-	PreAggEnabled: true,
-}
+var storeConfig = Store{}
 
 func SetStoreConfig(conf Store) {
 	storeConfig = conf
@@ -293,7 +291,6 @@ type Store struct {
 	TemporaryIndexCompressMode int  `toml:"temporary-index-compress-mode"`
 	ChunkMetaCompressMode      int  `toml:"chunk-meta-compress-mode"`
 	IndexReadCachePersistent   bool `toml:"index-read-cache-persistent"`
-	PreAggEnabled              bool `toml:"pre-agg-enabled"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -337,7 +334,6 @@ func NewStore() Store {
 		InterruptQuery:               true,
 		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
 		IndexReadCachePersistent:     false,
-		PreAggEnabled:                true,
 	}
 }
 
