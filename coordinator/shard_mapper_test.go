@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -983,7 +984,7 @@ func Test_CreateLogicalPlan(t *testing.T) {
 	require.Equal(t, shardMapping.NodeNumbers(), 1)
 
 	// Querying the colstore engine by the unified plan
-	source.IndexRelation.Oids = append(source.IndexRelation.Oids, 4)
+	source.IndexRelation.Oids = append(source.IndexRelation.Oids, uint32(index.BloomFilter))
 	plan, err = shardMapping.CreateLogicalPlan(ctx, []influxql.Source{source}, schema)
 	if !reflect.DeepEqual(plan.Schema().GetSourcesNames(), []string{"mst1"}) {
 		t.Fatal()

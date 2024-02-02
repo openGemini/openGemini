@@ -19,6 +19,7 @@ package tsi
 import (
 	"fmt"
 
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -34,7 +35,7 @@ type IndexRelation struct {
 
 func NewIndexRelation(opt *Options, primaryIndex PrimaryIndex, iBuilder *IndexBuilder) (*IndexRelation, error) {
 	relation := &IndexRelation{
-		oid:      GetIndexIdByType(opt.indexType),
+		oid:      uint32(opt.indexType),
 		iBuilder: iBuilder,
 	}
 	var err error
@@ -44,11 +45,11 @@ func NewIndexRelation(opt *Options, primaryIndex PrimaryIndex, iBuilder *IndexBu
 
 func getIndexAmRoutine(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	switch opt.indexType {
-	case MergeSet:
+	case index.MergeSet:
 		return MergeSetIndexHandler(opt, primaryIndex)
-	case Text:
+	case index.Text:
 		return TextIndexHandler(opt, primaryIndex)
-	case Field:
+	case index.Field:
 		return FieldIndexHandler(opt, primaryIndex)
 	}
 	return nil, fmt.Errorf("not found index type %d", opt.indexType)

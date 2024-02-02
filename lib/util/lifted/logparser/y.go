@@ -61,7 +61,7 @@ func buildCondExpr(first influxql.Expr, op int, right influxql.Expr) influxql.Ex
 			field = first
 		}
 	} else {
-		field = &influxql.VarRef{Val: "content"}
+		field = &influxql.VarRef{Val: DefaultFieldForFullText, Type: influxql.String}
 	}
 
 	newOp := transCondOpToInflux(op)

@@ -270,9 +270,9 @@ func (s *fileLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
 			schema = s.ctx.schema
 		}
 		if len(s.ctx.decs.GetOps()) > 0 {
-			s.recPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, schema, true)
+			s.recPool = record.NewCircularRecordPool(FileLoopCursorPool, fileCursorRecordNum, schema, true)
 		} else {
-			s.recPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, schema, false)
+			s.recPool = record.NewCircularRecordPool(FileLoopCursorPool, fileCursorRecordNum, schema, false)
 		}
 		if len(s.ctx.readers.Orders) == 0 {
 			s.fileLoopCursorFunctions.readDataFunction = s.ReadAggDataOnlyInMemTable

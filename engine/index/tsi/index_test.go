@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -1129,11 +1130,11 @@ func TestSortTagsets(t *testing.T) {
 }
 
 func TestGetIndexOidByName(t *testing.T) {
-	_, err := GetIndexIdByName("field")
+	_, err := index.GetIndexTypeByName("field")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = GetIndexIdByName("FIELD")
+	_, err = index.GetIndexTypeByName("FIELD")
 	if err != nil {
 		t.Fatal(err)
 	}

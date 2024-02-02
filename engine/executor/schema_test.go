@@ -23,6 +23,8 @@ import (
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
@@ -346,4 +348,17 @@ func TestMeanAsSubCall(t *testing.T) {
 	if !hasSum {
 		t.Fatal("TestMeanAsSubCall fail")
 	}
+}
+
+func TestGetTimeRangeByTC(t *testing.T) {
+	indexR := influxql.NewIndexRelation()
+	indexR.Oids = append(indexR.Oids, uint32(index.TimeCluster))
+	indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
+		Options: []*influxql.IndexOption{
+			{TimeClusterDuration: time.Duration(5000)},
+		},
+	})
+	opt := query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: influxql.MinTime, EndTime: 5001}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: influxql.MinTime, Max: 5000})
 }

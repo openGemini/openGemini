@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -43,10 +44,6 @@ const (
 	VerticalFilterReaderNumSpan  = "vertical_filter_num_span"
 	VerticalFilterReaderDuration = "vertical_filter_duration"
 )
-
-type BFReader interface {
-	IsExist(int64) (bool, error)
-}
 
 type FilterReader struct {
 	isFilter             bool
@@ -85,7 +82,7 @@ func NewFilterReader(option *obs.ObsOptions, expr influxql.Expr, splitMap map[st
 	return filterReader, nil
 }
 
-func (s *FilterReader) IsExist(blockId int64) (bool, error) {
+func (s *FilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	if !s.isFilter {
 		return true, nil
 	}
@@ -189,7 +186,7 @@ func NewVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr influxql
 	return v, nil
 }
 
-func (s *VerticalFilterReader) IsExist(blockId int64) (bool, error) {
+func (s *VerticalFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	return s.isExist(blockId)
 }
 
@@ -390,7 +387,7 @@ func NewLineFilterReader(path string, obsOpts *obs.ObsOptions, expr influxql.Exp
 	return l, nil
 }
 
-func (s *LineFilterReader) IsExist(blockId int64) (bool, error) {
+func (s *LineFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	return s.isExist(blockId)
 }
 

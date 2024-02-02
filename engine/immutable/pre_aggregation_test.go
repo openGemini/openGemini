@@ -103,3 +103,9 @@ func TestPreAggOnlyOneLine(t *testing.T) {
 	intAgg.addValues(col, times)
 	assertPreAggCodec(t, intAgg, NewIntegerPreAgg())
 }
+
+func TestConvert(t *testing.T) {
+	builder := &PreAggBuilders{}
+	require.NotNil(t, builder.FloatBuilder())
+	require.NotNil(t, builder.IntegerBuilder())
+}

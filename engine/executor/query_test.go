@@ -897,7 +897,7 @@ func TestMockTSDBSystemWhenLocalStore(t *testing.T) {
 				executor.SetLocalStorageForQuery(nil)
 			}()
 			execErr := tsdb.ExecSQL(tc.sql, tc.validator, tc.intoValidator, true)
-			if execErr != nil && !strings.Contains(execErr.Error(), "logical plan build failed: no shard for reader exchange") {
+			if execErr != nil {
 				t.Error("expect error")
 			}
 		})

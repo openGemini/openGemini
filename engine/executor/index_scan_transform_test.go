@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -189,7 +190,7 @@ func buildColStoreSchema(initSKIndex bool) *executor.QuerySchema {
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
 	if initSKIndex {
-		opt.Sources[0].(*influxql.Measurement).IndexRelation = &influxql.IndexRelation{Oids: []uint32{4}}
+		opt.Sources[0].(*influxql.Measurement).IndexRelation = &influxql.IndexRelation{Oids: []uint32{uint32(index.BloomFilter)}}
 	}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	return schema
@@ -206,7 +207,7 @@ func buildTsStoreSchema(initSKIndex bool) *executor.QuerySchema {
 	}
 	opt.Dimensions = append(opt.Dimensions, "tag1")
 	if initSKIndex {
-		opt.Sources[0].(*influxql.Measurement).IndexRelation = &influxql.IndexRelation{Oids: []uint32{4}}
+		opt.Sources[0].(*influxql.Measurement).IndexRelation = &influxql.IndexRelation{Oids: []uint32{uint32(index.BloomFilter)}}
 	}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	return schema

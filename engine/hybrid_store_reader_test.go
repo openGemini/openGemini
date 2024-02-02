@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
@@ -40,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
 )
@@ -74,7 +77,7 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	return mstinfo
@@ -200,6 +203,60 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, reader.closedCount, int64(1))
 }
 
+func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
+	var fields influxql.Fields
+	m := createMeasurement()
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}}
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:   logparser.DefaultFieldForFullText,
+			Type:  influxql.String,
+			Alias: "",
+		},
+	})
+	var names []string
+	names = append(names, "f1")
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	assert2.Equal(t, reader.Name(), "HybridStoreReader")
+	assert2.Equal(t, len(reader.Explain()), 1)
+	reader.Abort()
+	assert2.Equal(t, reader.IsSink(), true)
+	assert2.Equal(t, len(reader.GetOutputs()), 1)
+	assert2.Equal(t, len(reader.GetInputs()), 0)
+	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
+	assert2.Equal(t, reader.GetInputNumber(nil), 0)
+	reader.schema = nil
+	err := reader.initQueryCtx()
+	assert2.Equal(t, errno.Equal(err, errno.InvalidQuerySchema), true)
+	err = reader.Work(context.Background())
+	assert2.Equal(t, errno.Equal(err, errno.InvalidQuerySchema), true)
+	schema.Options().(*query.ProcessorOptions).Sources[0] = &influxql.Measurement{
+		Name:         "students",
+		IsTimeSorted: true,
+		IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
+			IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"field1_string"}}},
+		},
+	}
+	reader.schema = schema
+	err = reader.initQueryCtx()
+	assert2.Equal(t, err, nil)
+	_, err = reader.initAttachedFileReader(executor.NewDetachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
+	_, err = reader.initDetachedFileReader(executor.NewAttachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
+	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
+	frag := executor.NewBaseFrags("", 3)
+	assert2.Equal(t, 72, frag.Size())
+	err = reader.initSchema()
+	assert2.Equal(t, err, nil)
+}
+
 func TestHybridIndexReaderFunctions(t *testing.T) {
 	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{})
 	err := indexReader.Init()
@@ -308,6 +365,8 @@ func TestHybridStoreReader(t *testing.T) {
 	// build the storage engine
 	storeEngine := NewMockStoreEngine()
 	storeEngine.SetShard(sh)
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
 
 	for _, tt := range []struct {
 		skip      bool
@@ -395,7 +454,7 @@ func TestHybridStoreReader(t *testing.T) {
 				RetentionPolicy: rp,
 				Name:            mst,
 				IndexRelation: &influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-					Oids:      []uint32{4},
+					Oids:      []uint32{uint32(index.BloomFilter)},
 					IndexList: list},
 				EngineType: config.COLUMNSTORE},
 			}
@@ -576,7 +635,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil)
 	schema.Options().(*query.ProcessorOptions).IterID += 1
 	indexReader.Init()
-	_, ok := immutable.GetDetachedSegmentTask(queryID)
+	_, ok := immutable.GetDetachedSegmentTask(sh.filesPath + queryID)
 	if !ok {
 		t.Error("get wrong cache")
 	}
@@ -592,4 +651,90 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	indexReader.init = false
 	frag, _ = indexReader.Next()
 	assert2.Equal(t, frag, nil)
+}
+
+func TestInitSchemaByUnnest(t *testing.T) {
+	field := "content"
+	unnest := &influxql.Unnest{
+		Expr: &influxql.Call{
+			Name: "match_all",
+			Args: []influxql.Expr{
+				&influxql.VarRef{Val: "([a-z]+),([0-9]+)", Type: influxql.String},
+				&influxql.VarRef{Val: field, Type: influxql.String},
+			},
+		},
+		Aliases: []string{"key1", "value1"},
+		DstType: []influxql.DataType{influxql.String, influxql.String},
+	}
+	schema := createSortQuerySchema()
+	schema.SetUnnests([]*influxql.Unnest{unnest})
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	err := reader.initSchemaByUnnest()
+	if err != nil {
+		t.Fatal("initSchemaByUnnest failed")
+	}
+	if reader.inSchema.FieldIndex(field) == -1 {
+		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
+	}
+	reader.initSchemaByUnnest()
+	if reader.inSchema.FieldIndex(field) == -1 {
+		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
+	}
+}
+
+func genRecordFortRranRec() *record.Record {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 1}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7})
+	return rec
+}
+
+func createQuerySchemaForTranRec() *executor.QuerySchema {
+	var fields influxql.Fields
+	m := &influxql.Measurement{Name: "tranRec"}
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}, Dimensions: []string{"string", "float"}}
+	fields = append(fields, influxql.Fields{
+		{Expr: &influxql.VarRef{Val: "int", Type: influxql.Integer, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "float", Type: influxql.Float, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "boolean", Type: influxql.Boolean, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "string", Type: influxql.String, Alias: ""}},
+		{Expr: &influxql.VarRef{Val: "time", Type: influxql.Integer, Alias: ""}},
+	}...)
+	names := []string{"int", "float", "boolean", "string", "time"}
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+	return schema
+}
+
+func TestHybridStoreReaderTranRecToChunk(t *testing.T) {
+	schema := createQuerySchemaForTranRec()
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	if err := reader.initQueryCtx(); err != nil {
+		t.Fatalf("HybridStoreReader initQueryCtx , err: %+v", err)
+	}
+	if err := reader.initSchema(); err != nil {
+		t.Fatalf("initSchema initQueryCtx , err: %+v", err)
+	}
+	rec := genRecordFortRranRec()
+	chk, err := reader.tranRecToChunk(rec)
+	if err != nil {
+		t.Fatalf("trans rec to chunk failed, err: %+v", err)
+	}
+	// compare column and dim for the filed "string"
+	if !reflect.DeepEqual(chk.Column(3), chk.Dim(0)) {
+		t.Fatal("trans rec to dim failed. The column[3] not equal to dim[0]")
+	}
+	fmt.Println(chk.Column(3).BitMap())
 }

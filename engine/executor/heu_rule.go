@@ -18,6 +18,7 @@ package executor
 
 import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -887,6 +888,9 @@ func (r *AggPushDownToSubQueryRule) canPush(agg *LogicalAggregate, project *Logi
 	}
 
 	if project.Schema().HasLimit() {
+		return false
+	}
+	if !config.GetCommon().PreAggEnabled || project.schema.Options().GetHintType() == hybridqp.ExactStatisticQuery {
 		return false
 	}
 	return true

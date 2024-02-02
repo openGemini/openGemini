@@ -30,6 +30,8 @@ const (
 	AND
 	OR
 	MATCHPHRASE
+	AlwaysTrue
+	AlwaysFalse
 	UNKNOWN // unsupported type value.
 )
 
@@ -70,4 +72,16 @@ func ConvertToRPNExpr(expr influxql.Expr) *RPNExpr {
 	default:
 	}
 	return rpnExpr
+}
+
+type SKRPNElement struct {
+	RPNOp Op
+	Key   string
+	Value interface{}
+	Ty    influxql.DataType
+	Op    influxql.Token
+}
+
+type SKBaseReader interface {
+	IsExist(blockId int64, elem *SKRPNElement) (bool, error)
 }

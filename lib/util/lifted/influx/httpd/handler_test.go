@@ -371,8 +371,8 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 	req.URL.RawQuery = "%3Arepository=repo0&%3AlogStream=log0&"
 	testStr := [][3]string{
 		{"content: abc and efg | select count(*) from log0",
-			"SELECT count(*) FROM repo0.log0.log0 WHERE content MATCHPHRASE 'abc' AND content MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
-			"content MATCHPHRASE 'abc' AND content MATCHPHRASE 'efg'"},
+			"SELECT count(*) FROM repo0.log0.log0 WHERE content MATCHPHRASE 'abc' AND __log___::string MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
+			"content MATCHPHRASE 'abc' AND __log___::string MATCHPHRASE 'efg'"},
 		{"content: abc or content: efg | select count(*) from log0 where status > 200",
 			"SELECT count(*) FROM repo0.log0.log0 WHERE status > 200 AND content MATCHPHRASE 'abc' OR content MATCHPHRASE 'efg' AND time::time >= 1 AND time::time < 100 GROUP BY * ORDER BY time DESC",
 			"content MATCHPHRASE 'abc' OR content MATCHPHRASE 'efg'"},
@@ -450,7 +450,7 @@ func TestParseJsonVV2(t *testing.T) {
 	rows := &record.Record{}
 	failRows := record.NewRecord(schema, false)
 	_ = h.parseJsonV2(scanner, req2, rows, failRows, expiredEarliestTime)
-	expect := fmt.Sprintf("field(tags):[]string(nil)\nfield(time):[]int64{%v}\nfield(http):[]string{\"127.0.0.1\"}\nfield(cnt):[]float64{4}\n", now*1e6)
+	expect := fmt.Sprintf("field(tags):[]string(nil)\nfield(cnt):[]float64{4}\nfield(http):[]string{\"127.0.0.1\"}\nfield(time):[]int64{%v}\n", now*1e6)
 	res := rows.String()
 	if expect != res {
 		t.Fatal("unexpect", res)

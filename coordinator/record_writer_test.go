@@ -549,3 +549,36 @@ func TestCheckAndUpdateRecordSchema(t *testing.T) {
 	_, _, err = rw.checkAndUpdateRecordSchema("db0", "rp0", "rtt", "mst0", MockRecord4())
 	assert.Equal(t, errno.Equal(err, errno.ArrowRecordTimeFieldErr), true)
 }
+
+func TestCutPreSchema(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.SeqIDField},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	targetSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	_ = cutPreSchema(schema)
+	config.SetProductType("logkeeper")
+	resSchema := cutPreSchema(schema)
+	if len(targetSchema) != len(resSchema) {
+		t.Fatal("cut preSchema failed")
+	}
+
+	for i := range targetSchema {
+		if targetSchema[i].Name != resSchema[i].Name {
+			t.Fatal("cut preSchema failed")
+		}
+	}
+	config.SetProductType("csstore")
+}

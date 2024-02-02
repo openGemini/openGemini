@@ -20,7 +20,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
@@ -163,7 +163,7 @@ func getSkipIndexList(skipIndex *influxql.IndexRelation, isFullTextIdx bool) []s
 	if skipIndex != nil && len(skipIndex.IndexNames) != 0 {
 		for i := range skipIndex.IndexNames {
 			//If a full-text index is created, bf will not be created separately.
-			if (!isFullTextIdx && skipIndex.IndexNames[i] == colstore.BloomFilterIndex) || skipIndex.IndexNames[i] == colstore.MinMaxIndex {
+			if (!isFullTextIdx && skipIndex.IndexNames[i] == index.BloomFilterIndex) || skipIndex.IndexNames[i] == index.MinMaxIndex {
 				indexList = append(indexList, skipIndex.IndexList[i].IList...)
 			}
 		}

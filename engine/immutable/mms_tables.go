@@ -47,17 +47,19 @@ type TablesStore interface {
 	Close() error
 	AddTable(ms *MsBuilder, isOrder bool, tmp bool)
 	AddTSSPFiles(name string, isOrder bool, f ...TSSPFile)
+	AddBothTSSPFiles(flushed *bool, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile)
 	AddPKFile(name, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8)
 	GetPKFile(mstName string, file string) (pkInfo *colstore.PKInfo, ok bool)
 	FreeAllMemReader()
 	ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isOrder bool) error
-	GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange) ([]TSSPFile, []TSSPFile)
+	GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]TSSPFile, []TSSPFile, bool)
 	ReplaceDownSampleFiles(mstNames []string, originFiles [][]TSSPFile, newFiles [][]TSSPFile, isOrder bool, callBack func()) error
 	NextSequence() uint64
 	Sequencer() *Sequencer
 	GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool)
 	GetCSFiles(mm string) (*TSSPFiles, bool)
 	Tier() uint64
+	SetTier(tier uint64)
 	File(name string, namePath string, isOrder bool) TSSPFile
 	CompactDone(seq []string)
 	CompactionEnable()
@@ -87,6 +89,7 @@ type TablesStore interface {
 	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
 	SeriesTotal() uint64
 	SetLockPath(lock *string)
+	FullyCompacted() bool
 }
 
 type ImmTable interface {
@@ -100,6 +103,7 @@ type ImmTable interface {
 	compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error
 	NewFileIterators(m *MmsTables, group *CompactGroup) (FilesInfo, error)
 	AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile)
+	AddBothTSSPFiles(flushed *bool, m *MmsTables, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile)
 	LevelPlan(m *MmsTables, level uint16) []*CompactGroup
 	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
 	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
@@ -199,6 +203,10 @@ func (m *MmsTables) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
 func (m *MmsTables) Tier() uint64 {
 	tier := *(m.tier)
 	return tier
+}
+
+func (m *MmsTables) SetTier(tier uint64) {
+	m.tier = &tier
 }
 
 func (m *MmsTables) GetFileSeq() uint64 {
@@ -414,7 +422,7 @@ func (m *MmsTables) getFiles(inFiles *TSSPFiles, hasTimeFilter bool, tr util.Tim
 	return reFiles
 }
 
-func (m *MmsTables) GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange) ([]TSSPFile, []TSSPFile) {
+func (m *MmsTables) GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]TSSPFile, []TSSPFile, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	order, orderOk := m.Order[measurement]
@@ -435,7 +443,12 @@ func (m *MmsTables) GetBothFilesRef(measurement string, hasTimeFilter bool, tr u
 	if unorderOk {
 		unorderFiles = m.getFiles(unorder, hasTimeFilter, tr)
 	}
-	return orderFiles, unorderFiles
+	if flushed != nil {
+		if *flushed {
+			return orderFiles, unorderFiles, true
+		}
+	}
+	return orderFiles, unorderFiles, false
 }
 
 func (m *MmsTables) NextSequence() uint64 {
@@ -694,8 +707,13 @@ func (ctx *memReaderEvictCtx) runEvictMemReaders() {
 	timer.Stop()
 }
 
+// now not use for tsEngine
 func (m *MmsTables) AddTSSPFiles(name string, isOrder bool, files ...TSSPFile) {
 	m.ImmTable.AddTSSPFiles(m, name, isOrder, files...)
+}
+
+func (m *MmsTables) AddBothTSSPFiles(flushed *bool, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile) {
+	m.ImmTable.AddBothTSSPFiles(flushed, m, name, orderFiles, unorderFiles)
 }
 
 func (m *MmsTables) AddTable(mb *MsBuilder, isOrder bool, tmp bool) {

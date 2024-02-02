@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -867,4 +868,31 @@ func TestFileIterator_lessGroup(t *testing.T) {
 	}
 	run(config.TSSTORE)
 	run(config.COLUMNSTORE)
+}
+
+func TestStreamIterators_ListenCloseSignal(t *testing.T) {
+	wg := sync.WaitGroup{}
+	newStreamIterators := func() *StreamIterators {
+		si := &StreamIterators{}
+		si.closed = make(chan struct{})
+		si.stopCompMerge = make(chan struct{})
+		finish := make(chan struct{})
+
+		wg.Add(1)
+		go func() {
+			si.ListenCloseSignal(finish)
+			wg.Done()
+		}()
+		return si
+	}
+
+	si := newStreamIterators()
+	close(si.closed)
+	wg.Wait()
+	require.Equal(t, si.closeStat, true)
+
+	si = newStreamIterators()
+	close(si.stopCompMerge)
+	wg.Wait()
+	require.Equal(t, si.closeStat, true)
 }

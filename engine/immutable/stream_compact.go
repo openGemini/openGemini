@@ -141,6 +141,7 @@ func putStreamIterators(itr *StreamIterators) {
 type StreamIterators struct {
 	closed        chan struct{}
 	stopCompMerge chan struct{}
+	closeStat     bool
 	dropping      *int64
 	dir           string
 	name          string // measurement name with version
@@ -399,6 +400,7 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) *StreamIterators {
 	compItrs.estimateSize = group.estimateSize
 	compItrs.chunkRows = 0
 	compItrs.maxChunkRows = 0
+	compItrs.tier = *m.tier
 
 	heap.Init(compItrs)
 
@@ -461,7 +463,12 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 		c.log.Error("file exist", zap.String("file", filePath))
 		return fmt.Errorf("file(%s) exist", filePath)
 	}
-	c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+
+	if c.tier == util.Cold {
+		c.fd, err = fileops.CreateOBSFile(filePath, lock, pri)
+	} else {
+		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	}
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		return err
@@ -769,14 +776,7 @@ func (c *StreamIterators) isClosed() bool {
 	if atomic.LoadInt64(c.dropping) > 0 {
 		return true
 	}
-	select {
-	case <-c.closed:
-		return true
-	case <-c.stopCompMerge:
-		return true
-	default:
-		return false
-	}
+	return c.closeStat
 }
 
 func (c *StreamIterators) compactColumn(dstIdx int, ref record.Field, needCalPreAgg bool, fieldIndex []int) (iteratorStart, segmentIndex int, splitFile bool, err error) {
@@ -923,6 +923,16 @@ func (c *StreamIterators) writeCrc(crc []byte) error {
 	return nil
 }
 
+func (c *StreamIterators) ListenCloseSignal(finish chan struct{}) {
+	select {
+	case <-c.closed:
+		c.closeStat = true
+	case <-c.stopCompMerge:
+		c.closeStat = true
+	case <-finish:
+	}
+}
+
 func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) ([]TSSPFile, error) {
 	var crc [4]byte
 	_, seq := files[0].LevelAndSequence()
@@ -930,6 +940,11 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 	if err := c.NewFile(false); err != nil {
 		panic(err)
 	}
+
+	c.closeStat = false
+	finish := make(chan struct{})
+	defer close(finish)
+	go c.ListenCloseSignal(finish)
 
 	for c.Len() > 0 {
 		// merge one chunk
@@ -1223,13 +1238,17 @@ func (c *StreamIterators) mergeTimePreAgg(cm *ColumnMeta) error {
 }
 
 func (c *StreamIterators) mergeIntegerPreAgg(cm *ColumnMeta, ref *record.Field, fieldIndex []int) error {
-	ab := c.colBuilder.intPreAggBuilder
+	ab, ok := c.colBuilder.intPreAggBuilder.(*IntegerPreAgg)
+	if !ok || ab == nil {
+		ab = &IntegerPreAgg{}
+	}
+
 	if c.chunkSegments > c.Conf.maxSegmentLimit {
 		cm.preAgg = ab.marshal(cm.preAgg[:0])
 		return nil
 	}
 
-	aggBuilder := c.ctx.preAggBuilders.intBuilder
+	aggBuilder := c.ctx.preAggBuilders.IntegerBuilder()
 	aggBuilder.reset()
 	for i := 0; i < len(c.chunkItrs); i++ {
 		itr := c.chunkItrs[i]
@@ -1250,15 +1269,7 @@ func (c *StreamIterators) mergeIntegerPreAgg(cm *ColumnMeta, ref *record.Field, 
 				}
 			}
 
-			v, t := ab.min()
-			min := v.(int64)
-			aggBuilder.addMin(float64(min), t)
-			v, t = ab.max()
-			max := v.(int64)
-			aggBuilder.addMax(float64(max), t)
-			aggBuilder.addCount(ab.count())
-			vv := ab.sum().(int64)
-			aggBuilder.addSum(float64(vv))
+			aggBuilder.merge(ab)
 		}
 	}
 
@@ -1267,13 +1278,17 @@ func (c *StreamIterators) mergeIntegerPreAgg(cm *ColumnMeta, ref *record.Field, 
 }
 
 func (c *StreamIterators) mergeFloatPreAgg(cm *ColumnMeta, ref *record.Field, fieldIndex []int) error {
-	ab := c.colBuilder.floatPreAggBuilder
+	ab, ok := c.colBuilder.floatPreAggBuilder.(*FloatPreAgg)
+	if !ok || ab == nil {
+		ab = &FloatPreAgg{}
+	}
+
 	if c.chunkSegments > c.Conf.maxSegmentLimit {
 		cm.preAgg = ab.marshal(cm.preAgg[:0])
 		return nil
 	}
 
-	aggBuilder := c.ctx.preAggBuilders.floatBuilder
+	aggBuilder := c.ctx.preAggBuilders.FloatBuilder()
 	aggBuilder.reset()
 	for i := 0; i < len(c.chunkItrs); i++ {
 		itr := c.chunkItrs[i]
@@ -1293,15 +1308,8 @@ func (c *StreamIterators) mergeFloatPreAgg(cm *ColumnMeta, ref *record.Field, fi
 				c.log.Error("unmarshal preagg fail", zap.String("column", ref.String()))
 				return err
 			}
-			v, t := ab.min()
-			min := v.(float64)
-			aggBuilder.addMin(min, t)
-			v, t = ab.max()
-			max := v.(float64)
-			aggBuilder.addMax(max, t)
-			aggBuilder.addCount(ab.count())
-			vv := ab.sum().(float64)
-			aggBuilder.addSum(vv)
+
+			aggBuilder.merge(ab)
 		}
 	}
 	cm.preAgg = aggBuilder.marshal(cm.preAgg[:0])

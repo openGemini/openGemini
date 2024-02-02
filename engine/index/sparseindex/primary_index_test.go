@@ -559,7 +559,7 @@ func TestScanWithComplex(t *testing.T) {
 			pkFile,
 			buildIndexFragmentVariable(),
 			buildPkRecordComplex(),
-			[]*fragment.FragmentRange{fragment.NewFragmentRange(1, 3)},
+			[]*fragment.FragmentRange{fragment.NewFragmentRange(0, 4)},
 			"UserID > 'U2' and URL > 'W2' or height = 180 and age = 18",
 		)
 	})

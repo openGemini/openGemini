@@ -374,6 +374,7 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		}
 		createRowChunks(msInfo, mstInfo.ColStoreInfo.SortKey)
 		msInfo.concurrencyChunks.writeRowChunksToken <- struct{}{}
+		// only writeRowChunksToken is available will getFreeWriteChunk
 		writeChunk, idx = getFreeWriteChunk(msInfo)
 		for index := range rs {
 			_, err = c.appendFields(table, writeChunk, rs[index].Timestamp, rs[index].Fields, rs[index].Tags)
@@ -393,6 +394,32 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		<-msInfo.concurrencyChunks.writeRowChunksToken
 	}
 	return err
+}
+
+func (c *csMemTableImpl) addSeqIdColIfNeeded(startSeqId int64, rec *record.Record) {
+	if !config.IsLogKeeper() {
+		return
+	}
+
+	//update schema
+	seqIDSchema := record.Field{Type: influx.Field_Type_Int,
+		Name: record.SeqIDField}
+	rec.Schema = append(rec.Schema, seqIDSchema)
+	//add seqIdCol
+	var seqIdCol record.ColVal
+	col := genSeqIDCol(startSeqId, rec.RowNums())
+	seqIdCol.AppendIntegers(col...)
+	rec.ColVals = append(rec.ColVals, seqIdCol)
+	sort.Sort(rec)
+}
+
+func genSeqIDCol(startSeqId int64, rowCount int) []int64 {
+	seqCol := make([]int64, rowCount)
+	for i := 0; i < rowCount; i++ {
+		seqCol[i] = startSeqId
+		startSeqId++
+	}
+	return seqCol
 }
 
 func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColumnStore, time int64, fields []influx.Field, tags []influx.Tag) (int64, error) {
@@ -486,9 +513,11 @@ func (c *csMemTableImpl) appendTagToCol(col *record.ColVal, tag *influx.Tag, siz
 	*size += int64(len(tag.Value))
 }
 
-func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
+func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string, startSeqId int64) error {
 	start := time.Now()
 	mst = stringinterner.InternSafe(mst)
+	// extend seqId col if needed
+	c.addSeqIdColIfNeeded(startSeqId, rec)
 	msInfo := table.CreateMsInfo(mst, nil, rec)
 	atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 

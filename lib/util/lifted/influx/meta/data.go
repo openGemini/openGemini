@@ -44,7 +44,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -450,19 +449,7 @@ func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, s
 	}
 
 	if indexR != nil {
-		newIndexR := influxql.IndexRelation{
-			Rid:        indexR.GetRid(),
-			Oids:       indexR.GetOid(),
-			IndexNames: indexR.GetIndexName(),
-		}
-		indexLists := indexR.GetIndexLists()
-		newIndexR.IndexList = make([]*influxql.IndexList, len(indexLists))
-		for i, iList := range indexLists {
-			newIndexR.IndexList[i] = &influxql.IndexList{
-				IList: iList.GetIList(),
-			}
-		}
-		msti.IndexRelation = newIndexR
+		msti.IndexRelation = *DecodeIndexRelation(indexR)
 	}
 
 	if options != nil {

@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
@@ -69,7 +70,7 @@ func TestCheckDetachedFiles(t *testing.T) {
 			CompactionType: config.BLOCK,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -129,7 +130,7 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 			PrimaryKey: primaryKey,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -407,7 +408,7 @@ func TestLoadProcess(t *testing.T) {
 			PrimaryKey: primaryKey,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 

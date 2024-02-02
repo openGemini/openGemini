@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -68,7 +69,7 @@ func NewIndexBuilder(opt *Options) *IndexBuilder {
 		logicalClock: opt.logicalClock,
 		sequenceID:   opt.sequenceID,
 		lock:         opt.lock,
-		Relations:    make([]*IndexRelation, IndexTypeAll),
+		Relations:    make([]*IndexRelation, index.IndexTypeAll),
 	}
 	return iBuilder
 }
@@ -350,7 +351,7 @@ func (iBuilder *IndexBuilder) createSecondaryIndex(row *influx.Row, primaryIndex
 		relation := iBuilder.Relations[indexOpt.Oid]
 		if relation == nil {
 			opt := &Options{
-				indexType: GetIndexTypeById(indexOpt.Oid),
+				indexType: index.IndexType(indexOpt.Oid),
 				path:      primaryIndex.Path(),
 				lock:      iBuilder.lock,
 			}
@@ -397,7 +398,7 @@ func (iBuilder *IndexBuilder) initRelation(oid uint32, opt *Options, primaryInde
 
 func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error) (interface{}, int64, error) {
 	// 1st, use primary index to scan.
-	relation := iBuilder.Relations[uint32(MergeSet)]
+	relation := iBuilder.Relations[uint32(index.MergeSet)]
 	if relation == nil {
 		return nil, 0, fmt.Errorf("not exist index for %s", name)
 	}
@@ -413,7 +414,7 @@ func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.P
 			continue
 		}
 
-		if iBuilder.Relations[i].oid == uint32(MergeSet) {
+		if iBuilder.Relations[i].oid == uint32(index.MergeSet) {
 			continue
 		}
 		groups, indexSeriesNum, err = iBuilder.Relations[i].IndexScan(span, name, opt, groups, callBack)
@@ -428,14 +429,14 @@ func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.P
 
 func (iBuilder *IndexBuilder) Delete(name []byte, condition influxql.Expr, tr TimeRange) error {
 	var err error
-	var index int
+	var idx int
 	for i := range iBuilder.Relations {
 		if !iBuilder.isRelationInited(uint32(i)) {
 			continue
 		}
 
-		if iBuilder.Relations[i].oid == uint32(MergeSet) {
-			index = i
+		if iBuilder.Relations[i].oid == uint32(index.MergeSet) {
+			idx = i
 			continue
 		}
 		err = iBuilder.Relations[i].IndexDelete(name, condition, tr)
@@ -445,7 +446,7 @@ func (iBuilder *IndexBuilder) Delete(name []byte, condition influxql.Expr, tr Ti
 	}
 
 	//delete primary index last
-	return iBuilder.Relations[index].IndexDelete(name, condition, tr)
+	return iBuilder.Relations[idx].IndexDelete(name, condition, tr)
 }
 
 func (iBuilder *IndexBuilder) Close() error {

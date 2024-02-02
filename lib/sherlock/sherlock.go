@@ -205,7 +205,7 @@ func (s *Sherlock) memCheckAndDump(mem int) {
 func (s *Sherlock) memProfile(rss int, c commonOption) bool {
 	match, _ := matchRule(s.memStats, rss, c.TriggerMin, c.TriggerDiff, c.TriggerAbs)
 	if !match {
-		s.opts.logger.Info("[Sherlock] not match memory dump rule",
+		s.opts.logger.Debug("[Sherlock] not match memory dump rule",
 			zap.Int("config_min", c.TriggerMin), zap.Int("config_diff", c.TriggerDiff), zap.Int("config_abs", c.TriggerAbs),
 			zap.Int("current", rss), zap.Ints("previous", s.memStats.sequentialData()))
 		return false
@@ -308,7 +308,7 @@ func (s *Sherlock) goroutineProfile(gNum int, c grtOptions) bool {
 	}
 	if !match {
 		// let user know why this should not dump
-		s.opts.logger.Info("[Sherlock] not match goroutine dump rule",
+		s.opts.logger.Debug("[Sherlock] not match goroutine dump rule",
 			zap.Int("config_min", c.TriggerMin), zap.Int("config_diff", c.TriggerDiff), zap.Int("config_abs", c.TriggerAbs),
 			zap.Int("current", gNum), zap.Ints("previous", s.cpuStats.sequentialData()))
 		return false

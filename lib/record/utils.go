@@ -18,6 +18,7 @@ package record
 
 import (
 	"fmt"
+	"math/bits"
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/util"
@@ -167,4 +168,60 @@ func reserveBytes(b []byte, size int) []byte {
 		}
 	}
 	return b[:valLen+size]
+}
+
+func valueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, posValidCount int) (int, int) {
+	var start, end int
+	firstIndex := 0
+	if bmStart >= pos {
+		start = posValidCount
+		firstIndex = pos
+	}
+	start += valueIndexRangeWithSingle(bitMap, firstIndex+bitOffset, bmStart+bitOffset)
+	end += start + valueIndexRangeWithSingle(bitMap, bmStart+bitOffset, bmEnd+bitOffset)
+
+	return start, end
+}
+
+func ValueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, posValidCount int) (int, int) {
+	return valueIndexRange(bitMap, bitOffset, bmStart, bmEnd, pos, posValidCount)
+}
+
+func valueIndexRangeWithSingle(bitMap []byte, bitStart int, bitEnd int) int {
+	bm := bitMap[bitStart>>3 : (bitEnd+7)>>3]
+	size := len(bm)
+	total := 0
+
+	// Bitmap is stored in little-endian mode
+	// In the subsequent logic, the lower N bits are repeatedly calculated.
+	// Therefore, the result needs to be corrected in advance.
+	// For example: bm[0] = 0 0 1 0 0 1 1 1; bitStart = 3
+	//                                ^ ^ ^
+	// Indicates that the lower three bits have been calculated
+	if n := bitStart & 0x07; n > 0 {
+		total -= bits.OnesCount8(bm[0] << (8 - n))
+	}
+
+	if n := bitEnd & 0x07; n > 0 {
+		total -= bits.OnesCount8(bm[size-1] >> n)
+	}
+
+	if size >= 8 {
+		pos := size - size&0x07
+		// Because only the number of 1s is calculated,
+		// the type can be forcibly converted,
+		// regardless of the difference between big-endian and little-endian
+		uints := util.Bytes2Uint64Slice(bm[:pos])
+		for i := range uints {
+			total += bits.OnesCount64(uints[i])
+		}
+		bm = bm[pos:]
+	}
+
+	// calculate the tail part less than 8 bytes
+	for i := range bm {
+		total += bits.OnesCount8(bm[i])
+	}
+
+	return total
 }

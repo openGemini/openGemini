@@ -775,7 +775,7 @@ func findRowFilterByRowId(rowFilters []clv.RowFilter, rowId int64) *clv.RowFilte
 	return nil
 }
 
-func genRecByReserveIds(rec, filterRec *record.Record, rowNumber []int, redIdxMap map[int]struct{}) *record.Record {
+func GenRecByReserveIds(rec, filterRec *record.Record, rowNumber []int, redIdxMap map[int]struct{}) *record.Record {
 	var newRecord *record.Record
 	if filterRec == nil {
 		newRecord = record.NewRecordBuilder(rec.Schema)
@@ -959,7 +959,7 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 		filterBitmap.Reset()
 		return nil
 	}
-	return genRecByReserveIds(rec, filterRec, filterBitmap.ReserveId, filterOption.RedIdxMap)
+	return GenRecByReserveIds(rec, filterRec, filterBitmap.ReserveId, filterOption.RedIdxMap)
 }
 
 var ignoreTypeFun []func(filterMap influxql.FilterMapValuer, name string, i int, col record.ColVal, validCount int, Integervalues []int64, Floatvalues []float64, Boolvalues []bool)
