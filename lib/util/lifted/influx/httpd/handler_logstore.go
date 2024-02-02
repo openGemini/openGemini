@@ -35,12 +35,12 @@ import (
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/uuid"
 	logstore2 "github.com/openGemini/openGemini/engine/immutable/logstore"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -331,11 +331,11 @@ func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInf
 	tags := map[string]int32{"tags": influx.Field_Type_String}
 	fields := map[string]int32{"content": influx.Field_Type_String}
 	schemaInfo := meta2.NewSchemaInfo(tags, fields)
-	oid, _ := tsi.GetIndexIdByName("bloomfilter")
+	indexName, _ := index.GetIndexNameByType(index.BloomFilterFullText)
 	indexR := &influxql.IndexRelation{
 		Rid:        0,
-		Oids:       []uint32{oid},
-		IndexNames: []string{"bloomfilter"},
+		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		IndexNames: []string{indexName},
 		IndexList: []*influxql.IndexList{
 			&influxql.IndexList{
 				IList: []string{"tags", "content"},
@@ -668,6 +668,8 @@ func appendRowAll(rows *record.Record, tags []byte, time int64, schemasNil []boo
 		rows.ColVals[0].AppendByteSlice(tags)
 	}
 	rows.ColVals[1].AppendInteger(time)
+	rows.ColVals[1], rows.ColVals[rows.ColNums()-1] = rows.ColVals[rows.ColNums()-1], rows.ColVals[1]
+	rows.Schema[1], rows.Schema[rows.ColNums()-1] = rows.Schema[rows.ColNums()-1], rows.Schema[1]
 	for i := 2; i < len(schemasNil); i++ {
 		if schemasNil[i] {
 			schemasNil[i] = false
@@ -943,6 +945,7 @@ func (h *Handler) parseJsonV2(scanner *bufio.Scanner, req *LogWriteRequest, rows
 						schemasMap[string(key)] = fieldIndex
 						schemasNil = append(schemasNil, true)
 						rows.Schema = append(rows.Schema, record.Field{Type: fastJsonTypeToRecordType(vv.Type()), Name: string(key)})
+						rows.ColVals = append(rows.ColVals, record.ColVal{})
 						appendValueToRecordColumn(rows, fieldIndex, vv)
 						fieldIndex++
 					} else {
@@ -1474,7 +1477,11 @@ func (h *Handler) rewriteStatementForLogStore(selectStmt *influxql.SelectStateme
 		isIncQuery = param.IncQuery
 		selectStmt.Limit = param.Limit
 		if len(selectStmt.SortFields) == 0 {
-			selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}}
+			if param.Limit > 0 {
+				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}, {Name: record.SeqIDField, Ascending: param.Ascending}}
+			} else {
+				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}}
+			}
 		}
 		timeCond := &influxql.BinaryExpr{
 			LHS: &influxql.BinaryExpr{
@@ -1528,7 +1535,8 @@ func (h *Handler) rewriteStatementForLogStore(selectStmt *influxql.SelectStateme
 func getPplAndSqlFromQuery(query string) (string, string) {
 	lastPipeIndex := getLastPipeIndex(query)
 	if lastPipeIndex == -1 {
-		return query, ""
+		ppl := removeMulAndSpace(query)
+		return ppl, ""
 	}
 	if strings.HasPrefix(removePreSpace(strings.ToLower(query[lastPipeIndex+1:])), "select ") {
 		sql := strings.TrimSpace(query[lastPipeIndex+1:])
@@ -1536,7 +1544,8 @@ func getPplAndSqlFromQuery(query string) (string, string) {
 		ppl = removeMulAndSpace(ppl)
 		return ppl, sql
 	}
-	return query, ""
+	ppl := removeMulAndSpace(query)
+	return ppl, ""
 }
 
 // reutrn pplQuery for highlight
@@ -1602,7 +1611,7 @@ func (h *Handler) ValidateAndCheckLogStreamExists(repoName, streamName string) e
 	return nil
 }
 
-func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *QueryParam, user meta2.User) (*Response, *influxql.Query, error, int) {
+func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *QueryParam, user meta2.User) (*Response, *influxql.Query, int, error) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, 1)
 	start := time.Now()
@@ -1620,7 +1629,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 
 	if syscontrol.DisableReads {
 		h.Logger.Error("read is forbidden!", zap.Bool("DisableReads", syscontrol.DisableReads))
-		return nil, nil, fmt.Errorf("disable read"), http.StatusForbidden
+		return nil, nil, http.StatusForbidden, fmt.Errorf("disable read")
 	}
 
 	// Retrieve the node id the query should be executed on.
@@ -1628,7 +1637,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	// new reader for sql statement
 	q, pplQuery, err, status := h.getSqlAndPplQuery(r, param, user)
 	if err != nil {
-		return nil, nil, err, status
+		return nil, nil, status, err
 	}
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
 	db := r.FormValue("db")
@@ -1653,13 +1662,13 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	// Check authorization.
 	err = h.checkAuthorization(user, q, db)
 	if err != nil {
-		return nil, nil, fmt.Errorf("error authorizing query: " + err.Error()), http.StatusForbidden
+		return nil, nil, http.StatusForbidden, fmt.Errorf("error authorizing query: " + err.Error())
 	}
 
 	// Parse chunk size. Use default if not provided or unparsable.
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
 	if err != nil {
-		return nil, nil, err, http.StatusBadRequest
+		return nil, nil, http.StatusBadRequest, err
 	}
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
@@ -1697,7 +1706,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	if async {
 		go h.async(q, results)
 		h.writeHeader(w, http.StatusNoContent)
-		return nil, nil, err, http.StatusNoContent
+		return nil, nil, http.StatusNoContent, err
 	}
 
 	// if we're not chunking, this will be the in memory buffer for all results before sending to client
@@ -1713,7 +1722,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 
 		// Throws out errors during query execution
 		if r.Err != nil {
-			return nil, nil, r.Err, http.StatusNoContent
+			return nil, nil, http.StatusNoContent, r.Err
 		}
 
 		// if requested, convert result timestamps to epoch
@@ -1764,13 +1773,13 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 				if q.Statements[0].(*influxql.SelectStatement).Fields != nil {
 					for _, v := range q.Statements[0].(*influxql.SelectStatement).Fields {
 						if _, ok := v.Expr.(*influxql.Call); ok {
-							return &resp, q, nil, http.StatusOK
+							return &resp, q, http.StatusOK, nil
 						}
 					}
 				}
-				return &resp, pplQuery, nil, http.StatusOK
+				return &resp, pplQuery, http.StatusOK, nil
 			}
-			return &resp, pplQuery, nil, http.StatusOK
+			return &resp, pplQuery, http.StatusOK, nil
 		}
 	}
 	if !chunked {
@@ -1778,7 +1787,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 	}
 
-	return nil, nil, nil, http.StatusOK
+	return nil, nil, http.StatusOK, nil
 }
 
 func getQueryLogRequest(r *http.Request) (*QueryLogRequest, error) {
@@ -1994,8 +2003,8 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 	var unnestFunc *logstore2.UnnestMatchAll
 	if unnest != nil {
 		unnestExpr, ok := unnest.Expr.(*influxql.Call)
-		if ok {
-			return 0, nil, fmt.Errorf("the type of unnest error")
+		if !ok {
+			return 0, nil, fmt.Errorf("the type of unnest expr error")
 		}
 		unnestField = unnestExpr.Args[1].(*influxql.VarRef).Val
 		if unnestField == TAGS {
@@ -2014,7 +2023,15 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 				recMore := map[string]interface{}{}
 				hasMore := false
 				rec[IsOverflow] = false
+				var currSeqID int64
+				var currT int64
 				for id, c := range s.Columns {
+					if c == record.SeqIDField {
+						if s.Values[j][id] != nil {
+							currSeqID = s.Values[j][id].(int64)
+						}
+						continue
+					}
 					if unnest != nil && c == unnestField {
 						unnestResult := unnestFunc.Get(s.Values[j][id].(string))
 						for k, v := range unnestResult {
@@ -2025,8 +2042,7 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 					case TIME:
 						v, _ := s.Values[j][id].(time.Time)
 						rec[Timestamp] = v.UnixMilli()
-						nano := v.UnixNano()
-						rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(nano, 10) + "|" + s.Tags[Scroll] + "^^"))
+						currT = v.UnixNano()
 					case TAGS:
 						tags, _ := s.Values[j][id].(string)
 						rec[TAGS] = strings.Split(tags, tokenizer.TAGS_SPLITTER)
@@ -2037,6 +2053,7 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 						h.setRecord(recMore, c, s.Values[j][id], para.Truncate)
 					}
 				}
+				rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(currT, 10) + "|" + strconv.FormatInt(currSeqID, 10) + "^^"))
 				if hasMore {
 					if content, ok := rec[CONTENT]; ok {
 						recMore[CONTENT] = content
@@ -2173,26 +2190,21 @@ func GetMSByScrollID(id string) (int64, error) {
 	id = string(scrollIDByte)
 	arrFirst := strings.SplitN(id, "^", 3)
 	if len(arrFirst) != 3 {
-		return 0, errno.NewError(errno.WrongScrollId)
+		return 0, fmt.Errorf("wrong scroll_id")
 	}
-
-	if arrFirst[0] == EmptyValue {
-		currT, err := strconv.ParseInt(arrFirst[1], 10, 64)
+	if arrFirst[0] == "" {
+		return 0, nil
+	}
+	arr := strings.Split(arrFirst[0], "|")
+	if len(arr) == 2 {
+		time, err := strconv.ParseInt(arr[0], 10, 64)
 		if err != nil {
 			return 0, err
 		}
-		return currT / 1e6, nil
+		return time / 1e6, nil
+	} else {
+		return 0, fmt.Errorf("Get wrong scroll_id")
 	}
-
-	arr := strings.Split(arrFirst[0], "|")
-	n, err := strconv.ParseInt(arr[0], 10, 64)
-	if err != nil {
-		return 0, err
-	}
-	if len(arr) != 4 && len(arr) != 5 {
-		return 0, err
-	}
-	return n / 1e6, nil
 }
 
 type Histograms struct {

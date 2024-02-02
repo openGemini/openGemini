@@ -71,6 +71,7 @@ type ColumnStoreReader struct {
 	rowBitmap   []bool
 	dimVals     []string
 	outInIdxMap map[int]int
+	inOutIdxMap map[int]int
 	closedCh    chan struct{}
 	closedCount int64
 }
@@ -85,6 +86,7 @@ func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragment
 		frags:       frags,
 		plan:        plan,
 		outInIdxMap: make(map[int]int),
+		inOutIdxMap: make(map[int]int),
 		dimVals:     make([]string, len(plan.Schema().Options().GetOptDimension())),
 		logger:      logger.NewLogger(errno.ModuleQueryEngine),
 		closedCh:    make(chan struct{}, 2),
@@ -283,6 +285,7 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 			inIdx, outIdx := r.inSchema.FieldIndex(in.Val), r.outSchema.FieldIndex(r.ops[i].Ref.Val)
 			if inIdx >= 0 && outIdx >= 0 {
 				r.outInIdxMap[outIdx], useIdxMap[inIdx] = inIdx, struct{}{} //  fields for select
+				r.inOutIdxMap[inIdx] = outIdx
 			}
 		}
 	}
@@ -300,9 +303,9 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	if !r.schema.Options().IsTimeSorted() {
 		startTime, endTime := r.schema.Options().GetStartTime(), r.schema.Options().GetEndTime()
 		timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: startTime, Max: endTime}, r.inSchema, len(r.inSchema)-1)
-		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(timeCond, r.schema.Options().GetCondition(), r.inSchema)
+		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(timeCond, r.schema.Options().GetCondition(), r.inSchema, &r.opt)
 	} else {
-		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(nil, r.schema.Options().GetCondition(), r.inSchema)
+		r.queryCtx.filterOption.CondFunctions, err = binaryfilterfunc.NewCondition(nil, r.schema.Options().GetCondition(), r.inSchema, &r.opt)
 	}
 	if err != nil {
 		return err
@@ -515,13 +518,22 @@ func (r *ColumnStoreReader) tranFieldToDim(rec *record.Record, chunk executor.Ch
 			return errno.NewError(errno.SchemaNotAligned)
 		}
 		colType := record.ToInfluxqlTypes(rec.Schema[idx].Type)
-		transFun, ok := transColumnFun[colType]
-		if !ok {
-			return errno.NewError(errno.NoColValToColumnFunc, colType)
-		}
-
 		recColumn, dimColumn := rec.Column(idx), chunk.Dim(i)
-		transFun(recColumn, dimColumn)
+		chunkColIdx, ok := r.inOutIdxMap[idx]
+		if !ok {
+			transFun, ok := transColumnFun[colType]
+			if !ok {
+				return errno.NewError(errno.NoColValToColumnFunc, colType)
+			}
+			transFun(recColumn, dimColumn)
+		} else {
+			copyFun, ok := copyColumnFun[colType]
+			if !ok {
+				return errno.NewError(errno.NoColValToColumnFunc, colType)
+			}
+			srcColumn := chunk.Column(chunkColIdx)
+			copyFun(srcColumn, dimColumn)
+		}
 		if recColumn.NilCount == recColumn.Length() {
 			dimColumn.AppendManyNil(len(times))
 		} else {

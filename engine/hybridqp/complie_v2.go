@@ -19,6 +19,7 @@ package hybridqp
 import (
 	"errors"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -73,6 +74,10 @@ func FilterNullColumnQuery(stmt *influxql.SelectStatement) bool {
 
 // IsExactStatisticQuery Hint
 func IsExactStatisticQuery(stmt *influxql.SelectStatement) bool {
+	if !config.GetCommon().PreAggEnabled {
+		return true
+	}
+
 	for _, s := range stmt.Sources {
 		switch s := s.(type) {
 		case *influxql.Measurement:

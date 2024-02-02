@@ -687,6 +687,218 @@ func TestAggPushDownToSubQueryRuleWithAlias(t *testing.T) {
 	}
 }
 
+func TestAggPushDownToSubQueryRuleWithAliasWithNoPreAgg1(t *testing.T) {
+	config.GetCommon().PreAggEnabled = false
+	defer func() {
+		config.GetCommon().PreAggEnabled = true
+	}()
+	fieldsSub := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Float,
+			},
+			Alias: "a",
+		},
+	}
+	columnsName := []string{"a"}
+	opt := query.ProcessorOptions{}
+
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateShardPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.Project()
+	planBuilder.SubQuery()
+
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "a",
+						Type: influxql.Integer,
+					},
+				},
+			},
+		},
+	}
+	sources := make(influxql.Sources, 0)
+	sources = append(sources, &influxql.SubQuery{})
+	schemaOut := executor.NewQuerySchemaWithSources(fields, sources, columnsName, &opt, nil)
+	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
+	planBuilderOut.Push(plan)
+	planBuilderOut.GroupBy()
+	planBuilderOut.OrderBy()
+	planBuilderOut.Aggregate()
+	planBuilderOut.Project()
+
+	if plan, err = planBuilderOut.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	toExchange := executor.NewAggPushdownToExchangeRule("")
+	toMeasurement := executor.NewAggPushdownToReaderRule("")
+	toSeries := executor.NewAggPushdownToSeriesRule("")
+	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
+	spreadToReader := executor.NewAggSpreadToReaderRule("")
+	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
+	pb := NewHeuProgramBuilder()
+	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
+	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	planner := executor.NewHeuPlannerImpl(pb.Build())
+	planner.AddRule(aggToSubquery)
+	planner.AddRule(toExchange)
+	planner.AddRule(toMeasurement)
+	planner.AddRule(toSeries)
+	planner.AddRule(spreadToExchange)
+	planner.AddRule(spreadToReader)
+	planner.SetRoot(plan)
+
+	best := planner.FindBestExp()
+
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	goal := best.Schema().GetColumnNames()[0]
+
+	if goal != "a" {
+		t.Errorf("subquery has alias push down failed")
+	}
+
+	if !best.Schema().HasCall() {
+		t.Errorf("subquery has alias WithNoPreAgg1 push down failed")
+	}
+}
+
+func TestAggPushDownToSubQueryRuleWithAliasWithNoPreAgg2(t *testing.T) {
+	fieldsSub := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Float,
+			},
+			Alias: "a",
+		},
+	}
+	columnsName := []string{"a"}
+	opt := query.ProcessorOptions{}
+	opt.HintType = hybridqp.ExactStatisticQuery
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateShardPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.Project()
+	planBuilder.SubQuery()
+
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "a",
+						Type: influxql.Integer,
+					},
+				},
+			},
+		},
+	}
+	sources := make(influxql.Sources, 0)
+	sources = append(sources, &influxql.SubQuery{})
+	schemaOut := executor.NewQuerySchemaWithSources(fields, sources, columnsName, &opt, nil)
+	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
+	planBuilderOut.Push(plan)
+	planBuilderOut.GroupBy()
+	planBuilderOut.OrderBy()
+	planBuilderOut.Aggregate()
+	planBuilderOut.Project()
+
+	if plan, err = planBuilderOut.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	toExchange := executor.NewAggPushdownToExchangeRule("")
+	toMeasurement := executor.NewAggPushdownToReaderRule("")
+	toSeries := executor.NewAggPushdownToSeriesRule("")
+	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
+	spreadToReader := executor.NewAggSpreadToReaderRule("")
+	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
+	pb := NewHeuProgramBuilder()
+	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
+	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	planner := executor.NewHeuPlannerImpl(pb.Build())
+	planner.AddRule(aggToSubquery)
+	planner.AddRule(toExchange)
+	planner.AddRule(toMeasurement)
+	planner.AddRule(toSeries)
+	planner.AddRule(spreadToExchange)
+	planner.AddRule(spreadToReader)
+	planner.SetRoot(plan)
+
+	best := planner.FindBestExp()
+
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	goal := best.Schema().GetColumnNames()[0]
+
+	if goal != "a" {
+		t.Errorf("subquery has alias push down failed")
+	}
+
+	if !best.Schema().HasCall() {
+		t.Errorf("subquery has alias WithNoPreAgg2 push down failed")
+	}
+}
+
 func TestAggPushDownToSubQueryRuleWithAliasAndBinary(t *testing.T) {
 	fieldsSub := influxql.Fields{
 		&influxql.Field{

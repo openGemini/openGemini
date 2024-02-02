@@ -21,17 +21,19 @@ import (
 	"hash/crc32"
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
-const CurrentLogTokenizerVersion = 5
+const (
+	GramTokenizerVersion       = 3
+	CurrentLogTokenizerVersion = 5
+)
 
 var (
-	Table               = crc32.MakeTable(crc32.Castagnoli)
-	BloomFilterIndex    = "bloomfilter"
-	BloomFilterFullText = "bloomfilter_fulltext"
+	Table = crc32.MakeTable(crc32.Castagnoli)
 )
 
 func FlushVerticalFilter(filterVerBuffer, filterLogBuffer []byte) []byte {
@@ -63,7 +65,7 @@ func GenSchemaIdxs(schema record.Schemas, skipIndexRelation *influxql.IndexRelat
 	}
 
 	for i := range skipIndexRelation.IndexNames {
-		if skipIndexRelation.IndexNames[i] != BloomFilterIndex {
+		if skipIndexRelation.IndexNames[i] != index.BloomFilterIndex {
 			continue
 		}
 		res = make([]int, 0, len(skipIndexRelation.IndexList[i].IList))
@@ -84,7 +86,7 @@ func IsFullTextIdx(indexRelation *influxql.IndexRelation) bool {
 	}
 
 	for i := range indexRelation.IndexNames {
-		if indexRelation.IndexNames[i] == BloomFilterFullText {
+		if indexRelation.IndexNames[i] == index.BloomFilterFullTextIndex {
 			return true
 		}
 	}

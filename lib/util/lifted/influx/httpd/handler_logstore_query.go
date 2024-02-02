@@ -114,6 +114,7 @@ type QueryParam struct {
 	IterID           int32
 	Timeout          int
 	Limit            int
+	SeqID            int64
 	Process          float64
 	Scroll           string
 	Query            string
@@ -137,6 +138,7 @@ func NewQueryPara(query string, ascending bool, highlight bool, timeout, limit i
 		Limit:     limit,
 		IncQuery:  isIncQuery,
 		Truncate:  isTruncate,
+		SeqID:     -1,
 	}
 }
 
@@ -193,8 +195,12 @@ func (para *QueryParam) parseScrollID() error {
 	if err != nil {
 		return err
 	}
-	if len(arr) != 4 && len(arr) != 5 {
+	seqId, err := strconv.ParseInt(arr[1], 10, 64)
+	if err != nil {
 		return err
+	}
+	if len(arr) != 2 {
+		return fmt.Errorf("scroll_id is not right")
 	}
 	if para.Ascending {
 		para.TimeRange.start = n - 1
@@ -203,6 +209,8 @@ func (para *QueryParam) parseScrollID() error {
 			para.TimeRange.end = n + 1
 		}
 	}
+	para.SeqID = seqId
+
 	return nil
 }
 
@@ -222,6 +230,7 @@ func (para *QueryParam) deepCopy() *QueryParam {
 		QueryID:          para.QueryID,
 		TimeRange:        para.TimeRange,
 		GroupBytInterval: para.GroupBytInterval,
+		SeqID:            para.SeqID,
 	}
 }
 
@@ -250,6 +259,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 		h.httpErrorRsp(w, ErrorResponse(errno.NewError(errno.ScrollIdIllegal).Error(), LogReqErr), http.StatusBadRequest)
 		return
 	}
+	para.QueryID = para.Scroll_id
 	sgsAll, err := h.MetaClient.GetShardGroupByTimeRange(repository, logStream, time.Unix(0, para.TimeRange.start), time.Unix(0, para.TimeRange.end))
 	if err != nil {
 		h.serveQueryLogWhenErr(w, err, t, repository, logStream)
@@ -274,7 +284,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 		if sgs[i].EndTime.UnixNano() < currPara.TimeRange.end {
 			currPara.TimeRange.end = sgs[i].EndTime.UnixNano()
 		}
-		resp, logCond, err, _ := h.serveLogQuery(w, r, currPara, user)
+		resp, logCond, _, err := h.serveLogQuery(w, r, currPara, user)
 		if err != nil {
 			if QuerySkippingError(err.Error()) {
 				continue
@@ -783,36 +793,37 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		}
 		return
 	}
-	var results [][]interface{}
-	groupInfo := make([]string, 0)
+	var tagKey string
+	mergeResults := make(map[string]int64)
 	for i := range resp.Results {
-		for k, s := range resp.Results[i].Series {
+		for _, s := range resp.Results[i].Series {
 			var tagName string
-			for _, n := range s.Tags {
+			// the analytics interface only support output one tags
+			for key, n := range s.Tags {
+				tagKey = key
 				tagName = n
 			}
-			groupInfo = append(groupInfo, tagName)
-			results = append(results, make([]interface{}, 2))
-			results[k][0] = tagName
-			currCount := int64(0)
+			var sum int64
 			for _, v := range s.Values {
 				var cnt int64
-				if v[len(v)-1] != nil {
-					var ok bool
-					cnt, ok = v[len(v)-1].(int64)
-					if !ok {
-						h.Logger.Error("query log value parse fail! ")
-						h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-						return
+				for k := 1; k < len(v); k++ {
+					val, ok := v[k].(int64)
+					if ok && val > cnt {
+						cnt = val
 					}
-				} else {
-					cnt = 0
 				}
-				currCount += cnt
-				count += cnt
+				sum += cnt
 			}
-			results[k][1] = currCount
+			count += sum
+			mergeResults[tagName] += sum
 		}
+	}
+	i := 0
+	results := make([][2]interface{}, len(mergeResults))
+	for k, v := range mergeResults {
+		results[i][0] = k
+		results[i][1] = v
+		i++
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i][1].(int64) > results[j][1].(int64)
@@ -821,7 +832,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		results = results[0:DefaultMaxLogStoreAnalyzeResponseNum]
 	}
 	var resultsLast [][]string
-	resultsLast = append(resultsLast, []string{unnest.Aliases[0], Count})
+	resultsLast = append(resultsLast, []string{tagKey, Count})
 	for k := range results {
 		resultsLast = append(resultsLast, []string{results[k][0].(string), strconv.FormatInt(results[k][1].(int64), 10)})
 	}
@@ -885,7 +896,7 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 	}
 	h.Logger.Info(fmt.Sprintf("queryAggRequest %v", queryAggRequest))
 	if !strings.Contains(queryAggRequest.Query, Select) {
-		queryAggRequest.Query = queryAggRequest.Query + " |select count(*)"
+		queryAggRequest.Query = queryAggRequest.Query + " |select count(time)"
 	}
 
 	para := NewQueryPara(queryAggRequest.Query, true, false, queryAggRequest.Timeout, 0,
@@ -997,7 +1008,7 @@ func (h *Handler) queryAggLog(w http.ResponseWriter, r *http.Request, user meta2
 	var resp *Response
 	var sql *influxql.Query
 	for {
-		resp, sql, err, _ = h.serveLogQuery(w, r, para, user)
+		resp, sql, _, err = h.serveLogQuery(w, r, para, user)
 		if err != nil {
 			if isIncAggLogQueryRetryErr(err) {
 				para.reInitForInc()

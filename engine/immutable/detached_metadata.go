@@ -49,7 +49,7 @@ func NewDetachedMetaDataReader(path string, obsOpts *obs.ObsOptions, isSort bool
 }
 
 type position struct {
-	schemaIndex int
+	schemaIndex []int
 	segmentID   int
 }
 
@@ -89,16 +89,21 @@ func (reader *DetachedMetaDataReader) InitReadBatch(s []*SegmentMeta, schema rec
 			tmpIndex := startSegmentIndex
 			for tmpIndex < endSegmentIndex {
 				tmpIndex += 1
-				offset = append(offset, currChunkMeta.colMeta[idx].entries[s[tmpIndex].id].offset)
-				length = append(length, int64(currChunkMeta.colMeta[idx].entries[s[tmpIndex].id].size))
-				reader.positionMap[currChunkMeta.colMeta[idx].entries[s[tmpIndex].id].offset] = &position{schemaIndex: schemaIndex, segmentID: tmpIndex}
-				if _, ok := reader.task[tmpIndex]; ok {
-					reader.task[tmpIndex].fieldNum += 1
-				} else {
-					reader.task[tmpIndex] = &SegmentTask{
-						fieldNum: 1,
-						data:     make([]*request.StreamReader, len(schema)),
+				currEntry := currChunkMeta.colMeta[idx].entries[s[tmpIndex].id]
+				if _, ok := reader.positionMap[currEntry.offset]; len(offset) == 0 || !ok {
+					offset = append(offset, currEntry.offset)
+					length = append(length, int64(currEntry.size))
+					reader.positionMap[currEntry.offset] = &position{schemaIndex: []int{schemaIndex}, segmentID: tmpIndex}
+					if _, ok := reader.task[tmpIndex]; ok {
+						reader.task[tmpIndex].fieldNum += 1
+					} else {
+						reader.task[tmpIndex] = &SegmentTask{
+							fieldNum: 1,
+							data:     make([]*request.StreamReader, len(schema)),
+						}
 					}
+				} else {
+					reader.positionMap[currEntry.offset].schemaIndex = append(reader.positionMap[currEntry.offset].schemaIndex, schemaIndex)
 				}
 			}
 		}
@@ -127,7 +132,7 @@ func (reader *DetachedMetaDataReader) ReadBatch(dst *record.Record, decs *ReadCo
 		}
 		r.Content = r.Content[crcSize:]
 		if p, exist := reader.positionMap[r.Offset]; exist {
-			reader.task[p.segmentID].data[p.schemaIndex] = r
+			reader.task[p.segmentID].data[p.schemaIndex[0]] = r
 			reader.task[p.segmentID].fieldNum--
 			if reader.task[p.segmentID].fieldNum == 0 {
 				finishSegment = p.segmentID
@@ -154,15 +159,17 @@ func (reader *DetachedMetaDataReader) ReadBatch(dst *record.Record, decs *ReadCo
 		}
 		schemaIndex := reader.positionMap[v.Offset].schemaIndex
 		var err error
-		col := &record.ColVal{}
-		if schemaIndex == timeIndex {
-			err = reader.decodeTimeColumn(col, decs, v.Content)
-		} else {
-			err = decodeColumnData(&schema[schemaIndex], v.Content, col, decs, false)
-		}
-		dst.Column(schemaIndex).AppendColVal(col, dst.Schemas()[schemaIndex].Type, 0, col.Len)
-		if err != nil {
-			return nil, err
+		for _, index := range schemaIndex {
+			col := &record.ColVal{}
+			if index == timeIndex || schema[index].Name == "time" {
+				err = reader.decodeTimeColumn(col, decs, v.Content)
+			} else {
+				err = decodeColumnData(&schema[index], v.Content, col, decs, false)
+			}
+			dst.Column(index).AppendColVal(col, dst.Schemas()[index].Type, 0, col.Len)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	delete(reader.task, finishSegment)

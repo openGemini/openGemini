@@ -298,11 +298,11 @@ func TestReadFilter(t *testing.T) {
 
 	filterReader, _ := NewFilterReader(nil, trueExpr, splitMap, false, true, version, tmpDir, tmpDir, logstore.FilterLogName, logstore.OBSVLMFileName)
 	for i := 0; i < 128; i++ {
-		isExist, _ := filterReader.IsExist(int64(i))
+		isExist, _ := filterReader.IsExist(int64(i), nil)
 		assert.True(t, isExist)
 	}
 	for i := 128; i < 128+1; i++ {
-		isExist, _ := filterReader.IsExist(int64(i))
+		isExist, _ := filterReader.IsExist(int64(i), nil)
 		assert.True(t, isExist)
 	}
 
@@ -326,7 +326,7 @@ func TestReadFilter(t *testing.T) {
 
 	filterReader, _ = NewFilterReader(nil, falseExpr, splitMap, false, true, 4, tmpDir, tmpDir, logstore.FilterLogName, logstore.OBSVLMFileName)
 	for i := 0; i < 129; i++ {
-		isExist, _ := filterReader.IsExist(int64(i))
+		isExist, _ := filterReader.IsExist(int64(i), nil)
 		assert.False(t, isExist)
 	}
 	filterReader.Close()

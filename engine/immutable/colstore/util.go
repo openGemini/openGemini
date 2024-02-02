@@ -19,6 +19,7 @@ package colstore
 import (
 	"fmt"
 
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -40,12 +41,6 @@ const (
 	pKMetaItemSize             int    = util.Uint64SizeBytes*2 + util.Uint32SizeBytes*2
 )
 
-var (
-	MinMaxIndex      = "minmax"
-	SetIndex         = "set"
-	BloomFilterIndex = "bloomfilter"
-)
-
 func AppendPKIndexSuffix(dataPath string) string {
 	indexPath := dataPath + IndexFileSuffix
 	return indexPath
@@ -54,11 +49,11 @@ func AppendPKIndexSuffix(dataPath string) string {
 func AppendSKIndexSuffix(dataPath string, fieldName string, indexName string) string {
 	var indexFileSuffix string
 	switch indexName {
-	case MinMaxIndex:
+	case index.MinMaxIndex:
 		indexFileSuffix = MinMaxIndexFileSuffix
-	case SetIndex:
+	case index.SetIndex:
 		indexFileSuffix = SetIndexFileSuffix
-	case BloomFilterIndex:
+	case index.BloomFilterIndex:
 		indexFileSuffix = BloomFilterIndexFileSuffix
 	default:
 		panic(fmt.Sprintf("unsupported the skip index: %s", indexName))

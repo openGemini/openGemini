@@ -784,6 +784,106 @@ func (h *Handler) getStmtResult(stmtID2Result map[int]*query.Result) Response {
 	return resp
 }
 
+func transformRequestParams(r *http.Request) {
+	q := r.URL.Query()
+	q.Add(Repository, r.FormValue("db"))
+	q.Add(LogStream, r.FormValue("measurement"))
+	q.Add(Sql, "true")
+	q.Add("query", r.FormValue("q"))
+	r.URL.RawQuery = q.Encode()
+	r.Form = nil
+}
+
+// rewritePipeStateForQuery is used to generate selectStmt based on the pipe state.
+func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam, r *http.Request) {
+	var selectStmt *influxql.SelectStatement
+	if stmt, currOk := q.Statements[0].(*influxql.ExplainStatement); currOk {
+		selectStmt = stmt.Statement
+	} else {
+		selectStmt, _ = q.Statements[0].(*influxql.SelectStatement)
+	}
+	selectStmt.RewriteUnnestSource()
+	selectStmt.Sources = influxql.Sources{&influxql.Measurement{Name: r.URL.Query().Get(":logStream"), Database: r.URL.Query().Get(":repository"), RetentionPolicy: r.URL.Query().Get(":logStream")}}
+	if param != nil {
+		selectStmt.Limit = param.Limit
+		timeCond := &influxql.BinaryExpr{
+			LHS: &influxql.BinaryExpr{
+				LHS: &influxql.VarRef{Val: "time", Type: influxql.Time},
+				Op:  influxql.GTE,
+				RHS: &influxql.IntegerLiteral{Val: param.TimeRange.start},
+			},
+			Op: influxql.AND,
+			RHS: &influxql.BinaryExpr{
+				LHS: &influxql.VarRef{Val: "time", Type: influxql.Time},
+				Op:  influxql.LT,
+				RHS: &influxql.IntegerLiteral{Val: param.TimeRange.end},
+			},
+		}
+		if selectStmt.Condition == nil {
+			selectStmt.Condition = timeCond
+		} else {
+			selectStmt.Condition = &influxql.BinaryExpr{
+				LHS: selectStmt.Condition,
+				Op:  influxql.AND,
+				RHS: timeCond,
+			}
+		}
+	}
+}
+
+func (h *Handler) buildLogQueryParam(r *http.Request) (*QueryParam, error) {
+	transformRequestParams(r)
+	queryLogRequest, err := getQueryLogRequest(r)
+	if err != nil {
+		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.String("request params", r.URL.RawQuery))
+		return nil, fmt.Errorf("query log scan request error! ")
+	}
+
+	para := NewQueryPara(queryLogRequest.Query, queryLogRequest.Reverse, queryLogRequest.Highlight,
+		queryLogRequest.Timeout, queryLogRequest.Limit, queryLogRequest.From*1e6, queryLogRequest.To*1e6,
+		queryLogRequest.Scroll, queryLogRequest.Scroll_id, false, queryLogRequest.Explain, queryLogRequest.IsTruncate)
+	if err := para.parseScrollID(); err != nil {
+		h.Logger.Error("query log scan request Scroll_id error! ", zap.Error(err), zap.String("Scroll_id", para.Scroll_id))
+		return nil, fmt.Errorf("query log scan request Scroll_id error! ")
+	}
+	return para, nil
+}
+
+func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User) (*influxql.Query, int, error) {
+	para, err := h.buildLogQueryParam(r)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+
+	qp := h.getQueryFromRequest(r, para, user)
+	if qp == "" {
+		return nil, http.StatusBadRequest, fmt.Errorf(`missing required parameter "q"`)
+	}
+	ppl, sql := getPplAndSqlFromQuery(qp)
+	// sql parser
+	var sqlQuery *influxql.Query
+	var status int
+	if sql != "" {
+		sqlQuery, err, status = h.getSqlQuery(r, strings.NewReader(sql))
+		if err != nil {
+			return nil, status, err
+		}
+	} else {
+		stmt := generateDefaultStatement()
+		sqlQuery = &influxql.Query{Statements: influxql.Statements{stmt}}
+	}
+	// ppl parser
+	if ppl != "" {
+		_, err, status := h.getPplQuery(r, strings.NewReader(ppl), sqlQuery)
+		if err != nil {
+			return nil, status, err
+		}
+	}
+
+	h.rewritePipeStateForQuery(sqlQuery, para, r)
+	return sqlQuery, http.StatusOK, nil
+}
+
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
@@ -809,20 +909,32 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 
 	// Retrieve the node id the query should be executed on.
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
-	// new reader for sql statement
-	qr, f, err := h.newQueryReader(r, nil, user)
-	if err != nil {
-		h.httpError(rw, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if f != nil {
-		defer util.MustClose(f)
-	}
 
-	q, err, status := h.getSqlQuery(r, qr)
-	if err != nil {
-		h.httpError(rw, err.Error(), status)
-		return
+	var q *influxql.Query
+	var err error
+	var status int
+	if r.FormValue("pipe") == "true" {
+		// new reader for sql statement
+		q, _, err = h.parsePipeAndSqlForQuery(r, user)
+		if err != nil {
+			h.httpError(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		// new reader for sql statement
+		qr, f, err := h.newQueryReader(r, nil, user)
+		if err != nil {
+			h.httpError(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if f != nil {
+			defer util.MustClose(f)
+		}
+		q, err, status = h.getSqlQuery(r, qr)
+		if err != nil {
+			h.httpError(rw, err.Error(), status)
+			return
+		}
 	}
 
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
@@ -1199,6 +1311,12 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenDropped, int64(werr.Dropped))
 			h.httpError(w, werr.Error(), http.StatusBadRequest)
 			h.Logger.Error("write Partial Write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return
+		} else if errno.Equal(err, errno.MeasurementNameTooLong) {
+			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsParse))
+			h.httpError(w, werr.Error(), http.StatusBadRequest)
+			h.Logger.Error("write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
 			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 			return
 		} else if err != nil {

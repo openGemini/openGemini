@@ -49,8 +49,8 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
@@ -255,7 +255,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 	opts := new(tsi.Options).
 		Ident(ident).
 		Path(indexPath).
-		IndexType(tsi.MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(engineType).
 		StartTime(time.Now()).
 		EndTime(time.Now().Add(time.Hour)).
@@ -270,7 +270,7 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 	}
 	primaryIndex.SetIndexBuilder(indexBuilder)
 	indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
 	err = indexBuilder.Open()
 	if err != nil {
 		return nil, err
@@ -1483,7 +1483,7 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -1531,7 +1531,7 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 			"field1_string": influx.Field_Type_String,
 			"field2_int":    influx.Field_Type_Int},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -3435,6 +3435,7 @@ func TestFreeSequencer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sh.ident.ShardType = influxql.RANGE
 	if err = sh.NewShardKeyIdx("range", sh.dataPath, &lockPath); err != nil {
 		t.Fatal(err)
 	}
@@ -3503,6 +3504,7 @@ func TestShard_GetSplitPoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sh.ident.ShardType = influxql.RANGE
 	if err = sh.NewShardKeyIdx("range", sh.dataPath, &lockPath); err != nil {
 		t.Fatal(err)
 	}
@@ -3555,7 +3557,7 @@ func TestDropMeasurement(t *testing.T) {
 	if store.GetOutOfOrderFileNum() != 2 {
 		t.Fatal("store.GetOutOfOrderFileNum() != 2")
 	}
-	orderFiles, unorderedFiles := store.GetBothFilesRef(msNames[0], false, util.TimeRange{})
+	orderFiles, unorderedFiles, _ := store.GetBothFilesRef(msNames[0], false, util.TimeRange{}, nil)
 	if len(unorderedFiles) != 1 {
 		t.Fatalf("len(unorderedFiles) != 1")
 	}
@@ -3569,7 +3571,7 @@ func TestDropMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	orderFiles, unorderedFiles = store.GetBothFilesRef(msNames[1], false, util.TimeRange{})
+	orderFiles, unorderedFiles, _ = store.GetBothFilesRef(msNames[1], false, util.TimeRange{}, nil)
 	if len(unorderedFiles) != 1 {
 		t.Fatalf("len(unorderedFiles) != 1")
 	}
@@ -3847,7 +3849,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, _ := sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{})
+	files, _, _ := sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{}, nil)
 	if len(files) != 2 {
 		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
 	}
@@ -3860,7 +3862,7 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, files = sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{})
+	_, files, _ = sh.immTables.GetBothFilesRef("mst", false, util.TimeRange{}, nil)
 	if len(files) != 2 {
 		t.Fatalf("wire fail, exp:2 files, get:%v files", len(files))
 	}
@@ -4110,7 +4112,7 @@ func TestFilterByFiledWithFastPath(t *testing.T) {
 					}
 				}
 				timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}, queryCtx.schema, len(queryCtx.schema)-1)
-				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema)
+				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema, nil)
 
 				// with time condition
 				var newRecord *record.Record
@@ -4294,7 +4296,7 @@ func TestFilterByFiledWithFastPath2(t *testing.T) {
 					}
 				}
 				timeCond := binaryfilterfunc.GetTimeCondition(util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}, queryCtx.schema, len(queryCtx.schema)-1)
-				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema)
+				conFunctions, _ := binaryfilterfunc.NewCondition(timeCond, querySchema.Options().GetCondition(), queryCtx.schema, nil)
 
 				// with time condition
 				var newRecord *record.Record
@@ -4578,6 +4580,69 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 	}
 }
 
+func TestAddSeqIDToCol(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+
+	config.SetProductType("logkeeper")
+	sort.Sort(record)
+	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	config.SetProductType("csstore")
+	record1 := genRecord()
+	sort.Sort(record1)
+	err = sh.WriteCols(defaultMeasurementName, record1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAddSeqIDToColV1(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	record1 := genRecord()
+	sort.Sort(record1)
+	err = sh.WriteCols(defaultMeasurementName, record1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config.SetProductType("logkeeper")
+	sort.Sort(record)
+	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
+		t.Fatal(err)
+	}
+	config.SetProductType("csstore")
+}
+
 func TestLeftBound(t *testing.T) {
 	nums := []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	target := uint32(8)
@@ -4623,7 +4688,7 @@ func TestWriteDetachedData(t *testing.T) {
 			CompactionType: config.BLOCK,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -4677,7 +4742,7 @@ func TestWriteDetachedDataV2(t *testing.T) {
 			PrimaryKey: primaryKey,
 		},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 
@@ -4732,8 +4797,8 @@ func TestWriteFullTextIndexV1(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: list},
 	}
 
@@ -4786,8 +4851,8 @@ func TestWriteFullTextIndexV2(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: list},
 	}
 
@@ -4842,8 +4907,8 @@ func TestWriteFullTextIndexV3(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{logstore.BloomFilterFullText},
-			Oids:      []uint32{5},
+		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:      []uint32{uint32(index.BloomFilterFullText)},
 			IndexList: list},
 	}
 

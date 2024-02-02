@@ -315,7 +315,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 	}
 
 	// check the time field
-	colNum := int(rec.ColNums() - 1)
+	colNum := rec.ColNums() - 1
 	if nil == rec.Schema.Field(colNum) || rec.Schema.Field(colNum).Name != record.TimeField {
 		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
 		return
@@ -329,6 +329,12 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 		wh.preSchema = &schema
 	}
 	for i := 0; i < colNum; i++ {
+		// key field name protection
+		if rec.Schema.Field(i).Name == record.SeqIDField {
+			err = errno.NewError(errno.KeyWordConflictErr, mst, rec.Schema.Field(i).Name)
+			return
+		}
+
 		_, ok := wh.preMst.Schema[rec.Schema.Field(i).Name]
 		if !ok {
 			wh.fieldToCreatePool = appendField(wh.fieldToCreatePool, rec.Schema.Field(i).Name, int32(rec.Schema.Field(i).Type))
@@ -425,7 +431,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 			return
 		}
 	}
-	r = record.NewRecord(*wh.preSchema, false)
+	r = record.NewRecord(cutPreSchema(*wh.preSchema), false)
 	return
 }
 
@@ -552,4 +558,19 @@ func createShardGroup(database, retentionPolicy string, client ComMetaClient, pr
 
 	*preSg = sg
 	return sg, false, nil
+}
+
+func cutPreSchema(preSchema []record.Field) []record.Field {
+	if !config.IsLogKeeper() {
+		return preSchema
+	}
+	// cut seqId field
+	schema := make([]record.Field, 0, len(preSchema)-1)
+	for i := range preSchema {
+		if preSchema[i].Name == record.SeqIDField {
+			continue
+		}
+		schema = append(schema, preSchema[i])
+	}
+	return schema
 }

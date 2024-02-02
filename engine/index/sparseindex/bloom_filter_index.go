@@ -26,10 +26,12 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
@@ -68,13 +70,13 @@ func (o *OBSFilterPath) Option() *obs.ObsOptions {
 	return o.option
 }
 
-var _ = RegistrySKFileReaderCreator(colstore.BloomFilterIndex, &BloomFilterReaderCreator{})
+var _ = RegistrySKFileReaderCreator(index.BloomFilterIndex, &BloomFilterReaderCreator{})
 
 type BloomFilterReaderCreator struct {
 }
 
-func (index *BloomFilterReaderCreator) CreateSKFileReader(schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error) {
-	return NewBloomFilterIndexReader(schema, option, isCache)
+func (index *BloomFilterReaderCreator) CreateSKFileReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error) {
+	return NewBloomFilterIndexReader(rpnExpr, schema, option, isCache)
 }
 
 type BloomFilterIndexReader struct {
@@ -82,15 +84,20 @@ type BloomFilterIndexReader struct {
 	version uint32
 	schema  record.Schemas
 	option  hybridqp.Options
-	bf      bloomfilter.BFReader
+	bf      rpn.SKBaseReader
+	sk      SKCondition
 }
 
-func NewBloomFilterIndexReader(schema record.Schemas, option hybridqp.Options, isCache bool) (*BloomFilterIndexReader, error) {
-	return &BloomFilterIndexReader{schema: schema, option: option, isCache: isCache, version: 4}, nil
+func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*BloomFilterIndexReader, error) {
+	sk, err := NewSKCondition(rpnExpr, schema)
+	if err != nil {
+		return nil, err
+	}
+	return &BloomFilterIndexReader{schema: schema, option: option, isCache: isCache, version: 4, sk: sk}, nil
 }
 
 func (r *BloomFilterIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
-	return r.bf.IsExist(int64(fragId))
+	return r.sk.IsExist(int64(fragId), r.bf)
 }
 
 func (r *BloomFilterIndexReader) ReInit(file interface{}) (err error) {
@@ -163,8 +170,4 @@ func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record
 
 func GetBloomFilterFilePath(dir, msName, fieldName string) string {
 	return path.Join(dir, msName, BloomFilterFilePrefix+fieldName+BloomFilterFileSuffix)
-}
-
-func GetFullTextIdxFilePath(dir, msName string) string {
-	return path.Join(dir, msName, BloomFilterFilePrefix+FullTextIndex+BloomFilterFileSuffix)
 }

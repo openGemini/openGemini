@@ -20,6 +20,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -257,6 +258,7 @@ type Catalog interface {
 	SetUnnests(unnests []*influxql.Unnest)
 	GetUnnests() influxql.Unnests
 	HasUnnests() bool
+	GetTimeRangeByTC() util.TimeRange
 }
 
 type CatalogCreator interface {

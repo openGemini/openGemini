@@ -25,12 +25,15 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -73,11 +76,11 @@ func writeData(testCompDir, mstName string) error {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	indexRelation := &influxql.IndexRelation{
-		Oids:       []uint32{4},
+		Oids:       []uint32{uint32(index.BloomFilter)},
 		IndexNames: []string{"bloomfilter"},
 	}
 
@@ -277,7 +280,10 @@ func TestDetachedTSSPReader(t *testing.T) {
 	reader, _ := NewDetachedMetaIndexReader(p, nil)
 	metaIndex, _ := reader.ReadMetaIndex([]int64{16, 56}, []int64{40, 40})
 	decs := NewFileReaderContext(util.TimeRange{Min: 0, Max: 1635732519000000000}, schema, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
-	treader, _ := NewTSSPFileDetachedReader(metaIndex, [][]int{[]int{0, 1, 2, 4, 30, 50, 200}, []int{0, 1, 2, 4, 30, 50, 200}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true)
+	treader, _ := NewTSSPFileDetachedReader(metaIndex, [][]int{[]int{0, 1, 2, 4, 30, 50, 200}, []int{0, 1, 2, 4, 30, 50, 200}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &query2.ProcessorOptions{
+		QueryId: 1,
+		Query:   "select * from mst",
+	})
 	totalRow := 0
 	for {
 		data, _, _ := treader.Next()
@@ -299,4 +305,123 @@ func TestDetachedTSSPReader(t *testing.T) {
 	assert.Equal(t, 100, totalRow)
 	err = treader.Close()
 	assert.Equal(t, true, IsInterfaceNil(err))
+	option := query2.ProcessorOptions{
+		QueryId: 1,
+		Query:   "select * from mst",
+	}
+	decs = NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2, 200}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow = 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		totalRow += data.RowNums()
+	}
+	assert.Equal(t, 40, totalRow)
+
+	decs = NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow = 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		totalRow += data.RowNums()
+	}
+	assert.Equal(t, 20, totalRow)
+
+	schema1 := []record.Field{
+		{Name: "time", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	decs = NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema1, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow = 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		assert.Equal(t, data.RowNums(), data.ColVals[0].Len)
+		totalRow += data.RowNums()
+	}
+	assert.Equal(t, 20, totalRow)
+	decs = NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema1, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow = 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		assert.Equal(t, data.RowNums(), data.ColVals[0].Len)
+		totalRow += data.RowNums()
+	}
+}
+
+func TestSeqFilterReader(t *testing.T) {
+	testCompDir := t.TempDir()
+	config.SetProductType("logkeeper")
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+	mstName := "mst"
+	err := writeData(testCompDir, mstName)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	p := path.Join(testCompDir, mstName)
+	reader, _ := NewDetachedMetaIndexReader(p, nil)
+
+	metaIndex, _ := reader.ReadMetaIndex([]int64{16, 56}, []int64{40, 40})
+	option := query2.ProcessorOptions{
+		QueryId: 1,
+		Query:   "select * from mst",
+	}
+	option.LogQueryCurrId = "1635724829000000000|9^^"
+	option.Limit = 10
+	schema3 := []record.Field{
+		{Name: record.SeqIDField, Type: influx.Field_Type_Int},
+		{Name: "field2_int", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	decs := NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema3, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ := NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow := 0
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		assert.Equal(t, data.RowNums(), data.ColVals[0].Len)
+		totalRow += data.RowNums()
+	}
+	rec := &record.Record{}
+	rec.SetSchema(schema3)
+	rec.ColVals = make([]record.ColVal, len(schema3))
+	rec.AppendTime(1635724829000000000)
+	rec.ColVals[0].AppendInteger(1)
+	rec.ColVals[1].AppendInteger(2)
+	rec = treader.filterForLog(rec)
+	assert.Equal(t, 1, rec.RowNums())
+
+	option.LogQueryCurrId = "1635724829000000000|9^"
+	err = treader.parseSeqId(&option)
+	if IsInterfaceNil(err) {
+		t.Errorf("get wrong result")
+	}
+	option.LogQueryCurrId = "^^"
+	err = treader.parseSeqId(&option)
+	if !IsInterfaceNil(err) {
+		t.Errorf("get wrong result")
+	}
+
+	config.SetProductType("basic")
 }

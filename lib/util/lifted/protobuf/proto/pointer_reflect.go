@@ -30,7 +30,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //go:build purego || appengine || js
-// +build purego appengine js
 
 // This file contains an implementation of proto field accesses using package reflect.
 // It is slower than the code in pointer_unsafe.go but it avoids package unsafe and can

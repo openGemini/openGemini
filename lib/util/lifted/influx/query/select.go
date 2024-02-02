@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -529,13 +530,7 @@ func (opt *ProcessorOptions) GetLocation() *time.Location {
 }
 
 func (opt *ProcessorOptions) IsUnifyPlan() bool {
-	msts := opt.GetMeasurements()
-	for i := range msts {
-		if msts[i].IndexRelation != nil && len(msts[i].IndexRelation.Oids) > 0 {
-			return true
-		}
-	}
-	return false
+	return config.IsLogKeeper()
 }
 
 func (opt *ProcessorOptions) IsTimeSorted() bool {

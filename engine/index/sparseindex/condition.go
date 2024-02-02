@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -59,23 +60,14 @@ func (kc *KeyConditionImpl) convertToRPNElem(
 	rpnExpr *rpn.RPNExpr,
 	cols []*ColumnRef,
 ) error {
-	var fieldCount int
 	for i, expr := range rpnExpr.Val {
 		switch v := expr.(type) {
 		case influxql.Token:
 			switch v {
 			case influxql.AND:
-				if fieldCount == 0 {
-					kc.rpn = append(kc.rpn, &RPNElement{op: rpn.AND})
-				} else {
-					fieldCount--
-				}
+				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.AND})
 			case influxql.OR:
-				if fieldCount == 0 {
-					kc.rpn = append(kc.rpn, &RPNElement{op: rpn.OR})
-				} else {
-					fieldCount--
-				}
+				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.OR})
 			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
@@ -87,7 +79,7 @@ func (kc *KeyConditionImpl) convertToRPNElem(
 			// the third element is a operator. rpnExpr.Val[i+2]
 			idx := kc.pkSchema.FieldIndex(v.Val)
 			if idx < 0 {
-				fieldCount++
+				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.AlwaysTrue})
 				continue
 			}
 			if i+2 >= len(rpnExpr.Val) {
@@ -175,6 +167,10 @@ func (kc *KeyConditionImpl) CheckInRange(
 			if err != nil {
 				return Mark{}, err
 			}
+		} else if elem.op == rpn.AlwaysTrue {
+			rpnStack = append(rpnStack, NewMark(true, false))
+		} else if elem.op == rpn.AlwaysFalse {
+			rpnStack = append(rpnStack, NewMark(false, true))
 		} else {
 			return Mark{}, errno.NewError(errno.ErrUnknownOpInCondition)
 		}
@@ -496,4 +492,140 @@ func (kc *KeyConditionImpl) GetRPN() []*RPNElement {
 
 func (kc *KeyConditionImpl) SetRPN(rpn []*RPNElement) {
 	kc.rpn = rpn
+}
+
+type SKCondition interface {
+	IsExist(blockId int64, reader rpn.SKBaseReader) (bool, error)
+}
+
+type SKConditionImpl struct {
+	schema   record.Schemas
+	rpn      []*rpn.SKRPNElement
+	rpnStack []bool
+}
+
+func NewSKCondition(rpnExpr *rpn.RPNExpr, schema record.Schemas) (SKCondition, error) {
+	c := &SKConditionImpl{schema: schema, rpnStack: make([]bool, 0, len(rpnExpr.Val))}
+	if err := c.convertToRPNElem(rpnExpr); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *SKConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
+	for i, expr := range rpnExpr.Val {
+		switch v := expr.(type) {
+		case influxql.Token:
+			switch v {
+			case influxql.AND:
+				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.AND})
+			case influxql.OR:
+				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.OR})
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
+			default:
+				return errno.NewError(errno.ErrRPNOp, v)
+			}
+		case *influxql.VarRef:
+			if v.Val == logparser.DefaultFieldForFullText {
+				if err := c.genRPNElementByFullText(v.Val, rpnExpr.Val[i+1], influxql.MATCHPHRASE); err != nil {
+					return err
+				}
+				continue
+			}
+			idx := c.schema.FieldIndex(v.Val)
+			if idx < 0 {
+				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.AlwaysTrue})
+				continue
+			}
+			if i+2 >= len(rpnExpr.Val) {
+				return errno.NewError(errno.ErrRPNElemNum)
+			}
+			value := rpnExpr.Val[i+1]
+			op, ok := rpnExpr.Val[i+2].(influxql.Token)
+			if !ok {
+				return errno.NewError(errno.ErrRPNElemOp)
+			}
+			if err := c.genRPNElementByVal(v.Val, value, op); err != nil {
+				return err
+			}
+		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral, *influxql.BooleanLiteral:
+		default:
+			return errno.NewError(errno.ErrRPNExpr, v)
+		}
+	}
+	return nil
+}
+
+func (c *SKConditionImpl) genRPNElementByFullText(key string, value interface{}, op influxql.Token) error {
+	e := &rpn.SKRPNElement{RPNOp: rpn.InRange, Key: key, Op: op}
+	v, ok := value.(*influxql.StringLiteral)
+	if !ok {
+		return errno.NewError(errno.ErrValueTypeFullTextIndex)
+	}
+	e.Value = v.Val
+	e.Ty = influxql.String
+	c.rpn = append(c.rpn, e)
+	return nil
+}
+
+func (c *SKConditionImpl) genRPNElementByVal(key string, value interface{}, op influxql.Token) error {
+	e := &rpn.SKRPNElement{RPNOp: rpn.InRange, Key: key, Op: op}
+	switch val := value.(type) {
+	case *influxql.StringLiteral:
+		e.Value = val.Val
+		e.Ty = influxql.String
+	case *influxql.IntegerLiteral:
+		e.Value = val.Val
+		e.Ty = influxql.Integer
+	case *influxql.NumberLiteral:
+		e.Value = val.Val
+		e.Ty = influxql.Float
+	case *influxql.BooleanLiteral:
+		e.Value = val.Val
+		e.Ty = influxql.Boolean
+	default:
+		return errno.NewError(errno.ErrRPNElement, value)
+	}
+	c.rpn = append(c.rpn, e)
+	return nil
+}
+
+func (c *SKConditionImpl) IsExist(blockId int64, reader rpn.SKBaseReader) (bool, error) {
+	c.rpnStack = c.rpnStack[:0]
+	for _, elem := range c.rpn {
+		switch elem.RPNOp {
+		case rpn.InRange:
+			ok, err := reader.IsExist(blockId, elem)
+			if err != nil {
+				return false, err
+			}
+			c.rpnStack = append(c.rpnStack, ok)
+		case rpn.AlwaysTrue:
+			c.rpnStack = append(c.rpnStack, true)
+		case rpn.AlwaysFalse:
+			c.rpnStack = append(c.rpnStack, false)
+		case rpn.AND:
+			if len(c.rpnStack) < 2 {
+				return false, errno.NewError(errno.ErrRPNIsNullForAnd)
+			}
+			v1 := c.rpnStack[len(c.rpnStack)-1]
+			c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
+			v2 := c.rpnStack[len(c.rpnStack)-1]
+			c.rpnStack[len(c.rpnStack)-1] = v1 && v2
+		case rpn.OR:
+			if len(c.rpnStack) < 2 {
+				return false, errno.NewError(errno.ErrRPNIsNullForOR)
+			}
+			v1 := c.rpnStack[len(c.rpnStack)-1]
+			c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
+			v2 := c.rpnStack[len(c.rpnStack)-1]
+			c.rpnStack[len(c.rpnStack)-1] = v1 || v2
+		default:
+			return false, errno.NewError(errno.ErrUnknownOpInCondition)
+		}
+	}
+	if len(c.rpnStack) != 1 {
+		return false, errno.NewError(errno.ErrInvalidStackInCondition)
+	}
+	return c.rpnStack[0], nil
 }

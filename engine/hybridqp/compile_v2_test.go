@@ -21,9 +21,11 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	qry "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestIsFullSeriesQuery(t *testing.T) {
@@ -98,4 +100,14 @@ func TestVerifyHintStmt(t *testing.T) {
 	}
 	opt := qry.ProcessorOptions{}
 	assert.Equal(t, nil, hybridqp.VerifyHintStmt(selectStmt, &opt))
+}
+
+func TestIsExactStatisticQuery(t *testing.T) {
+	conf := config.GetCommon()
+	conf.PreAggEnabled = false
+	defer func() {
+		conf.PreAggEnabled = true
+	}()
+
+	require.True(t, hybridqp.IsExactStatisticQuery(nil))
 }

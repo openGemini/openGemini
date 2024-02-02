@@ -17,11 +17,16 @@ limitations under the License.
 package immutable
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
+
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -38,9 +43,14 @@ const (
 type TSSPFileDetachedReader struct {
 	isSort          bool
 	isInit          bool
+	filterSeq       bool
+	seqIndex        int
 	metaIndexID     int
 	currBlockID     int // currMetaRead
 	currChunkMetaID int
+	filterSeqTime   int64
+	filterSeqId     int64
+	filterSeqFunc   func(int64, int64) bool
 
 	metaDataQueue   logstore.MetaControl
 	metaIndex       []*MetaIndex
@@ -50,6 +60,7 @@ type TSSPFileDetachedReader struct {
 	dataReader      *DetachedMetaDataReader
 	recordPool      *record.CircularRecordPool
 	filterPool      *record.CircularRecordPool
+	logFilterPool   *record.CircularRecordPool
 	currChunkMeta   []*ChunkMeta
 	unnest          *influxql.Unnest
 	unnestOperator  logstore.UnnestOperator
@@ -57,7 +68,7 @@ type TSSPFileDetachedReader struct {
 }
 
 func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *FileReaderContext, path *sparseindex.OBSFilterPath, unnest *influxql.Unnest,
-	isSort bool) (*TSSPFileDetachedReader, error) {
+	isSort bool, options hybridqp.Options) (*TSSPFileDetachedReader, error) {
 	r := &TSSPFileDetachedReader{
 		isSort:        isSort,
 		metaIndex:     metaIndex,
@@ -66,6 +77,13 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		ctx:           ctx,
 		metaDataQueue: logstore.NewMetaControl(true, chunkMetaReadNum),
 		unnest:        unnest,
+		seqIndex:      -1,
+	}
+	if config.IsLogKeeper() && options.GetLogQueryCurrId() != "" && options.GetLimit() > 0 {
+		err := r.parseSeqId(options)
+		if err != nil {
+			return nil, err
+		}
 	}
 	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), BatchReaderRecordNum, ctx.schemas, false)
 	r.filterPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), BatchReaderRecordNum, ctx.schemas, false)
@@ -83,6 +101,90 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		}
 	}
 	return r, err
+}
+
+func (t *TSSPFileDetachedReader) parseSeqId(options hybridqp.Options) error {
+	arrFirst := strings.SplitN(options.GetLogQueryCurrId(), "^", 3)
+	if len(arrFirst) != 3 {
+		return fmt.Errorf("wrong scroll_id")
+	}
+	if arrFirst[0] == "" {
+		return nil
+	}
+	arr := strings.Split(arrFirst[0], "|")
+	if len(arr) == 2 {
+		time, err := strconv.ParseInt(arr[0], 10, 64)
+		if err != nil {
+			return err
+		}
+		seqId, err := strconv.ParseInt(arr[1], 10, 64)
+		if err != nil {
+			return err
+		}
+		if seqId == 0 {
+			return nil
+		}
+		t.filterSeqTime = time
+		t.filterSeqId = seqId
+	}
+	isExist := false
+	for _, v := range t.GetSchema() {
+		if v.Name == record.SeqIDField {
+			isExist = true
+		}
+	}
+	if !isExist {
+		return nil
+	}
+	t.filterSeq = true
+	t.logFilterPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), BatchReaderRecordNum, t.ctx.schemas, false)
+
+	if options.IsAscending() {
+		t.filterSeqFunc = func(cmp, origin int64) bool {
+			return cmp < origin
+		}
+	} else {
+		t.filterSeqFunc = func(cmp, origin int64) bool {
+			return cmp > origin
+		}
+	}
+	return nil
+}
+
+func (t *TSSPFileDetachedReader) filterForLog(rec *record.Record) *record.Record {
+	if !t.filterSeq {
+		return rec
+	}
+	if rec == nil || rec.RowNums() == 0 {
+		return rec
+	}
+	if t.seqIndex == -1 {
+		t.seqIndex = rec.Schema.FieldIndex(record.SeqIDField)
+	}
+	if t.ctx.readCtx.Ascending && (t.filterSeqTime < rec.Time(0) || t.filterSeqTime > rec.Time(rec.RowNums()-1)) {
+		return rec
+	} else if !t.ctx.readCtx.Ascending && (t.filterSeqTime > rec.Time(0) || t.filterSeqTime < rec.Time(rec.RowNums()-1)) {
+		return rec
+	}
+	rows := make([]int, 0, rec.RowNums())
+	isExist := false
+	for k, v := range rec.Times() {
+		if v == t.filterSeqTime {
+			currSeq, isNil := rec.ColVals[t.seqIndex].IntegerValue(k)
+			if !isNil && !t.filterSeqFunc(t.filterSeqId, currSeq) {
+				isExist = true
+			} else {
+				rows = append(rows, k)
+			}
+		} else {
+			rows = append(rows, k)
+		}
+	}
+
+	if !isExist {
+		return rec
+	}
+	return GenRecByReserveIds(rec, t.logFilterPool.Get(), rows, make(map[int]struct{}))
 }
 
 func (t *TSSPFileDetachedReader) Name() string {
@@ -118,9 +220,9 @@ func (t *TSSPFileDetachedReader) Next() (*record.Record, comm.SeriesInfoIntf, er
 }
 
 func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
-	r := t.recordPool.Get()
-	colAux := record.ColAux{}
 	for {
+		r := t.recordPool.Get()
+		colAux := record.ColAux{}
 		result, err := t.dataReader.ReadBatch(r, t.ctx.readCtx)
 		if err != nil {
 			return nil, err
@@ -137,19 +239,30 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 		if t.unnest != nil {
 			t.unnestOperator.Compute(result)
 		}
-		return t.filterData(result), nil
+		result = t.filterData(result)
+		if result.RowNums() == 0 {
+			t.recordPool.PutRecordInCircularPool()
+			continue
+		}
+		return result, nil
 	}
 }
 
 func (t *TSSPFileDetachedReader) filterData(rec *record.Record) *record.Record {
 	if rec != nil && (t.ctx.isOrder || t.isSort) {
-		rec = FilterByTime(rec, t.ctx.tr)
+		if t.ctx.readCtx.Ascending {
+			rec = FilterByTime(rec, t.ctx.tr)
+		} else {
+			rec = FilterByTimeDescend(rec, t.ctx.tr)
+		}
 	}
 
 	// filter by field
 	if rec != nil && t.ctx.filterOpts.cond != nil {
 		rec = FilterByField(rec, t.filterPool.Get(), t.ctx.filterOpts.options, t.ctx.filterOpts.cond, t.ctx.filterOpts.rowFilters, t.ctx.filterOpts.pointTags, t.ctx.filterBitmap, &t.ctx.filterOpts.colAux)
 	}
+
+	rec = t.filterForLog(rec)
 	return rec
 }
 

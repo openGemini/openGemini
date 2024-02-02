@@ -71,6 +71,18 @@ func GetSubscriptionEnable() bool {
 	return subscriptionEnable
 }
 
+var commonConfig = Common{
+	PreAggEnabled: true,
+}
+
+func SetCommon(conf Common) {
+	commonConfig = conf
+}
+
+func GetCommon() *Common {
+	return &commonConfig
+}
+
 func Parse(conf Config, path string) error {
 	if path == "" {
 		return nil
@@ -117,6 +129,7 @@ type Common struct {
 	HaPolicy           string         `toml:"ha-policy"`
 	NodeRole           string         `toml:"node-role"`
 	ProductType        string         `toml:"product-type"`
+	PreAggEnabled      bool           `toml:"pre-agg-enabled"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -127,6 +140,7 @@ func NewCommon() *Common {
 		OptHashAlgo:        DefaultHashAlgo,
 		CpuAllocationRatio: DefaultCpuAllocationRatio,
 		HaPolicy:           DefaultHaPolicy,
+		PreAggEnabled:      true,
 	}
 }
 
@@ -257,11 +271,15 @@ const (
 	LogKeeper             // the log service of CSS
 )
 
+const (
+	LogKeeperService = "logkeeper"
+)
+
 var productTypeOfService ProductType = Basic
 
 func SetProductType(productType string) {
 	switch strings.ToLower(productType) {
-	case "logkeeper":
+	case LogKeeperService:
 		productTypeOfService = LogKeeper
 	default:
 		productTypeOfService = Basic

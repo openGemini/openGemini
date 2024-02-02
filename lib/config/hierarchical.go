@@ -38,13 +38,16 @@ type HierarchicalConfig struct {
 
 	// Max process number for shard moving
 	MaxProcessN int `toml:"max-process-hs-number"`
+
+	EnableWriteColdShard bool `toml:"enable-write-cold-shard"`
 }
 
 func NewHierarchicalConfig() HierarchicalConfig {
 	return HierarchicalConfig{
-		Enabled:     false,
-		RunInterval: toml.Duration(DefaultHSRunInterval),
-		MaxProcessN: DefaultMaxProcessHSNumber,
+		Enabled:              false,
+		RunInterval:          toml.Duration(DefaultHSRunInterval),
+		MaxProcessN:          DefaultMaxProcessHSNumber,
+		EnableWriteColdShard: true,
 	}
 }
 

@@ -91,7 +91,10 @@ const (
 )
 
 var (
-	FileCursorPool = record.NewRecordPool(record.FileCursorPool)
+	FileLoopCursorPool         = record.NewRecordPool(record.FileLoopCursorPool)
+	FileCursorPool             = record.NewRecordPool(record.FileCursorPool)
+	FileCursorValidRowPool     = record.NewRecordPool(record.FileCursorValidRowPool)
+	FileCursorFilterRecordPool = record.NewRecordPool(record.FileCursorFilterRecordPool)
 )
 
 /*
@@ -135,12 +138,12 @@ func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor
 	c.memIter.reset()
 	if len(ctx.decs.GetOps()) > 0 {
 		c.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, true)
-		c.validRowRecordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, true)
+		c.validRowRecordPool = record.NewCircularRecordPool(FileCursorValidRowPool, fileCursorRecordNum, c.schema, true)
 	} else {
 		c.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, false)
-		c.validRowRecordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, false)
+		c.validRowRecordPool = record.NewCircularRecordPool(FileCursorValidRowPool, fileCursorRecordNum, c.schema, false)
 		if ctx.hasFieldCondition() {
-			c.filterRecordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, c.schema, false)
+			c.filterRecordPool = record.NewCircularRecordPool(FileCursorFilterRecordPool, fileCursorRecordNum, c.schema, false)
 		}
 	}
 
@@ -407,12 +410,12 @@ func (f *fileCursor) reInit(ctx *idKeyCursorContext, span *tracing.Span, schema 
 	f.ctx = ctx
 	if len(ctx.decs.GetOps()) > 0 {
 		f.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, true)
-		f.validRowRecordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, true)
+		f.validRowRecordPool = record.NewCircularRecordPool(FileCursorValidRowPool, fileCursorRecordNum, f.schema, true)
 	} else {
 		f.recordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, false)
-		f.validRowRecordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, false)
+		f.validRowRecordPool = record.NewCircularRecordPool(FileCursorValidRowPool, fileCursorRecordNum, f.schema, false)
 		if ctx.hasFieldCondition() {
-			f.filterRecordPool = record.NewCircularRecordPool(FileCursorPool, fileCursorRecordNum, f.schema, false)
+			f.filterRecordPool = record.NewCircularRecordPool(FileCursorFilterRecordPool, fileCursorRecordNum, f.schema, false)
 		}
 	}
 	f.loc = immutable.NewLocation(file, f.ctx.decs)

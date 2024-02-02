@@ -35,6 +35,18 @@ type RecordStatistics struct {
 	itemFileCursorPoolGet          int64
 	itemFileCursorPoolGetReUse     int64
 	itemFileCursorPoolAbort        int64
+	itemFileLoopCursorPoolInUse        int64
+	itemFileLoopCursorPoolGet          int64
+	itemFileLoopCursorPoolGetReUse     int64
+	itemFileLoopCursorPoolAbort        int64
+	itemFileCursorValidRowPoolInUse        int64
+	itemFileCursorValidRowPoolGet          int64
+	itemFileCursorValidRowPoolGetReUse     int64
+	itemFileCursorValidRowPoolAbort        int64
+	itemFileCursorFilterRecordPoolInUse        int64
+	itemFileCursorFilterRecordPoolGet          int64
+	itemFileCursorFilterRecordPoolGetReUse     int64
+	itemFileCursorFilterRecordPoolAbort        int64
 	itemAggPoolInUse               int64
 	itemAggPoolGet                 int64
 	itemAggPoolGetReUse            int64
@@ -86,6 +98,18 @@ func (s *RecordStatistics) Collect(buffer []byte) ([]byte, error) {
 		"FileCursorPoolGet":          s.itemFileCursorPoolGet,
 		"FileCursorPoolGetReUse":     s.itemFileCursorPoolGetReUse,
 		"FileCursorPoolAbort":        s.itemFileCursorPoolAbort,
+		"FileLoopCursorPoolInUse":        s.itemFileLoopCursorPoolInUse,
+		"FileLoopCursorPoolGet":          s.itemFileLoopCursorPoolGet,
+		"FileLoopCursorPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
+		"FileLoopCursorPoolAbort":        s.itemFileLoopCursorPoolAbort,
+		"FileCursorValidRowPoolInUse":        s.itemFileLoopCursorPoolInUse,
+		"FileCursorValidRowPoolGet":          s.itemFileLoopCursorPoolGet,
+		"FileCursorValidRowPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
+		"FileCursorValidRowPoolAbort":        s.itemFileLoopCursorPoolAbort,
+		"FileCursorFilterRecordPoolInUse":        s.itemFileLoopCursorPoolInUse,
+		"FileCursorFilterRecordPoolGet":          s.itemFileLoopCursorPoolGet,
+		"FileCursorFilterRecordPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
+		"FileCursorFilterRecordPoolAbort":        s.itemFileLoopCursorPoolAbort,
 		"AggPoolInUse":               s.itemAggPoolInUse,
 		"AggPoolGet":                 s.itemAggPoolGet,
 		"AggPoolGetReUse":            s.itemAggPoolGetReUse,
@@ -150,6 +174,55 @@ func (s *RecordStatistics) AddFileCursorPoolGetReUse(i int64) {
 
 func (s *RecordStatistics) AddFileCursorPoolAbort(i int64) {
 	atomic.AddInt64(&s.itemFileCursorPoolAbort, i)
+}
+
+func (s *RecordStatistics) AddFileLoopCursorPoolInUse(i int64) {
+	atomic.AddInt64(&s.itemFileLoopCursorPoolInUse, i)
+}
+
+func (s *RecordStatistics) AddFileLoopCursorPoolGet(i int64) {
+	atomic.AddInt64(&s.itemFileLoopCursorPoolGet, i)
+}
+
+func (s *RecordStatistics) AddFileLoopCursorPoolGetReUse(i int64) {
+	atomic.AddInt64(&s.itemFileLoopCursorPoolGetReUse, i)
+}
+
+func (s *RecordStatistics) AddFileLoopCursorPoolAbort(i int64) {
+	atomic.AddInt64(&s.itemFileLoopCursorPoolAbort, i)
+}
+
+func (s *RecordStatistics) AddFileCursorValidRowPoolInUse(i int64) {
+	atomic.AddInt64(&s.itemFileCursorValidRowPoolInUse, i)
+}
+
+func (s *RecordStatistics) AddFileCursorValidRowPoolGet(i int64) {
+	atomic.AddInt64(&s.itemFileCursorValidRowPoolGet, i)
+}
+
+func (s *RecordStatistics) AddFileCursorValidRowPoolGetReUse(i int64) {
+	atomic.AddInt64(&s.itemFileCursorValidRowPoolGetReUse, i)
+}
+
+func (s *RecordStatistics) AddFileCursorValidRowPoolAbort(i int64) {
+	atomic.AddInt64(&s.itemFileCursorValidRowPoolAbort, i)
+}
+
+
+func (s *RecordStatistics) AddFileCursorFilterRecordPoolInUse(i int64) {
+	atomic.AddInt64(&s.itemFileCursorFilterRecordPoolInUse, i)
+}
+
+func (s *RecordStatistics) AddFileCursorFilterRecordPoolGet(i int64) {
+	atomic.AddInt64(&s.itemFileCursorFilterRecordPoolGet, i)
+}
+
+func (s *RecordStatistics) AddFileCursorFilterRecordPoolGetReUse(i int64) {
+	atomic.AddInt64(&s.itemFileCursorFilterRecordPoolGetReUse, i)
+}
+
+func (s *RecordStatistics) AddFileCursorFilterRecordPoolAbort(i int64) {
+	atomic.AddInt64(&s.itemFileCursorFilterRecordPoolAbort, i)
 }
 
 func (s *RecordStatistics) AddAggPoolInUse(i int64) {

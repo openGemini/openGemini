@@ -131,6 +131,8 @@ var (
 
 	HierarchicalStorageEnabled int32 = 0
 
+	WriteColdShardEnable int32 = 0
+
 	indexReadCachePersistent bool = true
 )
 
@@ -265,6 +267,20 @@ func SetHierarchicalStorageEnabled(en bool) {
 		atomic.StoreInt32(&HierarchicalStorageEnabled, -1)
 	}
 	fmt.Println(time.Now().Format(time.RFC3339Nano), "HierarchicalStorageEnabled:", en)
+}
+
+func IsWriteColdShardEnabled() bool {
+	enabled := atomic.LoadInt32(&WriteColdShardEnable)
+	return enabled == 1
+}
+
+func SetWriteColdShardEnabled(en bool) {
+	if en {
+		atomic.StoreInt32(&WriteColdShardEnable, 1)
+	} else {
+		atomic.StoreInt32(&WriteColdShardEnable, -1)
+	}
+	fmt.Println(time.Now().Format(time.RFC3339Nano), "WriteColdShardEnable:", en)
 }
 
 var handlerOnQueryRequest = make(map[queryRequestMod]func(req netstorage.SysCtrlRequest) (string, error), 1)

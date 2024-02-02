@@ -74,6 +74,16 @@ const (
 var ReadMetaCachePct = DefaultReadMetaCachePercent
 var ReadDataCachePct = DefaultReadDataCachePercent
 
+var storeConfig = Store{}
+
+func SetStoreConfig(conf Store) {
+	storeConfig = conf
+}
+
+func GetStoreConfig() *Store {
+	return &storeConfig
+}
+
 // TSStore represents the configuration format for the influxd binary.
 type TSStore struct {
 	Common      *Common     `toml:"common"`

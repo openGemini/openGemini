@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +109,19 @@ func buildChunkMeta() *ChunkMeta {
 		entries: []Segment{{100, 64}},
 	})
 	return cm
+}
+
+func TestPreAggEnable(t *testing.T) {
+	config.GetCommon().PreAggEnabled = false
+	defer func() {
+		config.GetCommon().PreAggEnabled = true
+	}()
+
+	cm := buildChunkMeta()
+	buf := cm.marshal(nil)
+	other := &ChunkMeta{}
+	_, err := other.unmarshal(buf)
+	require.NoError(t, err)
+
+	require.Equal(t, zeroPreAgg, other.colMeta[0].preAgg)
 }
