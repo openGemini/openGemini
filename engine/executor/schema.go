@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -1222,4 +1223,21 @@ func (qs *QuerySchema) GetUnnests() influxql.Unnests {
 
 func (qs *QuerySchema) HasUnnests() bool {
 	return len(qs.unnestCases) > 0
+}
+
+func (qs *QuerySchema) GetTimeRangeByTC() util.TimeRange {
+	startTime, endTime := qs.Options().GetStartTime(), qs.Options().GetEndTime()
+	var interval int64
+	if indexR := qs.Options().GetMeasurements()[0].IndexRelation; indexR != nil {
+		interval = indexR.GetTimeClusterDuration()
+	}
+	return util.TimeRange{Min: window(startTime, interval), Max: window(endTime, interval)}
+}
+
+// window used to calculate the time point that belongs to a specific time window.
+func window(t, window int64) int64 {
+	if t == influxql.MinTime || t == influxql.MaxTime || window == 0 {
+		return t
+	}
+	return t - t%window
 }

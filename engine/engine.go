@@ -47,6 +47,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -1344,6 +1345,47 @@ func (s *Engine) InitLogStoreCtx(querySchema *executor.QuerySchema) (*idKeyCurso
 	return ctx, nil
 }
 
-func (e *Engine) HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool {
-	return true
+func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) error {
+	e.log.Info("[hierarchical storage]", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
+	e.mu.RLock()
+	if err := e.checkAndAddRefPTNoLock(db, uint32(ptId)); err != nil {
+		e.mu.RUnlock()
+		e.log.Error("[hierarchical storage] add pt ref err", zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
+		return err
+	}
+
+	dbPTInfo := e.DBPartitions[db][ptId]
+	e.mu.RUnlock()
+	defer e.unrefDBPT(db, ptId)
+
+	dbPTInfo.mu.RLock()
+	sh := dbPTInfo.Shard(shardID)
+	dbPTInfo.mu.RUnlock()
+	if sh == nil {
+		return errno.NewError(errno.ShardNotFound, shardID)
+	}
+
+	if err := sh.OpenAndEnable(e.metaClient); err != nil {
+		e.log.Error("[hierarchical storage] shard open err", zap.String("db", db),
+			zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
+		return err
+	}
+
+	if syscontrol.IsWriteColdShardEnabled() {
+		if err := sh.UpdateShardReadOnly(e.metaClient); err != nil {
+			e.log.Error("[hierarchical storage] update shard read only fail", zap.String("db", db),
+				zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
+			return err
+		}
+	}
+
+	if sh.CanDoShardMove() {
+		if err := sh.ExecShardMove(); err != nil {
+			return err
+		}
+	}
+
+	e.log.Info("[hierarchical storage] shard move success", zap.String("db", db),
+		zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
+	return nil
 }

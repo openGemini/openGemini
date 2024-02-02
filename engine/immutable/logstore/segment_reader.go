@@ -217,7 +217,7 @@ func (s *SegmentReader) initMeta() (bool, error) {
 	}
 	for _, meta := range readerMetaDatas {
 		s.rowCount += int64(meta.blockRecordsCount)
-		isExist, _ := s.filterReader.IsExist(meta.blockIndex)
+		isExist, _ := s.filterReader.IsExist(meta.blockIndex, nil)
 		if isExist {
 			s.metaDataQueue.Push(meta)
 		}

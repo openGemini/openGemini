@@ -138,7 +138,7 @@ func (t *tsImmTableImpl) LevelPlan(m *MmsTables, level uint16) []*CompactGroup {
 	return plans
 }
 
-func (t *tsImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile) {
+func (t *tsImmTableImpl) makeTSSPFiles(m *MmsTables, name string, isOrder bool, files []TSSPFile) *TSSPFiles {
 	m.mu.RLock()
 	tables := m.Order
 	if !isOrder {
@@ -160,6 +160,42 @@ func (t *tsImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, f
 	for _, f := range files {
 		statistics.IOStat.AddIOSnapshotBytes(f.FileSize())
 	}
+	return fs
+}
+
+// use for flush tsEngine Table
+func (t *tsImmTableImpl) AddBothTSSPFiles(flushed *bool, m *MmsTables, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile) {
+	var orderFs *TSSPFiles
+	var unorderFs *TSSPFiles
+	if len(orderFiles) != 0 {
+		orderFs = t.makeTSSPFiles(m, name, true, orderFiles)
+	}
+	if len(unorderFiles) != 0 {
+		unorderFs = t.makeTSSPFiles(m, name, false, unorderFiles)
+	}
+	if orderFs != nil {
+		orderFs.lock.Lock()
+		defer orderFs.lock.Unlock()
+	}
+	if unorderFs != nil {
+		unorderFs.lock.Lock()
+		defer unorderFs.lock.Unlock()
+	}
+	if orderFs != nil {
+		orderFs.files = append(orderFs.files, orderFiles...)
+		sort.Sort(orderFs)
+	}
+	if unorderFs != nil {
+		unorderFs.files = append(unorderFs.files, unorderFiles...)
+		sort.Sort(unorderFs)
+	}
+	if flushed != nil {
+		*flushed = true
+	}
+}
+
+func (t *tsImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile) {
+	fs := t.makeTSSPFiles(m, name, isOrder, files)
 
 	fs.lock.Lock()
 	fs.files = append(fs.files, files...)

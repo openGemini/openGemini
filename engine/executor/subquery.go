@@ -87,6 +87,7 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 	subOpt.Ordered = opt.Ordered
 	subOpt.HintType = opt.HintType
 	subOpt.StmtId = opt.StmtId
+	subOpt.MaxParallel = opt.MaxParallel
 	return subOpt, nil
 }
 

@@ -40,7 +40,7 @@ Compared with other time series database, openGemini has the following advantage
 
 - #### Ecosystem compatibility
 
-  Compatible with InfluxDB v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing InfluxDB toolchain, supports promethus remote read/write API
+  Compatible with InfluxDB v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing InfluxDB toolchain, supports prometheus remote read/write API
 
 ## Third-party supports
 

@@ -25,15 +25,21 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 var table = crc32.MakeTable(crc32.Castagnoli)
+
+const crcSize = 4
 
 // SKIndexReader as a skip index read interface.
 type SKIndexReader interface {
@@ -110,61 +116,88 @@ func (r *SKIndexReaderImpl) Scan(
 }
 
 func (r *SKIndexReaderImpl) CreateSKFileReaders(option hybridqp.Options, mstInfo *influxql.Measurement, isCache bool) ([]SKFileReader, error) {
-	skInfo := mstInfo.IndexRelation
-	if mstInfo.IndexRelation == nil || len(skInfo.Oids) == 0 || option.GetCondition() == nil {
+	skIndexRelation := mstInfo.IndexRelation
+	if skIndexRelation == nil || len(skIndexRelation.Oids) == 0 || option.GetCondition() == nil {
 		return nil, nil
 	}
 
-	skInfoMap := make(map[string][]string)
-	for i, indexList := range skInfo.IndexList {
+	skFieldMap := make(map[string][]string)
+	for i, indexList := range skIndexRelation.IndexList {
+		// time cluster takes effect on the primary key, not the skip index.
+		if skIndexRelation.Oids[i] == uint32(index.TimeCluster) {
+			continue
+		}
 		for _, field := range indexList.IList {
-			if _, ok := skInfoMap[field]; !ok {
-				skInfoMap[field] = []string{skInfo.IndexNames[i]}
+			if _, ok := skFieldMap[field]; !ok {
+				skFieldMap[field] = []string{skIndexRelation.IndexNames[i]}
 			} else {
-				skInfoMap[field] = append(skInfoMap[field], skInfo.IndexNames[i])
+				skFieldMap[field] = append(skFieldMap[field], skIndexRelation.IndexNames[i])
 			}
 		}
 	}
-	return r.GenSKFileReaderByExpr(option.GetCondition(), option, skInfoMap, isCache)
+	if len(skFieldMap) == 0 {
+		return nil, nil
+	}
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	skInfoMap, err := r.getSKInfoByExpr(rpnExpr, skIndexRelation, skFieldMap)
+	if err != nil {
+		return nil, err
+	}
+	return r.createSKFileReaders(skInfoMap, rpnExpr, option, isCache)
 }
 
-func (r *SKIndexReaderImpl) GenSKFileReaderByExpr(expr influxql.Expr, option hybridqp.Options, skInfoMap map[string][]string, isCache bool) ([]SKFileReader, error) {
-	var readers []SKFileReader
-	switch expr := expr.(type) {
-	case *influxql.BinaryExpr:
-		lReaders, err := r.GenSKFileReaderByExpr(expr.LHS, option, skInfoMap, isCache)
-		if err != nil {
-			return nil, err
+func (r *SKIndexReaderImpl) getSKInfoByExpr(rpnExpr *rpn.RPNExpr, skIndexRelation *influxql.IndexRelation, skFieldMap map[string][]string) (map[string]*SkInfo, error) {
+	skInfoMap := make(map[string]*SkInfo)
+	for _, expr := range rpnExpr.Val {
+		v, ok := expr.(*influxql.VarRef)
+		if !ok {
+			continue
 		}
-		rReaders, err := r.GenSKFileReaderByExpr(expr.RHS, option, skInfoMap, isCache)
-		if err != nil {
-			return nil, err
+		if v.Val == logparser.DefaultFieldForFullText {
+			fields := skIndexRelation.GetFullTextColumns()
+			if len(fields) == 0 {
+				return nil, fmt.Errorf("empty fields for full text index")
+			}
+			schemas := make([]record.Field, 0, len(fields))
+			for i := 0; i < len(fields); i++ {
+				schemas = append(schemas, record.Field{Name: fields[i], Type: influx.Field_Type_String})
+			}
+			// TODO: indexName is used to uniquely identify an index.
+			skInfoMap[index.BloomFilterFullTextIndex] = &SkInfo{fields: schemas, oid: uint32(index.BloomFilterFullText)}
+			continue
 		}
-		readers = append(readers, lReaders...)
-		readers = append(readers, rReaders...)
-	case *influxql.ParenExpr:
-		pReaders, err := r.GenSKFileReaderByExpr(expr.Expr, option, skInfoMap, isCache)
-		if err != nil {
-			return nil, err
+		indexNames, ok := skFieldMap[v.Val]
+		if !ok {
+			continue
 		}
-		readers = append(readers, pReaders...)
-	case *influxql.VarRef:
-		if sks, ok := skInfoMap[expr.Val]; ok {
-			for i := range sks {
-				creator, ok := GetSKFileReaderFactoryInstance().Find(sks[i])
+		for i := range indexNames {
+			if info, ok := skInfoMap[indexNames[i]]; ok {
+				info.fields = append(info.fields, record.Field{Name: v.Val, Type: record.ToModelTypes(v.Type)})
+			} else {
+				oid, ok := skIndexRelation.GetIndexOidByName(indexNames[i])
 				if !ok {
-					return nil, fmt.Errorf("unsupported the skip index type: %s", sks[i])
+					return nil, fmt.Errorf("invalid the index name %s", indexNames[i])
 				}
-				reader, err := creator.CreateSKFileReader([]record.Field{{Name: expr.Val, Type: record.ToModelTypes(expr.Type)}}, option, isCache)
-				if err != nil {
-					return nil, err
-				}
-				readers = append(readers, reader)
+				skInfoMap[indexNames[i]] = &SkInfo{fields: []record.Field{{Name: v.Val, Type: record.ToModelTypes(v.Type)}}, oid: oid}
 			}
 		}
-	case *influxql.StringLiteral, *influxql.IntegerLiteral, *influxql.NumberLiteral, *influxql.BooleanLiteral:
-	default:
-		return nil, fmt.Errorf("unsupported the expr type: %s", expr.String())
+	}
+	return skInfoMap, nil
+}
+
+func (r *SKIndexReaderImpl) createSKFileReaders(skInfoMap map[string]*SkInfo, rpnExpr *rpn.RPNExpr, option hybridqp.Options, isCache bool) ([]SKFileReader, error) {
+	var readers []SKFileReader
+	for _, v := range skInfoMap {
+		indexName, _ := index.GetIndexNameByType(index.IndexType(v.oid))
+		creator, ok := GetSKFileReaderFactoryInstance().Find(indexName)
+		if !ok {
+			return nil, fmt.Errorf("unsupported the skip index type: %s", indexName)
+		}
+		reader, err := creator.CreateSKFileReader(rpnExpr, v.fields, option, isCache)
+		if err != nil {
+			return nil, err
+		}
+		readers = append(readers, reader)
 	}
 	return readers, nil
 }
@@ -173,9 +206,14 @@ func (r *SKIndexReaderImpl) Close() error {
 	return nil
 }
 
+type SkInfo struct {
+	fields record.Schemas
+	oid    uint32
+}
+
 // SKFileReaderCreator is used to abstract SKFileReader implementation of multiple skip indexes in factory mode.
 type SKFileReaderCreator interface {
-	CreateSKFileReader(schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error)
+	CreateSKFileReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (SKFileReader, error)
 }
 
 // RegistrySKFileReaderCreator is used to registry the SKFileReaderCreator
@@ -223,11 +261,12 @@ type SkipIndexWriter interface {
 	Close() error
 	Flush() error
 	CreateSkipIndex(src *record.ColVal, rowsPerSegment []int, refType int) ([]byte, error)
+	CreateFullTextIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte
 }
 
 func NewSkipIndexWriter(indexType string) SkipIndexWriter {
 	switch indexType {
-	case logstore.BloomFilterIndex:
+	case index.BloomFilterIndex:
 		return &BloomFilterImpl{
 			bloomFilter: make([]byte, 0),
 		}
@@ -256,10 +295,10 @@ func (b *BloomFilterImpl) CreateSkipIndex(src *record.ColVal, rowsPerSegment []i
 	//TODO:
 	// 1. use different splitter for different column
 	// 2. reusing the tokenizers
-	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, +3)
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
 
 	segCnt := len(rowsPerSegment)
-	segBfSize := int(logstore.GetConstant(2).FilterDataDiskSize)
+	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
 	res := make([]byte, segCnt*segBfSize)
 	var segCol []record.ColVal
 	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
@@ -269,11 +308,44 @@ func (b *BloomFilterImpl) CreateSkipIndex(src *record.ColVal, rowsPerSegment []i
 	for _, col := range segCol {
 		end = start + segBfSize
 		offs, lens := col.GetOffsAndLens()
-		tk.ProcessTokenizerBatch(col.Val, res[start:end-4], offs, lens)
-		crc := crc32.Checksum(res[start:end-4], table)
-		binary.LittleEndian.PutUint32(res[end-4:end], crc)
+		tk.ProcessTokenizerBatch(col.Val, res[start:end-crcSize], offs, lens)
+		crc := crc32.Checksum(res[start:end-crcSize], table)
+		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
 		start = end
 	}
 	tokenizer.FreeSimpleGramTokenizer(tk)
 	return res, nil
+}
+
+func (b *BloomFilterImpl) CreateFullTextIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte {
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
+	segCnt := len(rowsPerSegment)
+	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
+	res := make([]byte, segCnt*segBfSize)
+
+	start := 0
+	end := 0
+	colsData := b.getFullTextColsData(writeRec, schemaIdx, rowsPerSegment)
+	row, col := len(colsData), len(colsData[0])
+	for i := 0; i < col; i++ {
+		end = start + segBfSize
+		for j := 0; j < row; j++ {
+			offs, lens := colsData[j][i].GetOffsAndLens()
+			tk.ProcessTokenizerBatch(colsData[j][i].Val, res[start:end-crcSize], offs, lens)
+		}
+		crc := crc32.Checksum(res[start:end-crcSize], table)
+		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
+		start = end
+	}
+	return res
+}
+
+func (b *BloomFilterImpl) getFullTextColsData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) [][]record.ColVal {
+	colsData := make([][]record.ColVal, 0, len(schemaIdx))
+	for _, v := range schemaIdx {
+		var colData []record.ColVal
+		colData = writeRec.ColVals[v].SplitColBySize(colData, rowsPerSegment, writeRec.Schema[v].Type)
+		colsData = append(colsData, colData)
+	}
+	return colsData
 }

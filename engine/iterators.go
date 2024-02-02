@@ -200,9 +200,21 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, *mutable.MemTables) {
 	var immutableReader immutable.MmsReaders
 	mutableReader := mutable.MemTables{}
+	var flushed bool
+	var snapshotTblFlushed *bool
 	s.snapshotLock.RLock()
-	immutableReader.Orders, immutableReader.OutOfOrders = s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr)
-	mutableReader.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
+	if s.snapshotTbl != nil {
+		msInfo, err := s.snapshotTbl.GetMsInfo(mm)
+		if err == nil && msInfo != nil {
+			snapshotTblFlushed = msInfo.GetFlushed()
+		}
+	}
+	immutableReader.Orders, immutableReader.OutOfOrders, flushed = s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr, snapshotTblFlushed)
+	if flushed {
+		mutableReader.Init(s.activeTbl, nil, s.memDataReadEnabled)
+	} else {
+		mutableReader.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
+	}
 	mutableReader.Ref()
 	s.snapshotLock.RUnlock()
 	return &immutableReader, &mutableReader

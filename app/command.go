@@ -130,6 +130,7 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		}
 		crypto.Initialize(common.CryptoConfig)
 		config.SetProductType(common.ProductType)
+		config.SetCommon(*common)
 	}
 
 	if err := conf.Validate(); err != nil {

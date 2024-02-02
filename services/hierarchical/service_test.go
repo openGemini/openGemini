@@ -116,27 +116,17 @@ func TestService_RunShardHierarchicalStorage(t *testing.T) {
 		return nil, shardsToCold
 	}
 
-	e.HierarchicalStorageFn = func(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool {
-		if dbName == "testdb1" {
-			return false
+	e.HierarchicalStorageFn = func(db string, ptId uint32, shardID uint64) error {
+		if db == "testdb1" {
+			return errors.New("not the db")
 		}
-		go func() {
-			select {
-			case res, ok := <-resCh:
-				if ok {
-					resCh <- res
-				}
-			default:
-				resCh <- util.Cold
-			}
-		}()
-		return true
+		return nil
 	}
 
 	t.Run("all success", func(t *testing.T) {
 		s := testService(c, e)
 		s.handle()
-		assert.Equal(t, 2, called)
+		assert.Equal(t, 3, called)
 	})
 
 	t.Run("UpdateShardInfoTier return error", func(t *testing.T) {
@@ -147,7 +137,7 @@ func TestService_RunShardHierarchicalStorage(t *testing.T) {
 		}
 		s := testService(c, e)
 		s.handle()
-		assert.Equal(t, 1, called)
+		assert.Equal(t, 2, called)
 	})
 
 	t.Run("UpdateShardInfoTier moving return nil", func(t *testing.T) {
@@ -161,7 +151,7 @@ func TestService_RunShardHierarchicalStorage(t *testing.T) {
 		}
 		s := testService(c, e)
 		s.handle()
-		assert.Equal(t, 2, called)
+		assert.Equal(t, 3, called)
 	})
 }
 
@@ -176,13 +166,13 @@ func TestService_Run(t *testing.T) {
 }
 
 type MockTEngine struct {
-	HierarchicalStorageFn        func(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool
+	HierarchicalStorageFn        func(db string, ptId uint32, shardID uint64) error
 	FetchShardsNeedChangeStoreFn func() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
 	ChangeShardTierToWarmFn      func(db string, ptId uint32, shardID uint64) error
 }
 
-func (s *MockTEngine) HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool {
-	return s.HierarchicalStorageFn(shardId, ptID, dbName, resCh)
+func (s *MockTEngine) HierarchicalStorage(db string, ptId uint32, shardID uint64) error {
+	return s.HierarchicalStorageFn(db, ptId, shardID)
 }
 
 func (s *MockTEngine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta.ShardIdentifier) {

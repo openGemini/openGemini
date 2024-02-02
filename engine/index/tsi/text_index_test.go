@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -48,7 +49,7 @@ func buildRow(seriesId uint64, timestamp int64, textFiledValue string) influx.Ro
 	// construct indexOptions
 	indexOptions := influx.IndexOptions{{
 		IndexList: []uint16{1},
-		Oid:       uint32(Text),
+		Oid:       uint32(index.Text),
 	}}
 
 	r := &influx.Row{}

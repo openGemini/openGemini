@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -447,7 +448,7 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 		OpId(opId).
 		Ident(indexIdent).
 		Path(ipath).
-		IndexType(tsi.MergeSet).
+		IndexType(index.MergeSet).
 		EngineType(engineType).
 		StartTime(tr.StartTime).
 		EndTime(tr.EndTime).
@@ -473,12 +474,12 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 		dbPT.mu.Unlock()
 		return
 	}
-	indexBuilder.Relations[uint32(tsi.MergeSet)] = indexRelation
+	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
 
 	// init other indexRelations if exist
 	for idx := range allIndexDirs {
 		if containOtherIndexes(allIndexDirs[idx].Name()) {
-			idxType := tsi.GetIndexTypeByName(allIndexDirs[idx].Name())
+			idxType, _ := index.GetIndexTypeByName(allIndexDirs[idx].Name())
 			opts := new(tsi.Options).
 				Ident(indexIdent).
 				Path(ipath).
@@ -742,7 +743,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		opts := new(tsi.Options).
 			Ident(indexIdent).
 			Path(iPath).
-			IndexType(tsi.MergeSet).
+			IndexType(index.MergeSet).
 			EngineType(engineType).
 			StartTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime).
 			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
@@ -759,7 +760,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		primaryIndex, _ := tsi.NewIndex(opts)
 		primaryIndex.SetIndexBuilder(indexBuilder)
 		indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-		dbPT.indexBuilder[indexid].Relations[uint32(tsi.MergeSet)] = indexRelation
+		dbPT.indexBuilder[indexid].Relations[uint32(index.MergeSet)] = indexRelation
 		err = indexBuilder.Open()
 		if err != nil {
 			return nil, err

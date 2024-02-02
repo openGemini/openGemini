@@ -110,20 +110,25 @@ func (p *preparedStatement) Statement() *influxql.SelectStatement {
 	return p.stmt
 }
 
-func (p *preparedStatement) buildPlanByCache(ctx context.Context, schema *QuerySchema, plan []hybridqp.QueryNode, req *[]*RemoteQuery) (hybridqp.QueryNode, error) {
+func (p *preparedStatement) buildPlanByCache(ctx context.Context, schema *QuerySchema, plan []hybridqp.QueryNode, mstsReqs *[]*MultiMstReqs) (hybridqp.QueryNode, error) {
 	p.stmt.Sources = p.qc.GetSources(p.stmt.Sources)
 	eTraits, err := p.qc.GetETraits(ctx, p.stmt.Sources, schema)
 	if eTraits == nil || err != nil {
 		return nil, err
 	}
-	if len(eTraits) == 1 && localStorageForQuery != nil {
-		*req = append(*req, eTraits[0].(*RemoteQuery))
+	if localStorageForQuery != nil {
+		if len(eTraits) > 0 {
+			*mstsReqs = append(*mstsReqs, NewMultiMstReqs())
+			for _, e := range eTraits {
+				(*mstsReqs)[len(*mstsReqs)-1].reqs = append((*mstsReqs)[len(*mstsReqs)-1].reqs, e.(*RemoteQuery))
+			}
+		}
 		return NewPlanBySchemaAndSrcPlan(schema, plan, eTraits, true)
 	}
 	return NewPlanBySchemaAndSrcPlan(schema, plan, eTraits, false)
 }
 
-func (p *preparedStatement) removeNodeLogicalExchange(plan hybridqp.QueryNode, req *[]*RemoteQuery) hybridqp.QueryNode {
+func (p *preparedStatement) removeNodeLogicalExchange(plan hybridqp.QueryNode, mstsReqs *[]*MultiMstReqs) hybridqp.QueryNode {
 	if len(plan.Children()) == 0 {
 		return plan
 	}
@@ -131,29 +136,44 @@ func (p *preparedStatement) removeNodeLogicalExchange(plan hybridqp.QueryNode, r
 		if nodeExchange, ok := plan.Children()[i].(*LogicalExchange); ok {
 			if nodeExchange.eType == NODE_EXCHANGE {
 				eTraits := nodeExchange.eTraits
-				if len(nodeExchange.Children()) == 1 && len(eTraits) == 1 {
+				if len(nodeExchange.Children()) == 1 {
 					plan.Children()[i] = nodeExchange.Children()[0]
-					*req = append(*req, eTraits[0].(*RemoteQuery))
+					if len(eTraits) > 0 {
+						*mstsReqs = append(*mstsReqs, NewMultiMstReqs())
+						for _, e := range eTraits {
+							(*mstsReqs)[len(*mstsReqs)-1].reqs = append((*mstsReqs)[len(*mstsReqs)-1].reqs, e.(*RemoteQuery))
+						}
+					}
 					continue
 				}
 			}
 		}
-		p.removeNodeLogicalExchange(plan.Children()[i], req)
+		p.removeNodeLogicalExchange(plan.Children()[i], mstsReqs)
 	}
 
 	return plan
+}
+
+type MultiMstReqs struct {
+	reqs []*RemoteQuery
+}
+
+func NewMultiMstReqs() *MultiMstReqs {
+	return &MultiMstReqs{
+		reqs: make([]*RemoteQuery, 0),
+	}
 }
 
 func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, hybridqp.Trait, error) {
 	if len(p.stmt.Fields) == 0 {
 		return nil, nil, nil
 	}
-	var req []*RemoteQuery = make([]*RemoteQuery, 0)
+	var mstsReqs []*MultiMstReqs = make([]*MultiMstReqs, 0)
 	ctx = context.WithValue(ctx, NowKey, p.now)
 
 	opt, ok := p.opt.(*query.ProcessorOptions)
 	if !ok {
-		return nil, req, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
+		return nil, mstsReqs, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
 	}
 	opt.EnableBinaryTreeMerge = sysconfig.GetEnableBinaryTreeMerge()
 
@@ -173,23 +193,23 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 				templatePlan = SqlPlanTemplate[planType].GetPlan()
 			}
 			schema.SetPlanType(planType)
-			plan, err := p.buildPlanByCache(ctx, schema, templatePlan, &req)
+			plan, err := p.buildPlanByCache(ctx, schema, templatePlan, &mstsReqs)
 			PrintPlan("template plan", plan)
-			return plan, req, err
+			return plan, mstsReqs, err
 		}
 	}
 	plan, err := buildExtendedPlan(ctx, p.stmt, p.qc, schema)
 
 	if err != nil {
-		return nil, req, err
+		return nil, mstsReqs, err
 	}
 	if plan == nil {
-		return nil, req, nil
+		return nil, mstsReqs, nil
 	}
 
 	PrintPlan("origin plan", plan)
 	if localStorageForQuery != nil && !HaveOnlyCSStore {
-		p.removeNodeLogicalExchange(plan, &req)
+		p.removeNodeLogicalExchange(plan, &mstsReqs)
 		PrintPlan("ts-server plan", plan)
 	}
 	planner := p.optimizer()
@@ -215,7 +235,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	}
 
 	PrintPlan("optimized plan", best)
-	return best, req, nil
+	return best, mstsReqs, nil
 }
 
 func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, error) {
@@ -233,7 +253,7 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 	}
 	// ts-server + tsEngine remove node_exchange
 	if localStorageForQuery != nil {
-		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(req.([]*RemoteQuery), ctx)
+		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(req.([]*MultiMstReqs), ctx)
 	}
 	return executorBuilder.Build(best)
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
+	indextype "github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -1251,7 +1252,7 @@ func (idx *MergeSetIndex) DebugFlush() {
 
 func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
 	return &IndexAmRoutine{
-		amKeyType:    MergeSet,
+		amKeyType:    indextype.MergeSet,
 		amOpen:       MergeSetOpen,
 		amBuild:      MergeSetBuild,
 		amInsert:     MergeSetInsert,

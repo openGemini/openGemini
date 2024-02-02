@@ -85,6 +85,7 @@ type StreamWriteFile struct {
 	// used only for data verification
 	rowCount       map[string]int
 	enableValidate bool
+	tier           uint64
 }
 
 func NewWriteScanFile(mst string, m *MmsTables, file TSSPFile, schema record.Schemas) (*StreamWriteFile, error) {
@@ -94,6 +95,7 @@ func NewWriteScanFile(mst string, m *MmsTables, file TSSPFile, schema record.Sch
 	compItr.maxN = int(trailer.idCount)
 	compItr.schema = schema
 	compItr.file = file
+	compItr.tier = *(m.tier)
 	return compItr, nil
 }
 
@@ -138,7 +140,12 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 		c.log.Error("file exist", zap.String("file", filePath))
 		return fmt.Errorf("file(%s) exist", filePath)
 	}
-	c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	if c.tier == util.Cold {
+		c.fd, err = fileops.CreateOBSFile(filePath, lock, pri)
+	} else {
+		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	}
+
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		return err

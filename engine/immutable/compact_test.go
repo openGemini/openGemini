@@ -35,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
@@ -1611,11 +1612,11 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	indexRelation := &influxql.IndexRelation{
-		Oids:       []uint32{4},
+		Oids:       []uint32{uint32(index.BloomFilter)},
 		IndexNames: []string{"bloomfilter"},
 	}
 
@@ -1769,11 +1770,11 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	indexRelation := &influxql.IndexRelation{
-		Oids:       []uint32{4},
+		Oids:       []uint32{uint32(index.BloomFilter)},
 		IndexNames: []string{"bloomfilter"},
 	}
 
@@ -1996,11 +1997,11 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 		},
 		Schema: schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{4},
+			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
 	indexRelation := &influxql.IndexRelation{
-		Oids:       []uint32{4},
+		Oids:       []uint32{uint32(index.BloomFilter)},
 		IndexNames: []string{"bloomfilter"},
 	}
 

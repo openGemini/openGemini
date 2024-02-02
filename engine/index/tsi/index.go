@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -46,20 +47,6 @@ const (
 	defaultSKeyCacheSize     = 128 << 20
 	defaultTagCacheSize      = 512 << 20
 	defaultTagFilterCostSize = 16 << 20 // 16MB
-)
-
-type IndexType int
-
-const (
-	MergeSet IndexType = iota
-	Text
-	Field
-	TimeCluster
-	BloomFilter
-	BloomFilterFullText
-	MinMax
-	Set
-	IndexTypeAll
 )
 
 var (
@@ -294,7 +281,7 @@ type Options struct {
 	ident        *meta.IndexIdentifier
 	path         string
 	lock         *string
-	indexType    IndexType
+	indexType    index.IndexType
 	engineType   config.EngineType
 	startTime    time.Time
 	endTime      time.Time
@@ -333,7 +320,7 @@ func (opts *Options) Lock(lock *string) *Options {
 	return opts
 }
 
-func (opts *Options) IndexType(indexType IndexType) *Options {
+func (opts *Options) IndexType(indexType index.IndexType) *Options {
 	opts.indexType = indexType
 	return opts
 }
@@ -360,7 +347,7 @@ func (opts *Options) Duration(duration time.Duration) *Options {
 
 func NewIndex(opts *Options) (Index, error) {
 	switch opts.indexType {
-	case MergeSet:
+	case index.MergeSet:
 		return NewMergeSetIndex(opts)
 	default:
 		return NewMergeSetIndex(opts)

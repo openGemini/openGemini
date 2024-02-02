@@ -21,11 +21,10 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tokenizer"
@@ -44,8 +43,8 @@ func TestSKIndexReader(t *testing.T) {
 		RHS: &influxql.IntegerLiteral{Val: 2},
 	}}
 	mstInfo := &influxql.Measurement{IndexRelation: &influxql.IndexRelation{
-		Oids:       []uint32{uint32(tsi.MinMax)},
-		IndexNames: []string{colstore.MinMaxIndex},
+		Oids:       []uint32{uint32(index.MinMax)},
+		IndexNames: []string{index.MinMaxIndex},
 		IndexList:  []*influxql.IndexList{{IList: []string{"value"}}},
 	}}
 	readers, err := reader.CreateSKFileReaders(option, mstInfo, true)
@@ -62,6 +61,24 @@ func TestSKIndexReader(t *testing.T) {
 	}
 	assert.Equal(t, len(frs), 1)
 	assert.Equal(t, reader.Close(), nil)
+}
+
+func TestSKBFIndexReader(t *testing.T) {
+	reader := sparseindex.NewSKIndexReader(2, 2, 0)
+	option := &query.ProcessorOptions{Condition: &influxql.BinaryExpr{
+		Op:  influxql.EQ,
+		LHS: &influxql.VarRef{Val: "value", Type: influxql.Integer},
+		RHS: &influxql.IntegerLiteral{Val: 2},
+	}}
+	mstInfo := &influxql.Measurement{IndexRelation: &influxql.IndexRelation{
+		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		IndexNames: []string{index.BloomFilterFullTextIndex},
+		IndexList:  []*influxql.IndexList{{IList: []string{"value"}}},
+	}}
+	r, err := reader.CreateSKFileReaders(option, mstInfo, true)
+	assert.Equal(t, err, nil)
+	err = r[0].Close()
+	assert.Equal(t, err, nil)
 }
 
 func TestCreateSkipIndex(t *testing.T) {

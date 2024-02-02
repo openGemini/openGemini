@@ -289,7 +289,7 @@ func (m *MmsTables) GetMstFileStat() *statistics.FileStat {
 	return fileStat
 }
 
-func (m *MmsTables) fullyCompacted() bool {
+func (m *MmsTables) FullyCompacted() bool {
 	count := 0
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -305,7 +305,7 @@ func (m *MmsTables) fullyCompacted() bool {
 }
 
 func (m *MmsTables) FreeSequencer() bool {
-	if !m.fullyCompacted() {
+	if !m.FullyCompacted() {
 		return false
 	}
 	return m.sequencer.free()

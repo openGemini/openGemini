@@ -105,6 +105,10 @@ func (c *csImmTableImpl) LevelPlan(m *MmsTables, level uint16) []*CompactGroup {
 	return plans
 }
 
+// not use
+func (c *csImmTableImpl) AddBothTSSPFiles(flushed *bool, m *MmsTables, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile) {
+}
+
 func (c *csImmTableImpl) AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile) {
 	m.mu.RLock()
 	tables := m.CSFiles

@@ -26,6 +26,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -166,7 +167,7 @@ func (idx *TextIndex) CreateIndexIfNotExists(primaryIndex PrimaryIndex, row *inf
 	timestamp := row.Timestamp
 	// Find the field need to be created index.
 	for _, opt := range row.IndexOptions {
-		if opt.Oid != uint32(Text) {
+		if opt.Oid != uint32(index.Text) {
 			continue
 		}
 
@@ -397,12 +398,12 @@ func (idx *TextIndex) Flush() {
 }
 
 func TextIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
-	index, err := NewTextIndex(opt)
+	textIndex, err := NewTextIndex(opt)
 	if err != nil {
 		return nil, err
 	}
 	return &IndexAmRoutine{
-		amKeyType:    Text,
+		amKeyType:    index.Text,
 		amOpen:       TextOpen,
 		amBuild:      TextBuild,
 		amInsert:     TextInsert,
@@ -410,7 +411,7 @@ func TextIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine,
 		amScan:       TextScan,
 		amClose:      TextClose,
 		amFlush:      TextFlush,
-		index:        index,
+		index:        textIndex,
 		primaryIndex: primaryIndex,
 	}, nil
 }

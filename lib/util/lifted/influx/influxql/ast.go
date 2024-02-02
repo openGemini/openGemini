@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -605,13 +606,7 @@ func (a Sources) HaveOnlyCSStore() bool {
 }
 
 func (a Sources) IsUnifyPlan() bool {
-	msts := a.Measurements()
-	for i := range msts {
-		if msts[i].IndexRelation != nil && len(msts[i].IndexRelation.Oids) > 0 {
-			return true
-		}
-	}
-	return false
+	return config.IsLogKeeper()
 }
 
 func (a Sources) IsSubQuery() bool {
@@ -4373,16 +4368,49 @@ func (ir *IndexRelation) Clone() *IndexRelation {
 	return clone
 }
 
+func (ir *IndexRelation) GetIndexOidByName(indexName string) (uint32, bool) {
+	if ir == nil || len(ir.IndexNames) == 0 {
+		return 0, false
+	}
+	for i := range ir.IndexNames {
+		if ir.IndexNames[i] == indexName {
+			return ir.Oids[i], true
+		}
+	}
+	return 0, false
+}
+
 func (ir *IndexRelation) GetBloomFilterColumns() []string {
 	if ir == nil {
 		return nil
 	}
 	for i := range ir.IndexNames {
-		if ir.IndexNames[i] == "bloomfilter" {
+		if ir.IndexNames[i] == index.BloomFilterIndex {
 			return ir.IndexList[i].IList
 		}
 	}
 	return nil
+}
+
+func (ir *IndexRelation) GetFullTextColumns() []string {
+	if ir == nil || len(ir.Oids) == 0 {
+		return nil
+	}
+	for i := range ir.Oids {
+		if ir.Oids[i] == uint32(index.BloomFilterFullText) {
+			return ir.IndexList[i].IList
+		}
+	}
+	return nil
+}
+
+func (ir *IndexRelation) GetTimeClusterDuration() int64 {
+	for i := range ir.Oids {
+		if ir.Oids[i] == uint32(index.TimeCluster) {
+			return int64(ir.IndexOptions[i].Options[0].TimeClusterDuration)
+		}
+	}
+	return 0
 }
 
 // Measurement represents a single measurement used as a datasource.

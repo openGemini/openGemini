@@ -23,10 +23,13 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/bitmap"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
@@ -296,6 +299,25 @@ func getCondString(c *ConditionImpl) string {
 	return b.String()
 }
 
+func TestCondition(t *testing.T) {
+	condStr := "__log___ = 1"
+	fieldMap["__log__"] = influxql.Integer
+	condExpr := MustParseExpr(condStr)
+	opt := query.ProcessorOptions{
+		Sources: []influxql.Source{
+			&influxql.Measurement{
+				Name: "students",
+				IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+					Oids:      []uint32{uint32(index.BloomFilterFullText)},
+					IndexList: []*influxql.IndexList{{IList: []string{"country"}}},
+				},
+			},
+		},
+	}
+	_, err := NewCondition(nil, condExpr, inSchema, &opt)
+	assert.True(t, errno.Equal(err, errno.ErrValueTypeFullTextIndex))
+}
+
 func TestConditionToRPN(t *testing.T) {
 	f := func(
 		timeStr string,
@@ -310,7 +332,18 @@ func TestConditionToRPN(t *testing.T) {
 		if len(condStr) > 0 {
 			condExpr = MustParseExpr(condStr)
 		}
-		condition, err := NewCondition(timeExpr, condExpr, inSchema)
+		opt := query.ProcessorOptions{
+			Sources: []influxql.Source{
+				&influxql.Measurement{
+					Name: "students",
+					IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+						Oids:      []uint32{uint32(index.BloomFilterFullText)},
+						IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"country"}}},
+					},
+				},
+			},
+		}
+		condition, err := NewCondition(timeExpr, condExpr, inSchema, &opt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -386,6 +419,14 @@ func TestConditionToRPN(t *testing.T) {
 			"",
 			"((country = 'china' and country  = 'american') and address = 'shenzhen') or address = 'shanghai'",
 			"country::string = 'china' | country::string = 'american' | and | address::string = 'shenzhen' | and | address::string = 'shanghai' | or",
+		)
+	})
+	t.Run("9", func(t *testing.T) {
+		// 1 and 2 and 3 and 4 => 1 2 3 4 and and and
+		f(
+			"",
+			"__log___ = 'shanghai'",
+			"country::string MATCHPHRASE 'shanghai'",
 		)
 	})
 }

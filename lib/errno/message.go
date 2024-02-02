@@ -94,6 +94,8 @@ var messageMap = map[Errno]*Message{
 	WritePointHasInvalidField:    newFatalMessage("column store write point has Invalid field :%s", ModuleWrite),
 	WritePointSchemaInvalid:      newFatalMessage("point schema length does not match ddl schema length: %d != %d", ModuleWrite),
 	WritePointPrimaryKeyErr:      newFatalMessage("checkSchema: write point is not match the number of primary key. mst: %s,  expect:%d but:%d", ModuleWrite),
+	KeyWordConflictErr:           newFatalMessage("column name conflict with key word. mst: %s,  conflict column name :%s", ModuleWrite),
+	MeasurementNameTooLong:       newWarnMessage("measurement name is :%s. upper limit: %d; current: %d", ModuleWrite),
 
 	// write interface error codes
 	InvalidLogDataType:                 newWarnMessage("invalid log data type value", ModuleWriteInterface),
@@ -196,6 +198,8 @@ var messageMap = map[Errno]*Message{
 	FailedToDecodeFloatArray:           newFatalMessage("failed to decode float array. exp length: %d, got: %d", ModuleStorageEngine),
 	InvalidFloatBuffer:                 newFatalMessage("invalid input float encoded data, type = %v", ModuleStorageEngine),
 	MemUsageExceeded:                   newFatalMessage("mem usage exceeded threshold %d", ModuleStorageEngine),
+	ShardCannotMove:                    newFatalMessage("shard can not move %d", ModuleStorageEngine),
+	ShardIsMoving:                      newFatalMessage("shard is moving %d", ModuleStorageEngine),
 
 	// wal error codes
 	ReadWalFileFailed:         newWarnMessage("read wal file failed", ModuleWal),
@@ -345,6 +349,7 @@ var messageMap = map[Errno]*Message{
 	ErrRPNElement:              newFatalMessage("unknown the rpn element: %v", ModuleIndex),
 	ErrCoarseIndexFragment:     newFatalMessage("property coarse_index_fragment should be greater than 1", ModuleIndex),
 	ErrQuerySchemaUpperBound:   newNoticeMessage("max-select-schema limit exceeded: %d/%d", ModuleQueryEngine),
+	ErrValueTypeFullTextIndex:  newNoticeMessage("compare value of full text index should be string", ModuleQueryEngine),
 
 	// monitoring and statistics
 	WatchFileTimeout: newWarnMessage("watch file timeout", ModuleStat),

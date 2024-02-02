@@ -18,6 +18,7 @@ package engine
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -677,5 +678,26 @@ func TestColumnStoreReader(t *testing.T) {
 				t.Errorf("`%s` failed", tt.name)
 			}
 		})
+	}
+}
+
+func TestColumnStoreReaderTranRecToChunk(t *testing.T) {
+	schema := createQuerySchemaForTranRec()
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewColumnStoreReader(readerPlan, nil)
+	if err := reader.initReadCursor(); err != nil {
+		t.Fatalf("ColumnStoreReader initReadCursor, err: %+v", err)
+	}
+	if err := reader.initSchemaAndPool(); err != nil {
+		t.Fatalf("ColumnStoreReader initSchemaAndPool, err: %+v", err)
+	}
+	rec := genRecordFortRranRec()
+	chk, err := reader.tranRecToChunk(rec)
+	if err != nil {
+		t.Fatalf("trans rec to chunk failed, err: %+v", err)
+	}
+	// compare column and dim for the filed "string"
+	if !reflect.DeepEqual(chk.Column(3), chk.Dim(0)) {
+		t.Fatal("trans rec to dim failed. The column[3] not equal to dim[0]")
 	}
 }

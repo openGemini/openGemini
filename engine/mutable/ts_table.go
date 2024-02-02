@@ -64,9 +64,6 @@ func (t *tsMemTableImpl) flushChunkImp(dataPath, msName string, lockPath *string
 				logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
 				return writeMs
 			}
-
-			tbStore.AddTSSPFiles(writeMs.Name(), isOrder, writeMs.Files...)
-			writeMs = nil
 		}
 	}
 
@@ -119,6 +116,17 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 		atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(chunk.OrderWriteRec.GetRecord().RowNums())+int64(chunk.UnOrderWriteRec.GetRecord().RowNums()))
 	}
 
+	var orderFiles, unorderFiles []immutable.TSSPFile
+	if orderMs != nil {
+		orderFiles = orderMs.Files
+	}
+	if unOrderMs != nil {
+		unorderFiles = unOrderMs.Files
+	}
+	// add both ordered/unordered files to list
+	tbStore.AddBothTSSPFiles(msInfo.GetFlushed(), msName, orderFiles, unorderFiles)
+	orderMs = nil
+	unOrderMs = nil
 	PutSidsImpl(sids)
 }
 
@@ -213,7 +221,7 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 	return table.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
-func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
+func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string, startSeqId int64) error {
 	return nil
 }
 

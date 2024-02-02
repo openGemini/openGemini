@@ -37,7 +37,7 @@ type metaClient interface {
 type engine interface {
 	FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
-	HierarchicalStorage(shardId uint64, ptID uint32, dbName string, resCh chan int64) bool
+	HierarchicalStorage(db string, ptId uint32, shardID uint64) error
 }
 
 type WaitGroup struct {
@@ -142,36 +142,27 @@ func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifi
 	for _, shard := range shardsToCold {
 		s.HsWaitGroup.Add(1)
 		go func(s *Service, shard *meta.ShardIdentifier) {
-			resCh := make(chan int64)
 			defer func() {
 				s.HsWaitGroup.Done()
-				close(resCh)
 			}()
-
-			if ok := s.Engine.HierarchicalStorage(shard.ShardID, shard.OwnerPt, shard.OwnerDb, resCh); !ok {
-				return
-			}
 
 			// update tier status to moving
 			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, util.Moving, shard.OwnerDb, shard.Policy); err != nil {
 				s.Logger.Error("update shard info tier err",
 					zap.Int64("shard id", int64(shard.ShardID)),
 					zap.Int64("tier", int64(util.Moving)), zap.Error(err))
-				tier := <-resCh
-				s.Logger.Error("UpdateShardInfoTier. tier received", zap.Int64("tier", tier))
 				return
 			}
 
-			// wait until shard move done or stop by shard.close or compact
-			tier := <-resCh
-			s.Logger.Info("shard move done. tier received", zap.Int64("tier", tier))
-			if tier != util.Cold {
+			if err := s.Engine.HierarchicalStorage(shard.OwnerDb, shard.OwnerPt, shard.ShardID); err != nil {
+				s.Logger.Error("HierarchicalStorage run error", zap.Error(err))
 				return
 			}
-			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, uint64(tier), shard.OwnerDb, shard.Policy); err != nil {
+
+			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, util.Cold, shard.OwnerDb, shard.Policy); err != nil {
 				s.Logger.Error("update shard info tier err",
 					zap.Int64("shard id", int64(shard.ShardID)),
-					zap.Int64("tier", tier), zap.Error(err))
+					zap.Uint64("tier", util.Cold), zap.Error(err))
 			}
 		}(s, shard)
 	}

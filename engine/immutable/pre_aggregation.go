@@ -62,12 +62,11 @@ var (
 	timePreAggPool    = sync.Pool{}
 	SegmentLen        = (Segment{}).bytes()
 	ColumnMetaLenMin  = (ColumnMeta{}).bytes(1)
-	ChunkMetaMinLen   = ChunkMetaLen + ColumnMetaLenMin*2
+	ChunkMetaMinLen   = (&ChunkMeta{}).minBytes()
 )
 
 const (
 	MinMaxTimeLen        = int(unsafe.Sizeof(SegmentRange{}))
-	ChunkMetaLen         = int(unsafe.Sizeof(ChunkMeta{})-24*2) + MinMaxTimeLen
 	MetaIndexLen         = int(unsafe.Sizeof(MetaIndex{}))
 	DetachedMetaIndexLen = int(unsafe.Sizeof(MetaIndex{}) - 4) //count not use
 )
@@ -90,6 +89,22 @@ func newPreAggBuilders() *PreAggBuilders {
 	}
 	b.reset()
 	return b
+}
+
+func (b *PreAggBuilders) FloatBuilder() *FloatPreAgg {
+	builder, ok := b.floatBuilder.(*FloatPreAgg)
+	if !ok || builder == nil {
+		builder = &FloatPreAgg{}
+	}
+	return builder
+}
+
+func (b *PreAggBuilders) IntegerBuilder() *IntegerPreAgg {
+	builder, ok := b.intBuilder.(*IntegerPreAgg)
+	if !ok || builder == nil {
+		builder = &IntegerPreAgg{}
+	}
+	return builder
 }
 
 func (b *PreAggBuilders) reset() {
@@ -316,6 +331,13 @@ func (m *IntegerPreAgg) addMax(value float64, tm int64) {
 func (m *IntegerPreAgg) addSum(v float64) { m.values[sumIndex] += int64(v) }
 func (m *IntegerPreAgg) addCount(n int64) { m.values[countIndex] += n }
 
+func (m *IntegerPreAgg) merge(other *IntegerPreAgg) {
+	m.addMin(float64(other.values[minIndex]), other.values[minTIndex])
+	m.addMax(float64(other.values[maxIndex]), other.values[maxTIndex])
+	m.values[sumIndex] += other.values[sumIndex]
+	m.values[countIndex] += other.values[countIndex]
+}
+
 // FloatPreAgg If you change the order of the elements in the structure,
 // remember to modify marshal() and unmarshal() as well.
 type FloatPreAgg struct {
@@ -457,6 +479,13 @@ func (m *FloatPreAgg) addMax(v float64, tm int64) {
 
 func (m *FloatPreAgg) addSum(v float64) { m.sumV += v }
 func (m *FloatPreAgg) addCount(n int64) { m.countV += n }
+
+func (m *FloatPreAgg) merge(other *FloatPreAgg) {
+	m.addMin(other.minV, other.minTime)
+	m.addMax(other.maxV, other.maxTime)
+	m.addSum(other.sumV)
+	m.addCount(other.countV)
+}
 
 // StringPreAgg If you change the order of the elements in the structure,
 // remember to modify marshal() and unmarshal() as well.

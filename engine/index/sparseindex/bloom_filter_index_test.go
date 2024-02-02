@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -67,7 +68,8 @@ func TestBloomFilterIndexReader(t *testing.T) {
 			RHS: &influxql.StringLiteral{Val: "hello1"},
 		},
 	}
-	reader, err := sparseindex.NewBloomFilterIndexReader(schema, option, true)
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	reader, err := sparseindex.NewBloomFilterIndexReader(rpnExpr, schema, option, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +129,8 @@ func TestReadVerticalFilter(t *testing.T) {
 			RHS: &influxql.StringLiteral{Val: "hello1"},
 		},
 	}
-	reader, err := sparseindex.NewBloomFilterIndexReader(schema, option, true)
+	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
+	reader, err := sparseindex.NewBloomFilterIndexReader(rpnExpr, schema, option, true)
 	if err != nil {
 		t.Fatal(err)
 	}

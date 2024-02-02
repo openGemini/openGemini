@@ -26,8 +26,8 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/coordinator"
-	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
@@ -62,7 +62,7 @@ func TestStreamGenerateGroupKey(t *testing.T) {
 	assert2.Equal(t, value, "value3")
 
 	rows[0].IndexOptions = make([]influx.IndexOption, 1)
-	rows[0].IndexOptions[0].Oid = uint32(tsi.Field)
+	rows[0].IndexOptions[0].Oid = uint32(index.Field)
 	rows[0].IndexOptions[0].IndexList = []uint16{5}
 	keys = []string{"fk3", "tk3"}
 	value, _ = s.GenerateGroupKey(ctx, keys, &rows[0])

@@ -102,6 +102,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	immutable.InitWriterPool(3 * cpu.GetCpuNum())
 	immutable.SetIndexCompressMode(conf.Data.TemporaryIndexCompressMode)
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
+	config.SetStoreConfig(conf.Data)
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))

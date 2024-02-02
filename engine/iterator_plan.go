@@ -46,6 +46,7 @@ func init() {
 	initTransColMetaFun()
 	initTransColAuxFun()
 	initTransColumnFun()
+	initCopyColumnFun()
 }
 
 func (s *shard) CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
@@ -352,6 +353,8 @@ var transColAuxFun map[influxql.DataType]func(recColumn *record.ColVal, column e
 
 var transColumnFun map[influxql.DataType]func(recColumn *record.ColVal, column executor.Column)
 
+var copyColumnFun map[influxql.DataType]func(srcColumn executor.Column, dstColumn executor.Column)
+
 func initTransColMetaFun() {
 	transColMetaFun = make(map[influxql.DataType]func(value interface{}, column executor.Column), 4)
 
@@ -451,6 +454,34 @@ func initTransColumnFun() {
 			}
 			column.SetStringValues(recColumn.Val, recColumn.Offset)
 		}
+	}
+}
+
+func initCopyColumnFun() {
+	copyColumnFun = make(map[influxql.DataType]func(srcColumn executor.Column, dstColumn executor.Column), 5)
+	copyColumnFun[influxql.Integer] = func(srcColumn executor.Column, dstColumn executor.Column) {
+		values := srcColumn.IntegerValues()
+		dstColumn.SetIntegerValues(values)
+	}
+
+	copyColumnFun[influxql.Float] = func(srcColumn executor.Column, dstColumn executor.Column) {
+		values := srcColumn.FloatValues()
+		dstColumn.SetFloatValues(values)
+	}
+
+	copyColumnFun[influxql.Boolean] = func(srcColumn executor.Column, dstColumn executor.Column) {
+		values := srcColumn.BooleanValues()
+		dstColumn.SetBooleanValues(values)
+	}
+
+	copyColumnFun[influxql.String] = func(srcColumn executor.Column, dstColumn executor.Column) {
+		val, offset := srcColumn.GetStringBytes()
+		dstColumn.SetStringValues(val, offset)
+	}
+
+	copyColumnFun[influxql.Tag] = func(srcColumn executor.Column, dstColumn executor.Column) {
+		val, offset := srcColumn.GetStringBytes()
+		dstColumn.SetStringValues(val, offset)
 	}
 }
 

@@ -17,104 +17,14 @@ limitations under the License.
 package tsi
 
 import (
-	"fmt"
-	"strings"
-
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
-// indexAm define index access method
-type indexAm struct {
-	id      uint32
-	IdxType IndexType
-	IdxName string
-	idxFunc func(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error)
-}
-
-var IndexAms = []indexAm{
-	{0, MergeSet, "mergeset", MergeSetIndexHandler},
-	{1, Text, "text", TextIndexHandler},
-	{2, Field, "field", FieldIndexHandler},
-	{3, TimeCluster, "timecluster", nil},
-	{4, BloomFilter, "bloomfilter", nil},
-	{5, BloomFilterFullText, "bloomfilter_fulltext", nil},
-}
-
-var (
-	IndexNameToID = map[string]uint32{
-		"mergeset":             0,
-		"text":                 1,
-		"field":                2,
-		"timecluster":          3,
-		"bloomfilter":          4,
-		"bloomfilter_fulltext": 5,
-	}
-	IndexIDToName = map[uint32]string{
-		0: "mergeset",
-		1: "text",
-		2: "field",
-		3: "timecluster",
-		4: "bloomfilter",
-		5: "bloomfilter_fulltext",
-	}
-)
-
-func GetIndexIdByName(name string) (uint32, error) {
-	id, ok := IndexNameToID[strings.ToLower(name)]
-	if !ok {
-		return 0, fmt.Errorf("invalid index type %s", name)
-	}
-	return id, nil
-}
-
-func GetIndexNameById(id uint32) (string, error) {
-	name, ok := IndexIDToName[id]
-	if !ok {
-		return "", fmt.Errorf("invalid index type %d", id)
-	}
-	return name, nil
-}
-
-func GetIndexTypeByName(name string) IndexType {
-	for _, am := range IndexAms {
-		if am.IdxName == name {
-			return am.IdxType
-		}
-	}
-	return MergeSet
-}
-
-func GetIndexIdByType(idxType IndexType) uint32 {
-	for _, am := range IndexAms {
-		if am.IdxType == idxType {
-			return am.id
-		}
-	}
-	return 0
-}
-
-func GetIndexTypeById(id uint32) IndexType {
-	for _, am := range IndexAms {
-		if am.id == id {
-			return am.IdxType
-		}
-	}
-	return MergeSet
-}
-
-func GetIndexAmRoutine(id uint32, opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine, error) {
-	for _, am := range IndexAms {
-		if am.id == id {
-			return am.idxFunc(opt, primaryIndex)
-		}
-	}
-	return nil, nil
-}
-
 type IndexAmRoutine struct {
-	amKeyType    IndexType
+	amKeyType    index.IndexType
 	index        interface{}
 	primaryIndex PrimaryIndex
 

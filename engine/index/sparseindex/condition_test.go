@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -100,5 +101,96 @@ func TestKeyConditionImpl_AlwaysInRange(t *testing.T) {
 
 	keyCondition1.SetRPN([]*sparseindex.RPNElement{sparseindex.NewRPNElement(10)})
 	_, err = keyCondition1.AlwaysInRange()
-	assert.Equal(t, errno.Equal(err, errno.ErrUnknownOpInCondition), true)
+	assert.Equal(t, err, nil)
+}
+
+type MockSKBaseReader struct {
+	err error
+}
+
+func (m *MockSKBaseReader) IsExist(_ int64, _ *rpn.SKRPNElement) (bool, error) {
+	return true, m.err
+}
+
+func TestSKCondition(t *testing.T) {
+	skRec := buildPKRecordAllFinal()
+	skSchema := skRec.Schema
+
+	conStr := "stringKey"
+	expr := MustParseExpr(conStr)
+	rpnExpr := rpn.ConvertToRPNExpr(expr)
+	_, err := sparseindex.NewSKCondition(rpnExpr, skSchema)
+	assert.True(t, errno.Equal(err, errno.ErrRPNElemNum))
+
+	expr = &influxql.BinaryExpr{
+		Op: influxql.ADD,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: "intKey", Type: influxql.Integer},
+			RHS: &influxql.IntegerLiteral{Val: 2},
+		}}
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	_, err = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	assert.True(t, errno.Equal(err, errno.ErrRPNOp))
+
+	rpnExpr = &rpn.RPNExpr{Val: []interface{}{&influxql.BinaryExpr{}}}
+	_, err = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	assert.True(t, errno.Equal(err, errno.ErrRPNExpr))
+
+	conStr = "stringKey='W1'"
+	expr = MustParseExpr(conStr)
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	skCondition, _ := sparseindex.NewSKCondition(rpnExpr, skSchema)
+	_, err = skCondition.IsExist(0, &MockSKBaseReader{err: errno.NewError(errno.ErrInvalidStackInCondition)})
+	assert.True(t, errno.Equal(err, errno.ErrInvalidStackInCondition))
+
+	expr = &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: "intKey", Type: influxql.Integer},
+			RHS: &influxql.IntegerLiteral{Val: 2},
+		}}
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	skCondition, _ = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	_, err = skCondition.IsExist(0, &MockSKBaseReader{})
+	assert.True(t, errno.Equal(err, errno.ErrRPNIsNullForAnd))
+
+	expr = &influxql.BinaryExpr{
+		Op: influxql.OR,
+		LHS: &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: "intKey", Type: influxql.Integer},
+			RHS: &influxql.IntegerLiteral{Val: 2},
+		}}
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	skCondition, _ = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	_, err = skCondition.IsExist(0, &MockSKBaseReader{})
+	assert.True(t, errno.Equal(err, errno.ErrRPNIsNullForOR))
+
+	skCondition, _ = sparseindex.NewSKCondition(&rpn.RPNExpr{}, skSchema)
+	_, err = skCondition.IsExist(0, &MockSKBaseReader{})
+	assert.True(t, errno.Equal(err, errno.ErrInvalidStackInCondition))
+
+	conStr = "stringKey='W1' or boolKey=true and intKey=1 and floatKey=1.0 and UserID='U1'"
+	expr = MustParseExpr(conStr)
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	skCondition, _ = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	ok, _ := skCondition.IsExist(0, &MockSKBaseReader{})
+	assert.True(t, ok)
+
+	conStr = "__log___='W1'"
+	fieldMap["__log___"] = influxql.String
+	expr = MustParseExpr(conStr)
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	skCondition, _ = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	ok, _ = skCondition.IsExist(0, &MockSKBaseReader{})
+	assert.True(t, ok)
+
+	conStr = "__log___=1"
+	fieldMap["__log___"] = influxql.Integer
+	expr = MustParseExpr(conStr)
+	rpnExpr = rpn.ConvertToRPNExpr(expr)
+	_, err = sparseindex.NewSKCondition(rpnExpr, skSchema)
+	assert.True(t, errno.Equal(err, errno.ErrValueTypeFullTextIndex))
 }

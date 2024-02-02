@@ -166,6 +166,8 @@ const (
 	FailedToDecodeFloatArray           = 2132
 	InvalidFloatBuffer                 = 2133
 	MemUsageExceeded                   = 2134
+	ShardCannotMove                    = 2135
+	ShardIsMoving                      = 2136
 )
 
 // merge out of order
@@ -302,6 +304,8 @@ const (
 	WritePointHasInvalidField    = 5032
 	WritePointSchemaInvalid      = 5033
 	WritePointPrimaryKeyErr      = 5034
+	KeyWordConflictErr           = 5035
+	MeasurementNameTooLong       = 5036
 )
 
 // write interface
@@ -344,6 +348,7 @@ const (
 	ErrRPNElement              = 6018
 	ErrCoarseIndexFragment     = 6019
 	ErrQuerySchemaUpperBound   = 6020
+	ErrValueTypeFullTextIndex  = 6021
 )
 
 const (
