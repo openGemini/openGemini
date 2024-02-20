@@ -35,7 +35,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
-	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/numberenc"
@@ -84,14 +83,14 @@ type MsBuilder struct {
 	lock      *string
 	tier      uint64
 
+	tcLocation         int8 // time cluster
 	Files              []TSSPFile
 	FileName           TSSPFileName
 	log                *logger.Logger
 	pkIndexWriter      sparseindex.PKIndexWriter
 	pkRec              []*record.Record
 	pkMark             []fragment.IndexFragment
-	tcLocation         int8 // time cluster
-	skipIndexWriter    sparseindex.SkipIndexWriter
+	skipIndex          *sparseindex.SkipIndex
 	EncodeChunkDataImp EncodeChunkData
 }
 
@@ -203,6 +202,10 @@ func (b *MsBuilder) SetFullTextIdx(fullTextIdx bool) {
 
 func (b *MsBuilder) GetFullTextIdx() bool {
 	return b.fullTextIdx
+}
+
+func (b *MsBuilder) GetSkipIndex() *sparseindex.SkipIndex {
+	return b.skipIndex
 }
 
 func (b *MsBuilder) StoreTimes() {
@@ -419,40 +422,20 @@ func (b *MsBuilder) writeDetachedPrimaryIndex(firstFlush bool, pkRec *record.Rec
 	return err
 }
 
-func (b *MsBuilder) NewSkipIndexWriter() {
-	b.skipIndexWriter = sparseindex.NewSkipIndexWriter(index.BloomFilterIndex)
+func (b *MsBuilder) NewSkipIndex(schema record.Schemas, indexRelation influxql.IndexRelation) {
+	b.skipIndex = sparseindex.NewSkipIndex()
+	b.skipIndex.NewSkipIndexWriters(b.Path, b.msName, b.FileName.String(), *b.lock, indexRelation)
+	b.skipIndex.GenSchemaIdxes(schema, indexRelation)
 }
 
-func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, schemaIndex []int, dataFilePath, lockpath string, rowsPerSegment []int, detached bool) error {
-	var skipIndexFilePath string
-	var data []byte
+func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, rowsPerSegment []int) error {
 	var err error
-	if b.fullTextIdx {
-		memBfData := logstore.GetBloomFilterBuf(sparseindex.FullTextIdxColumnCnt)
-		defer logstore.PutBloomFilterBuf(memBfData)
-		skipIndexFilePath = b.getFullTextIdxFilePath()[0]
-		skipIndexFilePath += tmpFileSuffix
-		*memBfData, err = b.getMemoryFullTextIdxData(*memBfData, writeRec, schemaIndex, rowsPerSegment)
+	skipWriters := b.skipIndex.GetSkipIndexWriters()
+	schemaIdxes := b.skipIndex.GetSchemaIdxes()
+	for i := range skipWriters {
+		err = skipWriters[i].CreateAttachSkipIndex(schemaIdxes[i], rowsPerSegment, writeRec)
 		if err != nil {
 			return err
-		}
-
-		err = writeSkipIndexToDisk((*memBfData)[0], lockpath, skipIndexFilePath)
-		if err != nil {
-			return err
-		}
-	} else {
-		for _, i := range schemaIndex {
-			skipIndexFilePath = b.getSkipIndexFilePath(dataFilePath, writeRec.Schema[i].Name, detached)
-			data, err = b.skipIndexWriter.CreateSkipIndex(&writeRec.ColVals[i], rowsPerSegment, writeRec.Schema[i].Type)
-			if err != nil {
-				return err
-			}
-
-			err = writeSkipIndexToDisk(data, lockpath, skipIndexFilePath)
-			if err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -465,32 +448,52 @@ func writeSkipIndexToDisk(data []byte, lockPath, skipIndexFilePath string) error
 	return err
 }
 
-func (b *MsBuilder) getSkipIndexFilePath(dataFilePath, fieldName string, detached bool) string {
-	if detached {
-		return sparseindex.GetBloomFilterFilePath(b.Path, b.msName, fieldName)
+func (b *MsBuilder) genAccumulateRowsIndex(data *record.Record) []int {
+	var accumulateRowsIndex []int
+	if b.fullTextIdx {
+		accumulateRowsIndex = b.splitRecordForFullText(data, b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetFullTextIdx()])
+	} else {
+		accumulateRowsIndex = b.splitRecord(data, b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetBfIdx()])
 	}
-	return path.Join(b.Path, b.msName, colstore.AppendSKIndexSuffix(dataFilePath, fieldName, index.BloomFilterIndex)+tmpFileSuffix)
-}
 
-func (b *MsBuilder) genAccumulateRowsIndex(data *record.Record, skipIndexRelation *influxql.IndexRelation) ([]int, []int) {
-	schemaIdx := logstore.GenSchemaIdxs(data.Schema, skipIndexRelation, b.fullTextIdx)
-	if len(schemaIdx) == 0 {
-		return nil, nil
-	}
-	accumulateRowsIndex := b.splitRecord(data, schemaIdx)
 	if len(accumulateRowsIndex) == 0 {
 		accumulateRowsIndex = append(accumulateRowsIndex, data.RowNums()-1)
 	}
-	return accumulateRowsIndex, schemaIdx
+	return accumulateRowsIndex
 }
 
-func (b *MsBuilder) splitRecord(data *record.Record, skipIndexSchema []int) []int {
+func (b *MsBuilder) splitRecordForFullText(data *record.Record, fullTextSchemaIdx []int) []int {
+	res := make([]int, 0)
+	sizeByRow := getColsSizeByRow(data, fullTextSchemaIdx)
+	var idx, preIdx int
+	start, targetCount := 0, uint32(1)
+	for start < data.RowNums()-1 {
+		idx = LeftBound(sizeByRow[preIdx:], b.Conf.expectedSegmentSize*targetCount, 0)
+		res = append(res, idx+preIdx)
+		start = idx + preIdx
+		preIdx += idx
+		targetCount++
+	}
+	return res
+}
+
+func getColsSizeByRow(data *record.Record, fullTextSchemaIdx []int) []uint32 {
+	totalSize := make([]uint32, data.RowNums())
+	for i := 0; i < data.RowNums(); i++ {
+		for _, j := range fullTextSchemaIdx {
+			totalSize[i] += data.ColVals[j].Offset[i]
+		}
+	}
+	return totalSize
+}
+
+func (b *MsBuilder) splitRecord(data *record.Record, schemaIdx []int) []int {
 	res := make([]int, 0)
 	var idx, minIdx int
 	start, targetCount := 0, uint32(1)
 	for start < data.RowNums()-1 { // final start = data.RowNums()-1, then should break
 		minIdx = math.MaxInt
-		for _, i := range skipIndexSchema {
+		for _, i := range schemaIdx {
 			idx = LeftBound(data.ColVals[i].Offset, b.Conf.expectedSegmentSize*targetCount, start)
 			//one single row data size > b.Conf.expectedSegmentSize
 			if len(res) > 0 && idx == res[len(res)-1] {
@@ -538,13 +541,13 @@ func removeClusteredTimeCol(data *record.Record) {
 func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema record.Schemas, skipIndexRelation *influxql.IndexRelation,
 	nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16)) (*MsBuilder, error) {
 	rowsLimit := b.Conf.maxRowsPerSegment * b.Conf.maxSegmentLimit
-	var accumulateRowsIndex, schemaIdx []int
+	var accumulateRowsIndex []int
 	fixRowsPerSegment := b.Conf.maxRowsPerSegment
 	b.EncodeChunkDataImp.SetDetachedInfo(false)
 	// fast path, most data does not reach the threshold for splitting files.
 	if data.RowNums() <= rowsLimit {
-		accumulateRowsIndex, schemaIdx, fixRowsPerSegment = b.getAccumulateRowsIndex(data, skipIndexRelation, fixRowsPerSegment)
-		err := b.writeIndex(data, schema, skipIndexRelation, accumulateRowsIndex, schemaIdx, fixRowsPerSegment)
+		accumulateRowsIndex, fixRowsPerSegment = b.getAccumulateRowsIndex(data, fixRowsPerSegment)
+		err := b.writeIndex(data, schema, accumulateRowsIndex, fixRowsPerSegment)
 		if err != nil {
 			return b, err
 		}
@@ -566,8 +569,8 @@ func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema reco
 	recs := data.Split(nil, rowsLimit)
 
 	for i := range recs {
-		accumulateRowsIndex, schemaIdx, fixRowsPerSegment = b.getAccumulateRowsIndex(&recs[i], skipIndexRelation, fixRowsPerSegment)
-		err := b.writeIndex(&recs[i], schema, skipIndexRelation, accumulateRowsIndex, schemaIdx, fixRowsPerSegment)
+		accumulateRowsIndex, fixRowsPerSegment = b.getAccumulateRowsIndex(&recs[i], fixRowsPerSegment)
+		err := b.writeIndex(&recs[i], schema, accumulateRowsIndex, fixRowsPerSegment)
 		if err != nil {
 			return b, err
 		}
@@ -586,28 +589,27 @@ func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema reco
 			if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // need to init indexwriter after switch tssp file, i.e. new b
 				b.NewPKIndexWriter()
 			}
+
 			if skipIndexRelation != nil && len(skipIndexRelation.Oids) != 0 {
-				b.NewSkipIndexWriter()
+				b.NewSkipIndex(schema, *skipIndexRelation)
 			}
 		}
 	}
 	return b, nil
 }
 
-func (b *MsBuilder) WriteDetached(id uint64, data *record.Record, pkSchema record.Schemas, skipIndexRelation *influxql.IndexRelation,
-	firstFlush bool, accumulateMetaIndex *AccumulateMetaIndex) error {
+func (b *MsBuilder) WriteDetached(id uint64, data *record.Record, pkSchema record.Schemas, firstFlush bool,
+	accumulateMetaIndex *AccumulateMetaIndex) error {
 	record.CheckRecord(data)
-	var accumulateRowsIndex, schemaIdx []int
-	fixRowsPerSegment := b.Conf.maxRowsPerSegment
 	b.EncodeChunkDataImp.SetDetachedInfo(true)
-	accumulateRowsIndex, schemaIdx, fixRowsPerSegment = b.getAccumulateRowsIndex(data, skipIndexRelation, fixRowsPerSegment)
+	accumulateRowsIndex, fixRowsPerSegment := b.getAccumulateRowsIndex(data, b.Conf.maxRowsPerSegment)
 	//write detached data
 	err := b.writeDetachedData(id, data, firstFlush, accumulateMetaIndex.dataOffset)
 	if err != nil {
 		return err
 	}
 	//write detached meta
-	return b.WriteDetachedMetaAndIndex(data, pkSchema, firstFlush, accumulateMetaIndex, accumulateRowsIndex, schemaIdx, fixRowsPerSegment)
+	return b.WriteDetachedMetaAndIndex(data, pkSchema, firstFlush, accumulateMetaIndex, accumulateRowsIndex, fixRowsPerSegment)
 }
 
 func (b *MsBuilder) writeDetachedData(id uint64, data *record.Record, firstFlush bool, dataOffset int64) error {
@@ -671,13 +673,13 @@ func (b *MsBuilder) initDetachedBuilder(columnCount int, firstFlush, toRemote bo
 }
 
 func (b *MsBuilder) WriteDetachedMetaAndIndex(writeRec *record.Record, pkSchema record.Schemas, firstFlush bool,
-	accumulateMetaIndex *AccumulateMetaIndex, rowsPerSegment, schemaIdx []int, fixRowsPerSegment int) error {
+	accumulateMetaIndex *AccumulateMetaIndex, rowsPerSegment []int, fixRowsPerSegment int) error {
 	var err error
 	err = b.writeDetachedChunkMeta(writeRec, firstFlush, accumulateMetaIndex.blockId)
 	if err != nil {
 		return err
 	}
-	err = b.writeDetachedBloomFilter(writeRec, schemaIdx, rowsPerSegment)
+	err = b.WriteDetachedSkipIndex(writeRec, rowsPerSegment)
 	if err != nil {
 		return err
 	}
@@ -714,11 +716,14 @@ func (b *MsBuilder) closeFdWrite() error {
 		}
 	}
 
-	if b.skipIndexWriter != nil {
-		err = b.skipIndexWriter.Close()
-		b.skipIndexWriter = nil
-		if err != nil {
-			return err
+	if b.skipIndex != nil {
+		skipIndexWriters := b.skipIndex.GetSkipIndexWriters()
+		for i := range skipIndexWriters {
+			err = skipIndexWriters[i].Close()
+			skipIndexWriters[i] = nil
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -732,51 +737,70 @@ func (b *MsBuilder) closeFdWrite() error {
 	return nil
 }
 
-func (b *MsBuilder) writeDetachedBloomFilter(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
-	if len(schemaIdx) == 0 {
+func (b *MsBuilder) WriteDetachedSkipIndex(writeRec *record.Record, rowsPerSegment []int) error {
+	// skip index not exist
+	if len(b.skipIndex.GetSkipIndexWriters()) == 0 {
 		return nil
 	}
 
-	var cols int
-	if b.fullTextIdx {
-		cols = sparseindex.FullTextIdxColumnCnt
-	} else {
-		cols = len(schemaIdx)
-	}
-	memBfData := logstore.GetBloomFilterBuf(cols)
-	defer logstore.PutBloomFilterBuf(memBfData)
-
-	var skipIndexFilePaths []string
 	var err error
-	var filterDetachedWriteTimes int
-	if b.fullTextIdx {
-		*memBfData, err = b.getMemoryFullTextIdxData(*memBfData, writeRec, schemaIdx, rowsPerSegment)
+	var cols int
+	var skipIndexFilePaths []string
+	skipWriters := b.skipIndex.GetSkipIndexWriters()
+	schemaIdxes := b.skipIndex.GetSchemaIdxes()
+	for i := range skipWriters {
+		if b.fullTextIdx {
+			cols = sparseindex.FullTextIdxColumnCnt
+		} else {
+			cols = len(schemaIdxes[i])
+		}
+		indexBuf := logstore.GetIndexBuf(cols)
+
+		*indexBuf, skipIndexFilePaths = skipWriters[i].CreateDetachSkipIndex(writeRec, schemaIdxes[i], rowsPerSegment, *indexBuf)
+		err = b.flushIndexToDisk(*indexBuf, skipIndexFilePaths, i, len(rowsPerSegment))
 		if err != nil {
+			logstore.PutIndexBuf(indexBuf)
 			return err
 		}
-		skipIndexFilePaths = b.getFullTextIdxFilePath()
-	} else {
-		*memBfData, err = b.getMemoryBloomFilterData(writeRec, schemaIdx, rowsPerSegment)
-		if err != nil {
-			return err
-		}
-		skipIndexFilePaths = b.getSkipIndexFilePaths(writeRec.Schema, schemaIdx, true, "")
+		logstore.PutIndexBuf(indexBuf)
 	}
-	filterDetachedWriteTimes = (len(rowsPerSegment) + int(b.localBFCount)) / int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
-	if b.BloomFilterNeedDetached(filterDetachedWriteTimes) {
-		// local bf files and memory blocks satisfied the dump quantity,then write to remote
-		*memBfData, err = b.detachBloomFilter(*memBfData, skipIndexFilePaths, filterDetachedWriteTimes)
+	return nil
+}
+
+func (b *MsBuilder) flushIndexToDisk(memBfData [][]byte, skipIndexFilePaths []string, idx, segmentCount int) error {
+	if len(memBfData) == 0 || len(memBfData[0]) == 0 {
+		return nil
+	}
+	var err error
+	if idx == b.skipIndex.GetBfIdx() || idx == b.skipIndex.GetFullTextIdx() {
+		filterDetachedWriteTimes := (segmentCount + int(b.localBFCount)) / int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
+		if b.BloomFilterNeedDetached(filterDetachedWriteTimes) {
+			// local bf files and memory blocks satisfied the dump quantity,then write to remote
+			memBfData, err = b.detachBloomFilter(memBfData, skipIndexFilePaths, filterDetachedWriteTimes)
+			if err != nil {
+				return err
+			}
+		}
+
+		// bloomFilter blocks dissatisfied the dump quantity,then write to local
+		err = b.writeMemoryBloomFilterData(memBfData, skipIndexFilePaths, *b.lock)
+		if err != nil {
+			logger.GetLogger().Error("write skip index file failed", zap.String("mstName", b.msName), zap.Error(err))
+		}
+		return err
+	}
+
+	for i := range skipIndexFilePaths {
+		if len(memBfData[i]) == 0 {
+			continue
+		}
+		err = writeSkipIndexToDisk(memBfData[i], "", skipIndexFilePaths[i])
 		if err != nil {
 			return err
 		}
 	}
 
-	// bloomFilter blocks dissatisfied the dump quantity,then write to local
-	err = b.writeMemoryBloomFilterData(*memBfData, skipIndexFilePaths, *b.lock)
-	if err != nil {
-		logger.GetLogger().Error("write skip index file failed", zap.String("mstName", b.msName), zap.Error(err))
-	}
-	return err
+	return nil
 }
 
 func (b *MsBuilder) detachBloomFilter(memBfData [][]byte, skipIndexFilePaths []string, filterDetachedWriteTimes int) ([][]byte, error) {
@@ -818,17 +842,9 @@ func (b *MsBuilder) clearLocalFile(skipIndexFilePaths []string) error {
 	return nil
 }
 
-func (b *MsBuilder) getSkipIndexFilePaths(schema record.Schemas, schemaIndex []int, detached bool, dataFilePath string) []string {
-	skipIndexFilePaths := make([]string, len(schemaIndex))
-	for k, v := range schemaIndex {
-		skipIndexFilePaths[k] = b.getSkipIndexFilePath(dataFilePath, schema[v].Name, detached)
-	}
-	return skipIndexFilePaths
-}
-
 func (b *MsBuilder) getFullTextIdxFilePath() []string {
 	var skipIndexFilePaths []string
-	skipIndexFilePaths = append(skipIndexFilePaths, sparseindex.GetFullTextIdxFilePath(b.Path, b.msName))
+	skipIndexFilePaths = append(skipIndexFilePaths, sparseindex.GetFullTextDetachFilePath(b.Path, b.msName))
 	return skipIndexFilePaths
 }
 
@@ -918,24 +934,6 @@ func (b *MsBuilder) getLocalBloomFilterData(skipIndexFilePaths []string) ([][]by
 	return localBfData, nil
 }
 
-func (b *MsBuilder) getMemoryBloomFilterData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) ([][]byte, error) {
-	bfCols := make([][]byte, len(schemaIdx))
-	for k, v := range schemaIdx {
-		data, err := b.skipIndexWriter.CreateSkipIndex(&writeRec.ColVals[v], rowsPerSegment, writeRec.Schema[v].Type)
-		if err != nil {
-			return nil, err
-		}
-		bfCols[k] = append(bfCols[k], data...)
-	}
-	return bfCols, nil
-}
-
-func (b *MsBuilder) getMemoryFullTextIdxData(memBfData [][]byte, writeRec *record.Record, schemaIdx, rowsPerSegment []int) ([][]byte, error) {
-	data := b.skipIndexWriter.CreateFullTextIndex(writeRec, schemaIdx, rowsPerSegment)
-	memBfData[0] = append(memBfData[0], data...)
-	return memBfData, nil
-}
-
 func (b *MsBuilder) BloomFilterNeedDetached(filterDetachedWriteTimes int) bool {
 	return filterDetachedWriteTimes >= 1
 }
@@ -1008,9 +1006,9 @@ func (b *MsBuilder) writeDetachedMetaIndex(firstFlush bool, accumulateMetaIndex 
 	return nil
 }
 
-func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas, skipIndexRelation *influxql.IndexRelation,
-	rowsPerSegment, schemaIdx []int, fixRowsPerSegment int) error {
-	if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation { // write index, works for colstore
+func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas, rowsPerSegment []int, fixRowsPerSegment int) error {
+	// write primaryIndex, works for colstore
+	if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation {
 		dataFilePath := b.FileName.String()
 		indexFilePath := path.Join(b.Path, b.msName, colstore.AppendPKIndexSuffix(dataFilePath)+tmpFileSuffix)
 		if err := b.writePrimaryIndex(writeRecord, schema, indexFilePath, *b.lock, b.tcLocation, rowsPerSegment, fixRowsPerSegment); err != nil {
@@ -1019,10 +1017,9 @@ func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas
 		}
 	}
 
-	//write skip index, works for colStore
-	if b.fullTextIdx || (skipIndexRelation != nil && len(skipIndexRelation.IndexNames) != 0) {
-		dataFilePath := b.FileName.String()
-		if err := b.writeSkipIndex(writeRecord, schemaIdx, dataFilePath, *b.lock, rowsPerSegment, false); err != nil {
+	// write skipIndex, works for colStore
+	if b.skipIndex != nil && len(b.skipIndex.GetSkipIndexWriters()) > 0 {
+		if err := b.writeSkipIndex(writeRecord, rowsPerSegment); err != nil {
 			logger.GetLogger().Error("write skip index file failed", zap.String("mstName", b.msName), zap.Error(err))
 			return err
 		}
@@ -1034,21 +1031,31 @@ func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas
 	return nil
 }
 
-func (b *MsBuilder) getAccumulateRowsIndex(data *record.Record, skipIndexRelation *influxql.IndexRelation, fixRowsPerSegment int) ([]int, []int, int) {
-	var accumulateRowsIndex, schemaIdx []int
-	if b.fullTextIdx || (skipIndexRelation != nil && len(skipIndexRelation.IndexNames) != 0) {
-		accumulateRowsIndex, schemaIdx = b.genAccumulateRowsIndex(data, skipIndexRelation)
-		//There is no bf columns
-		if len(schemaIdx) == 0 {
-			accumulateRowsIndex = GenFixRowsPerSegment(data, b.Conf.maxRowsPerSegment)
-		} else {
-			fixRowsPerSegment = 0
-		}
+func (b *MsBuilder) getAccumulateRowsIndex(data *record.Record, fixRowsPerSegment int) ([]int, int) {
+	var accumulateRowsIndex []int
+	// bloom filter index or full text index exist
+	if b.bfIndexExist() || b.fullTextIndexExist() {
+		accumulateRowsIndex = b.genAccumulateRowsIndex(data)
+		fixRowsPerSegment = 0
 	} else {
 		accumulateRowsIndex = GenFixRowsPerSegment(data, b.Conf.maxRowsPerSegment)
 	}
 	b.EncodeChunkDataImp.SetAccumulateRowsIndex(accumulateRowsIndex)
-	return accumulateRowsIndex, schemaIdx, fixRowsPerSegment
+	return accumulateRowsIndex, fixRowsPerSegment
+}
+
+func (b *MsBuilder) bfIndexExist() bool {
+	if b.skipIndex == nil {
+		return false
+	}
+	return b.skipIndex.GetBfIdx() >= 0 && len(b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetBfIdx()]) > 0
+}
+
+func (b *MsBuilder) fullTextIndexExist() bool {
+	if b.skipIndex == nil {
+		return false
+	}
+	return b.skipIndex.GetFullTextIdx() >= 0 && len(b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetFullTextIdx()]) > 0
 }
 
 func GenFixRowsPerSegment(data *record.Record, rowNumPerSegment int) []int {

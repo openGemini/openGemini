@@ -84,11 +84,10 @@ func TestSKBFIndexReader(t *testing.T) {
 func TestCreateSkipIndex(t *testing.T) {
 	var colVal record.ColVal
 	colVal.AppendStrings("hello", "world", "hello", "test")
-	index := &sparseindex.BloomFilterImpl{}
-	bytes, err := index.CreateSkipIndex(&colVal, []int{2, 2}, influx.Field_Type_String)
+	bloomFilterWriter := &sparseindex.BloomFilterWriter{}
+	bytes := bloomFilterWriter.GenBloomFilterData(&colVal, []int{2, 2}, influx.Field_Type_String)
 
 	segBfSize := int(logstore.GetConstant(2).FilterDataDiskSize)
-	assert.Nil(t, err)
 	assert.Equal(t, 2*segBfSize, len(bytes))
 
 	crc := crc32.Checksum(bytes[0:segBfSize-4], crc32.MakeTable(crc32.Castagnoli))

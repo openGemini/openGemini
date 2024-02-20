@@ -17,7 +17,9 @@ limitations under the License.
 package sparseindex
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path"
 	"strings"
@@ -33,15 +35,16 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
 )
 
 const (
-	BloomFilterFilePrefix = "bloomfilter_" // bloomfilter_${columnName}.idx
-	FullTextIndex         = "fullText"
+	crcSize               = 4
 	FullTextIdxColumnCnt  = 1
+	tmpFileSuffix         = ".init"
+	FullTextIndex         = "fullText"
 	BloomFilterFileSuffix = ".idx"
+	BloomFilterFilePrefix = "bloomfilter_" // bloomfilter_${columnName}.idx
 )
 
 type OBSFilterPath struct {
@@ -137,18 +140,17 @@ func (r *BloomFilterIndexReader) Close() error {
 }
 
 // GetLocalBloomFilterBlockCnts get one local bloomFilter col's  block count,if not exist return 0
-func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record.Schemas, indexRelation *influxql.IndexRelation,
+func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record.Schemas, skipIndex *SkipIndex,
 	fullTextIdx bool) int64 {
 	var localPath string
 	if fullTextIdx {
-		localPath = GetFullTextIdxFilePath(dir, msName)
+		localPath = GetFullTextDetachFilePath(dir, msName)
 	} else {
-		schemaIdx := logstore.GenSchemaIdxs(recSchema, indexRelation, fullTextIdx)
-		if len(schemaIdx) == 0 {
-			logger.GetLogger().Error("bloom filter cols is not exist in the schema", zap.String("measurement name", msName))
+		if skipIndex.bfIdx < 0 || len(skipIndex.schemaIdxes[skipIndex.bfIdx]) == 0 {
+			logger.GetLogger().Info("bloom filter cols is not exist in the schema", zap.String("measurement name", msName))
 			return 0
 		}
-		fieldName := recSchema[schemaIdx[0]].Name
+		fieldName := recSchema[skipIndex.schemaIdxes[skipIndex.bfIdx][0]].Name // get the first bloom filter col
 		localPath = GetBloomFilterFilePath(dir, msName, fieldName)
 	}
 
@@ -170,4 +172,80 @@ func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record
 
 func GetBloomFilterFilePath(dir, msName, fieldName string) string {
 	return path.Join(dir, msName, BloomFilterFilePrefix+fieldName+BloomFilterFileSuffix)
+}
+
+type BloomFilterWriter struct {
+	*skipIndexWriter
+}
+
+func NewBloomFilterWriter(dir, msName, dataFilePath, lockPath string) *BloomFilterWriter {
+	return &BloomFilterWriter{
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+	}
+}
+
+func (b *BloomFilterWriter) Open() error {
+	return nil
+}
+
+func (b *BloomFilterWriter) Close() error {
+	return nil
+}
+
+func (b *BloomFilterWriter) getSkipIndexFilePath(fieldName string, detached bool) string {
+	if detached {
+		return GetBloomFilterFilePath(b.dir, b.msName, fieldName)
+	}
+	return path.Join(b.dir, b.msName, colstore.AppendSKIndexSuffix(b.dataFilePath, fieldName, index.BloomFilterIndex)+tmpFileSuffix)
+}
+
+func (b *BloomFilterWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+	var err error
+	var data []byte
+	var skipIndexFilePath string
+	for _, i := range schemaIdx {
+		skipIndexFilePath = b.getSkipIndexFilePath(writeRec.Schema[i].Name, false)
+		data = b.GenBloomFilterData(&writeRec.ColVals[i], rowsPerSegment, writeRec.Schema[i].Type)
+
+		err = writeSkipIndexToDisk(data, b.lockPath, skipIndexFilePath)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *BloomFilterWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int,
+	dataBuf [][]byte) ([][]byte, []string) {
+	skipIndexFilePaths := make([]string, len(schemaIdx))
+	for k, v := range schemaIdx {
+		data := b.GenBloomFilterData(&writeRec.ColVals[v], rowsPerSegment, writeRec.Schema[v].Type)
+		dataBuf[k] = append(dataBuf[k], data...)
+		skipIndexFilePaths[k] = b.getSkipIndexFilePath(writeRec.Schema[v].Name, true)
+	}
+
+	return dataBuf, skipIndexFilePaths
+}
+
+func (b *BloomFilterWriter) GenBloomFilterData(src *record.ColVal, rowsPerSegment []int, refType int) []byte {
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
+
+	segCnt := len(rowsPerSegment)
+	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
+	res := make([]byte, segCnt*segBfSize)
+	var segCol []record.ColVal
+	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
+
+	start := 0
+	end := 0
+	for _, col := range segCol {
+		end = start + segBfSize
+		offs, lens := col.GetOffsAndLens()
+		tk.ProcessTokenizerBatch(col.Val, res[start:end-crcSize], offs, lens)
+		crc := crc32.Checksum(res[start:end-crcSize], logstore.Table)
+		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
+		start = end
+	}
+	tokenizer.FreeSimpleGramTokenizer(tk)
+	return res
 }
