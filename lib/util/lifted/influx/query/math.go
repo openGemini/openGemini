@@ -248,7 +248,7 @@ func (f *atanFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql
 
 func (f *atanFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
 	if arg0, ok := asFloat(args[0]); ok {
-		return math.Acos(arg0), true
+		return math.Atan(arg0), true
 	}
 	return nil, true
 }
@@ -266,7 +266,7 @@ func (f *atan2Func) CallTypeFunc(name string, args []influxql.DataType) (influxq
 }
 
 func (f *atan2Func) CallFunc(name string, args []interface{}) (interface{}, bool) {
-	if arg0, arg1, ok := asFloats(args[0], args[0]); ok {
+	if arg0, arg1, ok := asFloats(args[0], args[1]); ok {
 		return math.Atan2(arg0, arg1), true
 	}
 	return nil, true
@@ -343,7 +343,7 @@ func (f *log2Func) CallTypeFunc(name string, args []influxql.DataType) (influxql
 
 func (f *log2Func) CallFunc(name string, args []interface{}) (interface{}, bool) {
 	if arg0, ok := asFloat(args[0]); ok {
-		return math.Log10(arg0), true
+		return math.Log2(arg0), true
 	}
 	return nil, true
 }
@@ -362,7 +362,7 @@ func (f *log10Func) CallTypeFunc(name string, args []influxql.DataType) (influxq
 
 func (f *log10Func) CallFunc(name string, args []interface{}) (interface{}, bool) {
 	if arg0, ok := asFloat(args[0]); ok {
-		return math.Log2(arg0), true
+		return math.Log10(arg0), true
 	}
 	return nil, true
 }
