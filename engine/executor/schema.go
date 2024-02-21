@@ -30,22 +30,21 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-var NotAggOnSeries = map[string]bool{
-	"percentile": true, "percentile_ogsketch": true, "percentile_approx": true,
-	"difference": true, "non_negative_difference": true,
-	"derivative": true, "non_negative_derivative": true,
-	"rate": true, "irate": true, "absent": true, "stddev": true, "mode": true, "median": true,
-	"elapsed": true, "moving_average": true, "cumulative_sum": true, "integral": true, "sample": true,
-	"sliding_window": true,
-}
-
-var OptimizeAgg = map[string]bool{
-	"count": true, "sum": true, "mean": true,
-	"max": true, "min": true, "first": true, "last": true,
-}
+var NotAggOnSeries = make(map[string]bool)
 
 func init() {
+	initAggInfo()
 	addUDAFNotAggOnSeries()
+}
+
+func initAggInfo() {
+	factory := query.GetFunctionFactoryInstance()
+	aggOps := factory.GetAggregateOp()
+	for opName, op := range aggOps {
+		if !op.CanPushDownSeries() {
+			NotAggOnSeries[opName] = true
+		}
+	}
 }
 
 func addUDAFNotAggOnSeries() {
@@ -423,7 +422,7 @@ func (qs *QuerySchema) CanSeqAggPushDown() bool {
 
 func (qs *QuerySchema) HasOptimizeCall() bool {
 	for _, call := range qs.calls {
-		if !OptimizeAgg[call.Name] {
+		if aggFunc := query.GetAggregateOperator(call.Name); aggFunc != nil && !aggFunc.OptimizeAgg() {
 			return false
 		}
 	}
@@ -1033,7 +1032,7 @@ func (qs *QuerySchema) MatchPreAgg() bool {
 
 func (qs *QuerySchema) CanCallsPushdown() bool {
 	for _, call := range qs.calls {
-		if mergeCall[call.Name] || sortedMergeCall[call.Name] {
+		if aggFunc := query.GetAggregateOperator(call.Name); aggFunc != nil && !aggFunc.CanPushDown() {
 			return false
 		}
 	}
@@ -1124,7 +1123,7 @@ func (qs *QuerySchema) IsTimeZero() bool {
 
 func (qs *QuerySchema) HasStreamCall() bool {
 	for _, call := range qs.calls {
-		if sortedMergeCall[call.Name] {
+		if aggFunc := query.GetAggregateOperator(call.Name); aggFunc != nil && aggFunc.SortedMergeCall() {
 			return true
 		}
 	}

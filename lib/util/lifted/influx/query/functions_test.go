@@ -9,7 +9,8 @@ import (
 )
 
 func TestFunctionTypeMapper(t *testing.T) {
-	m := query.FunctionTypeMapper{}
+	m := query.MathTypeMapper{}
+	s := query.StringFunctionTypeMapper{}
 
 	if dataType, err := m.CallType("sin", []influxql.DataType{influxql.Float}); err != nil {
 		t.Fatalf("raise error: %s", err.Error())
@@ -23,25 +24,25 @@ func TestFunctionTypeMapper(t *testing.T) {
 		assert.Equal(t, dataType, influxql.Integer)
 	}
 
-	if dataType, err := m.CallType("str", []influxql.DataType{influxql.String, influxql.String}); err != nil {
+	if dataType, err := s.CallType("str", []influxql.DataType{influxql.String, influxql.String}); err != nil {
 		t.Fatalf("raise error: %s", err.Error())
 	} else {
 		assert.Equal(t, dataType, influxql.Boolean)
 	}
 
-	if dataType, err := m.CallType("strlen", []influxql.DataType{influxql.String}); err != nil {
+	if dataType, err := s.CallType("strlen", []influxql.DataType{influxql.String}); err != nil {
 		t.Fatalf("raise error: %s", err.Error())
 	} else {
 		assert.Equal(t, dataType, influxql.Integer)
 	}
 
-	if dataType, err := m.CallType("substr", []influxql.DataType{influxql.String, influxql.Integer}); err != nil {
+	if dataType, err := s.CallType("substr", []influxql.DataType{influxql.String, influxql.Integer}); err != nil {
 		t.Fatalf("raise error: %s", err.Error())
 	} else {
 		assert.Equal(t, dataType, influxql.String)
 	}
 
-	if dataType, err := m.CallType("substr", []influxql.DataType{influxql.String, influxql.Integer, influxql.Integer}); err != nil {
+	if dataType, err := s.CallType("substr", []influxql.DataType{influxql.String, influxql.Integer, influxql.Integer}); err != nil {
 		t.Fatalf("raise error: %s", err.Error())
 	} else {
 		assert.Equal(t, dataType, influxql.String)
