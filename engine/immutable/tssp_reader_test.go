@@ -2253,3 +2253,30 @@ func TestQueryFileCache1(t *testing.T) {
 	fileCache.Get()
 	fileCache.GetCap()
 }
+
+
+func TestLoadIdTimesFromClosedFile(t *testing.T) {
+	dir := t.TempDir()
+	conf := NewTsStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(dir, &lockPath, &tier, false, conf)
+	store.SetImmTableType(config.TSSTORE)
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := NewMsBuilder(dir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE)
+	for _, id := range ids {
+		require.NoError(t, msb.WriteData(id, data[id]))
+	}
+	store.AddTable(msb, true, false)
+
+	fs := store.tableFiles("mst", true)
+	require.NotEmpty(t, fs)
+
+	f := fs.Files()[0]
+	require.NoError(t, f.Close())
+	require.NoError(t, f.LoadIdTimes(&IdTimePairs{}))
+}

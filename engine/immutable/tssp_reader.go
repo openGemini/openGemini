@@ -604,7 +604,9 @@ func (f *tsspFile) Close() error {
 
 	f.Unref()
 	f.wg.Wait()
+	f.mu.Lock()
 	_ = f.reader.Close()
+	f.mu.Unlock()
 
 	if memSize > 0 && !tmp {
 		if order {
