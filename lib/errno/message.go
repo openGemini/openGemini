@@ -199,7 +199,8 @@ var messageMap = map[Errno]*Message{
 	InvalidFloatBuffer:                 newFatalMessage("invalid input float encoded data, type = %v", ModuleStorageEngine),
 	MemUsageExceeded:                   newFatalMessage("mem usage exceeded threshold %d", ModuleStorageEngine),
 	ShardCannotMove:                    newFatalMessage("shard can not move %d", ModuleStorageEngine),
-	ShardIsMoving:                      newFatalMessage("shard is moving %d", ModuleStorageEngine),
+	ShardIsMoving:                      newFatalMessage("shard is moving, shardID %d", ModuleStorageEngine),
+	ShardMovingStopped:                 newFatalMessage("shard moving is disabled, shardID %d", ModuleStorageEngine),
 
 	// wal error codes
 	ReadWalFileFailed:         newWarnMessage("read wal file failed", ModuleWal),

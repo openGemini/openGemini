@@ -186,3 +186,33 @@ func TestFsReader_Rename(t *testing.T) {
 		t.Fatalf("test rename error fail")
 	}
 }
+
+func TestFsReader_RenameFileToOBS(t *testing.T) {
+	fn := "/tmp/test_diskreader.data"
+	_ = Remove(fn)
+	defer func() {
+		_ = Remove(fn)
+	}()
+	var buf [10]byte
+
+	fd, err := OpenFile(fn, os.O_CREATE|os.O_RDWR, 0640)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = fd.Write(buf[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockPath := ""
+	MmapEn = true
+	dr := NewFileReader(fd, &lockPath)
+	defer func() {
+		MmapEn = false
+		dr.Close()
+	}()
+	err = dr.RenameOnObs("/tmp/test_diskreadernew.data")
+	if err == nil || !strings.Contains(err.Error(), "table store rename file failed") {
+		t.Fatalf("test rename error fail")
+	}
+}

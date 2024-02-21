@@ -29,6 +29,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -76,6 +77,9 @@ const (
 	cpuDownSampleRatio          = 16
 	CRCLen                      = 4
 	BufferSize                  = 1024 * 1024
+
+	// OBSFileExtension is the extension used for OBS files.
+	OBSFileExtension = ".init"
 )
 
 var (
@@ -1055,9 +1059,6 @@ func (s *shard) Compact() error {
 		log.Info("closed", zap.Uint64("shardId", id))
 		return nil
 	default:
-		s.DisableHierarchicalStorage()
-		defer s.SetEnableHierarchicalStorage()
-
 		var rule []uint16
 		switch s.engineType {
 		case config.COLUMNSTORE:
@@ -1770,6 +1771,7 @@ func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
 	if err != nil {
 		return err
 	}
+
 	// replay wal files
 	s.log.Info("replay wal start", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Bool("async replay", s.isAsyncReplayWal))
 	wStart := time.Now()
@@ -2556,7 +2558,7 @@ func (s *shard) ExecShardMove() error {
 		s.log.Error("[hierarchical storage] other operation is running",
 			zap.Int64("works counts", s.moveWorksCount),
 			zap.String("shard path", s.dataPath))
-		return errno.NewError(errno.ShardIsMoving)
+		return errno.NewError(errno.ShardIsMoving, s.GetID())
 	}
 
 	if s.MoveShardStartTime.IsZero() {
@@ -2577,10 +2579,119 @@ func (s *shard) ExecShardMove() error {
 }
 
 func (s *shard) doShardMove() error {
+	s.log.Info("[hierarchical storage] begin to move shard", zap.Uint64("tier", s.tier), zap.String("path", s.dataPath))
+	// here we need not engine lock, because hierarchical storage priority is lower compact / delete e,g.
+	// other operation can stop this func by disable hierarchical storage(e.lock)
+	if s.stopMove() {
+		s.log.Info("[hierarchical storage] received stop signal", zap.Uint64("shard id", s.GetID()))
+		return errno.NewError(errno.ShardMovingStopped, s.GetID())
+	}
+
+	lock := fileops.FileLockOption(*s.lock)
+
+	mstPath := filepath.Join(s.dataPath, immutable.TsspDirName)
+	dirs, err := fileops.ReadDir(mstPath)
+	if err != nil {
+		return err
+	}
+
+	s.DisableCompAndMerge()
+	defer s.EnableCompAndMerge()
+	// iterate each measurement dir
+	for i := range dirs {
+		mstName := dirs[i].Name() // measurement name with version
+		// get all order tssp files, since full compact is completed
+		orderTsspFiles, existOrderFiles := s.immTables.GetTSSPFiles(mstName, true)
+		outOfOrderTsspFiles, existOutOfOrderFiles := s.immTables.GetTSSPFiles(mstName, false)
+		// has no both order and out of order files
+		if !existOrderFiles && !existOutOfOrderFiles {
+			continue
+		}
+		allFiles := &immutable.TSSPFiles{}
+		if existOrderFiles {
+			orderTsspFiles.RLock()
+			allFiles.Append(orderTsspFiles.Files()...)
+			orderTsspFiles.RUnlock()
+		}
+		if existOutOfOrderFiles {
+			outOfOrderTsspFiles.RLock()
+			allFiles.Append(outOfOrderTsspFiles.Files()...)
+			outOfOrderTsspFiles.RUnlock()
+		}
+
+		for _, tf := range allFiles.Files() {
+			filePath := tf.Path()
+
+			// every time, we need check it should be stop by other operation
+			if s.stopMove() {
+				return errno.NewError(errno.ShardMovingStopped)
+			}
+
+			s.log.Info("[hierarchical storage] start move", zap.Uint64("shard id", s.GetID()), zap.String("tssp", filePath))
+
+			if strings.HasSuffix(filePath, OBSFileExtension) {
+				// generate tssp file name
+				tsspName := filePath[:len(filePath)-len(OBSFileExtension)]
+				if err := tf.Rename(tsspName); err != nil {
+					s.log.Error("[hierarchical storage] rename obs file err",
+						zap.String("obsfile", filePath), zap.Error(err))
+					return err
+				}
+				continue
+			}
+			// check file is already in obs
+			ok, err := fileops.IsObsFile(filePath)
+			if err != nil {
+				return err
+			}
+			if ok {
+				continue
+			}
+
+			// copy tssp file from dfv to obs, obs file like: xxxx.tssp.init
+			obsName := filePath + OBSFileExtension
+			if err := fileops.CopyFileFromDFVToOBS(filePath, obsName, lock); err != nil {
+				s.copyFileRollBack(obsName)
+				return err
+			}
+
+			if err := s.renameFileOnOBS(tf, obsName); err != nil {
+				return err
+			}
+			s.log.Info("[hierarchical storage] rename obs file success", zap.String("obsfile", obsName))
+		}
+	}
+
 	// all tssp copy success, update tier status
 	s.tier = util.Cold
 	s.immTables.SetTier(util.Cold)
 	return nil
+}
+
+func (s *shard) renameFileOnOBS(tf immutable.TSSPFile, obsName string) error {
+	if err := tf.RenameOnObs(obsName); err != nil {
+		s.log.Error("[hierarchical storage] rename obs file failed",
+			zap.String("obsfile", obsName), zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+func (s *shard) stopMove() bool {
+	select {
+	case <-s.moveStop:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *shard) copyFileRollBack(fileName string) {
+	lock := fileops.FileLockOption(*s.lock)
+	if err := fileops.Remove(fileName, lock); err != nil {
+		s.log.Error("[run hierarchical storage RollBack]: remove file err",
+			zap.String("file", fileName), zap.Error(err))
+	}
 }
 
 func (s *shard) DisableHierarchicalStorage() {

@@ -77,6 +77,7 @@ type BasicFileReader interface {
 	ReadAt(off int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	StreamReadBatch(off, length []int64, c chan *request.StreamReader, limit int)
 	Rename(newName string) error
+	RenameOnObs(newName string) error
 	ReOpen() error
 	IsMmapRead() bool
 	IsOpen() bool
@@ -216,31 +217,51 @@ func (r *fileReader) Name() string {
 	return r.name
 }
 
+// rename r.name -> newName
 func (r *fileReader) Rename(newName string) error {
 	if r.mmapData != nil {
 		_ = MUnmap(r.mmapData)
 		r.mmapData = nil
 	}
-	oldName := r.name
+	return r.rename(r.name, newName)
+}
+
+// rename tssp.obs -> tssp
+func (r *fileReader) RenameOnObs(obsName string) error {
+	err := r.rename(obsName, r.name)
+	if err != nil {
+		isOpen := r.IsOpen()
+		if !isOpen {
+			// first try to reopen tssp file, then try to reopen tssp.obs file
+			if err := r.ReOpen(); err != nil {
+				r.name = obsName
+				return r.ReOpen()
+			}
+		}
+	}
+	return err
+}
+
+func (r *fileReader) rename(oldPath, newPath string) error {
 	isOpen := r.IsOpen() //if target fd is in use, we will reopen it after rename.
 
 	if isOpen {
 		if err := r.fd.Close(); err != nil {
-			log.Error("close file fail", zap.String("file", oldName), zap.Error(err))
-			err = errCloseFail(oldName, err)
+			log.Error("close file fail", zap.String("file", oldPath), zap.Error(err))
+			err = errCloseFail(oldPath, err)
 			return err
 		}
 		r.fd = nil
 	}
 
-	log.Debug("rename file", zap.String("old", oldName), zap.String("new", newName), zap.Int64("size", r.fileSize))
+	log.Debug("rename file", zap.String("old", oldPath), zap.String("new", newPath), zap.Int64("size", r.fileSize))
 	lock := FileLockOption(*r.lock)
-	if err := RenameFile(oldName, newName, lock); err != nil {
-		err = errRenameFail(zap.String("old", oldName), zap.String("new", newName), err)
+	if err := RenameFile(oldPath, newPath, lock); err != nil {
+		err = errRenameFail(zap.String("old", oldPath), zap.String("new", newPath), err)
 		log.Error("rename file fail", zap.Error(err))
 		return err
 	}
-	r.name = newName
+	r.name = newPath
 
 	if isOpen {
 		if err := r.ReOpen(); err != nil {

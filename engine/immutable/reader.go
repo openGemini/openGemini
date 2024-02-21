@@ -67,6 +67,7 @@ type FileReader interface {
 	Name() string
 	FileName() string
 	Rename(newName string) error
+	RenameOnObs(obsName string) error
 	FileSize() int64
 	InMemSize() int64
 	Version() uint64

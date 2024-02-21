@@ -296,6 +296,14 @@ func (m MocTsspFile) GetFileReaderRef() int64 {
 	return 0
 }
 
+func (m MocTsspFile) ReOpen() error {
+	return nil
+}
+
+func (m MocTsspFile) RenameOnObs(newName string) error {
+	return nil
+}
+
 func TestGetTsspFiles(t *testing.T) {
 	m := &MmsTables{
 		Order: map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{

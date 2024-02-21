@@ -817,6 +817,10 @@ func (r *tsspFileReader) Rename(newName string) error {
 	return r.r.Rename(newName)
 }
 
+func (r *tsspFileReader) RenameOnObs(obsName string) error {
+	return r.r.RenameOnObs(obsName)
+}
+
 func (r *tsspFileReader) Version() uint64 {
 	return r.version
 }

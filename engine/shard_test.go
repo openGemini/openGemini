@@ -56,6 +56,7 @@ import (
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -5967,6 +5968,222 @@ func TestGetMstWriteRecordCtx(t *testing.T) {
 	ctx = getMstWriteRecordCtx(time.Millisecond*10, config.COLUMNSTORE)
 	time.Sleep(time.Millisecond * 20)
 	putMstWriteRecordCtx(ctx)
+}
+
+func TestInterEngine_DoShardMove_OrderFiles(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	// 1. both exist 00000001-0000-00000000.tssp and 00000001-0000-00000000.tssp.init
+	srcFile := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp")
+	dstFile1 := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp.init")
+	fileops.CopyFile(srcFile, dstFile1)
+
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	err = sh.doShardMove()
+	require.NoError(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	// 2. exist only 00000001-0000-00000000.tssp.init, so there is no order and out of order files
+	fileops.Remove(srcFile)
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	err = sh.doShardMove()
+	require.NoError(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestInterEngine_DoShardMove_OutOfOrderFiles(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	srcFile := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp")
+	outOfOrderPath := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "out-of-order")
+	fileops.MkdirAll(outOfOrderPath, 0750)
+	dstFile2 := filepath.Join(outOfOrderPath, "00000002-0000-00000000.tssp")
+	fileops.CopyFile(srcFile, dstFile2)
+
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	err = sh.doShardMove()
+	require.NoError(t, err)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+/*
+there are 3 files:
+00000001-0000-00000000.tssp.init
+00000002-0000-00000000.tssp
+00000003-0000-00000000.tssp
+00000001-0000-00000000.tssp.init just rename.
+00000002-0000-00000000.tssp and 00000003-0000-00000000.tssp need to copy to obs and rename.
+*/
+func TestInterEngine_DoShardMove_BothFiles(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	srcFile := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp")
+	dstFile1 := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp.init")
+	dstFile2 := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000002-0000-00000000.tssp")
+	dstFile3 := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000003-0000-00000000.tssp")
+	fileops.CopyFile(srcFile, dstFile1)
+	fileops.CopyFile(srcFile, dstFile2)
+	fileops.CopyFile(srcFile, dstFile3)
+	fileops.Remove(srcFile)
+
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	err = sh.doShardMove()
+	require.NoError(t, err)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestInterEngine_DoShardMove_Stop(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	srcFile := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp")
+	dstFile := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp.init")
+	fileops.CopyFile(srcFile, dstFile)
+
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+
+	sh.moveStop = make(chan struct{})
+	close(sh.moveStop)
+	err = sh.doShardMove()
+	// check whether shard move is disabled
+	require.Error(t, err)
+	sh.moveStop = nil
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestInterEngine_DoShardMove_Mock(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+
+	file := MocTsspFile{
+		path: "/tmp/openGemini",
+	}
+	mockobsName := "00000001-0000-00000000.tssp.init"
+
+	err = sh.renameFileOnOBS(file, mockobsName)
+	// check whether shard move is disabled
+	require.Error(t, err)
+	sh.moveStop = nil
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestInterEngine_CopyFileRollBack(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	existFile := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "00000001-0000-00000000.tssp")
+	sh.copyFileRollBack(existFile)
+
+	sh.copyFileRollBack("")
 }
 
 func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
