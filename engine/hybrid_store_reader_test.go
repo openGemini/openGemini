@@ -339,7 +339,7 @@ func TestHybridStoreReader(t *testing.T) {
 			t.Fatal(err)
 		}
 		sh.ForceFlush()
-		time.Sleep(time.Second * 1)
+		sh.waitSnapshot()
 	}
 
 	// start to compact
@@ -595,7 +595,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 			t.Fatal(err)
 		}
 		sh.ForceFlush()
-		time.Sleep(time.Second * 1)
+		sh.waitSnapshot()
 	}
 
 	// start to compact
