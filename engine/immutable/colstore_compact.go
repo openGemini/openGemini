@@ -776,7 +776,7 @@ func (f *FragmentIterators) updateIterators(m *MmsTables, group FilesInfo, sortK
 	f.breakPoint = &breakPoint{}
 
 	_, seq := group.oldFiles[0].LevelAndSequence()
-	ext := group.oldFiles[0].FileNameExtend()
+	ext := getMaxFileExtend(group.oldFiles, seq)
 	fileName := NewTSSPFileName(seq, group.toLevel, 0, 0, true, m.lock)
 	var err error
 	//gen msBuilder
@@ -816,6 +816,21 @@ func (f *FragmentIterators) updateIterators(m *MmsTables, group FilesInfo, sortK
 		f.itrs = append(f.itrs, iterator)
 	}
 	return nil
+}
+
+// to avoid file name conflict while writing bach to local
+func getMaxFileExtend(files []TSSPFile, seq uint64) uint16 {
+	var ext uint16
+	var tmpSeq uint64
+	for i := 1; i < len(files); i++ {
+		_, tmpSeq = files[i].LevelAndSequence()
+		//The seq of all files cannot be the same at the same time
+		if tmpSeq != seq {
+			ext = files[i-1].FileNameExtend()
+			break
+		}
+	}
+	return ext
 }
 
 func (f *FragmentIterators) writeBloomFilters(toLocal bool) error {
