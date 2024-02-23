@@ -432,6 +432,16 @@ func TestHybridStoreReader(t *testing.T) {
 			expected:  0,
 			expect:    testEqualChunkNum,
 		},
+		{
+			name:      "select * from db0.rp0.mst where or",
+			q:         `select field1_float,field2_int,field3_bool,field4_string from db0.rp0.mst where MATCHPHRASE(primaryKey_string1, 'test111') or MATCHPHRASE(primaryKey_string2, 'test')`,
+			tr:        util.TimeRange{Min: 1635724800000000000, Max: 1635732800000000000},
+			out:       buildComRowDataType(),
+			readerOps: buildComReaderOps(),
+			fields:    fields,
+			expected:  1245,
+			expect:    testEqualChunkNum,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.skip {

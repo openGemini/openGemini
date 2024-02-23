@@ -403,7 +403,6 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 	filterBitmap := bitmap.NewFilterBitmap(r.queryCtx.filterOption.CondFunctions.NumFilter())
 	colAux := record.ColAux{}
 	for {
-		filterBitmap.Reset()
 		select {
 		case <-r.closedCh:
 			return
