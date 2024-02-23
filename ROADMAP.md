@@ -31,15 +31,15 @@
 - [x] Support continuous query
 - [x] Support show configs command
 
-**v1.2.0 (2024.01)**
+**v1.2.0 (2024.02)**
 
 - [ ] Query performance optimization for IoT scenarios
 
-**v.1.3.0 (2024.03)**
+**v.1.3.0 (2024.04)**
 
 - [ ] Data delete
 
-**v.1.4.0 (2024.05)**
+**v.1.4.0 (2024.06)**
 
 - [ ] Data replication
 - [ ] Refactor AI-based data analysis
