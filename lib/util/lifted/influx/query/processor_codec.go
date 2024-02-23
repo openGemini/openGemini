@@ -19,6 +19,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/query/proto"
 	"google.golang.org/protobuf/proto"
@@ -311,8 +312,11 @@ func decodeMeasurement(pb *internal.Measurement) (*influxql.Measurement, error) 
 }
 
 func decodeIndexOption(pb *internal.IndexOption) *influxql.IndexOption {
+	tokens := pb.GetTokens()
+	tokensTable, _ := tokenizer.BuildSplitTable(tokens)
 	io := &influxql.IndexOption{
-		Tokens:              pb.GetTokens(),
+		Tokens:              tokens,
+		TokensTable:         tokensTable,
 		Tokenizers:          pb.GetTokenizers(),
 		TimeClusterDuration: time.Duration(pb.GetTimeClusterDuration()),
 	}
@@ -344,7 +348,6 @@ func decodeIndexRelation(pb *internal.IndexRelation) *influxql.IndexRelation {
 			}
 		}
 	}
-
 	return indexR
 }
 

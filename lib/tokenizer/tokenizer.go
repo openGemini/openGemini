@@ -18,6 +18,9 @@ package tokenizer
 import (
 	"encoding/binary"
 	"math/bits"
+
+	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 const (
@@ -81,6 +84,18 @@ func BuildSplitTable(splitChar string) ([]byte, uint8) {
 		}
 	}
 	return splitTable, missIndex
+}
+
+func GetFullTextOption(ir *influxql.IndexRelation) *influxql.IndexOption {
+	if ir != nil {
+		if option := ir.FindIndexOption(uint32(index.BloomFilterFullText), ""); option != nil {
+			return option
+		}
+	}
+	return &influxql.IndexOption{
+		Tokens:      CONTENT_SPLITTER,
+		TokensTable: CONTENT_SPLIT_TABLE,
+	}
 }
 
 type Tokenizer interface {

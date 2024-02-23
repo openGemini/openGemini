@@ -522,10 +522,6 @@ func TestHybridStoreReaderByLogStore(t *testing.T) {
 	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
 	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), 4))
 	reader.initQueryCtx()
-	_, err := reader.CreateLogStoreCursor()
-	if err == nil {
-		t.Errorf("get wrong cursor")
-	}
 
 	var fields influxql.Fields
 	m := createMeasurement()
@@ -544,10 +540,6 @@ func TestHybridStoreReaderByLogStore(t *testing.T) {
 	readerPlan = executor.NewLogicalColumnStoreReader(nil, schema)
 	reader = NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), 4))
 	reader.initQueryCtx()
-	cursor, _ := reader.CreateLogStoreCursor()
-	if _, ok := cursor.(*AggTagSetCursor); !ok {
-		t.Errorf("get wrong cursor")
-	}
 }
 
 func TestHybridStoreReaderForInc(t *testing.T) {

@@ -87,7 +87,15 @@ func TestRotate(t *testing.T) {
 
 func TestGetStringMatchPhraseConditionBitMap(t *testing.T) {
 	col, bitMap := prepareStringColValue(1, 8192)
-	results := GetStringMatchPhraseConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	params := &TypeFunParams{
+		col:     col,
+		compare: RandomString + "-4096",
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+		opt:     &query.ProcessorOptions{},
+	}
+	results := GetStringMatchPhraseConditionBitMap(params)
 	emptyCount := 0
 	for _, v := range results {
 		if v == 0 {
@@ -96,7 +104,7 @@ func TestGetStringMatchPhraseConditionBitMap(t *testing.T) {
 	}
 	assert.Equal(t, 1023, emptyCount)
 
-	results = GetStringMatchPhraseConditionBitMapWithNull(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+	results = GetStringMatchPhraseConditionBitMapWithNull(params)
 	emptyCount = 0
 	for _, v := range results {
 		if v == 0 {
@@ -526,8 +534,15 @@ func BenchmarkStringCompareByBytes(b *testing.B) {
 	col, bitMap := prepareStringColValue(1, 8192)
 	b.ReportAllocs()
 	b.ResetTimer()
+	params := &TypeFunParams{
+		col:     col,
+		compare: RandomString + "-4096",
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+	}
 	for i := 0; i < b.N; i++ {
-		GetStringLTConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+		GetStringLTConditionBitMap(params)
 	}
 }
 
@@ -553,8 +568,15 @@ func BenchmarkGetStringEQConditionBitMap(b *testing.B) {
 	col, bitMap := prepareStringColValue(1, 8192)
 	b.ReportAllocs()
 	b.ResetTimer()
+	params := &TypeFunParams{
+		col:     col,
+		compare: RandomString + "-4096",
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+	}
 	for i := 0; i < b.N; i++ {
-		GetStringEQConditionBitMap(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+		GetStringEQConditionBitMap(params)
 	}
 }
 
@@ -562,8 +584,15 @@ func BenchmarkGetStringEQConditionBitMapWithNull(b *testing.B) {
 	col, bitMap := prepareStringColValue(1, 8192)
 	b.ReportAllocs()
 	b.ResetTimer()
+	params := &TypeFunParams{
+		col:     col,
+		compare: RandomString + "-4096",
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+	}
 	for i := 0; i < b.N; i++ {
-		GetStringEQConditionBitMapWithNull(col, RandomString+"-4096", col.Bitmap, bitMap, 0)
+		GetStringEQConditionBitMapWithNull(params)
 	}
 }
 
@@ -571,8 +600,15 @@ func BenchmarkGetIntegerLTEConditionBitMap(b *testing.B) {
 	col, bitMap := prepareIntegerColValue(1, 8192)
 	b.ReportAllocs()
 	b.ResetTimer()
+	params := &TypeFunParams{
+		col:     col,
+		compare: 4096,
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+	}
 	for i := 0; i < b.N; i++ {
-		GetIntegerLTEConditionBitMap(col, 4096, col.Bitmap, bitMap, 0)
+		GetIntegerLTEConditionBitMap(params)
 	}
 }
 
@@ -580,7 +616,14 @@ func BenchmarkGetIntegerLTEConditionBitMapWithNull(b *testing.B) {
 	col, bitMap := prepareIntegerColValue(1, 8192)
 	b.ReportAllocs()
 	b.ResetTimer()
+	params := &TypeFunParams{
+		col:     col,
+		compare: 4096,
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+	}
 	for i := 0; i < b.N; i++ {
-		GetIntegerLTEConditionBitMapWithNull(col, 4096, col.Bitmap, bitMap, 0)
+		GetIntegerLTEConditionBitMapWithNull(params)
 	}
 }

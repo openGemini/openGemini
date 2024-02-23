@@ -68,9 +68,9 @@ type SetWriter struct {
 	*skipIndexWriter
 }
 
-func NewSetWriter(dir, msName, dataFilePath, lockPath string) *SetWriter {
+func NewSetWriter(dir, msName, dataFilePath, lockPath string, token string) *SetWriter {
 	return &SetWriter{
-		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, token),
 	}
 }
 

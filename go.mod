@@ -30,7 +30,6 @@ require (
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.6-0.20210304033056-74c60be0ef68
 	github.com/panjf2000/ants/v2 v2.5.0
-	github.com/pierrec/lz4/v4 v4.1.15
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
 	github.com/prometheus/client_golang v1.12.1
 	github.com/prometheus/common v0.32.1
@@ -126,6 +125,7 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/philhofer/fwd v1.1.2-0.20210722190033-5c56ac6d0bb9 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pingcap/errors v0.11.4 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/term v1.2.0-beta.2 // indirect
