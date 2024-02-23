@@ -926,6 +926,10 @@ func (r *tsspFileReader) LoadComponents() error {
 }
 
 func (r *tsspFileReader) LoadIdTimes(isOrder bool, p *IdTimePairs) error {
+	if r.r == nil {
+		return nil
+	}
+
 	var buf []byte
 	var err error
 
