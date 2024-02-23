@@ -600,6 +600,55 @@ func (e *Engine) DeleteIndex(db string, ptId uint32, indexID uint64) error {
 	return nil
 }
 
+func (e *Engine) ExpiredCacheIndexes() []*meta2.IndexIdentifier {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	var res []*meta2.IndexIdentifier
+	for db := range e.DBPartitions {
+		for _, pti := range e.DBPartitions[db] {
+			pti.mu.RLock()
+			for idxId := range e.DBPartitions[db][pti.id].indexBuilder {
+				if e.DBPartitions[db][pti.id].indexBuilder[idxId].ExpiredCache() {
+					res = append(res, e.DBPartitions[db][pti.id].indexBuilder[idxId].Ident())
+				}
+			}
+			pti.mu.RUnlock()
+		}
+	}
+	return res
+}
+
+func (e *Engine) ClearIndexCache(db string, ptId uint32, indexID uint64) error {
+	e.log.Info("start clear index cache...", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
+
+	e.mu.RLock()
+	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
+		e.mu.RUnlock()
+		return err
+	}
+	dbPtInfo := e.DBPartitions[db][ptId]
+	e.mu.RUnlock()
+
+	defer e.unrefDBPT(db, ptId)
+
+	dbPtInfo.mu.RLock()
+	iBuild, ok := dbPtInfo.indexBuilder[indexID]
+	if !ok {
+		dbPtInfo.mu.RUnlock()
+		return errno.NewError(errno.IndexNotFound, db, ptId, indexID)
+	}
+
+	dbPtInfo.mu.RUnlock()
+
+	if err := iBuild.ClearCache(); err != nil {
+		return err
+	}
+
+	e.log.Info("clear index cache success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
+	return nil
+}
+
 func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta2.ShardIdentifier) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

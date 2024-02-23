@@ -1473,3 +1473,40 @@ func TestSeriesByAllAndExprIteratorFilterBreak(t *testing.T) {
 		})
 	})
 }
+
+func TestIndexExpiredCache1(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsOfAllAndExprFilterBreak(idx)
+
+	isExpired := idxBuilder.ExpiredCache()
+	if isExpired != false {
+		t.Fatal()
+	}
+}
+
+func TestIndexExpiredCache2(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsOfAllAndExprFilterBreak(idx)
+	t1, _ := time.ParseDuration("-2h")
+	t2, _ := time.ParseDuration("-1h")
+	idxBuilder.startTime = time.Now().Add(t1)
+	idxBuilder.endTime = time.Now().Add(t2)
+
+	isExpired := idxBuilder.ExpiredCache()
+	if isExpired != true {
+		t.Fatal()
+	}
+}
+
+func TestIndexClearIndexCache(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsOfAllAndExprFilterBreak(idx)
+
+	idxBuilder.ClearCache()
+}
