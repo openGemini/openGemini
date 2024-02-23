@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -211,7 +212,7 @@ func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, stream
 	panic("implement me")
 }
 
-func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []*stream.FieldCall) error {
+func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.FieldCall) error {
 	panic("implement me")
 }
 

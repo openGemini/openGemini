@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +27,12 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	atomic2 "github.com/openGemini/openGemini/lib/atomic"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -42,7 +42,7 @@ import (
 
 type streamTask struct {
 	info           *meta2.StreamInfo
-	calls          []*FieldCall
+	calls          []*streamLib.FieldCall
 	tagDimKeys     []string
 	fieldIndexKeys []string
 }
@@ -51,13 +51,10 @@ func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema map[string]int32
 	w := &streamTask{
 		info: info,
 	}
-	calls, err := BuildFieldCall(info, srcSchema, dstSchema)
+	var err error
+	w.calls, err = BuildFieldCall(info, srcSchema, dstSchema)
 	if err != nil {
 		return nil, err
-	}
-	w.calls = make([]*FieldCall, len(calls))
-	for i := range calls {
-		w.calls[i] = &calls[i]
 	}
 	tagDimKeys, fieldIndexKeys := buildTagsFields(info, srcSchema)
 	w.tagDimKeys = make([]string, len(tagDimKeys))
@@ -91,36 +88,6 @@ func NewStream(tsdbStore TSDBStore, metaClient PWMetaClient, logger *logger.Logg
 	}
 }
 
-type FieldCall struct {
-	inFieldType  int32
-	outFieldType int32
-	name         string
-	alias        string
-	call         string
-	callFunc     func(*float64, float64) float64
-}
-
-type BuilderPool struct {
-	pool sync.Pool
-}
-
-func NewBuilderPool() *BuilderPool {
-	p := &BuilderPool{}
-	return p
-}
-
-func (p *BuilderPool) Get() *strings.Builder {
-	c := p.pool.Get()
-	if c == nil {
-		return &strings.Builder{}
-	}
-	return c.(*strings.Builder)
-}
-
-func (p *BuilderPool) Put(r *strings.Builder) {
-	p.pool.Put(r)
-}
-
 var streamCtxPool sync.Pool
 
 func GetStreamCtx() *streamCtx {
@@ -138,7 +105,7 @@ func PutStreamCtx(s *streamCtx) {
 
 type streamCtx struct {
 	minTime         int64
-	bp              *BuilderPool
+	bp              *streamLib.BuilderPool
 	db              *meta2.DatabaseInfo
 	rp              *meta2.RetentionPolicyInfo
 	ms              *meta2.MeasurementInfo
@@ -161,7 +128,7 @@ func (s *streamCtx) reset() {
 	s.dataCache = make(map[string]map[int64][]*float64)
 }
 
-func (s *streamCtx) SetBP(bp *BuilderPool) {
+func (s *streamCtx) SetBP(bp *streamLib.BuilderPool) {
 	s.bp = bp
 }
 
@@ -195,7 +162,7 @@ func (s *streamCtx) initVar(w *PointsWriter, si *meta2.StreamInfo) (err error) {
 	}
 
 	if s.bp == nil {
-		s.bp = NewBuilderPool()
+		s.bp = streamLib.NewBuilderPool()
 	}
 
 	if s.opt == nil {
@@ -250,10 +217,7 @@ func (s *Stream) calculate(
 
 func (s *Stream) calculateWindow(rows []*influx.Row, si *meta2.StreamInfo, task *streamTask, ctx *streamCtx) error {
 	for _, r := range rows {
-		groupKey, err := s.GenerateGroupKey(ctx, si.Dims, r)
-		if err != nil {
-			return err
-		}
+		groupKey := s.GenerateGroupKey(ctx, si.Dims, r)
 		// get the end time of the window corresponding to this time,
 		// and subtract 1 to avoid this time from expiring.
 		_, et := ctx.opt.Window(r.Timestamp)
@@ -267,7 +231,7 @@ func (s *Stream) calculateWindow(rows []*influx.Row, si *meta2.StreamInfo, task 
 			v[et] = make([]*float64, len(task.calls))
 		}
 		for i := range task.calls {
-			id, ok := r.ColumnToIndex[task.calls[i].name]
+			id, ok := r.ColumnToIndex[task.calls[i].Name]
 			if !ok {
 				//miss field value
 				continue
@@ -278,19 +242,19 @@ func (s *Stream) calculateWindow(rows []*influx.Row, si *meta2.StreamInfo, task 
 				return fmt.Errorf("the %s string type is not supported for stream task %s", fv.Key, si.Name)
 			}
 			curVal := fv.NumValue
-			if task.calls[i].call == "count" {
+			if task.calls[i].Call == "count" {
 				curVal = 1
 			}
 			if v[et][i] == nil {
 				var t float64
-				if task.calls[i].call == "min" {
+				if task.calls[i].Call == "min" {
 					t = math.MaxFloat64
-				} else if task.calls[i].call == "max" {
+				} else if task.calls[i].Call == "max" {
 					t = -math.MaxFloat64
 				}
-				atomic2.SetAndSwapPointerFloat64(&v[et][i], &t)
+				v[et][i] = &t
 			}
-			task.calls[i].callFunc(v[et][i], curVal)
+			*v[et][i] = task.calls[i].SingleThreadFunc(*v[et][i], curVal)
 		}
 	}
 	return nil
@@ -312,11 +276,14 @@ func (s *Stream) mapRowsToShard(
 		(*wRows)[i] = &influx.Row{}
 	}
 	for k, tv := range ctx.dataCache {
-		groupValue := strings.Split(k, config.StreamGroupValueStrSeparator)
-		if len(groupValue) != dimLen {
-			errStr := fmt.Sprintf("group value is mssing for stream task %s, groupValue %v, tagDimKeys %v, fieldIndexKeys %v",
-				si.Name, groupValue, task.tagDimKeys, task.fieldIndexKeys)
-			return errors.New(errStr)
+		var groupValue []string
+		if len(k) != 0 {
+			groupValue = strings.Split(k, config.StreamGroupValueStrSeparator)
+			if len(groupValue) != dimLen {
+				errStr := fmt.Sprintf("group value is mssing for stream task %s, groupValue %v, tagDimKeys %v, fieldIndexKeys %v groupLen %v dimLen %v",
+					si.Name, groupValue, task.tagDimKeys, task.fieldIndexKeys, len(groupValue), dimLen)
+				return errors.New(errStr)
+			}
 		}
 		for t, v := range tv {
 			size++
@@ -327,11 +294,8 @@ func (s *Stream) mapRowsToShard(
 			r.Reset()
 
 			// update the fields of the agg row
-			if r.Fields == nil {
+			if r.Fields == nil || cap(r.Fields) < callLen {
 				r.Fields = make([]influx.Field, len(task.calls))
-			}
-			for cap(r.Fields) < callLen {
-				r.Fields = append(r.Fields, make([]influx.Field, callLen-cap(r.Fields))...)
 			}
 			var fieldCount int
 			r.Fields = r.Fields[:len(task.calls)]
@@ -339,9 +303,9 @@ func (s *Stream) mapRowsToShard(
 				if v[i] == nil {
 					continue
 				}
-				r.Fields[i].Key = task.calls[i].alias
-				r.Fields[i].NumValue = atomic2.LoadFloat64(v[i])
-				r.Fields[i].Type = task.calls[i].outFieldType
+				r.Fields[i].Key = task.calls[i].Alias
+				r.Fields[i].NumValue = *v[i]
+				r.Fields[i].Type = task.calls[i].OutFieldType
 				fieldCount++
 			}
 			if fieldCount == 0 {
@@ -350,29 +314,22 @@ func (s *Stream) mapRowsToShard(
 			}
 			r.Fields = r.Fields[:fieldCount]
 
-			// update the tags and columnToIndex of the agg row
-			if r.Tags == nil {
-				r.Tags = make([]influx.Tag, dimLen)
-			}
-			for cap(r.Tags) < dimLen {
-				r.Tags = append(r.Tags, make([]influx.Tag, dimLen-cap(r.Tags))...)
-			}
-			r.Tags = r.Tags[:dimLen]
-			if r.ColumnToIndex == nil {
-				r.ColumnToIndex = make(map[string]int)
-			}
-			index := 0
-			for i := range task.tagDimKeys {
-				r.Tags[index].Key = task.tagDimKeys[i]
-				r.Tags[index].Value = groupValue[i]
-				r.ColumnToIndex[r.Tags[index].Key] = index
-				index++
-			}
-			for i := range task.fieldIndexKeys {
-				r.Tags[index].Key = task.fieldIndexKeys[i]
-				r.Tags[index].Value = groupValue[i+len(task.tagDimKeys)]
-				r.ColumnToIndex[r.Fields[index].Key] = index
-				index++
+			if dimLen != 0 {
+				// update the tags and columnToIndex of the agg row
+				if r.Tags == nil || cap(r.Tags) < dimLen {
+					r.Tags = make([]influx.Tag, dimLen)
+				}
+				r.Tags = r.Tags[:dimLen]
+				if r.ColumnToIndex == nil {
+					r.ColumnToIndex = make(map[string]int)
+				}
+				index := 0
+				for i := range task.tagDimKeys {
+					r.Tags[index].Key = task.tagDimKeys[i]
+					r.Tags[index].Value = groupValue[i]
+					r.ColumnToIndex[r.Tags[index].Key] = index
+					index++
+				}
 			}
 
 			// update the mst, timestamp and shardKey of the agg row
@@ -465,80 +422,42 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 	return
 }
 
-func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.Row) (string, error) {
+func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.Row) string {
+	if len(keys) == 0 {
+		return ""
+	}
 	builder := ctx.bp.Get()
 	defer func() {
 		builder.Reset()
 		ctx.bp.Put(builder)
 	}()
-	// the tags and fields are sorted by their keys in the sql layer
-	haveFieldIndex := len(value.IndexOptions) > 0
+
+	tagIndex := 0
 	for i := range keys {
-		idx := sort.Search(len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
+		idx := util.Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
 		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
-			builder.WriteString(value.Tags[idx].Value)
+			builder.AppendString(value.Tags[idx].Value)
 			if i < len(keys)-1 {
-				builder.WriteByte(config.StreamGroupValueSeparator)
+				builder.AppendByte(config.StreamGroupValueSeparator)
 			}
+			tagIndex = idx + 1
 			continue
 		}
-		if haveFieldIndex {
-			fIdx := sort.Search(len(value.Fields), func(j int) bool { return value.Fields[j].Key >= keys[i] })
-			if fIdx < len(value.Fields) && value.Fields[fIdx].Key == keys[i] {
-				if value.Fields[fIdx].Type == influx.Field_Type_String {
-					builder.WriteString(value.Fields[fIdx].StrValue)
-				} else {
-					builder.WriteString(fmt.Sprint(value.Fields[fIdx].NumValue))
-				}
-				if i < len(keys)-1 {
-					builder.WriteByte(config.StreamGroupValueSeparator)
-				}
-				continue
-			}
+		if i < len(keys)-1 {
+			builder.AppendByte(config.StreamGroupValueSeparator)
 		}
-
-		var err error
-		builder.Reset()
-		for j := range value.Tags {
-			builder.WriteString(value.Tags[j].Key)
-			builder.WriteString("-")
-		}
-		if haveFieldIndex {
-			for j := range value.Fields {
-				builder.WriteString(value.Fields[j].Key)
-				builder.WriteString("-")
-			}
-			err = fmt.Errorf("the group key is incomplite, r.TagKey-r.FieldKey: %s", builder.String())
-		} else {
-			err = fmt.Errorf("the group key is incomplite, r.TagKey: %s", builder.String())
-		}
-		return "", err
+		tagIndex = idx + 1
 	}
-	return builder.String(), nil
+	return builder.NewString()
 }
 
-func BuildFieldCall(info *meta2.StreamInfo, srcSchema map[string]int32, destSchema map[string]int32) ([]FieldCall, error) {
-	calls := make([]FieldCall, len(info.Calls))
+func BuildFieldCall(info *meta2.StreamInfo, srcSchema map[string]int32, destSchema map[string]int32) ([]*streamLib.FieldCall, error) {
+	calls := make([]*streamLib.FieldCall, len(info.Calls))
+	var err error
 	for i, v := range info.Calls {
-		calls[i] = FieldCall{
-			inFieldType:  srcSchema[v.Field],
-			outFieldType: destSchema[v.Alias],
-			name:         v.Field,
-			alias:        v.Alias,
-			call:         v.Call,
-			callFunc:     nil,
-		}
-		switch calls[i].call {
-		case "min":
-			calls[i].callFunc = atomic2.CompareAndSwapMinFloat64
-		case "max":
-			calls[i].callFunc = atomic2.CompareAndSwapMaxFloat64
-		case "sum":
-			calls[i].callFunc = atomic2.AddFloat64
-		case "count":
-			calls[i].callFunc = atomic2.AddFloat64
-		default:
-			return nil, fmt.Errorf("not support stream func %v", calls[i].call)
+		calls[i], err = streamLib.NewFieldCall(srcSchema[v.Field], destSchema[v.Alias], v.Field, v.Alias, v.Call, false)
+		if err != nil {
+			return nil, err
 		}
 	}
 	return calls, nil

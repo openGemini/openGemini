@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -51,43 +52,22 @@ func TestStreamGenerateGroupKey(t *testing.T) {
 	ctx := coordinator.GetStreamCtx()
 	defer coordinator.PutStreamCtx(ctx)
 
-	ctx.SetBP(coordinator.NewBuilderPool())
+	ctx.SetBP(stream.NewBuilderPool())
 	keys := []string{"tk1", "fk1"}
-	value, _ := s.GenerateGroupKey(ctx, keys, &rows[0])
-	assert2.Equal(t, value, "value1\x001")
+	value := s.GenerateGroupKey(ctx, keys, &rows[0])
+	assert2.Equal(t, value, "value1\x00")
 
 	rows[0].IndexOptions = make([]influx.IndexOption, 1)
 	keys = []string{"tk3"}
-	value, _ = s.GenerateGroupKey(ctx, keys, &rows[0])
+	value = s.GenerateGroupKey(ctx, keys, &rows[0])
 	assert2.Equal(t, value, "value3")
 
 	rows[0].IndexOptions = make([]influx.IndexOption, 1)
 	rows[0].IndexOptions[0].Oid = uint32(index.Field)
 	rows[0].IndexOptions[0].IndexList = []uint16{5}
 	keys = []string{"fk3", "tk3"}
-	value, _ = s.GenerateGroupKey(ctx, keys, &rows[0])
-	assert2.Equal(t, value, "fv3\x00value3")
-
-	rows[0].Fields = rows[0].Fields[:2]
-	rows[0].IndexOptions = make([]influx.IndexOption, 1)
-	keys = []string{"tk1", "fk3"}
-	_, err := s.GenerateGroupKey(ctx, keys, &rows[0])
-	if err == nil {
-		t.Fatal("StreamGenerateGroupKey failed")
-	}
-	if !strings.Contains(err.Error(), "the group key is incomplite") {
-		t.Fatal("StreamGenerateGroupKey failed")
-	}
-
-	rows[0].IndexOptions = rows[0].IndexOptions[:0]
-	keys = []string{"tk4"}
-	_, err = s.GenerateGroupKey(ctx, keys, &rows[0])
-	if err == nil {
-		t.Fatal("StreamGenerateGroupKey failed")
-	}
-	if !strings.Contains(err.Error(), "the group key is incomplite") {
-		t.Fatal("StreamGenerateGroupKey failed")
-	}
+	value = s.GenerateGroupKey(ctx, keys, &rows[0])
+	assert2.Equal(t, value, "\x00value3")
 }
 
 func TestStreamBuildFieldCall(t *testing.T) {

@@ -32,8 +32,9 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
+	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/panjf2000/ants/v2"
@@ -43,6 +44,7 @@ import (
 var (
 	maxWindowNum           = 10
 	FlushParallelMinRowNum = 10000
+	ErrEmptyCache          = errors.New("empty window cache")
 )
 
 const (
@@ -60,60 +62,31 @@ type TagTask struct {
 
 	// key tag values
 	values sync.Map
-	// store startWindow id, for ring store structure
-	startWindowID int64
-	offset        int
-	// current window start time
-	start time.Time
-	// current window end time
-	end time.Time
 	// store all ptIds for all window
 	ptIds []*uint32
 	// store all shardIds for all window
 	shardIds []*uint64
-
 	// metadata, not change
-	src        *meta2.StreamMeasurementInfo
-	des        *meta2.StreamMeasurementInfo
-	info       *meta2.MeasurementInfo
-	groupKeys  []string
-	fieldCalls []*FieldCall
+	groupKeys []string
 
 	// chan for process
 	innerCache     chan *WindowCache
 	innerRes       chan error
-	abort          chan struct{}
-	err            error
-	updateWindow   chan struct{}
 	cleanPreWindow chan struct{}
 
 	// pool
-	bp              *BuilderPool
+	bp              *streamLib.BuilderPool
 	windowCachePool *WindowCachePool
 	*WindowDataPool
-	indexKeyPool []byte
 
 	// config
-	id          uint64
-	name        string
 	concurrency int
-	windowNum   int
-	window      time.Duration
-	maxDelay    time.Duration
-
-	// tmp data, reuse
-	fieldCallsLen int
-	rows          []influx.Row
-	validNum      int
-	maxDuration   int64
 
 	// tools
 	flushWG sync.WaitGroup
 	goPool  *ants.Pool
-	stats   *statistics.StreamWindowStatItem
-	store   Storage
-	Logger  Logger
-	cli     MetaClient
+
+	*BaseTask
 }
 
 type WindowCache struct {
@@ -155,10 +128,6 @@ func (s *TagTask) run() error {
 		s.err = err
 		return err
 	}
-	err = s.buildFieldCalls()
-	if err != nil {
-		return err
-	}
 	go s.cycleFlush()
 	go s.parallelCalculate()
 	go s.cleanWindow()
@@ -190,24 +159,6 @@ func (s *TagTask) initVar() error {
 		var shard uint64
 		s.ptIds[i] = &pt
 		s.shardIds[i] = &shard
-	}
-	return nil
-}
-
-func (s *TagTask) buildFieldCalls() error {
-	for c := range s.fieldCalls {
-		switch s.fieldCalls[c].call {
-		case "min":
-			s.fieldCalls[c].tagFunc = atomic2.CompareAndSwapMinFloat64
-		case "max":
-			s.fieldCalls[c].tagFunc = atomic2.CompareAndSwapMaxFloat64
-		case "sum":
-			s.fieldCalls[c].tagFunc = atomic2.AddFloat64
-		case "count":
-			s.fieldCalls[c].tagFunc = atomic2.AddFloat64
-		default:
-			return fmt.Errorf("not support stream func %v", s.fieldCalls[c].call)
-		}
 	}
 	return nil
 }
@@ -261,7 +212,7 @@ func (s *TagTask) parallelCalculate() {
 					select {
 					case s.innerRes <- err:
 					default:
-						panic(fmt.Sprintf("innerRes is full, size %v", len(s.innerRes)))
+						s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
 					}
 				case <-s.abort:
 					return
@@ -360,7 +311,7 @@ func (s *TagTask) walkUpdate(k, vv interface{}) bool {
 func (s *TagTask) calculate(cache *WindowCache) error {
 	// occur release func
 	if cache == nil {
-		panic("cannot be here")
+		return ErrEmptyCache
 	}
 	defer func() {
 		cache.release()
@@ -386,21 +337,21 @@ func (s *TagTask) calculate(cache *WindowCache) error {
 		vv, exist := s.values.Load(key)
 		var vs []*float64
 		if !exist {
-			vs = make([]*float64, s.fieldCallsLen*s.windowNum)
+			vs = make([]*float64, s.fieldCallsLen*int(s.windowNum))
 			s.values.Store(key, vs)
 			s.stats.AddWindowGroupKeyCount(1)
 		} else {
 			vs, _ = vv.([]*float64)
 		}
-		windowId := int((row.Timestamp-s.start.UnixNano())/s.window.Nanoseconds()+atomic.LoadInt64(&s.startWindowID)) % s.windowNum
+		windowId := int(((row.Timestamp-s.start.UnixNano())/s.window.Nanoseconds() + atomic.LoadInt64(&s.startWindowID)) % s.windowNum)
 		for c := range s.fieldCalls {
 			var curVal float64
 			// count op, if streamOnly, add value, else add 1
-			if s.fieldCalls[c].call == "count" && !row.StreamOnly {
+			if s.fieldCalls[c].Call == "count" && !row.StreamOnly {
 				curVal = 1
 			} else {
 				for f := range row.Fields {
-					if row.Fields[f].Key == s.fieldCalls[c].name || row.Fields[f].Key == s.fieldCalls[c].alias {
+					if row.Fields[f].Key == s.fieldCalls[c].Name || row.Fields[f].Key == s.fieldCalls[c].Alias {
 						curVal = row.Fields[f].NumValue
 						break
 					}
@@ -409,14 +360,14 @@ func (s *TagTask) calculate(cache *WindowCache) error {
 			id := s.fieldCallsLen*windowId + c
 			if vs[id] == nil {
 				var t float64
-				if s.fieldCalls[c].call == "min" {
+				if s.fieldCalls[c].Call == "min" {
 					t = math.MaxFloat64
-				} else if s.fieldCalls[c].call == "max" {
+				} else if s.fieldCalls[c].Call == "max" {
 					t = -math.MaxFloat64
 				}
 				atomic2.SetAndSwapPointerFloat64(&vs[id], &t)
 			}
-			s.fieldCalls[c].tagFunc(vs[id], curVal)
+			s.fieldCalls[c].ConcurrencyFunc(vs[id], curVal)
 		}
 		atomic.SwapUint64(s.shardIds[windowId], cache.shardId)
 		atomic.StoreUint32(s.ptIds[windowId], cache.ptId)
@@ -447,8 +398,8 @@ func (s *TagTask) buildRow(k any, vv any) bool {
 		*fields = make([]influx.Field, len(s.fieldCalls))
 		for i := 0; i < fields.Len(); i++ {
 			(*fields)[i] = influx.Field{
-				Key:  s.fieldCalls[i].alias,
-				Type: s.fieldCalls[i].outFieldType,
+				Key:  s.fieldCalls[i].Alias,
+				Type: s.fieldCalls[i].OutFieldType,
 			}
 		}
 	}
@@ -534,14 +485,11 @@ func (s *TagTask) UnCompressDictKeyUint(key uint64) (string, error) {
 }
 
 // no lock to compress dict key, compress string to int64
-func (s *TagTask) compressDictKeyUint(key string) (uint64, error) {
+func (s *TagTask) compressDictKeyUint(key string) uint64 {
 	vv, ok := s.corpus.Load(key)
 	if ok {
 		index, _ := vv.(uint64)
-		if uint64(len(s.corpusIndexes))+1 < index {
-			return 0, errors.New("compressDict index out of range")
-		}
-		return index, nil
+		return index
 	}
 	index := atomic.AddUint64(&s.corpusIndex, 1)
 	for uint64(len(s.corpusIndexes)) <= index {
@@ -558,7 +506,7 @@ func (s *TagTask) compressDictKeyUint(key string) (uint64, error) {
 	s.corpusIndexes[index] = key
 	s.corpus.Store(key, index)
 	// conflict situation, may overwrite kv, but do not difference for uncompress, because corpusIndexes not overwrite
-	return index, nil
+	return index
 }
 
 func (s *TagTask) flush() error {
@@ -675,38 +623,20 @@ func (s *TagTask) generateGroupKeyUint(keys []string, value *influx.Row) string 
 
 	tagIndex := 0
 	for i := range keys {
-		idx := Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
+		idx := util.Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
 		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
-			v, err := s.compressDictKeyUint(value.Tags[idx].Value)
-			if err != nil {
-				panic(fmt.Sprintf("CompressDictKey fail : %v", err))
-			}
+			v := s.compressDictKeyUint(value.Tags[idx].Value)
 			builder.AppendString(strconv.FormatUint(v, 10))
 			if i < len(keys)-1 {
 				builder.AppendByte(config.StreamGroupValueSeparator)
 			}
 			tagIndex = idx + 1
 			continue
-		} else {
-			if i < len(keys)-1 {
-				builder.AppendByte(config.StreamGroupValueSeparator)
-			}
-			tagIndex = idx + 1
-			continue
 		}
+		if i < len(keys)-1 {
+			builder.AppendByte(config.StreamGroupValueSeparator)
+		}
+		tagIndex = idx + 1
 	}
 	return builder.NewString()
-}
-
-func Search(begin, n int, f func(int) bool) int {
-	i, j := begin, n
-	for i < j {
-		h := int(uint(i+j) >> 1) // avoid overflow when computing h
-		if !f(h) {
-			i = h + 1 // preserves f(i-1) == false
-		} else {
-			j = h // preserves f(j) == true
-		}
-	}
-	return i
 }
