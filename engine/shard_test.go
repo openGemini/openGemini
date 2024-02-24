@@ -1588,7 +1588,7 @@ func TestShard_AsyncWalReplay_serial(t *testing.T) {
 	if err = writeData(newSh, rows, false); err != nil {
 		t.Fatal(err)
 	}
-	for !newSh.loadWalDone {
+	for newSh.replayingWal {
 		time.Sleep(10 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
@@ -1693,7 +1693,7 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 	tmp := msInfo.GetWriteChunk().WriteRec.GetRecord()
 	got.ResetWithSchema(tmp.Schema)
 	got.AppendRec(tmp, 0, tmp.RowNums())
-	for !newSh.loadWalDone {
+	for newSh.replayingWal {
 		time.Sleep(13 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
@@ -1758,7 +1758,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
 	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
 	rec.AppendRec(rec, 0, rec.RowNums())
-	for !newSh.loadWalDone {
+	for newSh.replayingWal {
 		time.Sleep(13 * time.Millisecond)
 		fmt.Println("wait load wal done")
 	}
@@ -6248,4 +6248,14 @@ func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 
 func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 	return 0, nil
+}
+
+func TestDropMeasurementWhenReplayingWal(t *testing.T) {
+	testDir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer sh.Close()
+
+	sh.replayingWal = true
+	require.EqualError(t, sh.DropMeasurement(context.Background(), "mst"), "async replay wal not finish")
 }
