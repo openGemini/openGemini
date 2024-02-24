@@ -16,50 +16,6 @@ limitations under the License.
 
 package immutable
 
-import (
-	"regexp"
-
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-)
-
 type UnnestMatch interface {
 	Get([][]byte) [][]byte
-}
-
-type UnnestMatchAll struct {
-	unnest *influxql.Unnest
-	re     *regexp.Regexp
-}
-
-func NewUnnestMatchAll(unnest *influxql.Unnest) (*UnnestMatchAll, error) {
-	unnestExpr, ok := unnest.Expr.(*influxql.Call)
-	if !ok {
-		return nil, nil
-	}
-	var err error
-	reg, err := regexp.Compile(unnestExpr.Args[0].(*influxql.VarRef).Val)
-	if err != nil {
-		return nil, err
-	}
-	r := &UnnestMatchAll{
-		unnest: unnest,
-		re:     reg,
-	}
-
-	return r, nil
-}
-
-func (r *UnnestMatchAll) Get(s string) map[string]string {
-	result := make(map[string]string)
-	for _, v := range r.unnest.Aliases {
-		result[v] = ""
-	}
-	matchesAll := r.re.FindStringSubmatch(s)
-	if matchesAll == nil {
-		return result
-	}
-	for k, v := range r.unnest.Aliases {
-		result[v] = matchesAll[k+1]
-	}
-	return result
 }
