@@ -34,7 +34,6 @@ import (
 
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/uuid"
-	logstore2 "github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -1996,25 +1995,8 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 	var count int64
 	var logs []map[string]interface{}
 	var unnest *influxql.Unnest
-	var unnestField string
 	if logCond != nil {
 		unnest = logCond.Statements[0].(*influxql.LogPipeStatement).Unnest
-	}
-	var unnestFunc *logstore2.UnnestMatchAll
-	if unnest != nil {
-		unnestExpr, ok := unnest.Expr.(*influxql.Call)
-		if !ok {
-			return 0, nil, fmt.Errorf("the type of unnest expr error")
-		}
-		unnestField = unnestExpr.Args[1].(*influxql.VarRef).Val
-		if unnestField == TAGS {
-			unnestField = Tag
-		}
-		var err error
-		unnestFunc, err = logstore2.NewUnnestMatchAll(unnest)
-		if err != nil {
-			return 0, nil, err
-		}
 	}
 	for i := range resp.Results {
 		for _, s := range resp.Results[i].Series {
@@ -2032,12 +2014,6 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 						}
 						continue
 					}
-					if unnest != nil && c == unnestField {
-						unnestResult := unnestFunc.Get(s.Values[j][id].(string))
-						for k, v := range unnestResult {
-							rec[k] = v
-						}
-					}
 					switch c {
 					case TIME:
 						v, _ := s.Values[j][id].(time.Time)
@@ -2049,8 +2025,12 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 					case CONTENT:
 						h.setRecord(rec, CONTENT, s.Values[j][id], para.Truncate)
 					default:
-						hasMore = true
-						h.setRecord(recMore, c, s.Values[j][id], para.Truncate)
+						if unnest != nil && unnest.IsUnnestField(c) {
+							h.setRecord(rec, c, s.Values[j][id], para.Truncate)
+						} else {
+							hasMore = true
+							h.setRecord(recMore, c, s.Values[j][id], para.Truncate)
+						}
 					}
 				}
 				rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(currT, 10) + "|" + strconv.FormatInt(currSeqID, 10) + "^^"))

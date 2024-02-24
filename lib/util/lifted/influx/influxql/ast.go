@@ -7693,6 +7693,15 @@ func (u *Unnest) Clone() *Unnest {
 	return clone
 }
 
+func (u *Unnest) IsUnnestField(field string) bool {
+	for _, alias := range u.Aliases {
+		if alias == field {
+			return true
+		}
+	}
+	return false
+}
+
 func (u *Unnest) GetName() string {
 	return ""
 }

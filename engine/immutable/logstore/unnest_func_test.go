@@ -24,49 +24,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-func TestUnnestMatchAll(t *testing.T) {
-	unnest := &influxql.Unnest{
-		Expr: &influxql.Call{
-			Name: "match_all",
-			Args: []influxql.Expr{&influxql.VarRef{Val: "location:([a-z]+)"}, &influxql.VarRef{Val: "content", Type: influxql.String}},
-		},
-		Aliases: []string{"key1"},
-		DstType: []influxql.DataType{influxql.String},
-	}
-	match, _ := NewUnnestMatchAll(unnest)
-	result := match.Get("location:test")
-	v, ok := result["key1"]
-	if !ok || v != "test" {
-		t.Fatal("get result error")
-	}
-	result = match.Get("type:test")
-	v, ok = result["key1"]
-	if !ok || v != "" {
-		t.Fatal("get nil result error")
-	}
-
-	matchNil, _ := NewUnnestMatchAll(&influxql.Unnest{
-		Expr:    &influxql.VarRef{},
-		Aliases: []string{"key1"},
-		DstType: []influxql.DataType{influxql.String},
-	})
-	if matchNil != nil {
-		t.Fatal("get nil match error")
-	}
-
-	_, err := NewUnnestMatchAll(&influxql.Unnest{
-		Expr: &influxql.Call{
-			Name: "match_all",
-			Args: []influxql.Expr{&influxql.VarRef{Val: "* | EXTRACT(content:\"type:(a-z:0-9]+\") AS(key1) | select count (key1) group by key1"}, &influxql.VarRef{Val: "content", Type: influxql.String}},
-		},
-		Aliases: []string{"key1"},
-		DstType: []influxql.DataType{influxql.String},
-	})
-	if err == nil {
-		t.Fatal("get err match")
-	}
-}
-
 func TestUnnestMatchAllOperator(t *testing.T) {
 	schema := record.Schemas{
 		record.Field{Type: influx.Field_Type_String, Name: "content"},
