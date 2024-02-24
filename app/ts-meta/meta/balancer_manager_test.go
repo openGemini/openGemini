@@ -26,8 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var balancerTestIp = "127.0.0.4"
-
 func TestBalanceIfNeeded(t *testing.T) {
 	dir := t.TempDir()
 	balanceInterval = 100 * time.Millisecond
