@@ -684,8 +684,8 @@ type shard struct {
 	isAsyncReplayWal   bool               // async replay wal switch
 	cancelLock         sync.RWMutex       // lock for cancelFn
 	cancelFn           context.CancelFunc // to cancel wal replay
-	loadWalDone        bool               // is replay wal done
-	wal                *WAL               // for cases: 1. write 2. replay
+	replayingWal       bool
+	wal                *WAL // for cases: 1. write 2. replay
 	snapshotLock       sync.RWMutex
 	memDataReadEnabled bool
 	activeTbl          *mutable.MemTable
@@ -1514,6 +1514,7 @@ func (s *shard) setCancelWalFunc(cancel context.CancelFunc) {
 }
 
 func (s *shard) replayWal() error {
+	s.replayingWal = true
 	// make sure the wal files exist in the disk
 	s.wal.restoreLogs()
 
@@ -1523,7 +1524,7 @@ func (s *shard) replayWal() error {
 	if !s.isAsyncReplayWal {
 		err := s.syncReplayWal(ctx)
 		s.setCancelWalFunc(nil)
-		s.loadWalDone = true
+		s.replayingWal = false
 		s.wal.unref()
 		return err
 	}
@@ -1535,7 +1536,7 @@ func (s *shard) replayWal() error {
 			s.log.Error("async replay wal failed", zap.Uint64("id", s.ident.ShardID), zap.Error(err))
 		}
 		s.setCancelWalFunc(nil)
-		s.loadWalDone = true
+		s.replayingWal = false
 		s.wal.unref()
 	}()
 	return nil
@@ -2216,15 +2217,16 @@ func (s *shard) LastWriteTime() uint64 {
 
 // DropMeasurement drop measurement name from shard
 func (s *shard) DropMeasurement(ctx context.Context, name string) error {
-	if !s.loadWalDone {
-		return fmt.Errorf("async replay wal not finish")
-	}
 	s.DisableDownSample()
 	defer s.EnableDownSample()
 	s.setMstDeleting(name)
 	defer s.clearMstDeleting(name)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if s.replayingWal {
+		return fmt.Errorf("async replay wal not finish")
+	}
 
 	// flush measurement data in mem
 	s.ForceFlush()
