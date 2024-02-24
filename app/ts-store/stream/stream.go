@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -62,6 +63,20 @@ type FieldCall struct {
 	outFieldType int32
 	tagFunc      func(*float64, float64) float64
 	timeFunc     func(float64, float64) float64
+}
+
+type FieldCalls []*FieldCall
+
+func (f FieldCalls) Len() int {
+	return len(f)
+}
+
+func (f FieldCalls) Less(i, j int) bool {
+	return f[i].alias < f[j].alias
+}
+
+func (f FieldCalls) Swap(i, j int) {
+	f[i], f[j] = f[j], f[i]
 }
 
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
@@ -223,6 +238,7 @@ func (s *Stream) Run() {
 					}
 				}
 				if canRegisterTask {
+					sort.Sort(FieldCalls(calls))
 					err = s.RegisterTask(stream, calls)
 					if err != nil {
 						s.Logger.Error("register stream task fail", zap.Error(err))
