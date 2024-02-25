@@ -458,7 +458,7 @@ func TestVFS2(t *testing.T) {
 	if err := CopyFileFromDFVToOBS(fileName, dstPath, lockFile); err != nil {
 		t.Fatalf("CopyTSSPFromDFVToOBS(from %v to %v) fail, err:%v", fileName, dstPath, err)
 	}
-	if _, err := CreateOBSFile(fileName, lockFile, pri); err != nil {
+	if _, err := CreateV2(fileName, lockFile, pri); err != nil {
 		t.Fatalf("CreateOBS(%v) fail, err:%v", fileName, err)
 	}
 }

@@ -726,6 +726,6 @@ func (o *obsFs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) e
 	return nil
 }
 
-func (o *obsFs) CreateOBSFile(name string, opt ...FSOption) (File, error) {
+func (o *obsFs) CreateV2(name string, opt ...FSOption) (File, error) {
 	return nil, nil
 }

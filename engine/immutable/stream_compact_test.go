@@ -896,3 +896,18 @@ func TestStreamIterators_ListenCloseSignal(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, si.closeStat, true)
 }
+
+func TestStreamNewFileWithColdTier(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+
+	sw := &StreamWriteFile{}
+	tmpLockFile := filepath.Join(testCompDir, "lock")
+	sw.lock = &tmpLockFile
+	sw.tier = util.Cold
+	sw.dir = testCompDir
+	sw.name = "mst"
+	sw.fileName = NewTSSPFileName(1, 0, 0, 0, true, sw.lock)
+
+	sw.NewFile(false)
+}

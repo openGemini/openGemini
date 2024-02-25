@@ -318,6 +318,6 @@ func TestObsFile_CreateOBS(t *testing.T) {
 	srcFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
 	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
 	lockFile := FileLockOption("/tmp/test_vfs/lock")
-	_, err := testObsFs.CreateOBSFile(srcFile, lockFile, pri)
+	_, err := testObsFs.CreateV2(srcFile, lockFile, pri)
 	assert.Nil(t, err)
 }
