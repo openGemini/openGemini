@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/panjf2000/ants/v2"
@@ -54,13 +55,10 @@ func Test_CompressDictKey(t *testing.T) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
 	}
 	key := "ty"
-	vv, err := task.compressDictKeyUint(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	vv := task.compressDictKeyUint(key)
 	vvv := strconv.FormatUint(vv, 10)
 	v, err := task.unCompressDictKey(vvv)
 	if err != nil {
@@ -76,13 +74,10 @@ func Test_CompressDictKeyUint(t *testing.T) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
 	}
 	key := "ty"
-	vv, err := task.compressDictKeyUint(key)
-	if err != nil {
-		t.Fatal(err)
-	}
+	vv := task.compressDictKeyUint(key)
 	v, err := task.UnCompressDictKeyUint(vv)
 	if err != nil {
 		t.Fatal(err)
@@ -97,16 +92,13 @@ func Benchmark_CompressDictKey(t *testing.B) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
 	}
 	t.ReportAllocs()
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
 		key := "testKey" + strconv.Itoa(i)
-		vv, err := task.compressDictKeyUint(key)
-		if err != nil {
-			t.Fatal(err)
-		}
+		vv := task.compressDictKeyUint(key)
 		vvv := strconv.FormatUint(vv, 10)
 		v, err := task.unCompressDictKey(vvv)
 		if err != nil {
@@ -123,16 +115,13 @@ func Benchmark_CompressDictKeyUint(t *testing.B) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
 	}
 	t.ReportAllocs()
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
 		key := "testKey" + strconv.Itoa(i)
-		vv, err := task.compressDictKeyUint(key)
-		if err != nil {
-			t.Fatal(err)
-		}
+		vv := task.compressDictKeyUint(key)
 		v, err := task.UnCompressDictKeyUint(vv)
 		if err != nil {
 			t.Fatal(err)
@@ -144,8 +133,8 @@ func Benchmark_CompressDictKeyUint(t *testing.B) {
 }
 
 func Test_ConsumeDataAbort(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
-		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
+		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.consumeDataAndUpdateMeta()
 	// wait run
 	time.Sleep(3 * time.Second)
@@ -156,9 +145,9 @@ func Test_ConsumeDataAbort(t *testing.T) {
 }
 
 func Test_ConsumeDataClean(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
-		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
-		cleanPreWindow: make(chan struct{})}
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(),
+		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
+			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.consumeDataAndUpdateMeta()
 	// wait run
 	time.Sleep(3 * time.Second)
@@ -169,9 +158,9 @@ func Test_ConsumeDataClean(t *testing.T) {
 }
 
 func Test_FlushAbort(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
-		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
-		cleanPreWindow: make(chan struct{}), Logger: MockLogger{t}}
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(),
+		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
+			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.flush()
 	// wait abort
 	close(task.abort)
@@ -179,9 +168,9 @@ func Test_FlushAbort(t *testing.T) {
 }
 
 func Test_FlushUpdate(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), updateWindow: make(chan struct{}),
-		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
-		cleanPreWindow: make(chan struct{}), Logger: MockLogger{t}}
+	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(),
+		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
+			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.flush()
 	// wait update
 	<-task.updateWindow
@@ -193,8 +182,8 @@ func Test_GenerateGroupKey(t *testing.T) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
-		bp:            NewBuilderPool(),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:            streamLib.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -220,8 +209,8 @@ func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
-		bp:            NewBuilderPool(),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:            streamLib.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	offset := 30
@@ -260,8 +249,8 @@ func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
-		bp:            NewBuilderPool(),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:            streamLib.NewBuilderPool(),
 	}
 	var keys []string
 	r := buildRow("1", "xx", false)
@@ -277,8 +266,8 @@ func Benchmark_GenerateGroupKeyUint(t *testing.B) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
-		bp:            NewBuilderPool(),
+		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:            streamLib.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -347,13 +336,13 @@ func Benchmark_FlushRow(t *testing.B) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		Logger:        logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
-		bp:            NewBuilderPool(),
-		des: &meta2.StreamMeasurementInfo{
-			Name:            "test",
-			Database:        "db",
-			RetentionPolicy: "autogen",
-		},
+		bp:            streamLib.NewBuilderPool(),
+		BaseTask: &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
+			des: &meta2.StreamMeasurementInfo{
+				Name:            "test",
+				Database:        "db",
+				RetentionPolicy: "autogen",
+			}},
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -367,15 +356,12 @@ func Benchmark_FlushRow(t *testing.B) {
 		})
 	}
 	task.groupKeys = keys
-	fieldCalls := []*FieldCall{}
-	fieldCalls = append(fieldCalls, &FieldCall{
-		name:         "bps",
-		alias:        "bps",
-		call:         "sum",
-		tagFunc:      nil,
-		inFieldType:  influx.Field_Type_Float,
-		outFieldType: influx.Field_Type_Float,
-	})
+	fieldCalls := []*streamLib.FieldCall{}
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCalls = append(fieldCalls, call)
 	task.fieldCalls = fieldCalls
 	groupNum := 100000
 	vs := make([]*float64, len(task.fieldCalls)*1)

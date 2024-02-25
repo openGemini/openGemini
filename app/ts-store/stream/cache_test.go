@@ -17,7 +17,6 @@ limitations under the License.
 package stream_test
 
 import (
-	"bytes"
 	"fmt"
 	"testing"
 	"time"
@@ -107,28 +106,6 @@ func Test_WindowCachePool_Block(t *testing.T) {
 	}
 }
 
-func Test_builderPool(t *testing.T) {
-	bp := stream.NewBuilderPool()
-	sb := bp.Get()
-	for i := 0; i < 100; i++ {
-		sb.AppendString("xx")
-	}
-	f := sb.NewString()
-	if len(f) != 200 {
-		t.Error("len fail")
-	}
-	sb.Reset()
-	bp.Put(sb)
-	sb1 := bp.Get()
-	for i := 0; i < 100; i++ {
-		sb1.AppendString("xx")
-	}
-	f = sb1.NewString()
-	if len(f) != 200 {
-		t.Error("len fail")
-	}
-}
-
 func Test_CacheRowPool_Len(t *testing.T) {
 	pool := stream.NewCacheRowPool()
 	c1 := pool.Get()
@@ -158,80 +135,5 @@ func Test_CacheRowPool_Len(t *testing.T) {
 	}
 	if pool.Size() != 2 {
 		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Size()))
-	}
-}
-
-func Test_BuilderPool_Len(t *testing.T) {
-	pool := stream.NewBuilderPool()
-	c1 := pool.Get()
-	if pool.Len() != 0 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 0, pool.Len()))
-	}
-	if pool.Size() != 1 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Size()))
-	}
-	c2 := pool.Get()
-	if pool.Len() != 0 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 0, pool.Len()))
-	}
-	if pool.Size() != 2 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Size()))
-	}
-	pool.Put(c1)
-	if pool.Len() != 1 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Len()))
-	}
-	if pool.Size() != 2 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Size()))
-	}
-	pool.Put(c2)
-	if pool.Len() != 2 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Len()))
-	}
-	if pool.Size() != 2 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Size()))
-	}
-}
-
-func Test_StringBuilder(t *testing.T) {
-	sb := stream.StringBuilder{}
-	sb.AppendString("xx")
-	str := sb.String()
-	strNew := sb.NewString()
-	sb.Reset()
-	sb.AppendString("aa")
-	str1 := sb.NewString()
-	if strNew != "xx" {
-		t.Fatal("unexpect", strNew)
-	}
-	if str != str1 {
-		t.Fatal("unexpect", str)
-	}
-	sb.Reset()
-	str2 := sb.NewString()
-	if str2 != "" {
-		t.Fatal("unexpect", str2)
-	}
-}
-
-func BenchmarkStringBuilder(t *testing.B) {
-	t.ReportAllocs()
-	t.ResetTimer()
-	sb := stream.StringBuilder{}
-	for i := 0; i < t.N; i++ {
-		for j := 0; j < 10000000; j++ {
-			sb.AppendString("key12345")
-		}
-	}
-}
-
-func BenchmarkBytesBuffer(t *testing.B) {
-	t.ReportAllocs()
-	t.ResetTimer()
-	bb := bytes.Buffer{}
-	for i := 0; i < t.N; i++ {
-		for j := 0; j < 10000000; j++ {
-			bb.WriteString("key12345")
-		}
 	}
 }

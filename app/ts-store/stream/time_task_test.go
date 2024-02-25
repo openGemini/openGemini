@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -42,22 +43,19 @@ func Test_Time_ConsumeData(t *testing.T) {
 	}
 	interval := 5 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
-	fieldCalls := []*FieldCall{}
+	var fieldCalls []*streamLib.FieldCall
 	calls := []string{"sum", "min", "max", "count"}
 	for _, c := range calls {
-		fieldCalls = append(fieldCalls, &FieldCall{
-			name:         "bps",
-			alias:        "bps",
-			call:         c,
-			tagFunc:      nil,
-			inFieldType:  influx.Field_Type_Float,
-			outFieldType: influx.Field_Type_Float,
-		})
+		call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", c, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fieldCalls = append(fieldCalls, call)
 	}
-	task := &TimeTask{WindowDataPool: NewWindowDataPool(), windowCachePool: NewWindowCachePool(), updateWindow: make(chan struct{}),
+	task := &TimeTask{WindowDataPool: NewWindowDataPool(), windowCachePool: NewWindowCachePool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		Logger: l, store: m, cli: metaClient, src: &src, des: &des, window: interval,
-		start: start, end: start.Add(interval), fieldCalls: fieldCalls}
+		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}
 	task.run()
 	// wait run
 	fieldRows := buildRows(1000)
