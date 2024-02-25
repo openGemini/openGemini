@@ -534,33 +534,34 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 
 		for _, idx := range dstSisIdxes {
 			for shardId, rs := range shardIdRowMap {
-				// Case1: same distribution, same shard, which db set shardKey with same db and rp,
-				// so dst measurement of the stream share the same shardId with src measurement.
-				if len(ctx.db.ShardKey.ShardKey) > 0 && (*dstSis)[idx].SrcMst.Database == (*dstSis)[idx].DesMst.Database &&
-					(*dstSis)[idx].SrcMst.RetentionPolicy == (*dstSis)[idx].DesMst.RetentionPolicy {
-					w.updateSrcStreamDstShardIdMap(rs, (*dstSis)[idx].ID, shardId, srcStreamDstShardIdMap)
-					continue
-				}
-
-				// Case2: same distribution, same node, which db set shardKey with same db and different rp,
-				// so dst measurement of the stream share the same node with src measurement.
-				// reuse shardKey, avoid calculate shardKey
-				if len(ctx.db.ShardKey.ShardKey) > 0 && ((*dstSis)[idx].SrcMst.Database == (*dstSis)[idx].DesMst.Database ||
-					len((*streamDBs)[idx].ShardKey.ShardKey) > 0 && strings2.SortIsEqual(ctx.db.ShardKey.ShardKey, (*streamDBs)[idx].ShardKey.ShardKey)) {
-					err = w.updateSrcStreamDstShardIdMapWithShardKey(rs, (*dstSis)[idx], ctx, shardId, idx)
-					if err != nil {
-						return
+				if len((*dstSis)[idx].Dims) != 0 {
+					// Case1: same distribution, same shard, which db set shardKey with same db and rp,
+					// so dst measurement of the stream share the same shardId with src measurement.
+					if len(ctx.db.ShardKey.ShardKey) > 0 && (*dstSis)[idx].SrcMst.Database == (*dstSis)[idx].DesMst.Database &&
+						(*dstSis)[idx].SrcMst.RetentionPolicy == (*dstSis)[idx].DesMst.RetentionPolicy {
+						w.updateSrcStreamDstShardIdMap(rs, (*dstSis)[idx].ID, shardId, srcStreamDstShardIdMap)
+						continue
 					}
-					continue
-				}
-
-				// Case3: same distribution, same node, which mst set shardKey with, reuse shardKey, avoid calculate shardKey
-				if len(mi.ShardKeys) == 1 && strings2.SortIsEqual(mi.ShardKeys[0].ShardKey, (*dstSis)[idx].Dims) {
-					err = w.updateSrcStreamDstShardIdMapWithShardKey(rs, (*dstSis)[idx], ctx, shardId, idx)
-					if err != nil {
-						return
+					// Case2: same distribution, same node, which db set shardKey with same db and different rp,
+					// so dst measurement of the stream share the same node with src measurement.
+					// reuse shardKey, avoid calculate shardKey
+					if len(ctx.db.ShardKey.ShardKey) > 0 && ((*dstSis)[idx].SrcMst.Database == (*dstSis)[idx].DesMst.Database ||
+						len((*streamDBs)[idx].ShardKey.ShardKey) > 0 && strings2.SortIsEqual(ctx.db.ShardKey.ShardKey, (*streamDBs)[idx].ShardKey.ShardKey)) {
+						err = w.updateSrcStreamDstShardIdMapWithShardKey(rs, (*dstSis)[idx], ctx, shardId, idx)
+						if err != nil {
+							return
+						}
+						continue
 					}
-					continue
+
+					// Case3: same distribution, same node, which mst set shardKey with, reuse shardKey, avoid calculate shardKey
+					if len(mi.ShardKeys) == 1 && strings2.SortIsEqual(mi.ShardKeys[0].ShardKey, (*dstSis)[idx].Dims) {
+						err = w.updateSrcStreamDstShardIdMapWithShardKey(rs, (*dstSis)[idx], ctx, shardId, idx)
+						if err != nil {
+							return
+						}
+						continue
+					}
 				}
 
 				// Case4: different distribution, if the source table and the target table are not belong to the same distribution,

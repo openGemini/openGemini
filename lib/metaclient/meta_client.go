@@ -775,8 +775,9 @@ func (c *Client) getMeasurementInfo(currentServer int, database string, rpName s
 		DbName: database, RpName: rpName, MstName: mstName})
 	err := c.SendRPCMsg(currentServer, msg, callback)
 	if err != nil {
-		c.logger.Error("GetMeasurementInfoR SendRPCMsg fail", zap.Error(err))
-		return nil, err
+		if !strings.Contains(err.Error(), "node is not the leader") {
+			c.logger.Error("GetMeasurementInfoR SendRPCMsg fail", zap.Error(err))
+		}
 	}
 	return callback.Data, nil
 }

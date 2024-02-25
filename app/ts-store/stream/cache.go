@@ -19,7 +19,6 @@ package stream
 import (
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -61,69 +60,6 @@ func (p *CacheRowPool) Len() int64 {
 }
 
 func (p *CacheRowPool) Size() int64 {
-	return atomic.LoadInt64(&p.size)
-}
-
-func NewBuilderPool() *BuilderPool {
-	p := &BuilderPool{}
-	return p
-}
-
-type StringBuilder struct {
-	buf []byte
-}
-
-func (b *StringBuilder) String() string {
-	return *(*string)(unsafe.Pointer(&b.buf))
-}
-
-func (b *StringBuilder) NewString() string {
-	if len(b.buf) == 0 {
-		return ""
-	}
-	s := make([]byte, len(b.buf))
-	copy(s, b.buf)
-	return *(*string)(unsafe.Pointer(&s))
-}
-
-func (b *StringBuilder) Reset() {
-	b.buf = b.buf[:0]
-}
-
-func (b *StringBuilder) AppendByte(c byte) {
-	b.buf = append(b.buf, c)
-}
-
-func (b *StringBuilder) AppendString(s string) {
-	b.buf = append(b.buf, s...)
-}
-
-type BuilderPool struct {
-	pool   sync.Pool
-	size   int64
-	length int64
-}
-
-func (p *BuilderPool) Get() *StringBuilder {
-	c := p.pool.Get()
-	if c == nil {
-		atomic.AddInt64(&p.size, 1)
-		return &StringBuilder{}
-	}
-	atomic.AddInt64(&p.length, -1)
-	return c.(*StringBuilder)
-}
-
-func (p *BuilderPool) Put(r *StringBuilder) {
-	p.pool.Put(r)
-	atomic.AddInt64(&p.length, 1)
-}
-
-func (p *BuilderPool) Len() int64 {
-	return atomic.LoadInt64(&p.length)
-}
-
-func (p *BuilderPool) Size() int64 {
 	return atomic.LoadInt64(&p.size)
 }
 

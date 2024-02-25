@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -294,15 +295,12 @@ func Test_RegisterFail(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
-	fieldCalls := []*FieldCall{}
-	fieldCalls = append(fieldCalls, &FieldCall{
-		name:         "bps",
-		alias:        "bps",
-		call:         "sum",
-		tagFunc:      nil,
-		inFieldType:  influx.Field_Type_Float,
-		outFieldType: influx.Field_Type_Float,
-	})
+	fieldCalls := []*streamLib.FieldCall{}
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCalls = append(fieldCalls, call)
 	window := time.Second * 3
 	maxDelay := time.Second * 10
 	calls := []string{"sum"}
@@ -334,15 +332,12 @@ func Test_RegisterTimeTask(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
-	fieldCalls := []*FieldCall{}
-	fieldCalls = append(fieldCalls, &FieldCall{
-		name:         "bps",
-		alias:        "bps",
-		call:         "sum",
-		tagFunc:      nil,
-		inFieldType:  influx.Field_Type_Float,
-		outFieldType: influx.Field_Type_Float,
-	})
+	fieldCalls := []*streamLib.FieldCall{}
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCalls = append(fieldCalls, call)
 	window := time.Second * 3
 	maxDelay := time.Second * 10
 	calls := []string{"sum"}
@@ -373,15 +368,12 @@ func Test_MaxDelay(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
-	fieldCalls := []*FieldCall{}
-	fieldCalls = append(fieldCalls, &FieldCall{
-		name:         "bps",
-		alias:        "bps",
-		call:         "sum",
-		tagFunc:      nil,
-		inFieldType:  influx.Field_Type_Float,
-		outFieldType: influx.Field_Type_Float,
-	})
+	var fieldCalls []*streamLib.FieldCall
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCalls = append(fieldCalls, call)
 	fieldRows := buildRows(100)
 	window := time.Second * 3
 	maxDelay := time.Second * 10
@@ -496,15 +488,12 @@ func Bench_Stream_POINT(t *testing.B, pointNum int) {
 	window := time.Second * 10
 	maxDelay := time.Second * 1
 
-	fieldCalls := []*FieldCall{}
-	fieldCalls = append(fieldCalls, &FieldCall{
-		name:         "bps",
-		alias:        "bps",
-		call:         "sum",
-		tagFunc:      nil,
-		inFieldType:  influx.Field_Type_Float,
-		outFieldType: influx.Field_Type_Float,
-	})
+	fieldCalls := []*streamLib.FieldCall{}
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCalls = append(fieldCalls, call)
 
 	calls := []string{"sum"}
 	streamInfos := buildStreamInfo(window, maxDelay, calls)

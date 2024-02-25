@@ -17,7 +17,6 @@ limitations under the License.
 package stream
 
 import (
-	"fmt"
 	"math"
 	"sync/atomic"
 	"time"
@@ -27,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -36,57 +34,20 @@ import (
 type TimeTask struct {
 	values      []float64
 	validValues []bool
-	// store startWindow id, for ring store structure
-	startWindowID int64
-	offset        int
-	// current window start time
-	start          time.Time
-	startTimeStamp int64
-	// current window end time
-	end          time.Time
-	endTimeStamp int64
-	maxTimeStamp int64
+
 	// store all ptIds for all window
 	ptIds []int32
 	// store all shardIds for all window
 	shardIds     []int64
 	windowOffset []int
 
-	// metadata, not change
-	src        *meta2.StreamMeasurementInfo
-	des        *meta2.StreamMeasurementInfo
-	info       *meta2.MeasurementInfo
-	fieldCalls []*FieldCall
-
-	// chan for process
-	abort        chan struct{}
-	err          error
-	updateWindow chan struct{}
-
 	// pool
 	windowCachePool *WindowCachePool
 	*WindowDataPool
-	indexKeyPool []byte
-
-	// config
-	id        uint64
-	name      string
-	windowNum int64
-	window    time.Duration
-	maxDelay  time.Duration
 
 	// tmp data, reuse
-	fieldCallsLen int
-	row           *influx.Row
-	rows          []influx.Row
-	validNum      int
-	maxDuration   int64
-
-	// tools
-	stats  *statistics.StreamWindowStatItem
-	store  Storage
-	Logger Logger
-	cli    MetaClient
+	row *influx.Row
+	*BaseTask
 }
 
 func (s *TimeTask) getSrcInfo() *meta2.StreamMeasurementInfo {
@@ -121,10 +82,6 @@ func (s *TimeTask) run() error {
 		s.err = err
 		return err
 	}
-	err = s.buildFieldCalls()
-	if err != nil {
-		return err
-	}
 	go s.consumeData()
 	go s.cycleFlush()
 	return nil
@@ -142,7 +99,7 @@ func (s *TimeTask) initVar() error {
 	for i := 0; i < int(s.windowNum); i++ {
 		for j := 0; j < s.fieldCallsLen; j++ {
 			id := i*s.fieldCallsLen + j
-			initValue(s.values, id, s.fieldCalls[j].call)
+			initValue(s.values, id, s.fieldCalls[j].Call)
 		}
 	}
 	s.windowOffset = make([]int, s.windowNum)
@@ -160,38 +117,6 @@ func (s *TimeTask) initVar() error {
 	s.startTimeStamp = s.start.UnixNano()
 	s.endTimeStamp = s.end.UnixNano()
 	s.maxTimeStamp = s.startTimeStamp + s.maxDuration
-	return nil
-}
-
-func (s *TimeTask) buildFieldCalls() error {
-	for c := range s.fieldCalls {
-		switch s.fieldCalls[c].call {
-		case "min":
-			s.fieldCalls[c].timeFunc = func(f float64, f2 float64) float64 {
-				if f > f2 {
-					return f2
-				}
-				return f
-			}
-		case "max":
-			s.fieldCalls[c].timeFunc = func(f float64, f2 float64) float64 {
-				if f < f2 {
-					return f2
-				}
-				return f
-			}
-		case "sum":
-			s.fieldCalls[c].timeFunc = func(f float64, f2 float64) float64 {
-				return f + f2
-			}
-		case "count":
-			s.fieldCalls[c].timeFunc = func(f float64, f2 float64) float64 {
-				return f + f2
-			}
-		default:
-			return fmt.Errorf("not support stream func %v", s.fieldCalls[c].call)
-		}
-	}
 	return nil
 }
 
@@ -270,7 +195,7 @@ func (s *TimeTask) walkUpdate(vv []float64, lastWindowId int64) bool {
 	offset := int(lastWindowId) * s.fieldCallsLen
 	vs := vv[offset : offset+s.fieldCallsLen]
 	for j := 0; j < s.fieldCallsLen; j++ {
-		initValue(vs, j, s.fieldCalls[j].call)
+		initValue(vs, j, s.fieldCalls[j].Call)
 		s.validValues[offset+j] = false
 	}
 	s.ptIds[lastWindowId] = -1
@@ -281,7 +206,7 @@ func (s *TimeTask) walkUpdate(vv []float64, lastWindowId int64) bool {
 func (s *TimeTask) calculate(cache *WindowCache) error {
 	// occur release func
 	if cache == nil {
-		panic("cannot be here")
+		return ErrEmptyCache
 	}
 	defer func() {
 		if cache.release != nil {
@@ -293,11 +218,11 @@ func (s *TimeTask) calculate(cache *WindowCache) error {
 	s.stats.AddWindowIn(int64(len(cache.rows)))
 	s.stats.StatWindowStartTime(s.startTimeStamp)
 	s.stats.StatWindowEndTime(s.maxTimeStamp)
-	s.calculateRow2(cache)
+	s.calculateRow(cache)
 	return nil
 }
 
-func (s *TimeTask) calculateRow2(cache *WindowCache) {
+func (s *TimeTask) calculateRow(cache *WindowCache) {
 	var skip int
 	var curVal float64
 	for i := range cache.rows {
@@ -309,17 +234,17 @@ func (s *TimeTask) calculateRow2(cache *WindowCache) {
 		windowId := s.windowId(row.Timestamp)
 		base := s.windowOffset[windowId]
 		for c, call := range s.fieldCalls {
-			f := getFieldValue(row, call.name)
+			f := getFieldValue(row, call.Name, call.Alias)
 			if f < 0 {
 				continue
 			}
-			if call.call == "count" && !row.StreamOnly {
+			if call.Call == "count" && !row.StreamOnly {
 				curVal = 1
 			} else {
 				curVal = row.Fields[f].NumValue
 			}
 			id := base + c
-			s.values[id] = call.timeFunc(s.values[id], curVal)
+			s.values[id] = call.SingleThreadFunc(s.values[id], curVal)
 			s.validValues[id] = true
 		}
 		if s.shardIds[windowId] < 0 {
@@ -347,9 +272,9 @@ func (s *TimeTask) skipRow(row *influx.Row) bool {
 	return false
 }
 
-func getFieldValue(row *influx.Row, name string) int {
+func getFieldValue(row *influx.Row, name, alias string) int {
 	for f := range row.Fields {
-		if row.Fields[f].Key == name {
+		if row.Fields[f].Key == alias || row.Fields[f].Key == name {
 			return f
 		}
 	}
@@ -385,8 +310,8 @@ func (s *TimeTask) buildRow() bool {
 		*fields = make([]influx.Field, len(s.fieldCalls))
 		for i := 0; i < fields.Len(); i++ {
 			(*fields)[i] = influx.Field{
-				Key:  s.fieldCalls[i].alias,
-				Type: s.fieldCalls[i].outFieldType,
+				Key:  s.fieldCalls[i].Alias,
+				Type: s.fieldCalls[i].OutFieldType,
 			}
 		}
 	}
@@ -403,7 +328,7 @@ func (s *TimeTask) buildRow() bool {
 	}
 	*fields = (*fields)[:validNum]
 	s.row.Timestamp = s.start.UnixNano()
-	s.row.UnmarshalIndexKeys(s.indexKeyPool)
+	s.indexKeyPool = s.row.UnmarshalIndexKeys(s.indexKeyPool)
 	s.validNum++
 	return true
 }

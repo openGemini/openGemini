@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger2 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -38,7 +40,7 @@ import (
 
 type Engine interface {
 	WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, ww WritePointsWorkIF)
-	RegisterTask(info *meta2.StreamInfo, fieldCalls []*FieldCall) error
+	RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.FieldCall) error
 	Drain()
 	DeleteTask(id uint64)
 	Run()
@@ -54,20 +56,10 @@ type WritePointsWorkIF interface {
 	PutWritePointsWork()
 }
 
-type FieldCall struct {
-	name         string
-	alias        string
-	call         string
-	inFieldType  int32
-	outFieldType int32
-	tagFunc      func(*float64, float64) float64
-	timeFunc     func(float64, float64) float64
-}
-
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
 	cache := make(chan *CacheRow, conf.FilterCache)
 	rowPool := NewCacheRowPool()
-	bp := NewBuilderPool()
+	bp := streamLib.NewBuilderPool()
 	windowCachePool := NewWindowCachePool()
 	goPool, err := ants.NewPool(conf.FilterConcurrency)
 	if err != nil {
@@ -112,10 +104,9 @@ type MetaClient interface {
 }
 
 type Stream struct {
-	cache chan *CacheRow
-
+	cache           chan *CacheRow
 	rowPool         *CacheRowPool
-	bp              *BuilderPool
+	bp              *streamLib.BuilderPool
 	windowCachePool *WindowCachePool
 	goPool          *ants.Pool
 
@@ -127,8 +118,7 @@ type Stream struct {
 	Logger Logger
 	cli    MetaClient
 	store  Storage
-
-	conf stream.Config
+	conf   stream.Config
 }
 
 type Task interface {
@@ -166,64 +156,63 @@ func (s *Stream) Run() {
 				s.Logger.Info("get stream is nil")
 				continue
 			}
-			for _, stream := range streams {
-				_, exist := s.tasks.Load(stream.ID)
+			for _, info := range streams {
+				_, exist := s.tasks.Load(info.ID)
 				if exist {
 					continue
 				}
-				srcMst, err := s.cli.GetMeasurementInfoStore(stream.SrcMst.Database, stream.SrcMst.RetentionPolicy, stream.SrcMst.Name)
+				srcMst, err := s.cli.GetMeasurementInfoStore(info.SrcMst.Database, info.SrcMst.RetentionPolicy, info.SrcMst.Name)
 				if err != nil || srcMst == nil {
 					if err != nil {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, get src measurement info failed and raise error (%s)", stream.Name, err.Error()))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, get src measurement info failed and raise error (%s)", info.Name, err.Error()))
 					} else {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst exist: %v, get src measurement info failed ", stream.Name, srcMst != nil))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst exist: %v, get src measurement info failed ", info.Name, srcMst != nil))
 					}
 					continue
 				}
-				dstMst, err := s.cli.GetMeasurementInfoStore(stream.DesMst.Database, stream.DesMst.RetentionPolicy, stream.DesMst.Name)
+				dstMst, err := s.cli.GetMeasurementInfoStore(info.DesMst.Database, info.DesMst.RetentionPolicy, info.DesMst.Name)
 				if err != nil || dstMst == nil {
 					if err != nil {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, get dst measurement info failed and raise error (%s)", stream.Name, err.Error()))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, get dst measurement info failed and raise error (%s)", info.Name, err.Error()))
 					} else {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst exist: %v, get dst measurement info failed ", stream.Name, dstMst != nil))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst exist: %v, get dst measurement info failed ", info.Name, dstMst != nil))
 					}
 					continue
 				}
 				canRegisterTask := true
-				calls := make([]*FieldCall, len(stream.Calls))
-				for i, v := range stream.Calls {
+				calls := make([]*streamLib.FieldCall, len(info.Calls))
+				for i, v := range info.Calls {
 					inFieldType, ok := srcMst.Schema[v.Field]
 					if !ok {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst: %s, inField: %s, get input field type failed", stream.Name, srcMst.Name, v.Field))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst: %s, inField: %s, get input field type failed", info.Name, srcMst.Name, v.Field))
 						canRegisterTask = false
 						break
 					}
 					outFieldType, ok := dstMst.Schema[v.Alias]
 					if !ok {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, outField: %s, get output field type failed", stream.Name, dstMst.Name, v.Alias))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, outField: %s, get output field type failed", info.Name, dstMst.Name, v.Alias))
 						canRegisterTask = false
 						break
 					}
-					calls[i] = &FieldCall{
-						name:         v.Field,
-						alias:        v.Alias,
-						call:         v.Call,
-						inFieldType:  inFieldType,
-						outFieldType: outFieldType,
-						tagFunc:      nil,
+					calls[i], err = streamLib.NewFieldCall(inFieldType, outFieldType, v.Field, v.Alias, v.Call, len(info.Dims) != 0)
+					if err != nil {
+						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, outField: %s, new stream call failed", info.Name, dstMst.Name, v.Alias), zap.Error(err))
+						canRegisterTask = false
+						break
 					}
 				}
 				//TODO detect src schema change
-				for i := range stream.Dims {
-					ty, ok := srcMst.Schema[stream.Dims[i]]
+				for i := range info.Dims {
+					ty, ok := srcMst.Schema[info.Dims[i]]
 					if !ok || influx.Field_Type_Tag != ty {
-						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, dim: %s check fail", stream.Name, dstMst.Name, stream.Dims[i]))
+						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, dim: %s check fail", info.Name, dstMst.Name, info.Dims[i]))
 						canRegisterTask = false
 						break
 					}
 				}
 				if canRegisterTask {
-					err = s.RegisterTask(stream, calls)
+					sort.Sort(streamLib.FieldCalls(calls))
+					err = s.RegisterTask(info, calls)
 					if err != nil {
 						s.Logger.Error("register stream task fail", zap.Error(err))
 					}
@@ -267,7 +256,7 @@ func (s *Stream) DeleteTask(id uint64) {
 	}
 }
 
-func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*FieldCall) error {
+func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.FieldCall) error {
 	s.Logger.Info("register stream task", zap.String("streamName", info.Name), zap.String("streamId", strconv.FormatUint(info.ID, 10)))
 	start := time.Now().Truncate(info.Interval).Add(info.Interval)
 	var logger Logger
@@ -285,47 +274,51 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*FieldCall) e
 	var task Task
 	if len(info.Dims) == 0 {
 		task = &TimeTask{
-			windowNum:       int64(maxWindowNum),
-			id:              info.ID,
-			src:             info.SrcMst,
-			des:             info.DesMst,
-			start:           start,
-			end:             start.Add(info.Interval),
-			window:          info.Interval,
 			WindowDataPool:  NewWindowDataPool(),
-			fieldCalls:      fieldCalls,
 			windowCachePool: s.windowCachePool,
-			store:           s.store,
-			maxDelay:        info.Delay,
-			Logger:          logger,
-			name:            info.Name,
-			stats:           statistics.NewStreamWindowStatItem(info.ID),
-			cli:             s.cli,
+			BaseTask: &BaseTask{
+				windowNum:  int64(maxWindowNum),
+				id:         info.ID,
+				src:        info.SrcMst,
+				des:        info.DesMst,
+				start:      start,
+				end:        start.Add(info.Interval),
+				window:     info.Interval,
+				fieldCalls: fieldCalls,
+				store:      s.store,
+				maxDelay:   info.Delay,
+				Logger:     logger,
+				name:       info.Name,
+				stats:      statistics.NewStreamWindowStatItem(info.ID),
+				cli:        s.cli,
+			},
 		}
 	} else {
 		task = &TagTask{
-			windowNum:       maxWindowNum,
-			id:              info.ID,
 			values:          sync.Map{},
-			src:             info.SrcMst,
-			des:             info.DesMst,
-			start:           start,
-			end:             start.Add(info.Interval),
-			window:          info.Interval,
 			WindowDataPool:  NewWindowDataPool(),
 			goPool:          s.goPool,
 			groupKeys:       info.Dims,
-			fieldCalls:      fieldCalls,
 			bp:              s.bp,
 			windowCachePool: s.windowCachePool,
-			store:           s.store,
-			maxDelay:        info.Delay,
-			rows:            []influx.Row{},
-			Logger:          logger,
-			name:            info.Name,
 			concurrency:     s.conf.WindowConcurrency,
-			stats:           statistics.NewStreamWindowStatItem(info.ID),
-			cli:             s.cli,
+			BaseTask: &BaseTask{
+				windowNum:  int64(maxWindowNum),
+				id:         info.ID,
+				src:        info.SrcMst,
+				des:        info.DesMst,
+				start:      start,
+				end:        start.Add(info.Interval),
+				window:     info.Interval,
+				fieldCalls: fieldCalls,
+				store:      s.store,
+				maxDelay:   info.Delay,
+				rows:       []influx.Row{},
+				Logger:     logger,
+				name:       info.Name,
+				stats:      statistics.NewStreamWindowStatItem(info.ID),
+				cli:        s.cli,
+			},
 		}
 	}
 	s.tasks.Store(info.ID, task)
