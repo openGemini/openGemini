@@ -238,7 +238,6 @@ func (s *Stream) Run() {
 					}
 				}
 				if canRegisterTask {
-					sort.Sort(FieldCalls(calls))
 					err = s.RegisterTask(stream, calls)
 					if err != nil {
 						s.Logger.Error("register stream task fail", zap.Error(err))
