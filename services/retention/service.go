@@ -43,7 +43,9 @@ type Service struct {
 		UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
 		ExpiredShards() []*meta.ShardIdentifier
 		ExpiredIndexes() []*meta.IndexIdentifier
+		ExpiredCacheIndexes() []*meta.IndexIdentifier
 		DeleteShard(db string, ptId uint32, shardID uint64) error
+		ClearIndexCache(db string, ptId uint32, indexID uint64) error
 	}
 
 	index uint64
@@ -120,6 +122,19 @@ func (s *Service) handle() {
 		// send request to clear deleted shard group from PyMeta.
 		if err := s.MetaClient.PruneGroupsCommand(false, expiredIndexes[i].Index.IndexID); err != nil {
 			logger.Error("Problem pruning index groups", zap.Error(err), zap.Uint64("id", expiredIndexes[i].Index.IndexID))
+		}
+	}
+
+	expiredCacheIndexes := s.Engine.ExpiredCacheIndexes()
+	for i := range expiredCacheIndexes {
+		if err := s.Engine.ClearIndexCache(expiredCacheIndexes[i].OwnerDb, expiredCacheIndexes[i].OwnerPt, expiredCacheIndexes[i].Index.IndexID); err != nil {
+			logger.Error("Failed to clear index cache",
+				log.Database(expiredCacheIndexes[i].OwnerDb),
+				zap.Uint64("indexID", expiredCacheIndexes[i].Index.IndexID),
+				zap.Error(err))
+
+			retryNeeded = true
+			continue
 		}
 	}
 

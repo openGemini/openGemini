@@ -1300,6 +1300,38 @@ func Test_openShardLazy(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestEngine_ExpiredCacheIndexes(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	eng.ExpiredCacheIndexes()
+}
+
+func TestEngine_ClearIndexCache(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	dbPTInfo := eng.DBPartitions["db0"][defaultPtId]
+	var okIndexID uint64 = 1
+	err = eng.ClearIndexCache("db0", dbPTInfo.id, okIndexID)
+	require.NoError(t, err)
+
+	err = eng.ClearIndexCache("db0", 0, 1)
+	require.Error(t, err)
+
+	var errorIndexID uint64 = 0
+	err = eng.ClearIndexCache("db0", dbPTInfo.id, errorIndexID)
+	require.Error(t, err)
+}
+
 func TestStoreHierarchicalStorage(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine1(dir, config.TSSTORE)

@@ -66,9 +66,11 @@ type Engine interface {
 	ForceFlush()
 
 	DeleteShard(db string, ptId uint32, shardID uint64) error
-	DeleteIndex(db string, pt uint32, shardID uint64) error
+	DeleteIndex(db string, pt uint32, indexID uint64) error
+	ClearIndexCache(db string, pt uint32, indexID uint64) error
 	ExpiredShards() []*meta.ShardIdentifier
 	ExpiredIndexes() []*meta.IndexIdentifier
+	ExpiredCacheIndexes() []*meta.IndexIdentifier
 	FetchShardsNeedChangeStore() ([]*meta.ShardIdentifier, []*meta.ShardIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
 

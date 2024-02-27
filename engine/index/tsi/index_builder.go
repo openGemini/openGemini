@@ -42,12 +42,13 @@ import (
 type IndexBuilder struct {
 	opId uint64 // assign task id
 
-	path      string           // eg, data/db/pt/rp/index/indexid
-	Relations []*IndexRelation // <oid, indexRelation>
-	ident     *meta.IndexIdentifier
-	startTime time.Time
-	endTime   time.Time
-	duration  time.Duration
+	path          string           // eg, data/db/pt/rp/index/indexid
+	Relations     []*IndexRelation // <oid, indexRelation>
+	ident         *meta.IndexIdentifier
+	startTime     time.Time
+	endTime       time.Time
+	duration      time.Duration
+	cacheDuration time.Duration
 
 	mu             sync.RWMutex
 	logicalClock   uint64
@@ -60,16 +61,17 @@ type IndexBuilder struct {
 
 func NewIndexBuilder(opt *Options) *IndexBuilder {
 	iBuilder := &IndexBuilder{
-		opId:         opt.opId,
-		path:         opt.path,
-		ident:        opt.ident,
-		duration:     opt.duration,
-		startTime:    opt.startTime,
-		endTime:      opt.endTime,
-		logicalClock: opt.logicalClock,
-		sequenceID:   opt.sequenceID,
-		lock:         opt.lock,
-		Relations:    make([]*IndexRelation, index.IndexTypeAll),
+		opId:          opt.opId,
+		path:          opt.path,
+		ident:         opt.ident,
+		duration:      opt.duration,
+		cacheDuration: opt.ident.Index.TimeRange.EndTime.Sub(opt.ident.Index.TimeRange.StartTime),
+		startTime:     opt.startTime,
+		endTime:       opt.endTime,
+		logicalClock:  opt.logicalClock,
+		sequenceID:    opt.sequenceID,
+		lock:          opt.lock,
+		Relations:     make([]*IndexRelation, index.IndexTypeAll),
 	}
 	return iBuilder
 }
@@ -456,6 +458,29 @@ func (iBuilder *IndexBuilder) Close() error {
 		}
 
 		if err := iBuilder.Relations[i].IndexClose(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (iBuilder *IndexBuilder) ExpiredCache() bool {
+	// duration == 0 means INF.
+	now := time.Now().UTC()
+	if iBuilder.duration != 0 && iBuilder.endTime.Add(iBuilder.cacheDuration).Before(now) {
+		return true
+	}
+
+	return false
+}
+
+func (iBuilder *IndexBuilder) ClearCache() error {
+	for i := range iBuilder.Relations {
+		if !iBuilder.isRelationInited(uint32(i)) {
+			continue
+		}
+
+		if err := iBuilder.Relations[i].IndexCacheClear(); err != nil {
 			return err
 		}
 	}

@@ -36,4 +36,5 @@ type IndexAmRoutine struct {
 	amScanrelation func(oid1 int, oid2 int, result1 interface{}, result2 interface{}) (interface{}, error)
 	amClose        func(index interface{}) error
 	amFlush        func(index interface{})
+	amCacheClear   func(index interface{}) error
 }

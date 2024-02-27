@@ -411,6 +411,7 @@ func TextIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine,
 		amScan:       TextScan,
 		amClose:      TextClose,
 		amFlush:      TextFlush,
+		amCacheClear: TextCacheClear,
 		index:        textIndex,
 		primaryIndex: primaryIndex,
 	}, nil
@@ -454,4 +455,8 @@ func TextFlush(index interface{}) {
 		return
 	}
 	textIndex.Flush()
+}
+
+func TextCacheClear(index interface{}) error {
+	return nil
 }

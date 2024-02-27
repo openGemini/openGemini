@@ -277,17 +277,18 @@ type Index interface {
 }
 
 type Options struct {
-	opId         uint64 // assign task id
-	ident        *meta.IndexIdentifier
-	path         string
-	lock         *string
-	indexType    index.IndexType
-	engineType   config.EngineType
-	startTime    time.Time
-	endTime      time.Time
-	duration     time.Duration
-	logicalClock uint64
-	sequenceID   *uint64
+	opId          uint64 // assign task id
+	ident         *meta.IndexIdentifier
+	path          string
+	lock          *string
+	indexType     index.IndexType
+	engineType    config.EngineType
+	startTime     time.Time
+	endTime       time.Time
+	duration      time.Duration
+	cacheDuration time.Duration
+	logicalClock  uint64
+	sequenceID    *uint64
 }
 
 func (opts *Options) OpId(opId uint64) *Options {
@@ -342,6 +343,11 @@ func (opts *Options) EndTime(endTime time.Time) *Options {
 
 func (opts *Options) Duration(duration time.Duration) *Options {
 	opts.duration = duration
+	return opts
+}
+
+func (opts *Options) CacheDuration(cacheDuration time.Duration) *Options {
+	opts.cacheDuration = cacheDuration
 	return opts
 }
 

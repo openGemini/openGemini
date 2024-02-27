@@ -96,6 +96,11 @@ func (relation *IndexRelation) IndexFlush() {
 	relation.indexAmRoutine.amFlush(index)
 }
 
+func (relation *IndexRelation) IndexCacheClear() error {
+	index := relation.indexAmRoutine.index
+	return relation.indexAmRoutine.amCacheClear(index)
+}
+
 type PrimaryIndex interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)

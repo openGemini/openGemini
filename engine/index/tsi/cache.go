@@ -193,3 +193,13 @@ func (ic *IndexCache) close() error {
 
 	return nil
 }
+
+func (ic *IndexCache) reset() error {
+	ic.SeriesKeyToTSIDCache.Reset()
+	ic.TSIDToSeriesKeyCache.Reset()
+	ic.tagCache.Reset()
+	ic.TagKeyValueCache.Reset()
+	ic.TagFilterCostCache.Reset()
+
+	return nil
+}

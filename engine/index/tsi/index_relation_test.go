@@ -1225,3 +1225,59 @@ func TestDeleteIndex(t *testing.T) {
 		t.Fatal()
 	}
 }
+
+func TestMergeSetCacheClear(t *testing.T) {
+	path := t.TempDir()
+	opts := new(Options).
+		Path(path).
+		IndexType(index.Field)
+
+	mIndex, err := NewMergeSetIndex(opts)
+	if err != nil {
+		t.Fatal()
+	}
+	mem := 1 * 1024 * 1024
+	mIndex.cache = newIndexCache(mem/32, mem/32, mem/16, mem/128, path, false)
+
+	err = MergeSetCacheClear(mIndex)
+	if err != nil {
+		t.Fatal()
+	}
+
+	fi, err := NewFieldIndex(opts)
+	if err != nil {
+		t.Fatal()
+	}
+	err = MergeSetCacheClear(fi)
+	if err == nil {
+		t.Fatal()
+	}
+}
+
+func TestFieldIndexCacheClear(t *testing.T) {
+	path := t.TempDir()
+	opts := new(Options).
+		Path(path).
+		IndexType(index.Field)
+
+	fIndex, err := NewFieldIndex(opts)
+	if err != nil {
+		t.Fatal()
+	}
+
+	FieldCacheClear(fIndex)
+}
+
+func TestTextIndexCacheClear(t *testing.T) {
+	path := t.TempDir()
+	opts := new(Options).
+		Path(path).
+		IndexType(index.Field)
+
+	tIndex, err := NewTextIndex(opts)
+	if err != nil {
+		t.Fatal()
+	}
+
+	TextCacheClear(tIndex)
+}
