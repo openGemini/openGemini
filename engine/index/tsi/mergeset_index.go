@@ -1148,6 +1148,15 @@ func (idx *MergeSetIndex) Close() error {
 	return nil
 }
 
+func (idx *MergeSetIndex) ClearCache() error {
+	idx.logger.Info("ClearCache", zap.String("path", idx.path))
+	if err := idx.cache.reset(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (idx *MergeSetIndex) Path() string {
 	return idx.path
 }
@@ -1260,6 +1269,7 @@ func MergeSetIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRout
 		amScan:       MergeSetScan,
 		amClose:      MergeSetClose,
 		amFlush:      MergeSetFlush,
+		amCacheClear: MergeSetCacheClear,
 		index:        primaryIndex,
 		primaryIndex: nil,
 	}, nil
@@ -1317,6 +1327,14 @@ func MergeSetFlush(index interface{}) {
 		return
 	}
 	mergeIndex.DebugFlush()
+}
+
+func MergeSetCacheClear(index interface{}) error {
+	mergeIndex, ok := index.(*MergeSetIndex)
+	if !ok {
+		return fmt.Errorf("index %v is not a MergeSetIndex", index)
+	}
+	return mergeIndex.ClearCache()
 }
 
 type tagKeyReflection struct {

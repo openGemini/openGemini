@@ -481,6 +481,7 @@ func FieldIndexHandler(opt *Options, primaryIndex PrimaryIndex) (*IndexAmRoutine
 		amScan:       FieldScan,
 		amClose:      FieldClose,
 		amFlush:      FieldFlush,
+		amCacheClear: FieldCacheClear,
 		index:        fieldIndex,
 		primaryIndex: primaryIndex,
 	}, nil
@@ -533,4 +534,8 @@ func FieldFlush(index interface{}) {
 		return
 	}
 	fi.DebugFlush()
+}
+
+func FieldCacheClear(index interface{}) error {
+	return nil
 }

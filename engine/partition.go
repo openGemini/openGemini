@@ -748,6 +748,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 			StartTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime).
 			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
 			Duration(timeRangeInfo.ShardDuration.DurationInfo.Duration).
+			CacheDuration(timeRangeInfo.OwnerIndex.TimeRange.EndTime.Sub(timeRangeInfo.OwnerIndex.TimeRange.StartTime)).
 			LogicalClock(dbPT.logicClock).
 			SequenceId(&dbPT.sequenceID).
 			Lock(dbPT.lockPath)
