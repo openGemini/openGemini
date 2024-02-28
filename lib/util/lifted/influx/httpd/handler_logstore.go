@@ -1638,6 +1638,8 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	if err != nil {
 		return nil, nil, status, err
 	}
+	// If an error occurs during the query, an error must be returned to avoid error shielding.
+	q.SetReturnErr(true)
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
 	db := r.FormValue("db")
 	var qDuration *statistics.SQLSlowQueryStatistics
