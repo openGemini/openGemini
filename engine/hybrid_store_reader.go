@@ -518,7 +518,6 @@ func (r *HybridStoreReader) run(ctx context.Context, reader comm.KeyCursor) (err
 	var rec *record.Record
 	colAux := record.ColAux{}
 	for {
-		r.filterBitmap.Reset()
 		select {
 		case <-r.closedCh:
 			return
