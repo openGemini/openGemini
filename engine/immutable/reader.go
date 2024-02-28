@@ -947,6 +947,8 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 		return rec
 	}
 
+	filterBitmap.Reset()
+
 	if err := filterOption.CondFunctions.Filter(rec, filterBitmap); err != nil {
 		panic(err)
 	}
@@ -956,7 +958,6 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 	}
 
 	if len(filterBitmap.ReserveId) == 0 {
-		filterBitmap.Reset()
 		return nil
 	}
 	return GenRecByReserveIds(rec, filterRec, filterBitmap.ReserveId, filterOption.RedIdxMap)
