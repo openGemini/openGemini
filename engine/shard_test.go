@@ -5987,6 +5987,87 @@ func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
 	}
 }
 
+func TestAggQueryOnlyInImmutable_NoEmpty_OneBoolMinMaxOp(t *testing.T) {
+	testDir := t.TempDir()
+	configs := []TestConfig{
+		{50, 3, time.Second, false},
+	}
+	for _, conf := range configs {
+		fileops.EnableMmapRead(false)
+		executor.EnableFileCursor(true)
+		if testing.Short() && conf.short {
+			t.Skip("skipping test in short mode.")
+		}
+		// step1: clean env
+		_ = os.RemoveAll(testDir)
+
+		// step2: create shard
+		sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+		rows, minTime, maxTime, result := GenAggDataRecord([]string{"cpu"}, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), true, true, true)
+		err = writeData(sh, rows, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = writeData(sh, rows, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// query data and judge
+		cases := []TestAggCase{
+			{"PartFieldFilter_single_column_bool_min", minTime, maxTime, createFieldAux([]string{"field3_bool"}), "", nil, true, []string{"min"}},
+			{"PartFieldFilter_single_column_bool_max", minTime, maxTime, createFieldAux([]string{"field3_bool"}), "", nil, true, []string{"max"}},
+		}
+		chunkSize := []int{1, 2}
+		timeOrder := []bool{true, false}
+		for _, ascending := range timeOrder {
+			for _, c := range cases {
+				for _, size := range chunkSize {
+					c := c
+					ascending := ascending
+					t.Run(c.Name, func(t *testing.T) {
+						for i := range c.aggCall {
+							opt := genAggQueryOpt(&c, "cpu", ascending, size, conf.interval)
+							calls := genCall(c.fieldAux, c.aggCall[i])
+							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
+							ops := genOps(c.fieldAux, calls)
+							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							if err != nil {
+								t.Fatal(err)
+							}
+
+							updateClusterCursor(cursors, ops, c.aggCall[i])
+							// step5: loop all cursors to query data from shard
+							// key is indexKey, value is Record
+							m := genExpectRecordsMap(rows, querySchema)
+							errs := make(chan error, len(cursors))
+							checkAggQueryResultParallel(errs, cursors, m, ascending, c.aggCall[i], *result)
+							close(errs)
+							for i := 0; i < len(cursors); i++ {
+								err = <-errs
+								if err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
+					})
+				}
+			}
+
+		}
+		// step6: close shard
+		err = closeShard(sh)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	executor.EnableFileCursor(false)
+}
+
 type MockMetaClient struct {
 	metaclient.MetaClient
 }
