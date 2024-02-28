@@ -538,7 +538,7 @@ func updateBooleanMinImpl(v bool, iRec, rec *Record, recRow, iRecColumn, iRecRow
 	}
 	t1, _ := iRec.ColVals[len(iRec.Schema)-1].IntegerValueWithNullReserve(iRecRow)
 	t2, _ := rec.ColVals[len(rec.Schema)-1].IntegerValue(recRow)
-	if t1 <= t2 {
+	if t1 <= t2 && !isSrcNil && srcVal == v {
 		return
 	}
 	iRec.UpdateIntervalRecRow(rec, recRow, iRecRow)
@@ -564,7 +564,7 @@ func updateBooleanMaxImpl(v bool, iRec, rec *Record, recRow, iRecColumn, iRecRow
 	}
 	t1, _ := iRec.ColVals[len(iRec.Schema)-1].IntegerValueWithNullReserve(iRecRow)
 	t2, _ := rec.ColVals[len(rec.Schema)-1].IntegerValue(recRow)
-	if t1 <= t2 {
+	if t1 <= t2 && !isSrcNil && srcVal == v {
 		return
 	}
 	iRec.UpdateIntervalRecRow(rec, recRow, iRecRow)
