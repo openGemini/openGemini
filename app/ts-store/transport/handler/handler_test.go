@@ -145,6 +145,8 @@ type mockQuery struct {
 
 func (m *mockQuery) Abort() {}
 
+func (m *mockQuery) Crash() {}
+
 func (m *mockQuery) GetQueryExeInfo() *netstorage.QueryExeInfo {
 	return m.info
 }

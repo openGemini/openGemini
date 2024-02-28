@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -92,6 +93,7 @@ type SortTransform struct {
 	ascending              []bool
 	dimension              []string
 	outputChunkPool        *CircularChunkPool
+	closedSignal           int32
 
 	schema     *QuerySchema
 	opt        *query.ProcessorOptions
@@ -259,7 +261,10 @@ func (trans *SortTransform) Explain() []ValuePair {
 }
 
 func (trans *SortTransform) Close() {
-	trans.output.Close()
+	trans.Once(func() {
+		atomic.AddInt32(&trans.closedSignal, 1)
+		trans.output.Close()
+	})
 }
 
 func (trans *SortTransform) addChunk(c Chunk) bool {
@@ -293,6 +298,8 @@ func (trans *SortTransform) runnable(ctx context.Context, errs *errno.Errs, i in
 				return
 			}
 		case <-ctx.Done():
+			atomic.AddInt32(&trans.closedSignal, 1)
+			trans.addChunk(nil)
 			return
 		}
 	}
@@ -352,6 +359,13 @@ func (trans *SortTransform) singleSortWorkerHelper(ctx context.Context, errs *er
 		}
 	}()
 	for {
+		// The interrupt signal is received. No result is returned.
+		if atomic.LoadInt32(&trans.closedSignal) > 0 {
+			if err := trans.Release(); err != nil {
+				return
+			}
+			break
+		}
 		// 1.getChunk from childs
 		if !trans.getChunkFromChild(i) {
 			// 3. sortLastPartition
@@ -471,4 +485,12 @@ func (trans *SortTransform) GetOutputNumber(_ Port) int {
 
 func (trans *SortTransform) GetInputNumber(_ Port) int {
 	return 0
+}
+
+func (trans *SortTransform) Release() error {
+	trans.sortWorkerBufChunk = trans.sortWorkerBufChunk[:0]
+	trans.sortWorkerPartitionIdx = trans.sortWorkerPartitionIdx[:0]
+	trans.sortWorkerResult = trans.sortWorkerResult[:0]
+	trans.sortKeysIdxs = trans.sortKeysIdxs[:0]
+	return nil
 }

@@ -271,6 +271,9 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 	}
 
 	for rec == nil && l.hasNext() {
+		if l.ctx.isAborted() {
+			return nil, oriRowCount, nil
+		}
 		if (!l.ctx.tr.Overlaps(l.getCurSegMinMax())) ||
 			(!l.overlapsForRowFilter(filterOpts.rowFilters)) {
 			l.nextSegment(false)
