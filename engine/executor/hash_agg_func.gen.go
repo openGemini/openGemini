@@ -298,6 +298,8 @@ func NewHeapFunc(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []h
 		return NewAggFunc(heapFunc, NewHeapIntegerOperator, inOrdinal, outOrdinal, input), nil
 	case influxql.Float:
 		return NewAggFunc(heapFunc, NewHeapFloatOperator, inOrdinal, outOrdinal, input), nil
+	case influxql.Tag, influxql.String:
+		return NewAggFunc(heapFunc, NewHeapStringOperator, inOrdinal, outOrdinal, input), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "top/bottom", dataType.String())
 	}
@@ -1385,10 +1387,10 @@ func (s *heapFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRow
 			if !s.sorPart.rows[0].LessThan(row, s.sorPart.sortKeysIdxs, s.sorPart.ascending) {
 				continue
 			}
-			s.sorPart.rows[0] = row
+			s.sorPart.rows[0] = row.Clone()
 			heap.Fix(s.sorPart, 0)
 		} else {
-			heap.Push(s.sorPart, row)
+			heap.Push(s.sorPart, row.Clone())
 		}
 	}
 	return nil
@@ -1408,8 +1410,8 @@ func (s *heapFloatOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
 }
 
 func (s *heapFloatOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
-	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValue(val)
+	val, _ := hybridqp.TransToFloat(fillVal)
+	oc.Column(colLoc).AppendFloatValue(val)
 	oc.Column(colLoc).AppendNotNil()
 }
 
@@ -1447,10 +1449,10 @@ func (s *heapIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endR
 			if !s.sorPart.rows[0].LessThan(row, s.sorPart.sortKeysIdxs, s.sorPart.ascending) {
 				continue
 			}
-			s.sorPart.rows[0] = row
+			s.sorPart.rows[0] = row.Clone()
 			heap.Fix(s.sorPart, 0)
 		} else {
-			heap.Push(s.sorPart, row)
+			heap.Push(s.sorPart, row.Clone())
 		}
 	}
 	return nil
@@ -1476,5 +1478,67 @@ func (s *heapIntegerOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface
 }
 
 func (s *heapIntegerOperator) GetTime() int64 {
+	return DefaultTime
+}
+
+type heapStringOperator struct {
+	init    bool
+	sorPart *sortPartition
+}
+
+func NewHeapStringOperator() aggOperator {
+	return &heapStringOperator{}
+}
+
+func (s *heapStringOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, input any) error {
+	if c.Column(colLoc).NilCount() != 0 {
+		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
+	}
+	param := input.(*heapParam)
+	if !s.init {
+		s.sorPart = NewSortPartition(0, param.sortKeyIdx, param.sortAsc)
+		s.sorPart.rows = make([]*sortRowMsg, 0, param.topN)
+		s.init = true
+	}
+	for i := startRowLoc; i < endRowLoc; i++ {
+		sortElems := make([]sortEleMsg, len(param.sortFuncs))
+		for j, f := range param.sortFuncs {
+			sortElems[j] = f()
+		}
+		row := NewSortRowMsg(sortElems)
+		row.SetVals(c, i, nil)
+		if len(s.sorPart.rows) == cap(s.sorPart.rows) {
+			if !s.sorPart.rows[0].LessThan(row, s.sorPart.sortKeysIdxs, s.sorPart.ascending) {
+				continue
+			}
+			s.sorPart.rows[0] = row.Clone()
+			heap.Fix(s.sorPart, 0)
+		} else {
+			heap.Push(s.sorPart, row.Clone())
+		}
+	}
+	return nil
+}
+
+func (s *heapStringOperator) SetOutVal(c Chunk, colLoc int, input any) {
+	sort.Sort(s.sorPart)
+	n := len(s.sorPart.rows) - 1
+	for i := n; i >= 0; i-- {
+		s.sorPart.rows[i].AppendToChunkByColIdx(c, input.(*heapParam).inOutColIdxMap)
+	}
+	s.sorPart.rows = s.sorPart.rows[:0]
+}
+
+func (s *heapStringOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+	oc.Column(colLoc).AppendNil()
+}
+
+func (s *heapStringOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+	val, _ := hybridqp.TransToString(fillVal)
+	oc.Column(colLoc).AppendStringValue(val)
+	oc.Column(colLoc).AppendNotNil()
+}
+
+func (s *heapStringOperator) GetTime() int64 {
 	return DefaultTime
 }

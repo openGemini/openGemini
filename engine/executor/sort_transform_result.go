@@ -22,6 +22,8 @@ limitations under the License.
 
 package executor
 
+import "github.com/openGemini/openGemini/lib/util"
+
 const (
 	less = iota
 	eq
@@ -32,6 +34,7 @@ type sortEleMsg interface {
 	LessThan(ele sortEleMsg) int
 	SetVal(col Column, startLoc int)
 	AppendToCol(col Column)
+	Clone() sortEleMsg
 }
 
 type sortRowMsg struct {
@@ -93,6 +96,13 @@ func (sr *sortRowMsg) LessThan(osr *sortRowMsg, sortKeysIdxs []int, ascending []
 	return true
 }
 
+func (sr *sortRowMsg) Clone() *sortRowMsg {
+	for i := range sr.sortEle {
+		sr.sortEle[i] = sr.sortEle[i].Clone()
+	}
+	return sr
+}
+
 type floatSortEle struct {
 	val      float64
 	validVal bool
@@ -145,6 +155,10 @@ func (ele *floatSortEle) AppendToCol(col Column) {
 		col.AppendFloatValue(ele.val)
 		col.AppendNilsV2(ele.validVal)
 	}
+}
+
+func (ele *floatSortEle) Clone() sortEleMsg {
+	return ele
 }
 
 type integerSortEle struct {
@@ -201,6 +215,10 @@ func (ele *integerSortEle) AppendToCol(col Column) {
 	}
 }
 
+func (ele *integerSortEle) Clone() sortEleMsg {
+	return ele
+}
+
 type stringSortEle struct {
 	val      string
 	validVal bool
@@ -255,6 +273,12 @@ func (ele *stringSortEle) AppendToCol(col Column) {
 	}
 }
 
+func (ele *stringSortEle) Clone() sortEleMsg {
+	newStr := make([]byte, len(ele.val))
+	copy(newStr, ele.val)
+	return &stringSortEle{val: util.Bytes2str(newStr), validVal: ele.validVal}
+}
+
 type boolSortEle struct {
 	val      bool
 	validVal bool
@@ -307,4 +331,8 @@ func (ele *boolSortEle) AppendToCol(col Column) {
 		col.AppendBooleanValue(ele.val)
 		col.AppendNilsV2(ele.validVal)
 	}
+}
+
+func (ele *boolSortEle) Clone() sortEleMsg {
+	return ele
 }

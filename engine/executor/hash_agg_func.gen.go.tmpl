@@ -293,6 +293,8 @@ func NewHeapFunc(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt []h
 		return NewAggFunc(heapFunc, NewHeapIntegerOperator, inOrdinal, outOrdinal, input), nil
 	case influxql.Float:
 		return NewAggFunc(heapFunc, NewHeapFloatOperator, inOrdinal, outOrdinal, input), nil
+	case influxql.Tag, influxql.String:
+		return NewAggFunc(heapFunc, NewHeapStringOperator, inOrdinal, outOrdinal, input), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "top/bottom", dataType.String())
 	}
@@ -766,7 +768,7 @@ func (s *percentile{{.Name}}Operator) GetTime() int64 {
 {{end}}
 
 {{range .}}
-{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "String")}}
 type heap{{.Name}}Operator struct {
 	init      bool
 	sorPart   *sortPartition
@@ -797,10 +799,10 @@ func (s *heap{{.Name}}Operator) Compute(c Chunk, colLoc int, startRowLoc int, en
 			if !s.sorPart.rows[0].LessThan(row, s.sorPart.sortKeysIdxs, s.sorPart.ascending) {
 				continue
 			}
-			s.sorPart.rows[0] = row
+			s.sorPart.rows[0] = row.Clone()
 			heap.Fix(s.sorPart, 0)
 		} else {
-			heap.Push(s.sorPart, row)
+			heap.Push(s.sorPart, row.Clone())
 		}
 	}
 	return nil
@@ -820,8 +822,8 @@ func (s *heap{{.Name}}Operator) SetNullFill(oc Chunk, colLoc int, time int64) {
 }
 
 func (s *heap{{.Name}}Operator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
-	val, _ := hybridqp.TransToInteger(fillVal)
-	oc.Column(colLoc).AppendIntegerValue(val)
+	val, _ := hybridqp.TransTo{{.Name}}(fillVal)
+	oc.Column(colLoc).Append{{.Name}}Value(val)
 	oc.Column(colLoc).AppendNotNil()
 }
 
