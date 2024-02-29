@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
@@ -360,6 +361,14 @@ type Query struct {
 func (q *Query) String() string { return q.Statements.String() }
 
 func (q *Query) StringAndLocs() (string, [][2]int) { return q.Statements.StringAndLocs() }
+
+func (q *Query) SetReturnErr(returnErr bool) {
+	for i := range q.Statements {
+		if s, ok := q.Statements[i].(*SelectStatement); ok {
+			s.ReturnErr = returnErr
+		}
+	}
+}
 
 // Statements represents a list of statements.
 type Statements []Statement
@@ -1489,6 +1498,9 @@ type SelectStatement struct {
 	SubQueryHasDifferentAscending bool
 	// only useful for topQuery
 	StmtId int
+
+	// whether to return error
+	ReturnErr bool
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -1782,6 +1794,66 @@ func (s *SelectStatement) GetUnnestSchema(fields map[string]DataType) {
 	}
 }
 
+func (s *SelectStatement) checkField(m FieldMapper, sources Sources) error {
+	for i := range sources {
+		mst, ok := sources[i].(*Measurement)
+		if !ok {
+			continue
+		}
+		fks, tks, _, err := m.FieldDimensions(mst)
+		if err != nil {
+			return err
+		}
+		s.GetUnnestSchema(fks)
+
+		// Check whether fields that do not exist in the table.
+		for j := range s.Fields {
+			if err = checkField(s.Fields[j].Expr, fks, tks); err != nil {
+				return err
+			}
+		}
+		// Check whether condition that do not exist in the table.
+		if err = checkField(s.Condition, fks, tks); err != nil {
+			return err
+		}
+		// Check whether dimension that do not exist in the table.
+		for j := range s.Dimensions {
+			if err = checkField(s.Dimensions[j].Expr, fks, tks); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func checkField(expr Expr, fks map[string]DataType, tks map[string]struct{}) error {
+	switch v := expr.(type) {
+	case *VarRef:
+		if v.Val == "time" || v.Val == "__log___" {
+			return nil
+		}
+		_, ok1 := fks[v.Val]
+		_, ok2 := tks[v.Val]
+		if !ok1 && !ok2 {
+			return errno.NewError(errno.NoFieldSelected, v.Val)
+		}
+	case *Call:
+		for i := range v.Args {
+			if err := checkField(v.Args[i], fks, tks); err != nil {
+				return err
+			}
+		}
+	case *BinaryExpr:
+		if err := checkField(v.LHS, fks, tks); err != nil {
+			return err
+		}
+		if err := checkField(v.RHS, fks, tks); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
 // fields are replaced with the supplied fields, and any wildcard GROUP BY fields are replaced
 // with the supplied dimensions. Any fields with no type specifier are rewritten with the
@@ -1824,7 +1896,10 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		}
 	}
 	if len(sources) == 0 {
-		return nil, ErrDeclareEmptyCollection
+		if !s.ReturnErr {
+			return nil, ErrDeclareEmptyCollection
+		}
+		return nil, errno.NewError(errno.NoFieldSelected, "source")
 	}
 
 	if in, ok := s.Condition.(*InCondition); ok {
@@ -1834,6 +1909,12 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		}
 		in.Stmt = stmt
 		other.Condition = in
+	}
+
+	if s.ReturnErr {
+		if err := s.checkField(m, sources); err != nil {
+			return nil, err
+		}
 	}
 
 	other.Sources = sources
