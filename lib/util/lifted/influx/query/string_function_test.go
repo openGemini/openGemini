@@ -14,17 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package executor_test
+package query_test
 
 import (
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
-	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func TestStringFunctionStr(t *testing.T) {
-	stringValuer := executor.StringValuer{}
+	stringValuer := query.StringValuer{}
 	inputName := "str"
 	inputArgs := []interface{}{"abc", "bcd", "cde"}
 	subStr := "bc"
@@ -39,7 +39,7 @@ func TestStringFunctionStr(t *testing.T) {
 }
 
 func TestStringFunctionStrLen(t *testing.T) {
-	stringValuer := executor.StringValuer{}
+	stringValuer := query.StringValuer{}
 	inputName := "strlen"
 	inputArgs := []interface{}{"", "abc", "bcde", "cdefg"}
 	expects := []interface{}{int64(0), int64(3), int64(4), int64(5)}
@@ -53,7 +53,7 @@ func TestStringFunctionStrLen(t *testing.T) {
 }
 
 func TestStringFunctionSubStrOnePara(t *testing.T) {
-	stringValuer := executor.StringValuer{}
+	stringValuer := query.StringValuer{}
 	inputName := "substr"
 	inputArgs := []interface{}{"", "abc", "bcde", "cdefg"}
 	start := int64(1)
@@ -68,7 +68,7 @@ func TestStringFunctionSubStrOnePara(t *testing.T) {
 }
 
 func TestStringFunctionSubStrTwoPara(t *testing.T) {
-	stringValuer := executor.StringValuer{}
+	stringValuer := query.StringValuer{}
 	inputName := "substr"
 	inputArgs := []interface{}{"", "abc", "bcde", "cdefg"}
 	start := int64(1)
