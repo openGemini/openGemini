@@ -17,7 +17,9 @@ limitations under the License.
 package sparseindex
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"path"
 	"strings"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/bloomfilter"
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
@@ -106,6 +109,88 @@ func (r *BloomFilterFullTextIndexReader) Close() error {
 	return nil
 }
 
-func GetFullTextIdxFilePath(dir, msName string) string {
+func GetFullTextDetachFilePath(dir, msName string) string {
 	return path.Join(dir, msName, BloomFilterFilePrefix+FullTextIndex+BloomFilterFileSuffix)
+}
+
+func GetFullTextAttachFilePath(dir, msName, dataFilePath string) string {
+	return path.Join(dir, msName, colstore.AppendSKIndexSuffix(dataFilePath, FullTextIndex, index.BloomFilterFullTextIndex))
+}
+
+type FullTextIdxWriter struct {
+	*skipIndexWriter
+}
+
+func NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath string) *FullTextIdxWriter {
+	return &FullTextIdxWriter{
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+	}
+}
+
+func (f *FullTextIdxWriter) Open() error {
+	return nil
+}
+
+func (f *FullTextIdxWriter) Close() error {
+	return nil
+}
+
+func (f *FullTextIdxWriter) getFullTextIdxFilePath(detached bool) string {
+	if detached {
+		return GetFullTextDetachFilePath(f.dir, f.msName)
+	}
+	return GetFullTextAttachFilePath(f.dir, f.msName, f.dataFilePath)
+}
+
+func (f *FullTextIdxWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+	indexBuf := logstore.GetIndexBuf(FullTextIdxColumnCnt)
+	defer logstore.PutIndexBuf(indexBuf)
+
+	data, skipIndexFilePaths := f.createSkipIndex(writeRec, schemaIdx, rowsPerSegment, *indexBuf, false)
+	return writeSkipIndexToDisk(data[0], f.lockPath, skipIndexFilePaths[0])
+}
+
+func (f *FullTextIdxWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
+	return f.createSkipIndex(writeRec, schemaIdx, rowsPerSegment, dataBuf, true)
+}
+
+func (f *FullTextIdxWriter) createSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, memBfData [][]byte,
+	detached bool) ([][]byte, []string) {
+	var skipIndexFilePaths []string
+	skipIndexFilePaths = append(skipIndexFilePaths, f.getFullTextIdxFilePath(detached))
+	memBfData[0] = append(memBfData[0], f.genFullTextIndexData(writeRec, schemaIdx, rowsPerSegment)...)
+	return memBfData, skipIndexFilePaths
+}
+
+func (f *FullTextIdxWriter) genFullTextIndexData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte {
+	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
+	segCnt := len(rowsPerSegment)
+	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
+	res := make([]byte, segCnt*segBfSize)
+
+	start := 0
+	end := 0
+	colsData := f.getFullTextColsData(writeRec, schemaIdx, rowsPerSegment)
+	row, col := len(colsData), len(colsData[0])
+	for i := 0; i < col; i++ {
+		end = start + segBfSize
+		for j := 0; j < row; j++ {
+			offs, lens := colsData[j][i].GetOffsAndLens()
+			tk.ProcessTokenizerBatch(colsData[j][i].Val, res[start:end-crcSize], offs, lens)
+		}
+		crc := crc32.Checksum(res[start:end-crcSize], logstore.Table)
+		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
+		start = end
+	}
+	return res
+}
+
+func (f *FullTextIdxWriter) getFullTextColsData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) [][]record.ColVal {
+	colsData := make([][]record.ColVal, 0, len(schemaIdx))
+	var colData []record.ColVal
+	for _, v := range schemaIdx {
+		colData = writeRec.ColVals[v].SplitColBySize(colData[:0], rowsPerSegment, writeRec.Schema[v].Type)
+		colsData = append(colsData, colData)
+	}
+	return colsData
 }

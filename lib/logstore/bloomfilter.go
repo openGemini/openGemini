@@ -93,12 +93,12 @@ func IsFullTextIdx(indexRelation *influxql.IndexRelation) bool {
 	return false
 }
 
-var BloomFilterBufferPool sync.Pool
+var IndexBufferPool sync.Pool
 
 type multiCosBuf [][]byte
 
-func GetBloomFilterBuf(cols int) *multiCosBuf {
-	buf := BloomFilterBufferPool.Get()
+func GetIndexBuf(cols int) *multiCosBuf {
+	buf := IndexBufferPool.Get()
 	if buf == nil {
 		multiBuf := make(multiCosBuf, cols)
 		return &multiBuf
@@ -106,9 +106,9 @@ func GetBloomFilterBuf(cols int) *multiCosBuf {
 	return buf.(*multiCosBuf)
 }
 
-func PutBloomFilterBuf(buf *multiCosBuf) {
+func PutIndexBuf(buf *multiCosBuf) {
 	for i := range *buf {
 		(*buf)[i] = (*buf)[i][:0]
 	}
-	BloomFilterBufferPool.Put(buf)
+	IndexBufferPool.Put(buf)
 }

@@ -122,14 +122,13 @@ func (w *writeDetached) getAccumulateMetaIndex() *immutable.AccumulateMetaIndex 
 func (w *writeDetached) flushChunk(pkSchema record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
 	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) {
 	writeRec := chunk.WriteRec.GetRecord()
-	w.WriteDetached(writeRec, writeMs, 0, pkSchema, indexRelation)
+	w.WriteDetached(writeRec, writeMs, 0, pkSchema)
 	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
 }
 
-func (w *writeDetached) WriteDetached(rec *record.Record, msb *immutable.MsBuilder, id uint64, pkSchema record.Schemas,
-	skipIndexRelation *influxql.IndexRelation) {
+func (w *writeDetached) WriteDetached(rec *record.Record, msb *immutable.MsBuilder, id uint64, pkSchema record.Schemas) {
 	msb.SetLocalBfCount(w.localBFCount)
-	err := msb.WriteDetached(id, rec, pkSchema, skipIndexRelation, w.firstFlush, w.accumulateMetaIndex)
+	err := msb.WriteDetached(id, rec, pkSchema, w.firstFlush, w.accumulateMetaIndex)
 	if err != nil {
 		panic(err)
 	}
@@ -177,14 +176,14 @@ func (c *csMemTableImpl) updateAccumulateMetaIndexInfo(name string, index *immut
 }
 
 func (c *csMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutable.MsBuilder, recSchema record.Schemas, msName,
-	lockPath string, indexRelation *influxql.IndexRelation) FlushManager {
+	lockPath string) FlushManager {
 	c.mu.RLock()
 	fManager, ok := c.flushManager[msName]
 	c.mu.RUnlock()
 	aMetaIndex := c.getAccumulateMetaIndex(msName)
 	if !ok {
 		if detachedEnabled {
-			localBFCount := sparseindex.GetLocalBloomFilterBlockCnts(writeMs.Path, msName, lockPath, recSchema, indexRelation, writeMs.GetFullTextIdx())
+			localBFCount := sparseindex.GetLocalBloomFilterBlockCnts(writeMs.Path, msName, lockPath, recSchema, writeMs.GetSkipIndex(), writeMs.GetFullTextIdx())
 			fManager = &writeDetached{
 				accumulateMetaIndex: aMetaIndex,
 				firstFlush:          aMetaIndex.GetBlockId() == 0,
@@ -266,9 +265,9 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName string, l
 	writeMs.SetTCLocation(tcLocation)
 	writeMs.SetTimeSorted(timeSorted)
 	writeMs.NewPKIndexWriter()
-	writeMs.NewSkipIndexWriter()
+	writeMs.NewSkipIndex(rec.Schema, indexRelation)
 
-	fManager := c.getFlushManager(conf.GetDetachedFlushEnabled(), writeMs, rec.Schema, msName, *lock, &indexRelation)
+	fManager := c.getFlushManager(conf.GetDetachedFlushEnabled(), writeMs, rec.Schema, msName, *lock)
 	fManager.flushChunk(primaryKey, msName, &indexRelation, tbStore, chunk, writeMs, tcLocation) // column store flush one chunk each time
 
 	//after finishing flush update accumulate metaIndex info to csMemTableImpl

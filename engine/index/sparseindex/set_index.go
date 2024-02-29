@@ -63,3 +63,29 @@ func (r *SetIndexReader) ReInit(file interface{}) (err error) {
 func (r *SetIndexReader) Close() error {
 	return nil
 }
+
+type SetWriter struct {
+	*skipIndexWriter
+}
+
+func NewSetWriter(dir, msName, dataFilePath, lockPath string) *SetWriter {
+	return &SetWriter{
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+	}
+}
+
+func (s *SetWriter) Open() error {
+	return nil
+}
+
+func (s *SetWriter) Close() error {
+	return nil
+}
+
+func (s *SetWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+	return nil
+}
+
+func (s *SetWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
+	return nil, nil
+}

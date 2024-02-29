@@ -17,29 +17,22 @@ limitations under the License.
 package sparseindex
 
 import (
-	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
-	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
-
-var table = crc32.MakeTable(crc32.Castagnoli)
-
-const crcSize = 4
 
 // SKIndexReader as a skip index read interface.
 type SKIndexReader interface {
@@ -256,96 +249,136 @@ func GetSKFileReaderFactoryInstance() *SKFileReaderCreatorFactory {
 	return SKFileReaderInstance
 }
 
+type SkipIndex struct {
+	bfIdx, fullTextIdx int     // if bloomFilter/fullTextIdx exist, the idx in schemaIdxes is bfIdx/fullTextIdx
+	idxInRelation      []int   // mark the position of each skipIndex in the indexRelation, indexRelation may include text、fieldIndex or mergeSet
+	schemaIdxes        [][]int // each skip index contains a schemaIdx to indicate the corresponding position of the index column, but under schemaLess, its content may be empty.
+	skipIndexWriters   []SkipIndexWriter
+}
+
+func NewSkipIndex() *SkipIndex {
+	return &SkipIndex{
+		bfIdx:       -1,
+		fullTextIdx: -1,
+	}
+}
+
+func (s *SkipIndex) NewSkipIndexWriters(dir, msName, dataFilePath, lockPath string, indexRelation influxql.IndexRelation) {
+	s.skipIndexWriters = make([]SkipIndexWriter, 0, len(indexRelation.Oids))
+	s.idxInRelation = make([]int, 0, len(indexRelation.Oids))
+	pos := 0
+	for i := range indexRelation.Oids {
+		if indexRelation.IsSkipIndex(i) {
+			if indexRelation.IndexNames[i] == index.BloomFilterIndex {
+				s.bfIdx = pos
+			}
+			if indexRelation.IndexNames[i] == index.BloomFilterFullTextIndex {
+				s.fullTextIdx = pos
+			}
+
+			s.skipIndexWriters = append(s.skipIndexWriters, NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexRelation.IndexNames[i]))
+			s.idxInRelation = append(s.idxInRelation, i)
+			pos++
+		}
+	}
+}
+
+// GetBfIdx get idx in schemaIdxes if bloom filter index exist bfIdx >= 0
+func (s *SkipIndex) GetBfIdx() int {
+	return s.bfIdx
+}
+
+// GetFullTextIdx get idx in schemaIdxes if full text index exist fullTextIdx >= 0
+func (s *SkipIndex) GetFullTextIdx() int {
+	return s.fullTextIdx
+}
+
+func (s *SkipIndex) GetSchemaIdxes() [][]int {
+	return s.schemaIdxes
+}
+
+func (s *SkipIndex) GetSkipIndexWriters() []SkipIndexWriter {
+	return s.skipIndexWriters
+}
+
+func (s *SkipIndex) GenSchemaIdxes(schema record.Schemas, indexRelation influxql.IndexRelation) {
+	schemaMap := genSchemaMap(schema)
+	s.schemaIdxes = make([][]int, 0, len(s.skipIndexWriters))
+	var cols []string
+	for i := range s.idxInRelation {
+		cols = indexRelation.IndexList[s.idxInRelation[i]].IList
+		res := make([]int, 0, len(cols))
+		// if full text idx exist then get all string col into schema
+		if i == s.fullTextIdx {
+			for j := range schema {
+				if schema[j].IsString() {
+					res = append(res, j)
+				}
+			}
+			s.schemaIdxes = append(s.schemaIdxes, res)
+			continue
+		}
+
+		for idx := range cols {
+			_, ok := schemaMap[cols[idx]]
+			if !ok {
+				// skip missing col
+				continue
+			}
+			res = append(res, schemaMap[cols[idx]])
+		}
+		s.schemaIdxes = append(s.schemaIdxes, res)
+	}
+}
+
+func genSchemaMap(schema record.Schemas) map[string]int {
+	schemaMap := make(map[string]int)
+	for i := range schema {
+		schemaMap[schema[i].Name] = i
+	}
+	return schemaMap
+}
+
+func writeSkipIndexToDisk(data []byte, lockPath, skipIndexFilePath string) error {
+	indexBuilder := colstore.NewSkipIndexBuilder(&lockPath, skipIndexFilePath)
+	err := indexBuilder.WriteData(data)
+	defer indexBuilder.Reset()
+	return err
+}
+
 type SkipIndexWriter interface {
 	Open() error
 	Close() error
-	Flush() error
-	CreateSkipIndex(src *record.ColVal, rowsPerSegment []int, refType int) ([]byte, error)
-	CreateFullTextIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte
+	CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error
+	CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string)
 }
 
-func NewSkipIndexWriter(indexType string) SkipIndexWriter {
+func NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexType string) SkipIndexWriter {
 	switch indexType {
 	case index.BloomFilterIndex:
-		return &BloomFilterImpl{
-			bloomFilter: make([]byte, 0),
-		}
+		return NewBloomFilterWriter(dir, msName, dataFilePath, lockPath)
+	case index.BloomFilterFullTextIndex:
+		return NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath)
+	case index.SetIndex:
+		return NewSetWriter(dir, msName, dataFilePath, lockPath)
+	case index.MinMaxIndex:
+		return NewMinMaxWriter(dir, msName, dataFilePath, lockPath)
 	default:
+		logger.GetLogger().Error("unknown skip index type")
 		return nil
 	}
 }
 
-type BloomFilterImpl struct {
-	bloomFilter []byte
+type skipIndexWriter struct {
+	dir, msName            string
+	dataFilePath, lockPath string
 }
 
-func (b *BloomFilterImpl) Open() error {
-	return nil
-}
-
-func (b *BloomFilterImpl) Close() error {
-	return nil
-}
-
-func (b *BloomFilterImpl) Flush() error {
-	return nil
-}
-
-func (b *BloomFilterImpl) CreateSkipIndex(src *record.ColVal, rowsPerSegment []int, refType int) ([]byte, error) {
-	//TODO:
-	// 1. use different splitter for different column
-	// 2. reusing the tokenizers
-	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
-
-	segCnt := len(rowsPerSegment)
-	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
-	res := make([]byte, segCnt*segBfSize)
-	var segCol []record.ColVal
-	segCol = src.SplitColBySize(segCol, rowsPerSegment, refType)
-
-	start := 0
-	end := 0
-	for _, col := range segCol {
-		end = start + segBfSize
-		offs, lens := col.GetOffsAndLens()
-		tk.ProcessTokenizerBatch(col.Val, res[start:end-crcSize], offs, lens)
-		crc := crc32.Checksum(res[start:end-crcSize], table)
-		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
-		start = end
+func newSkipIndexWriter(dir, msName, dataFilePath, lockPath string) *skipIndexWriter {
+	return &skipIndexWriter{
+		dir:          dir,
+		msName:       msName,
+		dataFilePath: dataFilePath,
+		lockPath:     lockPath,
 	}
-	tokenizer.FreeSimpleGramTokenizer(tk)
-	return res, nil
-}
-
-func (b *BloomFilterImpl) CreateFullTextIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte {
-	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
-	segCnt := len(rowsPerSegment)
-	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
-	res := make([]byte, segCnt*segBfSize)
-
-	start := 0
-	end := 0
-	colsData := b.getFullTextColsData(writeRec, schemaIdx, rowsPerSegment)
-	row, col := len(colsData), len(colsData[0])
-	for i := 0; i < col; i++ {
-		end = start + segBfSize
-		for j := 0; j < row; j++ {
-			offs, lens := colsData[j][i].GetOffsAndLens()
-			tk.ProcessTokenizerBatch(colsData[j][i].Val, res[start:end-crcSize], offs, lens)
-		}
-		crc := crc32.Checksum(res[start:end-crcSize], table)
-		binary.LittleEndian.PutUint32(res[end-crcSize:end], crc)
-		start = end
-	}
-	return res
-}
-
-func (b *BloomFilterImpl) getFullTextColsData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) [][]record.ColVal {
-	colsData := make([][]record.ColVal, 0, len(schemaIdx))
-	for _, v := range schemaIdx {
-		var colData []record.ColVal
-		colData = writeRec.ColVals[v].SplitColBySize(colData, rowsPerSegment, writeRec.Schema[v].Type)
-		colsData = append(colsData, colData)
-	}
-	return colsData
 }
