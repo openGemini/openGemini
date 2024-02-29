@@ -1787,6 +1787,8 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetWriteColdDuration(time.Minute)
+
 	// step2: write data
 	rec := genRecord()
 	err = writeRec(sh, rec, false)
@@ -3596,6 +3598,13 @@ func TestDropMeasurement(t *testing.T) {
 	}
 }
 
+func TestDropMeasurementOnWalReplay(t *testing.T) {
+	sh := &shard{stopDownSample: util.NewSignal()}
+	sh.replayingWal = true
+	err := sh.DropMeasurement(context.Background(), "mst")
+	require.EqualError(t, err, "async replay wal not finish")
+}
+
 func TestDropMeasurementForColStore(t *testing.T) {
 	testDir := t.TempDir()
 	_ = os.RemoveAll(testDir)
@@ -3620,7 +3629,10 @@ func TestDropMeasurementForColStore(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.ForceFlush()
+	sh.waitSnapshot()
+	sh.indexBuilder.Flush()
+	time.Sleep(time.Second)
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -4356,9 +4368,7 @@ func TestColumnStoreFlush(t *testing.T) {
 	sh.ForceFlush()
 
 	err = closeShard(sh)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 }
 
 func TestColumnStoreFlushErr(t *testing.T) {

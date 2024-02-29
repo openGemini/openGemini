@@ -187,9 +187,9 @@ func (f *FullTextIdxWriter) genFullTextIndexData(writeRec *record.Record, schema
 
 func (f *FullTextIdxWriter) getFullTextColsData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) [][]record.ColVal {
 	colsData := make([][]record.ColVal, 0, len(schemaIdx))
-	var colData []record.ColVal
 	for _, v := range schemaIdx {
-		colData = writeRec.ColVals[v].SplitColBySize(colData[:0], rowsPerSegment, writeRec.Schema[v].Type)
+		var colData []record.ColVal
+		colData = writeRec.ColVals[v].SplitColBySize(colData, rowsPerSegment, writeRec.Schema[v].Type)
 		colsData = append(colsData, colData)
 	}
 	return colsData
