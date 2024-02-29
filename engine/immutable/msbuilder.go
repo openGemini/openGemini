@@ -110,7 +110,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 		panic(fmt.Sprintf("file(%v) exist", filePath))
 	}
 	if tier == util.Cold {
-		msBuilder.fd, err = fileops.CreateOBSFile(filePath, lock, pri)
+		msBuilder.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
 		msBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
 	}

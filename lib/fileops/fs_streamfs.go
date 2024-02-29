@@ -1456,7 +1456,7 @@ func (fs *streamVfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opts ...FSOpt
 	return fs.sc.CopyFileFromDFVToOBS(srcPath, dstPath, lock)
 }
 
-func (fs *streamVfs) CreateOBSFile(name string, opts ...FSOption) (File, error) {
+func (fs *streamVfs) CreateV2(name string, opts ...FSOption) (File, error) {
 	var lock string
 	var priority int
 	if err := lockAndPriorityOpt(&lock, &priority, opts...); err != nil {

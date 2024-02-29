@@ -867,8 +867,6 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 	if expired {
 		if tier == util.Hot {
 			s.tier = util.Warm
-		} else {
-			s.tier = util.Cold
 		}
 	}
 	s.immTables = immutable.NewTableStore(filePath, s.lock, &s.tier, options.CompactRecovery, conf)
