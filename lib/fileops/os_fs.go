@@ -237,5 +237,6 @@ func (f vfs) IsObsFile(path string) (bool, error) {
 }
 
 func (f vfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
-	return nil
+	_, err := f.CopyFile(srcPath, dstPath, opt...)
+	return err
 }

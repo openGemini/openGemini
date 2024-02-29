@@ -168,6 +168,7 @@ const (
 	MemUsageExceeded                   = 2134
 	ShardCannotMove                    = 2135
 	ShardIsMoving                      = 2136
+	ShardMovingStopped                 = 2137
 )
 
 // merge out of order

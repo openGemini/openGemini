@@ -273,7 +273,7 @@ func CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
 	return GetFs(t).CopyFileFromDFVToOBS(srcPath, dstPath, opt...)
 }
 
-// CreateOBSFile create a new file in OBS when use streamfs
+// CreateV2 create a new file in OBS when use streamfs
 func CreateV2(name string, opt ...FSOption) (File, error) {
 	t := GetFsType(name)
 	return GetFs(t).CreateV2(name, opt...)

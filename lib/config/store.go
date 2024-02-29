@@ -97,7 +97,7 @@ type TSStore struct {
 	HTTPD             httpdConf.Config   `toml:"http"`
 	Retention         retention.Config   `toml:"retention"`
 	DownSample        retention.Config   `toml:"downsample"`
-	HierarchicalStore HierarchicalConfig `toml:"hierarchical-storage"`
+	HierarchicalStore HierarchicalConfig `toml:"hierarchical_storage"`
 	Stream            stream.Config      `toml:"stream"`
 
 	// TLS provides configuration options for all https endpoints.

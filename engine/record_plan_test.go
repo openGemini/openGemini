@@ -18,6 +18,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -2026,6 +2027,10 @@ func (m MocTsspFile) RemoveFromEvictList(level uint16) {
 
 func (m MocTsspFile) GetFileReaderRef() int64 {
 	return 0
+}
+
+func (m MocTsspFile) RenameOnObs(newName string) error {
+	return errors.New("RenameOnObs error")
 }
 
 func TestCanDoDownSample(t *testing.T) {
