@@ -6332,11 +6332,7 @@ func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, e
 }
 
 func TestDropMeasurementWhenReplayingWal(t *testing.T) {
-	testDir := t.TempDir()
-	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
-	require.NoError(t, err)
-	defer sh.Close()
-
+	sh := &shard{stopDownSample: util.NewSignal()}
 	sh.replayingWal = true
 	require.EqualError(t, sh.DropMeasurement(context.Background(), "mst"), "async replay wal not finish")
 }

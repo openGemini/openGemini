@@ -2060,8 +2060,8 @@ func TestCancelDownSample(t *testing.T) {
 		cacheClosed:             0,
 		shardDownSampleTaskInfo: &shardDownSampleTaskInfo{sdsp: &meta.ShardDownSamplePolicyInfo{}, schema: []hybridqp.Catalog{}, log: nil},
 	}
-	sh.stopDownSample = make(chan struct{})
-	close(sh.stopDownSample)
+	sh.stopDownSample = util.NewSignal()
+	sh.stopDownSample.Close()
 	if sh.StartDownSample(0, 0, nil, &mocMeta{}) != nil {
 		t.Fatal()
 	}
@@ -2267,8 +2267,8 @@ func TestStopShardDownSample(t *testing.T) {
 		cacheClosed:             0,
 		shardDownSampleTaskInfo: &shardDownSampleTaskInfo{sdsp: &meta.ShardDownSamplePolicyInfo{}, schema: []hybridqp.Catalog{}, log: nil},
 	}
-	sh.stopDownSample = make(chan struct{})
-	close(sh.stopDownSample)
+	sh.stopDownSample = util.NewSignal()
+	sh.stopDownSample.Close()
 	sh.EnableDownSample()
 	sh.DisableDownSample()
 	if sh.StartDownSample(0, 0, nil, &mocMeta{}) != nil {
