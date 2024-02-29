@@ -66,14 +66,14 @@ type ColumnStoreReader struct {
 	frags      executor.ShardsFragments
 	plan       hybridqp.QueryNode
 
-	limit       int
-	ops         []hybridqp.ExprOptions
-	rowBitmap   []bool
-	dimVals     []string
-	outInIdxMap map[int]int
-	inOutIdxMap map[int]int
-	closedCh    chan struct{}
-	closedCount int64
+	limit        int
+	ops          []hybridqp.ExprOptions
+	rowBitmap    []bool
+	dimVals      []string
+	outInIdxMap  map[int]int
+	inOutIdxMap  map[int]int
+	closedCh     chan struct{}
+	closedSignal *int32
 }
 
 func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragments) *ColumnStoreReader {
@@ -94,6 +94,8 @@ func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragment
 	if len(r.schema.GetSortFields()) == 0 && !r.schema.HasCall() {
 		r.limit = plan.Schema().Options().GetLimit() + plan.Schema().Options().GetOffset()
 	}
+	closedSignal := int32(0)
+	r.closedSignal = &closedSignal
 	return r
 }
 
@@ -153,7 +155,7 @@ func (r *ColumnStoreReader) initSpan() {
 
 func (r *ColumnStoreReader) Close() {
 	r.Once(func() {
-		atomic.AddInt64(&r.closedCount, 1)
+		atomic.AddInt32(r.closedSignal, 1)
 		r.output.Close()
 	})
 }
@@ -226,6 +228,7 @@ func (r *ColumnStoreReader) initReadCursor() (err error) {
 	if err != nil {
 		return
 	}
+	readCtx.SetClosedSignal(r.closedSignal)
 	if !r.schema.Options().IsTimeSorted() {
 		tr = util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
 	}
@@ -549,7 +552,7 @@ func (r *ColumnStoreReader) sendChunk(chunk executor.Chunk) {
 			r.closedCh <- struct{}{}
 		}
 	}()
-	if atomic.LoadInt64(&r.closedCount) == 0 {
+	if atomic.LoadInt32(r.closedSignal) == 0 {
 		statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
 		r.output.State <- chunk
 	} else {

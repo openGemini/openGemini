@@ -19,6 +19,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -66,6 +67,7 @@ type HashMergeTransform struct {
 	isSpill        bool
 	isChildDrained bool
 	hashMergeType  HashMergeType
+	closedSignal   int32
 }
 
 type HashMergeTransformCreator struct {
@@ -163,7 +165,10 @@ func (trans *HashMergeTransform) Explain() []ValuePair {
 }
 
 func (trans *HashMergeTransform) Close() {
-	trans.output.Close()
+	trans.Once(func() {
+		atomic.AddInt32(&trans.closedSignal, 1)
+		trans.output.Close()
+	})
 }
 
 func (trans *HashMergeTransform) addChunk(c Chunk) {
@@ -190,6 +195,7 @@ func (trans *HashMergeTransform) runnable(ctx context.Context, errs *errno.Errs,
 			}
 			trans.addChunk(c)
 		case <-ctx.Done():
+			atomic.AddInt32(&trans.closedSignal, 1)
 			trans.addChunk(nil)
 			return
 		}
@@ -272,6 +278,12 @@ func (trans *HashMergeTransform) streamMergeHelper(ctx context.Context, errs *er
 
 func (trans *HashMergeTransform) getChunk() hashAggGetChunkState {
 	var ret bool
+	// The interrupt signal is received. No result is returned.
+	if atomic.LoadInt32(&trans.closedSignal) > 0 {
+		if !trans.initDiskAsInput() {
+			return noChunk
+		}
+	}
 	if trans.isChildDrained {
 		ret = trans.getChunkFromDisk()
 	} else {
