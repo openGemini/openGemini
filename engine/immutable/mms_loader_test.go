@@ -52,3 +52,24 @@ func TestMmsLoader(t *testing.T) {
 	_, err = ctx.getError()
 	require.NoError(t, err)
 }
+
+func TestMmsLoadIndexFiles(t *testing.T) {
+	lock := ""
+	ctx := &fileLoadContext{}
+	loader := newFileLoader(&MmsTables{
+		lock:      &lock,
+		closed:    make(chan struct{}),
+		sequencer: NewSequencer(),
+	}, ctx)
+
+	dir := t.TempDir()
+	err := os.MkdirAll(path.Join(dir, "mst"), 0700)
+	err = os.WriteFile(path.Join(dir, "mst", "segment.idx"), []byte{1}, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader.Load(path.Join(dir, "mst"), "mst", true)
+	loader.Wait()
+	_, err = ctx.getError()
+	require.NoError(t, err)
+}
