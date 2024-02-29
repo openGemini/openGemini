@@ -719,9 +719,8 @@ type shard struct {
 
 	shardDownSampleTaskInfo *shardDownSampleTaskInfo
 
-	stopDownSample chan struct{}
+	stopDownSample *util.Signal
 	dswg           sync.WaitGroup
-	downSampleEn   int32
 
 	engineType config.EngineType
 	storage    Storage
@@ -837,8 +836,7 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 			"retentionPolicy": rp,
 		},
 		fileStat:       statistics.NewFileStatistics(),
-		stopDownSample: make(chan struct{}),
-		downSampleEn:   0,
+		stopDownSample: util.NewSignal(),
 		droppedMst:     sync.Map{},
 		msRowCount:     &sync.Map{},
 		engineType:     engineType,
@@ -1841,16 +1839,12 @@ func (s *shard) GetRPName() string {
 }
 
 func (s *shard) DisableDownSample() {
-	if atomic.CompareAndSwapInt32(&s.downSampleEn, 1, 0) {
-		close(s.stopDownSample)
-	}
+	s.stopDownSample.Close()
 	s.dswg.Wait()
 }
 
 func (s *shard) EnableDownSample() {
-	if atomic.CompareAndSwapInt32(&s.downSampleEn, 0, 1) {
-		s.stopDownSample = make(chan struct{})
-	}
+	s.stopDownSample.ReOpen()
 }
 
 func (s *shard) CanDoDownSample() bool {
@@ -1861,7 +1855,7 @@ func (s *shard) CanDoDownSample() bool {
 }
 
 func (s *shard) downSampleEnabled() bool {
-	return atomic.LoadInt32(&s.downSampleEn) == 1
+	return s.stopDownSample.Opening()
 }
 
 // notify async goroutines to cancel the wal replay
@@ -2170,7 +2164,7 @@ func (s *shard) StartDownSampleTask(taskID int, mstName string, files *immutable
 	}
 	node2.SetMmsTables(mmsTables)
 	source := influxql.Sources{&influxql.Measurement{Database: db, RetentionPolicy: rpName, Name: mstName}}
-	sidSequenceReader := NewTsspSequenceReader(nil, nil, nil, source, querySchema, files, newSeqs, s.stopDownSample)
+	sidSequenceReader := NewTsspSequenceReader(nil, nil, nil, source, querySchema, files, newSeqs, s.stopDownSample.C())
 	writeIntoStorage := NewWriteIntoStorageTransform(nil, nil, nil, source, querySchema, immutable.GetTsStoreConfig(), mmsTables, s.ident.DownSampleLevel == 0)
 	fileSequenceAgg := NewFileSequenceAggregator(querySchema, s.ident.DownSampleLevel == 0, s.startTime.UnixNano(), s.endTime.UnixNano())
 	sidSequenceReader.GetOutputs()[0].Connect(fileSequenceAgg.GetInputs()[0])
