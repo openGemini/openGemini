@@ -8699,6 +8699,13 @@ func TestMatchPreAgg(t *testing.T) {
 	if matchPreAgg(schema, &idKeyCursorContext{}) {
 		t.Fatal()
 	}
+
+	config.GetCommon().PreAggEnabled = false
+	defer func() {
+		config.GetCommon().PreAggEnabled = true
+	}()
+
+	require.False(t, matchPreAgg(nil, nil))
 }
 
 func TestRecTransToChunk(t *testing.T) {

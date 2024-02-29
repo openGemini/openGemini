@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -88,6 +89,10 @@ func hasMultipleColumnsWithFirst(schema *executor.QuerySchema) bool {
 }
 
 func matchPreAgg(schema *executor.QuerySchema, ctx *idKeyCursorContext) bool {
+	if !config.GetCommon().PreAggEnabled {
+		return false
+	}
+
 	if !schema.HasCall() {
 		return false
 	}
