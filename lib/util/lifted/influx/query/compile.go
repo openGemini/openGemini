@@ -319,11 +319,13 @@ func (c *compiledField) compileExpr(expr influxql.Expr) error {
 		if op.IsProjectOp(expr) {
 			return c.compileProjectOp(expr)
 		}
-		if isMathFunction(expr) {
-			return c.compileMathFunction(expr)
+
+		if mathFunc := GetMathFunction(expr.Name); mathFunc != nil {
+			return mathFunc.CompileFunc(expr, c)
 		}
-		if isStringFunction(expr) {
-			return c.compileStringFunction(expr)
+
+		if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
+			return stringFunc.CompileFunc(expr, c)
 		}
 
 		// Register the function call in the list of function calls.
@@ -333,46 +335,22 @@ func (c *compiledField) compileExpr(expr influxql.Expr) error {
 			return c.compileAggregateOp(expr)
 		}
 
+		if aggFunc := GetAggregateOperator(expr.Name); aggFunc != nil {
+			return aggFunc.CompileFunc(expr, c)
+		}
+
 		switch expr.Name {
-		case "percentile":
-			return c.compilePercentile(expr.Args)
-		case "percentile_ogsketch", "percentile_approx":
-			return c.compilePercentileOGSketch(expr.Args, expr.Name)
-		case "histogram":
-			return c.compileHistogram(expr.Args)
-		case "sample":
-			return c.compileSample(expr.Args)
-		case "distinct":
-			return c.compileDistinct(expr.Args, false)
-		case "top", "bottom":
-			return c.compileTopBottom(expr)
-		case "derivative", "non_negative_derivative":
-			isNonNegative := expr.Name == "non_negative_derivative"
-			return c.compileDerivative(expr.Args, isNonNegative)
-		case "difference", "non_negative_difference":
-			isNonNegative := expr.Name == "non_negative_difference"
-			return c.compileDifference(expr.Args, isNonNegative)
-		case "cumulative_sum":
-			return c.compileCumulativeSum(expr.Args)
-		case "moving_average":
-			return c.compileMovingAverage(expr.Args)
-		case "sliding_window":
-			return c.compileSlidingWindow(expr.Args)
 		case "exponential_moving_average", "double_exponential_moving_average", "triple_exponential_moving_average", "relative_strength_index", "triple_exponential_derivative":
 			return c.compileExponentialMovingAverage(expr.Name, expr.Args)
 		case "kaufmans_efficiency_ratio", "kaufmans_adaptive_moving_average":
 			return c.compileKaufmans(expr.Name, expr.Args)
 		case "chande_momentum_oscillator":
 			return c.compileChandeMomentumOscillator(expr.Args)
-		case "elapsed":
-			return c.compileElapsed(expr.Args)
-		case "integral":
-			return c.compileIntegral(expr.Args)
 		case "holt_winters", "holt_winters_with_fit":
 			withFit := expr.Name == "holt_winters_with_fit"
 			return c.compileHoltWinters(expr.Args, withFit)
 		default:
-			return c.compileFunction(expr)
+			return fmt.Errorf("undefined function %s()", expr.Name)
 		}
 	case *influxql.Distinct:
 		call := expr.NewCall()
@@ -444,364 +422,6 @@ func (c *compiledField) compileSymbol(name string, field influxql.Expr) error {
 		return nil
 	default:
 		return fmt.Errorf("expected field argument in %s()", name)
-	}
-}
-
-func (c *compiledField) compileFunction(expr *influxql.Call) error {
-	// Validate the function call and mark down some meta properties
-	// related to the function for query validation.
-	switch expr.Name {
-	case "max", "min", "first", "last":
-		// top/bottom are not included here since they are not typical functions.
-	case "count", "sum", "mean", "median", "mode", "stddev", "spread", "rate", "irate", "absent":
-		// These functions are not considered selectors.
-		c.global.OnlySelectors = false
-	default:
-		return fmt.Errorf("undefined function %s()", expr.Name)
-	}
-
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
-	}
-
-	// If this is a call to count(), allow distinct() to be used as the function argument.
-	if expr.Name == "count" {
-		// If we have count(), the argument may be a distinct() call.
-		if arg0, ok := expr.Args[0].(*influxql.Call); ok && arg0.Name == "distinct" {
-			return c.compileDistinct(arg0.Args, true)
-		} else if arg0, ok := expr.Args[0].(*influxql.Distinct); ok {
-			call := arg0.NewCall()
-			return c.compileDistinct(call.Args, true)
-		}
-	}
-	return c.compileSymbol(expr.Name, expr.Args[0])
-}
-
-func isStringFunction(call *influxql.Call) bool {
-	switch call.Name {
-	case "str", "strlen", "substr":
-		return true
-	}
-	return false
-}
-
-func (c *compiledField) compileStringFunction(expr *influxql.Call) error {
-	// Validate the function call and mark down some meta properties
-	// related to the function for query validation.
-	var nargs int
-
-	switch expr.Name {
-	case "str":
-		nargs = 2
-	default:
-		nargs = 1
-	}
-	// Did we get the expected number of args?
-	if got := len(expr.Args); expr.Name == "substr" && (len(expr.Args) < 2 || len(expr.Args) > 3) {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, nargs, got)
-	}
-
-	if got := len(expr.Args); expr.Name != "substr" && got != nargs {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, nargs, got)
-	}
-
-	// Input type and value verification
-	switch expr.Name {
-	case "str":
-		if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-			return fmt.Errorf("expected string argument in str()")
-		}
-	case "substr":
-		if second, ok := expr.Args[1].(*influxql.IntegerLiteral); !ok || second.Val < 0 {
-			return fmt.Errorf("expected non-gegative integer argument in substr()")
-		}
-		if len(expr.Args) == 3 {
-			if third, ok := expr.Args[2].(*influxql.IntegerLiteral); !ok || third.Val < 0 {
-				return fmt.Errorf("expected non-gegative integer argument in substr()")
-			}
-		}
-	}
-
-	// Compile all the argument expressions that are not just literals.
-	for _, arg := range expr.Args {
-		if _, ok := arg.(influxql.Literal); ok {
-			continue
-		}
-		if err := c.compileExpr(arg); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *compiledField) compilePercentile(args []influxql.Expr) error {
-	if exp, got := 2, len(args); got != exp {
-		return fmt.Errorf("invalid number of arguments for percentile, expected %d, got %d", exp, got)
-	}
-
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected float argument in percentile()")
-	}
-	return c.compileSymbol("percentile", args[0])
-}
-
-func (c *compiledField) compilePercentileOGSketch(args []influxql.Expr, name string) error {
-	if min, max, got := 2, 3, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for %s, expected at least %d but no more than %d, got %d", name, min, max, got)
-	}
-
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected integer or float argument as second arg in %s", name)
-	}
-	if len(args) == 3 {
-		switch args[2].(type) {
-		case *influxql.IntegerLiteral:
-		default:
-			return fmt.Errorf("expected integer argument as third arg in %s", name)
-		}
-	}
-	c.global.OnlySelectors = false
-	if name == "percentile_ogsketch" {
-		c.global.PercentileOGSketchFunction = name
-	}
-	return c.compileSymbol(name, args[0])
-}
-
-func (c *compiledField) compileHistogram(args []influxql.Expr) error {
-	/*if exp, got := 2, len(args); got != exp {
-	        return fmt.Errorf("invalid number of arguments for histogram, expected %d, got %d", exp, got)
-	}*/
-
-	switch args[1].(type) {
-	case *influxql.StringLiteral:
-
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected string argument in histogram()")
-	}
-	return c.compileSymbol("histogram", args[0])
-}
-
-func (c *compiledField) compileSample(args []influxql.Expr) error {
-	if exp, got := 2, len(args); got != exp {
-		return fmt.Errorf("invalid number of arguments for sample, expected %d, got %d", exp, got)
-	}
-
-	switch arg1 := args[1].(type) {
-	case *influxql.IntegerLiteral:
-		if arg1.Val <= 0 {
-			return fmt.Errorf("sample window must be greater than 1, got %d", arg1.Val)
-		}
-	default:
-		return fmt.Errorf("expected integer argument in sample()")
-	}
-	return c.compileSymbol("sample", args[0])
-}
-
-func (c *compiledField) compileDerivative(args []influxql.Expr, isNonNegative bool) error {
-	name := "derivative"
-	if isNonNegative {
-		name = "non_negative_derivative"
-	}
-
-	if min, max, got := 1, 2, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for %s, expected at least %d but no more than %d, got %d", name, min, max, got)
-	}
-
-	// Retrieve the duration from the derivative() call, if specified.
-	if len(args) == 2 {
-		switch arg1 := args[1].(type) {
-		case *influxql.DurationLiteral:
-			if arg1.Val <= 0 {
-				return fmt.Errorf("duration argument must be positive, got %s", influxql.FormatDuration(arg1.Val))
-			}
-		default:
-			return fmt.Errorf("second argument to %s must be a duration, got %T", name, args[1])
-		}
-	}
-	c.global.OnlySelectors = false
-	if c.global.ExtraIntervals < 1 {
-		c.global.ExtraIntervals = 1
-	}
-
-	// Must be a variable reference, function, wildcard, or regexp.
-	switch arg0 := args[0].(type) {
-	case *influxql.Call:
-		if c.global.Interval.IsZero() {
-			return fmt.Errorf("%s aggregate requires a GROUP BY interval", name)
-		}
-		return c.compileNestedExpr(arg0)
-	default:
-		if !c.global.Interval.IsZero() && !c.global.InheritedInterval {
-			return fmt.Errorf("aggregate function required inside the call to %s", name)
-		}
-		return c.compileSymbol(name, arg0)
-	}
-}
-
-func (c *compiledField) compileElapsed(args []influxql.Expr) error {
-	if min, max, got := 1, 2, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for elapsed, expected at least %d but no more than %d, got %d", min, max, got)
-	}
-
-	// Retrieve the duration from the elapsed() call, if specified.
-	if len(args) == 2 {
-		switch arg1 := args[1].(type) {
-		case *influxql.DurationLiteral:
-			if arg1.Val <= 0 {
-				return fmt.Errorf("duration argument must be positive, got %s", influxql.FormatDuration(arg1.Val))
-			}
-		default:
-			return fmt.Errorf("second argument to elapsed must be a duration, got %T", args[1])
-		}
-	}
-	c.global.OnlySelectors = false
-	if c.global.ExtraIntervals < 1 {
-		c.global.ExtraIntervals = 1
-	}
-
-	// Must be a variable reference, function, wildcard, or regexp.
-	switch arg0 := args[0].(type) {
-	case *influxql.Call:
-		if c.global.Interval.IsZero() {
-			return fmt.Errorf("elapsed aggregate requires a GROUP BY interval")
-		}
-		return c.compileNestedExpr(arg0)
-	default:
-		if !c.global.Interval.IsZero() && !c.global.InheritedInterval {
-			return fmt.Errorf("aggregate function required inside the call to elapsed")
-		}
-		return c.compileSymbol("elapsed", arg0)
-	}
-}
-
-func (c *compiledField) compileDifference(args []influxql.Expr, isNonNegative bool) error {
-	name := "difference"
-	if isNonNegative {
-		name = "non_negative_difference"
-	}
-
-	if min, max, got := 1, 2, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for %s, expected at least %d but no more than %d, got %d", name, min, max, got)
-	}
-	// Retrieve the duration from the difference() call, if specified.
-	if len(args) == 2 {
-		switch arg1 := args[1].(type) {
-		case *influxql.StringLiteral:
-			if !(arg1.Val == "front" || arg1.Val == "behind" || arg1.Val == "absolute") {
-				return fmt.Errorf("the second argument must be front, behind or absolute, got %s", arg1.Val)
-			}
-		default:
-			return fmt.Errorf("second argument to %s must be a string, got %T", name, args[1])
-		}
-	}
-	c.global.OnlySelectors = false
-	if c.global.ExtraIntervals < 1 {
-		c.global.ExtraIntervals = 1
-	}
-
-	// Must be a variable reference, function, wildcard, or regexp.
-	switch arg0 := args[0].(type) {
-	case *influxql.Call:
-		if c.global.Interval.IsZero() {
-			return fmt.Errorf("%s aggregate requires a GROUP BY interval", name)
-		}
-		return c.compileNestedExpr(arg0)
-	default:
-		if !c.global.Interval.IsZero() && !c.global.InheritedInterval {
-			return fmt.Errorf("aggregate function required inside the call to %s", name)
-		}
-		return c.compileSymbol(name, arg0)
-	}
-}
-
-func (c *compiledField) compileCumulativeSum(args []influxql.Expr) error {
-	if got := len(args); got != 1 {
-		return fmt.Errorf("invalid number of arguments for cumulative_sum, expected 1, got %d", got)
-	}
-	c.global.OnlySelectors = false
-	if c.global.ExtraIntervals < 1 {
-		c.global.ExtraIntervals = 1
-	}
-
-	// Must be a variable reference, function, wildcard, or regexp.
-	switch arg0 := args[0].(type) {
-	case *influxql.Call:
-		if c.global.Interval.IsZero() {
-			return fmt.Errorf("cumulative_sum aggregate requires a GROUP BY interval")
-		}
-		return c.compileNestedExpr(arg0)
-	default:
-		if !c.global.Interval.IsZero() && !c.global.InheritedInterval {
-			return fmt.Errorf("aggregate function required inside the call to cumulative_sum")
-		}
-		return c.compileSymbol("cumulative_sum", arg0)
-	}
-}
-
-func (c *compiledField) compileMovingAverage(args []influxql.Expr) error {
-	if got := len(args); got != 2 {
-		return fmt.Errorf("invalid number of arguments for moving_average, expected 2, got %d", got)
-	}
-
-	arg1, ok := args[1].(*influxql.IntegerLiteral)
-	if !ok {
-		return fmt.Errorf("second argument for moving_average must be an integer, got %T", args[1])
-	} else if arg1.Val <= 1 {
-		return fmt.Errorf("moving_average window must be greater than 1, got %d", arg1.Val)
-	}
-	c.global.OnlySelectors = false
-	if c.global.ExtraIntervals < int(arg1.Val) {
-		c.global.ExtraIntervals = int(arg1.Val)
-	}
-
-	// Must be a variable reference, function, wildcard, or regexp.
-	switch arg0 := args[0].(type) {
-	case *influxql.Call:
-		if c.global.Interval.IsZero() {
-			return fmt.Errorf("moving_average aggregate requires a GROUP BY interval")
-		}
-		return c.compileNestedExpr(arg0)
-	default:
-		if !c.global.Interval.IsZero() && !c.global.InheritedInterval {
-			return fmt.Errorf("aggregate function required inside the call to moving_average")
-		}
-		return c.compileSymbol("moving_average", arg0)
-	}
-}
-
-func (c *compiledField) compileSlidingWindow(args []influxql.Expr) error {
-	if got := len(args); got != 2 {
-		return fmt.Errorf("invalid number of arguments for sliding_window, expected 2, got %d", got)
-	}
-
-	arg1, ok := args[1].(*influxql.IntegerLiteral)
-	if !ok {
-		return fmt.Errorf("second argument for sliding_window must be an integer, got %T", args[1])
-	} else if arg1.Val <= 1 {
-		return fmt.Errorf("sliding_window window must be greater than 1, got %d", arg1.Val)
-	}
-	c.global.OnlySelectors = false
-	if c.global.ExtraIntervals < int(arg1.Val) {
-		c.global.ExtraIntervals = int(arg1.Val)
-	}
-
-	// Must be a variable reference, function, wildcard, or regexp.
-	switch arg0 := args[0].(type) {
-	case *influxql.Call:
-		if c.global.Interval.IsZero() {
-			return fmt.Errorf("sliding_window aggregate requires a GROUP BY interval")
-		}
-		return c.compileNestedExpr(arg0)
-	default:
-		return fmt.Errorf("aggregate function required inside the call to sliding_window")
 	}
 }
 
@@ -960,27 +580,6 @@ func (c *compiledField) compileChandeMomentumOscillator(args []influxql.Expr) er
 	}
 }
 
-func (c *compiledField) compileIntegral(args []influxql.Expr) error {
-	if min, max, got := 1, 2, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for integral, expected at least %d but no more than %d, got %d", min, max, got)
-	}
-
-	if len(args) == 2 {
-		switch arg1 := args[1].(type) {
-		case *influxql.DurationLiteral:
-			if arg1.Val <= 0 {
-				return fmt.Errorf("duration argument must be positive, got %s", influxql.FormatDuration(arg1.Val))
-			}
-		default:
-			return errors.New("second argument must be a duration")
-		}
-	}
-	c.global.OnlySelectors = false
-
-	// Must be a variable reference, wildcard, or regexp.
-	return c.compileSymbol("integral", args[0])
-}
-
 func (c *compiledField) compileHoltWinters(args []influxql.Expr, withFit bool) error {
 	name := "holt_winters"
 	if withFit {
@@ -1029,52 +628,6 @@ func (c *compiledField) compileDistinct(args []influxql.Expr, nested bool) error
 		c.global.HasDistinct = true
 	}
 	c.global.OnlySelectors = false
-	return nil
-}
-
-func (c *compiledField) compileTopBottom(call *influxql.Call) error {
-	if c.global.TopBottomFunction != "" {
-		return fmt.Errorf("selector function %s() cannot be combined with other functions", c.global.TopBottomFunction)
-	}
-
-	if exp, got := 2, len(call.Args); got < exp {
-		return fmt.Errorf("invalid number of arguments for %s, expected at least %d, got %d", call.Name, exp, got)
-	}
-
-	limit, ok := call.Args[len(call.Args)-1].(*influxql.IntegerLiteral)
-	if !ok {
-		return fmt.Errorf("expected integer as last argument in %s(), found %s", call.Name, call.Args[len(call.Args)-1])
-	} else if limit.Val <= 0 {
-		return fmt.Errorf("limit (%d) in %s function must be at least 1", limit.Val, call.Name)
-	} else if c.global.Limit > 0 && int(limit.Val) > c.global.Limit {
-		return fmt.Errorf("limit (%d) in %s function can not be larger than the LIMIT (%d) in the select statement", limit.Val, call.Name, c.global.Limit)
-	}
-
-	if _, ok := call.Args[0].(*influxql.VarRef); !ok {
-		return fmt.Errorf("expected first argument to be a field in %s(), found %s", call.Name, call.Args[0])
-	}
-
-	if len(call.Args) > 2 {
-		for _, v := range call.Args[1 : len(call.Args)-1] {
-			ref, ok := v.(*influxql.VarRef)
-			if !ok {
-				return fmt.Errorf("only fields or tags are allowed in %s(), found %s", call.Name, v)
-			}
-
-			// Add a field for each of the listed dimensions when not writing the results.
-			if !c.global.HasTarget {
-				field := &compiledField{
-					global: c.global,
-					Field:  &influxql.Field{Expr: ref},
-				}
-				c.global.Fields = append(c.global.Fields, field)
-				if err := field.compileExpr(ref); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	c.global.TopBottomFunction = call.Name
 	return nil
 }
 
@@ -1132,83 +685,36 @@ func (c *compiledField) compileCall(expr *influxql.Call) error {
 	if op.IsProjectOp(expr) {
 		return c.compileProjectOp(expr)
 	}
-	if isMathFunction(expr) {
-		return c.compileMathFunction(expr)
+
+	if mathFunc := GetMathFunction(expr.Name); mathFunc != nil {
+		return mathFunc.CompileFunc(expr, c)
 	}
-	if isStringFunction(expr) {
-		return c.compileStringFunction(expr)
+
+	if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
+		return stringFunc.CompileFunc(expr, c)
 	}
 
 	if op.IsAggregateOp(expr) {
 		return c.compileAggregateOp(expr)
 	}
 
+	if aggFunc := GetAggregateOperator(expr.Name); aggFunc != nil {
+		return aggFunc.CompileFunc(expr, c)
+	}
+
 	switch expr.Name {
-	case "percentile":
-		return c.compilePercentile(expr.Args)
-	case "percentile_ogsketch", "percentile_approx":
-		return c.compilePercentileOGSketch(expr.Args, expr.Name)
-	case "histogram":
-		return c.compileHistogram(expr.Args)
-	case "sample":
-		return c.compileSample(expr.Args)
-	case "distinct":
-		return c.compileDistinct(expr.Args, true)
-	case "top", "bottom":
-		return c.compileTopBottom(expr)
-	case "derivative", "non_negative_derivative":
-		isNonNegative := expr.Name == "non_negative_derivative"
-		return c.compileDerivative(expr.Args, isNonNegative)
-	case "difference", "non_negative_difference":
-		isNonNegative := expr.Name == "non_negative_difference"
-		return c.compileDifference(expr.Args, isNonNegative)
-	case "cumulative_sum":
-		return c.compileCumulativeSum(expr.Args)
-	case "moving_average":
-		return c.compileMovingAverage(expr.Args)
-	case "sliding_window":
-		return c.compileSlidingWindow(expr.Args)
 	case "exponential_moving_average", "double_exponential_moving_average", "triple_exponential_moving_average", "relative_strength_index", "triple_exponential_derivative":
 		return c.compileExponentialMovingAverage(expr.Name, expr.Args)
 	case "kaufmans_efficiency_ratio", "kaufmans_adaptive_moving_average":
 		return c.compileKaufmans(expr.Name, expr.Args)
 	case "chande_momentum_oscillator":
 		return c.compileChandeMomentumOscillator(expr.Args)
-	case "elapsed":
-		return c.compileElapsed(expr.Args)
-	case "integral":
-		return c.compileIntegral(expr.Args)
 	case "holt_winters", "holt_winters_with_fit":
 		withFit := expr.Name == "holt_winters_with_fit"
 		return c.compileHoltWinters(expr.Args, withFit)
 	default:
-		return c.compileFunction(expr)
+		return fmt.Errorf("undefined function %s()", expr.Name)
 	}
-}
-
-func (c *compiledField) compileMathFunction(expr *influxql.Call) error {
-	// How many arguments are we expecting?
-	nargs := 1
-	switch expr.Name {
-	case "atan2", "pow", "log", "row_max":
-		nargs = 2
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); got != nargs {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, nargs, got)
-	}
-
-	// Compile all the argument expressions that are not just literals.
-	for _, arg := range expr.Args {
-		if _, ok := arg.(influxql.Literal); ok {
-			continue
-		}
-		if err := c.compileExpr(arg); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (c *compiledStatement) compileDimensions(stmt *influxql.SelectStatement) error {
@@ -1342,7 +848,7 @@ func (c *compiledStatement) validateCondition(expr influxql.Expr) error {
 		}
 		return nil
 	case *influxql.Call:
-		if !isMathFunction(expr) {
+		if mathFunc := GetMathFunction(expr.Name); mathFunc == nil {
 			return fmt.Errorf("invalid function call in condition: %s", expr)
 		}
 

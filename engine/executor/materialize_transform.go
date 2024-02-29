@@ -390,7 +390,7 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		Valuer: influxql.MultiValuer(
 			op.Valuer{},
 			query.MathValuer{},
-			StringValuer{},
+			query.StringValuer{},
 			trans.chunkValuer,
 		),
 		IntegerFloatDivision: true,

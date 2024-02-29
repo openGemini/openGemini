@@ -63,17 +63,6 @@ var (
 	_ LogicalPlan = &LogicalJoin{}
 )
 
-var mergeCall = map[string]bool{"percentile": true, "rate": true, "irate": true,
-	"absent": true, "stddev": true, "mode": true, "median": true, "sample": true,
-	"percentile_approx": true,
-}
-
-var sortedMergeCall = map[string]bool{
-	"difference": true, "non_negative_difference": true,
-	"derivative": true, "non_negative_derivative": true,
-	"elapsed": true, "integral": true, "moving_average": true, "cumulative_sum": true,
-}
-
 type AggLevel uint8
 
 const (
@@ -2612,7 +2601,7 @@ func (b *LogicalPlanBuilderImpl) HashMerge(eType ExchangeType, eTraits []hybridq
 func (b *LogicalPlanBuilderImpl) Merge() LogicalPlanBuilder {
 	reWrite := true
 	for i := range b.schema.Calls() {
-		if mergeCall[b.schema.Calls()[i].Name] {
+		if aggFunc := query.GetAggregateOperator(b.schema.Calls()[i].Name); aggFunc != nil && aggFunc.MergeCall() {
 			reWrite = false
 		}
 	}
