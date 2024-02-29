@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -1011,6 +1012,10 @@ func (qs *QuerySchema) LimitAndOffset() (int, int) {
 }
 
 func (qs *QuerySchema) MatchPreAgg() bool {
+	if !config.GetCommon().PreAggEnabled {
+		return false
+	}
+
 	if !qs.HasCall() {
 		return false
 	}
@@ -1174,7 +1179,8 @@ func (qs *QuerySchema) BuildDownSampleSchema(addPrefix bool) record.Schemas {
 }
 
 func (qs *QuerySchema) HasExcatLimit() bool {
-	return qs.Options().GetHintType() == hybridqp.ExactStatisticQuery && qs.HasLimit() && !qs.HasOptimizeAgg()
+	return (!config.GetCommon().PreAggEnabled || qs.Options().GetHintType() == hybridqp.ExactStatisticQuery) &&
+		qs.HasLimit() && !qs.HasOptimizeAgg()
 }
 
 func (qs *QuerySchema) GetSourcesNames() []string {
