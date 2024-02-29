@@ -77,8 +77,12 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 			fl.Load(filepath.Join(dir, unorderedDir), mst, false)
 			continue
 		}
+
 		switch filepath.Ext(item.Name()) {
 		case colstore.IndexFileSuffix:
+			if isDetachedIdxFile(item.Name()) {
+				continue
+			}
 			fl.loadPKIndexFile(filepath.Join(dir, item.Name()), mst)
 		case tsspFileSuffix:
 			fl.loadTsspFile(filepath.Join(dir, item.Name()), mst, isOrder)
@@ -88,6 +92,13 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 
 		fl.total++
 	}
+}
+
+func isDetachedIdxFile(fileName string) bool {
+	if fileName == MetaIndexFile || fileName == PrimaryKeyFile {
+		return true
+	}
+	return false
 }
 
 func (fl *fileLoader) removeTmpFile(file string) {
