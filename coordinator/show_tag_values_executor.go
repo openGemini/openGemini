@@ -192,18 +192,12 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 	var tagValuesSlice TagValuesSlice
 
 	lock := new(sync.Mutex)
-	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
-		if *hasErr {
-			return nil
-		}
+	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) error {
 		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {
-			*hasErr = true
 			tagValuesSlice = tagValuesSlice[:0]
-		}
-		if *hasErr {
 			return err
 		}
 		tagValuesSlice = append(tagValuesSlice, s...)

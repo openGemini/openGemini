@@ -263,17 +263,16 @@ type mockME struct {
 	MetaExecutor
 }
 
-func (m *mockME) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32, hasErr *bool) error) error {
+func (m *mockME) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error) error {
 	n := 4
 	wg := sync.WaitGroup{}
 	wg.Add(n)
-	hasErr := false
 	var mu sync.RWMutex
 	errs := make([]error, n)
 	for i := 0; i < n; i++ {
 		go func(nodeID int) {
 			mu.Lock()
-			errs[nodeID] = fn(uint64(nodeID), nil, &hasErr)
+			errs[nodeID] = fn(uint64(nodeID), nil)
 			mu.Unlock()
 			wg.Done()
 		}(i)

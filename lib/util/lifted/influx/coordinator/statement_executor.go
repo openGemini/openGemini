@@ -1673,18 +1673,13 @@ func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, c
 	var series []string
 	lock := new(sync.Mutex)
 
-	err = e.MetaExecutor.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
-		if *hasErr {
-			return nil
-		}
+	err = e.MetaExecutor.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) error {
 		arr, err := e.NetStorage.ShowSeries(nodeID, q.Database, pts, names, q.Condition)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {
-			*hasErr = true
 			series = series[:0] // if execute command failed reset res
-		}
-		if !*hasErr {
+		} else {
 			series = append(series, arr...)
 		}
 		return err
@@ -1741,18 +1736,12 @@ func (e *StatementExecutor) showSeriesCardinality(stmt *influxql.ShowSeriesCardi
 	stime := time.Now()
 	var ret meta2.CardinalityInfos
 	lock := new(sync.Mutex)
-	err := e.MetaExecutor.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
-		if *hasErr {
-			return nil
-		}
+	err := e.MetaExecutor.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32) error {
 		mstCardinality, err := e.NetStorage.SeriesCardinality(nodeID, stmt.Database, pts, names, stmt.Condition)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {
-			*hasErr = true
 			ret = ret[:0]
-		}
-		if *hasErr {
 			return err
 		}
 		for i := range mstCardinality {
@@ -1788,18 +1777,12 @@ func (e *StatementExecutor) showSeriesCardinalityWithCondition(stmt *influxql.Sh
 	stime := time.Now()
 	ret := make(map[string]meta2.CardinalityInfos)
 	lock := new(sync.Mutex)
-	err := e.MetaExecutor.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
-		if *hasErr {
-			return nil
-		}
+	err := e.MetaExecutor.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32) error {
 		mstCardinality, err := e.NetStorage.SeriesCardinality(nodeID, stmt.Database, pts, names, stmt.Condition)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {
-			*hasErr = true
 			ret = make(map[string]meta2.CardinalityInfos)
-		}
-		if *hasErr {
 			return err
 		}
 		for i := range mstCardinality {
@@ -1841,18 +1824,12 @@ func (e *StatementExecutor) showSeriesExactCardinality(stmt *influxql.ShowSeries
 	stime := time.Now()
 	ret := make(map[string]uint64)
 	lock := new(sync.Mutex)
-	err := e.MetaExecutor.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32, hasErr *bool) error {
-		if *hasErr {
-			return nil
-		}
+	err := e.MetaExecutor.EachDBNodes(stmt.Database, func(nodeID uint64, pts []uint32) error {
 		tmp, err := e.NetStorage.SeriesExactCardinality(nodeID, stmt.Database, pts, names, stmt.Condition)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {
-			*hasErr = true
 			ret = make(map[string]uint64)
-		}
-		if *hasErr {
 			return err
 		}
 		for name, n := range tmp {

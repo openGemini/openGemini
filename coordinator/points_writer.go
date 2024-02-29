@@ -831,21 +831,39 @@ func (w *PointsWriter) Close() {
 	close(w.signal)
 }
 
+// Errors that need to be retried in both HA and non-HA scenarios.
+var retryableErrnos = []errno.Errno{
+	errno.NoConnectionAvailable,
+	errno.ConnectionClosed,
+	errno.NoNodeAvailable,
+	errno.SelectClosedConn,
+	errno.SessionSelectTimeout,
+	errno.OpenSessionTimeout,
+	errno.PtNotFound,
+	errno.DBPTClosed,
+	errno.ShardMetaNotFound,
+}
+
+var retryableErrStrs = []string{
+	"connection reset by peer",
+	"connection refused",
+	"broken pipe",
+	"write: connection timed out",
+	"use of closed network connection",
+}
+
 // IsRetryErrorForPtView returns true if dbpt is not on this node.
 func IsRetryErrorForPtView(err error) bool {
-	// Errors that need to be retried in both HA and non-HA scenarios.
-	return errno.Equal(err, errno.NoConnectionAvailable) ||
-		errno.Equal(err, errno.ConnectionClosed) ||
-		errno.Equal(err, errno.NoNodeAvailable) ||
-		errno.Equal(err, errno.SelectClosedConn) ||
-		errno.Equal(err, errno.SessionSelectTimeout) ||
-		errno.Equal(err, errno.OpenSessionTimeout) ||
-		strings.Contains(err.Error(), "connection reset by peer") ||
-		strings.Contains(err.Error(), "connection refused") ||
-		strings.Contains(err.Error(), "broken pipe") ||
-		strings.Contains(err.Error(), "write: connection timed out") ||
-		strings.Contains(err.Error(), "use of closed network connection") || errno.Equal(err, errno.PtNotFound) ||
-		errno.Equal(err, errno.DBPTClosed) || errno.Equal(err, errno.ShardMetaNotFound)
+	if errno.Equal(err, retryableErrnos...) {
+		return true
+	}
+	str := err.Error()
+	for _, s := range retryableErrStrs {
+		if strings.Contains(str, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16, bool) {

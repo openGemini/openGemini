@@ -17,7 +17,6 @@ limitations under the License.
 package coordinator
 
 import (
-	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -33,7 +32,7 @@ const (
 
 type IMetaExecutor interface {
 	SetTimeOut(timeout time.Duration)
-	EachDBNodes(database string, fn func(nodeID uint64, pts []uint32, hasErr *bool) error) error
+	EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error) error
 	Close() error
 }
 
@@ -64,45 +63,43 @@ func (m *MetaExecutor) Close() error {
 	return nil
 }
 
-func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32, hasError *bool) error) error {
-	_, err := m.MetaClient.Database(database)
-	if err != nil {
+func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error) error {
+	if _, err := m.MetaClient.Database(database); err != nil {
 		return err
 	}
 
 	start := time.Now()
-	//var dbPtInfo []meta2.PtInfo
-	var wg sync.WaitGroup
 
-retryExecute:
 	for {
-		if time.Since(start).Seconds() >= 30*time.Second.Seconds() {
-			break retryExecute
-		}
 		// write-available-first: skip offline pts and tolerate data lost
-		var nodePtMap map[uint64][]uint32
-		nodePtMap, err = m.MetaClient.GetNodePtsMap(database)
+		nodePtMap, err := m.MetaClient.GetNodePtsMap(database)
 		if err != nil || len(nodePtMap) == 0 {
-			break retryExecute
+			return err
 		}
-		hasErr := false
-		wg.Add(len(nodePtMap))
-		for nodeId := range nodePtMap {
+
+		chErr := make(chan error, len(nodePtMap))
+
+		for id, pts := range nodePtMap {
 			go func(nodeID uint64, pts []uint32) {
-				errR := fn(nodeID, pts, &hasErr)
-				if errR != nil {
-					err = errR
-				}
-				wg.Done()
-			}(nodeId, nodePtMap[nodeId])
+				chErr <- fn(nodeID, pts)
+			}(id, pts)
 		}
-		wg.Wait()
-		if err == nil || !IsRetryErrorForPtView(err) {
-			break retryExecute
+
+		retryable := true
+		for i := 0; i < len(nodePtMap); i++ {
+			if e := <-chErr; e != nil && retryable {
+				retryable = IsRetryErrorForPtView(e)
+				err = e
+			}
 		}
+		if err == nil || !retryable {
+			return err
+		}
+
 		time.Sleep(100 * time.Millisecond)
+		if time.Since(start) >= 30*time.Second {
+			return err
+		}
 		m.Logger.Warn("retry execute command", zap.Error(err))
 	}
-
-	return err
 }
