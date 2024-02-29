@@ -29,6 +29,7 @@ const (
 
 type IQuery interface {
 	Abort()
+	Crash()
 	GetQueryExeInfo() *netstorage.QueryExeInfo
 }
 
@@ -138,6 +139,17 @@ func (qm *Manager) Abort(qid uint64) {
 	h := qm.Get(qid)
 	if h != nil {
 		h.Abort()
+	}
+}
+
+func (qm *Manager) Crash(qid uint64) {
+	qm.abortedMu.Lock()
+	qm.aborted[qid] = time.Now()
+	qm.abortedMu.Unlock()
+
+	h := qm.Get(qid)
+	if h != nil {
+		h.Crash()
 	}
 }
 

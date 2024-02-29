@@ -344,7 +344,7 @@ func TestColumnStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
 	assert2.Equal(t, reader.GetInputNumber(nil), 0)
 	reader.sendChunk(nil)
-	assert2.Equal(t, reader.closedCount, int64(1))
+	assert2.Equal(t, *(reader.closedSignal), int32(1))
 }
 
 type MockStoreEngine struct {

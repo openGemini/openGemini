@@ -188,6 +188,10 @@ func (c *RPCServer) Abort() {
 	fmt.Println("aborted")
 }
 
+func (c *RPCServer) Crash() {
+	fmt.Println("crashed")
+}
+
 type RPCAbort struct {
 }
 

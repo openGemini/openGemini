@@ -53,6 +53,7 @@ type Select struct {
 
 	aborted   bool
 	abortHook func()
+	crashHook func()
 
 	trace          *tracing.Trace
 	buildPlanSpan  *tracing.Span
@@ -103,6 +104,28 @@ func (s *Select) isAborted() bool {
 	defer s.mu.RUnlock()
 
 	return s.aborted
+}
+
+func (s *Select) Crash() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.aborted = true
+	if s.crashHook != nil {
+		s.crashHook()
+		s.crashHook = nil
+	}
+}
+
+func (s *Select) SetCrashHook(hook func()) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.aborted {
+		return false
+	}
+	s.crashHook = hook
+	return true
 }
 
 func (s *Select) Process() error {
@@ -233,9 +256,14 @@ func (s *Select) execute(ctx context.Context, p hybridqp.Executor) error {
 		// query aborted
 		return nil
 	}
+	if !s.SetCrashHook(pe.Crash) {
+		// query crashed
+		return nil
+	}
 	ctx = context.WithValue(ctx, query2.IndexScanDagStartTimeKey, time.Now())
 	err := pe.ExecuteExecutor(ctx)
-	if err == nil || pe.Aborted() {
+	// ignore the PipelineExecutor error caused by abort or kill query.
+	if err == nil || pe.Aborted() || s.isAborted() {
 		return nil
 	}
 	return err

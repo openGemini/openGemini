@@ -117,7 +117,7 @@ func (pm *ProactiveManager) KillQuery(id uint64) {
 		}
 		isExist = true
 		manager.Kill(id)
-		manager.Abort(id)
+		manager.Crash(id)
 		abortSuccess = true
 	}
 	query.VisitManagers(killQueryByIDFn)

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -263,6 +264,7 @@ type HashAggTransform struct {
 	timeFuncState      TimeFuncState
 	firstOrLastFuncLoc int
 	haveTopBottomOp    bool
+	closedSignal       int32
 }
 
 type TimeFuncState uint32
@@ -409,8 +411,11 @@ func (trans *HashAggTransform) Explain() []ValuePair {
 }
 
 func (trans *HashAggTransform) Close() {
-	trans.output.Close()
-	trans.outputChunkPool.Release()
+	trans.Once(func() {
+		atomic.AddInt32(&trans.closedSignal, 1)
+		trans.output.Close()
+		trans.outputChunkPool.Release()
+	})
 }
 
 func (trans *HashAggTransform) receiveChunk(c Chunk) {
@@ -439,6 +444,7 @@ func (trans *HashAggTransform) runnable(ctx context.Context, errs *errno.Errs, i
 			trans.receiveChunk(c)
 			tracing.EndPP(trans.span)
 		case <-ctx.Done():
+			atomic.AddInt32(&trans.closedSignal, 1)
 			trans.receiveChunk(nil)
 			return
 		}
@@ -513,6 +519,12 @@ func (trans *HashAggTransform) getChunkFromChild() bool {
 
 func (trans *HashAggTransform) getChunk() hashAggGetChunkState {
 	var ret bool
+	// The interrupt signal is received. No result is returned.
+	if atomic.LoadInt32(&trans.closedSignal) > 0 {
+		if !trans.initDiskAsInput() {
+			return noChunk
+		}
+	}
 	if trans.isChildDrained {
 		ret = trans.getChunkFromDisk()
 	} else {

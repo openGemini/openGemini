@@ -238,6 +238,12 @@ func TestCreateSerfInstance(t *testing.T) {
 	require.NoError(t, h.Process())
 
 	h = NewSelect(store, resp, req)
+	h.SetCrashHook(func() {})
+	h.Crash()
+	h.SetCrashHook(func() {})
+	require.NoError(t, h.Process())
+
+	h = NewSelect(store, resp, req)
 	require.NotEmpty(t, h.execute(context.Background(), nil))
 	h.Abort()
 	require.NoError(t, h.execute(context.Background(), &executor.PipelineExecutor{}))
