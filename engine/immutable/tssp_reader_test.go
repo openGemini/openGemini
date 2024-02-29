@@ -2279,3 +2279,21 @@ func TestLoadIdTimesFromClosedFile(t *testing.T) {
 	require.NoError(t, f.Close())
 	require.NoError(t, f.LoadIdTimes(&IdTimePairs{}))
 }
+
+func TestNewMsBuilderWithCold(t *testing.T) {
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewTsStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+	store.SetImmTableType(config.TSSTORE)
+
+	fileSeq := uint64(1)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	NewMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, util.Cold, store.Sequencer(), 2, config.TSSTORE)
+}

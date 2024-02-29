@@ -141,7 +141,7 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 		return fmt.Errorf("file(%s) exist", filePath)
 	}
 	if c.tier == util.Cold {
-		c.fd, err = fileops.CreateOBSFile(filePath, lock, pri)
+		c.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
 		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
 	}

@@ -1600,12 +1600,6 @@ func (data *Data) GetTierOfShardGroup(database, policy string, timestamp time.Ti
 			tier = util.Warm
 		}
 	}
-
-	if rpi.WarmDuration > 0 {
-		if endTime.Add(rpi.WarmDuration).Before(now) {
-			tier = util.Cold
-		}
-	}
 	return nil, tier, nil
 }
 

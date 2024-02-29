@@ -163,6 +163,10 @@ func (vfs) CreateV1(name string, _ ...FSOption) (File, error) {
 	return Create(name)
 }
 
+func (vfs) CreateV2(name string, _ ...FSOption) (File, error) {
+	return Create(name)
+}
+
 func (vfs) Remove(name string, _ ...FSOption) error {
 	return os.Remove(name)
 }
@@ -234,8 +238,4 @@ func (f vfs) IsObsFile(path string) (bool, error) {
 
 func (f vfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
 	return nil
-}
-
-func (f vfs) CreateOBSFile(name string, opt ...FSOption) (File, error) {
-	return nil, nil
 }

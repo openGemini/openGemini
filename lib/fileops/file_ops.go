@@ -95,6 +95,9 @@ type VFS interface {
 
 	CreateV1(name string, opt ...FSOption) (File, error)
 
+	// CreateV2 create a new file in OBS when use streamfs
+	CreateV2(name string, opt ...FSOption) (File, error)
+
 	// Remove removes the named file or (empty) directory.
 	// the optional opt is: FileLockOption
 	Remove(name string, opt ...FSOption) error
@@ -142,9 +145,6 @@ type VFS interface {
 
 	// CopyFileFromDFVToOBS copy a file from DFV TO OBS when use streamfs
 	CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error
-
-	// CreateOBSFile create a new file in OBS when use streamfs
-	CreateOBSFile(name string, opt ...FSOption) (File, error)
 }
 
 // Open opens the named file with specified options.
@@ -274,9 +274,9 @@ func CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
 }
 
 // CreateOBSFile create a new file in OBS when use streamfs
-func CreateOBSFile(name string, opt ...FSOption) (File, error) {
+func CreateV2(name string, opt ...FSOption) (File, error) {
 	t := GetFsType(name)
-	return GetFs(t).CreateOBSFile(name, opt...)
+	return GetFs(t).CreateV2(name, opt...)
 }
 
 func opsStatEnd(startTime int64, opsType int, bytes int64) {
