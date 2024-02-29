@@ -1983,6 +1983,7 @@ type mockTableReader struct {
 	NameFn             func() string
 	FileNameFn         func() string
 	RenameFn           func(newName string) error
+	RenameOnObsFn      func(newName string) error
 	FileSizeFn         func() int64
 	InMemSizeFn        func() int64
 	VersionFn          func() uint64
@@ -2034,6 +2035,7 @@ func (r *mockTableReader) ContainsId(id uint64) bool                    { return
 func (r *mockTableReader) Name() string                                 { return r.NameFn() }
 func (r *mockTableReader) FileName() string                             { return r.FileNameFn() }
 func (r *mockTableReader) Rename(newName string) error                  { return r.RenameFn(newName) }
+func (r *mockTableReader) RenameOnObs(newName string) error             { return r.RenameOnObsFn(newName) }
 func (r *mockTableReader) FileSize() int64                              { return r.FileSizeFn() }
 func (r *mockTableReader) InMemSize() int64                             { return r.InMemSizeFn() }
 func (r *mockTableReader) Version() uint64                              { return r.VersionFn() }
@@ -2296,4 +2298,12 @@ func TestNewMsBuilderWithCold(t *testing.T) {
 	fileSeq := uint64(1)
 	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
 	NewMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, util.Cold, store.Sequencer(), 2, config.TSSTORE)
+}
+
+func TestTsspFileRenameOnObs(t *testing.T) {
+	file := &tsspFile{}
+	file.Stop()
+
+	err := file.RenameOnObs("tmp")
+	require.Error(t, err)
 }

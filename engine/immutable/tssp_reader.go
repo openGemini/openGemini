@@ -103,6 +103,7 @@ type TSSPFile interface {
 	AddToEvictList(level uint16)
 	RemoveFromEvictList(level uint16)
 	GetFileReaderRef() int64
+	RenameOnObs(obsName string) error
 }
 
 type TSSPFiles struct {
@@ -224,8 +225,16 @@ func (f *TSSPFiles) deleteFile(tbl TSSPFile) {
 	f.files = append(f.files[:idx], f.files[idx+1:]...)
 }
 
-func (f *TSSPFiles) Append(file TSSPFile) {
-	f.files = append(f.files, file)
+func (f *TSSPFiles) Append(file ...TSSPFile) {
+	f.files = append(f.files, file...)
+}
+
+func (f *TSSPFiles) RLock() {
+	f.lock.RLock()
+}
+
+func (f *TSSPFiles) RUnlock() {
+	f.lock.RUnlock()
 }
 
 type tsspFile struct {
@@ -756,6 +765,16 @@ func (f *tsspFile) GetFileReaderRef() int64 {
 		return f.reader.GetFileReaderRef()
 	}
 	return 0
+}
+
+func (f *tsspFile) RenameOnObs(obsName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopped() {
+		return errFileClosed
+	}
+
+	return f.reader.RenameOnObs(obsName)
 }
 
 var (

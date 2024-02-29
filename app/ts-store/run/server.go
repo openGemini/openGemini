@@ -111,6 +111,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	syscontrol.SetQuerySeriesLimit(conf.SelectSpec.QuerySeriesLimit)
 	syscontrol.SetQueryEnabledWhenExceedSeries(conf.SelectSpec.EnableWhenExceed)
 	syscontrol.SetIndexReadCachePersistent(conf.Data.IndexReadCachePersistent)
+	syscontrol.SetHierarchicalStorageEnabled(conf.HierarchicalStore.Enabled)
 
 	s.storageDataPath = conf.Data.DataDir
 	s.metaPath = conf.Data.MetaDir

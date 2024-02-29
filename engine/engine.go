@@ -658,7 +658,7 @@ func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*met
 			for _, shard := range e.DBPartitions[db][pt].shards {
 				tier := shard.GetTier()
 				expired := shard.IsTierExpired()
-				if !expired {
+				if !expired || tier == util.Cold {
 					continue
 				}
 				if tier == util.Hot {

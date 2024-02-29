@@ -1409,3 +1409,16 @@ func TestStoreHierarchicalStorage_MoveStop(t *testing.T) {
 
 	err = eng.HierarchicalStorage("db0", 0, 1)
 }
+
+func TestStoreHierarchicalStorage_FetchShardsNeedChangeStore(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	sh := eng.DBPartitions["db0"][0].shards[1]
+	sh.GetDuration().Tier = util.Cold
+
+	eng.FetchShardsNeedChangeStore()
+}

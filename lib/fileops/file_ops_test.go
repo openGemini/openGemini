@@ -455,10 +455,17 @@ func TestVFS2(t *testing.T) {
 	}
 
 	dstPath := filepath.Join(rootDir, "file2")
+
+	fd, err := Create(fileName, FilePriorityOption(IO_PRIORITY_NORMAL))
+	if err != nil {
+		panic(err)
+	}
+
 	if err := CopyFileFromDFVToOBS(fileName, dstPath, lockFile); err != nil {
 		t.Fatalf("CopyTSSPFromDFVToOBS(from %v to %v) fail, err:%v", fileName, dstPath, err)
 	}
 	if _, err := CreateV2(fileName, lockFile, pri); err != nil {
 		t.Fatalf("CreateOBS(%v) fail, err:%v", fileName, err)
 	}
+	_ = fd.Close()
 }
