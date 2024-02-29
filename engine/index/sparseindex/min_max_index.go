@@ -132,3 +132,29 @@ func (r *MinMaxIndexReader) ReInit(file interface{}) (err error) {
 func (r *MinMaxIndexReader) Close() error {
 	return nil
 }
+
+type MinMaxWriter struct {
+	*skipIndexWriter
+}
+
+func NewMinMaxWriter(dir, msName, dataFilePath, lockPath string) *MinMaxWriter {
+	return &MinMaxWriter{
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+	}
+}
+
+func (m *MinMaxWriter) Open() error {
+	return nil
+}
+
+func (m *MinMaxWriter) Close() error {
+	return nil
+}
+
+func (m *MinMaxWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+	return nil
+}
+
+func (m *MinMaxWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
+	return nil, nil
+}

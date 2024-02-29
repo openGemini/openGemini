@@ -27,7 +27,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
-	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -79,10 +78,6 @@ func writeData(testCompDir, mstName string) error {
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
 	}
-	indexRelation := &influxql.IndexRelation{
-		Oids:       []uint32{uint32(index.BloomFilter)},
-		IndexNames: []string{"bloomfilter"},
-	}
 
 	store.ImmTable.SetMstInfo(mstName, &mstinfo)
 	sortKeyMap := genSortedKeyMap(sort)
@@ -101,11 +96,10 @@ func writeData(testCompDir, mstName string) error {
 				return nil, err
 			}
 		}
-		if indexRelation != nil && len(indexRelation.IndexNames) != 0 {
-			dataFilePath := msb.FileName.String()
+		msb.NewSkipIndex(rec.Schema, *indexRelation)
+		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			schemaIdx := logstore.GenSchemaIdxs(rec.Schema, &mstinfo.IndexRelation, false)
-			if err := msb.writeSkipIndex(rec, schemaIdx, dataFilePath, *msb.lock, fixRowsPerSegment, false); err != nil {
+			if err = msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				return nil, err
 			}
 		}
@@ -203,8 +197,8 @@ func writeData(testCompDir, mstName string) error {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 		msb := NewMsBuilder(store.path, mstName, &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndexWriter()
-		oldRec, err = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, indexRelation)
+		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		oldRec, err = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		if err != nil {
 			return err
 		}

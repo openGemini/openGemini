@@ -4413,6 +4413,13 @@ func (ir *IndexRelation) GetTimeClusterDuration() int64 {
 	return 0
 }
 
+func (ir *IndexRelation) IsSkipIndex(idx int) bool {
+	if ir.Oids[idx] >= uint32(index.BloomFilter) && ir.Oids[idx] < uint32(index.IndexTypeAll) {
+		return true
+	}
+	return false
+}
+
 // Measurement represents a single measurement used as a datasource.
 type Measurement struct {
 	Database        string

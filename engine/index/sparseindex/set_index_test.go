@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
+	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -46,4 +48,28 @@ func TestSetIndexReader(t *testing.T) {
 	assert.Equal(t, err, nil)
 	assert.Equal(t, ok, false)
 	assert.Equal(t, reader.Close(), nil)
+}
+
+func TestSetIndexWriter(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+
+	msName := "cpu"
+	setWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.SetIndex)
+	err := setWriter.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = setWriter.CreateAttachSkipIndex(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = setWriter.CreateDetachSkipIndex(nil, nil, nil, nil)
+
+	err = setWriter.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
 }

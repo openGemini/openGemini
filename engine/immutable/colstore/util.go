@@ -53,7 +53,7 @@ func AppendSKIndexSuffix(dataPath string, fieldName string, indexName string) st
 		indexFileSuffix = MinMaxIndexFileSuffix
 	case index.SetIndex:
 		indexFileSuffix = SetIndexFileSuffix
-	case index.BloomFilterIndex:
+	case index.BloomFilterIndex, index.BloomFilterFullTextIndex:
 		indexFileSuffix = BloomFilterIndexFileSuffix
 	default:
 		panic(fmt.Sprintf("unsupported the skip index: %s", indexName))

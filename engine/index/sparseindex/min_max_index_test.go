@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
@@ -96,4 +97,28 @@ func TestMinMaxIndexReader_error(t *testing.T) {
 		return nil, fmt.Errorf("mock error")
 	}
 	assert.EqualError(t, reader.ReInit(dataFile), "mock error")
+}
+
+func TestMinMaxIndexWriter(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+
+	msName := "cpu"
+	minMaxWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.MinMaxIndex)
+	err := minMaxWriter.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = minMaxWriter.CreateAttachSkipIndex(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = minMaxWriter.CreateDetachSkipIndex(nil, nil, nil, nil)
+
+	err = minMaxWriter.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
 }
