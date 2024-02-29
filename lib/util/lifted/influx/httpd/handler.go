@@ -836,16 +836,13 @@ func (h *Handler) buildLogQueryParam(r *http.Request) (*QueryParam, error) {
 	queryLogRequest, err := getQueryLogRequest(r)
 	if err != nil {
 		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.String("request params", r.URL.RawQuery))
-		return nil, fmt.Errorf("query log scan request error! ")
+		return nil, err
 	}
 
 	para := NewQueryPara(queryLogRequest.Query, queryLogRequest.Reverse, queryLogRequest.Highlight,
 		queryLogRequest.Timeout, queryLogRequest.Limit, queryLogRequest.From*1e6, queryLogRequest.To*1e6,
 		queryLogRequest.Scroll, queryLogRequest.Scroll_id, false, queryLogRequest.Explain, queryLogRequest.IsTruncate)
-	if err := para.parseScrollID(); err != nil {
-		h.Logger.Error("query log scan request Scroll_id error! ", zap.Error(err), zap.String("Scroll_id", para.Scroll_id))
-		return nil, fmt.Errorf("query log scan request Scroll_id error! ")
-	}
+
 	return para, nil
 }
 
@@ -913,8 +910,8 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	var q *influxql.Query
 	var err error
 	var status int
-	if r.FormValue("pipe") == "true" {
-		// new reader for sql statement
+	isPipe := r.FormValue("pipe") == "true"
+	if isPipe {
 		q, _, err = h.parsePipeAndSqlForQuery(r, user)
 		if err != nil {
 			h.httpError(rw, err.Error(), http.StatusBadRequest)
@@ -1018,9 +1015,11 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	// Status header is OK once this point is reached.
 	// Attempt to flush the header immediately so the client gets the header information
 	// and knows the query was accepted.
-	h.writeHeader(rw, http.StatusOK)
-	if w, ok := w.(http.Flusher); ok {
-		w.Flush()
+	if !isPipe {
+		h.writeHeader(rw, http.StatusOK)
+		if w, ok := w.(http.Flusher); ok {
+			w.Flush()
+		}
 	}
 
 	// pull all results from the channel
@@ -1029,6 +1028,11 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		// Ignore nil results.
 		if r == nil {
 			continue
+		}
+
+		if isPipe && r.Err != nil {
+			h.httpError(rw, r.Err.Error(), http.StatusBadRequest)
+			return
 		}
 
 		// if requested, convert result timestamps to epoch
