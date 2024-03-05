@@ -196,6 +196,10 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 		writeRec = &chunk.UnOrderWriteRec
 	}
 
+	if writeRec.rec == nil {
+		writeRec.init(msInfo.Schema)
+	}
+
 	sameSchema := checkSchemaIsSame(writeRec.rec.Schema, fields)
 	if !sameSchema && !writeRec.schemaCopyed {
 		copySchema := record.Schemas{}

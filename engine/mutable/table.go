@@ -69,11 +69,9 @@ type WriteChunk struct {
 	UnOrderWriteRec WriteRec
 }
 
-func (chunk *WriteChunk) Init(sid uint64, schema []record.Field) {
+func (chunk *WriteChunk) Init(sid uint64) {
 	chunk.Sid = sid
 	chunk.LastFlushTime = math.MinInt64
-	chunk.OrderWriteRec.init(schema)
-	chunk.UnOrderWriteRec.init(schema)
 }
 
 func (chunk *WriteChunk) SortRecordNoLock(hlp *record.ColumnSortHelper) {
@@ -195,7 +193,7 @@ func (msi *MsInfo) CreateChunk(sid uint64) (*WriteChunk, bool) {
 	chunk, ok := msi.sidMap[sid]
 	if !ok {
 		chunk = msi.allocChunk()
-		chunk.Init(sid, msi.Schema)
+		chunk.Init(sid)
 		msi.sidMap[sid] = chunk
 	}
 	msi.mu.Unlock()
