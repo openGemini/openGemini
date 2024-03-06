@@ -380,16 +380,15 @@ def build(version=None,
         if len(tags) > 0:
             build_command += "-tags {} ".format(','.join(tags))
 
+        ldflags = "-ldflags=\"-X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
         if static:
-            build_command += "-ldflags=\"-s -X main.TsVersion={} -X main.TsBranch={} -X main.TsCommit={}\" ".format(version,
-                                                                                                                    get_current_branch(),
-                                                                                                                    get_current_commit())
-        else:
-            build_command += "-ldflags=\"-X main.TsVersion={} -X main.TsBranch={} -X main.TsCommit={}\" ".format(version,
-                                                                                                                 get_current_branch(),
-                                                                                                                 get_current_commit())
-        if static:
-            build_command += "-a -installsuffix cgo "
+            ldflags = "-ldflags=\"-s -X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" -a -installsuffix cgo "
+        
+        build_command += ldflags.format(
+                package = "github.com/openGemini/openGemini/app",
+                version = version,
+                branch = get_current_branch(),
+                commit = get_current_commit())
 
         build_command += path
         start_time = datetime.utcnow()
