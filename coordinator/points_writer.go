@@ -675,7 +675,6 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 		}
 	}
 
-	//atomic.AddInt64(&statistics.HandlerStat.WriteUnmarshalSkDuration, time.Since(start).Nanoseconds())
 	if !sameSg {
 		*asis = w.MetaClient.GetAliveShards(database, sg)
 	}
