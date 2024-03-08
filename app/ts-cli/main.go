@@ -17,20 +17,11 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
 	"os"
-	"runtime"
 
 	parse "github.com/influxdata/influxdb/cmd"
-	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-cli/analyzer"
 	"github.com/openGemini/openGemini/app/ts-cli/cmd"
-)
-
-var (
-	TsVersion = "v1.1.0rc0"
-	TsCommit  string
-	TsBranch  string
 )
 
 func main() {
@@ -40,8 +31,6 @@ func main() {
 func doRun(args ...string) {
 	name, _ := parse.ParseCommandName(args)
 	switch name {
-	case "version":
-		fmt.Printf(app.VERSION, cmd.TsCli, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
 	case "analyze":
 		az := analyzer.NewAnalyzer()
 		az.Analyze(args[1])

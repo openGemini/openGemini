@@ -33,13 +33,13 @@ import (
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/models"
 	"github.com/olekukonko/tablewriter"
+	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-cli/geminiql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"golang.org/x/term"
 )
 
 const (
-	CLIENT_VERSION = "0.1.0"
 	DEFAULT_FORMAT = "column"
 	DEFAULT_HOST   = "localhost"
 	DEFAULT_PORT   = 8086
@@ -150,7 +150,7 @@ func (c *CommandLine) Connect(addr string) error {
 		config.URL = url
 	}
 
-	config.UserAgent = "openGemini CLI/" + CLIENT_VERSION
+	config.UserAgent = "openGemini CLI/" + app.Version
 	config.Proxy = http.ProxyFromEnvironment
 
 	client, err := c.clientCreator(config)
@@ -481,7 +481,7 @@ func (c *CommandLine) clientBatchPoints(db string, rp string, raw string) *clien
 }
 
 func (c *CommandLine) Run() error {
-	fmt.Printf("openGemini CLI %s (rev-%s)\n", CLIENT_VERSION, "revision")
+	fmt.Printf("openGemini CLI %s (rev-%s)\n", app.Version, "revision")
 	fmt.Println("Please use `quit`, `exit` or `Ctrl-D` to exit this program.")
 	completer := NewCompleter()
 	p := prompt.New(
