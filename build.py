@@ -380,9 +380,11 @@ def build(version=None,
         if len(tags) > 0:
             build_command += "-tags {} ".format(','.join(tags))
 
-        ldflags = "-ldflags=\"-X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
         if static:
-            ldflags = "-ldflags=\"-s -X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" -a -installsuffix cgo "
+            build_command += "-a -installsuffix cgo "
+            ldflags = "-ldflags=\"-s -X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
+        else:
+            ldflags = "-ldflags=\"-X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
         
         build_command += ldflags.format(
                 package = "github.com/openGemini/openGemini/app",
