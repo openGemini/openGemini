@@ -1264,7 +1264,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 				ctx.ErrLock.Unlock()
 			} else {
 				if h.SubscriberManager != nil {
-					// uw.ReqBuf is the line protocal
+					// uw.ReqBuf is the line protocol
 					h.SubscriberManager.Send(db, rp, uw.ReqBuf)
 				}
 				atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, int64(len(rows)))
