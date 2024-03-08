@@ -121,12 +121,24 @@ Usage: %s run [flags]
             Write process ID to a file.
 `
 
-const VERSION = `openGemini version info:
+// Version information, the value is set by the build script
+var (
+	Version   string
+	GitCommit string
+	GitBranch string
+	BuildTime string
+)
+
+// FullVersion returns the full version string.
+func FullVersion(app string) string {
+	const format = `openGemini version info:
 %s: %s
 git: %s %s
 os: %s
-arch: %s
-`
+arch: %s`
+
+	return fmt.Sprintf(format, app, Version, GitBranch, GitCommit, runtime.GOOS, runtime.GOARCH)
+}
 
 // Options represents the command line options that can be parsed.
 type Options struct {
@@ -279,8 +291,8 @@ type ServerInfo struct {
 	BuildTime string
 }
 
-func (i *ServerInfo) FullVersion() string {
-	return fmt.Sprintf(VERSION, i.App, i.Version, i.Branch, i.Commit, runtime.GOOS, runtime.GOARCH)
+func (si *ServerInfo) FullVersion() string {
+	return FullVersion(string(si.App))
 }
 
 func LogStarting(name string, info *ServerInfo) {

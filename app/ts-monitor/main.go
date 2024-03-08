@@ -19,7 +19,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"runtime"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
@@ -31,13 +30,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
-)
-
-var (
-	TsVersion   = "v1.1.0rc0"
-	TsCommit    string
-	TsBranch    string
-	TsBuildTime string
 )
 
 const TsMonitor = "ts-monitor"
@@ -69,10 +61,10 @@ func doRun(args ...string) error {
 		mainCmd := app.NewCommand()
 		info := app.ServerInfo{
 			App:       config.AppMonitor,
-			Version:   TsVersion,
-			Commit:    TsCommit,
-			Branch:    TsBranch,
-			BuildTime: TsBuildTime,
+			Version:   app.Version,
+			Commit:    app.GitCommit,
+			Branch:    app.GitBranch,
+			BuildTime: app.BuildTime,
 		}
 		mainCmd.Info = info
 		mainCmd.Logo = app.MONITORLOGO
@@ -86,8 +78,8 @@ func doRun(args ...string) error {
 		mainCmd.Logger = logger.NewLogger(errno.ModuleUnknown)
 		mainCmd.Command = &cobra.Command{
 			Use:                monitorUsage,
-			Version:            TsVersion,
-			ValidArgs:          []string{TsBranch, TsCommit, TsBuildTime},
+			Version:            app.Version,
+			ValidArgs:          []string{app.GitBranch, app.GitCommit, app.BuildTime},
 			DisableFlagParsing: true,
 			RunE: func(cmd *cobra.Command, args []string) error {
 				fmt.Fprint(os.Stdout, app.MONITORLOGO)
@@ -121,7 +113,7 @@ func doRun(args ...string) error {
 		util.MustClose(mainCmd)
 		mainCmd.Logger.Info("Monitor shutdown successfully!")
 	case "version":
-		fmt.Printf(app.VERSION, TsMonitor, TsVersion, TsBranch, TsCommit, runtime.GOOS, runtime.GOARCH)
+		fmt.Println(app.FullVersion(TsMonitor))
 	default:
 		return fmt.Errorf(monitorUsage)
 	}

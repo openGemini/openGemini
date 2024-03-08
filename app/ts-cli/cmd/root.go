@@ -36,7 +36,6 @@ var (
 
 // Execute executes the root command.
 func Execute() {
-	rootCmd.AddCommand()
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)

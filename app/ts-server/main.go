@@ -28,23 +28,16 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 )
 
-var (
-	TsVersion   = "v1.1.0rc0"
-	TsCommit    string
-	TsBranch    string
-	TsBuildTime string
-)
-
 func main() {
 	app.InitParse()
 	errno.SetNode(errno.NodeServer)
 
 	info := app.ServerInfo{
 		App:       config.AppSingle,
-		Version:   TsVersion,
-		Commit:    TsCommit,
-		Branch:    TsBranch,
-		BuildTime: TsBuildTime,
+		Version:   app.Version,
+		Commit:    app.GitCommit,
+		Branch:    app.GitBranch,
+		BuildTime: app.BuildTime,
 	}
 
 	cmdMeta := meta.NewCommand(info, false)
