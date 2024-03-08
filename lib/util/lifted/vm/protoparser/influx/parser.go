@@ -1098,7 +1098,7 @@ func (r *Row) TagsSize() int {
 	return total
 }
 
-// PointTag represents influx tag.
+// Tag PointTag represents influx tag.
 type Tag struct {
 	Key     string
 	Value   string
