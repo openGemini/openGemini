@@ -33,16 +33,24 @@
 
 **v1.2.0 (2024.02)**
 
-- [ ] Query performance optimization for IoT scenarios
+- [x] Query performance optimization for IoT scenarios
+- [x] LSM compaction, unorder data merge optimization
+- [x] Enhangce log storage
 
-**v.1.3.0 (2024.04)**
+**v1.2.1 (2024.04)**
 
-- [ ] Data delete
+- [ ] Bug fix
 
-**v.1.4.0 (2024.06)**
+**v1.2.2(2024.06)**
+
+- [ ] Bug fix
+
+**v.1.3.0 (2024.12)**
 
 - [ ] Data replication
-- [ ] Refactor AI-based data analysis
+- [ ] Table level TTL
+- [ ] OBS store
+- [ ] Aggregation optimization
 
 
 
@@ -50,7 +58,7 @@
 
 v0.1.0 (2024.01)
 
-- [ ] Basic API for reading and writing (Line Protocol)
+- [x] Basic API for reading and writing (Line Protocol)
 
 v0.2.0 (2024.02)
 
