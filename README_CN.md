@@ -8,6 +8,12 @@
 
 [官网](http://www.openGemini.org) | [文档](https://docs.opengemini.org/zh/guide) | [贡献指南](CONTRIBUTION_CN.md) | [RoadMap](ROADMAP.md) | [性能](https://docs.opengemini.org/zh/guide/introduction/performance.html)
 
+<picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://next.ossinsight.io/widgets/official/compose-activity-trends/thumbnail.png?repo_id=507829396&image_size=auto&color_scheme=dark" width="815" height="auto">
+    <img alt="Activity Trends of openGemini/openGemini - Last 28 days" src="https://next.ossinsight.io/widgets/official/compose-activity-trends/thumbnail.png?repo_id=507829396&image_size=auto&color_scheme=light" width="815" height="auto">
+  </picture>
+
+
 ## 关于openGemini
 
 openGemini是一款云原生分布式时序数据库，主要面向物联网和运维监控场景，专注海量遥测数据的存储与分析，可广泛应用于物流、车联网、互联网、智能制造、现代农业、交通、能源、电力和医药等行业，具备卓越的读写性能和高效的数据分析能力，采用类SQL查询语言，无第三方软件依赖、安装简单、部署灵活、运维便捷。
@@ -42,21 +48,9 @@ openGemini是一款云原生分布式时序数据库，主要面向物联网和�
 
   兼容InfluxDB 1.x 版本的Line Protocol 、Influxql和API接口，兼容现有InfluxDB工具链（如SDK/telegraf..)，支持Prometheus远程数据存储
 
-## 第三方支持
+## 应用场景
 
-![image-20220927211159737](images/image-20220927211159737.png)
-
-openGemini目前暂时只支持Linux操作系统，无缝支持InfluxDB生态工具链，比如：
-
-主流开发语言驱动：[JavaScript](https://github.com/node-influx/node-influx)、[Java](https://github.com/influxdata/influxdb-java)、[C/C++]()、[Ruby](https://github.com/influxdata/influxdb-ruby)、[Go](https://github.com/influxdata/influxdb1-client)、[Python](https://github.com/influxdata/influxdb-python)、[PHP](https://github.com/influxdata/influxdb-php)
-
-客户端：ts-cli
-
-数据接入工具：StatsD、EMQX、Telegraf、Icinga2、HiveMQ、Kafka、MQTT
-
-数据洞察工具：Chronograf、Grafana
-
-大数据和数据分析系统：Zeppelin、Flink、Spark、Kapacitor等。
+![image-20220927211159737](images/scenario_zh.png)
 
 ## 快速开始
 

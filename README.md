@@ -5,12 +5,19 @@
 ![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)                                                                                                
 [简体中文](README_CN.md) | English
 
-[Official Website](http://www.openGemini.org) | [Docs](https://docs.opengemini.org/guide) | [Contribution Guide](CONTRIBUTION.md) 
- | [RoadMap](./ROADMAP.md) | [Performance](https://docs.opengemini.org/guide/introduction/performance.html)
+[Official Website](http://www.openGemini.org) | [Docs](https://docs.opengemini.org/guide) | [Contribution Guide](CONTRIBUTION.md) | [RoadMap](./ROADMAP.md) | [Performance](https://docs.opengemini.org/guide/introduction/performance.html)
+
+
+
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://next.ossinsight.io/widgets/official/compose-activity-trends/thumbnail.png?repo_id=507829396&image_size=auto&color_scheme=dark" width="815" height="auto">
+    <img alt="Activity Trends of openGemini/openGemini - Last 28 days" src="https://next.ossinsight.io/widgets/official/compose-activity-trends/thumbnail.png?repo_id=507829396&image_size=auto&color_scheme=light" width="815" height="auto">
+  </picture>
+
 
 ## About openGemini
 
-openGemini is a cloud-native distributed time series database, mainly for the Internet of Things and operation and maintenance monitoring scenarios. It focuses on the storage and analysis of massive telemetry data. It can be widely used in logistics, Internet of Vehicles, Internet, intelligent manufacturing, modern agriculture, transportation, and energy, electric power, medicine and other industries, it has excellent reading and writing performance and efficient data analysis capabilities. It uses SQL-like query language, easy to install, and convenient in operation and maintenance.
+openGemini is a cloud-native distributed time series database for Observability, focusing on the storage and analysis of massive telemetry data. 
 
 If you have used openGemini, please let us know and [click Submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
 
@@ -40,23 +47,11 @@ Compared with other time series database, openGemini has the following advantage
 
 - #### Ecosystem compatibility
 
-  Compatible with InfluxDB v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing InfluxDB toolchain, supports prometheus remote read/write API
+  Compatible with **InfluxDB** v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing **InfluxDB toolchain**, supports **prometheus** remote read/write API and **openTelemetry** standard protocol
 
-## Third-party supports
+## Application Scenes
 
-![image-20220927210909436](images/image-20220927210909436.png)
-
-currently openGemini only supports Linux OS, and supports InfluxDB ecosystem toolchains, such as:
-
-Drivers: [JavaScript](https://github.com/node-influx/node-influx), [Java](https://github.com/influxdata/influxdb-java), [C/C++](), [Ruby](https://github.com/influxdata/influxdb-ruby), [Go](https://github.com/influxdata/influxdb1-client), [Python](https://github.com/influxdata/influxdb-python), [PHP](https://github.com/influxdata/influxdb-php)
-
-Client: ts-cli
-
-Data access tools: StatsD, EMQ, Telegraf, Icinga2, HiveMQ, Kafka, MQTT
-
-Data insight tools: Chronograf, Grafana
-
-Big data and data analysis systems: Zeppelin, Flink, Spark, Kapacitor, etc.
+![image-20220927210909436](images/scenario.png)
 
 ## Quick Start
 
