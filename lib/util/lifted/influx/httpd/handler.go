@@ -1255,6 +1255,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			if atomic.LoadInt32(&syscontrol.LogRowsRuleSwitch) == 1 {
 				h.logRowsIfNecessary(rows, uw.ReqBuf)
 			}
+			h.Logger.Error("serveWrite", zap.Int64("rows len: ", (int64)(len(rows))), zap.Error(err), zap.String("db", database))
 			if err = h.PointsWriter.RetryWritePointRows(db, rp, rows); err != nil {
 				ctx.ErrLock.Lock()
 				if ctx.CallbackErr == nil {

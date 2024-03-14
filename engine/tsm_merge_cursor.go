@@ -17,6 +17,7 @@ limitations under the License.
 package engine
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -87,9 +88,13 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 			return nil, e
 		}
 		if c.locations.Len() == 0 && c.outOfOrderLocations.Len() == 0 {
+			fmt.Print(time.Now())
+			fmt.Println(" newTsmMergeCursor loc nil")
 			return nil, nil
 		}
 	} else {
+		fmt.Print(time.Now())
+		fmt.Println(" lazyInit is true")
 		c.locations = nil
 		c.outOfOrderLocations = nil
 	}

@@ -23,10 +23,12 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"text/tabwriter"
+	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
@@ -959,6 +961,24 @@ LOOP:
 	if sortTs != nil {
 		sortTs.Finish()
 	}
+
+	var msg []byte
+	msg = append(msg, " tagsets\n"...)
+	for i, tagset := range tagSetSlice {
+		msg = append(msg, []byte(strconv.Itoa(i))...)
+		msg = append(msg, ":(len="...)
+		msg = append(msg, []byte(strconv.Itoa(len(tagset.SeriesKeys)))...)
+		msg = append(msg, ")"...)
+		for _, series := range tagset.SeriesKeys {
+			msg = append(msg, series...)
+			msg = append(msg, " "...)
+		}
+	}
+	msg = append(msg, "\nseriesCnt"...)
+	msg = append(msg, []byte(strconv.FormatUint(uint64(seriesNum), 10))...)
+	msg = append(msg, "\n"...)
+	fmt.Print(time.Now())
+	fmt.Println(string(msg))
 
 	return tagSetSlice, seriesNum, nil
 }

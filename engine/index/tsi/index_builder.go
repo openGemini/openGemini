@@ -411,6 +411,8 @@ func (iBuilder *IndexBuilder) Scan(span *tracing.Span, name []byte, opt *query.P
 
 	// 2nd, use secondary index to scan.
 	for i := range iBuilder.Relations {
+		fmt.Print(time.Now())
+		fmt.Println(" use 2nd index --- high cardinality engine")
 		indexSeriesNum := int64(0)
 		if !iBuilder.isRelationInited(uint32(i)) {
 			continue

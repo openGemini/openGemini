@@ -148,6 +148,27 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		lazyInit = true
 	}
 	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
+
+	/* test code */
+	var msg []byte
+	msg = append(msg, " result\n"...)
+	for i, tagset := range result {
+		msg = append(msg, []byte(strconv.Itoa(i))...)
+		msg = append(msg, ":(len="...)
+		msg = append(msg, []byte(strconv.Itoa(len(tagset.SeriesKeys)))...)
+		msg = append(msg, ")"...)
+		for _, series := range tagset.SeriesKeys {
+			msg = append(msg, series...)
+			msg = append(msg, " "...)
+		}
+	}
+	msg = append(msg, "\nseriesCnt"...)
+	msg = append(msg, []byte(strconv.FormatUint(uint64(seriesNum), 10))...)
+	msg = append(msg, "\n"...)
+	fmt.Print(time.Now())
+	fmt.Println(string(msg))
+	/* end */
+
 	defer func() {
 		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum, seriesNum)
 	}()
@@ -194,6 +215,11 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	// unref file(no need lock here), series iterator will ref/unref file itself
 	unRefReaders(immutableReader, mutableReader)
 
+	if err != nil {
+		fmt.Println("CreateCursor err: ", len(groupCursors), err.Error())
+	} else {
+		fmt.Println("CreateCursor noerr:", len(groupCursors))
+	}
 	return groupCursors, err
 }
 
@@ -353,7 +379,8 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 	readers *immutable.MmsReaders, memTables *mutable.MemTables) ([]comm.KeyCursor, error) {
 
 	parallelism, totalSid := getParallelismNumAndSidNum(schema, tagSets)
-
+	fmt.Print(time.Now())
+	fmt.Println(" parallelism: ", parallelism, " totalSid: ", totalSid)
 	var groupSpan *tracing.Span
 	if span != nil {
 		groupSpan = span.StartSpan("create_group_cursor").StartPP()
@@ -365,9 +392,13 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 
 	cursors, err := s.initGroupCursors(schema, parallelism, readers, memTables)
 	if err != nil {
+		fmt.Print(time.Now())
+		fmt.Println(" initGroupCursors error")
 		return nil, err
 	}
 	if len(cursors) == 0 {
+		fmt.Print(time.Now())
+		fmt.Println(" Some thing wrong with initGroupCursors, len(cursors)==0")
 		return nil, nil
 	}
 
@@ -414,6 +445,8 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 			return
 		}
 		if !immutable.IsInterfaceNil(tsCursor) {
+			fmt.Print(time.Now())
+			fmt.Println(" append a tsCursor")
 			groupCur.tagSetCursors = append(groupCur.tagSetCursors, tsCursor)
 		}
 
@@ -433,8 +466,12 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 
 		//if lazy init series cursor, create tagset in serial not in parallel
 		if lazyInit || subTagSetN == 1 {
+			fmt.Print(time.Now())
+			fmt.Println(" CreateTagSetInSerial", subTagSetN, len(tagSet.SeriesKeys))
 			s.CreateTagSetInSerial(work, subTagSetN, tagSet)
 		} else {
+			fmt.Print(time.Now())
+			fmt.Println(" CreateTagSetInParallel", subTagSetN, len(tagSet.SeriesKeys))
 			s.CreateTagSetInParallel(work, subTagSetN, tagSet)
 		}
 		startGroupIdx += subTagSetN
@@ -450,6 +487,8 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 	for i := range cursors {
 		gCursor := cursors[i].(*groupCursor)
 		if len(gCursor.tagSetCursors) > 0 {
+			fmt.Print(time.Now())
+			fmt.Println(" result append a gCursor")
 			result = append(result, gCursor)
 		}
 		gCursor.lazyInit = lazyInit
@@ -464,9 +503,12 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 		analyzeCursor(result, enableFileCursor)
 	}
 	if len(result) > 0 {
+		fmt.Print(time.Now())
+		fmt.Println(" len(result) > 0, return")
 		return result, nil
 	}
-
+	fmt.Print(time.Now())
+	fmt.Println(" len(result) <= 0")
 	return nil, nil
 }
 
@@ -950,6 +992,8 @@ func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *execut
 	tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, rowFilters, ptTags, lazyInit, span)
 
 	if err != nil {
+		fmt.Print(time.Now())
+		fmt.Println(" newTsmMergeCursor err")
 		return nil, err
 	}
 
@@ -974,6 +1018,8 @@ func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *execut
 
 		return seriesCursor, nil
 	}
+	fmt.Print(time.Now())
+	fmt.Println(" newSeriesCursor nil")
 	return nil, nil
 }
 

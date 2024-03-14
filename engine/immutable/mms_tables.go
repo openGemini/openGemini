@@ -19,9 +19,11 @@ package immutable
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -437,12 +439,76 @@ func (m *MmsTables) GetBothFilesRef(measurement string, hasTimeFilter bool, tr u
 	}
 	var orderFiles []TSSPFile = nil
 	var unorderFiles []TSSPFile = nil
+
+	var msg []byte
+	msg = append(msg, " tr:"...)
+	msg = append(msg, []byte(strconv.FormatUint(uint64(tr.Min), 10))...)
+	msg = append(msg, "/"...)
+	msg = append(msg, []byte(strconv.FormatUint(uint64(tr.Max), 10))...)
+	msg = append(msg, "\n"...)
+
 	if orderOk {
 		orderFiles = m.getFiles(order, hasTimeFilter, tr)
+		msg = append(msg, "orderFiles\n"...)
+		for _, f := range order.files {
+			minTime := f.FileStat().TableStat.minTime
+			maxTime := f.FileStat().TableStat.maxTime
+			msg = append(msg, []byte(strconv.FormatUint(uint64(minTime), 10))...)
+			msg = append(msg, "/"...)
+			msg = append(msg, []byte(strconv.FormatUint(uint64(maxTime), 10))...)
+			msg = append(msg, "/"...)
+			msg = append(msg, []byte(f.Name())...)
+			msg = append(msg, " "...)
+		}
+		msg = append(msg, "\n"...)
 	}
 	if unorderOk {
 		unorderFiles = m.getFiles(unorder, hasTimeFilter, tr)
+		msg = append(msg, "unorderFiles\n"...)
+		for _, f := range unorder.files {
+			minTime := f.FileStat().TableStat.minTime
+			maxTime := f.FileStat().TableStat.maxTime
+			msg = append(msg, []byte(strconv.FormatUint(uint64(minTime), 10))...)
+			msg = append(msg, "/"...)
+			msg = append(msg, []byte(strconv.FormatUint(uint64(maxTime), 10))...)
+			msg = append(msg, "/"...)
+			msg = append(msg, []byte(f.Name())...)
+			msg = append(msg, " "...)
+		}
+		msg = append(msg, "\n"...)
 	}
+	fmt.Print(time.Now())
+	fmt.Println(string(msg))
+
+	var msg1 []byte
+	msg1 = append(msg1, " resultOrderFiles\n"...)
+	for _, f := range orderFiles {
+		minTime := f.FileStat().TableStat.minTime
+		maxTime := f.FileStat().TableStat.maxTime
+		msg1 = append(msg1, []byte(strconv.FormatUint(uint64(minTime), 10))...)
+		msg1 = append(msg1, "/"...)
+		msg1 = append(msg1, []byte(strconv.FormatUint(uint64(maxTime), 10))...)
+		msg1 = append(msg1, "/"...)
+		msg1 = append(msg1, []byte(f.Name())...)
+		msg1 = append(msg1, " "...)
+	}
+	msg1 = append(msg1, "\n"...)
+	msg1 = append(msg1, " resultUnorderFiles\n"...)
+
+	for _, f := range unorderFiles {
+		minTime := f.FileStat().TableStat.minTime
+		maxTime := f.FileStat().TableStat.maxTime
+		msg1 = append(msg1, []byte(strconv.FormatUint(uint64(minTime), 10))...)
+		msg1 = append(msg1, "/"...)
+		msg1 = append(msg1, []byte(strconv.FormatUint(uint64(maxTime), 10))...)
+		msg1 = append(msg1, "/"...)
+		msg1 = append(msg1, []byte(f.Name())...)
+		msg1 = append(msg1, " "...)
+	}
+	msg1 = append(msg1, "\n"...)
+	fmt.Print(time.Now())
+	fmt.Println(string(msg1))
+
 	if flushed != nil {
 		if *flushed {
 			return orderFiles, unorderFiles, true
