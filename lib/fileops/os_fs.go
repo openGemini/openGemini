@@ -22,7 +22,7 @@ package fileops
 
 import (
 	"io"
-	"io/ioutil"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -184,8 +184,20 @@ func (vfs) MkdirAll(path string, perm os.FileMode, _ ...FSOption) error {
 	return os.MkdirAll(path, perm)
 }
 
-func (vfs) ReadDir(dirname string) ([]os.FileInfo, error) {
-	return ioutil.ReadDir(dirname)
+func (vfs) ReadDir(dirname string) ([]fs.FileInfo, error) {
+	entries, err := os.ReadDir(dirname)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]fs.FileInfo, 0, len(entries))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
 }
 
 func (vfs) Glob(pattern string) ([]string, error) {
