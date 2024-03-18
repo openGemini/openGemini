@@ -57,6 +57,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -4808,9 +4809,18 @@ func TestWriteFullTextIndexV1(t *testing.T) {
 			PrimaryKey:     primaryKey,
 			CompactionType: config.BLOCK,
 		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
-			Oids:      []uint32{uint32(index.BloomFilterFullText)},
-			IndexList: list},
+		IndexRelation: influxql.IndexRelation{
+			IndexNames: []string{index.BloomFilterFullTextIndex},
+			Oids:       []uint32{uint32(index.BloomFilterFullText)},
+			IndexList:  list,
+			IndexOptions: []*influxql.IndexOptions{
+				{
+					Options: []*influxql.IndexOption{
+						{Tokens: tokenizer.CONTENT_SPLITTER, TokensTable: tokenizer.CONTENT_SPLIT_TABLE, Tokenizers: "standard"},
+					},
+				},
+			},
+		},
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])

@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -104,7 +105,7 @@ func TestMinMaxIndexWriter(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 
 	msName := "cpu"
-	minMaxWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.MinMaxIndex)
+	minMaxWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.MinMaxIndex, tokenizer.CONTENT_SPLITTER)
 	err := minMaxWriter.Open()
 	if err != nil {
 		t.Fatal(err)

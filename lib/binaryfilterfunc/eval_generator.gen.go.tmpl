@@ -21,26 +21,26 @@ import (
 
     "github.com/openGemini/openGemini/lib/tokenizer"
     "github.com/openGemini/openGemini/lib/bitmap"
-    "github.com/openGemini/openGemini/lib/record"
     "github.com/openGemini/openGemini/lib/util"
 )
 
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}LTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	if col.NilCount == 0 {
-		return Get{{.Name}}LTConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}LTConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return Get{{.Name}}LTConditionBitMapWithoutNull(params)
 	}
-	return Get{{.Name}}LTConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+	return Get{{.Name}}LTConditionBitMapWithNull(params)
 }
 {{- end}}
 {{end}}
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}LTConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}LTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -87,7 +87,8 @@ func Get{{.Name}}LTConditionBitMapWithoutNull(col *record.ColVal, compare interf
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}LTConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}LTConditionBitMapWithNull(params *TypeFunParams) []byte {
+    compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -149,19 +150,20 @@ func Get{{.Name}}LTConditionBitMapWithNull(col *record.ColVal, compare interface
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}LTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	if col.NilCount == 0 {
-		return Get{{.Name}}LTEConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}LTEConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return Get{{.Name}}LTEConditionBitMapWithoutNull(params)
 	}
-	return Get{{.Name}}LTEConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+	return Get{{.Name}}LTEConditionBitMapWithNull(params)
 }
 {{- end}}
 {{end}}
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}LTEConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}LTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -208,7 +210,8 @@ func Get{{.Name}}LTEConditionBitMapWithoutNull(col *record.ColVal, compare inter
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}LTEConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}LTEConditionBitMapWithNull(params *TypeFunParams) []byte {
+    compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -270,19 +273,20 @@ func Get{{.Name}}LTEConditionBitMapWithNull(col *record.ColVal, compare interfac
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}GTConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	if col.NilCount == 0 {
-		return Get{{.Name}}GTConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}GTConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return Get{{.Name}}GTConditionBitMapWithoutNull(params)
 	}
-	return Get{{.Name}}GTConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+	return Get{{.Name}}GTConditionBitMapWithNull(params)
 }
 {{- end}}
 {{end}}
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}GTConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}GTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -329,7 +333,8 @@ func Get{{.Name}}GTConditionBitMapWithoutNull(col *record.ColVal, compare interf
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}GTConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}GTConditionBitMapWithNull(params *TypeFunParams) []byte {
+    compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -391,19 +396,20 @@ func Get{{.Name}}GTConditionBitMapWithNull(col *record.ColVal, compare interface
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}GTEConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
- 	if col.NilCount == 0 {
- 		return Get{{.Name}}GTEConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}GTEConditionBitMap(params *TypeFunParams) []byte {
+ 	if params.col.NilCount == 0 {
+ 		return Get{{.Name}}GTEConditionBitMapWithoutNull(params)
  	}
- 	return Get{{.Name}}GTEConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+ 	return Get{{.Name}}GTEConditionBitMapWithNull(params)
  }
 {{- end}}
 {{end}}
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}GTEConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}GTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -451,7 +457,8 @@ func Get{{.Name}}GTEConditionBitMapWithoutNull(col *record.ColVal, compare inter
 
 {{range .}}
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
-func Get{{.Name}}GTEConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}GTEConditionBitMapWithNull(params *TypeFunParams) []byte {
+    compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -512,17 +519,18 @@ func Get{{.Name}}GTEConditionBitMapWithNull(col *record.ColVal, compare interfac
 {{end}}
 
 {{range .}}
-func Get{{.Name}}EQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
- 	if col.NilCount == 0 {
- 		return Get{{.Name}}EQConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}EQConditionBitMap(params *TypeFunParams) []byte {
+ 	if params.col.NilCount == 0 {
+ 		return Get{{.Name}}EQConditionBitMapWithoutNull(params)
  	}
- 	return Get{{.Name}}EQConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+ 	return Get{{.Name}}EQConditionBitMapWithNull(params)
  }
 {{end}}
 
 {{range .}}
-func Get{{.Name}}EQConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}EQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -567,7 +575,8 @@ func Get{{.Name}}EQConditionBitMapWithoutNull(col *record.ColVal, compare interf
 {{end}}
 
 {{range .}}
-func Get{{.Name}}EQConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}EQConditionBitMapWithNull(params *TypeFunParams) []byte {
+    compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -627,17 +636,18 @@ func Get{{.Name}}EQConditionBitMapWithNull(col *record.ColVal, compare interface
 {{end}}
 
 {{range .}}
-func Get{{.Name}}NEQConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
- 	if col.NilCount == 0 {
- 		return Get{{.Name}}NEQConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}NEQConditionBitMap(params *TypeFunParams) []byte {
+ 	if params.col.NilCount == 0 {
+ 		return Get{{.Name}}NEQConditionBitMapWithoutNull(params)
  	}
- 	return Get{{.Name}}NEQConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+ 	return Get{{.Name}}NEQConditionBitMapWithNull(params)
  }
 {{end}}
 
 {{range .}}
-func Get{{.Name}}NEQConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}NEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -682,7 +692,8 @@ func Get{{.Name}}NEQConditionBitMapWithoutNull(col *record.ColVal, compare inter
 {{end}}
 
 {{range .}}
-func Get{{.Name}}NEQConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}NEQConditionBitMapWithNull(params *TypeFunParams) []byte {
+    compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
     {{- end}}
@@ -743,23 +754,31 @@ func Get{{.Name}}NEQConditionBitMapWithNull(col *record.ColVal, compare interfac
 
 {{range .}}
 {{- if or (eq .Name "String")}}
-func Get{{.Name}}MatchPhraseConditionBitMap(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
-	if col.NilCount == 0 {
-		return Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(col, compare, bitMap, pos, offset)
+func Get{{.Name}}MatchPhraseConditionBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(params)
 	}
-	return Get{{.Name}}MatchPhraseConditionBitMapWithNull(col, compare, bitMap, pos, offset)
+	return Get{{.Name}}MatchPhraseConditionBitMapWithNull(params)
 }
 {{- end}}
 {{end}}
 
 {{range .}}
 {{- if or (eq .Name "String")}}
-func Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, opt, pos := params.compare, params.col, params.offset, params.opt, params.pos
     {{- if or (eq .Name "String")}}
     goal := util.Str2bytes(compare.(string))
     var content []byte
-    tokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+	var tokensTable []byte
+    measurements := opt.GetMeasurements()
+	if len(measurements) == 0 {
+		tokensTable = tokenizer.GetFullTextOption(nil).TokensTable
+	} else {
+		tokensTable = tokenizer.GetFullTextOption(measurements[0].IndexRelation).TokensTable
+	}
+    tokenFinder := tokenizer.NewSimpleTokenFinder(tokensTable)
     {{- end}}
 
     {{- if or (eq .Name "String")}}
@@ -789,12 +808,20 @@ func Get{{.Name}}MatchPhraseConditionBitMapWithoutNull(col *record.ColVal, compa
 
 {{range .}}
 {{- if or (eq .Name "String")}}
-func Get{{.Name}}MatchPhraseConditionBitMapWithNull(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+func Get{{.Name}}MatchPhraseConditionBitMapWithNull(params *TypeFunParams) []byte {
     var idx int
+    compare, col, offset, pos, opt, bitMap := params.compare, params.col, params.offset, params.pos, params.opt, params.bitMap
     {{- if or (eq .Name "String")}}
     goal := util.Str2bytes(compare.(string))
     var content []byte
-    tokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+    var tokensTable []byte
+    measurements := opt.GetMeasurements()
+	if len(measurements) == 0 {
+		tokensTable = tokenizer.GetFullTextOption(nil).TokensTable
+	} else {
+		tokensTable = tokenizer.GetFullTextOption(measurements[0].IndexRelation).TokensTable
+	}
+    tokenFinder := tokenizer.NewSimpleTokenFinder(tokensTable)
     {{- end}}
 
     {{- if or (eq .Name "String")}}

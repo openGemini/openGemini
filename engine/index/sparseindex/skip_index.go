@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
@@ -275,8 +276,8 @@ func (s *SkipIndex) NewSkipIndexWriters(dir, msName, dataFilePath, lockPath stri
 			if indexRelation.IndexNames[i] == index.BloomFilterFullTextIndex {
 				s.fullTextIdx = pos
 			}
-
-			s.skipIndexWriters = append(s.skipIndexWriters, NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexRelation.IndexNames[i]))
+			tokens := tokenizer.GetFullTextOption(&indexRelation).Tokens
+			s.skipIndexWriters = append(s.skipIndexWriters, NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexRelation.IndexNames[i], tokens))
 			s.idxInRelation = append(s.idxInRelation, i)
 			pos++
 		}
@@ -353,16 +354,16 @@ type SkipIndexWriter interface {
 	CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string)
 }
 
-func NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexType string) SkipIndexWriter {
+func NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexType string, tokens string) SkipIndexWriter {
 	switch indexType {
 	case index.BloomFilterIndex:
-		return NewBloomFilterWriter(dir, msName, dataFilePath, lockPath)
+		return NewBloomFilterWriter(dir, msName, dataFilePath, lockPath, tokens)
 	case index.BloomFilterFullTextIndex:
-		return NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath)
+		return NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath, tokens)
 	case index.SetIndex:
-		return NewSetWriter(dir, msName, dataFilePath, lockPath)
+		return NewSetWriter(dir, msName, dataFilePath, lockPath, tokens)
 	case index.MinMaxIndex:
-		return NewMinMaxWriter(dir, msName, dataFilePath, lockPath)
+		return NewMinMaxWriter(dir, msName, dataFilePath, lockPath, tokens)
 	default:
 		logger.GetLogger().Error("unknown skip index type")
 		return nil
@@ -372,13 +373,15 @@ func NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexType string) S
 type skipIndexWriter struct {
 	dir, msName            string
 	dataFilePath, lockPath string
+	fullTextTokens         string
 }
 
-func newSkipIndexWriter(dir, msName, dataFilePath, lockPath string) *skipIndexWriter {
+func newSkipIndexWriter(dir, msName, dataFilePath, lockPath string, tokens string) *skipIndexWriter {
 	return &skipIndexWriter{
-		dir:          dir,
-		msName:       msName,
-		dataFilePath: dataFilePath,
-		lockPath:     lockPath,
+		dir:            dir,
+		msName:         msName,
+		dataFilePath:   dataFilePath,
+		lockPath:       lockPath,
+		fullTextTokens: tokens,
 	}
 }

@@ -17,7 +17,6 @@ limitations under the License.
 package immutable
 
 import (
-	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -260,7 +259,7 @@ func (l *Location) ReadData(filterOpts *FilterOptions, dst *record.Record, filte
 }
 
 func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Record, filterBitmap *bitmap.FilterBitmap,
-	unnestOperator logstore.UnnestOperator) (*record.Record, int, error) {
+	unnestOperator UnnestOperator) (*record.Record, int, error) {
 	var rec *record.Record
 	var err error
 	var oriRowCount int

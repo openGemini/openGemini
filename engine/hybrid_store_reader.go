@@ -36,7 +36,6 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -409,54 +408,24 @@ func (r *HybridStoreReader) initSchema() (err error) {
 	return
 }
 
-func (r *HybridStoreReader) CreateLogStoreCursor() (comm.KeyCursor, error) {
-	var cursor comm.KeyCursor
-	var err error
-	if r.opt.IsIncQuery() {
-		logCursor, err := NewLogStoreAggCursor(r.obsOptions, r.indexInfo.ShardPath(), r.indexInfo.Version(), r.queryCtx, r.span, r.queryCtx.querySchema)
-		if err != nil {
-			return nil, err
-		}
-		if logCursor == nil {
-			return nil, nil
-		}
-		aggCur := NewAggregateCursor(logCursor, r.queryCtx.querySchema, r.queryCtx.aggPool, r.queryCtx.hasAuxTags())
-		cursor = NewAggTagSetCursor(r.queryCtx.querySchema, r.queryCtx, aggCur, false)
-	} else {
-		cursor, err = NewLogStoreLimitCursor(r.obsOptions, r.indexInfo.ShardPath(), r.indexInfo.Version(), r.queryCtx, r.span, r.queryCtx.querySchema)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return cursor, err
-}
-
 func (r *HybridStoreReader) CreateCursors() ([]comm.KeyCursor, error) {
 	cursors := make([]comm.KeyCursor, 0)
-	if r.indexInfo.Version() <= tokenizer.VersionLatest {
-		cursor, err := r.CreateLogStoreCursor()
-		if err != nil {
-			return nil, err
-		}
-		cursors = append(cursors, cursor)
-	} else {
-		r.initIndexReader()
-		for i := range r.indexReaders {
-			for {
-				frags, err := r.indexReaders[i].Next()
-				if err != nil {
-					return nil, err
-				}
-				if frags == nil {
-					break
-				}
-				r.fragCount += int(frags.FragCount())
-				reader, err := r.initFileReader(frags)
-				if err != nil {
-					return nil, err
-				}
-				cursors = append(cursors, reader)
+	r.initIndexReader()
+	for i := range r.indexReaders {
+		for {
+			frags, err := r.indexReaders[i].Next()
+			if err != nil {
+				return nil, err
 			}
+			if frags == nil {
+				break
+			}
+			r.fragCount += int(frags.FragCount())
+			reader, err := r.initFileReader(frags)
+			if err != nil {
+				return nil, err
+			}
+			cursors = append(cursors, reader)
 		}
 	}
 	return cursors, nil
