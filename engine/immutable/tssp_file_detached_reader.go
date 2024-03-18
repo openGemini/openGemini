@@ -23,7 +23,6 @@ import (
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/config"
@@ -52,7 +51,7 @@ type TSSPFileDetachedReader struct {
 	filterSeqId     int64
 	filterSeqFunc   func(int64, int64) bool
 
-	metaDataQueue   logstore.MetaControl
+	metaDataQueue   MetaControl
 	metaIndex       []*MetaIndex
 	blocks          [][]int
 	obsOpts         *obs.ObsOptions
@@ -63,7 +62,7 @@ type TSSPFileDetachedReader struct {
 	logFilterPool   *record.CircularRecordPool
 	currChunkMeta   []*ChunkMeta
 	unnest          *influxql.Unnest
-	unnestOperator  logstore.UnnestOperator
+	unnestOperator  UnnestOperator
 	ctx             *FileReaderContext
 }
 
@@ -75,7 +74,7 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		blocks:        blocks,
 		obsOpts:       path.Option(),
 		ctx:           ctx,
-		metaDataQueue: logstore.NewMetaControl(true, chunkMetaReadNum),
+		metaDataQueue: NewMetaControl(true, chunkMetaReadNum),
 		unnest:        unnest,
 		seqIndex:      -1,
 	}
@@ -95,7 +94,7 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 	r.dataReader, err = NewDetachedMetaDataReader(path.RemotePath(), path.Option(), isSort)
 	if r.unnest != nil {
 		var err error
-		r.unnestOperator, err = logstore.GetUnnestFuncOperator(unnest, r.ctx.schemas)
+		r.unnestOperator, err = GetUnnestFuncOperator(unnest, r.ctx.schemas)
 		if err != nil {
 			return nil, err
 		}

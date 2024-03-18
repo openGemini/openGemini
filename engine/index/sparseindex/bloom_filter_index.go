@@ -104,9 +104,16 @@ func (r *BloomFilterIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
 }
 
 func (r *BloomFilterIndexReader) ReInit(file interface{}) (err error) {
+	var fullTextTokensTable []byte
+	measurements := r.option.GetMeasurements()
+	if len(measurements) == 0 {
+		fullTextTokensTable = tokenizer.GetFullTextOption(nil).TokensTable
+	} else {
+		fullTextTokensTable = tokenizer.GetFullTextOption(measurements[0].IndexRelation).TokensTable
+	}
 	if f, ok := file.(*OBSFilterPath); ok {
 		splitMap := make(map[string][]byte)
-		splitMap[r.schema[0].Name] = tokenizer.CONTENT_SPLIT_TABLE
+		splitMap[r.schema[0].Name] = fullTextTokensTable
 		fileName := BloomFilterFilePrefix + r.schema[0].Name + BloomFilterFileSuffix
 		if f.localPath != "" {
 			r.bf, err = bloomfilter.NewFilterReader(f.Option(), r.option.GetCondition(), splitMap, true, true, r.version, f.localPath, f.remotePath, fileName, fileName)
@@ -124,7 +131,7 @@ func (r *BloomFilterIndexReader) ReInit(file interface{}) (err error) {
 		fileNameSlice := strings.Split(fileName, ".")
 		fileName = fileNameSlice[0] + "." + r.schema[0].Name + colstore.BloomFilterIndexFileSuffix
 		splitMap := make(map[string][]byte)
-		splitMap[r.schema[0].Name] = tokenizer.CONTENT_SPLIT_TABLE
+		splitMap[r.schema[0].Name] = fullTextTokensTable
 		r.bf, err = bloomfilter.NewLineFilterReader(path, nil, r.option.GetCondition(), r.version, splitMap, fileName)
 		if err != nil {
 			return err
@@ -178,9 +185,9 @@ type BloomFilterWriter struct {
 	*skipIndexWriter
 }
 
-func NewBloomFilterWriter(dir, msName, dataFilePath, lockPath string) *BloomFilterWriter {
+func NewBloomFilterWriter(dir, msName, dataFilePath, lockPath string, tokens string) *BloomFilterWriter {
 	return &BloomFilterWriter{
-		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
 }
 
@@ -228,7 +235,7 @@ func (b *BloomFilterWriter) CreateDetachSkipIndex(writeRec *record.Record, schem
 }
 
 func (b *BloomFilterWriter) GenBloomFilterData(src *record.ColVal, rowsPerSegment []int, refType int) []byte {
-	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
+	tk := tokenizer.NewGramTokenizer(b.fullTextTokens, 0, logstore.GramTokenizerVersion)
 
 	segCnt := len(rowsPerSegment)
 	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)

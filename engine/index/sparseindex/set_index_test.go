@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -55,7 +56,7 @@ func TestSetIndexWriter(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 
 	msName := "cpu"
-	setWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.SetIndex)
+	setWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.SetIndex, tokenizer.CONTENT_SPLITTER)
 	err := setWriter.Open()
 	if err != nil {
 		t.Fatal(err)

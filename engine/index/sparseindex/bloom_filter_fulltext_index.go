@@ -67,11 +67,18 @@ func (r *BloomFilterFullTextIndexReader) MayBeInFragment(fragId uint32) (bool, e
 func (r *BloomFilterFullTextIndexReader) ReInit(file interface{}) (err error) {
 	splitMap := make(map[string][]byte)
 	expr := make([]*bloomfilter.SKRPNElement, 0, len(r.schema))
-	splitMap[r.schema[0].Name] = tokenizer.CONTENT_SPLIT_TABLE
-	for _, v := range r.schema {
-		splitMap[v.Name] = tokenizer.CONTENT_SPLIT_TABLE
+	var tokensTable []byte
+	measurements := r.option.GetMeasurements()
+	if len(measurements) == 0 {
+		tokensTable = tokenizer.GetFullTextOption(nil).TokensTable
+	} else {
+		ir := measurements[0].IndexRelation
+		tokensTable = tokenizer.GetFullTextOption(ir).TokensTable
+		for _, v := range r.schema {
+			splitMap[v.Name] = tokensTable
+		}
 	}
-	splitMap[logparser.DefaultFieldForFullText] = tokenizer.CONTENT_SPLIT_TABLE
+	splitMap[logparser.DefaultFieldForFullText] = tokensTable
 	for _, elem := range r.sk.(*SKConditionImpl).rpn {
 		if elem.RPNOp == rpn.InRange || elem.RPNOp == rpn.NotInRange {
 			expr = append(expr, bloomfilter.NewSKRPNElement(elem.Key, elem.Value.(string)))
@@ -121,9 +128,9 @@ type FullTextIdxWriter struct {
 	*skipIndexWriter
 }
 
-func NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath string) *FullTextIdxWriter {
+func NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath string, tokens string) *FullTextIdxWriter {
 	return &FullTextIdxWriter{
-		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
 }
 
@@ -163,7 +170,7 @@ func (f *FullTextIdxWriter) createSkipIndex(writeRec *record.Record, schemaIdx, 
 }
 
 func (f *FullTextIdxWriter) genFullTextIndexData(writeRec *record.Record, schemaIdx, rowsPerSegment []int) []byte {
-	tk := tokenizer.NewGramTokenizer(tokenizer.CONTENT_SPLITTER, 0, logstore.GramTokenizerVersion)
+	tk := tokenizer.NewGramTokenizer(f.fullTextTokens, 0, logstore.GramTokenizerVersion)
 	segCnt := len(rowsPerSegment)
 	segBfSize := int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize)
 	res := make([]byte, segCnt*segBfSize)

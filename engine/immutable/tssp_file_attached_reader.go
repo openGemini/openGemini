@@ -19,7 +19,6 @@ package immutable
 import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/engine/immutable/logstore"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -37,7 +36,7 @@ type TSSPFileAttachedReader struct {
 
 	reader         *LocationCursor
 	unnest         *influxql.Unnest
-	unnestOperator logstore.UnnestOperator
+	unnestOperator UnnestOperator
 }
 
 func NewTSSPFileAttachedReader(files []TSSPFile, fragRanges []fragment.FragmentRanges, ctx *FileReaderContext, schema hybridqp.Options,
@@ -57,7 +56,7 @@ func NewTSSPFileAttachedReader(files []TSSPFile, fragRanges []fragment.FragmentR
 
 	if r.unnest != nil {
 		var err error
-		r.unnestOperator, err = logstore.GetUnnestFuncOperator(unnest, r.ctx.schemas)
+		r.unnestOperator, err = GetUnnestFuncOperator(unnest, r.ctx.schemas)
 		if err != nil {
 			return nil, err
 		}

@@ -137,9 +137,9 @@ type MinMaxWriter struct {
 	*skipIndexWriter
 }
 
-func NewMinMaxWriter(dir, msName, dataFilePath, lockPath string) *MinMaxWriter {
+func NewMinMaxWriter(dir, msName, dataFilePath, lockPath string, tokens string) *MinMaxWriter {
 	return &MinMaxWriter{
-		newSkipIndexWriter(dir, msName, dataFilePath, lockPath),
+		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
 }
 

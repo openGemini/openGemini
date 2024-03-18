@@ -846,6 +846,7 @@ type CreateMeasurementStatementOption struct {
 
 type IndexOption struct {
 	Tokens              string
+	TokensTable         []byte // not stored in meta,converted from 'IndexOption.Tokens'
 	Tokenizers          string
 	TimeClusterDuration time.Duration
 }
@@ -4414,7 +4415,7 @@ type IndexRelation struct {
 	Oids         []uint32
 	IndexNames   []string
 	IndexList    []*IndexList    // indexType to column name (all column indexed with indexType)
-	IndexOptions []*IndexOptions // columnName to index option (all index options for columnName)
+	IndexOptions []*IndexOptions // indexType to IndexOptions
 }
 
 func NewIndexRelation() *IndexRelation {
@@ -4424,6 +4425,33 @@ func NewIndexRelation() *IndexRelation {
 		IndexList:    make([]*IndexList, 0),
 		IndexOptions: make([]*IndexOptions, 0),
 	}
+}
+
+func (ir *IndexRelation) FindIndexOption(oid uint32, field string) *IndexOption {
+	if ir.IndexOptions == nil {
+		return nil
+	}
+	for i, id := range ir.Oids {
+		if id != oid || len(ir.IndexOptions[i].Options) == 0 {
+			continue
+		}
+		if field == "" || len(ir.IndexOptions[i].Options) == 1 {
+			// find full text option
+			return ir.IndexOptions[i].Options[0]
+		} else {
+			for j, iList := range ir.IndexList[i].IList {
+				if field == iList {
+					if j < len(ir.IndexOptions[i].Options) {
+						return ir.IndexOptions[i].Options[j]
+					} else {
+						// use first option
+						return ir.IndexOptions[i].Options[0]
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // Clone returns a deep clone of the IndexRelation.

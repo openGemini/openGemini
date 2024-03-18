@@ -413,6 +413,7 @@ func (msti *MeasurementInfo) CompatibleForLogkeeperColstore() {
 	if contentSplit == "" {
 		contentSplit = tokenizer.CONTENT_SPLITTER
 	}
+	splitTable, _ := tokenizer.BuildSplitTable(contentSplit)
 	tagsSplitChar := msti.Options.GetTagSplitChar()
 	if tagsSplitChar == "" {
 		tagsSplitChar = tokenizer.TAGS_SPLITTER_BEFORE
@@ -425,7 +426,7 @@ func (msti *MeasurementInfo) CompatibleForLogkeeperColstore() {
 		msti.IndexRelation.IndexList[i] = &influxql.IndexList{IList: IList}
 		msti.IndexRelation.IndexOptions[i] = &influxql.IndexOptions{
 			Options: []*influxql.IndexOption{
-				{Tokens: contentSplit, Tokenizers: "standard"},
+				{Tokens: contentSplit, TokensTable: splitTable, Tokenizers: "standard"},
 			}}
 	}
 }

@@ -331,9 +331,10 @@ func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInf
 	fields := map[string]int32{"content": influx.Field_Type_String}
 	schemaInfo := meta2.NewSchemaInfo(tags, fields)
 	indexName, _ := index.GetIndexNameByType(index.BloomFilterFullText)
+	fullTextOid := uint32(index.BloomFilterFullText)
 	indexR := &influxql.IndexRelation{
 		Rid:        0,
-		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		Oids:       []uint32{fullTextOid},
 		IndexNames: []string{indexName},
 		IndexList: []*influxql.IndexList{
 			&influxql.IndexList{
@@ -349,6 +350,7 @@ func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInf
 			},
 		},
 	}
+
 	ski := &meta2.ShardKeyInfo{Type: "hash"}
 	return colStoreInfo, schemaInfo, indexR, ski
 }

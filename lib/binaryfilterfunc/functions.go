@@ -130,16 +130,17 @@ func SplitWithOrOperation(expr influxql.Expr) []influxql.Expr {
 
 type IdxFunction struct {
 	Idx      int
-	Function func(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte
+	Function func(params *TypeFunParams) []byte
 	Compare  interface{}
 	Op       influxql.Token
+	Opt      hybridqp.Options
 }
 
 type IdxFunctions []IdxFunction
 
 type CondFunctions []IdxFunctions
 
-func InitCondFunctions(expr influxql.Expr, schema *record.Schemas) (CondFunctions, error) {
+func InitCondFunctions(expr influxql.Expr, schema *record.Schemas, opt hybridqp.Options) (CondFunctions, error) {
 	if expr == nil {
 		return nil, nil
 	}
@@ -150,7 +151,7 @@ func InitCondFunctions(expr influxql.Expr, schema *record.Schemas) (CondFunction
 	var funcs CondFunctions
 	for i := range andExprs {
 		var f IdxFunctions
-		f, err = generateIdxFunctions(andExprs[i], f, schema)
+		f, err = generateIdxFunctions(andExprs[i], f, schema, opt)
 		if err != nil {
 			return nil, err
 		}
@@ -160,7 +161,7 @@ func InitCondFunctions(expr influxql.Expr, schema *record.Schemas) (CondFunction
 	return funcs, nil
 }
 
-func generateIdxFunctions(expr influxql.Expr, funcs IdxFunctions, schema *record.Schemas) (IdxFunctions, error) {
+func generateIdxFunctions(expr influxql.Expr, funcs IdxFunctions, schema *record.Schemas, opt hybridqp.Options) (IdxFunctions, error) {
 	var switchOp bool
 	if expr == nil {
 		return funcs, nil
@@ -170,12 +171,12 @@ func generateIdxFunctions(expr influxql.Expr, funcs IdxFunctions, schema *record
 	switch expr := expr.(type) {
 	case *influxql.BinaryExpr:
 		if expr.Op == influxql.AND {
-			funcs, err = generateIdxFunctions(expr.LHS, funcs, schema)
+			funcs, err = generateIdxFunctions(expr.LHS, funcs, schema, opt)
 			if err != nil {
 				return nil, err
 			}
 
-			funcs, err = generateIdxFunctions(expr.RHS, funcs, schema)
+			funcs, err = generateIdxFunctions(expr.RHS, funcs, schema, opt)
 			if err != nil {
 				return nil, err
 			}
@@ -185,7 +186,7 @@ func generateIdxFunctions(expr influxql.Expr, funcs IdxFunctions, schema *record
 				return nil, err
 			}
 
-			funcs, err = getIdxFunction(expr, funcs, switchOp, schema, expr.Op)
+			funcs, err = getIdxFunction(expr, funcs, switchOp, schema, expr.Op, opt)
 			if err != nil {
 				return nil, err
 			}
@@ -236,13 +237,22 @@ var switchOpMap = map[int]int{
 	MATHCHPHRASE: MATHCHPHRASE,
 }
 
-var idxTypeFun [BOTTOM][ColBottom]func(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte
+type TypeFunParams struct {
+	col     *record.ColVal
+	opt     hybridqp.Options
+	compare interface{}
+	bitMap  []byte
+	pos     []byte
+	offset  int
+}
+
+var idxTypeFun [BOTTOM][ColBottom]func(params *TypeFunParams) []byte
 
 func initIdxTypeFun() {
-	nilFunc := func(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte {
+	nilFunc := func(params *TypeFunParams) []byte {
 		return nil
 	}
-	idxTypeFun = [BOTTOM][ColBottom]func(col *record.ColVal, compare interface{}, bitMap, pos []byte, offset int) []byte{
+	idxTypeFun = [BOTTOM][ColBottom]func(params *TypeFunParams) []byte{
 		{GetStringGTConditionBitMap, GetFloatGTConditionBitMap, GetIntegerGTConditionBitMap, nilFunc},
 		{GetStringLTConditionBitMap, GetFloatLTConditionBitMap, GetIntegerLTConditionBitMap, nilFunc},
 		{GetStringGTEConditionBitMap, GetFloatGTEConditionBitMap, GetIntegerGTEConditionBitMap, nilFunc},
@@ -253,7 +263,7 @@ func initIdxTypeFun() {
 	}
 }
 
-func getIdxFunction(expr *influxql.BinaryExpr, funcs IdxFunctions, switchOp bool, schema *record.Schemas, op influxql.Token) (IdxFunctions, error) {
+func getIdxFunction(expr *influxql.BinaryExpr, funcs IdxFunctions, switchOp bool, schema *record.Schemas, op influxql.Token, opt hybridqp.Options) (IdxFunctions, error) {
 	leftExpr, ok := expr.LHS.(*influxql.VarRef)
 	if !ok {
 		return nil, errors.New("error type switch")
@@ -263,6 +273,7 @@ func getIdxFunction(expr *influxql.BinaryExpr, funcs IdxFunctions, switchOp bool
 	switchIdx := switchOpMap[opType]
 	f := IdxFunction{
 		Idx: schema.FieldIndex(leftExpr.Val),
+		Opt: opt,
 	}
 
 	switch e := expr.RHS.(type) {
@@ -450,7 +461,7 @@ func NewCondition(timeCondition, condition influxql.Expr, schema record.Schemas,
 	// use "AND" to connect the time condition to other conditions.
 	combineCondition := CombineConditionWithAnd(timeCondition, condition)
 	rpnExpr := rpn.ConvertToRPNExpr(combineCondition)
-	if err = c.convertToRPNElem(rpnExpr); err != nil {
+	if err = c.convertToRPNElem(rpnExpr, opt); err != nil {
 		return nil, err
 	}
 	if c.numFilter, err = c.getNumFilter(); err != nil {
@@ -459,7 +470,7 @@ func NewCondition(timeCondition, condition influxql.Expr, schema record.Schemas,
 	return c, nil
 }
 
-func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
+func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr, opt hybridqp.Options) error {
 	for i, expr := range rpnExpr.Val {
 		switch v := expr.(type) {
 		case influxql.Token:
@@ -475,7 +486,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 			}
 		case *influxql.VarRef:
 			if v.Val == logparser.DefaultFieldForFullText {
-				if err := c.genRPNElementByFullText(rpnExpr.Val[i+1], influxql.MATCHPHRASE); err != nil {
+				if err := c.genRPNElementByFullText(rpnExpr.Val[i+1], influxql.MATCHPHRASE, opt); err != nil {
 					return err
 				}
 				continue
@@ -492,7 +503,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 			if !ok {
 				return errno.NewError(errno.ErrRPNElemOp)
 			}
-			if err := c.genRPNElementByVal(value, op, idx); err != nil {
+			if err := c.genRPNElementByVal(value, op, idx, opt); err != nil {
 				return err
 			}
 		case *influxql.StringLiteral, *influxql.NumberLiteral, *influxql.IntegerLiteral, *influxql.BooleanLiteral:
@@ -503,7 +514,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 	return nil
 }
 
-func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.Token) error {
+func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.Token, opt hybridqp.Options) error {
 	c.isSimpleExpr = false
 	fields := c.opt.GetMeasurements()[0].IndexRelation.GetFullTextColumns()
 	for i := range fields {
@@ -512,6 +523,7 @@ func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.T
 			return errno.NewError(errno.ErrValueTypeFullTextIndex)
 		}
 		elem := &RPNElement{op: rpn.InRange, rg: IdxFunction{Idx: c.schema.FieldIndex(fields[i]), Op: op}}
+		elem.rg.Opt = opt
 		elem.rg.Compare = v.Val
 		elem.rg.Function = idxTypeFun[operationMap[op]][StringFunc]
 		c.rpn = append(c.rpn, elem)
@@ -522,8 +534,9 @@ func (c *ConditionImpl) genRPNElementByFullText(value interface{}, op influxql.T
 	return nil
 }
 
-func (c *ConditionImpl) genRPNElementByVal(value interface{}, op influxql.Token, idx int) error {
+func (c *ConditionImpl) genRPNElementByVal(value interface{}, op influxql.Token, idx int, opt hybridqp.Options) error {
 	elem := &RPNElement{op: rpn.InRange, rg: IdxFunction{Idx: idx, Op: op}}
+	elem.rg.Opt = opt
 	switch val := value.(type) {
 	case *influxql.StringLiteral:
 		elem.rg.Compare = val.Val
@@ -616,7 +629,15 @@ func (c *ConditionImpl) filterSimplexExpr(rec *record.Record, filterBitmap *bitm
 			if len(filterBitmap.Bitmap[0].Val) == 0 {
 				filterBitmap.Bitmap[0].Val = append(filterBitmap.Bitmap[0].Val, col.Bitmap...)
 			}
-			filterBitmap.Bitmap[0].Val = elem.rg.Function(&col, elem.rg.Compare, col.Bitmap, filterBitmap.Bitmap[0].Val, col.BitMapOffset)
+			params := &TypeFunParams{
+				col:     &col,
+				compare: elem.rg.Compare,
+				bitMap:  col.Bitmap,
+				pos:     filterBitmap.Bitmap[0].Val,
+				offset:  col.BitMapOffset,
+				opt:     elem.rg.Opt,
+			}
+			filterBitmap.Bitmap[0].Val = elem.rg.Function(params)
 		case rpn.AND, rpn.OR:
 		default:
 			return errno.NewError(errno.ErrRPNOp, elem.op)
@@ -673,7 +694,15 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 		b := filterBitmap.Bitmap[idx]
 		b.Val = append(b.Val, col.Bitmap...)
 		// Save the compare result in the new bitmap.
-		b.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		params := &TypeFunParams{
+			col:     &col,
+			compare: e1.rg.Compare,
+			bitMap:  col.Bitmap,
+			pos:     b.Val,
+			offset:  col.BitMapOffset,
+			opt:     e1.rg.Opt,
+		}
+		b.Val = e1.rg.Function(params)
 		filterBitmap.Bitmap[idx-1].Or(filterBitmap.Bitmap[idx])
 		// Clear intermediate results
 		c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
@@ -689,14 +718,28 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 		b1 := filterBitmap.Bitmap[idx]
 		b1.Val = append(b1.Val, col.Bitmap...)
 		// Save the compare result in the new bitmap.
-		b1.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b1.Val, col.BitMapOffset)
+		b1.Val = e1.rg.Function(&TypeFunParams{
+			col:     &col,
+			compare: e1.rg.Compare,
+			bitMap:  col.Bitmap,
+			pos:     b1.Val,
+			offset:  col.BitMapOffset,
+			opt:     e1.rg.Opt,
+		})
 		// Apply for a new bitmap.
 		idx++
 		b2 := filterBitmap.Bitmap[idx]
 		b2.Val = append(b2.Val, col.Bitmap...)
 		// Save the compare result in the new bitmap.
 		col = rec.ColVals[e2.rg.Idx]
-		b2.Val = e2.rg.Function(&col, e2.rg.Compare, col.Bitmap, b2.Val, col.BitMapOffset)
+		b2.Val = e2.rg.Function(&TypeFunParams{
+			col:     &col,
+			compare: e2.rg.Compare,
+			bitMap:  col.Bitmap,
+			pos:     b2.Val,
+			offset:  col.BitMapOffset,
+			opt:     e2.rg.Opt,
+		})
 		b1.Or(b2)
 		// Clear intermediate results
 		c.rpnStack = c.rpnStack[:len(c.rpnStack)-2]
@@ -722,7 +765,14 @@ func (c *ConditionImpl) filterForAnd(rec *record.Record, filterBitmap *bitmap.Fi
 		e1 := c.rpnStack[len(c.rpnStack)-1]
 		col := rec.ColVals[e1.rg.Idx]
 		b := filterBitmap.Bitmap[idx]
-		b.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		b.Val = e1.rg.Function(&TypeFunParams{
+			col:     &col,
+			compare: e1.rg.Compare,
+			bitMap:  col.Bitmap,
+			pos:     b.Val,
+			offset:  col.BitMapOffset,
+			opt:     e1.rg.Opt,
+		})
 		c.rpnStack = c.rpnStack[:len(c.rpnStack)-1]
 	default:
 		e1, e2 := c.rpnStack[len(c.rpnStack)-1], c.rpnStack[len(c.rpnStack)-2]
@@ -734,9 +784,23 @@ func (c *ConditionImpl) filterForAnd(rec *record.Record, filterBitmap *bitmap.Fi
 		b := filterBitmap.Bitmap[idx]
 		b.Val = append(b.Val, col.Bitmap...)
 		// Save the AND result in the new bitmap.
-		b.Val = e1.rg.Function(&col, e1.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		b.Val = e1.rg.Function(&TypeFunParams{
+			col:     &col,
+			compare: e1.rg.Compare,
+			bitMap:  col.Bitmap,
+			pos:     b.Val,
+			offset:  col.BitMapOffset,
+			opt:     e1.rg.Opt,
+		})
 		col = rec.ColVals[e2.rg.Idx]
-		b.Val = e2.rg.Function(&col, e2.rg.Compare, col.Bitmap, b.Val, col.BitMapOffset)
+		b.Val = e2.rg.Function(&TypeFunParams{
+			col:     &col,
+			compare: e2.rg.Compare,
+			bitMap:  col.Bitmap,
+			pos:     b.Val,
+			offset:  col.BitMapOffset,
+			opt:     e2.rg.Opt,
+		})
 		c.rpnStack = c.rpnStack[:len(c.rpnStack)-2]
 	}
 	return idx, nil
