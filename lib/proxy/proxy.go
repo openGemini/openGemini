@@ -19,7 +19,7 @@ package proxy
 import (
 	"bytes"
 	"crypto/tls"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -65,11 +65,11 @@ func (u *Pool) Get(ul *url.URL, targetHost string) (*httputil.ReverseProxy, erro
 		proxy.Transport = defaultTransport
 		proxy.ModifyResponse = func(response *http.Response) error {
 			if response.StatusCode == 200 {
-				body, err := ioutil.ReadAll(response.Body)
+				body, err := io.ReadAll(response.Body)
 				if err != nil {
 					return err
 				}
-				response.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+				response.Body = io.NopCloser(bytes.NewBuffer(body))
 				response.Header.Set("Content-Length", strconv.Itoa(len(body)))
 			}
 			return nil

@@ -19,8 +19,8 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
+	"os"
 	"path"
 	"strings"
 
@@ -92,7 +92,7 @@ func Parse(conf Config, path string) error {
 }
 
 func fromTomlFile(c Config, p string) error {
-	content, err := ioutil.ReadFile(path.Clean(p))
+	content, err := os.ReadFile(path.Clean(p))
 	if err != nil {
 		return err
 	}

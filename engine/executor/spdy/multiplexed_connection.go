@@ -21,7 +21,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -307,7 +306,7 @@ func (c *MultiplexedConnection) discardData(hdr []byte) error {
 		if err := c.setReadDeadline(); err != nil {
 			return err
 		}
-		if _, err := io.CopyN(ioutil.Discard, c.input, int64(length)); err != nil {
+		if _, err := io.CopyN(io.Discard, c.input, int64(length)); err != nil {
 			return err
 		}
 	}

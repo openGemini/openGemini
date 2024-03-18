@@ -201,11 +201,11 @@ func (vfs) Stat(name string) (os.FileInfo, error) {
 }
 
 func (vfs) WriteFile(filename string, data []byte, perm os.FileMode, _ ...FSOption) error {
-	return ioutil.WriteFile(filename, data, perm)
+	return os.WriteFile(filename, data, perm)
 }
 
 func (vfs) ReadFile(filename string, _ ...FSOption) ([]byte, error) {
-	return ioutil.ReadFile(path.Clean(filename))
+	return os.ReadFile(path.Clean(filename))
 }
 
 func (vfs) CreateTime(name string) (*time.Time, error) {

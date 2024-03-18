@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -210,7 +209,7 @@ func (rb *ReportJob) retryEver(url string, headers http.Header, buf string, http
 				_ = resp.Body.Close()
 				break
 			} else {
-				bytesBody, _ = ioutil.ReadAll(resp.Body)
+				bytesBody, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 			}
 		} else if checkConnectionError(err) {

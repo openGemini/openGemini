@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"mime/multipart"
 	"net/http"
@@ -1584,7 +1583,7 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 	//h.httpError(w, "not implementation", http.StatusBadRequest)
 	startTime := time.Now()
 	h.requestTracker.Add(r, user)
-	compressed, err := ioutil.ReadAll(r.Body)
+	compressed, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusInternalServerError)
 		return
