@@ -133,15 +133,15 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 		sort.Sort(tagsGroup[tagGroupIdx])
 		i, j := 0, 0
 		for i < len(ski.ShardKey) && j < len(*tagsGroup[tagGroupIdx]) {
-			cmp := strings.Compare(ski.ShardKey[i], (*tagsGroup[tagGroupIdx])[j].Key)
-			if cmp < 0 {
+			sk, tag := ski.ShardKey[i], &(*tagsGroup[tagGroupIdx])[j]
+			if sk < tag.Key {
 				break
 			}
-			if cmp == 0 {
+			if sk == tag.Key {
 				shardKeyAndValue = append(shardKeyAndValue, ","...)
-				shardKeyAndValue = append(shardKeyAndValue, (*tagsGroup[tagGroupIdx])[j].Key...)
+				shardKeyAndValue = append(shardKeyAndValue, tag.Key...)
 				shardKeyAndValue = append(shardKeyAndValue, "="...)
-				shardKeyAndValue = append(shardKeyAndValue, (*tagsGroup[tagGroupIdx])[j].Value...)
+				shardKeyAndValue = append(shardKeyAndValue, tag.Value...)
 				i++
 			}
 			j++
@@ -425,9 +425,9 @@ type ShardInfo struct {
 }
 
 func (si ShardInfo) Contain(shardKey string) bool {
-	gtMin := strings.Compare(si.Min, shardKey) <= 0
+	gtMin := si.Min <= shardKey
 	ltMax := si.Max == ""
-	ltMax = ltMax || strings.Compare(shardKey, si.Max) < 0
+	ltMax = ltMax || shardKey < si.Max
 	return gtMin && ltMax
 }
 
@@ -435,12 +435,12 @@ func (si ShardInfo) ContainPrefix(prefix string) bool {
 	prefixLen := len(prefix)
 	gtMin := si.Min == ""
 	if len(si.Min) > prefixLen {
-		gtMin = strings.Compare(si.Min[:prefixLen], prefix) <= 0
+		gtMin = si.Min[:prefixLen] <= prefix
 	} else {
-		gtMin = gtMin || strings.Compare(si.Min, prefix) <= 0
+		gtMin = gtMin || si.Min <= prefix
 	}
 
-	ltMax := si.Max == "" || strings.Compare(prefix, si.Max) < 0
+	ltMax := si.Max == "" || prefix < si.Max
 	return gtMin && ltMax
 }
 
