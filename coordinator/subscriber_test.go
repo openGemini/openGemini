@@ -19,7 +19,7 @@ package coordinator
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -307,7 +307,7 @@ func TestSendWriteRequest(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/write", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp")}
-		wr.lineProtocol, _ = ioutil.ReadAll(r.Body)
+		wr.lineProtocol, _ = io.ReadAll(r.Body)
 		ch <- wr
 		w.WriteHeader(http.StatusNoContent)
 	}))

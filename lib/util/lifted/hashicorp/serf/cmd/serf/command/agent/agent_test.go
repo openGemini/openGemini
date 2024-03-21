@@ -2,7 +2,6 @@ package agent
 
 import (
 	"encoding/json"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -125,7 +124,7 @@ func TestAgentTagsFile(t *testing.T) {
 		"datacenter": "us-east",
 	}
 
-	td, err := ioutil.TempDir("", "serf")
+	td, err := os.MkdirTemp("", "serf")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -245,7 +244,7 @@ func TestAgentKeyringFile(t *testing.T) {
 		"5K9OtfP7efFrNKe5WCQvXvnaXJ5cWP0SvXiwe0kkjM4=",
 	}
 
-	td, err := ioutil.TempDir("", "serf")
+	td, err := os.MkdirTemp("", "serf")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -262,7 +261,7 @@ func TestAgentKeyringFile(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	if err := ioutil.WriteFile(keyringFile, encodedKeys, 0600); err != nil {
+	if err := os.WriteFile(keyringFile, encodedKeys, 0600); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -296,14 +295,14 @@ func TestAgentKeyringFile_BadOptions(t *testing.T) {
 }
 
 func TestAgentKeyringFile_NoKeys(t *testing.T) {
-	dir, err := ioutil.TempDir("", "serf")
+	dir, err := os.MkdirTemp("", "serf")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	defer os.RemoveAll(dir)
 
 	keysFile := filepath.Join(dir, "keyring")
-	if err := ioutil.WriteFile(keysFile, []byte("[]"), 0600); err != nil {
+	if err := os.WriteFile(keysFile, []byte("[]"), 0600); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 

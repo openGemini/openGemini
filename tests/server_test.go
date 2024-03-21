@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -11904,7 +11903,7 @@ func TestServer_SubscriptionForward(t *testing.T) {
 	}))
 	mux.HandleFunc("/write", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wr := Request{db: r.URL.Query().Get("db"), rp: r.URL.Query().Get("rp")}
-		wr.lineProtocol, _ = ioutil.ReadAll(r.Body)
+		wr.lineProtocol, _ = io.ReadAll(r.Body)
 		ch <- wr
 		w.WriteHeader(http.StatusNoContent)
 	}))

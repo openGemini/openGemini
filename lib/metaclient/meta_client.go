@@ -18,11 +18,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"sort"
 	"strconv"
@@ -1680,7 +1680,7 @@ func (c *Client) isSimilarToUserName(s, user string) bool {
 
 func (c *Client) isInWeakPwdDict(s string) (bool, error) {
 	filename := c.weakPwdPath
-	content, err := ioutil.ReadFile(path.Clean(filename))
+	content, err := os.ReadFile(path.Clean(filename))
 	if err != nil {
 		return false, err
 	}

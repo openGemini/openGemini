@@ -19,7 +19,6 @@ package meta
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"sort"
 	"time"
 
@@ -875,7 +874,7 @@ func (fsm *storeFSM) applyUpdatePtVersionCommand(cmd *proto2.Command) interface{
 }
 
 func (fsm *storeFSM) Restore(r io.ReadCloser) error {
-	b, err := ioutil.ReadAll(r)
+	b, err := io.ReadAll(r)
 	if err != nil {
 		return err
 	}

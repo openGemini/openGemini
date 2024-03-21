@@ -19,7 +19,7 @@ package collector
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -135,11 +135,11 @@ func (q *QueryMetric) queryExecute(db, cmd string) ([]byte, error) {
 		resp, err := q.Client.Do(req)
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {
-				bytesBody, _ = ioutil.ReadAll(resp.Body)
+				bytesBody, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 				break
 			}
-			bytesBody, _ = ioutil.ReadAll(resp.Body)
+			bytesBody, _ = io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 		}
 		tries++

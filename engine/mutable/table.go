@@ -18,8 +18,8 @@ package mutable
 
 import (
 	"errors"
-	"io/ioutil"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -264,12 +264,12 @@ type MTable interface {
 func StoreMstRowCount(countFile string, rowCount int) error {
 	str := strconv.Itoa(rowCount)
 
-	return ioutil.WriteFile(countFile, []byte(str), 0640)
+	return os.WriteFile(countFile, []byte(str), 0640)
 }
 
 // LoadMstRowCount is used to load the rowcount value for mst-level pre-aggregation.
 func LoadMstRowCount(countFile string) (int, error) {
-	data, err := ioutil.ReadFile(countFile)
+	data, err := os.ReadFile(countFile)
 	if err != nil {
 		return 0, err
 	}

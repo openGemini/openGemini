@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -218,7 +218,7 @@ func (h *httpHandler) getOtherStat(errorMap map[string]string, status map[string
 				continue
 			}
 
-			b, err := ioutil.ReadAll(resp.Body)
+			b, err := io.ReadAll(resp.Body)
 			defer util.MustClose(resp.Body)
 			if err != nil {
 				errorMap["Error"] = fmt.Sprintf("%s", err)
