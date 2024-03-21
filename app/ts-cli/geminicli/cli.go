@@ -23,7 +23,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -182,13 +184,22 @@ func (c *CommandLine) elapse() {
 
 }
 
+func (c *CommandLine) tearDown(_ *prompt.Buffer) {
+	if runtime.GOOS != "windows" {
+		reset := exec.Command("stty", "-raw", "echo")
+		reset.Stdin = os.Stdin
+		_ = reset.Run()
+	}
+	os.Exit(0)
+}
+
 func (c *CommandLine) Execute(s string) error {
 	var err error
 
 	if s == "" {
 		return nil
 	} else if s == "quit" || s == "exit" {
-		os.Exit(0)
+		c.tearDown(nil)
 	}
 
 	ast := &geminiql.QLAst{}
@@ -510,8 +521,14 @@ func (c *CommandLine) Run() error {
 				Key: prompt.ShiftRight,
 				Fn:  prompt.GoRightWord,
 			},
+			prompt.KeyBind{
+				Key: prompt.ControlC,
+				Fn:  c.tearDown,
+			},
 		),
 	)
+	// Make sure key bind ControlD reset stty correctly
+	defer c.tearDown(nil)
 	p.Run()
 	return nil
 }
