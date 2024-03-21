@@ -159,6 +159,9 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 		field := statement.Fields[len(statement.Fields)-1]
 		switch field.Expr.(type) {
 		case *influxql.Call, *influxql.BinaryExpr:
+			if t.canPushDownAggWithFunction(a, statement, field, parameter, aggFn) {
+				return statement, nil
+			}
 			// If the field is a Call expression, we need to wrap the sub expression as InfluxQL SubQuery
 			selectStatement := &influxql.SelectStatement{
 				Sources: []influxql.Source{
@@ -202,4 +205,32 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 	default:
 		return expr, nil
 	}
+}
+
+// canPushDownAggWithFunction used to optimizing the nested push down of function and aggregate operator
+func (t *Transpiler) canPushDownAggWithFunction(agg *parser.AggregateExpr, statement *influxql.SelectStatement, field *influxql.Field, parameter []influxql.Expr, aggFn aggregateFn) bool {
+	if aggFn.name == "mean" {
+		return false
+	}
+	call, ok := field.Expr.(*influxql.Call)
+	if !ok {
+		return false
+	}
+	_, ok = rangeVectorFunctions[getOriCallName(call.Name)]
+	if !ok {
+		return false
+	}
+	if statement.Range <= 0 {
+		return false
+	}
+	t.setAggregateFields(statement, field, parameter, aggFn)
+	if !aggFn.keepMetric {
+		statement.Dimensions = statement.Dimensions[:0]
+		t.setAggregateDimension(statement, agg.Without, agg.Grouping...)
+		if t.Step > 0 {
+			t.setTimeInterval(statement)
+			statement.Fill = influxql.NoFill
+		}
+	}
+	return true
 }

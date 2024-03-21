@@ -441,6 +441,11 @@ func (c *compiledField) compileSymbol(name string, field influxql.Expr) error {
 		}
 		c.global.OnlySelectors = false
 		return nil
+	case *influxql.Call:
+		if c.global.stmt.Range > 0 {
+			return nil
+		}
+		return fmt.Errorf("expected field argument in %s()", name)
 	default:
 		return fmt.Errorf("expected field argument in %s()", name)
 	}

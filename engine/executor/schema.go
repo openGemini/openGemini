@@ -18,6 +18,7 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -184,9 +185,11 @@ type QuerySchema struct {
 	slidingWindow map[string]*influxql.Call
 	holtWinters   []*influxql.Field
 	compositeCall map[string]*hybridqp.OGSketchCompositeOperator
-	i             int
-	notIncI       bool
-	sources       influxql.Sources
+	// promNestedCall is used to optimize the nested push down of function and aggregate operator
+	promNestedCall map[string]*hybridqp.PromNestedCall
+	i              int
+	notIncI        bool
+	sources        influxql.Sources
 	// Options is interface now, it must be cloned in internal
 	opt hybridqp.Options
 
@@ -198,30 +201,31 @@ type QuerySchema struct {
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
 	schema := &QuerySchema{
-		tables:        make(map[string]*QueryTable),
-		queryFields:   fields,
-		columnNames:   columnNames,
-		fields:        make(influxql.Fields, 0, len(fields)),
-		fieldsRef:     make(influxql.VarRefs, 0, len(fields)),
-		mapDeriveType: make(map[influxql.Expr]influxql.DataType),
-		mapping:       make(map[influxql.Expr]influxql.VarRef),
-		symbols:       make(map[string]influxql.VarRef),
-		calls:         make(map[string]*influxql.Call),
-		origCalls:     make(map[string]*influxql.Call),
-		refs:          make(map[string]*influxql.VarRef),
-		binarys:       make(map[string]*influxql.BinaryExpr),
-		maths:         make(map[string]*influxql.Call),
-		strings:       make(map[string]*influxql.Call),
-		labelCalls:    make(map[string]*influxql.Call),
-		promTimeCalls: make(map[string]*influxql.Call),
-		slidingWindow: make(map[string]*influxql.Call),
-		holtWinters:   make([]*influxql.Field, 0),
-		compositeCall: make(map[string]*hybridqp.OGSketchCompositeOperator),
-		i:             0,
-		notIncI:       false,
-		opt:           opt,
-		sources:       nil,
-		planType:      UNKNOWN,
+		tables:         make(map[string]*QueryTable),
+		queryFields:    fields,
+		columnNames:    columnNames,
+		fields:         make(influxql.Fields, 0, len(fields)),
+		fieldsRef:      make(influxql.VarRefs, 0, len(fields)),
+		mapDeriveType:  make(map[influxql.Expr]influxql.DataType),
+		mapping:        make(map[influxql.Expr]influxql.VarRef),
+		symbols:        make(map[string]influxql.VarRef),
+		calls:          make(map[string]*influxql.Call),
+		origCalls:      make(map[string]*influxql.Call),
+		refs:           make(map[string]*influxql.VarRef),
+		binarys:        make(map[string]*influxql.BinaryExpr),
+		maths:          make(map[string]*influxql.Call),
+		strings:        make(map[string]*influxql.Call),
+		labelCalls:     make(map[string]*influxql.Call),
+		promTimeCalls:  make(map[string]*influxql.Call),
+		slidingWindow:  make(map[string]*influxql.Call),
+		holtWinters:    make([]*influxql.Field, 0),
+		compositeCall:  make(map[string]*hybridqp.OGSketchCompositeOperator),
+		promNestedCall: make(map[string]*hybridqp.PromNestedCall),
+		i:              0,
+		notIncI:        false,
+		opt:            opt,
+		sources:        nil,
+		planType:       UNKNOWN,
 	}
 	if len(sortFields) > 0 && len(opt.GetSortFields()) == 0 {
 		schema.opt.SetSortFields(sortFields)
@@ -231,6 +235,10 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 
 	if schema.HasPercentileOGSketch() {
 		schema.rewritePercentileOGSketchCompositeCall()
+	}
+
+	if schema.HasPromNestedCall() {
+		schema.rewritePromNestedCall()
 	}
 
 	return schema
@@ -274,6 +282,7 @@ func (qs *QuerySchema) reset(fields influxql.Fields, column []string) {
 	qs.labelCalls = make(map[string]*influxql.Call)
 	qs.promTimeCalls = make(map[string]*influxql.Call)
 	qs.slidingWindow = make(map[string]*influxql.Call)
+	qs.promNestedCall = make(map[string]*hybridqp.PromNestedCall)
 	qs.holtWinters = qs.holtWinters[0:0]
 	qs.unnestCases = qs.unnestCases[:0]
 	qs.i = 0
@@ -339,9 +348,6 @@ func (qs *QuerySchema) rewriteBaseCallTransformExprCall(expr influxql.Expr) infl
 		return &influxql.ParenExpr{Expr: qs.rewriteBaseCallTransformExprCall(expr.Expr)}
 	case *influxql.Call:
 		if expr.Name == "mean" {
-			if qs.opt.IsRangeVectorSelector() {
-				return expr
-			}
 			replacement := qs.meanToSumDivCount(expr)
 			typ, err := qs.deriveType(expr)
 			if err != nil {
@@ -564,8 +570,16 @@ func (qs *QuerySchema) HasPercentileOGSketch() bool {
 	return false
 }
 
+func (qs *QuerySchema) HasPromNestedCall() bool {
+	return len(qs.promNestedCall) > 0
+}
+
 func (qs *QuerySchema) CompositeCall() map[string]*hybridqp.OGSketchCompositeOperator {
 	return qs.compositeCall
+}
+
+func (qs *QuerySchema) PromNestedCall() map[string]*hybridqp.PromNestedCall {
+	return qs.promNestedCall
 }
 
 func (qs *QuerySchema) isPercentileOGSketch(call *influxql.Call) bool {
@@ -574,6 +588,15 @@ func (qs *QuerySchema) isPercentileOGSketch(call *influxql.Call) bool {
 	}
 
 	return call.Name == PercentileOGSketch
+}
+
+func (qs *QuerySchema) IsPromNestedCall(call *influxql.Call) bool {
+	if !qs.opt.IsRangeVectorSelector() {
+		return false
+	}
+
+	_, ok := call.Args[0].(*influxql.Call)
+	return ok
 }
 
 func (qs *QuerySchema) rewritePercentileOGSketchCompositeCall() {
@@ -640,6 +663,66 @@ func (qs *QuerySchema) genOGSketchOperator(call *influxql.Call) {
 
 	operator := hybridqp.NewOGSketchCompositeOperator(OGSketchInsertCall, OGSketchMergeCall, OGSketchPercentileCall)
 	qs.addCompositeCall(call.String(), operator)
+}
+
+func (qs *QuerySchema) rewritePromNestedCall() {
+	for key, call := range qs.calls {
+		if _, ok := call.Args[0].(*influxql.Call); ok {
+			nc := qs.promNestedCall[key]
+
+			// derive the schema of the lower-layer prom function.
+			dc := nc.GetFuncCall()
+			dcInRef, ok := dc.Args[0].(*influxql.VarRef)
+			if !ok {
+				panic(fmt.Sprintf("the type of the %s should be *influxql.VarRef", dc.Args[0].String()))
+			}
+			oriKey := fmt.Sprintf("%s::%s", dcInRef.Val, dcInRef.Type)
+			inSymbolRef := qs.symbols[oriKey]
+			outSymbolRef := qs.symbols[key]
+			dcInRef.Val = inSymbolRef.Val
+			dcInRef.Type = inSymbolRef.Type
+			qs.mapping[dc] = outSymbolRef
+
+			// derive the schema of the upper-layer prom aggregate operator.
+			uc := nc.GetAggCall()
+			ucInRef, ok := uc.Args[0].(*influxql.VarRef)
+			if !ok {
+				panic(fmt.Sprintf("the type of the %s should be *influxql.VarRef", dc.Args[0].String()))
+			}
+			ucInRef.Val = outSymbolRef.Val
+			ucInRef.Type = outSymbolRef.Type
+			ucOutRef := qs.mapping[uc]
+			ucOutRef.Val = outSymbolRef.Val
+			ucOutRef.Type = outSymbolRef.Type
+			qs.mapping[uc] = ucOutRef
+		}
+	}
+}
+
+func (qs *QuerySchema) genPromNestedCall(call *influxql.Call) {
+	// add the prom nested call
+	qs.addCall(call.String(), call)
+	qs.mapSymbol(call.String(), call)
+
+	// prom nested func call
+	funcCall, ok := influxql.CloneExpr(call.Args[0]).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", call.Args[0].String()))
+	}
+	qs.notIncI = true
+	qs.mapSymbol(funcCall.String(), funcCall)
+
+	// prom nested agg call
+	aggCall, ok := influxql.CloneExpr(call).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", aggCall.String()))
+	}
+	downRef := qs.mapping[aggCall]
+	aggCall.Args[0] = &influxql.VarRef{Val: downRef.Val, Type: downRef.Type}
+	qs.mapSymbol(aggCall.String(), aggCall)
+	qs.notIncI = false
+
+	qs.addPromNestedCall(call.String(), hybridqp.NewPromNestedCall(funcCall, aggCall))
 }
 
 func (qs *QuerySchema) HasInterval() bool {
@@ -911,6 +994,19 @@ func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
 			return qs
 		}
 
+		if qs.IsPromNestedCall(n) {
+			qs.genPromNestedCall(n)
+			return qs
+		}
+
+		if qs.opt.IsRangeVectorSelector() {
+			for name := range qs.calls {
+				if strings.Contains(name, key) {
+					return qs
+				}
+			}
+		}
+
 		qs.addCall(key, n)
 		qs.mapSymbol(key, expr)
 		return qs
@@ -951,6 +1047,14 @@ func (qs *QuerySchema) addCompositeCall(key string, operator *hybridqp.OGSketchC
 
 	if !ok {
 		qs.compositeCall[key] = operator
+	}
+}
+
+func (qs *QuerySchema) addPromNestedCall(key string, operator *hybridqp.PromNestedCall) {
+	_, ok := qs.promNestedCall[key]
+
+	if !ok {
+		qs.promNestedCall[key] = operator
 	}
 }
 

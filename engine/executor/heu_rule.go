@@ -315,8 +315,9 @@ func (r *AggPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	// the calculation of prom function with range vector selector is only pushed down to series, not exchange.
-	if exchange.schema.Options().IsRangeVectorSelector() {
+	// the calculation of prom function with range vector selector is only pushed down to series
+	// however the agg in the prom nested call needs to be pushed down to the exchange.
+	if exchange.schema.Options().IsRangeVectorSelector() && !exchange.Schema().HasPromNestedCall() {
 		return
 	}
 
@@ -399,12 +400,13 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 	}
 
 	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && sysconfig.GetEnableSlidingWindowPushUp() != sysconfig.OnSlidingWindowPushUp
-	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown) {
+	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown && !reader.Schema().Options().IsPromQuery()) {
 		return
 	}
 
-	// the calculation of prom function with range vector selector is only pushed down to series, not reader.
-	if reader.schema.Options().IsRangeVectorSelector() {
+	// the calculation of prom function with range vector selector is only pushed down to series
+	// however the agg in the prom nested call needs to be pushed down to the reader.
+	if reader.schema.Options().IsRangeVectorSelector() && !reader.Schema().HasPromNestedCall() {
 		return
 	}
 
