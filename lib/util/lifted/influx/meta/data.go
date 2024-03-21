@@ -572,7 +572,7 @@ func (data *Data) GetNodeIndex(nodeId uint64) (uint64, error) {
 func (data *Data) CheckDataNodeAlive(nodeId uint64) error {
 	nodeIndex, err := data.GetNodeIndex(nodeId)
 	if err != nil {
-		err = fmt.Errorf("dataNode %d not found\n", nodeId)
+		err = fmt.Errorf("dataNode %d not found", nodeId)
 		return err
 	}
 	if data.DataNodes[nodeIndex].SegregateStatus != Normal {
@@ -638,13 +638,13 @@ func (data *Data) ClusterChangeState(nodeID uint64, newState serf.MemberStatus) 
 }
 
 // CreateDataNode adds a node to the metadata.
-func (data *Data) CreateDataNode(host, tcpHost, role string) (error, uint64) {
+func (data *Data) CreateDataNode(host, tcpHost, role string) (uint64, error) {
 	data.MaxConnID++
 	// Ensure a node with the same host doesn't already exist.
 	for i := range data.DataNodes {
 		if data.DataNodes[i].TCPHost == tcpHost {
 			data.DataNodes[i].ConnID = data.MaxConnID
-			return nil, data.DataNodes[i].ID
+			return data.DataNodes[i].ID, nil
 		}
 	}
 
@@ -677,7 +677,7 @@ func (data *Data) CreateDataNode(host, tcpHost, role string) (error, uint64) {
 	sort.Sort(DataNodeInfos(data.DataNodes))
 	data.initDataNodePtView(data.GetClusterPtNum())
 	if role == NodeReader {
-		return nil, existingID
+		return existingID, nil
 	}
 	for db := range data.Databases {
 		data.expandDBPtView(db, data.GetClusterPtNum(), &dn)
@@ -685,7 +685,7 @@ func (data *Data) CreateDataNode(host, tcpHost, role string) (error, uint64) {
 	if data.ExpandShardsEnable {
 		data.ExpandGroups()
 	}
-	return nil, existingID
+	return existingID, nil
 }
 
 func (data *Data) updatePtStatus(db string, ptId uint32, nodeId uint64, status PtStatus) {
@@ -875,9 +875,7 @@ func (data *Data) CloneDataNodes() []DataNode {
 		return nil
 	}
 	nis := make([]DataNode, len(data.DataNodes))
-	for i := range data.DataNodes {
-		nis[i] = data.DataNodes[i]
-	}
+	copy(nis, data.DataNodes)
 	return nis
 }
 
@@ -998,9 +996,7 @@ func (data *Data) CloneDBPtView() map[string]DBPtInfos {
 
 	for db, ptView := range data.PtView {
 		dbView := make([]PtInfo, len(ptView))
-		for i := range ptView {
-			dbView[i] = ptView[i]
-		}
+		copy(dbView, ptView)
 		dbPts[db] = dbView
 	}
 	return dbPts
@@ -2850,8 +2846,18 @@ func (data *Data) ShowStreams(database string, showAll bool) (models.Rows, error
 	row := &models.Row{Columns: []string{"database", "retention", "measurement", "Name", "source measurement", "dimensions", "calls", "interval", "delay"}}
 	for _, v := range data.Streams {
 		if showAll || v.DesMst.Database == database {
-			row.Values = append(row.Values, []interface{}{v.DesMst.Database, v.DesMst.RetentionPolicy, v.DesMst.Name, v.Name, v.SrcMst.Name + "." + v.SrcMst.RetentionPolicy + "." + v.SrcMst.Name,
-				v.Dimensions(), v.CallsName(), v.Interval.String(), v.Delay.String()})
+			values := []interface{}{
+				v.DesMst.Database,
+				v.DesMst.RetentionPolicy,
+				v.DesMst.Name,
+				v.Name,
+				v.SrcMst.Database + "." + v.SrcMst.RetentionPolicy + "." + v.SrcMst.Name,
+				v.Dimensions(),
+				v.CallsName(),
+				v.Interval.String(),
+				v.Delay.String(),
+			}
+			row.Values = append(row.Values, values)
 		}
 	}
 
@@ -2966,7 +2972,7 @@ func (data *Data) createReplicationInner(db string, replicaN, repStart, repEnd, 
 	ptView := data.DBPtView(db)
 	for repGroupId, ptIdx := repStart, ptStart; repGroupId < repEnd; {
 		for k := uint32(0); k < ptNumPerNode; k++ {
-			peers := make([]Peer, replicaN-1, replicaN-1)
+			peers := make([]Peer, replicaN-1)
 			for i := uint32(0); i < replicaN-1; i++ {
 				slavePtId = ptIdx + ptNumPerNode*(i+1)
 				peers[i].ID = slavePtId

@@ -573,7 +573,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	data := Data{}
 	data.PtNumPerNode = 1
 	DataLogger = logger.New(os.Stderr)
-	err, _ := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
+	_, err := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +673,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 	assert(igs[0].StartTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T08:00:00Z")), "index group startTime error")
 	assert(igs[0].EndTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T10:00:00Z")), "index group endTime error")
 	data.ExpandShardsEnable = true
-	err, _ = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "")
+	_, err = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +794,7 @@ func initDataWithDataNode() *Data {
 
 	for i := 1; i <= 40; i++ {
 		nodeIp := prefix + fmt.Sprint(i)
-		err, _ := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "")
+		_, err := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "")
 		if err != nil {
 			panic(err)
 		}
