@@ -1200,7 +1200,7 @@ func (e *StatementExecutor) executeShowDatabasesStatement(q *influxql.ShowDataba
 		}
 	}
 	sort.Slice(row.Values, func(i, j int) bool {
-		return strings.Compare(row.Values[i][0].(string), row.Values[j][0].(string)) < 0
+		return row.Values[i][0].(string) < row.Values[j][0].(string)
 	})
 	return []*models.Row{row}, nil
 }

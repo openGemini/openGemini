@@ -17,7 +17,7 @@ limitations under the License.
 package metaclient
 
 import (
-	"io/ioutil"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -60,7 +60,7 @@ func (n *Node) LoadLogicalClock() error {
 	defer util.MustClose(file)
 
 	var content []byte
-	content, err = ioutil.ReadAll(file)
+	content, err = io.ReadAll(file)
 	if err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func (n *Node) LoadLogicalClock() error {
 	}
 
 	LogicClock = uint64(clock)
-	if err = ioutil.WriteFile(clockPath, []byte(strconv.Itoa(clock+1)), 0600); err != nil {
+	if err = os.WriteFile(clockPath, []byte(strconv.Itoa(clock+1)), 0600); err != nil {
 		return err
 	}
 	return nil

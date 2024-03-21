@@ -279,34 +279,30 @@ func (r *Row) UnmarshalShardKeyByTag(tags []string) error {
 		}
 		return nil
 	}
+
 	i, j := 0, 0
+searchTag:
 	for i < len(tags) && j < len(r.Tags) {
-		cmp := strings.Compare(tags[i], r.Tags[j].Key)
-		if cmp < 0 {
-		searchFields:
+		if tags[i] < r.Tags[j].Key {
 			for _, relation := range r.IndexOptions {
-				if relation.Oid == uint32(2) {
-					for k := range relation.IndexList {
-						cmp = strings.Compare(tags[i], r.Fields[int(relation.IndexList[k])-len(r.Tags)].Key)
-						if cmp == 0 {
-							r.appendShardKeyWithField(int(relation.IndexList[k]) - len(r.Tags))
+				if relation.Oid == 2 { // magic number, what does 2 mean?
+					for _, v := range relation.IndexList {
+						if tags[i] == r.Fields[int(v)-len(r.Tags)].Key {
+							r.appendShardKeyWithField(int(v) - len(r.Tags))
 							i++
-							break searchFields
+							continue searchTag
 						}
 					}
 				}
 			}
-			if cmp != 0 {
-				return ErrPointShouldHaveAllShardKey
-			}
-			continue
+			return ErrPointShouldHaveAllShardKey
 		}
 
 		if err := r.CheckDuplicateTag(j); err != nil {
 			return err
 		}
 
-		if cmp == 0 {
+		if tags[i] == r.Tags[j].Key {
 			r.appendShardKey(j)
 			i++
 		}

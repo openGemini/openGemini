@@ -19,6 +19,7 @@ package fileops
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -112,7 +113,7 @@ type VFS interface {
 	MkdirAll(path string, perm os.FileMode, opt ...FSOption) error
 	// ReadDir reads the directory named by dirname and returns
 	// a list of fs.FileInfo for the directory's contents, sorted by filename.
-	ReadDir(dirname string) ([]os.FileInfo, error)
+	ReadDir(dirname string) ([]fs.FileInfo, error)
 	// Glob returns the names of all files matching pattern or nil if there is no matching file.
 	Glob(pattern string) ([]string, error)
 	// RenameFile renames (moves) oldPath to newPath.
@@ -204,7 +205,7 @@ func MkdirAll(path string, perm os.FileMode, opt ...FSOption) error {
 
 // ReadDir reads the directory named by dirname and returns
 // a list of fs.FileInfo for the directory's contents, sorted by filename.
-func ReadDir(dirname string) ([]os.FileInfo, error) {
+func ReadDir(dirname string) ([]fs.FileInfo, error) {
 	t := GetFsType(dirname)
 	return GetFs(t).ReadDir(dirname)
 }

@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
@@ -676,7 +675,7 @@ var LosAngeles = mustParseLocation("America/Los_Angeles")
 
 // MustReadAll reads r. Panic on error.
 func MustReadAll(r io.Reader) []byte {
-	b, err := ioutil.ReadAll(r)
+	b, err := io.ReadAll(r)
 	if err != nil {
 		panic(err)
 	}
@@ -942,6 +941,6 @@ func writeTestData(s Server, t *Test) error {
 func configureLogging(s Server) {
 	// Set the logger to discard unless verbose is on
 	if !verboseServerLogs {
-		s.SetLogOutput(ioutil.Discard)
+		s.SetLogOutput(io.Discard)
 	}
 }

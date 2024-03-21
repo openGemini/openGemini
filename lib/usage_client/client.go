@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"time"
 
@@ -69,7 +69,7 @@ func (c *Client) Send(usage UsageValues) (*http.Response, error) {
 		c.logger.Error("send usage failed", zap.Error(err))
 		return resp, err
 	}
-	bytesBody, err := ioutil.ReadAll(resp.Body)
+	bytesBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return resp, err
 	}
