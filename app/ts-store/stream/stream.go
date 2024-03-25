@@ -141,7 +141,7 @@ type CacheRow struct {
 func (s *Stream) Run() {
 	s.Logger.Info("start stream")
 	s.abort = make(chan struct{})
-	ticker := time.NewTicker(10 * time.Second) // leak??
+	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
 		case <-s.abort:
