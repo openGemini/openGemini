@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
-	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -105,7 +105,6 @@ func PutStreamCtx(s *streamCtx) {
 
 type streamCtx struct {
 	minTime         int64
-	bp              *streamLib.BuilderPool
 	db              *meta2.DatabaseInfo
 	rp              *meta2.RetentionPolicyInfo
 	ms              *meta2.MeasurementInfo
@@ -126,10 +125,6 @@ func (s *streamCtx) reset() {
 	s.opt = nil
 	s.aliveShardIdxes = s.aliveShardIdxes[:0]
 	s.dataCache = make(map[string]map[int64][]*float64)
-}
-
-func (s *streamCtx) SetBP(bp *streamLib.BuilderPool) {
-	s.bp = bp
 }
 
 func (s *streamCtx) checkDBRP(database, retentionPolicy string, w *Stream) (err error) {
@@ -159,10 +154,6 @@ func (s *streamCtx) initVar(w *PointsWriter, si *meta2.StreamInfo) (err error) {
 	// init the writerHelper, opt and measurementInfo
 	if s.writeHelper == nil {
 		s.writeHelper = newWriteHelper(w)
-	}
-
-	if s.bp == nil {
-		s.bp = streamLib.NewBuilderPool()
 	}
 
 	if s.opt == nil {
@@ -426,29 +417,26 @@ func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.R
 	if len(keys) == 0 {
 		return ""
 	}
-	builder := ctx.bp.Get()
-	defer func() {
-		builder.Reset()
-		ctx.bp.Put(builder)
-	}()
 
-	tagIndex := 0
-	for i := range keys {
-		idx := util.Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
-		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
-			builder.AppendString(value.Tags[idx].Value)
-			if i < len(keys)-1 {
-				builder.AppendByte(config.StreamGroupValueSeparator)
-			}
-			tagIndex = idx + 1
-			continue
+	values := make([]string, len(keys))
+	tags := value.Tags
+	for i, k := range keys {
+		idx := sort.Search(len(tags), func(j int) bool {
+			return tags[j].Key >= k
+		})
+
+		if idx >= len(tags) {
+			break
 		}
-		if i < len(keys)-1 {
-			builder.AppendByte(config.StreamGroupValueSeparator)
+
+		if tags[idx].Key == k {
+			values[i] = tags[idx].Value
 		}
-		tagIndex = idx + 1
+
+		tags = tags[idx+1:]
 	}
-	return builder.NewString()
+
+	return strings.Join(values, string(config.StreamGroupValueSeparator))
 }
 
 func BuildFieldCall(info *meta2.StreamInfo, srcSchema map[string]int32, destSchema map[string]int32) ([]*streamLib.FieldCall, error) {

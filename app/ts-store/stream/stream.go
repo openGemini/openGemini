@@ -59,7 +59,6 @@ type WritePointsWorkIF interface {
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
 	cache := make(chan *CacheRow, conf.FilterCache)
 	rowPool := NewCacheRowPool()
-	bp := streamLib.NewBuilderPool()
 	windowCachePool := NewWindowCachePool()
 	goPool, err := ants.NewPool(conf.FilterConcurrency)
 	if err != nil {
@@ -68,7 +67,6 @@ func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config)
 	s := &Stream{
 		cache:           cache,
 		rowPool:         rowPool,
-		bp:              bp,
 		store:           store,
 		stats:           statistics.NewStreamStatistics(),
 		Logger:          Logger,
@@ -106,7 +104,6 @@ type MetaClient interface {
 type Stream struct {
 	cache           chan *CacheRow
 	rowPool         *CacheRowPool
-	bp              *streamLib.BuilderPool
 	windowCachePool *WindowCachePool
 	goPool          *ants.Pool
 
@@ -299,7 +296,6 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.Fi
 			WindowDataPool:  NewWindowDataPool(),
 			goPool:          s.goPool,
 			groupKeys:       info.Dims,
-			bp:              s.bp,
 			windowCachePool: s.windowCachePool,
 			concurrency:     s.conf.WindowConcurrency,
 			BaseTask: &BaseTask{
@@ -435,12 +431,6 @@ func (s *Stream) rangeWindow(r *CacheRow) (bool, map[uint64][]int) {
 
 // Drain is for test case, to check whether there exist resource leakage
 func (s *Stream) Drain() {
-	//wait rowPool put back all
-	for s.rowPool.Len() != s.rowPool.Size() {
-	}
-	//wait window cache pool empty
-	for s.windowCachePool.Count() != 0 {
-	}
 	s.tasks.Range(func(key, value interface{}) bool {
 		w, _ := value.(Task)
 		w.Drain()

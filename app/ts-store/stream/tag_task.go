@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,9 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
-	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/panjf2000/ants/v2"
@@ -75,7 +74,6 @@ type TagTask struct {
 	cleanPreWindow chan struct{}
 
 	// pool
-	bp              *streamLib.BuilderPool
 	windowCachePool *WindowCachePool
 	*WindowDataPool
 
@@ -604,8 +602,6 @@ func (s *TagTask) WriteRowsToShard(start, end int) error {
 }
 
 func (s *TagTask) Drain() {
-	for s.bp.Len() != s.bp.Size() {
-	}
 	for s.Len() != 0 {
 	}
 }
@@ -615,28 +611,25 @@ func (s *TagTask) generateGroupKeyUint(keys []string, value *influx.Row) string 
 	if len(keys) == 0 {
 		return EmptyGroupKey
 	}
-	builder := s.bp.Get()
-	defer func() {
-		builder.Reset()
-		s.bp.Put(builder)
-	}()
 
-	tagIndex := 0
-	for i := range keys {
-		idx := util.Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
-		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
-			v := s.compressDictKeyUint(value.Tags[idx].Value)
-			builder.AppendString(strconv.FormatUint(v, 10))
-			if i < len(keys)-1 {
-				builder.AppendByte(config.StreamGroupValueSeparator)
-			}
-			tagIndex = idx + 1
-			continue
+	values := make([]string, len(keys))
+	tags := value.Tags
+	for i, k := range keys {
+		idx := sort.Search(len(tags), func(j int) bool {
+			return tags[j].Key >= k
+		})
+
+		if idx >= len(tags) {
+			break
 		}
-		if i < len(keys)-1 {
-			builder.AppendByte(config.StreamGroupValueSeparator)
+
+		if tags[idx].Key == keys[i] {
+			v := s.compressDictKeyUint(tags[idx].Value)
+			values[i] = strconv.FormatUint(v, 10)
 		}
-		tagIndex = idx + 1
+
+		tags = tags[idx+1:]
 	}
-	return builder.NewString()
+
+	return strings.Join(values, string(config.StreamGroupValueSeparator))
 }

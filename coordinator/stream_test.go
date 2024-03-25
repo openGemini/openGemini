@@ -29,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -52,7 +51,6 @@ func TestStreamGenerateGroupKey(t *testing.T) {
 	ctx := coordinator.GetStreamCtx()
 	defer coordinator.PutStreamCtx(ctx)
 
-	ctx.SetBP(stream.NewBuilderPool())
 	keys := []string{"tk1", "fk1"}
 	value := s.GenerateGroupKey(ctx, keys, &rows[0])
 	assert2.Equal(t, value, "value1\x00")
