@@ -183,7 +183,6 @@ func Test_GenerateGroupKey(t *testing.T) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -210,7 +209,6 @@ func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	offset := 30
@@ -250,7 +248,6 @@ func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
 	}
 	var keys []string
 	r := buildRow("1", "xx", false)
@@ -267,7 +264,6 @@ func Benchmark_GenerateGroupKeyUint(t *testing.B) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -336,7 +332,6 @@ func Benchmark_FlushRow(t *testing.B) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		bp:            streamLib.NewBuilderPool(),
 		BaseTask: &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
 			des: &meta2.StreamMeasurementInfo{
 				Name:            "test",

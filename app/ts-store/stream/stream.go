@@ -59,7 +59,6 @@ type WritePointsWorkIF interface {
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
 	cache := make(chan *CacheRow, conf.FilterCache)
 	rowPool := NewCacheRowPool()
-	bp := streamLib.NewBuilderPool()
 	windowCachePool := NewWindowCachePool()
 	goPool, err := ants.NewPool(conf.FilterConcurrency)
 	if err != nil {
@@ -68,7 +67,6 @@ func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config)
 	s := &Stream{
 		cache:           cache,
 		rowPool:         rowPool,
-		bp:              bp,
 		store:           store,
 		stats:           statistics.NewStreamStatistics(),
 		Logger:          Logger,
@@ -106,7 +104,6 @@ type MetaClient interface {
 type Stream struct {
 	cache           chan *CacheRow
 	rowPool         *CacheRowPool
-	bp              *streamLib.BuilderPool
 	windowCachePool *WindowCachePool
 	goPool          *ants.Pool
 
@@ -144,7 +141,7 @@ type CacheRow struct {
 func (s *Stream) Run() {
 	s.Logger.Info("start stream")
 	s.abort = make(chan struct{})
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(10 * time.Second) // leak??
 	for {
 		select {
 		case <-s.abort:
@@ -299,7 +296,6 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.Fi
 			WindowDataPool:  NewWindowDataPool(),
 			goPool:          s.goPool,
 			groupKeys:       info.Dims,
-			bp:              s.bp,
 			windowCachePool: s.windowCachePool,
 			concurrency:     s.conf.WindowConcurrency,
 			BaseTask: &BaseTask{
