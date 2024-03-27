@@ -46,11 +46,29 @@ openGemini是一款云原生分布式时序数据库，主要面向物联网和�
 
 - #### 时序生态兼容
 
-  兼容InfluxDB 1.x 版本的Line Protocol 、Influxql和API接口，兼容现有InfluxDB工具链（如SDK/telegraf..)，支持Prometheus远程数据存储
+  兼容InfluxDB 1.x 版本的Line Protocol 、Influxql和API接口，兼容现有InfluxDB工具链（如SDK/telegraf..)
+
+## 云原生场景支持
+
+- 容器化部署，[openGemini-Operator](https://github.com/openGemini/openGemini-operator) 支持一键容器化部署
+
+  <img src="./images/containerized.png" alt="image-20220927210909436" style="width:60%;" />
+
+- openTelemetry 后端存储, 简化系统架构
+
+  <img src="./images/openTelemetry.png" alt="image-20220927210909436" style="width:60%;" />
+
+- Prometheus 后端存储，支持远程 read/write，**[WIP]** 支持 PromQL
+
+  <img src="./images/prometheus.png" alt="image-20220927210909436" style="width:60%;" />
+
+- KubeEdge与openGemini集成, 更好管理边缘设备数据
+
+  <img src="./images/kubeedge.png" alt="image-20220927210909436" style="width:60%;" />
 
 ## 应用场景
 
-![image-20220927211159737](images/scenario_zh.png)
+<img src="images/scenario_zh.png" alt="image-20220927211159737" style="width:90%;" />
 
 ## 快速开始
 
