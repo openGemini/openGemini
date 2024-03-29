@@ -97,7 +97,7 @@ func TestPrecisionParser(t *testing.T) {
 			stmt: &geminiql.PrecisionStatement{
 				Precision: "rfc3339",
 			},
-			expect: "",
+			expect: "rfc3339",
 		},
 		{
 			name: "Precision ns",
@@ -147,7 +147,7 @@ func TestParsePrecision(t *testing.T) {
 		{input: "ms", expected: "ms", wantError: false},
 		{input: "u", expected: "u", wantError: false},
 		{input: "ns", expected: "ns", wantError: false},
-		{input: "rfc3339", expected: "", wantError: false},
+		{input: "rfc3339", expected: "rfc3339", wantError: false},
 		{input: "unknown", expected: "", wantError: true},
 	}
 
