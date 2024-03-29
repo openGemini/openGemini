@@ -1035,7 +1035,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		}
 
 		// if requested, convert result timestamps to epoch
-		if epoch != "" {
+		if epoch != "rfc3339" {
 			convertToEpoch(r, epoch)
 		}
 
