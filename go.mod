@@ -22,6 +22,8 @@ require (
 	github.com/hashicorp/serf v0.9.6
 	github.com/huaweicloud/huaweicloud-sdk-go-obs v3.23.3+incompatible
 	github.com/influxdata/influxdb v1.9.5
+	github.com/influxdata/influxdb-observability/common v0.2.19
+	github.com/influxdata/influxdb-observability/otel2influx v0.2.19
 	github.com/influxdata/influxql v1.1.1-0.20211004132434-7e7d61973256
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.17.0
@@ -43,6 +45,8 @@ require (
 	github.com/valyala/fastjson v1.6.4
 	github.com/xlab/treeprint v1.2.0
 	go.etcd.io/bbolt v1.3.6
+	go.opentelemetry.io/collector/pdata v0.50.0
+	go.opentelemetry.io/collector/semconv v0.74.0
 	go.uber.org/zap v1.19.1
 	golang.org/x/crypto v0.17.0
 	golang.org/x/sys v0.15.0
@@ -152,6 +156,7 @@ require (
 	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/willf/bitset v1.1.9 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
+	go.opentelemetry.io/collector/model v0.50.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.7.0 // indirect
 	golang.org/x/exp v0.0.0-20220827204233-334a2380cb91 // indirect
@@ -162,7 +167,6 @@ require (
 	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
 	gonum.org/v1/gonum v0.11.0 // indirect
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
