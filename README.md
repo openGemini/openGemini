@@ -17,9 +17,9 @@
 
 ## About openGemini
 
-openGemini is a cloud-native distributed time series database for Observability, focusing on the storage and analysis of massive telemetry data. 
+openGemini is a cloud-native distributed time series database, focusing on the storage and analysis of massive telemetry data. 
 
-If you have used openGemini, please let us know and [click Submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
+If you have used openGemini, please let us know and [click submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
 
 ## Why openGemini
 
@@ -27,7 +27,7 @@ Compared with other time series database, openGemini has the following advantage
 
 - #### High Performance
 
-  Store and query data quickly and efficiently with automatic partitioning, LSM-based storage techniques,  and better data process engineering, see[performance reports](https://docs.opengemini.org/guide/introduction/performance.html)
+  Store and query data quickly and efficiently with automatic partitioning, LSM-based storage techniques,  and better data process engineering, see [performance reports](https://docs.opengemini.org/guide/introduction/performance.html)
 
 - #### High Scalability
 
@@ -47,11 +47,29 @@ Compared with other time series database, openGemini has the following advantage
 
 - #### Ecosystem compatibility
 
-  Compatible with **InfluxDB** v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing **InfluxDB toolchain**, supports **prometheus** remote read/write API and **openTelemetry** standard protocol
+  Compatible with **InfluxDB** v1.x Line Protocol, Influxql and read/write APIs, also compatible with existing **InfluxDB toolchain**
+
+## Support for Cloud Native Scenarios
+
+- Containerized deployment, refer to [openGemini-operator](https://github.com/openGemini/openGemini-operator)
+
+  <img src="./images/containerized.png" alt="image-20220927210909436" style="width:60%;" />
+
+- openTelemetry backend storage, simplified architecture
+
+  <img src="./images/openTelemetry.png" alt="image-20220927210909436" style="width:60%;" />
+
+- Prometheus backend storage，support remote read/write, and Support PromQL **[WIP]** 
+
+  <img src="./images/prometheus.png" alt="image-20220927210909436" style="width:60%;" />
+
+- KubeEdge integration with openGemini, better manage edge device data
+
+  <img src="./images/kubeedge.png" alt="image-20220927210909436" style="width:60%;" />
 
 ## Application Scenes
 
-![image-20220927210909436](images/scenario.png)
+<img src="./images/scenario.png" alt="image-20220927210909436" style="width:90%;" />
 
 ## Quick Start
 
