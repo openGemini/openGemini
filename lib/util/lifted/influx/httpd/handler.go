@@ -37,6 +37,7 @@ import (
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/opentelemetry"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -267,6 +268,18 @@ func NewHandler(c config.Config) *Handler {
 		Route{
 			"prometheus-read", // Prometheus remote read
 			"POST", "/api/v1/prom/read", true, true, h.servePromRead,
+		},
+		Route{
+			"otlp-traces-write", // open-telemetry OTLP traces remote write
+			"POST", "/api/v1/otlp/traces", false, true, h.serveTracesWrite,
+		},
+		Route{
+			"otlp-metrics-write", // open-telemetry OTLP metrics remote write
+			"POST", "/api/v1/otlp/metrics", false, true, h.serveMetricsWrite,
+		},
+		Route{
+			"otlp-logs-write", // open-telemetry OTLP logs remote write
+			"POST", "/api/v1/otlp/logs", false, true, h.serveLogsWrite,
 		},
 		Route{ // sysCtrl
 			"sysCtrl",
@@ -1437,6 +1450,175 @@ func convertToEpoch(r *query.Result, epoch string) {
 			}
 		}
 	}
+}
+func (h *Handler) serveOTLP(w http.ResponseWriter, r *http.Request, user meta2.User) (io.ReadCloser, string, error) {
+	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
+	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
+	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
+	defer func(start time.Time) {
+		d := time.Since(start).Nanoseconds()
+		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
+		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+	}(time.Now())
+	h.requestTracker.Add(r, user)
+
+	database := r.URL.Query().Get("db")
+	if database == "" {
+		h.httpError(w, "database is required", http.StatusBadRequest)
+		return nil, "", fmt.Errorf("database is required")
+	}
+
+	if _, err := h.MetaClient.Database(database); err != nil {
+		h.httpError(w, err.Error(), http.StatusNotFound)
+		return nil, "", err
+	}
+
+	if h.Config.AuthEnabled {
+		if user == nil {
+			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
+			err := errno.NewError(errno.HttpForbidden)
+			h.Logger.Error("write error: user is required to write to database", zap.Error(err), zap.String("db", database))
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return nil, "", err
+		}
+
+		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), database); err != nil {
+			err1 := errno.NewError(errno.HttpForbidden)
+			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
+			h.Logger.Error("write error:user is not authorized to write to database", zap.Error(err1), zap.String("db", database), zap.String("user", user.ID()))
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return nil, "", err
+		}
+	}
+
+	body := r.Body
+	if h.Config.MaxBodySize > 0 {
+		body = truncateReader(body, int64(h.Config.MaxBodySize))
+	}
+
+	if r.ContentLength > 0 {
+		if h.Config.MaxBodySize > 0 && r.ContentLength > int64(h.Config.MaxBodySize) {
+			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return nil, "", fmt.Errorf(http.StatusText(http.StatusRequestEntityTooLarge))
+		}
+	}
+
+	return body, database, nil
+}
+
+// serveTracesWrite receives data in the openTelemetry collector and writes it
+// to the database
+func (h *Handler) serveTracesWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	body, database, err := h.serveOTLP(w, r, user)
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	octx := opentelemetry.GetOtelContext(body)
+	octx.Writer = h.PointsWriter
+	octx.Database = database
+	octx.RetentionPolicy = r.URL.Query().Get("rp")
+	defer opentelemetry.PutOtelContext(octx)
+
+	for octx.Read(int(r.ContentLength)) {
+		// Convert the OTLP remote write request to Influx Points
+		start := time.Now()
+		err := octx.WriteTraces(ctx)
+		if err != nil {
+			h.Logger.Error("write otlp traces failed", zap.Error(err))
+			h.httpError(w, err.Error(), http.StatusInternalServerError)
+			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
+			return
+		}
+		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(octx.ReqBuf)))
+		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
+	}
+
+	if err := octx.Error(); err != nil {
+		h.Logger.Error("write otlp traces error", zap.Error(err), zap.String("db", database))
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		return
+	}
+	h.writeHeader(w, http.StatusNoContent)
+}
+
+// serveMetricsWrite receives OTLP metrics data and writes it to the database
+func (h *Handler) serveMetricsWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	body, database, err := h.serveOTLP(w, r, user)
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	octx := opentelemetry.GetOtelContext(body)
+	octx.Writer = h.PointsWriter
+	octx.Database = database
+	octx.RetentionPolicy = r.URL.Query().Get("rp")
+	defer opentelemetry.PutOtelContext(octx)
+
+	if octx.Read(int(r.ContentLength)) {
+		// Convert the OTLP remote write request to Influx Points
+		start := time.Now()
+		err := octx.WriteMetrics(ctx)
+		if err != nil {
+			h.Logger.Error("write otlp metrics failed", zap.Error(err))
+			h.httpError(w, err.Error(), http.StatusInternalServerError)
+			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
+			return
+		}
+		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(octx.ReqBuf)))
+		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
+	}
+
+	if err := octx.Error(); err != nil {
+		h.Logger.Error("write otlp metrics error", zap.Error(err), zap.String("db", database))
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		return
+	}
+	h.writeHeader(w, http.StatusNoContent)
+}
+
+// serveLogsWrite receives OTLP logs data and writes it to the database
+func (h *Handler) serveLogsWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	body, database, err := h.serveOTLP(w, r, user)
+	if err != nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	octx := opentelemetry.GetOtelContext(body)
+	octx.Writer = h.PointsWriter
+	octx.Database = database
+	octx.RetentionPolicy = r.URL.Query().Get("rp")
+	defer opentelemetry.PutOtelContext(octx)
+
+	for octx.Read(int(r.ContentLength)) {
+		// Convert the OTLP remote write request to Influx Points
+		start := time.Now()
+		err := octx.WriteLogs(ctx)
+		if err != nil {
+			h.Logger.Error("write otlp logs failed", zap.Error(err))
+			h.httpError(w, err.Error(), http.StatusInternalServerError)
+			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
+			return
+		}
+		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(octx.ReqBuf)))
+		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
+	}
+
+	if err := octx.Error(); err != nil {
+		h.Logger.Error("write otlp logs error", zap.Error(err), zap.String("db", database))
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		return
+	}
+	h.writeHeader(w, http.StatusNoContent)
 }
 
 // servePromWrite receives data in the Prometheus remote write protocol and writes it

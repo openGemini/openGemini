@@ -27,47 +27,47 @@ import (
 )
 
 type RecordStatistics struct {
-	itemIntervalRecordPoolInUse    int64
-	itemIntervalRecordPoolGet      int64
-	itemIntervalRecordPoolGetReUse int64
-	itemIntervalRecordPoolAbort    int64
-	itemFileCursorPoolInUse        int64
-	itemFileCursorPoolGet          int64
-	itemFileCursorPoolGetReUse     int64
-	itemFileCursorPoolAbort        int64
-	itemFileLoopCursorPoolInUse        int64
-	itemFileLoopCursorPoolGet          int64
-	itemFileLoopCursorPoolGetReUse     int64
-	itemFileLoopCursorPoolAbort        int64
+	itemIntervalRecordPoolInUse            int64
+	itemIntervalRecordPoolGet              int64
+	itemIntervalRecordPoolGetReUse         int64
+	itemIntervalRecordPoolAbort            int64
+	itemFileCursorPoolInUse                int64
+	itemFileCursorPoolGet                  int64
+	itemFileCursorPoolGetReUse             int64
+	itemFileCursorPoolAbort                int64
+	itemFileLoopCursorPoolInUse            int64
+	itemFileLoopCursorPoolGet              int64
+	itemFileLoopCursorPoolGetReUse         int64
+	itemFileLoopCursorPoolAbort            int64
 	itemFileCursorValidRowPoolInUse        int64
 	itemFileCursorValidRowPoolGet          int64
 	itemFileCursorValidRowPoolGetReUse     int64
 	itemFileCursorValidRowPoolAbort        int64
-	itemFileCursorFilterRecordPoolInUse        int64
-	itemFileCursorFilterRecordPoolGet          int64
-	itemFileCursorFilterRecordPoolGetReUse     int64
-	itemFileCursorFilterRecordPoolAbort        int64
-	itemAggPoolInUse               int64
-	itemAggPoolGet                 int64
-	itemAggPoolGetReUse            int64
-	itemAggPoolAbort               int64
-	itemTsmMergePoolInUse          int64
-	itemTsmMergePoolGet            int64
-	itemTsmMergePoolGetReUse       int64
-	itemTsmMergePoolAbort          int64
-	itemTsspSequencePoolInUse      int64
-	itemTsspSequencePoolGet        int64
-	itemTsspSequencePoolGetReUse   int64
-	itemTsspSequencePoolAbort      int64
-	itemSequenceAggPoolInUse       int64
-	itemSequenceAggPoolGet         int64
-	itemSequenceAggPoolGetReUse    int64
-	itemSequenceAggPoolAbort       int64
-	itemCircularRecordPool         int64
-	itemSeriesPoolInUse            int64
-	itemSeriesPoolGet              int64
-	itemSeriesPoolAbort            int64
-	itemSeriesPoolGetReUse         int64
+	itemFileCursorFilterRecordPoolInUse    int64
+	itemFileCursorFilterRecordPoolGet      int64
+	itemFileCursorFilterRecordPoolGetReUse int64
+	itemFileCursorFilterRecordPoolAbort    int64
+	itemAggPoolInUse                       int64
+	itemAggPoolGet                         int64
+	itemAggPoolGetReUse                    int64
+	itemAggPoolAbort                       int64
+	itemTsmMergePoolInUse                  int64
+	itemTsmMergePoolGet                    int64
+	itemTsmMergePoolGetReUse               int64
+	itemTsmMergePoolAbort                  int64
+	itemTsspSequencePoolInUse              int64
+	itemTsspSequencePoolGet                int64
+	itemTsspSequencePoolGetReUse           int64
+	itemTsspSequencePoolAbort              int64
+	itemSequenceAggPoolInUse               int64
+	itemSequenceAggPoolGet                 int64
+	itemSequenceAggPoolGetReUse            int64
+	itemSequenceAggPoolAbort               int64
+	itemCircularRecordPool                 int64
+	itemSeriesPoolInUse                    int64
+	itemSeriesPoolGet                      int64
+	itemSeriesPoolAbort                    int64
+	itemSeriesPoolGetReUse                 int64
 
 	mu  sync.RWMutex
 	buf []byte
@@ -90,47 +90,47 @@ func (s *RecordStatistics) Init(tags map[string]string) {
 
 func (s *RecordStatistics) Collect(buffer []byte) ([]byte, error) {
 	data := map[string]interface{}{
-		"IntervalRecordPoolInUse":    s.itemIntervalRecordPoolInUse,
-		"IntervalRecordPoolGet":      s.itemIntervalRecordPoolGet,
-		"IntervalRecordPoolGetReUse": s.itemIntervalRecordPoolGetReUse,
-		"IntervalRecordPoolAbort":    s.itemIntervalRecordPoolAbort,
-		"FileCursorPoolInUse":        s.itemFileCursorPoolInUse,
-		"FileCursorPoolGet":          s.itemFileCursorPoolGet,
-		"FileCursorPoolGetReUse":     s.itemFileCursorPoolGetReUse,
-		"FileCursorPoolAbort":        s.itemFileCursorPoolAbort,
-		"FileLoopCursorPoolInUse":        s.itemFileLoopCursorPoolInUse,
-		"FileLoopCursorPoolGet":          s.itemFileLoopCursorPoolGet,
-		"FileLoopCursorPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
-		"FileLoopCursorPoolAbort":        s.itemFileLoopCursorPoolAbort,
+		"IntervalRecordPoolInUse":            s.itemIntervalRecordPoolInUse,
+		"IntervalRecordPoolGet":              s.itemIntervalRecordPoolGet,
+		"IntervalRecordPoolGetReUse":         s.itemIntervalRecordPoolGetReUse,
+		"IntervalRecordPoolAbort":            s.itemIntervalRecordPoolAbort,
+		"FileCursorPoolInUse":                s.itemFileCursorPoolInUse,
+		"FileCursorPoolGet":                  s.itemFileCursorPoolGet,
+		"FileCursorPoolGetReUse":             s.itemFileCursorPoolGetReUse,
+		"FileCursorPoolAbort":                s.itemFileCursorPoolAbort,
+		"FileLoopCursorPoolInUse":            s.itemFileLoopCursorPoolInUse,
+		"FileLoopCursorPoolGet":              s.itemFileLoopCursorPoolGet,
+		"FileLoopCursorPoolGetReUse":         s.itemFileLoopCursorPoolGetReUse,
+		"FileLoopCursorPoolAbort":            s.itemFileLoopCursorPoolAbort,
 		"FileCursorValidRowPoolInUse":        s.itemFileLoopCursorPoolInUse,
 		"FileCursorValidRowPoolGet":          s.itemFileLoopCursorPoolGet,
 		"FileCursorValidRowPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
 		"FileCursorValidRowPoolAbort":        s.itemFileLoopCursorPoolAbort,
-		"FileCursorFilterRecordPoolInUse":        s.itemFileLoopCursorPoolInUse,
-		"FileCursorFilterRecordPoolGet":          s.itemFileLoopCursorPoolGet,
-		"FileCursorFilterRecordPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
-		"FileCursorFilterRecordPoolAbort":        s.itemFileLoopCursorPoolAbort,
-		"AggPoolInUse":               s.itemAggPoolInUse,
-		"AggPoolGet":                 s.itemAggPoolGet,
-		"AggPoolGetReUse":            s.itemAggPoolGetReUse,
-		"AggPoolAbort":               s.itemAggPoolAbort,
-		"TsmMergePoolInUse":          s.itemTsmMergePoolInUse,
-		"TsmMergePoolGet":            s.itemTsmMergePoolGet,
-		"TsmMergePoolGetReUse":       s.itemTsmMergePoolGetReUse,
-		"TsmMergePoolAbort":          s.itemTsmMergePoolAbort,
-		"TsspSequencePoolInUse":      s.itemTsspSequencePoolInUse,
-		"TsspSequencePoolGet":        s.itemTsspSequencePoolGet,
-		"TsspSequencePoolGetReUse":   s.itemTsspSequencePoolGetReUse,
-		"TsspSequencePoolAbort":      s.itemTsspSequencePoolAbort,
-		"SequenceAggPoolInUse":       s.itemSequenceAggPoolInUse,
-		"SequenceAggPoolGet":         s.itemSequenceAggPoolGet,
-		"SequenceAggPoolGetReUse":    s.itemSequenceAggPoolGetReUse,
-		"SequenceAggPoolAbort":       s.itemSequenceAggPoolAbort,
-		"CircularRecordPool":         s.itemCircularRecordPool,
-		"SeriesPoolInUse":            s.itemSeriesPoolInUse,
-		"SeriesPoolGet":              s.itemSeriesPoolGet,
-		"SeriesPoolAbort":            s.itemSeriesPoolAbort,
-		"SeriesPoolGetReUse":         s.itemSeriesPoolGetReUse,
+		"FileCursorFilterRecordPoolInUse":    s.itemFileLoopCursorPoolInUse,
+		"FileCursorFilterRecordPoolGet":      s.itemFileLoopCursorPoolGet,
+		"FileCursorFilterRecordPoolGetReUse": s.itemFileLoopCursorPoolGetReUse,
+		"FileCursorFilterRecordPoolAbort":    s.itemFileLoopCursorPoolAbort,
+		"AggPoolInUse":                       s.itemAggPoolInUse,
+		"AggPoolGet":                         s.itemAggPoolGet,
+		"AggPoolGetReUse":                    s.itemAggPoolGetReUse,
+		"AggPoolAbort":                       s.itemAggPoolAbort,
+		"TsmMergePoolInUse":                  s.itemTsmMergePoolInUse,
+		"TsmMergePoolGet":                    s.itemTsmMergePoolGet,
+		"TsmMergePoolGetReUse":               s.itemTsmMergePoolGetReUse,
+		"TsmMergePoolAbort":                  s.itemTsmMergePoolAbort,
+		"TsspSequencePoolInUse":              s.itemTsspSequencePoolInUse,
+		"TsspSequencePoolGet":                s.itemTsspSequencePoolGet,
+		"TsspSequencePoolGetReUse":           s.itemTsspSequencePoolGetReUse,
+		"TsspSequencePoolAbort":              s.itemTsspSequencePoolAbort,
+		"SequenceAggPoolInUse":               s.itemSequenceAggPoolInUse,
+		"SequenceAggPoolGet":                 s.itemSequenceAggPoolGet,
+		"SequenceAggPoolGetReUse":            s.itemSequenceAggPoolGetReUse,
+		"SequenceAggPoolAbort":               s.itemSequenceAggPoolAbort,
+		"CircularRecordPool":                 s.itemCircularRecordPool,
+		"SeriesPoolInUse":                    s.itemSeriesPoolInUse,
+		"SeriesPoolGet":                      s.itemSeriesPoolGet,
+		"SeriesPoolAbort":                    s.itemSeriesPoolAbort,
+		"SeriesPoolGetReUse":                 s.itemSeriesPoolGetReUse,
 	}
 
 	buffer = AddPointToBuffer("record", s.tags, data, buffer)
@@ -207,7 +207,6 @@ func (s *RecordStatistics) AddFileCursorValidRowPoolGetReUse(i int64) {
 func (s *RecordStatistics) AddFileCursorValidRowPoolAbort(i int64) {
 	atomic.AddInt64(&s.itemFileCursorValidRowPoolAbort, i)
 }
-
 
 func (s *RecordStatistics) AddFileCursorFilterRecordPoolInUse(i int64) {
 	atomic.AddInt64(&s.itemFileCursorFilterRecordPoolInUse, i)
