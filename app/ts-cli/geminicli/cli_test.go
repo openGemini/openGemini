@@ -149,6 +149,7 @@ func TestParsePrecision(t *testing.T) {
 		{input: "ns", expected: "ns", wantError: false},
 		{input: "rfc3339", expected: "", wantError: false},
 		{input: "unknown", expected: "", wantError: true},
+		{input: "fuck", expected: "", wantError: true},
 	}
 
 	for _, tc := range tests {
