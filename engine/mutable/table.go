@@ -18,6 +18,7 @@ package mutable
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"sort"
@@ -330,13 +331,19 @@ func (m *MemTables) UnRef() {
 
 func (m *MemTables) Values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
 	if !m.readEnable {
+		fmt.Print(time.Now())
+		fmt.Println(" in MemTables.Values(), m.readEnble=false")
 		return nil
 	}
 
 	var getValues = func(mt *MemTable) *record.Record {
 		if mt == nil {
+			fmt.Print(time.Now())
+			fmt.Println(" mt == nil, return nil")
 			return nil
 		}
+		fmt.Print(time.Now())
+		fmt.Println(" return Record from mt.values")
 		return mt.values(msName, id, tr, schema, ascending)
 	}
 
@@ -476,6 +483,7 @@ func NewMemTable(engineType config.EngineType) *MemTable {
 }
 
 func (t *MemTable) NeedFlush() bool {
+	fmt.Printf(" atomic.LoadInt64(&t.memSize) %v, GetSizeLimit() %v \n", atomic.LoadInt64(&t.memSize), GetSizeLimit())
 	return atomic.LoadInt64(&t.memSize) > GetSizeLimit()
 }
 
@@ -750,6 +758,10 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 	msInfo, ok := t.msInfoMap[msName]
 	t.mu.RUnlock()
 	if !ok {
+
+		fmt.Print(time.Now())
+		fmt.Println(" in MemTable.getSortedRecSafe(), msInfoMap[msName] err")
+
 		return nil
 	}
 
@@ -758,6 +770,8 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 	chunk, ok := msInfo.sidMap[id]
 	msInfo.mu.RUnlock()
 	if !ok {
+		fmt.Print(time.Now())
+		fmt.Println(" in MemTable.getSortedRecSafe(), msInfo.sidMap[id] err")
 		return nil
 	}
 
@@ -771,16 +785,28 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 	if chunk.OrderWriteRec.rec.RowNums() == 0 {
 		rec = chunk.UnOrderWriteRec.rec.CopyWithCondition(ascending, tr, schema)
 		chunk.Mu.Unlock()
+		fmt.Println("5555")
+		if rec == nil {
+			fmt.Print(time.Now())
+			fmt.Println(" chunk.UnOrderWriteRec.rec.CopyWithCondition, retrun rec nil")
+		}
 		return rec
 	}
 
 	if chunk.UnOrderWriteRec.rec.RowNums() == 0 {
 		rec = chunk.OrderWriteRec.rec.CopyWithCondition(ascending, tr, schema)
 		chunk.Mu.Unlock()
+		fmt.Println("6666")
+		if rec == nil {
+			fmt.Print(time.Now())
+			fmt.Println(" chunk.OrderWriteRec.rec.CopyWithCondition, retrun rec nil")
+		}
 		return rec
 	}
 
 	rec = &record.Record{}
+	fmt.Print(time.Now())
+	fmt.Println(" chunk.OrderWriteRec.rec and chunk.UnOrderWriteRec.rec are not empty, MergeRecord, retrun rec")
 	rec.MergeRecord(chunk.OrderWriteRec.rec, chunk.UnOrderWriteRec.rec)
 	chunk.Mu.Unlock()
 
@@ -789,10 +815,13 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 
 func (t *MemTable) values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
 	// column of sid need sort and dedupe
+	fmt.Print(time.Now())
+	fmt.Printf(" in MemTable, %v, %v, %v, %v, %s \n", msName, id, tr.Max, tr.Min, schema.String())
 	rec := t.getSortedRecSafe(msName, id, tr, schema, ascending)
 	if rec != nil {
 		sort.Sort(rec)
 	}
+	fmt.Println("7777")
 	return rec
 }
 

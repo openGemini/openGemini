@@ -1017,6 +1017,7 @@ func (s *shard) shouldSnapshot() bool {
 	defer s.snapshotLock.RUnlock()
 
 	if !s.storage.shouldSnapshot(s) {
+		fmt.Println(" storage.shouldSnapshot return false at line 1021")
 		return false
 	}
 
@@ -1025,12 +1026,14 @@ func (s *shard) shouldSnapshot() bool {
 			s.prepareSnapshot()
 			return true
 		}
+		fmt.Println(" s.activeTbl != nil && s.activeTbl.GetMemSize() > 0 ，but NeedFlush return false")
 
 		// check time
 		if fasttime.UnixTimestamp() >= (atomic.LoadUint64(&s.lastWriteTime) + uint64(s.writeColdDuration.Seconds())) {
 			s.prepareSnapshot()
 			return true
 		}
+		fmt.Println(" s.activeTbl != nil && s.activeTbl.GetMemSize() > 0 ，but check time not meet")
 	}
 
 	return false

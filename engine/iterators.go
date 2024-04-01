@@ -923,9 +923,25 @@ func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 
 	// get record from mem table which match the select cond
 	nameWithVer := schema.Options().OptionsName()
+	fmt.Print(time.Now())
+	fmt.Printf(" in getMemTableRecord(), call Values() %v, %v, %v \n", sid, ctx.tr.Max, ctx.tr.Min)
 	memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
+	if memTableRecord == nil {
+		fmt.Print(time.Now())
+		fmt.Println(" ctx.memTables.Values return memTableRecord is nil")
+	} else {
+		fmt.Print(time.Now())
+		fmt.Print("888")
+		fmt.Printf(" ctx.memTables.Values memTableRecord RowNums: %v \n", memTableRecord.RowNums())
+	}
 	memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilters, ptTags, nil, &ctx.colAux)
-
+	if memTableRecord == nil {
+		fmt.Print(time.Now())
+		fmt.Println(" immutable.FilterByField return memTableRecord is nil")
+	} else {
+		fmt.Print(time.Now())
+		fmt.Printf(" ctx.immutable.FilterByField memTableRecord RowNums: %v \n", memTableRecord.RowNums())
+	}
 	if span != nil {
 		span.Count(memTableDuration, int64(time.Since(tm)))
 		if memTableRecord != nil {

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -173,6 +174,8 @@ func (rec *Record) CopyWithCondition(ascending bool, tr util.TimeRange, schema S
 	endIndex := GetTimeRangeEndIndex(times, 0, tr.Max)
 
 	if startIndex <= endIndex {
+		fmt.Print(time.Now())
+		fmt.Println(" in CopyWithCondition, startIndex < endIndex")
 		copyRec := Record{}
 		copyRec.SetSchema(schema)
 		copyRec.ReserveColVal(len(schema))
@@ -193,12 +196,16 @@ func (rec *Record) CopyWithCondition(ascending bool, tr util.TimeRange, schema S
 				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, startIndex, endIndex+1)
 				return &copyRec
 			}
+			fmt.Print(time.Now())
+			fmt.Println(" in CopyWithCondition, return nil at Line: 200")
 			return nil
 		}
 
 		for i := 0; i < len(schema)-1; i++ {
 			colIndex := rec.FieldIndexs(schema[i].Name)
 			if colIndex < 0 {
+				fmt.Print(time.Now())
+				fmt.Println(" rec.FieldIndexs(schema[i].Name) at line: 208 colIndex < 0, continue")
 				copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
 				continue
 			}
@@ -209,12 +216,16 @@ func (rec *Record) CopyWithCondition(ascending bool, tr util.TimeRange, schema S
 		}
 		if isExist {
 			// append time column
+			fmt.Print(time.Now())
+			fmt.Println(" in CopyWithCondition, append time column at line 220")
 			timeIndex := rec.ColNums() - 1
 			for pos := endIndex; pos >= startIndex; pos-- {
 				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, pos, pos+1)
 			}
 			return &copyRec
 		}
+		fmt.Print(time.Now())
+		fmt.Println(" in CopyWithCondition, return nil at line: 228")
 		return nil
 	}
 	return nil

@@ -17,6 +17,7 @@ limitations under the License.
 package engine
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -147,7 +148,11 @@ func (s *seriesCursor) nextInner() (*record.Record, *seriesInfo, error) {
 
 	var tsmRecord *record.Record
 	var err error
+	fmt.Print(time.Now())
+	fmt.Println(" in seriesCursor nextInner")
 	if !s.isTsmCursorNil() {
+		fmt.Print(time.Now())
+		fmt.Println(" call tsmCursor.Next()")
 		tsmRecord, err = s.tsmCursor.Next()
 	}
 
@@ -175,12 +180,21 @@ func (s *seriesCursor) nextInner() (*record.Record, *seriesInfo, error) {
 }
 
 func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	fmt.Print(time.Now())
+	fmt.Printf(" in seriesCursor.Next() %v, %v \n", s.init, s.lazyInit)
+
 	if !s.init && s.lazyInit {
 		if s.span != nil {
 			s.span.CreateCounter(memTableDuration, "ns")
 			s.span.CreateCounter(memTableRowCount, "")
 		}
+		fmt.Print(time.Now())
+		fmt.Println(" in seriesCursor.Next(), call getMemTableRecord()")
 		memTableRecord := getMemTableRecord(s.ctx, s.span, s.querySchema, s.sInfo.sid, s.filter, nil, &s.sInfo.tags)
+		if memTableRecord == nil {
+			fmt.Print(time.Now())
+			fmt.Println(" getMemTableRecord return nil")
+		}
 		s.memRecIter.init(memTableRecord)
 		s.init = true
 	}
