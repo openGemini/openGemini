@@ -75,7 +75,7 @@ type TagTask struct {
 
 	// pool
 	windowCachePool *WindowCachePool
-	*WindowDataPool
+	*WindowCacheQueue
 
 	// config
 	concurrency int
@@ -95,7 +95,7 @@ type WindowCache struct {
 }
 
 func (s *TagTask) Put(r *WindowCache) {
-	s.WindowDataPool.Put(r)
+	s.WindowCacheQueue.Put(r)
 }
 
 func (s *TagTask) stop() error {
@@ -266,7 +266,7 @@ func (s *TagTask) consumeDataAndUpdateMeta() {
 			}
 		case <-s.abort:
 			return
-		case cache := <-s.cache:
+		case cache := <-s.queue:
 			s.IncreaseChan()
 			count := 0
 			s.innerCache <- cache
@@ -275,7 +275,7 @@ func (s *TagTask) consumeDataAndUpdateMeta() {
 				loop := true
 				for loop {
 					select {
-					case c := <-s.cache:
+					case c := <-s.queue:
 						s.IncreaseChan()
 						s.innerCache <- c
 						count++

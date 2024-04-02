@@ -37,8 +37,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func Test_WindowDataPool(t *testing.T) {
-	pool := NewWindowDataPool()
+func Test_WindowCacheQueue(t *testing.T) {
+	pool := NewWindowCacheQueue()
 	pool.Put(nil)
 	timer := time.NewTicker(1 * time.Second)
 	kk := make(chan *WindowCache)
@@ -133,7 +133,7 @@ func Benchmark_CompressDictKeyUint(t *testing.B) {
 }
 
 func Test_ConsumeDataAbort(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
+	task := &TagTask{values: sync.Map{}, WindowCacheQueue: NewWindowCacheQueue(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.consumeDataAndUpdateMeta()
 	// wait run
@@ -145,7 +145,7 @@ func Test_ConsumeDataAbort(t *testing.T) {
 }
 
 func Test_ConsumeDataClean(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(),
+	task := &TagTask{values: sync.Map{}, WindowCacheQueue: NewWindowCacheQueue(),
 		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.consumeDataAndUpdateMeta()
@@ -158,7 +158,7 @@ func Test_ConsumeDataClean(t *testing.T) {
 }
 
 func Test_FlushAbort(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(),
+	task := &TagTask{values: sync.Map{}, WindowCacheQueue: NewWindowCacheQueue(),
 		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.flush()
@@ -168,7 +168,7 @@ func Test_FlushAbort(t *testing.T) {
 }
 
 func Test_FlushUpdate(t *testing.T) {
-	task := &TagTask{values: sync.Map{}, WindowDataPool: NewWindowDataPool(),
+	task := &TagTask{values: sync.Map{}, WindowCacheQueue: NewWindowCacheQueue(),
 		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
 	go task.flush()

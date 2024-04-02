@@ -43,7 +43,7 @@ type TimeTask struct {
 
 	// pool
 	windowCachePool *WindowCachePool
-	*WindowDataPool
+	*WindowCacheQueue
 
 	// tmp data, reuse
 	row *influx.Row
@@ -59,7 +59,7 @@ func (s *TimeTask) getDesInfo() *meta2.StreamMeasurementInfo {
 }
 
 func (s *TimeTask) Put(r *WindowCache) {
-	s.WindowDataPool.Put(r)
+	s.WindowCacheQueue.Put(r)
 }
 
 func (s *TimeTask) stop() error {
@@ -149,7 +149,7 @@ func (s *TimeTask) consumeData() {
 			s.stats.StatWindowUpdateCost(int64(time.Since(t)))
 		case <-s.abort:
 			return
-		case cache := <-s.cache:
+		case cache := <-s.queue:
 			err := s.calculate(cache)
 			if err != nil {
 				s.Logger.Error("calculate error", zap.String("window", s.name), zap.Error(err))

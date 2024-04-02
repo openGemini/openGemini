@@ -84,12 +84,12 @@ func (p *RowsPool) Put(r *[]influx.Row) {
 	p.pool.Put(r)
 }
 
-type WindowDataPool struct {
-	cache  chan *WindowCache
+type WindowCacheQueue struct {
+	queue  chan *WindowCache
 	length int64
 }
 
-func NewWindowDataPool() *WindowDataPool {
+func NewWindowCacheQueue() *WindowCacheQueue {
 	n := cpu.GetCpuNum() * 8
 	if n < 4 {
 		n = 4
@@ -98,28 +98,28 @@ func NewWindowDataPool() *WindowDataPool {
 		n = 256
 	}
 
-	p := &WindowDataPool{
-		cache: make(chan *WindowCache, n),
+	p := &WindowCacheQueue{
+		queue: make(chan *WindowCache, n),
 	}
 	return p
 }
 
-func (p *WindowDataPool) Get() *WindowCache {
-	cache := <-p.cache
+func (p *WindowCacheQueue) Get() *WindowCache {
+	cache := <-p.queue
 	p.IncreaseChan()
 	return cache
 }
 
-func (p *WindowDataPool) IncreaseChan() {
+func (p *WindowCacheQueue) IncreaseChan() {
 	atomic.AddInt64(&p.length, -1)
 }
 
-func (p *WindowDataPool) Put(cache *WindowCache) {
-	p.cache <- cache
+func (p *WindowCacheQueue) Put(cache *WindowCache) {
+	p.queue <- cache
 	atomic.AddInt64(&p.length, 1)
 }
 
-func (p *WindowDataPool) Len() int64 {
+func (p *WindowCacheQueue) Len() int64 {
 	return atomic.LoadInt64(&p.length)
 }
 

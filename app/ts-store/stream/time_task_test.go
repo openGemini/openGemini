@@ -52,7 +52,7 @@ func Test_Time_ConsumeData(t *testing.T) {
 		}
 		fieldCalls = append(fieldCalls, call)
 	}
-	task := &TimeTask{WindowDataPool: NewWindowDataPool(), windowCachePool: NewWindowCachePool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
+	task := &TimeTask{WindowCacheQueue: NewWindowCacheQueue(), windowCachePool: NewWindowCachePool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		Logger: l, store: m, cli: metaClient, src: &src, des: &des, window: interval,
 		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}

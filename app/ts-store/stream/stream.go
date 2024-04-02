@@ -271,8 +271,8 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.Fi
 	var task Task
 	if len(info.Dims) == 0 {
 		task = &TimeTask{
-			WindowDataPool:  NewWindowDataPool(),
-			windowCachePool: s.windowCachePool,
+			WindowCacheQueue: NewWindowCacheQueue(),
+			windowCachePool:  s.windowCachePool,
 			BaseTask: &BaseTask{
 				windowNum:  int64(maxWindowNum),
 				id:         info.ID,
@@ -292,12 +292,12 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.Fi
 		}
 	} else {
 		task = &TagTask{
-			values:          sync.Map{},
-			WindowDataPool:  NewWindowDataPool(),
-			goPool:          s.goPool,
-			groupKeys:       info.Dims,
-			windowCachePool: s.windowCachePool,
-			concurrency:     s.conf.WindowConcurrency,
+			values:           sync.Map{},
+			WindowCacheQueue: NewWindowCacheQueue(),
+			goPool:           s.goPool,
+			groupKeys:        info.Dims,
+			windowCachePool:  s.windowCachePool,
+			concurrency:      s.conf.WindowConcurrency,
 			BaseTask: &BaseTask{
 				windowNum:  int64(maxWindowNum),
 				id:         info.ID,

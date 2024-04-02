@@ -24,8 +24,8 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 )
 
-func Benchmark_WindowDataPool(t *testing.B) {
-	pool := stream.NewWindowDataPool()
+func Benchmark_WindowCacheQueue(t *testing.B) {
+	pool := stream.NewWindowCacheQueue()
 	for i := 0; i < t.N; i++ {
 		for i := 0; i < 10000000; i++ {
 			c := &stream.WindowCache{}
@@ -35,8 +35,8 @@ func Benchmark_WindowDataPool(t *testing.B) {
 	}
 }
 
-func Test_WindowDataPool_Len(t *testing.T) {
-	pool := stream.NewWindowDataPool()
+func Test_WindowCacheQueue_Len(t *testing.T) {
+	pool := stream.NewWindowCacheQueue()
 	c := &stream.WindowCache{}
 	pool.Put(c)
 	if pool.Len() != 1 {
@@ -67,8 +67,8 @@ func Benchmark_WindowCachePool(t *testing.B) {
 	}
 }
 
-func Test_WindowDataPool_Block(t *testing.T) {
-	pool := stream.NewWindowDataPool()
+func Test_WindowCacheQueue_Block(t *testing.T) {
+	pool := stream.NewWindowCacheQueue()
 	timer := time.NewTicker(1 * time.Second)
 	r := make(chan struct{}, 1)
 	go func() {
@@ -82,8 +82,8 @@ func Test_WindowDataPool_Block(t *testing.T) {
 	}
 }
 
-func Test_WindowDataPool_NIL(t *testing.T) {
-	pool := stream.NewWindowDataPool()
+func Test_WindowCacheQueue_NIL(t *testing.T) {
+	pool := stream.NewWindowCacheQueue()
 	pool.Put(nil)
 	r := pool.Get()
 	if r != nil {
