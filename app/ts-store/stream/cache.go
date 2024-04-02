@@ -21,34 +21,30 @@ import (
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/cpu"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func NewCacheRowPool() *CacheRowPool {
-	rowsPool := NewRowsPool()
-	p := &CacheRowPool{rowsPool: rowsPool}
+	p := &CacheRowPool{}
 	return p
 }
 
 type CacheRowPool struct {
-	pool     sync.Pool
-	size     int64
-	length   int64
-	rowsPool *RowsPool
+	pool   sync.Pool
+	size   int64
+	length int64
 }
 
 func (p *CacheRowPool) Get() *CacheRow {
 	c := p.pool.Get()
 	if c == nil {
 		atomic.AddInt64(&p.size, 1)
-		return &CacheRow{rows: *p.rowsPool.Get()}
+		return &CacheRow{}
 	}
 	atomic.AddInt64(&p.length, -1)
 	return c.(*CacheRow)
 }
 
 func (p *CacheRowPool) Put(r *CacheRow) {
-	p.rowsPool.Put(&r.rows)
 	r.rows = nil
 	r.ww = nil
 	p.pool.Put(r)
@@ -61,27 +57,6 @@ func (p *CacheRowPool) Len() int64 {
 
 func (p *CacheRowPool) Size() int64 {
 	return atomic.LoadInt64(&p.size)
-}
-
-type RowsPool struct {
-	pool sync.Pool
-}
-
-func NewRowsPool() *RowsPool {
-	p := &RowsPool{}
-	return p
-}
-
-func (p *RowsPool) Get() *[]influx.Row {
-	c := p.pool.Get()
-	if c == nil {
-		return &[]influx.Row{}
-	}
-	return c.(*[]influx.Row)
-}
-
-func (p *RowsPool) Put(r *[]influx.Row) {
-	p.pool.Put(r)
 }
 
 type WindowCacheQueue struct {
