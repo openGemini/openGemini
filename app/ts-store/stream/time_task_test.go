@@ -52,7 +52,7 @@ func Test_Time_ConsumeData(t *testing.T) {
 		}
 		fieldCalls = append(fieldCalls, call)
 	}
-	task := &TimeTask{WindowCacheQueue: NewWindowCacheQueue(), windowCachePool: NewWindowCachePool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
+	task := &TimeTask{WindowCacheQueue: NewWindowCacheQueue(), windowCachePool: NewNetGetPool[WindowCache](), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0),
 		Logger: l, store: m, cli: metaClient, src: &src, des: &des, window: interval,
 		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}
@@ -97,27 +97,5 @@ func Test_Time_ConsumeData(t *testing.T) {
 	err := task.stop()
 	if err != nil {
 		t.Fatal(err)
-	}
-}
-
-func BenchmarkXX(b *testing.B) {
-	a := make([]bool, 10)
-	a[5] = true
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < 100000000; j++ {
-			a[5] = true
-		}
-	}
-}
-
-func BenchmarkXX1(b *testing.B) {
-	a := make([]bool, 10)
-	a[5] = true
-	for i := 0; i < b.N; i++ {
-		for j := 0; j < 100000000; j++ {
-			if !a[5] {
-				a[5] = true
-			}
-		}
 	}
 }

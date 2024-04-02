@@ -38,14 +38,14 @@ import (
 )
 
 func Test_WindowCacheQueue(t *testing.T) {
-	pool := NewWindowCacheQueue()
-	pool.Put(nil)
+	q := NewWindowCacheQueue()
+	q.Put(nil)
 	timer := time.NewTicker(1 * time.Second)
 	kk := make(chan *WindowCache)
 	select {
 	case <-timer.C:
 		t.Log("timer occur")
-	case kk <- pool.Get():
+	case kk <- q.Get():
 		t.Fatal("should be block")
 	}
 }

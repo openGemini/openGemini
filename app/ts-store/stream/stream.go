@@ -58,8 +58,8 @@ type WritePointsWorkIF interface {
 
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
 	cache := make(chan *CacheRow, conf.FilterCache)
-	rowPool := NewCacheRowPool()
-	windowCachePool := NewWindowCachePool()
+	rowPool := NewNetGetPool[CacheRow]()
+	windowCachePool := NewNetGetPool[WindowCache]()
 	goPool, err := ants.NewPool(conf.FilterConcurrency)
 	if err != nil {
 		return nil, err
@@ -432,10 +432,10 @@ func (s *Stream) rangeWindow(r *CacheRow) (bool, map[uint64][]int) {
 // Drain is for test case, to check whether there exist resource leakage
 func (s *Stream) Drain() {
 	// wait rowPool put back all
-	for s.rowPool.Len() != s.rowPool.Size() {
+	for s.rowPool.NetGet() != 0 {
 	}
 	//wait window cache pool empty
-	for s.windowCachePool.Count() != 0 {
+	for s.windowCachePool.NetGet() != 0 {
 	}
 	s.tasks.Range(func(key, value interface{}) bool {
 		w, _ := value.(Task)

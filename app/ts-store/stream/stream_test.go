@@ -562,7 +562,7 @@ type MockRowCache struct {
 }
 
 func (r *MockRowCache) GetPool() *WindowCache {
-	windowCachePool := NewWindowCachePool()
+	windowCachePool := NewNetGetPool[WindowCache]()
 	release := func() bool {
 		cur := atomic.AddInt64(&r.refCount, -1)
 		r.res = cur

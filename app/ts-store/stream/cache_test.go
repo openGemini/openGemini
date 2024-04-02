@@ -25,39 +25,39 @@ import (
 )
 
 func Benchmark_WindowCacheQueue(t *testing.B) {
-	pool := stream.NewWindowCacheQueue()
+	q := stream.NewWindowCacheQueue()
 	for i := 0; i < t.N; i++ {
 		for i := 0; i < 10000000; i++ {
 			c := &stream.WindowCache{}
-			pool.Put(c)
-			pool.Get()
+			q.Put(c)
+			q.Get()
 		}
 	}
 }
 
 func Test_WindowCacheQueue_Len(t *testing.T) {
-	pool := stream.NewWindowCacheQueue()
+	q := stream.NewWindowCacheQueue()
 	c := &stream.WindowCache{}
-	pool.Put(c)
-	if pool.Len() != 1 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Len()))
+	q.Put(c)
+	if q.Len() != 1 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 1, q.Len()))
 	}
-	pool.Get()
-	if pool.Len() != 0 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 0, pool.Len()))
+	q.Get()
+	if q.Len() != 0 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 0, q.Len()))
 	}
-	pool.Put(c)
-	if pool.Len() != 1 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Len()))
+	q.Put(c)
+	if q.Len() != 1 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 1, q.Len()))
 	}
-	pool.Put(c)
-	if pool.Len() != 2 {
-		t.Error(fmt.Sprintf("expect %v ,got %v", 2, pool.Len()))
+	q.Put(c)
+	if q.Len() != 2 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 2, q.Len()))
 	}
 }
 
 func Benchmark_WindowCachePool(t *testing.B) {
-	pool := stream.NewWindowCachePool()
+	pool := stream.NewNetGetPool[stream.WindowCache]()
 	for i := 0; i < t.N; i++ {
 		for i := 0; i < 10000000; i++ {
 			c := &stream.WindowCache{}
@@ -68,11 +68,11 @@ func Benchmark_WindowCachePool(t *testing.B) {
 }
 
 func Test_WindowCacheQueue_Block(t *testing.T) {
-	pool := stream.NewWindowCacheQueue()
+	q := stream.NewWindowCacheQueue()
 	timer := time.NewTicker(1 * time.Second)
 	r := make(chan struct{}, 1)
 	go func() {
-		pool.Get()
+		q.Get()
 		r <- struct{}{}
 	}()
 	select {
@@ -83,16 +83,16 @@ func Test_WindowCacheQueue_Block(t *testing.T) {
 }
 
 func Test_WindowCacheQueue_NIL(t *testing.T) {
-	pool := stream.NewWindowCacheQueue()
-	pool.Put(nil)
-	r := pool.Get()
+	q := stream.NewWindowCacheQueue()
+	q.Put(nil)
+	r := q.Get()
 	if r != nil {
 		t.Error(fmt.Sprintf("expect %v ,got %v", nil, r))
 	}
 }
 
 func Test_WindowCachePool_Block(t *testing.T) {
-	pool := stream.NewWindowCachePool()
+	pool := stream.NewNetGetPool[stream.WindowCache]()
 	timer := time.NewTicker(1 * time.Second)
 	r := make(chan struct{}, 1)
 	go func() {

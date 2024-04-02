@@ -23,41 +23,47 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 )
 
-func NewCacheRowPool() *CacheRowPool {
-	p := &CacheRowPool{}
-	return p
-}
-
-type CacheRowPool struct {
+// NetGetPool is a pool which records the number of net gets, i.e.:
+//
+//	(total number of Get) - (total number of Put)
+//
+// note the number could be negative, which means more Put are called
+// than Get.
+type NetGetPool[T any] struct {
 	pool   sync.Pool
-	size   int64
-	length int64
+	netGet int64
 }
 
-func (p *CacheRowPool) Get() *CacheRow {
-	c := p.pool.Get()
-	if c == nil {
-		atomic.AddInt64(&p.size, 1)
-		return &CacheRow{}
+// NewNetGetPool creates a new NetGetPool.
+func NewNetGetPool[T any]() *NetGetPool[T] {
+	return &NetGetPool[T]{}
+}
+
+// Get returns a new instance of T and increases the netGet counter.
+func (p *NetGetPool[T]) Get() *T {
+	atomic.AddInt64(&p.netGet, 1)
+	if c := p.pool.Get(); c != nil {
+		return c.(*T)
 	}
-	atomic.AddInt64(&p.length, -1)
-	return c.(*CacheRow)
+	return new(T)
 }
 
-func (p *CacheRowPool) Put(r *CacheRow) {
-	r.rows = nil
-	r.ww = nil
-	p.pool.Put(r)
-	atomic.AddInt64(&p.length, 1)
+// Put puts c back to the pool and decreases the netGet counter.
+func (p *NetGetPool[T]) Put(c *T) {
+	atomic.AddInt64(&p.netGet, -1)
+	p.pool.Put(c)
 }
 
-func (p *CacheRowPool) Len() int64 {
-	return atomic.LoadInt64(&p.length)
+// NetGet returns the netGet counter.
+func (p *NetGetPool[T]) NetGet() int64 {
+	return atomic.LoadInt64(&p.netGet)
 }
 
-func (p *CacheRowPool) Size() int64 {
-	return atomic.LoadInt64(&p.size)
-}
+// CacheRowPool is a NetGetPool for CacheRow.
+type CacheRowPool = NetGetPool[CacheRow]
+
+// WindowCachePool is a NetGetPool for WindowCache.
+type WindowCachePool = NetGetPool[WindowCache]
 
 type WindowCacheQueue struct {
 	queue  chan *WindowCache
@@ -96,32 +102,4 @@ func (p *WindowCacheQueue) Put(cache *WindowCache) {
 
 func (p *WindowCacheQueue) Len() int64 {
 	return atomic.LoadInt64(&p.length)
-}
-
-type WindowCachePool struct {
-	pool  sync.Pool
-	count int64
-}
-
-func NewWindowCachePool() *WindowCachePool {
-	p := &WindowCachePool{}
-	return p
-}
-
-func (p *WindowCachePool) Get() *WindowCache {
-	atomic.AddInt64(&p.count, 1)
-	c := p.pool.Get()
-	if c == nil {
-		return &WindowCache{}
-	}
-	return c.(*WindowCache)
-}
-
-func (p *WindowCachePool) Put(r *WindowCache) {
-	atomic.AddInt64(&p.count, -1)
-	p.pool.Put(r)
-}
-
-func (p *WindowCachePool) Count() int64 {
-	return atomic.LoadInt64(&p.count)
 }
