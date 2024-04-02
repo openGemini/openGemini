@@ -21,30 +21,67 @@ import (
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func NewCacheRowPool() *CacheRowPool {
-	return &CacheRowPool{
-		Pool: sync.Pool{
-			New: func() interface{} {
-				return &CacheRow{}
-			},
-		},
-	}
+	rowsPool := NewRowsPool()
+	p := &CacheRowPool{rowsPool: rowsPool}
+	return p
 }
 
 type CacheRowPool struct {
-	sync.Pool
+	pool     sync.Pool
+	size     int64
+	length   int64
+	rowsPool *RowsPool
 }
 
 func (p *CacheRowPool) Get() *CacheRow {
-	return p.Pool.Get().(*CacheRow)
+	c := p.pool.Get()
+	if c == nil {
+		atomic.AddInt64(&p.size, 1)
+		return &CacheRow{rows: *p.rowsPool.Get()}
+	}
+	atomic.AddInt64(&p.length, -1)
+	return c.(*CacheRow)
 }
 
 func (p *CacheRowPool) Put(r *CacheRow) {
+	p.rowsPool.Put(&r.rows)
 	r.rows = nil
 	r.ww = nil
-	p.Pool.Put(r)
+	p.pool.Put(r)
+	atomic.AddInt64(&p.length, 1)
+}
+
+func (p *CacheRowPool) Len() int64 {
+	return atomic.LoadInt64(&p.length)
+}
+
+func (p *CacheRowPool) Size() int64 {
+	return atomic.LoadInt64(&p.size)
+}
+
+type RowsPool struct {
+	pool sync.Pool
+}
+
+func NewRowsPool() *RowsPool {
+	p := &RowsPool{}
+	return p
+}
+
+func (p *RowsPool) Get() *[]influx.Row {
+	c := p.pool.Get()
+	if c == nil {
+		return &[]influx.Row{}
+	}
+	return c.(*[]influx.Row)
+}
+
+func (p *RowsPool) Put(r *[]influx.Row) {
+	p.pool.Put(r)
 }
 
 type WindowDataPool struct {
@@ -87,23 +124,29 @@ func (p *WindowDataPool) Len() int64 {
 }
 
 type WindowCachePool struct {
-	sync.Pool
+	pool  sync.Pool
+	count int64
 }
 
 func NewWindowCachePool() *WindowCachePool {
-	return &WindowCachePool{
-		Pool: sync.Pool{
-			New: func() interface{} {
-				return &WindowCache{}
-			},
-		},
-	}
+	p := &WindowCachePool{}
+	return p
 }
 
 func (p *WindowCachePool) Get() *WindowCache {
-	return p.Pool.Get().(*WindowCache)
+	atomic.AddInt64(&p.count, 1)
+	c := p.pool.Get()
+	if c == nil {
+		return &WindowCache{}
+	}
+	return c.(*WindowCache)
 }
 
 func (p *WindowCachePool) Put(r *WindowCache) {
-	p.Pool.Put(r)
+	atomic.AddInt64(&p.count, -1)
+	p.pool.Put(r)
+}
+
+func (p *WindowCachePool) Count() int64 {
+	return atomic.LoadInt64(&p.count)
 }
