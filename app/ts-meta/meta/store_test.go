@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -268,7 +269,7 @@ func generateData(ms *meta.MetaService, db, rp, mst string, shardKeyN int, value
 				}
 				tagValue := "host_" + strconv.Itoa(idx)
 				shardKeyAndValue := shardKey.ShardKey[0] + "=" + tagValue
-				if shardKeyAndValue < splitPoint {
+				if strings.Compare(shardKeyAndValue, splitPoint) < 0 {
 					continue
 				}
 				sh := sg.DestShard(shardKeyAndValue)

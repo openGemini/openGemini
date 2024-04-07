@@ -19,7 +19,7 @@ package meta
 import (
 	"encoding/json"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"reflect"
@@ -240,7 +240,7 @@ func (h *MockHandler) servePeers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MockHandler) serveJoin(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		h.httpError(err, w, http.StatusInternalServerError)
 		return

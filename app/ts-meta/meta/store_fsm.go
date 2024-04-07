@@ -785,7 +785,7 @@ func (fsm *storeFSM) applyCreateDataNodeCommand(cmd *proto2.Command) interface{}
 	}
 
 	fsm.data.ExpandShardsEnable = fsm.config.ExpandShardsEnable
-	err, _ := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole())
+	_, err := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole())
 	return err
 }
 
