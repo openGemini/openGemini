@@ -1087,6 +1087,15 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 				closed = true
 				break
 			}
+			if stmt.Location != nil {
+				for _, row := range rowsChan.Rows {
+					for _, v := range row.Values {
+						if ts, ok := v[0].(time.Time); ok {
+							v[0] = ts.In(stmt.Location)
+						}
+					}
+				}
+			}
 			result := &query.Result{
 				Series:  rowsChan.Rows,
 				Partial: rowsChan.Partial,
