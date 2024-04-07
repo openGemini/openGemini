@@ -446,7 +446,7 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 	var retryNum uint32 = 0
 	var err error
 	var rows models.Rows
-	for time.Now().Sub(startTime).Seconds() < coordinator.DMLTimeOutSecond {
+	for time.Since(startTime).Seconds() < coordinator.DMLTimeOutSecond {
 		if retryNum > 0 {
 			time.Sleep(coordinator.DMLRetryInternalMillisecond * time.Millisecond)
 		}
@@ -1015,7 +1015,7 @@ func (e *StatementExecutor) retryCreatePipelineExecutor(ctx context.Context, stm
 			if retryNum%20 == 0 {
 				e.StmtExecLogger.Warn("retry retryCreatePipelineExecutor ", zap.Error(err), zap.Uint32("retryNum", retryNum), zap.Any("stmt", stmt))
 			}
-			if time.Now().Sub(startTime).Seconds() < coordinator.DMLTimeOutSecond {
+			if time.Since(startTime).Seconds() < coordinator.DMLTimeOutSecond {
 				time.Sleep(coordinator.DMLRetryInternalMillisecond * time.Millisecond)
 				retryNum++
 				continue
@@ -1074,7 +1074,7 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 		qStat, _ := ctx.Value(query2.QueryDurationKey).(*statistics.SQLSlowQueryStatistics)
 		if qStat != nil {
 			qStat.AddDuration("SqlIteratorDuration", end.Sub(start).Nanoseconds())
-			qStat.AddDuration("EmitDuration", time.Now().Sub(end).Nanoseconds())
+			qStat.AddDuration("EmitDuration", time.Since(end).Nanoseconds())
 		}
 	}()
 
@@ -2332,7 +2332,7 @@ func (a TagKeysSlice) Len() int           { return len(a) }
 func (a TagKeysSlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a TagKeysSlice) Less(i, j int) bool { return a[i].Name < a[j].Name }
 
-func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*netstorage.ExecuteStatementMessage) (error, [][]byte) {
+func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*netstorage.ExecuteStatementMessage) ([][]byte, error) {
 	retString := make(map[string]bool, len(otherNodeNamesMap))
 	clusterNames := make([][]byte, 0, len(otherNodeNamesMap))
 	for _, msg := range otherNodeNamesMap {
@@ -2342,7 +2342,7 @@ func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*netstorage.ExecuteStat
 		}
 		err := json.Unmarshal(msg.Result, &names)
 		if err != nil {
-			return fmt.Errorf("Unmarshal %s json bytes failed: %s\n", msg.StatementType, err), nil
+			return nil, fmt.Errorf("unmarshal %s json bytes failed: %s\n", msg.StatementType, err)
 		}
 
 		if len(names) > 0 {
@@ -2360,10 +2360,10 @@ func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*netstorage.ExecuteStat
 	}
 
 	sort.Stable(uniqueStrings)
-	return nil, uniqueStrings
+	return uniqueStrings, nil
 }
 
-func MergeTagKeys(otherNodeTagKeysMap *map[uint64][]netstorage.TagKeys) (error, []netstorage.TagKeys) {
+func MergeTagKeys(otherNodeTagKeysMap *map[uint64][]netstorage.TagKeys) ([]netstorage.TagKeys, error) {
 
 	uniqueMap := make(map[string]set.Set)
 
@@ -2395,7 +2395,7 @@ func MergeTagKeys(otherNodeTagKeysMap *map[uint64][]netstorage.TagKeys) (error, 
 	}
 
 	sort.Stable(clusterTagKeys)
-	return nil, clusterTagKeys
+	return clusterTagKeys, nil
 }
 
 type KeyValues []netstorage.TagSet
@@ -2414,7 +2414,7 @@ func (a KeyValues) Less(i, j int) bool {
 	return ki < kj
 }
 
-func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (error, []netstorage.TableTagSets) {
+func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) ([]netstorage.TableTagSets, error) {
 	uniqueMap := make(map[string]set.Set)
 	for _, nodeTagValues := range *otherNodeTagKeysMap {
 		for _, tagValues := range nodeTagValues {
@@ -2444,7 +2444,7 @@ func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (
 	}
 
 	sort.Stable(clusterTagValues)
-	return nil, clusterTagValues
+	return clusterTagValues, nil
 }
 
 func GetStatementMessageType(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) string {
@@ -2455,7 +2455,7 @@ func GetStatementMessageType(OtherNodesMsg map[uint64]*netstorage.ExecuteStateme
 	return ""
 }
 
-func MergeAllNodeMessage(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (error, interface{}) {
+func MergeAllNodeMessage(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (interface{}, error) {
 	stmtType := GetStatementMessageType(OtherNodesMsg)
 	switch stmtType {
 	case netstorage.ShowMeasurementsStatement:
@@ -2491,7 +2491,7 @@ func MergeAllNodeMessage(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMe
 	}
 }
 
-func CalcCardinality(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (error, int64) {
+func CalcCardinality(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (int64, error) {
 	var nl int64
 	var clusterCardinality int64
 	clusterCardinality = 0
@@ -2499,14 +2499,14 @@ func CalcCardinality(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessag
 		var n int64
 		err := json.Unmarshal(msg.Result, &n)
 		if err != nil {
-			return err, 0
+			return 0, err
 		}
 		clusterCardinality += n
 	}
-	return nil, clusterCardinality + nl
+	return clusterCardinality + nl, nil
 }
 
-func MergeAllNodeFiltered(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (error, interface{}) {
+func MergeAllNodeFiltered(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (interface{}, error) {
 	// for reuse the message merge flow
 	other := OtherNodesMsg
 	for _, n := range other {
