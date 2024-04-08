@@ -189,17 +189,19 @@ func (uw *unmarshalWork) Unmarshal() {
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequestParseDuration, time.Since(start).Nanoseconds())
 	currentTs := time.Now().UnixNano()
 	tsMultiplier := uw.TsMultiplier
-	for i := range rows {
-		row := &rows[i]
-		err = row.CheckValid()
-		if err != nil {
-			break
-		}
-		if row.Timestamp == NoTimestamp {
-			// erase the unused tiny time cell and fill timestamp with zero
-			row.Timestamp = currentTs / tsMultiplier * tsMultiplier
-		} else {
-			row.Timestamp *= tsMultiplier
+	if tsMultiplier > 0 {
+		for i := range rows {
+			row := &rows[i]
+			err = row.CheckValid()
+			if err != nil {
+				break
+			}
+			if row.Timestamp == NoTimestamp {
+				// erase the unused tiny time cell and fill timestamp with zero
+				row.Timestamp = currentTs / tsMultiplier * tsMultiplier
+			} else {
+				row.Timestamp *= tsMultiplier
+			}
 		}
 	}
 
