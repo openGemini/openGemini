@@ -23,7 +23,7 @@ import (
 )
 
 // The maximum size of a single line returned by ReadLinesBlock.
-const maxLineSize = 256 * 1024
+const maxLineSize = 1024 * 1024
 
 // Default size in bytes of a single block returned by ReadLinesBlock.
 const defaultBlockSize = 64 * 1024
