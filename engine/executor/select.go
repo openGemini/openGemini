@@ -299,10 +299,7 @@ func (p *preparedStatement) Close() error {
 func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
 	for i := range stmt.Sources {
-		source, e := copystructure.Copy(stmt.Sources[i])
-		if e != nil {
-			return nil, e
-		}
+		source := influxql.CloneSource(stmt.Sources[i])
 		optSource := influxql.Sources{source.(influxql.Source)}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
