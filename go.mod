@@ -28,7 +28,6 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/klauspost/compress v1.17.0
 	github.com/mitchellh/cli v1.1.5
-	github.com/mitchellh/copystructure v1.2.0
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.6-0.20210304033056-74c60be0ef68
 	github.com/panjf2000/ants/v2 v2.5.0
@@ -122,6 +121,7 @@ require (
 	github.com/mattn/go-tty v0.0.5 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
+	github.com/mitchellh/copystructure v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.4.3 // indirect
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
