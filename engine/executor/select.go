@@ -23,7 +23,6 @@ import (
 	"io"
 	"time"
 
-	"github.com/mitchellh/copystructure"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -299,11 +298,8 @@ func (p *preparedStatement) Close() error {
 func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
 	for i := range stmt.Sources {
-		source, e := copystructure.Copy(stmt.Sources[i])
-		if e != nil {
-			return nil, e
-		}
-		optSource := influxql.Sources{source.(influxql.Source)}
+		source := influxql.CloneSource(stmt.Sources[i])
+		optSource := influxql.Sources{source}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
 		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource,
@@ -315,7 +311,7 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 		if child != nil {
 			joinNodes = append(joinNodes, child)
 		}
-		schema.sources = append(schema.sources, source.(influxql.Source))
+		schema.sources = append(schema.sources, source)
 	}
 
 	if len(joinNodes) == 0 {
@@ -374,11 +370,8 @@ func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
 
 	for i := range stmt.Sources {
-		source, e := copystructure.Copy(stmt.Sources[i])
-		if e != nil {
-			return nil, e
-		}
-		optSource := influxql.Sources{source.(influxql.Source)}
+		source := influxql.CloneSource(stmt.Sources[i])
+		optSource := influxql.Sources{source}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
 		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
@@ -389,7 +382,7 @@ func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 		if child != nil {
 			joinNodes = append(joinNodes, child)
 		}
-		schema.sources = append(schema.sources, source.(influxql.Source))
+		schema.sources = append(schema.sources, source)
 	}
 
 	if len(joinNodes) == 0 {
