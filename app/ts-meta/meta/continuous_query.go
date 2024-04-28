@@ -152,6 +152,19 @@ func (s *Store) checkSQLNodesHeartbeat() {
 		return
 	}
 
+	var hasCQ bool
+	s.cacheMu.RLock()
+	for _, db := range s.cacheData.Databases {
+		if len(db.ContinuousQueries) > 0 {
+			hasCQ = true
+			break
+		}
+	}
+	s.cacheMu.RUnlock()
+
+	if !hasCQ {
+		return
+	}
 	for {
 		s.cqLock.RLock()
 		var hbi *list.Element

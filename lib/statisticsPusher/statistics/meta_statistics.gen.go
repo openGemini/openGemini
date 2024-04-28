@@ -29,11 +29,15 @@ import (
 )
 
 type MetaStatistics struct {
-	itemSnapshotTotal             int64
-	itemSnapshotDataSize          int64
-	itemSnapshotUnmarshalDuration int64
-	itemLeaderSwitchTotal         int64
-	itemStoreApplyTotal           int64
+	itemSnapshotTotal              int64
+	itemSnapshotDataSize           int64
+	itemSnapshotUnmarshalDuration  int64
+	itemLeaderSwitchTotal          int64
+	itemStoreApplyTotal            int64
+	itemGetFromOpsMapTotal         int64
+	itemGetFromOpsMapLenTotal      int64
+	itemGetFromDataMarshalTotal    int64
+	itemGetFromDataMarshalLenTotal int64
 
 	mu  sync.RWMutex
 	buf []byte
@@ -56,11 +60,15 @@ func (s *MetaStatistics) Init(tags map[string]string) {
 
 func (s *MetaStatistics) Collect(buffer []byte) ([]byte, error) {
 	data := map[string]interface{}{
-		"SnapshotTotal":             s.itemSnapshotTotal,
-		"SnapshotDataSize":          s.itemSnapshotDataSize,
-		"SnapshotUnmarshalDuration": s.itemSnapshotUnmarshalDuration,
-		"LeaderSwitchTotal":         s.itemLeaderSwitchTotal,
-		"StoreApplyTotal":           s.itemStoreApplyTotal,
+		"SnapshotTotal":              s.itemSnapshotTotal,
+		"SnapshotDataSize":           s.itemSnapshotDataSize,
+		"SnapshotUnmarshalDuration":  s.itemSnapshotUnmarshalDuration,
+		"LeaderSwitchTotal":          s.itemLeaderSwitchTotal,
+		"StoreApplyTotal":            s.itemStoreApplyTotal,
+		"GetFromOpsMapTotal":         s.itemGetFromOpsMapTotal,
+		"GetFromOpsMapLenTotal":      s.itemGetFromOpsMapLenTotal,
+		"GetFromDataMarshalTotal":    s.itemGetFromDataMarshalTotal,
+		"GetFromDataMarshalLenTotal": s.itemGetFromDataMarshalLenTotal,
 	}
 
 	buffer = AddPointToBuffer("meta", s.tags, data, buffer)
@@ -76,11 +84,15 @@ func (s *MetaStatistics) Collect(buffer []byte) ([]byte, error) {
 
 func (s *MetaStatistics) CollectOps() []opsStat.OpsStatistic {
 	data := map[string]interface{}{
-		"SnapshotTotal":             s.itemSnapshotTotal,
-		"SnapshotDataSize":          s.itemSnapshotDataSize,
-		"SnapshotUnmarshalDuration": s.itemSnapshotUnmarshalDuration,
-		"LeaderSwitchTotal":         s.itemLeaderSwitchTotal,
-		"StoreApplyTotal":           s.itemStoreApplyTotal,
+		"SnapshotTotal":              s.itemSnapshotTotal,
+		"SnapshotDataSize":           s.itemSnapshotDataSize,
+		"SnapshotUnmarshalDuration":  s.itemSnapshotUnmarshalDuration,
+		"LeaderSwitchTotal":          s.itemLeaderSwitchTotal,
+		"StoreApplyTotal":            s.itemStoreApplyTotal,
+		"GetFromOpsMapTotal":         s.itemGetFromOpsMapTotal,
+		"GetFromOpsMapLenTotal":      s.itemGetFromOpsMapLenTotal,
+		"GetFromDataMarshalTotal":    s.itemGetFromDataMarshalTotal,
+		"GetFromDataMarshalLenTotal": s.itemGetFromDataMarshalLenTotal,
 	}
 
 	return []opsStat.OpsStatistic{
@@ -110,6 +122,22 @@ func (s *MetaStatistics) AddLeaderSwitchTotal(i int64) {
 
 func (s *MetaStatistics) AddStoreApplyTotal(i int64) {
 	atomic.AddInt64(&s.itemStoreApplyTotal, i)
+}
+
+func (s *MetaStatistics) AddGetFromOpsMapTotal(i int64) {
+	atomic.AddInt64(&s.itemGetFromOpsMapTotal, i)
+}
+
+func (s *MetaStatistics) AddGetFromOpsMapLenTotal(i int64) {
+	atomic.AddInt64(&s.itemGetFromOpsMapLenTotal, i)
+}
+
+func (s *MetaStatistics) AddGetFromDataMarshalTotal(i int64) {
+	atomic.AddInt64(&s.itemGetFromDataMarshalTotal, i)
+}
+
+func (s *MetaStatistics) AddGetFromDataMarshalLenTotal(i int64) {
+	atomic.AddInt64(&s.itemGetFromDataMarshalLenTotal, i)
 }
 
 func (s *MetaStatistics) Push(item *MetaStatItem) {

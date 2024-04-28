@@ -17,11 +17,14 @@ limitations under the License.
 package retention
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	log "github.com/influxdata/influxdb/logger"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -36,10 +39,13 @@ func mustParseTime(layout, value string) time.Time {
 }
 
 type MockMetaClient struct {
-	PruneGroupsCommandFn   func(shardGroup bool, id uint64) error
-	GetShardDurationInfoFn func(index uint64) (*meta.ShardDurationResponse, error)
-	DeleteShardGroupFn     func(database, policy string, id uint64) error
-	DeleteIndexGroupFn     func(database, policy string, id uint64) error
+	PruneGroupsCommandFn    func(shardGroup bool, id uint64) error
+	GetShardDurationInfoFn  func(index uint64) (*meta.ShardDurationResponse, error)
+	DeleteShardGroupFn      func(database, policy string, id uint64, deleteType int32) error
+	DeleteIndexGroupFn      func(database, policy string, id uint64) error
+	DelayDeleteShardGroupFn func(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error
+	GetExpiredShardsFn      func() ([]meta.ExpiredShardInfos, []meta.ExpiredShardInfos)
+	GetExpiredIndexesFn     func() []meta.ExpiredIndexInfos
 }
 
 func (mc *MockMetaClient) PruneGroupsCommand(shardGroup bool, id uint64) error {
@@ -50,12 +56,24 @@ func (mc *MockMetaClient) GetShardDurationInfo(index uint64) (*meta.ShardDuratio
 	return mc.GetShardDurationInfoFn(index)
 }
 
-func (mc *MockMetaClient) DeleteShardGroup(database, policy string, id uint64) error {
-	return mc.DeleteShardGroupFn(database, policy, id)
+func (mc *MockMetaClient) DeleteShardGroup(database, policy string, id uint64, deleteType int32) error {
+	return mc.DeleteShardGroupFn(database, policy, id, deleteType)
 }
 
 func (mc *MockMetaClient) DeleteIndexGroup(database, policy string, id uint64) error {
 	return mc.DeleteIndexGroupFn(database, policy, id)
+}
+
+func (mc *MockMetaClient) DelayDeleteShardGroup(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error {
+	return mc.DelayDeleteShardGroupFn(database, policy, id, deletedAt, deleteType)
+}
+
+func (mc *MockMetaClient) GetExpiredShards() ([]meta.ExpiredShardInfos, []meta.ExpiredShardInfos) {
+	return mc.GetExpiredShardsFn()
+}
+
+func (mc *MockMetaClient) GetExpiredIndexes() []meta.ExpiredIndexInfos {
+	return mc.GetExpiredIndexesFn()
 }
 
 func TestTTL(t *testing.T) {
@@ -97,12 +115,24 @@ func TestTTL(t *testing.T) {
 		return nil
 	}
 
-	mockClient.DeleteShardGroupFn = func(database, policy string, id uint64) error {
+	mockClient.DeleteShardGroupFn = func(database, policy string, id uint64, deleteType int32) error {
 		return nil
 	}
 
 	mockClient.GetShardDurationInfoFn = func(index uint64) (*meta.ShardDurationResponse, error) {
 		return &meta.ShardDurationResponse{}, nil
+	}
+
+	mockClient.DelayDeleteShardGroupFn = func(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error {
+		return nil
+	}
+
+	mockClient.GetExpiredShardsFn = func() ([]meta.ExpiredShardInfos, []meta.ExpiredShardInfos) {
+		return nil, nil
+	}
+
+	mockClient.GetExpiredIndexesFn = func() []meta.ExpiredIndexInfos {
+		return nil
 	}
 
 	s.MetaClient = mockClient
@@ -113,4 +143,64 @@ func TestTTL(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 	s.Close()
+}
+
+func TestTTLForShardStorage(t *testing.T) {
+	path := t.TempDir()
+	_ = fileops.RemoveAll(path)
+	mockClient := &MockMetaClient{}
+	mockClient.PruneGroupsCommandFn = func(shardGroup bool, id uint64) error {
+		if id == 5 {
+			return fmt.Errorf("inject a error for ut")
+		}
+		return nil
+	}
+	mockClient.DeleteIndexGroupFn = func(database, policy string, id uint64) error {
+		if id == 3 {
+			return fmt.Errorf("inject a error for ut")
+		}
+		return nil
+	}
+	mockClient.DeleteShardGroupFn = func(database, policy string, id uint64, deleteType int32) error {
+		return nil
+	}
+	mockClient.GetShardDurationInfoFn = func(index uint64) (*meta.ShardDurationResponse, error) {
+		return &meta.ShardDurationResponse{}, nil
+	}
+	mockClient.DelayDeleteShardGroupFn = func(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error {
+		if database == "db0" {
+			return fmt.Errorf("inject a error for ut")
+		}
+		return nil
+	}
+	mockClient.GetExpiredShardsFn = func() ([]meta.ExpiredShardInfos, []meta.ExpiredShardInfos) {
+		markShardInfos := []meta.ExpiredShardInfos{
+			{Database: "db0", Policy: "rp0", ShardGroupId: 1, ShardIds: []uint64{1, 2}, ShardPaths: []string{path + "/1", path + "/2"}, ObsOpts: nil},
+			{Database: "db1", Policy: "rp1", ShardGroupId: 2, ShardIds: []uint64{3, 4}, ShardPaths: []string{path + "/3", path + "/4"}, ObsOpts: nil},
+		}
+
+		deletedShardInfos := []meta.ExpiredShardInfos{
+			{Database: "db0", Policy: "rp0", ShardGroupId: 1, ShardIds: []uint64{1, 2}, ShardPaths: []string{path + "/1", path + "/2"}, ObsOpts: nil},
+			{Database: "db1", Policy: "rp1", ShardGroupId: 2, ShardIds: []uint64{3, 4}, ShardPaths: []string{path + "/3", path + "/4"}, ObsOpts: nil},
+			{Database: "db2", Policy: "rp2", ShardGroupId: 3, ShardIds: []uint64{5, 6}, ShardPaths: []string{path + "/5", path + "/6"}, ObsOpts: nil},
+		}
+
+		return markShardInfos, deletedShardInfos
+	}
+
+	mockClient.GetExpiredIndexesFn = func() []meta.ExpiredIndexInfos {
+		return []meta.ExpiredIndexInfos{
+			{Database: "db0", Policy: "rp0", IndexGroupID: 1, IndexIDs: []uint64{1, 2}},
+			{Database: "db1", Policy: "rp1", IndexGroupID: 2, IndexIDs: []uint64{3, 4}},
+			{Database: "db2", Policy: "rp2", IndexGroupID: 3, IndexIDs: []uint64{5, 6}},
+		}
+	}
+	config.SetProductType("logkeeper")
+	s := NewService(time.Second)
+	s.MetaClient = mockClient
+	logger, _ := log.NewOperation(s.Logger.GetZapLogger(), "retention policy deletion check", "retention_delete_check")
+	retryNeeded := s.handleSharedStorage(logger)
+	if !retryNeeded {
+		t.Fatal("retention operation injected a failed operation, but it was not retried")
+	}
 }

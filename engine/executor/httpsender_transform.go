@@ -50,7 +50,10 @@ func NewHttpChunkSender(opt *query.ProcessorOptions) *HttpChunkSender {
 		opt:           opt,
 		rowsGenerator: NewRowsGenerator(),
 	}
-	h.opt.Location = time.UTC
+
+	if h.opt.Location == nil {
+		h.opt.Location = time.UTC
+	}
 
 	return h
 }
@@ -465,6 +468,9 @@ var transformationCall = map[string]bool{
 func SetTimeZero(schema *QuerySchema) bool {
 	if schema.Options().HasInterval() {
 		return false
+	}
+	if schema.PromResetTime() {
+		return true
 	}
 	calls := schema.calls
 	if len(calls) == 0 {

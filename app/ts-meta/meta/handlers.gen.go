@@ -35,8 +35,12 @@ func New(typ uint8) RPCHandler {
 		return &Peers{}
 	case message.CreateNodeRequestMessage:
 		return &CreateNode{}
+	case message.CreateSqlNodeRequestMessage:
+		return &CreateSqlNode{}
 	case message.SnapshotRequestMessage:
 		return &Snapshot{}
+	case message.SnapshotV2RequestMessage:
+		return &SnapshotV2{}
 	case message.ExecuteRequestMessage:
 		return &Execute{}
 	case message.UpdateRequestMessage:
@@ -127,6 +131,25 @@ func (h *CreateNode) Instance() RPCHandler {
 	return &CreateNode{}
 }
 
+type CreateSqlNode struct {
+	BaseHandler
+
+	req *message.CreateSqlNodeRequest
+}
+
+func (h *CreateSqlNode) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.CreateSqlNodeRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.CreateSqlNodeRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *CreateSqlNode) Instance() RPCHandler {
+	return &CreateSqlNode{}
+}
+
 type Snapshot struct {
 	BaseHandler
 
@@ -144,6 +167,25 @@ func (h *Snapshot) SetRequestMsg(data transport.Codec) error {
 
 func (h *Snapshot) Instance() RPCHandler {
 	return &Snapshot{}
+}
+
+type SnapshotV2 struct {
+	BaseHandler
+
+	req *message.SnapshotV2Request
+}
+
+func (h *SnapshotV2) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.SnapshotV2Request)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.SnapshotV2Request", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *SnapshotV2) Instance() RPCHandler {
+	return &SnapshotV2{}
 }
 
 type Execute struct {

@@ -29,16 +29,25 @@ const (
 	version                    uint32 = 0
 	headerSize                 int    = fileMagicSize + util.Uint32SizeBytes
 	accMetaSize                int    = util.Uint64SizeBytes*2 + util.Uint32SizeBytes*2
-	RowsNumPerFragment         int    = util.RowsNumPerFragment
 	CoarseIndexFragment        int    = 8
 	MinRowsForSeek             int    = 0
 	IndexFileSuffix            string = ".idx"
 	MinMaxIndexFileSuffix      string = ".mm"
 	SetIndexFileSuffix         string = ".set"
 	BloomFilterIndexFileSuffix string = ".bf"
+	TextIndexDataFileSuffix    string = ".pos" // posting list
+	TextIndexHeadFileSuffix    string = ".bh"  // block header
+	TextIndexPartFileSuffix    string = ".ph"  // part header
 	DefaultTCLocation          int8   = -1
 	crcSize                    uint32 = 4
 	pKMetaItemSize             int    = util.Uint64SizeBytes*2 + util.Uint32SizeBytes*2
+)
+
+const (
+	TextIndexData = iota
+	TextIndexHead
+	TextIndexPart
+	TextIndexMax
 )
 
 func AppendPKIndexSuffix(dataPath string) string {
@@ -46,17 +55,27 @@ func AppendPKIndexSuffix(dataPath string) string {
 	return indexPath
 }
 
-func AppendSKIndexSuffix(dataPath string, fieldName string, indexName string) string {
+func AppendSecondaryIndexSuffix(dataPath string, fieldName string, indexType index.IndexType, fileType int) string {
 	var indexFileSuffix string
-	switch indexName {
-	case index.MinMaxIndex:
+	switch indexType {
+	case index.MinMax:
 		indexFileSuffix = MinMaxIndexFileSuffix
-	case index.SetIndex:
+	case index.Set:
 		indexFileSuffix = SetIndexFileSuffix
-	case index.BloomFilterIndex, index.BloomFilterFullTextIndex:
+	case index.BloomFilter, index.BloomFilterFullText:
 		indexFileSuffix = BloomFilterIndexFileSuffix
+	case index.Text:
+		if fileType == TextIndexData {
+			indexFileSuffix = TextIndexDataFileSuffix
+		} else if fileType == TextIndexHead {
+			indexFileSuffix = TextIndexHeadFileSuffix
+		} else if fileType == TextIndexPart {
+			indexFileSuffix = TextIndexPartFileSuffix
+		} else {
+			panic(fmt.Sprintf("unsupported index file type{%d} for text index", fileType))
+		}
 	default:
-		panic(fmt.Sprintf("unsupported the skip index: %s", indexName))
+		panic(fmt.Sprintf("unsupported the secondary index: %d", indexType))
 	}
 	indexPath := dataPath + "." + fieldName + indexFileSuffix
 	return indexPath

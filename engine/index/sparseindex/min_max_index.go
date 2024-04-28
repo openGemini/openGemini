@@ -23,7 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/rpn"
 )
 
-var _ = RegistrySKFileReaderCreator(index.MinMaxIndex, &MinMaxReaderCreator{})
+var _ = RegistrySKFileReaderCreator(uint32(index.MinMax), &MinMaxReaderCreator{})
 
 type MinMaxReaderCreator struct {
 }
@@ -151,10 +151,10 @@ func (m *MinMaxWriter) Close() error {
 	return nil
 }
 
-func (m *MinMaxWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+func (m *MinMaxWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
 	return nil
 }
 
-func (m *MinMaxWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
+func (m *MinMaxWriter) CreateDetachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
 	return nil, nil
 }

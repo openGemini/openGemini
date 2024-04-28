@@ -26,10 +26,10 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
-func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {
+func (data *Data) CreateContinuousQueryBase(dbName, cqName, cqQuery string) (bool, error) {
 	dbi, err := data.GetDatabase(dbName)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if dbi.ContinuousQueries == nil {
@@ -39,21 +39,28 @@ func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {
 	if theCQ, ok := dbi.ContinuousQueries[cqName]; ok {
 		// If the query string is the same, we'll silently return.
 		if strings.ToLower(theCQ.Query) == strings.ToLower(cqQuery) {
-			return nil
+			return false, nil
 		}
-		return ErrSameContinuousQueryName
+		return false, ErrSameContinuousQueryName
 	}
 
 	// Make sure continuous query name is unique.
 	for _, db := range data.Databases {
 		if _, ok := db.ContinuousQueries[cqName]; ok {
-			return ErrSameContinuousQueryName
+			return false, ErrSameContinuousQueryName
 		}
 	}
 
 	dbi.ContinuousQueries[cqName] = &ContinuousQueryInfo{
 		Name:  cqName,
 		Query: cqQuery,
+	}
+	return true, nil
+}
+
+func (data *Data) CreateContinuousQuery(dbName, cqName, cqQuery string) error {
+	if insert, err := data.CreateContinuousQueryBase(dbName, cqName, cqQuery); !insert {
+		return err
 	}
 	data.MaxCQChangeID++
 	return nil
@@ -94,7 +101,7 @@ func (data *Data) ShowContinuousQueries() (models.Rows, error) {
 }
 
 // DropContinuousQuery drops one continuous query and notify ALL sql nodes that CQ has been changed.
-func (data *Data) DropContinuousQuery(cqName string, database string) (bool, error) {
+func (data *Data) DropContinuousQueryBase(cqName string, database string) (bool, error) {
 	dbi, err := data.GetDatabase(database)
 	if err != nil {
 		return false, err
@@ -103,8 +110,20 @@ func (data *Data) DropContinuousQuery(cqName string, database string) (bool, err
 		return false, nil
 	}
 	delete(dbi.ContinuousQueries, cqName)
-	data.MaxCQChangeID++
 	return true, nil
+}
+
+func (data *Data) DropContinuousQuery(cqName string, database string) (bool, error) {
+	changed, err := data.DropContinuousQueryBase(cqName, database)
+	if err != nil {
+		return changed, err
+	}
+
+	if changed {
+		data.MaxCQChangeID++
+	}
+
+	return changed, nil
 }
 
 // ContinuousQueryInfo represents metadata about a continuous query.

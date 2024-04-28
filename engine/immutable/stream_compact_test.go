@@ -123,7 +123,7 @@ func TestFileIterator(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		write(ids, data, msb)
 
 		for j, id := range ids {
@@ -175,13 +175,13 @@ func TestFileIterator(t *testing.T) {
 		t.Fatalf("maxChunkRows, exp:%v, but:%v", recRows, fi.maxChunkRows)
 	}
 
-	SetMergeFlag4TsStore(AutoCompact)
-	SetMergeFlag4TsStore(NonStreamingCompact)
+	SetMergeFlag4TsStore(util.AutoCompact)
+	SetMergeFlag4TsStore(util.NonStreamingCompact)
 	if NonStreamingCompaction(fi) != true {
 		t.Fatalf("set NonStreamingCompact fail")
 	}
 
-	SetMergeFlag4TsStore(StreamingCompact)
+	SetMergeFlag4TsStore(util.StreamingCompact)
 	NonStreamingCompaction(fi)
 	if NonStreamingCompaction(fi) != false {
 		t.Fatalf("set StreamingCompact fail")
@@ -257,7 +257,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	conf := NewTsStoreConfig()
 	conf.maxRowsPerSegment = 40
 	conf.maxSegmentLimit = 16
-	conf.fileSizeLimit = defaultFileSizeLimit
+	conf.fileSizeLimit = util.DefaultFileSizeLimit
 	tier := uint64(util.Hot)
 	recRows := conf.maxRowsPerSegment*2 + 1
 	lockPath := ""
@@ -361,7 +361,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		write(ids, data, msb)
 
 		for j, id := range ids {
@@ -636,7 +636,7 @@ func TestFileSizeExceedLimit(t *testing.T) {
 	oldIds := make([]uint64, 0, filesN)
 	for i := 0; i < filesN; i++ {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, size, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, size, config.TSSTORE, nil, 0)
 		rec := genIntColumn(&startTime, rows, 2)
 		if err := msb.WriteData(id, rec); err != nil {
 			t.Fatal(err)
@@ -737,7 +737,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 	oldIds := make([]uint64, 0, filesN)
 	for i := 0; i < filesN; i++ {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 1024, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 1024, config.TSSTORE, nil, 0)
 		rec := genIntColumn(&startTime, rows, 2)
 		if err := msb.WriteData(id, rec); err != nil {
 			t.Fatal(err)
@@ -752,7 +752,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 		}
 	}
 
-	SetMergeFlag4TsStore(StreamingCompact)
+	SetMergeFlag4TsStore(util.StreamingCompact)
 	if err := store.LevelCompact(0, 1); err != nil {
 		t.Fatal(err)
 	}

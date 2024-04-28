@@ -32,6 +32,15 @@ const (
 	NodeWriter  string = "writer"
 )
 
+// eq to metaclient.Role
+type NodeType int
+
+const (
+	SQL NodeType = iota
+	STORE
+	META
+)
+
 func IsNodeWriter(role string) bool {
 	return role == NodeWriter || role == NodeDefault
 }
@@ -94,6 +103,7 @@ type DataNode struct {
 	NodeInfo
 	ConnID      uint64 // after joined raft cluster. ConnID will +1 when restart
 	AliveConnID uint64 // after joined gossip cluster, AliveConnID will set by ConnID
+	Index       uint64
 }
 
 func (n *DataNode) MarshalBinary() ([]byte, error) {

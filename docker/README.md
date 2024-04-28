@@ -231,6 +231,7 @@ spec:
   bind-address = "{{addr}}"
   store-bind-port = 8011
   meta-bind-port = 8010
+  sql-bind-port = 8012
   # prob-interval = '1s'
   # suspicion-mult = 4
   # 【必填】需要替换{{meta_addr_1}}，{{meta_addr_2}}，{{meta_addr_3}}为对应的域名

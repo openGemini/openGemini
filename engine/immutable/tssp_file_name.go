@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/obs"
 	"go.uber.org/zap"
 )
 
@@ -110,17 +111,33 @@ func validFileName(name string) bool {
 	return tsspFileReq.MatchString(name)
 }
 
+func getRemoteSuffix(name string) string {
+	extend := filepath.Ext(name)
+	switch extend {
+	case tsspFileSuffix:
+		return ""
+	case obs.ObsFileSuffix:
+		return extend
+	default:
+		// temporarily unsupported suffixes and illegal file names return ""
+		return ""
+	}
+}
+
 func (n *TSSPFileName) ParseFileName(name string) error {
 	base := filepath.Base(name)
 	if !validFileName(base) {
 		return fmt.Errorf("invalid file name:%v", name)
 	}
+
 	nl := len(base)
-	var nameStr string
+	var nameStr, remoteSuffix string
 	if base[nl-tmpSuffixNameLen:] == tmpFileSuffix {
-		nameStr = base[:nl-(tsspFileSuffixLen+tmpSuffixNameLen)]
+		remoteSuffix = getRemoteSuffix(base[:nl-tmpSuffixNameLen])
+		nameStr = base[:nl-(tsspFileSuffixLen+len(remoteSuffix)+tmpSuffixNameLen)]
 	} else {
-		nameStr = base[:nl-tsspFileSuffixLen]
+		remoteSuffix = getRemoteSuffix(base)
+		nameStr = base[:nl-(tsspFileSuffixLen+len(remoteSuffix))]
 	}
 
 	//00008250-0001-00010001.tssp.init

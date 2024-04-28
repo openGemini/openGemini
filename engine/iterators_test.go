@@ -610,12 +610,12 @@ func createFieldsWithMultipleRows() influxql.Fields {
 var _ comm.KeyCursor = (*readerKeyCursor)(nil)
 
 type readerKeyCursor struct {
-	buf  []*record.Record
-	info *comm.FileInfo
+	buf    []*record.Record
+	info   *comm.FileInfo
+	schema record.Schemas
 }
 
 func (c *readerKeyCursor) SinkPlan(plan hybridqp.QueryNode) {
-	panic("implement me")
 }
 
 func newReaderKeyCursor(records []*record.Record) *readerKeyCursor {
@@ -648,7 +648,7 @@ func (c *readerKeyCursor) Close() error {
 }
 
 func (c *readerKeyCursor) GetSchema() record.Schemas {
-	return nil
+	return c.schema
 }
 
 func (c *readerKeyCursor) StartSpan(span *tracing.Span) {
@@ -3103,5 +3103,41 @@ func TestAggTagSetCursorNext_SingleSeries(t *testing.T) {
 	_, info2, _ := tagSetCursor1.Next()
 	if !reflect.DeepEqual(info2, info1.SeriesInfo) {
 		t.Fatal("unexpected info")
+	}
+}
+
+func TestGetCtx(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	fields := make(influxql.Fields, 0, 1)
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.Call{
+			Name: "sum",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "id",
+					Type: influxql.Integer,
+				},
+			},
+		},
+	})
+	schema := executor.NewQuerySchema(fields, []string{"id"}, &opt, nil)
+	ctx, err := engine.GetCtx(schema)
+	if err != nil {
+		t.Fatal("get wrong ctx")
+	}
+	s := record.Schemas{
+		{Name: "id", Type: influx.Field_Type_String},
+	}
+	ctx.SetSchema(s)
+	filterOpt := ctx.GetFilterOption()
+	if filterOpt == nil {
+		t.Fatal("get wrong ctx")
+	}
+
+	fields = make(influxql.Fields, 0, 1)
+	schema = executor.NewQuerySchema(fields, []string{"id"}, &opt, nil)
+	ctx, err = engine.GetCtx(schema)
+	if err == nil {
+		t.Fatal("get wrong ctx")
 	}
 }

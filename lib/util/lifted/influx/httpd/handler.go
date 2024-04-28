@@ -18,12 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bmizerany/pat"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/golang/snappy"
+	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/prometheus"
 	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/influxdata/influxdb/uuid"
@@ -121,16 +119,17 @@ type SubscriberManager interface {
 
 // Handler represents an HTTP handler for the InfluxDB server.
 type Handler struct {
-	mux       *pat.PatternServeMux
+	mux       *mux.Router
 	Version   string
 	BuildType string
 
 	MetaClient interface {
 		Database(name string) (*meta2.DatabaseInfo, error)
+		Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 		Authenticate(username, password string) (ui meta2.User, err error)
 		User(username string) (meta2.User, error)
 		AdminUserExists() bool
-		ShowShards() models.Rows
+		ShowShards(db string, rp string, mst string) models.Rows
 		TagArrayEnabled(db string) bool
 		DataNode(id uint64) (*meta2.DataNode, error)
 		DataNodes() ([]meta2.DataNode, error)
@@ -140,13 +139,18 @@ type Handler struct {
 		MarkDatabaseDelete(name string) error
 		Measurements(database string, ms influxql.Measurements) ([]string, error)
 
+		CreateStreamPolicy(info *meta2.StreamInfo) error
+		CreateStreamMeasurement(info *meta2.StreamInfo, src, dest *influxql.Measurement, stmt *influxql.SelectStatement) error
+		DropStream(name string) error
 		CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
 		RetentionPolicy(database, name string) (rpi *meta2.RetentionPolicyInfo, err error)
+		DBPtView(database string) (meta2.DBPtInfos, error)
 		MarkRetentionPolicyDelete(database, name string) error
-		CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config2.EngineType,
+		CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config2.EngineType,
 			colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 		UpdateMeasurement(db, rp, mst string, options *meta2.Options) error
 		GetShardGroupByTimeRange(repoName, streamName string, min, max time.Time) ([]*meta2.ShardGroupInfo, error)
+		RevertRetentionPolicyDelete(database, name string) error
 	}
 
 	QueryAuthorizer interface {
@@ -187,12 +191,13 @@ type Handler struct {
 	queryThrottler   *Throttler
 	slowQueries      chan *hybridqp.SelectDuration
 	StatisticsPusher *statisticsPusher.StatisticsPusher
+	SQLConfig        *config2.TSSql
 }
 
 // NewHandler returns a new instance of handler with routes.
 func NewHandler(c config.Config) *Handler {
 	h := &Handler{
-		mux:            pat.New(),
+		mux:            mux.NewRouter(),
 		Config:         &c,
 		Logger:         logger.NewLogger(errno.ModuleHTTP),
 		CLFLogger:      logger.GetLogger(),
@@ -270,113 +275,157 @@ func NewHandler(c config.Config) *Handler {
 			"POST", "/api/v1/prom/read", true, true, h.servePromRead,
 		},
 		Route{
-			"otlp-traces-write", // open-telemetry OTLP traces remote write
-			"POST", "/api/v1/otlp/traces", false, true, h.serveTracesWrite,
+			"prometheus-instant-query", // Prometheus instant query
+			"GET", "/api/v1/query", true, true, h.servePromQuery,
 		},
 		Route{
-			"otlp-metrics-write", // open-telemetry OTLP metrics remote write
-			"POST", "/api/v1/otlp/metrics", false, true, h.serveMetricsWrite,
+			"prometheus-instant-query", // Prometheus instant query
+			"POST", "/api/v1/query", true, true, h.servePromQuery,
 		},
 		Route{
-			"otlp-logs-write", // open-telemetry OTLP logs remote write
-			"POST", "/api/v1/otlp/logs", false, true, h.serveLogsWrite,
+			"prometheus-range-query", // Prometheus range query
+			"GET", "/api/v1/query_range", true, true, h.servePromQueryRange,
+		},
+		Route{
+			"prometheus-range-query", // Prometheus range query
+			"POST", "/api/v1/query_range", true, true, h.servePromQueryRange,
+		},
+		Route{
+			"prometheus-labels-query", // Prometheus labels query
+			"GET", "/api/v1/labels", true, true, h.servePromQueryLabels,
+		},
+		Route{
+			"prometheus-labels-query", // Prometheus labels query
+			"POST", "/api/v1/labels", true, true, h.servePromQueryLabels,
+		},
+		Route{
+			"prometheus-label-values-query", // Prometheus label-values query
+			"GET", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+		},
+		Route{
+			"prometheus-series-query", // Prometheus series query
+			"GET", "/api/v1/series", true, true, h.servePromQuerySeries,
+		},
+		Route{
+			"prometheus-series-query", // Prometheus series query
+			"POST", "/api/v1/series", true, true, h.servePromQuerySeries,
+		},
+		Route{
+			"prometheus-metadata-query", // Prometheus metadata query
+			"GET", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
 		},
 		Route{ // sysCtrl
 			"sysCtrl",
 			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
 		},
-		// repository related operations
-		Route{
-			"create-repository",
-			"POST", "/api/v1/repository/:repository", false, true, h.serveCreateRepository,
-		},
-		Route{
-			"delete-repository",
-			"DELETE", "/api/v1/repository/:repository", false, true, h.serveDeleteRepository,
-		},
-		Route{
-			"list-repository",
-			"GET", "/api/v1/repository", false, true, h.serveListRepository,
-		},
-		Route{
-			"show-repository",
-			"GET", "/api/v1/repository/:repository", false, true, h.serveShowRepository,
-		},
-		Route{
-			"update-repository",
-			"PUT", "/api/v1/repository/:repository", false, true, h.serveUpdateRepository,
-		},
-		// logstream related operations
-		Route{
-			"create-logStream",
-			"POST", "/api/v1/logstream/:repository/:logStream", false, true, h.serveCreateLogstream,
-		},
-		Route{
-			"delete-logStream",
-			"DELETE", "/api/v1/logstream/:repository/:logStream", false, true, h.serveDeleteLogstream,
-		},
-		Route{
-			"list-logStream",
-			"GET", "/api/v1/logstream/:repository", false, true, h.serveListLogstream,
-		},
-		Route{
-			"show-logStream",
-			"GET", "/api/v1/logstream/:repository/:logStream", false, true, h.serveShowLogstream,
-		},
-		Route{
-			"update-logStream",
-			"PUT", "/api/v1/logstream/:repository/:logStream", false, true, h.serveUpdateLogstream,
-		},
-		Route{
-			"write-log", // Data-ingest route.
-			"POST", "/repo/:repository/logstreams/:logStream/records", false, true, h.serveRecord,
-		},
-		Route{
-			"upload", // Data-upload route.
-			"POST", "/repo/:repository/logstreams/:logStream/upload", false, true, h.serveUpload,
-		},
-		Route{
-			"log-list", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/logs", true, true, h.serveQueryLog,
-		},
-		Route{
-			"log-by-cursor", // Query for Log by cursor.
-			"GET", "/repo/:repository/logstreams/:logStream/logbycursor", true, true, h.serveQueryLogByCursor,
-		},
-		Route{
-			"log-consume", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/consume/logs", true, true, h.serveConsumeLogs,
-		},
-		Route{
-			"log-consume-cursor-time", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/consume/cursor-time", true, true, h.serveConsumeCursorTime,
-		},
-		Route{
-			"log-consume-cursors", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/consume/cursors", true, true, h.serveGetConsumeCursors,
-		},
-		Route{
-			"log-context", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/context", true, true, h.serveContextQueryLog,
-		},
-		Route{
-			"log-agg", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/histogram", true, true, h.serveAggLogQuery,
-		},
-		Route{
-			"log-agg", // Query for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/analytics", true, true, h.serveAnalytics,
-		},
-		Route{
-			"log-cursor", // Get Cursor for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/cursor", true, true, h.serveGetCursor,
-		},
-		Route{
-			"log-pull-cursor", // Pull data for Log.
-			"GET", "/repo/:repository/logstreams/:logStream/cursor/:cursor", true, true, h.servePullLog,
-		},
 	}...)
+	if config2.IsLogKeeper() {
+		h.AddRoutes([]Route{
+			// repository related operations
+			Route{
+				"create-repository",
+				"POST", "/api/v1/repository/{repository}", false, true, h.serveCreateRepository,
+			},
+			Route{
+				"delete-repository",
+				"DELETE", "/api/v1/repository/{repository}", false, true, h.serveDeleteRepository,
+			},
+			Route{
+				"list-repository",
+				"GET", "/api/v1/repository", false, true, h.serveListRepository,
+			},
+			Route{
+				"show-repository",
+				"GET", "/api/v1/repository/{repository}", false, true, h.serveShowRepository,
+			},
+			Route{
+				"update-repository",
+				"PUT", "/api/v1/repository/{repository}", false, true, h.serveUpdateRepository,
+			},
+			// logstream related operations
+			Route{
+				"create-logStream",
+				"POST", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveCreateLogstream,
+			},
+			Route{
+				"delete-logStream",
+				"DELETE", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveDeleteLogstream,
+			},
+			Route{
+				"list-logStream",
+				"GET", "/api/v1/logstream/{repository}", false, true, h.serveListLogstream,
+			},
+			Route{
+				"show-logStream",
+				"GET", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveShowLogstream,
+			},
+			Route{
+				"update-logStream",
+				"PUT", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveUpdateLogstream,
+			},
+			Route{
+				"write-log", // Data-ingest route.
+				"POST", "/repo/{repository}/logstreams/{logStream}/records", false, true, h.serveRecord,
+			},
+			Route{
+				"upload", // Data-upload route.
+				"POST", "/repo/{repository}/logstreams/{logStream}/upload", false, true, h.serveUpload,
+			},
+			Route{
+				"log-list", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/logs", true, true, h.serveQueryLog,
+			},
+			Route{
+				"log-by-cursor", // Query for Log by cursor.
+				"GET", "/repo/{repository}/logstreams/{logStream}/logbycursor", true, true, h.serveQueryLogByCursor,
+			},
+			Route{
+				"log-consume", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/consume/logs", true, true, h.serveConsumeLogs,
+			},
+			Route{
+				"log-consume-cursor-time", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursor-time", true, true, h.serveConsumeCursorTime,
+			},
+			Route{
+				"log-consume-cursors", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursors", true, true, h.serveGetConsumeCursors,
+			},
+			Route{
+				"log-context", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/context", true, true, h.serveContextQueryLog,
+			},
+			Route{
+				"log-agg", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/histogram", true, true, h.serveAggLogQuery,
+			},
+			Route{
+				"log-agg", // Query for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/analytics", true, true, h.serveAnalytics,
+			},
+			Route{
+				"log-cursor", // Get Cursor for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/cursor", true, true, h.serveGetCursor,
+			},
+			Route{
+				"log-pull-cursor", // Pull data for Log.
+				"GET", "/repo/{repository}/logstreams/{logStream}/cursor/{cursor}", true, true, h.servePullLog,
+			},
+			Route{
+				"recall-data",
+				"POST", "/repo/{repository}/logstreams/{logStream}/recalldata", false, true, h.serveRecallData,
+			},
+			Route{
+				"create-stream-task",
+				"POST", "/repo/{repository}/logstreams/{logStream}/stream-task", false, true, h.serveCreateStreamTask,
+			},
+			Route{
+				"delete-stream-task",
+				"DELETE", "/repo/{repository}/logstreams/{logStream}/stream-task/{taskId}", false, true, h.serveDeleteStreamTask,
+			},
+		}...)
 
+	}
 	fluxRoute := Route{
 		"flux-read",
 		"POST", "/api/v2/query", true, true, nil,
@@ -446,7 +495,8 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		// Throttle route if this is a write endpoint.
 		if r.Method == http.MethodPost {
 			switch r.Pattern {
-			case "/write", "/api/v1/prom/write":
+			case "/write", "/api/v1/prom/write", "/repo/{repository}/logstreams/{logStream}/records",
+				"/api/streams/{repository}/{logStream}/upload":
 				handler = h.writeThrottler.Handler(handler)
 			case "/query", "/api/v1/prom/query":
 				handler = h.queryThrottler.Handler(handler)
@@ -457,6 +507,10 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		if r.Method == http.MethodGet {
 			switch r.Pattern {
 			case "/query", "/api/v1/prom/query":
+				handler = h.queryThrottler.Handler(handler)
+			case "/repo/{repository}/logstreams/{logStream}/logs", "/repo/{repository}/logstreams/{logStream}/consume/logs",
+				"/repo/{repository}/logstreams/{logStream}/context", "/repo/{repository}/logstreams/{logStream}/histogram",
+				"/repo/{repository}/logstreams/{logStream}/analytics", "/repo/{repository}/logstreams/{logStream}/logbycursor":
 				handler = h.queryThrottler.Handler(handler)
 			default:
 			}
@@ -473,7 +527,7 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		}
 		//handler = h.recovery(handler, r.Name) // make sure recovery is always last
 
-		h.mux.Add(r.Method, r.Pattern, handler)
+		h.mux.HandleFunc(r.Pattern, handler.ServeHTTP).Methods(r.Method)
 	}
 }
 
@@ -553,9 +607,9 @@ func (h *Handler) getQueryFromRequest(r *http.Request, param *QueryParam, user m
 
 	qp = strings.TrimSpace(qp)
 	if user != nil {
-		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()))
+		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()), zap.String("remote_addr", r.RemoteAddr))
 	} else {
-		h.Logger.Info(app.HideQueryPassword(qp))
+		h.Logger.Info(app.HideQueryPassword(qp), zap.String("remote_addr", r.RemoteAddr))
 	}
 
 	return qp
@@ -798,8 +852,6 @@ func (h *Handler) getStmtResult(stmtID2Result map[int]*query.Result) Response {
 
 func transformRequestParams(r *http.Request) {
 	q := r.URL.Query()
-	q.Add(Repository, r.FormValue("db"))
-	q.Add(LogStream, r.FormValue("measurement"))
 	q.Add(Sql, "true")
 	q.Add("query", r.FormValue("q"))
 	r.URL.RawQuery = q.Encode()
@@ -807,7 +859,7 @@ func transformRequestParams(r *http.Request) {
 }
 
 // rewritePipeStateForQuery is used to generate selectStmt based on the pipe state.
-func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam, r *http.Request) {
+func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam, info *measurementInfo) {
 	var selectStmt *influxql.SelectStatement
 	if stmt, currOk := q.Statements[0].(*influxql.ExplainStatement); currOk {
 		selectStmt = stmt.Statement
@@ -815,7 +867,7 @@ func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam,
 		selectStmt, _ = q.Statements[0].(*influxql.SelectStatement)
 	}
 	selectStmt.RewriteUnnestSource()
-	selectStmt.Sources = influxql.Sources{&influxql.Measurement{Name: r.URL.Query().Get(":logStream"), Database: r.URL.Query().Get(":repository"), RetentionPolicy: r.URL.Query().Get(":logStream")}}
+	selectStmt.Sources = influxql.Sources{&influxql.Measurement{Name: info.name, Database: info.database, RetentionPolicy: info.retentionPolicy}}
 	if param != nil {
 		selectStmt.Limit = param.Limit
 		timeCond := &influxql.BinaryExpr{
@@ -851,14 +903,12 @@ func (h *Handler) buildLogQueryParam(r *http.Request) (*QueryParam, error) {
 		return nil, err
 	}
 
-	para := NewQueryPara(queryLogRequest.Query, queryLogRequest.Reverse, queryLogRequest.Highlight,
-		queryLogRequest.Timeout, queryLogRequest.Limit, queryLogRequest.From*1e6, queryLogRequest.To*1e6,
-		queryLogRequest.Scroll, queryLogRequest.Scroll_id, false, queryLogRequest.Explain, queryLogRequest.IsTruncate)
+	para := NewQueryPara(queryLogRequest)
 
 	return para, nil
 }
 
-func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User) (*influxql.Query, int, error) {
+func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User, info *measurementInfo) (*influxql.Query, int, error) {
 	para, err := h.buildLogQueryParam(r)
 	if err != nil {
 		return nil, http.StatusBadRequest, err
@@ -883,13 +933,13 @@ func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User) (*in
 	}
 	// ppl parser
 	if ppl != "" {
-		_, err, status := h.getPplQuery(r, strings.NewReader(ppl), sqlQuery)
+		_, err, status := h.getPplQuery(info, strings.NewReader(ppl), sqlQuery)
 		if err != nil {
 			return nil, status, err
 		}
 	}
 
-	h.rewritePipeStateForQuery(sqlQuery, para, r)
+	h.rewritePipeStateForQuery(sqlQuery, para, info)
 	return sqlQuery, http.StatusOK, nil
 }
 
@@ -924,7 +974,14 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	var status int
 	isPipe := r.FormValue("pipe") == "true"
 	if isPipe {
-		q, _, err = h.parsePipeAndSqlForQuery(r, user)
+		repository := r.URL.Query().Get("db")
+		logStream := r.URL.Query().Get("measurement")
+		info := &measurementInfo{
+			name:            logStream,
+			database:        repository,
+			retentionPolicy: logStream,
+		}
+		q, _, err = h.parsePipeAndSqlForQuery(r, user, info)
 		if err != nil {
 			h.httpError(rw, err.Error(), http.StatusBadRequest)
 			return
@@ -1619,347 +1676,6 @@ func (h *Handler) serveLogsWrite(w http.ResponseWriter, r *http.Request, user me
 		return
 	}
 	h.writeHeader(w, http.StatusNoContent)
-}
-
-// servePromWrite receives data in the Prometheus remote write protocol and writes it
-// to the database
-func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
-	defer func(start time.Time) {
-		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
-	}(time.Now())
-	h.requestTracker.Add(r, user)
-
-	if syscontrol.DisableWrites {
-		h.httpError(w, `disable write!`, http.StatusForbidden)
-		h.Logger.Error("write is forbidden!", zap.Bool("DisableWrites", syscontrol.DisableWrites))
-		return
-	}
-
-	urlValues := r.URL.Query()
-	database := urlValues.Get("db")
-	if database == "" {
-		h.httpError(w, "database is required", http.StatusBadRequest)
-		return
-	}
-
-	if _, err := h.MetaClient.Database(database); err != nil {
-		h.httpError(w, fmt.Sprintf(err.Error()), http.StatusNotFound)
-		return
-	}
-
-	if h.Config.AuthEnabled {
-		if user == nil {
-			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
-			return
-		}
-
-		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), database); err != nil {
-			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
-			return
-		}
-	}
-
-	body := r.Body
-	if h.Config.MaxBodySize > 0 {
-		body = truncateReader(body, int64(h.Config.MaxBodySize))
-	}
-
-	var bs []byte
-	if r.ContentLength > 0 {
-		if h.Config.MaxBodySize > 0 && r.ContentLength > int64(h.Config.MaxBodySize) {
-			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		// This will just be an initial hint for the reader, as the
-		// bytes.Buffer will grow as needed when ReadFrom is called
-		bs = make([]byte, 0, r.ContentLength)
-	}
-	buf := bytes.NewBuffer(bs)
-
-	_, err := buf.ReadFrom(body)
-	if err != nil {
-		if err == errTruncated {
-			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		if h.Config.WriteTracing {
-			h.Logger.Info("Prom write handler unable to read bytes from request body")
-		}
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if h.Config.WriteTracing {
-		h.Logger.Info("Prom write body received by handler", zap.ByteString("body", buf.Bytes()))
-	}
-
-	reqBuf, err := snappy.Decode(nil, buf.Bytes())
-	if err != nil {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Convert the Prometheus remote write request to Influx Points
-	var req prompb.WriteRequest
-	if err := req.Unmarshal(reqBuf); err != nil {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	points, err := prometheus.WriteRequestToPoints(&req)
-	if err != nil {
-		if h.Config.WriteTracing {
-			h.Logger.Info("Prom write handler", zap.Error(err))
-		}
-
-		// Check if the error was from something other than dropping invalid values.
-		if _, ok := err.(prometheus.DroppedValuesError); !ok {
-			h.httpError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-	rows, e := Points2Rows(points)
-	if e != nil {
-		h.Logger.Info("points transfer wrong", zap.Error(e))
-	}
-
-	// Determine required consistency level.
-	level := urlValues.Get("consistency")
-	if level != "" {
-		if err != nil {
-			h.httpError(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Write points.
-	if err := h.PointsWriter.RetryWritePointRows(database, urlValues.Get("rp"), rows); influxdb.IsClientError(err) {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	} else if influxdb.IsAuthorizationError(err) {
-		h.httpError(w, err.Error(), http.StatusForbidden)
-		return
-	} else if err != nil {
-		h.httpError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.writeHeader(w, http.StatusNoContent)
-}
-
-// servePromRead will convert a Prometheus remote read request into a storage
-// query and returns data in Prometheus remote read protobuf format.
-func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	if syscontrol.DisableReads {
-		h.httpError(w, `disable read!`, http.StatusForbidden)
-		h.Logger.Error("read is forbidden!", zap.Bool("DisableReads", syscontrol.DisableReads))
-		return
-	}
-	//h.httpError(w, "not implementation", http.StatusBadRequest)
-	startTime := time.Now()
-	h.requestTracker.Add(r, user)
-	compressed, err := io.ReadAll(r.Body)
-	if err != nil {
-		h.httpError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	reqBuf, err := snappy.Decode(nil, compressed)
-	if err != nil {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	var req prompb.ReadRequest
-	if err := req.Unmarshal(reqBuf); err != nil {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Query the DB and create a ReadResponse for Prometheus
-	db := r.FormValue("db")
-
-	queries, err := ReadRequestToInfluxQuery(&req)
-	YyParser := &influxql.YyParser{
-		Query: influxql.Query{},
-	}
-	YyParser.Scanner = influxql.NewScanner(strings.NewReader(queries))
-	YyParser.ParseTokens()
-	q, err := YyParser.GetQuery()
-
-	if err != nil {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if h.Config.AuthEnabled {
-		//&& h.Config.PromReadAuthEnabled {
-		if user == nil {
-			h.httpError(w, fmt.Sprintf("user is required to read from database %q", db), http.StatusForbidden)
-			return
-		}
-		if h.QueryAuthorizer.AuthorizeQuery(user, q, db) != nil {
-			h.httpError(w, fmt.Sprintf("user %q is not authorized to read from database %q", user.ID(), db), http.StatusForbidden)
-			return
-		}
-	}
-
-	//todo: change here
-	//readRequest, err := prometheus.ReadRequestToInfluxStorageRequest(&req, db, rp)
-
-	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(db) {
-		qDuration = statistics.NewSqlSlowQueryStatistics(db)
-		defer func() {
-			d := time.Since(startTime)
-			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
-				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
-				statistics.AppendSqlQueryDuration(qDuration)
-				h.Logger.Info("slow query", zap.Duration("duration", d), zap.String("db", qDuration.DB),
-					zap.String("query", qDuration.Query))
-			}
-		}()
-	}
-
-	respond := func(resp *prompb.ReadResponse) {
-		data, err := resp.Marshal()
-		if err != nil {
-			h.httpError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/x-protobuf")
-		w.Header().Set("Content-Encoding", "snappy")
-
-		compressed = snappy.Encode(nil, data)
-		if _, err := w.Write(compressed); err != nil {
-			h.httpError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
-	//ctx := context.Background()
-
-	// Parse whether this is an async command.
-	async := r.FormValue("async") == "true"
-
-	opts := query2.ExecutionOptions{
-		Database:        db,
-		RetentionPolicy: r.FormValue("rp"),
-		ChunkSize:       1,
-		Chunked:         true,
-		ReadOnly:        r.Method == "GET",
-		InnerChunkSize:  1,
-		//ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
-		//QueryLimitEn:    atomic.LoadInt32(&syscontrol.QueryLimitEn) == 1,
-		Quiet: true,
-	}
-
-	if h.Config.AuthEnabled {
-		if user != nil && user.AuthorizeUnrestricted() {
-			opts.Authorizer = query2.OpenAuthorizer
-		} else {
-			// The current user determines the authorized actions.
-			opts.Authorizer = user
-		}
-	} else {
-		// Auth is disabled, so allow everything.
-		opts.Authorizer = query2.OpenAuthorizer
-	}
-
-	// Make sure if the client disconnects we signal the query to abort
-	var closing chan struct{}
-	if !async {
-		closing = make(chan struct{})
-		done := make(chan struct{})
-
-		opts.AbortCh = closing
-		defer func() {
-			close(done)
-		}()
-		go func() {
-			select {
-			case <-done:
-			case <-r.Context().Done():
-			}
-			close(closing)
-		}()
-	}
-
-	// Execute query
-	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
-
-	resp := &prompb.ReadResponse{
-		Results: []*prompb.QueryResult{{}},
-	}
-
-	if results == nil {
-		respond(resp)
-		return
-	}
-
-	var unsupportedCursor string
-
-	var tags models.Tags
-
-	sameTag := false
-
-	for r := range results {
-		for i := range r.Series {
-			s := r.Series[i]
-			var series *prompb.TimeSeries
-			if sameTag {
-				series = resp.Results[0].Timeseries[len(resp.Results[0].Timeseries)-1]
-			} else {
-				tags = TagsConverterRemoveInfluxSystemTag(s.Tags)
-				// We have some data for this series.
-				series = &prompb.TimeSeries{
-					Labels:  prometheus.ModelTagsToLabelPairs(tags),
-					Samples: make([]prompb.Sample, 0, len(r.Series)),
-				}
-			}
-			start := len(series.Samples)
-			series.Samples = append(series.Samples, make([]prompb.Sample, len(s.Values))...)
-
-			for j := range s.Values {
-				sample := &series.Samples[start+j]
-				if t, ok := s.Values[j][0].(time.Time); !ok {
-					h.httpError(w, "wrong time datatype, should be time.Time", http.StatusBadRequest)
-					return
-				} else {
-					sample.Timestamp = t.UnixNano() / int64(time.Millisecond)
-				}
-				if value, ok := s.Values[j][len(s.Values[j])-1].(float64); !ok {
-					h.httpError(w, "wrong value datatype, should be float64", http.StatusBadRequest)
-					return
-				} else {
-					sample.Value = value
-				}
-
-			}
-			// There was data for the series.
-			if !sameTag {
-				resp.Results[0].Timeseries = append(resp.Results[0].Timeseries, series)
-			}
-
-			if len(unsupportedCursor) > 0 {
-				h.Logger.Info("Prometheus can't read data",
-					zap.String("cursor_type", unsupportedCursor),
-					zap.Stringer("series", tags),
-				)
-			}
-			sameTag = s.Partial
-		}
-	}
-	h.Logger.Info("serve prometheus read", zap.String("SQL:", q.String()), zap.Duration("prometheus query duration:", time.Since(startTime)))
-	respond(resp)
 }
 
 func (h *Handler) serveFluxQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {

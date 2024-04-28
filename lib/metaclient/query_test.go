@@ -52,7 +52,7 @@ func (e *FuncExecutor) Execute() error {
 	return nil
 }
 
-func MockMetaData() (meta.Data, error) {
+func MockMetaData() (*meta.Data, error) {
 	exec := &FuncExecutor{}
 
 	data := meta.Data{PtNumPerNode: 1, ClusterPtNum: 1}
@@ -85,12 +85,12 @@ func MockMetaData() (meta.Data, error) {
 
 	exec.Add(func() {
 		exec.err = data.CreateMeasurement("foo", "bar", "cpu",
-			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil, nil, nil)
+			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, 0, nil, config.TSSTORE, nil, nil, nil)
 	})
 
 	exec.Add(func() {
 		exec.err = data.CreateMeasurement("foo", "bar", "cpu",
-			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, config.TSSTORE, nil, nil, nil)
+			&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, 0, nil, config.TSSTORE, nil, nil, nil)
 	})
 
 	exec.Add(func() {
@@ -112,10 +112,10 @@ func MockMetaData() (meta.Data, error) {
 
 	err := exec.Execute()
 	if err != nil {
-		return meta.Data{}, err
+		return &meta.Data{}, err
 	}
 
-	return data, nil
+	return &data, nil
 }
 
 func TestQueryTagKeys(t *testing.T) {
@@ -123,7 +123,7 @@ func TestQueryTagKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
-	mc := &Client{cacheData: &data}
+	mc := &Client{cacheData: data}
 
 	ms := influxql.Measurements{}
 	ms = append(ms, &influxql.Measurement{

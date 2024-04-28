@@ -3,22 +3,28 @@ package httpd
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/bmizerany/pat"
+	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
+	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -141,6 +147,116 @@ func TestHandler_Disabled_Prom_Write_Read(t *testing.T) {
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/prom/write", nil)
 		h.servePromWrite(w, req, user)
 		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+}
+
+func TestHandler_Disabled_Prom_Query(t *testing.T) {
+	h := Handler{
+		requestTracker: httpd.NewRequestTracker(),
+		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Config:         &config.Config{},
+	}
+	var user meta.User
+	t.Run("disable prom read", func(t *testing.T) {
+		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
+		syscontrol.SysCtrl.NetStore = &mockStorage{}
+
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchon=true", nil)
+		defer func() {
+			req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchon=false", nil)
+			h.serveDebug(w, req)
+		}()
+
+		h.serveDebug(w, req)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/query?db=db1&query=up", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("prom query api params check", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/query?db=db1", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/query?db=db1&query=up&timeout=xx", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/query?db=db1&query=up&time=xx", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("prom query_range api params check", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/query_range?db=db1&query=up", nil)
+		h.servePromQueryRange(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/query_range?db=db1&query=up&start=1708572257", nil)
+		h.servePromQueryRange(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/query_range?db=db1&query=up&start=1708572257&end=1708585337", nil)
+		h.servePromQueryRange(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/query_range?db=db1&query=up&start=2708572257&end=1708585337", nil)
+		h.servePromQueryRange(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/query_range?db=db1&query=up&start=1708572257&end=2708585337&step=15s", nil)
+		h.servePromQueryRange(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+func TestHandler_Prom_Metadata_Query(t *testing.T) {
+	h := Handler{
+		requestTracker: httpd.NewRequestTracker(),
+		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Config:         &config.Config{},
+	}
+	var user meta.User
+
+	t.Run("prom meta query", func(t *testing.T) {
+		// check db
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/labels", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		// check start
+		w = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/labels?db=prometheus&start=a", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("prom label-values query", func(t *testing.T) {
+		// check label name
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/label/up./values?db=prometheus", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("prom series query", func(t *testing.T) {
+		// check match[] exits
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/series?db=prometheus", nil)
+		h.servePromQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }
 
@@ -396,7 +512,11 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 			Query:     testStr[i][0],
 			TimeRange: TimeRange{1, 100},
 		}
-		sqlQuery, pplQuery, err, status := h.getSqlAndPplQuery(req, param, user)
+		sqlQuery, pplQuery, err, status := h.getSqlAndPplQuery(req, param, user, &measurementInfo{
+			name:            "log0",
+			database:        "repo0",
+			retentionPolicy: "log0",
+		})
 		if err != nil {
 			t.Fatalf("%d-parser pipe syntax: %v, %d", i, err, status)
 		}
@@ -415,9 +535,107 @@ func TestGetSqlAndPplQuery(t *testing.T) {
 	}
 }
 
-func TestParseJsonVV2(t *testing.T) {
+func TestTimeSeries2Rows(t *testing.T) {
+	type args struct {
+		dst []influx.Row
+		tss []prompb2.TimeSeries
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    []influx.Row
+		wantErr bool
+	}{
+		{
+			name: "Test with valid time series",
+			args: args{
+				dst: []influx.Row{},
+				tss: []prompb2.TimeSeries{
+					{
+						Labels: []prompb2.Label{
+							{Name: []byte("label1"), Value: []byte("value1")},
+						},
+						Samples: []prompb2.Sample{
+							{Value: 1.0, Timestamp: 1000},
+						},
+					},
+				},
+			},
+			want: []influx.Row{
+				{
+					Tags: influx.PointTags{
+						influx.Tag{
+							Key:   "label1",
+							Value: "value1",
+						},
+					},
+					Name:      promql2influxql.DefaultMeasurementName,
+					Timestamp: time.Unix(0, 1000*int64(time.Millisecond)).UnixNano(),
+					Fields: []influx.Field{
+						{
+							Type:     influx.Field_Type_Float,
+							Key:      promql2influxql.DefaultFieldKey,
+							NumValue: 1.0,
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Test with invalid time series",
+			args: args{
+				dst: []influx.Row{},
+				tss: []prompb2.TimeSeries{
+					{
+						Labels: []prompb2.Label{
+							{Name: []byte("label1"), Value: []byte("value1")},
+						},
+						Samples: []prompb2.Sample{
+							{Value: math.Inf(1), Timestamp: 1000},
+						},
+					},
+				},
+			},
+			want: []influx.Row{
+				{
+					Tags: influx.PointTags{
+						influx.Tag{
+							Key:   "label1",
+							Value: "value1",
+						},
+					},
+					Name:      promql2influxql.DefaultMeasurementName,
+					Timestamp: time.Unix(0, 1000*int64(time.Millisecond)).UnixNano(),
+					Fields: []influx.Field{
+						{
+							Type:     influx.Field_Type_Float,
+							Key:      promql2influxql.DefaultFieldKey,
+							NumValue: math.Inf(1),
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := timeSeries2Rows(tt.args.dst, tt.args.tss)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("timeSeries2Rows() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("timeSeries2Rows() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseJson(t *testing.T) {
 	h := &Handler{
-		mux: pat.New(),
+		mux: mux.NewRouter(),
 		Config: &config.Config{
 			AuthEnabled: false,
 		},
@@ -427,18 +645,7 @@ func TestParseJsonVV2(t *testing.T) {
 	// {"time":%v, "http":"127.0.0.1", "cnt":4}
 	now := time.Now().UnixMilli()
 	s := fmt.Sprintf("{\"time\":%v, \"http\":\"127.0.0.1\", \"cnt\":4}", now)
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(s))
-	q := req.URL.Query()
-	q.Add(":repository", "test")
-	q.Add(":logStream", "test")
-	q.Add("type", "json")
-	q.Add("mapping", `{"timestamp":"time", "default_type":"tags","content": ["http", "cnt"]}`)
-	req.URL.RawQuery = q.Encode()
-
-	req2, err := h.getLogWriteRequest(req)
-	if err != nil {
-		t.Fatal(req2, err)
-	}
+	req := mockLogWriteRequest(`{"timestamp":"time", "default_type":"tags","content": ["http", "cnt"]}`)
 	scanner := bufio.NewScanner(strings.NewReader(s))
 	scanBuf := byteBufferPool.Get()
 	defer byteBufferPool.Put(scanBuf)
@@ -446,13 +653,89 @@ func TestParseJsonVV2(t *testing.T) {
 	scanner.Split(bufio.ScanLines)
 
 	ld := 7 * 24 * time.Hour
-	expiredEarliestTime := time.Now().UnixMilli() - ld.Milliseconds()
-	rows := &record.Record{}
-	failRows := record.NewRecord(schema, false)
-	_ = h.parseJsonV2(scanner, req2, rows, failRows, expiredEarliestTime)
-	expect := fmt.Sprintf("field(tags):[]string(nil)\nfield(cnt):[]float64{4}\nfield(http):[]string{\"127.0.0.1\"}\nfield(time):[]int64{%v}\n", now*1e6)
+	req.expiredTime = time.Now().UnixNano() - ld.Nanoseconds()
+	rows := record.NewRecord(logSchema, false)
+	failRows := record.NewRecord(failLogSchema, false)
+	_ = h.parseJson(scanner, req, rows, failRows)
+	expect := fmt.Sprintf("field(__retry_tag__):[]bool{false}\nfield(cnt):[]float64{4}\nfield(http):[]string{\"127.0.0.1\"}\nfield(time):[]int64{%v}\n", now*1e6)
 	res := rows.String()
 	if expect != res {
 		t.Fatal("unexpect", res)
 	}
+}
+
+func newTimeSeries(num int) []prompb2.TimeSeries {
+	ts := prompb2.TimeSeries{
+		Labels: []prompb2.Label{
+			{Name: []byte("__name__"), Value: []byte("test_metric")},
+			{Name: []byte("label1"), Value: []byte("value1")},
+		},
+		Samples: []prompb2.Sample{
+			{Value: 1.0, Timestamp: 1000},
+			{Value: 2.0, Timestamp: 2000},
+		},
+	}
+
+	tss := make([]prompb2.TimeSeries, 0, num)
+	for i := 0; i < num; i++ {
+		for j := range ts.Samples {
+			ts.Samples[j].Value += 1.0
+			ts.Samples[j].Timestamp += 1000
+		}
+		tss = append(tss, ts)
+	}
+	return tss
+}
+
+func Benchmark_TimeSeries2Rows(t *testing.B) {
+	num := 100000
+	tss := newTimeSeries(num)
+	rs := pool.GetRows(num)
+	defer pool.PutRows(rs)
+	t.N = 10
+	t.ReportAllocs()
+	t.ResetTimer()
+	var err error
+	for i := 0; i < t.N; i++ {
+		t.StartTimer()
+		for j := 0; j < 1000000; j++ {
+			*rs, err = timeSeries2Rows(*rs, tss)
+			if err != nil {
+				if err != nil {
+					t.Fatal("timeSeries2Rows fail")
+				}
+			}
+			t.StopTimer()
+		}
+	}
+}
+
+func TestMergeFragments(t *testing.T) {
+	// A test of multiple highlighted section coverage
+	fragments := []Fragment{
+		{1, 10},
+		{5, 15},
+	}
+	fragments = mergeFragments(fragments)
+	assert.Equal(t, 1, len(fragments))
+	assert.Equal(t, 1, fragments[0].Offset)
+	assert.Equal(t, 19, fragments[0].Length)
+
+	// A test for one highlight containing another
+	fragments = []Fragment{
+		{1, 10},
+		{5, 3},
+	}
+	fragments = mergeFragments(fragments)
+	assert.Equal(t, 1, len(fragments))
+	assert.Equal(t, 1, fragments[0].Offset)
+	assert.Equal(t, 10, fragments[0].Length)
+
+	// A test of multiple highlights independent of each other
+	fragments = []Fragment{
+		{1, 10},
+		{15, 3},
+	}
+	fragments = mergeFragments(fragments)
+	assert.Equal(t, 2, len(fragments))
 }

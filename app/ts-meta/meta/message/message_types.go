@@ -82,6 +82,12 @@ const (
 
 	SendSysCtrlToMetaRequestMessage
 	SendSysCtrlToMetaResponseMessage
+
+	SnapshotV2RequestMessage
+	SnapshotV2ResponseMessage
+
+	CreateSqlNodeRequestMessage
+	CreateSqlNodeResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -95,9 +101,13 @@ func init() {
 	MetaMessageBinaryCodec[PeersRequestMessage] = func() transport.Codec { return &PeersRequest{} }
 	MetaMessageBinaryCodec[PeersResponseMessage] = func() transport.Codec { return &PeersResponse{} }
 	MetaMessageBinaryCodec[CreateNodeRequestMessage] = func() transport.Codec { return &CreateNodeRequest{} }
+	MetaMessageBinaryCodec[CreateSqlNodeRequestMessage] = func() transport.Codec { return &CreateSqlNodeRequest{} }
 	MetaMessageBinaryCodec[CreateNodeResponseMessage] = func() transport.Codec { return &CreateNodeResponse{} }
+	MetaMessageBinaryCodec[CreateSqlNodeResponseMessage] = func() transport.Codec { return &CreateSqlNodeResponse{} }
 	MetaMessageBinaryCodec[SnapshotRequestMessage] = func() transport.Codec { return &SnapshotRequest{} }
 	MetaMessageBinaryCodec[SnapshotResponseMessage] = func() transport.Codec { return &SnapshotResponse{} }
+	MetaMessageBinaryCodec[SnapshotV2RequestMessage] = func() transport.Codec { return &SnapshotV2Request{} }
+	MetaMessageBinaryCodec[SnapshotV2ResponseMessage] = func() transport.Codec { return &SnapshotV2Response{} }
 	MetaMessageBinaryCodec[ExecuteRequestMessage] = func() transport.Codec { return &ExecuteRequest{} }
 	MetaMessageBinaryCodec[ExecuteResponseMessage] = func() transport.Codec { return &ExecuteResponse{} }
 	MetaMessageBinaryCodec[UpdateRequestMessage] = func() transport.Codec { return &UpdateRequest{} }
@@ -131,7 +141,9 @@ func init() {
 		PingRequestMessage:                    PingResponseMessage,
 		PeersRequestMessage:                   PeersResponseMessage,
 		CreateNodeRequestMessage:              CreateNodeResponseMessage,
+		CreateSqlNodeRequestMessage:           CreateSqlNodeResponseMessage,
 		SnapshotRequestMessage:                SnapshotResponseMessage,
+		SnapshotV2RequestMessage:              SnapshotV2ResponseMessage,
 		ExecuteRequestMessage:                 ExecuteResponseMessage,
 		UpdateRequestMessage:                  UpdateResponseMessage,
 		ReportRequestMessage:                  ReportResponseMessage,

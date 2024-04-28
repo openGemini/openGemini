@@ -241,6 +241,7 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 		result = t.filterData(result)
 		if result.RowNums() == 0 {
 			t.recordPool.PutRecordInCircularPool()
+			t.filterPool.PutRecordInCircularPool()
 			continue
 		}
 		return result, nil
@@ -324,6 +325,9 @@ func (t *TSSPFileDetachedReader) Close() error {
 	}
 	if t.filterPool != nil {
 		t.filterPool.Put()
+	}
+	if t.dataReader != nil {
+		t.dataReader.Close()
 	}
 	return nil
 }

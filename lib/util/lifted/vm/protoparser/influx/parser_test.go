@@ -9,6 +9,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -411,5 +412,59 @@ func BenchmarkStoreUnmarshalTags_Disable_TagArray(b *testing.B) {
 	tagpool := []Tag{}
 	for i := 0; i < b.N; i++ {
 		row.unmarshalTags(tagStr, tagpool)
+	}
+}
+
+func TestParse2Series(t *testing.T) {
+	key := make([]byte, 0, len([]byte(`mst1,tagK1=2.11,tagK2=233,tagK3=ab\ss,,,tagK4=2=3,1\="`)))
+
+	key = encoding.MarshalUint32(key, uint32(len([]byte(`mst1,tagK1=2.11,tagK2=233,tagK3=ab\ss,,,tagK4=2=3,1\="`))))
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`mst1`))))
+	key = append(key, []byte(`mst1`)...)
+
+	key = encoding.MarshalUint16(key, 4)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`tagK1`))))
+	key = append(key, []byte(`tagK1`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`2.11`))))
+	key = append(key, []byte(`2.11`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`tagK2`))))
+	key = append(key, []byte(`tagK2`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`233`))))
+	key = append(key, []byte(`233`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`tagK3`))))
+	key = append(key, []byte(`tagK3`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`ab\ss,,`))))
+	key = append(key, []byte(`ab\ss,,`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`tagK4`))))
+	key = append(key, []byte(`tagK4`)...)
+
+	key = encoding.MarshalUint16(key, uint16(len([]byte(`2=3,1\="`))))
+	key = append(key, []byte(`2=3,1\="`)...)
+
+	seriesKey := Parse2Series(key)
+	if string(seriesKey.Measurement) != `mst1` {
+		t.Fatalf("Parse2Series measurement not equal, expeted: %v, actual: %v", `mst1`, string(seriesKey.Measurement))
+	}
+
+	if len(seriesKey.TagSet) != 4 {
+		t.Fatalf("Parse2Series TagSet not equal, expeted: %v, actual: %v", 4, len(seriesKey.TagSet))
+	}
+
+	want := []TagKV{
+		{[]byte("tagK1"), []byte(`2.11`)},
+		{[]byte("tagK2"), []byte(`233`)},
+		{[]byte("tagK3"), []byte(`ab\ss,,`)},
+		{[]byte("tagK4"), []byte(`2=3,1\="`)},
+	}
+	if !reflect.DeepEqual(seriesKey.TagSet, want) {
+		t.Fatalf("Parse2Series TagSet not equal, expeted: %v, actual: %v", want, seriesKey.TagSet)
 	}
 }

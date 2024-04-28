@@ -184,6 +184,13 @@ func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources in
 			if err := csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt); err != nil {
 				return err
 			}
+		case *influxql.BinOp:
+			if err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt); err != nil {
+				return err
+			}
+			if err := csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt); err != nil {
+				return err
+			}
 		}
 	}
 	if in, ok := condition.(*influxql.InCondition); ok {
@@ -579,7 +586,9 @@ func (csm *ClusterShardMapping) GetETraits(ctx context.Context, sources influxql
 		}
 	}
 	opts, _ := schema.Options().(*query.ProcessorOptions)
-	opts.QueryId = ctx.Value(query.QueryIDKey).(uint64)
+	if c, ok := ctx.Value(query.QueryIDKey).([]uint64); ok {
+		opts.QueryId = c[schema.Options().GetStmtId()]
+	}
 	shardsMapByNode, sourcesMapByPtId, err := csm.GetShardAndSourcesMap(sources)
 	if err != nil {
 		return nil, err

@@ -60,7 +60,7 @@ func GetFloatLTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] >= cmpData {
+		if values[i] >= cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -77,7 +77,7 @@ func GetIntegerLTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] >= cmpData {
+		if values[i] >= cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -220,7 +220,7 @@ func GetFloatLTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] > cmpData {
+		if values[i] > cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -237,7 +237,7 @@ func GetIntegerLTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] > cmpData {
+		if values[i] > cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -380,7 +380,7 @@ func GetFloatGTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] <= cmpData {
+		if values[i] <= cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -397,7 +397,7 @@ func GetIntegerGTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] <= cmpData {
+		if values[i] <= cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -540,7 +540,7 @@ func GetFloatGTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] < cmpData {
+		if values[i] < cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -557,7 +557,7 @@ func GetIntegerGTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] < cmpData {
+		if values[i] < cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -707,7 +707,7 @@ func GetFloatEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] != cmpData {
+		if values[i] != cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -724,7 +724,7 @@ func GetIntegerEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] != cmpData {
+		if values[i] != cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -764,7 +764,7 @@ func GetBooleanEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] != cmpData {
+		if values[i] != cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -918,7 +918,7 @@ func GetFloatNEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] == cmpData {
+		if values[i] == cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -935,7 +935,7 @@ func GetIntegerNEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] == cmpData {
+		if values[i] == cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}
@@ -975,7 +975,7 @@ func GetBooleanNEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 		if bitmap.IsNil(pos, idx) {
 			continue
 		}
-		if values[idx] == cmpData {
+		if values[i] == cmpData {
 			bitmap.SetBitMap(pos, idx)
 		}
 	}

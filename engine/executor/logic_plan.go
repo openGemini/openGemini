@@ -61,6 +61,7 @@ var (
 	_ LogicalPlan = &LogicalSparseIndexScan{}
 	_ LogicalPlan = &LogicalColumnStoreReader{}
 	_ LogicalPlan = &LogicalJoin{}
+	_ LogicalPlan = &LogicalBinOp{}
 )
 
 type AggLevel uint8
@@ -82,6 +83,10 @@ func EnableFileCursor(en bool) {
 
 func GetEnableFileCursor() bool {
 	return enableFileCursor
+}
+
+func IsEnableFileCursor(schema hybridqp.Catalog) bool {
+	return GetEnableFileCursor() && schema.HasOptimizeAgg() && !schema.Options().IsPromQuery()
 }
 
 func PrintPlan(planName string, plan hybridqp.QueryNode) {
@@ -756,7 +761,7 @@ func (p *LogicalAggregate) ForwardCallArgs() {
 
 func (p *LogicalAggregate) CountToSum() {
 	for _, call := range p.calls {
-		if call.Name == "count" {
+		if call.Name == "count" || call.Name == "count_prom" {
 			call.Name = "sum"
 			p.digest = false
 		}
@@ -2812,8 +2817,8 @@ func (b *LogicalPlanBuilderImpl) CreateSeriesPlan() (hybridqp.QueryNode, error) 
 	}
 	b.Series()
 
-	if GetEnableFileCursor() && b.schema.HasOptimizeAgg() {
-		if b.schema.HasCall() && b.schema.CanCallsPushdown() && !b.schema.ContainSeriesIgnoreCall() {
+	if IsEnableFileCursor(b.schema) {
+		if b.schema.CanAggTagSet() {
 			b.TagSetAggregate()
 		}
 	}
@@ -4158,5 +4163,93 @@ func (p *LogicalColumnStoreReader) Digest() string {
 	p.digestName = p.digestName[:0]
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
 	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
+	return string(p.digestName)
+}
+
+type LogicalBinOp struct {
+	left  hybridqp.QueryNode
+	right hybridqp.QueryNode
+	Para  *influxql.BinOp
+	LogicalPlanBase
+}
+
+func NewLogicalBinOp(left hybridqp.QueryNode, right hybridqp.QueryNode, para *influxql.BinOp, schema hybridqp.Catalog) *LogicalBinOp {
+	project := &LogicalBinOp{
+		left:  left,
+		right: right,
+		Para:  para,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+	project.init()
+	return project
+}
+
+// impl me
+func (p *LogicalBinOp) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalBinOp) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalBinOp) init() {
+	p.InitRef(p.right)
+	p.InitRef(p.left)
+}
+
+func (p *LogicalBinOp) Clone() hybridqp.QueryNode {
+	clone := &LogicalBinOp{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalBinOp) Children() []hybridqp.QueryNode {
+	return []hybridqp.QueryNode{p.left, p.right}
+}
+
+func (p *LogicalBinOp) ReplaceChildren(children []hybridqp.QueryNode) {
+	if len(children) != 2 {
+		panic("children count in LogicalBinOp is not 2")
+	}
+	p.left = children[0]
+	p.right = children[1]
+}
+
+func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal > 1 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
+	if ordinal == 0 {
+		p.left = child
+	} else {
+		p.right = child
+	}
+}
+
+func (p *LogicalBinOp) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalBinOp) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalBinOp) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
+	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
 	return string(p.digestName)
 }

@@ -33,7 +33,7 @@ func Test_Engine_Assign_404PT(t *testing.T) {
 	dir := t.TempDir()
 	e, err := initEngine(dir)
 	defer e.Close()
-	err = e.Assign(0, defaultDb, defaultPtId, 1, nil, nil, nil)
+	err = e.Assign(0, 1, defaultDb, defaultPtId, 1, nil, nil, mockMetaClient())
 	require.NoError(t, err)
 }
 
@@ -53,7 +53,7 @@ func Test_Engine_Assign_success(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.Assign(0, defaultDb, defaultPtId, 1, shardDurationInfo, dbBriefInfo, nil)
+	err = eng.Assign(0, 1, defaultDb, defaultPtId, 1, shardDurationInfo, dbBriefInfo, mockMetaClient())
 	require.NoError(t, err)
 	eng.Close()
 }
@@ -260,7 +260,7 @@ func TestPrepareLoadPts001(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -281,7 +281,7 @@ func TestPrepareLoadPts002(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -302,7 +302,7 @@ func TestPrepareLoadPts003(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -323,12 +323,12 @@ func TestPrepareLoadPts004(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
 	checkShard(t, eng, 1, defaultShardId, false, defaultDb, defaultPtId, true)
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
@@ -361,7 +361,7 @@ func TestLoadPts001(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, nil)
+	err = eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -388,12 +388,12 @@ func TestLoadPts002(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, nil)
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
 	checkShard(t, eng, 1, defaultShardId, false, defaultDb, defaultPtId, true)
-	err = eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, nil)
+	err = eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -412,7 +412,7 @@ func TestLoadPts003(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err := eng.Assign(0, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, nil)
+	err := eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient())
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}

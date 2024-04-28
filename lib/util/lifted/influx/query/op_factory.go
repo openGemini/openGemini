@@ -29,11 +29,13 @@ var instance *FunctionFactory = NewFunctionFactory()
 const (
 	STRING FuncType = iota
 	MATH
+	LABEL
 	AGG_NORMAL  // Traverse the data in the current time window to complete the calculation.The traversal process does not depend on other data in the time window.eg: max,min
 	AGG_SLICE   // All data in the time window needs to be cached during calculation. eg: median,percentile
 	AGG_HEAP    // Same as AGG_SLICE but requires heap sorting. eg: top,bottom
 	AGG_TRANS   // Calculation depends on part data in the time window. eg: derivative
 	AGG_SPECIAL // Special categories,Need to implement custom iterator.
+	PROMTIME    // use for promTime funcs
 )
 
 type BaseFunc interface {
@@ -77,6 +79,16 @@ func (b *BaseAgg) OptimizeAgg() bool {
 	return b.optimizeAgg
 }
 
+type LabelFunc interface {
+	BaseFunc
+	CompileFunc(expr *influxql.Call, c *compiledField) error
+}
+
+type PromTimeFunc interface {
+	BaseFunc
+	CompileFunc(expr *influxql.Call, c *compiledField) error
+}
+
 type MaterializeFunc interface {
 	BaseFunc
 	CompileFunc(expr *influxql.Call, c *compiledField) error
@@ -96,13 +108,37 @@ type AggregateFunc interface {
 type FunctionFactory struct {
 	materialize map[string]MaterializeFunc
 	aggregate   map[string]AggregateFunc
+	label       map[string]LabelFunc
+	promTime    map[string]PromTimeFunc // use for prom
 }
 
 func NewFunctionFactory() *FunctionFactory {
 	return &FunctionFactory{
 		materialize: make(map[string]MaterializeFunc),
 		aggregate:   make(map[string]AggregateFunc),
+		label:       make(map[string]LabelFunc),
+		promTime:    make(map[string]PromTimeFunc),
 	}
+}
+
+func RegistryPromTimeFunction(name string, function PromTimeFunc) {
+	factory := GetFunctionFactoryInstance()
+	_, ok := factory.promTime[name]
+	if ok {
+		return
+	}
+
+	factory.promTime[name] = function
+}
+
+func RegistryLabelFunction(name string, function LabelFunc) {
+	factory := GetFunctionFactoryInstance()
+	_, ok := factory.label[name]
+	if ok {
+		return
+	}
+
+	factory.label[name] = function
 }
 
 func RegistryMaterializeFunction(name string, function MaterializeFunc) bool {
@@ -153,4 +189,12 @@ func (r *FunctionFactory) GetAggregateOp() map[string]AggregateFunc {
 
 func GetFunctionFactoryInstance() *FunctionFactory {
 	return instance
+}
+
+func GetMaterializeFunction(name string, t FuncType) MaterializeFunc {
+	materialize, ok := GetFunctionFactoryInstance().FindMaterFunc(name)
+	if ok && materialize.GetFuncType() == t {
+		return materialize
+	}
+	return nil
 }

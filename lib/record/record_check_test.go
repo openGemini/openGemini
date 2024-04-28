@@ -103,3 +103,70 @@ func checkRecord(rec *record.Record) (err error) {
 	record.CheckRecord(rec)
 	return
 }
+
+func TestCheckSchema(t *testing.T) {
+	type Schema struct {
+		Name string
+	}
+
+	tests := []struct {
+		name string
+		rec  *record.Record
+		i    int
+	}{
+		{
+			name: "sorted schema",
+			rec: &record.Record{
+				Schema: []record.Field{
+					{Name: "A"},
+					{Name: "B"},
+					{Name: "C"},
+				},
+			},
+			i: 0,
+		},
+		{
+			name: "unsorted schema",
+			rec: &record.Record{
+				Schema: []record.Field{
+					{Name: "B"},
+					{Name: "A"},
+					{Name: "C"},
+				},
+			},
+			i: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for i := 0; i < len(tt.rec.Schema)-1; i++ {
+				record.CheckSchema(i, tt.rec, false)
+			}
+		})
+	}
+}
+
+func TestCheckSchemaV2(t *testing.T) {
+	var nameFloat = []byte("iii")
+	var nameTime = []byte("time")
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: util.Bytes2str(nameFloat)},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: util.Bytes2str(nameTime)},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1}, []int64{700, 2, 600},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+
+	err := checkRecord(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+}

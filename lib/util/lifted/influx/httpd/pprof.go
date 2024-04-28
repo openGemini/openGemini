@@ -223,7 +223,7 @@ func (h *Handler) archiveProfilesAndQueries(w http.ResponseWriter, r *http.Reque
 // showShards generates the same values that a StatementExecutor would if a
 // SHOW SHARDS query was executed.
 func (h *Handler) showShards() ([]*models.Row, error) {
-	return h.MetaClient.ShowShards(), nil
+	return h.MetaClient.ShowShards("", "", ""), nil
 }
 
 // Taken from net/http/pprof/pprof.go

@@ -44,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -65,6 +66,10 @@ func init() {
 	log = logger.NewLogger(errno.ModuleStorageEngine)
 	netstorage.RegisterNewEngineFun(config.EngineType1, NewEngine)
 }
+
+const MaxFileInfoSize = 1024
+
+const DefaultUploadFrequence = 500 * time.Millisecond
 
 type Engine struct {
 	mu       sync.RWMutex // read/write lock for Engine
@@ -90,6 +95,7 @@ type Engine struct {
 	mgtLock       sync.RWMutex // lock for migration
 	migratingDbPT map[string]map[uint32]struct{}
 	metaClient    meta.MetaClient
+	fileInfos     chan []immutable.FileInfoExtend
 }
 
 const maxInt = int(^uint(0) >> 1)
@@ -128,6 +134,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 		droppingRP:    make(map[string]string),
 		droppingMst:   make(map[string]string),
 		migratingDbPT: make(map[string]map[uint32]struct{}),
+		fileInfos:     nil,
 	}
 
 	eng.DownSamplePolicies = make(map[string]*meta2.StoreDownSamplePolicy)
@@ -152,7 +159,8 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	immutable.SetCompactionEnabled(options.CsCompactionEnabled)
 	immutable.SetDetachedFlushEnabled(options.CsDetachedFlushEnabled)
 	immutable.SetFragmentsNumPerFlush(options.FragmentsNumPerFlush)
-	immutable.SetPrefixDataPath(dataPath)
+	immutable.SetMaxRowsPerSegment4TsStore(options.MaxRowsPerSegment)
+	obs.SetPrefixDataPath(dataPath)
 	immutable.Init()
 
 	return eng, nil
@@ -193,6 +201,54 @@ func (e *Engine) setMetaClient(m meta.MetaClient) {
 	e.mu.Lock()
 	e.metaClient = m
 	e.mu.Unlock()
+}
+
+func (e *Engine) uploadFileInfos() {
+	fileInfo := make([]meta2.FileInfo, 0, MaxFileInfoSize)
+	ticker := time.NewTicker(DefaultUploadFrequence)
+	defer ticker.Stop()
+
+uploadChannel:
+	for {
+		select {
+		case fileInfoExtend := <-e.fileInfos:
+			currentFileNum := len(fileInfo)
+			incomingFileNum := len(fileInfoExtend)
+			if currentFileNum+incomingFileNum > MaxFileInfoSize {
+				fileInfo = append(make([]meta2.FileInfo, 0, currentFileNum+incomingFileNum), fileInfo...)
+			}
+			db, rp, _ := e.metaClient.ShardOwner(fileInfoExtend[0].FileInfo.ShardID)
+			mstID, err := e.metaClient.GetMeasurementID(db, rp, influx.GetOriginMstName(fileInfoExtend[0].Name))
+			if err != nil {
+				e.log.Error("measurement ID not found")
+				continue
+			}
+			for _, fi := range fileInfoExtend {
+				fileInfo = append(fileInfo, fi.FileInfo)
+				fileInfo[len(fileInfo)-1].MstID = mstID
+			}
+			if len(fileInfo) > MaxFileInfoSize {
+				err := e.metaClient.InsertFiles(fileInfo)
+				if err != nil {
+					e.log.Error("InsertFiles failed.")
+					continue // try later if failed
+				}
+				fileInfo = fileInfo[:0]
+			}
+		case <-ticker.C:
+			if len(fileInfo) != 0 {
+				err := e.metaClient.InsertFiles(fileInfo)
+				if err != nil {
+					e.log.Error("InsertFiles failed.")
+					continue // try later if failed
+				}
+				fileInfo = fileInfo[:0]
+			}
+			if e.closed.Closed() {
+				break uploadChannel
+			}
+		}
+	}
 }
 
 func (e *Engine) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfos map[string]*meta2.DatabaseBriefInfo, loadStat int, client meta.MetaClient) error {
@@ -526,7 +582,14 @@ func (e *Engine) DeleteShard(db string, ptId uint32, shardID uint64) error {
 	}
 
 	lock := fileops.FileLockOption(*dbPtInfo.lockPath)
-	// remove shard's wal&data on-disk, index data will not delete right now
+	// remove shard's wal&data on-disk, index data will not delete right now, if obs-option is not empty, then should remove remote shard dir
+	obsOption := sh.GetObsOption()
+	if obsOption != nil {
+		if err := fileops.RemoveAll(fileops.GetRemoteDataPath(obsOption, sh.GetDataPath()), lock); err != nil {
+			atomic.AddInt64(&stat.EngineStat.DelShardErr, 1)
+			return err
+		}
+	}
 	if err := fileops.RemoveAll(sh.GetDataPath(), lock); err != nil {
 		atomic.AddInt64(&stat.EngineStat.DelShardErr, 1)
 		return err
@@ -655,6 +718,7 @@ func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*met
 
 	for db := range e.DBPartitions {
 		for pt := range e.DBPartitions[db] {
+			e.DBPartitions[db][pt].mu.RLock()
 			for _, shard := range e.DBPartitions[db][pt].shards {
 				tier := shard.GetTier()
 				expired := shard.IsTierExpired()
@@ -667,6 +731,7 @@ func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*met
 					shardsToCold = append(shardsToCold, shard.GetIdent())
 				}
 			}
+			e.DBPartitions[db][pt].mu.RUnlock()
 		}
 	}
 	return shardsToWarm, shardsToCold
@@ -691,7 +756,7 @@ func (e *Engine) ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) e
 		return errno.NewError(errno.ShardNotFound, shardID)
 	}
 
-	if _, ok := dbPtInfo.pendingShardTiering[shardID]; ok {
+	if _, ok = dbPtInfo.pendingShardTiering[shardID]; ok {
 		dbPtInfo.mu.Unlock()
 		return fmt.Errorf("shard %d already in changing tier", shardID)
 	}
@@ -785,6 +850,7 @@ func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRan
 			return err
 		}
 		sh.SetMstInfo(mstInfo)
+		sh.SetObsOption(mstInfo.ObsOptions)
 		dbPTInfo.shards[shardID] = sh
 		newestShardID, ok := dbPTInfo.newestRpShard[rp]
 		if !ok || newestShardID < shardID {
@@ -852,7 +918,7 @@ func (e *Engine) CreateDBPT(db string, pt uint32, enableTagArray bool) {
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(pt)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(pt)))
 	lockPath := path.Join(ptPath, "LOCK")
-	dbPTInfo := NewDBPTInfo(db, pt, ptPath, walPath, e.loadCtx)
+	dbPTInfo := NewDBPTInfo(db, pt, ptPath, walPath, e.loadCtx, e.fileInfos)
 	dbPTInfo.lockPath = &lockPath
 	e.addDBPTInfo(dbPTInfo)
 	dbPTInfo.SetOption(e.engOpt)
@@ -967,7 +1033,7 @@ func (e *Engine) deleteIndexes(db string, pt uint32, rp string, fn func(dbPTInfo
 	indexes := make(map[uint64]struct{})
 
 	dbPTInfo := e.getDBPTInfo(db, pt)
-	shardIDs := dbPTInfo.ShardIds()
+	shardIDs := dbPTInfo.ShardIds(nil)
 
 	var n int
 	for _, shardId := range shardIDs {
@@ -1394,13 +1460,36 @@ func (s *Engine) InitLogStoreCtx(querySchema *executor.QuerySchema) (*idKeyCurso
 	return ctx, nil
 }
 
-func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) error {
+func GetCtx(querySchema *executor.QuerySchema) (*idKeyCursorContext, error) {
+	ctx := &idKeyCursorContext{
+		decs:         immutable.NewReadContext(querySchema.Options().IsAscending()),
+		maxRowCnt:    querySchema.Options().ChunkSizeNum(),
+		aggPool:      AggPool,
+		seriesPool:   SeriesPool,
+		tmsMergePool: TsmMergePool,
+		querySchema:  querySchema,
+	}
+	err := newCursorSchema(ctx, querySchema)
+	if err != nil {
+		return nil, err
+	}
+
+	if ctx.schema.Len() <= 1 {
+		return nil, errno.NewError(errno.NoFieldSelected, "initCtx")
+	}
+	ctx.tr.Min = querySchema.Options().GetStartTime()
+	ctx.tr.Max = querySchema.Options().GetEndTime()
+	ctx.decs.SetTr(ctx.tr)
+	return ctx, nil
+}
+
+func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) bool {
 	e.log.Info("[hierarchical storage]", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
 	e.mu.RLock()
-	if err := e.checkAndAddRefPTNoLock(db, uint32(ptId)); err != nil {
+	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
 		e.log.Error("[hierarchical storage] add pt ref err", zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
-		return err
+		return false
 	}
 
 	dbPTInfo := e.DBPartitions[db][ptId]
@@ -1411,30 +1500,38 @@ func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) err
 	sh := dbPTInfo.Shard(shardID)
 	dbPTInfo.mu.RUnlock()
 	if sh == nil {
-		return errno.NewError(errno.ShardNotFound, shardID)
+		e.log.Error("shard not found", zap.Error(errno.NewError(errno.ShardNotFound, shardID)))
+		return false
 	}
 
 	if err := sh.OpenAndEnable(e.metaClient); err != nil {
 		e.log.Error("[hierarchical storage] shard open err", zap.String("db", db),
 			zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
-		return err
+		return false
 	}
 
-	if syscontrol.IsWriteColdShardEnabled() {
+	if !syscontrol.IsWriteColdShardEnabled() {
 		if err := sh.UpdateShardReadOnly(e.metaClient); err != nil {
 			e.log.Error("[hierarchical storage] update shard read only fail", zap.String("db", db),
 				zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
-			return err
+			return false
 		}
 	}
 
-	if sh.CanDoShardMove() {
-		if err := sh.ExecShardMove(); err != nil {
-			return err
-		}
+	if !sh.CanDoShardMove() {
+		e.log.Info("shard have not finished full compact yet ", zap.Uint64("shard id", shardID))
+		return false
+	}
+
+	// unregister cold shard
+	sh.UnregisterShard()
+	if err := sh.ExecShardMove(); err != nil {
+		e.log.Error("[hierarchical storage] exec shard move fail", zap.String("db", db),
+			zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
+		return false
 	}
 
 	e.log.Info("[hierarchical storage] shard move success", zap.String("db", db),
 		zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
-	return nil
+	return true
 }

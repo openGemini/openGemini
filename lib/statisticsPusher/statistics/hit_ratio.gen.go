@@ -28,14 +28,17 @@ import (
 )
 
 type HitRatioStatistics struct {
-	itemIndexWriterGetTotal int64
-	itemIndexWriterHitTotal int64
-	itemMergeColValGetTotal int64
-	itemMergeColValHitTotal int64
-	itemFileOpenTotal       int64
-	itemQueryFileUnHitTotal int64
-	itemChunkMetaGetTotal   int64
-	itemChunkMetaHitTotal   int64
+	itemIndexWriterGetTotal                   int64
+	itemIndexWriterHitTotal                   int64
+	itemMergeColValGetTotal                   int64
+	itemMergeColValHitTotal                   int64
+	itemFileOpenTotal                         int64
+	itemQueryFileUnHitTotal                   int64
+	itemChunkMetaGetTotal                     int64
+	itemChunkMetaHitTotal                     int64
+	itemSeriesKeyToTSIDCacheGetTotal          int64
+	itemSeriesKeyToTSIDCacheGetMissTotal      int64
+	itemSeriesKeyToTSIDCacheGetNewSeriesTotal int64
 
 	tags map[string]string
 }
@@ -55,14 +58,17 @@ func (s *HitRatioStatistics) Init(tags map[string]string) {
 
 func (s *HitRatioStatistics) Collect(buffer []byte) ([]byte, error) {
 	data := map[string]interface{}{
-		"IndexWriterGetTotal": s.itemIndexWriterGetTotal,
-		"IndexWriterHitTotal": s.itemIndexWriterHitTotal,
-		"MergeColValGetTotal": s.itemMergeColValGetTotal,
-		"MergeColValHitTotal": s.itemMergeColValHitTotal,
-		"FileOpenTotal":       s.itemFileOpenTotal,
-		"QueryFileUnHitTotal": s.itemQueryFileUnHitTotal,
-		"ChunkMetaGetTotal":   s.itemChunkMetaGetTotal,
-		"ChunkMetaHitTotal":   s.itemChunkMetaHitTotal,
+		"IndexWriterGetTotal":                   s.itemIndexWriterGetTotal,
+		"IndexWriterHitTotal":                   s.itemIndexWriterHitTotal,
+		"MergeColValGetTotal":                   s.itemMergeColValGetTotal,
+		"MergeColValHitTotal":                   s.itemMergeColValHitTotal,
+		"FileOpenTotal":                         s.itemFileOpenTotal,
+		"QueryFileUnHitTotal":                   s.itemQueryFileUnHitTotal,
+		"ChunkMetaGetTotal":                     s.itemChunkMetaGetTotal,
+		"ChunkMetaHitTotal":                     s.itemChunkMetaHitTotal,
+		"SeriesKeyToTSIDCacheGetTotal":          s.itemSeriesKeyToTSIDCacheGetTotal,
+		"SeriesKeyToTSIDCacheGetMissTotal":      s.itemSeriesKeyToTSIDCacheGetMissTotal,
+		"SeriesKeyToTSIDCacheGetNewSeriesTotal": s.itemSeriesKeyToTSIDCacheGetNewSeriesTotal,
 	}
 
 	buffer = AddPointToBuffer("hitRatio", s.tags, data, buffer)
@@ -72,14 +78,17 @@ func (s *HitRatioStatistics) Collect(buffer []byte) ([]byte, error) {
 
 func (s *HitRatioStatistics) CollectOps() []opsStat.OpsStatistic {
 	data := map[string]interface{}{
-		"IndexWriterGetTotal": s.itemIndexWriterGetTotal,
-		"IndexWriterHitTotal": s.itemIndexWriterHitTotal,
-		"MergeColValGetTotal": s.itemMergeColValGetTotal,
-		"MergeColValHitTotal": s.itemMergeColValHitTotal,
-		"FileOpenTotal":       s.itemFileOpenTotal,
-		"QueryFileUnHitTotal": s.itemQueryFileUnHitTotal,
-		"ChunkMetaGetTotal":   s.itemChunkMetaGetTotal,
-		"ChunkMetaHitTotal":   s.itemChunkMetaHitTotal,
+		"IndexWriterGetTotal":                   s.itemIndexWriterGetTotal,
+		"IndexWriterHitTotal":                   s.itemIndexWriterHitTotal,
+		"MergeColValGetTotal":                   s.itemMergeColValGetTotal,
+		"MergeColValHitTotal":                   s.itemMergeColValHitTotal,
+		"FileOpenTotal":                         s.itemFileOpenTotal,
+		"QueryFileUnHitTotal":                   s.itemQueryFileUnHitTotal,
+		"ChunkMetaGetTotal":                     s.itemChunkMetaGetTotal,
+		"ChunkMetaHitTotal":                     s.itemChunkMetaHitTotal,
+		"SeriesKeyToTSIDCacheGetTotal":          s.itemSeriesKeyToTSIDCacheGetTotal,
+		"SeriesKeyToTSIDCacheGetMissTotal":      s.itemSeriesKeyToTSIDCacheGetMissTotal,
+		"SeriesKeyToTSIDCacheGetNewSeriesTotal": s.itemSeriesKeyToTSIDCacheGetNewSeriesTotal,
 	}
 
 	return []opsStat.OpsStatistic{
@@ -121,4 +130,16 @@ func (s *HitRatioStatistics) AddChunkMetaGetTotal(i int64) {
 
 func (s *HitRatioStatistics) AddChunkMetaHitTotal(i int64) {
 	atomic.AddInt64(&s.itemChunkMetaHitTotal, i)
+}
+
+func (s *HitRatioStatistics) AddSeriesKeyToTSIDCacheGetTotal(i int64) {
+	atomic.AddInt64(&s.itemSeriesKeyToTSIDCacheGetTotal, i)
+}
+
+func (s *HitRatioStatistics) AddSeriesKeyToTSIDCacheGetMissTotal(i int64) {
+	atomic.AddInt64(&s.itemSeriesKeyToTSIDCacheGetMissTotal, i)
+}
+
+func (s *HitRatioStatistics) AddSeriesKeyToTSIDCacheGetNewSeriesTotal(i int64) {
+	atomic.AddInt64(&s.itemSeriesKeyToTSIDCacheGetNewSeriesTotal, i)
 }

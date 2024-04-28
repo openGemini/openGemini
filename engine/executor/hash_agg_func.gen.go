@@ -357,8 +357,9 @@ func (s *sumFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowL
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
-	for ; startRowLoc < endRowLoc; startRowLoc++ {
-		s.val += c.Column(colLoc).FloatValue(startRowLoc)
+	vs := c.Column(colLoc).FloatValues()[startRowLoc:endRowLoc]
+	for i := 0; i < endRowLoc-startRowLoc; i++ {
+		s.val += vs[i]
 	}
 	return nil
 }
@@ -396,8 +397,9 @@ func (s *sumIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRo
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
-	for ; startRowLoc < endRowLoc; startRowLoc++ {
-		s.val += c.Column(colLoc).IntegerValue(startRowLoc)
+	vs := c.Column(colLoc).IntegerValues()[startRowLoc:endRowLoc]
+	for i := 0; i < endRowLoc-startRowLoc; i++ {
+		s.val += vs[i]
 	}
 	return nil
 }
@@ -437,10 +439,10 @@ func (s *minFloatOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowL
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
-	for ; startRowLoc < endRowLoc; startRowLoc++ {
-		val := c.Column(colLoc).FloatValue(startRowLoc)
-		if val < s.val {
-			s.val = val
+	vs := c.Column(colLoc).FloatValues()[startRowLoc:endRowLoc]
+	for i := 0; i < endRowLoc-startRowLoc; i++ {
+		if vs[i] < s.val {
+			s.val = vs[i]
 			s.nilFlag = false
 		}
 	}
@@ -486,10 +488,10 @@ func (s *minIntegerOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRo
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
-	for ; startRowLoc < endRowLoc; startRowLoc++ {
-		val := c.Column(colLoc).IntegerValue(startRowLoc)
-		if val < s.val {
-			s.val = val
+	vs := c.Column(colLoc).IntegerValues()[startRowLoc:endRowLoc]
+	for i := 0; i < endRowLoc-startRowLoc; i++ {
+		if vs[i] < s.val {
+			s.val = vs[i]
 			s.nilFlag = false
 		}
 	}
@@ -535,10 +537,10 @@ func (s *minBooleanOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRo
 	if c.Column(colLoc).NilCount() != 0 {
 		startRowLoc, endRowLoc = c.Column(colLoc).GetRangeValueIndexV2(startRowLoc, endRowLoc)
 	}
-	for ; startRowLoc < endRowLoc; startRowLoc++ {
-		val := c.Column(colLoc).BooleanValue(startRowLoc)
-		if (s.val && !val) || (s.val && val && s.nilFlag) {
-			s.val = val
+	vs := c.Column(colLoc).BooleanValues()[startRowLoc:endRowLoc]
+	for i := 0; i < endRowLoc-startRowLoc; i++ {
+		if (s.val && !vs[i]) || (s.val && vs[i] && s.nilFlag) {
+			s.val = vs[i]
 			s.nilFlag = false
 		}
 	}

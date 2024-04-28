@@ -33,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
@@ -280,12 +281,12 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExistsByCol(rec *record.Record, ta
 		return errors.New("get mergeSetIndex failed")
 	}
 	tagCols := GetIndexTagCols(rec.RowNums()) // preset one colVal.Len cap
-	buf := GetWriteBuffer()
+	buf := mergeset.GetIndexBuffer()
 	curVal := GetIndexKeyCache()
 
 	defer func() {
 		PutIndexTagCols(tagCols)
-		PutWriteBuffer(buf)
+		mergeset.PutIndexBuffer(buf)
 		PutIndexKeyCache(curVal)
 	}()
 

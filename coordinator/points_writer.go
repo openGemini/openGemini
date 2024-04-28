@@ -75,7 +75,7 @@ type PWMetaClient interface {
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	GetStreamInfos() map[string]*meta2.StreamInfo
@@ -405,6 +405,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		}
 
 		originName = r.Name
+		wh.sameMeasurement(originName)
 		ctx.ms, err = wh.createMeasurement(database, retentionPolicy, r.Name)
 		if err != nil {
 			if errno.Equal(err, errno.InvalidMeasurement) {
@@ -527,6 +528,7 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 		}
 
 		var mi *meta2.MeasurementInfo
+		ctx.writeHelper.sameMeasurement(mst)
 		mi, err = ctx.writeHelper.createMeasurement((*dstSis)[dstSisIdxes[0]].SrcMst.Database, (*dstSis)[dstSisIdxes[0]].SrcMst.RetentionPolicy, mst)
 		if err != nil {
 			return
@@ -568,7 +570,11 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 				// the two-tier computing framework based on sql-store is adopted,
 				// the following is calculated at the sql layer.
 				if _, ok := ctx.stream.tasks[(*dstSis)[idx].Name]; !ok {
+					mi.SchemaLock.RLock()
+					(*mis)[idx].SchemaLock.RLock()
 					task, err := newStreamTask((*dstSis)[idx], mi.Schema, (*mis)[idx].Schema)
+					(*mis)[idx].SchemaLock.RUnlock()
+					mi.SchemaLock.RUnlock()
 					if err != nil {
 						return err
 					}
@@ -634,7 +640,7 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 		sameSg = false
 	}
 
-	if !sameSg {
+	if !sameSg || !wh.sameMst {
 		if len(di.ShardKey.ShardKey) > 0 {
 			*si = &di.ShardKey
 		} else {
@@ -685,7 +691,22 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 		if len((*si).ShardKey) > 0 && !reuseShardKey {
 			r.ShardKey = r.ShardKey[len(r.Name)+1:]
 		}
-		sh = sg.ShardFor(meta2.HashID(r.ShardKey), *asis)
+		var shardIdxes []int
+		if mi.InitNumOfShards == 0 {
+			shardIdxes = *asis
+		} else {
+			shardIdxes = mi.ShardIdexes[sg.ID]
+			if len(shardIdxes) == 0 { // need to update mst info if shard group is newly created.
+				mi, err = w.MetaClient.Measurement(database, retentionPolicy, mi.OriginName())
+				if err != nil {
+					w.logger.Error("write failed", zap.Error(err))
+					return
+				}
+				shardIdxes = mi.ShardIdexes[sg.ID]
+			}
+		}
+		r.SkipMarshalShardKey()
+		sh = sg.ShardFor(meta2.HashID(r.ShardKey), shardIdxes)
 	}
 	if sh == nil {
 		err = errno.NewError(errno.WritePointMap2Shard)
@@ -849,6 +870,7 @@ var retryableErrStrs = []string{
 	"broken pipe",
 	"write: connection timed out",
 	"use of closed network connection",
+	"measurement already exists",
 }
 
 // IsRetryErrorForPtView returns true if dbpt is not on this node.

@@ -1209,37 +1209,3 @@ func {{.Name}}AbsoluteDiffFunc(prev, curr {{.Type}}) {{.Type}} {
 {{end}}
 
 
-{{range .}}
-{{- if and (ne .Name "String") (ne .Name "Boolean")}}
-
-func {{.Name}}TopCmpByTimeReduce(a, b *{{.Name}}PointItem) bool {
-	if a.time != b.time {
-		return a.time < b.time
-	}
-	return a.value > b.value
-}
-
-func {{.Name}}TopCmpByValueReduce(a, b *{{.Name}}PointItem) bool {
-	if a.value != b.value {
-		return a.value < b.value
-	}
-	return a.time > b.time
-}
-
-func {{.Name}}BottomCmpByValueReduce(a, b *{{.Name}}PointItem) bool {
-	if a.value != b.value {
-		return a.value > b.value
-	}
-	return a.time > b.time
-}
-
-func {{.Name}}BottomCmpByTimeReduce(a, b *{{.Name}}PointItem) bool {
-	if a.time != b.time {
-		return a.time < b.time
-	}
-	return a.value < b.value
-}
-
-
-{{- end}}
-{{end}}

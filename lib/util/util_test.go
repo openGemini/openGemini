@@ -53,6 +53,13 @@ func TestMustClose(t *testing.T) {
 	util.MustClose(s)
 }
 
+func TestMustRun(t *testing.T) {
+	o := &closeObject{err: fmt.Errorf("some error")}
+	util.MustRun(o.Close)
+
+	util.MustRun(nil)
+}
+
 func BenchmarkIsObjectNil(b *testing.B) {
 	o := &closeObject{err: fmt.Errorf("some error")}
 	var s String

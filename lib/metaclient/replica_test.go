@@ -29,7 +29,7 @@ func TestReplicaInfoManager(t *testing.T) {
 	manager := client.GetReplicaInfoManager()
 	data := genMetaData()
 
-	manager.Update(data, 100)
+	manager.Update(data, 100, metaclient.STORE)
 	info := client.GetReplicaInfo("db0", 0)
 	require.NotEmpty(t, info)
 	require.Equal(t, uint64(100), info.Master.NodeId)
@@ -37,18 +37,22 @@ func TestReplicaInfoManager(t *testing.T) {
 	require.Equal(t, 1, len(info.Peers))
 	require.Equal(t, uint64(1001), info.Peers[0].GetSlaveShardID(1000))
 
-	manager.Update(data, 101)
+	manager.Update(data, 101, metaclient.STORE)
 	info = client.GetReplicaInfo("db0", 1)
 	require.NotEmpty(t, info)
 	require.Equal(t, uint64(100), info.Master.NodeId)
 	require.Equal(t, uint32(0), info.Master.PtId)
 
-	manager.Update(data, 102)
+	manager.Update(data, 102, metaclient.STORE)
 	info = manager.Get("db0", 2)
 	require.Empty(t, info)
 
-	manager.Update(data, 103)
+	manager.Update(data, 103, metaclient.STORE)
 	info = manager.Get("db0", 3)
+	require.Empty(t, info)
+
+	manager.Update(data, 104, metaclient.SQL)
+	info = manager.Get("db0", 4)
 	require.Empty(t, info)
 }
 

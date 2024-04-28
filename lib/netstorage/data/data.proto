@@ -79,6 +79,8 @@ message ShowTagValuesRequest {
     repeated uint32 PtIDs        = 2;
     repeated MapTagKeys TagKeys  = 3;
     optional string Condition    = 4;
+    optional int32 Limit         = 5;
+    optional bool Disorder       = 6;
 }
 
 message ShowTagValuesResponse {
@@ -140,4 +142,14 @@ message SegregateNodeRequest {
 
 message SegregateNodeResponse {
     optional string Err = 1;
+}
+
+message RaftMessagesRequest {
+    optional string Database = 1;
+    optional uint32 PtId = 2;
+    optional bytes RaftMessages = 3;
+}
+
+message RaftMessagesResponse {
+    optional string ErrMsg = 1;
 }

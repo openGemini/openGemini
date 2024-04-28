@@ -28,11 +28,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/flight"
-	"github.com/apache/arrow/go/arrow/ipc"
-	"github.com/apache/arrow/go/arrow/memory"
-	"github.com/influxdata/influxdb/models"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/flight"
+	"github.com/apache/arrow/go/v13/arrow/ipc"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -54,7 +53,7 @@ const (
 )
 
 type RecordWriter interface {
-	RetryWriteRecord(database, retentionPolicy, measurement string, rec array.Record) error
+	RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error
 }
 
 type FlightMetaClient interface {
@@ -63,7 +62,6 @@ type FlightMetaClient interface {
 	User(username string) (meta.User, error)
 	AdminUserExists() bool
 	DataNodes() ([]meta.DataNode, error)
-	ShowShards() models.Rows
 }
 
 // Service is that the protocol of arrow flight must satisfy 4 constraints.
@@ -83,7 +81,7 @@ type Service struct {
 	MetaClient FlightMetaClient
 
 	RecordWriter interface {
-		RetryWriteRecord(database, retentionPolicy, measurement string, rec array.Record) error
+		RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error
 	}
 }
 
@@ -97,12 +95,14 @@ func NewService(c config.Config) (*Service, error) {
 	} else {
 		maxRecvMsgSize = c.MaxBodySize
 	}
-	server := flight.NewServerWithMiddleware(authHandler, nil, grpc.MaxRecvMsgSize(maxRecvMsgSize))
+
+	server := flight.NewServerWithMiddleware(nil, grpc.MaxRecvMsgSize(maxRecvMsgSize))
+	writer.SetAuthHandler(authHandler)
+	server.RegisterFlightService(writer)
 	if err := server.Init(c.FlightAddress); err != nil {
 		sLogger.Error("arrow flight service start failed", zap.Error(err))
 		return nil, err
 	}
-	server.RegisterFlightService(writer.service)
 	sLogger.Info("arrow flight service start successfully")
 	return &Service{
 		server:      server,
@@ -257,18 +257,17 @@ type MetaData struct {
 
 type writeServer struct {
 	RecordWriter
-	mem     memory.Allocator
-	logger  *logger.Logger
-	service *flight.FlightServiceService
+	mem    memory.Allocator
+	logger *logger.Logger
+	flight.BaseFlightServer
 }
 
 func NewWriteServer(logger *logger.Logger) *writeServer {
 	writer := &writeServer{
-		mem:     memory.NewGoAllocator(),
-		logger:  logger,
-		service: &flight.FlightServiceService{},
+		mem:              memory.NewGoAllocator(),
+		logger:           logger,
+		BaseFlightServer: flight.BaseFlightServer{},
 	}
-	writer.service.DoPut = writer.DoPut
 	return writer
 }
 

@@ -53,6 +53,34 @@ func (o *CreateNodeRequest) Instance() transport.Codec {
 	return &CreateNodeRequest{}
 }
 
+func (o *CreateSqlNodeRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendString(buf, o.HttpHost)
+	buf = codec.AppendString(buf, o.GossipHost)
+	return buf, nil
+}
+
+func (o *CreateSqlNodeRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.HttpHost = dec.String()
+	o.GossipHost = dec.String()
+
+	return nil
+}
+
+func (o *CreateSqlNodeRequest) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.HttpHost)
+	size += codec.SizeOfString(o.GossipHost)
+	return size
+}
+
+func (o *CreateSqlNodeRequest) Instance() transport.Codec {
+	return &CreateSqlNodeRequest{}
+}
+
 func (o *CreateNodeResponse) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendBytes(buf, o.Data)
 	buf = codec.AppendString(buf, o.Err)
@@ -82,6 +110,37 @@ func (o *CreateNodeResponse) Size() int {
 
 func (o *CreateNodeResponse) Instance() transport.Codec {
 	return &CreateNodeResponse{}
+}
+
+func (o *CreateSqlNodeResponse) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, nil
+}
+
+func (o *CreateSqlNodeResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return nil
+}
+
+func (o *CreateSqlNodeResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *CreateSqlNodeResponse) Instance() transport.Codec {
+	return &CreateSqlNodeResponse{}
 }
 
 func (o *ExecuteRequest) Marshal(buf []byte) ([]byte, error) {
@@ -526,6 +585,66 @@ func (o *SnapshotResponse) Size() int {
 
 func (o *SnapshotResponse) Instance() transport.Codec {
 	return &SnapshotResponse{}
+}
+
+func (o *SnapshotV2Request) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendInt(buf, o.Role)
+	buf = codec.AppendUint64(buf, o.Index)
+	buf = codec.AppendUint64(buf, o.Id)
+	return buf, nil
+}
+
+func (o *SnapshotV2Request) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.Role = dec.Int()
+	o.Index = dec.Uint64()
+	o.Id = dec.Uint64()
+	return nil
+}
+
+func (o *SnapshotV2Request) Size() int {
+	size := 0
+	size += codec.SizeOfInt()
+	size += codec.SizeOfUint64()
+	size += codec.SizeOfUint64()
+	return size
+}
+
+func (o *SnapshotV2Request) Instance() transport.Codec {
+	return &SnapshotV2Request{}
+}
+
+func (o *SnapshotV2Response) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, nil
+}
+
+func (o *SnapshotV2Response) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.Err = dec.String()
+
+	return nil
+}
+
+func (o *SnapshotV2Response) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *SnapshotV2Response) Instance() transport.Codec {
+	return &SnapshotV2Response{}
 }
 
 func (o *UpdateRequest) Marshal(buf []byte) ([]byte, error) {

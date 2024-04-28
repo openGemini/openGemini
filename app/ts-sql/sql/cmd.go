@@ -23,13 +23,13 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 )
 
-func NewCommand(info app.ServerInfo) *app.Command {
+func NewCommand(info app.ServerInfo, enableGossip bool) *app.Command {
 	cmd := app.NewCommand()
 	cmd.Info = info
 	cmd.Logo = app.SQLLOGO
 	cmd.Version = info.FullVersion()
 	cmd.Usage = fmt.Sprintf(app.RunUsage, info.App, info.App)
-	cmd.Config = config.NewTSSql()
+	cmd.Config = config.NewTSSql(enableGossip)
 	cmd.NewServerFunc = NewServer
 
 	return cmd

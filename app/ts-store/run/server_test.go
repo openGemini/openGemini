@@ -258,20 +258,6 @@ func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration)
 	panic("implement me")
 }
 
-func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (client *MockMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (client *MockMetaClient) GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error) {
-	return nil, nil
-}
-
 func (client *MockMetaClient) UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error {
 	return nil
 }
@@ -288,8 +274,8 @@ func (client *MockMetaClient) DropStream(name string) error {
 	return nil
 }
 
-func (client *MockMetaClient) OpenAtStore() {
-	return
+func (client *MockMetaClient) OpenAtStore() error {
+	return nil
 }
 
 func (client *MockMetaClient) UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error {
@@ -304,7 +290,7 @@ func (client *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint3
 	panic("implement me")
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation,
 	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
@@ -439,7 +425,7 @@ func (client *MockMetaClient) MatchMeasurements(database string, ms influxql.Mea
 func (client *MockMetaClient) Measurements(database string, ms influxql.Measurements) ([]string, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) ShowShards() models.Rows {
+func (client *MockMetaClient) ShowShards(db string, rp string, mst string) models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowShardGroups() models.Rows {

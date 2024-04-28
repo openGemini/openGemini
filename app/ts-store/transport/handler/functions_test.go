@@ -29,7 +29,7 @@ func TestParseTagKeyCondition(t *testing.T) {
 		t.Fatalf("%v \n", err)
 	}
 
-	exp := `val::tag = '100' AND ((a::tag = 'abc' OR b::tag = '1.100000000' OR c::tag =~ /.*/) AND d::tag = e::tag OR f::tag = 'false' OR g::tag = 'true')`
+	exp := `val::tag = '100' AND ((a::tag = 'abc' OR b::tag = '1.1' OR c::tag =~ /.*/) AND d::tag = e::tag OR f::tag = 'false' OR g::tag = 'true')`
 
 	if condition.String() != exp {
 		t.Fatalf("parse tag key condition failed, \n exp: %s, \n got: %s \n", exp, condition.String())

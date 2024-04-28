@@ -140,6 +140,12 @@ func UnrefFiles(files ...TSSPFile) {
 	}
 }
 
+func UnrefFilesReader(files ...TSSPFile) {
+	for _, f := range files {
+		f.UnrefFileReader()
+	}
+}
+
 var (
 	_ TablesStore = (*MmsTables)(nil)
 )

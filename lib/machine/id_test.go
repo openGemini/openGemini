@@ -45,6 +45,13 @@ func TestMachineID(t *testing.T) {
 	assert.Equal(t, id&0xffff, uint64(8433), "invalid port")
 	assert.Equal(t, buf[2:6], []byte{127, 0, 0, 1}, "invalid ip")
 
+	// test double ipv4
+	machine.InitMachineID("127.0.0.1:8433,127.0.0.2:8635")
+	id = machine.GetMachineID()
+	binary.BigEndian.PutUint64(buf[:], id)
+	assert.Equal(t, id&0xffff, uint64(8433), "invalid port")
+	assert.Equal(t, buf[2:6], []byte{127, 0, 0, 1}, "invalid ip")
+
 	// test ipv6
 	machine.InitMachineID("[ff88::ff88:3eff:fe5b:3611]:8844")
 	id = machine.GetMachineID()
