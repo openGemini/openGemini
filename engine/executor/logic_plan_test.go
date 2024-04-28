@@ -764,3 +764,114 @@ func TestLogicalIncHashAgg(t *testing.T) {
 		t.Error("wrong result")
 	}
 }
+
+func TestNewLogicalBinOp(t *testing.T) {
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	leftSubquery := executor.NewLogicalSubQuery(node, schema)
+	rightSubquery := executor.NewLogicalSubQuery(node, schema)
+	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, nil, schema)
+	binOpClone := binOp.Clone()
+	if binOpClone.Type() != binOp.Type() {
+		t.Fatal("wrong type result")
+	}
+	if len(binOp.Children()) != 2 {
+		t.Fatal("wrong children len result")
+	}
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	binOp.Explain(planWriter)
+	if binOp.Digest() == "" {
+		t.Fatal("wrong Digest result")
+	}
+	binOp.ReplaceChild(0, nil)
+	binOp.ReplaceChild(1, nil)
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
+	if binOp.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
+	}
+	binOpClone.DeriveOperations()
+	if binOp.New(nil, nil, nil) != nil {
+		t.Fatal("wrong new result")
+	}
+}
+
+func TestBuildBinOpPlan(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	stmt := &influxql.SelectStatement{
+		Fields: fields,
+		Sources: []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}},
+			&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}},
+		BinOpSource: []*influxql.BinOp{&influxql.BinOp{}},
+	}
+	schema := createQuerySchema()
+
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt.Sources[0].(*influxql.SubQuery).Statement.Dimensions = append(stmt.Sources[0].(*influxql.SubQuery).Statement.Dimensions, &influxql.Dimension{Expr: &influxql.Call{Name: "time"}})
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err == nil {
+		t.Fatal("TestBuildBinOpPlan error1")
+	}
+	stmt.Sources = nil
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err != nil {
+		t.Fatal("TestBuildBinOpPlan error3")
+	}
+	stmt.BinOpSource = nil
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err == nil {
+		t.Fatal("TestBuildBinOpPlan error2")
+	}
+}
+
+func Test_BuildFullJoinQueryPlant(t *testing.T) {
+	fields := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "m1.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+		{Expr: &influxql.VarRef{Val: "m2.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+	}
+	sub_query_fields_1 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Float, Alias: ""}, Alias: "m1.f1"},
+	}
+
+	sub_query_fields_2 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Float, Alias: ""}, Alias: "m2.f1"},
+	}
+
+	sub_query_fields_3 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Unknown, Alias: ""}, Alias: ""},
+	}
+
+	sources := []influxql.Source{
+		&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_1, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m1"},
+		&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_2, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m2"},
+	}
+	joincases := []*influxql.Join{
+		{
+			LSrc:      &influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_3, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m1"},
+			RSrc:      &influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_3, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m2"},
+			Condition: &influxql.BinaryExpr{},
+		},
+	}
+	unsets := []*influxql.Unnest{}
+	clonames := []string{"tk1", "f1"}
+
+	stmt := &influxql.SelectStatement{
+		Fields:     fields,
+		Sources:    sources,
+		JoinSource: joincases,
+	}
+	opt := query.ProcessorOptions{}
+
+	schema := executor.NewQuerySchemaWithJoinCase(fields, sources, clonames, &opt, joincases, unsets, nil)
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"f1": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildFullJoinQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal("TestBuildFullJoinQueryPlan error")
+	}
+}

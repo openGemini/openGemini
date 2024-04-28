@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/huaweicloud/huaweicloud-sdk-go-obs/obs"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/stretchr/testify/assert"
 )
@@ -180,7 +181,8 @@ func TestMockObsFile_StreamReadBatch(t *testing.T) {
 	offs := []int64{0, 2, 5, 8}
 	sizes := []int64{2, 2, 2, 2}
 	ch := make(chan *request.StreamReader, 2)
-	go fd.StreamReadBatch(offs, sizes, 2, ch, -1)
+	config.SetProductType(config.LogKeeperService)
+	go fd.StreamReadBatch(offs, sizes, 2, ch, -1, true)
 	result := make(map[int64][]byte)
 	result[0] = []byte{1, 2}
 	result[2] = []byte{3, 4}
@@ -430,6 +432,36 @@ func TestMockObsFs_CopyFile(t *testing.T) {
 	assert.Equal(t, []byte("hello"), read)
 }
 
+func TestMockObsFs_RenameFile(t *testing.T) {
+	oldName := "test_obs_fs_rename_file_old.txt"
+	newName := "test_obs_fs_rename_file_new.txt"
+	oldPath := EncodeObsPath(mockObsConf.endpoint, mockObsConf.bucket, oldName, mockObsConf.ak, mockObsConf.sk)
+	newPath := EncodeObsPath(mockObsConf.endpoint, mockObsConf.bucket, newName, mockObsConf.ak, mockObsConf.sk)
+
+	fs, _ := testFs()
+	err := fs.RenameFile(oldPath, newPath)
+	assert.Nil(t, err)
+}
+
+func TestMockObsFs_IsObsFile(t *testing.T) {
+	name := "test_obs_fs_isObs_file.txt"
+	fs, _ := testFs()
+	_, err := fs.IsObsFile(name)
+	assert.NotNil(t, err)
+
+	path := EncodeObsPath(mockObsConf.endpoint, mockObsConf.bucket, name, mockObsConf.ak, mockObsConf.sk)
+	_, err = fs.IsObsFile(path)
+	assert.Nil(t, err)
+}
+
+func TestMockObsFs_RemoveLocal(t *testing.T) {
+	name := "test_obs_fs_remove_local.txt"
+	path := EncodeObsPath(mockObsConf.endpoint, mockObsConf.bucket, name, mockObsConf.ak, mockObsConf.sk)
+	fs, _ := testFs()
+	err := fs.RemoveLocal(path)
+	assert.Nil(t, err)
+}
+
 type mockObsClient struct {
 	mockErr bool
 	dummy   map[string][]byte
@@ -529,6 +561,10 @@ func (m *mockObsClient) GetObjectMetadata(input *obs.GetObjectMetadataInput) (*o
 	}
 }
 
+func (m *mockObsClient) IsObsFile(input *obs.HeadObjectInput) (output *obs.BaseModel, err error) {
+	return nil, nil
+}
+
 func (m *mockObsClient) Do(r *http.Request) (*http.Response, error) {
 	if m.mockErr {
 		return nil, fmt.Errorf("mock error")
@@ -565,6 +601,13 @@ func (m *mockObsClient) Do(r *http.Request) (*http.Response, error) {
 		resp := w.Result()
 		return resp, nil
 	}
+}
+
+func (m *mockObsClient) RenameFile(input *obs.RenameFileInput) (*obs.RenameFileOutput, error) {
+	if m.mockErr {
+		return nil, fmt.Errorf("mock error")
+	}
+	return &obs.RenameFileOutput{}, nil
 }
 
 func newBody(b []byte) *body {

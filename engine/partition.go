@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
@@ -61,6 +62,9 @@ type PtNNLock struct {
 type DBPTInfo struct {
 	//lint:ignore U1000 use for replication feature
 	replicaInfo *message.ReplicaInfo
+
+	//lint:ignore U1000 use for replication feature
+	node raftNodeRequest
 
 	mu       sync.RWMutex
 	database string
@@ -93,9 +97,10 @@ type DBPTInfo struct {
 	sequenceID          uint64
 	lockPath            *string
 	enableTagArray      bool
+	fileInfos           chan []immutable.FileInfoExtend
 }
 
-func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx) *DBPTInfo {
+func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx, ch chan []immutable.FileInfoExtend) *DBPTInfo {
 	return &DBPTInfo{
 		database:            db,
 		id:                  id,
@@ -116,6 +121,7 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 		wg:                  &sync.WaitGroup{},
 		sequenceID:          uint64(time.Now().Unix()),
 		bgrEnabled:          true,
+		fileInfos:           ch,
 	}
 }
 
@@ -490,7 +496,7 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 			indexBuilder.Relations[uint32(idxType)] = indexRelation
 		}
 	}
-	err = indexBuilder.Open()
+
 	dbPT.mu.Unlock()
 
 	if err != nil {
@@ -544,9 +550,9 @@ func (dbPT *DBPTInfo) preloadProcess(opId uint64, thermalShards map[uint64]struc
 
 	engineType := config.EngineType(durationInfos[shardId].Ident.EngineType)
 
-	sh := NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType)
+	sh := NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType, dbPT.fileInfos)
 	sh.opId = opId
-	sh.storage.SetClient(client)
+	sh.SetClient(client)
 
 	start := time.Now()
 	statistics.ShardTaskInit(sh.opId, sh.GetIdent().OwnerDb, sh.GetIdent().OwnerPt, sh.GetRPName(), sh.GetID())
@@ -580,9 +586,9 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 	dbPT.mu.RUnlock()
 	if !ok {
 		engineType := config.EngineType(durationInfos[shardId].Ident.EngineType)
-		sh = NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType)
+		sh = NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType, dbPT.fileInfos)
 		sh.opId = opId
-		sh.storage.SetClient(client)
+		sh.SetClient(client)
 	}
 	if sh.indexBuilder != nil && sh.downSampleEnabled() {
 		return sh, nil
@@ -602,18 +608,17 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 		return nil, err
 	}
 
-	// column store load mstsInfo
+	mstsInfo, err := client.GetMeasurements(&influxql.Measurement{Database: sh.ident.OwnerDb, RetentionPolicy: sh.ident.Policy})
+	if err != nil {
+		return nil, err
+	}
 	if sh.engineType == config.COLUMNSTORE {
-		mstsInfo, err := client.GetMeasurementsInfoStore(sh.ident.OwnerDb, sh.ident.Policy)
-		if err != nil {
-			return nil, err
-		}
-		d := NewDetachedMetaInfo()
-		for _, mstInfo := range mstsInfo.MstsInfo {
+		for _, mstInfo := range mstsInfo {
 			if mstInfo.EngineType != config.COLUMNSTORE {
 				continue
 			}
-			if mstInfo.IsDetachedWrite() {
+			d := NewDetachedMetaInfo()
+			if immutable.GetDetachedFlushEnabled() {
 				err = checkAndTruncateDetachedFiles(d, mstInfo, sh)
 				if err != nil {
 					return nil, err
@@ -621,18 +626,26 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 			}
 			sh.SetMstInfo(mstInfo)
 		}
-		sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
-		sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 		// Load the row count of each measurement.
-		for _, mst := range mstsInfo.MstsInfo {
-			rowCount, err1 := mutable.LoadMstRowCount(path.Join(sh.dataPath, immutable.ColumnStoreDirName, mst.Name, immutable.CountBinFile))
-			if err1 != nil {
-				sh.log.Error("load row count failed", zap.Uint64("shard", sh.GetID()), zap.String("mst", mst.OriginName()), zap.Error(err1))
+		for _, mst := range mstsInfo {
+			mstPath := path.Join(sh.dataPath, immutable.ColumnStoreDirName, mst.Name)
+			_, err := os.Stat(mstPath)
+			if os.IsNotExist(err) {
+				continue
+			}
+			rowCount, err := mutable.LoadMstRowCount(path.Join(mstPath, immutable.CountBinFile))
+			if err != nil {
+				sh.log.Error("load row count failed", zap.Uint64("shard", sh.GetID()), zap.String("mst", mst.OriginName()), zap.Error(err))
 			}
 			rowCountPtr := int64(rowCount)
 			sh.msRowCount.Store(mst.Name, &rowCountPtr)
 		}
+	}
+	if len(mstsInfo) > 0 {
+		sh.SetObsOption(mstsInfo[0].ObsOptions)
 	}
 
 	if _, ok = thermalShards[sh.ident.ShardID]; ok || !dbPT.opt.LazyLoadShardEnable {
@@ -778,8 +791,8 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		return nil, err
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: shardID, Policy: rp, OwnerDb: dbPT.database, OwnerPt: dbPT.id}
-	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt, engineType)
-	sh.storage.SetClient(client)
+	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt, engineType, dbPT.fileInfos)
+	sh.SetClient(client)
 
 	sh.indexBuilder = indexBuilder
 
@@ -799,8 +812,8 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		return nil, err
 	}
 	if sh.engineType == config.COLUMNSTORE {
-		sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
-		sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+		sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 	}
 	return sh, err
 }
@@ -845,6 +858,9 @@ func (dbPT *DBPTInfo) closeDBPt() error {
 			dbPT.logger.Error("close index fail", zap.Uint64("id", id), zap.Error(err))
 			return err
 		}
+	}
+	if dbPT.node != nil {
+		dbPT.node.Stop()
 	}
 	dbPT.mu.Unlock()
 	d = time.Since(start)
@@ -929,11 +945,12 @@ func (dbPT *DBPTInfo) disableDBPtBgr() error {
 }
 
 func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
-	shardIds := dbPT.ShardIds()
+	shardIds := dbPT.ShardIds(nil)
+	dbPT.logger.Info("set shard compaction merge and downsample tasks", zap.Bool("enabled", enabled), zap.Int("shards", len(shardIds)))
 
 	for _, id := range shardIds {
 		dbPT.mu.RLock()
-		sh, ok := dbPT.shards[id].(*shard)
+		sh, ok := dbPT.shards[id]
 		dbPT.mu.RUnlock()
 		if !ok {
 			continue
@@ -948,12 +965,32 @@ func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
 	}
 }
 
-func (dbPT *DBPTInfo) ShardIds() []uint64 {
+func (dbPT *DBPTInfo) ShardIds(tr *influxql.TimeRange) []uint64 {
 	var shardIds []uint64
 	dbPT.mu.RLock()
-	for id := range dbPT.shards {
-		shardIds = append(shardIds, id)
+	for id, sh := range dbPT.shards {
+		if tr == nil || sh.Intersect(tr) {
+			shardIds = append(shardIds, id)
+		}
 	}
 	dbPT.mu.RUnlock()
 	return shardIds
+}
+
+func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard)) {
+	dbPT.ref()
+	defer dbPT.unref()
+
+	shardIDs := dbPT.ShardIds(tr)
+
+	for _, id := range shardIDs {
+		dbPT.mu.RLock()
+		sh, ok := dbPT.shards[id]
+		dbPT.mu.RUnlock()
+		if !ok {
+			continue
+		}
+
+		callback(sh)
+	}
 }

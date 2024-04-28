@@ -62,8 +62,8 @@ func NewIndexContext(readBatch bool, batchCount int, schema hybridqp.Catalog, sh
 		readSegmentBatch:  readBatch,
 		segmentBatchCount: batchCount,
 		shardPath:         shardPath,
-		pkIndexReader:     sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
-		skIndexReader:     sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
+		pkIndexReader:     sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
+		skIndexReader:     sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
 		schema:            schema,
 		tr:                util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()},
 		log:               logger.NewLogger(errno.ModuleIndex),
@@ -176,8 +176,8 @@ func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions) *detac
 func (r *detachedIndexReader) Init() (err error) {
 	mst := r.ctx.schema.Options().GetMeasurements()[0]
 	r.dataPath = obs.GetBaseMstPath(r.ctx.shardPath, mst.Name)
-	if immutable.GetColStoreConfig().GetDetachedFlushEnabled() {
-		r.localPath = obs.GetLocalMstPath(immutable.GetPrefixDataPath(), r.dataPath)
+	if immutable.GetDetachedFlushEnabled() {
+		r.localPath = obs.GetLocalMstPath(obs.GetPrefixDataPath(), r.dataPath)
 	}
 	chunkCount, err := immutable.GetMetaIndexChunkCount(r.obsOptions, r.dataPath)
 	if err != nil {
@@ -193,37 +193,10 @@ func (r *detachedIndexReader) Init() (err error) {
 	if err != nil {
 		return
 	}
-
-	// init the obs pk meta info reader
-	pkMetaInfoReader, err := immutable.NewDetachedPKMetaInfoReader(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-	pkMetaInfo, err := pkMetaInfoReader.Read()
-	if err != nil {
-		return
-	}
-
-	// init the obs pk meta reader
-	pkMetaReader, err := immutable.NewDetachedPKMetaReader(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-
-	// init the obs pk data reader
-	pkDataReader, err := immutable.NewDetachedPKDataReader(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-	pkDataReader.SetPkMetaInfo(pkMetaInfo)
+	defer metaIndexReader.Close()
 
 	var miChunkIds []int64
 	var miFiltered []*immutable.MetaIndex
-
-	// init the pk meta variables
-	var pkMetas []*colstore.DetachedPKMeta
-	var pkDatas []*colstore.DetachedPKData
-	var pkItems []*colstore.DetachedPKInfo
 
 	// step1: init the meta index
 	offsets, lengths := make([]int64, 0, chunkCount), make([]int64, 0, chunkCount)
@@ -247,12 +220,17 @@ func (r *detachedIndexReader) Init() (err error) {
 	}
 
 	// step2: init the pk items
+	pkMetaInfo, err := immutable.ReadPKMetaInfoAll(r.dataPath, r.obsOptions)
+	if err != nil {
+		return
+	}
+
 	offsets, lengths = offsets[:0], lengths[:0]
 	for _, chunkId := range miChunkIds {
 		offset, length := immutable.GetPKMetaOffsetLengthByChunkId(pkMetaInfo, int(chunkId))
 		offsets, lengths = append(offsets, offset), append(lengths, length)
 	}
-	pkMetas, err = pkMetaReader.Read(offsets, lengths)
+	pkMetas, err := immutable.ReadPKMetaAll(r.dataPath, r.obsOptions, offsets, lengths)
 	if err != nil {
 		return err
 	}
@@ -260,10 +238,11 @@ func (r *detachedIndexReader) Init() (err error) {
 	for i := range pkMetas {
 		offsets, lengths = append(offsets, int64(pkMetas[i].Offset)), append(lengths, int64(pkMetas[i].Length))
 	}
-	pkDatas, err = pkDataReader.Read(offsets, lengths, pkMetas)
+	pkDatas, err := immutable.ReadPKDataAll(r.dataPath, r.obsOptions, offsets, lengths, pkMetas, pkMetaInfo)
 	if err != nil {
 		return err
 	}
+	var pkItems []*colstore.DetachedPKInfo
 	for i := range pkDatas {
 		pkItems = append(pkItems, colstore.GetPKInfoByPKMetaData(pkMetas[i], pkDatas[i], pkMetaInfo.TCLocation))
 	}

@@ -17,6 +17,10 @@ limitations under the License.
 package colstore
 
 import (
+	"io"
+	"os"
+
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
@@ -64,9 +68,11 @@ func (c *indexWriter) WriteData(b []byte) (int, error) {
 
 	return n, nil
 }
+
 func (c *indexWriter) WriteChunkMeta(b []byte) (int, error) {
 	panic("WriteChunkMeta not implement for indexWriter") // no chunk meta for colStore
 }
+
 func (c *indexWriter) Close() error {
 	if c.fileWriter != nil {
 		if err := c.fileWriter.Close(); err != nil {
@@ -84,27 +90,84 @@ func (c *indexWriter) Close() error {
 
 	return nil
 }
+
 func (c *indexWriter) DataSize() int64 {
 	return c.num
 }
+
 func (c *indexWriter) ChunkMetaSize() int64 {
 	panic("ChunkMetaSize not implement for indexWriter")
 }
+
 func (c *indexWriter) ChunkMetaBlockSize() int64 {
 	return 0
 }
+
 func (c *indexWriter) GetFileWriter() fileops.BasicFileWriter {
 	return c.fileWriter
 }
+
 func (c *indexWriter) AppendChunkMetaToData() error {
 	panic("AppendChunkMetaToData not implement for indexWriter")
 }
+
 func (c *indexWriter) SwitchMetaBuffer() (int, error) {
 	panic("SwitchMetaBuffer not implement for indexWriter")
 }
+
 func (c *indexWriter) MetaDataBlocks(dst [][]byte) [][]byte {
 	panic("MetaDataBlocks not implement for indexWriter")
 }
+
 func (c *indexWriter) Name() string {
 	return c.fd.Name()
+}
+
+type IndexWriter struct {
+	fd     fileops.File
+	writer fileops.FileWriter
+	log    *Log.Logger
+}
+
+func NewIndexWriter(lockPath *string, filePath string) (*IndexWriter, error) {
+	indexWriter := &IndexWriter{}
+	var err error
+	lock := fileops.FileLockOption(*lockPath)
+	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
+	indexWriter.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640, lock, pri)
+	if err != nil {
+		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
+		return nil, err
+	}
+	indexWriter.log = Log.NewLogger(errno.ModuleCompact).SetZapLogger(log)
+	indexWriter.writer = newIndexWriter(indexWriter.fd, lockPath)
+	return indexWriter, nil
+}
+
+func (b *IndexWriter) WriteData(data []byte) error {
+	var num int
+	var err error
+	if num, err = b.writer.WriteData(data); err != nil {
+		err = errno.NewError(errno.WriteFileFailed, err)
+		b.log.Error("write chunk data fail", zap.Error(err))
+		return err
+	}
+
+	if num != len(data) {
+		b.log.Error("write chunk data fail", zap.String("file", b.fd.Name()),
+			zap.Int("size", num))
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func (b *IndexWriter) Reset() {
+	if b.writer != nil {
+		_ = b.writer.Close()
+		b.writer = nil
+	}
+	if b.fd != nil {
+		_ = b.fd.Close()
+		b.fd = nil
+	}
 }

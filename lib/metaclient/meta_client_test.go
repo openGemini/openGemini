@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,9 @@ func init() {
 type RPCServer struct {
 	err      error
 	metaData *meta2.Data
+	ops      []string
+	NodeId   uint64
+	NoClear  bool
 }
 
 func (c *RPCServer) Abort() {
@@ -61,6 +65,10 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 		return c.HandleSnapshot(w, msg)
 	case *message.CreateNodeRequest:
 		return c.HandleCreateNode(w, msg)
+	case *message.SnapshotV2Request:
+		return c.HandleSnapshotV2(w, msg)
+	case *message.CreateSqlNodeRequest:
+		return c.HandleCreateSqlNode(w, msg)
 	}
 	return nil
 }
@@ -78,6 +86,48 @@ func (c *RPCServer) HandleSnapshot(w spdy.Responser, msg *message.SnapshotReques
 		rsp.Err = server.err.Error()
 	}
 	return w.Response(message.NewMetaMessage(message.SnapshotResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleSnapshotV2(w spdy.Responser, msg *message.SnapshotV2Request) error {
+	c.metaData = &meta2.Data{
+		Index: msg.Index + 1,
+	}
+	if len(c.ops) > 0 {
+		dataOps := meta2.NewDataOps(c.ops, 1, int(meta2.NoClear), msg.Index+uint64(len(c.ops)))
+		data := dataOps.Marshal()
+		rsp := &message.SnapshotV2Response{
+			Data: data,
+		}
+		return w.Response(message.NewMetaMessage(message.SnapshotV2ResponseMessage, rsp), true)
+	}
+	if c.NoClear {
+		dataOps := meta2.NewDataOps(nil, 1, int(meta2.NoClear), msg.Index+uint64(len(c.ops)))
+		data := dataOps.Marshal()
+		rsp := &message.SnapshotV2Response{
+			Data: data,
+		}
+		return w.Response(message.NewMetaMessage(message.SnapshotV2ResponseMessage, rsp), true)
+	}
+	dataPb := c.metaData.Marshal()
+	dataOps := meta2.NewDataOpsOfAllClear(int(meta2.AllClear), dataPb, *dataPb.Index)
+	buf := dataOps.Marshal()
+	rsp := &message.SnapshotV2Response{
+		Data: buf,
+	}
+	if server.err != nil {
+		rsp.Err = server.err.Error()
+	}
+	return w.Response(message.NewMetaMessage(message.SnapshotV2ResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleCreateSqlNode(w spdy.Responser, msg *message.CreateSqlNodeRequest) error {
+	nodeStartInfo := meta2.NodeStartInfo{}
+	nodeStartInfo.NodeId = c.NodeId
+	buf, _ := nodeStartInfo.MarshalBinary()
+	rsp := &message.CreateSqlNodeResponse{
+		Data: buf,
+	}
+	return w.Response(message.NewMetaMessage(message.CreateSqlNodeResponseMessage, rsp), true)
 }
 
 func (c *RPCServer) HandleCreateNode(w spdy.Responser, msg *message.CreateNodeRequest) error {
@@ -496,10 +546,10 @@ func TestClient_CreateMeasurement(t *testing.T) {
 	schemaInfo := meta2.NewSchemaInfo(map[string]int32{"a": influx.Field_Type_Tag}, map[string]int32{"b": influx.Field_Type_Float})
 
 	options := &meta2.Options{Ttl: 1}
-	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, nil, options)
+	_, err := c.CreateMeasurement("db0", "rp0", "measurement", nil, 0, nil, config.COLUMNSTORE, colStoreInfo, nil, options)
 	require.EqualError(t, err, "execute command timeout")
 
-	_, err = c.CreateMeasurement("db0", "rp0", "measurement", nil, nil, config.COLUMNSTORE, colStoreInfo, schemaInfo, options)
+	_, err = c.CreateMeasurement("db0", "rp0", "measurement", nil, 0, nil, config.COLUMNSTORE, colStoreInfo, schemaInfo, options)
 	require.EqualError(t, err, "execute command timeout")
 }
 
@@ -680,14 +730,9 @@ func TestClient_Stream(t *testing.T) {
 	if len(infos) != 1 {
 		t.Fatal("not find stream infos")
 	}
-
-	infos = c.GetStreamInfosStore()
-	if len(infos) != 0 {
-		t.Fatal("query from store should not return value in ut")
-	}
 }
 
-func TestClient_MeasurementInfo(t *testing.T) {
+func TestClient_GetMeasurements(t *testing.T) {
 	c := &Client{
 		cacheData: &meta2.Data{
 			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
@@ -695,8 +740,13 @@ func TestClient_MeasurementInfo(t *testing.T) {
 				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
 				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
 					"rp0": {
-						Name:     "rp0",
-						Duration: 72 * time.Hour,
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"m1": &meta2.MeasurementInfo{Name: "m1"}},
+						MstVersions: map[string]meta2.MeasurementVer{"m1": {
+							NameWithVersion: "m1",
+							Version:         0,
+						}},
 					},
 				}}},
 		},
@@ -704,42 +754,25 @@ func TestClient_MeasurementInfo(t *testing.T) {
 		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
 		SendRPCMessage: &RPCMessageSender{},
 	}
-	_, err := c.GetMeasurementInfoStore("test", "rp0", "test")
+	ms, err := c.GetMeasurements(&influxql.Measurement{Database: "test", RetentionPolicy: "rp0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ms) != 1 {
+		t.Fatal(fmt.Sprintf("unexpect measurement %v", ms))
+	}
+	if ms[0].Name != "m1" {
+		t.Fatal(fmt.Sprintf("unexpect measurement %v", ms))
+	}
+	_, err = c.GetMeasurementInfoStore("test", "rp0", "test")
 	if err == nil {
 		t.Fatal("query from store should not return value in ut")
 	}
-}
-
-func TestClient_MeasurementsInfo(t *testing.T) {
-	address := "127.0.0.1:8492"
-	nodeId := 0
-	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
-
-	// Server
-	rrcServer, err := startServer(address)
-	if err != nil {
-		t.Fatalf("%v", err)
+	_, err = c.RetryMeasurement("test", "rp0", "test")
+	if err == nil {
+		t.Fatal("query from store should not return value in ut")
 	}
-	defer rrcServer.Stop()
-	time.Sleep(time.Second)
-
-	c := &Client{
-		cacheData: &meta2.Data{
-			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
-				Name:     "test",
-				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
-				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-					"rp0": {
-						Name:     "rp0",
-						Duration: 72 * time.Hour,
-					},
-				}}},
-		},
-		metaServers:    []string{"127.0.0.1:8092"},
-		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		SendRPCMessage: &RPCMessageSender{},
-	}
-	_, err = c.GetMeasurementsInfoStore("test", "rp0")
+	_, err = c.RetryMeasurement("test", "rp0", "m1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,14 +1052,15 @@ func TestCreateMeasurement(t *testing.T) {
 					},
 				}}},
 		},
-		metaServers: []string{"127.0.0.1:8092"},
-		logger:      logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		metaServers:    []string{"127.0.0.1:8092"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
 	}
 	var err error
 	invalidMst := []string{"", "/111", ".", "..", "bbb\\aaa", string([]byte{'m', 's', 't', 0, '_', '0', '0'})}
 
 	for _, mst := range invalidMst {
-		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, nil, config.TSSTORE, nil, nil, nil)
+		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, 0, nil, config.TSSTORE, nil, nil, nil)
 		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
 	}
 
@@ -1127,15 +1161,54 @@ func TestInitMetaClient(t *testing.T) {
 		SendRPCMessage: &RPCMessageSender{},
 	}
 
-	_, _, _, err = mc.InitMetaClient(nil, true, nil, "")
+	_, _, _, err = mc.InitMetaClient(nil, true, nil, nil, "", STORE)
 	if err == nil {
 		t.Fatalf("fail")
 	}
 	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
 	info := &StorageNodeInfo{"127.0.0.5:8081", "127.0.0.5:8082"}
-	_, _, _, err = mc.InitMetaClient(joinPeers, true, info, "")
+	_, _, _, err = mc.InitMetaClient(joinPeers, true, info, nil, "", STORE)
 	if err != nil {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestInitMetaClientForSql(t *testing.T) {
+	address := "127.0.0.1:8496"
+	nodeId := 0
+	transport.NewMetaNodeManager().Clear()
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": &meta2.DatabaseInfo{
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		UseSnapshotV2:  true,
+	}
+
+	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
+	info := &SqlNodeInfo{"127.0.0.5:8086", "127.0.0.5:8086"}
+	server.NodeId = 234
+	if nid, clock, connId, err := mc.InitMetaClient(joinPeers, true, nil, info, "", SQL); err != nil {
+		t.Fatalf("%v %d %d %d", err, nid, clock, connId)
 	}
 }
 
@@ -1841,5 +1914,1271 @@ func TestClient_ShowCluster(t *testing.T) {
 				t.Fatalf("wrong column values %s %s", row3[0].Values[j][i], values3[j][i-1])
 			}
 		}
+	}
+}
+
+func TestCheckAndUpdateReplication(t *testing.T) {
+	type args struct {
+		dbReplicaN uint32
+		rpReplicaN *int
+	}
+
+	config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+
+	oneReplication := 1
+	twoReplication := 2
+	threeReplication := 3
+	fourReplication := 4
+
+	tests := []struct {
+		name    string
+		args    args
+		want    uint32
+		want1   *int
+		wantErr bool
+	}{
+		{
+			name: "Test with both dbReplicaN and rpReplicaN as 0",
+			args: args{
+				dbReplicaN: 0,
+				rpReplicaN: nil,
+			},
+			want:    1,
+			want1:   &oneReplication,
+			wantErr: false,
+		},
+		{
+			name: "Test with dbReplicaN as not 0 and rpReplicaN as nil",
+			args: args{
+				dbReplicaN: 3,
+				rpReplicaN: nil,
+			},
+			want:    3,
+			want1:   &threeReplication,
+			wantErr: false,
+		},
+		{
+			name: "Test with dbReplicaN and rpReplicaN not equal",
+			args: args{
+				dbReplicaN: 2,
+				rpReplicaN: nil,
+			},
+			want:    2,
+			want1:   &twoReplication,
+			wantErr: true,
+		},
+		{
+			name: "Test with dbReplicaN is even",
+			args: args{
+				dbReplicaN: 4,
+				rpReplicaN: nil,
+			},
+			want:    4,
+			want1:   &fourReplication,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1, err := checkAndUpdateReplication(tt.args.dbReplicaN, tt.args.rpReplicaN)
+			require.Equalf(t, tt.wantErr, err != nil, "checkAndUpdateReplication() error = %v, wantErr %v", err, tt.wantErr)
+			assert.Equal(t, tt.want, got, "checkAndUpdateReplication() got = %v, want %v", got, tt.want)
+			assert.Equal(t, tt.want1, got1, "checkAndUpdateReplication() got1 = %v, want %v", got1, tt.want1)
+		})
+	}
+}
+
+func MocTestCacheData(dbName, logStreamName string) (*meta2.Data, error) {
+	data := &meta2.Data{PtNumPerNode: 1}
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
+
+	if err := data.CreateDatabase(dbName, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
+		return nil, err
+	}
+	if err := data.CreateDBPtView(dbName); err != nil {
+		return nil, err
+	}
+
+	sgTtl := 1 * time.Hour
+	rpi := &meta2.RetentionPolicyInfo{Name: logStreamName, ReplicaN: 1, Duration: 24 * sgTtl, ShardGroupDuration: sgTtl,
+		HotDuration: 0, WarmDuration: 0, IndexGroupDuration: 24 * sgTtl}
+	if err := data.CreateRetentionPolicy(dbName, rpi, false); err != nil {
+		return nil, err
+	}
+
+	var ttl int64 = 1
+	options := &proto2.Options{Ttl: &ttl}
+	if err := data.CreateMeasurement(dbName, logStreamName, logStreamName, &proto2.ShardKeyInfo{
+		ShardKey: []string{"hostname"},
+		Type:     proto.String(influxql.HASH),
+	}, 0, nil, config.COLUMNSTORE, nil, nil, options); err != nil {
+		return nil, err
+	}
+
+	t := time.Now().UTC()
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*3), 0, config.COLUMNSTORE, 0); err != nil {
+		return nil, err
+	}
+
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*2), 0, config.COLUMNSTORE, 0); err != nil {
+		return nil, err
+	}
+	rp, _ := data.RetentionPolicy(dbName, logStreamName)
+	rp.ShardGroupDuration = time.Hour * 24
+	rp.ShardGroups[1].DeletedAt = t.Add(-time.Hour * 24 * 1).Truncate(rp.ShardGroupDuration).UTC()
+
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*1), 0, config.COLUMNSTORE, 0); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
+func TestRevertRetentionPolicyDelete(t *testing.T) {
+	options := &meta2.Options{}
+	options.InitDefault()
+	cacheData, err := MocTestCacheData("db0", "rp0")
+	if err != nil {
+		t.Fatalf("mock cache data failed, err:%+v", err)
+	}
+	c := &Client{
+		cacheData:      cacheData,
+		metaServers:    []string{"127.0.0.1:8092"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	err = c.RevertRetentionPolicyDelete("db0", "rp0")
+	if err != nil && !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("RevertRetentionPolicyDelete failed, err:%+v", err)
+	}
+	err = c.RevertRetentionPolicyDelete("db1", "rp1")
+	if err == nil {
+		t.Fatalf("db1 does not exist, but there is no error reported")
+	}
+	err = c.RevertRetentionPolicyDelete("db0", "rp1")
+	if err == nil {
+		t.Fatalf("rp1 does not exist, but there is no error reported")
+	}
+	err = c.DelayDeleteShardGroup("db0", "rp1", 1, time.Now().UTC(), 0)
+	if err == nil {
+		t.Fatalf("rp1 does not exist, but there is no error reported")
+	}
+}
+
+func MocTestCacheDataForExpired() (*meta2.Data, error) {
+	dbName := "testDb"
+	logStreamName := "testLogstrem"
+	data := &meta2.Data{PtNumPerNode: 1}
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
+
+	if err := data.CreateDatabase(dbName, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
+		return nil, err
+	}
+	if err := data.CreateDBPtView(dbName); err != nil {
+		return nil, err
+	}
+	sgTtl := 1 * time.Hour
+	rpi := &meta2.RetentionPolicyInfo{Name: logStreamName, ReplicaN: 1, Duration: 24 * sgTtl, ShardGroupDuration: sgTtl,
+		HotDuration: 0, WarmDuration: 0, IndexGroupDuration: 24 * sgTtl}
+	if err := data.CreateRetentionPolicy(dbName, rpi, false); err != nil {
+		return nil, err
+	}
+
+	var ttl int64 = 1
+	options := &proto2.Options{Ttl: &ttl}
+	if err := data.CreateMeasurement(dbName, logStreamName, logStreamName, &proto2.ShardKeyInfo{
+		ShardKey: []string{"hostname"},
+		Type:     proto.String(influxql.HASH),
+	}, 0, nil, config.COLUMNSTORE, nil, nil, options); err != nil {
+		return nil, err
+	}
+
+	t := time.Now().UTC()
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*3), 0, config.COLUMNSTORE, 0); err != nil {
+		return nil, err
+	}
+
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*2), 0, config.COLUMNSTORE, 0); err != nil {
+		return nil, err
+	}
+	rp, _ := data.RetentionPolicy(dbName, logStreamName)
+	rp.ShardGroupDuration = time.Hour * 24
+	rp.ShardGroups[1].DeletedAt = t.Add(-time.Hour * 24 * 1).Truncate(rp.ShardGroupDuration).UTC()
+
+	if err := data.CreateShardGroup(dbName, logStreamName, t.Add(-time.Hour*24*1), 0, config.COLUMNSTORE, 0); err != nil {
+		return nil, err
+	}
+
+	dbName1 := "testDb1"
+	if err := data.CreateDatabase(dbName1, nil, nil, false, 1, nil); err != nil {
+		return nil, err
+	}
+
+	dbName2 := "testDb2"
+	if err := data.CreateDatabase(dbName2, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
+		return nil, err
+	}
+
+	dbName3 := "testDb3"
+	logStreamName3 := "testLogstrem3"
+	if err := data.CreateDatabase(dbName3, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
+		return nil, err
+	}
+	if err := data.CreateDBPtView(dbName3); err != nil {
+		return nil, err
+	}
+	rpi3 := &meta2.RetentionPolicyInfo{Name: logStreamName3, ReplicaN: 1, Duration: 0, ShardGroupDuration: 0,
+		HotDuration: 0, WarmDuration: 0, IndexGroupDuration: 0}
+	if err := data.CreateRetentionPolicy(dbName, rpi3, false); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func TestCacheDataForExpired(t *testing.T) {
+	// mock cache data
+	cacheData, err := MocTestCacheDataForExpired()
+	if err != nil {
+		t.Fatalf("mock cachedata failed, err:%+v", err)
+	}
+	c := &Client{
+		cacheData:      cacheData,
+		metaServers:    []string{"127.0.0.1:8092"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+
+	markDelSgInfos, expiredShards := c.GetExpiredShards()
+	fmt.Println("dd", len(expiredShards), len(markDelSgInfos))
+	if len(expiredShards) == 0 || len(markDelSgInfos) == 0 {
+		t.Fatalf("get expired shards failed, err:%d, %d", len(expiredShards), len(markDelSgInfos))
+	}
+
+	expiredIndexes := c.GetExpiredIndexes()
+	if len(expiredIndexes) == 0 {
+		t.Fatalf("get expired indexes failed, err:%d", len(expiredIndexes))
+	}
+}
+
+func TestClient_ShowShards(t *testing.T) {
+	type args struct {
+		db  string
+		rp  string
+		mst string
+	}
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{ID: 1, StartTime: ts, EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{{ID: 1}, {ID: 21}, {ID: 33}, {ID: 46}}, EngineType: config.COLUMNSTORE}
+	c1 := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+		},
+	}
+	c2 := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{
+							"mst0_0001": {
+								Name: "mst0_0001",
+								ShardIdexes: map[uint64][]int{
+									1: {1, 2, 3},
+								},
+							},
+						},
+						MstVersions: map[string]meta2.MeasurementVer{
+							"mst0": {
+								NameWithVersion: "mst0_0001",
+								Version:         1,
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{sgInfo1},
+					},
+				}},
+			},
+		},
+	}
+	tests := []struct {
+		name     string
+		fields   *Client
+		args     args
+		wantSize int
+		want     []uint64
+	}{
+		{
+			name:   "test1",
+			fields: c1,
+			args: args{
+				db:  "",
+				rp:  "",
+				mst: "",
+			},
+			wantSize: 4,
+			want:     []uint64{1, 21, 33, 46},
+		},
+		{
+			name:   "test2",
+			fields: c2,
+			args: args{
+				db:  "db0",
+				rp:  "rp0",
+				mst: "mst0",
+			},
+			wantSize: 3,
+			want:     []uint64{21, 33, 46},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Client{
+				cacheData: tt.fields.cacheData,
+			}
+			got := c.ShowShards(tt.args.db, tt.args.rp, tt.args.mst)
+			if len(got[0].Values) != tt.wantSize {
+				t.Errorf("Client.ShowShards() = %v, want %v", got, tt.wantSize)
+			}
+			for i := 0; i < tt.wantSize; i++ {
+				if got[0].Values[i][0] != tt.want[i] {
+					t.Errorf("shard id = %v, want %v", got[0].Values[i][0], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestSnapshotV2_GetData(t *testing.T) {
+	address := "127.0.0.1:8491"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	var err error
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		UseSnapshotV2:  true,
+		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+	}
+	connectedServer = nodeId
+
+	err = mc.retryUntilSnapshotV2(SQL, 0)
+	require.NoError(t, err)
+	if mc.cacheData.Index != server.metaData.Index {
+		t.Fatalf("TestSnapshotV2_GetData1 error index; exp: %d; got: %d", server.metaData.Index, mc.cacheData.Index)
+	}
+
+	cmd1 := &proto2.CreateDatabaseCommand{
+		Name:           proto.String("db0"),
+		EnableTagArray: proto.Bool(false),
+		ReplicaNum:     proto.Uint32(1),
+	}
+	typ := proto2.Command_CreateDatabaseCommand
+	cmd2 := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd2, proto2.E_CreateDatabaseCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	strOps, _ := proto.Marshal(cmd2)
+	server.ops = append(server.ops, string(strOps))
+	connectedServer = nodeId
+
+	err = mc.retryUntilSnapshotV2(SQL, 1)
+	require.NoError(t, err)
+	if mc.cacheData.Index != server.metaData.Index {
+		t.Fatalf("TestSnapshotV2_GetData2 error index; exp: %d; got: %d", server.metaData.Index, mc.cacheData.Index)
+	}
+
+	server.NoClear = true
+	server.ops = nil
+	err = mc.retryUntilSnapshotV2(SQL, 10)
+	require.NoError(t, err)
+	if mc.cacheData.Index != 10 {
+		t.Fatalf("TestSnapshotV2_GetData3 error index; exp: %d; got: %d", server.metaData.Index, mc.cacheData.Index)
+	}
+}
+
+func TestCreateSqlNode(t *testing.T) {
+	address := "127.0.0.1:8491"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
+
+	// Server
+	var err error
+	rrcServer, err := startServer(address)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
+
+	mc := Client{
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		UseSnapshotV2:  true,
+		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+	}
+	connectedServer = nodeId
+	server.NodeId = 123
+	nodeID, _, _, err := mc.CreateSqlNode("127.0.0.1:8086", "127.0.0.1:8012")
+	require.NoError(t, err)
+	if nodeID != server.NodeId {
+		t.Fatalf("TestCreateSqlNode err")
+	}
+}
+
+var newPbFunc = map[proto2.Command_Type]func() (interface{}, *proto.ExtensionDesc){
+	proto2.Command_CreateDatabaseCommand:            newCreateDatabasePb,
+	proto2.Command_DropDatabaseCommand:              newDropDatabasePb,
+	proto2.Command_CreateRetentionPolicyCommand:     newCreateRetentionPolicyPb,
+	proto2.Command_DropRetentionPolicyCommand:       newDropRetentionPolicyPb,
+	proto2.Command_SetDefaultRetentionPolicyCommand: newSetDefaultRetentionPolicyPb,
+	proto2.Command_UpdateRetentionPolicyCommand:     newUpdateRetentionPolicyPb,
+	proto2.Command_CreateShardGroupCommand:          newCreateShardGroupPb,
+	proto2.Command_DeleteShardGroupCommand:          newDeleteShardGroupPb,
+	proto2.Command_CreateSubscriptionCommand:        newCreateSubscriptionPb,
+	proto2.Command_DropSubscriptionCommand:          newDropSubscriptionPb,
+	proto2.Command_CreateUserCommand:                newCreateUserPb,
+	proto2.Command_DropUserCommand:                  newDropUserPb,
+	proto2.Command_UpdateUserCommand:                newUpdateUserPb,
+	proto2.Command_SetPrivilegeCommand:              newSetPrivilegePb,
+	proto2.Command_SetAdminPrivilegeCommand:         newSetAdminPrivilegePb,
+	proto2.Command_SetDataCommand:                   newSetDataPb,
+	proto2.Command_CreateMetaNodeCommand:            newCreateMetaNodePb,
+	proto2.Command_DeleteMetaNodeCommand:            newDeleteMetaNodePb,
+	proto2.Command_SetMetaNodeCommand:               newSetMetaNodePb,
+	proto2.Command_CreateDataNodeCommand:            newCreateDataNodePb,
+	proto2.Command_CreateSqlNodeCommand:             newCreateSqlNodePb,
+	proto2.Command_DeleteDataNodeCommand:            newDeleteDataNodePb,
+	proto2.Command_MarkDatabaseDeleteCommand:        newMarkDatabaseDeletePb,
+	proto2.Command_MarkRetentionPolicyDeleteCommand: newMarkRetentionPolicyDeletePb,
+	proto2.Command_CreateMeasurementCommand:         newCreateMeasurementPb,
+	proto2.Command_ReShardingCommand:                newReShardingPb,
+	proto2.Command_UpdateSchemaCommand:              newUpdateSchemaPb,
+	proto2.Command_AlterShardKeyCmd:                 newAlterShardKeyPb,
+	proto2.Command_PruneGroupsCommand:               newPruneGroupsPb,
+	proto2.Command_MarkMeasurementDeleteCommand:     newMarkMeasurementDeletePb,
+	proto2.Command_DropMeasurementCommand:           newDropMeasurementPb,
+	proto2.Command_DeleteIndexGroupCommand:          newDeleteIndexGroupPb,
+	proto2.Command_UpdateShardInfoTierCommand:       newUpdateShardInfoTierPb,
+	proto2.Command_UpdateNodeStatusCommand:          newUpdateNodeStatusPb,
+	proto2.Command_UpdateSqlNodeStatusCommand:       newUpdateSqlNodeStatusPb,
+	proto2.Command_CreateEventCommand:               newCreateEventPb,
+	proto2.Command_UpdateEventCommand:               newUpdateEventPb,
+	proto2.Command_UpdatePtInfoCommand:              newUpdatePtInfoPb,
+	proto2.Command_RemoveEventCommand:               newRemoveEventPb,
+	proto2.Command_CreateDownSamplePolicyCommand:    newCreateDownSamplePb,
+	proto2.Command_DropDownSamplePolicyCommand:      newDropDownSamplePb,
+	proto2.Command_CreateDbPtViewCommand:            newCreateDbPtViewPb,
+	proto2.Command_UpdateShardDownSampleInfoCommand: newUpdateShardDownSampleInfoPb,
+	proto2.Command_MarkTakeoverCommand:              newMarkTakeoverPb,
+	proto2.Command_MarkBalancerCommand:              newMarkBalancerPb,
+	proto2.Command_CreateStreamCommand:              newCreateStreamPb,
+	proto2.Command_DropStreamCommand:                newDropStreamPb,
+	proto2.Command_VerifyDataNodeCommand:            newVerifyDataNodePb,
+	proto2.Command_ExpandGroupsCommand:              newExpandGroupsPb,
+	proto2.Command_UpdatePtVersionCommand:           newUpdatePtVersionPb,
+	proto2.Command_RegisterQueryIDOffsetCommand:     newRegisterQueryIDOffsetPb,
+	proto2.Command_CreateContinuousQueryCommand:     newCreateContinuousQueryPb,
+	proto2.Command_ContinuousQueryReportCommand:     newContinuousQueryReportPb,
+	proto2.Command_DropContinuousQueryCommand:       newDropContinuousQueryPb,
+	proto2.Command_NotifyCQLeaseChangedCommand:      newNotifyCQLeaseChangedPb,
+	proto2.Command_SetNodeSegregateStatusCommand:    newSetNodeSegregateStatusPb,
+	proto2.Command_RemoveNodeCommand:                newRemoveNodePb,
+	proto2.Command_UpdateReplicationCommand:         newUpdateReplicationPb,
+	proto2.Command_UpdateMeasurementCommand:         newUpdateMeasurementPb,
+}
+
+func newCreateDatabasePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateDatabaseCommand{
+		Name:           proto.String("db0"),
+		EnableTagArray: proto.Bool(false),
+		ReplicaNum:     proto.Uint32(1),
+	}, proto2.E_CreateDatabaseCommand_Command
+}
+
+func newDropDatabasePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropDatabaseCommand{
+		Name: proto.String("db0"),
+	}, proto2.E_DropDatabaseCommand_Command
+}
+
+func newCreateRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateRetentionPolicyCommand{
+		Database: proto.String("db0"),
+	}, proto2.E_CreateRetentionPolicyCommand_Command
+}
+
+func newDropRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+	rpName := "rp0"
+	return &proto2.DropRetentionPolicyCommand{
+		Database: proto.String("db0"),
+		Name:     &rpName,
+	}, proto2.E_DropRetentionPolicyCommand_Command
+}
+
+func newSetDefaultRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+	rpName := "rp0"
+	return &proto2.SetDefaultRetentionPolicyCommand{
+		Database: proto.String("db0"),
+		Name:     &rpName,
+	}, proto2.E_SetDefaultRetentionPolicyCommand_Command
+}
+
+func newUpdateRetentionPolicyPb() (interface{}, *proto.ExtensionDesc) {
+	rpName := "rp0"
+	newName := "rp1"
+	return &proto2.UpdateRetentionPolicyCommand{
+		Database: proto.String("db0"),
+		Name:     &rpName,
+		NewName:  &newName,
+	}, proto2.E_UpdateRetentionPolicyCommand_Command
+}
+
+func newCreateShardGroupPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateShardGroupCommand{
+		Database: proto.String("db0"),
+	}, proto2.E_CreateShardGroupCommand_Command
+}
+
+func newDeleteShardGroupPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DeleteShardGroupCommand{
+		Database: proto.String("db0"),
+	}, proto2.E_DeleteShardGroupCommand_Command
+}
+
+func newCreateSubscriptionPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateSubscriptionCommand{
+		Database: proto.String("db0"),
+	}, proto2.E_CreateSubscriptionCommand_Command
+}
+
+func newDropSubscriptionPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropSubscriptionCommand{
+		Database: proto.String("db0"),
+	}, proto2.E_DropSubscriptionCommand_Command
+}
+
+func newCreateUserPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateUserCommand{
+		Name: proto.String("use0"),
+	}, proto2.E_CreateUserCommand_Command
+}
+
+func newDropUserPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropUserCommand{
+		Name: proto.String("use0"),
+	}, proto2.E_DropUserCommand_Command
+}
+
+func newUpdateUserPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateUserCommand{
+		Name: proto.String("use0"),
+	}, proto2.E_UpdateUserCommand_Command
+}
+
+func newSetPrivilegePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.SetPrivilegeCommand{
+		Username: proto.String("use0"),
+	}, proto2.E_SetPrivilegeCommand_Command
+}
+
+func newSetAdminPrivilegePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.SetAdminPrivilegeCommand{
+		Username: proto.String("use0"),
+	}, proto2.E_SetAdminPrivilegeCommand_Command
+}
+
+func newSetDataPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.SetDataCommand{
+		Data: &proto2.Data{
+			Databases: []*proto2.DatabaseInfo{&proto2.DatabaseInfo{ReplicaN: proto.Int64(1), Name: proto.String("ds"), RetentionPolicies: []*proto2.RetentionPolicyInfo{&proto2.RetentionPolicyInfo{Name: proto.String("ds"), DownSamplePolicyInfo: &proto2.DownSamplePolicyInfo{}}}}},
+		},
+	}, proto2.E_SetDataCommand_Command
+}
+
+func newCreateMetaNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateMetaNodeCommand{}, proto2.E_CreateMetaNodeCommand_Command
+}
+
+func newSetMetaNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.SetMetaNodeCommand{
+		HTTPAddr: proto.String("127.0.0.1:8091"),
+		RPCAddr:  proto.String("127.0.0.1:8092"),
+		TCPAddr:  proto.String("127.0.0.1:8088"),
+	}, proto2.E_SetMetaNodeCommand_Command
+}
+
+func newDeleteMetaNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DeleteMetaNodeCommand{}, proto2.E_DeleteMetaNodeCommand_Command
+}
+
+func newCreateDataNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateDataNodeCommand{}, proto2.E_CreateDataNodeCommand_Command
+}
+
+func newCreateSqlNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateSqlNodeCommand{}, proto2.E_CreateSqlNodeCommand_Command
+}
+
+func newUpdateSqlNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateSqlNodeStatusCommand{}, proto2.E_UpdateSqlNodeStatusCommand_Command
+}
+
+func newDeleteDataNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DeleteDataNodeCommand{}, proto2.E_DeleteDataNodeCommand_Command
+}
+
+func newMarkDatabaseDeletePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.MarkDatabaseDeleteCommand{}, proto2.E_MarkDatabaseDeleteCommand_Command
+}
+
+func newMarkRetentionPolicyDeletePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.MarkRetentionPolicyDeleteCommand{}, proto2.E_MarkRetentionPolicyDeleteCommand_Command
+}
+
+func newCreateMeasurementPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateMeasurementCommand{}, proto2.E_CreateMeasurementCommand_Command
+}
+
+func newReShardingPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.ReShardingCommand{}, proto2.E_ReShardingCommand_Command
+}
+
+func newUpdateSchemaPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateSchemaCommand{}, proto2.E_UpdateSchemaCommand_Command
+}
+
+func newAlterShardKeyPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.AlterShardKeyCmd{}, proto2.E_AlterShardKeyCmd_Command
+}
+
+func newPruneGroupsPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.PruneGroupsCommand{}, proto2.E_PruneGroupsCommand_Command
+}
+
+func newMarkMeasurementDeletePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.MarkMeasurementDeleteCommand{}, proto2.E_MarkMeasurementDeleteCommand_Command
+}
+
+func newDropMeasurementPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropMeasurementCommand{}, proto2.E_DropMeasurementCommand_Command
+}
+
+func newDeleteIndexGroupPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DeleteIndexGroupCommand{}, proto2.E_DeleteIndexGroupCommand_Command
+}
+
+func newUpdateShardInfoTierPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateShardInfoTierCommand{}, proto2.E_UpdateShardInfoTierCommand_Command
+}
+
+func newUpdateNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateNodeStatusCommand{}, proto2.E_UpdateNodeStatusCommand_Command
+}
+
+func newCreateEventPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateEventCommand{
+		EventInfo: &proto2.MigrateEventInfo{
+			Pti: &proto2.DbPt{},
+		},
+	}, proto2.E_CreateEventCommand_Command
+}
+
+func newUpdateEventPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateEventCommand{}, proto2.E_UpdateEventCommand_Command
+}
+
+func newUpdatePtInfoPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdatePtInfoCommand{}, proto2.E_UpdatePtInfoCommand_Command
+}
+
+func newRemoveEventPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.RemoveEventCommand{}, proto2.E_RemoveEventCommand_Command
+}
+
+func newCreateDownSamplePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateDownSamplePolicyCommand{
+		Database: proto.String("ds"),
+		Name:     proto.String("ds"),
+		DownSamplePolicyInfo: &proto2.DownSamplePolicyInfo{
+			TaskID:             proto.Uint64(1),
+			DownSamplePolicies: []*proto2.DownSamplePolicy{&proto2.DownSamplePolicy{}},
+			Calls:              []*proto2.DownSampleOperators{&proto2.DownSampleOperators{}},
+		},
+	}, proto2.E_CreateDownSamplePolicyCommand_Command
+}
+
+func newDropDownSamplePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropDownSamplePolicyCommand{
+		Database: proto.String("ds"),
+		RpName:   proto.String("ds"),
+	}, proto2.E_DropDownSamplePolicyCommand_Command
+}
+
+func newCreateDbPtViewPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateDbPtViewCommand{}, proto2.E_CreateDbPtViewCommand_Command
+}
+
+func newUpdateShardDownSampleInfoPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateShardDownSampleInfoCommand{}, proto2.E_UpdateShardDownSampleInfoCommand_Command
+}
+
+func newMarkTakeoverPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.MarkTakeoverCommand{}, proto2.E_MarkTakeoverCommand_Command
+}
+
+func newMarkBalancerPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.MarkBalancerCommand{}, proto2.E_MarkBalancerCommand_Command
+}
+
+func newCreateStreamPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateStreamCommand{
+		StreamInfo: &proto2.StreamInfo{},
+	}, proto2.E_CreateStreamCommand_Command
+}
+
+func newDropStreamPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropStreamCommand{}, proto2.E_DropStreamCommand_Command
+}
+
+func newVerifyDataNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.VerifyDataNodeCommand{}, proto2.E_VerifyDataNodeCommand_Command
+}
+
+func newExpandGroupsPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.ExpandGroupsCommand{}, proto2.E_ExpandGroupsCommand_Command
+}
+
+func newUpdatePtVersionPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdatePtVersionCommand{}, proto2.E_UpdatePtVersionCommand_Command
+}
+
+func newRegisterQueryIDOffsetPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.RegisterQueryIDOffsetCommand{}, proto2.E_RegisterQueryIDOffsetCommand_Command
+}
+
+func newCreateContinuousQueryPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.CreateContinuousQueryCommand{}, proto2.E_CreateContinuousQueryCommand_Command
+}
+
+func newContinuousQueryReportPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.ContinuousQueryReportCommand{}, proto2.E_ContinuousQueryReportCommand_Command
+}
+
+func newDropContinuousQueryPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.DropContinuousQueryCommand{}, proto2.E_DropContinuousQueryCommand_Command
+}
+
+func newNotifyCQLeaseChangedPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.NotifyCQLeaseChangedCommand{}, proto2.E_NotifyCQLeaseChangedCommand_Command
+}
+
+func newSetNodeSegregateStatusPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.SetNodeSegregateStatusCommand{}, proto2.E_SetNodeSegregateStatusCommand_Command
+}
+
+func newRemoveNodePb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.RemoveNodeCommand{}, proto2.E_RemoveNodeCommand_Command
+}
+
+func newUpdateReplicationPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateReplicationCommand{}, proto2.E_UpdateReplicationCommand_Command
+}
+
+func newUpdateMeasurementPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateMeasurementCommand{}, proto2.E_UpdateMeasurementCommand_Command
+}
+
+func BuildCmd(t proto2.Command_Type) *proto2.Command {
+	cmd1, ext := newPbFunc[t]()
+	cmd2 := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd2, ext, cmd1); err != nil {
+		panic(err)
+	}
+	return cmd2
+}
+
+func TestMetaClientApply(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+		},
+		logger: logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient"))}
+	c.cacheData.Databases["ds"] = &meta2.DatabaseInfo{RetentionPolicies: make(map[string]*meta2.RetentionPolicyInfo), ReplicaN: 1, Name: "ds"}
+	c.cacheData.Databases["ds"].RetentionPolicies["ds"] = &meta2.RetentionPolicyInfo{DownSamplePolicyInfo: &meta2.DownSamplePolicyInfo{}}
+	for k, v := range applyFunc {
+		cmd := BuildCmd(k)
+		v(c, cmd)
+	}
+}
+
+func TestMetaClientApplyPanic(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+		},
+		logger: logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient"))}
+
+	cmd1 := &proto2.CreateEventCommand{}
+	typ := proto2.Command_CreateEventCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateEventCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	var wg sync.WaitGroup
+	wg.Add(len(applyFunc))
+	for _, v := range applyFunc {
+		go func(fn func(c *Client, op *proto2.Command) error) {
+			defer func() {
+				recover()
+				wg.Done()
+			}()
+			fn(c, cmd)
+		}(v)
+	}
+	wg.Wait()
+}
+
+func TestMetaClientComFunc(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+		},
+	}
+	c.EnableUseSnapshotV2(true, true)
+	c.SetNode(1, 2)
+	require.Equal(t, int(c.nodeID), 1)
+	require.Equal(t, int(c.Clock), 2)
+}
+
+func TestCreateStreamMeasurement(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{ID: 1, StartTime: ts, EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE}
+	c1 := &Client{
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &RPCMessageSender{},
+		metaServers:    []string{"127.0.0.1"},
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+						ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+						MstVersions: map[string]meta2.MeasurementVer{
+							"mst0": {
+								NameWithVersion: "mst0",
+								Version:         1,
+							},
+						},
+					},
+				}},
+				"srcRepo": {
+					Name:     "srcRepo",
+					ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"srcStore": {
+							Name:         "srcStore",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"srcStore": {Name: "srcStore"}},
+							ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+							MstVersions: map[string]meta2.MeasurementVer{
+								"srcStore": {
+									NameWithVersion: "srcStore",
+									Version:         1,
+								},
+							},
+						},
+						"srcStore1": {
+							Name:         "srcStore1",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"srcStore1": {Name: "srcStore1", EngineType: config.COLUMNSTORE}},
+							ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+							MstVersions: map[string]meta2.MeasurementVer{
+								"srcStore1": {
+									NameWithVersion: "srcStore1",
+									Version:         1,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	newStream := "newStore"
+	repository := "srcRepo"
+	logStream := "srcStore"
+
+	sql := "SELECT count(count_cnt) GROUP BY time(5s)"
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	q, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt := q.Statements[0]
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		t.Fatal(fmt.Errorf("invalid SelectStatement"))
+	}
+
+	dest := &influxql.Measurement{Database: repository, Name: newStream, RetentionPolicy: "srcStore"}
+	src := &influxql.Measurement{Database: repository, Name: logStream, RetentionPolicy: logStream}
+	info := meta2.NewStreamInfo(newStream, 0, src,
+		&meta2.StreamMeasurementInfo{Name: newStream, Database: repository, RetentionPolicy: "srcStore"},
+		selectStmt)
+
+	dest1 := &influxql.Measurement{Database: "db0", Name: "mst0", RetentionPolicy: "rp0"}
+	err = c1.CreateStreamMeasurement(info, src, dest1, selectStmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dest2 := &influxql.Measurement{Database: "db0", Name: "mst0", RetentionPolicy: "rp1"}
+	err = c1.CreateStreamMeasurement(info, src, dest2, selectStmt)
+	if err == nil || !strings.Contains(err.Error(), "retention policy not found") {
+		t.Fatal("unexpect err", err)
+	}
+
+	src1 := &influxql.Measurement{Database: "srcRepo", Name: "srcStore1", RetentionPolicy: "srcStore"}
+	err = c1.CreateStreamMeasurement(info, src1, dest, selectStmt)
+	if err == nil || !strings.Contains(err.Error(), "measurement not found") {
+		t.Fatal("unexpect err", err)
+	}
+
+	err = c1.CreateStreamMeasurement(info, src, dest, selectStmt)
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatal("unexpect err", err)
+	}
+
+	logStream1 := "srcStore1"
+	destColumn := &influxql.Measurement{Database: repository, Name: newStream, RetentionPolicy: logStream1}
+	srcColumn := &influxql.Measurement{Database: repository, Name: logStream1, RetentionPolicy: logStream1}
+	infoColumn := meta2.NewStreamInfo(newStream, 0, srcColumn,
+		&meta2.StreamMeasurementInfo{Name: newStream, Database: repository, RetentionPolicy: logStream1},
+		selectStmt)
+	err = c1.CreateStreamMeasurement(infoColumn, srcColumn, destColumn, selectStmt)
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatal("unexpect err", err)
+	}
+}
+
+func TestMetaClientLocalExec(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			Index:     2,
+		},
+		logger: logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+	}
+
+	cmd := &proto2.CreateMeasurementCommand{}
+	err := c.LocalExec(1, proto2.Command_CreateMeasurementCommand, proto2.E_CreateMeasurementCommand_Command, cmd)
+	require.Equal(t, err, nil)
+	cmd1 := &proto2.CreateEventCommand{}
+	err1 := c.LocalExec(3, proto2.Command_CreateEventCommand, proto2.E_CreateEventCommand_Command, cmd1)
+	require.Equal(t, err1, nil)
+}
+
+func TestCreateDatabase(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			DataNodes: []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive}}},
+		},
+		RetentionAutoCreate: true,
+	}
+	cmd1 := &proto2.CreateDatabaseCommand{
+		Name:           proto.String("db0"),
+		EnableTagArray: proto.Bool(false),
+		ReplicaNum:     proto.Uint32(0),
+	}
+	typ := proto2.Command_CreateDatabaseCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_CreateDatabaseCommand](c, cmd)
+	if !errno.Equal(err, errno.ApplyFuncErr) {
+		t.Fatal("TestCreateDatabase1 err")
+	}
+
+	cmd2 := &proto2.CreateDatabaseCommand{
+		Name:            proto.String("db0"),
+		EnableTagArray:  proto.Bool(false),
+		ReplicaNum:      proto.Uint32(1),
+		RetentionPolicy: &proto2.RetentionPolicyInfo{},
+	}
+	cmd = &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, cmd2); err != nil {
+		panic(err)
+	}
+	err = applyFunc[proto2.Command_CreateDatabaseCommand](c, cmd)
+	if !errno.Equal(err, errno.ApplyFuncErr) {
+		t.Fatal("TestCreateDatabase2 err")
+	}
+}
+
+func TestDropDatabase(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			DataNodes: []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive}}},
+		},
+	}
+	c.cacheData.Databases["db0"] = &meta2.DatabaseInfo{ContinuousQueries: make(map[string]*meta2.ContinuousQueryInfo)}
+	c.cacheData.Databases["db0"].ContinuousQueries["1"] = &meta2.ContinuousQueryInfo{}
+	cmd1 := &proto2.DropDatabaseCommand{
+		Name: proto.String("db0"),
+	}
+	typ := proto2.Command_DropDatabaseCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_DropDatabaseCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_DropDatabaseCommand](c, cmd)
+	require.Equal(t, err, nil)
+}
+
+func Test_CreateMeasurement(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			DataNodes: []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive}}},
+		},
+	}
+	c.cacheData.Databases["db0"] = &meta2.DatabaseInfo{ContinuousQueries: make(map[string]*meta2.ContinuousQueryInfo)}
+	c.cacheData.Databases["db0"].ContinuousQueries["1"] = &meta2.ContinuousQueryInfo{}
+	cmd1 := &proto2.CreateMeasurementCommand{
+		Name: proto.String("mst"),
+	}
+	typ := proto2.Command_CreateMeasurementCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateMeasurementCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_CreateMeasurementCommand](c, cmd)
+	if !errno.Equal(err, errno.ApplyFuncErr) {
+		t.Fatal("TestCreateDatabase2 err")
+	}
+}
+
+func TestUpdateSchema(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			DataNodes: []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive}}},
+		},
+	}
+	c.cacheData.Databases["db0"] = &meta2.DatabaseInfo{RetentionPolicies: make(map[string]*meta2.RetentionPolicyInfo)}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"] = &meta2.RetentionPolicyInfo{Measurements: make(map[string]*meta2.MeasurementInfo), MstVersions: make(map[string]meta2.MeasurementVer)}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"] = &meta2.MeasurementInfo{Schema: make(map[string]int32)}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].MstVersions["mst0"] = meta2.MeasurementVer{NameWithVersion: "mst0"}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"].Schema["col1"] = 1
+	cmd1 := &proto2.UpdateSchemaCommand{
+		Database:      proto.String("db0"),
+		RpName:        proto.String("rp0"),
+		Measurement:   proto.String("mst0"),
+		FieldToCreate: []*proto2.FieldSchema{&proto2.FieldSchema{FieldName: proto.String("col2"), FieldType: proto.Int32(2)}},
+	}
+	typ := proto2.Command_UpdateSchemaCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_UpdateSchemaCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_UpdateSchemaCommand](c, cmd)
+	require.Equal(t, err, nil)
+	cmd2 := &proto2.UpdateSchemaCommand{
+		Database:      proto.String("db0"),
+		RpName:        proto.String("rp0"),
+		Measurement:   proto.String("mst0"),
+		FieldToCreate: []*proto2.FieldSchema{&proto2.FieldSchema{FieldName: proto.String("col3"), FieldType: proto.Int32(2)}},
+	}
+	cmd = &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_UpdateSchemaCommand_Command, cmd2); err != nil {
+		panic(err)
+	}
+	err = applyFunc[proto2.Command_UpdateSchemaCommand](c, cmd)
+	require.Equal(t, err, nil)
+}
+
+func TestCreateDBPtView(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			DataNodes: []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive}}},
+		},
+	}
+	cmd1 := &proto2.CreateDbPtViewCommand{
+		DbName:     proto.String("db0"),
+		ReplicaNum: proto.Uint32(1),
+	}
+	typ := proto2.Command_CreateDbPtViewCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_CreateDbPtViewCommand](c, cmd)
+	require.Equal(t, err, nil)
+}
+
+func TestCreateDataNode(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			DataNodes: []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive, Host: "127.0.0.1:8086"}}},
+		},
+	}
+	cmd1 := &proto2.CreateDataNodeCommand{
+		HTTPAddr: proto.String("127.0.0.1:8086"),
+		Role:     proto.String("store"),
+	}
+	typ := proto2.Command_CreateDataNodeCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateDataNodeCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_CreateDataNodeCommand](c, cmd)
+	require.Equal(t, err, nil)
+}
+
+func Test_CreateSqlNode(t *testing.T) {
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	var c *Client = &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+			SqlNodes:  []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive, TCPHost: "127.0.0.1:8086"}}},
+		},
+	}
+	cmd1 := &proto2.CreateSqlNodeCommand{
+		HTTPAddr: proto.String("127.0.0.1:8086"),
+	}
+	typ := proto2.Command_CreateSqlNodeCommand
+	cmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command, cmd1); err != nil {
+		panic(err)
+	}
+	err := applyFunc[proto2.Command_CreateSqlNodeCommand](c, cmd)
+	require.Equal(t, err, nil)
+}
+
+func TestOpenClientAtStore(t *testing.T) {
+	var c *Client = &Client{
+		cacheData:     &meta2.Data{},
+		UseSnapshotV2: true,
+		closing:       make(chan struct{}),
+	}
+	c.Close()
+	c.OpenAtStore()
+	time.Sleep(time.Second * 3)
+}
+
+func TestOpenClientAtSql(t *testing.T) {
+	var c *Client = &Client{
+		cacheData:     &meta2.Data{},
+		UseSnapshotV2: true,
+		closing:       make(chan struct{}),
+	}
+	c.Close()
+	c.Open()
+	time.Sleep(time.Second * 3)
+}
+
+func TestClient_InsertFiles(t *testing.T) {
+	client := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:     "rp0",
+						Duration: 72 * time.Hour,
+					},
+				}}},
+		},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	type args struct {
+		fileInfos []meta2.FileInfo
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+	}{
+		{
+			name: "test1",
+			args: args{
+				fileInfos: []meta2.FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := client.InsertFiles(tt.args.fileInfos)
+			require.EqualError(t, err, "execute command timeout")
+		})
 	}
 }

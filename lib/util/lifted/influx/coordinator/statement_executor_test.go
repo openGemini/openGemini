@@ -89,6 +89,10 @@ func newMockSelectStatement(rp, mst string) *influxql.SelectStatement {
 }
 
 func MockExcuteStatementErr(rp, mst string, tm time.Duration) error {
+	return MockExcuteStatement(tm, newMockSelectStatement(rp, mst))
+}
+
+func MockExcuteStatement(tm time.Duration, statement influxql.Statement) error {
 	var err error
 	ch := make(chan struct{})
 	defer close(ch)
@@ -97,9 +101,8 @@ func MockExcuteStatementErr(rp, mst string, tm time.Duration) error {
 	defer timer.Stop()
 	go func() {
 		statementExecutor := newMockStatementExecutor()
-		slectStatement := newMockSelectStatement(rp, mst)
 		ctx := &query.ExecutionContext{}
-		err = statementExecutor.ExecuteStatement(slectStatement, ctx, 0)
+		err = statementExecutor.ExecuteStatement(statement, ctx, 0)
 		ch <- struct{}{}
 	}()
 

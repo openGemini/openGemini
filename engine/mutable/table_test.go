@@ -25,18 +25,20 @@ import (
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSizeLimit(t *testing.T) {
-	mutable.SetSizeLimit(0)
-	require.Equal(t, int64(1024*1024), mutable.GetSizeLimit())
+	config.SetShardMemTableSizeLimit(0)
+	require.Equal(t, int64(config.GetShardMemTableMinSize()), config.GetShardMemTableSizeLimit())
 
 	var size int64 = 1024 * 1024 * 64
-	mutable.SetSizeLimit(size)
-	require.Equal(t, size, mutable.GetSizeLimit())
+	config.SetShardMemTableSizeLimit(size)
+	require.Equal(t, size, config.GetShardMemTableSizeLimit())
 }
 
 func TestSidsPool(t *testing.T) {
@@ -50,23 +52,6 @@ func TestSidsPool(t *testing.T) {
 
 	sids = mutable.GetSidsImpl(1)
 	mutable.PutSidsImpl(sids)
-}
-
-func TestMemTable_GetMaxTimeBySidNoLock(t *testing.T) {
-	tbl := mutable.NewMemTable(config.TSSTORE)
-	row := &influx.Row{}
-	row.Fields = append(row.Fields, influx.Field{
-		Key:      "foo",
-		NumValue: 1,
-		StrValue: "",
-		Type:     influx.Field_Type_Int,
-	})
-	msInfo := tbl.CreateMsInfo("mst", row, nil)
-	chunk, _ := msInfo.CreateChunk(100)
-	chunk.OrderWriteRec.SetLastAppendTime(100)
-	chunk.UnOrderWriteRec.SetLastAppendTime(200)
-
-	require.Equal(t, int64(200), tbl.GetMaxTimeBySidNoLock("mst", 100))
 }
 
 func TestStoreLoadMstRowCount(t *testing.T) {
@@ -96,4 +81,64 @@ func TestStoreLoadMstRowCount(t *testing.T) {
 	_, _ = file.WriteString("")
 	_, err = mutable.LoadMstRowCount(countFile)
 	assert.Equal(t, err != nil, true)
+}
+
+func TestMemTables_Values_Empty(t *testing.T) {
+	tb := mutable.NewMemTable(config.TSSTORE)
+	row := &influx.Row{}
+	row.Fields = append(row.Fields, influx.Field{
+		Key:      "foo",
+		NumValue: 1,
+		StrValue: "",
+		Type:     influx.Field_Type_Int,
+	})
+	msInfo := tb.CreateMsInfo("mst", row, nil)
+	msInfo.CreateChunk(100)
+
+	var run = func(readEnable bool) {
+		tbs := &mutable.MemTables{}
+		tbs.Init(tb, nil, readEnable)
+		rec := tbs.Values("mst", 100, util.TimeRange{}, nil, true)
+		require.Empty(t, rec)
+	}
+
+	run(true)
+	run(false)
+}
+
+func TestSplitRecordByTime(t *testing.T) {
+	var order, unOrder *record.Record
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "a1"},
+		record.Field{Type: influx.Field_Type_Float, Name: "a2"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+	}
+	rec := &record.Record{}
+	rec.ResetWithSchema(schema)
+	rec.Column(0).AppendIntegers(1, 2, 3, 4, 5)
+	rec.Column(1).AppendFloats(1.1, 2.1, 3.1, 4.1, 5.1)
+	rec.Column(2).AppendIntegers(1, 2, 3, 4, 5)
+
+	order, unOrder = mutable.SplitRecordByTime(rec, nil, 3)
+	record.CheckRecord(order)
+	record.CheckRecord(unOrder)
+	require.Equal(t, 2, order.RowNums())
+	require.Equal(t, 3, unOrder.RowNums())
+	require.Equal(t, []int64{4, 5}, order.Column(0).IntegerValues())
+	require.Equal(t, []int64{1, 2, 3}, unOrder.Column(0).IntegerValues())
+
+	rec.ResetWithSchema(schema)
+	rec.Column(0).AppendIntegerNulls(3)
+	rec.Column(0).AppendIntegers(4, 5)
+	rec.Column(1).AppendFloats(1.1, 2.1, 3.1)
+	rec.Column(1).AppendFloatNulls(2)
+	rec.Column(2).AppendIntegers(1, 2, 3, 7, 8)
+	order, unOrder = mutable.SplitRecordByTime(rec, nil, 4)
+
+	record.CheckRecord(order)
+	record.CheckRecord(unOrder)
+	require.Equal(t, 2, order.RowNums())
+	require.Equal(t, 3, unOrder.RowNums())
+	require.Equal(t, 2, order.Len())
+	require.Equal(t, 2, unOrder.Len())
 }

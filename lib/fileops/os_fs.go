@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
@@ -67,7 +68,7 @@ func (f *file) ReadAt(b []byte, off int64) (int, error) {
 	return res, err
 }
 
-func (f *file) StreamReadBatch(offs []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, obsRangeSize int) {
+func (f *file) StreamReadBatch(offs []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, obsRangeSize int, isStat bool) {
 	for i, offset := range offs {
 		content := make([]byte, sizes[i])
 		_, err := f.ReadAt(content, offset)
@@ -171,6 +172,10 @@ func (vfs) Remove(name string, _ ...FSOption) error {
 	return os.Remove(name)
 }
 
+func (vfs) RemoveLocal(name string, _ ...FSOption) error {
+	return os.Remove(name)
+}
+
 func (vfs) RemoveAll(path string, _ ...FSOption) error {
 	logger.GetLogger().Info("remove path", zap.String("path", path))
 	return os.RemoveAll(path)
@@ -249,6 +254,42 @@ func (f vfs) IsObsFile(path string) (bool, error) {
 }
 
 func (f vfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
-	_, err := f.CopyFile(srcPath, dstPath, opt...)
+	dstFd, err := OpenFile(dstPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+	if err != nil {
+		log.Error("create dst file fail", zap.String("name", dstPath), zap.Error(err))
+		return err
+	}
+	defer util.MustClose(dstFd)
+
+	srcFd, err := f.Open(srcPath, opt...)
+	if err != nil {
+		return err
+	}
+	defer util.MustClose(srcFd)
+
+	_, err = io.Copy(dstFd, srcFd)
 	return err
+}
+
+func (f vfs) GetAllFilesSizeInPath(path string) (int64, int64, int64, error) {
+	fi, err := f.Stat(path)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	size := fi.Size()
+	return size, 0, 0, nil
+}
+
+func (f vfs) GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string {
+	if obsOption != nil {
+		path = path[len(obs.GetPrefixDataPath()):]
+		path = filepath.Join(obsOption.BasePath, path) + obs.ObsFileSuffix + obs.ObsFileTmpSuffix
+		path = EncodeObsPath(obsOption.Endpoint, obsOption.BucketName, path, obsOption.Ak, obsOption.Sk)
+		return path
+	}
+	return path + obs.ObsFileTmpSuffix
+}
+
+func (f vfs) DecodeRemotePathToLocal(path string) (string, error) {
+	return "", nil
 }

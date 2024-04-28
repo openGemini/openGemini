@@ -193,6 +193,7 @@ func TestTextIndexSearch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TextOpen Failed, err:%v", err)
 	}
+	defer textIndex.Close()
 
 	expr := getSearchExpr()
 	opt := &query.ProcessorOptions{Condition: expr}

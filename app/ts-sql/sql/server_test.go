@@ -40,10 +40,11 @@ func Test_NewServer(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.ContinuousQuery.Enabled = true
+	conf.Meta.UseIncSyncData = true
 
 	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
@@ -58,7 +59,7 @@ func Test_NewServer_Open_Close(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9179"}...)
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -95,7 +96,7 @@ func TestServer_Close(t *testing.T) {
 func TestInitStatisticsPusher(t *testing.T) {
 	server := &Server{}
 	server.Logger = logger.NewLogger(errno.ModuleUnknown)
-	server.config = config.NewTSSql()
+	server.config = config.NewTSSql(false)
 	server.config.Monitor.Pushers = "http"
 	server.config.Monitor.StoreEnabled = true
 
@@ -110,7 +111,7 @@ func Test_NewServer_1U(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 1
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -128,7 +129,7 @@ func Test_NewServer_2U8G(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 2
 	conf.Common.MemorySize = 8 * config.GB
@@ -147,7 +148,7 @@ func Test_NewServer_2U16G(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 2
 	conf.Common.MemorySize = 16 * config.GB
@@ -166,7 +167,7 @@ func Test_NewServer_4U(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 4
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -184,7 +185,7 @@ func Test_NewServer_8U(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 8
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -202,7 +203,7 @@ func Test_NewServer_16U(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 16
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -220,7 +221,7 @@ func Test_NewServer_32U(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 32
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -238,7 +239,7 @@ func Test_NewServer_64U(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Common.CPUNum = 64
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -256,7 +257,7 @@ func Test_NewServer_Correct_RPLimit(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Coordinator.RetentionPolicyLimit = 0
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
@@ -272,7 +273,7 @@ func Test_NewServer_Correct_RPLimit(t *testing.T) {
 func Test_NewServer_Invalid_BindAddress(t *testing.T) {
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.HTTP.PprofEnabled = true
 	conf.HTTP.BindAddress = "127.0.0.1"
 
@@ -282,7 +283,7 @@ func Test_NewServer_Invalid_BindAddress(t *testing.T) {
 }
 
 func TestNewCommand(t *testing.T) {
-	cmd := NewCommand(app.ServerInfo{App: config.AppSql})
+	cmd := NewCommand(app.ServerInfo{App: config.AppSql}, false)
 	require.Equal(t, app.SQLLOGO, cmd.Logo)
 	require.Equal(t, config.AppSql, cmd.Info.App)
 }
@@ -292,7 +293,7 @@ func Test_NewServer_Subscription_Enabled(t *testing.T) {
 
 	log := logger.NewLogger(errno.ModuleUnknown)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.Subscriber.Enabled = true
@@ -322,4 +323,28 @@ func Test_handleCPUThreshold(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	err := server.Close()
 	assert.NoError(t, err)
+}
+
+func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	conf := config.NewTSSql(false)
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	conf.Meta.UseIncSyncData = true
+	conf.Gossip.Enabled = true
+
+	server, err := NewServer(conf, app.ServerInfo{}, log)
+	require.NoError(t, err)
+	require.Equal(t, server.(*Server).MetaClient.UseSnapshotV2, true)
+	server.(*Server).initMetaClientFn = func() error {
+		return nil
+	}
+	err = server.Open()
+	require.NoError(t, err)
+
+	err = server.Close()
+	require.NoError(t, err)
 }

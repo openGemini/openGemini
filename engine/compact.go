@@ -23,6 +23,7 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
@@ -71,6 +72,9 @@ func NewCompactor() *Compactor {
 }
 
 func (c *Compactor) RegisterShard(sh *shard) {
+	if sh.skipRegister() {
+		return
+	}
 	c.wg.Add(1)
 	c.mu.Lock()
 	c.sources[sh.ident.ShardID] = sh
@@ -142,7 +146,12 @@ func (c *Compactor) merger() {
 			log.Info("closed", zap.Uint64("shardId", id))
 			return
 		default:
-			_ = sh.immTables.MergeOutOfOrder(id, false)
+			full := false
+			if config.GetStoreConfig().UnorderedOnly {
+				d := fasttime.UnixTimestamp() - sh.LastWriteTime()
+				full = d >= atomic.LoadUint64(&fullCompColdDuration)
+			}
+			_ = sh.immTables.MergeOutOfOrder(id, full, false)
 		}
 	}
 }
@@ -233,7 +242,7 @@ func (c *Compactor) SetSnapshotColdDuration(d time.Duration) {
 	defer c.mu.RUnlock()
 
 	for _, sh := range c.sources {
-		sh.writeColdDuration = d
+		sh.writeColdDuration = uint64(d.Seconds())
 	}
 }
 

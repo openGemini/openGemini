@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.uber.org/zap"
@@ -41,7 +41,7 @@ func Test_WriteRead(t *testing.T) {
 	l := logger.NewLogger(errno.ModuleCastor)
 	l.SetZapLogger(observedLogger)
 
-	respChan := make(chan array.Record)
+	respChan := make(chan arrow.Record)
 	idleCliChan := make(chan *castorCli, 1)
 
 	cnt := new(int32)
@@ -114,7 +114,7 @@ func Test_Write_Fail(t *testing.T) {
 	idleCliChan := make(chan *castorCli, 1)
 	srvDataChanSet := &dataChanSet{
 		dataChan:   make(chan *data, 1),
-		resultChan: make(chan array.Record, 1),
+		resultChan: make(chan arrow.Record, 1),
 	}
 	cli := castorCli{
 		dataSocketIn:  rwc,

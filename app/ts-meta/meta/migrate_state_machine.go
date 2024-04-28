@@ -108,7 +108,7 @@ func (m *MigrateStateMachine) recoverStateMachine() {
 		event.setRecovery(true)
 		err := m.executeEvent(event)
 		if err != nil {
-			m.logger.Error("[MSM] failed to execute event", zap.Any("event", event), zap.Error(err))
+			m.logger.Error("[MSM] failed to execute event", zap.String("event", event.String()), zap.Error(err))
 		}
 	}
 	m.eventsRecovered = true
@@ -187,10 +187,10 @@ func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, er
 		}
 		m.handleMigrateCommandResponse(err, e)
 		m.logger.Error("[MSM] send migrate command to store failed", zap.String("pt", pti.String()),
-			zap.Uint64("target", e.getTarget()), zap.Uint64("opId", e.getOpId()), zap.Error(err))
+			zap.Uint64("target", e.getTarget()), zap.String("event", e.String()), zap.Error(err))
 	} else {
 		m.logger.Info("[MSM] send migrate command to store successfully", zap.String("pt", pti.String()),
-			zap.Uint64("target", e.getTarget()), zap.Uint64("opId", e.getOpId()))
+			zap.Uint64("target", e.getTarget()), zap.String("event", e.String()), zap.String("event", e.String()))
 	}
 	return ActionWait, nil
 }
@@ -294,12 +294,12 @@ func (m *MigrateStateMachine) processEvent(e MigrateEvent) {
 	// ActionError, err == nil
 	//means the event finished, but execute failed, for example, assign failed, go to assign failed handler
 	if actionState == ActionError {
-		m.logger.Error("migrate state machine handle dbpt event occurs ActionError")
+		m.logger.Error("migrate state machine handle dbpt event occurs ActionError", zap.String("event", e.String()))
 		statistics.MetaDBPTStepDuration(e.getEventType().String(), e.getOpId(), e.getCurrStateString(), e.getSrc(), e.getDst(), time.Since(e.getStartTime()).Nanoseconds(), statistics.DBPTLoadErr, "assign failed")
 	}
 
 	if err != nil {
-		m.logger.Error("migrate state machine process dbpt event failed", zap.Error(err))
+		m.logger.Error("migrate state machine process dbpt event failed", zap.Error(err), zap.String("event", e.String()))
 	}
 	if !e.getUserCommand() {
 		m.deleteEvent(e)
@@ -375,17 +375,16 @@ func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 		m.logger.Info("do not process this dbpt cause database is deleting", zap.Error(res.err))
 		return
 	}
-	m.logger.Debug("try to judge whether process this dbpt", zap.Error(res.err),
+	m.logger.Debug("try to judge whether process this dbpt", zap.String("event", e.String()),
 		zap.Bool("canExecuteEvent", m.canExecuteEvent(false)),
-		zap.Bool("isReassignNeeded", e.isReassignNeeded()))
+		zap.Bool("isReassignNeeded", e.isReassignNeeded()), zap.Error(res.err))
 	if res.err != nil && m.canExecuteEvent(false) && e.isReassignNeeded() {
 		time.Sleep(100 * time.Millisecond)
 		nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
-		m.logger.Error("process failed db pt failed", zap.Error(res.err),
-			zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId), zap.Uint64("opId", e.getOpId()))
+		m.logger.Error("process failed db pt failed", zap.String("event", e.String()), zap.Error(res.err))
 		go func() {
 			err := globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap, true)
-			m.logger.Error("process failed db pt error", zap.Error(err))
+			m.logger.Error("retry to process failed db pt error", zap.String("event", e.String()), zap.Error(err))
 		}()
 	}
 }
@@ -404,8 +403,7 @@ func (m *MigrateStateMachine) addToEventMap(e MigrateEvent) error {
 	}
 	currentEvent := m.eventMap[e.getEventId()]
 	if currentEvent == nil {
-		m.logger.Info("msm eventMap add event", zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId),
-			zap.Uint64("src", e.getSrc()), zap.Uint64("dst", e.getDst()), zap.String("event id", e.getEventId()))
+		m.logger.Info("msm eventMap add event", zap.String("event", e.String()))
 		m.eventMap[e.getEventId()] = e
 		m.eventMapMu.Unlock()
 		return nil
@@ -420,8 +418,7 @@ func (m *MigrateStateMachine) softAddToEventMap(e MigrateEvent) error {
 	m.eventMapMu.Lock()
 	currentEvent := m.eventMap[e.getEventId()]
 	if currentEvent == nil {
-		m.logger.Info("msm eventMap add event softly", zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId),
-			zap.Uint64("src", e.getSrc()), zap.Uint64("dst", e.getDst()), zap.String("event id", e.getEventId()))
+		m.logger.Info("msm eventMap add event softly", zap.String("event", e.String()))
 		m.eventMap[e.getEventId()] = e
 		m.eventMapMu.Unlock()
 		return nil
@@ -436,8 +433,7 @@ func (m *MigrateStateMachine) removeFromEventMap(e MigrateEvent) {
 	m.eventMapMu.Lock()
 	existEvent := m.eventMap[e.getEventId()]
 	if existEvent == e {
-		m.logger.Info("msm eventMap delete event", zap.String("db", e.getPtInfo().Db), zap.Uint32("pt id", e.getPtInfo().Pti.PtId),
-			zap.Uint64("src", e.getSrc()), zap.Uint64("dst", e.getDst()), zap.String("event id", e.getEventId()))
+		m.logger.Info("msm eventMap delete event", zap.String("event", e.String()))
 		delete(m.eventMap, e.getEventId())
 	}
 	m.eventMapMu.Unlock()

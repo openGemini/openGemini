@@ -24,14 +24,14 @@ import (
 const (
 	StatFileCount           = "FileCount"
 	StatFileSize            = "FileSize"
-	fileStatisticsName      = "filestat"
+	FileStatisticsName      = "filestat"
 	levelFileStatisticsName = "filestat_level"
 
 	fileStatisticsReportRate     = 6
 	fileStatisticsReportInterval = time.Minute * 5
 )
 
-var fileTagMap map[string]string
+var FileTagMap map[string]string
 
 type FileStatistics struct {
 	lastReport time.Time
@@ -44,7 +44,7 @@ func NewFileStatistics() *FileStatistics {
 }
 
 func InitFileStatistics(tags map[string]string) {
-	fileTagMap = tags
+	FileTagMap = tags
 }
 
 func FileStatisticsLimited(i int64) bool {
@@ -66,7 +66,7 @@ func (s *FileStatistics) CollectMst(buffer []byte, originTags map[string]string,
 	}
 	s.lastReport = time.Now()
 
-	tags := s.merge(originTags, fileTagMap)
+	tags := s.merge(originTags, FileTagMap)
 	var fileSize, fileCount int64
 
 	for _, stat := range mstFileStat {
@@ -78,13 +78,13 @@ func (s *FileStatistics) CollectMst(buffer []byte, originTags map[string]string,
 		StatFileSize:  fileSize,
 		StatFileCount: fileCount,
 	}
-	buffer = AddPointToBuffer(fileStatisticsName, tags, valueMap, buffer)
+	buffer = AddPointToBuffer(FileStatisticsName, tags, valueMap, buffer)
 
 	return buffer, nil
 }
 
 func (s *FileStatistics) CollectLevel(buffer []byte, originTags map[string]string, fileStat map[uint16]*FileStatItem) ([]byte, error) {
-	tags := s.merge(originTags, fileTagMap)
+	tags := s.merge(originTags, FileTagMap)
 	for level, stat := range fileStat {
 		valueMap := map[string]interface{}{
 			StatFileSize:  stat.FileSize,

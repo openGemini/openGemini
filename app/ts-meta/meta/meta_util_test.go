@@ -87,6 +87,7 @@ leader-lease-timeout = "500ms"
 commit-timeout = "50ms"
 split-row-threshold = 1000
 imbalance-factor = 0.3
+sqlite-enabled = true
 `, dir, ip, ip, ip), c)
 	c.JoinPeers = []string{ip + ":9092"}
 	return c, err
@@ -279,6 +280,33 @@ func GenerateCreateDataNodeCmd(httpAddr, tcpAddr string) *proto2.Command {
 	t1 := proto2.Command_CreateDataNodeCommand
 	cmd := &proto2.Command{Type: &t1}
 	if err := proto.SetExtension(cmd, proto2.E_CreateDataNodeCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateUpdateUserCmd() *proto2.Command {
+	val := &proto2.UpdateUserCommand{
+		Name: proto.String("user"),
+		Hash: proto.String("hash"),
+	}
+
+	t1 := proto2.Command_UpdateUserCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_UpdateUserCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
+func GenerateCreateSqlNodeCmd(httpAddr string) *proto2.Command {
+	val := &proto2.CreateSqlNodeCommand{
+		HTTPAddr: proto.String(httpAddr),
+	}
+
+	t1 := proto2.Command_CreateSqlNodeCommand
+	cmd := &proto2.Command{Type: &t1}
+	if err := proto.SetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command, val); err != nil {
 		panic(err)
 	}
 	return cmd

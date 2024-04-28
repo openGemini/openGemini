@@ -63,7 +63,7 @@ func Get{{.Name}}LTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
         }
 
         {{- if or (eq .Name "Float") (eq .Name "Integer")}}
-        if values[idx] >= cmpData {
+        if values[i] >= cmpData {
         {{- end}}
         {{- if or (eq .Name "String")}}
         if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) >= 0 {
@@ -186,7 +186,7 @@ func Get{{.Name}}LTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
         }
 
         {{- if or (eq .Name "Float") (eq .Name "Integer")}}
-        if values[idx] > cmpData {
+        if values[i] > cmpData {
         {{- end}}
         {{- if or (eq .Name "String")}}
         if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) > 0 {
@@ -309,7 +309,7 @@ func Get{{.Name}}GTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
         }
 
         {{- if or (eq .Name "Float") (eq .Name "Integer")}}
-        if values[idx] <= cmpData {
+        if values[i] <= cmpData {
         {{- end}}
         {{- if or (eq .Name "String")}}
         if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) <= 0 {
@@ -432,7 +432,7 @@ func Get{{.Name}}GTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
         }
 
         {{- if or (eq .Name "Float") (eq .Name "Integer")}}
-        if values[idx] < cmpData {
+        if values[i] < cmpData {
         {{- end}}
         {{- if or (eq .Name "String")}}
         if bytes.Compare(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) < 0 {
@@ -553,7 +553,7 @@ func Get{{.Name}}EQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
         }
 
         {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
-        if values[idx] != cmpData {
+        if values[i] != cmpData {
         {{- end}}
         {{- if or (eq .Name "String")}}
         if !bytes.Equal(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) {
@@ -670,7 +670,7 @@ func Get{{.Name}}NEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
         }
 
         {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
-        if values[idx] == cmpData {
+        if values[i] == cmpData {
         {{- end}}
         {{- if or (eq .Name "String")}}
         if bytes.Equal(col.Val[col.Offset[i]:col.Offset[i+1]], cmpData) {

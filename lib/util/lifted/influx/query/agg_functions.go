@@ -224,6 +224,102 @@ var (
 			canPushDown: true,
 		},
 	})
+	_ = RegistryAggregateFunction("sum_over_time", &SumFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("avg_over_time", &MeanFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("max_over_time", &MaxFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("min_over_time", &MinFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("count_over_time", &CountPromFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("stddev_over_time", &StddevFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("quantile_over_time", &PercentileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("rate_prom", &RateFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("irate_prom", &IRateFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("increase", &IncreaseFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("deriv", &DerivFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("predict_linear", &PredictLinearFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("min_prom", &MinPromFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			canPushDown:       true,
+			canPushDownSeries: true,
+			optimizeAgg:       true,
+		},
+	})
+	_ = RegistryAggregateFunction("max_prom", &MaxPromFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			canPushDown:       true,
+			canPushDownSeries: true,
+			optimizeAgg:       true,
+		},
+	})
+	_ = RegistryAggregateFunction("count_prom", &FloatCountPromFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			canPushDown:       true,
+			canPushDownSeries: true,
+			optimizeAgg:       true,
+		},
+	})
 )
 
 func GetAggregateOperator(name string) AggregateFunc {
@@ -273,6 +369,23 @@ func (f *CountFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 
 func (f *CountFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Integer, nil
+}
+
+type CountPromFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *CountPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	c.global.OnlySelectors = false
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *CountPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
 }
 
 type LastFunc struct {
@@ -1026,4 +1139,114 @@ func (f *SlidingWindowFunc) CompileFunc(expr *influxql.Call, c *compiledField) e
 
 func (f *SlidingWindowFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return args[0], nil
+}
+
+type DerivFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *DerivFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *DerivFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type IncreaseFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *IncreaseFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *IncreaseFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type PredictLinearFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PredictLinearFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args := expr.Args
+	if exp, got := 2, len(args); got != exp {
+		return fmt.Errorf("invalid number of arguments for predict_linear, expected %d, got %d", exp, got)
+	}
+
+	switch args[1].(type) {
+	case *influxql.IntegerLiteral:
+	case *influxql.NumberLiteral:
+	default:
+		return fmt.Errorf("expected float argument in predict_linear()")
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *PredictLinearFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return args[0], nil
+}
+
+type MinPromFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *MinPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *MinPromFunc) CallTypeFunc(_ string, _ []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type MaxPromFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *MaxPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *MaxPromFunc) CallTypeFunc(_ string, _ []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type FloatCountPromFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *FloatCountPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *FloatCountPromFunc) CallTypeFunc(_ string, _ []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
 }

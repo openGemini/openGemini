@@ -79,6 +79,11 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 		LogQueryCurrId:        opt.LogQueryCurrId,
 		IncQuery:              opt.IncQuery,
 		IterID:                opt.IterID,
+		PromQuery:             opt.PromQuery,
+		Step:                  int64(opt.Step),
+		Range:                 int64(opt.Range),
+		LookBackDelta:         int64(opt.LookBackDelta),
+		QueryOffset:           int64(opt.QueryOffset),
 	}
 
 	// Set expression, if set.
@@ -151,6 +156,11 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 		LogQueryCurrId:        pb.LogQueryCurrId,
 		IncQuery:              pb.IncQuery,
 		IterID:                pb.IterID,
+		PromQuery:             pb.GetPromQuery(),
+		Step:                  time.Duration(pb.Step),
+		Range:                 time.Duration(pb.Range),
+		LookBackDelta:         time.Duration(pb.LookBackDelta),
+		QueryOffset:           time.Duration(pb.QueryOffset),
 	}
 
 	// Set expression, if set.

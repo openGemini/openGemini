@@ -21,11 +21,11 @@ type ExecutionContext struct {
 	// The statement ID of the executing query.
 	statementID int
 
-	// The query ID of the executing query.
-	QueryID uint64
+	// The query IDs of the executing query. Each statement assigns one ID.
+	QueryID []uint64
 
-	// The query task information available to the StatementExecutor.
-	task *Task
+	// The query task information available to the StatementExecutor. Each statement is one sub task.
+	task []*Task
 
 	// Output channel where results and errors should be sent.
 	Results chan *query.Result
@@ -53,22 +53,25 @@ func (ctx *ExecutionContext) watch() {
 	go func() {
 		defer close(ctx.done)
 
-		var taskCtx <-chan struct{}
-		if ctx.task != nil {
-			taskCtx = ctx.task.closing
+		for _, task := range ctx.task {
+			var taskCtx <-chan struct{}
+			if task != nil {
+				taskCtx = task.closing
+			}
+
+			select {
+			case <-taskCtx:
+				ctx.err = task.Error()
+				if ctx.err == nil {
+					ctx.err = errno.NewError(errno.ErrQueryKilled)
+				}
+			case <-ctx.AbortCh:
+				ctx.err = ErrQueryAborted
+			case <-ctx.Context.Done():
+				ctx.err = ctx.Context.Err()
+			}
 		}
 
-		select {
-		case <-taskCtx:
-			ctx.err = ctx.task.Error()
-			if ctx.err == nil {
-				ctx.err = errno.NewError(errno.ErrQueryKilled)
-			}
-		case <-ctx.AbortCh:
-			ctx.err = ErrQueryAborted
-		case <-ctx.Context.Done():
-			ctx.err = ctx.Context.Err()
-		}
 	}()
 }
 

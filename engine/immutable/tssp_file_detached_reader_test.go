@@ -92,12 +92,12 @@ func writeData(testCompDir, mstName string) error {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				return nil, err
 			}
 		}
-		msb.NewSkipIndex(rec.Schema, *indexRelation)
-		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
+		msb.NewIndexWriterBuilder(rec.Schema, *indexRelation)
+		if len(msb.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
 			if err = msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				return nil, err
@@ -195,9 +195,9 @@ func writeData(testCompDir, mstName string) error {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, mstName, &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, mstName, &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
 		oldRec, err = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		if err != nil {
 			return err

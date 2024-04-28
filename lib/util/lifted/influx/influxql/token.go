@@ -337,6 +337,7 @@ var tokens = [...]string{
 	REPLICAS:       "REPLICAS",
 	DETAIL:         "DETAIL",
 	COMPACT:        "COMPACT",
+	AUTO:           "AUTO",
 }
 
 var keywords map[string]int

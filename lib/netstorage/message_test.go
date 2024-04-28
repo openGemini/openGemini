@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestSeriesKeysRequestMessage(t *testing.T) {
@@ -480,4 +481,31 @@ func TestSegregateNodeResponse_Marshal_Unmarshal(t *testing.T) {
 	if newResp.(*netstorage.SegregateNodeResponse).Error() != nil {
 		t.Fatal("newResp.Error() error")
 	}
+}
+
+func TestRaftMsgRequest_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.RaftMessagesRequest{
+		Database:    "db0",
+		PtId:        2,
+		RaftMessage: raftpb.Message{Type: 1, To: 2, From: 3, Commit: 100},
+	}
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+	req2 := &netstorage.RaftMessagesRequest{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.Database, req2.Database)
+	require.EqualValues(t, req.PtId, req2.PtId)
+	require.EqualValues(t, req, req2)
+}
+
+func TestRaftMsgResponse_Marshal_Unmarshal(t *testing.T) {
+	req := &netstorage.RaftMessagesResponse{}
+	req.ErrMsg = proto.String("mock error")
+	buf, err := req.MarshalBinary()
+	require.NoError(t, err)
+	req2 := &netstorage.RaftMessagesResponse{}
+	err = req2.UnmarshalBinary(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
 }

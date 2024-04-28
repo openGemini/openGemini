@@ -19,6 +19,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"reflect"
 	"sort"
 	"sync/atomic"
 
@@ -26,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
@@ -265,7 +266,9 @@ func (r *HybridStoreReader) initIndexReader() {
 	if !r.opt.IsIncQuery() || r.opt.IterID == 0 {
 		r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo))
 	}
-	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions))
+	if _, err := os.Stat(obs.GetLocalMstPath(obs.GetPrefixDataPath(), ctx.shardPath)); !os.IsNotExist(err) {
+		r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions))
+	}
 }
 
 func (r *HybridStoreReader) initSchemaByFullTest() error {
@@ -431,11 +434,13 @@ func (r *HybridStoreReader) CreateCursors() ([]comm.KeyCursor, error) {
 	return cursors, nil
 }
 
-func (r *HybridStoreReader) Work(ctx context.Context) error {
+func (r *HybridStoreReader) Work(ctx context.Context) (err error) {
 	statistics.ExecutorStat.SourceWidth.Push(int64(r.output.RowDataType.NumColumn()))
-
-	var err error
-
+	defer func() {
+		if err != nil && reflect.TypeOf(err).Kind() == reflect.Pointer && reflect.TypeOf(err) != reflect.TypeOf(&errno.Error{}) {
+			err = errno.NewError(errno.ChunkReaderCursor, err.Error())
+		}
+	}()
 	r.initSpan()
 
 	tracing.StartPP(r.initReaderSpan)
@@ -448,7 +453,7 @@ func (r *HybridStoreReader) Work(ctx context.Context) error {
 		return err
 	}
 
-	rowCountBeforeFilter := r.fragCount * colstore.RowsNumPerFragment
+	rowCountBeforeFilter := r.fragCount * util.RowsNumPerFragment
 	tracing.StartPP(r.span)
 	cursors, err := r.CreateCursors()
 	if err != nil {

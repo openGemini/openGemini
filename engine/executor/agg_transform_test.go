@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"testing"
 	"time"
@@ -5952,4 +5953,99 @@ func TestStreamAggregateTransformTopFloatUnorderInput(t *testing.T) {
 			assert.Equal(t, outputChunks[i].Column(j), expectChunks[i].Column(j))
 		}
 	}
+}
+
+func buildRowDataTypeProm() hybridqp.RowDataType {
+	return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "age", Type: influxql.Float})
+}
+
+func buildInChunkProm() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	b := executor.NewChunkBuilder(buildRowDataTypeProm())
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("country=american")}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3})
+	inCk1.Column(0).AppendFloatValues([]float64{2.2, 1.1, math.NaN()})
+	inCk1.Column(0).AppendManyNotNil(3)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("country=american")}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{4, 5, 6})
+	inCk2.Column(0).AppendFloatValues([]float64{6.6, math.NaN(), 0.0})
+	inCk2.Column(0).AppendManyNotNil(3)
+	inChunks = append(inChunks, inCk1, inCk2)
+	return inChunks
+}
+
+func buildDstRowDataTypeMin() hybridqp.RowDataType {
+	return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "min_prom(\"age\")", Type: influxql.Float})
+}
+
+func buildDstChunkMinProm() []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 1)
+	b := executor.NewChunkBuilder(buildDstRowDataTypeMin())
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("country=american")}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{4})
+	inCk1.Column(0).AppendFloatValues([]float64{0.0})
+	inCk1.Column(0).AppendManyNotNil(1)
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
+func buildDstRowDataTypeMax() hybridqp.RowDataType {
+	return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "max_prom(\"age\")", Type: influxql.Float})
+}
+
+func buildDstChunkMaxProm() []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 1)
+	b := executor.NewChunkBuilder(buildDstRowDataTypeMax())
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("country=american")}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{4})
+	inCk1.Column(0).AppendFloatValues([]float64{6.6})
+	inCk1.Column(0).AppendManyNotNil(1)
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformMinProm(t *testing.T) {
+	testStreamAggregateTransformBase(
+		t, buildInChunkProm(), buildDstChunkMinProm(), buildRowDataTypeProm(), buildDstRowDataTypeMin(),
+		[]hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "min_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("age")}},
+				Ref:  influxql.VarRef{Val: `min_prom("age")`, Type: influxql.Float},
+			},
+		},
+		&query.ProcessorOptions{
+			Dimensions: []string{"country"},
+			ChunkSize:  6,
+		},
+		false,
+	)
+}
+
+func TestStreamAggregateTransformMaxProm(t *testing.T) {
+	testStreamAggregateTransformBase(
+		t, buildInChunkProm(), buildDstChunkMaxProm(), buildRowDataTypeProm(), buildDstRowDataTypeMax(),
+		[]hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "max_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("age")}},
+				Ref:  influxql.VarRef{Val: `max_prom("age")`, Type: influxql.Float},
+			},
+		},
+		&query.ProcessorOptions{
+			Dimensions: []string{"country"},
+			ChunkSize:  6,
+		},
+		false,
+	)
 }

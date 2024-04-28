@@ -22,11 +22,9 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
-	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/index"
+	indextype "github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
-	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -39,7 +37,7 @@ func MinMaxIndexDataRead(file interface{}, rec *record.Record, isCache bool) (*r
 	if !ok {
 		return nil, fmt.Errorf("unexpected the input file")
 	}
-	pkFile := colstore.AppendSKIndexSuffix(dataPath, rec.Schema[0].Name, index.MinMaxIndex)
+	pkFile := colstore.AppendSecondaryIndexSuffix(dataPath, rec.Schema[0].Name, indextype.MinMax, 0)
 	_ = pkFile
 	rec = record.NewRecord(record.Schemas{{Name: "value", Type: influx.Field_Type_Int}}, false)
 	rec.ColVals[0].AppendIntegers(1, 3, 2, 4)
@@ -98,28 +96,4 @@ func TestMinMaxIndexReader_error(t *testing.T) {
 		return nil, fmt.Errorf("mock error")
 	}
 	assert.EqualError(t, reader.ReInit(dataFile), "mock error")
-}
-
-func TestMinMaxIndexWriter(t *testing.T) {
-	testCompDir := t.TempDir()
-	_ = fileops.RemoveAll(testCompDir)
-
-	msName := "cpu"
-	minMaxWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.MinMaxIndex, tokenizer.CONTENT_SPLITTER)
-	err := minMaxWriter.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = minMaxWriter.CreateAttachSkipIndex(nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, _ = minMaxWriter.CreateDetachSkipIndex(nil, nil, nil, nil)
-
-	err = minMaxWriter.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
 }

@@ -59,4 +59,15 @@ type Options interface {
 	GetLogQueryCurrId() string
 	GetIterId() int32
 	IsIncQuery() bool
+	SetPromQuery(bool)
+	IsPromQuery() bool
+	IsPromInstantQuery() bool
+	IsPromRangeQuery() bool
+	GetPromStep() time.Duration
+	GetPromRange() time.Duration
+	GetPromLookBackDelta() time.Duration
+	GetPromQueryOffset() time.Duration
+	IsRangeVectorSelector() bool
+	IsInstantVectorSelector() bool
+	SetDims(source influxql.Source)
 }

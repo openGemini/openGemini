@@ -223,7 +223,7 @@ func TestGetDBBriefInfo_FromStore(t *testing.T) {
 		Name:           "db0",
 		EnableTagArray: true,
 	}
-	mms.GetStore().data = &meta2.Data{Databases: databases}
+	mms.GetStore().data.Databases = databases
 	_, err = mms.GetStore().getDBBriefInfo("db0")
 	if err != nil {
 		t.Fatal(err)

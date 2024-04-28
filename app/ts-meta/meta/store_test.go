@@ -377,6 +377,14 @@ func MockReportLoad(ms *meta.MetaService, db string, ptId uint32) {
 	}
 }
 
+func TestMetaErr(t *testing.T) {
+	dir := "/dev/null"
+	_, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err == nil {
+		t.Fatal("run as root?")
+	}
+}
+
 func TestConcurrentApply(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
@@ -525,6 +533,45 @@ func TestGetShardInfo_Process(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+func TestGetShardInfoV2_Process(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+
+	db := "db0"
+	rp := "autogen"
+	mst := "mst0"
+	mms.GetStore().NetStore = meta.NewMockNetStorage()
+	err = mms.GetStore().GetData().UpdateNodeStatus(2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmd(db), mms.GetConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mms.GetStore().ApplyCmd(meta.GenerateCreateMeasurementCmd(db, rp, mst, nil, "hash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = mms.GetStore().ApplyCmd(meta.GenerateCreateShardGroupCmd(db, rp, time.Now(), config.TSSTORE))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mms.GetStore().UseIncSyncData = true
+	cmd = meta.GenerateGetShardRangeInfoCmd(db, rp, 2)
+	err = shardInfoMsgHandler(cmd, mms)
+	assert.True(t, err.Error() == errno.NewError(errno.ShardMetaNotFound, 2).Error(),
+		"actual err ", err.Error(), ";expect err ", errno.NewError(errno.ShardMetaNotFound, 2).Error())
 }
 
 func TestStoreDeleteDatabase(t *testing.T) {
@@ -953,11 +1000,15 @@ func TestUpdateReplicationCommand(t *testing.T) {
 	}
 	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8460", "127.0.0.1:8461")
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.1:8462", "127.0.0.1:8463")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.1:8464", "127.0.0.1:8465")
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -971,7 +1022,7 @@ func TestUpdateReplicationCommand(t *testing.T) {
 
 	config.SetHaPolicy(config.RepPolicy)
 	defer config.SetHaPolicy(config.WAFPolicy)
-	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 2), mms.GetConfig())
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 3), mms.GetConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1022,11 +1073,15 @@ func TestUpdateRetentionPolicyCommand(t *testing.T) {
 	}
 	defer mms.Close()
 
-	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8460", "127.0.0.1:8461")
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
-	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8400", "127.0.0.2:8401")
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8462", "127.0.0.2:8463")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.2:8464", "127.0.0.2:8465")
 	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -1040,7 +1095,7 @@ func TestUpdateRetentionPolicyCommand(t *testing.T) {
 
 	config.SetHaPolicy(config.RepPolicy)
 	defer config.SetHaPolicy(config.WAFPolicy)
-	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 2), mms.GetConfig())
+	err = meta.ProcessExecuteRequest(mms.GetStore(), meta.GenerateCreateDatabaseCmdWithDefaultRep(db, 3), mms.GetConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1054,4 +1109,94 @@ func TestUpdateRetentionPolicyCommand(t *testing.T) {
 	cmd = createUpdateRetentionPolicyCmd(db, "autogen", 0, 0, nil, uint32(meta2.SubHealth))
 	err = mms.GetStore().ApplyCmd(cmd)
 	require.Equal(t, nil, err)
+}
+
+func TestUpdateNodeTmpIndex(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	mms.GetStore().GetData().SqlNodes = []meta2.DataNode{meta2.DataNode{NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive, ID: 1}}, meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 2}}}
+
+	mms.GetStore().UpdateNodeTmpIndex(0, 10, 1)
+	mms.GetStore().UpdateNodeTmpIndex(0, 10, 2)
+	mms.GetStore().UpdateNodeTmpIndex(1, 10, 1)
+	mms.GetStore().UpdateNodeTmpIndex(2, 10, 1)
+	mms.GetStore().TryUpdateNodeTmpIndex(0, 30, 1)
+	if mms.GetStore().GetData().SqlNodes[0].Index != 10 {
+		t.Fatal("TestUpdateNodeTmpIndex err")
+	}
+}
+
+func TestCreateSqlCommand(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	if _, err := mms.GetStore().CreateSqlNode("127.0.0.1:8400", "127.0.0.1:8012"); err != nil {
+		t.Fatal(err)
+	}
+	if len(mms.GetStore().GetData().SqlNodes) != 1 {
+		t.Fatal("TestCreateSqlCommand err1")
+	}
+	node := mms.GetStore().GetData().SqlNodes[0]
+	if err := mms.GetStore().UpdateSqlNodeStatus(node.ID, int32(meta2.StatusAlive), uint64(1), "127.0.0.1:8400"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mms.GetStore().UpdateSqlNodeStatus(1234, int32(meta2.StatusAlive), uint64(1), "127.0.0.1:8400"); err == nil {
+		t.Fatal(err)
+	}
+	if mms.GetStore().GetData().SqlNodes[0].Status != serf.MemberStatus(meta2.StatusAlive) {
+		t.Fatal("TestCreateSqlCommand err2")
+	}
+	mms.GetStore().UpdateNodeTmpIndex(0, 10, 1)
+	mms.GetStore().UpdateNodeTmpIndex(0, 10, 2)
+	mms.GetStore().UpdateNodeTmpIndex(1, 10, 1)
+	mms.GetStore().UpdateNodeTmpIndex(2, 10, 1)
+	if mms.GetStore().GetData().SqlNodes[0].Index != 10 {
+		t.Fatal("TestCreateSqlCommand err3")
+	}
+}
+
+func TestNewServer(t *testing.T) {
+	dir := t.TempDir()
+	config, err := meta.NewMetaConfig(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.UseIncSyncData = true
+	s := meta.NewStore(config, "", "", "")
+	if s.GetData().OpsMap == nil {
+		t.Fatal("TestNewServer fail")
+	}
+	s.Close()
+}
+
+func TestStoreUpdateCacheDataV2Err(t *testing.T) {
+	cfg := &config.Meta{UseIncSyncData: true}
+	s := meta.NewStore(cfg, "", "", "")
+	s.GetData().OpsMapMinIndex = 3
+	s.GetData().OpsMapMaxIndex = 3
+	s.GetData().OpsToMarshalIndex = 1
+	s.GetData().OpsMap[1] = meta2.NewOp(nil, 2, nil)
+	s.UpdateCacheDataV2()
+}
+
+func TestUpdateInvalidUser(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cmd := meta.GenerateUpdateUserCmd()
+	if err = mms.GetStore().ApplyCmd(cmd); err == nil {
+		t.Fatal("TestUpdateInvalidUser err")
+	}
 }

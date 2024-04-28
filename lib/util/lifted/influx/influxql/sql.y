@@ -114,7 +114,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 QUERY PARTITION
                 TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER
                 REPLICAS DETAIL DESTINATIONS
-                SCHEMA INDEXES
+                SCHEMA INDEXES AUTO
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -172,7 +172,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <cqsp>                        SAMPLE_POLICY
 %type <tdurs>                       DURATIONVALS
 %type <cqsp>                        SAMPLE_POLICY
-%type <int64>                       INTEGERPARA
+%type <int64>                       INTEGERPARA CMOPTION_SHARDNUM
 %type <bool>                        ALLOW_TAG_ARRAY
 %type <fieldOption>                 FIELD_OPTION FIELD_COLUMN
 %type <fieldOptions>                FIELD_OPTIONS
@@ -196,8 +196,7 @@ ALL_QUERY:
     }
     |ALL_QUERY SEMICOLON
     {
-
-        if len($1) ==1{
+        if len($1) >= 1{
             $$ = $1
         }else{
             yylex.Error("excrescent semicolo")
@@ -642,7 +641,7 @@ COLUMN:
     }
     |LPAREN COLUMN RPAREN
     {
-        $$ = $2
+        $$ = &ParenExpr{Expr: $2}
     }
     |IDENT LPAREN COLUMN_CLAUSES RPAREN
     {
@@ -1515,8 +1514,8 @@ CREAT_DATABASE_POLICY:
     }
     |REPLICATION INTEGER
     {
-        if $2<1 ||$2 > 2{
-            yylex.Error("REPLICATION must be 1 <= n <= 2")
+        if $2 < 1 || $2 % 2 == 0 {
+            yylex.Error("REPLICATION must be an odd number")
         }
         replicaN := int($2)
         $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,Replication: &replicaN}
@@ -1656,8 +1655,8 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-    	if $4<1 ||$4 > 2{
-            yylex.Error("REPLICATION must be 1 <= n <= 2")
+        if $4 < 1 || $4 % 2 == 0 {
+            yylex.Error("REPLICATION must be an odd number")
         }
     	stmt.Replication = int($4)
 
@@ -1691,8 +1690,8 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-    	if $4<1 ||$4 > 2{
-            yylex.Error("REPLICATION must be 1 <= n <= 2")
+        if $4 < 1 || $4 % 2 == 0 {
+            yylex.Error("REPLICATION must be an odd number")
         }
     	stmt.Replication = int($4)
     	$$ = stmt
@@ -2395,9 +2394,13 @@ CREATE_MEASUREMENT_STATEMENT:
             stmt.Tags = $4.(*CreateMeasurementStatement).Tags
             stmt.IndexOption = $4.(*CreateMeasurementStatement).IndexOption
         }
+        if $5.NumOfShards != 0 && $5.Type == "range" {
+            yylex.Error("Not support to set num-of-shards for range sharding")
+        }
         stmt.IndexType = $5.IndexType
         stmt.IndexList = $5.IndexList
         stmt.ShardKey = $5.ShardKey
+        stmt.NumOfShards = $5.NumOfShards
         stmt.Type = $5.Type
         stmt.EngineType = $5.EngineType
 
@@ -2475,11 +2478,16 @@ CREATE_MEASUREMENT_STATEMENT:
                 }
             }
         }
+        if $5.NumOfShards != 0 && $5.Type == "range" {
+            yylex.Error("Not support to set num-of-shards for range sharding")
+        }
+
         stmt.EngineType = $5.EngineType
         stmt.IndexType = $5.IndexType
         stmt.IndexList = $5.IndexList
         stmt.TimeClusterDuration = $5.TimeClusterDuration
         stmt.ShardKey = $5.ShardKey
+        stmt.NumOfShards = $5.NumOfShards
         stmt.Type = $5.Type
         stmt.PrimaryKey = $5.PrimaryKey
         stmt.SortKey = $5.SortKey
@@ -2495,7 +2503,7 @@ CMOPTIONS_TS:
         option.EngineType = "tsstore"
         $$ = option
     }
-    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE_TS CMOPTION_SHARDKEY TYPE_CLAUSE
+    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE_TS CMOPTION_SHARDKEY CMOPTION_SHARDNUM TYPE_CLAUSE
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2505,13 +2513,14 @@ CMOPTIONS_TS:
         if $4 != nil {
             option.ShardKey = $4
         }
-        option.Type = $5
+        option.NumOfShards = $5
+        option.Type = $6
         option.EngineType = $2
         $$ = option
     }
 
 CMOPTIONS_CS:
-    WITH CMOPTION_ENGINETYPE_CS CMOPTION_INDEXTYPE_CS CMOPTION_SHARDKEY TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES COMPACTION_TYPE_CLAUSE
+    WITH CMOPTION_ENGINETYPE_CS CMOPTION_INDEXTYPE_CS CMOPTION_SHARDKEY CMOPTION_SHARDNUM TYPE_CLAUSE CMOPTION_PRIMARYKEY CMOPTION_SORTKEY CMOPTION_PROPERTIES COMPACTION_TYPE_CLAUSE
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2522,23 +2531,24 @@ CMOPTIONS_CS:
         if $4 != nil {
             option.ShardKey = $4
         }
-        option.Type = $5
+        option.NumOfShards = $5
+        option.Type = $6
         option.EngineType = $2
-        if $6 != nil {
-            option.PrimaryKey = $6
-        } else if $7 != nil {
+        if $7 != nil {
             option.PrimaryKey = $7
+        } else if $8 != nil {
+            option.PrimaryKey = $8
         }
 
-        if $7 != nil {
-            option.SortKey = $7
-        } else if $6 != nil {
-            option.SortKey = $6
-        }
         if $8 != nil {
-            option.Property = $8
+            option.SortKey = $8
+        } else if $7 != nil {
+            option.SortKey = $7
         }
-        option.CompactType = $9
+        if $9 != nil {
+            option.Property = $9
+        }
+        option.CompactType = $10
         $$ = option
     }
 
@@ -2572,6 +2582,7 @@ CMOPTION_INDEXTYPE_CS:
         validIndexType := map[string]struct{}{}
         validIndexType["bloomfilter"] = struct{}{}
         validIndexType["minmax"] = struct{}{}
+        validIndexType["text"] = struct{}{}
         if $2 == nil {
             $$ = nil
         } else {
@@ -2621,6 +2632,22 @@ CMOPTION_SHARDKEY:
         shardKey := $2
         sort.Strings(shardKey)
         $$ = shardKey
+    }
+
+CMOPTION_SHARDNUM:
+    {
+        $$ = 0
+    }
+    | SHARDS AUTO
+    {
+        $$ = -1
+    }
+    | SHARDS INTEGER
+    {
+        if $2 == 0 {
+            yylex.Error("syntax error: NUM OF SHARDS SHOULD LARGER THAN 0")
+        }
+        $$ = $2
     }
 
 CMOPTION_ENGINETYPE_TS:
@@ -3012,6 +3039,11 @@ SHOW_SHARDS_STATEMENT:
     SHOW SHARDS
     {
         stmt := &ShowShardsStatement{}
+        $$ = stmt
+    }
+    | SHOW SHARDS FROM TABLE_CASE
+    {
+        stmt := &ShowShardsStatement{mstInfo: $4}
         $$ = stmt
     }
 

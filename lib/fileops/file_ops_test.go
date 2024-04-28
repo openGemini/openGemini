@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/stretchr/testify/assert"
 )
@@ -390,7 +391,7 @@ func TestStreamRead(t *testing.T) {
 	f := &file{of: fp}
 	defer f.Close()
 	c := make(chan *request.StreamReader)
-	go f.StreamReadBatch([]int64{0}, []int64{2}, 1, c, 1)
+	go f.StreamReadBatch([]int64{0}, []int64{2}, 1, c, 1, false)
 	for {
 		select {
 		case r, ok := <-c:
@@ -468,4 +469,97 @@ func TestVFS2(t *testing.T) {
 		t.Fatalf("CreateOBS(%v) fail, err:%v", fileName, err)
 	}
 	_ = fd.Close()
+}
+
+func TestOpenObsFile(t *testing.T) {
+	rootDir := "/tmp/test_OpenObsFile"
+	defer RemoveAll(rootDir)
+
+	fileName := "test_file1"
+	_, err := OpenObsFile(rootDir, fileName, nil, false)
+	assert.NotNil(t, err)
+
+	obsOpt := &obs.ObsOptions{
+		Enabled: true,
+	}
+	_, err = OpenObsFile(rootDir, fileName, obsOpt, false)
+	assert.NotNil(t, err)
+}
+
+func TestGetRemoteDataPath(t *testing.T) {
+	rootDir := "/tmp/GetRemoteDataPath"
+	defer RemoveAll(rootDir)
+
+	targetPath := GetRemoteDataPath(nil, rootDir)
+	assert.Equal(t, "", targetPath)
+
+	obsOpt := &obs.ObsOptions{
+		Endpoint:   "mock_endpoint",
+		Ak:         "mock_ak",
+		Sk:         "mock_sk",
+		BasePath:   "mock_basePath",
+		BucketName: "mock_BucketName",
+		Enabled:    true,
+	}
+
+	targetPath = GetRemoteDataPath(obsOpt, rootDir)
+	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/tmp/GetRemoteDataPath", targetPath)
+}
+
+func TestRemoveLocal(t *testing.T) {
+	obsOpt := &obs.ObsOptions{
+		Endpoint:   "mock_endpoint",
+		Ak:         "mock_ak",
+		Sk:         "mock_sk",
+		BasePath:   "mock_basePath",
+		BucketName: "mock_BucketName",
+		Enabled:    true,
+	}
+
+	p := ObsPrefix + "remove_local_file_test"
+	err := RemoveLocal(p)
+	assert.NotNil(t, err)
+
+	p = EncodeObsPath(obsOpt.Endpoint, obsOpt.BucketName, p, obsOpt.Ak, obsOpt.Sk)
+	err = RemoveLocal(p)
+	assert.NotNil(t, err)
+}
+
+func TestDeleteObsPath(t *testing.T) {
+	obsOpt := &obs.ObsOptions{
+		Endpoint:   "mock_endpoint",
+		Ak:         "mock_ak",
+		Sk:         "mock_sk",
+		BasePath:   "mock_basePath",
+		BucketName: "mock_BucketName",
+		Enabled:    true,
+	}
+
+	path := ""
+	err := DeleteObsPath(path, obsOpt)
+	assert.Nil(t, err)
+
+	path = "delete_obs_path"
+	err = DeleteObsPath(path, obsOpt)
+	assert.NotNil(t, err)
+
+	err = DeleteObsPath(path, nil)
+	assert.Nil(t, err)
+}
+
+func TestGetRemotePrefixPath(t *testing.T) {
+	obsOpt := &obs.ObsOptions{
+		Endpoint:   "mock_endpoint",
+		Ak:         "mock_ak",
+		Sk:         "mock_sk",
+		BasePath:   "mock_basePath",
+		BucketName: "mock_BucketName",
+		Enabled:    true,
+	}
+	res := GetRemotePrefixPath(nil)
+	assert.Equal(t, "", res)
+
+	res = GetRemotePrefixPath(obsOpt)
+	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName", res)
+
 }

@@ -21,14 +21,13 @@ import (
 	json2 "encoding/json"
 	"fmt"
 	"io"
-	"strings"
 	"testing"
 
-	"github.com/apache/arrow/go/arrow"
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/flight"
-	"github.com/apache/arrow/go/arrow/ipc"
-	"github.com/apache/arrow/go/arrow/memory"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/flight"
+	"github.com/apache/arrow/go/v13/arrow/ipc"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -46,7 +45,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func MockArrowRecord(size int) array.Record {
+func MockArrowRecord(size int) arrow.Record {
 	schema := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "age", Type: arrow.PrimitiveTypes.Int64},
@@ -106,7 +105,7 @@ func (c *MockFlightMetaClient) DataNodes() ([]meta.DataNode, error) {
 	return nil, nil
 }
 
-func (c *MockFlightMetaClient) ShowShards() models.Rows {
+func (c *MockFlightMetaClient) ShowShards(db string, rp string, mst string) models.Rows {
 	return nil
 }
 
@@ -114,7 +113,7 @@ type WriteRecRes struct {
 	db   string
 	rp   string
 	mst  string
-	recs []array.Record
+	recs []arrow.Record
 }
 
 type MockRecordWriter struct {
@@ -122,7 +121,7 @@ type MockRecordWriter struct {
 
 var writeRecRes = &WriteRecRes{}
 
-func (w *MockRecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec array.Record) error {
+func (w *MockRecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error {
 	writeRecRes.recs = append(writeRecRes.recs, rec)
 	writeRecRes.db = database
 	writeRecRes.rp = retentionPolicy
@@ -333,5 +332,5 @@ func TestArrowFlightServiceErr(t *testing.T) {
 
 	writer := arrowflight.NewWriteServer(logger.NewLogger(errno.ModuleHTTP))
 	err = writer.DoPut(NewDoPutServer())
-	assert.Equal(t, strings.Contains(err.Error(), "arrow/flight: could not create flight reader"), true)
+	assert.Equal(t, err == io.EOF, true)
 }

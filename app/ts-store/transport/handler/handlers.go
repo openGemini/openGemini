@@ -51,6 +51,8 @@ func newHandler(typ uint8) RPCHandler {
 		return &KillQuery{}
 	case netstorage.ShowTagKeysRequestMessage:
 		return &ShowTagKeys{}
+	case netstorage.RaftMessagesRequestMessage:
+		return &RaftMessages{}
 	default:
 		return nil
 	}
@@ -238,6 +240,23 @@ func (h *ShowTagKeys) SetMessage(msg codec.BinaryCodec) error {
 	req, ok := msg.(*netstorage.ShowTagKeysRequest)
 	if !ok {
 		return executor.NewInvalidTypeError("*netstorage.ShowTagKeysRequest", msg)
+	}
+	h.req = req
+	return nil
+}
+
+type RaftMessages struct {
+	BaseHandler
+
+	req *netstorage.RaftMessagesRequest
+	rsp *netstorage.RaftMessagesResponse
+}
+
+func (h *RaftMessages) SetMessage(msg codec.BinaryCodec) error {
+	h.rsp = &netstorage.RaftMessagesResponse{}
+	req, ok := msg.(*netstorage.RaftMessagesRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.RaftMessagesRequest", msg)
 	}
 	h.req = req
 	return nil

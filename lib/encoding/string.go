@@ -21,6 +21,7 @@ import (
 
 	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 )
@@ -33,6 +34,18 @@ const (
 
 	minCompReta = 0.85
 )
+
+func GetCompressAlgo() int {
+	switch config.GetStoreConfig().StringCompressAlgo {
+	case config.CompressAlgoLZ4:
+		return StringCompressedLz4
+	case config.CompressAlgoZSTD:
+		return StringCompressedZstd
+	default:
+		break
+	}
+	return stringCompressedSnappy
+}
 
 func ZSTDCompressBound(srcSize int) int {
 	constV := 128 << 10
@@ -70,7 +83,7 @@ func (enc *String) MaxEncodedLen(size int) int {
 
 func (enc *String) encInit(in []byte, out []byte) {
 	if enc.encodingType == 0 {
-		enc.encodingType = stringCompressedSnappy
+		enc.encodingType = GetCompressAlgo()
 	}
 
 	enc.outLen = len(out)
@@ -87,15 +100,13 @@ func (enc *String) encInit(in []byte, out []byte) {
 	enc.buf.Reset(out[length:])
 	enc.out = out
 
-	if enc.encodingType == StringCompressedZstd {
+	if enc.encodingType == StringCompressedZstd && enc.zstdEnc == nil {
 		var err error
-		if enc.zstdEnc == nil {
-			enc.zstdEnc, err = zstd.NewWriter(enc.buf,
-				zstd.WithEncoderCRC(false),
-				zstd.WithEncoderLevel(zstd.SpeedFastest))
-			if err != nil {
-				panic(err)
-			}
+		enc.zstdEnc, err = zstd.NewWriter(enc.buf,
+			zstd.WithEncoderCRC(false),
+			zstd.WithEncoderLevel(zstd.SpeedFastest))
+		if err != nil {
+			panic(err)
 		}
 	}
 }

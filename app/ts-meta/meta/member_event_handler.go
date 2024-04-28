@@ -38,14 +38,34 @@ type baseHandler struct {
 	cm *ClusterManager
 }
 
-func (bh *baseHandler) handleEvent(m *serf.Member, e *serf.MemberEvent, id uint64, from eventFrom) error {
+func (bh *baseHandler) handleSqlEvent(m *serf.Member, e *serf.MemberEvent, id uint64, from eventFrom) error {
 	// do not take over meta
 	if m.Tags["role"] == "meta" || uint64(e.EventTime) == 0 {
 		return nil
 	}
-
 	bh.cm.addEventMap(m.Name, e)
-	logger.GetLogger().Info("handle event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
+	logger.GetLogger().Info("handle sqlnode event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
+		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)),
+		zap.Any("from", from))
+	if bh.cm.isStopped() {
+		return nil
+	}
+	err := bh.cm.store.UpdateSqlNodeStatus(id, int32(m.Status), uint64(e.EventTime), fmt.Sprintf("%d", m.Port))
+	logger.GetLogger().Info("UpdateSqlNodeStatus", zap.Uint64("id", id), zap.Int("status", int(m.Status)), zap.String("name", m.Name), zap.String("event", e.String()), zap.Error(err))
+	if errno.Equal(err, errno.OlderEvent) {
+		logger.GetLogger().Error("ignore handle sql event", zap.String("name", m.Name), zap.String("event", e.String()), zap.Error(err))
+		return nil
+	}
+	return err
+}
+
+func (bh *baseHandler) handleStoreEvent(m *serf.Member, e *serf.MemberEvent, id uint64, from eventFrom) error {
+	// do not take over meta
+	if m.Tags["role"] == "meta" || uint64(e.EventTime) == 0 {
+		return nil
+	}
+	bh.cm.addEventMap(m.Name, e)
+	logger.GetLogger().Info("handle datanode event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
 		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)),
 		zap.Any("from", from))
 	if bh.cm.isStopped() {
@@ -75,6 +95,7 @@ func (bh *baseHandler) takeoverDbPts(id uint64) {
 	}
 }
 
+//lint:ignore U1000 raft replication should NOT change the relationship for pts
 func (bh *baseHandler) failOverForRep(id uint64) error {
 	// get pts and add to failed dbPts
 	start := time.Now()
@@ -108,7 +129,14 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 		if e.event.Members[i].Tags["role"] == "meta" {
 			continue
 		}
-		err = jh.handleEvent(&e.event.Members[i], &e.event, id, e.from)
+		if e.event.Members[i].Tags["role"] == "sql" {
+			err = jh.handleSqlEvent(&e.event.Members[i], &e.event, id, e.from)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		err = jh.handleStoreEvent(&e.event.Members[i], &e.event, id, e.from)
 		if err != nil {
 			return err
 		}
@@ -149,7 +177,10 @@ type failedHandler struct {
 }
 
 func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
-	err := fh.handleEvent(member, event, id, from)
+	if member.Tags["role"] == "sql" {
+		return fh.handleSqlEvent(member, event, id, from)
+	}
+	err := fh.handleStoreEvent(member, event, id, from)
 	if err != nil {
 		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()),
 			zap.Int("status", int(member.Status)), zap.Uint64("lTime", uint64(event.EventTime)),
@@ -172,11 +203,14 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 		}
 	})
 	fh.cm.handleClusterMember(id, event)
-	return fh.failOverForRep(id)
+	return nil
 }
 
 func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
-	err := fh.handleEvent(member, event, id, from)
+	if member.Tags["role"] == "sql" {
+		return fh.handleSqlEvent(member, event, id, from)
+	}
+	err := fh.handleStoreEvent(member, event, id, from)
 	if err != nil {
 		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()),
 			zap.Int("status", int(member.Status)), zap.Uint64("lTime", uint64(event.EventTime)),
